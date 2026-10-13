@@ -827,6 +827,11 @@ const _ensureManageQRsFilled = () => {
 window._ensureManageQRsFilled = _ensureManageQRsFilled;
 
 const _renderManagePayload = (id, d) => {
+    // A late pulse or refreshManageView fetch for the PREVIOUS location must not
+    // paint over the one now open: its DEPOSIT card would deposit into the old
+    // location (Group 46 review). The pulse upper-cases the id, hence the compare.
+    const openId = (document.getElementById('manage-loc-id') || {}).value || '';
+    if (String(id).toUpperCase() !== String(openId).toUpperCase()) return false;
     const loc = state.allLocations.find(l => l.LocationID == id);
     if (!loc) return false;
     // --- NO WIGGLE CHECK ---
@@ -1262,7 +1267,12 @@ window.handleSlotInteraction = (slot) => {
         // was cancelled or rejected (e.g. backend requires_confirm flow,
         // active-print bail, network error, swap-cancel-swap-continue race).
         if (item) {
-            promptAction("Slot Occupied", `Swap/Overwrite Slot ${slot}?`, [
+            // Name the spool this writes: the prompt can outlive a buffer change
+            // (a queued CMD:NEXT scan, a re-sync), and the captured id still wins.
+            const esc = window.escHtml || ((s) => s);
+            const top = state.heldSpools[0];
+            const what = `#${top.id}${top.display ? ` (${esc(String(top.display))})` : ''}`;
+            promptAction("Slot Occupied", `Put ${what} into Slot ${slot}: swap or overwrite?`, [
                 {
                     label: "Swap", action: () => {
                         // Pass the displaced item so doAssign can push it
@@ -1350,11 +1360,17 @@ const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateIn
     const escapeHtml = (s) => String(s || '')
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    // Name the spool this confirm writes (Group 46 review): the prompt can
+    // outlive a buffer change (a queued CMD:NEXT scan, a re-sync), and the spool
+    // captured at the click is the one that moves.
+    const sid = String(spool).replace('ID:', '');
+    const held = (state.heldSpools || []).find(s => String(s.id) === sid);
+    const spoolLabel = `#${sid}${held && held.display ? ` (${held.display})` : ''}`;
     const content = `
         <div style="background:#1e1e1e; color:#fff; border:2px solid #ff8800; border-radius:8px; padding:20px 24px; max-width:460px; text-align:center;">
             <div style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">⚠️ ${escapeHtml(stateInfo.printer_name)} is ${escapeHtml(stateInfo.state)}</div>
             <div style="color:#ffc; margin-bottom:14px;">
-                Reassigning a spool to <b>${escapeHtml(loc)}</b> during an active print will disrupt the print and may leave filabridge/Spoolman in a stale state. Continue anyway?
+                Reassigning <b>${escapeHtml(spoolLabel)}</b> to <b>${escapeHtml(loc)}</b> during an active print will disrupt the print and may leave filabridge/Spoolman in a stale state. Continue anyway?
             </div>
             <div style="display:flex; gap:10px; justify-content:center;">
                 <button id="fcc-apc-yes" class="btn btn-warning btn-sm" style="min-width:120px;">Continue Anyway</button>
@@ -1983,6 +1999,14 @@ const _populateParentSelect = (selfIdUpper, currentParentId) => {
 };
 
 window.openEdit = (id) => {
+    // Group 46.5 — a row saved before the blank-ID guard can't be repaired here:
+    // with no id to name it, saving appends a SECOND row and leaves the blank one
+    // behind, and the next save says "already exists" (the original report).
+    if (!String(id == null ? '' : id).trim()) {
+        const msg = "This location has no Location ID, so it can't be edited — delete it with 🗑️ and add it again.";
+        if (typeof showToast === 'function') showToast(msg, 'warning', 7000); else alert(msg);
+        return;
+    }
     const i = state.allLocations.find(l => l.LocationID == id);
     if (i) {
         modals.locMgrModal.hide();
@@ -2031,7 +2055,11 @@ window.openEdit = (id) => {
 
 window.closeEdit = () => { modals.locModal.hide(); modals.locMgrModal.show(); };
 
+// One save at a time: a double Enter (or click) used to POST twice, and the
+// second create/rename answered "already exists" just after the first succeeded.
+let _locSaveInFlight = false;
 window.saveLocation = () => {
+    if (_locSaveInFlight) return;
     // Group 46.5 — a blank LocationID is refused here and by the server (400).
     // Checked before anything else, so a refused save persists no custom Type.
     const _idEl = document.getElementById('edit-id');
@@ -2058,6 +2086,7 @@ window.saveLocation = () => {
     if (pv === _LOC_PARENT_NONE) new_data.parent_id = null;
     else if (pv && pv !== _LOC_PARENT_AUTO) new_data.parent_id = pv;
 
+    _locSaveInFlight = true;
     fetch('/api/locations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2084,44 +2113,56 @@ window.saveLocation = () => {
         .catch(e => {
             const msg = 'Save failed: ' + (e && e.message ? e.message : e);
             if (typeof showToast === 'function') showToast(msg, 'error', 7000); else alert(msg);
-        });
+        })
+        .finally(() => { _locSaveInFlight = false; });
 };
 
-// Group 46.2 — Enter on a field of the location editor saves it (the CLAUDE.md
-// "Enter confirms" idiom). The editor had no Enter-to-save, and the global scan
+// Group 46.2 — Enter in the location editor saves it (the CLAUDE.md "Enter
+// confirms" idiom). The editor had no Enter-to-save, and the global scan
 // accumulator (scripts.html) skips only INPUT/TEXTAREA targets, so a letter
 // typed on the Type <select> (native typeahead) landed in state.scanBuffer and
 // Enter then submitted it as a scan of "t".
 // Deliberately NOT a global "ignore SELECT" in the scanner: a focused dropdown
-// would then swallow a blind barcode scan. For the same reason a scanner burst
-// (window.isScannerBurst: the accumulator's own <150 ms rule, plus a minimum
-// length no typeahead reaches) is left to the accumulator here.
-// Buttons keep their own Enter. The parent tree picker mounts on document.body,
-// so its keys never pass through #locModal.
+// would then swallow a blind barcode scan. So a scan on a dropdown or a button
+// is left to the accumulator: a scanner-speed burst (window.isScannerBurst), or
+// a slower scanner's buffer that looks like a scan payload (a ':' or '/' that
+// no typeahead produces). A scan typed INTO a text field never reaches the
+// accumulator at all; the shared field-scan capture installed below hands it to
+// the scan path and restores the field before this handler could save it.
+// Enter on a button activates that button. The accumulator cancels every Enter
+// outside INPUT/TEXTAREA, which also killed native button activation, and it
+// would have submitted leftover typeahead letters as a scan.
+// The parent tree picker mounts on document.body, so its keys never pass
+// through #locModal; it neutralises its own Enter.
 const _installLocEditorEnterToSave = () => {
     const modalEl = document.getElementById('locModal');
     if (!modalEl || modalEl._fccEnterToSave) return;
     modalEl._fccEnterToSave = true;
+    if (window.installFieldScanCapture) {
+        window.installFieldScanCapture({
+            match: (el) => el.tagName === 'INPUT' && !!(el.closest && el.closest('#locModal')),
+            isScanPayload: (txt) => !!(window.looksLikeScanPayload && window.looksLikeScanPayload(txt)),
+        });
+    }
     modalEl.addEventListener('keydown', (e) => {
         if (e.key !== 'Enter' || e.ctrlKey || e.altKey || e.metaKey || e.isComposing) return;
+        // A held key repeats keydown, and the modal stays focusable for its
+        // ~150 ms fade after a successful save: neither may save again.
+        if (e.repeat || !modalEl.classList.contains('show')) return;
         const tag = ((e.target && e.target.tagName) || '').toUpperCase();
-        if (tag !== 'INPUT' && tag !== 'SELECT') return;
-        if (window.isScannerBurst && window.isScannerBurst()) return;
-        const st = (typeof state !== 'undefined') ? state : window.state;
+        if (tag !== 'INPUT' && tag !== 'SELECT' && tag !== 'BUTTON') return;
+        if (tag !== 'INPUT') {
+            const st = (typeof state !== 'undefined') ? state : window.state;
+            if (window.isScannerBurst && window.isScannerBurst()) return;
+            if (st && st.scanBuffer && window.looksLikeScanPayload && window.looksLikeScanPayload(st.scanBuffer)) return;
+        }
         e.preventDefault();
         // The accumulator is a bubble-phase listener on `document`, so stopping
-        // here keeps it from seeing this Enter. Clear what the typeahead letters
-        // already put in it, now and again after this tick (the L298 idiom: the
-        // deferred clear doesn't depend on listener order).
+        // here keeps it from seeing this Enter; the typeahead letters it already
+        // collected are cleared now and again after this tick (the L298 idiom).
         e.stopImmediatePropagation();
-        const _clearScanBuffer = () => {
-            if (!st) return;
-            st.scanBuffer = '';
-            st.scanStartTime = 0;
-            try { clearTimeout(st.bufferTimeout); } catch (_) { /* noop */ }
-        };
-        _clearScanBuffer();
-        setTimeout(_clearScanBuffer, 0);
+        if (window.clearScanBuffer) window.clearScanBuffer();
+        if (tag === 'BUTTON') { e.target.click(); return; }
         window.saveLocation();
     });
     if (window.registerShortcut) {
@@ -2380,7 +2421,15 @@ const _renderParentTreePicker = (rows, selfIdUpper, sel, locModalEl) => {
         const cur = ns.findIndex(n => n.classList.contains('kb-active'));
         if (e.key === 'ArrowDown') { e.preventDefault(); setActive(cur + 1); }
         else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(cur - 1); }
-        else if (e.key === 'Enter') { e.preventDefault(); const n = ns[cur] || ns[0]; if (n) pick(n.dataset.tpVal); }
+        else if (e.key === 'Enter') {
+            // Same class as Group 46.2: this Enter reached the scan accumulator,
+            // which submitted any letters typed in the picker as a scan
+            // ("Unknown Code"). Picking a node consumes it.
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            if (window.clearScanBuffer) window.clearScanBuffer();
+            const n = ns[cur] || ns[0]; if (n) pick(n.dataset.tpVal);
+        }
     });
 
     handle = window.mountOverlay({

@@ -1152,7 +1152,30 @@ def api_identify_scan():
         # That path emits its own log entry on success, so we don't add one
         # here — otherwise every pickup would generate a misleading warning.
         buffer = getattr(state, 'GLOBAL_BUFFER', []) or []
-        first_spool = next((item for item in buffer if isinstance(item, dict) and item.get('id')), None)
+        # Group 46 review — a caller that NAMED the spool (the Quick-Swap deposit
+        # confirm, `spool_id`) gets exactly that spool. GLOBAL_BUFFER is only the
+        # replica the client persists asynchronously, so its first entry can be a
+        # different spool by the time the user presses Yes. A scan names no spool
+        # and keeps the buffer's first.
+        named = request.json.get('spool_id')
+        if named not in (None, ''):
+            try:
+                named_id = int(str(named).replace('ID:', '').strip())
+            except (TypeError, ValueError):
+                named_id = 0
+            if named_id <= 0:
+                state.add_log_entry(
+                    f"❌ Load into <b>{target}:SLOT:{slot}</b> refused — bad spool id {named!r}",
+                    "ERROR", "ff4444")
+                return jsonify({
+                    "type": "assignment",
+                    "action": "assignment_failed",
+                    "location": target, "slot": slot,
+                    "msg": f"bad spool id {named!r}",
+                }), 400
+            first_spool = {"id": named_id}
+        else:
+            first_spool = next((item for item in buffer if isinstance(item, dict) and item.get('id')), None)
         if not first_spool:
             return jsonify({
                 "type": "assignment",

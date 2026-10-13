@@ -76,6 +76,24 @@ const isScannerBurst = () => {
 };
 window.isScannerBurst = isScannerBurst;
 
+// --- SCAN BUFFER RESET (now, and again after this tick) ---
+// For a key handler that consumes a key the accumulator (scripts.html) would
+// otherwise collect or submit. The deferred second clear doesn't depend on
+// listener order (the L298 Shift+B lesson): if the accumulator still runs after
+// the caller, the buffer ends up empty anyway.
+const clearScanBuffer = () => {
+    const st = (typeof state !== 'undefined') ? state : window.state;
+    const clear = () => {
+        if (!st) return;
+        st.scanBuffer = '';
+        st.scanStartTime = 0;
+        try { clearTimeout(st.bufferTimeout); } catch (_) { /* noop */ }
+    };
+    clear();
+    setTimeout(clear, 0);
+};
+window.clearScanBuffer = clearScanBuffer;
+
 // --- SCAN CAPTURE FROM A FOCUSED FIELD ---
 // The global accumulator bails on `e.target.tagName === 'INPUT'`, so any modal
 // that focuses a text field disarms the scanner. Sometimes dropping the

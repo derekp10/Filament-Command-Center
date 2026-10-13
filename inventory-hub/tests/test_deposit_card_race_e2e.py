@@ -38,6 +38,8 @@ from playwright.sync_api import Page
 
 LOC = "FCC-TEST-DEPOSIT-CART"
 LOC_ROW = {"LocationID": LOC, "Name": "FCC Test Deposit Cart", "Type": "Cart", "Max Spools": ""}
+OTHER = "FCC-TEST-OTHER-CART"
+OTHER_ROW = {"LocationID": OTHER, "Name": "FCC Test Other Cart", "Type": "Cart", "Max Spools": ""}
 A = {"id": 999201, "display": "FCC Test PLA #999201", "color": "ff0000"}
 B = {"id": 999202, "display": "FCC Test PETG #999202", "color": "00ff00"}
 OK = {"success": True}
@@ -107,6 +109,10 @@ class FakeBackend:
             if path == "/api/state/buffer":
                 self._json(route, self.buffer)
                 return
+            if path.startswith("/api/printer_state/"):
+                self._json(route, {"known": True, "is_active": False, "state": "IDLE",
+                                   "printer_name": "FCC Test Printer"})
+                return
             if path == "/api/get_contents":
                 loc = (parse_qs(parts.query).get("id") or [""])[0].upper()
                 if loc.startswith("FCC-TEST-"):
@@ -115,9 +121,9 @@ class FakeBackend:
             if path == "/api/locations" and req.method == "GET":
                 resp = route.fetch()
                 rows = resp.json()
-                if isinstance(rows, list) and not any(
-                        isinstance(r, dict) and r.get("LocationID") == LOC for r in rows):
-                    rows.append(dict(LOC_ROW))
+                if isinstance(rows, list):
+                    have = {r.get("LocationID") for r in rows if isinstance(r, dict)}
+                    rows.extend(dict(r) for r in (LOC_ROW, OTHER_ROW) if r["LocationID"] not in have)
                 self._json(route, rows, status=resp.status)
                 return
             route.continue_()
@@ -135,6 +141,11 @@ class FakeBackend:
             payload = OK
         elif path == "/api/manage_contents":
             payload = {"status": "success"}
+        elif path == "/api/identify_scan":
+            # A Quick-Swap deposit: answer as the route would, for the spool named.
+            moved = body.get("spool_id") or A["id"]
+            payload = {"type": "assignment", "action": "assignment_done", "location": "FCC-TEST-BOX",
+                       "slot": "2", "moved": moved}
         else:
             payload = OK
         self._json(route, payload)
@@ -146,8 +157,13 @@ class FakeBackend:
 @pytest.fixture(autouse=True)
 def _drop_routes_in_flight(page: Page):
     """A route callback still running at context close otherwise surfaces its
-    TargetClosedError in the NEXT test's setup."""
+    TargetClosedError in the NEXT test's setup. Close the page FIRST: un-routing
+    a live page lets its next buffer poll or persist reach the real dev server."""
     yield
+    try:
+        page.close()
+    except PlaywrightError:
+        pass
     try:
         page.context.unroute_all(behavior="ignoreErrors")
     except PlaywrightError:
@@ -251,3 +267,54 @@ def test_deposit_card_disappears_when_the_buffer_empties(page: Page, base_url, r
     assert not be.bodies("/api/manage_contents"), (
         "a click on a DEPOSIT card rendered for a now-empty buffer still POSTed "
         f"{be.bodies('/api/manage_contents')}")
+
+
+# --------------------------------------------------------------------------- #
+# Found by the Group 46 adversarial review                                    #
+# --------------------------------------------------------------------------- #
+
+QS_DEPOSIT_JS = """([box, slot, th]) => {
+    let btn = document.getElementById('fcc-test-deposit-btn');
+    if (!btn) {
+        btn = document.createElement('button');
+        btn.id = 'fcc-test-deposit-btn';
+        btn.className = 'fcc-qs-slot';
+        btn.dataset.box = box; btn.dataset.slot = slot; btn.dataset.toolhead = th;
+        btn.hidden = true;
+        document.body.appendChild(btn);
+    }
+    window.quickSwapDeposit(btn);
+}"""
+
+
+def test_quickswap_deposit_writes_the_spool_its_confirm_named(page: Page, base_url, reset_dom_state_js):
+    """The Quick-Swap deposit names the buffered spool in its confirm, but used to
+    post only LOC:<box>:SLOT:<n>, so the server deposited the first spool of its
+    buffer replica. Rotate the carousel while the confirm is up, press Yes: the
+    POST must still name the spool the confirm showed."""
+    be = _open_with_buffer(page, base_url, reset_dom_state_js)
+    page.evaluate(QS_DEPOSIT_JS, ["FCC-TEST-BOX", "2", "FCC-TEST-TH"])
+    page.wait_for_selector("#fcc-quickswap-yes", timeout=8_000)
+    title = page.evaluate("() => document.getElementById('fcc-quickswap-confirm-title').textContent")
+    assert f"#{A['id']}" in title, title
+    page.evaluate("() => window.nextBuffer()")
+    assert page.evaluate("() => state.heldSpools[0].id") == B["id"]
+    page.click("#fcc-quickswap-yes")
+    _until(page, lambda: be.bodies("/api/identify_scan"), 5_000, "Yes never posted the deposit")
+    body = be.bodies("/api/identify_scan")[0]
+    assert body.get("spool_id") == A["id"], (
+        f"the confirm named #{A['id']} but the deposit posted {body}")
+
+
+def test_a_late_render_for_another_location_does_not_paint_over_the_open_one(
+        page: Page, base_url, reset_dom_state_js):
+    """A pulse or refresh fetched for the PREVIOUS location used to repaint the open
+    view with it, and its DEPOSIT card then wrote into the old location."""
+    be = _open_with_buffer(page, base_url, reset_dom_state_js)
+    page.wait_for_function(
+        f"(state.allLocations || []).some(l => l.LocationID === {json.dumps(OTHER)})", timeout=10_000)
+    painted = page.evaluate(f"() => window._renderManagePayload({json.dumps(OTHER)}, [])")
+    assert painted is False, "a payload for another location was painted into the open view"
+    page.evaluate(CLICK_DEPOSIT_JS)
+    _until(page, lambda: be.bodies("/api/manage_contents"), 5_000, "the DEPOSIT click never posted")
+    assert be.bodies("/api/manage_contents")[0]["location"] == LOC

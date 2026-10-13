@@ -36,7 +36,8 @@ pytestmark = pytest.mark.usefixtures("require_server")
 
 
 class FakeBackend:
-    def __init__(self, page: Page):
+    def __init__(self, page: Page, locations=None):
+        self.locations = locations   # None = GET /api/locations passes through read-only
         self.posts: list[tuple[str, dict]] = []
         self.urls: list[tuple[str, str]] = []   # (method, full url) of every non-GET
         self.buffer: list = []
@@ -61,6 +62,9 @@ class FakeBackend:
             if path == "/api/state/buffer":
                 self._json(route, self.buffer)
                 return
+            if path == "/api/locations" and self.locations is not None:
+                self._json(route, self.locations)
+                return
             route.continue_()
             return
         try:
@@ -82,7 +86,13 @@ class FakeBackend:
 
 @pytest.fixture(autouse=True)
 def _drop_routes_in_flight(page: Page):
+    """Close the page BEFORE un-routing: a live page's next buffer poll or persist
+    would otherwise reach the real dev server."""
     yield
+    try:
+        page.close()
+    except PlaywrightError:
+        pass
     try:
         page.context.unroute_all(behavior="ignoreErrors")
     except PlaywrightError:
@@ -98,8 +108,8 @@ def _until(page: Page, predicate, timeout_ms: int, what: str) -> None:
     assert predicate(), what
 
 
-def _open_editor(page: Page, base_url: str, reset_dom_state_js: str) -> FakeBackend:
-    be = FakeBackend(page)
+def _open_editor(page: Page, base_url: str, reset_dom_state_js: str, locations=None) -> FakeBackend:
+    be = FakeBackend(page, locations=locations)
     page.goto(base_url.rstrip("/") + "/", wait_until="domcontentloaded")
     page.wait_for_function(
         "typeof state !== 'undefined' && typeof modals !== 'undefined' && !!modals.locModal"
@@ -109,6 +119,11 @@ def _open_editor(page: Page, base_url: str, reset_dom_state_js: str) -> FakeBack
     page.evaluate(reset_dom_state_js)
     page.evaluate("() => window.openAddModal()")
     page.wait_for_function("document.getElementById('locModal').classList.contains('show')",
+                           timeout=10_000)
+    # `.show` lands at the START of the fade; the shown handler later focuses
+    # #edit-id and selects its text. Wait for it, or a key meant for another
+    # field can land in the ID under load.
+    page.wait_for_function("document.activeElement && document.activeElement.id === 'edit-id'",
                            timeout=10_000)
     page.fill("#edit-id", NEW_ID)
     page.fill("#edit-name", "FCC Test Enter Save")
@@ -146,19 +161,127 @@ def test_enter_in_a_text_field_saves(page: Page, base_url, reset_dom_state_js):
 
 def test_a_scanner_burst_on_the_dropdown_is_still_a_scan(page: Page, base_url, reset_dom_state_js):
     """Not a global 'ignore SELECT': a barcode scanned while the dropdown has
-    focus still reaches the scan path, and doesn't save the half-edited row."""
+    focus still reaches the scan path, and doesn't save the half-edited row. A
+    purely numeric barcode has no scan-shaped character, so only the scanner-
+    speed rule can tell it from typing. The burst and its Enter are dispatched
+    in ONE evaluate, so the timing can't depend on this machine's load."""
     be = _open_editor(page, base_url, reset_dom_state_js)
     page.focus("#edit-type")
-    # A scanner's burst, already accumulated: the scanner path's own state, so
-    # the test doesn't depend on how fast this machine dispatches keydowns.
-    page.evaluate("() => { state.scanBuffer = 'ID:999301'; state.scanStartTime = Date.now(); }")
-    page.keyboard.press("Enter")
+    page.evaluate("""() => {
+        state.scanBuffer = '12345678'; state.scanStartTime = Date.now();
+        document.getElementById('edit-type').dispatchEvent(
+            new KeyboardEvent('keydown', {key: 'Enter', bubbles: true, cancelable: true}));
+    }""")
 
-    _until(page, lambda: "ID:999301" in _scan_texts(be), 5_000,
+    _until(page, lambda: "12345678" in _scan_texts(be), 5_000,
            "a scanner burst on the focused Type dropdown never reached /api/identify_scan")
     page.wait_for_timeout(300)
     assert not be.bodies("/api/locations"), (
         f"a scanner burst on the dropdown saved the location: {be.bodies('/api/locations')}")
+
+
+def test_a_slow_scanner_on_the_dropdown_is_still_a_scan(page: Page, base_url, reset_dom_state_js):
+    """A scanner slower than the 150 ms burst window still types a scan-shaped
+    payload (a ':' no typeahead produces): it stays a scan, never a save."""
+    be = _open_editor(page, base_url, reset_dom_state_js)
+    page.focus("#edit-type")
+    page.evaluate("""() => {
+        state.scanBuffer = 'LOC:FCC-TEST-SLOW'; state.scanStartTime = Date.now() - 1000;
+        document.getElementById('edit-type').dispatchEvent(
+            new KeyboardEvent('keydown', {key: 'Enter', bubbles: true, cancelable: true}));
+    }""")
+    _until(page, lambda: "LOC:FCC-TEST-SLOW" in _scan_texts(be), 5_000,
+           "a slow scan on the Type dropdown never reached /api/identify_scan")
+    page.wait_for_timeout(300)
+    assert not be.bodies("/api/locations")
+
+
+def test_a_scan_typed_into_a_text_field_is_a_scan_not_a_save(page: Page, base_url, reset_dom_state_js):
+    """The accumulator ignores INPUT targets, so a barcode scanned while Friendly
+    Name has focus types into the field. Enter-to-save then SAVED it as the name
+    (Group 46 review). The shared field-scan capture now sends it to the scan path
+    and leaves the field as it was. Keydowns dispatched in one evaluate = scanner
+    speed, on any machine."""
+    be = _open_editor(page, base_url, reset_dom_state_js)
+    page.focus("#edit-name")
+    page.evaluate("""() => {
+        const el = document.getElementById('edit-name');
+        for (const c of 'LOC:FCC-TEST-SCAN') {
+            el.dispatchEvent(new KeyboardEvent('keydown', {key: c, bubbles: true, cancelable: true}));
+        }
+        el.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true, cancelable: true}));
+    }""")
+    _until(page, lambda: "LOC:FCC-TEST-SCAN" in _scan_texts(be), 5_000,
+           "a scan typed into Friendly Name never reached /api/identify_scan")
+    page.wait_for_timeout(300)
+    assert not be.bodies("/api/locations"), (
+        f"a scan typed into a text field was saved into the location: {be.bodies('/api/locations')}")
+    assert page.input_value("#edit-name") == "FCC Test Enter Save"
+
+
+def test_a_held_or_doubled_enter_saves_once(page: Page, base_url, reset_dom_state_js):
+    be = _open_editor(page, base_url, reset_dom_state_js)
+    page.focus("#edit-name")
+    page.evaluate("""() => {
+        const el = document.getElementById('edit-name');
+        const enter = (repeat) => el.dispatchEvent(
+            new KeyboardEvent('keydown', {key: 'Enter', repeat, bubbles: true, cancelable: true}));
+        enter(false); enter(true); enter(false);
+    }""")
+    _until(page, lambda: be.bodies("/api/locations"), 5_000, "Enter never saved")
+    page.wait_for_timeout(500)
+    assert len(be.bodies("/api/locations")) == 1, (
+        f"one Enter press posted {len(be.bodies('/api/locations'))} saves")
+
+
+def test_enter_on_a_focused_button_presses_it(page: Page, base_url, reset_dom_state_js):
+    """The accumulator cancels every Enter outside INPUT/TEXTAREA, which killed
+    Enter on the editor's buttons, and it submitted leftover typeahead letters as
+    a scan. Enter on 💾 Save now saves; the stray 't' goes nowhere."""
+    be = _open_editor(page, base_url, reset_dom_state_js)
+    page.focus("#locModal .modal-footer .btn-primary")
+    page.evaluate("() => { state.scanBuffer = 't'; state.scanStartTime = Date.now() - 1000; }")
+    page.keyboard.press("Enter")
+    _until(page, lambda: be.bodies("/api/locations"), 5_000, "Enter on the focused Save button didn't save")
+    page.wait_for_timeout(300)
+    assert not be.bodies("/api/identify_scan"), f"leftover letters were scanned: {_scan_texts(be)}"
+
+
+def test_editing_a_blank_id_row_is_refused_with_a_way_out(page: Page, base_url, reset_dom_state_js):
+    """Group 46.5: the editor can't repair a row with no Location ID (saving it
+    appends a SECOND row, and the next save says "already exists"), so it doesn't
+    open; it says to delete the row and add it again."""
+    FakeBackend(page)
+    page.goto(base_url.rstrip("/") + "/", wait_until="domcontentloaded")
+    page.wait_for_function("typeof window.openEdit === 'function' && typeof modals !== 'undefined'",
+                           timeout=20_000)
+    page.evaluate(reset_dom_state_js)
+    page.evaluate("() => window.openEdit('')")
+    page.wait_for_timeout(600)
+    assert not page.evaluate("() => document.getElementById('locModal').classList.contains('show')")
+    toast = page.evaluate(
+        "() => Array.from(document.querySelectorAll('.toast-msg')).map(t => t.textContent).join(' | ')")
+    assert "no Location ID" in toast, toast
+
+
+def test_enter_in_the_parent_tree_picker_is_not_scanned(page: Page, base_url, reset_dom_state_js):
+    """Same class as 46.2, in the 🌳 Browse… picker: its Enter reached the scan
+    accumulator, which submitted letters typed in the picker as a scan."""
+    # The picker fetches /api/locations itself; a fixed list keeps it fast and off
+    # dev's Spoolman-backed synthesizer.
+    rows = [{"LocationID": "FCC-TEST-ROOM", "Name": "FCC Test Room", "Type": "Room",
+             "Max Spools": "0", "parent_id": None}]
+    be = _open_editor(page, base_url, reset_dom_state_js, locations=rows)
+    page.evaluate("() => window.openParentTreePicker()")   # what 🌳 Browse… calls
+    page.wait_for_selector("#fcc-parent-tree-picker .fcc-tp-node", state="attached", timeout=8_000)
+    page.evaluate("""() => {
+        state.scanBuffer = 'r'; state.scanStartTime = Date.now() - 1000;
+        const node = document.querySelector('#fcc-parent-tree-picker .fcc-tp-node');
+        node.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true, cancelable: true}));
+    }""")
+    page.wait_for_timeout(500)
+    assert not be.bodies("/api/identify_scan"), f"the picker's Enter was scanned: {_scan_texts(be)}"
+    assert page.evaluate("() => state.scanBuffer") == ""
 
 
 def test_save_with_a_blank_location_id_is_refused_client_side(page: Page, base_url, reset_dom_state_js):
