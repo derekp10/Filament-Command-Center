@@ -64,13 +64,18 @@ class WeightWireSpoolman:
     shaped like Spoolman's (own initial_weight may be null; filament.weight is the
     inherited net weight). A PATCH applies what Spoolman would store."""
 
-    def __init__(self, spools, patch_fails=()):
+    def __init__(self, spools, patch_fails=(), patch_lost=()):
         self.spools = {int(k): copy.deepcopy(v) for k, v in spools.items()}
         self.patches = []
         self.patch_fails = set(patch_fails)   # sids whose PATCH lands but answers as a failure
+        self.patch_lost = set(patch_lost)     # sids whose PATCH never lands (and answers as a failure)
+        self.blind = set()                    # sids Spoolman can't be read for (a GET fails)
+        self.blind_after_patch = set()        # sids that go blind as soon as a PATCH to them lands
 
     def _get(self, url, *a, **k):
         tail = str(url).split("?")[0].rstrip("/").rsplit("/", 1)[-1]
+        if tail.isdigit() and int(tail) in self.blind:
+            raise spoolman_api.requests.exceptions.ConnectionError("unreachable (test)")
         rec = self.spools.get(int(tail)) if tail.isdigit() else None
         if rec is None:
             return MagicMock(ok=False, status_code=404, text="not found", json=MagicMock(return_value={}))
@@ -83,12 +88,16 @@ class WeightWireSpoolman:
         sid = int(str(url).rstrip("/").rsplit("/", 1)[-1])
         body = copy.deepcopy(json)
         self.patches.append((sid, body))
+        if sid in self.patch_lost:
+            raise spoolman_api.requests.exceptions.ReadTimeout("read timed out, not applied (test)")
         rec = self.spools[sid]
         for key in ("used_weight", "initial_weight", "archived", "location"):
             if key in body:
                 rec[key] = body[key]
         if "extra" in body:
             rec["extra"] = {key: _unwire(val) for key, val in body["extra"].items()}
+        if sid in self.blind_after_patch:
+            self.blind.add(sid)
         if sid in self.patch_fails:
             # The write LANDED, but the answer reads as a failure (a timeout after
             # commit) — the 43.6 hazard.
@@ -361,3 +370,123 @@ def test_review_confirm_line_names_printer_and_toolhead(logs):
     assert r.get_json()["status"] == "confirmed"
     line = next(m for m in _msgs(logs) if "Spool #96" in m)
     assert line.startswith(f"✔️ {INDX} RCOI-2: cancel-deduct 2.50g from Spool #96 (confirmed)"), line
+
+
+# --------------------------------------------------------------------------- #
+# 43.6 — the cancel-review retry is idempotent                                #
+# --------------------------------------------------------------------------- #
+# update_spool's 15 s timeout is a READ timeout: a Spoolman that applies a PATCH
+# but answers slowly reads as a rejection. The confirm then re-queued the spool,
+# and the retry re-read the CURRENT used_weight (already including the write that
+# landed) and added the grams again, charging one cancelled print twice.
+
+def _pending_review(job="J-436X", sid=96, grams=2.5):
+    cancel_review_store.add_pending({
+        "printer_name": INDX, "job_id": job, "filename": "f.bgcode", "progress": 0.5,
+        "total_grams": grams, "ambiguous": False, "created": "2026-10-13 00:00:00",
+        "spools": [{"sid": sid, "toolhead": "RCOI-2", "position": 1, "grams": grams}]})
+
+
+def _confirm(sm, job="J-436X", updates=None):
+    ctx = _wire_ctx(sm, at={"RCOI-2": [96]}, toolheads=(("RCOI-2", 1),), printer=INDX)
+    _start(ctx)
+    try:
+        return app_module.app.test_client().post("/api/cancel_deduct/confirm", json={
+            "printer_name": INDX, "job_id": job, "updates": updates or {"96": 2.5}}).get_json()
+    finally:
+        _stop(ctx)
+
+
+def _landed(sm, sid=96):
+    return [b for s_, b in sm.patches if s_ == sid and s_ not in sm.patch_lost]
+
+
+def test_a_write_that_landed_but_reported_a_timeout_is_charged_once(logs):
+    """The task file's pin. Spoolman applies the PATCH but the answer times out.
+    Whatever the first confirm reports, confirming again (as the card invites)
+    must leave the spool charged exactly once."""
+    sm = WeightWireSpoolman({96: _full_spool(used=43.4)}, patch_fails={96})
+    _pending_review()
+    first = _confirm(sm)
+    sm.patch_fails.clear()   # Spoolman answers normally again
+    if cancel_review_store.has_pending(INDX, "J-436X"):
+        _confirm(sm)
+    assert sm.used(96) == pytest.approx(45.9), (
+        f"charged {sm.used(96) - 43.4:.2f} g, not 2.5 g; first confirm said {first}")
+    assert len(sm.patches) == 1, "a second PATCH re-charged the spool"
+    assert print_deduct_ledger.was_deducted(INDX, "J-436X")
+
+
+def test_a_landed_write_is_recognised_on_the_spot(logs):
+    """Re-reading the spool right after a reported failure shows the write landed:
+    the first confirm already counts it, so nothing is left pending."""
+    sm = WeightWireSpoolman({96: _full_spool(used=43.4)}, patch_fails={96})
+    _pending_review()
+    body = _confirm(sm)
+    assert body["status"] == "confirmed" and body["applied"][0]["grams"] == 2.5, body
+    assert not cancel_review_store.has_pending(INDX, "J-436X")
+    assert any("landed" in m for m in _msgs(logs)), _msgs(logs)
+
+
+def test_a_landed_write_found_only_on_the_retry(logs):
+    """The re-read after the failure ALSO fails (Spoolman unreachable), so the
+    retry record must carry the attempt's baseline: the retry sees the spool
+    already at the attempted weight and doesn't write again."""
+    sm = WeightWireSpoolman({96: _full_spool(used=43.4)}, patch_fails={96})
+    sm.blind_after_patch.add(96)
+    _pending_review()
+    first = _confirm(sm)
+    assert first["status"] == "error" and cancel_review_store.has_pending(INDX, "J-436X"), first
+    retry_row = cancel_review_store.list_pending()[0]["spools"][0]
+    assert retry_row.get("attempt_used_before") == 43.4, retry_row
+    assert retry_row.get("attempt_used_after") == pytest.approx(45.9), retry_row
+    sm.blind.clear()
+    sm.blind_after_patch.clear()
+    sm.patch_fails.clear()
+    second = _confirm(sm)
+    assert second["status"] == "confirmed", second
+    assert sm.used(96) == pytest.approx(45.9) and len(sm.patches) == 1
+    assert print_deduct_ledger.was_deducted(INDX, "J-436X")
+
+
+def test_a_write_that_never_landed_is_charged_on_the_retry(logs):
+    sm = WeightWireSpoolman({96: _full_spool(used=43.4)}, patch_lost={96})
+    _pending_review()
+    _confirm(sm)
+    assert cancel_review_store.has_pending(INDX, "J-436X")
+    sm.patch_lost.clear()
+    second = _confirm(sm)
+    assert second["status"] == "confirmed", second
+    assert sm.used(96) == pytest.approx(45.9)
+
+
+def test_a_spool_changed_since_the_attempt_needs_a_second_apply(logs):
+    """The spool was weighed between the failed attempt and the retry, and came
+    out HEAVIER than before the attempt: FCC can't tell whether this print's grams
+    were already taken, so the retry charges nothing and says so. Applying again
+    charges it deliberately."""
+    sm = WeightWireSpoolman({96: _full_spool(used=43.4)}, patch_lost={96})
+    _pending_review()
+    _confirm(sm)
+    sm.patch_lost.clear()
+    sm.spools[96]["used_weight"] = 40.0          # a weigh-out in between
+    second = _confirm(sm)
+    assert second["status"] != "confirmed" and sm.used(96) == 40.0, second
+    assert cancel_review_store.has_pending(INDX, "J-436X")
+    assert "changed" in (second.get("errors") or [{}])[0].get("error", ""), second
+    third = _confirm(sm)
+    assert third["status"] == "confirmed" and sm.used(96) == pytest.approx(42.5), third
+
+
+def test_a_spool_already_past_the_attempted_weight_is_not_charged_again(logs):
+    """At or past the weight the charge would have left it at (the write landed,
+    or a later weigh-out recorded more use): charging again would count twice."""
+    sm = WeightWireSpoolman({96: _full_spool(used=43.4)}, patch_lost={96})
+    _pending_review()
+    _confirm(sm)
+    sm.patch_lost.clear()
+    sm.spools[96]["used_weight"] = 50.0
+    second = _confirm(sm)
+    assert second["status"] == "confirmed" and sm.used(96) == 50.0, second
+    assert not [b for s_, b in sm.patches[1:] if s_ == 96], "the retry wrote again"
+    assert print_deduct_ledger.was_deducted(INDX, "J-436X")
