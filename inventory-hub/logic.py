@@ -49,6 +49,89 @@ def _active_print_info_for_location(location_str, printer_map=None):
     }
 
 
+def _confirm_scope(confirm):
+    """Group 39.1 — what a `confirm_active_print` value covers, as
+    (covers_every_head, covered_heads).
+
+    True covers every head: internal callers (the bulk-move commit, which
+    re-plans from live state) and the legacy browser flag. Falsy covers none.
+    An iterable of LocationIDs covers exactly the heads whose active-print
+    warning the user saw (`confirmed_toolheads`), so a stale confirm — a grid
+    whose slot was rebound to another head — is asked again (R2-08)."""
+    if confirm is True:
+        return True, frozenset()
+    if not confirm:
+        return False, frozenset()
+    if isinstance(confirm, (str, bytes)):
+        heads = [confirm]
+    else:
+        try:
+            heads = list(confirm)
+        except TypeError:
+            return True, frozenset()   # any other truthy value is the legacy blanket confirm
+    return False, frozenset(str(h).strip().strip('"').upper() for h in heads if str(h).strip())
+
+
+def _confirm_covers(confirm, head):
+    """True when `confirm` covers the active-print warning for `head`."""
+    every, heads = _confirm_scope(confirm)
+    return every or str(head or '').strip().strip('"').upper() in heads
+
+
+def _uncovered_active_heads(touched, confirm, printer_map, spools=None):
+    """Group 39.1 — the actively printing heads this move would touch that the
+    caller's confirm doesn't cover. One list, so a move answers ONE confirm.
+
+    `touched` is [(head_id, role)], role 'destination' (the move's target),
+    'feeds' (a named slot's bound head, which the auto-deploy chain loads) or
+    'source' (Group 39.4: a moving spool's own head). A covered head is never
+    probed. The rest go through _active_print_info_for_location, whose per-move
+    memo (perform_smart_move) probes each printer once, and which fails open:
+    an unreachable printer is not active. Returns
+    [{toolhead, printer_name, state, role, spools}]."""
+    every, covered = _confirm_scope(confirm)
+    if every:
+        return []
+    out, seen = [], set()
+    for head, role in touched:
+        h = str(head or '').strip().strip('"').upper()
+        if not h or h in seen or h in covered:
+            continue
+        seen.add(h)
+        ap = _active_print_info_for_location(h, printer_map)
+        if ap:
+            out.append({"toolhead": ap['toolhead'], "printer_name": ap['printer_name'],
+                        "state": ap['state'], "role": role,
+                        "spools": [int(s) for s in (spools or []) if str(s).isdigit()]})
+    return out
+
+
+def _active_print_message(active_prints, target):
+    """The text of an active-print confirm. Group 39.4 widens it with D6's
+    consequence wording for a spool leaving a printing head; for a destination
+    or a bound slot's head it keeps the sentence consumers already show."""
+    first = active_prints[0]
+    return f"{first['printer_name']} is {first['state']} — moving a spool here will disrupt the print."
+
+
+def _requires_confirm_answer(active_prints, target, target_slot):
+    """Group 39.1 — the ONE shape every move confirm answers in. Groups 40-42
+    extend it (40.0c fills fed_heads / can_store); none redefines it.
+    `active_print` keeps the first entry's three original keys for existing
+    consumers; a replay sends back the heads in `active_prints`."""
+    first = active_prints[0]
+    return {
+        "status": "requires_confirm",
+        "confirm_type": "active_print",
+        "active_prints": active_prints,
+        "active_print": {k: first[k] for k in ("toolhead", "printer_name", "state")},
+        "fed_heads": [],
+        "can_store": False,
+        "target_slot": None if target_slot in (None, '') else str(target_slot),
+        "msg": _active_print_message(active_prints, target),
+    }
+
+
 def _toolhead_of(location_str, printer_map=None):
     """Resolve a location string to its (printer_name, toolhead_id) tuple.
 
@@ -514,33 +597,45 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
 
     if not spools: return {"status": "error", "msg": "No spools found"}
 
-    # Active-print safety check: if the destination is a toolhead on a
-    # printer that's currently PRINTING/PAUSED/BUSY, bail with a
-    # requires_confirm response so the caller can show a dialog and retry
-    # with confirm_active_print=True. Fail-open via None inside the helper.
+    # ---- THE SHARED PRE-WRITE CONTRACT (Group 39.1) ----------------------------
+    # Groups 39-42 all edit this section. The order is fixed; extend a step,
+    # never reorder or redefine it:
+    #   1. Resolve the spool list (above).
+    #   2. Structural refusals, no Spoolman or printer I/O, answered as
+    #      {"status": "error", "blocked_reason", "msg", "failures"}: a Printer row
+    #      that is not its own toolhead (40.0a); several spools onto a
+    #      single-occupancy target (42.3a).
+    #   3. Slot choice: auto-slot for a slotless single spool into a multi-slot
+    #      box (40.0e moves it up here).
+    #   4. Strict reads, failing closed (status error, nothing written): the
+    #      moving spools' own records (39.4), the target head's residents (39.7),
+    #      the bound head's residents (40.0c).
+    #   5. ONE confirm answer: _uncovered_active_heads over the destination /
+    #      feeds / source heads (one probe per printer, through the memo), in the
+    #      shape _requires_confirm_answer builds (40.0c adds fed_heads).
+    #   6. Writes, per spool, in this order: Smart Load's resident ejects; the
+    #      slot unseat (41.6); the spool's own write (13.6 / record_source at a
+    #      head, 40.0d; the single-slot box release, 42.1); then the chain.
+    # -----------------------------------------------------------------------------
     #
-    # Walks slot-targets too: if target is a Dryer Box and target_slot is
-    # bound to a toolhead, that toolhead is the eventual destination (via
-    # the auto-deploy chain below). Checking it preemptively means the
-    # user gets prompted BEFORE any Spoolman writes happen, instead of
-    # having the recursive call swallow requires_confirm silently.
-    if not confirm_active_print:
-        ap = _active_print_info_for_location(target, printer_map)
-        if not ap:
-            # Check slot-binding's eventual toolhead.
-            tgt_row = loc_info_map.get(target)
-            if tgt_row and tgt_row.get('Type') == 'Dryer Box' and target_slot:
-                bound = locations_db.bindings_from_row(tgt_row)
-                bound_th = bound.get(str(target_slot)) or bound.get(str(int(target_slot))) if str(target_slot).isdigit() else bound.get(str(target_slot))
-                if bound_th:
-                    ap = _active_print_info_for_location(bound_th, printer_map)
-        if ap:
-            return {
-                "status": "requires_confirm",
-                "confirm_type": "active_print",
-                "active_print": ap,
-                "msg": f"{ap['printer_name']} is {ap['state']} — moving a spool here will disrupt the print.",
-            }
+    # Step 5 today. The destination, and a named slot's bound head (the auto-
+    # deploy chain loads it), are checked BEFORE any Spoolman write, so the
+    # user is asked before anything moves rather than the chained call
+    # swallowing the answer. `confirm_active_print` is True (covers every
+    # head), falsy (none) or the LocationIDs whose warning the user saw.
+    touched = [(target, 'destination')]
+    tgt_row = loc_info_map.get(target)
+    if tgt_row and tgt_row.get('Type') == 'Dryer Box' and target_slot:
+        bound = locations_db.bindings_from_row(tgt_row)
+        if str(target_slot).isdigit():
+            bound_th = bound.get(str(target_slot)) or bound.get(str(int(target_slot)))
+        else:
+            bound_th = bound.get(str(target_slot))
+        if bound_th and not locations_db.is_printer_sentinel(bound_th):
+            touched.append((bound_th, 'feeds'))
+    active_prints = _uncovered_active_heads(touched, confirm_active_print, printer_map, spools)
+    if active_prints:
+        return _requires_confirm_answer(active_prints, target, target_slot)
 
     # Whether the CALLER named the slot, before auto-slot fills one in. The
     # pre-flight above probed only an explicit slot's bound toolhead, so only
@@ -664,8 +759,10 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
             if homeless_dest is None:
                 homeless_dest = _known_room_of(target, loc_list)
             before_extra = dict(before.get('extra') or {})
+            # perform_smart_eject takes a boolean: covered when the confirm
+            # covers the head this resident is unloaded from (Group 39.1).
             ejected = perform_smart_eject(
-                rid, confirm_active_print=confirm_active_print,
+                rid, confirm_active_print=_confirm_covers(confirm_active_print, target),
                 homeless_destination=homeless_dest,
             )
             if ejected is not True:
@@ -926,7 +1023,9 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                     th, to_deploy,
                     target_slot=None, origin=chain_origin,
                     auto_deploy=False,
-                    confirm_active_print=confirm_active_print and explicit_slot,
+                    # Scoped confirms pass through as-is (Group 39.1): `confirm
+                    # and explicit_slot` turned a head list into a blanket True.
+                    confirm_active_print=confirm_active_print if explicit_slot else False,
                 )
             except Exception as _ad_err:
                 state.logger.error(f"Auto-deploy failed for {target}:SLOT:{target_slot}: {_ad_err}")
