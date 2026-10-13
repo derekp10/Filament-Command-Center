@@ -394,15 +394,20 @@ def test_a_spool_changed_since_the_attempt_needs_a_second_apply(logs):
     assert third["status"] == "confirmed" and sm.used(96) == pytest.approx(42.5), third
 
 
-def test_a_spool_already_past_the_attempted_weight_is_not_charged_again(logs):
-    """At or past the weight the charge would have left it at (the write landed,
-    or a later weigh-out recorded more use): charging again would count twice."""
+def test_a_spool_past_the_attempted_weight_is_asked_about_not_skipped(logs):
+    """Review finding deduct-math-1: the attempt never landed, then the next
+    print on the head charged 20 g. "At or past the attempted weight" read that
+    as "the earlier write landed", so this print's 2.5 g went to nobody while the
+    ledger said they were charged. Only an exact match counts as landed; past it,
+    the retry charges nothing, says why, and a second Apply charges it."""
     sm = WeightWireSpoolman({96: _full_spool(used=43.4)}, patch_lost={96})
     _pending_review()
     _confirm(sm)
     sm.patch_lost.clear()
-    sm.spools[96]["used_weight"] = 50.0
+    sm.spools[96]["used_weight"] = 63.4           # the next print's 20 g deduct
     second = _confirm(sm)
-    assert second["status"] == "confirmed" and sm.used(96) == 50.0, second
-    assert not [b for s_, b in sm.patches[1:] if s_ == 96], "the retry wrote again"
-    assert print_deduct_ledger.was_deducted(INDX, "J-436X")
+    assert second["status"] != "confirmed" and sm.used(96) == 63.4, second
+    assert "changed" in (second.get("errors") or [{}])[0].get("error", ""), second
+    assert not print_deduct_ledger.was_deducted(INDX, "J-436X")
+    third = _confirm(sm)
+    assert third["status"] == "confirmed" and sm.used(96) == pytest.approx(65.9), third

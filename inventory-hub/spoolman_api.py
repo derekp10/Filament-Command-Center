@@ -282,9 +282,11 @@ def _auto_unarchive_on_refill(data, existing):
     manually via the normal scan/move flow.
 
     The caller's explicit intent always wins: if the payload already sets
-    `archived` or `location`, we leave those keys alone.
+    `archived` or `location`, we leave those keys alone. A payload that sets
+    `archived: True` keeps the spool archived, so it gets no location restore
+    either (a deduct charging an archived spool is not a refill; Group 43 review).
     """
-    if not existing or not existing.get('archived'):
+    if not existing or not existing.get('archived') or data.get('archived') is True:
         return
     new_used = data.get('used_weight', existing.get('used_weight'))
     new_initial = data.get('initial_weight', existing.get('initial_weight'))

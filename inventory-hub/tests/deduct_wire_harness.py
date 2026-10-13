@@ -46,7 +46,12 @@ class WeightWireSpoolman:
             raise spoolman_api.requests.exceptions.ConnectionError("unreachable (test)")
         rec = self.spools.get(int(tail)) if tail.isdigit() else None
         if rec is None:
-            return MagicMock(ok=False, status_code=404, text="not found", json=MagicMock(return_value={}))
+            # Spoolman's ItemNotFoundError answer. get_spool returns the parsed
+            # body whatever the status, so a missing spool reads as this TRUTHY
+            # dict, not as None or {}.
+            body = {"message": f"No spool with ID {tail} found."}
+            return MagicMock(ok=False, status_code=404, text=json.dumps(body),
+                             json=MagicMock(return_value=body))
         body = copy.deepcopy(rec)
         body["id"] = int(tail)
         body["extra"] = {key: json.dumps(val) for key, val in (rec.get("extra") or {}).items()}
@@ -58,7 +63,11 @@ class WeightWireSpoolman:
         self.patches.append((sid, body))
         if sid in self.patch_lost:
             raise spoolman_api.requests.exceptions.ReadTimeout("read timed out, not applied (test)")
-        rec = self.spools[sid]
+        rec = self.spools.get(sid)
+        if rec is None:
+            body = {"message": f"No spool with ID {sid} found."}
+            return MagicMock(ok=False, status_code=404, text=json.dumps(body),
+                             json=MagicMock(return_value=body))
         for key in ("used_weight", "initial_weight", "archived", "location"):
             if key in body:
                 rec[key] = body[key]
