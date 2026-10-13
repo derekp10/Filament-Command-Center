@@ -211,6 +211,29 @@ def api_update_filament():
             f"Filament #{fid} updated OK but activity-log write failed: {e}")
     return jsonify({"success": True, "filament": updated})
 
+def _no_home_unassign_msg(spool_id):
+    """Group 39.6 — the unassign prompt names the spool and where it is: "#88 is
+    loose in CR with no saved home. Unassign it?" for a Room, "… is loaded on
+    XL-3 and has no saved home …" for a toolhead, "… is on PM-DB-1 with no saved
+    home …" otherwise (under Group 41 Q1's option B, a cart, shelf or drawer
+    too). It replaced "Spool is already in a room. Confirm true unassign to
+    nowhere?", which a toolhead spool got as well."""
+    spool = spoolman_api.get_spool(spool_id)
+    loc = ''
+    if isinstance(spool, dict) and spool.get('id') is not None:
+        loc = str(spool.get('location') or '').strip().upper()
+    if not loc:
+        return f"#{spool_id} has no saved home. Unassign it?"
+    rows = {str(r.get('LocationID', '')).strip().upper(): r
+            for r in (locations_db.load_locations_list() or []) if isinstance(r, dict)}
+    row_type = str((rows.get(loc) or {}).get('Type', '')).strip()
+    if row_type == 'Room':
+        return f"#{spool_id} is loose in {loc} with no saved home. Unassign it?"
+    if loc in locations_db.get_active_printer_map() or row_type in locations_db.TOOLHEAD_TYPES:
+        return f"#{spool_id} is loaded on {loc} and has no saved home. Unassign it?"
+    return f"#{spool_id} is on {loc} with no saved home. Unassign it?"
+
+
 @app.route('/api/manage_contents', methods=['POST'])
 def api_manage_contents():
     data = request.json
@@ -315,15 +338,37 @@ def api_manage_contents():
             confirm_active_print=confirm_active_print,
         )
         if isinstance(result, dict) and result.get('status') == 'requires_confirm':
+            # Group 39.6 — one prompt, not two in a row: if the spool would also
+            # need the unassign confirm (no saved home), ask both now. The engine's
+            # answer is unchanged; _eject_destination is the code it runs.
+            unassign_too = False
+            spool = None if is_confirmed else spoolman_api.get_spool(spool_id)
+            if isinstance(spool, dict) and spool.get('id') is not None:
+                dest = logic._eject_destination(spool, locations_db.get_active_printer_map())
+                unassign_too = dest['needs_unassign_confirm']
+            ap = result.get('active_print') or {}
+            if unassign_too:
+                where = str(ap.get('toolhead') or spool.get('location') or '').strip().upper()
+                return jsonify({
+                    "success": False,
+                    "require_confirm": True,
+                    "confirm_types": ["active_print", "unassign"],
+                    "confirm_type": "active_print",
+                    "active_print": result.get('active_print'),
+                    "msg": (f"#{spool_id} is loaded on {where} and has no saved home. Ejecting it leaves "
+                            f"it Unassigned, and FCC stops charging this print to it. Continue?"),
+                })
             return jsonify({
                 "success": False,
                 "require_confirm": True,
+                "confirm_types": ["active_print"],
                 "confirm_type": result.get('confirm_type'),
                 "active_print": result.get('active_print'),
                 "msg": result.get('msg', 'Confirmation required.'),
             })
         if result == "REQUIRE_CONFIRM":
-            return jsonify({"success": False, "require_confirm": True, "msg": "Spool is already in a room. Confirm true unassign to nowhere?"})
+            return jsonify({"success": False, "require_confirm": True, "confirm_types": ["unassign"],
+                            "msg": _no_home_unassign_msg(spool_id)})
         elif result is True:
             return jsonify({"success": True})
         else:

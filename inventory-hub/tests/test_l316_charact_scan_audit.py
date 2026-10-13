@@ -376,16 +376,25 @@ def test_filament_scan_unknown_filament_returns_error_payload(client):
 def test_remove_legacy_require_confirm_string_translated_to_json(client):
     """perform_smart_eject's legacy 'REQUIRE_CONFIRM' string return is
     translated to a {success:false, require_confirm:true} JSON with the
-    exact unassign-to-nowhere prompt. Also pins the default kwargs the
-    route forwards (confirmed=False, confirm_active_print=False)."""
+    unassign prompt. Also pins the default kwargs the route forwards
+    (confirmed=False, confirm_active_print=False).
+    Group 39.6 flipped the text on purpose: it was "Spool is already in a room.
+    Confirm true unassign to nowhere?", which a toolhead spool got as well; it
+    now names the spool and where it is."""
+    rows = [{"LocationID": "CR", "Type": "Room", "Max Spools": "0"}]
     with patch.object(app_module.logic, "perform_smart_eject",
-                      return_value="REQUIRE_CONFIRM") as eject:
+                      return_value="REQUIRE_CONFIRM") as eject, \
+         patch.object(app_module.spoolman_api, "get_spool",
+                      return_value={"id": 55, "location": "CR", "extra": {}}), \
+         patch.object(app_module.locations_db, "load_locations_list", return_value=rows), \
+         patch.object(app_module.locations_db, "get_active_printer_map", return_value={}):
         r = client.post("/api/manage_contents",
                         json={"action": "remove", "spool_id": "55"})
     assert r.get_json() == {
         "success": False,
         "require_confirm": True,
-        "msg": "Spool is already in a room. Confirm true unassign to nowhere?",
+        "confirm_types": ["unassign"],
+        "msg": "#55 is loose in CR with no saved home. Unassign it?",
     }
     eject.assert_called_once_with(
         55, confirmed_unassign=False, confirm_active_print=False)

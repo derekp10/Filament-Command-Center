@@ -1934,6 +1934,80 @@ def get_room_from_location(loc_id):
 
     return room
 
+def _eject_destination(spool_data, printer_map, homeless_destination=None):
+    """Group 39.6 — where perform_smart_eject sends a spool, decided without
+    writing anything or probing a printer (it reads locations.json). Returns
+    {"home", "slot", "target", "needs_unassign_confirm"}:
+      - `home`: the saved source (physical_source) when it is a real home, with
+        `slot` its saved slot; None when there is none. Not a home: the place the
+        spool sits now (the loop), anywhere beneath it (a room's own box), or a
+        toolhead (a stale head -> head trail).
+      - `target`: where a homeless spool goes: the caller-decided
+        `homeless_destination`, else '' off a printer (a printer is not a Room),
+        else its Room, else '' (Unassigned).
+      - `needs_unassign_confirm`: the protected unassign. A homeless spool would
+        leave a real location for Unassigned with no caller decision.
+    perform_smart_eject runs this code, so the eject route's combined confirm
+    (one prompt for "printing" + "no saved home") can't drift from it."""
+    current_location = str(spool_data.get('location') or '').strip().upper()
+    extra = spool_data.get('extra') or {}
+    saved_source = extra.get('physical_source')
+
+    # [ALEX FIX] Prevent Infinite Return Loop
+    # If the database thinks we "came from" the place we are currently ejecting from,
+    # we must clear that memory, otherwise we just 'return' to the same box.
+    if saved_source and str(saved_source).strip().upper() == current_location:
+        state.logger.info(f"🛑 Eject Loop Detected: Source is same as Location ({saved_source}). Clearing.")
+        saved_source = None
+
+    # [ALEX FIX] Room hierarchy bypass
+    # If we are currently floating in a room, and the saved_source is a CHILD of this room,
+    # we NEVER bounce back down to the child box. We break the loop and eject to Unassigned.
+    # L271 Phase 3.5: "is saved_source anywhere BENEATH current_location" via
+    # is_descendant instead of a single-hop resolve_parent equality. parent_id
+    # now stores the immediate parent, so a one-hop check would only catch a
+    # DIRECT child — but a saved_source can be a grandchild of the room we're
+    # floating in (room -> cart -> cart-row). is_descendant walks the chain so
+    # the loop-break fires for the whole subtree. On the pre-3.5 flat tree this
+    # reduces to the old single-hop equality (a row's only ancestor is its
+    # first-segment room), so it's byte-identical until the data flip.
+    if current_location and saved_source:
+        if locations_db.is_descendant(str(saved_source).strip('"'), current_location):
+            state.logger.info(f"🛑 Bypassing Saved Source: {saved_source} is inside {current_location}. Ejecting to Unassigned.")
+            saved_source = None
+
+    # A toolhead is never a home. A trail naming one is stale (a head -> head
+    # move used to record the old head), and "returning" there put the spool
+    # onto whatever is loaded on that head now (2026-09-12).
+    if saved_source:
+        _src = str(saved_source).strip().strip('"').upper()
+        if _src in printer_map or _is_single_occupancy(_src, printer_map, {
+                str(r.get('LocationID', '')).strip().upper(): r
+                for r in (locations_db.load_locations_list() or [])}):
+            state.logger.info(
+                f"🛑 Stale ghost trail: #{spool_data.get('id')}'s saved source {_src} is a toolhead — not returning there.")
+            saved_source = None
+
+    if saved_source:
+        home = str(saved_source).strip('"')
+        return {"home": home, "slot": str(extra.get('physical_source_slot', '') or '').strip('"'),
+                "target": home, "needs_unassign_confirm": False}
+
+    if homeless_destination is not None:
+        # The caller already decided where a spool with no home goes.
+        target_loc = str(homeless_destination or '').strip().upper()
+    # Normal unslotted eject with Room Fallback
+    # [Universal Fallback fix] A printer is not a Room. If ejecting from a printer and missing physical_source, default to Unassigned.
+    elif current_location in printer_map:
+        target_loc = ""
+    else:
+        room_fallback = get_room_from_location(current_location)
+        target_loc = room_fallback if room_fallback else ""
+    # Protected Unassign (a caller-decided destination needs no prompt)
+    needs = target_loc == "" and current_location != "" and homeless_destination is None
+    return {"home": None, "slot": "", "target": target_loc, "needs_unassign_confirm": needs}
+
+
 def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print=False,
                         homeless_destination=None):
     """Remove `spool_id` from its current location.
@@ -1991,59 +2065,20 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
         except Exception as _de:
             state.logger.warning(f"20.2 box auto-detach skipped: {_de}")
 
-    # Save the original slot before we wipe it for processing
-    orig_container_slot = extra.get('container_slot', '')
-    
     # [ALEX FIX] Explicitly overwrite the slot with empty string.
     # .pop() just removes the key, which causes PATCH to ignore it (keeping the old value).
     extra['container_slot'] = ""
-    
-    saved_source = extra.get('physical_source')
-    
-    # [ALEX FIX] Prevent Infinite Return Loop
-    # If the database thinks we "came from" the place we are currently ejecting from,
-    # we must clear that memory, otherwise we just 'return' to the same box.
-    if saved_source and saved_source.strip().upper() == current_location:
-        state.logger.info(f"🛑 Eject Loop Detected: Source is same as Location ({saved_source}). Clearing.")
-        saved_source = None
-        extra['physical_source'] = "" # Wipe the memory
 
-    # [ALEX FIX] Room hierarchy bypass
-    # If we are currently floating in a room, and the saved_source is a CHILD of this room,
-    # we NEVER bounce back down to the child box. We break the loop and eject to Unassigned.
-    # L271 Phase 3.5: "is saved_source anywhere BENEATH current_location" via
-    # is_descendant instead of a single-hop resolve_parent equality. parent_id
-    # now stores the immediate parent, so a one-hop check would only catch a
-    # DIRECT child — but a saved_source can be a grandchild of the room we're
-    # floating in (room -> cart -> cart-row). is_descendant walks the chain so
-    # the loop-break fires for the whole subtree. On the pre-3.5 flat tree this
-    # reduces to the old single-hop equality (a row's only ancestor is its
-    # first-segment room), so it's byte-identical until the data flip.
-    if current_location and saved_source:
-        if locations_db.is_descendant(saved_source.strip('"'), current_location):
-            state.logger.info(f"🛑 Bypassing Saved Source: {saved_source} is inside {current_location}. Ejecting to Unassigned.")
-            saved_source = None
-
-    # A toolhead is never a home. A trail naming one is stale (a head -> head
-    # move used to record the old head), and "returning" there put the spool
-    # onto whatever is loaded on that head now (2026-09-12).
-    if saved_source:
-        _src = str(saved_source).strip().strip('"').upper()
-        if _src in printer_map or _is_single_occupancy(_src, printer_map, {
-                str(r.get('LocationID', '')).strip().upper(): r
-                for r in (locations_db.load_locations_list() or [])}):
-            state.logger.info(
-                f"🛑 Stale ghost trail: #{spool_id}'s saved source {_src} is a toolhead — not returning there.")
-            saved_source = None
+    # Where it goes: its saved home, else the homeless fallback (Group 39.6's
+    # _eject_destination, which the eject route's combined confirm also runs).
+    dest = _eject_destination(spool_data, printer_map, homeless_destination)
+    saved_source = dest['home']
 
     if saved_source:
-        if saved_source.startswith('"'): saved_source = saved_source.strip('"')
-
         # [ALEX FIX] Retain the assignment slot when returning home.
         # Move the saved slot back into container_slot
-        saved_slot = extra.get('physical_source_slot', '')
-        if saved_slot:
-            saved_slot_clean = str(saved_slot).strip('"')
+        saved_slot_clean = dest['slot']
+        if extra.get('physical_source_slot', ''):
             # 13.2 — Don't recreate a slot binding that's already claimed by
             # another spool (direct OR ghost from a different spool). The
             # auto-deploy chain can leave a ghost in our former slot moments
@@ -2088,21 +2123,10 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
             f"❌ Failed to return Spool #{spool_id} -> {saved_source}: {err}", "ERROR", "ff4444"
         )
     else:
-        if homeless_destination is not None:
-            # The caller already decided where a spool with no home goes.
-            target_loc = str(homeless_destination or '').strip().upper()
-        # Normal unslotted eject with Room Fallback
-        # [Universal Fallback fix] A printer is not a Room. If ejecting from a printer and missing physical_source, default to Unassigned.
-        elif current_location in printer_map:
-            target_loc = ""
-        else:
-            room_fallback = get_room_from_location(current_location)
-            target_loc = room_fallback if room_fallback else ""
-
+        target_loc = dest['target']
         # Protected Unassign (a caller-decided destination needs no prompt)
-        if target_loc == "" and current_location != "" and homeless_destination is None:
-            if not confirmed_unassign:
-                return "REQUIRE_CONFIRM"
+        if dest['needs_unassign_confirm'] and not confirmed_unassign:
+            return "REQUIRE_CONFIRM"
 
         # Strictly clear source bindings so it doesn't become a ghost in its old container
         extra['physical_source'] = ""
