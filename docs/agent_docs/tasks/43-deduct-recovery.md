@@ -4,7 +4,7 @@
 **Estimated effort:** MEDIUM (~8–12 h, 1–2 sessions). Double-deduct guard ~1 h · log wording ~0.5 h · pick-the-spool on reviews ~2–3 h · shortfall review ~3–4 h · 22.5 ~1–2 h · retry idempotency ~1–2 h · tests throughout.
 **Risk:** **MEDIUM–HIGH.** Every item writes `used_weight` or the exactly-once ledger. There are two failure modes to design against: a **double-deduct** (grams charged twice) and a **silent loss** (grams charged to nobody). Each sub-task must name which one it could cause and pin it.
 
-> **Status: `PARTIAL` — 43.1, 43.5, 43.3 and 43.6 shipped in the 2026-10-13 overnight run (merged to `dev`, `985aba8`; see `completed-archive.md`). 43.4 shipped with Group 39 (MERGE_SHA). Left: 43.2, which needs Derek's answer on where a top-up goes when the clamped spool was auto-archived.**
+> **Status: `PARTIAL` — 43.1, 43.5, 43.3 and 43.6 shipped in the 2026-10-13 overnight run (merged to `dev`, `985aba8`; see `completed-archive.md`). 43.4 shipped with Group 39 (`c389e26`). Left: 43.2, which needs Derek's answer on where a top-up goes when the clamped spool was auto-archived.**
 > Grouped by Derek's call (2026-10-12). The unblocked deduct work stops waiting behind [Group 22](22-filabridge-phase2-detection-deduct-followups.md), whose only open item (the M600 multi-color split) is blocked on print data.
 > It absorbs the "unblocked 22.5" that [Group 41's plan](41-honest-bulk-results.md) asked to file under Group 22 (it never landed there), and the standalone cancel-deduct retry row (Derek, 2026-10-12: "Into Group 43").
 > Code anchors were read on `dev` @ `3949aba`. Line numbers drift, so re-grep the named function before editing.
