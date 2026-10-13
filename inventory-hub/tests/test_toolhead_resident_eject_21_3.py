@@ -60,7 +60,10 @@ def _run_move(target_type, *, printer_map=None, resident_id=99, new_id=42):
         patch.object(logic.locations_db, "load_locations_list", return_value=loc_list),
         patch.object(logic.spoolman_api, "get_spool",
                      side_effect=lambda sid: resident_data if int(sid) == resident_id else spool_data),
-        # The resident occupying the head — returned for the Smart-Load probe.
+        # The resident occupying the head, as Smart Load's strict read sees it
+        # (Group 39.7).
+        patch.object(logic.spoolman_api, "get_spools_at_location_detailed_strict",
+                     return_value=[{"id": resident_id, "is_ghost": False, "location": target}]),
         patch.object(logic.spoolman_api, "get_spools_at_location",
                      return_value=[resident_id]),
         patch.object(logic.spoolman_api, "get_spools_at_location_detailed",

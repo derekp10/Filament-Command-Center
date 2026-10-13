@@ -745,6 +745,9 @@ def _smart_load(rows, target, residents):
 
     with patch.object(locations_db, "load_locations_list", return_value=copy.deepcopy(rows)), \
          patch.object(spoolman_api, "get_spools_at_location", return_value=list(residents)), \
+         patch.object(spoolman_api, "get_spools_at_location_detailed_strict",
+                      return_value=[{"id": sid, "is_ghost": False, "location": loc}
+                                    for sid, loc in residents.items()]), \
          patch.object(spoolman_api, "get_spool", side_effect=_spool), \
          patch.object(spoolman_api, "update_spool", return_value=True), \
          patch.object(spoolman_api, "format_spool_display", return_value={"text": "", "color": "000"}), \

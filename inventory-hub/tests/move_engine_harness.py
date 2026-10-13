@@ -38,6 +38,9 @@ class FakeSpoolman:
         self.spools = {int(k): copy.deepcopy(v) for k, v in spools.items()}
         self.reject_locations = {str(r).upper() for r in reject_locations}
         self.unreadable = {int(u) for u in unreadable}
+        # True = Spoolman's spool LIST is down: the fail-open readers answer []
+        # (they swallow the error) and the strict reader raises.
+        self.list_reads_fail = False
         self.writes = []
 
     def get_spool(self, sid):
@@ -74,10 +77,19 @@ class FakeSpoolman:
         return None
 
     def at_location(self, loc):
+        if self.list_reads_fail:
+            return []
         loc = str(loc).upper()
         return sorted(sid for sid, rec in self.spools.items() if self._match(rec, loc))
 
+    def at_location_detailed_strict(self, loc):
+        if self.list_reads_fail:
+            raise logic.spoolman_api.requests.ConnectionError("Spoolman spool list unreachable (test)")
+        return self.at_location_detailed(loc)
+
     def at_location_detailed(self, loc):
+        if self.list_reads_fail:
+            return []
         loc = str(loc).upper()
         items = []
         for sid in sorted(self.spools):
@@ -184,7 +196,7 @@ def run_move(sm, *, probe, locations, printer_map, call=None, **move_kwargs):
             patch.object(logic.spoolman_api, "get_spools_at_location_detailed",
                          side_effect=sm.at_location_detailed),
             patch.object(logic.spoolman_api, "get_spools_at_location_detailed_strict",
-                         side_effect=sm.at_location_detailed),
+                         side_effect=sm.at_location_detailed_strict),
             patch.object(logic.spoolman_api, "format_spool_display",
                          side_effect=lambda s: {"text": f"#{(s or {}).get('id')}",
                                                 "color": "ff0000"}),

@@ -45,6 +45,11 @@ def _move_ctx(printer_map, loc_list, get_spool, update_spool,
         patch.object(logic.spoolman_api, "get_spool", **get_spool),
         patch.object(logic.spoolman_api, "get_spools_at_location",
                      return_value=spools_at_location if spools_at_location is not None else []),
+        # Smart Load's resident read is strict (Group 39.7): the same spools,
+        # each sitting directly at the queried head.
+        patch.object(logic.spoolman_api, "get_spools_at_location_detailed_strict",
+                     side_effect=lambda loc: [{"id": sid, "is_ghost": False, "location": loc}
+                                              for sid in (spools_at_location or [])]),
         patch.object(logic.spoolman_api, "get_spools_at_location_detailed", return_value=[]),
         patch.object(logic.spoolman_api, "format_spool_display",
                      return_value={"text": "#240", "color": "ff0000"}),

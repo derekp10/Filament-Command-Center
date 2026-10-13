@@ -730,32 +730,39 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         #    its printer sits in, else Unassigned (Derek, 2026-09-12).
         #  - Only True counts. A resident that cannot be moved, or read, refuses
         #    the whole move.
-        #  - Known gap (filed 2026-09-12): the resident LIST read below is
-        #    fail-open, so a Spoolman blip there makes an occupied head look
-        #    empty. The strict reader would close it, but every move test's
-        #    mocks would need reworking first.
+        #  - The resident LIST is read strictly (Group 39.7, R1-03). The old
+        #    fail-open read answered [] on a Spoolman blip, so an occupied head
+        #    looked empty and the incoming spool landed on top of its resident.
+        #    An unreadable list now refuses the move before anything is written,
+        #    like plan_bulk_move's source read.
         incoming = {str(s) for s in spools}
         homeless_dest = None
         stuck: typing.Dict[typing.Any, str] = {}
-        matched = None  # the matcher's own view, fetched only when a read fails
-        for rid in spoolman_api.get_spools_at_location(target):
+        try:
+            matched_rows = spoolman_api.get_spools_at_location_detailed_strict(target) or []
+        except Exception as e:
+            state.logger.error(f"Smart Load: resident read failed for {target}: {e}")
+            why = f"could not read {target} from Spoolman"
+            for sid in spools:
+                failures[str(sid)] = why
+                state.add_log_entry(
+                    f"❌ <b>Smart Load:</b> not loading Spool #{sid} onto {target} — {why}",
+                    "ERROR", "ff4444")
+            return {"status": "error", "msg": f"Not loaded: {why}.", "failures": failures}
+        for row in matched_rows:
+            rid = row.get('id')
             if str(rid) in incoming:
+                continue
+            # Ghosts and prefix hits are skipped on the row, with no read of
+            # their own (R1-02).
+            if row.get('is_ghost') or str(row.get('location') or '').strip().upper() != target:
                 continue
             before = spoolman_api.get_spool(rid)
             if not before:
-                # Unreadable. Refuse unless the matcher places it somewhere else:
-                # an unreadable ghost or Printer-row prefix hit must not block a
-                # load onto an empty head (2026-09-12 review).
-                if matched is None:
-                    matched = {str(m.get('id')): m for m in
-                               (spoolman_api.get_spools_at_location_detailed(target) or [])}
-                hit = matched.get(str(rid))
-                if hit is None or (not hit.get('is_ghost')
-                                   and str(hit.get('location') or '').strip().upper() == target):
-                    stuck[rid] = "it could not be read from Spoolman"
+                stuck[rid] = "it could not be read from Spoolman"
                 continue
             if str(before.get('location') or '').strip().upper() != target:
-                continue
+                continue  # it left the head between the two reads
             if homeless_dest is None:
                 homeless_dest = _known_room_of(target, loc_list)
             before_extra = dict(before.get('extra') or {})

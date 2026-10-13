@@ -65,6 +65,11 @@ def _run_move(target, spools=None, target_slot=None, existing_at_target=None):
         stack.enter_context(patch.object(
             logic.spoolman_api, "get_spools_at_location_detailed", return_value=existing_at_target
         ))
+        # Smart Load's resident read on a single-occupancy target (strict since
+        # Group 39.7).
+        stack.enter_context(patch.object(
+            logic.spoolman_api, "get_spools_at_location_detailed_strict", return_value=existing_at_target
+        ))
         stack.enter_context(patch.object(
             logic.spoolman_api, "get_spool", return_value={
                 "id": 42, "location": "CR", "extra": {}, "name": "Test",

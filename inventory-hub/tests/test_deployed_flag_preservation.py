@@ -46,6 +46,8 @@ def _setup_smartmove_mocks(spool_data, printer_map, loc_list, captured):
         patch.object(logic.locations_db, "load_locations_list", return_value=loc_list),
         patch.object(logic.spoolman_api, "get_spool", return_value=spool_data),
         patch.object(logic.spoolman_api, "get_spools_at_location", return_value=[]),
+        # Smart Load's resident read is strict (Group 39.7): the head is empty.
+        patch.object(logic.spoolman_api, "get_spools_at_location_detailed_strict", return_value=[]),
         # The 13.6 reverse-binding checks the bound slot is free (2026-09-12).
         patch.object(logic.spoolman_api, "get_spools_at_location_detailed", return_value=[]),
         patch.object(logic.spoolman_api, "format_spool_display",
@@ -85,6 +87,8 @@ def test_perform_smart_move_auto_deploys_when_slot_is_bound():
         patch.object(logic.locations_db, "load_locations_list", return_value=loc_list),
         patch.object(logic.spoolman_api, "get_spool", return_value=spool_data),
         patch.object(logic.spoolman_api, "get_spools_at_location", return_value=[]),
+        # Smart Load's resident read is strict (Group 39.7): the head is empty.
+        patch.object(logic.spoolman_api, "get_spools_at_location_detailed_strict", return_value=[]),
         patch.object(logic.spoolman_api, "get_spools_at_location_detailed", return_value=[]),
         patch.object(logic.spoolman_api, "format_spool_display",
                      return_value={"text": "Test", "color": "ff0000"}),
@@ -130,6 +134,8 @@ def test_perform_smart_move_skips_auto_deploy_when_slot_unbound():
         patch.object(logic.locations_db, "load_locations_list", return_value=loc_list),
         patch.object(logic.spoolman_api, "get_spool", return_value=spool_data),
         patch.object(logic.spoolman_api, "get_spools_at_location", return_value=[]),
+        # Smart Load's resident read is strict (Group 39.7): the head is empty.
+        patch.object(logic.spoolman_api, "get_spools_at_location_detailed_strict", return_value=[]),
         patch.object(logic.spoolman_api, "get_spools_at_location_detailed", return_value=[]),
         patch.object(logic.spoolman_api, "format_spool_display",
                      return_value={"text": "Test", "color": "ff0000"}),
