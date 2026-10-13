@@ -5,7 +5,7 @@ it is updated after every milestone and committed on `dev` at every merge.
 
 ## Morning summary
 
-_Checkpoint 06:05. The run started at `dev` @ `c895d36` (the plan commit, on top of `e818d0c`)._
+_Checkpoint 06:40. The run started at `dev` @ `c895d36` (the plan commit, on top of `e818d0c`)._
 
 - **Landed on `dev` (nothing pushed):** Group 46 (`PARTIAL`, only 46.3 left), both standalone fixes, and Group 43
   (`PARTIAL`: 43.1, 43.5, 43.3's review-card spool picker and 43.6, plus 16 fixes from its adversarial review;
@@ -111,17 +111,24 @@ tests (3/3 solo). Every new pin was proven red on `dev`'s code first. No adversa
 | `e7818e0` | 39.3 backend | `/api/printer_state` answers `no_credentials` for a printer with no login (it said "unreachable") | `test_printer_state_reasons_39_3.py` |
 | `ee89219` | 39.2 test hygiene | The Return-overlay test's restore asserts it landed (it was a silent `try/except`) | — |
 | `70d1bd9` | docs | CLAUDE.md: "Move confirms name their heads", plus the two engine rows | — |
+| `715c352` | 39.4 frontend | The Location Manager and scan-assign confirms render through `window.confirmActivePrint` (their DOM ids kept) and show the server's D6 message when the backend asked. The scan-path canary now counts guard LINES (counting occurrences let inv_cmd.js's Shift+B line alone satisfy the old minimum) | `test_the_shared_active_print_confirm_owns_the_enter_guard` |
+| `d7164e9` + `cf31aeb` | 39.3 client | The "⏳ Checking XL…" pill (after 300 ms; "XL didn't answer" + a WARNING past 3 s), `fetchPrinterStateDetailed`, the overlay's "FCC has no login for XL" / "Couldn't reach XL" line, the dim's label on slot scans and buffer location scans. The Quick-Swap visuals stub the new probe seam (baselines unchanged) | 4 E2E with the fetch-delay lever, `test_printer_check_budgets_39_3.py` |
 
 **Next, in order:**
 
-1. **39.3 client half**: `withPrinterCheck` (the "⏳ Checking XL…" pill after 300 ms), `fetchPrinterStateDetailed`
-   (passes `reason` through: "FCC has no login for XL" vs "Couldn't reach XL"), `setProcessing(true, {label})`, the
-   timeout race for `doAssign`, with its E2E (Group 38's in-page fetch-delay lever).
-2. **39.4 frontend**: move the three older overlays (`showConfirmOverlay`'s banner, `_confirmActivePrintAssign`,
-   `_confirmActivePrintScan`) onto `window.confirmActivePrint`, so they show the engine's D6 wording. Today they
-   still show their own destination sentence, though they already send the right heads.
-3. **43.4** (a cancel review keeps every head) lands with or after 39.4, so it belongs at this branch's tail.
-4. Adversarial review, full sweep, merge. The group merges only whole (the plan's rule).
+1. **43.4** (a cancel review keeps every head), which D6 now makes urgent: a confirmed move off a printing head
+   leaves that head empty, and today a cancel review drops its grams silently. (Started after the 06:40
+   checkpoint; see the branch log.)
+2. Adversarial review (≤ 8 agents, batched verify), a full `RUN_INTEGRATION` sweep, then merge. The group merges
+   only whole (the plan's rule).
+3. Small leftovers: the "no login" line could link to Config's credentials grid; the scratchpad worktree
+   (`git worktree list`) is detached and can be removed with `git worktree remove --force <path>`.
+
+Known E2E flakes met on this branch, all pre-existing (A/B'd, or passing solo): `test_doassign_buffer_safety`
+(`..._swap_pushes_displaced_only_on_success` 2/5 here vs 3/5 with `dev`'s `inv_loc_mgr.js`), the two
+`test_deployed_flag_preservation` Quick-Swap button tests and `test_escape_key_walks_out_of_three_level_stack`
+("`#manageModal` never opened" after other tests; they pass solo), and a 5 s server read timeout in
+`test_empty_slot_disabled_when_buffer_empty`.
 
 ## Notes from the run
 
