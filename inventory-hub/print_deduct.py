@@ -477,6 +477,36 @@ def _snapshot_active_spools(printer_name, fb_url, active_locs=None):
     return snap
 
 
+def _heads_snapshot(printer_name, fb_url, active_locs=None):
+    """Group 43.3 — every head of `printer_name` with the spool on it now:
+    [{toolhead, position, sid}], `sid` None when the head is empty or ambiguous.
+
+    The same alias fallthrough and ghost-vs-current pick as _snapshot_active_spools,
+    but it keeps EMPTY heads too and names each head, because the review card's
+    picker needs both: a `no_spool` review records it at print end, and the
+    candidates endpoint serves it live. Best-effort: [] on any failure."""
+    heads = []
+    try:
+        if active_locs is None:
+            printer_map = locations_db.get_active_printer_map()
+            active_locs = _resolve_active_locs_for_printer(printer_map, printer_name, fb_url)
+        by_pos = {}
+        for loc_id, p_info in active_locs:
+            pos = p_info.get('position', 0)
+            if pos in by_pos and by_pos[pos]['sid'] is not None:
+                continue
+            sids = spoolman_api.get_spools_at_location(loc_id)
+            if len(sids) > 1:
+                sids, _amb = spoolman_api.select_deduct_targets(loc_id)
+            sid = sids[0] if len(sids) == 1 else None
+            if pos not in by_pos or sid is not None:
+                by_pos[pos] = {"toolhead": str(loc_id).upper(), "position": pos, "sid": sid}
+        heads = [by_pos[p] for p in sorted(by_pos, key=lambda p: (0, p) if isinstance(p, int) else (1, str(p)))]
+    except Exception:
+        return []
+    return heads
+
+
 def _validated_start_spools(src, job_id):
     """Return src's `start_spools` snapshot ONLY if it belongs to `job_id`, else None.
     `src` is the tracker entry (restart) or the fire dict (live edge). Both job_id
@@ -1313,6 +1343,12 @@ def _stash_unresolved_review(printer_name, filename, job_id, reached_fraction,
                       if (no_spool and usage_map) else None),
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
+    if no_spool:
+        # 43.3 — the heads at PRINT END: what the card's picker can name as "the
+        # spool that was there", so Apply never silently charges a spool loaded
+        # afterwards (and a print sliced for T0 but run on T1 shows T1's spool).
+        _, fb_url = config_loader.get_api_urls()
+        record["heads_at_end"] = _heads_snapshot(printer_name, fb_url)
     cancel_review_store.add_pending(record)
     state.add_log_entry(msg, "WARNING", "ffaa00",
                         meta={"type": "cancel_deduct_pending",
@@ -1503,6 +1539,96 @@ def api_cancel_deduct_pending():
     return jsonify({"pending": cancel_review_store.list_pending()})
 
 
+@app.route('/api/cancel_deduct/candidates', methods=['GET'])
+def api_cancel_deduct_candidates():
+    """Group 43.3 — the review card's spool picker: each of `printer_name`'s heads
+    with the spool on it NOW (`sid` null when empty), plus its display, remaining
+    and archived flag. "Any spool" is a #id the card looks up itself."""
+    printer = (request.args.get('printer_name') or '').strip()
+    if not printer:
+        return jsonify({"status": "error", "msg": "missing printer_name"}), 400
+    _, fb_url = config_loader.get_api_urls()
+    heads = []
+    for head in _heads_snapshot(printer, fb_url):
+        entry = dict(head)
+        spool = spoolman_api.get_spool(head['sid']) if head.get('sid') is not None else None
+        if spool:
+            disp = spoolman_api.format_spool_display(spool)
+            capacity = spoolman_api.effective_initial_weight(spool)
+            used = float(spool.get('used_weight', 0) or 0)
+            entry.update(display=disp.get('text', f"#{head['sid']}"), color=disp.get('color', '888888'),
+                         remaining=None if capacity is None else round(max(0.0, capacity - used), 1),
+                         archived=bool(spool.get('archived')))
+        heads.append(entry)
+    return jsonify({"heads": heads})
+
+
+def _rows_from_charges(rec, kind, charges):
+    """Group 43.3 — turn the review card's explicit picks into review rows, or say
+    why not. Returns (rows, None) or (None, reason).
+
+    `no_spool`: [{position, sid, grams}]; `position` must be a tool the print used.
+    Otherwise: [{row, sid, grams}]; `row` is the sid of one of the review's rows
+    (the spool on that head when the print ended) and `sid` keeps it or redirects
+    it to another spool. A kept row carries its 43.6 attempt baseline over, so a
+    retry stays idempotent. Every picked spool is re-read: it must exist and not
+    be archived (where a top-up onto an archived spool goes is 43.2's open
+    question). Two picks of the same spool merge into one row."""
+    if not isinstance(charges, list) or not charges:
+        return None, "no spool was picked"
+    usage = {str(k): v for k, v in (rec.get("usage_map") or {}).items()}
+    by_row = {str(r.get("sid")): r for r in (rec.get("spools") or []) if isinstance(r, dict)}
+    rows, seen = {}, set()
+    for pick in charges:
+        if not isinstance(pick, dict):
+            return None, "a pick is malformed"
+        try:
+            sid, grams = int(pick.get("sid")), float(pick.get("grams"))
+        except (TypeError, ValueError):
+            return None, "a pick names no spool, or no grams"
+        if sid <= 0 or grams <= 0:
+            return None, "a pick names no spool, or no grams"
+        if kind == "no_spool":
+            line = str(pick.get("position"))
+            if line not in usage:
+                return None, f"this print didn't use tool {line}"
+            original = {}
+        else:
+            line = str(pick.get("row"))
+            if line not in by_row:
+                return None, f"spool #{line} isn't a row of this review"
+            original = by_row[line]
+        if line in seen:
+            return None, f"{'tool' if kind == 'no_spool' else 'row'} {line} was picked twice"
+        seen.add(line)
+        spool = spoolman_api.get_spool(sid)
+        if not spool:
+            return None, f"spool #{sid} wasn't found in Spoolman"
+        if spool.get("archived"):
+            return None, (f"spool #{sid} is archived — refill it (weigh it) or pick another spool. "
+                          f"Charging an archived spool is still an open question.")
+        if sid in rows:
+            rows[sid]["grams"] = round(rows[sid]["grams"] + grams, 2)
+            continue
+        disp = spoolman_api.format_spool_display(spool)
+        capacity = spoolman_api.effective_initial_weight(spool)
+        used = float(spool.get('used_weight', 0) or 0)
+        before = None if capacity is None else round(max(0.0, capacity - used), 1)
+        row = {"sid": sid,
+               "toolhead": str(spool.get("location") or "").strip().upper() or str(original.get("toolhead") or ""),
+               "position": original.get("position") if original else pick.get("position"),
+               "grams": round(grams, 2),
+               "display": disp.get('text', f"#{sid}"), "color": disp.get('color', '888888'),
+               "remaining_before": before,
+               "remaining_after": None if before is None else round(max(0.0, before - grams), 1)}
+        if original and str(sid) == line:
+            for key in ("attempt_used_before", "attempt_used_after"):
+                if key in original:
+                    row[key] = original[key]
+        rows[sid] = row
+    return list(rows.values()), None
+
+
 def _confirm_no_spool_review(printer, job_id, rec):
     """Apply a `no_spool` review (the record was already popped = the claim). The
     usage was computed when the print ended but no spool was bound; RE-RESOLVE the
@@ -1573,6 +1699,29 @@ def api_cancel_deduct_confirm():
         return jsonify({"status": "already_handled"})
 
     kind = rec.get("kind", "partial")
+    # 43.3 — explicit picks from the card's spool picker. They become this
+    # review's rows and run through the same clamped, idempotent per-spool loop
+    # below. Without `charges` the old behaviour stands (a cached page, the
+    # no_spool re-check against whatever is on the head now).
+    requested_total = None
+    charges = data.get('charges')
+    if charges is not None and kind != "progress_unknown":
+        picked, why = _rows_from_charges(rec, kind, charges)
+        if why:
+            cancel_review_store.add_pending(rec)   # the pop was the claim: keep the review
+            state.add_log_entry(f"⚠️ {printer}: review Apply refused — {why}.", "WARNING", "ffaa00")
+            return jsonify({"status": "error", "msg": why})
+        if kind == "no_spool":
+            try:
+                requested_total = round(sum(float(v) for v in (rec.get("usage_map") or {}).values()), 2)
+            except (TypeError, ValueError):
+                requested_total = None
+        rec = dict(rec)
+        rec["kind"] = "partial"    # the user's picks are this review's rows from now on
+        rec["spools"] = picked
+        rec.pop("usage_map", None)
+        updates = {str(r["sid"]): r["grams"] for r in picked}
+        kind = "partial"
     if kind == "no_spool":
         # Usage was computed earlier but no spool was bound. RE-RESOLVE the stored
         # usage_map against whatever's bound NOW (Derek just bound the toolhead) and
@@ -1744,10 +1893,21 @@ def api_cancel_deduct_confirm():
         return jsonify({"status": status, "applied": applied, "errors": errors})
 
     # Full success — commit the ledger (exactly-once across restart/retry).
+    applied_total = round(sum(a['grams'] for a in applied), 2)
     print_deduct_ledger.record_deduct(
         printer, job_id, filename=rec.get('filename'), scale=rec.get('progress'),
-        grams=round(sum(a['grams'] for a in applied), 2), confirmed=True)
-    return jsonify({"status": "confirmed", "applied": applied, "errors": errors})
+        grams=applied_total, confirmed=True)
+    resp = {"status": "confirmed", "applied": applied, "errors": errors}
+    if requested_total is not None:
+        # 43.3 — a no_spool review applied by picks: say what the print used that
+        # no picked spool took (a tool left unpicked, or a clamp).
+        shortfall = round(max(0.0, requested_total - applied_total), 2)
+        resp["shortfall_g"] = shortfall
+        if shortfall > 0.05:
+            state.add_log_entry(
+                f"⚠️ {printer}: {shortfall:.2f}g of '{rec.get('filename')}' wasn't charged to any "
+                f"spool — weigh the spools to true up.", "WARNING", "ffaa00")
+    return jsonify(resp)
 
 
 @app.route('/api/cancel_deduct/dismiss', methods=['POST'])
