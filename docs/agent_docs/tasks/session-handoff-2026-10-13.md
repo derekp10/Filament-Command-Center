@@ -150,6 +150,8 @@ _Checkpoint 09:35. The run started at `dev` @ `c895d36` (the plan commit, on top
 
 ## Questions for Derek
 
+**Plain-language versions, with examples and what changed after checking the code:** [open-decisions-2026-10-13.md](open-decisions-2026-10-13.md) (morning of 2026-10-13). Five of these turned out to be calls Claude can make alone; that doc says which.
+
 Each one blocks only its own item; nothing here holds up a release. My recommended answer comes first.
 
 1. **46.3 — How should Printer Status label a toolhead?** A display preference (`fcc.printerStatus.toolheadLabel`)
@@ -257,7 +259,7 @@ decision, not a check (Questions, item 15).
 
 ## To push
 
-Nothing has been pushed tonight (rule 2). Waiting on `dev`, oldest first:
+**Pushed to `origin/dev` on the morning of 2026-10-13** (`d65bfbe..da9cfe5`, Derek's OK). `main` is NOT released: Derek said hold. What went up, oldest first:
 
 - `e818d0c` docs(buglist): file Group 47's two leftovers
 - `c895d36` docs(tasks): plan for the unattended 2026-10-13 overnight run
