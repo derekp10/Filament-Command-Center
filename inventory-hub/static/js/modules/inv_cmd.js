@@ -1616,6 +1616,7 @@ const processScan = (text, source = 'keyboard') => {
                         slot: res.slot,
                         stateInfo: res.active_print
                             || { printer_name: res.location, state: 'PRINTING' },
+                        msg: res.msg,
                         onConfirm: () => {
                             setProcessing(true);
                             window.fetchT('/api/identify_scan', {
@@ -1828,97 +1829,17 @@ const processScan = (text, source = 'keyboard') => {
         .catch((e) => { setProcessing(false); console.error(e); showToast("Scan Error", "error"); });
 };
 
-// Inline confirm overlay for "bulk assign into an active toolhead" — same
-// visual pattern as Location Manager's _confirmActivePrintAssign (no nested
-// Swal). Mounts into body so it floats above the scan UI and any open modal.
-const _confirmActivePrintScan = ({ tid, slot, stateInfo, onConfirm }) => {
-    // L122 fix: previously rolled its own overlay (createElement +
-    // appendChild + document keydown). Migrated to window.mountOverlay()
-    // so it inherits the canonical z-index ladder, focus guard, and
-    // host-close discipline documented in CLAUDE.md "Project Conventions".
-    // The previous implementation could end up blocked/hidden behind
-    // certain modal stacks (the buglist L122 symptom: "confirm change
-    // modal is being blocked, canceled, or hidden").
-    const escapeHtml = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
-    const content = `
-        <div style="background:#1e1e1e; color:#fff; border:2px solid #ff8800; border-radius:8px; padding:20px 24px; max-width:460px; text-align:center;">
-            <div style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">⚠️ ${escapeHtml(stateInfo.printer_name)} is ${escapeHtml(stateInfo.state)}</div>
-            <div style="color:#ffc; margin-bottom:14px;">
-                Assigning the buffered spool(s) to <b>${escapeHtml(tid)}</b> will disrupt the active print. Continue anyway?
-            </div>
-            <div style="display:flex; gap:10px; justify-content:center;">
-                <button id="fcc-aps-yes" class="btn btn-warning btn-sm" style="min-width:120px;">Continue Anyway</button>
-                <button id="fcc-aps-no" class="btn btn-secondary btn-sm" style="min-width:120px;">Cancel</button>
-            </div>
-        </div>
-    `;
-    let handle = null;
-    let qrSession = null;
-    const cleanup = () => {
-        if (handle) { try { handle.cleanup(); } catch (_) { /* noop */ } handle = null; }
-        if (qrSession) { try { qrSession.cleanup(); } catch (_) { /* noop */ } qrSession = null; }
-    };
-    const proceed = () => { cleanup(); onConfirm(); };
-    handle = window.mountOverlay({
-        id: 'fcc-active-print-scan-overlay',
-        content,
-        tier: 'confirm',
-        initialFocus: '#fcc-aps-yes',
-        onEscape: cleanup,
+// The active-print confirm for a scan assign: the shared one (inv_core.js,
+// Group 39.4), with this overlay's proven ids (#fcc-active-print-scan-overlay,
+// #fcc-aps-yes/no). It shows the server's message when the backend asked
+// (`msg`: Derek's D6 wording), else this door's own sentence.
+const _confirmActivePrintScan = ({ tid, slot, stateInfo, onConfirm, msg = '' }) => {
+    window.confirmActivePrint({
+        activePrint: stateInfo,
+        msg: msg || `Assigning the buffered spool(s) to ${tid} will disrupt the active print. Continue anyway?`,
+        ids: { overlay: 'fcc-active-print-scan-overlay', yes: 'fcc-aps-yes', no: 'fcc-aps-no' },
+        onConfirm,
     });
-    const ov = handle.element;
-    const yesBtn = ov.querySelector('#fcc-aps-yes');
-    const noBtn = ov.querySelector('#fcc-aps-no');
-    if (yesBtn) yesBtn.onclick = proceed;
-    if (noBtn) noBtn.onclick = cleanup;
-    // Keyboard contract (matches _confirmActivePrintAssign in inv_loc_mgr):
-    // Enter activates the focused button (Yes/No); Tab cycles between
-    // them; Escape always cancels (owned by mountOverlay's onEscape).
-    const keyHandler = (e) => {
-        if (e.key === 'Enter') {
-            // ⚠️ SAFETY (axis-(a) audit, 2026-08-03) — see inv_quickswap.js for the
-            // full rationale. A scan in flight owns this Enter: it terminates the
-            // scan, it is not a button press. YES is focused by initialFocus, so
-            // without this the "📷 Scan to Cancel" QR performed the CONFIRM.
-            if (window.isScanInFlight && window.isScanInFlight()) return;
-            const active = document.activeElement;
-            if (active === yesBtn) { e.preventDefault(); e.stopPropagation(); proceed(); }
-            else if (active === noBtn) { e.preventDefault(); e.stopPropagation(); cleanup(); }
-            return;
-        }
-        if (e.key === 'Tab') {
-            const focusables = [yesBtn, noBtn].filter(Boolean);
-            if (focusables.length === 0) return;
-            const active = document.activeElement;
-            const idx = focusables.indexOf(active);
-            if (idx === -1) {
-                e.preventDefault(); e.stopPropagation();
-                focusables[e.shiftKey ? focusables.length - 1 : 0].focus();
-                return;
-            }
-            if (e.shiftKey && idx === 0) {
-                e.preventDefault(); e.stopPropagation();
-                focusables[focusables.length - 1].focus();
-            } else if (!e.shiftKey && idx === focusables.length - 1) {
-                e.preventDefault(); e.stopPropagation();
-                focusables[0].focus();
-            }
-        }
-    };
-    ov.addEventListener('keydown', keyHandler, true);
-    if (window.attachConfirmQRs && ov) {
-        qrSession = window.attachConfirmQRs({
-            // Mount the QR row inside the dialog PANEL, not the overlay root.
-            // The root is a centered flex-ROW (overlay_mount.js), so appending
-            // the QR row there lays it out BESIDE the panel (the "QR codes on
-            // the right" bug). handle.panel makes it stack below the buttons,
-            // matching the Quick-Swap confirm.
-            host: handle.panel,
-            onConfirm: proceed,
-            onCancel: cleanup,
-            theme: 'warning',
-        });
-    }
 };
 
 // `confirmedHeads`: the heads whose active-print warning the user confirmed
@@ -1955,6 +1876,7 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
                 _confirmActivePrintScan({
                     tid, slot,
                     stateInfo: res.active_print || { printer_name: tid, state: 'ACTIVE' },
+                    msg: res.msg,
                     onConfirm: () => performContextAssign(
                         tid, slot, window.unionConfirmHeads(confirmedHeads, res), spoolIdsOverride),
                 });
