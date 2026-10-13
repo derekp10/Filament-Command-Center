@@ -707,6 +707,41 @@ def test_clear_scan_during_a_bulk_move_opens_no_confirm(
 
 
 @pytest.mark.usefixtures("require_server")
+def test_trash_scan_during_a_bulk_move_opens_no_confirm(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """Group 39.9: the CMD:CLEAR guard above, for CMD:TRASH. With a location
+    open and a bulk move armed, the eject's confirm (z 1100) opened BEHIND the
+    bulk panel (z 20000) and swallowed every later scan. Now it explains and
+    opens nothing, and the next location scan still reaches the backend (the
+    bulk-move session's gate). HEAD proof: on the pre-39.9 code the eject
+    confirm shows."""
+    be = FakeBackend(page)
+    _boot(page, base_url, reset_dom_state_js)
+    page.evaluate("""([sid, loc]) => {
+        document.getElementById('manageModal').classList.add('show');
+        document.getElementById('manage-loc-id').value = loc;
+        state.bulkMoveActive = true;
+        processScan('CMD:TRASH:' + sid, 'barcode');
+        window.__afterTrash = { activeModal: state.activeModal };
+    }""", [SID, LOC])
+    page.wait_for_timeout(700)
+    assert page.evaluate("window.__afterTrash") == {"activeModal": None}
+    snap = page.evaluate(SNAPSHOT_JS)
+    assert not snap["confirmShown"] and snap["activeModal"] is None and _count(page, "show") == 0, (
+        f"CMD:TRASH during a bulk move opened a confirm: {snap}")
+    assert not be.ejects(), be.posts
+    _toast_until(page, "Eject waits until the bulk move", "CMD:TRASH during a bulk move gave no explanation")
+    page.evaluate("processScan('LOC:FCC-TEST-BOX', 'barcode')")
+    _until(page, lambda: any("FCC-TEST-BOX" in str(b.get("text", "")) for b in be.bodies("/api/identify_scan")),
+           3_000, "the next location scan never reached the bulk-move session")
+
+    # Control: outside a bulk move the same scan opens the eject confirm.
+    page.evaluate("(sid) => { state.bulkMoveActive = false; processScan('CMD:TRASH:' + sid, 'barcode'); }", SID)
+    _wait_shown(page, 1, "control: CMD:TRASH outside a bulk move should prompt")
+    page.evaluate("confirmAction(false)")   # cancel: never eject anything
+
+
+@pytest.mark.usefixtures("require_server")
 def test_cancel_scan_while_a_reprompt_is_queued_cancels_it(
         page: Page, base_url: str, reset_dom_state_js: str):
     """Guards the queue's cancellation: CANCEL stays unguarded, and closing a

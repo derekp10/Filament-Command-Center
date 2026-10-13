@@ -1465,6 +1465,14 @@ const processScan = (text, source = 'keyboard') => {
     if (upper === 'CMD:PREV') { prevBuffer(); return; }
     if (upper === 'CMD:NEXT') { nextBuffer(); return; }
     if (upper.startsWith('CMD:PRINT:')) { const parts = upper.split(':'); if (parts[2]) window.printLabel(parts[2]); return; }
+    // Group 39.9 — the CMD:CLEAR guard above, for the eject: its confirm
+    // (requestConfirmation, z 1100) would open BEHIND the bulk panel (z 20000)
+    // and swallow the scans meant for the session.
+    if (upper.startsWith('CMD:TRASH:') && state.bulkMoveActive) {
+        showToast('Eject waits until the bulk move is finished or cancelled', 'info', 4000);
+        if (window.logClientEvent) window.logClientEvent(`ℹ️ ${upper} ignored: a bulk move is armed — finish or cancel it first`, 'INFO');
+        return;
+    }
     if (upper.startsWith('CMD:TRASH:')) { const parts = upper.split(':'); if (parts[2] && document.getElementById('manageModal').classList.contains('show')) ejectSpool(parts[2], document.getElementById('manage-loc-id').value, false); return; }
 
     // A CONFIRM scan may fire a dialog's callback ONLY while that dialog is
