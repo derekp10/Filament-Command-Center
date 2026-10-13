@@ -381,7 +381,9 @@ def _printer_map_blocked_removals(old_map, new_map):
     slots_verified = True
     try:
         for row in locations_db.load_locations_list():
-            targets = (row.get('extra') or {}).get('slot_targets') or {}
+            # The guarded reader: a malformed row used to raise here, and the
+            # except below then failed closed — blocking EVERY toolhead removal.
+            targets = locations_db.bindings_from_row(row)
             for tgt in targets.values():
                 if not tgt:
                     continue
@@ -546,14 +548,16 @@ def api_all_dryer_box_slots():
     loc_list = locations_db.load_locations_list()
     out = []
     for row in loc_list:
-        if row.get('Type') != locations_db.DRYER_BOX_TYPE:
+        if not isinstance(row, dict) or row.get('Type') != locations_db.DRYER_BOX_TYPE:
             continue
         box_id = str(row.get('LocationID', '')).strip()
         try:
             max_slots = int(str(row.get('Max Spools', '0')).strip() or '0')
         except ValueError:
             max_slots = 0
-        targets = (row.get('extra') or {}).get('slot_targets') or {}
+        # The guarded reader (a malformed row 500'd the whole picker). It also
+        # reports a blank binding as None, which is what "unbound" means here.
+        targets = locations_db.bindings_from_row(row)
         for n in range(1, max_slots + 1):
             slot = str(n)
             target = targets.get(slot)
@@ -767,9 +771,9 @@ def api_quickswap_return():
     # Fallback: scan bindings for the first dryer-box slot bound to this toolhead.
     if not found_box:
         for row in loc_list:
-            if row.get('Type') != locations_db.DRYER_BOX_TYPE:
+            if not isinstance(row, dict) or row.get('Type') != locations_db.DRYER_BOX_TYPE:
                 continue
-            targets = (row.get('extra') or {}).get('slot_targets') or {}
+            targets = locations_db.bindings_from_row(row)   # guarded: a bad row 500'd Return
             for slot, target in targets.items():
                 if target and str(target).upper() == active_toolhead:
                     found_box = row['LocationID']

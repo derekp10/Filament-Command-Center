@@ -85,9 +85,12 @@ def _find_box_slot_feeding_toolhead(toolhead_id, loc_list=None):
         loc_list = locations_db.load_locations_list()
     target_th = str(toolhead_id).strip().upper()
     for row in loc_list:
-        if row.get('Type') != 'Dryer Box':
+        if not isinstance(row, dict) or row.get('Type') != 'Dryer Box':
             continue
-        slot_targets = (row.get('extra') or {}).get('slot_targets') or {}
+        # The guarded reader: one malformed box row must not break every
+        # source-less move onto a toolhead (this runs unguarded in the PRINTER
+        # MOVE branch).
+        slot_targets = locations_db.bindings_from_row(row)
         for slot, bound_th in slot_targets.items():
             if not bound_th:
                 continue
@@ -527,7 +530,7 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
             # Check slot-binding's eventual toolhead.
             tgt_row = loc_info_map.get(target)
             if tgt_row and tgt_row.get('Type') == 'Dryer Box' and target_slot:
-                bound = (tgt_row.get('extra') or {}).get('slot_targets', {}) or {}
+                bound = locations_db.bindings_from_row(tgt_row)
                 bound_th = bound.get(str(target_slot)) or bound.get(str(int(target_slot))) if str(target_slot).isdigit() else bound.get(str(target_slot))
                 if bound_th:
                     ap = _active_print_info_for_location(bound_th, printer_map)
@@ -900,7 +903,7 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     auto_deploy_skipped: typing.Dict[str, str] = {}
     bound_toolhead = None
     if auto_deploy and target_slot and tgt_info and tgt_info.get('Type') == 'Dryer Box':
-        bindings = (tgt_info.get('extra') or {}).get('slot_targets') or {}
+        bindings = locations_db.bindings_from_row(tgt_info)
         bound_toolhead = bindings.get(str(target_slot))
         # PRINTER:<id> sentinels declare "this slot is staged for the named
         # printer's pool" — no toolhead is implied, so auto-deploy is a no-op.
@@ -2018,7 +2021,12 @@ def perform_toolhead_delete_cascade(target, loc_list, confirm_active_print=False
     for row in loc_list:
         if not isinstance(row, dict) or str(row.get('Type', '')).strip() != locations_db.DRYER_BOX_TYPE:
             continue
-        extra_l = row.get('extra') or {}
+        # A non-dict `extra` holds no binding to drop, and must not abort the
+        # cascade for the boxes after it (the write-back below needs the raw
+        # dict, so this guards rather than going through bindings_from_row).
+        extra_l = row.get('extra')
+        if not isinstance(extra_l, dict):
+            continue
         targets = extra_l.get('slot_targets')
         if not isinstance(targets, dict):
             continue

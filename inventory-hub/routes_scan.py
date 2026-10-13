@@ -374,6 +374,12 @@ def api_bulk_move():
     nothing here hand-rolls a spool write (CLAUDE.md "Spool / Filament write
     surfaces"; the 2026-04-26/27 outage class).
     """
+    # Feature gate (2026-10-13). The same rule as /api/bulk_move_session: a direct
+    # POST must not run a bulk move on an install where the feature is off. This
+    # door was open until Group 47's skeptic found it. There is nothing to cancel
+    # here, so no carve-out.
+    if not _bulk_moves_enabled():
+        return jsonify({"success": False, "msg": _BULK_MOVES_OFF_MSG}), 403
     data = request.json or {}
     source = str(data.get('source', '') or '').strip().upper()
     dest = str(data.get('dest', '') or '').strip().upper()
@@ -419,6 +425,21 @@ def _bulk_moves_enabled():
     return bool(cfg.get('fcc.bulkMove.enabled', False))
 
 
+_BULK_MOVES_OFF_MSG = "Bulk Moves is turned off. Enable it in ⚙️ Settings → Behavior."
+
+
+def _bulk_moves_off_scan_answer():
+    """The scan path's refusal while Bulk Moves is off: an error the scanner UI
+    toasts, plus an Activity Log line (CLAUDE.md: every scan outcome does both).
+    Names CMD:CANCEL when a session is still armed, because that is the one scan
+    an armed session still answers."""
+    msg = _BULK_MOVES_OFF_MSG
+    if state.BULK_MOVE_SESSION.get('active'):
+        msg += " Scan CMD:CANCEL to clear the bulk move that is still armed."
+    state.add_log_entry(f"⚠️ {msg}", "WARNING", "ffaa00")
+    return jsonify({"type": "error", "msg": msg})
+
+
 @app.route('/api/bulk_move_session', methods=['POST'])
 def api_bulk_move_session_action():
     """L298 Phase 2 — mouse/keyboard control of the scan-driven bulk-move
@@ -441,10 +462,7 @@ def api_bulk_move_session_action():
     data = request.json or {}
     action = str(data.get('action', '') or '').strip().lower()
     if not _bulk_moves_enabled() and action != 'cancel':
-        return jsonify({
-            "success": False,
-            "msg": "Bulk Moves is turned off. Enable it in ⚙️ Settings → Behavior.",
-        }), 403
+        return jsonify({"success": False, "msg": _BULK_MOVES_OFF_MSG}), 403
     confirm_active_print = bool(data.get('confirm_active_print', False))
 
     if action == 'start':
@@ -914,6 +932,10 @@ def api_identify_scan():
     # process_bulk_move_scan. Re-scanning CMD:BULKMOVE mid-session must NOT
     # reset an already-captured source (the audit 27.5 guard, cloned).
     if res and res.get('type') == 'command' and res.get('cmd') == 'bulkmove':
+        # Feature gate (2026-10-13): never arm a session, or refresh a stale
+        # one's idle watchdog, on an install where Bulk Moves is off.
+        if not _bulk_moves_enabled():
+            return _bulk_moves_off_scan_answer()
         if state.BULK_MOVE_SESSION.get('active'):
             state.BULK_MOVE_SESSION['last_activity_ts'] = time.time()
             state.add_log_entry(
@@ -928,6 +950,13 @@ def api_identify_scan():
         return jsonify({"type": "command", "cmd": "clear"})
 
     if state.BULK_MOVE_SESSION.get('active'):
+        # Feature gate (2026-10-13): with the flag off, an armed session (left
+        # from before the flag was turned off) answers ONLY CMD:CANCEL, so it
+        # can always be cleared. A location scan used to set its destination
+        # and a scanned CMD:DONE (the deck's COMMIT QR) used to commit it.
+        if not _bulk_moves_enabled() and not (
+                res and res.get('type') == 'command' and res.get('cmd') == 'cancel'):
+            return _bulk_moves_off_scan_answer()
         # Refresh the watchdog BEFORE delegating so an explicit CMD:DONE /
         # CMD:CANCEL can't race the idle timeout (same reasoning as audit).
         state.BULK_MOVE_SESSION['last_activity_ts'] = time.time()
