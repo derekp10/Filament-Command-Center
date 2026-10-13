@@ -223,6 +223,12 @@ Each one blocks only its own item; nothing here holds up a release. My recommend
 
 Belt-and-braces: each of these already has an automated test that fails on the old code.
 
+**Update (morning, Derek's call):** the ones that need a real print, a powered-off printer, the scanner or your
+opinion are now in `Feature-Buglist.md` ⏸️ PENDING DEREK ("one session with a print running" and "the next INDX
+cancel review…"): 39-a, b, d, e, f, g, h, i, j, l, m, n and 43-a, d. The rest (46-a…d, 43-b, 43-c, 39-c, 39-k) are
+screen-only flows already pinned by browser tests that passed tonight, so they're off your list. 46-e is a
+decision, not a check (Questions, item 15).
+
 | # | Check | Steps | Pass if |
 |---|---|---|---|
 | 46-a | **Deposit follows the carousel** | Put 3 spools in the buffer. Open a toolhead (or any shelf) in the Location Manager. Press ▶ next, then click ⬇️ DEPOSIT HERE straight away. Repeat while a print is running (the slow case) | The card's spool name changes the instant the centre card does, and the spool deposited is always the centre one |
@@ -236,8 +242,8 @@ Belt-and-braces: each of these already has an automated test that fails on the o
 | 39-a | **Quick-Swap mid-print** | XL printing. Open XL-2 → tap the `LR-MDB-1` slot 2 tile | One confirm with the yellow "XL is PRINTING" banner. Yes → the new spool is on XL-2 and XL-2's old spool is back in its box. No second prompt |
 | 39-b | **Return mid-print** | XL printing. Open XL-3 → ↩️ Return | The banner names XL (the head being emptied). Yes → the spool is in `LR-MDB-1` slot 3. No second prompt |
 | 39-c | **Return while idle** | XL idle. Open XL-3 → ↩️ Return | No banner. One tap parks the spool |
-| 39-d | **"Checking…" (offline printer)** | Core One powered off. Open CORE1 → ↩️ Return (or tap the `CR-MDB-1` slot 1 tile) | "⏳ Checking …" appears within about half a second. The overlay then says it couldn't reach the Core One, and the action still works |
-| 39-e | **"Checking…" on a scan** | Core One powered off. Reload the page, put a spare spool in the buffer → scan the `CR-MDB-1` slot 1 label | The dim screen names the printer instead of a blank dim. The load then completes |
+| 39-d | **"Checking…" (offline printer)** | Core One INDX switched off. Location Manager → open `RCOI-1` → assign a buffered spool to it | "⏳ Checking 🦝 Core One INDX…" appears within about half a second, and the assign still goes through. (The task file said CORE1, which no longer exists on dev.) |
+| 39-e | **"Checking…" on a scan** | Core One INDX switched off. Reload the page, put a spare spool in the buffer → scan `RCOI-1`'s toolhead label | The dimmed screen names the printer instead of a blank dim. The move then completes |
 | 39-f | **Move off a printing head** | XL printing. Open XL-3 → pick its spool into the buffer → scan `CR-CT-2-R1` | One prompt naming the spool, XL-3, `CR-CT-2-R1` and "stops charging". Cancel → nothing moved. Repeat and choose Yes → moved |
 | 39-g | **Paused never asks** | Pause the XL print → repeat 39-f | No prompt; the spool moves |
 | 39-h | **Head to head asks once** | XL printing. Pick up XL-1's spool → scan XL-3's toolhead QR; then repeat from the Location Manager (open XL-3, assign it) | Exactly one prompt each time, naming both heads |

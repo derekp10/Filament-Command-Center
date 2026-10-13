@@ -25,18 +25,38 @@
   Optional sanity: source == destination blocked; a destination inside the source blocked; a toolhead
   destination blocked; reloading while armed brings the pill back. **Known, NOT a failure:** scanning
   a cart *parent* (e.g. `CR-CT-2`) finds only its direct spools (Group 37.4).
-* **⏸️ PENDING DEREK — mid-print flow re-runs (active-print chain fix).** These cover fixes that ship
-  **enabled**, so unlike the bulk-move set they aren't gated behind anything. They now have automated
-  coverage (the node-vm tests + E2E added by `fix/core1-return-ejectall-guard` and
-  `fix/active-print-chain-confirm`, which fail on pre-fix code), so this is belt-and-braces rather
-  than the only safety net. Assign into a bound dryer-box slot by slot label → the spool reaches the
-  toolhead after the print confirm; replace a loaded spool from the print-status toolhead view → the
-  old one goes home and only one stays on the head; eject from a printing head → the second prompt
-  appears; Quick-Swap Return on the XL → the spool stays in the box.
-  **Two entries from the old list INVERTED and are now positive checks:** Core One Return used to be
-  expected to say *"Nothing to return on CORE1"* (the bug) and should now actually return; and
-  `CMD:EJECTALL` with no location open used to target the Unassigned pile and is now refused with a
-  message, so it's safe to try deliberately instead of being a "do NOT try".
+* **⏸️ PENDING DEREK — one session with a print running (mid-print checks; updated 2026-10-13).** Covers the
+  active-print chain fix (2026-09-12) and Group 39 "Confirm on Every Door" (merged to `dev` 2026-10-13, **not
+  released yet**, so run these on dev, `http://localhost:8000`, which reads the same printers). Everything here
+  has automated coverage too; these are what only a real printer, the real scanner and your eyes can check: does
+  the wording read right, and does each move really ask once. **Setup:** start a multi-tool print on the XL; put a
+  spare spool or two in the buffer. `LR-MDB-1` slots 1-3 feed XL-1 to XL-3 on dev.
+  | # | Check | Steps | Pass if |
+  |---|---|---|---|
+  | 1 | Quick-Swap mid-print | Open XL-2 → tap its `LR-MDB-1` slot 2 tile | One confirm with the yellow "XL is PRINTING" banner. Yes → the new spool is on XL-2 and the old one is back in its box. No second prompt |
+  | 2 | Return mid-print | Open XL-3 → ↩️ Return | The banner names the XL. Yes → the spool is back in its box slot. No second prompt |
+  | 3 | Move off a printing head | Pick XL-3's spool into the buffer → scan `CR-CT-2-R1` | **One** prompt naming the spool, XL-3, `CR-CT-2-R1` and "stops charging this print to it". Cancel → nothing moves; again with Yes → it moves. **Does the wording read right to you?** |
+  | 4 | Head to head asks once | Pick up XL-1's spool → scan XL-3's toolhead QR. Then the same from the Location Manager (open XL-3, assign it) | Exactly one prompt each time, naming both heads |
+  | 5 | A bound slot is named | Pick XL-3's spool → scan the `LR-MDB-1` slot 2 label (it feeds XL-2) | One prompt that names XL-3 AND says the slot feeds XL-2 ("…so this also loads #N onto XL-2 and unloads what XL-2 holds") |
+  | 6 | Slot label → toolhead | Scan a spare spool, then the `LR-MDB-1` slot 1 label | The spool reaches XL-1 after one confirm |
+  | 7 | Force Location mid-print | Details of XL-3's spool → Force Location → `CR-CT-2-R1`; then again with "-- Unassigned --" | A confirm both times (not a red "failed" toast); Yes moves it |
+  | 8 | Eject asks once | Eject a spool that has no saved home (put one on XL-2 with Force Location first) | **One** prompt beyond "Eject spool #N?", mentioning XL-2 and Unassigned. ⚠️ This INVERTS the old check ("the second prompt appears"): Group 39 merged the two prompts |
+  | 9 | Deposit, three ways | XL-2's Quick-Swap grid → Deposit a buffered spool; confirm once with Enter, once with a click, once by scanning the confirm QR | All three load after one confirm |
+  | 10 | Paused never asks | Pause the print → repeat check 3 | No prompt; the spool moves |
+  | 11 | An emptied head keeps its grams | Mid-print, move one head's spool to a shelf (confirm). Then cancel the print | The cancel review lists that head as "no spool loaded" with its grams and a spool picker; Apply without a pick reports those grams as not charged |
+  Still valid from the 2026-09-12 list: `CMD:EJECTALL` with no location open is refused with a message, so it's
+  safe to try. (Its "Core One Return" check is dropped: it covered the one-head `CORE1` printer, which is now the
+  INDX.) **With the
+  Core One INDX switched off** (no print needed): in the Location Manager open `RCOI-1` and assign a buffered
+  spool to it; then scan `RCOI-1`'s toolhead label with a spool in the buffer. Each time a "⏳ Checking 🦝 Core One
+  INDX…" notice appears within about half a second (a pill at the top, or a label on the dimmed screen), and the
+  move still goes through. **After the next release:** a tab left open across the update says "This FCC page is
+  out of date … reload" when it confirms a mid-print move; Ctrl+F5 fixes it.
+* **⏸️ PENDING DEREK — the next INDX cancel review for a print you ran from a different head than it was sliced
+  for.** Nothing to set up; it will happen on its own (your job 1104/1105 case). Open 🛑 Review, and on that
+  T-line pick the spool on the head the print really used, then Apply. Pass if the deduct lands on that spool (the
+  Activity Log names the printer and head) and nothing is charged on the sliced-for head. (The review-card spool
+  picker, built 2026-10-13.)
 * **⏸️ PENDING DEREK — capture one raw multi-slot `.bgcode` as a test fixture.** A print using **≥3
   non-contiguous slots** (e.g. 1, 4, 8 → T0, T3, T7), raw and unconverted, dropped at
   `inventory-hub/tests/fixtures/`. Settles the last open gcode questions and turns them into hermetic
