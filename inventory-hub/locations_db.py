@@ -494,8 +494,20 @@ def bindings_from_row(row):
         return {}
     targets = extra.get('slot_targets')
     if isinstance(targets, dict):
-        return {str(k): (None if v in (None, '') else str(v)) for k, v in targets.items()}
+        return {str(k): _binding_target(v) for k, v in targets.items()}
     return {}
+
+
+def _binding_target(value):
+    """A slot's bound target, or None for "unbound". EVERY falsy value is unbound
+    (None, '', False, 0, an empty list), as the raw `targets.get(slot)` reads this
+    helper replaced treated it, and so is a blank string. Stringifying `False`
+    to "False" made a hand-edited `{"1": false}` auto-deploy the spool to a
+    location named "FALSE" (2026-10-13 review)."""
+    if not value:
+        return None
+    text = str(value)
+    return text if text.strip() else None
 
 
 # Back-compat alias: the helper was private until 2026-08-03, when logic.py
@@ -1898,8 +1910,14 @@ def attach_single_slot_box_to_toolhead(box_id, toolhead_id):
         idx, row = _find_location(loc_list, box_up)
         if idx is None or not _is_single_slot_dryer_box(row):
             return False, "not a single-slot dryer box"
-        extra = dict(row.get('extra') or {})
-        targets = dict(extra.get('slot_targets') or {})
+        # isinstance guards, not bindings_from_row: this writes the dict back, and
+        # `dict("some string")` raised ValueError. A non-dict `extra` (or
+        # `slot_targets`) carries nothing worth keeping, so it is replaced — the
+        # migrate_feeder_map_if_needed precedent.
+        _existing_extra = row.get('extra')
+        extra = dict(_existing_extra) if isinstance(_existing_extra, dict) else {}
+        _existing_targets = extra.get('slot_targets')
+        targets = dict(_existing_targets) if isinstance(_existing_targets, dict) else {}
         if str(targets.get('1', '')).strip().upper() == th_up:
             return True, "already attached"  # idempotent — skip the write
         targets['1'] = th_up
@@ -1925,11 +1943,16 @@ def detach_single_slot_boxes_from_toolhead(toolhead_id):
         for row in loc_list:
             if not _is_single_slot_dryer_box(row):
                 continue
-            targets = (row.get('extra') or {}).get('slot_targets')
+            # A non-dict `extra` holds no binding to clear; skip it rather than
+            # raise, which aborted the detach for every box on this head.
+            _existing_extra = row.get('extra')
+            if not isinstance(_existing_extra, dict):
+                continue
+            targets = _existing_extra.get('slot_targets')
             if not isinstance(targets, dict):
                 continue
             if str(targets.get('1', '')).strip().upper() == th_up:
-                extra = dict(row.get('extra') or {})
+                extra = dict(_existing_extra)
                 extra['slot_targets'] = {k: v for k, v in targets.items() if str(k) != '1'}
                 row['extra'] = extra
                 detached.append(row.get('LocationID'))
@@ -1994,11 +2017,12 @@ def _set_dryer_box_bindings_locked(loc_id, slot_targets, printer_map):
     # printer's staging pool without conflicting on any physical toolhead.
     my_id_up = str(loc_id).strip().upper()
     for other in loc_list:
-        if other.get('Type') != DRYER_BOX_TYPE:
+        if not isinstance(other, dict) or other.get('Type') != DRYER_BOX_TYPE:
             continue
         if str(other.get('LocationID', '')).strip().upper() == my_id_up:
             continue
-        other_targets = (other.get('extra') or {}).get('slot_targets') or {}
+        # The guarded reader: a malformed OTHER box used to 500 this save.
+        other_targets = bindings_from_row(other)
         for other_slot, other_target in other_targets.items():
             other_up = str(other_target or '').strip().upper()
             if other_up and other_up in reverse and not is_printer_sentinel(other_up):
@@ -2007,7 +2031,10 @@ def _set_dryer_box_bindings_locked(loc_id, slot_targets, printer_map):
                     f"already bound by {other['LocationID']} slot {other_slot}"
                 ))
 
-    extra = dict(row.get('extra') or {})
+    # isinstance, not `or {}`: `dict("some string")` raised ValueError. A non-dict
+    # `extra` carries nothing worth keeping, so the save replaces it.
+    _existing_extra = row.get('extra')
+    extra = dict(_existing_extra) if isinstance(_existing_extra, dict) else {}
     extra['slot_targets'] = clean
     row['extra'] = extra
     loc_list[idx] = row

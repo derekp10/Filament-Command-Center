@@ -36,6 +36,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 import app as app_module  # noqa: E402
 import logic  # noqa: E402
+import routes_scan  # noqa: E402
 import locations_db  # noqa: E402
 import spoolman_api  # noqa: E402
 import state  # noqa: E402
@@ -63,6 +64,16 @@ FAKE_PRINTER_MAP = {"XL-1": {"printer_name": "XL", "position": 0}}
 def client():
     app_module.app.config["TESTING"] = True
     return app_module.app.test_client()
+
+
+@pytest.fixture(autouse=True)
+def _bulk_moves_on(monkeypatch):
+    """These tests exercise bulk-move BEHAVIOUR; the feature gate has its own file
+    (test_bulk_move_feature_gate.py). Turn the flag on explicitly: since every
+    door is gated (2026-10-13), relying on the machine's git-ignored config.json
+    made this file pass only where it happens to say true (dev's does; prod's
+    and a fresh checkout's don't)."""
+    monkeypatch.setattr(routes_scan, "_bulk_moves_enabled", lambda: True)
 
 
 def _spool(sid, location="PM-DB-A", is_ghost=False, archived=False):
