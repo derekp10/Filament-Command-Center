@@ -577,17 +577,48 @@
         setTimeout(doRefresh, 450);
     };
 
-    const performSwap = (opts) => {
+    // Group 39.1/39.2 — the heads a Quick-Swap/Return/Deposit Yes confirms: the
+    // probed head when the overlay showed its banner, plus any the server named
+    // before (always the union; see unionConfirmHeads in inv_core.js).
+    const _headsShown = (prior, stateInfo, head) => {
+        const out = new Set((prior || []).map(h => String(h).toUpperCase()));
+        if (stateInfo && head) out.add(String(head).toUpperCase());
+        return [...out];
+    };
+
+    // The server re-checked and a printing head needs a confirm the overlay's
+    // own probe missed (it fails open on a timeout): log it, re-open the confirm
+    // with the server's answer as the banner, and replay with every head
+    // confirmed so far.
+    const _reaskFromServer = (body, sent, overlayOpts, replay) => {
+        if (window.logClientEvent) window.logClientEvent(
+            `⚠️ ${overlayOpts.title.replace(/\?$/, '')} needs an active-print confirm: ${body.msg || 'the printer is printing'}`,
+            'WARNING');
+        const heads = window.unionConfirmHeads(sent, body);
+        showConfirmOverlay({
+            ...overlayOpts,
+            knownState: body.active_print || { printer_name: overlayOpts.toolhead, state: 'PRINTING' },
+            body: `<div class="text-light" style="font-size:1.05rem;">${_escapeHtml(body.msg || '')}</div>`,
+            onConfirm: () => replay(heads),
+        });
+    };
+
+    const performSwap = (opts, stateInfo = null, prior = []) => {
+        const sent = _headsShown(prior, stateInfo, opts.toolhead);
         fetch('/api/quickswap', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(opts),
+            body: JSON.stringify({ ...opts, confirmed_toolheads: sent }),
         })
             .then(async r => ({ ok: r.ok, body: await r.json() }))
             .then(({ ok, body }) => {
                 if (ok && body.action === 'quickswap_done') {
                     showToast(`⚡ Spool #${body.moved} → ${opts.toolhead}`, 'success', 2500);
                     _refreshAfterMove();
+                } else if (body.action === 'quickswap_requires_confirm') {
+                    _reaskFromServer(body, sent, {
+                        ...opts, title: `Load ${opts.box} slot ${opts.slot} into ${opts.toolhead}?`,
+                    }, (heads) => performSwap(opts, null, heads));
                 } else if (body.action === 'quickswap_empty_slot') {
                     showToast(`⚠️ ${opts.box} slot ${opts.slot} is empty — nothing to swap`, 'warning', 4000);
                 } else if (body.action === 'quickswap_not_bound') {
@@ -608,17 +639,23 @@
             });
     };
 
-    const performReturn = (opts) => {
+    const performReturn = (opts, stateInfo = null, prior = []) => {
+        // The Return overlay probes the head it empties (opts.toolhead).
+        const sent = _headsShown(prior, stateInfo, opts.toolhead);
         fetch('/api/quickswap/return', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(opts),
+            body: JSON.stringify({ ...opts, confirmed_toolheads: sent }),
         })
             .then(async r => ({ ok: r.ok, body: await r.json() }))
             .then(({ ok, body }) => {
                 if (ok && body.action === 'return_done') {
                     showToast(`↩️ Spool #${body.moved} → ${body.box}:SLOT:${body.slot}`, 'success', 2500);
                     _refreshAfterMove();
+                } else if (body.action === 'return_requires_confirm') {
+                    _reaskFromServer(body, sent, {
+                        toolhead: opts.toolhead, title: `Return the spool on ${opts.toolhead}?`,
+                    }, (heads) => performReturn(opts, null, heads));
                 } else if (body.action === 'return_no_spool') {
                     showToast(`⚠️ ${opts.toolhead} is empty — nothing to return`, 'warning', 4000);
                 } else if (body.action === 'return_no_binding') {
@@ -668,6 +705,11 @@
         let knownState = null;
         try { knownState = btn.dataset.knownActivePrint ? JSON.parse(btn.dataset.knownActivePrint) : null; } catch (_) { knownState = null; }
         delete btn.dataset.knownActivePrint;
+        // Group 39.1 — on that re-open, the heads the server named (unioned with
+        // any confirmed before) are what its Yes confirms.
+        let prior = [];
+        try { prior = btn.dataset.confirmedHeads ? JSON.parse(btn.dataset.confirmedHeads) : []; } catch (_) { prior = []; }
+        delete btn.dataset.confirmedHeads;
         showConfirmOverlay({
             toolhead, box, slot, knownState,
             title: `Deposit ${bsDisplay} into ${box} slot ${slot}?`,
@@ -677,6 +719,9 @@
                 `<b>${toolhead}</b>, it auto-deploys to the toolhead once placed. ` +
                 `If ${toolhead} currently has another spool, that one goes back to its recorded source box first (or the printer’s room / Unassigned if it has none).</div>`,
             onConfirm: (stateInfo) => {
+                // A re-open's banner is the server's own answer (`prior`); a first
+                // open's is the overlay's probe of the slot's bound head.
+                const sent = knownState ? prior : _headsShown(prior, stateInfo, toolhead);
                 fetch('/api/identify_scan', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -684,11 +729,12 @@
                         text: `LOC:${box}:SLOT:${slot}`,
                         source: 'quickswap_deposit',
                         // The overlay showed the "is PRINTING" banner and the user
-                        // confirmed it. Without this flag the backend asked again,
+                        // confirmed it. Without the confirm the backend asked again,
                         // this handler had no branch for that and toasted "Deposit
                         // failed", so a deposit during a print never worked
-                        // (2026-09-12).
-                        confirm_active_print: !!stateInfo,
+                        // (2026-09-12). Group 39.1: it names the heads the user
+                        // saw, so a stale grid can't carry it onto another head.
+                        confirmed_toolheads: sent,
                         // Group 46 review — deposit the spool this overlay NAMED.
                         // Without it the server took the first spool of its buffer
                         // replica, which can differ by the time Yes is pressed: the
@@ -732,6 +778,7 @@
                                 'WARNING');
                             btn.dataset.knownActivePrint = JSON.stringify(
                                 body.active_print || { printer_name: toolhead, state: 'PRINTING' });
+                            btn.dataset.confirmedHeads = JSON.stringify(window.unionConfirmHeads(sent, body));
                             // Re-open for the SAME spool the user already confirmed.
                             btn.dataset.depositSpool = String(buffered.id);
                             window.quickSwapDeposit(btn);
@@ -786,7 +833,9 @@
                 + 'This moves that spool onto <b>' + opts.toolhead + '</b>. '
                 + 'Any spool currently on the toolhead goes back to <em>its own</em> recorded source box — '
                 + 'or, if it has none, to the printer’s room (else Unassigned).',
-            onConfirm: () => performSwap(opts),
+            // The probe result says whether the banner showed: its Yes confirms
+            // that head (Group 39.1; this used to be thrown away).
+            onConfirm: (stateInfo) => performSwap(opts, stateInfo),
         });
     };
 
@@ -937,7 +986,7 @@
                     toolhead: th,
                     title: `Return the spool on ${th}?`,
                     body: resolvedNote + destLine,
-                    onConfirm: dest ? (() => performReturn({ toolhead: th })) : (() => { /* no-op */ }),
+                    onConfirm: dest ? ((stateInfo) => performReturn({ toolhead: th }, stateInfo)) : (() => { /* no-op */ }),
                 });
             });
         });

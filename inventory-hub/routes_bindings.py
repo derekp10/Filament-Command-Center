@@ -819,11 +819,13 @@ def api_quickswap_return():
             found_slot = None
 
     # 3) Send the spool back. perform_smart_move handles Filabridge + extras.
-    # The destination is a dryer box (not a toolhead), so the destination
-    # active-print check won't fire. The source-side disruption was already
-    # surfaced by the Quick-Swap confirm overlay's banner before this
-    # endpoint was called — backend just passes confirm_active_print=True
-    # unconditionally here because the user already saw the warning.
+    # Group 39.2: the server re-checks. The spool's own location is the head
+    # being emptied, so 39.4's source check probes it and answers
+    # requires_confirm when that printer is printing: "Return probes the head
+    # it empties" with no route-specific probe. The browser sends the heads
+    # whose warning the user saw (`confirmed_toolheads`); this used to pass
+    # True unconditionally, so a probe that timed out emptied a printing head
+    # with no warning.
     # auto_deploy=False (2026-09-12): the slot is normally bound to this same
     # toolhead, so the auto-deploy chain put the spool straight back onto it
     # while this route still answered return_done. Every Return was a silent
@@ -831,8 +833,26 @@ def api_quickswap_return():
     # honoured the caller's confirm.
     move_result = logic.perform_smart_move(
         found_box, [spool_id], target_slot=found_slot, origin='quickswap_return',
-        auto_deploy=False, confirm_active_print=True,
+        auto_deploy=False, confirm_active_print=logic.confirmed_heads(data),
     )
+    if isinstance(move_result, dict) and move_result.get('status') == 'requires_confirm':
+        state.add_log_entry(
+            f"⚠️ Return: Spool #{spool_id} off <b>{toolhead}</b> waits for a confirm: "
+            f"{move_result.get('msg')}", "WARNING", "ffaa00")
+        return jsonify({
+            # 29.B3: `toolhead` is the REQUESTED value outside return_done.
+            "action": "return_requires_confirm",
+            "spool": spool_id,
+            "toolhead": requested,
+            "active_toolhead": toolhead,
+            "requested": requested,
+            "box": found_box,
+            "slot": found_slot,
+            "confirm_type": move_result.get('confirm_type'),
+            "active_print": move_result.get('active_print'),
+            "active_prints": move_result.get('active_prints') or [],
+            "msg": move_result.get('msg'),
+        }), 200
     move_failed = logic.smart_move_failure(move_result, spool_id)
     if move_failed:
         state.add_log_entry(
@@ -935,14 +955,29 @@ def api_quickswap():
             "box": box, "slot": slot, "toolhead": toolhead,
         }), 404
 
-    # Quick-Swap confirm overlay already probed the destination toolhead and
-    # surfaced the warning banner before this endpoint was called, so the
-    # user has already opted in. Pass confirm_active_print=True so the
-    # backend check doesn't re-prompt.
+    # Group 39.2: the server re-checks. The overlay's probe shows the banner on
+    # the usual path and the browser sends the heads whose warning the user saw
+    # (`confirmed_toolheads`); this catches only what that probe missed (it
+    # fails open on a timeout), so a mid-print Quick-Swap is still one confirm.
+    # It used to pass True unconditionally, so a probe that timed out unloaded
+    # a printing head's spool with no warning at all (D1 / R2-06).
     move_result = logic.perform_smart_move(
         toolhead, [spool_id], target_slot=None, origin='quickswap',
-        confirm_active_print=True,
+        confirm_active_print=logic.confirmed_heads(data),
     )
+    if isinstance(move_result, dict) and move_result.get('status') == 'requires_confirm':
+        state.add_log_entry(
+            f"⚠️ Quick-swap: Spool #{spool_id} → <b>{toolhead}</b> waits for a confirm: "
+            f"{move_result.get('msg')}", "WARNING", "ffaa00")
+        return jsonify({
+            "action": "quickswap_requires_confirm",
+            "spool": spool_id,
+            "toolhead": toolhead, "box": box, "slot": slot,
+            "confirm_type": move_result.get('confirm_type'),
+            "active_print": move_result.get('active_print'),
+            "active_prints": move_result.get('active_prints') or [],
+            "msg": move_result.get('msg'),
+        }), 200
     # 2026-09-12: a rejected write, or a resident Smart Load could not unload,
     # used to be logged and answered as quickswap_done.
     move_failed = logic.smart_move_failure(move_result, spool_id)

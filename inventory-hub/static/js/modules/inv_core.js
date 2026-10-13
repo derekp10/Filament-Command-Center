@@ -94,6 +94,23 @@ const clearScanBuffer = () => {
 };
 window.clearScanBuffer = clearScanBuffer;
 
+// --- CONFIRMED HEADS (Group 39.1) ---
+// A move's active-print confirm names the heads whose warning the user saw
+// (`confirmed_toolheads`); a bare `confirm_active_print: true` covers none.
+// unionConfirmHeads(prior, answer) is what a Yes sends: the heads already
+// confirmed plus the ones this answer showed (`active_prints`, else the legacy
+// `active_print`). Always the UNION: replaying only the latest answer's heads
+// would ping-pong the user between two printing heads forever.
+const unionConfirmHeads = (prior, answer) => {
+    const out = new Set((Array.isArray(prior) ? prior : []).map(h => String(h).toUpperCase()));
+    const shown = (answer && Array.isArray(answer.active_prints) && answer.active_prints.length)
+        ? answer.active_prints.map(a => a && a.toolhead)
+        : [answer && answer.active_print && answer.active_print.toolhead];
+    shown.forEach(h => { if (h) out.add(String(h).toUpperCase()); });
+    return [...out];
+};
+window.unionConfirmHeads = unionConfirmHeads;
+
 // --- SCAN CAPTURE FROM A FOCUSED FIELD ---
 // The global accumulator bails on `e.target.tagName === 'INPUT'`, so any modal
 // that focuses a text field disarms the scanner. Sometimes dropping the

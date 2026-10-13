@@ -1326,9 +1326,10 @@ window.doAssign = (loc, spool, slot, isFromBufferFlag = null, options = {}) => {
         return window.fetchPrinterStateForToolhead(loc).then(stateInfo => {
             if (!stateInfo) {
                 // Unknown state → proceed normally.
-                return _doAssignFinalize(loc, spool, slot, isFromBufferFlag, false, options);
+                return _doAssignFinalize(loc, spool, slot, isFromBufferFlag, [], options);
             }
-            // Active print → inline confirm overlay (no nested Swal).
+            // Active print → inline confirm overlay (no nested Swal). Its Yes
+            // confirms this head, the one whose warning it shows (Group 39.1).
             setProcessing(false);
             return _confirmActivePrintAssign({
                 loc,
@@ -1337,11 +1338,12 @@ window.doAssign = (loc, spool, slot, isFromBufferFlag = null, options = {}) => {
                 isFromBufferFlag,
                 stateInfo,
                 options,
+                heads: [String(loc).toUpperCase()],
             });
         });
     }
 
-    return _doAssignFinalize(loc, spool, slot, isFromBufferFlag, false, options);
+    return _doAssignFinalize(loc, spool, slot, isFromBufferFlag, [], options);
 };
 
 // Inline confirm overlay for "you're moving onto a printer that's actively
@@ -1356,7 +1358,7 @@ window.doAssign = (loc, spool, slot, isFromBufferFlag = null, options = {}) => {
 // clicks while a print was active. mountOverlay's tier='confirm' sits
 // above any Bootstrap modal and the host=manageModal binding cleans
 // the overlay when the user dismisses the Location Manager.
-const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateInfo, options = {} }) => {
+const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateInfo, options = {}, heads = [] }) => {
     const escapeHtml = (s) => String(s || '')
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -1384,14 +1386,14 @@ const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateIn
         if (handle) { try { handle.cleanup(); } catch (_) { /* noop */ } handle = null; }
         if (qrSession) { try { qrSession.cleanup(); } catch (_) { /* noop */ } qrSession = null; }
     };
-    // After user confirms, call _doAssignFinalize with confirmActivePrint=true
-    // so the backend's safety check doesn't re-prompt. Without this flag,
-    // the backend would see the POST has no confirm and return requires_confirm,
-    // creating an infinite loop.
+    // After user confirms, call _doAssignFinalize with the heads this confirm
+    // covers (`heads`: the probed head, or the backend answer's heads unioned
+    // with any confirmed before) so the backend's safety check doesn't
+    // re-prompt for them. Group 39.1: a bare `true` no longer covers anything.
     const proceed = () => {
         cleanup();
         setProcessing(true);
-        _doAssignFinalize(loc, spool, slot, isFromBufferFlag, true, options);
+        _doAssignFinalize(loc, spool, slot, isFromBufferFlag, heads, options);
     };
     handle = window.mountOverlay({
         id: 'fcc-active-print-confirm-overlay',
@@ -1457,7 +1459,7 @@ const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateIn
     }
 };
 
-const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmActivePrint = false, options = {}) => {
+const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedHeads = [], options = {}) => {
     // FIX: 0-based index correction for MMU/CORE slots
     let finalSlot = slot;
     if (slot !== null) {
@@ -1495,25 +1497,25 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmAct
             spool_id: "ID:" + spool,
             slot: finalSlot,
             origin: isFromBuffer ? 'buffer' : '',
-            // Pass the UI-probe's opt-in through so the backend's safety net
-            // doesn't re-prompt us. Without this, the backend active-print
-            // check would flag the move even after the user already confirmed.
-            confirm_active_print: confirmActivePrint,
+            // The heads whose warning the user confirmed (Group 39.1), so the
+            // backend's safety net doesn't re-prompt for them.
+            confirmed_toolheads: Array.isArray(confirmedHeads) ? confirmedHeads : [],
         }),
     })
         .then(r => r.json())
         .then(res => {
             setProcessing(false);
             // Backend safety net: if the printer flipped from IDLE to PRINTING
-            // in the race window between our UI probe and the POST, OR the
-            // user's browser skipped the UI probe for any reason (cache, older
-            // bundle), the backend returns requires_confirm. Show our confirm
-            // overlay and retry on user opt-in.
+            // in the race window between our UI probe and the POST, the probe
+            // missed it, or the spool is LEAVING a printing head (39.4), the
+            // backend returns requires_confirm. Show our confirm overlay and
+            // retry with every head confirmed so far.
             if (res.status === 'requires_confirm' && res.confirm_type === 'active_print') {
                 _confirmActivePrintAssign({
                     loc, spool, slot, isFromBufferFlag,
                     stateInfo: res.active_print || { printer_name: loc, state: 'ACTIVE' },
                     options,
+                    heads: window.unionConfirmHeads(confirmedHeads, res),
                 });
                 return;
             }

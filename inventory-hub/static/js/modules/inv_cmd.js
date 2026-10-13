@@ -1601,7 +1601,8 @@ const processScan = (text, source = 'keyboard') => {
                     // however many times you rescanned. Every OTHER surface
                     // already prompts; this one just couldn't.
                     // Reuse the same overlay the buffer-assign path uses, then
-                    // replay the ORIGINAL scan with the confirm flag set.
+                    // replay the ORIGINAL scan confirming the heads the answer
+                    // named (Group 39.1: a bare flag no longer covers any).
                     _confirmActivePrintScan({
                         tid: res.location,
                         slot: res.slot,
@@ -1615,7 +1616,7 @@ const processScan = (text, source = 'keyboard') => {
                                 body: JSON.stringify({
                                     text: text,
                                     source: source,
-                                    confirm_active_print: true,
+                                    confirmed_toolheads: window.unionConfirmHeads([], res),
                                 }),
                             })
                                 .then(r => r.json())
@@ -1912,7 +1913,9 @@ const _confirmActivePrintScan = ({ tid, slot, stateInfo, onConfirm }) => {
     }
 };
 
-const performContextAssign = (tid, slot = null, confirmActivePrint = false, spoolIdsOverride = null) => {
+// `confirmedHeads`: the heads whose active-print warning the user confirmed
+// (Group 39.1); anything else (the old `false`) confirms none.
+const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOverride = null) => {
     setProcessing(true);
     // L124: callers can pass an explicit `spoolIdsOverride` subset (e.g. the
     // single topmost id when the target is a toolhead) so the rest of the
@@ -1926,7 +1929,7 @@ const performContextAssign = (tid, slot = null, confirmActivePrint = false, spoo
         spools: spoolIds,
         slot: slot,
         origin: 'buffer',
-        confirm_active_print: confirmActivePrint,
+        confirmed_toolheads: Array.isArray(confirmedHeads) ? confirmedHeads : [],
     };
 
     fetch('/api/smart_move', {
@@ -1937,13 +1940,15 @@ const performContextAssign = (tid, slot = null, confirmActivePrint = false, spoo
         .then(r => r.json())
         .then(res => {
             setProcessing(false);
-            // Backend safety net: target is an active toolhead. Prompt the
-            // user and retry with confirmActivePrint=true on approval.
+            // Backend safety net: the move touches an active head (the target,
+            // a bound slot's head, or a head a spool leaves). Prompt the user
+            // and retry with every head confirmed so far on approval.
             if (res.status === 'requires_confirm' && res.confirm_type === 'active_print') {
                 _confirmActivePrintScan({
                     tid, slot,
                     stateInfo: res.active_print || { printer_name: tid, state: 'ACTIVE' },
-                    onConfirm: () => performContextAssign(tid, slot, true, spoolIdsOverride),
+                    onConfirm: () => performContextAssign(
+                        tid, slot, window.unionConfirmHeads(confirmedHeads, res), spoolIdsOverride),
                 });
                 return;
             }

@@ -259,7 +259,8 @@ def api_smart_move():
         payload.get('spools'),
         target_slot=payload.get('slot'),
         origin=payload.get('origin', ''),
-        confirm_active_print=bool(payload.get('confirm_active_print', False)),
+        # Group 39.1: the heads whose warning the user saw.
+        confirm_active_print=logic.confirmed_heads(payload),
     ))
 
 

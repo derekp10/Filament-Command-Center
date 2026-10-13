@@ -388,10 +388,12 @@ def api_manage_contents():
         return jsonify({"success": False, "msg": "DB Update Failed"})
     elif action == 'add':
         origin = data.get('origin', '')
+        # Group 39.1: a move confirms by head (`confirmed_toolheads`); the
+        # boolean above stays for remove / force_unassign / clear_location.
         return jsonify(logic.perform_smart_move(
             loc_id, [spool_id],
             target_slot=slot_arg, origin=origin,
-            confirm_active_print=confirm_active_print,
+            confirm_active_print=logic.confirmed_heads(data),
         ))
     # 28.C1 — the action set is validated at the top, so control never reaches
     # here; a defensive JSON error keeps Flask from returning None if it ever did.
@@ -1258,25 +1260,30 @@ def api_identify_scan():
             }), 200
 
         spool_id = int(first_spool['id'])
-        # Slot-QR scans pass the caller's confirm-active-print flag through
-        # transparently. Frontend slot-QR paths pre-probe too, but the
-        # backend check is the authoritative safety net — if the printer
-        # went active between the probe and the scan, we still bail.
-        confirm_active_print = bool(request.json.get('confirm_active_print', False))
+        # Slot-QR scans pass the caller's confirm through: the heads whose
+        # warning the user saw (Group 39.1). Frontend slot-QR paths pre-probe
+        # too, but the backend check is the authoritative safety net — if the
+        # printer went active between the probe and the scan, we still bail.
         move_result = logic.perform_smart_move(
             target, [spool_id], target_slot=slot, origin='slot_qr_scan',
-            confirm_active_print=confirm_active_print,
+            confirm_active_print=logic.confirmed_heads(request.json),
         )
         # If perform_smart_move bailed on an active-print check, surface the
         # confirmation prompt to the client. Frontend slot-QR path (scan
-        # handler) renders this as a modal and retries on confirm.
+        # handler) renders this as a modal and retries on confirm, sending
+        # back the heads in `active_prints`.
         if isinstance(move_result, dict) and move_result.get('status') == 'requires_confirm':
+            state.add_log_entry(
+                f"⚠️ Spool #{spool_id} → <b>{target}:SLOT:{slot}</b> waits for a confirm: "
+                f"{move_result.get('msg')}", "WARNING", "ffaa00")
             return jsonify({
                 "type": "assignment",
                 "action": "assignment_requires_confirm",
                 "location": target, "slot": slot,
                 "confirm_type": move_result.get('confirm_type'),
                 "active_print": move_result.get('active_print'),
+                "active_prints": move_result.get('active_prints') or [],
+                "target_slot": move_result.get('target_slot'),
                 "msg": move_result.get('msg'),
                 "moved": spool_id,
             }), 200

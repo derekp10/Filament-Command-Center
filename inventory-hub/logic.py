@@ -72,6 +72,21 @@ def _confirm_scope(confirm):
     return False, frozenset(str(h).strip().strip('"').upper() for h in heads if str(h).strip())
 
 
+def confirmed_heads(data):
+    """Group 39.1 — the `confirm_active_print` a browser move request carries:
+    the heads in its `confirmed_toolheads`, i.e. the active-print warnings the
+    user actually saw. A bare legacy `confirm_active_print: true` (a stale
+    cached page) covers NO head, so the user is asked again: the safe direction,
+    and the build-version cache-bust keeps that window short. Used by the five
+    move doors (manage_contents add, /api/smart_move, the identify_scan slot
+    branch, /api/quickswap, /api/quickswap/return); eject, force-unassign,
+    clear-location and the bulk-move commit keep their boolean."""
+    heads = (data or {}).get('confirmed_toolheads')
+    if isinstance(heads, (list, tuple)):
+        return [str(h).strip().strip('"').upper() for h in heads if str(h or '').strip()]
+    return []
+
+
 def _confirm_covers(confirm, head):
     """True when `confirm` covers the active-print warning for `head`."""
     every, heads = _confirm_scope(confirm)
