@@ -5,15 +5,17 @@ it is updated after every milestone and committed on `dev` at every merge.
 
 ## Morning summary
 
-_Checkpoint 07:40. The run started at `dev` @ `c895d36` (the plan commit, on top of `e818d0c`)._
+_Checkpoint 09:35. The run started at `dev` @ `c895d36` (the plan commit, on top of `e818d0c`)._
 
-- **Landed on `dev` (nothing pushed):** Group 46 (`PARTIAL`, only 46.3 left), both standalone fixes, and Group 43
-  (`PARTIAL`: 43.1, 43.5, 43.3's review-card spool picker and 43.6, plus 16 fixes from its adversarial review;
-  43.2 and 43.4 left). Each merge passed offline, targeted E2E and, where the frontend changed, a triaged full sweep.
-- **Group 39 (confirm on every door):** on `feature/group-39-confirm-on-every-door`, **fully built** (39.1-39.9
-  plus 43.4) and tested (offline + the E2E files for every changed door). Its adversarial review found 16
-  confirmed issues (3 medium); I'm fixing those now, then the full sweep, then the merge (see Parked).
-- **Needs you:** the Questions below (15, each with my recommended answer); the manual checks; and pushing `dev`.
+- **Everything in the queue up to Group 39 landed on `dev` (nothing pushed):** Group 46 (`PARTIAL`, only 46.3
+  left), both standalone fixes, Group 43 (`PARTIAL`: only 43.2 left), and **Group 39, all nine items, plus 43.4**.
+  Each merge passed offline, targeted E2E and a triaged full sweep where the frontend changed.
+- **Group 39 changes what you see during a print:** every move that touches a printing head asks once, names
+  the heads it touches (a spool LEAVING a printing head now asks too, in your D6 wording), and FCC shows
+  "⏳ Checking XL…" while it waits on a printer. ⚠️ **After you deploy it, reload every open FCC tab**: a page
+  loaded before Group 39 is told "This FCC page is out of date … reload" when it confirms a mid-print move.
+- **Needs you:** the Questions below (15, each with my recommended answer), the manual checks (Group 39's are
+  new: 39-a to 39-n), and pushing `dev`. Group 45's filler items were not started.
 
 ## Landed
 
@@ -84,57 +86,49 @@ _Checkpoint 07:40. The run started at `dev` @ `c895d36` (the plan commit, on top
 - **Review:** 5 agents, 1.35M tokens, 32 raw findings → 15 confirmed + 1 plausible, all fixed.
 - **Left:** 43.2 (Question 2) and 43.4 (with or after Group 39.4).
 
+### Group 39 — Confirm on Every Door → `DONE`, with 43.4 (merged `c389e26`)
+
+- **Commits:** `8074d0c` (the real-engine move harness), `0a47e42` + `364c035` + `1c92673` + `81ebc7c` (39.1),
+  `e92440a` + `ee89219` (39.2), `e7818e0` + `d7164e9` + `cf31aeb` (39.3), `fb7a077` + `715c352` (39.4), `a446bcc`
+  (39.5 and the shared confirm), `804ca88` + `9360ff6` (39.6), `8390b39` (39.7), `5810179` + `3ce3c43` (39.8),
+  `98748d5` (39.9), `795529c` (43.4), `70d1bd9` (CLAUDE.md), `8833329` + `9cf9f23` (the review's fixes),
+  `ab6cbee` + `141678f` (buglist / working-groups / banners / archive).
+- **What changed for you:**
+  - **One question per move, naming its heads.** A Yes confirms exactly the heads it showed; a stale grid whose
+    slot was rebound to another head is asked again (R2-08). Quick-Swap and Return now ask the server too, so a
+    slow printer answer can't skip the warning (R2-06).
+  - **Moving a spool OFF a printing head asks first (your D6):** "#42 is loaded on XL-3. Moving it to
+    CR-CT-2-R1 means FCC stops charging this print to it. Continue?". Head to head on one printer is one
+    question. A re-scan onto the head it already sits on asks nothing.
+  - **"⏳ Checking XL…"** after 300 ms whenever FCC waits on a printer; past 3 s it says the printer didn't
+    answer. A printer with no login says "FCC has no login for XL" instead of "unreachable".
+  - **Force Location** mid-print opens a confirm (it was a red "failed" toast). **Eject** of a homeless spool
+    mid-print is one prompt, not three. **Smart Load** refuses a load when Spoolman can't list the head (it
+    used to stack two spools). **Quick-Swap/Return failures** say why (409, "server answered 502").
+    `CMD:TRASH` during a bulk move explains instead of opening an invisible dialog.
+  - **43.4:** a cancelled print's review keeps a head that had no spool at the end; pick a spool for it, or its
+    grams are reported as the job's shortfall instead of vanishing.
+  - From the review: a slot bound to a printing head is now NAMED in the question (the Yes covered it
+    silently); the deposit's second question shows the server's words; a completed print's swap review keeps
+    an emptied head too; a spool loaded during the printer check is unloaded rather than left under the new
+    one; one unreadable spool no longer cancels a whole bulk commit; a slot scan asked twice re-asks instead of
+    a green toast; a Location Manager head-to-head move asks once; the dim names the printer on a fresh page;
+    a double tap during the Quick-Swap check no longer breaks Tab page-wide; a stale review card can't drop a
+    review without its ledger entry.
+- **Tests:** every new pin was proven red on the pre-change code. `--offline` 2056 passed, 1 red (TestCart). Targeted E2E (21 files): 190 passed, 3 failed, all three known order-dependent flakes (`test_doassign_does_not_shift_buffer_on_failed_response` and the two `test_deployed_flag_preservation` Quick-Swap button tests), 15/15 in isolation. The frontend review pins are hermetic node tests (`tests/test_confirm_replays_js.py`, run under `--offline`).
+- **Full sweep:** 17 failed / 2904 passed / 30 skipped in **39:23** (Group 43's: 36:42). Triage: the 2 TestCart reds; **11 passed 5/5** in isolation; 4 flaky in isolation, each A/B'd against `dev`'s frontend modules with interleaved runs: `test_doassign_swap_pushes_displaced_only_on_success` 8/8 vs 8/8; `test_prefill_falls_back_to_vendor_shows_vendor_badge` 5/8 vs 6/8 (with its sibling at 4/5, the family Group 46 found flakes the same on `dev`); and `test_filament_details_renders_sample_and_label_status_rows`, the one that needed a closer look: 3/8 vs 8/8 in the interleaved A/B, but **24/24** in consecutive branch-only runs, and a timing probe shows its `/api/filament_details` call (a Spoolman read over the NAS) spiking to 4–5 s on both sides against the test's 5 s budget. The branch doesn't touch that modal's code. I couldn't explain why the interleaved arm was worse, so it's noted here rather than called settled.
+- **Review:** 5 agents, 2.02M tokens, 22 raw findings → 16 confirmed (3 medium) + 6 refuted duplicates, all fixed.
+- **Left:** nothing in Group 39. Groups 40, 41 and 42 build on its contract (their questions are below).
+
 ## Parked
 
-- **Group 39** — parked; see below. (Groups 46 and 43 and the standalone fixes all landed; see Landed.)
-
-### Group 39 — Confirm on Every Door → parked on `feature/group-39-confirm-on-every-door`
-
-The branch is checked out in the main tree, rebased on `dev` @ `d9f954b` (after Group 43). It was started in a
-scratchpad worktree while Group 43 owned the main tree; that worktree is now detached and can be deleted.
-**Everything below is tested** unless the row says otherwise: `--offline` 2028 passed (the TestCart red only), and
-the 21 E2E files that drive a changed door pass apart from two Quick-Swap button tests that fail only after other
-tests (3/3 solo). Every new pin was proven red on `dev`'s code first. No adversarial review or full sweep yet.
-
-| Commit | Sub-task | What it does | Pin |
-|---|---|---|---|
-| `8074d0c` | 39.1 prep | The real-engine move harness, extracted to `tests/move_engine_harness.py` | (refactor) |
-| `0a47e42` | 39.1 engine | `confirm_active_print` is True / falsy / **a list of head ids**; `_uncovered_active_heads` asks ONE confirm and never probes a covered head; the shared answer shape; the pre-write contract comment block | `test_scoped_confirm_39_1.py` |
-| `8390b39` | 39.7 | Smart Load's resident list is read **strictly**: a Spoolman blip refuses the load instead of stacking two spools on one head | `test_smart_load_fail_closed_39_7.py` |
-| `fb7a077` | 39.4 engine | **Ask before moving a spool OFF a printing head (D6)**, in your wording ("#42 is loaded on XL-3. Moving it to CR-CT-2-R1 means FCC stops charging this print to it. Continue?"); an unreadable record fails closed | `test_source_confirm_39_4.py` |
-| `e92440a` | 39.2 engine | A named slot's binding is walked only when the move deploys (I1-06) | `test_bound_slot_walk_39_2.py` |
-| `804ca88` + `9360ff6` | 39.6 | `_eject_destination` (pure, the code `perform_smart_eject` runs); ejecting a homeless spool off a printing head is ONE prompt and one Yes, not three | `test_one_eject_confirm_39_6.py`, `test_one_yes_answers_both_print_and_unassign` |
-| `364c035` + `1c92673` + `81ebc7c` | 39.1 wire, 39.2 routes | The five move doors read `confirmed_toolheads`; a bare legacy `true` covers no head; Quick-Swap and Return re-check on the server (`quickswap_requires_confirm` / `return_requires_confirm`); every Yes sends the UNION of heads confirmed so far. ⚠️ `364c035` says "UNTESTED" in its message; `1c92673` and `81ebc7c` are its tests | `test_confirmed_heads_routes_39_1.py`, the flipped pins |
-| `98748d5` | 39.9 | `CMD:TRASH` while a bulk move is armed explains instead of opening a confirm behind the panel | `test_trash_scan_during_a_bulk_move_opens_no_confirm` |
-| `5810179` + `3ce3c43` | 39.8 | Quick-Swap/Return failures answer 409; a non-JSON answer reads "server answered 502" | the failure-toast E2E (5) |
-| `a446bcc` | 39.5 + the shared confirm | `window.confirmActivePrint` (inv_core.js), the one shared active-print confirm; Force Location gets a yes-path through it | 3 Force Location E2E |
-| `e7818e0` | 39.3 backend | `/api/printer_state` answers `no_credentials` for a printer with no login (it said "unreachable") | `test_printer_state_reasons_39_3.py` |
-| `ee89219` | 39.2 test hygiene | The Return-overlay test's restore asserts it landed (it was a silent `try/except`) | — |
-| `70d1bd9` | docs | CLAUDE.md: "Move confirms name their heads", plus the two engine rows | — |
-| `715c352` | 39.4 frontend | The Location Manager and scan-assign confirms render through `window.confirmActivePrint` (their DOM ids kept) and show the server's D6 message when the backend asked. The scan-path canary now counts guard LINES (counting occurrences let inv_cmd.js's Shift+B line alone satisfy the old minimum) | `test_the_shared_active_print_confirm_owns_the_enter_guard` |
-| `d7164e9` + `cf31aeb` | 39.3 client | The "⏳ Checking XL…" pill (after 300 ms; "XL didn't answer" + a WARNING past 3 s), `fetchPrinterStateDetailed`, the overlay's "FCC has no login for XL" / "Couldn't reach XL" line, the dim's label on slot scans and buffer location scans. The Quick-Swap visuals stub the new probe seam (baselines unchanged) | 4 E2E with the fetch-delay lever, `test_printer_check_budgets_39_3.py` |
-| `795529c` | 43.4 | A cancel review keeps every head: a head with no spool (emptied mid-print, the everyday case once D6 lets you move a spool off a printing head) is carried as `unresolved_usage` with the heads at the end; the card offers 43.3's picker for it (`{position, sid, grams}`), and whatever nobody picks is the job's reported shortfall instead of vanishing | `test_cancel_review_keeps_every_head_43_4.py`, 2 picker E2E |
-
-**Next, in order:**
-
-1. **Fix the review's 16 confirmed findings** (`wf_d989c332-cda`; the medium ones first): a same-printer
-   "feeds" sentence the message dropped; the Quick-Swap deposit re-ask showing stale text instead of the
-   server's; a `spool_changed` completion review dropping its empty heads (the 43.4 hole on the other path);
-   plus 13 lows (a stale pre-39 browser tab looping on a bare `true`; the dim label naming no printer before
-   the printer map loads; a double tap leaking a keydown handler; a bulk commit refusing a whole batch on one
-   unreadable spool; the slot-QR replay missing a second ask; an LM head-to-head move asking twice; a stale
-   cancel-review row deleting the review without its ledger entry; four test-hygiene items).
-2. The full `RUN_INTEGRATION` sweep, then merge. The group merges only whole (the plan's rule).
-3. Small leftovers: the "no login" line could link to Config's credentials grid; the scratchpad worktree
-   (`git worktree list`) is detached and can be removed with `git worktree remove --force <path>`.
-
-Known E2E flakes met on this branch, all pre-existing (A/B'd, or passing solo): `test_doassign_buffer_safety`
-(`..._swap_pushes_displaced_only_on_success` 2/5 here vs 3/5 with `dev`'s `inv_loc_mgr.js`), the two
-`test_deployed_flag_preservation` Quick-Swap button tests and `test_escape_key_walks_out_of_three_level_stack`
-("`#manageModal` never opened" after other tests; they pass solo), and a 5 s server read timeout in
-`test_empty_slot_disabled_when_buffer_empty`.
+- Nothing. (The scratchpad worktree Group 39 started in was clean and is removed.)
 
 ## Notes from the run
+
+- **Deploy note for Group 39:** reload every open FCC tab after the update. A page loaded before it sends a
+  bare "yes" that no longer covers any head; rather than ask it the same question forever, the server tells
+  it to reload (`logic.stale_confirm_refusal`).
 
 - **An accidental ~11-minute full-suite run (03:18–03:30).** A command meant to re-run only the Group 46 sweep's
   reds had a broken `sed` expression, so its test list came out empty and pytest started the whole suite
@@ -236,6 +230,21 @@ Belt-and-braces: each of these already has an automated test that fails on the o
 | 43-a | **A review charges the head the print really ran on** (the task file's check) | The next `no_spool` review for an INDX print you started from a different head than it was sliced for → 🛑 Review → on its T-line pick the spool on the head it really used → Apply | The deduct lands on that spool (Activity Log names the printer and head), nothing on the sliced-for head |
 | 43-b | **"Another spool by #ID" finds the spool** | Any review card → a line's picker → "Another spool by #ID…" → type a real spool id, Tab away | The line shows the spool's name and location (it used to say "not found" for every spool) |
 | 43-c | **A near-empty pick says what it can't take** | On a review row, pick a spool with less left than the row's grams | The row's preview turns amber at once; Apply charges what fits and a warning names the grams nobody took |
+| 39-a | **Quick-Swap mid-print** | XL printing. Open XL-2 → tap the `LR-MDB-1` slot 2 tile | One confirm with the yellow "XL is PRINTING" banner. Yes → the new spool is on XL-2 and XL-2's old spool is back in its box. No second prompt |
+| 39-b | **Return mid-print** | XL printing. Open XL-3 → ↩️ Return | The banner names XL (the head being emptied). Yes → the spool is in `LR-MDB-1` slot 3. No second prompt |
+| 39-c | **Return while idle** | XL idle. Open XL-3 → ↩️ Return | No banner. One tap parks the spool |
+| 39-d | **"Checking…" (offline printer)** | Core One powered off. Open CORE1 → ↩️ Return (or tap the `CR-MDB-1` slot 1 tile) | "⏳ Checking …" appears within about half a second. The overlay then says it couldn't reach the Core One, and the action still works |
+| 39-e | **"Checking…" on a scan** | Core One powered off. Reload the page, put a spare spool in the buffer → scan the `CR-MDB-1` slot 1 label | The dim screen names the printer instead of a blank dim. The load then completes |
+| 39-f | **Move off a printing head** | XL printing. Open XL-3 → pick its spool into the buffer → scan `CR-CT-2-R1` | One prompt naming the spool, XL-3, `CR-CT-2-R1` and "stops charging". Cancel → nothing moved. Repeat and choose Yes → moved |
+| 39-g | **Paused never asks** | Pause the XL print → repeat 39-f | No prompt; the spool moves |
+| 39-h | **Head to head asks once** | XL printing. Pick up XL-1's spool → scan XL-3's toolhead QR; then repeat from the Location Manager (open XL-3, assign it) | Exactly one prompt each time, naming both heads |
+| 39-i | **Force Location mid-print** | XL printing. Details of XL-3's spool → Force Location → `CR-CT-2-R1` → Force Move. Then repeat with "-- Unassigned --" | Both times a confirm appears (not a red "failed" toast); Yes moves the spool |
+| 39-j | **One eject prompt** | XL printing, a spool on XL-2 with no saved home (e.g. one put there with Force Location) → ⏏️ Eject on its card | Only one prompt beyond "Eject spool #N?". Its wording mentions XL-2 and Unassigned, not "already in a room" |
+| 39-k | **Eject during a bulk move** | Open `CR-CT-2-R1` → 🔀 Move all → scan the TRASH QR on one of its spool cards | An info toast only. No invisible dialog; later scans still work |
+| 39-l | **Deposit mid-print still works** | XL printing. XL-2 grid → Deposit a buffered spool into its slot; confirm once with Enter, once with a click, once with the scan QR | All three load the spool after one confirm |
+| 39-m | **A bound slot is named** | XL printing. Pick XL-3's spool into the buffer → scan the label of a box slot bound to XL-2 | One prompt that names XL-3 AND says the slot feeds XL-2 ("…so this also loads #N onto XL-2 and unloads what XL-2 holds") |
+| 39-n | **An old tab is told to reload** | Leave an FCC tab open across the deploy. XL printing → in that old tab, assign a spool to an XL head and press Continue | A 7 s message: "This FCC page is out of date … Reload the page". After Ctrl+F5 the same move asks normally |
+| 43-d | **A head emptied mid-print keeps its grams** | XL multi-tool print. Mid-print, move one head's spool to a shelf (confirm), then cancel the print | The review lists that head as "no spool loaded" with its grams and a picker; Apply without a pick reports the grams as not charged |
 
 ## To push
 
@@ -247,9 +256,7 @@ Nothing has been pushed tonight (rule 2). Waiting on `dev`, oldest first:
 - `36d7318` Merge Group 46 (+ its three branch commits) and the docs commit after it
 - `b7ed885` Merge the standalone fixes (+ its three branch commits) and the docs commit after it
 - `985aba8` Merge Group 43 (+ its eight branch commits) and the docs commit after it
-
-Not for pushing yet: `feature/group-39-confirm-on-every-door` is a local, parked branch (it lives in a scratchpad
-worktree; see Parked).
+- `c389e26` Merge Group 39 (+ its 24 branch commits), the archive commit `141678f`, and the handoff commits
 
 ## Budget log
 
@@ -258,4 +265,4 @@ worktree; see Parked).
 | `wf_0e44faf0-934` review-group-46 | Group 46 | 5 (4 lenses + 1 batched skeptic) | 1,311,429 subagent | 41 min, 311 tool calls; 13 findings → 12 confirmed + 1 plausible, 0 refuted, all fixed |
 | `wf_4a2dec42-133` review-standalone | Standalone fixes | 4 (3 lenses + 1 batched skeptic) | 828,479 subagent | 35 min, 229 tool calls; 1 finding, confirmed (low), fixed |
 | `wf_4573e3ac-aca` review-group-43 | Group 43 | 5 (4 lenses + 1 batched skeptic) | 1,346,059 subagent | 34 min, 236 tool calls; 32 raw findings → 15 confirmed + 1 plausible; the 16 refuted were duplicates (15) or not a defect (1); all 16 fixed |
-| `wf_d989c332-cda` review-group-39 | Group 39 | 5 (4 lenses + 1 batched skeptic) | 2,022,606 subagent | 49 min, 431 tool calls; 22 raw findings → 16 confirmed (3 medium), 6 refuted (all duplicates) |
+| `wf_d989c332-cda` review-group-39 | Group 39 | 5 (4 lenses + 1 batched skeptic) | 2,022,606 subagent | 49 min, 431 tool calls; 22 raw findings → 16 confirmed (3 medium), 6 refuted (all duplicates); all 16 fixed |
