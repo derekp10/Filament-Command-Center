@@ -373,6 +373,38 @@ def test_three_hop_active_print_then_true_unassign_chain(
 
 
 @pytest.mark.usefixtures("require_server")
+def test_one_yes_answers_both_print_and_unassign(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """Group 39.6: the server now asks "printing" and "no saved home" in ONE
+    answer (`confirm_types`), so the three hops above become two, and the one
+    Yes sends both flags. HEAD proof: the pre-39.6 doEject retried with only
+    confirm_active_print, so a third prompt followed."""
+    combined = dict(ACTIVE, confirm_types=["active_print", "unassign"],
+                    msg=f"#{SID} is loaded on {LOC} and has no saved home. Ejecting it leaves it "
+                        f"Unassigned, and FCC stops charging this print to it. Continue?")
+
+    def backend(b):
+        if b.get("confirmed") and b.get("confirm_active_print"):
+            return OK
+        return UNASSIGN if b.get("confirm_active_print") else combined
+
+    be = FakeBackend(page, backend)
+    _boot(page, base_url, reset_dom_state_js)
+
+    _start_eject(page)
+    page.click(YES)
+    _confirm_visible_with(page, "has no saved home", "the combined prompt was dropped")
+    _wait_shown(page, 2, "the combined prompt never finished showing")
+    page.click(YES)
+
+    _until(page, lambda: len(be.ejects()) >= 2, 5_000, "YES on the combined prompt sent no retry")
+    _js_until(page, "window.__toasts.includes('Ejected')", 5_000, "no 'Ejected' toast")
+    flags = [(b["confirmed"], b["confirm_active_print"]) for b in be.ejects()]
+    assert flags == [(False, False), (True, True)], flags
+    assert _count(page, "shown") == 2, "a third prompt showed"
+
+
+@pytest.mark.usefixtures("require_server")
 def test_double_click_on_yes_never_confirms_the_reprompt_unseen(
         page: Page, base_url: str, reset_dom_state_js: str):
     """FE-1: the second click of a double-click lands on the dialog that is still

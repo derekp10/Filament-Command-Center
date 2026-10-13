@@ -1610,10 +1610,14 @@ window.doEject = (sid, loc, isConfirmed = false, confirmActivePrint = false) => 
             // and Yes appeared to "do nothing".
             if (res.require_confirm && res.confirm_type === 'active_print') {
                 const stateInfo = res.active_print || { printer_name: loc, state: 'ACTIVE' };
+                // Group 39.6: when the server asks both questions at once
+                // ("printing" + "no saved home"), the one Yes answers both, so
+                // there is no second prompt raised from this one's callback.
+                const both = Array.isArray(res.confirm_types) && res.confirm_types.includes('unassign');
                 requestConfirmation(
                     res.msg
                         || `${stateInfo.printer_name} is ${stateInfo.state} — ejecting will disrupt the print. Continue anyway?`,
-                    () => window.doEject(sid, loc, isConfirmed, true)
+                    () => window.doEject(sid, loc, isConfirmed || both, true)
                 );
                 return;
             }
