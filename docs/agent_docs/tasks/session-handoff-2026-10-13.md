@@ -33,14 +33,27 @@ _In progress — the run started at `dev` @ `c895d36` (the plan commit, on top o
 - **Review:** 5 agents, 1.31M tokens, 13 findings → 12 confirmed + 1 plausible, 0 refuted, all fixed.
 - **Left:** 46.3 (Question 1 below).
 
+### Standalone fixes → done (merged `b7ed885`)
+
+- **Commits:** `545562d` (both fixes), `e481987` (review fix), plus a CLAUDE.md convention line.
+- **Bulk Moves flag:** with `fcc.bulkMove.enabled` off, `POST /api/bulk_move` now answers 403, a server-side
+  `CMD:BULKMOVE` scan no longer arms a session, and an armed session only answers `CMD:CANCEL` (a scanned
+  `CMD:DONE` used to commit it). Prod is dark, so this changes nothing you'd see there.
+- **`slot_targets` readers:** one malformed Dryer Box row can no longer break moves onto toolheads, the Quick-Swap
+  bind picker and Return, the Feeds save, single-slot attach/detach, toolhead deletes, or every toolhead removal in
+  Settings. The review caught that my migration made a hand-edited `false` binding auto-deploy to a location named
+  "FALSE"; fixed.
+- **Tests:** `--offline` 1921 passed, 1 red (TestCart). Targeted E2E for every touched surface: 252 passed,
+  1 failed (`test_feeds_section_hidden_for_non_dryer_box`: 5/5 in isolation; it also failed in the Group 46 sweep
+  before this code existed). Backend-only, so no full sweep (the plan's rule).
+- **Review:** 4 agents, ~828K tokens, 1 finding (confirmed, low), fixed.
+
 ## Parked
 
 _Nothing parked yet. In flight (checkpoint 02:47, updated as units land):_
 
 - **Group 46** — merged (`36d7318`); see Landed.
-- **Standalone fixes** — `fix/standalone-2026-10-13` @ `f9f9982`, worktree `<scratchpad>/wt-standalone`
-  (backend only). Review done (1 finding, fixed in `f9f9982`). Next: bring onto `dev` in the main tree → offline +
-  targeted E2E → merge.
+- **Standalone fixes** — merged (`b7ed885`); see Landed.
 - **Group 43** — `feature/group-43-deduct-recovery` @ `cb0ed16`, worktree `<scratchpad>/wt-g43`: 43.1, 43.5, 43.6,
   the harness extraction and 43.3 (backend + `cancel_review.js` picker) committed; 39 hermetic pins + deduct suites
   green. 43.3's E2E file (`test_cancel_review_picker_e2e.py`) is written but NOT yet run (needs the main tree).
@@ -154,6 +167,7 @@ Nothing has been pushed tonight (rule 2). Waiting on `dev`, oldest first:
 - `c895d36` docs(tasks): plan for the unattended 2026-10-13 overnight run
 - `6eba7d7` docs(handoff): start the run log
 - `36d7318` Merge Group 46 (+ its three branch commits) and the docs commit after it
+- `b7ed885` Merge the standalone fixes (+ its three branch commits) and the docs commit after it
 
 ## Budget log
 
