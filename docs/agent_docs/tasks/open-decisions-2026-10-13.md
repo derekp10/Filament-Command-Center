@@ -9,6 +9,15 @@ numbers; the internal refs at the bottom of each item are for the next session, 
 **How to answer:** reply per section, e.g. "Your call: loop, refuse, keep moves-only, later. OK: yes to all.
 Decide: fine." Anything you skip keeps its stated default.
 
+## Derek's answers (2026-10-13, afternoon)
+
+Answered one at a time after the overnight run. Until the task files are updated from this list, it wins over the "If you don't answer" lines below.
+
+1. **Several spools in hand when you scan a whole box's (or printer's) label** → **Loop**: the slot chooser opens once per spool you're carrying (Enter, Enter, Enter fills the box); Escape stops and the rest stay in the buffer. _(Group 40 Q1 (handoff Q6))_
+2. **Deleting a Room that still has locations in it** → **Refuse until it's empty.** Derek: deleting a room with stuff in it is a bad idea to begin with; a rename and re-ID is the right tool for a reorganisation. The ID system needs work, but IDs should stay readable (where it is, what it is, which one: LR-MDB-1 becomes something else that still reads that way). That part is input for the location-ID sit-down (Group 37 fork 1, paired with Group 44). _(Group 41 Q4 / 41.3 (handoff Q4))_
+3. **Should Undo also undo a weight change?** → **Undo stays moves-only and is renamed "Undo Last Move"** (or "UNDO MOVE" if the tile is too narrow); the problem was that it never said what it does. It **always asks first, naming the move** it will reverse, printing or not (a printing head is called out like on any move). The toast says what it put back, and the Activity Log line is reworded so it can't be read backwards (today: "↩️ Undid: moved #57 from LR-MDB-1 -> XL-2"; new: "#57 is back in LR-MDB-1 (it had been moved to XL-2)"), so a user can fix things by hand. **No weight-undo**: it gets complicated once a print deduct or a review lands; other undos wait until they make sense elsewhere. **Redo**: undecided, a maybe-later (the command deck is already crowded). _(standalone Undo item, Feature-Buglist.md (handoff Q10))_
+4. **Refresh dev's data from prod** → **Script the full refresh**: locations plus the Spoolman inventory, prod read-only, the dev-only test pieces re-applied, the reset snapshot retaken. Run it one evening when Derek is around to approve the prod reads. Not urgent. _(Group 45.6 (handoff Q14))_
+
 ## Your call
 
 Product behaviour only you can decide. Each has my recommendation.
