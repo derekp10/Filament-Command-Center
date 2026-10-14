@@ -5,7 +5,7 @@ it is updated after every milestone and committed (and pushed) on `dev` at every
 
 ## Morning summary
 
-_Run in progress. Started from `dev` @ `4203ffe` (= `origin/dev`) at ~18:15 on 2026-10-13._
+_Run finished at ~04:45 on 2026-10-14. Started from `dev` @ `4203ffe` (= `origin/dev`) at ~18:15 on 2026-10-13. Everything that merged is pushed; `main` is untouched, still the 2026-10-08 release._
 
 - Queue (Derek's pick): 43.2 + 46.3 → Group 45 → Group 41 → Group 42 → Group 40.
 - **Landed (21:30):** Groups 43 and 46 are DONE (43.2 the uncharged-grams card, 46.3 toolhead labels), merged
@@ -16,6 +16,8 @@ _Run in progress. Started from `dev` @ `4203ffe` (= `origin/dev`) at ~18:15 on 2
   for you: 45.6, the dev-data refresh from prod (an evening; it needs your OK on the prod reads). Next: Group 41.
 - **Landed (~01:45):** Group 41 is DONE, merged `f49ccfe` and pushed. Eject All refuses rooms and printers and says what it did; a delete never reaches a loaded head; Undo is "Undo Last Move" and asks first; a confirm dialog fading in ignores clicks. The review's red (an auto-deployed undo mid-print) is fixed. Next: Group 42.
 - **Landed (04:05):** Group 42 is DONE, merged `efc7181` and pushed. A PolyDryer lets go of a head only when its own spool leaves it, follows that spool head to head, and an eject out of the box puts the spool back where it sat before; one loaded spool per head on every writer; eject says where the spool went and which box let go. The review's 14 findings are fixed. Next: Group 40, whose engine prerequisites start on a parked branch (the group spans 2–3 sessions, and its one prompt you'd feel waits for you).
+- **Parked (~04:45):** Group 40 started. On the LOCAL branch `feature/group-40-slot-picker` (not reviewed, not merged): nothing is filed on XL / RCOI (or a printer with no heads yet) any more, Bulk Move says so in printer words, and a spare scanned onto a head records which box slot it came from only when exactly one free slot feeds that head (the toast names it). Its full `RUN_INTEGRATION` sweep is green: 3249 passed / 21 skipped / 0 failed in 21:35 (load 1.06×). Not merged: the next part (40.0c + 40.3) adds a question to your slot-label scans, so it waits for a session with you. See Parked.
+- **For you:** nothing blocks. `main` is held for you; the next release would carry 43.2 + 46.3, Group 45, Group 41 and Group 42. Optional hands-on checks are under "Manual checks for Derek". The buglist's ⏸️ PENDING DEREK section was left untouched (tonight's rule).
 - Evening prep done: Derek's go-ahead for all-night full test runs, a push after each merge, and read-only prod
   counts (taken ~18:25; table in the plan file).
 
@@ -161,7 +163,33 @@ _Run in progress. Started from `dev` @ `4203ffe` (= `origin/dev`) at ~18:15 on 2
 
 ## Parked
 
-_Nothing yet._
+### Group 40 → `IN PROGRESS`, parked: engine prerequisites on a local branch
+
+- **Branch:** `feature/group-40-slot-picker` (`ab69c56`, off `dev` `2f426fc`). Local only (tonight's rule was to push `dev` alone). Not reviewed, not merged.
+- **Why it stops here:** Group 40 is LARGE (14–20 h over 2–3 sessions) and every part edits the move engine. Its
+  one part you will feel, 40.3 (a slot-label scan into a slot whose head runs a spool from somewhere else asks
+  first), needs your checks S1–S6, and 40.0c's new answer can't ship without 40.3's dialog. 40.0e (auto-slot
+  before the printer check) needs the same "residents of the bound heads" read as 40.0c, so the two belong together.
+- **What is on the branch** (one commit, every pin failed on `dev` first):
+  - **40.0a:** a spool sent to XL, RCOI or a printer with no toolheads yet is refused before anything is read or
+    written: "XL is a printer, not a toolhead — pick one of its toolheads (XL-1 to XL-5) or a Printer Pool slot."
+    / "MK4 has no toolheads set up yet — add them in ⚙️ Settings → Toolheads." (Claude's call 26). A printer that is
+    its own head stays loadable. Today `LOC:XL` with a full buffer files every buffered spool on XL itself.
+  - **Item H:** Bulk Move onto XL / RCOI says "… is a printer, not a toolhead …", and a spool filed on a printer
+    row itself becomes movable (call 27).
+  - **40.0b:** a pin for "Just store it" (`auto_deploy=False` keeps the slot and leaves a printing head alone).
+  - **40.0d:** the "came from" slot a spare gets when you scan it onto a head is recorded only when exactly one
+    free slot feeds that head (it used to take the first one in the file), each box is read strictly, and the
+    buffer scan's toast says "#42 → XL-1 (recorded as from LR-MDB-1 slot 1)".
+  - Deliberate test changes: the 2026-09-29 hotfix's "a one-slot printer not yet set up still loads" now expects
+    the refusal (call 26); `test_logic_undo`'s mocked `locations_db` answers the new classifier.
+- **Tests:** `--offline` 2355 passed; its full `RUN_INTEGRATION` sweep is green: 3249 passed / 21 skipped / 0 failed in 21:35 (load 1.06×).
+- **Next session, in order:** 40.0e + 40.0c (step 3's pick and step 4's fed-head read share one strict read of
+  the bound heads), 40.1 (the shared picker), **40.3 with you** (S1–S6), 40.2, 40.4, 40.5 (adds the
+  `record_source` keyword's caller and the `inv_core.js` classifier mirror), 40.6, 40.7. Review the engine part
+  (4 lenses + 1 batched skeptic) before anything merges; full sweep before `dev`.
+- **The task file's banner lists what Groups 41 and 42 changed underneath it** (helpers that now exist, single-slot
+  boxes out of every feed path, the location scan's strict read and check order).
 
 ## Questions for Derek
 
