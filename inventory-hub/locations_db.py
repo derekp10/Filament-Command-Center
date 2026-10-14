@@ -1949,7 +1949,7 @@ def effective_slot(box_row, slot, occupants=1):
     return '1'
 
 
-def attach_single_slot_box_to_toolhead(box_id, toolhead_id):
+def attach_single_slot_box_to_toolhead(box_id, toolhead_id, steal=True):
     """Group 20.2 — bind a SINGLE-SLOT (`Max Spools <= 1`) dryer box's slot '1'
     to `toolhead_id` so the box follows its deployed spool onto the toolhead
     (feeds the Core One "missing box" notification for non-Core-One printers).
@@ -1961,6 +1961,11 @@ def attach_single_slot_box_to_toolhead(box_id, toolhead_id):
     detach_single_slot_box, which logic._release_single_slot_box calls when the
     box's own spool leaves the head by any path, Group 42.1). Returns
     (attached, detail).
+
+    `steal=False` (Group 42 review) leaves a box that is bound to ANOTHER head
+    where it is: the 42.6 follow and Undo's re-attach must never take a
+    PolyDryer off the head its own spool runs on. A deploy keeps steal=True:
+    its spool just left that box, so the box goes with it.
     """
     box_up = str(box_id or '').strip().upper()
     th_up = str(toolhead_id or '').strip().upper()
@@ -1979,8 +1984,11 @@ def attach_single_slot_box_to_toolhead(box_id, toolhead_id):
         extra = dict(_existing_extra) if isinstance(_existing_extra, dict) else {}
         _existing_targets = extra.get('slot_targets')
         targets = dict(_existing_targets) if isinstance(_existing_targets, dict) else {}
-        if str(targets.get('1', '')).strip().upper() == th_up:
+        _bound_now = str(targets.get('1') or '').strip().upper()
+        if _bound_now == th_up:
             return True, "already attached"  # idempotent — skip the write
+        if _bound_now and not steal:
+            return False, f"attached to {_bound_now}"
         targets['1'] = th_up
         extra['slot_targets'] = targets
         row['extra'] = extra

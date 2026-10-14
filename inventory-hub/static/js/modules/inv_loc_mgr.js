@@ -1089,10 +1089,19 @@ const _syncDepositCard = () => {
 // should only ever see one in there"). When FCC's records put two loaded spools
 // on a head, its view says so above the cards, in the Printer Status chip's
 // words (Claude's call 23).
+const _isOneSpoolHeadRow = (row, lid) => {
+    if (!row) return false;
+    if (['Tool Head', 'MMU Slot', 'No MMU Direct Load'].includes(row.Type)) return true;
+    // A dual-role printer that is its own (only) head, the CORE1 shape (Group 42
+    // review: its tile said "⚠️ 2 spools" while its view showed no banner).
+    if (row.Type !== 'Printer') return false;
+    const heads = (row.toolheads || []).map(t => String((t && t.location_id) || '').toUpperCase()).filter(Boolean);
+    return heads.length > 0 && heads.every(h => h === lid);
+};
 const _doubledHeadBanner = (data, locId) => {
     const lid = String(locId || '').toUpperCase();
     const row = (state.allLocations || []).find(l => String(l.LocationID || '').toUpperCase() === lid);
-    if (!row || !['Tool Head', 'MMU Slot', 'No MMU Direct Load'].includes(row.Type)) return null;
+    if (!_isOneSpoolHeadRow(row, lid)) return null;
     const loaded = (data || []).filter(s => !s.is_ghost
         && String(s.location || '').replace(/"/g, '').trim().toUpperCase() === lid);
     if (loaded.length < 2) return null;

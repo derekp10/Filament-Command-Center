@@ -285,5 +285,7 @@ def test_an_attached_polydryer_says_which_spool_it_follows(tmp_path):
 def test_a_stale_attachment_says_so_and_unbinds(tmp_path):
     res = _grid(tmp_path, [], click=True)
     assert "🔗 attached, but its spool isn't on XL-2" in res["html"] and "fcc-qs-unbind" in res["html"], res
-    assert res["put"]["url"] == "/api/dryer_box/PM-DB-2/bindings/1" and res["put"]["body"] == {"target": None}, res
+    # It names the head it showed, so a box that moved meanwhile is refused (Group 42 review).
+    assert res["put"]["url"] == "/api/dryer_box/PM-DB-2/bindings/1", res
+    assert res["put"]["body"] == {"target": None, "expected_target": "XL-2"}, res
     assert [(t["msg"], t["type"]) for t in res["toasts"]] == [("🔗✖ PM-DB-2 detached from XL-2", "success")]

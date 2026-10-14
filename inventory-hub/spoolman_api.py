@@ -334,7 +334,10 @@ def _unarchive_destination(existing, prev_loc, remaining):
     warning naming the spool on the head, as an ejected spool with no saved home
     does. Claude's call 22: a place FCC can't read, or that no longer exists,
     counts as taken; a remembered Printer label counts only spools filed on the
-    printer itself. A shelf, box or cart is restored with no read.
+    printer itself. A shelf, box or cart is restored with no read. A place with
+    no locations.json row is gone only if no live spool is filed there either
+    (Group 42 review): a Spoolman-native location FCC shows from its spools was
+    restored before 42.3c and still is.
     Returns (location, warning or None)."""
     loc = str(prev_loc).strip().strip('"')
     lid = loc.upper()
@@ -349,7 +352,14 @@ def _unarchive_destination(existing, prev_loc, remaining):
     if rows is None:
         why = "FCC couldn't check where it was"
     elif lid not in printer_map and lid not in rows:
-        why = f"{lid} no longer exists"
+        try:
+            in_use = any(not r.get('is_ghost') for r in (get_spools_at_location_detailed_strict(lid) or []))
+        except Exception as e:
+            state.logger.warning(f"42.3c: couldn't read {lid} for #{sid}: {e}")
+            in_use = None
+        if in_use:
+            return loc, None
+        why = f"FCC couldn't read {lid} from Spoolman" if in_use is None else f"{lid} no longer exists"
     elif lid in printer_map or str(rows[lid].get('Type', '')).strip() in (locations_db.TOOLHEAD_TYPES | {'Printer'}):
         try:
             holders = [r.get('id') for r in (get_spools_at_location_detailed_strict(lid) or [])
@@ -402,6 +412,7 @@ def update_spool(sid, data):
     """
     global LAST_SPOOLMAN_ERROR
     sm_url, _ = config_loader.get_api_urls()
+    existing, pre_archived = {}, False   # read by the except branch's archive-edge check
     try:
         # [ALEX FIX] Intercept "UNASSIGNED" and coerce into empty string for Spoolman API
         if 'location' in data and isinstance(data['location'], str):
@@ -521,7 +532,30 @@ def update_spool(sid, data):
     except Exception as e:
         state.logger.error(f"API Error updating spool {sid}: {e}")
         LAST_SPOOLMAN_ERROR = str(e)[:400]
+        _release_box_if_archive_landed(sid, data, existing, pre_archived)
     return None
+
+
+def _release_box_if_archive_landed(sid, data, existing, pre_archived):
+    """Group 42 review: `timeout` is a READ timeout, so the archive edge can land
+    while the PATCH reports failure (a print deduct that empties the spool, a
+    weigh-out to 0). The deduct re-reads and counts such a charge as landed
+    (print_deduct._write_landed), and nothing could release the box afterwards:
+    the spool is off the head and its trail is cleared. So when the write was an
+    archive edge, re-read, and release the box if the archive really landed.
+    Never changes the result or LAST_SPOOLMAN_ERROR (get_spool leaves it alone)."""
+    try:
+        if not isinstance(data, dict) or not isinstance(existing, dict):
+            return
+        if not (data.get('archived') and not pre_archived and data.get('location') == ''):
+            return
+        rec = get_spool(sid)
+        if not isinstance(rec, dict) or rec.get('id') is None:
+            return   # unreadable, or Spoolman's truthy 404 body
+        if rec.get('archived') and not str(rec.get('location') or '').strip().strip('"'):
+            _release_box_on_archive(sid, data, existing, pre_archived)
+    except Exception as e:
+        state.logger.warning(f"42.1b archive-edge re-read for #{sid} skipped: {e}")
 
 
 def update_spool_or_raise(sid, data):

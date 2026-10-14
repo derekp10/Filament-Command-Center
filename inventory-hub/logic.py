@@ -559,6 +559,35 @@ def _is_single_occupancy(loc_id, printer_map, loc_info_map):
     return row.get('Type') in (locations_db.TOOLHEAD_TYPES | {'Printer'})
 
 
+def _holds_one_spool(loc_id, printer_map, loc_info_map):
+    """The move engine's one-spool rule (step 2 and Smart Load): a printer_map
+    head, a toolhead-type row, or a Printer row that owns no head but itself
+    (the dual-role Core One, or a one-slot printer not yet set up; hotfix
+    2026-09-29). A multi-head Printer row (XL, RCOI) is not a deploy slot and
+    holds any number of spools: a LOC:XL scan files them on XL itself.
+    _is_single_occupancy counts every Printer row, on purpose, for trails and
+    eject destinations; Undo's occupancy check uses this rule (Group 42 review)."""
+    lid = str(loc_id or '').strip().strip('"').upper()
+    if not lid:
+        return False
+    if lid in (printer_map or {}):
+        return True
+    row = (loc_info_map or {}).get(lid)
+    if not isinstance(row, dict):
+        return False
+    if row.get('Type') in locations_db.TOOLHEAD_TYPES:
+        return True
+    if str(row.get('Type', '')).strip() != 'Printer':
+        return False
+    own_heads = [str(t.get('location_id', '')).strip().upper()
+                 for t in (row.get('toolheads') or []) if isinstance(t, dict)]
+    try:
+        one_slot = int(str(row.get('Max Spools', '0')).strip() or '0') <= 1
+    except (TypeError, ValueError):
+        one_slot = True
+    return one_slot and not any(h and h != lid for h in own_heads)
+
+
 def _ghost_trail_from(current_loc, current_extra, printer_map, loc_info_map):
     """(physical_source, physical_source_slot) for a spool arriving on a toolhead
     from `current_loc`.
@@ -824,6 +853,25 @@ def _release_single_slot_box(sid, from_loc, pre_extra, printer_map, log=True):
     return box
 
 
+def release_box_after_direct_write(sid, pre, post):
+    """Group 42 review: the wizard and /api/spool/update write a spool's location
+    straight through update_spool, not through the move engine, so a spool edited
+    off its head released nothing and its single-slot box stayed attached there.
+    Call after such a write landed; `pre` / `post` are the spool before and after
+    (the archive edge releases inside update_spool, and a second release finds
+    nothing to do). Returns the released box id, or None; never raises."""
+    try:
+        before = str((pre or {}).get('location') or '').strip().strip('"').upper()
+        after = str((post or {}).get('location') or '').strip().strip('"').upper()
+        if not before or before == after:
+            return None
+        return _release_single_slot_box(sid, before, (pre or {}).get('extra') or {},
+                                        locations_db.get_active_printer_map())
+    except Exception as e:
+        state.logger.warning(f"single-slot box release after a direct edit of #{sid} skipped: {e}")
+        return None
+
+
 # Thread-local re-entry depth for perform_smart_move. The auto-deploy chain
 # re-enters the wrapper synchronously on the same thread; depth 0 is the
 # outermost move, which owns the per-move printer-state probe cache (L3 fix A).
@@ -955,16 +1003,8 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     # printer not yet set up in Settings. A multi-head printer (the INDX: RCOI
     # owns RCOI-1..8) is not a deploy slot, and the resident lookup prefix-
     # matches its heads — loading onto the printer row used to eject every
-    # spool on all of them.
-    is_toolhead = bool(tgt_info) and tgt_info.get('Type') in locations_db.TOOLHEAD_TYPES
-    if bool(tgt_info) and str(tgt_info.get('Type', '')).strip() == 'Printer':
-        _own_heads = [str(t.get('location_id', '')).strip().upper()
-                      for t in (tgt_info.get('toolheads') or []) if isinstance(t, dict)]
-        try:
-            _one_slot = int(str(tgt_info.get('Max Spools', '0')).strip() or '0') <= 1
-        except (TypeError, ValueError):
-            _one_slot = True
-        is_toolhead = _one_slot and not any(h and h != target for h in _own_heads)
+    # spool on all of them. The rule lives in _holds_one_spool (Undo uses it).
+    is_toolhead = _holds_one_spool(target, {}, loc_info_map)
 
     # sid(str) -> why that spool did not move. Declared before the strict reads
     # and Smart Load, which can refuse the whole move; see the L298 Phase 3 note
@@ -1135,9 +1175,25 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
             # Group 42.2: a single-slot box has one place, so its spool is in
             # slot 1. It used to be stored blank, which left a toolhead's
             # Quick-Swap tile for the box reading empty while its spool was
-            # loaded. A spool already there is unseated to slotless (both still
-            # sit in the box; a Max-1 box has never refused a second spool).
-            target_slot = '1'
+            # loaded. Only while no other spool claims slot 1 (Group 42 review):
+            # the box's own spool, deployed to a head, still holds it through
+            # its trail, and a second spool in slot 1 made Quick-Swap move a
+            # different spool than its card showed (and Return unseat the one
+            # it had just said it would leave alone). Such a spool goes in
+            # unslotted. A read that fails leaves it unslotted too: no slot is
+            # claimed, so nothing can be unseated.
+            try:
+                _in_box = [o for o in (spoolman_api.get_spools_at_location_detailed_strict(target) or [])
+                           if str(o.get('id')) not in {str(s) for s in spools}]
+                _taken_by = next((o.get('id') for o in _in_box if locations_db.effective_slot(
+                    tgt_info_auto, o.get('slot', ''), occupants=len(_in_box)) == '1'), None)
+                _why_unslotted = f"slot 1 is taken by #{_taken_by}" if _taken_by is not None else ""
+            except Exception as _pick_err:
+                _why_unslotted = f"couldn't read it from Spoolman ({_pick_err})"
+            if not _why_unslotted:
+                target_slot = '1'
+            else:
+                state.logger.info(f"🪑 {target}: {_why_unslotted} — the spool goes in unslotted")
 
     # L298 Phase 0 — undo hardening: `extras` snapshots each moved spool's
     # system-managed extras (container_slot / physical_source /
@@ -1145,7 +1201,10 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     # restore them — not just `location` — making an undo a TRUE rollback (the
     # spool returns to its exact slot + ghost state). Benefits single moves too;
     # a prerequisite for a trustworthy bulk-move undo.
-    undo_record: typing.Dict[str, typing.Any] = {"target": target, "moves": {}, "extras": {}, "labels": {}, "ejections": {}, "ejection_extras": {}, "summary": f"Moved {len(spools)} -> {target}", "origin": origin}
+    # `released` / `ejection_released` (Group 42 review): the single-slot box each
+    # spool's leaving released from its head, so Undo re-attaches exactly that,
+    # and never a box the move did not release.
+    undo_record: typing.Dict[str, typing.Any] = {"target": target, "moves": {}, "extras": {}, "labels": {}, "ejections": {}, "ejection_extras": {}, "released": {}, "ejection_released": {}, "summary": f"Moved {len(spools)} -> {target}", "origin": origin}
 
     # Step 6 opens with a fresh strict list of the head (review engine-2): the
     # step-4 list was read BEFORE the source reads and the printer probe, which
@@ -1187,18 +1246,21 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
             before_extra = dict(before.get('extra') or {})
             # perform_smart_eject takes a boolean: covered when the confirm
             # covers the head this resident is unloaded from (Group 39.1).
+            _eject_report: typing.Dict[str, typing.Any] = {}
             ejected = perform_smart_eject(
                 rid, confirm_active_print=_confirm_covers(confirm_active_print, target),
-                homeless_destination=homeless_dest,
+                homeless_destination=homeless_dest, report=_eject_report,
             )
             if ejected is not True:
                 stuck[rid] = _eject_refusal_reason(ejected)
                 continue
-            # Undo puts the resident back on this head, ghost trail included.
+            # Undo puts the resident back on this head, ghost trail included,
+            # and re-attaches the box its eject released.
             undo_record['ejections'][rid] = target
             undo_record['ejection_extras'][rid] = {
                 k: before_extra.get(k, '') for k in spoolman_api.SYSTEM_MANAGED_EXTRAS
             }
+            undo_record['ejection_released'][str(rid)] = list(_eject_report.get('released_boxes') or [])
             # perform_smart_eject has already logged where it went.
             state.add_log_entry(f"⚠️ <b>Smart Load:</b> unloaded #{rid} from {target}", "WARNING")
         if stuck:
@@ -1337,9 +1399,16 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
             # single-slot box keeps that box as its home and the box follows it
             # (attached to the new head below, once the old head has let go).
             # Every other head-sourced trail is still dropped (_ghost_trail_from).
+            # Only from the head that box is attached to (Group 42 review): a
+            # trail can name a PolyDryer running another spool on another head
+            # (the pre-step-5 13.6 reverse-binding wrote such trails), and
+            # following it took that box off its own spool's head.
             _old_src = existing_source.upper()
+            _old_row = loc_info_map.get(_old_src)
             _follows = (not is_already_here and current_loc in printer_map and _old_src
-                        and locations_db._is_single_slot_dryer_box(loc_info_map.get(_old_src)))
+                        and locations_db._is_single_slot_dryer_box(_old_row)
+                        and str(locations_db.bindings_from_row(_old_row).get('1') or '').strip().upper()
+                        == current_loc)
             if is_already_here:
                 new_extra['physical_source'] = existing_source
                 new_extra['physical_source_slot'] = current_extra.get('physical_source_slot')
@@ -1460,11 +1529,14 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         # releases its own single-slot box, whichever branch wrote it. Smart
         # Load's residents are released inside their own eject, never here.
         if str(sid) not in failures and current_loc != target and current_loc in printer_map:
-            _release_single_slot_box(sid, current_loc, current_extra, printer_map)
-            # Group 42.6: head to head, the box follows its spool to the new head.
-            if follow_box:
+            _released = _release_single_slot_box(sid, current_loc, current_extra, printer_map)
+            if _released:
+                undo_record['released'][str(sid)] = _released
+            # Group 42.6: head to head, the box follows its spool to the new head,
+            # once the old head has really let go of it (Group 42 review).
+            if follow_box and _released == follow_box:
                 try:
-                    _att, _ad = locations_db.attach_single_slot_box_to_toolhead(follow_box, target)
+                    _att, _ad = locations_db.attach_single_slot_box_to_toolhead(follow_box, target, steal=False)
                     if _att and _ad != "already attached":
                         state.add_log_entry(f"🔗 {follow_box} follows its spool #{sid} to {target}", "INFO")
                 except Exception as _fe:
@@ -1552,6 +1624,7 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                 del state.UNDO_STACK[idx]
                 undo_record['ejections'].update(chained_undo.get('ejections') or {})
                 undo_record['ejection_extras'].update(chained_undo.get('ejection_extras') or {})
+                undo_record['ejection_released'].update(chained_undo.get('ejection_released') or {})
             chained_failures = chained.get('failures') or {}
             for sid in to_deploy:
                 if chained.get('status') == 'success' and str(sid) not in chained_failures:
@@ -2919,8 +2992,9 @@ def perform_undo(expected_id=None):
         a writer that records no undo (auto-unarchive, the wizard, a direct
         edit) may have loaded something since; restoring blind stacked two
         spools on one head (2026-09-12 review for a Smart Load's resident;
-        Group 42.3b, I5-10, for a moved spool). Logged at ERROR."""
-        if not loc or not _is_single_occupancy(loc, printer_map, undo_rows):
+        Group 42.3b, I5-10, for a moved spool). Logged at ERROR. One-spool is
+        the engine's rule: a multi-head Printer row holds many (Group 42 review)."""
+        if not loc or not _holds_one_spool(loc, printer_map, undo_rows):
             return ""
         head = str(loc).strip().strip('"').upper()
         try:
@@ -2933,18 +3007,26 @@ def perform_undo(expected_id=None):
                                 "ERROR", "ff4444")
         return why
 
-    def _reattach(loc, snap):
-        """Group 42.3b: a spool put back onto a head brings its own single-slot
-        box back with it (its snapshot trail), as the forward move attached it."""
+    released = last.get('released') or {}
+    ejection_released = last.get('ejection_released') or {}
+
+    def _reattach(loc, box):
+        """Group 42.3b: a spool put back onto a head brings back the single-slot
+        box its leaving released from that head. The record names that box
+        (Group 42 review): re-attaching from the spool's trail took a PolyDryer
+        off the head its own spool runs on, or bound one that never was. A box
+        attached to another head since stays there."""
         head = str(loc or '').strip().strip('"').upper()
-        box = str((snap or {}).get('physical_source') or '').strip().strip('"').upper()
+        box = str(box or '').strip().strip('"').upper()
         if not head or head not in printer_map or not box:
             return
         try:
-            _att, _detail = locations_db.attach_single_slot_box_to_toolhead(box, head)
+            _att, _detail = locations_db.attach_single_slot_box_to_toolhead(box, head, steal=False)
             if _att and _detail != "already attached":
                 state.add_log_entry(f"🔗 Undo: {box} attached to {head} again — its spool is back on the head",
                                     "INFO")
+            elif not _att:
+                state.logger.info(f"42.3b undo re-attach of {box} to {head} skipped: {_detail}")
         except Exception as _ae:
             state.logger.warning(f"42.3b undo re-attach skipped: {_ae}")
 
@@ -2975,8 +3057,8 @@ def perform_undo(expected_id=None):
             _now = was_at.get(str(sid), '')
             if _now and _now != str(loc or '').strip().strip('"').upper():
                 _release_single_slot_box(sid, _now, cur.get('extra') or {}, printer_map)
-            # ...and going back onto one brings it back.
-            _reattach(loc, snap)
+            # ...and going back onto one brings back what the move released.
+            _reattach(loc, released.get(str(sid)))
         else:
             err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
             failed.append(f"#{sid} ({err})")
@@ -3010,7 +3092,8 @@ def perform_undo(expected_id=None):
             eject_payload["extra"] = merged
         if spoolman_api.update_spool(ejected_sid, eject_payload):
             restored_ejections.append(ejected_sid)
-            _reattach(original_loc, snap)
+            for _box in ejection_released.get(str(ejected_sid)) or ():
+                _reattach(original_loc, _box)
         else:
             err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
             failed.append(f"#{ejected_sid} ({err})")
@@ -3241,8 +3324,10 @@ def get_live_spools_data(spool_ids):
     return results
 
 
-def find_spool_in_slot(box_loc_id, slot):
-    """Return the spool id sitting in (box_loc_id, slot), or None.
+def spools_in_slot(box_loc_id, slot):
+    """Ids of the spools FCC records in (box_loc_id, slot): direct occupants and
+    ghosts whose trail names that slot. Normally one; two or more mean the
+    records disagree (Group 42 review).
 
     Scans items at the location (including ghost items whose
     physical_source points back to this box) and matches the slot
@@ -3250,7 +3335,7 @@ def find_spool_in_slot(box_loc_id, slot):
     quoting — see spoolman_api.parse_inbound_data).
     """
     if not box_loc_id or not str(slot).strip():
-        return None
+        return []
     wanted = str(slot).strip().strip('"')
     items = spoolman_api.get_spools_at_location_detailed(box_loc_id) or []
     # Group 42.2: a single-slot box's lone spool is in slot 1 even when its slot
@@ -3258,7 +3343,17 @@ def find_spool_in_slot(box_loc_id, slot):
     box_up = str(box_loc_id).strip().upper()
     row = next((r for r in (locations_db.load_locations_list() or [])
                 if isinstance(r, dict) and str(r.get('LocationID', '')).strip().upper() == box_up), None)
-    for item in items:
-        if locations_db.effective_slot(row, item.get('slot', ''), occupants=len(items)) == wanted:
-            return int(item['id'])
-    return None
+    return [int(item['id']) for item in items
+            if locations_db.effective_slot(row, item.get('slot', ''), occupants=len(items)) == wanted]
+
+
+def find_spool_in_slot(box_loc_id, slot, claimants=None):
+    """Return the spool id sitting in (box_loc_id, slot), or None. None too when
+    two spools claim the slot: the Quick-Swap grid showed the last and this
+    returned the first, so a tap moved a different spool than its card showed
+    (Group 42 review). Pass a list as `claimants` to get every claimant back
+    (/api/quickswap names them)."""
+    ids = spools_in_slot(box_loc_id, slot)
+    if isinstance(claimants, list):
+        claimants.extend(ids)
+    return ids[0] if len(ids) == 1 else None

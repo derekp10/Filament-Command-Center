@@ -1370,6 +1370,13 @@ const _ejectModeLocationScan = (res) => {
         _ejectModeWarn(`Eject mode: ${id} isn't a toolhead, so nothing was ejected. Scan a spool or a toolhead label, or turn eject mode off.`);
         return;
     }
+    // A read that failed is not an empty head (Group 42 review): it said "is
+    // empty — PM-DB-4 is still attached; open RCOI-1 to unbind it" about a
+    // loaded head, pointing at an Unbind of the box its spool runs from.
+    if (res.contents_error) {
+        _ejectModeWarn(`Couldn't read ${id} from Spoolman, so nothing was ejected. Scan it again in a moment.`);
+        return;
+    }
     const loaded = (res.contents || []).filter(c => !c.is_ghost
         && String(c.location || '').replace(/"/g, '').trim().toUpperCase() === id);
     if (loaded.length === 1) {
@@ -1737,6 +1744,15 @@ const processScan = (text, source = 'keyboard') => {
                 // manager (which carries the Add-Spool affordance) — mirrors the
                 // empty-SLOT path above. Scoped to the truly-empty case so it never
                 // fires for quick-pick or buffer-assign flows.
+                if (res.contents_error) {
+                    // Group 42 review: the server couldn't read the location, so
+                    // "is empty" would be a guess. The manager re-reads it.
+                    showToast(`Couldn't read ${res.id} from Spoolman — opening it so you can check.`, 'warning', 7000);
+                    if (window.logClientEvent) window.logClientEvent(
+                        `⚠️ Location scan ${res.id} — ${res.contents_error} (opened manager)`, 'WARNING');
+                    openManage(res.id); state.lastScannedLoc = res.id;
+                    return;
+                }
                 if (!res.contents || res.contents.length === 0) {
                     showToast(`📭 ${res.id} is empty — no spools here. Use the manager to add one.`, 'info', 6000);
                     if (window.logClientEvent) window.logClientEvent(

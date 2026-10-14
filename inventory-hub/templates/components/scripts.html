@@ -137,8 +137,15 @@
         // ROOT CAUSE FIX: Removed the 'shown.bs.modal' listener for manageModal.
         // inv_loc_mgr.js -> openManage() now handles the full render cycle before showing.
 
-        // Modal Open Interceptor (Auto-disables Deck Modes)
-        document.addEventListener('show.bs.modal', () => {
+        // Modal Open Interceptor (Auto-disables Deck Modes). A gating dialog
+        // (#confirmModal / #safetyModal / #actionModal, inv_core.js's
+        // SCAN_GATING_MODALS) is a step of the action that raised it, not a new
+        // screen: an eject-mode eject that asked "unassign?" or "printing?"
+        // turned eject mode off, and the next toolhead label then loaded the
+        // buffer onto that head instead of ejecting it (Group 42 review).
+        document.addEventListener('show.bs.modal', (event) => {
+            const id = event && event.target && event.target.id;
+            if (typeof SCAN_GATING_MODALS !== 'undefined' && SCAN_GATING_MODALS.includes(id)) return;
             if (typeof window.resetCommandModes === 'function') {
                 window.resetCommandModes();
             }

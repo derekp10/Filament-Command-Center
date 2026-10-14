@@ -1101,8 +1101,17 @@ def api_identify_scan():
         })
 
     if res['type'] == 'location':
-        lid = res['id']; 
-        items = spoolman_api.get_spools_at_location_detailed(lid)
+        lid = res['id']
+        # Read strictly (Group 42 review): a Spoolman blip answered "0 items", and
+        # eject mode then called a loaded toolhead empty and pointed at an Unbind.
+        # A failed read says so (`contents_error`) instead of looking empty.
+        try:
+            items = spoolman_api.get_spools_at_location_detailed_strict(lid)
+        except Exception as e:
+            why = f"couldn't read {lid} from Spoolman ({e})"
+            state.add_log_entry(f"⚠️ 🔎 {lid}: {why}", "WARNING", "ffaa00")
+            return jsonify({"type": "location", "id": lid, "display": f"LOC: {lid}",
+                            "contents": [], "contents_error": why})
         state.add_log_entry(f"🔎 {lid}: {len(items)} item(s)")
         return jsonify({"type": "location", "id": lid, "display": f"LOC: {lid}", "contents": items})
         

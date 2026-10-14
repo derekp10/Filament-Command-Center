@@ -234,12 +234,13 @@ def test_a_head_fcc_cant_read_counts_as_taken(logs):
 
 
 def test_a_place_that_no_longer_exists_counts_as_taken(logs):
-    """Dev's #131 remembers CORE1, which no longer exists."""
+    """Dev's #131 remembers CORE1, which no longer exists. One read tells it from
+    a Spoolman-native place that still holds spools (Group 42 review)."""
     sm = WeightWireSpoolman(_archived("CORE1"))
     ctx, reads = _wire(sm)
     out = _refill(sm, ctx)
     assert "CORE1 no longer exists, so it is Unassigned" in out.get("fcc_warning", ""), out
-    assert sm.spools[77]["location"] == "" and reads == []
+    assert sm.spools[77]["location"] == "" and reads == ["CORE1"]
 
 
 def test_a_shelf_is_restored_with_no_read(logs):

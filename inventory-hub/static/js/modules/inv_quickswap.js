@@ -37,24 +37,28 @@
                        onclick="window.quickSwapUnbindAttached(this)"
                        title="Detach ${boxId} from ${head}">🔗✖ Unbind</button>`;
     };
-    // The same single-slot binding PUT the bind picker's Unbind uses.
+    // The same single-slot binding PUT the bind picker's Unbind uses. It names
+    // the head this grid showed (Group 42 review): the grid repaints every 5-30 s,
+    // and a box that has followed its spool onto another head meanwhile is
+    // refused rather than detached from there.
     window.quickSwapUnbindAttached = (btn) => {
         const box = btn && btn.getAttribute('data-box');
         const head = btn && btn.getAttribute('data-toolhead');
         if (!box) return;
         fetch(`/api/dryer_box/${encodeURIComponent(box)}/bindings/1`, {
             method: 'PUT', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ target: null }),
+            body: JSON.stringify({ target: null, expected_target: head }),
         })
             .then(async r => ({ ok: r.ok, body: await r.json() }))
             .then(({ ok, body }) => {
                 if (ok) {
                     showToast(`🔗✖ ${box} detached from ${head}`, 'success', 4000);
-                    if (window.renderQuickSwapSection && currentLoc) window.renderQuickSwapSection(currentLoc);
                 } else {
                     const errs = (body.errors || []).map(e => `${e.slot}: ${e.reason}`).join('; ');
-                    showToast(`❌ ${errs || body.error || 'Unbind failed'}`, 'error', 7000);
+                    showToast(`❌ ${body.msg || errs || body.error || 'Unbind failed'}`, 'error', 7000);
                 }
+                // Either way the grid repaints, so it never keeps offering a stale Unbind.
+                if (window.renderQuickSwapSection && currentLoc) window.renderQuickSwapSection(currentLoc);
             })
             .catch(() => showToast('Unbind — network error', 'error', 7000));
     };
@@ -232,19 +236,35 @@
                         ...entries.map(e => e.box),
                         ...printerPool.map(p => p.box),
                     ])];
-                    Promise.all(uniqueBoxes.map(b =>
-                        fetch(`/api/get_contents?id=${encodeURIComponent(b)}`)
-                            .then(r => r.ok ? r.json() : [])
+                    // Group 42.2/42.5c: a single-slot box (flagged by the
+                    // server) has one place, so its lone spool is in slot 1
+                    // even when its slot was stored blank; a box FCC thinks
+                    // holds two stays unsorted (Claude's call 20).
+                    const singleBoxes = new Set(entries.filter(e => e.single_slot).map(e => e.box));
+                    // Group 42 review: a single-slot box is read strictly. Its
+                    // header offers Unbind when its spool isn't on the head, and
+                    // a Spoolman blip (the plain read answers []) looked just like
+                    // that, so Unbind detached a box whose spool was loaded.
+                    const unreadable = new Set();
+                    Promise.all(uniqueBoxes.map(b => {
+                        const strict = singleBoxes.has(b);
+                        const read = strict
+                            ? fetch(`/api/get_contents?id=${encodeURIComponent(b)}&strict=1`)
+                            : fetch(`/api/get_contents?id=${encodeURIComponent(b)}`);
+                        return read
+                            .then(r => {
+                                if (r.ok) return r.json();
+                                if (strict) unreadable.add(b);
+                                return [];
+                            })
                             .then(items => [b, items])
-                            .catch(() => [b, []])
-                    )).then(boxContents => {
+                            .catch(() => { if (strict) unreadable.add(b); return [b, []]; });
+                    })).then(boxContents => {
                         const slotMap = {};
+                        // Every item claiming a slot (Group 42 review): two claims
+                        // showed the last card while /api/quickswap moved the first.
+                        const slotClaims = {};
                         const itemsByBox = {};
-                        // Group 42.2/42.5c: a single-slot box (flagged by the
-                        // server) has one place, so its lone spool is in slot 1
-                        // even when its slot was stored blank; a box FCC thinks
-                        // holds two stays unsorted (Claude's call 20).
-                        const singleBoxes = new Set(entries.filter(e => e.single_slot).map(e => e.box));
                         boxContents.forEach(([b, items]) => {
                             const list = items || [];
                             itemsByBox[b] = list;
@@ -252,7 +272,10 @@
                                 let slotStr = String(it.slot || '').replace(/"/g, '').trim();
                                 if (slotStr === 'None' || slotStr === 'null') slotStr = '';
                                 if (!slotStr && singleBoxes.has(b) && list.length === 1) slotStr = '1';
-                                if (slotStr) slotMap[`${b}|${slotStr}`] = it;
+                                if (slotStr) {
+                                    slotMap[`${b}|${slotStr}`] = it;
+                                    (slotClaims[`${b}|${slotStr}`] = slotClaims[`${b}|${slotStr}`] || []).push(it);
+                                }
                             });
                         });
 
@@ -278,18 +301,42 @@
                                         style="text-decoration: underline dotted;"
                                         title="Open ${boxId} — Close returns here">${boxId}</a>` +
                                     (singleBoxes.has(boxId)
-                                        ? _attachedLabel(boxId, String(byBox[boxId][0].toolhead || loc.LocationID).toUpperCase(),
-                                            itemsByBox[boxId])
+                                        ? (unreadable.has(boxId)
+                                            ? ` <span class="fcc-qs-attached text-warning" style="font-size:0.9rem;"
+                                                     title="FCC couldn't read ${boxId} from Spoolman just now, so it can't tell whether its spool is on the head">⚠️ couldn't read ${boxId} from Spoolman</span>`
+                                            : _attachedLabel(boxId, String(byBox[boxId][0].toolhead || loc.LocationID).toUpperCase(),
+                                                itemsByBox[boxId]))
                                         : '') +
                                     `</div>`;
                             byBox[boxId].sort((a, b) => Number(a.slot) - Number(b.slot)).forEach(e => {
                                 const th = e.toolhead || loc.LocationID;
-                                const item = slotMap[`${e.box}|${e.slot}`];
+                                const claims = slotClaims[`${e.box}|${e.slot}`] || [];
+                                const item = claims.length === 1 ? claims[0] : null;
                                 const thLine = isPrinter
                                     ? `<div class="text-warning small" style="font-size:0.85rem;">→ ${th}</div>`
                                     : '';
                                 let contentLines, borderCls, handler, titleAttr, disabledAttr;
-                                if (item) {
+                                let singleAttr = '';
+                                if (claims.length > 1) {
+                                    // Two spools claim one slot: no card to tap, since
+                                    // either one could be the spool that gets loaded.
+                                    const who = claims.map(c => `#${c.id}`);
+                                    const whoTxt = who.length > 2
+                                        ? `${who.slice(0, -1).join(', ')} and ${who[who.length - 1]}` : who.join(' and ');
+                                    contentLines = `<div class="text-warning fw-bold" style="font-size:0.9rem; white-space:normal; max-width:240px;">⚠️ ${whoTxt} ${who.length > 2 ? 'all' : 'both'} claim slot ${e.slot} — open ${e.box} to sort them</div>`;
+                                    borderCls = 'btn-outline-warning';
+                                    handler = 'window.quickSwapTap(this)';
+                                    titleAttr = `FCC's records put ${whoTxt} in ${e.box} slot ${e.slot}; move one of them, then swap`;
+                                    singleAttr = `data-why="${titleAttr}"`;
+                                    disabledAttr = 'disabled';
+                                } else if (unreadable.has(e.box)) {
+                                    contentLines = `<div class="text-warning fw-bold" style="font-size:0.9rem;">⚠️ couldn't read ${e.box}</div>`;
+                                    borderCls = 'btn-outline-warning';
+                                    handler = 'window.quickSwapTap(this)';
+                                    titleAttr = `FCC couldn't read ${e.box} from Spoolman just now — reopen the view to try again`;
+                                    singleAttr = `data-why="${titleAttr}"`;
+                                    disabledAttr = 'disabled';
+                                } else if (item) {
                                     // Slot has a spool — render via SpoolCardBuilder's
                                     // 'quickswap' variant so the user sees a real
                                     // filament card (color, brand, name, weight,
@@ -321,7 +368,15 @@
                                         </div>`;
                                     borderCls = 'btn-outline-success';
                                     handler = 'window.quickSwapDeposit(this)';
-                                    titleAttr = `Drop the buffered spool into ${e.box} slot ${e.slot} (auto-deploys to ${th})`;
+                                    // A single-slot box is attached to the head for
+                                    // its own spool, not as a feed: since 42.2 nothing
+                                    // put in it is loaded onto the head (Group 42 review).
+                                    if (e.single_slot) {
+                                        singleAttr = 'data-single-slot="1"';
+                                        titleAttr = `Put the buffered spool in ${e.box} (it is not loaded onto ${th})`;
+                                    } else {
+                                        titleAttr = `Drop the buffered spool into ${e.box} slot ${e.slot} (auto-deploys to ${th})`;
+                                    }
                                     disabledAttr = '';
                                 } else {
                                     // Empty slot + empty buffer — nothing to do.
@@ -334,7 +389,7 @@
                                 html += `
                                     <button type="button" class="fcc-qs-slot btn ${borderCls} fw-bold d-flex flex-column align-items-start"
                                         data-box="${e.box}" data-slot="${e.slot}"
-                                        data-toolhead="${th}"
+                                        data-toolhead="${th}" ${singleAttr}
                                         style="min-width:240px; font-size:1.05rem; padding:10px 14px;"
                                         onclick="${handler}"
                                         ${disabledAttr}
@@ -855,23 +910,43 @@
                     );
                 });
         };
-        showConfirmOverlay({
-            toolhead, box, slot, title,
-            body: `<div class="text-warning fw-bold mb-2" style="font-size:1rem;">Spool: ${bsDisplay}</div>` +
-                `<div class="text-light" style="font-size:1.05rem;">` +
+        // Group 42 review: nothing deposited into a single-slot box (attached to
+        // the head for its own spool, not as a feed; 42.2) or a printer-pool slot
+        // is loaded onto a head, so neither promises it, and neither probes a
+        // head it never touches. The server still asks about a printing head the
+        // buffered spool LEAVES (_reaskFromServer).
+        const notLoaded = btn.dataset.singleSlot === '1' || btn.dataset.pool === '1' || !toolhead;
+        const spoolLine = `<div class="text-warning fw-bold mb-2" style="font-size:1rem;">Spool: ${bsDisplay}</div>`;
+        let depositBody;
+        if (btn.dataset.singleSlot === '1') {
+            depositBody = spoolLine + `<div class="text-light" style="font-size:1.05rem;">` +
+                `Puts it in <b>${box}</b>. It is not loaded onto <b>${toolhead}</b>: ${box} is attached to ` +
+                `${toolhead} because its own spool runs there, not as a feed. To load it, scan ${toolhead}'s label.</div>`;
+        } else if (notLoaded) {
+            depositBody = spoolLine + `<div class="text-light" style="font-size:1.05rem;">` +
+                `Drops it into <b>${box}:SLOT:${slot}</b> (printer pool). It is not loaded onto a toolhead.</div>`;
+        } else {
+            depositBody = spoolLine + `<div class="text-light" style="font-size:1.05rem;">` +
                 `Drops it into <b>${box}:SLOT:${slot}</b>. Because this slot is bound to ` +
                 `<b>${toolhead}</b>, it auto-deploys to the toolhead once placed. ` +
-                `If ${toolhead} currently has another spool, that one goes back to its recorded source box first (or the printer’s room / Unassigned if it has none).</div>`,
+                `If ${toolhead} currently has another spool, that one goes back to its recorded source box first (or the printer’s room / Unassigned if it has none).</div>`;
+        }
+        showConfirmOverlay({
+            toolhead: notLoaded ? null : toolhead, box, slot, title,
+            body: depositBody,
             // The overlay's probe of the slot's bound head: its banner is what Yes confirms.
-            onConfirm: (stateInfo) => postDeposit(_headsShown([], stateInfo, toolhead)),
+            onConfirm: (stateInfo) => postDeposit(notLoaded ? [] : _headsShown([], stateInfo, toolhead)),
         });
     };
 
     window.quickSwapTap = (btn) => {
         if (!btn) return;
-        // Disabled buttons (empty slot) should be a no-op.
+        // Disabled buttons (empty slot) should be a no-op. A tile that is
+        // disabled for another reason (two spools claim it, its box couldn't
+        // be read) carries that reason in data-why (Group 42 review).
         if (btn.hasAttribute('disabled')) {
-            showToast(`⚠️ ${btn.dataset.box} slot ${btn.dataset.slot} is empty — nothing to swap`, 'warning', 4000);
+            showToast(btn.dataset.why ? `⚠️ ${btn.dataset.why}`
+                : `⚠️ ${btn.dataset.box} slot ${btn.dataset.slot} is empty — nothing to swap`, 'warning', 4000);
             return;
         }
         const opts = {
@@ -953,6 +1028,9 @@
                 const resident = direct[0];
                 const firstBinding = () => fetch('/api/dryer_boxes/slots').then(r => r.json()).then(body => {
                     for (const s of body.slots || []) {
+                        // A single-slot box's binding says where ITS spool is
+                        // loaded, not a feed; the server skips it (Group 42 review).
+                        if (s.single_slot) continue;
                         if (s.target && String(s.target).toUpperCase() === th) {
                             return {
                                 box: s.box, slot: s.slot,

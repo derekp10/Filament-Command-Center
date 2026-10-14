@@ -177,9 +177,11 @@ def test_active_audit_hijacks_location_scan(client):
 def test_inactive_audit_location_scan_uses_normal_branch(client):
     """Control for the hijack tests: with NO active audit session, the same
     LOC: scan flows to the normal location branch and returns the pinned
-    {'type':'location', 'id', 'display', 'contents'} shape."""
+    {'type':'location', 'id', 'display', 'contents'} shape. The branch reads
+    strictly since the Group 42 review (a Spoolman blip read as "empty"; a
+    failed read now adds `contents_error`, test_review_fixes_42.py)."""
     with patch.object(app_module.logic, "process_audit_scan") as pas, \
-         patch.object(app_module.spoolman_api, "get_spools_at_location_detailed",
+         patch.object(app_module.spoolman_api, "get_spools_at_location_detailed_strict",
                       return_value=[]) as gl, \
          patch.object(app_module.state, "add_log_entry") as log:
         r = client.post("/api/identify_scan",
