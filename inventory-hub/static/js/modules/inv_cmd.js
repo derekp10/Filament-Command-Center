@@ -1899,7 +1899,16 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
                 const failures = res.failures || {};
                 const movedIds = spoolIds.filter(id => !failures[String(id)]);
                 const movedCount = movedIds.length;
-                if (movedCount) showToast("Assigned " + movedCount + " item" + (movedCount === 1 ? '' : 's') + "!", "success");
+                // Group 40.0d: a toolhead scan names the feed slot the engine
+                // recorded as the spool's home; the choice is silent, so the
+                // toast is where it shows.
+                const rec = (res.recorded_source && movedCount === 1)
+                    ? String(res.recorded_source).split(':') : null;
+                if (rec && rec.length === 2) {
+                    showToast(`#${movedIds[0]} → ${tid} (recorded as from ${rec[0]} slot ${rec[1]})`, "success");
+                } else if (movedCount) {
+                    showToast("Assigned " + movedCount + " item" + (movedCount === 1 ? '' : 's') + "!", "success");
+                }
                 spoolIds.filter(id => failures[String(id)]).forEach(id =>
                     showToast(`❌ #${id} was NOT assigned to ${tid}: ${failures[String(id)]}`, 'error', 7000));
                 Object.entries(res.auto_deploy_skipped || {}).forEach(([id, why]) =>

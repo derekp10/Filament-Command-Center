@@ -60,6 +60,18 @@ def test_a_park_into_a_bound_slot_does_not_ask_about_its_head():
     assert sm.spools[42]["location"] == "LR-MDB-1"
 
 
+def test_just_store_it_keeps_the_slot_and_leaves_the_printing_head_alone():
+    """Group 40.0b: 40.3's "Just store it" is this call. The spool lands in the
+    named slot and the printing head keeps its own spool. (Group 39 landed the
+    behaviour; this pins the path 40.3 will lean on.)"""
+    sm = WireSpoolman({240: {"location": "CR", "extra": {}}, 99: {"location": "XL-3", "extra": {}}})
+    res = run_move(sm, probe=_probe_for({"XL"}), locations=LOCATIONS, printer_map=PRINTER_MAP,
+                   target="LR-MDB-1", raw_spools=[240], target_slot="3", auto_deploy=False)
+    assert res.get("status") == "success" and not res.get("failures"), res
+    assert sm.spools[240]["location"] == "LR-MDB-1" and sm.spools[240]["extra"]["container_slot"] == "3"
+    assert sm.direct_at("XL-3") == [99], "the store touched the printing head"
+
+
 def test_a_deploying_move_still_asks_about_the_bound_head():
     sm = WireSpoolman({42: {"location": "CR", "extra": {}}})
     res, _ = _move(sm, auto_deploy=True)

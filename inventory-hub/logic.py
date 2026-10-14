@@ -290,6 +290,50 @@ def _find_box_slot_feeding_toolhead(toolhead_id, loc_list=None):
     return (None, None)
 
 
+def _feed_slots_for(toolhead_id, loc_list):
+    """Every (box, slot) of a multi-slot Dryer Box bound to `toolhead_id`, in
+    locations.json order. Single-slot boxes never feed (42.1 step 5); the
+    PRINTER:<id> pool sentinel names no head."""
+    target_th = str(toolhead_id or '').strip().upper()
+    out = []
+    if not target_th:
+        return out
+    for row in (loc_list or []):
+        if not isinstance(row, dict) or row.get('Type') != locations_db.DRYER_BOX_TYPE:
+            continue
+        if locations_db._is_single_slot_dryer_box(row):
+            continue
+        for slot, bound_th in locations_db.bindings_from_row(row).items():
+            if bound_th and str(bound_th).strip().upper() == target_th:
+                out.append((str(row.get('LocationID', '')).strip().upper(), str(slot)))
+    return out
+
+
+def _free_feed_slots(toolhead_id, loc_list, sid):
+    """Group 40.0d — the feed slots of `toolhead_id` that no other spool claims,
+    directly or through its trail (the one slot rule, 42.2's effective_slot), as
+    ([(box, slot)], why_none). Each box is read STRICTLY: the fail-open read
+    answered [] on a Spoolman blip, so every slot looked free and a spare took
+    one another spool held. A box that can't be read yields no candidates at all
+    (it might hold the second free slot), with `why_none` saying so."""
+    rows = {str(r.get('LocationID', '')).strip().upper(): r
+            for r in (loc_list or []) if isinstance(r, dict)}
+    held: typing.Dict[str, typing.List[dict]] = {}
+    free = []
+    for box, slot in _feed_slots_for(toolhead_id, loc_list):
+        if box not in held:
+            try:
+                held[box] = [o for o in (spoolman_api.get_spools_at_location_detailed_strict(box) or [])
+                             if str(o.get('id')) != str(sid)]
+            except Exception as e:
+                return [], f"couldn't read {box} from Spoolman ({e})"
+        items = held[box]
+        if not any(locations_db.effective_slot(rows.get(box), o.get('slot', ''), occupants=len(items))
+                   == slot for o in items):
+            free.append((box, slot))
+    return free, ""
+
+
 def _spool_brand_color_suffix(sid):
     """Return a ' — Brand MAT (Color)' suffix for a spool, or '' if unavailable.
 
@@ -745,6 +789,31 @@ def eject_all_block_message(reason, loc_id, loc_list, bulk_moves_enabled):
     return "Eject All was refused. Nothing was moved."
 
 
+def printer_row_refusal(loc_id, loc_row, loc_list):
+    """Why a spool can't be filed on a Printer row that is not itself a toolhead
+    (Group 40.0a; Claude's call 26, g40-q7): name its toolheads, and a Printer
+    Pool only when it has one; a printer whose toolheads aren't set up yet points
+    at Settings. "RCOI (🦝 Core One INDX) is a printer, not a toolhead — pick one
+    of its toolheads (RCOI-1 to RCOI-8)." """
+    lid = str(loc_id or '').strip().strip('"').upper()
+    heads = locations_db.printer_row_toolheads(loc_list, lid)
+    if not heads:
+        return f"{lid} has no toolheads set up yet — add them in ⚙️ Settings → Toolheads."
+    name = str((loc_row or {}).get('Name') or '').strip()
+    # "🦝 XL" names the row XL itself; only a different name is worth repeating.
+    plain = re.sub(r'^[^0-9A-Za-z]+', '', name).strip().upper()
+    label = f"{lid} ({name})" if name and plain != lid else lid
+    span = heads[0] if len(heads) == 1 else f"{heads[0]} to {heads[-1]}"
+    # A Printer Pool slot is bound to the PRINTER:<prefix> sentinel (XL-1 → XL).
+    sentinels = {f"PRINTER:{p}" for p in {lid} | {h.split('-', 1)[0] for h in heads}}
+    has_pool = any(str(t or '').strip().upper() in sentinels
+                   for r in (loc_list or []) if isinstance(r, dict)
+                   and r.get('Type') == locations_db.DRYER_BOX_TYPE
+                   for t in locations_db.bindings_from_row(r).values())
+    return (f"{label} is a printer, not a toolhead — pick one of its toolheads ({span})"
+            + (" or a Printer Pool slot." if has_pool else "."))
+
+
 def _eject_refusal_reason(result):
     """Why perform_smart_eject did not return True, in words for a log line.
 
@@ -1010,6 +1079,22 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     # and Smart Load, which can refuse the whole move; see the L298 Phase 3 note
     # at the write loop.
     failures: typing.Dict[str, str] = {}
+    # sid(str) -> "BOX:slot" the 13.6 reverse-binding recorded as its home (40.0d).
+    recorded_sources: typing.Dict[str, str] = {}
+
+    # Step 2 (Group 40.0a, Derek's D3): nothing is filed on a Printer row that is
+    # not itself one of its printer's toolheads (XL, RCOI, or one whose heads
+    # aren't set up yet, Claude's call 26). Since the 2026-09-29 hotfix such a
+    # row is a generic target, so LOC:XL with a buffer filed every buffered
+    # spool on XL itself. A row that is its own head (the old CORE1) is in the
+    # printer map and stays loadable. Refused before any read or write; the
+    # Printer picker (40.5) opens on the browser's doors instead.
+    if locations_db.is_printer_row_not_head(target, tgt_info, printer_map):
+        msg = printer_row_refusal(target, tgt_info, loc_list)
+        for sid in spools:
+            failures[str(sid)] = msg
+        state.add_log_entry(f"⚠️ Not moved: {msg}", "WARNING", "ffaa00")
+        return {"status": "error", "blocked_reason": "printer_row", "msg": msg, "failures": failures}
 
     # Step 2 (Group 42.3a): a head holds one spool. Every spool sent to a
     # single-occupancy target used to be written onto it (the dashboard's
@@ -1395,6 +1480,7 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
             # the spool is genuinely arriving from somewhere else.
             existing_source = str(current_extra.get('physical_source', '') or '').strip().strip('"')
             is_already_here = (current_loc == target) and bool(existing_source)
+            _recorded_here = None   # the feed slot 13.6 records (40.0d), reported once written
             # Group 42.6 (Derek's Q-A, 2026-09-18): head to head, a spool from a
             # single-slot box keeps that box as its home and the box follows it
             # (attached to the new head below, once the old head has let go).
@@ -1432,32 +1518,37 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                 str(new_extra.get('physical_source') or '').strip().strip('"')
             )
             if not current_source_meaningful:
-                bound_box, bound_slot = _find_box_slot_feeding_toolhead(target, loc_list)
-                # Never claim a slot another spool already holds, directly or as
-                # its own ghost: the double claim made a later Return unseat that
-                # spool (2026-09-12 review). No trail beats a false one.
-                claimed_by = None
-                if bound_box and bound_slot:
-                    claimed_by = next((
-                        o.get('id') for o in
-                        (spoolman_api.get_spools_at_location_detailed(bound_box) or [])
-                        if str(o.get('id')) != str(sid)
-                        and str(o.get('slot', '')).strip('"') == str(bound_slot)), None)
-                if bound_box and bound_slot and claimed_by is None:
+                # Group 40.0d (Derek's D3 rule, "one is pre-selected only when
+                # exactly one free option exists"): record a feed slot only when
+                # exactly ONE free slot feeds this head. The first match in
+                # locations.json order used to win, a guess when two were free.
+                # Never a slot another spool holds, directly or as its own ghost:
+                # the double claim made a later Return unseat that spool
+                # (2026-09-12 review). No trail beats a false one. The recorded
+                # slot is reported (`recorded_source`) so the scan toast names it.
+                _free, _why_none = _free_feed_slots(target, loc_list, sid)
+                if len(_free) == 1:
+                    bound_box, bound_slot = _free[0]
                     new_extra['physical_source'] = bound_box
                     new_extra['physical_source_slot'] = bound_slot
+                    _recorded_here = f"{bound_box}:{bound_slot}"
                     state.logger.info(
                         f"🔗 Reverse-binding: toolhead {target} is fed by "
                         f"{bound_box} slot {bound_slot} — synthesizing ghost source."
                     )
-                elif claimed_by is not None:
+                elif len(_free) > 1:
                     state.logger.info(
-                        f"🔗 Reverse-binding skipped: {bound_box} slot {bound_slot} "
-                        f"already holds Spool #{claimed_by}."
+                        f"🔗 Reverse-binding: not guessing where #{sid} came from — "
+                        f"{_and_list([f'{b} slot {s}' for b, s in _free])} "
+                        f"{'both' if len(_free) == 2 else 'all'} feed {target}."
                     )
+                elif _why_none:
+                    state.logger.info(f"🔗 Reverse-binding skipped for #{sid}: {_why_none}.")
 
             if _move_write(sid, target, new_extra):
                 state.add_log_entry(f"🖨️ {info['text']} -> {target}", "INFO", info['color'])
+                if _recorded_here:
+                    recorded_sources[str(sid)] = _recorded_here
                 # Group 20.2: a spool deployed FROM a single-slot dryer box
                 # attaches that box to this toolhead so the box follows its
                 # spool (Core One "missing box" aid). current_loc is where the
@@ -1652,6 +1743,11 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         # this is what lets a batch caller do better).
         "failures": failures,
     }
+    if recorded_sources:
+        # Group 40.0d: the feed slot the reverse-binding recorded as the spool's
+        # home ("LR-MDB-1:1"), so the scan toast can name it. A head takes one
+        # spool (42.3a), so one value.
+        result["recorded_source"] = next(iter(recorded_sources.values()))
     if auto_deployed:
         result["auto_deployed_to"] = str(bound_toolhead).upper()
     if auto_deploy_skipped:
@@ -1668,6 +1764,10 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
 
 BULK_MOVE_SINGLE_OCC_MSG = ("{dest} is a single-spool location — bulk move needs a "
                             "Room / Shelf / Cart / Dryer Box destination.")
+# Group 40 item H (Claude's call 27, g40-q8): a Printer row that is not itself a
+# head (XL, RCOI) stays refused, in printer words.
+BULK_MOVE_PRINTER_ROW_MSG = ("{dest} is a printer, not a toolhead — bulk move needs a "
+                             "Room / Shelf / Cart / Dryer Box destination.")
 
 
 def can_start_bulk_move():
@@ -1727,7 +1827,6 @@ def plan_bulk_move(source, dest):
     loc_list = locations_db.load_locations_list()
     loc_info_map = {str(r.get('LocationID', '')).upper(): r for r in loc_list}
     printer_map = locations_db.get_active_printer_map(loc_list)
-    single_occ_types = locations_db.TOOLHEAD_TYPES | {'Printer'}
 
     # --- Pre-flight 1: self / descendant (cheap topology reject) ------------
     # Moving a child's contents UP to an ancestor is legitimate; moving a
@@ -1753,12 +1852,17 @@ def plan_bulk_move(source, dest):
         plan["msg"] = f"{dest} is not a known location — nothing moved."
         plan["blocked_reason"] = "unknown_dest"
         return plan
-    dest_type = dest_row.get('Type')
 
     # --- Pre-flight 2b: single-occupancy destination ------------------------
-    # A Tool Head / MMU Slot / No MMU Direct Load / Printer holds ONE spool; a
-    # bulk move onto it would chain-unseat every spool but the last.
-    if dest in printer_map or (dest_type in single_occ_types):
+    # A head holds ONE spool; a bulk move onto it would chain-unseat every spool
+    # but the last. A Printer row that is not itself a head takes no spool at all
+    # (Group 40.0a), so it is refused in printer words (item H). One-spool is the
+    # engine's rule (_holds_one_spool): a head, or a printer that is its own head.
+    if locations_db.is_printer_row_not_head(dest, dest_row, printer_map):
+        plan["msg"] = BULK_MOVE_PRINTER_ROW_MSG.format(dest=dest)
+        plan["blocked_reason"] = "printer_row"
+        return plan
+    if _holds_one_spool(dest, printer_map, loc_info_map):
         plan["msg"] = BULK_MOVE_SINGLE_OCC_MSG.format(dest=dest)
         plan["blocked_reason"] = "single_occupancy"
         return plan
@@ -1815,10 +1919,11 @@ def plan_bulk_move(source, dest):
             pass
         # D2 flat-scope guard: a PRINTER source enumerates its toolhead spools as
         # DIRECT matches (their first segment IS the printer). Those are live
-        # single-occupancy feeds — never yank them in a bulk sweep.
+        # single-occupancy feeds — never yank them in a bulk sweep. A spool filed
+        # on a multi-head Printer row itself is not loaded anywhere, so it moves
+        # (Group 40 item H): Bulk Move can clean up what 40.0a now prevents.
         sp_loc = str(sp.get('location', '') or '').strip().upper()
-        sp_type = (loc_info_map.get(sp_loc) or {}).get('Type')
-        if sp_loc in printer_map or (sp_type in single_occ_types):
+        if _holds_one_spool(sp_loc, printer_map, loc_info_map):
             skipped.append({"id": sid, "reason": "loaded in a toolhead slot"})
             continue
         movable_ids.append(sid)

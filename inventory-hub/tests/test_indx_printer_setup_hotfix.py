@@ -731,11 +731,12 @@ def test_deleting_a_printer_by_a_lowercase_id_is_still_guarded(client):
     unassign.assert_not_called()
 
 
-def _smart_load(rows, target, residents):
+def _smart_load(rows, target, residents, with_result=False):
     """Load incoming spool #8 onto `target` through the real perform_smart_move.
     `residents` maps each spool the location lookup returns to where its own
     record says it sits — dev's resident filter only ejects a spool that is
-    really on the target, so the records must be realistic."""
+    really on the target, so the records must be realistic. `with_result`
+    returns (eject mock, the move's answer)."""
     import logic
     import prusalink_api
     import spoolman_api
@@ -756,16 +757,21 @@ def _smart_load(rows, target, residents):
          patch.object(spoolman_api, "format_spool_display", return_value={"text": "", "color": "000"}), \
          patch.object(prusalink_api, "get_printer_state", return_value=None), \
          patch.object(logic, "perform_smart_eject", return_value=True) as eject:
-        logic.perform_smart_move(target, [8])
-    return eject
+        res = logic.perform_smart_move(target, [8])
+    return (eject, res) if with_result else eject
 
 
-def test_loading_onto_a_one_slot_printer_not_yet_set_up_still_ejects_its_resident():
+def test_a_printer_not_yet_set_up_takes_no_spool_and_points_at_settings():
+    """The 2026-09-29 hotfix let a one-slot Printer row with no toolheads hold a
+    spool, as if it were its own head. Group 40.0a (Claude's call 26, g40-q7)
+    refuses it instead: FCC can't charge a print to a printer with no heads,
+    and the one classifier (`is_printer_row_not_head`) now decides every door."""
     rows = _prod_like_rows() + [{"LocationID": "MK4", "Name": "🦝 MK4", "Type": "Printer",
                                  "Max Spools": "1", "parent_id": None}]
-    eject = _smart_load(rows, "MK4", {101: "MK4"})
-    # dev forwards extra keywords (confirm_active_print, homeless_destination)
-    assert eject.call_count == 1 and eject.call_args[0][0] == 101
+    eject, res = _smart_load(rows, "MK4", {101: "MK4"}, with_result=True)
+    eject.assert_not_called()
+    assert res["blocked_reason"] == "printer_row", res
+    assert res["msg"] == "MK4 has no toolheads set up yet — add them in ⚙️ Settings → Toolheads.", res
 
 
 def test_stale_native_hide_is_skipped_when_the_spool_list_read_fails(client):
