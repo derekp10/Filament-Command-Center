@@ -2488,23 +2488,65 @@ const _deleteLocRequest = (id) => {
     return { prompt: `Delete the location with a blank Location ID${name}?`, url: '/api/locations?blank_id=1' };
 };
 
+// Group 41.3 (Claude's call 16): the prompt says what happens to the spools
+// ("Delete CR-CT-2-R1? Its 3 spools go to Unassigned."), from one contents
+// read; it falls back to the bare question if that read fails. It mirrors the
+// server: a spool loaded on a head is left alone, an emptied Room counts only
+// the spools filed on the Room itself, and a deployed spool keeps its place.
+const _deletePromptFor = (id, req) => {
+    const loc = String(id == null ? '' : id).trim();
+    if (!loc) return Promise.resolve(req.prompt);
+    const rows = state.allLocations || [];
+    const up = (v) => String(v == null ? '' : v).replace(/"/g, '').trim().toUpperCase();
+    const typeOf = (lid) => ((rows.find((l) => up(l.LocationID) === up(lid)) || {}).Type || '');
+    const isRoom = typeOf(loc) === 'Room';
+    const heads = ['Tool Head', 'MMU Slot', 'No MMU Direct Load', 'Printer'];
+    return fetch(`/api/get_contents?id=${encodeURIComponent(loc)}`)
+        .then((r) => r.json())
+        .then((items) => {
+            const list = Array.isArray(items) ? items : [];
+            const goes = list.filter((i) => !i.is_ghost
+                && (up(i.location) === up(loc) || (!isRoom && !heads.includes(typeOf(i.location)))));
+            const kept = list.filter((i) => i.is_ghost && up(i.location) === up(loc)).length;
+            let msg = `Delete ${loc}?`;
+            if (goes.length === 1) msg += ` Its spool #${goes[0].id} goes to Unassigned.`;
+            else if (goes.length > 1) msg += ` Its ${goes.length} spools go to Unassigned.`;
+            else msg += ' It holds no spools.';
+            if (kept) msg += ` ${kept} spool(s) deployed from it keep their place.`;
+            return msg;
+        })
+        .catch(() => req.prompt);
+};
+
 window.deleteLoc = (id) => {
     const req = _deleteLocRequest(id);
-    return requestConfirmation(req.prompt, () => fetch(req.url, { method: 'DELETE' })
+    const run = (url) => fetch(url, { method: 'DELETE' })
         .then(async (r) => {
             let body = {};
             try { body = await r.json(); } catch (_) { /* non-JSON */ }
+            // Group 41.3: a toolhead whose printer is printing asks first (the
+            // shared confirm), then retries with the flag; it used to be
+            // toasted as an error with no way to go on.
+            if (r.status === 409 && body.status === 'requires_confirm' && window.confirmActivePrint) {
+                window.confirmActivePrint({
+                    activePrint: body.active_print, msg: body.msg,
+                    onConfirm: () => run(url + '&confirm_active_print=1'),
+                });
+                return;
+            }
             if (!r.ok || body.success === false) {
                 const msg = body.error || body.msg || `Delete failed (HTTP ${r.status})`;
                 if (typeof showToast === 'function') showToast(msg, 'error', 8000);
                 return;
             }
+            if (typeof showToast === 'function') showToast(body.msg || `Deleted ${id}.`, 'success', 4000);
             const _row = (state.allLocations || []).find((l) => l.LocationID == id);
             if (_row && _isPrinterTopologyType(_row.Type)) _announcePrinterMapChange();
         })
         .catch((e) => {
             if (typeof showToast === 'function') showToast('Delete failed: ' + (e && e.message ? e.message : e), 'error', 7000);
         })
-        .then(fetchLocations));
+        .then(fetchLocations);
+    return _deletePromptFor(id, req).then((prompt) => requestConfirmation(prompt, () => run(req.url)));
 };
 

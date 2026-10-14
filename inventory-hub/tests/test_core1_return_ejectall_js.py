@@ -669,3 +669,98 @@ def test_a_failed_undo_names_the_spool_at_seven_seconds(tmp_path):
     assert [(t["msg"], t["type"]) for t in res["toasts"]] == [(msg, "error")], res["toasts"]
     assert res["toasts"][0]["duration"] >= 7000
     assert res["unhandled"] == []
+
+
+# ---------------------------------------------------------------------------
+# Location delete (inv_loc_mgr.js), Group 41.3
+# ---------------------------------------------------------------------------
+# The prompt names what happens to the spools (one contents read); a 409
+# requires_confirm (a toolhead whose printer is printing) goes through the
+# shared confirm and retries with the flag; a success raises a toast.
+
+DELETE_SCENARIO = """
+state.allLocations = __ROWS__;
+const contents = __CONTENTS__;
+const deletes = __DELETES__;
+let d = 0;
+window.__respond = (url, method) => {
+    if (url.startsWith('/api/get_contents')) return { body: contents };
+    if (method === 'DELETE') { const a = deletes[Math.min(d++, deletes.length - 1)]; return { status: a.status || 200, body: a.body }; }
+    return { body: [] };
+};
+globalThis.fetchLocations = () => {};
+const confirms = [];
+globalThis.requestConfirmation = (msg, cb) => { confirms.push(String(msg)); window.__yes = cb; };
+const printAsks = [];
+window.confirmActivePrint = (o) => { printAsks.push(o.msg); window.__print = o.onConfirm; };
+window.deleteLoc(__LOC__);
+await __settle(60);
+if (typeof window.__yes === 'function') { window.__yes(); await __settle(60); }
+if (typeof window.__print === 'function') { window.__print(); await __settle(60); }
+return { confirms, printAsks, toasts: __rec.toasts,
+         deletes: __rec.fetches.filter(f => f.method === 'DELETE').map(f => f.url) };
+"""
+
+
+def _delete_js(tmp_path, loc, rows, contents, deletes) -> dict:
+    return run_js(tmp_path, ["inv_loc_mgr.js"], (DELETE_SCENARIO
+                                                 .replace("__ROWS__", json.dumps(rows))
+                                                 .replace("__CONTENTS__", json.dumps(contents))
+                                                 .replace("__DELETES__", json.dumps(deletes))
+                                                 .replace("__LOC__", json.dumps(loc))))
+
+
+ROW = {"LocationID": "CR-CT-2-R1", "Type": "Cart Row"}
+DELETED = {"status": 200, "body": {"success": True, "msg": "Deleted CR-CT-2-R1: 2 spool(s) → Unassigned."}}
+
+
+def test_the_delete_prompt_says_what_happens_to_the_spools(tmp_path):
+    """Claude's call 16, FAILS on the old module: it asked a bare "Delete
+    CR-CT-2-R1?" and raised no toast after a successful delete."""
+    contents = [{"id": 3, "location": "CR-CT-2-R1"}, {"id": 4, "location": "CR-CT-2-R1"},
+                {"id": 5, "location": "CR-CT-2-R1", "is_ghost": True}]
+    res = _delete_js(tmp_path, "CR-CT-2-R1", [ROW], contents, [DELETED])
+
+    assert res["confirms"] == ["Delete CR-CT-2-R1? Its 2 spools go to Unassigned. "
+                               "1 spool(s) deployed from it keep their place."], res
+    assert res["deletes"] == ["/api/locations?id=CR-CT-2-R1"]
+    assert [(t["msg"], t["type"]) for t in res["toasts"]] == [(DELETED["body"]["msg"], "success")]
+    assert res["unhandled"] == []
+
+
+def test_an_emptied_rooms_prompt_counts_only_its_own_spools(tmp_path):
+    rows = [{"LocationID": "DR", "Type": "Room"}]
+    contents = [{"id": 1, "location": "DR"}, {"id": 2, "location": "DR-X-9"}]
+    res = _delete_js(tmp_path, "DR", rows, contents, [{"body": {"success": True}}])
+
+    assert res["confirms"] == ["Delete DR? Its spool #1 goes to Unassigned."], res
+    assert res["unhandled"] == []
+
+
+def test_a_printing_toolhead_asks_first_and_retries_with_the_flag(tmp_path):
+    """Group 41.3, FAILS on the old module: the 409 was toasted as an error
+    with no way to confirm and go on."""
+    ask = {"status": 409, "body": {"success": False, "status": "requires_confirm",
+                                   "confirm_type": "active_print",
+                                   "active_print": {"printer_name": "XL", "state": "PRINTING", "toolhead": "XL-5"},
+                                   "msg": "XL is PRINTING on XL-5 — deleting it orphans the running spool."}}
+    rows = [{"LocationID": "XL-5", "Type": "Tool Head"}]
+    res = _delete_js(tmp_path, "XL-5", rows, [{"id": 57, "location": "XL-5"}],
+                     [ask, {"body": {"success": True, "msg": "Deleted toolhead XL-5: 1 spool(s) → UNASSIGNED."}}])
+
+    assert res["confirms"] == ["Delete XL-5? Its spool #57 goes to Unassigned."], res
+    assert res["printAsks"] == [ask["body"]["msg"]], res
+    assert res["deletes"] == ["/api/locations?id=XL-5", "/api/locations?id=XL-5&confirm_active_print=1"]
+    assert [t["type"] for t in res["toasts"]] == ["success"], res["toasts"]
+    assert res["unhandled"] == []
+
+
+def test_a_refused_delete_is_an_error_toast(tmp_path):
+    msg = "CR-CT-2 still contains CR-CT-2-R1 — move or delete them first."
+    rows = [{"LocationID": "CR-CT-2", "Type": "Cart"}]
+    res = _delete_js(tmp_path, "CR-CT-2", rows, [], [{"status": 409, "body": {"success": False, "msg": msg}}])
+
+    assert res["confirms"] == ["Delete CR-CT-2? It holds no spools."], res
+    assert [(t["msg"], t["type"]) for t in res["toasts"]] == [(msg, "error")], res["toasts"]
+    assert res["toasts"][0]["duration"] >= 7000
+    assert res["unhandled"] == []

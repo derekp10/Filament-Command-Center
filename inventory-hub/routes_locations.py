@@ -550,8 +550,26 @@ def api_delete_location():
     confirm_active = request.args.get('confirm_active_print', '').strip().lower() in ('1', 'true', 'yes')
 
     current = locations_db.load_locations_list()
-    target_row = next((r for r in current if str(r.get('LocationID', '')).strip() == target), None)
-    is_toolhead = bool(target_row) and str(target_row.get('Type', '')).strip() in locations_db.TOOLHEAD_TYPES
+    _t_u = target.upper()
+    # Group 41.3 / 41.9 — the two built-in lists are not locations.
+    if _t_u in ('UNASSIGNED', 'UNKNOWN'):
+        name = "Unassigned" if _t_u == 'UNASSIGNED' else "Unknown (Physically Lost)"
+        msg = f"{name} is a built-in list, not a location, so it can't be deleted."
+        return jsonify({"success": False, "msg": msg, "error": msg}), 400
+    _guard_row = next(
+        (r for r in current if isinstance(r, dict) and str(r.get('LocationID', '')).strip().upper() == _t_u),
+        None)  # an API caller's lowercase id must not slip past the guards
+    if _guard_row is None:
+        # Group 41.3 — a "(Room)" or Spoolman-native row has nothing on disk to
+        # delete; the old path still unassigned every spool its prefix matched.
+        msg = (f"{target} isn't a saved location (FCC only knows it from its spools), so there's "
+               f"nothing to delete. Move its spools elsewhere and it disappears.")
+        state.add_log_entry(f"⚠️ Delete refused: {msg}", "WARNING", "ffaa00")
+        return jsonify({"success": False, "msg": msg, "error": msg}), 409
+    # Work on the row's own spelling from here on.
+    target = str(_guard_row.get('LocationID', '')).strip()
+    target_row = _guard_row
+    is_toolhead = str(target_row.get('Type', '')).strip() in locations_db.TOOLHEAD_TYPES
 
     # Hotfix 2026-09-29: deleting a printer that still owns toolheads took the
     # generic path below, whose location match includes child ids — it set every
@@ -559,11 +577,7 @@ def api_delete_location():
     # the head rows orphaned. Deleting it was also the only way to rename it
     # before the edit fix. Refuse until its heads are gone; a dual-role printer
     # that is only its own toolhead (the old Core One) keeps the existing path.
-    _t_u = target.upper()
-    _guard_row = target_row or next(
-        (r for r in current if isinstance(r, dict) and str(r.get('LocationID', '')).strip().upper() == _t_u),
-        None)  # an API caller's lowercase id must not slip past the guard
-    if _guard_row is not None and str(_guard_row.get('Type', '')).strip().lower() == 'printer':
+    if str(_guard_row.get('Type', '')).strip().lower() == 'printer':
         _heads = [str(h.get('location_id', '')).strip().upper()
                   for h in (_guard_row.get('toolheads') or []) if isinstance(h, dict)]
         _other_heads = [h for h in _heads if h and h != _t_u]
@@ -573,6 +587,21 @@ def api_delete_location():
                     f"Remove them in ⚙️ Settings → Toolheads first. To rename the printer, "
                     f"edit its Name instead of deleting it.")
             return jsonify({"success": False, "msg": _msg, "error": _msg}), 409
+
+    # Group 41.3 (Derek's Q4 C, and his 2026-10-13 answer for every type): a
+    # location that still contains other locations is not deleted; move or
+    # delete them first. Deleting a Room used to empty every box and drawer in it
+    # while their rows stayed. Nothing is read or written.
+    children = sorted(
+        str(r.get('LocationID', '')).strip() for r in current
+        if isinstance(r, dict) and str(r.get('parent_id') or '').strip().upper() == _t_u
+        and str(r.get('LocationID', '')).strip().upper() != _t_u)
+    if children:
+        shown = (logic._and_list(children) if len(children) <= 6
+                 else ", ".join(children[:5]) + f" and {len(children) - 5} more")
+        msg = f"{target} still contains {shown} — move or delete them first."
+        state.add_log_entry(f"⚠️ Delete refused: {msg}", "WARNING", "ffaa00")
+        return jsonify({"success": False, "msg": msg, "error": msg, "children": children}), 409
 
     if is_toolhead:
         # Group 20.3: a toolhead delete needs the FULL cascade — direct spools →
@@ -595,8 +624,20 @@ def api_delete_location():
             result = logic.perform_toolhead_delete_cascade(target, current, confirm_active_print=confirm_active)
             if isinstance(result, dict) and result.get("status") == "requires_confirm":
                 return jsonify({"success": False, **result}), 409
+            if result["errors"]:
+                # Group 41.3 — keep the row. The cascade's locations.json edits
+                # live only in `current` and are not saved, so nothing
+                # half-applies on disk; a retry finds only what's still there.
+                msg = (f"{target} was NOT deleted: {'; '.join(result['errors'])}. "
+                       f"Fix that and delete it again.")
+                state.add_log_entry(f"❌ {msg}", "ERROR", "ff4444")
+                return jsonify({"success": False, "msg": msg, "error": msg, "cascade": result}), 502
             new_list = [row for row in current if str(row.get('LocationID', '')).strip() != target]
-            locations_db.save_locations_list(new_list)
+            saved = locations_db.save_locations_list(new_list)
+        if not saved:
+            msg = f"{target} was NOT deleted: locations.json could not be saved."
+            state.add_log_entry(f"❌ {msg}", "ERROR", "ff4444")
+            return jsonify({"success": False, "msg": msg, "error": msg}), 500
         bits = []
         if result["unassigned"]:
             bits.append(f"{len(result['unassigned'])} spool(s) → UNASSIGNED")
@@ -608,28 +649,60 @@ def api_delete_location():
             bits.append(f"pruned from {', '.join(str(p) for p in result['toolhead_pruned_from'])}")
         detail = "; ".join(bits) if bits else "nothing referenced it"
         state.add_log_entry(f"🗑️ Deleted toolhead {target} — {detail}", "WARNING")
-        if result["errors"]:
-            state.add_log_entry(
-                f"⚠️ Toolhead-delete cascade for {target} had errors: {'; '.join(result['errors'])}",
-                "ERROR", "ff4444")
-        return jsonify({"success": True, "cascade": result})
+        return jsonify({"success": True, "cascade": result, "msg": f"Deleted toolhead {target}: {detail}."})
 
-    # Non-toolhead delete (Box / Room / Cart / Shelf): keep the existing best-
-    # effort cascade-unassign of direct contents. Box/room semantics differ from
-    # toolheads and are out of 20.3 scope.
+    # Non-toolhead delete (box, cart, shelf, an emptied Room). Group 41.3:
+    #   - read STRICTLY: a Spoolman blip used to read as "empty", and the row
+    #     was deleted with its spools still filed on it;
+    #   - a spool loaded on a head is never touched (Group 37's invariant: a
+    #     delete must never reach a live toolhead), and is reported;
+    #   - a deployed spool whose trail names exactly this row keeps its place
+    #     and loses only that trail (the toolhead cascade does the same);
+    #   - the rest are unassigned WITH their box links cleared (it used to be a
+    #     location-only PATCH that left container_slot / physical_source);
+    #   - an emptied Room unassigns only the spools filed on the Room itself
+    #     (Derek's Q4 C), never the prefix hits the matcher adds;
+    #   - any write that fails keeps the row, logged at ERROR.
     try:
-        contents = spoolman_api.get_spools_at_location(target)
-        for sid in contents:
-            # Best-effort cascade unassign on location delete. Don't raise
-            # on individual failures — the location is going away regardless,
-            # but log so a user can see partial completion.
-            if not spoolman_api.update_spool(sid, {"location": ""}):
-                err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
-                state.logger.warning(
-                    f"location delete: failed to unassign Spool #{sid} from {target}: {err}"
-                )
+        contents = spoolman_api.get_spools_at_location_detailed_strict(target)
     except Exception as e:
-        state.logger.warning(f"location delete: cascade unassign failed: {e}")
+        msg = f"Couldn't read {target} from Spoolman, so it was NOT deleted ({e}). Try again."
+        state.add_log_entry(f"❌ {msg}", "ERROR", "ff4444")
+        return jsonify({"success": False, "msg": msg, "error": msg}), 502
+    printer_map = locations_db.get_active_printer_map()
+    rows_by_id = {str(r.get('LocationID', '')).strip().upper(): r for r in current if isinstance(r, dict)}
+    is_room = str(target_row.get('Type', '')).strip().lower() == 'room'
+    unassigned, trails_cleared, skipped_loaded, errors = [], [], [], []
+    for item in contents:
+        sid = item.get('id')
+        if item.get('is_ghost'):
+            trail = str(item.get('location') or '').strip().strip('"').upper()
+            if trail != _t_u:
+                continue  # its trail names a surviving location under this prefix
+            payload = {"extra": {"physical_source": "", "physical_source_slot": ""}}
+            done, bucket = "box link cleared", trails_cleared
+        else:
+            own = str(item.get('location') or '').strip().strip('"').upper()
+            if own != _t_u and logic._is_single_occupancy(own, printer_map, rows_by_id):
+                skipped_loaded.append(sid)
+                continue
+            if is_room and own != _t_u:
+                continue
+            payload = {"location": "", "extra": {"container_slot": "", "physical_source": "",
+                                                 "physical_source_slot": ""}}
+            done, bucket = "unassigned", unassigned
+        if spoolman_api.update_spool(sid, payload):
+            bucket.append(sid)
+        else:
+            err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+            errors.append(f"#{sid} ({err})")
+            state.add_log_entry(f"❌ Deleting {target}: Spool #{sid} not {done}: {err}", "ERROR", "ff4444")
+    if errors:
+        msg = (f"{target} was NOT deleted: {', '.join(errors)} could not be updated. "
+               f"Fix that and delete it again.")
+        state.add_log_entry(f"❌ {msg}", "ERROR", "ff4444")
+        return jsonify({"success": False, "msg": msg, "error": msg, "unassigned": unassigned,
+                        "trails_cleared": trails_cleared, "skipped_loaded": skipped_loaded}), 502
 
     # Group 38 follow-up — the Spoolman cascade above is N NAS round-trips, so it
     # runs OUTSIDE the lock; only the file cycle is serialized. Re-read here
@@ -640,9 +713,22 @@ def api_delete_location():
     with locations_db.locations_write_lock():
         current = locations_db.load_locations_list()
         new_list = [row for row in current if str(row.get('LocationID', '')).strip() != target]
-        locations_db.save_locations_list(new_list)
-    state.add_log_entry(f"🗑️ Deleted: {target}", "WARNING")
-    return jsonify({"success": True})
+        saved = locations_db.save_locations_list(new_list)
+    if not saved:
+        msg = f"{target} was NOT deleted: locations.json could not be saved."
+        state.add_log_entry(f"❌ {msg}", "ERROR", "ff4444")
+        return jsonify({"success": False, "msg": msg, "error": msg}), 500
+    bits = []
+    if unassigned:
+        bits.append(f"{len(unassigned)} spool(s) → Unassigned")
+    if trails_cleared:
+        bits.append(f"{len(trails_cleared)} box link(s) cleared")
+    if skipped_loaded:
+        bits.append(f"{len(skipped_loaded)} loaded on a head left in place")
+    detail = "; ".join(bits) if bits else "it held no spools"
+    state.add_log_entry(f"🗑️ Deleted: {target} — {detail}", "WARNING")
+    return jsonify({"success": True, "unassigned": unassigned, "trails_cleared": trails_cleared,
+                    "skipped_loaded": skipped_loaded, "msg": f"Deleted {target}: {detail}."})
 
 
 @app.route('/api/spool/<int:sid>', methods=['DELETE'])

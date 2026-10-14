@@ -1215,6 +1215,11 @@ const _renderLocationsPayload = (d) => {
                     // via Name / LocationID).
                     const ancAttr = escAttr(JSON.stringify(entry.ancestors || []));
                     const lidEsc = escAttr(l.LocationID);
+                    // Group 41.3 (Claude's call 12): the built-in lists and a
+                    // "(Room)" FCC only knows from its spools have no row to edit
+                    // or delete, and the server refuses a delete of any id with no
+                    // row, so a Spoolman-native row keeps only its ✏️ (saving it
+                    // there makes it an FCC location).
 
                     return `
                 <tr data-locid="${escAttr(lidUC)}" data-ancestors="${ancAttr}" id="loc-row-${lidEsc}">
@@ -1225,10 +1230,10 @@ const _renderLocationsPayload = (d) => {
                     <td class="col-actions text-end" style="white-space: nowrap;">
                         <button class="btn btn-sm btn-outline-light me-1 btn-qr" data-id="${lidEsc}" title="Show QR">📱 QR</button>
                         ${canAddChild(l) ? `<button class="btn btn-sm btn-outline-success me-1 btn-add-child" data-id="${lidEsc}" title="Add a child location here">➕</button>` : ''}
-                        ${l.Type !== 'Virtual' ? `
-                        <button class="btn btn-sm btn-outline-warning me-1 btn-edit" data-id="${lidEsc}">✏️</button>
-                        <button class="btn btn-sm btn-outline-danger me-1 btn-delete" data-id="${lidEsc}">🗑️</button>
-                        ` : ''}
+                        ${!['Virtual', 'Virtual Room', 'Unknown'].includes(l.Type) ? `
+                        <button class="btn btn-sm btn-outline-warning me-1 btn-edit" data-id="${lidEsc}">✏️</button>` : ''}
+                        ${!['Virtual', 'Virtual Room', 'Unknown', 'Spoolman Native'].includes(l.Type) ? `
+                        <button class="btn btn-sm btn-outline-danger me-1 btn-delete" data-id="${lidEsc}">🗑️</button>` : ''}
                         <button class="btn btn-sm btn-info btn-manage fw-bold" data-id="${lidEsc}">Manage</button>
                     </td>
                 </tr>`;

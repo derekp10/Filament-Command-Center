@@ -421,6 +421,9 @@ def test_deleting_a_dual_role_printer_keeps_the_existing_path(client):
     with ExitStack() as stack:
         _patch_store(stack, store)
         stack.enter_context(patch.object(spoolman_api, "get_spools_at_location", return_value=[]))
+        # Group 41.3: the delete reads the location strictly.
+        stack.enter_context(patch.object(spoolman_api, "get_spools_at_location_detailed_strict",
+                                         return_value=[]))
         res = client.delete("/api/locations?id=CORE1")
     assert res.status_code == 200, res.get_json()
     assert store.row("CORE1") is None
