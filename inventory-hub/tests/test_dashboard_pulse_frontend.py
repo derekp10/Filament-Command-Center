@@ -71,6 +71,16 @@ def test_heartbeat_uses_dashboard_pulse_not_individual_endpoints(
     # If the buffer is non-empty in dev, it could still fire from a
     # user-action dispatch — we don't assert == 0 to keep the test robust.
 
+    # Group 45.8: the Printer Status widget's client fan-out (printer_map, one
+    # toolhead_slots per printer, one get_contents per toolhead, each of those
+    # a full Spoolman spool-list read) must not run on the heartbeat: the tick's
+    # printer_status section already rendered the widget. This test counted
+    # these from the start and never asserted on them; on dev's 13 heads it
+    # was ~13 get_contents per tick.
+    fan_out = {k: counts[k] for k in ('/api/get_contents', '/api/printer_map', '/api/machine/')}
+    assert fan_out == {'/api/get_contents': 0, '/api/printer_map': 0, '/api/machine/': 0}, (
+        f"the heartbeat ran the widget's per-toolhead fan-out: {counts}")
+
 
 def test_pulse_interval_returns_active_when_visible_and_recent(
     page, require_server, base_url

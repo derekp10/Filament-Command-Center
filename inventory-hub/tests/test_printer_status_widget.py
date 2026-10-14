@@ -192,6 +192,20 @@ def _stub_unbound_fleet(page: Page):
 
 
 @pytest.mark.usefixtures("require_server")
+def test_other_sync_pulse_sources_still_refresh_the_widget_at_once(page: Page, base_url):
+    """Group 45.8 stopped the widget's client fan-out on HEARTBEAT ticks (the
+    tick's printer_status section already rendered it; see
+    test_dashboard_pulse_frontend). Any other source, such as an eject, a
+    details save or a review, must still refresh it right away instead of
+    waiting up to a heartbeat (5-30 s)."""
+    page.goto(base_url)
+    expect(page.locator("#printer-status-widget .fcc-ps-row").first).to_be_attached(timeout=15000)
+    with page.expect_request(lambda r: urlsplit(r.url).path == "/api/printer_map", timeout=5000):
+        page.evaluate("() => document.dispatchEvent(new CustomEvent('inventory:sync-pulse',"
+                      " { detail: { source: 'eject' } }))")
+
+
+@pytest.mark.usefixtures("require_server")
 def test_widget_shows_unbound_printers_with_placeholder(page: Page, base_url):
     """L140 + box-bounding fix: with zero bound dryer-slots the widget
     previously hid EVERY printer (the symptom that hid Core One on prod
@@ -199,7 +213,10 @@ def test_widget_shows_unbound_printers_with_placeholder(page: Page, base_url):
     printer_map renders. An unbound toolhead that is EMPTY gets the
     "🔗 no bound slot" placeholder; an unbound toolhead that HOLDS a spool
     surfaces the spool (occupancy keys off the toolhead, not the dryer
-    box) while keeping the fcc-ps-th-unbound class + 🔗 hint."""
+    box) while keeping the fcc-ps-th-unbound class + 🔗 hint.
+
+    The stubbed heartbeat carries no printer_status, so this also pins the
+    Group 45.8 fallback: such a tick still runs the client fan-out."""
     _stub_unbound_fleet(page)
     page.goto(base_url)
     widget = page.locator("#printer-status-widget")

@@ -7,8 +7,10 @@
 // color cue (amber <100g, red ≤0g). Clicking a block opens the Location
 // Manager focused on that toolhead (Quick-Swap is one click away).
 //
-// Read-only. Refreshes piggyback on `inventory:sync-pulse` so we never
-// poll independently — same cadence as the buffer / search results.
+// Read-only. Never polls on its own: the dashboard heartbeat's printer_status
+// section feeds it (refreshFromAggregate), and the client fan-out (refresh)
+// runs only when something else changed, or as the fallback when a heartbeat
+// came back without that section (Group 45.8).
 //
 // Project Color Loadout (L330) is the eventual richer view; this widget
 // is V1 and intentionally avoids per-printer artwork. When Loadout lands,
@@ -21,6 +23,11 @@
     const ORDER_KEY = 'fcc.printerStatus.order';
     const LABEL_KEY = 'fcc.printerStatus.toolheadLabel';
     const REFRESH_DEBOUNCE_MS = 250;
+    // If nothing has rendered this long after load (the heartbeat keeps
+    // failing), fetch once the old way so the widget doesn't sit on its
+    // skeleton. Long enough that a merely SLOW first heartbeat on a loaded
+    // machine doesn't add the very fan-out Group 45.8 removed.
+    const LOAD_FALLBACK_MS = 15000;
 
     const _state = {
         printers: null,       // cached printer_map
@@ -28,6 +35,7 @@
         refreshTimer: null,
         inFlight: false,
         lastFingerprint: null,
+        pulseFed: false,      // the current heartbeat tick carried printer_status
     };
 
     const _isCollapsed = () => {
@@ -536,15 +544,33 @@
         _renderShell();
     };
 
-    document.addEventListener('inventory:sync-pulse', scheduleRefresh);
+    // Group 45.8: every heartbeat tick renders this widget from its
+    // printer_status section (refreshFromAggregate, below) and THEN fires
+    // inventory:sync-pulse. Answering that event with the client fan-out
+    // re-read Spoolman's whole spool list once per toolhead per tick: 52
+    // /api/get_contents calls in 21 idle seconds on dev's 13 heads, for data
+    // the tick had just delivered. So a heartbeat event is skipped when its
+    // tick fed the widget (inv_cmd.js skips it for the buffer the same way,
+    // L206); a tick without the section still falls back to the fan-out, and
+    // every other source (an eject, a details save, a review) refreshes at once.
+    document.addEventListener('inventory:sync-pulse', (e) => {
+        const fromPulse = !!(e && e.detail && e.detail.source === 'dashboard_pulse');
+        const fed = _state.pulseFed;
+        _state.pulseFed = false;
+        if (fromPulse && fed) return;
+        scheduleRefresh();
+    });
     document.addEventListener('inventory:locations-changed', scheduleRefresh);
     document.addEventListener('DOMContentLoaded', () => {
         _renderShell();
-        // Fetch immediately — the widget's "Loading printer status…"
-        // skeleton in dashboard.html holds the layout space, so the
-        // populated render replaces the placeholder rather than the
-        // whole widget popping in. No initial delay needed.
-        refresh();
+        // No fetch here: the heartbeat's first tick (100 ms after
+        // DOMContentLoaded, inv_core.js) renders the widget, state badges
+        // included; the "Loading printer status…" skeleton in dashboard.html
+        // holds the layout space until then. Fetching here too doubled every
+        // page load's Spoolman reads (Group 45.8).
+        setTimeout(() => {
+            if (_state.lastFingerprint === null) refresh();
+        }, LOAD_FALLBACK_MS);
     });
 
     // L206 bulk-pulse hook: render from a pre-fetched aggregate without
@@ -553,6 +579,8 @@
     // when the response includes a printer_status section.
     const refreshFromAggregate = (rows) => {
         if (!rows || typeof rows !== 'object') return;
+        // The tick's inventory:sync-pulse, fired right after this, needs no fan-out.
+        _state.pulseFed = true;
         _state.rowsByPrinter = rows;
         const fp = _fingerprint(rows);
         if (fp === _state.lastFingerprint) return;
