@@ -163,18 +163,20 @@ def test_apply_can_charge_any_spool_by_id(logs):
 def test_an_archived_pick_is_charged_what_it_has_and_stays_archived(logs):
     """Flipped on purpose by Group 43.2 (Derek, 2026-10-13: "charge the picked
     spool and leave it archived"). #99 ran out at 0 g, so picking it charges
-    nothing and writes nothing; the Apply goes through and reports the grams no
-    spool took as the job's shortfall. It used to be refused while the question
-    was open."""
+    nothing and writes nothing; the Apply goes through, and the grams no spool
+    took open an uncharged-grams card to pick again (43.2's review fix,
+    deduct-2). It used to be refused while the question was open."""
     sm = _sm()
     _no_spool_review(sm, {0: 27.12})
     body = _confirm(sm, {"printer_name": INDX, "job_id": "J-1105",
                          "charges": [{"position": 0, "sid": 99, "grams": 27.12}]})
     assert body["status"] == "confirmed", body
     assert body["shortfall_g"] == pytest.approx(27.12)
+    assert body["shortfall_card"] == "J-1105#shortfall", body
     assert sm.used(99) == 1000.0 and not sm.patches, "an empty spool takes no write"
     assert sm.spools[99]["archived"] is True
     assert _pending("J-1105") is None
+    assert _pending("J-1105#shortfall")["unresolved_usage"] == {"0": pytest.approx(27.12)}
     assert print_deduct_ledger.was_deducted(INDX, "J-1105")
 
 

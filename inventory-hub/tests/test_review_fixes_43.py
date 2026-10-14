@@ -107,7 +107,13 @@ def test_a_redirect_onto_a_near_empty_spool_reports_what_it_could_not_take(logs)
     assert sm.used(98) == pytest.approx(1000.0)
     assert body.get("shortfall_g") == pytest.approx(30.0), body
     assert any("Spool #98 had only 20.0g left" in m for m in _msgs(logs)), _msgs(logs)
-    assert any("30.00g of 'f.bgcode' wasn't charged" in m for m in _msgs(logs)), _msgs(logs)
+    # Group 43.2 (changed on purpose): the 30 g go to an uncharged-grams card to
+    # pick again, instead of only a "weigh the spools" line.
+    assert body.get("shortfall_card") == "J-1300#shortfall", body
+    card = _pending("J-1300#shortfall")
+    assert card is not None and card["unresolved_usage"] == {"2": pytest.approx(30.0)}, card
+    assert card["shortfall_causes"]["2"]["sid"] == 98 and card["shortfall_causes"]["2"]["archived"] is True
+    assert any("30.00g of 'f.bgcode' couldn't be charged" in m for m in _msgs(logs)), _msgs(logs)
 
 
 # --- deduct-math-2: a row with a 43.6 attempt baseline ----------------------

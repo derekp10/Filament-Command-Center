@@ -315,7 +315,7 @@ def test_a_shortfall_card_says_why_and_charges_the_picked_spool(page: Page, base
     be = _open(page, base_url, reset_dom_state_js, [SHORTFALL])
     _wait_heads(page, "pos:0")
     text = page.evaluate("() => document.querySelector('.fcc-cr-card').textContent")
-    assert "27.12g went to no spool" in text and "#99 ran out on RCOI-1 (archived)" in text, text
+    assert "27.12g went to no spool" in text and "#99's record hit 0 g on RCOI-1 (archived)" in text, text
     # The archived run-out spool is offered, and says so, but isn't pre-picked.
     assert page.evaluate("() => document.querySelector('.fcc-cr-pick[data-line=\"pos:0\"]').value") == ""
     ended = page.evaluate(
@@ -325,7 +325,7 @@ def test_a_shortfall_card_says_why_and_charges_the_picked_spool(page: Page, base
     page.select_option('.fcc-cr-pick[data-line="pos:0"]', "96")
     page.click("#fcc-cancel-review-overlay .fcc-cr-confirm")
     _until(page, lambda: be.confirms, 5_000, "Apply never posted")
-    assert be.confirms[0] == {"printer_name": INDX, "job_id": "1104#shortfall",
+    assert be.confirms[0] == {"printer_name": INDX, "job_id": "1104#shortfall", "rev": 0,
                               "charges": [{"position": 0, "sid": 96, "grams": 27.12}]}, be.confirms[0]
 
 
@@ -369,7 +369,8 @@ def test_a_spool_that_was_not_charged_is_pre_picked(page: Page, base_url, reset_
 
 def test_typing_an_archived_spool_says_it_is_charged_and_stays_archived(page: Page, base_url, reset_dom_state_js):
     """HEAD said "is archived — pick another spool" (Derek answered 2026-10-13:
-    charge it, leave it archived)."""
+    charge it, leave it archived). It also says how much it has left (0 g), so an
+    empty pick isn't a surprise."""
     _open(page, base_url, reset_dom_state_js, [NO_SPOOL])
     page.select_option('.fcc-cr-pick[data-line="0"]', "other")
     page.fill('.fcc-cr-other[data-line="0"]', "99")
@@ -377,3 +378,73 @@ def test_typing_an_archived_spool_says_it_is_charged_and_stays_archived(page: Pa
     page.wait_for_function(
         "(document.querySelector('.fcc-cr-other-info[data-line=\"0\"]') || {}).textContent.includes('stays archived')",
         timeout=5_000)
+    info = page.evaluate("() => document.querySelector('.fcc-cr-other-info[data-line=\"0\"]').textContent")
+    assert "0g left" in info, info
+
+
+def test_a_stale_card_is_redrawn_instead_of_charged(page: Page, base_url, reset_dom_state_js):
+    """43.2 review fix (deduct-3): another tab's Apply moved the card to rev 1 and
+    17.12 g; this view's Apply is refused as stale, and the card redraws."""
+    newer = dict(SHORTFALL, rev=1, total_grams=17.12, unresolved_usage={"0": 17.12})
+    be = _open(page, base_url, reset_dom_state_js, [SHORTFALL],
+               confirm_answer={"status": "error", "stale": True,
+                               "msg": "This card changed since you opened it — reopen the review."},
+               pending_after_confirm=[newer])
+    _wait_heads(page, "pos:0")
+    page.select_option('.fcc-cr-pick[data-line="pos:0"]', "96")
+    page.click("#fcc-cancel-review-overlay .fcc-cr-confirm")
+    _until(page, lambda: be.confirms, 5_000, "Apply never posted")
+    page.wait_for_function(
+        "(() => { const c = document.querySelector('.fcc-cr-card'); return !!c && c.dataset.rev === '1'"
+        " && c.textContent.includes('17.12g went to no spool'); })()", timeout=5_000)
+    assert "This card changed" in _toasts(page)
+
+
+def test_grams_a_pick_could_not_take_show_up_as_a_new_card(page: Page, base_url, reset_dom_state_js):
+    """43.2 review fix (deduct-2): an empty pick on a no_spool review closes it,
+    and its grams arrive as an uncharged-grams card in the same overlay."""
+    card = dict(SHORTFALL, job_id="J-1105#shortfall", shortfall_of="J-1105")
+    be = _open(page, base_url, reset_dom_state_js, [NO_SPOOL],
+               confirm_answer={"status": "confirmed", "applied": [{"sid": 99, "grams": 0.0, "remaining": 0.0}],
+                               "errors": [], "shortfall_g": 61.32, "shortfall_card": "J-1105#shortfall"},
+               pending_after_confirm=[card])
+    page.select_option('.fcc-cr-pick[data-line="0"]', "other")
+    page.fill('.fcc-cr-other[data-line="0"]', "99")
+    page.dispatch_event('.fcc-cr-other[data-line="0"]', "change")
+    page.click("#fcc-cancel-review-overlay .fcc-cr-confirm")
+    _until(page, lambda: be.confirms, 5_000, "Apply never posted")
+    page.wait_for_selector('.fcc-cr-card[data-job="J-1105#shortfall"]', state="attached", timeout=5_000)
+    assert page.evaluate("() => !document.querySelector('.fcc-cr-card[data-job=\"J-1105\"]')"), "the review closed"
+    toasts = _toasts(page)
+    assert "Nothing was charged" in toasts and "on a new card" in toasts, toasts
+    assert "Deducted from" not in toasts, toasts
+
+
+def test_an_unconfirmed_write_row_says_so(page: Page, base_url, reset_dom_state_js):
+    """43.2 review fix (deduct-1): a write Spoolman reported as failed rides on the
+    card as a row whose Apply checks first; the row says it's unconfirmed."""
+    row = dict(ROW, sid=97, grams=5.0, position=1, toolhead="RCOI-2", unconfirmed_write=True,
+               attempt_used_before=100.0, attempt_used_after=105.0)
+    rec = dict(SHORTFALL, total_grams=5.0, spools=[row], unresolved_usage={}, shortfall_causes={})
+    be = _open(page, base_url, reset_dom_state_js, [rec])
+    text = page.evaluate("() => document.querySelector('.fcc-cr-card').textContent")
+    assert "unconfirmed write" in text, text
+    page.click("#fcc-cancel-review-overlay .fcc-cr-confirm")
+    _until(page, lambda: be.confirms, 5_000, "Apply never posted")
+    assert be.confirms[0].get("updates") == {"97": 5.0} and be.confirms[0].get("rev") == 0, be.confirms[0]
+
+
+def test_a_two_spool_head_names_both(page: Page, base_url, reset_dom_state_js):
+    """43.2 review fix (spec-5): the card names both spools on a head that held two."""
+    rec = dict(SHORTFALL, unresolved_usage={"1": 5.0}, total_grams=5.0,
+               heads_at_end=[{"toolhead": "RCOI-2", "position": 1, "sid": 96},
+                             {"toolhead": "RCOI-2", "position": 1, "sid": 97}],
+               shortfall_causes={"1": {"why": "two_spools", "sid": None, "sids": [96, 97],
+                                       "toolhead": "RCOI-2", "archived": False}})
+    _open(page, base_url, reset_dom_state_js, [rec])
+    text = page.evaluate("() => document.querySelector('.fcc-cr-card').textContent")
+    assert "RCOI-2 had two spools (#96 and #97)" in text, text
+    ended = page.evaluate(
+        "() => Array.from(document.querySelectorAll('.fcc-cr-pick[data-line=\"pos:1\"] .fcc-cr-ended option'))"
+        ".map(o => o.value)")
+    assert ended == ["96", "97"], ended
