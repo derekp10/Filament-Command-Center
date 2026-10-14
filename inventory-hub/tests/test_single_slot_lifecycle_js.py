@@ -76,3 +76,105 @@ def test_the_weigh_screen_toasts_an_unarchive_redirect_for_7_seconds(tmp_path, w
     toasts = [(t["msg"], t["type"], t["duration"]) for t in res["toasts"]]
     assert toasts[0][0] == "Updated Spool #77", toasts
     assert toasts[1:] == ([(warning, "warning", 7000)] if warning else []), toasts
+
+
+# --- 42.5b: a location label in eject mode -------------------------------------
+
+SCAN = """
+state.allLocations = [
+  { LocationID: 'XL', Type: 'Printer', toolheads: [{ location_id: 'XL-1' }, { location_id: 'XL-2' }] },
+  { LocationID: 'XL-2', Type: 'Tool Head', 'Max Spools': '1' },
+  { LocationID: 'RCOI-1', Type: 'Tool Head', 'Max Spools': '1' },
+  { LocationID: 'CORE1', Type: 'Printer', 'Max Spools': '1', toolheads: [{ location_id: 'CORE1' }] },
+  { LocationID: 'PM-DB-4', Type: 'Dryer Box', 'Max Spools': '1', extra: { slot_targets: { '1': 'RCOI-1' } } },
+  { LocationID: 'LR-MDB-1', Type: 'Dryer Box', 'Max Spools': '4' },
+];
+state.ejectMode = __EJECT__;
+state.bulkMoveActive = __BULK__;
+state.heldSpools = __BUFFER__;
+const contents = __CONTENTS__;
+const ejects = [];
+window.doEject = (sid, loc) => { ejects.push([sid, loc]); };
+window.closeManage = () => {};
+globalThis.openManage = () => {};
+window.__respond = (url) => (url === '/api/identify_scan'
+  ? { body: { type: 'location', id: __ID__, contents } } : { body: { status: 'success' } });
+processScan(__TEXT__, 'barcode');
+await __settle(80);
+return { ejects, buffer: state.heldSpools.map(s => s.id), toasts: __rec.toasts, logs: __rec.logs,
+         posts: __rec.fetches.filter(f => f.method === 'POST').map(f => f.url) };
+"""
+
+
+def _scan(tmp_path, text, loc_id=None, contents=(), eject=True, bulk=False, buffer=()):
+    res = run_js(tmp_path, ["inv_cmd.js"], (SCAN
+                 .replace("__EJECT__", json.dumps(eject)).replace("__BULK__", json.dumps(bulk))
+                 .replace("__BUFFER__", json.dumps([{"id": b, "display": f"#{b}"} for b in buffer]))
+                 .replace("__CONTENTS__", json.dumps(list(contents)))
+                 .replace("__ID__", json.dumps(loc_id or text.split(":")[1]))
+                 .replace("__TEXT__", json.dumps(text))))
+    assert res["unhandled"] == [], res
+    return res
+
+
+def _warnings(res):
+    return [t["msg"] for t in res["toasts"] if t["type"] == "warning" and t["duration"] >= 7000]
+
+
+def _loaded(sid, loc):
+    return {"id": sid, "location": loc, "is_ghost": False, "slot": ""}
+
+
+@pytest.mark.parametrize("head", ["RCOI-1", "CORE1"])
+def test_eject_mode_toolhead_label_ejects_its_one_loaded_spool(tmp_path, head):
+    """Derek's Q-B answer; the buffer is left alone (it used to be assigned to
+    the head while eject mode stayed on)."""
+    res = _scan(tmp_path, f"LOC:{head}", contents=[_loaded(60, head)], buffer=[88])
+    assert res["ejects"] == [[60, head]], res
+    assert res["buffer"] == [88] and "/api/smart_move" not in res["posts"], res
+    assert _warnings(res) == [], res
+
+
+def test_eject_mode_ignores_a_stale_trail_on_the_head(tmp_path):
+    res = _scan(tmp_path, "LOC:XL-2", contents=[{"id": 7, "location": "XL-2", "is_ghost": True, "slot": ""}])
+    assert res["ejects"] == [] and _warnings(res) == ["XL-2 is empty — nothing to eject."], res
+
+
+def test_eject_mode_names_both_spools_on_a_doubled_head(tmp_path):
+    res = _scan(tmp_path, "LOC:XL-2", contents=[_loaded(42, "XL-2"), _loaded(50, "XL-2")])
+    assert res["ejects"] == [], res
+    assert _warnings(res) == ["XL-2 holds #42 and #50 — scan the label of the one to eject."], res
+
+
+def test_eject_mode_on_an_empty_head_says_its_polydryer_is_still_attached(tmp_path):
+    res = _scan(tmp_path, "LOC:RCOI-1")
+    assert _warnings(res) == ["RCOI-1 is empty — PM-DB-4 is still attached; open RCOI-1 to unbind it."], res
+
+
+@pytest.mark.parametrize("label", ["LOC:LR-MDB-1", "LOC:XL"])
+def test_eject_mode_on_a_box_or_printer_label_warns_and_does_nothing(tmp_path, label):
+    res = _scan(tmp_path, label, contents=[_loaded(42, "XL-1")], buffer=[88])
+    loc = label.split(":")[1]
+    assert res["ejects"] == [] and res["buffer"] == [88], res
+    assert _warnings(res) == [f"Eject mode: {loc} isn't a toolhead, so nothing was ejected. "
+                              f"Scan a spool or a toolhead label, or turn eject mode off."], res
+    assert [lg["level"] for lg in res["logs"]] == ["WARNING"], res
+
+
+def test_eject_mode_stops_a_slot_label_before_the_server_loads_the_buffer(tmp_path):
+    res = _scan(tmp_path, "LOC:LR-MDB-1:SLOT:2", loc_id="LR-MDB-1", buffer=[88])
+    assert "/api/identify_scan" not in res["posts"], "the slot scan reached the server"
+    assert res["buffer"] == [88]
+    assert _warnings(res) == ["Eject mode: a slot label loads your buffer into LR-MDB-1 slot 2, so nothing "
+                              "was loaded. Scan a spool or a toolhead label, or turn eject mode off."], res
+
+
+def test_without_eject_mode_a_toolhead_label_still_assigns_the_buffer(tmp_path):
+    """Control (passes on the old module too)."""
+    res = _scan(tmp_path, "LOC:RCOI-1", contents=[], eject=False, buffer=[88])
+    assert res["ejects"] == [] and "/api/smart_move" in res["posts"], res
+
+
+def test_a_bulk_move_keeps_its_own_location_scans(tmp_path):
+    res = _scan(tmp_path, "LOC:RCOI-1", contents=[_loaded(60, "RCOI-1")], bulk=True)
+    assert res["ejects"] == [], res

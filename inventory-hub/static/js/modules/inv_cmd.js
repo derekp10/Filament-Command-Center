@@ -1340,6 +1340,53 @@ const ejectAllFromScan = () => {
     triggerEjectAll(loc);
 };
 
+// Group 42.5b — a LOCATION label scanned in eject mode. Derek's Q-B answer
+// (2026-09-18): a toolhead's label ejects that head's one loaded spool, with the
+// eject button's confirms; a box, shelf or room, or a head holding 0 or 2
+// spools, warns and does nothing. It used to assign the buffer to the head (or
+// Quick-Pick its spool) while eject mode stayed on. Claude's call 18: no extra
+// "Eject #N?" question (the eject-mode spool scan has none either; the printing
+// and "no saved home" prompts still come from the eject itself); eject mode
+// stays on and the buffer is left alone; only spools whose OWN location is the
+// head count. Audits and bulk moves keep their own scan handling.
+const _ejectModeOwnsScans = () => state.ejectMode && !state.auditActive && !state.bulkMoveActive;
+const _ejectModeWarn = (msg) => {
+    showToast(msg, 'warning', 7000);
+    if (window.logClientEvent) window.logClientEvent(`⚠️ ${msg}`, 'WARNING');
+};
+const _isSingleHeadRow = (row, id) => {
+    if (!row) return false;
+    if (['Tool Head', 'MMU Slot', 'No MMU Direct Load'].includes(row.Type)) return true;
+    // A dual-role printer that is its own (only) head, the old Core One shape.
+    if (row.Type !== 'Printer') return false;
+    const heads = (row.toolheads || []).map(t => String((t && t.location_id) || '').toUpperCase()).filter(Boolean);
+    return heads.length > 0 && heads.every(h => h === id);
+};
+const _ejectModeLocationScan = (res) => {
+    const id = String(res.id || '').toUpperCase();
+    const rows = state.allLocations || [];
+    const row = rows.find(l => String(l.LocationID || '').toUpperCase() === id);
+    if (!_isSingleHeadRow(row, id)) {
+        _ejectModeWarn(`Eject mode: ${id} isn't a toolhead, so nothing was ejected. Scan a spool or a toolhead label, or turn eject mode off.`);
+        return;
+    }
+    const loaded = (res.contents || []).filter(c => !c.is_ghost
+        && String(c.location || '').replace(/"/g, '').trim().toUpperCase() === id);
+    if (loaded.length === 1) {
+        window.doEject(loaded[0].id, id);
+        return;
+    }
+    if (loaded.length > 1) {
+        _ejectModeWarn(`${id} holds ${loaded.map(c => '#' + c.id).join(' and ')} — scan the label of the one to eject.`);
+        return;
+    }
+    const attached = rows.find(l => l.Type === 'Dryer Box' && parseInt(l['Max Spools'], 10) <= 1
+        && String(((l.extra || {}).slot_targets || {})['1'] || '').toUpperCase() === id);
+    _ejectModeWarn(attached
+        ? `${id} is empty — ${attached.LocationID} is still attached; open ${id} to unbind it.`
+        : `${id} is empty — nothing to eject.`);
+};
+
 // --- SCAN ROUTER ---
 const processScan = (text, source = 'keyboard') => {
     const upper = text.toUpperCase();
@@ -1419,6 +1466,13 @@ const processScan = (text, source = 'keyboard') => {
     // Group 39.3: a slot scan whose slot feeds a printer head waits on that
     // printer server-side; the dim says which ("⏳ Checking XL…").
     const slotScan = /^LOC:([^:]+):SLOT:(\d+)$/i.exec(String(text).trim());
+    // Group 42.5b: in eject mode a box's SLOT label is stopped here, because the
+    // server would load the buffered spool into the slot (and on to its head)
+    // before the browser saw the answer.
+    if (slotScan && _ejectModeOwnsScans()) {
+        _ejectModeWarn(`Eject mode: a slot label loads your buffer into ${slotScan[1].toUpperCase()} slot ${slotScan[2]}, so nothing was loaded. Scan a spool or a toolhead label, or turn eject mode off.`);
+        return;
+    }
     setProcessing(true, { label: slotScan && window.printerLabelForTarget
         ? window.printerLabelForTarget(slotScan[1], slotScan[2]) : null });
     window.fetchT('/api/identify_scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: text, source: source }) })
@@ -1622,6 +1676,10 @@ const processScan = (text, source = 'keyboard') => {
                     );
                 }
             } else if (res.type === 'location') {
+                // Group 42.5b: eject mode decides first (the location-scan order
+                // the Group 40 pickers build on: eject mode, then the legacy
+                // label note, then the buffered / empty-buffer branches).
+                if (_ejectModeOwnsScans()) { state.lastScannedLoc = null; _ejectModeLocationScan(res); return; }
                 if (!text.toUpperCase().startsWith('LOC:')) {
                     const msg = "⚠️ Legacy Location Label Scanned! Features may be limited. Print a new LOC: label when possible.";
                     showToast(msg, "warning", 3500);
