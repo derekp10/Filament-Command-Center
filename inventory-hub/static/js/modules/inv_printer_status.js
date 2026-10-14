@@ -36,6 +36,7 @@
         inFlight: false,
         lastFingerprint: null,
         pulseFed: false,      // the current heartbeat tick carried printer_status
+        localAt: 0,           // last refresh asked for by a local change (ms)
     };
 
     const _isCollapsed = () => {
@@ -553,14 +554,23 @@
     // tick fed the widget (inv_cmd.js skips it for the buffer the same way,
     // L206); a tick without the section still falls back to the fan-out, and
     // every other source (an eject, a details save, a review) refreshes at once.
+    //
+    // Except for LOCAL_SETTLE_MS after a local change. The server reads
+    // Spoolman first and probes the printers after (2 s per offline printer),
+    // so a tick whose snapshot predates a Quick-Swap or an eject can land after
+    // the change's own refresh and repaint the old spool (review widget-1).
+    // Within that window a tick's event still runs the fan-out, as before 45.8.
+    const LOCAL_SETTLE_MS = 15000;
+    const _localRefresh = () => { _state.localAt = Date.now(); scheduleRefresh(); };
     document.addEventListener('inventory:sync-pulse', (e) => {
         const fromPulse = !!(e && e.detail && e.detail.source === 'dashboard_pulse');
         const fed = _state.pulseFed;
         _state.pulseFed = false;
-        if (fromPulse && fed) return;
+        if (!fromPulse) { _localRefresh(); return; }
+        if (fed && Date.now() - _state.localAt > LOCAL_SETTLE_MS) return;
         scheduleRefresh();
     });
-    document.addEventListener('inventory:locations-changed', scheduleRefresh);
+    document.addEventListener('inventory:locations-changed', _localRefresh);
     document.addEventListener('DOMContentLoaded', () => {
         _renderShell();
         // No fetch here: the heartbeat's first tick (100 ms after
@@ -579,6 +589,11 @@
     // when the response includes a printer_status section.
     const refreshFromAggregate = (rows) => {
         if (!rows || typeof rows !== 'object') return;
+        // A section the server couldn't build arrives as {error: "..."}
+        // (routes_state_pulse.py). Treat it as missing so the tick's event takes
+        // the fan-out fallback; rendering it threw in _fingerprint and aborted
+        // the rest of the tick (review widget-2).
+        if (typeof rows.error === 'string') return;
         // The tick's inventory:sync-pulse, fired right after this, needs no fan-out.
         _state.pulseFed = true;
         _state.rowsByPrinter = rows;

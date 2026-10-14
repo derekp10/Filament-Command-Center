@@ -20,7 +20,7 @@ flags the bright chip.
 Group 45.3 (2026-10-13) composites the FOREGROUND the same way: translucent
 text is painted onto its composited background before it is scored. Before
 that, the faint-text test's 2.24:1 pair scored 18.36:1 and passed. The OFFLINE
-chip's text went from alpha 0.45 (4.41:1 as painted) to 0.50 (5.29:1) with it.
+chip's text went from alpha 0.45 (4.41:1 as painted) to 0.50 (5.28:1; filed as 5.29) with it.
 """
 from __future__ import annotations
 
@@ -156,7 +156,7 @@ def test_translucent_text_is_scored_as_painted_onto_its_background(isolated_page
 
 
 def test_the_offline_chip_passes_as_painted_and_stays_dimmer_than_idle(isolated_page):
-    """The CSS half of 45.3: OFFLINE's text alpha 0.50 paints at 5.29:1 over
+    """The CSS half of 45.3: OFFLINE's text alpha 0.50 paints at 5.28:1 over
     the dashboard (0.45 was 4.41:1, under AA). It must stay the dimmest state."""
     page = isolated_page
     with open(GLOBAL_CSS, encoding="utf-8") as fh:
@@ -169,6 +169,6 @@ def test_the_offline_chip_passes_as_painted_and_stays_dimmer_than_idle(isolated_
     }""")
     assert alpha == {"offline": 0.5, "idle": 0.6}, alpha
     widget = page.locator("#printer-status-widget")
-    assert conftest.contrast_offenders(widget, min_ratio=5.25) == [], "OFFLINE paints under 5.29:1"
+    assert conftest.contrast_offenders(widget, min_ratio=5.25) == [], "OFFLINE paints under 5.28:1"
     assert [o["text"] for o in conftest.contrast_offenders(widget, min_ratio=5.35)
             if "OFFLINE" in o["text"]] == ["OFFLINE", "OFFLINE"], "OFFLINE got brighter than 0.50"

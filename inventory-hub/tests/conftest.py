@@ -43,6 +43,25 @@ for _utf8_stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError, OSError):
         pass
 
+# ---------------------------------------------------------------------------
+# The host never holds the container's hub.log (Group 45, review test-infra-1)
+# ---------------------------------------------------------------------------
+# state.py opens RotatingFileHandler('hub.log') relative to the working
+# directory at import. From inventory-hub/ (the canonical run) that is the dev
+# container's own bind-mounted log, so pytest held it open for the whole run.
+# Windows can't rename a file another process holds, so the container's 1 MB
+# rollover failed and Python's handler DROPPED the container's records until the
+# host happened to rotate; dev's hub.log.1 and .5 with no .2-.4 between them are
+# what those failed rollovers leave. It also mixed host unit-test lines ("DATA
+# LOSS in remove_choice('Doomed')") into the container's log, and starved the
+# request log's timeout count. Host log lines still reach stdout. Imported here,
+# before any test module imports state.
+import state as _fcc_state  # noqa: E402
+
+if _fcc_state.f_handler in _fcc_state.logger.handlers:
+    _fcc_state.logger.removeHandler(_fcc_state.f_handler)
+_fcc_state.f_handler.close()
+
 
 DEFAULT_BASE_URL = os.environ.get("INVENTORY_HUB_URL", "http://localhost:8000")
 DEFAULT_DEV_SPOOLMAN = os.environ.get("DEV_SPOOLMAN_URL", "http://192.168.1.29:7913")
@@ -204,12 +223,20 @@ DEV_SPOOLMAN_HOST = "192.168.1.29"
 _RUN = {"start": None, "browser": {}}
 
 
+def _times_of(entry):
+    """A history entry's numeric times; anything else in the file reads as
+    no history (a bare number used to crash the run's summary line)."""
+    if not isinstance(entry, list):
+        return []
+    return [p for p in entry if isinstance(p, (int, float)) and not isinstance(p, bool)]
+
+
 def load_factor(times, history, min_tests=LOAD_MIN_TESTS):
     """Median of (this run's call time / the test's fastest recorded time) over
     the tests that have a history; None with fewer than `min_tests` of them."""
     ratios = []
     for nodeid, t in times.items():
-        past = [p for p in (history.get(nodeid) or []) if isinstance(p, (int, float)) and p > 0]
+        past = [p for p in _times_of(history.get(nodeid)) if p > 0]
         if past and t > 0:
             ratios.append(t / min(past))
     if len(ratios) < min_tests:
@@ -223,7 +250,7 @@ def update_history(history, times, keep=TIMING_KEEP):
     """Append this run's call times, keeping each test's `keep` most recent."""
     out = dict(history)
     for nodeid, t in times.items():
-        past = [p for p in (out.get(nodeid) or []) if isinstance(p, (int, float))]
+        past = _times_of(out.get(nodeid))
         out[nodeid] = (past + [round(float(t), 3)])[-keep:]
     return out
 
@@ -283,12 +310,38 @@ def count_spoolman_timeouts(offset, path=HUB_LOG, host=DEV_SPOOLMAN_HOST):
     return sum(1 for ln in text.splitlines() if "Read timed out" in ln and host in ln)
 
 
+def request_start(req):
+    """When the browser started `req`, in epoch seconds by its own clock (else
+    now). Playwright's sync API dispatches request events only inside a
+    Playwright call, so Python's clock at dispatch can be late by however long
+    the test spent between calls (a requests.get, a sleep)."""
+    try:
+        st = (req.timing or {}).get("startTime", -1)
+        if st and st > 0:
+            return st / 1000.0
+    except Exception:
+        pass
+    return time.time()
+
+
+def request_duration(req, started, now=None):
+    """Seconds a finished request took: the browser's responseEnd (ms after its
+    start) when it reported one, else the wall time since `started`."""
+    try:
+        end = (req.timing or {}).get("responseEnd", -1)
+        if end is not None and end >= 0:
+            return end / 1000.0
+    except Exception:
+        pass
+    return (time.time() if now is None else now) - started
+
+
 def format_request_log(net, timeouts, now=None):
     """The section a failed browser test's report gets: its slow requests, the
     ones that never finished, and FCC's dev-Spoolman timeouts during the test.
     It answers "was this red load noise?" without a re-run. `net["pending"]`
-    maps each in-flight request to (method, url, start time)."""
-    now = time.monotonic() if now is None else now
+    maps each in-flight request to (method, url, start time in epoch seconds)."""
+    now = time.time() if now is None else now
     lines = []
     for method, url, took in net.get("slow", []):
         lines.append(f"  slow ({took:.1f} s): {method} {url}")
@@ -337,6 +390,14 @@ def pytest_runtest_makereport(item, call):
     if rep.when == "call" and rep.passed and "page" in getattr(item, "fixturenames", ()):
         _RUN["browser"][item.nodeid] = rep.duration
     if rep.failed and net is not None and rep.when in ("setup", "call"):
+        page = getattr(item, "_fcc_page", None)
+        if page is not None:
+            try:
+                # Let queued request events dispatch first: a request that
+                # finished after the last Playwright call isn't still in flight.
+                page.wait_for_timeout(1)
+            except Exception:
+                pass
         try:
             timeouts = count_spoolman_timeouts(getattr(item, "_fcc_hub_offset", 0))
             rep.sections.append(("FCC request log (Group 45.1)", format_request_log(net, timeouts)))
@@ -401,12 +462,12 @@ def page(page, request):
     net = {"slow": [], "pending": {}}
 
     def _started(req):
-        net["pending"][req] = (req.method, _short_url(req.url), time.monotonic())
+        net["pending"][req] = (req.method, _short_url(req.url), request_start(req))
 
     def _ended(req):
         entry = net["pending"].pop(req, None)
         if entry:
-            took = time.monotonic() - entry[2]
+            took = request_duration(req, entry[2])
             if took > SLOW_REQUEST_S:
                 net["slow"].append((entry[0], entry[1], took))
 
@@ -414,6 +475,7 @@ def page(page, request):
     page.on("requestfinished", _ended)
     page.on("requestfailed", _ended)
     request.node._fcc_net = net
+    request.node._fcc_page = page
     request.node._fcc_hub_offset = hub_log_size()
     return page
 
@@ -546,6 +608,31 @@ def close_wizard(page, timeout: int = 5_000) -> None:
         }
     """)
     _expect(page.locator("#wizardModal")).not_to_be_visible(timeout=timeout)
+
+
+def own_the_buffer(page, initial):
+    """Give `page` its own buffer endpoint (Group 45.8, family D). A test that
+    injects spools into state.heldSpools otherwise talks to dev's SHARED server
+    buffer: the page's 2 s poll overwrites the injected spool once its 3 s grace
+    lapses, and renderBuffer's persist (or the grace path's) POSTs the test's
+    spools, real or made-up (#99, #8001, #99999), into dev's buffer, where every
+    later page loads them. /api/state/buffer then starts as `initial` and follows
+    the page's own persists. Install before page.goto. Returns the stored dict."""
+    import json as _json
+    held = {"buffer": list(initial)}
+
+    def handle(route):
+        if route.request.method == "POST":
+            try:
+                held["buffer"] = (route.request.post_data_json or {}).get("buffer", [])
+            except ValueError:
+                pass
+            route.fulfill(status=200, content_type="application/json", body='{"success": true}')
+        else:
+            route.fulfill(status=200, content_type="application/json",
+                          body=_json.dumps(held["buffer"]))
+    page.route("**/api/state/buffer", handle)
+    return held
 
 
 def quiet_heartbeat(page) -> None:
@@ -1459,7 +1546,7 @@ def _cleanup_orphan_test_records(request):
 # it scored at full strength, so white text at 25% on a white 8% tint over black
 # (rgb(79,79,79) on rgb(20,20,20), 2.24:1) read as 18.36:1 and passed. The fix
 # landed with the OFFLINE chip's text alpha raised 0.45 -> 0.50 in global.css
-# (4.41:1 -> 5.29:1); the chip stays dimmer than IDLE's 0.6.
+# (4.41:1 -> 5.28:1 as the guard measures it); the chip stays dimmer than IDLE's 0.6.
 #
 # Only `background-color` is read. Gradients / images (e.g. .fcc-ps-widget's
 # linear-gradient) count as transparent and the walk continues past them.

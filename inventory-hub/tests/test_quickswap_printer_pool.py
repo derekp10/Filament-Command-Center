@@ -12,6 +12,8 @@ import pytest
 import requests
 from playwright.sync_api import Page, expect
 
+import conftest
+
 
 TEST_BOX = "TST-MDB-1"  # max=6, empty fixed baseline (conftest DEV_BOX_BINDING_BASELINES).
 TEST_TOOLHEAD = "XL-1"
@@ -73,6 +75,8 @@ def test_quickswap_grid_renders_printer_pool_section(page: Page, open_manage_mod
 
 @pytest.mark.usefixtures("require_server", "pool_binding", "clean_buffer")
 def test_pool_slot_disabled_when_buffer_empty(page: Page, open_manage_modal):
+    # Group 45.8: the buffer this test fills is its own, never dev's shared one.
+    conftest.own_the_buffer(page, [])
     open_manage_modal(TEST_TOOLHEAD)
     page.evaluate("() => { state.heldSpools = []; if (window.renderBuffer) window.renderBuffer(); }")
     pool_btn = _wait_pool_btn(page, TEST_BOX, POOL_SLOT)
@@ -85,6 +89,8 @@ def test_pool_slot_disabled_when_buffer_empty(page: Page, open_manage_modal):
 def test_pool_slot_becomes_deposit_target_when_buffer_has_spool(
     page: Page, open_manage_modal
 ):
+    # Group 45.8: the buffer this test fills is its own, never dev's shared one.
+    conftest.own_the_buffer(page, [])
     open_manage_modal(TEST_TOOLHEAD)
     # Wait for the grid's first render before mutating buffer state — the
     # buffer-updated re-render needs the prior render's currentLoc set.

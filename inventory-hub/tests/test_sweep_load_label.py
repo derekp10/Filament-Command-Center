@@ -59,6 +59,17 @@ def test_junk_in_the_history_file_is_ignored():
     assert conftest.load_factor(times, history) == pytest.approx(2.0)
 
 
+def test_a_history_entry_that_is_not_a_list_reads_as_no_history():
+    """Review test-infra-5: a bare number used to raise TypeError inside the
+    summary hook, failing every later run until the file was deleted."""
+    history = {f"t{i}": [1.0] for i in range(30)}
+    history.update({"bare": 2.5, "text": "x", "none": None, "flag": [True]})
+    times = {**{f"t{i}": 1.5 for i in range(30)}, "bare": 9.0, "text": 9.0, "none": 9.0, "flag": 9.0}
+    assert conftest.load_factor(times, history) == pytest.approx(1.5)
+    out = conftest.update_history(history, {"bare": 3.0, "flag": 4.0})
+    assert out["bare"] == [3.0] and out["flag"] == [4.0]
+
+
 def test_the_history_keeps_each_tests_most_recent_times():
     history = {"a": [1.0, 2.0, 3.0]}
     out = conftest.update_history(history, {"a": 4.0, "b": 5.0}, keep=3)
@@ -88,11 +99,11 @@ def test_a_log_that_rotated_during_the_test_is_read_across_both_files(tmp_path):
     """FCC's handler rotates hub.log at ~1 MB. After a rotation the file is
     smaller than where the test started; the rest of the old file is hub.log.1."""
     log = tmp_path / "hub.log"
-    old = OTHER * 50
-    (tmp_path / "hub.log.1").write_text(old + TIMEOUT * 3, encoding="utf-8")
-    log.write_text(TIMEOUT, encoding="utf-8")
-    offset = len(old.encode("utf-8"))
-    assert conftest.count_spoolman_timeouts(offset, path=str(log)) == 4
+    before = (TIMEOUT * 7 + OTHER * 50).encode("utf-8")     # logged before the test began
+    (tmp_path / "hub.log.1").write_bytes(before + (TIMEOUT * 3).encode("utf-8"))
+    log.write_bytes(TIMEOUT.encode("utf-8"))
+    assert conftest.count_spoolman_timeouts(len(before), path=str(log)) == 4, (
+        "the old file is read from where the test began, not from its start")
 
 
 def test_a_missing_log_counts_nothing(tmp_path):
@@ -108,6 +119,24 @@ def test_the_request_log_names_slow_and_unfinished_requests():
     assert "slow (6.2 s): GET /api/locations" in text
     assert "never finished (4.5 s so far): POST /api/identify_scan" in text
     assert "dev Spoolman read timeouts FCC logged during this test: 7" in text
+
+
+def _req(**timing):
+    return types.SimpleNamespace(timing=timing)
+
+
+def test_a_request_is_timed_by_the_browser_not_by_event_dispatch():
+    """Review test-infra-2: the sync API dispatches request events only inside
+    a Playwright call, so Python's clock at dispatch can be seconds late. A
+    finished request uses the browser's responseEnd (ms after its start)."""
+    assert conftest.request_duration(_req(startTime=1_700_000_000_000, responseEnd=180.0),
+                                     started=0.0, now=99.0) == pytest.approx(0.18)
+    # No browser figure (a failed or cached request): wall time since the start.
+    assert conftest.request_duration(_req(responseEnd=-1), started=10.0, now=12.5) == pytest.approx(2.5)
+    assert conftest.request_duration(types.SimpleNamespace(), started=10.0, now=11.0) == pytest.approx(1.0)
+    assert conftest.request_start(_req(startTime=1_700_000_000_000)) == pytest.approx(1_700_000_000.0)
+    t0 = time.time()
+    assert t0 <= conftest.request_start(_req(startTime=-1)) <= time.time()
 
 
 def test_a_quiet_request_log_says_so():
@@ -135,15 +164,36 @@ def run_state(monkeypatch):
 
 
 def test_a_failed_browser_test_gets_the_request_log(run_state, monkeypatch):
-    monkeypatch.setattr(conftest, "count_spoolman_timeouts", lambda offset: 12)
-    item = types.SimpleNamespace(nodeid="x::y", fixturenames=["page"], _fcc_hub_offset=0,
+    calls = []
+    monkeypatch.setattr(conftest, "count_spoolman_timeouts",
+                        lambda offset: calls.append(("count", offset)) or 12)
+    fake_page = types.SimpleNamespace(wait_for_timeout=lambda ms: calls.append(("pump", ms)))
+    item = types.SimpleNamespace(nodeid="x::y", fixturenames=["page"], _fcc_hub_offset=73_912,
+                                 _fcc_page=fake_page,
                                  _fcc_net={"slow": [("GET", "/api/locations", 9.0)], "pending": {}})
     rep = _rep("call", "failed")
     _run_hook(item, rep)
     (title, body), = rep.sections
     assert title == "FCC request log (Group 45.1)"
     assert "GET /api/locations" in body and ": 12" in body
+    # Review: count from THIS test's hub.log offset, after letting the page
+    # dispatch request events still queued behind the last Playwright call.
+    assert calls == [("pump", 1), ("count", 73_912)], calls
     assert run_state["browser"] == {}, "a red's time must not enter the history"
+
+
+def test_a_closed_page_never_turns_the_red_into_an_error(run_state, monkeypatch):
+    monkeypatch.setattr(conftest, "count_spoolman_timeouts", lambda offset: 0)
+
+    def closed(ms):
+        raise RuntimeError("Target page, context or browser has been closed")
+
+    item = types.SimpleNamespace(nodeid="x::y", fixturenames=["page"], _fcc_hub_offset=5,
+                                 _fcc_page=types.SimpleNamespace(wait_for_timeout=closed),
+                                 _fcc_net={"slow": [], "pending": {}})
+    rep = _rep("setup", "failed")
+    _run_hook(item, rep)
+    assert [t for t, _ in rep.sections] == ["FCC request log (Group 45.1)"]
 
 
 def test_a_passed_browser_test_records_its_call_time(run_state):
@@ -159,6 +209,21 @@ def test_a_test_without_a_browser_records_nothing(run_state):
     _run_hook(item, rep)
     _run_hook(item, _rep("call", "passed"))
     assert run_state["browser"] == {} and rep.sections == []
+
+
+# --- the host leaves the container's hub.log alone ----------------------------
+
+def test_the_host_test_process_holds_no_handle_on_hub_log():
+    """Review test-infra-1: state.py opens a RotatingFileHandler on 'hub.log'
+    relative to the working directory, which from inventory-hub/ is the dev
+    container's own log. Held by the host, the container's 1 MB rollover
+    failed on Windows and the container's log records were dropped."""
+    import logging.handlers
+    import state
+    held = [h for h in state.logger.handlers
+            if isinstance(h, logging.handlers.RotatingFileHandler)]
+    assert held == [], held
+    assert state.f_handler.stream is None, "the handler's file is still open"
 
 
 # --- 45.1(b): one default wait for `expect` -----------------------------------

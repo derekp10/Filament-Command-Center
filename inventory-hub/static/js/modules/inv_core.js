@@ -1093,6 +1093,15 @@ const _renderLocationsPayload = (d) => {
 
             const rowOnly = ordered.filter(e => e.row).map(e => e.row);
             state.allLocations = rowOnly;
+            // Group 45.8: an openManage() that came before this first load (a
+            // Printer Status tile clicked in the first seconds; the widget paints
+            // from the first heartbeat) was parked; open it now.
+            if (!state.locationsLoaded) {
+                state.locationsLoaded = true;
+                const parked = window._fccPendingManageId;
+                window._fccPendingManageId = null;
+                if (parked && window.openManage) setTimeout(() => window.openManage(parked), 0);
+            }
 
             // L271 Phase 3.5 (review fix #15): prune collapse state to live parent
             // nodes so a deleted/renamed id can't resurrect as collapsed on a

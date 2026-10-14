@@ -417,6 +417,37 @@ def test_l361_toolhead_click_survives_rerender(page: Page, base_url):
     expect(page.locator("#manageModal")).to_be_visible(timeout=5000)
 
 
+# Holds the page's own /api/locations load back 2.5 s (the in-page fetch-delay
+# lever from Group 38), so an early openManage always lands in the gap.
+_DELAY_LOCATIONS_JS = """(() => {
+    const orig = window.fetch;
+    window.fetch = (url, opts) => {
+        const u = typeof url === 'string' ? url : (url && url.url) || '';
+        if (u === '/api/locations') {
+            return new Promise(r => setTimeout(r, 2500)).then(() => orig(url, opts));
+        }
+        return orig(url, opts);
+    };
+})();"""
+
+
+@pytest.mark.usefixtures("require_server")
+def test_openmanage_before_the_first_locations_load_opens_when_it_lands(page: Page, base_url):
+    """Group 45.8: the widget now paints from the first heartbeat, ~100 ms after
+    load, sooner than the cold /api/locations load (1-2 s on dev). openManage()
+    did nothing for an id it hadn't loaded yet, so a tile clicked in that gap
+    was lost; test_l361_toolhead_click_survives_rerender went red on it. The
+    open is now parked until the load lands."""
+    page.add_init_script(_DELAY_LOCATIONS_JS)
+    page.goto(base_url, wait_until="domcontentloaded")
+    page.wait_for_function("() => typeof window.openManage === 'function'", timeout=10000)
+    assert page.evaluate("() => state.allLocations.length") == 0, (
+        "the locations landed before the click; the gap this pins was not exercised")
+    page.evaluate("(id) => window.openManage(id)", TEST_TOOLHEAD)
+    expect(page.locator("#manageModal")).to_be_visible(timeout=10000)
+    expect(page.locator("#manage-loc-id")).to_have_value(TEST_TOOLHEAD)
+
+
 @pytest.mark.usefixtures("require_server")
 def test_dashboard_primes_all_locations_for_openmanage(page: Page, base_url, api_base_url):
     """Regression (2026-06-01): the L206 adaptive pulse only fetched
@@ -520,3 +551,88 @@ def test_changing_the_label_mode_repaints_the_same_data(page: Page, base_url):
     page.evaluate("(k) => localStorage.setItem(k, 'Tool 3')", _LABEL_KEY)
     page.evaluate("() => window.refreshPrinterStatusWidget()")
     expect(label).to_have_text("Tool 3", timeout=5000)
+
+
+# --- Group 45.8 review: a heartbeat section that failed, or predates a change ---
+# One made-up printer with one head, ZF-1. The client fan-out (printer_map,
+# toolhead_slots, get_contents) is stubbed to see one spool there; the
+# heartbeat's printer_status section is stubbed separately, verbatim.
+_FEED_PRINTER = "ZZ Feed Printer"
+_FEED_HEAD = "ZF-1"
+
+
+def _feed_item(sid):
+    return {"id": sid, "color": "00AAFF", "color_direction": "longitudinal",
+            "remaining_weight": 500, "initial_weight": 1000, "display": f"#{sid} Feed Test"}
+
+
+def _stub_feed(page: Page, pulse_status, contents_sid):
+    def handle(route):
+        url = urlsplit(route.request.url)
+        if url.path == "/api/printer_map":
+            body = {"printers": {_FEED_PRINTER: [{"location_id": _FEED_HEAD, "position": 0}]}}
+        elif url.path.startswith("/api/machine/") and url.path.endswith("/toolhead_slots"):
+            body = {"toolheads": {_FEED_HEAD: [{"box": "ZZ-BOX"}]}, "printer_pool": []}
+        elif url.path == "/api/get_contents":
+            wanted = (parse_qs(url.query).get("id") or [""])[0].upper()
+            body = [_feed_item(contents_sid)] if wanted == _FEED_HEAD else []
+        elif url.path == "/api/dashboard_pulse":
+            body = {"printer_status": pulse_status}
+        else:
+            route.continue_()
+            return
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
+    page.route("**/api/**", handle)
+
+
+def _feed_tile(page: Page):
+    return page.locator(
+        f"#printer-status-widget .fcc-ps-body .fcc-ps-th[data-toolhead='{_FEED_HEAD}']").first
+
+
+@pytest.mark.usefixtures("require_server")
+def test_a_failed_printer_status_section_falls_back_to_the_fan_out(page: Page, base_url):
+    """The server sends printer_status: {error: "..."} when it can't build the
+    section. The widget used to take that for printer data, throw in its
+    fingerprint (aborting the tick before its event), and sit on the loading
+    skeleton until the 15 s load fallback. Now that tick takes the fan-out."""
+    _stub_feed(page, {"error": "boom"}, 9201)
+    page.goto(base_url)
+    expect(_feed_tile(page)).to_have_attribute("data-spool-id", "9201", timeout=6000)
+
+
+_RECORD_TILE_JS = """(head) => {
+    window.__fccTileSeq = [];
+    const body = document.querySelector('#printer-status-widget .fcc-ps-body');
+    const read = () => {
+        const t = body.querySelector(`.fcc-ps-th[data-toolhead='${head}']`);
+        const v = t ? t.getAttribute('data-spool-id') : null;
+        const seq = window.__fccTileSeq;
+        if (seq[seq.length - 1] !== v) seq.push(v);
+    };
+    new MutationObserver(read).observe(body, {childList: true, subtree: true, attributes: true});
+}"""
+
+
+@pytest.mark.usefixtures("require_server")
+def test_a_tick_older_than_a_local_change_cannot_leave_the_old_spool_up(page: Page, base_url):
+    """The heartbeat here always reports the OLD spool (#9301, a snapshot taken
+    before the change); the fan-out sees the new one (#9302). The server reads
+    Spoolman before it probes the printers, so in real use such a tick can land
+    right after a Quick-Swap's own refresh. After a local change, a tick's stale
+    repaint is followed by a fan-out: the new spool is back at once instead of
+    staying hidden until the next tick."""
+    stale = {_FEED_PRINTER: {"state": None, "toolheads": [
+        {"id": _FEED_HEAD, "position": 0, "unbound": False, "item": _feed_item(9301)}]}}
+    _stub_feed(page, stale, 9302)
+    page.goto(base_url)
+    tile = _feed_tile(page)
+    expect(tile).to_have_attribute("data-spool-id", "9301", timeout=10000)   # the first tick
+    page.evaluate(_RECORD_TILE_JS, _FEED_HEAD)
+    page.evaluate("() => document.dispatchEvent(new CustomEvent('inventory:locations-changed'))")
+    # The change's own refresh shows the new spool, then the next tick repaints the old one.
+    page.wait_for_function(
+        """() => { const s = window.__fccTileSeq || [];
+                   const i = s.indexOf('9302');
+                   return i >= 0 && s.indexOf('9301', i) > i; }""", timeout=12000)
+    expect(tile).to_have_attribute("data-spool-id", "9302", timeout=5000)
