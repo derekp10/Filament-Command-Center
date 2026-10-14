@@ -443,6 +443,9 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
             const finalize = () => {
                 setProcessing(false);
                 showToast(`Updated Spool #${id}`, 'success');
+                // Group 42.3c: a used-up spool weighed back above 0 g whose old
+                // toolhead holds another spool now went to Unassigned instead.
+                if (res && res.warning) showToast(res.warning, 'warning', 7000);
                 // Spool just auto-archived (weight hit 0) AND its filament
                 // has no empty_spool_weight yet — prompt the user to record
                 // the now-empty spool's weight. Fires after the toast so it

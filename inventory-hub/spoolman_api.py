@@ -308,7 +308,62 @@ def _auto_unarchive_on_refill(data, existing):
     if 'location' not in data:
         prev_loc = (existing.get('extra') or {}).get('fcc_pre_archive_location')
         if prev_loc:
-            data['location'] = prev_loc
+            dest, warning = _unarchive_destination(existing, prev_loc, remaining)
+            data['location'] = dest
+            # Claude's call 22: the note is used up once the spool is back in
+            # stock. "" because the extras merge won't pop a system-managed key.
+            extra = data.get('extra')
+            if not isinstance(extra, dict):
+                extra = {}
+                data['extra'] = extra
+            extra['fcc_pre_archive_location'] = ''
+            return warning
+    return None
+
+
+def _unarchive_destination(existing, prev_loc, remaining):
+    """Group 42.3c — where an auto-unarchived spool goes: back to where it was
+    archived from, unless that place holds one spool and another spool is there
+    now. A print that used a spool up archived it off its toolhead; if a
+    different spool was loaded there since, a later weight correction put the
+    old spool back on top of it (I5-9: two spools on one head).
+
+    Derek, 2026-10-13 (option A): then it goes to Unassigned, with a 7-second
+    warning naming the spool on the head, as an ejected spool with no saved home
+    does. Claude's call 22: a place FCC can't read, or that no longer exists,
+    counts as taken; a remembered Printer label counts only spools filed on the
+    printer itself. A shelf, box or cart is restored with no read.
+    Returns (location, warning or None)."""
+    loc = str(prev_loc).strip().strip('"')
+    lid = loc.upper()
+    sid = existing.get('id')
+    try:
+        printer_map = locations_db.get_active_printer_map() or {}
+        rows = {str(r.get('LocationID', '')).strip().upper(): r
+                for r in (locations_db.load_locations_list() or []) if isinstance(r, dict)}
+    except Exception as e:
+        state.logger.warning(f"42.3c: couldn't read the locations for #{sid}: {e}")
+        printer_map, rows = None, None
+    if rows is None:
+        why = "FCC couldn't check where it was"
+    elif lid not in printer_map and lid not in rows:
+        why = f"{lid} no longer exists"
+    elif lid in printer_map or str(rows[lid].get('Type', '')).strip() in (locations_db.TOOLHEAD_TYPES | {'Printer'}):
+        try:
+            holders = [r.get('id') for r in (get_spools_at_location_detailed_strict(lid) or [])
+                       if not r.get('is_ghost') and str(r.get('id')) != str(sid)
+                       and str(r.get('location') or '').strip().strip('"').upper() == lid]
+        except Exception as e:
+            state.logger.warning(f"42.3c: couldn't read {lid} for #{sid}: {e}")
+            holders = None
+        if holders == []:
+            return loc, None
+        why = (f"FCC couldn't read {lid} from Spoolman" if holders is None
+               else f"{lid} now holds " + ", ".join(f"#{h}" for h in holders))
+    else:
+        return loc, None
+    return '', (f"#{sid} is back in stock ({remaining:.0f} g), but {why}, so it is Unassigned — "
+                f"scan it to where you put it.")
 
 
 def _release_box_on_archive(sid, data, existing, pre_archived):
@@ -381,8 +436,10 @@ def update_spool(sid, data):
                 pass
 
         # Symmetric auto-unarchive: weight went from 0 back to >0 on an archived
-        # spool. Restores the pre-archive location when the breadcrumb is present.
-        _auto_unarchive_on_refill(data, existing)
+        # spool. Restores the pre-archive location when the breadcrumb is present
+        # (Group 42.3c: unless a one-spool head there holds another spool now;
+        # the warning then says so).
+        unarchive_warning = _auto_unarchive_on_refill(data, existing)
         if pre_archived and data.get('archived') is False:
             try:
                 restored_to = data.get('location') or 'UNASSIGNED'
@@ -445,7 +502,17 @@ def update_spool(sid, data):
         if r.ok:
             LAST_SPOOLMAN_ERROR = None
             _release_box_on_archive(sid, data, existing, pre_archived)
-            return r.json()
+            out = r.json()
+            if unarchive_warning:
+                # Every surface logs it; the weight screens also toast it at 7 s
+                # (/api/spool/update and the wizard pass `fcc_warning` on).
+                try:
+                    state.add_log_entry(f"⚠️ {unarchive_warning}", "WARNING", "ffaa00")
+                except Exception:
+                    pass
+                if isinstance(out, dict):
+                    out['fcc_warning'] = unarchive_warning
+            return out
         err_body = r.text
         state.logger.error(f"Failed to update spool {sid}: {r.status_code} - {err_body}")
         LAST_SPOOLMAN_ERROR = f"HTTP {r.status_code}: {err_body[:400]}"

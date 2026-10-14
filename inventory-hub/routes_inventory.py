@@ -691,7 +691,11 @@ def api_edit_spool_wizard():
                     "spool_saved": spool_committed,
                 })
 
-        return jsonify({"success": True, "spool_id": spool_id})
+        out = {"success": True, "spool_id": spool_id}
+        # Group 42.3c: see /api/spool/update.
+        if spool_data and isinstance(spool_res, dict) and spool_res.get('fcc_warning'):
+            out["warning"] = spool_res['fcc_warning']
+        return jsonify(out)
 
     except Exception as e:
         state.logger.error(f"Wizard Edit Error: {e}")
@@ -750,12 +754,17 @@ def api_spool_update():
                 return v is None or (isinstance(v, (int, float)) and v <= 0)
             needs_prompt = _missing(fil_weight) and _missing(vendor_weight)
 
-        return jsonify({
+        out = {
             "status": "success",
             "auto_archived": auto_archived,
             "needs_empty_weight_prompt": needs_prompt,
             "filament_id": filament_id,
-        })
+        }
+        # Group 42.3c: an auto-unarchived spool whose old toolhead holds another
+        # spool now went to Unassigned; the weigh screen toasts this at 7 s.
+        if res.get('fcc_warning'):
+            out["warning"] = res['fcc_warning']
+        return jsonify(out)
     except Exception as e:
         state.logger.error(f"Spool Update Error: {e}")
         return jsonify({"status": "error", "msg": str(e)})

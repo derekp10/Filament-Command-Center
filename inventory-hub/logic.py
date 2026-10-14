@@ -742,6 +742,19 @@ def _move_write(sid, target, new_extra):
     return True
 
 
+def strict_direct_occupants(loc_id, exclude=()):
+    """The ONE strict "direct residents" reader (Groups 39.7, 42.3b, 42.3c; Group
+    40.0c reuses it): ids of the spools whose OWN record puts them at `loc_id`,
+    read strictly, so a Spoolman blip RAISES instead of reading as "empty".
+    Ghosts (a trail naming the location) and first-segment prefix hits (a
+    Printer row's heads) are not residents; ids in `exclude` are left out."""
+    lid = str(loc_id or '').strip().strip('"').upper()
+    skip = {str(x) for x in (exclude or ())}
+    return [row.get('id') for row in (spoolman_api.get_spools_at_location_detailed_strict(lid) or [])
+            if str(row.get('id')) not in skip and not row.get('is_ghost')
+            and str(row.get('location') or '').strip().strip('"').upper() == lid]
+
+
 def _release_single_slot_box(sid, from_loc, pre_extra, printer_map, log=True):
     """Group 42.1 — Derek's rule (2026-09-13): a single-slot box stays bound to a
     head until ITS OWN spool leaves that head, by any path (eject, Return,
@@ -917,6 +930,25 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     # at the write loop.
     failures: typing.Dict[str, str] = {}
 
+    # Step 2 (Group 42.3a): a head holds one spool. Every spool sent to a
+    # single-occupancy target used to be written onto it (the dashboard's
+    # one-spool trim, L124, guards only its own scan path), so /api/smart_move
+    # with two spools, or a location that expands to two, stacked them on one
+    # head. Refused before any read or write, like Bulk Move's block. The same
+    # spool listed twice is still one spool.
+    _unique: typing.List[typing.Any] = []
+    for _s in spools:
+        if str(_s) not in {str(u) for u in _unique}:
+            _unique.append(_s)
+    spools = _unique
+    if (is_printer or is_toolhead) and len(spools) > 1:
+        msg = f"{target} holds one spool — move them one at a time (got {len(spools)})"
+        for sid in spools:
+            failures[str(sid)] = msg
+        state.add_log_entry(f"⚠️ Not moved: {msg}.", "WARNING", "ffaa00")
+        return {"status": "error", "blocked_reason": "single_occupancy", "msg": msg,
+                "failures": failures}
+
     # Step 4 (Group 39.4): the moving spools' own records. A spool loaded on a
     # printer head is LEAVING it (role 'source', D6), unless this re-scans it
     # onto the head it already sits on. Read only when the confirm doesn't
@@ -964,7 +996,7 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     def _strict_residents():
         """(residents, None), or (None, the fail-closed answer)."""
         try:
-            rows = spoolman_api.get_spools_at_location_detailed_strict(target) or []
+            residents_now = strict_direct_occupants(target, exclude=spools)
         except Exception as e:
             state.logger.error(f"Smart Load: resident read failed for {target}: {e}")
             why = f"could not read {target} from Spoolman"
@@ -974,10 +1006,7 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                     f"❌ <b>Smart Load:</b> not loading Spool #{sid} onto {target} — {why}",
                     "ERROR", "ff4444")
             return None, {"status": "error", "msg": f"Not loaded: {why}.", "failures": failures}
-        incoming = {str(s) for s in spools}
-        return [row.get('id') for row in rows
-                if str(row.get('id')) not in incoming and not row.get('is_ghost')
-                and str(row.get('location') or '').strip().upper() == target], None
+        return residents_now, None
 
     residents: typing.List[typing.Any] = []
     if is_printer or is_toolhead:
@@ -2780,6 +2809,44 @@ def perform_undo(expected_id=None):
     # also now surfaces a rejection to the Activity Log instead of dropping it
     # silently. A legacy record without 'extras' (pre-L298) restores location only.
     extras_by_sid = last.get('extras', {})
+    undo_rows = {str(r.get('LocationID', '')).strip().upper(): r
+                 for r in (locations_db.load_locations_list() or []) if isinstance(r, dict)}
+
+    def _blocked(sid, loc):
+        """Why `sid` can't go back onto `loc`, or ''. A one-spool head must
+        really be free: the incoming spool's restore may have been rejected, or
+        a writer that records no undo (auto-unarchive, the wizard, a direct
+        edit) may have loaded something since; restoring blind stacked two
+        spools on one head (2026-09-12 review for a Smart Load's resident;
+        Group 42.3b, I5-10, for a moved spool). Logged at ERROR."""
+        if not loc or not _is_single_occupancy(loc, printer_map, undo_rows):
+            return ""
+        head = str(loc).strip().strip('"').upper()
+        try:
+            occupants = strict_direct_occupants(head, exclude=[sid])
+            why = ("it holds " + ", ".join(f"#{o}" for o in occupants)) if occupants else ""
+        except Exception as _occ_err:
+            why = f"it could not be read from Spoolman ({_occ_err})"
+        if why:
+            state.add_log_entry(f"❌ Undo: not putting Spool #{sid} back on {head} — {why}",
+                                "ERROR", "ff4444")
+        return why
+
+    def _reattach(loc, snap):
+        """Group 42.3b: a spool put back onto a head brings its own single-slot
+        box back with it (its snapshot trail), as the forward move attached it."""
+        head = str(loc or '').strip().strip('"').upper()
+        box = str((snap or {}).get('physical_source') or '').strip().strip('"').upper()
+        if not head or head not in printer_map or not box:
+            return
+        try:
+            _att, _detail = locations_db.attach_single_slot_box_to_toolhead(box, head)
+            if _att and _detail != "already attached":
+                state.add_log_entry(f"🔗 Undo: {box} attached to {head} again — its spool is back on the head",
+                                    "INFO")
+        except Exception as _ae:
+            state.logger.warning(f"42.3b undo re-attach skipped: {_ae}")
+
     # Where each spool really was before this undo (the record's target is not
     # always it: an auto-deploy loads the box slot's head), for the log line.
     was_at: typing.Dict[str, str] = {}
@@ -2788,6 +2855,7 @@ def perform_undo(expected_id=None):
         snap = extras_by_sid.get(sid)
         if snap is None:
             snap = extras_by_sid.get(str(sid))
+        cur: typing.Dict[str, typing.Any] = {}
         if snap is not None:
             cur = spoolman_api.get_spool(sid) or {}
             was_at[str(sid)] = str(cur.get('location') or '').strip().strip('"').upper()
@@ -2795,8 +2863,19 @@ def perform_undo(expected_id=None):
             for k in spoolman_api.SYSTEM_MANAGED_EXTRAS:
                 merged[k] = snap.get(k, '')
             payload["extra"] = merged
+        why = _blocked(sid, loc)
+        if why:
+            failed.append(f"#{sid} ({why})")
+            continue
         if spoolman_api.update_spool(sid, payload):
             restored.append(sid)
+            # Group 42.1 / 42.3b: leaving a head releases its own single-slot
+            # box (an undone PolyDryer deploy lets go of the head)...
+            _now = was_at.get(str(sid), '')
+            if _now and _now != str(loc or '').strip().strip('"').upper():
+                _release_single_slot_box(sid, _now, cur.get('extra') or {}, printer_map)
+            # ...and going back onto one brings it back.
+            _reattach(loc, snap)
         else:
             err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
             failed.append(f"#{sid} ({err})")
@@ -2813,31 +2892,11 @@ def perform_undo(expected_id=None):
     ejections = last.get('ejections', {})
     ejection_extras = last.get('ejection_extras', {})
     restored_ejections = []
-    undo_rows: typing.Dict[str, typing.Any] = {}
-    if ejections:
-        undo_rows = {str(r.get('LocationID', '')).strip().upper(): r
-                     for r in (locations_db.load_locations_list() or [])}
     for ejected_sid, original_loc in ejections.items():
-        # Back onto a single-occupancy head only if that head is really free.
-        # The incoming spool's restore above may have been rejected, or
-        # something may have been loaded there since; restoring blind stacked
-        # two spools on one head (2026-09-12 review).
-        if original_loc and _is_single_occupancy(original_loc, printer_map, undo_rows):
-            head = str(original_loc).strip().upper()
-            try:
-                occupants = [
-                    o.get('id') for o in spoolman_api.get_spools_at_location_detailed_strict(head)
-                    if not o.get('is_ghost') and str(o.get('id')) != str(ejected_sid)
-                    and str(o.get('location') or '').strip().upper() == head]
-                why = ("it holds " + ", ".join(f"#{o}" for o in occupants)) if occupants else ""
-            except Exception as _occ_err:
-                why = f"it could not be read from Spoolman ({_occ_err})"
-            if why:
-                state.add_log_entry(
-                    f"❌ Undo: not putting Spool #{ejected_sid} back on {head} — {why}",
-                    "ERROR", "ff4444")
-                failed.append(f"#{ejected_sid} ({why})")
-                continue
+        why = _blocked(ejected_sid, original_loc)
+        if why:
+            failed.append(f"#{ejected_sid} ({why})")
+            continue
         eject_payload: typing.Dict[str, typing.Any] = {"location": original_loc}
         snap = ejection_extras.get(ejected_sid)
         if snap is None:
@@ -2850,6 +2909,7 @@ def perform_undo(expected_id=None):
             eject_payload["extra"] = merged
         if spoolman_api.update_spool(ejected_sid, eject_payload):
             restored_ejections.append(ejected_sid)
+            _reattach(original_loc, snap)
         else:
             err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
             failed.append(f"#{ejected_sid} ({err})")
