@@ -524,6 +524,46 @@ def test_double_click_on_force_execute_never_confirms_the_unassign_unseen(
     assert runs()[1]["confirmed_unassign_ids"] == [SID], runs()
 
 
+STILL_SLOW_FADE_IN_ALL_CSS = (", ".join(f"#{d['modal']}.fade .modal-dialog" for d in DIALOGS.values())
+                              + " { transform: none !important; transition: transform 2.5s linear !important; }")
+
+
+@pytest.mark.usefixtures("require_server")
+@pytest.mark.parametrize("kind", list(DIALOGS))
+def test_a_dialog_still_fading_in_takes_no_click(
+        page: Page, base_url: str, reset_dom_state_js: str, kind: str):
+    """The general form of the FORCE EXECUTE pin above, for all three gating
+    dialogs (41.2 owns the double-click on the safety AND action dialogs): a real
+    click on the primary button before shown.bs.modal runs nothing, and one
+    after it runs the callback."""
+    FakeBackend(page)
+    _boot(page, base_url, reset_dom_state_js)
+    page.add_style_tag(content=STILL_SLOW_FADE_IN_ALL_CSS)
+    d = DIALOGS[kind]
+    page.evaluate("(kind) => __open(kind, 'probe', 'probe')", kind)
+    _js_until(page, f"""(() => {{
+        const m = document.getElementById({json.dumps(d['modal'])});
+        const ev = window.__ev.filter(e => e.id === m.id);
+        return m.classList.contains('show') && ev.some(e => e.k === 'show') && !ev.some(e => e.k === 'shown');
+    }})()""", 5_000, f"precondition: the {kind} dialog never started fading in")
+    at = page.evaluate("""(sel) => {
+        const r = document.querySelector(sel).getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width };
+    }""", d["yes"])
+    assert at["w"] > 0, at
+    page.mouse.click(at["x"], at["y"])
+    page.wait_for_timeout(200)
+    assert _count(page, "shown", d["modal"]) == 0, "precondition: the click must land before shown.bs.modal"
+    assert page.evaluate("window.__ran") == [], f"a click on a {kind} dialog still fading in ran its callback"
+
+    _wait_shown(page, 1, f"the {kind} dialog never finished showing", modal=d["modal"])
+    snap = _dialog_snapshot(page, kind)
+    assert snap["shown"] and snap["armed"] == "function" and snap["activeModal"] == kind, snap
+    page.click(d["yes"])
+    _js_until(page, "window.__ran.length > 0", 3_000, f"a click on the shown {kind} dialog ran nothing")
+    assert page.evaluate("window.__ran") == ["probe"]
+
+
 # ---------------------------------------------------------------------------
 # A CONFIRM scan must not fire a callback whose dialog is not on screen
 # ---------------------------------------------------------------------------
