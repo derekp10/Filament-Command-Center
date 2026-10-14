@@ -282,9 +282,17 @@ def resurface_pending_cancel_reviews():
     try:
         _pending_reviews = cancel_review_store.list_pending()
         for _pr in _pending_reviews:
+            if _pr.get('kind') == 'shortfall':
+                # Group 43.2: grams no spool took, not a cancelled print.
+                _msg = (f"🛑 Uncharged grams from a previous session: {_pr.get('printer_name')} — "
+                        f"{_pr.get('total_grams')}g of '{_pr.get('filename')}' went to no spool. "
+                        f"Review to pick the spool that took them, or Discard.")
+            else:
+                _msg = (f"🛑 Pending cancel review from a previous session: {_pr.get('printer_name')} "
+                        f"— {_pr.get('total_grams')}g across {len(_pr.get('spools', []))} spool(s). "
+                        f"Review to confirm/dismiss.")
             state.add_log_entry(
-                f"🛑 Pending cancel review from a previous session: {_pr.get('printer_name')} "
-                f"— {_pr.get('total_grams')}g across {len(_pr.get('spools', []))} spool(s). Review to confirm/dismiss.",
+                _msg,
                 "WARNING", "ffaa00",
                 meta={"type": "cancel_deduct_pending",
                       "printer_name": _pr.get('printer_name'), "job_id": _pr.get('job_id')})

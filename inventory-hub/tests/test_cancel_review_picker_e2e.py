@@ -48,6 +48,10 @@ HEADS = {"heads": [
 ]}
 OTHER_SPOOL = {"id": 98, "filament": {"name": "PLA Blue"}, "location": "SHELF-A", "archived": False,
                "remaining_weight": 40.0}
+# Group 43.2: job 1104's run-out spool, auto-archived at 0 g.
+ARCHIVED_SPOOL = {"id": 99, "filament": {"name": "PETG Clear"}, "location": "", "archived": True,
+                  "remaining_weight": 0.0}
+SPOOLS = {OTHER_SPOOL["id"]: OTHER_SPOOL, ARCHIVED_SPOOL["id"]: ARCHIVED_SPOOL}
 
 
 class FakeBackend:
@@ -86,8 +90,8 @@ class FakeBackend:
             elif re.fullmatch(r"/api/spools/\d+", path):
                 # routes_inventory.api_get_spool's real envelope.
                 sid = int(path.rsplit("/", 1)[-1])
-                if sid == OTHER_SPOOL["id"]:
-                    self._json(route, {"success": True, "data": OTHER_SPOOL})
+                if sid in SPOOLS:
+                    self._json(route, {"success": True, "data": SPOOLS[sid]})
                 else:
                     self._json(route, {"success": False, "msg": "Spool not found"}, status=404)
             else:
@@ -285,3 +289,91 @@ def test_an_emptied_head_left_unpicked_keeps_the_updates_shape(page: Page, base_
     page.click("#fcc-cancel-review-overlay .fcc-cr-confirm")
     _until(page, lambda: be.confirms, 5_000, "Confirm never posted")
     assert be.confirms[0].get("updates") == {"97": 2.5} and "charges" not in be.confirms[0], be.confirms[0]
+
+
+# Group 43.2: grams an automatic deduct couldn't charge become a card. Job 1104:
+# #99 on RCOI-1 ran out after 34.2 g of 61.32 g, and the printer carried on from
+# the spool joined to it on RCOI-2.
+SHORTFALL = {
+    "printer_name": INDX, "job_id": "1104#shortfall", "shortfall_of": "1104", "filename": "/usb/MAIN-B~1.BGC",
+    "progress": 1.0, "total_grams": 27.12, "spools": [], "ambiguous": False, "kind": "shortfall",
+    "unresolved_usage": {"0": 27.12},
+    "heads_at_end": [{"toolhead": "RCOI-1", "position": 0, "sid": 99, "archived": True},
+                     {"toolhead": "RCOI-2", "position": 1, "sid": 96}],
+    "shortfall_causes": {"0": {"why": "ran_out", "sid": 99, "toolhead": "RCOI-1", "archived": True}},
+    "created": "2026-10-13 00:00:00",
+}
+
+
+def _toasts(page: Page) -> str:
+    return page.evaluate("() => Array.from(document.querySelectorAll('.toast-msg')).map(t => t.textContent).join(' | ')")
+
+
+def test_a_shortfall_card_says_why_and_charges_the_picked_spool(page: Page, base_url, reset_dom_state_js):
+    """HEAD proof: the card rendered as "cancelled at ~100%" with a "no spool was
+    loaded" line, and never said which spool ran out."""
+    be = _open(page, base_url, reset_dom_state_js, [SHORTFALL])
+    _wait_heads(page, "pos:0")
+    text = page.evaluate("() => document.querySelector('.fcc-cr-card').textContent")
+    assert "27.12g went to no spool" in text and "#99 ran out on RCOI-1 (archived)" in text, text
+    # The archived run-out spool is offered, and says so, but isn't pre-picked.
+    assert page.evaluate("() => document.querySelector('.fcc-cr-pick[data-line=\"pos:0\"]').value") == ""
+    ended = page.evaluate(
+        "() => Array.from(document.querySelectorAll('.fcc-cr-pick[data-line=\"pos:0\"] .fcc-cr-ended option'))"
+        ".map(o => o.textContent)")
+    assert any("#99" in t and "ran out, archived" in t for t in ended), ended
+    page.select_option('.fcc-cr-pick[data-line="pos:0"]', "96")
+    page.click("#fcc-cancel-review-overlay .fcc-cr-confirm")
+    _until(page, lambda: be.confirms, 5_000, "Apply never posted")
+    assert be.confirms[0] == {"printer_name": INDX, "job_id": "1104#shortfall",
+                              "charges": [{"position": 0, "sid": 96, "grams": 27.12}]}, be.confirms[0]
+
+
+def test_a_shortfall_card_without_a_pick_says_so_and_posts_nothing(page: Page, base_url, reset_dom_state_js):
+    be = _open(page, base_url, reset_dom_state_js, [SHORTFALL])
+    page.click("#fcc-cancel-review-overlay .fcc-cr-confirm")
+    page.wait_for_timeout(400)
+    assert not be.confirms, be.confirms
+    assert "Pick the spool that took these grams" in _toasts(page)
+
+
+def test_what_a_pick_cannot_take_stays_on_the_card(page: Page, base_url, reset_dom_state_js):
+    """#96 had only 10 g: the server charges what fits and keeps the card with the rest."""
+    kept = dict(SHORTFALL, total_grams=17.12, unresolved_usage={"0": 17.12})
+    be = _open(page, base_url, reset_dom_state_js, [SHORTFALL],
+               confirm_answer={"status": "confirmed", "applied": [{"sid": 96, "grams": 10.0, "remaining": 0.0}],
+                               "errors": [], "shortfall_g": 17.12, "kept": True},
+               pending_after_confirm=[kept])
+    _wait_heads(page, "pos:0")
+    page.select_option('.fcc-cr-pick[data-line="pos:0"]', "96")
+    page.click("#fcc-cancel-review-overlay .fcc-cr-confirm")
+    _until(page, lambda: be.confirms, 5_000, "Apply never posted")
+    page.wait_for_function(
+        "(() => { const c = document.querySelector('.fcc-cr-card'); return !!c && c.textContent.includes('17.12g went to no spool'); })()",
+        timeout=5_000)
+    assert "17.12g still have no spool" in _toasts(page)
+
+
+def test_a_spool_that_was_not_charged_is_pre_picked(page: Page, base_url, reset_dom_state_js):
+    """A head whose spool wasn't charged (a failed write) keeps that spool as the
+    default: it's still loaded and not archived, so one tap applies it."""
+    rec = dict(SHORTFALL,
+               shortfall_causes={"0": {"why": "not_charged", "sid": 97, "toolhead": "RCOI-1", "archived": False}},
+               heads_at_end=[{"toolhead": "RCOI-1", "position": 0, "sid": 97}])
+    be = _open(page, base_url, reset_dom_state_js, [rec])
+    assert page.evaluate("() => document.querySelector('.fcc-cr-pick[data-line=\"pos:0\"]').value") == "97"
+    page.click("#fcc-cancel-review-overlay .fcc-cr-confirm")
+    _until(page, lambda: be.confirms, 5_000, "Apply never posted")
+    assert be.confirms[0]["charges"] == [{"position": 0, "sid": 97, "grams": 27.12}], be.confirms[0]
+
+
+def test_typing_an_archived_spool_says_it_is_charged_and_stays_archived(page: Page, base_url, reset_dom_state_js):
+    """HEAD said "is archived — pick another spool" (Derek answered 2026-10-13:
+    charge it, leave it archived)."""
+    _open(page, base_url, reset_dom_state_js, [NO_SPOOL])
+    page.select_option('.fcc-cr-pick[data-line="0"]', "other")
+    page.fill('.fcc-cr-other[data-line="0"]', "99")
+    page.dispatch_event('.fcc-cr-other[data-line="0"]', "change")
+    page.wait_for_function(
+        "(document.querySelector('.fcc-cr-other-info[data-line=\"0\"]') || {}).textContent.includes('stays archived')",
+        timeout=5_000)

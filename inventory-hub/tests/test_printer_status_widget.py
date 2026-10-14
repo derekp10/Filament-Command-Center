@@ -446,3 +446,70 @@ def test_dashboard_primes_all_locations_for_openmanage(page: Page, base_url, api
     # straight off the dashboard.
     page.evaluate("(id) => window.openManage(id)", target)
     expect(page.locator("#manageModal")).to_be_visible(timeout=5000)
+
+
+# --- Group 46.3: the toolhead label setting (Settings → This Browser) ---------
+# Injected payload, no live-data dependency. ZZ-3 is position 2, so "Tool 3".
+_LABEL_KEY = "fcc.printerStatus.toolheadLabel"
+_LABEL_PAYLOAD = """() => window.refreshPrinterStatusWidgetFromAggregate({
+    'ZZ Label Printer': {
+        toolheads: [
+            { id: 'ZZ-1', position: 0, unbound: false, item: null },
+            { id: 'ZZ-3', position: 2, unbound: false,
+              item: { id: 9003, color: '00AAFF', color_direction: 'longitudinal',
+                      remaining_weight: 512, initial_weight: 1000, display: '#9003 Label Test' } }
+        ]
+    }
+})"""
+
+
+def _set_label_mode(page: Page, mode):
+    page.evaluate(
+        "([k, m]) => { try { if (m === null) localStorage.removeItem(k); else localStorage.setItem(k, m); } catch (e) {} }",
+        [_LABEL_KEY, mode])
+
+
+@pytest.mark.usefixtures("require_server")
+@pytest.mark.parametrize("mode,loaded,empty", [
+    (None, "ZZ-3", "ZZ-1"), ("XL-3", "ZZ-3", "ZZ-1"), ("3", "3", "1"), ("Tool 3", "Tool 3", "Tool 1"),
+])
+def test_toolhead_label_setting(page: Page, base_url, mode, loaded, empty):
+    """46.3 (Derek's "Tool 1", counting from 1 like the printer's screen). Only
+    the tile's visible label changes: data-toolhead, the tooltip and the
+    collapsed strip keep the full id. HEAD proof: every mode showed the full id."""
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.refreshPrinterStatusWidgetFromAggregate === 'function'",
+                           timeout=8000)
+    try:
+        _set_label_mode(page, mode)
+        page.evaluate(_LABEL_PAYLOAD)
+        tile = page.locator("#printer-status-widget .fcc-ps-th[data-toolhead='ZZ-3']").first
+        expect(tile.locator(".fcc-ps-th-id")).to_have_text(loaded, timeout=4000)
+        assert "ZZ-3" in (tile.get_attribute("title") or ""), "the tooltip keeps the full id"
+        expect(page.locator("#printer-status-widget .fcc-ps-th[data-toolhead='ZZ-1'] .fcc-ps-th-id").first
+               ).to_have_text(empty, timeout=4000)
+        chip = page.locator(
+            "#printer-status-widget .fcc-ps-header-chips .fcc-ps-mini[data-toolhead='ZZ-3'] .fcc-ps-mini-id").first
+        assert (chip.text_content() or "").strip() == "ZZ-3", "the collapsed strip keeps the full id"
+    finally:
+        _set_label_mode(page, None)
+
+
+@pytest.mark.usefixtures("require_server")
+def test_changing_the_label_mode_repaints_the_same_data(page: Page, base_url):
+    """The label mode is part of the widget's fingerprint. Without it, unchanged
+    printer data skipped the repaint, so a Settings change would show only after
+    the next spool change."""
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.refreshPrinterStatusWidgetFromAggregate === 'function'",
+                           timeout=8000)
+    label = page.locator("#printer-status-widget .fcc-ps-th[data-toolhead='ZZ-3'] .fcc-ps-th-id").first
+    try:
+        _set_label_mode(page, None)
+        page.evaluate(_LABEL_PAYLOAD)
+        expect(label).to_have_text("ZZ-3", timeout=4000)
+        _set_label_mode(page, "Tool 3")
+        page.evaluate(_LABEL_PAYLOAD)
+        expect(label).to_have_text("Tool 3", timeout=3000)
+    finally:
+        _set_label_mode(page, None)

@@ -17,8 +17,8 @@ The vehicle is a picker:
     review, [{row, sid, grams}] to redirect a row of a cancel/spool-changed
     review — and the server charges exactly those spools, through the same
     clamped, idempotent per-spool loop as every other review (43.1, 43.6).
-  - An archived pick is refused for now: where a top-up onto an auto-archived
-    spool should go is Group 43.2's open question for Derek.
+  - An archived pick is charged what it still has on record and stays archived
+    (Derek's 2026-10-13 answer to Group 43.2; it was refused while that was open).
   - Apply WITHOUT `charges` keeps the old re-check (a cached page, the tests that
     pin it).
 
@@ -160,17 +160,22 @@ def test_apply_can_charge_any_spool_by_id(logs):
     assert sm.used(98) == pytest.approx(70.0)
 
 
-def test_an_archived_pick_is_refused_and_the_review_kept(logs):
-    """Where a top-up onto an auto-archived spool should go is 43.2's open
-    question, so for now the card says so and charges nothing."""
+def test_an_archived_pick_is_charged_what_it_has_and_stays_archived(logs):
+    """Flipped on purpose by Group 43.2 (Derek, 2026-10-13: "charge the picked
+    spool and leave it archived"). #99 ran out at 0 g, so picking it charges
+    nothing and writes nothing; the Apply goes through and reports the grams no
+    spool took as the job's shortfall. It used to be refused while the question
+    was open."""
     sm = _sm()
     _no_spool_review(sm, {0: 27.12})
     body = _confirm(sm, {"printer_name": INDX, "job_id": "J-1105",
                          "charges": [{"position": 0, "sid": 99, "grams": 27.12}]})
-    assert body["status"] == "error" and "archived" in body["msg"].lower(), body
-    assert sm.used(99) == 1000.0 and not sm.patches
-    assert _pending("J-1105") is not None, "a refused Apply must keep the review"
-    assert not print_deduct_ledger.was_deducted(INDX, "J-1105")
+    assert body["status"] == "confirmed", body
+    assert body["shortfall_g"] == pytest.approx(27.12)
+    assert sm.used(99) == 1000.0 and not sm.patches, "an empty spool takes no write"
+    assert sm.spools[99]["archived"] is True
+    assert _pending("J-1105") is None
+    assert print_deduct_ledger.was_deducted(INDX, "J-1105")
 
 
 @pytest.mark.parametrize("charges", [
