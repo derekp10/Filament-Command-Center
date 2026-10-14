@@ -4,7 +4,7 @@
 **Estimated effort:** SMALL–MEDIUM (~4–7 h, 1 session).
 **Risk:** **LOW–MEDIUM.** Each item is small and already specified. 46.1 is on Derek's daily path and writes spool locations, so it needs a reproduction and an E2E pin.
 
-> **Status: `PARTIAL` — 46.1, 46.2, 46.4 and 46.5 shipped in the 2026-10-13 overnight run (merged to `dev`, `36d7318`; see `completed-archive.md`). Left: 46.3, decided 2026-10-13 ("Tool 1", counting from 1; see 46.3 below) and ready to build. The 46.5 follow-up, deleting dev's blank-ID TestCart row, was done 2026-10-13.**
+> **Status: `DONE` — 46.1, 46.2, 46.4 and 46.5 shipped in the 2026-10-13 overnight run (merged to `dev`, `36d7318`); 46.3 ("Tool 1") shipped in the 2026-10-13/14 overnight run on `feature/finish-groups-43-46` with Group 43.2. See `completed-archive.md`. The 46.5 follow-up, deleting dev's blank-ID TestCart row, was done 2026-10-13.**
 > Small, specified fixes that shouldn't wait behind the large design-blocked groups (37, 39–42, 44). It has the Option-B standalone-sweep shape.
 > 46.5 (37.1) was pulled out of [Group 37](37-location-system-redesign.md) by Derek's call on 2026-10-12: it's root-caused and doesn't depend on fork 1.
 > Code anchors were read on `dev` @ `3949aba`. Re-grep before editing.

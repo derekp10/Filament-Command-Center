@@ -8,6 +8,9 @@ Manager focused on that toolhead.
 """
 from __future__ import annotations
 
+import json
+from urllib.parse import parse_qs, urlsplit
+
 import pytest
 import requests
 from playwright.sync_api import Page, expect
@@ -446,3 +449,72 @@ def test_dashboard_primes_all_locations_for_openmanage(page: Page, base_url, api
     # straight off the dashboard.
     page.evaluate("(id) => window.openManage(id)", target)
     expect(page.locator("#manageModal")).to_be_visible(timeout=5000)
+
+
+# --- Group 46.3: the toolhead label setting (Settings → This Browser) ---------
+# Every source the widget reads answers with the same made-up printer (ZZ-1 empty,
+# ZZ-3 = position 2 loaded), and the dashboard pulse carries no printer status, so
+# the page's own first render and every later refresh paint the same tiles: no
+# race with live data (review finding frontend-8).
+_LABEL_KEY = "fcc.printerStatus.toolheadLabel"
+_LABEL_ITEM = {"id": 9003, "color": "00AAFF", "color_direction": "longitudinal",
+               "remaining_weight": 512, "initial_weight": 1000, "display": "#9003 Label Test"}
+
+
+def _stub_label_printer(page: Page):
+    def handle(route):
+        url = urlsplit(route.request.url)
+        if url.path == "/api/printer_map":
+            body = {"printers": {"ZZ Label Printer": [{"location_id": "ZZ-1", "position": 0},
+                                                      {"location_id": "ZZ-3", "position": 2}]}}
+        elif url.path.startswith("/api/machine/") and url.path.endswith("/toolhead_slots"):
+            body = {"toolheads": {"ZZ-1": [{"box": "ZZ-BOX"}], "ZZ-3": [{"box": "ZZ-BOX"}]}}
+        elif url.path == "/api/get_contents":
+            wanted = (parse_qs(url.query).get("id") or [""])[0].upper()
+            body = [_LABEL_ITEM] if wanted == "ZZ-3" else []
+        elif url.path == "/api/dashboard_pulse":
+            body = {}
+        else:
+            route.continue_()
+            return
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
+    page.route("**/api/**", handle)
+
+
+def _label_tile(page: Page, toolhead: str):
+    return page.locator(f"#printer-status-widget .fcc-ps-th[data-toolhead='{toolhead}']").first
+
+
+@pytest.mark.usefixtures("require_server")
+@pytest.mark.parametrize("mode,loaded,empty", [
+    (None, "ZZ-3", "ZZ-1"), ("XL-3", "ZZ-3", "ZZ-1"), ("3", "3", "1"), ("Tool 3", "Tool 3", "Tool 1"),
+])
+def test_toolhead_label_setting(page: Page, base_url, mode, loaded, empty):
+    """46.3 (Derek's "Tool 1", counting from 1 like the printer's screen). Only
+    the tile's visible label changes: data-toolhead, the tooltip and the
+    collapsed strip keep the full id. HEAD proof: every mode showed the full id."""
+    _stub_label_printer(page)
+    if mode is not None:
+        page.add_init_script(f"try {{ localStorage.setItem({json.dumps(_LABEL_KEY)}, {json.dumps(mode)}); }} catch (e) {{}}")
+    page.goto(base_url)
+    tile = _label_tile(page, "ZZ-3")
+    expect(tile.locator(".fcc-ps-th-id")).to_have_text(loaded, timeout=10000)
+    assert "ZZ-3" in (tile.get_attribute("title") or ""), "the tooltip keeps the full id"
+    expect(_label_tile(page, "ZZ-1").locator(".fcc-ps-th-id")).to_have_text(empty, timeout=4000)
+    chip = page.locator(
+        "#printer-status-widget .fcc-ps-header-chips .fcc-ps-mini[data-toolhead='ZZ-3'] .fcc-ps-mini-id").first
+    assert (chip.text_content() or "").strip() == "ZZ-3", "the collapsed strip keeps the full id"
+
+
+@pytest.mark.usefixtures("require_server")
+def test_changing_the_label_mode_repaints_the_same_data(page: Page, base_url):
+    """The label mode is part of the widget's fingerprint. Without it, unchanged
+    printer data skipped the repaint, so a Settings change would show only after
+    the next spool change. The data here can't change: every source is stubbed."""
+    _stub_label_printer(page)
+    page.goto(base_url)
+    label = _label_tile(page, "ZZ-3").locator(".fcc-ps-th-id")
+    expect(label).to_have_text("ZZ-3", timeout=10000)
+    page.evaluate("(k) => localStorage.setItem(k, 'Tool 3')", _LABEL_KEY)
+    page.evaluate("() => window.refreshPrinterStatusWidget()")
+    expect(label).to_have_text("Tool 3", timeout=5000)

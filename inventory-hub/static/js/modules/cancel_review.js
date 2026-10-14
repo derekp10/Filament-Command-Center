@@ -81,8 +81,10 @@
         const first = own != null
             ? `<option value="${esc(own)}" selected>${esc(ownLabel)}</option>`
             : `<option value="" selected>— pick the spool it used —</option>`;
+        // 43.2: a spool that ran out is still offered (it is charged what it has
+        // left, 0 g for an empty one, and stays archived), but says so.
         const ended = (atEnd || []).filter((h) => h.sid != null && String(h.sid) !== String(own))
-            .map((h) => `<option value="${esc(h.sid)}">#${esc(h.sid)} — on ${esc(h.toolhead)} when FCC logged the print</option>`)
+            .map((h) => `<option value="${esc(h.sid)}">#${esc(h.sid)} — on ${esc(h.toolhead)} when FCC logged the print${h.archived ? ' (ran out, archived)' : ''}</option>`)
             .join('');
         // The #id box is text, not number: arrow keys on a number box step it
         // (an empty one to 1), and charging spool #1 by accident is a real write.
@@ -159,13 +161,20 @@
         // 43.1: a spool with no known capacity (neither it nor its filament has a
         // weight) reports remaining as null — say so rather than "0g left".
         const known = s.remaining_before != null;
+        // 43.2: a write Spoolman reported as failed but may have landed. Apply
+        // checks the spool's weight first, so it is never charged twice.
+        const unconfirmed = s.unconfirmed_write
+            ? `<span title="Spoolman reported this write as failed and FCC couldn't re-read the spool. Apply checks whether it landed first, so it is never charged twice."
+                     style="margin-left:6px;font-size:0.74rem;font-weight:bold;color:#ffae42;
+                            border:1px solid #ffae42;border-radius:4px;padding:0 4px;white-space:nowrap;">⚠️ unconfirmed write</span>`
+            : '';
         return `
             <div class="fcc-cr-row" data-sid="${s.sid}"
                  style="display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap;
                         padding:6px 0;border-bottom:1px solid #2b2c30;${ambBorder}">
                 <div style="min-width:0;flex:1;">
                     ${swatch}
-                    <span style="color:#eee;">${esc(s.display)}</span>${ambBadge}${isRunout ? `<span title="Ran out mid-print (sensor tripped) — charged its own segment up to the swap, plus the sensor-to-nozzle remnant when a per-printer path value is configured."
+                    <span style="color:#eee;">${esc(s.display)}</span>${ambBadge}${unconfirmed}${isRunout ? `<span title="Ran out mid-print (sensor tripped) — charged its own segment up to the swap, plus the sensor-to-nozzle remnant when a per-printer path value is configured."
                      style="margin-left:6px;font-size:0.74rem;font-weight:bold;color:#ff8a65;
                             border:1px solid #ff8a65;border-radius:4px;padding:0 4px;white-space:nowrap;">ran out</span>` : ''}
                     <span style="color:#9aa;font-size:0.92rem;">
@@ -248,6 +257,88 @@
         }).join('');
     }
 
+    // Group 43.2: grams an automatic deduct couldn't charge (a spool ran out
+    // mid-print, a head had no spool, a write failed). Each head's line says why
+    // and picks the spool that really took the rest: after a SpoolJoin runout,
+    // the joined spool. The run-out spool is offered but not pre-picked: it is
+    // archived, and charging it takes only what it has left (0 g when empty).
+    // Whatever a pick can't take stays on the card.
+    // FCC sees the spool's record, not the spool: "ran out" is the record hitting
+    // 0 g, which may also mean the record was off (Derek: small spools often are).
+    function shortfallReason(c, pos) {
+        const head = c.toolhead || `T${pos}`;
+        if (c.why === 'ran_out') return `#${c.sid}'s record hit 0 g on ${head}${c.archived ? ' (archived)' : ''}`;
+        if (c.why === 'no_spool') return `no spool was loaded on ${head}`;
+        if (c.why === 'two_spools') {
+            const both = (c.sids || []).map((s) => `#${s}`).join(' and ');
+            return `${head} had two spools${both ? ` (${both})` : ''}, so FCC charged neither`;
+        }
+        return c.sid != null ? `#${c.sid} on ${head} wasn't charged (Spoolman didn't answer)` : `${head} wasn't charged`;
+    }
+
+    function shortfallLinesHtml(rec) {
+        const un = rec.unresolved_usage || {};
+        const causes = rec.shortfall_causes || {};
+        const atEnd = Array.isArray(rec.heads_at_end) ? rec.heads_at_end : [];
+        return Object.keys(un).sort((a, b) => Number(a) - Number(b)).map((pos) => {
+            const c = causes[pos] || {};
+            const head = c.toolhead || (atEnd.find((h) => String(h.position) === String(pos)) || {}).toolhead;
+            const where = head ? `T${esc(pos)} · ${esc(head)}` : `T${esc(pos)}`;
+            const own = (c.sid != null && !c.archived) ? c.sid : null;
+            const ownLabel = own != null ? `#${own} — on ${head || 'T' + pos} when FCC logged the print` : '';
+            const line = `pos:${pos}`;
+            return `
+                <div class="fcc-cr-unline fcc-cr-shortline" data-pos="${esc(pos)}" data-line="${esc(line)}"
+                     style="padding:6px 0;border-bottom:1px solid #2b2c30;">
+                    <div class="fcc-cr-why" style="color:#e6c074;font-size:0.9rem;margin-bottom:4px;">${esc(shortfallReason(c, pos))}</div>
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                        <span style="color:#eee;min-width:120px;">${where} uncharged</span>
+                        <div class="input-group input-group-sm" style="width:120px;flex:none;">
+                            <input type="number" class="fcc-cr-pgrams form-control bg-dark text-white border-secondary"
+                                   data-line="${esc(line)}" value="${fmtG(un[pos])}" step="0.01" min="0"
+                                   autocomplete="off" style="font-size:1.05rem;" />
+                            <span class="input-group-text bg-dark text-light border-secondary">g</span>
+                        </div>
+                        <span style="color:#9aa;">→</span>
+                        ${pickSelectHtml(line, own, ownLabel, atEnd)}
+                    </div>
+                </div>`;
+        }).join('');
+    }
+
+    function shortfallCardHtml(rec) {
+        const total = fmtG(rec.total_grams);
+        // A failed write's retry keeps its row (the picked spool) on the card.
+        const rows = (rec.spools || []).map(spoolRowHtml).join('');
+        return `
+            <div class="fcc-cr-card" data-printer="${esc(rec.printer_name)}" data-job="${esc(rec.job_id)}"
+                 data-kind="shortfall" data-ambiguous="0" data-rev="${esc(rec.rev == null ? 0 : rec.rev)}"
+                 style="border:1px solid #444;border-radius:6px;padding:10px 12px;margin-bottom:12px;background:#17181b;">
+                <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
+                    <div style="font-weight:bold;color:#ffd27a;">⚖️ ${esc(rec.printer_name)} — ${total}g went to no spool</div>
+                    <div style="color:#9aa;font-size:0.92rem;">${total}g uncharged</div>
+                </div>
+                <div style="color:#9aa;font-size:0.9rem;margin-bottom:8px;word-break:break-all;">${esc(rec.filename)}</div>
+                <div style="color:#e6c074;font-size:0.95rem;margin-bottom:10px;line-height:1.45;
+                            background:#221d12;border:1px solid #3a2f17;border-radius:4px;padding:9px 11px;">
+                    FCC charged what it could for this print, but <b>${total}g</b> went to no spool. If the
+                    printer carried on from another spool (a <b>joined spool</b>), or you know where the
+                    filament came from, <b>pick that spool</b> and <b>Apply</b>. A spool whose record is at
+                    0 g takes nothing, and whatever a spool can't take stays on this card. If a record was
+                    off (the spool still has filament), weigh that spool. Or <b>Discard</b> if you've already
+                    weighed them.
+                </div>
+                ${rows}
+                ${shortfallLinesHtml(rec)}
+                <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
+                    <button type="button" class="btn btn-sm btn-outline-secondary fcc-cr-discard"
+                            data-armed="0"
+                            title="Permanently drop this review — these grams stay uncharged">🗑️ Discard</button>
+                    <button type="button" class="btn btn-sm btn-success fw-bold fcc-cr-confirm">Apply to the picked spool(s)</button>
+                </div>
+            </div>`;
+    }
+
     // Unresolved reviews (2026-06-13): usage couldn't be finalized at print-end.
     //   no_spool         — real grams computed, but NO spool was bound to the
     //                      toolhead. Apply RE-RESOLVES to whatever's bound now.
@@ -304,6 +395,7 @@
         const kind = rec.kind || 'partial';
         const pct = Math.round((Number(rec.progress) || 0) * 100);
         if (kind === 'no_spool' || kind === 'progress_unknown') return unresolvedCardHtml(rec, kind);
+        if (kind === 'shortfall') return shortfallCardHtml(rec);
         const rows = (rec.spools || []).map(spoolRowHtml).join('');
         const total = (rec.spools || []).reduce((a, s) => a + (Number(s.grams) || 0), 0);
         // spool_changed (22.3): a COMPLETED print whose toolhead spool changed
@@ -387,7 +479,7 @@
                 <div style="display:flex;justify-content:space-between;align-items:center;
                             padding:14px 18px;border-bottom:1px solid #444;">
                     <div id="fcc-cr-title" style="font-weight:bold;font-size:1.18rem;">
-                        🛑 Cancelled-Print Reviews <span id="fcc-cr-count" style="color:#9aa;font-weight:normal;font-size:0.95rem;"></span>
+                        🛑 Print Reviews <span id="fcc-cr-count" style="color:#9aa;font-weight:normal;font-size:0.95rem;"></span>
                     </div>
                     <button type="button" id="fcc-cr-close"
                         style="background:none;border:none;color:#aaa;font-size:1.4rem;line-height:1;cursor:pointer;"
@@ -395,7 +487,7 @@
                         title="Close — every review stays pending for later">×</button>
                 </div>
                 <div style="padding:8px 18px 4px;color:#bbb;font-size:0.95rem;">
-                    Nudge each spool's grams if needed, then <b>Confirm</b>. <b>Closing keeps everything for later</b> — only <b>Discard</b> drops a review.
+                    Nudge the grams or pick the spools on each card, then press its green button. <b>Closing keeps everything for later</b> — only <b>Discard</b> drops a review.
                 </div>
                 <div id="fcc-cr-body" style="padding:8px 18px 14px;max-height:60vh;overflow:auto;">
                     ${cards}
@@ -484,7 +576,9 @@
             id: OVERLAY_ID,
             content: panelHtml(pending),
             focusGuard: true,
-            initialFocus: '.fcc-cr-grams',
+            // The first input of whichever card comes first: a grams box, a
+            // no-spool / uncharged line's grams, or its picker (43.2).
+            initialFocus: '.fcc-cr-grams, .fcc-cr-pgrams, .fcc-cr-pick',
             onEscape: cleanup,
         });
         const overlay = handle.element;
@@ -512,17 +606,41 @@
         // review (only the failed rows, a redirect's picked spools). Re-render the
         // card from what it stored, so the next Apply names rows the review still
         // has: a stale card's rows are refused as "not in this review".
-        async function rerenderCard(card) {
+        // `freshHeads`: re-read the printer's heads first. After an Apply that
+        // emptied a spool (43.2), the cached list still offers it with its old
+        // "Ng left".
+        async function rerenderCard(card, freshHeads) {
             const printer = card.dataset.printer;
             const job = card.dataset.job;
             const rec = (await fetchPending()).find(
                 (r) => String(r.printer_name) === printer && String(r.job_id) === job);
             if (!rec) { card.remove(); updateCount(); refreshBadge(); closeIfEmpty(); return; }
+            if (freshHeads) liveHeads[printer] = await fetchCandidates(printer);
             const tmp = document.createElement('div');
             tmp.innerHTML = cardHtml(rec).trim();
             const fresh = tmp.firstElementChild;
             card.replaceWith(fresh);
             if (liveHeads[printer]) injectHeads(fresh, liveHeads[printer]);
+            const first = fresh.querySelector('.fcc-cr-pick, .fcc-cr-grams');
+            if (first) { try { first.focus(); } catch (_) { /* noop */ } }
+        }
+
+        // 43.2: an Apply that couldn't place every gram opened an uncharged-grams
+        // card; show it in this overlay, so the next pick is right there.
+        async function showNewCard(printer, job) {
+            const rec = (await fetchPending()).find(
+                (r) => String(r.printer_name) === String(printer) && String(r.job_id) === String(job));
+            if (!rec) return;
+            const shown = Array.from(body.querySelectorAll('.fcc-cr-card')).some(
+                (c) => c.dataset.printer === String(printer) && c.dataset.job === String(job));
+            if (shown) return;
+            liveHeads[printer] = await fetchCandidates(printer);
+            const tmp = document.createElement('div');
+            tmp.innerHTML = cardHtml(rec).trim();
+            const fresh = tmp.firstElementChild;
+            body.appendChild(fresh);
+            injectHeads(fresh, liveHeads[printer]);
+            updateCount();
         }
 
         // A redirected row's preview must use the PICKED spool's remaining, or a
@@ -593,8 +711,11 @@
                     const s = j && j.success !== false ? j.data : null;
                     if (!s || s.id == null) { info.textContent = `#${id} not found`; return; }
                     const name = (s.filament && s.filament.name) || s.display || '';
+                    // 43.2 (Derek, 2026-10-13): an archived spool is charged what it
+                    // still has on record and stays archived; say how much that is.
+                    const left = s.remaining_weight == null ? '' : `${fmt(s.remaining_weight)}g left, `;
                     info.textContent = s.archived
-                        ? `#${id} ${name} is archived — pick another spool`
+                        ? `#${id} ${name} (archived, ${left}charged what it has, stays archived)`
                         : `#${id} ${name}${s.location ? ` (${s.location})` : ''}`;
                     setRowRemaining(card, line, s.remaining_weight == null ? '' : s.remaining_weight);
                 } catch (err) {
@@ -684,7 +805,16 @@
                         toast(`Type the #id of the spool T${unNoId} used (or pick one).`, 'warning', 7000);
                         return;
                     }
+                    // 43.2: a shortfall card names no spool of its own, so an Apply
+                    // with nothing picked would charge nothing (the server refuses it too).
+                    if (card.dataset.kind === 'shortfall' && !redirected && !Object.keys(updates).length) {
+                        toast('Pick the spool that took these grams (or Discard).', 'warning', 7000);
+                        return;
+                    }
                     if (redirected) payload.charges = charges; else payload.updates = updates;
+                    // 43.2: the card's revision, so an Apply from a view opened before
+                    // another Apply changed it is refused instead of charging again.
+                    if (card.dataset.kind === 'shortfall') payload.rev = Number(card.dataset.rev || 0);
                 }
                 e.target.disabled = true;
                 try {
@@ -693,15 +823,35 @@
                         body: JSON.stringify(payload),
                     });
                     const d = await r.json();
-                    if (d.status === 'confirmed') {
-                        toast(`Deducted from ${(d.applied || []).length} spool(s).`, 'success');
-                        // Partial-bind / clamp shortfall (no_spool re-resolve path): part of the
-                        // computed usage couldn't be applied — surface it AT THE OVERLAY, not only
-                        // in the Activity Log, so the user knows to weigh the still-short spool.
-                        if (Number(d.shortfall_g) > 0.05) toast(`${fmtG(d.shortfall_g)}g couldn't be applied — weigh that spool to true up.`, 'warning', 7000);
-                        if ((d.errors || []).length) toast(`${d.errors.length} spool(s) failed — check the log.`, 'error', 7000);
-                        card.remove(); updateCount(); refreshBadge(); closeIfEmpty();
+                    const took = (d.applied || []).reduce((a, x) => a + (Number(x.grams) || 0), 0);
+                    if (d.status === 'confirmed' && d.kept) {
+                        // 43.2: the picks couldn't take everything (a run-out or
+                        // near-empty spool); the rest stays on the card to pick again.
+                        toast(`Charged ${fmtG(took)}g. ${fmtG(d.shortfall_g)}g still have no spool — pick another spool, or Discard.`, 'warning', 7000);
+                        await rerenderCard(card, true);
+                        refreshBadge();
                         document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'cancel_review' } }));
+                    } else if (d.status === 'confirmed') {
+                        if (took > 0) toast(`Deducted from ${(d.applied || []).length} spool(s).`, 'success');
+                        else toast('Nothing was charged: the spool picked has 0 g left on record.', 'warning', 7000);
+                        if (d.shortfall_card) {
+                            // 43.2: what the picked spools couldn't take is on a new card.
+                            toast(`${fmtG(d.shortfall_g)}g couldn't be charged to the spool picked — they're on a new card: pick another spool, or Discard.`, 'warning', 7000);
+                        } else if (Number(d.shortfall_g) > 0.05) {
+                            // Partial-bind / clamp shortfall (no_spool re-resolve path): part of the
+                            // computed usage couldn't be applied — surface it AT THE OVERLAY, not only
+                            // in the Activity Log, so the user knows to weigh the still-short spool.
+                            toast(`${fmtG(d.shortfall_g)}g couldn't be applied — weigh that spool to true up.`, 'warning', 7000);
+                        }
+                        if ((d.errors || []).length) toast(`${d.errors.length} spool(s) failed — check the log.`, 'error', 7000);
+                        card.remove(); updateCount(); refreshBadge();
+                        if (d.shortfall_card) await showNewCard(printer, d.shortfall_card);
+                        closeIfEmpty();
+                        document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'cancel_review' } }));
+                    } else if (d.stale) {
+                        // 43.2: another Apply changed this card since it was shown.
+                        toast(d.msg || 'This card changed — check it and Apply again.', 'warning', 7000);
+                        await rerenderCard(card, true);
                     } else if (d.status === 'already_handled') {
                         toast('Already handled elsewhere.', 'info');
                         card.remove(); updateCount(); refreshBadge(); closeIfEmpty();

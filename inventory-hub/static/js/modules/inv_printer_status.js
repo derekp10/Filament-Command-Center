@@ -19,6 +19,7 @@
 (function () {
     const STORAGE_KEY = 'fcc.printerStatus.collapsed';
     const ORDER_KEY = 'fcc.printerStatus.order';
+    const LABEL_KEY = 'fcc.printerStatus.toolheadLabel';
     const REFRESH_DEBOUNCE_MS = 250;
 
     const _state = {
@@ -128,10 +129,31 @@
         return out;
     };
 
+    // Group 46.3 — how a toolhead tile is labelled (Settings → This Browser): its
+    // full id (XL-3, the default), just its number (3), or "Tool 3". The number is
+    // the head's position + 1: positions count from 0, the printer's own screen
+    // and the Feeds/Quick-Swap pickers count from 1. Visible text only: the
+    // data-toolhead attribute and the tooltips keep the full id, and the collapsed
+    // strip keeps it too, because it puts every printer's heads side by side
+    // (XL's and the INDX's first heads would both read "1").
+    const _labelMode = () => {
+        try { return localStorage.getItem(LABEL_KEY) || 'XL-3'; }
+        catch (e) { return 'XL-3'; }
+    };
+    const _thLabel = (th) => {
+        const mode = _labelMode();
+        const n = Number(th.position);
+        if (!Number.isFinite(n)) return th.id;
+        if (mode === '3') return String(n + 1);
+        if (mode === 'Tool 3') return `Tool ${n + 1}`;
+        return th.id;
+    };
+
     // Fingerprint of the aggregation result so refresh can skip rerendering
-    // identical state — keeps a tight sync-pulse cadence cheap.
+    // identical state — keeps a tight sync-pulse cadence cheap. The label mode
+    // is part of it, so changing it in Settings repaints on the next pulse.
     const _fingerprint = (rows) => {
-        const parts = [];
+        const parts = ['label=' + _labelMode()];
         Object.entries(rows).sort().forEach(([name, info]) => {
             const stateFp = info.state === null ? 'offline'
                 : info.state ? String(info.state.state || '') : '';
@@ -181,7 +203,7 @@
                      title="${th.id} — no dryer-box slot is bound to this toolhead. Bind one in the Location Manager → Feeds editor for a dryer box.">
                     <div class="fcc-ps-th-bar"><div class="fcc-ps-th-bar-fill" style="width:0%;"></div></div>
                     <div class="fcc-ps-th-body fcc-ps-th-body-empty">
-                        <div class="fcc-ps-th-id text-truncate">${th.id}</div>
+                        <div class="fcc-ps-th-id text-truncate">${_thLabel(th)}</div>
                     </div>
                     <div class="fcc-ps-th-chip" style="font-size:0.72rem; color:#ffd54a;">🔗 no bound slot</div>
                 </div>
@@ -197,7 +219,7 @@
                      title="${th.id} — empty">
                     <div class="fcc-ps-th-bar"><div class="fcc-ps-th-bar-fill" style="width:0%;"></div></div>
                     <div class="fcc-ps-th-body fcc-ps-th-body-empty">
-                        <div class="fcc-ps-th-id text-truncate">${th.id}</div>
+                        <div class="fcc-ps-th-id text-truncate">${_thLabel(th)}</div>
                     </div>
                     <div class="fcc-ps-th-chip" style="font-size:0.78rem; color: rgba(255,255,255,0.65);">empty</div>
                 </div>
@@ -245,7 +267,7 @@
                     <div class="fcc-ps-th-bar-fill" style="width:${pct}%; background:${barColor};"></div>
                 </div>
                 <div class="fcc-ps-th-body" style="background:${bodyBg};">
-                    <div class="fcc-ps-th-id text-truncate">${th.id}</div>
+                    <div class="fcc-ps-th-id text-truncate">${_thLabel(th)}</div>
                 </div>
                 ${chipHtml}
                 ${unboundHint}
