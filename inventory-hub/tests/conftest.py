@@ -183,6 +183,193 @@ def pytest_collection_modifyitems(config, items):
 
 
 # ---------------------------------------------------------------------------
+# Group 45.1(c) — a run labels itself: wall-clock and a load factor
+# ---------------------------------------------------------------------------
+# A busy desktop, or the run's own traffic (it saturates dev Spoolman: 8,577
+# five-second read timeouts in hub.log on 2026-10-13), slows every browser test
+# by roughly the same factor, and fixed waits trip all over the suite. So a run
+# says how slow it was: each passed browser test's call time against the fastest
+# time the same test has taken on this PC in recent runs; the median ratio is the
+# run's load factor. A fixed total-time limit would be wrong every time tests are
+# added (2,707 -> 2,951 tests in five days). The history is git-ignored at the
+# repo root, outside the inventory-hub/ bind mount the container sees.
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+TIMING_FILE = os.path.join(_REPO_ROOT, ".test-timings", "browser-call-times.json")
+TIMING_KEEP = 8           # recent call times kept per test
+LOAD_WARN = 1.25          # a median slowdown at or above this labels the run busy
+LOAD_MIN_TESTS = 30       # fewer comparable browser tests: no factor, just the time
+SLOW_REQUEST_S = 2.0      # a request slower than this is named on a failure
+HUB_LOG = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "hub.log"))
+DEV_SPOOLMAN_HOST = "192.168.1.29"
+_RUN = {"start": None, "browser": {}}
+
+
+def load_factor(times, history, min_tests=LOAD_MIN_TESTS):
+    """Median of (this run's call time / the test's fastest recorded time) over
+    the tests that have a history; None with fewer than `min_tests` of them."""
+    ratios = []
+    for nodeid, t in times.items():
+        past = [p for p in (history.get(nodeid) or []) if isinstance(p, (int, float)) and p > 0]
+        if past and t > 0:
+            ratios.append(t / min(past))
+    if len(ratios) < min_tests:
+        return None
+    ratios.sort()
+    mid = len(ratios) // 2
+    return ratios[mid] if len(ratios) % 2 else (ratios[mid - 1] + ratios[mid]) / 2
+
+
+def update_history(history, times, keep=TIMING_KEEP):
+    """Append this run's call times, keeping each test's `keep` most recent."""
+    out = dict(history)
+    for nodeid, t in times.items():
+        past = [p for p in (out.get(nodeid) or []) if isinstance(p, (int, float))]
+        out[nodeid] = (past + [round(float(t), 3)])[-keep:]
+    return out
+
+
+def _read_json(path, default):
+    try:
+        import json as _json
+        with open(path, encoding="utf-8") as f:
+            data = _json.load(f)
+        return data if isinstance(data, type(default)) else default
+    except (OSError, ValueError):
+        return default
+
+
+def _write_json(path, data):
+    try:
+        import json as _json
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            _json.dump(data, f, indent=0, sort_keys=True)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def hub_log_size(path=HUB_LOG):
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return 0
+
+
+def _read_from(path, offset):
+    try:
+        with open(path, "rb") as f:
+            f.seek(offset)
+            return f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def count_spoolman_timeouts(offset, path=HUB_LOG, host=DEV_SPOOLMAN_HOST):
+    """Read timeouts to dev Spoolman that FCC logged since byte `offset` of
+    hub.log. Only lines naming the dev Spoolman host count: host-side unit tests
+    can write a hub.log too (state.py opens a relative path), with mocked hosts.
+    A file now smaller than `offset` rotated meanwhile: the rest of the old file
+    is `<path>.1`, and the new one is read from its start."""
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return 0
+    if size < offset:
+        text = _read_from(path + ".1", offset) + _read_from(path, 0)
+    else:
+        text = _read_from(path, offset)
+    return sum(1 for ln in text.splitlines() if "Read timed out" in ln and host in ln)
+
+
+def format_request_log(net, timeouts, now=None):
+    """The section a failed browser test's report gets: its slow requests, the
+    ones that never finished, and FCC's dev-Spoolman timeouts during the test.
+    It answers "was this red load noise?" without a re-run. `net["pending"]`
+    maps each in-flight request to (method, url, start time)."""
+    now = time.monotonic() if now is None else now
+    lines = []
+    for method, url, took in net.get("slow", []):
+        lines.append(f"  slow ({took:.1f} s): {method} {url}")
+    for method, url, started in list(net.get("pending", {}).values()):
+        lines.append(f"  never finished ({now - started:.1f} s so far): {method} {url}")
+    if not lines:
+        lines.append(f"  no request took over {SLOW_REQUEST_S:.0f} s")
+    lines.append(f"  dev Spoolman read timeouts FCC logged during this test: {timeouts}")
+    return "\n".join(lines)
+
+
+def _short_url(url):
+    """Path + query only: the host is always the container."""
+    try:
+        from urllib.parse import urlsplit as _urlsplit
+        parts = _urlsplit(url)
+        return parts.path + (("?" + parts.query) if parts.query else "")
+    except ValueError:
+        return url
+
+
+# Group 45.1(b): Playwright's `expect` waits 5 s by default, which a loaded
+# desktop misses on checks that only say "this eventually shows". An expect
+# passes the moment its condition holds, so a longer default slows only a red.
+# An explicit `timeout=` still wins; those are triaged site by site (45.1(a)).
+EXPECT_TIMEOUT_MS = 10_000
+
+
+def pytest_configure(config):
+    try:
+        from playwright.sync_api import expect as _expect
+    except ImportError:
+        return
+    _expect.set_options(timeout=EXPECT_TIMEOUT_MS)
+
+
+def pytest_sessionstart(session):
+    _RUN["start"] = time.time()
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    rep = outcome.get_result()
+    net = getattr(item, "_fcc_net", None)
+    if rep.when == "call" and rep.passed and "page" in getattr(item, "fixturenames", ()):
+        _RUN["browser"][item.nodeid] = rep.duration
+    if rep.failed and net is not None and rep.when in ("setup", "call"):
+        try:
+            timeouts = count_spoolman_timeouts(getattr(item, "_fcc_hub_offset", 0))
+            rep.sections.append(("FCC request log (Group 45.1)", format_request_log(net, timeouts)))
+        except Exception:  # diagnostics must never turn a red into an error
+            pass
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    """One line at the end of every run: how long it took and, for a run with
+    browser tests, how loaded the machine was against this PC's usual times."""
+    if _RUN["start"] is None:
+        return
+    elapsed = int(time.time() - _RUN["start"])
+    stats = terminalreporter.stats
+    ran = sum(len(stats.get(k, [])) for k in ("passed", "failed", "error"))
+    msg = f"⏱️ {elapsed // 60}:{elapsed % 60:02d} for {ran} tests"
+    times = dict(_RUN["browser"])
+    if times:
+        history = _read_json(TIMING_FILE, {})
+        factor = load_factor(times, history)
+        msg += f" ({len(times)} browser tests passed)"
+        if factor is None:
+            msg += " · load: no baseline yet for enough of these tests on this PC"
+        elif factor >= LOAD_WARN:
+            msg += (f" · BUSY RUN: browser tests took {factor:.2f}x their usual time here; "
+                    f"re-check any red on its own before believing it")
+        else:
+            msg += f" · load {factor:.2f}x usual"
+        _write_json(TIMING_FILE, update_history(history, times))
+    terminalreporter.write_sep("=", msg)
+
+
+# ---------------------------------------------------------------------------
 # Base URL / context overrides
 # ---------------------------------------------------------------------------
 
@@ -203,6 +390,32 @@ def browser_context_args(browser_context_args):
         **browser_context_args,
         "viewport": BASELINE_VIEWPORT,
     }
+
+
+@pytest.fixture
+def page(page, request):
+    """pytest-playwright's page, logging its network for the failure report
+    (Group 45.1(c)): requests slower than SLOW_REQUEST_S and requests still in
+    flight when the test fails, plus where hub.log stood when the test began.
+    Listeners only append to lists, so a passing test pays nothing visible."""
+    net = {"slow": [], "pending": {}}
+
+    def _started(req):
+        net["pending"][req] = (req.method, _short_url(req.url), time.monotonic())
+
+    def _ended(req):
+        entry = net["pending"].pop(req, None)
+        if entry:
+            took = time.monotonic() - entry[2]
+            if took > SLOW_REQUEST_S:
+                net["slow"].append((entry[0], entry[1], took))
+
+    page.on("request", _started)
+    page.on("requestfinished", _ended)
+    page.on("requestfailed", _ended)
+    request.node._fcc_net = net
+    request.node._fcc_hub_offset = hub_log_size()
+    return page
 
 
 # ---------------------------------------------------------------------------
@@ -1225,10 +1438,12 @@ def _cleanup_orphan_test_records(request):
 # nearest opaque ancestor background (then the <html> background, then a default
 # dark ground), and the ratio is taken against that composite.
 #
-# The FOREGROUND alpha is still ignored, on purpose. Compositing it the same way
-# is two lines, but it would newly flag the OFFLINE chip (rgba(255,255,255,0.45)
-# text: ~4.4:1 over the widget), which is dev's usual printer state, so turning
-# it on is a design decision about that chip, not a guard fix.
+# The FOREGROUND is composited too (Group 45.3): translucent text is painted
+# source-over onto that composited background and scored as painted. Until then
+# it scored at full strength, so white text at 25% on a white 8% tint over black
+# (rgb(79,79,79) on rgb(20,20,20), 2.24:1) read as 18.36:1 and passed. The fix
+# landed with the OFFLINE chip's text alpha raised 0.45 -> 0.50 in global.css
+# (4.41:1 -> 5.29:1); the chip stays dimmer than IDLE's 0.6.
 #
 # Only `background-color` is read. Gradients / images (e.g. .fcc-ps-widget's
 # linear-gradient) count as transparent and the walk continues past them.
@@ -1299,14 +1514,17 @@ CONTRAST_GUARD_JS = r"""
         const fg = parseColor(cs.color);
         if (!fg) continue;
         const { color: bg, layers } = effectiveBg(el);
-        const r = ratio(relLum(fg.r, fg.g, fg.b), relLum(bg.r, bg.g, bg.b));
+        // Translucent text is seen as painted over that background.
+        const fgPaint = fg.a >= OPAQUE ? fg : over(fg, bg);
+        const r = ratio(relLum(fgPaint.r, fgPaint.g, fgPaint.b), relLum(bg.r, bg.g, bg.b));
         if (r < minRatio) {
             offenders.push({
                 tag: el.tagName.toLowerCase(),
                 id: el.id || null,
                 className: el.className || null,
                 text: (el.innerText || '').trim().slice(0, 80),
-                fg: `rgb(${Math.round(fg.r)}, ${Math.round(fg.g)}, ${Math.round(fg.b)})`,
+                fg: `rgb(${Math.round(fgPaint.r)}, ${Math.round(fgPaint.g)}, ${Math.round(fgPaint.b)})`,
+                fgAlpha: fg.a >= OPAQUE ? null : fg.a,
                 bg: `rgb(${Math.round(bg.r)}, ${Math.round(bg.g)}, ${Math.round(bg.b)})`,
                 bgLayers: layers,
                 ratio: Number(r.toFixed(2)),
@@ -1347,8 +1565,11 @@ def check_contrast(root_locator, min_ratio: float = 4.5, skip_empty: bool = True
             bg_note = ""
             if o.get('bgLayers'):
                 bg_note = f" (composited from {o['bgLayers']} translucent layer(s))"
+            fg_note = ""
+            if o.get('fgAlpha') is not None:
+                fg_note = f" (text at alpha {o['fgAlpha']}, as painted)"
             msg_lines.append(
-                f"  {label} ratio={o['ratio']}:1  fg={o['fg']}  bg={o['bg']}{bg_note}  text={o['text']!r}"
+                f"  {label} ratio={o['ratio']}:1  fg={o['fg']}{fg_note}  bg={o['bg']}{bg_note}  text={o['text']!r}"
             )
         raise AssertionError("\n".join(msg_lines))
 

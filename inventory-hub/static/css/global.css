@@ -1528,7 +1528,7 @@ body {
 .fcc-ps-state-paused   { background: rgba(245,158,11,0.18); color: #ffc107; border-color: rgba(255,193,7,0.4); }
 .fcc-ps-state-idle     { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.6); border-color: rgba(255,255,255,0.18); }
 .fcc-ps-state-attention{ background: rgba(239,68,68,0.18); color: #ff6b6b; border-color: rgba(255,107,107,0.4); }
-.fcc-ps-state-offline  { background: rgba(0,0,0,0.35); color: rgba(255,255,255,0.45); border-color: rgba(255,255,255,0.15); }
+.fcc-ps-state-offline  { background: rgba(0,0,0,0.35); color: rgba(255,255,255,0.50); border-color: rgba(255,255,255,0.15); }
 .fcc-ps-reorder-stack {
     width: 18px;
     flex: 0 0 18px;
