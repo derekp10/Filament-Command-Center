@@ -400,11 +400,16 @@ def test_setup_fields_does_not_wipe_container_slot_values(
     # (cp1252 console can't encode 🔗 / ✅ etc.); in prod the script runs
     # inside the utf-8 Docker container so this is purely test-env hygiene.
     env["PYTHONIOENCODING"] = "utf-8"
+    # ...and this side decodes it as UTF-8 too. `text=True` alone decodes with the
+    # Windows locale (cp1252), which has no byte 0x8F: an emoji's U+FE0F (EF B8 8F)
+    # in setup_fields' output killed the reader thread (2026-10-14: the new
+    # fcc_pre_box_location line), leaving a PytestUnhandledThreadExceptionWarning.
     proc = subprocess.run(
         ["python", script_path],
         env=env,
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=60,
     )
     assert proc.returncode == 0, (
