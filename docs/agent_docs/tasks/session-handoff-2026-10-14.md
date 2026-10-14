@@ -15,13 +15,13 @@ _Run in progress. Started from `dev` @ `4203ffe` (= `origin/dev`) at ~18:15 on 2
   sweep was **fully green: 3004 passed, 0 failed, in 21:01** (it took 37:21 with 8 reds earlier tonight). Left
   for you: 45.6, the dev-data refresh from prod (an evening; it needs your OK on the prod reads). Next: Group 41.
 - **Landed (~01:45):** Group 41 is DONE, merged `f49ccfe` and pushed. Eject All refuses rooms and printers and says what it did; a delete never reaches a loaded head; Undo is "Undo Last Move" and asks first; a confirm dialog fading in ignores clicks. The review's red (an auto-deployed undo mid-print) is fixed. Next: Group 42.
-- **Landed (04:05):** Group 42 is DONE, merged `MERGE_SHA` and pushed. A PolyDryer lets go of a head only when its own spool leaves it, follows that spool head to head, and an eject out of the box puts the spool back where it sat before; one loaded spool per head on every writer; eject says where the spool went and which box let go. The review's 14 findings are fixed. Next: Group 40, whose engine prerequisites start on a parked branch (the group spans 2–3 sessions, and its one prompt you'd feel waits for you).
+- **Landed (04:05):** Group 42 is DONE, merged `efc7181` and pushed. A PolyDryer lets go of a head only when its own spool leaves it, follows that spool head to head, and an eject out of the box puts the spool back where it sat before; one loaded spool per head on every writer; eject says where the spool went and which box let go. The review's 14 findings are fixed. Next: Group 40, whose engine prerequisites start on a parked branch (the group spans 2–3 sessions, and its one prompt you'd feel waits for you).
 - Evening prep done: Derek's go-ahead for all-night full test runs, a push after each merge, and read-only prod
   counts (taken ~18:25; table in the plan file).
 
 ## Landed
 
-### Group 42 → `DONE`: single-slot box lifecycle, one spool per head (merged `MERGE_SHA`, pushed)
+### Group 42 → `DONE`: single-slot box lifecycle, one spool per head (merged `efc7181`, pushed)
 
 - **Commits:** `4d71361` (42.1 + 42.5a), `c787d4b` (42.2), `b1e98d4` (42.3), `82ca8c6` (42.5b), `538f2e7`
   (42.4), `458b4af` (42.5c), `86c8fa2` (42.6), `b3793c7` (42.8 docs), `3cf3957` (the review's fixes),
