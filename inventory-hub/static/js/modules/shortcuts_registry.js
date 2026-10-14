@@ -230,7 +230,7 @@
     window.registerShortcut({
         id: 'scan-cmd-undo', scope: 'Scan Commands',
         keys: ['CMD:UNDO'],
-        description: 'Undo the last move.'
+        description: 'Undo Last Move: asks first, naming the move it will reverse.'
     });
     window.registerShortcut({
         id: 'scan-cmd-clear', scope: 'Scan Commands',

@@ -1934,7 +1934,36 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
         .catch(() => setProcessing(false));
 };
 
-const triggerUndo = () => fetch('/api/undo', { method: 'POST' }).then(() => { updateLogState(); loadBuffer(); if(window.fetchLocations) window.fetchLocations(); });
+// Group 41.4 — Undo Last Move. The first press asks the server, which answers
+// the question naming the move it would reverse ("Undo: put #57 back in
+// LR-MDB-1 slot 2 and #196 back on XL-2?") and writes nothing. The Yes quotes
+// that record's number (refused if another move landed meanwhile) and the heads
+// it called out as printing (the shared confirm), else the plain yes/no dialog
+// (Claude's call 9). The toast says what really went back; a failure names the
+// spool at 7 s; "Nothing to undo" is an info toast.
+const triggerUndo = (opts = {}) => {
+    const body = {};
+    if (opts.confirm) { body.confirm = true; body.undo_id = opts.undoId; body.confirmed_toolheads = opts.heads || []; }
+    fetch('/api/undo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+        .then(r => r.json())
+        .then((res) => {
+            if (res && res.requires_confirm) {
+                const heads = window.unionConfirmHeads ? window.unionConfirmHeads(opts.heads || [], res) : [];
+                const yes = () => triggerUndo({ confirm: true, undoId: res.undo_id, heads });
+                if ((res.active_prints || []).length && window.confirmActivePrint) {
+                    window.confirmActivePrint({ activePrints: res.active_prints, msg: res.msg, onConfirm: yes });
+                } else {
+                    requestConfirmation(res.msg, yes);
+                }
+                return;
+            }
+            updateLogState(); loadBuffer(); if (window.fetchLocations) window.fetchLocations();
+            if (res && res.success) showToast(res.msg || '↩️ Undone', 'success', 4000);
+            else if (res && res.nothing) showToast(res.msg, 'info', 4000);
+            else showToast((res && res.msg) || 'Undo failed', 'error', 7000);
+        })
+        .catch(() => showToast('Undo failed: no answer from the server', 'error', 7000));
+};
 
 const printLabel = (sid) => {
     showToast("🖨️ Requesting Label...");

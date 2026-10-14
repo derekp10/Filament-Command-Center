@@ -1,3 +1,4 @@
+import itertools
 import re
 import threading
 import time
@@ -682,8 +683,16 @@ def _eject_refusal_reason(result):
 _chain_undo_sink = threading.local()
 
 
+_UNDO_IDS = itertools.count(1)
+
+
 def _push_undo(record):
-    """Push a move's undo record, and hand it to an enclosing auto-deploy chain."""
+    """Push a move's undo record, and hand it to an enclosing auto-deploy chain.
+
+    Group 41.4: every record gets a number. Undo asks first, naming the move it
+    will reverse, and UNDO_STACK is shared by every tab, so the Yes carries the
+    number and is refused if another move landed on top meanwhile."""
+    record['id'] = next(_UNDO_IDS)
     state.UNDO_STACK.append(record)
     sink = getattr(_chain_undo_sink, 'records', None)
     if sink is not None:
@@ -1251,7 +1260,15 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                     f"❌ Failed to move Spool #{sid} -> {target}: {err}", "ERROR", "ff4444"
                 )
 
-    _push_undo(undo_record)
+    # Group 41.4: record only what landed. A spool whose write was rejected, or
+    # that was skipped (an unseat that failed, an unreadable slot), never moved,
+    # so "undoing" it would move it from where it is to where it already is.
+    # A move where nothing landed pushes no record at all.
+    for _sid in [s for s in list(undo_record['moves']) if str(s) in failures]:
+        for _key in ('moves', 'extras', 'labels'):
+            undo_record[_key].pop(_sid, None)
+    if undo_record['moves'] or undo_record['ejections']:
+        _push_undo(undo_record)
 
     # --- AUTO-DEPLOY CHAIN ---
     # If this move placed spool(s) into a Dryer Box slot that's bound to a
@@ -2517,12 +2534,123 @@ def perform_force_unassign(spool_id, confirm_active_print=False):
     )
     return False
 
-def perform_undo():
-    if not state.UNDO_STACK: return {"success": False, "msg": "Nothing to undo (Undo reverts spool moves only)."}
+NOTHING_TO_UNDO_MSG = "Nothing to undo (Undo Last Move reverts spool moves only)."
+
+
+def peek_undo():
+    """Group 41.4 — the record Undo Last Move would reverse, without popping it."""
+    return state.UNDO_STACK[-1] if state.UNDO_STACK else None
+
+
+def _undo_get(mapping, sid):
+    mapping = mapping or {}
+    hit = mapping.get(sid)
+    return mapping.get(str(sid)) if hit is None else hit
+
+
+def _undo_place(loc, slot, printer_map):
+    """'in LR-MDB-1 slot 2', 'on XL-2', 'in CR', 'in Unassigned'."""
+    lid = str(loc or '').strip().strip('"').upper()
+    if not lid:
+        return "in Unassigned"
+    if lid in (printer_map or {}):
+        return f"on {lid}"
+    slot = str(slot or '').strip().strip('"')
+    return f"in {lid} slot {slot}" if slot else f"in {lid}"
+
+
+def _undo_items(record, printer_map):
+    """[(sid, place)] for every spool the record would put back: the moved
+    spools first, then the residents a Smart Load had unloaded."""
+    items = []
+    for sid, loc in (record.get('moves') or {}).items():
+        snap = _undo_get(record.get('extras'), sid) or {}
+        items.append((sid, _undo_place(loc, snap.get('container_slot'), printer_map)))
+    for sid, loc in (record.get('ejections') or {}).items():
+        snap = _undo_get(record.get('ejection_extras'), sid) or {}
+        items.append((sid, _undo_place(loc, snap.get('container_slot'), printer_map)))
+    return items
+
+
+def describe_undo(record, printer_map):
+    """The question Undo Last Move asks: "Undo: put #57 back in LR-MDB-1 slot 2
+    and #196 back on XL-2?" (Derek, 2026-10-13: it always asks first, naming
+    the move it will reverse)."""
+    items = _undo_items(record, printer_map)
+    if not items:
+        return f"Undo: {record.get('summary') or 'the last move'}?"
+    return "Undo: put " + _and_list(f"#{sid} back {place}" for sid, place in items) + "?"
+
+
+def _undo_heads(record, printer_map):
+    """[(head, role, [sid])] — every printer head this undo would change: where
+    the moved spools are now (the move's target) and every head it puts a spool
+    back on."""
+    touched = []
+    target = str(record.get('target') or '').strip().upper()
+    moved = list((record.get('moves') or {}).keys())
+    if target in (printer_map or {}):
+        touched.append((target, 'source', moved))
+    for sid, loc in list((record.get('moves') or {}).items()) + list((record.get('ejections') or {}).items()):
+        lid = str(loc or '').strip().strip('"').upper()
+        if lid in (printer_map or {}):
+            touched.append((lid, 'destination', [sid]))
+    return touched
+
+
+def undo_confirm_answer(record, confirmed_heads=None):
+    """What /api/undo answers before it writes anything: the question naming the
+    move, the record's number (the Yes must quote it), and, when a head it would
+    change belongs to a printer that is printing, those heads with D6's
+    call-out. A PAUSED printer isn't active, so it gets the plain question."""
+    printer_map = locations_db.get_active_printer_map()
+    question = describe_undo(record, printer_map)
+    active = []
+    _pa = None
+    try:
+        import prusalink_api as _pa
+        _pa.begin_probe_cache()
+    except Exception:
+        _pa = None
+    try:
+        active = _uncovered_active_heads(_undo_heads(record, printer_map),
+                                         confirmed_heads or [], printer_map)
+    finally:
+        if _pa is not None:
+            try:
+                _pa.clear_probe_cache()
+            except Exception:
+                pass
+    msg = question
+    if active:
+        heads = _and_list(sorted({a['toolhead'] for a in active}))
+        printers = _and_list(sorted({f"{a['printer_name']} is {a['state']}" for a in active}))
+        msg = (f"{printers}: this undo changes {heads} mid-print, and FCC charges the print "
+               f"to whatever spool ends up loaded. {question}")
+    return {"success": False, "requires_confirm": True, "undo_id": record.get('id'),
+            "confirm_type": "active_print" if active else "undo",
+            "active_prints": active, "msg": msg}
+
+
+def perform_undo(expected_id=None):
+    """Reverse the last move. Group 41.4: honest about what it did. Only the
+    restores that land are reported (and logged) as undone; a rejected or
+    blocked restore makes the answer success: False, naming the spool, with an
+    ERROR line. `expected_id` is the record the user said Yes to; a different
+    record on top (another move landed meanwhile) is refused, writing nothing."""
+    if not state.UNDO_STACK:
+        state.add_log_entry(f"↩️ {NOTHING_TO_UNDO_MSG}", "INFO")
+        return {"success": False, "nothing": True, "msg": NOTHING_TO_UNDO_MSG}
+    if expected_id is not None and str(state.UNDO_STACK[-1].get('id')) != str(expected_id):
+        msg = "The last move changed since you pressed Undo. Press Undo Last Move again."
+        state.add_log_entry(f"⚠️ Undo refused: {msg}", "WARNING", "ffaa00")
+        return {"success": False, "stale": True, "msg": msg}
     last = state.UNDO_STACK.pop()
     moves = last['moves']
     target = last.get('target')
     origin = last.get('origin', '')
+    printer_map = locations_db.get_active_printer_map()
+    restored, failed = [], []
 
     # Reassign each moved spool back to its origin location in Spoolman, and
     # (L298 Phase 0) restore the pre-move system-managed extras so the undo is a
@@ -2548,8 +2676,11 @@ def perform_undo():
             for k in spoolman_api.SYSTEM_MANAGED_EXTRAS:
                 merged[k] = snap.get(k, '')
             payload["extra"] = merged
-        if not spoolman_api.update_spool(sid, payload):
+        if spoolman_api.update_spool(sid, payload):
+            restored.append(sid)
+        else:
             err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+            failed.append(f"#{sid} ({err})")
             state.add_log_entry(
                 f"❌ Undo: failed to restore Spool #{sid} → {loc or 'UNASSIGNED'}: {err}",
                 "ERROR", "ff4444")
@@ -2562,35 +2693,32 @@ def perform_undo():
     # (2026-09-12). A record without 'ejection_extras' restores location only.
     ejections = last.get('ejections', {})
     ejection_extras = last.get('ejection_extras', {})
-    blocked_restores: typing.List[str] = []
-    undo_printer_map = None
+    restored_ejections = []
     undo_rows: typing.Dict[str, typing.Any] = {}
+    if ejections:
+        undo_rows = {str(r.get('LocationID', '')).strip().upper(): r
+                     for r in (locations_db.load_locations_list() or [])}
     for ejected_sid, original_loc in ejections.items():
         # Back onto a single-occupancy head only if that head is really free.
         # The incoming spool's restore above may have been rejected, or
         # something may have been loaded there since; restoring blind stacked
         # two spools on one head (2026-09-12 review).
-        if original_loc:
-            if undo_printer_map is None:
-                undo_printer_map = locations_db.get_active_printer_map()
-                undo_rows = {str(r.get('LocationID', '')).strip().upper(): r
-                             for r in (locations_db.load_locations_list() or [])}
-            if _is_single_occupancy(original_loc, undo_printer_map, undo_rows):
-                head = str(original_loc).strip().upper()
-                try:
-                    occupants = [
-                        o.get('id') for o in spoolman_api.get_spools_at_location_detailed_strict(head)
-                        if not o.get('is_ghost') and str(o.get('id')) != str(ejected_sid)
-                        and str(o.get('location') or '').strip().upper() == head]
-                    why = ("it holds " + ", ".join(f"#{o}" for o in occupants)) if occupants else ""
-                except Exception as _occ_err:
-                    why = f"it could not be read from Spoolman ({_occ_err})"
-                if why:
-                    state.add_log_entry(
-                        f"❌ Undo: not putting Spool #{ejected_sid} back on {head} — {why}",
-                        "ERROR", "ff4444")
-                    blocked_restores.append(f"#{ejected_sid} ({why})")
-                    continue
+        if original_loc and _is_single_occupancy(original_loc, printer_map, undo_rows):
+            head = str(original_loc).strip().upper()
+            try:
+                occupants = [
+                    o.get('id') for o in spoolman_api.get_spools_at_location_detailed_strict(head)
+                    if not o.get('is_ghost') and str(o.get('id')) != str(ejected_sid)
+                    and str(o.get('location') or '').strip().upper() == head]
+                why = ("it holds " + ", ".join(f"#{o}" for o in occupants)) if occupants else ""
+            except Exception as _occ_err:
+                why = f"it could not be read from Spoolman ({_occ_err})"
+            if why:
+                state.add_log_entry(
+                    f"❌ Undo: not putting Spool #{ejected_sid} back on {head} — {why}",
+                    "ERROR", "ff4444")
+                failed.append(f"#{ejected_sid} ({why})")
+                continue
         eject_payload: typing.Dict[str, typing.Any] = {"location": original_loc}
         snap = ejection_extras.get(ejected_sid)
         if snap is None:
@@ -2601,17 +2729,19 @@ def perform_undo():
             for k in spoolman_api.SYSTEM_MANAGED_EXTRAS:
                 merged[k] = snap.get(k, '')
             eject_payload["extra"] = merged
-        if not spoolman_api.update_spool(ejected_sid, eject_payload):
+        if spoolman_api.update_spool(ejected_sid, eject_payload):
+            restored_ejections.append(ejected_sid)
+        else:
             err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+            failed.append(f"#{ejected_sid} ({err})")
             state.add_log_entry(
                 f"❌ Undo: failed to restore ejected Spool #{ejected_sid} → "
                 f"{original_loc or 'UNASSIGNED'}: {err}", "ERROR", "ff4444")
-            
-            
+
     # [ALEX FIX] Restore to Buffer Memory
     state.logger.info(f"UNDO RECORD TRIGGER: {last}")
     if origin == 'buffer':
-        for sid in moves.keys():
+        for sid in restored:
             spool_data = spoolman_api.get_spool(sid)
             if spool_data:
                 info = spoolman_api.format_spool_display(spool_data)
@@ -2620,32 +2750,40 @@ def perform_undo():
                     if not hasattr(state, 'GLOBAL_BUFFER'): state.GLOBAL_BUFFER = []
                     # Prepend to buffer so it shows up first
                     state.GLOBAL_BUFFER.insert(0, {'id': int(sid), 'display': info['text'], 'color': info['color']})
-                    
-    # Render a readable from→to line: label + source were captured at move time
-    # (logic.py undo_record build). Fall back to bare #sid / UNASSIGNED for legacy
-    # records or a spool deleted between the move and the undo.
+
+    # Group 41.4: the line reads forwards and names only what really went back,
+    # so a user can put the rest right by hand: "↩️ Undo: Spool A is back in
+    # LR-MDB-1 slot 2 (it had been moved to XL-2)". Labels were captured at move
+    # time (fall back to #sid for a legacy record or a deleted spool).
     labels = last.get('labels', {})
+    extras = last.get('extras', {})
 
-    def _undo_seg(sid, with_target):
-        label = labels.get(sid) or labels.get(str(sid)) or f"#{sid}"
-        src = moves.get(sid) or moves.get(str(sid)) or "UNASSIGNED"
-        # The multi-spool header already states the destination, so the per-spool
-        # segments drop the redundant "-> target".
-        return f"{label} from {src} -> {target}" if with_target else f"{label} from {src}"
+    def _label(sid):
+        return labels.get(sid) or labels.get(str(sid)) or f"#{sid}"
 
-    if len(moves) == 1:
-        detail = f"moved {_undo_seg(next(iter(moves)), True)}"
-    elif moves:
-        detail = f"moved {len(moves)} spools -> {target} (" + "; ".join(_undo_seg(s, False) for s in moves) + ")"
-    else:
-        # Legacy / no-move record: its summary already reads "Moved N -> target",
-        # so don't prepend a second "moved".
-        detail = last.get('summary', f"moved -> {target}")
-    state.add_log_entry(f"↩️ Undid: {detail}", "WARNING")
-    if blocked_restores:
-        return {"success": False,
-                "msg": f"Undo could not put back {', '.join(blocked_restores)}."}
-    return {"success": True}
+    parts = []
+    if restored:
+        segs = [f"{_label(sid)} is back "
+                f"{_undo_place(moves.get(sid), (_undo_get(extras, sid) or {}).get('container_slot'), printer_map)}"
+                for sid in restored]
+        parts.append(f"{_and_list(segs)} ({'it' if len(segs) == 1 else 'they'} had been moved to "
+                     f"{target or 'UNASSIGNED'})")
+    if restored_ejections:
+        segs = [f"#{sid} is back "
+                f"{_undo_place(ejections.get(sid), (_undo_get(ejection_extras, sid) or {}).get('container_slot'), printer_map)}"
+                for sid in restored_ejections]
+        parts.append(_and_list(segs))
+    if not moves and not ejections:
+        # Legacy / no-move record: its summary already reads "Moved N -> target".
+        parts.append(last.get('summary', f"moved -> {target}"))
+    if parts:
+        state.add_log_entry(f"↩️ Undo: {'; '.join(parts)}", "WARNING")
+    if failed:
+        msg = f"Undo could not put back {', '.join(failed)}."
+        state.add_log_entry(f"⚠️ Undo partly failed: {msg}", "ERROR", "ff4444")
+        return {"success": False, "msg": msg, "restored": restored + restored_ejections}
+    return {"success": True, "msg": f"↩️ Undo: {'; '.join(parts)}" if parts else "↩️ Undone",
+            "restored": restored + restored_ejections}
 
 def process_audit_scan(scan_result):
     """Handles scans when in Audit Mode."""

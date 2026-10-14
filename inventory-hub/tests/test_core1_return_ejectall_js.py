@@ -582,3 +582,90 @@ def test_a_printing_head_asks_first_and_its_yes_retries_with_the_flag(tmp_path):
                                                          "confirm_active_print": True}], res["posts"]
     assert [t["type"] for t in res["toasts"]] == ["success"], res["toasts"]
     assert res["unhandled"] == []
+
+
+# ---------------------------------------------------------------------------
+# Undo Last Move (inv_cmd.js), Group 41.4
+# ---------------------------------------------------------------------------
+# The first press only asks: the server answers the question naming the move
+# (and the record's number), the Yes quotes that number, and a printing head
+# goes through the shared active-print confirm with its heads. Each POST
+# /api/undo is answered by the next of __ANSWERS__.
+
+UNDO_SCENARIO = """
+const answers = __ANSWERS__;
+let n = 0;
+window.__respond = (url, method, body) =>
+    url === '/api/undo' ? { body: answers[Math.min(n++, answers.length - 1)] } : { body: [] };
+globalThis.updateLogState = () => {};
+const confirms = [];
+globalThis.requestConfirmation = (msg, cb) => { confirms.push(String(msg)); window.__yes = cb; };
+const printAsks = [];
+window.confirmActivePrint = (o) => { printAsks.push(o.msg); window.__yes = o.onConfirm; };
+window.unionConfirmHeads = (prior, ans) => {
+    const out = new Set(prior || []);
+    (ans.active_prints || []).forEach(a => out.add(a.toolhead));
+    return [...out];
+};
+triggerUndo();
+await __settle(60);
+if (__YES__ && typeof window.__yes === 'function') { window.__yes(); await __settle(60); }
+return { confirms, printAsks, toasts: __rec.toasts,
+         posts: __rec.fetches.filter(f => f.url === '/api/undo').map(f => f.body) };
+"""
+
+ASK = {"success": False, "requires_confirm": True, "undo_id": 7, "confirm_type": "undo",
+       "active_prints": [], "msg": "Undo: put #57 back in LR-MDB-1 slot 2 and #196 back on XL-2?"}
+DONE = {"success": True, "msg": "↩️ Undo: #57 is back in LR-MDB-1 slot 2 (it had been moved to XL-2)",
+        "restored": [57]}
+
+
+def _undo_js(tmp_path, answers, yes=False) -> dict:
+    return run_js(tmp_path, ["inv_cmd.js"], (UNDO_SCENARIO
+                                             .replace("__ANSWERS__", json.dumps(answers))
+                                             .replace("__YES__", "true" if yes else "false")))
+
+
+def test_undo_asks_first_and_the_yes_quotes_the_record(tmp_path):
+    """FAILS on the old module: it posted once, read nothing, and said nothing."""
+    res = _undo_js(tmp_path, [ASK, DONE], yes=True)
+
+    assert res["confirms"] == [ASK["msg"]], res
+    assert res["posts"] == [{}, {"confirm": True, "undo_id": 7, "confirmed_toolheads": []}], res["posts"]
+    assert [(t["msg"], t["type"]) for t in res["toasts"]] == [(DONE["msg"], "success")], res["toasts"]
+    assert res["unhandled"] == []
+
+
+def test_a_no_to_the_question_changes_nothing(tmp_path):
+    res = _undo_js(tmp_path, [ASK, DONE], yes=False)
+
+    assert res["posts"] == [{}], res["posts"]
+    assert res["toasts"] == [] and res["unhandled"] == []
+
+
+def test_a_printing_head_goes_through_the_shared_confirm(tmp_path):
+    ask = dict(ASK, confirm_type="active_print",
+               active_prints=[{"toolhead": "XL-2", "printer_name": "XL", "state": "PRINTING", "role": "source"}],
+               msg="XL is PRINTING: this undo changes XL-2 mid-print. " + ASK["msg"])
+    res = _undo_js(tmp_path, [ask, DONE], yes=True)
+
+    assert res["printAsks"] == [ask["msg"]] and res["confirms"] == [], res
+    assert res["posts"][-1] == {"confirm": True, "undo_id": 7, "confirmed_toolheads": ["XL-2"]}, res["posts"]
+    assert res["unhandled"] == []
+
+
+def test_nothing_to_undo_is_an_info_toast(tmp_path):
+    msg = "Nothing to undo (Undo Last Move reverts spool moves only)."
+    res = _undo_js(tmp_path, [{"success": False, "nothing": True, "msg": msg}])
+
+    assert [(t["msg"], t["type"]) for t in res["toasts"]] == [(msg, "info")], res["toasts"]
+    assert res["unhandled"] == []
+
+
+def test_a_failed_undo_names_the_spool_at_seven_seconds(tmp_path):
+    msg = "Undo could not put back #57 (400: rejected)."
+    res = _undo_js(tmp_path, [ASK, {"success": False, "msg": msg}], yes=True)
+
+    assert [(t["msg"], t["type"]) for t in res["toasts"]] == [(msg, "error")], res["toasts"]
+    assert res["toasts"][0]["duration"] >= 7000
+    assert res["unhandled"] == []

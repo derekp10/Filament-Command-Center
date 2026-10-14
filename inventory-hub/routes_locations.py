@@ -838,7 +838,33 @@ def api_merge_filament(src_fid, dst_fid):
 
 
 @app.route('/api/undo', methods=['POST'])
-def api_undo(): return jsonify(logic.perform_undo())
+def api_undo():
+    """Group 41.4 — Undo Last Move always asks first (Derek, 2026-10-13).
+
+    No `confirm` in the body: answer the question naming the move it would
+    reverse, plus the record's number, and write nothing. A printing head the
+    undo would change is called out (D6), and its Yes carries the heads it saw
+    as `confirmed_toolheads`. The Yes must quote `undo_id`; a different record
+    on top (another move landed meanwhile; the stack is shared by every tab) is
+    refused. Refused outright while a bulk move is armed (Claude's call 9: its
+    panel would hide the prompt)."""
+    data = request.get_json(silent=True) or {}
+    if (state.BULK_MOVE_SESSION or {}).get('active'):
+        msg = "Undo Last Move is off while a bulk move is armed. Commit or cancel the bulk move first."
+        state.add_log_entry(f"⚠️ {msg}", "WARNING", "ffaa00")
+        return jsonify({"success": False, "msg": msg})
+    rec = logic.peek_undo()
+    if rec is None:
+        return jsonify(logic.perform_undo())
+    if not data.get('confirm'):
+        return jsonify(logic.undo_confirm_answer(rec))
+    if str(data.get('undo_id')) != str(rec.get('id')):
+        return jsonify(logic.perform_undo(expected_id=data.get('undo_id')))
+    # A head that started printing after the question still asks.
+    ask = logic.undo_confirm_answer(rec, confirmed_heads=logic.confirmed_heads(data))
+    if ask.get("active_prints"):
+        return jsonify(ask)
+    return jsonify(logic.perform_undo(expected_id=rec.get('id')))
 
 @app.route('/api/get_contents', methods=['GET'])
 def api_get_contents_route():
