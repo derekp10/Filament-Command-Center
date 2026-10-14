@@ -14,7 +14,11 @@ re-render encodes, since the encoded command isn't otherwise visible in the DOM.
 """
 from __future__ import annotations
 
+import json
+
 from playwright.sync_api import Page, expect
+
+import conftest
 
 
 def _goto(page: Page) -> None:
@@ -48,7 +52,24 @@ def _last_qr_for(page: Page, slot_id: str):
     )
 
 
+# What /api/audit_session answers while an audit runs (routes_state_pulse.py).
+_ACTIVE_AUDIT = {
+    "active": True, "location_id": "FCC-TEST-AUDIT", "idle_timeout_min": 10,
+    "expected": [], "rogue": [],
+    "stats": {"total_expected": 0, "found": 0, "missing": 0, "rogue": 0},
+}
+
+
 def test_audit_slot_shapeshifts_between_states(page: Page):
+    # The test fakes an active audit locally (state.auditActive), so the server
+    # side is faked to match (Group 45.8). openAuditPanel polls
+    # /api/audit_session at once and closes itself on dev's real answer
+    # (active: false); the panel used to stay up only because that poll queued
+    # behind the Printer Status widget's per-tick fan-out. The log polls are
+    # stopped too: they carry the server's audit_active=false.
+    conftest.quiet_heartbeat(page)
+    page.route("**/api/audit_session*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=json.dumps(_ACTIVE_AUDIT)))
     _goto(page)
     page.evaluate(_STUB_QRCODE)
 

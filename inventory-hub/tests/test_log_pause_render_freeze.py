@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import pytest
 
+import conftest
+
 DASH = "http://localhost:8000/"
 
 # A log entry timestamped far enough ahead that it always sorts as "unseen"
@@ -165,7 +167,11 @@ def test_review_button_still_works_after_a_pause_cycle(page):
     `_renderLogsPayload` is the shared render path for the whole dashboard
     heartbeat, and it injects the 🛑 Review button for pending cancel-deducts.
     "Skip only the rewrite" must not damage that markup or its handler.
+
+    The real log polls are stopped (Group 45.8): one landing between the
+    synthetic render and the count repainted the list without this row.
     """
+    conftest.quiet_heartbeat(page)
     _boot(page)
     page.evaluate("window.toggleLogsStickyPause()")
     page.evaluate("window.toggleLogsStickyPause()")   # pause + resume

@@ -507,6 +507,58 @@ def open_manage_modal(page, base_url):
     return _open
 
 
+# ---------------------------------------------------------------------------
+# Bootstrap modal transitions (Group 45.8)
+# ---------------------------------------------------------------------------
+# Bootstrap 5.3's Modal.hide() returns silently while the modal's show
+# transition is still running (its `_isTransitioning` flag; see CLAUDE.md on
+# the gating dialogs). A test that opens the wizard and hides it inside that
+# ~0.5 s loses the hide and fails on "still visible". Two files were fixed
+# before: Group 26.7 retries the hide, and 38.6b waits for the public
+# shown.bs.modal event when it opens the wizard (the better fix where a test
+# controls the open). Once the dashboard stopped its per-tick fan-out (45.8)
+# the page got fast enough that eleven wizard tests in four other files hit it
+# in one sweep. This waits out the transition at close time instead.
+MODAL_SETTLED_JS = """(id) => {
+    const el = document.getElementById(id);
+    const m = (el && window.bootstrap) ? bootstrap.Modal.getInstance(el) : null;
+    return !m || !m._isTransitioning;
+}"""
+
+
+def wait_modal_settled(page, modal_id: str, timeout: int = 5_000) -> None:
+    """Block until Bootstrap modal `modal_id` is not mid-transition, so a
+    scripted hide() (or show()) isn't silently dropped."""
+    page.wait_for_function(MODAL_SETTLED_JS, arg=modal_id, timeout=timeout)
+
+
+def close_wizard(page, timeout: int = 5_000) -> None:
+    """Close the add/edit wizard past its unsaved-changes guard, once its show
+    transition is over, and wait until it is gone."""
+    from playwright.sync_api import expect as _expect
+    wait_modal_settled(page, "wizardModal", timeout)
+    page.evaluate("""
+        const m = bootstrap.Modal.getInstance(document.getElementById('wizardModal'));
+        if (m) {
+            // wizardState is script-scoped, not on window: reference it by name.
+            try { wizardState.forceClose = true; wizardState.isDirty = false; } catch (_) {}
+            m.hide();
+        }
+    """)
+    _expect(page.locator("#wizardModal")).not_to_be_visible(timeout=timeout)
+
+
+def quiet_heartbeat(page) -> None:
+    """Abort the dashboard's own status polls (the cold /api/logs fetch and
+    the /api/dashboard_pulse heartbeat) for a test that injects state those
+    polls own: a synthetic log row, a local audit flag. A real answer landing
+    between the injection and the assertion repaints that state, and is right
+    to (Group 38's lesson); in one sweep it took a 🛑 Review row and closed
+    the audit panel (Group 45.8). Install before page.goto."""
+    page.route("**/api/dashboard_pulse*", lambda route: route.abort())
+    page.route("**/api/logs*", lambda route: route.abort())
+
+
 @pytest.fixture
 def clean_buffer(api_base_url: str):
     """Ensure the buffer is empty before the test. Yields the base URL."""
