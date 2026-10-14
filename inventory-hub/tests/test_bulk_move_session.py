@@ -112,13 +112,21 @@ def _spool(sid, location="PM-DB-A", is_ghost=False, archived=False,
 
 @contextlib.contextmanager
 def _env(*, strict_map=None, readback=None, active_print_for=None,
-         move_result=None, buffer=None, locations=None):
+         move_result=None, buffer=None, locations=None, readback_raises=False):
     """Patch every collaborator the plan/execute core touches."""
     strict_map = strict_map or {}
     readback = readback or {}
     locations = FAKE_LOCATIONS if locations is None else locations
 
+    after_move = {"done": False}
+
     def _strict(loc):
+        # Group 41.5: the tally's readback is strict too; once the move has run,
+        # the strict reader answers what the test says is there afterwards.
+        if after_move["done"]:
+            if readback_raises:
+                raise RuntimeError("spoolman transport error (readback)")
+            return list(readback.get(str(loc).upper(), []))
         return list(strict_map.get(str(loc).upper(), []))
 
     def _detailed(loc):
@@ -135,8 +143,11 @@ def _env(*, strict_map=None, readback=None, active_print_for=None,
         stack.enter_context(patch.object(spoolman_api, "get_spool", return_value=None))
         stack.enter_context(patch.object(logic, "_active_print_info_for_location", side_effect=_ap))
         stack.enter_context(patch.object(state, "GLOBAL_BUFFER", buffer or []))
-        mv = stack.enter_context(patch.object(
-            logic, "perform_smart_move", return_value=(move_result or {"status": "success"})))
+        def _move(*a, **k):
+            after_move["done"] = True
+            return move_result or {"status": "success"}
+
+        mv = stack.enter_context(patch.object(logic, "perform_smart_move", side_effect=_move))
         yield mv
 
 
@@ -211,6 +222,20 @@ def test_cmd_done_commits_the_preview(client):
     assert args[1] == [1, 2]
     assert kwargs.get("auto_deploy") is False
     # Session cleared after a successful commit.
+    assert state.BULK_MOVE_SESSION["active"] is False
+
+
+def test_cmd_done_says_when_the_commit_couldnt_be_verified(client):
+    """Group 41.5, FAILS on the old route: the scan path answered a bare
+    "clear" for a commit whose readback couldn't reach Spoolman."""
+    with _env(strict_map={"PM-DB-A": [_spool(1), _spool(2)]}, readback_raises=True):
+        client.post("/api/identify_scan", json={"text": "CMD:BULKMOVE"})
+        client.post("/api/identify_scan", json={"text": "LOC:PM-DB-A"})
+        client.post("/api/identify_scan", json={"text": "LOC:SHELF-B"})
+        r = client.post("/api/identify_scan", json={"text": "CMD:DONE"})
+    body = r.get_json()
+    assert body["type"] == "command" and body["cmd"] == "clear", body
+    assert "couldn't verify it with Spoolman" in body["warning"], body
     assert state.BULK_MOVE_SESSION["active"] is False
 
 

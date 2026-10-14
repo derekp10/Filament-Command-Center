@@ -478,7 +478,11 @@ window.commitBulkMove = (confirmActivePrint = false) => {
         let msg = `Moved ${moved} spool(s) → ${res.dest || ''}`;
         if (skipped) msg += `, ${skipped} left in place`;
         if (failed) msg += `, ${failed} FAILED`;
-        showToast(msg, failed ? "warning" : "success", failed ? 7000 : 4000);
+        // Group 41.5: the readback couldn't reach Spoolman, so "moved" is what
+        // the writes answered, not what was checked afterwards.
+        if (res.unverified) msg += ` (couldn't verify with Spoolman; check the Activity Log)`;
+        const warn = failed || res.unverified;
+        showToast(msg, warn ? "warning" : "success", warn ? 7000 : 4000);
         if (typeof window.closeBulkMovePanel === 'function') window.closeBulkMovePanel();
         if (window.fetchLocations) window.fetchLocations();
         state.lastLocRenderHash = null;
@@ -1509,6 +1513,8 @@ const processScan = (text, source = 'keyboard') => {
         .then(res => {
             setProcessing(false);
             if (res.type === 'command') {
+                // Group 41.5: a bulk-move commit the server couldn't verify.
+                if (res.warning) showToast(res.warning, 'warning', 7000);
                 // L298 Phase 2 — a scan the backend routed into the bulk-move
                 // session answers cmd:'clear'. Refresh the panel immediately so
                 // the stage prompt / preview updates now, not on the next tick.

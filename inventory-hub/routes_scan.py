@@ -1077,6 +1077,9 @@ def api_identify_scan():
                 "type": "error",
                 "msg": bulk_res.get('msg') or "Scan not allowed during a bulk move.",
             })
+        if isinstance(bulk_res, dict) and bulk_res.get('status') == 'warning':
+            # Group 41.5: a commit that couldn't be verified with Spoolman.
+            return jsonify({"type": "command", "cmd": "clear", "warning": bulk_res.get('msg')})
         return jsonify({"type": "command", "cmd": "clear"})
 
     if not res: return jsonify({"type": "unknown"})

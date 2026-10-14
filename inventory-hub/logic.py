@@ -1083,7 +1083,20 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         
 # Handle Slot Assignment
         if target_slot:
-            existing_items = spoolman_api.get_spools_at_location_detailed(target)
+            # Group 41.6: read the slot STRICTLY, and seat nothing in a slot that
+            # couldn't be cleared. The fail-open read answered [] on a timeout,
+            # and a rejected unseat only logged, so the incoming spool was seated
+            # anyway and two spools claimed one slot.
+            try:
+                existing_items = spoolman_api.get_spools_at_location_detailed_strict(target)
+            except Exception as _slot_err:
+                failures[str(sid)] = (f"couldn't read {target} from Spoolman to check slot "
+                                      f"{target_slot} ({_slot_err})")
+                state.add_log_entry(
+                    f"❌ Not moving Spool #{sid} into {target} slot {target_slot}: couldn't read "
+                    f"{target} from Spoolman ({_slot_err})", "ERROR", "ff4444")
+                continue
+            unseat_failed = None
             for existing in existing_items:
                 # [ALEX FIX] Improved comparison to catch string vs int mismatches
                 if str(existing.get('slot', '')).strip('"') == str(target_slot) and existing['id'] != int(sid):
@@ -1101,6 +1114,14 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                             f"❌ Failed to unseat Spool #{existing['id']} from slot: {err}",
                             "ERROR", "ff4444"
                         )
+                        unseat_failed = f"couldn't unseat #{existing['id']} from slot {target_slot}: {err}"
+                        break
+            if unseat_failed:
+                failures[str(sid)] = unseat_failed
+                state.add_log_entry(
+                    f"❌ Not moving Spool #{sid} into {target} slot {target_slot}: {unseat_failed}",
+                    "ERROR", "ff4444")
+                continue
 
             new_extra['container_slot'] = str(target_slot)
         else:
@@ -1680,10 +1701,20 @@ def execute_bulk_move(plan, confirm_active_print=False):
     # the source: any movable id STILL present as a DIRECT (non-ghost) match
     # never left — it failed. Best-effort: advisory only; the Activity Log is
     # authoritative for the per-spool outcome (per Derek 2026-07-11).
-    moved_ids = list(movable_ids)
-    failed = []
+    # Per-spool attribution from the map perform_smart_move captured ADJACENT to
+    # each failing write. Reading the LAST_SPOOLMAN_ERROR module global here
+    # instead (the Phase-2 behaviour) was wrong twice over: a later SUCCESS
+    # resets it to None, and a second failure overwrites the first — so a mixed
+    # batch mislabelled every row. Group 41.5: those failures ALWAYS count. They
+    # used to be read only when the readback found a spool still at the source,
+    # so a rejected write plus a readback that missed it was tallied as moved.
+    per_spool = (move_result or {}).get('failures') or {}
+    failed_ids = {str(k) for k in per_spool}
+    unverified = False
     try:
-        still = spoolman_api.get_spools_at_location_detailed(source) or []
+        # Group 41.5: strict, so a Spoolman blip reads as "couldn't verify", not
+        # as an empty source that "proves" every spool left.
+        still = spoolman_api.get_spools_at_location_detailed_strict(source) or []
         still_direct = {str(s.get('id')) for s in still if not s.get('is_ghost')}
         stuck = {str(m) for m in movable_ids} & still_direct
         if stuck:
@@ -1694,31 +1725,29 @@ def execute_bulk_move(plan, confirm_active_print=False):
             # still flat-matches the source and would be mis-counted as failed.
             # Subtract anything that actually landed at dest before deciding.
             at_dest = {str(s.get('id'))
-                       for s in (spoolman_api.get_spools_at_location_detailed(dest) or [])}
+                       for s in (spoolman_api.get_spools_at_location_detailed_strict(dest) or [])}
             stuck -= at_dest
-        if stuck:
-            # Per-spool attribution from the map perform_smart_move captured
-            # ADJACENT to each failing write. Reading the LAST_SPOOLMAN_ERROR
-            # module global here instead (the Phase-2 behaviour) was wrong twice
-            # over: a later SUCCESS resets it to None, and a second failure
-            # overwrites the first — so a mixed batch mislabelled every row.
-            per_spool = (move_result or {}).get('failures') or {}
-            moved_ids = [m for m in movable_ids if str(m) not in stuck]
-            failed = [{"id": m, "err": per_spool.get(str(m)) or "see Activity Log"}
-                      for m in movable_ids if str(m) in stuck]
+        failed_ids |= stuck
     except Exception as e:
+        unverified = True
         state.logger.warning(f"bulk_move: tally readback failed for {source}: {e}")
+    moved_ids = [m for m in movable_ids if str(m) not in failed_ids]
+    failed = [{"id": m, "err": per_spool.get(str(m)) or "see Activity Log"}
+              for m in movable_ids if str(m) in failed_ids]
 
     # Per-spool INFO/ERROR lines already came from perform_smart_move; add one
     # aggregate summary line.
-    level, color = ("SUCCESS", "00ff00") if not failed else ("WARNING", "ffaa00")
+    quiet = not failed and not unverified
+    level, color = ("SUCCESS", "00ff00") if quiet else ("WARNING", "ffaa00")
+    moved_txt = (f"moved {len(moved_ids)} (couldn't verify with Spoolman)" if unverified
+                 else f"moved {len(moved_ids)}")
     state.add_log_entry(
-        f"🔀 Bulk move {source} → {dest}: moved {len(moved_ids)}, "
+        f"🔀 Bulk move {source} → {dest}: {moved_txt}, "
         f"skipped {len(skipped)}, failed {len(failed)}", level, color)
 
     return {"success": len(failed) == 0, "source": source, "dest": dest,
             "moved": len(moved_ids), "moved_ids": moved_ids,
-            "skipped": skipped, "failed": failed}
+            "skipped": skipped, "failed": failed, "unverified": unverified}
 
 
 def start_bulk_move_session(source_id=None):
@@ -1920,6 +1949,11 @@ def process_bulk_move_scan(scan_result):
                     msg = (f"{n_failed} spool(s) failed to move — see the Activity Log."
                            if n_failed else "Bulk move failed.")
                 return {"status": "error", "msg": msg}
+            if result.get('unverified'):
+                # Group 41.5: done, but Spoolman couldn't be read back to check it.
+                return {"status": "warning",
+                        "msg": (f"Bulk move done: moved {result.get('moved', 0)}, but FCC couldn't "
+                                f"verify it with Spoolman. Check the Activity Log.")}
             return {"status": "success", "msg": "Bulk move complete"}
         return {"status": "error", "msg": "Command not allowed during a bulk move."}
 

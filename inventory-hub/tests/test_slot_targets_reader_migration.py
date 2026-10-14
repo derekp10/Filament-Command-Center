@@ -104,6 +104,9 @@ def _move_into_poisoned_box(confirm_active_print, auto_deploy, box_row=None):
                                       return_value=("http://sm", "http://fb")))
         st.enter_context(patch.object(logic.spoolman_api, "get_spools_at_location_detailed",
                                       return_value=[]))
+        # Group 41.6: the engine reads a target slot strictly before seating.
+        st.enter_context(patch.object(logic.spoolman_api, "get_spools_at_location_detailed_strict",
+                                      return_value=[]))
         st.enter_context(patch.object(logic.spoolman_api, "get_spools_at_location", return_value=[]))
         st.enter_context(patch.object(logic.spoolman_api, "get_spool",
                                       return_value={"id": 42, "location": "CR", "extra": {}}))
