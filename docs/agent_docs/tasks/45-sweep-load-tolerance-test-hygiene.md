@@ -9,7 +9,10 @@
 
 Derek answered all three on 2026-10-13 (see "Decisions (answered 2026-10-13)" below). 45.6's run still needs him around to approve the prod reads.
 
-> **Status: `TODO` — filed 2026-10-12 (`/refresh-groups`), not started. Derek answered the 45.3–45.6 questions on 2026-10-13 (see "Decisions (answered 2026-10-13)" below); what still needs him is approving the prod reads on the evening 45.6 runs, plus the standing OK before each full sweep.**
+> **Status: `PARTIAL` — built in the 2026-10-13/14 overnight run on `feature/group-45-sweep-hygiene`, merged to `dev` (sha in [session-handoff-2026-10-14.md](session-handoff-2026-10-14.md)).** Shipped: **45.1(b)(c)**, **45.2**, **45.3**, **45.4**, **45.5**, and **45.8**'s fix (the Printer Status widget was re-reading the whole spool list per toolhead on every heartbeat: FCC itself was the sweep's load). Details and the review's fixes: the 2026-10-14 Group 45 block in `completed-archive.md`. **Left:** 45.1(a) a per-wait triage only where a red recurs, plus a sweep on a genuinely busy desktop (the load line labels it); 45.8's done criterion, three consecutive clean full sweeps; **45.6 / 45.7** the scripted dev-data refresh, one evening with Derek to approve the prod reads; 45.1(d) only if still needed.
+>
+> ⚠️ **Correcting this file's own build notes (2026-10-14):** the 3 s waits were not the main mechanism. On a quiet machine, every dashboard load and heartbeat queued each test's requests behind 13 full spool-list reads (45.8). Fixing that made the page fast enough to expose tests that had leaned on the slowness (closing a modal inside Bootstrap's show transition, opening the Location Manager before the locations load, injecting state a real poll owns); use `conftest.close_wizard` / `wait_modal_settled` / `quiet_heartbeat` / `own_the_buffer` for those shapes. Run sweeps from `inventory-hub/`.
+>
 > It has the Group 32 / 33 / 38 shape: make a red sweep mean something again, on the working desktop Derek actually has.
 
 ---
