@@ -524,11 +524,16 @@ def test_clear_location_ejects_unslotted_and_surfaces_slotted_survivors(client):
         {"id": 4, "slot": "None"},                  # 'None' string → ejected
         {"id": 5},                                  # no slot key → ejected
     ]
-    with patch.object(app_module.spoolman_api, "get_spools_at_location_detailed",
+    # Group 41.2: the strict reader, and an eject answer that really is True
+    # (a MagicMock answer now counts as failed, as any non-True result does).
+    with patch.object(app_module.spoolman_api, "get_spools_at_location_detailed_strict",
                       return_value=contents) as gl, \
+         patch.object(app_module.locations_db, "load_locations_list",
+                      return_value=[{"LocationID": "LR-MDB-1", "Type": "Dryer Box", "Max Spools": "4"}]), \
+         patch.object(app_module.locations_db, "get_active_printer_map", return_value={}), \
          patch.object(app_module.logic, "_active_print_info_for_location",
                       return_value=None) as ap, \
-         patch.object(app_module.logic, "perform_smart_eject") as eject, \
+         patch.object(app_module.logic, "perform_smart_eject", return_value=True) as eject, \
          patch.object(app_module.state, "add_log_entry") as log:
         r = client.post("/api/manage_contents", json={
             "action": "clear_location", "location": "lr-mdb-1",
@@ -544,25 +549,30 @@ def test_clear_location_ejects_unslotted_and_surfaces_slotted_survivors(client):
     ejected = [c[0][0] for c in eject.call_args_list]
     assert ejected == [3, 4, 5]
     for c in eject.call_args_list:
-        assert c[1] == {"confirm_active_print": True}
-    assert any("slotted spool(s) left in place" in c[0][0]
+        assert c[1] == {"confirmed_unassign": False, "confirm_active_print": True}
+    assert any("in a slot left in place" in c[0][0]
                for c in log.call_args_list)
 
 
 def test_clear_location_confirm_flag_skips_active_print_probe(client):
     """confirm_active_print=True bypasses the pre-flight printer probe
     entirely (it is not merely ignored — never called)."""
-    with patch.object(app_module.spoolman_api, "get_spools_at_location_detailed",
-                      return_value=[{"id": 3, "slot": ""}]), \
+    with patch.object(app_module.spoolman_api, "get_spools_at_location_detailed_strict",
+                      return_value=[{"id": 3, "slot": "", "location": "XL-1"}]), \
+         patch.object(app_module.locations_db, "load_locations_list",
+                      return_value=[{"LocationID": "XL-1", "Type": "Tool Head", "Max Spools": "1"}]), \
+         patch.object(app_module.locations_db, "get_active_printer_map",
+                      return_value={"XL-1": {"printer_name": "XL", "position": 0}}), \
          patch.object(app_module.logic, "_active_print_info_for_location") as ap, \
-         patch.object(app_module.logic, "perform_smart_eject") as eject:
+         patch.object(app_module.logic, "perform_smart_eject", return_value=True) as eject:
         r = client.post("/api/manage_contents", json={
             "action": "clear_location", "location": "XL-1",
             "confirm_active_print": True,
         })
-    assert r.get_json() == {"success": True}
+    body = r.get_json()
+    assert body["success"] is True and body["ejected"] == [3], body
     ap.assert_not_called()
-    eject.assert_called_once_with(3, confirm_active_print=True)
+    eject.assert_called_once_with(3, confirmed_unassign=False, confirm_active_print=True)
 
 
 # ---------------------------------------------------------------------------

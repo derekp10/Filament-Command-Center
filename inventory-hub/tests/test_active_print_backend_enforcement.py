@@ -216,8 +216,11 @@ def test_manage_contents_clear_location_bails_when_location_is_active_toolhead(c
          patch.object(logic.config_loader, "load_config", return_value={"printer_map": FAKE_PRINTER_MAP}), \
          patch.object(logic.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
          patch("prusalink_api.get_printer_state", return_value={"state": "PRINTING", "is_active": True}), \
-         patch.object(app_module.spoolman_api, "get_spools_at_location_detailed", return_value=[]), \
+         patch.object(app_module.spoolman_api, "get_spools_at_location_detailed_strict",
+                      return_value=[]), \
          patch.object(logic, "perform_smart_eject") as eject:
+        # Group 41.2: Eject All reads the location strictly (before the probe; a
+        # failed read refuses instead of "clearing" nothing).
         r = client.post("/api/manage_contents", json={
             "action": "clear_location",
             "location": "XL-1",

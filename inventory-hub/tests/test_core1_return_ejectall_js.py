@@ -441,29 +441,62 @@ def test_ejectall_scan_with_a_location_open_still_ejects_it(tmp_path, text):
 # ---------------------------------------------------------------------------
 # triggerEjectAll (inv_loc_mgr.js)
 # ---------------------------------------------------------------------------
+# Group 41.1 / 41.2: the browser asks the server first (check_only), and only a
+# view Eject All may sweep gets "Nuke all unslotted in …?". The run then reports
+# what it did, prompts once for the homeless spools, and asks first on a head
+# that is printing. Each POST is answered by its kind: __CHECK__ for the check,
+# then __RUNS__ in order for the runs.
 
 TRIGGER_SCENARIO = """
-const answer = __ANSWER__;
-window.__respond = (url) => url === '/api/manage_contents' ? { body: answer } : { body: [] };
+const check = __CHECK__;
+const runs = __RUNS__;
+let runIdx = 0;
+window.__respond = (url, method, body) => {
+    if (url !== '/api/manage_contents') return { body: [] };
+    if (body && body.check_only) return { body: check };
+    return { body: runs[Math.min(runIdx++, runs.length - 1)] };
+};
+const confirms = [];
+globalThis.requestConfirmation = (msg, cb) => { confirms.push(String(msg)); window.__confirmCb = cb; };
+const printAsks = [];
+window.confirmActivePrint = (o) => { printAsks.push(o.msg); window.__printYes = o.onConfirm; };
 window.triggerEjectAll(__LOC__);
+await __settle(40);
 if (typeof window.__safetyCb === 'function') window.__safetyCb();
-await __settle(80);
-return { safety: __rec.safety, toasts: __rec.toasts, logs: __rec.logs,
+await __settle(60);
+if (__PRINT_YES__ && typeof window.__printYes === 'function') { window.__printYes(); await __settle(60); }
+if (__CONFIRM_YES__ && typeof window.__confirmCb === 'function') { window.__confirmCb(); await __settle(60); }
+return { safety: __rec.safety, toasts: __rec.toasts, logs: __rec.logs, confirms, printAsks,
          posts: __rec.fetches.filter(f => f.method === 'POST').map(f => [f.url, f.body]) };
 """
 
+CHECK_OK = {"success": True, "check_only": True}
+POST_CHECK = ["/api/manage_contents", {"action": "clear_location", "location": "PM-DB-1", "check_only": True}]
+POST_RUN = ["/api/manage_contents", {"action": "clear_location", "location": "PM-DB-1"}]
 
-def _trigger(tmp_path, loc, answer) -> dict:
+
+def _result(msg, **lists):
+    out = {"success": not lists.get("failed") and not lists.get("needs_unassign"),
+           "ejected": [], "needs_unassign": [], "failed": [], "skipped_slotted": [],
+           "skipped_loaded": [], "msg": msg}
+    out.update(lists)
+    return out
+
+
+def _trigger(tmp_path, loc, check=CHECK_OK, runs=(), confirm_yes=False, print_yes=False) -> dict:
     return run_js(tmp_path, ["inv_loc_mgr.js"], (TRIGGER_SCENARIO
                                                  .replace("__LOC__", json.dumps(loc))
-                                                 .replace("__ANSWER__", json.dumps(answer))))
+                                                 .replace("__CHECK__", json.dumps(check))
+                                                 .replace("__RUNS__", json.dumps(list(runs) or [{}]))
+                                                 .replace("__CONFIRM_YES__", "true" if confirm_yes else "false")
+                                                 .replace("__PRINT_YES__", "true" if print_yes else "false")))
 
 
 @pytest.mark.parametrize("loc", ["", "   ", None])
 def test_trigger_eject_all_refuses_a_blank_location(tmp_path, loc):
     """FAILS on the old module: it prompted "Nuke all unslotted in ?" (or
     "in null") and, confirmed, posted clear_location for that location."""
-    res = _trigger(tmp_path, loc, {"success": True})
+    res = _trigger(tmp_path, loc)
 
     assert res["safety"] == [], res
     assert res["posts"] == [], res
@@ -473,23 +506,79 @@ def test_trigger_eject_all_refuses_a_blank_location(tmp_path, loc):
     assert res["unhandled"] == []
 
 
-def test_trigger_eject_all_reports_a_backend_refusal_instead_of_cleared(tmp_path):
-    """FAILS on the old module: a {success: false} answer toasted "Cleared!"."""
-    msg = "No location given. Open a location in the Location Manager, then use Eject All."
-    res = _trigger(tmp_path, "PM-DB-1", {"success": False, "msg": msg})
+def test_a_view_the_server_refuses_never_shows_the_nuke_prompt(tmp_path):
+    """Group 41.1, FAILS on the old module: it asked "Nuke all unslotted in
+    LR?" and the refusal (if any) came after the user had said yes."""
+    msg = "Eject All is off for rooms, so nothing was moved. Eject from LR's boxes, drawers and shelves."
+    res = _trigger(tmp_path, "PM-DB-1", check={"success": False, "blocked_reason": "room_view", "msg": msg})
 
-    assert res["safety"] == ["Nuke all unslotted in PM-DB-1?"]
-    assert res["posts"] == [["/api/manage_contents", {"action": "clear_location", "location": "PM-DB-1"}]]
+    assert res["safety"] == [], res
+    assert res["posts"] == [POST_CHECK], res
     assert [t["msg"] for t in res["toasts"]] == [msg], res["toasts"]
     assert res["toasts"][0]["type"] == "warning" and res["toasts"][0]["duration"] >= 7000
     assert res["unhandled"] == []
 
 
-def test_trigger_eject_all_success_still_says_cleared(tmp_path):
-    """Control, PASSES on the old module too."""
-    res = _trigger(tmp_path, "PM-DB-1", {"success": True})
+def test_trigger_eject_all_reports_a_backend_refusal_instead_of_cleared(tmp_path):
+    """A refusal on the run itself (an unreadable location) is reported, never
+    "Cleared!"."""
+    msg = "Couldn't read PM-DB-1 from Spoolman, so nothing was ejected. Try again."
+    res = _trigger(tmp_path, "PM-DB-1", runs=[{"success": False, "msg": msg}])
 
     assert res["safety"] == ["Nuke all unslotted in PM-DB-1?"]
-    assert res["posts"] == [["/api/manage_contents", {"action": "clear_location", "location": "PM-DB-1"}]]
-    assert "Cleared!" in [t["msg"] for t in res["toasts"]], res["toasts"]
+    assert res["posts"] == [POST_CHECK, POST_RUN]
+    assert [t["msg"] for t in res["toasts"]] == [msg], res["toasts"]
+    assert res["toasts"][0]["type"] == "warning" and res["toasts"][0]["duration"] >= 7000
+    assert res["unhandled"] == []
+
+
+def test_a_clean_eject_all_says_what_it_did(tmp_path):
+    """Group 41.2, FAILS on the old module: it toasted a bare "Cleared!"."""
+    msg = "Eject All on PM-DB-1: ejected 2."
+    res = _trigger(tmp_path, "PM-DB-1", runs=[_result(msg, ejected=[1, 2])])
+
+    assert res["posts"] == [POST_CHECK, POST_RUN]
+    assert [(t["msg"], t["type"]) for t in res["toasts"]] == [(msg, "success")], res["toasts"]
+    assert res["confirms"] == [] and res["unhandled"] == []
+
+
+def test_a_failed_eject_raises_an_error_toast(tmp_path):
+    msg = "Eject All on PM-DB-1: ejected 1, 1 failed (#33: its eject failed (see the Activity Log))."
+    res = _trigger(tmp_path, "PM-DB-1", runs=[_result(msg, ejected=[1], failed=[{"id": 33, "err": "x"}])])
+
+    assert [(t["msg"], t["type"]) for t in res["toasts"]] == [(msg, "error")], res["toasts"]
+    assert res["toasts"][0]["duration"] >= 7000
+    assert res["unhandled"] == []
+
+
+def test_the_homeless_spools_get_one_prompt_and_its_yes_names_them(tmp_path):
+    """Derek's Q1: one "unassign?" prompt for the batch; Yes posts exactly the
+    ids it named."""
+    ask = "2 spools on PM-DB-1 have no saved home (#32, #35). Unassign them?"
+    first = dict(_result("Eject All on PM-DB-1: ejected 1, 2 need a decision.",
+                         ejected=[31], needs_unassign=[32, 35]), unassign_msg=ask)
+    second = _result("Eject All on PM-DB-1: ejected 2.", ejected=[32, 35])
+    res = _trigger(tmp_path, "PM-DB-1", runs=[first, second], confirm_yes=True)
+
+    assert res["confirms"] == [ask], res
+    assert res["posts"] == [POST_CHECK, POST_RUN,
+                            ["/api/manage_contents", {"action": "clear_location", "location": "PM-DB-1",
+                                                      "confirmed_unassign_ids": [32, 35]}]], res["posts"]
+    assert [t["type"] for t in res["toasts"]] == ["warning", "success"], res["toasts"]
+    assert res["unhandled"] == []
+
+
+def test_a_printing_head_asks_first_and_its_yes_retries_with_the_flag(tmp_path):
+    """Group 41.2, FAILS on the old module: a require_confirm answer was left
+    unhandled (the old code returned without a word)."""
+    ask = {"success": False, "require_confirm": True, "confirm_type": "active_print",
+           "active_print": {"printer_name": "XL", "state": "PRINTING"},
+           "msg": "XL is PRINTING — clearing this location will disrupt the print."}
+    done = _result("Eject All on PM-DB-1: ejected 1.", ejected=[1])
+    res = _trigger(tmp_path, "PM-DB-1", runs=[ask, done], print_yes=True)
+
+    assert res["printAsks"] == [ask["msg"]], res
+    assert res["posts"][-1] == ["/api/manage_contents", {"action": "clear_location", "location": "PM-DB-1",
+                                                         "confirm_active_print": True}], res["posts"]
+    assert [t["type"] for t in res["toasts"]] == ["success"], res["toasts"]
     assert res["unhandled"] == []

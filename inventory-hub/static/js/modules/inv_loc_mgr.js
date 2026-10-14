@@ -1720,33 +1720,73 @@ window.triggerEjectAll = (loc) => {
         if (window.logClientEvent) window.logClientEvent('⚠️ Eject All ignored: no location was given', 'WARNING');
         return;
     }
-    promptSafety(`Nuke all unslotted in ${target}?`, () => {
+    // Group 41.1: ask the server first. A room, a printer that isn't a head, a
+    // row FCC only knows from its spools and the Unassigned/Unknown lists are
+    // refused there (and logged), so the user never answers "Nuke all?" only to
+    // be refused. One rule, one wording, in logic.eject_all_block_reason.
     setProcessing(true);
-    window.fetchT('/api/manage_contents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'clear_location', location: target }) })
+    window.fetchT('/api/manage_contents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'clear_location', location: target, check_only: true }) })
+        .then(r => r.json())
+        .then((chk) => {
+            setProcessing(false);
+            if (!chk || chk.success === false) {
+                showToast((chk && chk.msg) || 'Eject All was refused', 'warning', 9000);
+                return;
+            }
+            promptSafety(`Nuke all unslotted in ${target}?`, () => _runEjectAll(target, {}));
+        })
+        .catch(() => { setProcessing(false); showToast("Eject-all failed", "error", 7000); });
+};
+
+// Group 41.2: run Eject All and say what really happened. The answer lists
+// ejected / needs_unassign / failed / skipped_slotted / skipped_loaded; the toast
+// is its one-line summary (an error toast when anything failed). A head that is
+// printing asks first (the shared confirm), and the spools with no saved home
+// get ONE "unassign?" prompt for the batch (Derek's Q1), whose Yes names them.
+const _runEjectAll = (target, opts) => {
+    const body = { action: 'clear_location', location: target };
+    if (opts.confirmActivePrint) body.confirm_active_print = true;
+    if (opts.unassignIds && opts.unassignIds.length) body.confirmed_unassign_ids = opts.unassignIds;
+    setProcessing(true);
+    window.fetchT('/api/manage_contents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
         .then(r => r.json())
         .then((res) => {
             setProcessing(false);
-            // A plain refusal (e.g. the backend's no-location guard) is not
-            // "Cleared!". A require_confirm answer is left to the planned
-            // eject-all results work.
-            if (res && res.success === false && !res.require_confirm) {
-                showToast(res.msg || 'Eject All was refused', 'warning', 7000);
+            if (res && res.require_confirm && res.confirm_type === 'active_print' && window.confirmActivePrint) {
+                window.confirmActivePrint({
+                    activePrint: res.active_print, msg: res.msg,
+                    host: document.getElementById('manageModal'),
+                    onConfirm: () => _runEjectAll(target, Object.assign({}, opts, { confirmActivePrint: true })),
+                });
                 return;
             }
-            if(window.fetchLocations) window.fetchLocations();
+            const listed = res && Array.isArray(res.ejected);
+            if (!listed) {
+                if (res && res.success === true) {
+                    // A bare success (no per-spool lists): done, nothing to itemise.
+                    if (window.fetchLocations) window.fetchLocations();
+                    refreshManageView(target);
+                    showToast(res.msg || `Eject All on ${target}: done.`, 'success', 4000);
+                    return;
+                }
+                // A refusal (a blocked view, an unreadable location): nothing ran.
+                showToast((res && res.msg) || 'Eject All was refused', 'warning', 7000);
+                return;
+            }
+            if (window.fetchLocations) window.fetchLocations();
             refreshManageView(target);
-            // 27.6 — a bulk clear leaves SLOTTED spools (toolhead/MMU-loaded) in
-            // place on purpose. Be honest about it rather than always saying
-            // "Cleared!": warn when survivors remain so the user knows the
-            // location isn't actually empty (matches the backend Activity Log).
-            if (res && Array.isArray(res.skipped_slotted) && res.skipped_slotted.length) {
-                showToast(res.msg || `${res.skipped_slotted.length} slotted spool(s) left in place — unload the slot to remove them.`, "warning", 7000);
-            } else {
-                showToast("Cleared!");
+            const failed = res.failed || [];
+            const needs = res.needs_unassign || [];
+            const leftover = (res.skipped_slotted || []).length + (res.skipped_loaded || []).length;
+            if (failed.length) showToast(res.msg, 'error', 9000);
+            else if (needs.length || leftover) showToast(res.msg, 'warning', 7000);
+            else showToast(res.msg, 'success', 4000);
+            if (needs.length && !opts.unassignIds) {
+                requestConfirmation(res.unassign_msg || `Unassign ${needs.length} spool(s) with no saved home?`,
+                    () => _runEjectAll(target, Object.assign({}, opts, { unassignIds: needs })));
             }
         })
         .catch(() => { setProcessing(false); showToast("Eject-all failed", "error", 7000); });
-    });
 };
 
 window.printCurrentLocationLabel = () => {

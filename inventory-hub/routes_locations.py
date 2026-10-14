@@ -843,6 +843,10 @@ def api_undo(): return jsonify(logic.perform_undo())
 @app.route('/api/get_contents', methods=['GET'])
 def api_get_contents_route():
     loc = request.args.get('id', '').strip().upper()
+    # Group 41.9: a blank id is no location, not "every spool with no location"
+    # (the matcher reads '' that way). Every caller expects a list.
+    if not loc:
+        return jsonify([])
     return jsonify(spoolman_api.get_spools_at_location_detailed(loc))
 
 @app.route('/api/spool_details', methods=['GET'])

@@ -332,27 +332,6 @@ def _pm_prefix(k):
     return k.split('-', 1)[0] if '-' in k else k
 
 
-def _printer_row_toolheads(loc_list, loc_id):
-    """L271 — the toolhead LocationIDs a Printer row owns (its toolheads[]),
-    uppercased, in stored order; [] when `loc_id` is not a Printer row.
-
-    The row, not the spelling of its id, says which heads belong to a printer: a
-    toolhead id need not start with "<printer id>-" (a Core One+ row can own
-    CORE1-T1/CORE1-T2), and a head can share the printer's own id (CORE1)."""
-    want = str(loc_id or '').strip().upper()
-    for row in (loc_list or []):
-        if not isinstance(row, dict):
-            continue
-        if str(row.get('Type', '')).strip().lower() != 'printer':
-            continue
-        if str(row.get('LocationID', '')).strip().upper() != want:
-            continue
-        return [str(th.get('location_id', '')).strip().upper()
-                for th in (row.get('toolheads') or [])
-                if isinstance(th, dict) and str(th.get('location_id', '')).strip()]
-    return []
-
-
 def _natural_key(s):
     """29.B1 — natural/numeric sort key so "XL-2" orders before "XL-10"
     (lexicographic sort put "XL-10" first, which the 10+-toolhead indxx
@@ -676,7 +655,7 @@ def api_quickswap_return():
     if toolhead in pm_keys_up:
         candidate_toolheads = [toolhead]
     else:
-        row_heads = _printer_row_toolheads(loc_list, toolhead)
+        row_heads = locations_db.printer_row_toolheads(loc_list, toolhead)
         if row_heads:
             candidate_toolheads = sorted(
                 {t for t in row_heads if t in pm_keys_up}, key=_natural_key)

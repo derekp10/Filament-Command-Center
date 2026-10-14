@@ -590,6 +590,79 @@ def _known_room_of(loc_id, loc_list):
     return room if row and row.get('Type') == 'Room' else ""
 
 
+# Group 41.1 / 41.9 — the views Eject All refuses, decided from locations.json
+# and the printer map only (no Spoolman read), so the browser can ask before it
+# shows "Nuke all unslotted in …?" (manage_contents clear_location check_only).
+_EJECT_ALL_REFUSED = {
+    'blank': "no location",
+    'unassigned': "the Unassigned list",
+    'unknown': "the Unknown list",
+    'synthesized': "not a saved location",
+    'room_view': "a room",
+    'printer_view': "a printer",
+}
+
+
+def eject_all_block_reason(loc_id, loc_row, printer_map):
+    """Why Eject All refuses `loc_id`, or None when it may run.
+
+    - 'blank': no location (the 2026-09-13 guard: '' matches every Unassigned spool);
+    - 'unassigned' / 'unknown': the two virtual lists. The matcher reads UNASSIGNED
+      as every spool with no location, and Eject All there "returned" trail-carrying
+      spools into their old boxes (41.9);
+    - 'synthesized': no locations.json row (a "<prefix> (Room)" or a Spoolman-native
+      name); a prefix sweep with nothing on disk to scope it;
+    - 'room_view': Derek's D4 ("an eject all on a room would be catastrophic");
+    - 'printer_view': a Printer row that is not itself a head (XL, RCOI, or one with
+      no heads yet), so Eject All can't sweep every head mid-print.
+    Every other view (a box, cart, shelf, row, or a head) keeps Eject All."""
+    lid = str(loc_id or '').strip().upper()
+    if not lid:
+        return 'blank'
+    if lid in ('UNASSIGNED', 'UNKNOWN'):
+        return lid.lower()
+    if not isinstance(loc_row, dict):
+        return 'synthesized'
+    if str(loc_row.get('Type', '')).strip().lower() == 'room':
+        return 'room_view'
+    if locations_db.is_printer_row_not_head(lid, loc_row, printer_map):
+        return 'printer_view'
+    return None
+
+
+def eject_all_block_message(reason, loc_id, loc_list, bulk_moves_enabled):
+    """The toast for a refused Eject All (Derek, 2026-10-13: a room's pointer
+    follows the Bulk Moves switch; a printer points at its cards and heads)."""
+    lid = str(loc_id or '').strip().upper()
+    if reason == 'blank':
+        return "No location given. Open a location in the Location Manager, then use Eject All."
+    if reason == 'unassigned':
+        return ("Eject All doesn't apply to the Unassigned list: those spools have no "
+                "location to leave. Nothing was moved.")
+    if reason == 'unknown':
+        return ("Eject All doesn't apply to the Unknown (lost) list. Eject spool by spool "
+                "once you've found them. Nothing was moved.")
+    if reason == 'synthesized':
+        return (f"Eject All is off here: {lid} isn't a saved location (FCC only knows it "
+                f"from its spools), so nothing was moved. Eject spool by spool from its cards.")
+    if reason == 'room_view':
+        if bulk_moves_enabled:
+            return (f"Eject All is off for rooms, so nothing was moved. To empty {lid}, use "
+                    f"🔀 Move all →. Its preview includes the spools in {lid}'s boxes, "
+                    f"drawers and shelves too, so check it before you commit.")
+        return (f"Eject All is off for rooms, so nothing was moved. Eject from {lid}'s "
+                f"boxes, drawers and shelves, or spool by spool from its cards.")
+    if reason == 'printer_view':
+        heads = locations_db.printer_row_toolheads(loc_list, lid)
+        if not heads:
+            return (f"Eject All is off for printers, so nothing was moved. {lid} has no "
+                    f"toolheads yet; add them in ⚙️ Settings → Toolheads.")
+        span = heads[0] if len(heads) == 1 else f"{heads[0]} … {heads[-1]}"
+        return (f"Eject All is off for printers, so nothing was moved. Eject each spool "
+                f"from its card, or open a head ({span}); FCC asks first if {lid} is printing.")
+    return "Eject All was refused. Nothing was moved."
+
+
 def _eject_refusal_reason(result):
     """Why perform_smart_eject did not return True, in words for a log line.
 
@@ -686,6 +759,20 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
     loc_list = locations_db.load_locations_list()
     loc_info_map = {row['LocationID'].upper(): row for row in loc_list}
+
+    # Group 41.9: a non-numeric item names a LOCATION and expands to its spools.
+    # A blank one matched every spool with no location (plus every spool with no
+    # trail, as a ghost), and the two virtual lists sweep the same way, so any
+    # door that passed one moved essentially every live spool. Refuse before
+    # any read or write.
+    for item in (raw_spools or []):
+        name = str(item).strip().strip('"').upper()
+        if not str(item).isdigit() and name in ('', 'UNASSIGNED', 'UNKNOWN'):
+            state.add_log_entry(
+                f"⚠️ Move to {target or 'UNASSIGNED'} refused: {name or 'a blank'} isn't a "
+                f"spool or a place to move spools from. Nothing was moved.", "WARNING", "ffaa00")
+            return {"status": "error",
+                    "msg": f"{name or 'A blank item'} isn't a spool or a location to move from. Nothing was moved."}
 
     spools = []
     for item in raw_spools:
@@ -2088,13 +2175,15 @@ def _eject_destination(spool_data, printer_map, homeless_destination=None):
     if homeless_destination is not None:
         # The caller already decided where a spool with no home goes.
         target_loc = str(homeless_destination or '').strip().upper()
-    # Normal unslotted eject with Room Fallback
-    # [Universal Fallback fix] A printer is not a Room. If ejecting from a printer and missing physical_source, default to Unassigned.
-    elif current_location in printer_map:
-        target_loc = ""
     else:
-        room_fallback = get_room_from_location(current_location)
-        target_loc = room_fallback if room_fallback else ""
+        # Group 41.8 (Derek's Q1, option B, 2026-09-18): a spool with no saved
+        # home goes to Unassigned after one "unassign?" prompt, from a printer
+        # head as from a box, cart, drawer or shelf. It used to go UP to its
+        # Room's loose pile, which made exactly the Room-only spools Derek finds
+        # a pain to find. Smart Load's resident keeps the printer's Room through
+        # homeless_destination (his 2026-09-12 rule). A Room-valued trail
+        # ("CR") is still a saved home, handled above.
+        target_loc = ""
     # Protected Unassign (a caller-decided destination needs no prompt)
     needs = target_loc == "" and current_location != "" and homeless_destination is None
     return {"home": None, "slot": "", "target": target_loc, "needs_unassign_confirm": needs}

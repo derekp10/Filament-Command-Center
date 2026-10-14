@@ -34,10 +34,12 @@ class FakeSpoolman:
     `unreadable` read as None, like get_spool on a Spoolman timeout.
     """
 
-    def __init__(self, spools, reject_locations=(), unreadable=()):
+    def __init__(self, spools, reject_locations=(), unreadable=(), reject_ids=()):
         self.spools = {int(k): copy.deepcopy(v) for k, v in spools.items()}
         self.reject_locations = {str(r).upper() for r in reject_locations}
         self.unreadable = {int(u) for u in unreadable}
+        # Group 41.2: Spoolman rejects every write to these spools.
+        self.reject_ids = {int(r) for r in reject_ids}
         # True = Spoolman's spool LIST is down: the fail-open readers answer []
         # (they swallow the error) and the strict reader raises.
         self.list_reads_fail = False
@@ -51,7 +53,7 @@ class FakeSpoolman:
 
     def update_spool(self, sid, data):
         self.writes.append((int(sid), copy.deepcopy(data)))
-        if str(data.get("location", "")).upper() in self.reject_locations:
+        if int(sid) in self.reject_ids or str(data.get("location", "")).upper() in self.reject_locations:
             logic.spoolman_api.LAST_SPOOLMAN_ERROR = "400: rejected by test"
             return None
         rec = self.spools.setdefault(int(sid), {"location": "", "extra": {}})
