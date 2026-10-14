@@ -533,6 +533,42 @@ def test_context_assign_with_failures_drops_only_the_moved_spools(
 
 
 @pytest.mark.usefixtures("require_server")
+def test_context_assign_yes_names_the_slot_and_the_spool_it_asked_about(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """Group 40.0e: a slotless move into a multi-slot box is given its slot before
+    the question, and the answer carries it (`target_slot`). The Yes sends that
+    slot back as `picked_slot` (the server keeps it only while it is still free,
+    so it never unseats anyone), and names the spool the question was about: a
+    spool scanned into the buffer while the dialog is open stays in the buffer.
+    FAILS on HEAD: the replay sent no slot and re-read the live buffer (both
+    spools)."""
+    ask = {"status": "requires_confirm", "confirm_type": "active_print",
+           "active_print": {"toolhead": TH, "printer_name": PRINTER, "state": "PRINTING"},
+           "active_prints": [{"toolhead": TH, "printer_name": PRINTER, "state": "PRINTING",
+                              "role": "feeds", "spools": [999211]}],
+           "fed_heads": [], "can_store": True, "target_slot": SLOT,
+           "msg": f"{PRINTER} is PRINTING. {BOX} slot {SLOT} feeds {TH}, so this also loads #999211 "
+                  f"onto {TH} and unloads what {TH} holds. Continue?"}
+    be = FakeBackend(page, smart_move=lambda b: (
+        {"status": "success", "failures": {}} if b.get("confirmed_toolheads") else ask))
+    _boot(page, base_url, reset_dom_state_js)
+    _seed_buffer(page, be, [{"id": 999211, "display": "FCC Test #999211", "color": "00ff00"}])
+
+    page.evaluate("(tid) => performContextAssign(tid, null, [], null)", BOX)
+    page.wait_for_selector("#fcc-active-print-scan-overlay #fcc-aps-yes", state="visible", timeout=5_000)
+    assert be.bodies("/api/smart_move")[0]["slot"] is None, be.bodies("/api/smart_move")
+    page.evaluate("() => { state.heldSpools.push({id: 999212, display: 'FCC Test #999212', color: '0000ff'});"
+                  " renderBuffer(); }")
+    page.click("#fcc-active-print-scan-overlay #fcc-aps-yes")
+    _until(page, lambda: len(be.bodies("/api/smart_move")) >= 2, 5_000, "Yes sent no retry")
+    replay = be.bodies("/api/smart_move")[1]
+    assert replay["picked_slot"] == SLOT and replay["slot"] is None, replay
+    assert replay["spools"] == [999211], replay
+    assert replay["confirmed_toolheads"] == [TH], replay
+    _until(page, lambda: _held(page) == [999212], 5_000, "the late spool should stay in the buffer")
+
+
+@pytest.mark.usefixtures("require_server")
 def test_slot_assign_with_a_failure_leaves_the_buffer_untouched(
         page: Page, base_url: str, reset_dom_state_js: str):
     """doAssign -> _doAssignFinalize (a non-toolhead target, so no probe) with
@@ -611,6 +647,36 @@ def test_force_location_asks_on_an_active_print_then_moves_with_the_head(
     page.click("#fcc-active-print-confirm-overlay .fcc-apc-yes")
     _until(page, lambda: len(be.bodies("/api/manage_contents")) >= 2, 5_000, "Yes sent no retry")
     assert be.bodies("/api/manage_contents")[1]["confirmed_toolheads"] == [TH], be.bodies("/api/manage_contents")
+    _toast(page, "the confirmed override raised no success toast", type_="success",
+           contains=("Location updated via override",))
+
+
+@pytest.mark.usefixtures("require_server")
+def test_force_location_yes_lands_in_the_slot_the_engine_picked(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """Group 40.0e: Force Location into a multi-slot box sends no slot; the engine
+    picks one before it asks and names it (`target_slot`). The Yes sends it back
+    as `picked_slot`, so it lands where the question said (or, if someone took
+    that slot meanwhile, nothing moves). FAILS on HEAD: the retry sent no slot,
+    so the engine could pick another one."""
+    ask = {"status": "requires_confirm", "confirm_type": "active_print",
+           "active_print": {"toolhead": TH, "printer_name": PRINTER, "state": "PRINTING"},
+           "active_prints": [{"toolhead": TH, "printer_name": PRINTER, "state": "PRINTING",
+                              "role": "feeds", "spools": [999401]}],
+           "fed_heads": [], "can_store": True, "target_slot": SLOT,
+           "msg": f"{PRINTER} is PRINTING. {BOX} slot {SLOT} feeds {TH}, so this also loads #999401 "
+                  f"onto {TH} and unloads what {TH} holds. Continue?"}
+    be = FakeBackend(page, manage_contents=lambda b: (
+        {"status": "success"} if b.get("confirmed_toolheads") else ask), extra_locations=[BOX_ROW])
+    _boot(page, base_url, reset_dom_state_js)
+    _force_to_box(page)
+    page.wait_for_selector("#fcc-active-print-confirm-overlay .fcc-apc-yes", state="visible", timeout=5_000)
+    page.click("#fcc-active-print-confirm-overlay .fcc-apc-yes")
+    _until(page, lambda: len(be.bodies("/api/manage_contents")) >= 2, 5_000, "Yes sent no retry")
+    first, retry = be.bodies("/api/manage_contents")[:2]
+    assert "slot" not in first and "picked_slot" not in first, first
+    assert retry["picked_slot"] == SLOT and "slot" not in retry, retry
+    assert retry["confirmed_toolheads"] == [TH], retry
     _toast(page, "the confirmed override raised no success toast", type_="success",
            contains=("Location updated via override",))
 

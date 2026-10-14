@@ -1153,9 +1153,12 @@ def scan(api_base_url: str):
     scan input on the dashboard instead of using this fixture.
     """
     def _scan(text: str, source: str = "test") -> dict:
+        # `confirmed_fed_heads` as a current page sends it (Group 40.0c): a slot
+        # scan whose head runs a spool from elsewhere then asks (head_fed)
+        # instead of answering the stale-page "reload" refusal.
         r = requests.post(
             f"{api_base_url}/api/identify_scan",
-            json={"text": text, "source": source},
+            json={"text": text, "source": source, "confirmed_fed_heads": []},
             timeout=10,
         )
         r.raise_for_status()

@@ -502,10 +502,15 @@ def test_add_returns_perform_smart_move_result_verbatim(client):
     rs.assert_called_once_with("ID:7")
     args, kwargs = mv.call_args
     assert args == ("LR-MDB-1", [7])
+    # Group 40.0c: plus "Just store it" (auto_deploy) and the confirmed fed heads;
+    # 40.0e: plus the slot an earlier answer picked (kept only while free).
     assert kwargs == {
         "target_slot": "2",
         "origin": "buffer",
+        "auto_deploy": True,
         "confirm_active_print": [],
+        "confirmed_fed_heads": [],
+        "picked_slot": None,
     }
 
 

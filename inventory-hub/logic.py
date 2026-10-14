@@ -153,7 +153,8 @@ def _and_list(items):
     return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
 
 
-def _active_print_message(active_prints, target, residents=(), target_slot=None):
+def _active_print_message(active_prints, target, residents=(), target_slot=None,
+                          skip_feeds=(), named=()):
     """The text of an active-print confirm, in Derek's D6 wording (Group 39.4):
       one source   "#42 is loaded on XL-3. Moving it to CR-CT-2-R1 means FCC
                     stops charging this print to it. Continue?"
@@ -169,10 +170,17 @@ def _active_print_message(active_prints, target, residents=(), target_slot=None)
     it: the Yes covers that head, so the user must see it (R2-08). When it is
     on a source's printer, the spool keeps feeding that print, so the source
     sentence drops "stops charging". A destination with no resident keeps the
-    sentence the overlays have always shown."""
+    sentence the overlays have always shown.
+
+    Group 40.0c's head_fed question names a fed head in its own sentence:
+    `skip_feeds` (head ids) leaves out those heads' 'feeds' sentences, and
+    `named` (printer names) are printers whose state that sentence already
+    gave, so no other sentence repeats it."""
     sources = [a for a in active_prints if a.get('role') == 'source']
     feeds = [a for a in active_prints if a.get('role') == 'feeds']
-    told = {a['printer_name'] for a in sources}
+    source_printers = {a['printer_name'] for a in sources}
+    told = set(source_printers) | set(named)
+    skip = {str(h).strip().upper() for h in skip_feeds}
     out = []
     if sources:
         loaded = [(sid, a['toolhead']) for a in sources for sid in (a.get('spools') or [])]
@@ -182,11 +190,11 @@ def _active_print_message(active_prints, target, residents=(), target_slot=None)
             where = _and_list([f"#{loaded[0][0]} is loaded on {loaded[0][1]}"]
                               + [f"#{s} on {h}" for s, h in loaded[1:]])
             pronoun = "them"
-        if any(f['printer_name'] in told for f in feeds):
+        if any(f['printer_name'] in source_printers for f in feeds):
             out.append(f"{where}.")
         else:
             whose = ("this print" if len(loaded) == 1 else
-                     f"this {sources[0]['printer_name']} print" if len(told) == 1 else "these prints")
+                     f"this {sources[0]['printer_name']} print" if len(source_printers) == 1 else "these prints")
             out.append(f"{where}. Moving {pronoun} to {target} means FCC stops charging {whose} to {pronoun}.")
         if residents:
             out.append(f"It also unloads {_and_list('#' + str(r) for r in residents)} from {target}.")
@@ -195,6 +203,9 @@ def _active_print_message(active_prints, target, residents=(), target_slot=None)
         if role == 'source':
             continue
         if role == 'feeds':
+            if str(a.get('toolhead', '')).upper() in skip:
+                told.add(a['printer_name'])
+                continue
             moving = _and_list('#' + str(s) for s in a.get('spools') or []) if a.get('spools') else "the spool"
             slot = f"{target} slot {target_slot}" if target_slot not in (None, '') else target
             lead = "" if a['printer_name'] in told else f"{a['printer_name']} is {a['state']}. "
@@ -215,11 +226,13 @@ def _active_print_message(active_prints, target, residents=(), target_slot=None)
     return " ".join(out) + " Continue?"
 
 
-def _requires_confirm_answer(active_prints, target, target_slot, residents=()):
+def _requires_confirm_answer(active_prints, target, target_slot, residents=(), spools=()):
     """Group 39.1 — the ONE shape every move confirm answers in. Groups 40-42
     extend it (40.0c fills fed_heads / can_store); none redefines it.
     `active_print` keeps the first entry's three original keys for existing
-    consumers; a replay sends back the heads in `active_prints`."""
+    consumers; a replay sends back the heads in `active_prints`. `spools`
+    (40.0c): the moving spools the question is about, so a replay names them
+    rather than re-reading a buffer that changed while the dialog was open."""
     first = active_prints[0]
     return {
         "status": "requires_confirm",
@@ -229,7 +242,262 @@ def _requires_confirm_answer(active_prints, target, target_slot, residents=()):
         "fed_heads": [],
         "can_store": False,
         "target_slot": None if target_slot in (None, '') else str(target_slot),
+        "spools": [int(s) for s in spools if str(s).isdigit()],
         "msg": _active_print_message(active_prints, target, residents, target_slot),
+    }
+
+
+# ---- Group 40.0c: the "head already fed from elsewhere" confirm -------------------
+
+def confirmed_fed_heads_from(data):
+    """Group 40.0c — the fed heads whose "already running another spool" warning
+    the user saw (`confirmed_fed_heads`), the fed-head twin of confirmed_heads.
+    A current page sends each answer's `confirm_key` ("XL-1#99"): the head AND
+    the spools it was running, so a Yes about #99 never covers a spool loaded
+    onto XL-1 while the dialog was open (_fed_covered). Read by the three doors
+    that can load a bound box slot's head: manage_contents add, /api/smart_move
+    and the identify_scan slot branch."""
+    heads = (data or {}).get('confirmed_fed_heads')
+    if isinstance(heads, (list, tuple)):
+        return [str(h).strip().strip('"').upper() for h in heads
+                if isinstance(h, (str, int)) and str(h).strip()]
+    return []
+
+
+def auto_deploy_requested(data):
+    """Group 40.0c — a move door's `auto_deploy`, on unless the request says
+    false. "Just store it" replays the move with `auto_deploy: false`: the spool
+    goes in its slot and the head that slot feeds is left alone (40.0b)."""
+    value = (data or {}).get('auto_deploy')
+    if value is None or isinstance(value, bool):
+        return value is not False
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() not in ('false', '0', 'no', 'off')
+
+
+def _fed_key(head, residents):
+    """A fed head's confirm key: the head and the spools the question named
+    ("XL-1#99", "XL-1#7,99")."""
+    ids = sorted({str(r).strip() for r in residents}, key=lambda s: (len(s), s))
+    return f"{str(head or '').strip().upper()}#{','.join(ids)}"
+
+
+def _fed_blanket(confirmed, head):
+    """True when `confirmed` covers `head` whatever it runs: True (every head) or
+    the bare head id (internal callers and tests; a page sends confirm keys)."""
+    every, keys = _confirm_scope(confirmed)
+    return every or str(head or '').strip().strip('"').upper() in keys
+
+
+def _fed_covered(confirmed, head, residents):
+    """Whether `confirmed` covers loading over `head` while it runs `residents`
+    (its spools fed from elsewhere): blanket, or the confirm key naming exactly
+    those spools. A different spool on the head is asked about again."""
+    return _fed_blanket(confirmed, head) or _fed_key(head, residents) in _confirm_scope(confirmed)[1]
+
+
+def stale_fed_refusal(data, result):
+    """Group 40.0c — a page loaded before 40.0c can't answer a head_fed question:
+    its replay rebuilt the confirm from `active_print` and sent back only the
+    heads in `active_prints`, so every Yes got the same question back, forever.
+    The question goes only to a request that carries `confirmed_fed_heads` (any
+    list, even []), which every door call of a current page does. Otherwise this
+    logs and returns the message the door answers with instead, naming what it
+    refused; else None. Checked before stale_confirm_refusal."""
+    d = data if isinstance(data, dict) else {}
+    if 'confirmed_fed_heads' in d:
+        return None
+    if not (isinstance(result, dict) and result.get('status') == 'requires_confirm'
+            and result.get('confirm_type') == 'head_fed'):
+        return None
+    fed = (result.get('fed_heads') or [{}])[0]
+    running = _and_list(f"#{r.get('id')}" for r in (fed.get('residents') or [fed.get('resident') or {}]))
+    msg = (f"Not moved: {fed.get('toolhead') or 'that toolhead'} is running {running}, and this request "
+           f"can't ask before loading over it. Reload the page (Ctrl+F5) and try again.")
+    state.add_log_entry(f"⚠️ {msg} It would have asked: {result.get('msg')}", "WARNING", "ffaa00")
+    return msg
+
+
+def _norm_slot(slot):
+    """A slot as one comparable string: quotes and blanks stripped, 'None' /
+    'null' read as no slot, and a number without leading zeros ('01' -> '1').
+    Slots arrive as JSON ints, quoted Spoolman extras and scan text."""
+    s = str(slot if slot is not None else '').strip().strip('"').strip()
+    if s in ('None', 'null'):
+        return ''
+    return str(int(s)) if s.isdigit() else s
+
+
+def _slot_binding(box_row, slot):
+    """What `slot` of `box_row` feeds, upper-cased, or '' when the slot is
+    unbound or a PRINTER:<id> pool slot. The pre-flight, the fed-head check and
+    the auto-deploy chain all read the binding here, so the head the user is
+    asked about is the head the chain loads."""
+    s = _norm_slot(slot)
+    if not s:
+        return ''
+    for key, bound in locations_db.bindings_from_row(box_row).items():
+        if _norm_slot(key) == s:
+            t = str(bound or '').strip().strip('"').upper()
+            return '' if not t or locations_db.is_printer_sentinel(t) else t
+    return ''
+
+
+def _spool_record(sid):
+    """A spool's own record, or None when Spoolman can't give it: get_spool
+    returns Spoolman's error body (a truthy dict without an id) for a missing
+    spool, so the id decides (as print_deduct._spool_read does)."""
+    rec = spoolman_api.get_spool(sid)
+    return rec if isinstance(rec, dict) and rec.get('id') is not None else None
+
+
+def recommend_box_slot(max_slots, claims, own_slot=None, would_prompt=None):
+    """Group 40.0e / 40.1 — the ONE box-slot recommendation (Derek's D2.1),
+    shared by the engine's auto-slot and the slot picker's ⭐ so the two can't
+    drift:
+      1. `own_slot`: the moving spool already sits in this box, in a slot no
+         other spool claims;
+      2. else the lowest-numbered empty slot for which `would_prompt(slot)` is
+         false (the caller's rule: unbound, a pool slot, or a head with no
+         spool on it; any empty slot when nothing would load);
+      3. else the lowest-numbered empty slot;
+      4. else None: the box is full. Never assume an empty slot exists.
+    `claims` holds the slots other spools hold, directly or as the slot a
+    deployed spool came from. `would_prompt` is asked lazily, lowest slot
+    first, and may raise (the engine then refuses the move). Returns
+    (slot or None, 'own_slot' | 'no_prompt' | 'lowest_empty' | 'full')."""
+    try:
+        n = int(str(max_slots if max_slots is not None else '').strip() or '0')
+    except (TypeError, ValueError):
+        n = 0
+    taken = {_norm_slot(s) for s in (claims or ())}
+    own = _norm_slot(own_slot)
+    if own.isdigit() and 1 <= int(own) <= n and own not in taken:
+        return own, 'own_slot'
+    empty = [str(i) for i in range(1, n + 1) if str(i) not in taken]
+    if not empty:
+        return None, 'full'
+    for s in empty:
+        if would_prompt is None or not would_prompt(s):
+            return s, 'no_prompt'
+    return empty[0], 'lowest_empty'
+
+
+_AUTO_SLOT_WHY = {
+    'own_slot': "the slot it already sits in",
+    'no_prompt': "the lowest free slot that loads no busy toolhead",
+    'lowest_empty': "the lowest free slot",
+    'picked': "the slot picked when the move was asked about",
+}
+
+
+def _same_feed(rec, box_id, slot, loc_info_map):
+    """True when a head's resident `rec` is the slot's OWN spool: its trail names
+    exactly this box and slot. That is the same-slot swap (Derek's everyday
+    "replace the spool in LR-MDB-1 slot 3"), which asks nothing new. Compared
+    through the one slot rule (42.2's effective_slot)."""
+    extra = (rec or {}).get('extra') or {}
+    src = str(extra.get('physical_source') or '').strip().strip('"').upper()
+    if not src or src != str(box_id or '').strip().strip('"').upper():
+        return False
+    trail_slot = _norm_slot(locations_db.effective_slot(
+        (loc_info_map or {}).get(src), extra.get('physical_source_slot')))
+    return bool(trail_slot) and trail_slot == _norm_slot(slot)
+
+
+def _fed_resident(rec, head, printer_map, loc_list, loc_info_map):
+    """One spool running on a fed head, as the head_fed answer names it: where it
+    came from and where loading over it sends it, both from exactly where Smart
+    Load's eject sends it (its saved home, else the Room the printer sits in,
+    else Unassigned), so the dialog can't drift from the real eject. A trail the
+    eject won't use (a stale toolhead, a loop) reads as "doesn't know"."""
+    extra = rec.get('extra') or {}
+    src = str(extra.get('physical_source') or '').strip().strip('"').upper()
+    src_slot = _norm_slot(locations_db.effective_slot((loc_info_map or {}).get(src),
+                                                      extra.get('physical_source_slot'))) if src else ''
+    dest = _eject_destination(rec, printer_map, homeless_destination=_known_room_of(head, loc_list))
+    home = str(dest.get('home') or '').strip().strip('"').upper()
+    if home:
+        try:
+            multi = int(str(((loc_info_map or {}).get(home) or {}).get('Max Spools', '0')).strip() or '0') > 1
+        except (TypeError, ValueError):
+            multi = False
+        home_slot = _norm_slot(dest.get('slot'))
+        came_from = f"{home} slot {home_slot}" if multi and home_slot else home
+        goes_to, goes = home, f"back to {home}"
+    else:
+        came_from = ""
+        goes_to = str(dest.get('target') or '').strip().upper()
+        goes = f"to Room {goes_to}" if goes_to else "to Unassigned"
+    try:
+        display = spoolman_api.format_spool_display(rec).get('text') or f"#{rec.get('id')}"
+    except Exception:
+        display = f"#{rec.get('id')}"
+    return {"id": rec.get('id'), "display": display,
+            "trail": {"box": src, "slot": src_slot} if src else None,
+            "from": came_from, "goes_to": goes_to, "goes": goes}
+
+
+def _running_text(residents):
+    """"#99 (from PM-DB-2)", "#99 (FCC doesn't know where it came from)", or a list."""
+    return _and_list(f"#{r['id']} (from {r['from']})" if r.get('from')
+                     else f"#{r['id']} (FCC doesn't know where it came from)" for r in residents)
+
+
+def _fed_sentence(entry, loading, charged):
+    """"LR-MDB-1 slot 1 feeds XL-1, and XL-1 is running #1 (from PM-DB-3).
+    Loading #57 sends #1 back to PM-DB-3." (Derek's wording, 2026-10-13).
+    `charged`: the head's printer is printing, so the unloaded spool stops
+    being charged for this print."""
+    head = entry['toolhead']
+    residents = entry.get('residents') or [entry['resident']]
+    sends = _and_list(f"#{r['id']} {r['goes']}" for r in residents)
+    gone = _and_list(f"#{r['id']}" for r in residents)
+    tail = f", so FCC stops charging this print to {gone}" if charged else ""
+    return (f"{entry['box']} slot {entry['slot']} feeds {head}, and {head} is running "
+            f"{_running_text(residents)}. Loading #{loading} sends {sends}{tail}.")
+
+
+def _head_fed_answer(fed_heads, active_prints, target, target_slot, spools):
+    """Group 40.0c — the head_fed question, in the ONE shape every move confirm
+    answers in (39.1): `fed_heads` beside `active_prints`, so a head that is
+    fed from elsewhere AND printing is one question. "Load it instead" replays
+    the move with each fed head's `confirm_key` in `confirmed_fed_heads` (and
+    the printing heads in `confirmed_toolheads`); "Just store it" (`can_store`)
+    replays it with auto_deploy false. Both replays name the slot
+    (`picked_slot`: target_slot) and the spools (`spools`) the question was
+    about. `title` asks; `body` (= `msg`) explains, with no "Continue?"."""
+    loading = spools[-1]   # the chain deploys the last spool placed in the slot
+    printing = {str(a['toolhead']).upper(): a for a in active_prints if a.get('role') == 'feeds'}
+    told: typing.Set[str] = set()
+    parts = []
+    for f in fed_heads:
+        ap = printing.get(f['toolhead'])
+        lead = ""
+        if ap and ap['printer_name'] not in told:
+            lead = f"{ap['printer_name']} is {ap['state']}. "
+            told.add(ap['printer_name'])
+        parts.append(lead + _fed_sentence(f, loading, charged=bool(ap)))
+    rest = _active_print_message(active_prints, target, (), target_slot,
+                                 skip_feeds=[f['toolhead'] for f in fed_heads], named=told)
+    rest = rest[:-len("Continue?")].strip() if rest.endswith("Continue?") else rest.strip()
+    if rest:
+        parts.append(rest)
+    first = active_prints[0] if active_prints else None
+    msg = " ".join(parts)
+    return {
+        "status": "requires_confirm",
+        "confirm_type": "head_fed",
+        "fed_heads": fed_heads,
+        "active_prints": active_prints,
+        "active_print": {k: first[k] for k in ("toolhead", "printer_name", "state")} if first else None,
+        "can_store": True,
+        "target_slot": _norm_slot(target_slot) or None,
+        "spools": [int(s) for s in spools if str(s).isdigit()],
+        "title": f"Load #{loading} onto {fed_heads[0]['toolhead']}?",
+        "body": msg,
+        "msg": msg,
     }
 
 
@@ -947,7 +1215,8 @@ def release_box_after_direct_write(sid, pre, post):
 _smart_move_depth = threading.local()
 
 
-def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_deploy=True, confirm_active_print=False):
+def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_deploy=True, confirm_active_print=False,
+                       confirmed_fed_heads=(), fed_check_from=None, picked_slot=None):
     """Entry point for the slot-move pipeline.
 
     Owns the per-move printer-state probe cache (L3 fix A) so the auto-deploy
@@ -955,6 +1224,17 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
     detects the OUTERMOST call and begins/clears the cache around it, while the
     recursive re-entry (depth > 0) leaves the outer cache untouched. All real
     work lives in _perform_smart_move_impl — this is a behaviour-neutral wrapper.
+
+    `confirmed_fed_heads` (Group 40.0c): the fed heads whose "already running
+    another spool" warning the user saw, as confirm keys ("XL-1#99": the head and
+    the spools it ran) or bare head ids (any spool; internal callers); True
+    covers every head, and the default covers none, so any caller that loads a
+    bound slot's head is asked first. `fed_check_from` is internal: the
+    auto-deploy chain passes (box, slot, the head's spools the question saw), so
+    the chained load refuses to unload a spool that arrived during the probe.
+    `picked_slot` (Group 40.0e): the slot an earlier answer picked for this
+    slotless move (`target_slot`), taken only while it is still free; unlike
+    `target_slot` it never unseats a spool that took it meanwhile.
     """
     depth = getattr(_smart_move_depth, "n", 0)
     owns_move = depth == 0
@@ -973,6 +1253,9 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
             target, raw_spools, target_slot=target_slot, origin=origin,
             auto_deploy=auto_deploy,
             confirm_active_print=confirm_active_print,
+            confirmed_fed_heads=confirmed_fed_heads,
+            fed_check_from=fed_check_from,
+            picked_slot=picked_slot,
         )
     finally:
         _smart_move_depth.n = getattr(_smart_move_depth, "n", 1) - 1
@@ -983,7 +1266,8 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
                 pass
 
 
-def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', auto_deploy=True, confirm_active_print=False):
+def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', auto_deploy=True, confirm_active_print=False,
+                             confirmed_fed_heads=(), fed_check_from=None, picked_slot=None):
     """Move spool(s) to `target`, optionally into `target_slot` of that location.
 
     `auto_deploy` (default True): when the target is a Dryer Box AND the
@@ -1006,6 +1290,14 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     invariant (the 2026-04-22 desync).
     """
     target = target.strip().upper()
+    # One slot form for the whole move (Group 40.0c): a JSON int, a quoted
+    # Spoolman extra and a zero-padded label name the same slot, so the head the
+    # pre-flight asks about, the slot written and the head the chain loads can't
+    # disagree. Slots count from 1.
+    target_slot = _norm_slot(target_slot) or None
+    if target_slot == '0':
+        target_slot = None
+    picked_slot = _norm_slot(picked_slot) or None
     cfg = config_loader.load_config()
     printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
     loc_list = locations_db.load_locations_list()
@@ -1042,18 +1334,23 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     #      {"status": "error", "blocked_reason", "msg", "failures"}: a Printer row
     #      that is not its own toolhead (40.0a); several spools onto a
     #      single-occupancy target (42.3a).
-    #   3. Slot choice: auto-slot for a slotless single spool into a multi-slot
-    #      box (40.0e moves it up here).
+    #   3. Slot choice (40.0e): a slotless single spool into a multi-slot box
+    #      gets recommend_box_slot's pick here, BEFORE anything is asked, so the
+    #      pick is a named slot from then on (its head is probed and checked);
+    #      a single-slot box's spool takes slot 1 (42.2).
     #   4. Strict reads, failing closed (status error, nothing written): the
     #      moving spools' own records (39.4), the target head's residents (39.7),
-    #      the bound head's residents (40.0c).
+    #      the bound head's residents and their records (40.0c; step 3's pick
+    #      read them already, once per head).
     #   5. ONE confirm answer: _uncovered_active_heads over the destination /
-    #      feeds / source heads (one probe per printer, through the memo), in the
-    #      shape _requires_confirm_answer builds (40.0c adds fed_heads).
+    #      feeds / source heads (one probe per printer, through the memo), plus
+    #      40.0c's fed heads: `head_fed` (_head_fed_answer) when a bound head runs
+    #      a spool from elsewhere, else _requires_confirm_answer's `active_print`.
     #   6. Writes, per spool, in this order: Smart Load's resident ejects (from
-    #      a fresh strict list of the head when step 5 could have probed); the
-    #      slot unseat (41.6); the spool's own write (13.6 / record_source at a
-    #      head, 40.0d; the single-slot box release, 42.1); then the chain.
+    #      a fresh strict list of the head when step 5 could have probed, which
+    #      a chained deploy re-checks for a newly fed head, 40.0c); the slot
+    #      unseat (41.6); the spool's own write (13.6 / record_source at a head,
+    #      40.0d; the single-slot box release, 42.1); then the chain.
     # -----------------------------------------------------------------------------
 
     # Single-occupancy target (Printer/Toolhead): Smart Load (step 6) unloads
@@ -1114,6 +1411,148 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         state.add_log_entry(f"⚠️ Not moved: {msg}.", "WARNING", "ffaa00")
         return {"status": "error", "blocked_reason": "single_occupancy", "msg": msg,
                 "failures": failures}
+
+    # Step 3 (Group 40.0e): the slot choice, BEFORE anything is asked. Auto-slot
+    # used to run after the pre-flight, so a slotless move into a multi-slot box
+    # never asked about the head its picked slot feeds: the chain then skipped a
+    # printing head's deploy with a warning, or unloaded an idle head's spool
+    # unasked. The pick is a named slot from here on (step 5 probes its head,
+    # step 4 checks whether that head runs a spool from elsewhere), and every
+    # answer carries it as `target_slot`; the replay sends it back as
+    # `picked_slot`, taken only while it is still free. One spool only: in a
+    # bulk move a shared slot would make each spool unseat the one before, so a
+    # bulk slotless move stays slotless. Each bound head is read strictly once
+    # per move: the pick and step 4's fed check share the read.
+    head_residents: typing.Dict[str, typing.List[typing.Any]] = {}
+
+    def _residents_of(head):
+        """The spools whose own record is on `head`, other than the moving ones,
+        read strictly once per move. Raises when Spoolman can't say."""
+        h = str(head or '').strip().strip('"').upper()
+        if h not in head_residents:
+            head_residents[h] = strict_direct_occupants(h, exclude=spools)
+        return head_residents[h]
+
+    # The engine chose this slot, so it never unseats anyone: step 6 refuses
+    # (or, in a single-slot box, goes unslotted) if a spool took it meanwhile.
+    slot_was_picked = False
+    # The pick feeds the head the spool is leaving: the spool is stored in the
+    # box and not loaded straight back (a slotless move off a head into a box).
+    store_only = False
+    if not target_slot and tgt_info and len(spools) == 1 and not (is_printer or is_toolhead):
+        try:
+            max_slots_auto = int(str(tgt_info.get('Max Spools', '0')).strip() or '0')
+        except (TypeError, ValueError):
+            max_slots_auto = 0
+        if max_slots_auto > 1:
+            moving = {str(s) for s in spools}
+            # Strictly (Group 41 review): a fail-open read answered [] on a
+            # Spoolman blip, so slot 1 was picked whoever held it, and the slot
+            # block in step 6 then unseated that spool.
+            try:
+                in_box = spoolman_api.get_spools_at_location_detailed_strict(target) or []
+            except Exception as _pick_err:
+                why = f"couldn't read {target} from Spoolman to pick a free slot ({_pick_err})"
+                for sid in spools:
+                    failures[str(sid)] = why
+                state.add_log_entry(f"❌ Not moved to <b>{target}</b>: {why}", "ERROR", "ff4444")
+                return {"status": "error", "msg": f"Not moved: {why}.", "failures": failures}
+            others = [item for item in in_box if str(item.get('id')) not in moving]
+            # slot -> the other spools that hold it, directly or as the slot a
+            # deployed spool came from.
+            claims: typing.Dict[str, typing.List[typing.Any]] = {}
+            for item in others:
+                s = _norm_slot(locations_db.effective_slot(tgt_info, item.get('slot', ''),
+                                                           occupants=len(others)))
+                if s:
+                    claims.setdefault(s, []).append(item.get('id'))
+            # Its own slot, while it sits in the box itself (a spool deployed
+            # from here is on a head).
+            own_slot = next((_norm_slot(item.get('slot', '')) for item in in_box
+                             if str(item.get('id')) in moving and not item.get('is_ghost')
+                             and str(item.get('location') or '').strip().strip('"').upper() == target), None)
+            box_feeds = tgt_info.get('Type') == locations_db.DRYER_BOX_TYPE and auto_deploy
+            # Where the spool is now: a slot feeding the head it is leaving only
+            # stores it (below), so that slot never asks.
+            mover = _spool_record(spools[0]) if box_feeds else None
+            moving_from = str((mover or {}).get('location') or '').strip().strip('"').upper()
+
+            def _would_prompt(slot):
+                """Whether loading `slot`'s head could ask: a one-spool head that
+                holds a spool. A binding to anything else (a deleted head, a
+                printer row) is avoided too, since the chain would move the
+                spool out of the box to it. Static, with no printer probe: step 5
+                asks about a printing head either way."""
+                if not box_feeds:
+                    return False
+                head = _slot_binding(tgt_info, slot)
+                if not head or head == moving_from:
+                    return False
+                if not _holds_one_spool(head, printer_map, loc_info_map):
+                    return True
+                try:
+                    return bool(_residents_of(head))
+                except Exception as e:
+                    raise RuntimeError(f"couldn't read {head} from Spoolman to pick a slot in {target} ({e})")
+
+            if picked_slot:
+                # The replay of a question about this pick: the same slot while
+                # it is free. Otherwise nothing moves: it never unseats a spool
+                # that took the slot while the user was deciding.
+                if (picked_slot.isdigit() and 1 <= int(picked_slot) <= max_slots_auto
+                        and picked_slot not in claims):
+                    pick, pick_why = picked_slot, 'picked'
+                else:
+                    holders = claims.get(picked_slot) or []
+                    why = (f"{target} slot {picked_slot} was taken"
+                           + (f" by {_and_list('#' + str(h) for h in holders)}" if holders else "")
+                           + " while you were deciding, so nothing moved — try again")
+                    for sid in spools:
+                        failures[str(sid)] = why
+                    state.add_log_entry(f"⚠️ Not moved: {why}.", "WARNING", "ffaa00")
+                    return {"status": "error", "blocked_reason": "picked_slot_taken",
+                            "msg": f"Not moved: {why}.", "failures": failures}
+            else:
+                try:
+                    pick, pick_why = recommend_box_slot(max_slots_auto, claims, own_slot, _would_prompt)
+                except Exception as _pick_err:
+                    for sid in spools:
+                        failures[str(sid)] = str(_pick_err)
+                    state.add_log_entry(f"❌ Not moved to <b>{target}</b>: {_pick_err}", "ERROR", "ff4444")
+                    return {"status": "error", "msg": f"Not moved: {_pick_err}.", "failures": failures}
+            if pick:
+                target_slot = pick
+                slot_was_picked = True
+                state.logger.info(f"🪑 Auto-slot: {target} slot {pick}, {_AUTO_SLOT_WHY.get(pick_why, pick_why)}")
+                if moving_from and _slot_binding(tgt_info, pick) == moving_from:
+                    store_only = True
+                    state.logger.info(f"🪑 {target} slot {pick} feeds {moving_from}, which #{spools[0]} is "
+                                      f"leaving: it is stored there, not loaded back")
+        elif locations_db._is_single_slot_dryer_box(tgt_info):
+            # Group 42.2: a single-slot box has one place, so its spool is in
+            # slot 1. It used to be stored blank, which left a toolhead's
+            # Quick-Swap tile for the box reading empty while its spool was
+            # loaded. Only while no other spool claims slot 1 (Group 42 review):
+            # the box's own spool, deployed to a head, still holds it through
+            # its trail, and a second spool in slot 1 made Quick-Swap move a
+            # different spool than its card showed (and Return unseat the one
+            # it had just said it would leave alone). Such a spool goes in
+            # unslotted. A read that fails leaves it unslotted too: no slot is
+            # claimed, so nothing can be unseated. (A `picked_slot` "1" decides
+            # the same way.)
+            try:
+                _in_box = [o for o in (spoolman_api.get_spools_at_location_detailed_strict(target) or [])
+                           if str(o.get('id')) not in {str(s) for s in spools}]
+                _taken_by = next((o.get('id') for o in _in_box if locations_db.effective_slot(
+                    tgt_info, o.get('slot', ''), occupants=len(_in_box)) == '1'), None)
+                _why_unslotted = f"slot 1 is taken by #{_taken_by}" if _taken_by is not None else ""
+            except Exception as _pick_err:
+                _why_unslotted = f"couldn't read it from Spoolman ({_pick_err})"
+            if not _why_unslotted:
+                target_slot = '1'
+                slot_was_picked = True
+            else:
+                state.logger.info(f"🪑 {target}: {_why_unslotted} — the spool goes in unslotted")
 
     # Step 4 (Group 39.4): the moving spools' own records. A spool loaded on a
     # printer head is LEAVING it (role 'source', D6), unless this re-scans it
@@ -1180,105 +1619,92 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         if refused:
             return refused
 
+    # The head a named slot feeds: the auto-deploy chain loads it. It counts only
+    # when the chain will load it (I1-06): Return parks a spool with
+    # auto_deploy=False, and must not ask about a head it never touches. A
+    # single-slot box's slot 1 binding records where its OWN spool is loaded
+    # (the Group 20.2 lifecycle), not a feed, so it is never a feeds head and
+    # never auto-deploys (Group 42.2). A pick that feeds the head the spool is
+    # leaving stores it (step 3). The chain loads exactly this head.
+    bound_th = ''
+    if (tgt_info and tgt_info.get('Type') == locations_db.DRYER_BOX_TYPE and target_slot and auto_deploy
+            and not store_only and not locations_db._is_single_slot_dryer_box(tgt_info)):
+        bound_th = _slot_binding(tgt_info, target_slot)
+    loads_head = bool(bound_th) and _holds_one_spool(bound_th, printer_map, loc_info_map)
+
+    # Step 4 (Group 40.0c, Derek's D2.2): that head already runs a spool from
+    # somewhere else. The chain unloaded it without a word on an idle printer
+    # (Derek: "XL-1 running off a PolyDryer while slot 1 is prepped for later").
+    # A resident whose trail is this very box and slot is the slot's own spool
+    # coming back out, his everyday swap, and asks nothing new; any other trail,
+    # or none (FCC can't tell where it is fed from), is asked about. A Yes
+    # covers the spools it named (the confirm key), never one that arrived
+    # since. Read strictly, once per head (step 3's pick may have read it); an
+    # unreadable head or resident refuses the move before anything is written.
+    fed_heads: typing.List[typing.Dict[str, typing.Any]] = []
+    # The head's spools this move saw, for the chained deploy's guard (None: not
+    # read, because the caller covered the head whatever it runs).
+    fed_seen: typing.Optional[typing.Tuple[typing.Any, ...]] = None
+    if loads_head and not _fed_blanket(confirmed_fed_heads, bound_th):
+        def _fed_unreadable(why):
+            for _sid in spools:
+                failures[str(_sid)] = why
+            state.add_log_entry(
+                f"❌ Not moved to <b>{target}</b> slot {target_slot}: {why}, so FCC can't tell "
+                f"whether {bound_th} (the toolhead that slot feeds) runs a spool from elsewhere",
+                "ERROR", "ff4444")
+            return {"status": "error", "msg": f"Not moved: {why}.", "failures": failures}
+        try:
+            fed_rids = _residents_of(bound_th)
+        except Exception as e:
+            return _fed_unreadable(f"couldn't read {bound_th} from Spoolman ({e})")
+        fed_seen = tuple(fed_rids)
+        elsewhere = []
+        for rid in fed_rids:
+            rec = _spool_record(rid)
+            if rec is None:
+                return _fed_unreadable(f"couldn't read #{rid} on {bound_th} from Spoolman")
+            if str(rec.get('location') or '').strip().strip('"').upper() != bound_th:
+                continue   # it left the head between the two reads
+            if not _same_feed(rec, target, target_slot, loc_info_map):
+                elsewhere.append(_fed_resident(rec, bound_th, printer_map, loc_list, loc_info_map))
+        if elsewhere and not _fed_covered(confirmed_fed_heads, bound_th, [r['id'] for r in elsewhere]):
+            fed_heads.append({
+                "toolhead": bound_th,
+                "printer_name": str((printer_map.get(bound_th) or {}).get('printer_name') or bound_th),
+                "box": target, "slot": _norm_slot(target_slot),
+                "resident": elsewhere[0], "residents": elsewhere,
+                # What "Load it instead" sends back in confirmed_fed_heads.
+                "confirm_key": _fed_key(bound_th, [r['id'] for r in elsewhere]),
+            })
+
     # Step 5. The heads the moving spools leave, the destination, and a named
     # slot's bound head (the auto-deploy chain loads it) are checked BEFORE any
     # Spoolman write, so the user is asked once, before anything moves, rather
     # than the chained call swallowing the answer. `confirm_active_print` is
     # True (covers every head), falsy (none) or the LocationIDs whose warning
-    # the user saw.
+    # the user saw. A fed head (40.0c) is the same one question, with its
+    # active prints beside it.
     touched: typing.List[tuple] = [(head, 'source', sids) for head, sids in sources.items()]
     if not (all_here and not residents):
         touched.append((target, 'destination'))
-    tgt_row = tgt_info
-    # The bound head counts only when the chain will load it (I1-06): Return
-    # parks a spool with auto_deploy=False, and must not ask about a head it
-    # never touches.
-    # A single-slot box's slot 1 binding records where its OWN spool is loaded
-    # (the Group 20.2 lifecycle), not a feed, so it is never a feeds head and
-    # never auto-deploys (Group 42.2).
-    if (tgt_row and tgt_row.get('Type') == 'Dryer Box' and target_slot and auto_deploy
-            and not locations_db._is_single_slot_dryer_box(tgt_row)):
-        bound = locations_db.bindings_from_row(tgt_row)
-        if str(target_slot).isdigit():
-            bound_th = bound.get(str(target_slot)) or bound.get(str(int(target_slot)))
-        else:
-            bound_th = bound.get(str(target_slot))
-        if bound_th and not locations_db.is_printer_sentinel(bound_th):
-            touched.append((bound_th, 'feeds'))
+    if bound_th:
+        touched.append((bound_th, 'feeds'))
     active_prints = _uncovered_active_heads(touched, confirm_active_print, printer_map, spools)
+    if fed_heads:
+        return _head_fed_answer(fed_heads, active_prints, target, target_slot, spools)
     if active_prints:
-        return _requires_confirm_answer(active_prints, target, target_slot, residents)
-
-    # Whether the CALLER named the slot, before auto-slot fills one in. The
-    # pre-flight above probed only an explicit slot's bound toolhead, so only
-    # then does the caller's confirm also cover the auto-deploy chain below.
-    explicit_slot = bool(target_slot)
-
-    # Auto-slot-pick: if the caller didn't specify a slot and the target is a
-    # slotted container (Max Spools > 1) with at least one free slot, fill the
-    # lowest-numbered free slot. Only fires for single-spool moves — in a bulk
-    # move, a shared target_slot would make each spool unseat the previous
-    # one, so a bulk slotless move stays slotless (rooms/shelves handle that
-    # case correctly; slotted bulk moves should be explicit).
-    tgt_info_auto = loc_info_map.get(target)
-    if not target_slot and tgt_info_auto and len(spools) == 1:
-        try:
-            max_slots_auto = int(str(tgt_info_auto.get('Max Spools', '0')).strip() or '0')
-        except (TypeError, ValueError):
-            max_slots_auto = 0
-        if max_slots_auto > 1:
-            # Collect currently-occupied slot numbers at this target. Strictly
-            # (Group 41 review): a fail-open read answered [] on a Spoolman blip,
-            # so slot 1 was picked whoever held it, and the strict slot block
-            # below then unseated that spool. Nothing has been written yet.
-            try:
-                existing_at_target = spoolman_api.get_spools_at_location_detailed_strict(target) or []
-            except Exception as _pick_err:
-                why = f"couldn't read {target} from Spoolman to pick a free slot ({_pick_err})"
-                for sid in spools:
-                    failures[str(sid)] = why
-                state.add_log_entry(f"❌ Not moved to <b>{target}</b>: {why}", "ERROR", "ff4444")
-                return {"status": "error", "msg": f"Not moved: {why}.", "failures": failures}
-            occupied_slots = set()
-            for existing in existing_at_target:
-                # Skip the spool we're about to move — otherwise its own current slot
-                # gets flagged as occupied and we miss the obvious re-slot case.
-                if str(existing.get('id')) in [str(s) for s in spools]:
-                    continue
-                raw = str(existing.get('slot', '') or '').strip().strip('"')
-                if raw and raw.isdigit():
-                    occupied_slots.add(int(raw))
-            # Pick lowest-numbered free slot.
-            for i in range(1, max_slots_auto + 1):
-                if i not in occupied_slots:
-                    target_slot = str(i)
-                    state.logger.info(
-                        f"🪑 Auto-slot: {target} has free slot {i} — assigning spool there"
-                    )
-                    break
-        elif locations_db._is_single_slot_dryer_box(tgt_info_auto):
-            # Group 42.2: a single-slot box has one place, so its spool is in
-            # slot 1. It used to be stored blank, which left a toolhead's
-            # Quick-Swap tile for the box reading empty while its spool was
-            # loaded. Only while no other spool claims slot 1 (Group 42 review):
-            # the box's own spool, deployed to a head, still holds it through
-            # its trail, and a second spool in slot 1 made Quick-Swap move a
-            # different spool than its card showed (and Return unseat the one
-            # it had just said it would leave alone). Such a spool goes in
-            # unslotted. A read that fails leaves it unslotted too: no slot is
-            # claimed, so nothing can be unseated.
-            try:
-                _in_box = [o for o in (spoolman_api.get_spools_at_location_detailed_strict(target) or [])
-                           if str(o.get('id')) not in {str(s) for s in spools}]
-                _taken_by = next((o.get('id') for o in _in_box if locations_db.effective_slot(
-                    tgt_info_auto, o.get('slot', ''), occupants=len(_in_box)) == '1'), None)
-                _why_unslotted = f"slot 1 is taken by #{_taken_by}" if _taken_by is not None else ""
-            except Exception as _pick_err:
-                _why_unslotted = f"couldn't read it from Spoolman ({_pick_err})"
-            if not _why_unslotted:
-                target_slot = '1'
-            else:
-                state.logger.info(f"🪑 {target}: {_why_unslotted} — the spool goes in unslotted")
+        answer = _requires_confirm_answer(active_prints, target, target_slot, residents, spools=spools)
+        # "Just store it" (40.3) is an answer only where a store differs from a
+        # load: a slot whose chain would load a head. Its three-way dialog asks
+        # in the `title` and explains in the `body` (`msg` minus "Continue?",
+        # which no button there answers); `msg` keeps the yes/no wording.
+        answer['can_store'] = loads_head
+        if loads_head:
+            answer['title'] = f"Load #{spools[-1]} onto {bound_th}?"
+            m = answer['msg']
+            answer['body'] = m[:-len("Continue?")].strip() if m.endswith("Continue?") else m
+        return answer
 
     # L298 Phase 0 — undo hardening: `extras` snapshots each moved spool's
     # system-managed extras (container_slot / physical_source /
@@ -1300,6 +1726,33 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         residents, refused = _strict_residents()
         if refused:
             return refused
+
+    # Group 40.0c, the chained deploy's guard. The bound-slot move read this
+    # head's spools before its printer probe, which can take seconds. A spool
+    # loaded onto the head meanwhile was never shown to the user, so it is not
+    # unloaded unasked, whatever its trail says (a spare scanned onto the head
+    # records the one free slot that feeds it, 40.0d). Nothing is written: the
+    # spool stays in its slot and the outer move reports it as not deployed.
+    if (fed_check_from and residents and (is_printer or is_toolhead)
+            and not _fed_blanket(confirmed_fed_heads, target)):
+        g_box, g_slot, g_seen = fed_check_from
+        seen = {str(x) for x in (g_seen or ())}
+        arrived = [rid for rid in residents if str(rid) not in seen]
+        if arrived:
+            named = []
+            for rid in arrived:
+                rec = _spool_record(rid)
+                named.append(_fed_resident(rec, target, printer_map, loc_list, loc_info_map)
+                             if rec else {"id": rid, "from": ""})
+            loading = _and_list('#' + str(s) for s in spools)
+            why = (f"{target} started running {_running_text(named)} while FCC was checking the "
+                   f"printer, so {loading} stayed in {g_box} slot {g_slot} and was not loaded. To load "
+                   f"it, use {target}'s Quick-Swap ({g_box} slot {g_slot})")
+            for sid in spools:
+                failures[str(sid)] = why
+            state.add_log_entry(f"⚠️ Not loading onto {target}: {why}.", "WARNING", "ffaa00")
+            return {"status": "error", "blocked_reason": "head_fed", "msg": f"Not loaded: {why}.",
+                    "failures": failures}
 
     # --- SMART LOAD LOGIC (Auto-Eject Resident) ---
     if residents:
@@ -1404,6 +1857,7 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         # strict read, so a head named with a slot (LOC:SOLO:SLOT:1) has nothing
         # to unseat. Reading it again, after that unload, could only fail the
         # load and leave the head empty (Group 41 review).
+        seat_slot = target_slot
         if target_slot and not (is_printer or is_toolhead):
             # Group 41.6: read the slot STRICTLY, and seat nothing in a slot that
             # couldn't be cleared. The fail-open read answered [] on a timeout,
@@ -1418,8 +1872,29 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                     f"❌ Not moving Spool #{sid} into {target} slot {target_slot}: couldn't read "
                     f"{target} from Spoolman ({_slot_err})", "ERROR", "ff4444")
                 continue
+            if slot_was_picked:
+                # Group 40.0e: the engine chose this slot before the printer probe,
+                # which can take seconds. A pick never unseats a spool that took
+                # the slot meanwhile (in it, or deployed from it): a multi-slot box
+                # refuses this spool and writes nothing, and a single-slot box takes
+                # it unslotted, as 42.2 does. An explicit slot keeps Overwrite.
+                _moving = {str(s) for s in spools}
+                _others = [e for e in existing_items if str(e.get('id')) not in _moving]
+                _took = [e.get('id') for e in _others if _norm_slot(locations_db.effective_slot(
+                    tgt_info, e.get('slot', ''), occupants=len(_others))) == target_slot]
+                if _took:
+                    _who = _and_list('#' + str(t) for t in _took)
+                    if locations_db._is_single_slot_dryer_box(tgt_info):
+                        seat_slot = ''
+                        state.logger.info(f"🪑 {target}: {_who} took slot 1 meanwhile — the spool goes in unslotted")
+                    else:
+                        failures[str(sid)] = (f"{target} slot {target_slot} was filled by {_who} while FCC "
+                                              f"was checking the printer, so nothing moved — try again")
+                        state.add_log_entry(f"❌ Not moving Spool #{sid}: {failures[str(sid)]}",
+                                            "ERROR", "ff4444")
+                        continue
             unseat_failed = None
-            for existing in existing_items:
+            for existing in (existing_items if seat_slot else []):
                 # A ghost (a spool deployed FROM this slot) is listed with its
                 # trail's slot. Clearing its own container_slot never frees that
                 # slot, and since 41.6 a failure of that pointless write refused
@@ -1427,7 +1902,8 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                 if existing.get('is_ghost'):
                     continue
                 # [ALEX FIX] Improved comparison to catch string vs int mismatches
-                if str(existing.get('slot', '')).strip('"') == str(target_slot) and existing['id'] != int(sid):
+                # (and, since 40.0c, quoted or zero-padded slots: one slot form).
+                if _norm_slot(existing.get('slot', '')) == seat_slot and existing['id'] != int(sid):
                     state.logger.info(f"🪑 Unseating Spool {existing['id']} from Slot {target_slot}")
                     # Load the existing spool's full extra and MERGE — Spoolman's
                     # PATCH replaces the entire `extra` object, so passing only
@@ -1452,7 +1928,7 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                 continue
 
         # Moving to a non-slotted location clears the slot.
-        new_extra['container_slot'] = str(target_slot) if target_slot else ""
+        new_extra['container_slot'] = str(seat_slot) if seat_slot else ""
 
         # Group 42.6: the "before the box" note. Into a single-slot box from a
         # place that isn't a head, it records where the spool was (Claude's call
@@ -1581,7 +2057,7 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
             new_extra['physical_source_slot'] = ""
 
             if _move_write(sid, target, new_extra):
-                slot_txt = f" [Slot {target_slot}]" if target_slot else ""
+                slot_txt = f" [Slot {seat_slot}]" if seat_slot else ""
                 state.add_log_entry(f"📦 {info['text']} -> Dryer {target}{slot_txt}", "INFO", info['color'])
             else:
                 err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
@@ -1664,15 +2140,10 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     # auto_deploy_skipped.
     auto_deployed: typing.List[typing.Any] = []
     auto_deploy_skipped: typing.Dict[str, str] = {}
-    bound_toolhead = None
-    if (auto_deploy and target_slot and tgt_info and tgt_info.get('Type') == 'Dryer Box'
-            and not locations_db._is_single_slot_dryer_box(tgt_info)):
-        bindings = locations_db.bindings_from_row(tgt_info)
-        bound_toolhead = bindings.get(str(target_slot))
-        # PRINTER:<id> sentinels declare "this slot is staged for the named
-        # printer's pool" — no toolhead is implied, so auto-deploy is a no-op.
-        if bound_toolhead and locations_db.is_printer_sentinel(bound_toolhead):
-            bound_toolhead = None
+    # The head step 5 asked about (`bound_th`, read through _slot_binding):
+    # PRINTER:<id> sentinels declare "this slot is staged for the named
+    # printer's pool", so no toolhead is implied and auto-deploy is a no-op.
+    bound_toolhead = bound_th or None
     if bound_toolhead:
         th = str(bound_toolhead).upper()
         placed = [sid for sid in spools if str(sid) not in failures]
@@ -1690,9 +2161,13 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                     th, to_deploy,
                     target_slot=None, origin=chain_origin,
                     auto_deploy=False,
-                    # Scoped confirms pass through as-is (Group 39.1): `confirm
-                    # and explicit_slot` turned a head list into a blanket True.
-                    confirm_active_print=confirm_active_print if explicit_slot else False,
+                    # Scoped confirms pass through as-is (Group 39.1). Every
+                    # chained slot is one step 5 asked about: since 40.0e an
+                    # auto-picked slot is chosen at step 3, before the question,
+                    # so the caller's confirm covers the chain.
+                    confirm_active_print=confirm_active_print,
+                    confirmed_fed_heads=confirmed_fed_heads,
+                    fed_check_from=(target, target_slot, fed_seen) if fed_seen is not None else None,
                 )
             except Exception as _ad_err:
                 state.logger.error(f"Auto-deploy failed for {target}:SLOT:{target_slot}: {_ad_err}")

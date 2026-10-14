@@ -1212,7 +1212,12 @@ window.promptEditLocation = (spoolId, currentLoc) => {
                     // the error branch as a 7 s toast with no way to proceed. `confirm`
                     // is the heads for an add (39.1), or true for force_unassign,
                     // whose route keeps the boolean.
-                    const sendOverride = (confirm) => {
+                    // `pickedSlot` (Group 40.0e): the slot the engine picked for this
+                    // slotless move before it asked (the answer's `target_slot`), sent
+                    // back as `picked_slot` so the Yes lands where the question said;
+                    // the server keeps it only while it is still free. The first
+                    // request sends no slot.
+                    const sendOverride = (confirm, pickedSlot = null) => {
                         if (typeof setProcessing === 'function') setProcessing(true);
                         const payload = {
                             action: unassign ? 'force_unassign' : 'add',
@@ -1222,6 +1227,7 @@ window.promptEditLocation = (spoolId, currentLoc) => {
                         };
                         if (unassign) payload.confirm_active_print = confirm === true;
                         else payload.confirmed_toolheads = Array.isArray(confirm) ? confirm : [];
+                        if (!unassign && pickedSlot != null) payload.picked_slot = pickedSlot;
 
                         fetch('/api/manage_contents', {
                             method: 'POST',
@@ -1246,7 +1252,9 @@ window.promptEditLocation = (spoolId, currentLoc) => {
                                     activePrints: res.active_prints,
                                     msg: res.msg,
                                     host: document.getElementById('spoolModal'),
-                                    onConfirm: () => sendOverride(unassign ? true : window.unionConfirmHeads(confirm, res)),
+                                    onConfirm: () => (unassign ? sendOverride(true)
+                                        : sendOverride(window.unionConfirmHeads(confirm, res),
+                                            res.target_slot != null ? res.target_slot : pickedSlot)),
                                 });
                                 return;
                             }

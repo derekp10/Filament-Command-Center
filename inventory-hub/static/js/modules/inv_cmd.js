@@ -1853,8 +1853,10 @@ const _confirmActivePrintScan = ({ tid, slot, stateInfo, onConfirm, msg = '' }) 
 };
 
 // `confirmedHeads`: the heads whose active-print warning the user confirmed
-// (Group 39.1); anything else (the old `false`) confirms none.
-const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOverride = null) => {
+// (Group 39.1); anything else (the old `false`) confirms none. `pickedSlot`
+// (Group 40.0e): the slot the engine picked for this slotless move when it
+// asked (`target_slot`), sent back as `picked_slot`: kept only while still free.
+const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOverride = null, pickedSlot = null) => {
     setProcessing(true, { label: window.printerLabelForTarget ? window.printerLabelForTarget(tid, slot) : null });
     // L124: callers can pass an explicit `spoolIdsOverride` subset (e.g. the
     // single topmost id when the target is a toolhead) so the rest of the
@@ -1870,6 +1872,7 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
         origin: 'buffer',
         confirmed_toolheads: Array.isArray(confirmedHeads) ? confirmedHeads : [],
     };
+    if (pickedSlot != null) payload.picked_slot = pickedSlot;
 
     fetch('/api/smart_move', {
         method: 'POST',
@@ -1883,12 +1886,21 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
             // a bound slot's head, or a head a spool leaves). Prompt the user
             // and retry with every head confirmed so far on approval.
             if (res.status === 'requires_confirm' && res.confirm_type === 'active_print') {
+                // Group 40.0e: a slotless move into a multi-slot box is given its
+                // slot BEFORE the question (`target_slot`), so the Yes names it
+                // (`picked_slot`: the server keeps it only while it is still free,
+                // and never unseats a spool that took it meanwhile), and names the
+                // spools the question was about: the buffer can change while the
+                // dialog is open, and re-reading it could put that slot on another
+                // spool, or on two.
+                const picked = (slot == null && res.target_slot != null && spoolIds.length === 1)
+                    ? res.target_slot : pickedSlot;
                 _confirmActivePrintScan({
                     tid, slot,
                     stateInfo: res.active_print || { printer_name: tid, state: 'ACTIVE' },
                     msg: res.msg,
                     onConfirm: () => performContextAssign(
-                        tid, slot, window.unionConfirmHeads(confirmedHeads, res), spoolIdsOverride),
+                        tid, slot, window.unionConfirmHeads(confirmedHeads, res), spoolIds, picked),
                 });
                 return;
             }

@@ -65,8 +65,14 @@ def test_buffer_clear_endpoint_exists(api_base_url):
     reason="Happy-path test moves a real spool; set EXPLICIT_SPOOL_FOR_ASSIGNMENT_TEST=<spool_id> to enable.",
 )
 @pytest.mark.usefixtures("require_server", "clean_buffer")
-def test_slot_scan_happy_path_moves_real_spool(api_base_url, scan):
-    """Opt-in test that actually moves a real spool. User must set the env var."""
+def test_slot_scan_happy_path_moves_real_spool(api_base_url):
+    """Opt-in test that actually moves a real spool. User must set the env var.
+
+    Group 40.0c: the scan is posted the way a current page sends it, with
+    `confirmed_fed_heads` (a request without it is told to reload whenever the
+    slot's head runs a spool from elsewhere). When the slot's head does run one,
+    the server asks first; a happy-path test never confirms loading over a live
+    spool, so it skips, naming that spool."""
     import requests
     spool_id = int(os.environ["EXPLICIT_SPOOL_FOR_ASSIGNMENT_TEST"])
     target = os.environ.get("EXPLICIT_TARGET_FOR_ASSIGNMENT_TEST", "LR-MDB-1")
@@ -80,6 +86,14 @@ def test_slot_scan_happy_path_moves_real_spool(api_base_url, scan):
     )
     assert r.ok
 
-    result = scan(f"LOC:{target}:SLOT:{target_slot}", source="test")
+    r = requests.post(f"{api_base_url}/api/identify_scan",
+                      json={"text": f"LOC:{target}:SLOT:{target_slot}", "source": "test",
+                            "confirmed_fed_heads": []}, timeout=10)
+    r.raise_for_status()
+    result = r.json()
+    if result.get("action") == "assignment_requires_confirm" and result.get("confirm_type") == "head_fed":
+        fed = (result.get("fed_heads") or [{}])[0]
+        pytest.skip(f"{fed.get('toolhead')} runs #{(fed.get('resident') or {}).get('id')} from elsewhere; "
+                    f"the slot scan asks first (40.0c), and this test won't load over a live spool")
     assert result["action"] in ("assignment_done", "assignment_partial")
     assert result["moved"] == spool_id

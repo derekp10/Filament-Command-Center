@@ -232,9 +232,14 @@ def test_a_same_printer_source_and_bound_head_names_the_bound_head():
     """Review engine-1. #42 leaves XL-3 for LR-MDB-1 slot 2, which feeds XL-1 on
     the same printing XL. The Yes covers XL-1 too (the replay sends every head in
     active_prints), so the message must name it, and it must not claim FCC stops
-    charging the print to #42: the chain loads #42 onto XL-1."""
+    charging the print to #42: the chain loads #42 onto XL-1.
+
+    #196 is slot 2's own spool (its trail is LR-MDB-1 slot 2), so this stays the
+    active-print question. A head running a spool from elsewhere asks Group
+    40.0c's head_fed question instead (test_fed_head_confirm_40_0c.py)."""
     sm = WireSpoolman({42: {"location": "XL-3", "extra": {}},
-                       196: {"location": "XL-1", "extra": {}}})
+                       196: {"location": "XL-1", "extra": {"physical_source": "LR-MDB-1",
+                                                          "physical_source_slot": "2"}}})
     probe, calls = _state_probe({"XL"})
     res = run_move(sm, probe=probe, locations=BOX_LOCATIONS, printer_map=PRINTER_MAP,
                    target="LR-MDB-1", raw_spools=[42], target_slot="2", confirm_active_print=[])
@@ -248,9 +253,11 @@ def test_a_same_printer_source_and_bound_head_names_the_bound_head():
 
 
 def test_a_bound_head_alone_is_named_too():
-    """No source: the feeds sentence names the printer AND the head it loads."""
+    """No source: the feeds sentence names the printer AND the head it loads.
+    #196 is slot 2's own spool, as above (40.0c)."""
     sm = WireSpoolman({57: {"location": "CR", "extra": {}},
-                       196: {"location": "XL-1", "extra": {}}})
+                       196: {"location": "XL-1", "extra": {"physical_source": "LR-MDB-1",
+                                                          "physical_source_slot": "2"}}})
     probe, _ = _state_probe({"XL"})
     res = run_move(sm, probe=probe, locations=BOX_LOCATIONS, printer_map=PRINTER_MAP,
                    target="LR-MDB-1", raw_spools=[57], target_slot="2", confirm_active_print=[])

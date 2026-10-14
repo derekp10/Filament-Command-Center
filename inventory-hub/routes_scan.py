@@ -461,9 +461,15 @@ def api_manage_contents():
         result = logic.perform_smart_move(
             loc_id, [spool_id],
             target_slot=slot_arg, origin=origin,
+            # Group 40.0c: "Just store it" sends auto_deploy false, and the heads
+            # whose "already running another spool" warning the user saw.
+            auto_deploy=logic.auto_deploy_requested(data),
             confirm_active_print=logic.confirmed_heads(data),
+            confirmed_fed_heads=logic.confirmed_fed_heads_from(data),
+            # Group 40.0e: the slot an earlier answer picked, kept only while free.
+            picked_slot=data.get('picked_slot'),
         )
-        stale = logic.stale_confirm_refusal(data, result)
+        stale = logic.stale_fed_refusal(data, result) or logic.stale_confirm_refusal(data, result)
         if stale:
             return jsonify({"status": "error", "msg": stale, "stale_page": True})
         return jsonify(result)
@@ -1341,13 +1347,18 @@ def api_identify_scan():
         # printer went active between the probe and the scan, we still bail.
         move_result = logic.perform_smart_move(
             target, [spool_id], target_slot=slot, origin='slot_qr_scan',
+            # Group 40.0c: "Just store it" replays the scan with auto_deploy
+            # false, and "Load it instead" with the head in confirmed_fed_heads.
+            auto_deploy=logic.auto_deploy_requested(request.json),
             confirm_active_print=logic.confirmed_heads(request.json),
+            confirmed_fed_heads=logic.confirmed_fed_heads_from(request.json),
         )
         # If perform_smart_move bailed on an active-print check, surface the
         # confirmation prompt to the client. Frontend slot-QR path (scan
         # handler) renders this as a modal and retries on confirm, sending
         # back the heads in `active_prints`.
-        stale = logic.stale_confirm_refusal(request.json, move_result)
+        stale = (logic.stale_fed_refusal(request.json, move_result)
+                 or logic.stale_confirm_refusal(request.json, move_result))
         if stale:
             return jsonify({
                 "type": "assignment",
@@ -1369,6 +1380,13 @@ def api_identify_scan():
                 "active_print": move_result.get('active_print'),
                 "active_prints": move_result.get('active_prints') or [],
                 "target_slot": move_result.get('target_slot'),
+                # Group 40.0c: the head that runs a spool from elsewhere, and
+                # whether "Just store it" is an answer.
+                "fed_heads": move_result.get('fed_heads') or [],
+                "can_store": bool(move_result.get('can_store')),
+                "title": move_result.get('title'),
+                "body": move_result.get('body'),
+                "spools": move_result.get('spools') or [spool_id],
                 "msg": move_result.get('msg'),
                 "moved": spool_id,
             }), 200

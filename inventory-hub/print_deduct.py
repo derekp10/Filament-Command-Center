@@ -259,10 +259,18 @@ def api_smart_move():
         payload.get('spools'),
         target_slot=payload.get('slot'),
         origin=payload.get('origin', ''),
+        # Group 40.0c: "Just store it" sends auto_deploy false.
+        auto_deploy=logic.auto_deploy_requested(payload),
         # Group 39.1: the heads whose warning the user saw.
         confirm_active_print=logic.confirmed_heads(payload),
+        # Group 40.0c: the heads whose "already running another spool" warning
+        # the user saw.
+        confirmed_fed_heads=logic.confirmed_fed_heads_from(payload),
+        # Group 40.0e: the slot an earlier answer picked (its target_slot), kept
+        # only while it is still free.
+        picked_slot=payload.get('picked_slot'),
     )
-    stale = logic.stale_confirm_refusal(payload, result)
+    stale = logic.stale_fed_refusal(payload, result) or logic.stale_confirm_refusal(payload, result)
     if stale:
         return jsonify({"status": "error", "msg": stale, "stale_page": True})
     return jsonify(result)
