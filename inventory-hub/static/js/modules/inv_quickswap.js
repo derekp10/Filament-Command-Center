@@ -17,6 +17,48 @@
     const TOOLHEAD_TYPES = new Set(['Tool Head', 'MMU Slot', 'No MMU Direct Load']);
     const PRINTER_TYPE = 'Printer';
 
+    // Group 42.5c — a single-slot box (a PolyDryer) is bound to a head because
+    // its own spool is loaded there (the Group 20.2 lifecycle), not as a feed.
+    // Derek's "is it attached?" (2026-09-12) is answered on its grid header:
+    // "🔗 attached — follows #50" while that spool is on the head; a stale
+    // attachment (its spool isn't there) says so and offers Unbind, since 42.1
+    // never auto-releases a box another spool didn't take off the head.
+    const _attachedLabel = (boxId, head, items) => {
+        const follower = (items || []).find(it => it.is_ghost
+            && String(it.deployed_to || '').replace(/"/g, '').trim().toUpperCase() === head);
+        if (follower) {
+            return ` <span class="fcc-qs-attached text-info" style="font-size:0.9rem;"
+                         title="${boxId} follows its spool #${follower.id}, which is loaded on ${head}">🔗 attached — follows #${follower.id}</span>`;
+        }
+        return ` <span class="fcc-qs-attached text-warning" style="font-size:0.9rem;"
+                       title="${boxId} is still attached to ${head}, but its spool isn't on ${head}">🔗 attached, but its spool isn't on ${head}</span>`
+            + `<button type="button" class="fcc-qs-unbind btn btn-sm btn-outline-warning fw-bold ms-2"
+                       data-box="${boxId}" data-toolhead="${head}"
+                       onclick="window.quickSwapUnbindAttached(this)"
+                       title="Detach ${boxId} from ${head}">🔗✖ Unbind</button>`;
+    };
+    // The same single-slot binding PUT the bind picker's Unbind uses.
+    window.quickSwapUnbindAttached = (btn) => {
+        const box = btn && btn.getAttribute('data-box');
+        const head = btn && btn.getAttribute('data-toolhead');
+        if (!box) return;
+        fetch(`/api/dryer_box/${encodeURIComponent(box)}/bindings/1`, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ target: null }),
+        })
+            .then(async r => ({ ok: r.ok, body: await r.json() }))
+            .then(({ ok, body }) => {
+                if (ok) {
+                    showToast(`🔗✖ ${box} detached from ${head}`, 'success', 4000);
+                    if (window.renderQuickSwapSection && currentLoc) window.renderQuickSwapSection(currentLoc);
+                } else {
+                    const errs = (body.errors || []).map(e => `${e.slot}: ${e.reason}`).join('; ');
+                    showToast(`❌ ${errs || body.error || 'Unbind failed'}`, 'error', 7000);
+                }
+            })
+            .catch(() => showToast('Unbind — network error', 'error', 7000));
+    };
+
     const resolvePrinterNameForToolhead = (toolheadId, printerMap) => {
         // printerMap shape: { "🦝 XL": [{location_id, position}, ...], ... }
         const up = String(toolheadId || '').toUpperCase();
@@ -197,9 +239,19 @@
                             .catch(() => [b, []])
                     )).then(boxContents => {
                         const slotMap = {};
+                        const itemsByBox = {};
+                        // Group 42.2/42.5c: a single-slot box (flagged by the
+                        // server) has one place, so its lone spool is in slot 1
+                        // even when its slot was stored blank; a box FCC thinks
+                        // holds two stays unsorted (Claude's call 20).
+                        const singleBoxes = new Set(entries.filter(e => e.single_slot).map(e => e.box));
                         boxContents.forEach(([b, items]) => {
-                            (items || []).forEach(it => {
-                                const slotStr = String(it.slot || '').replace(/"/g, '').trim();
+                            const list = items || [];
+                            itemsByBox[b] = list;
+                            list.forEach(it => {
+                                let slotStr = String(it.slot || '').replace(/"/g, '').trim();
+                                if (slotStr === 'None' || slotStr === 'null') slotStr = '';
+                                if (!slotStr && singleBoxes.has(b) && list.length === 1) slotStr = '1';
                                 if (slotStr) slotMap[`${b}|${slotStr}`] = it;
                             });
                         });
@@ -224,7 +276,12 @@
                                     `📦 <a href="#" onclick="event.preventDefault(); window.openManage('${boxId}');"
                                         class="text-info"
                                         style="text-decoration: underline dotted;"
-                                        title="Open ${boxId} — Close returns here">${boxId}</a></div>`;
+                                        title="Open ${boxId} — Close returns here">${boxId}</a>` +
+                                    (singleBoxes.has(boxId)
+                                        ? _attachedLabel(boxId, String(byBox[boxId][0].toolhead || loc.LocationID).toUpperCase(),
+                                            itemsByBox[boxId])
+                                        : '') +
+                                    `</div>`;
                             byBox[boxId].sort((a, b) => Number(a.slot) - Number(b.slot)).forEach(e => {
                                 const th = e.toolhead || loc.LocationID;
                                 const item = slotMap[`${e.box}|${e.slot}`];

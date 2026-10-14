@@ -352,3 +352,13 @@ def test_return_sees_a_lone_legacy_spool_holding_slot_1(client, logs):
     body = _go(sm, store, call=lambda: client.post("/api/quickswap/return", json={"toolhead": "XL-2"})).get_json()
     assert body.get("action") == "return_done", body
     assert any("PM-DB-2 slot 1 already holds #18" in m for m, a in logs), logs
+
+
+# --- 42.5c: the grid knows which boxes are single-slot ----------------------------
+
+def test_bindings_for_machine_flags_single_slot_boxes():
+    store = LocationsStore(BASE + [_box_row("PM-DB-2")])
+    with patch.object(logic.locations_db, "load_locations_list", side_effect=store.load):
+        out = logic.locations_db.get_bindings_for_machine(XL, PRINTER_MAP)
+    assert out["toolheads"]["XL-2"] == [{"box": "PM-DB-2", "slot": "1", "single_slot": True}], out
+    assert out["toolheads"]["XL-1"] == [{"box": "LR-MDB-1", "slot": "1"}], out

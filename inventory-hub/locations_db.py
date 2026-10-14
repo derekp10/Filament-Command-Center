@@ -2160,12 +2160,20 @@ def get_bindings_for_machine(printer_name, printer_map):
         if row.get('Type') != DRYER_BOX_TYPE:
             continue
         box_id = str(row.get('LocationID', '')).strip()
+        # Group 42.5c: a single-slot box's binding is the 20.2 lifecycle (its
+        # own spool is on that head), not a feed, so the grid labels it
+        # "attached" and offers Unbind when that spool isn't there; 42.2's
+        # slot-1 rule maps its lone blank-slot spool.
+        single = _is_single_slot_dryer_box(row)
         for slot, target in bindings_from_row(row).items():
             if not target:
                 continue
             target_up = target.strip().upper()
             if target_up in toolheads:
-                toolheads[target_up].append({"box": box_id, "slot": slot})
+                entry = {"box": box_id, "slot": slot}
+                if single:
+                    entry["single_slot"] = True
+                toolheads[target_up].append(entry)
                 continue
             if is_printer_sentinel(target_up):
                 suffix = target_up.split(':', 1)[1]

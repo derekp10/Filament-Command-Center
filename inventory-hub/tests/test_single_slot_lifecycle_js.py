@@ -235,3 +235,55 @@ def test_a_doubled_heads_view_says_so_above_its_cards(tmp_path):
     assert res["unhandled"] == [], res
     assert res["two"] == f"⚠️ {DOUBLED_TEXT}", res
     assert res["one"] is None and res["box"] is None, res
+
+
+# --- 42.5c: "attached — follows #50" on the toolhead's grid ------------------------
+
+GRID = """
+state.printerMap = { 'XL': [{ location_id: 'XL-2', position: 1 }] };
+state.heldSpools = [];
+window.SpoolCardBuilder = { buildCard: (it) => `CARD#${it.id}` };
+window.makeSwatchHtml = () => '';
+const pm = __CONTENTS__;
+window.__respond = (url, method, body) => {
+  if (url.startsWith('/api/machine/')) return { body: { toolheads: { 'XL-2': [
+      { box: 'PM-DB-2', slot: '1', single_slot: true }, { box: 'LR-MDB-1', slot: '2' } ] }, printer_pool: [] } };
+  if (url.startsWith('/api/get_contents?id=PM-DB-2')) return { body: pm };
+  if (method === 'PUT') return { body: { success: true } };
+  return { body: [] };
+};
+window.renderQuickSwapSection({ LocationID: 'XL-2', Type: 'Tool Head' });
+await __settle(80);
+const html = document.getElementById('quickswap-grid').innerHTML;
+let put = null;
+if (__CLICK__) {
+  const btn = { getAttribute: (k) => ({ 'data-box': 'PM-DB-2', 'data-toolhead': 'XL-2' })[k] };
+  window.quickSwapUnbindAttached(btn);
+  await __settle(60);
+  put = __rec.fetches.find(f => f.method === 'PUT') || null;
+}
+return { html, put, toasts: __rec.toasts };
+"""
+
+
+def _grid(tmp_path, contents, click=False):
+    res = run_js(tmp_path, ["inv_quickswap.js"], GRID.replace("__CONTENTS__", json.dumps(contents))
+                 .replace("__CLICK__", json.dumps(click)))
+    assert res["unhandled"] == [], res
+    return res
+
+
+def test_an_attached_polydryer_says_which_spool_it_follows(tmp_path):
+    """Its loaded spool, stored with a blank slot (a legacy row), still fills
+    the box's tile (42.2) instead of the tile reading empty."""
+    follower = {"id": 50, "is_ghost": True, "deployed_to": "XL-2", "location": "PM-DB-2", "slot": ""}
+    html = _grid(tmp_path, [follower])["html"]
+    assert "🔗 attached — follows #50" in html and "CARD#50" in html, html
+    assert "fcc-qs-unbind" not in html
+
+
+def test_a_stale_attachment_says_so_and_unbinds(tmp_path):
+    res = _grid(tmp_path, [], click=True)
+    assert "🔗 attached, but its spool isn't on XL-2" in res["html"] and "fcc-qs-unbind" in res["html"], res
+    assert res["put"]["url"] == "/api/dryer_box/PM-DB-2/bindings/1" and res["put"]["body"] == {"target": None}, res
+    assert [(t["msg"], t["type"]) for t in res["toasts"]] == [("🔗✖ PM-DB-2 detached from XL-2", "success")]
