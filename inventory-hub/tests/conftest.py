@@ -607,6 +607,10 @@ DEV_BOX_BINDING_BASELINES: typing.Dict[str, typing.Dict[str, str]] = {
     "PM-DB-2": {},
     "PM-DB-4": {},
     "PM-DB-5": {},
+    # Group 45.5: the 6-slot test box (Quick-Swap overlays, the printer pool,
+    # the multi-slot Feeds save). Its old seed binding {"1": "PRINTER:XL"} was
+    # a leftover, not dev state anyone wanted (Derek, 2026-10-13).
+    "TST-MDB-1": {},
 }
 
 
@@ -749,89 +753,49 @@ def borrow_box_bindings(api_base_url: str):
 # Quick-Swap overlay fixture (Group 26.3)
 # ---------------------------------------------------------------------------
 
+# The Quick-Swap overlay tests' slot (Group 45.5). TST-MDB-1 is a dev TEST box
+# (6 slots, no bindings at its baseline) whose slot 1 holds a virtual dev spool
+# (#123 as of 2026-10-13). The fixture used to take the first loaded slot in ANY
+# dryer box, which on dev meant Derek's real boxes (CR-MDB-1, then LR-MDB-1),
+# and it put back whatever binding it had found there.
+QUICKSWAP_TEST_BOX = "TST-MDB-1"
+QUICKSWAP_TEST_SLOT = "1"
+QUICKSWAP_TEST_TOOLHEAD = "XL-1"
+
+
 @pytest.fixture
-def bound_loaded_slot(api_base_url):
-    """A deterministic bound + loaded Quick-Swap slot for overlay/confirm tests.
+def bound_loaded_slot(api_base_url, borrow_box_bindings):
+    """A fixed bound + loaded Quick-Swap slot for overlay/confirm tests.
 
     The Quick-Swap confirm overlay + bind-picker only render for a slot that is
-    (a) bound to a REAL toolhead and (b) actually holds a spool. On a bare dev
-    state the fixture boxes are bound-but-empty, so `.fcc-qs-slot` stays disabled
-    (`slot N is empty — scan a spool into the buffer`) and the overlays never
-    mount — the root cause of the six pre-existing overlay reds this fixture
-    fixes. (The old per-file `bound_slot` fixtures bound an EMPTY slot; the old
-    `_find_*` helpers could return a slot bound to a virtual `PRINTER:*` target,
-    which doesn't render a grid at all.)
+    (a) bound to a REAL toolhead and (b) actually holds a spool. This borrows
+    QUICKSWAP_TEST_BOX through `borrow_box_bindings` (so it must be at its
+    fixed baseline, and teardown always restores that baseline) and binds
+    QUICKSWAP_TEST_SLOT to QUICKSWAP_TEST_TOOLHEAD. No spool is ever moved.
+    Yields ``{"box", "slot", "toolhead", "spool_id"}``.
 
-    Discovers a dryer-box slot that ALREADY holds a spool (get_contents) and
-    ensures it is bound to a real toolhead (never a virtual `PRINTER:*`
-    whole-printer target). Mutates ONLY the slot binding, and only when the slot
-    isn't already bound to a real toolhead — restored on teardown; no spool is
-    ever moved, so dev inventory is left exactly as found. Yields
-    ``{"box", "slot", "toolhead", "spool_id"}``. Skips (does not fail) when dev
-    state has no loaded dryer-box slot, mirroring the sibling helpers these
-    tests previously used.
+    Fails, rather than skips, when the slot holds no spool or the toolhead has
+    left the fleet: either is dev data drifting under the tests, and a skip
+    would hide every test built on this fixture.
     """
-    # Real toolheads only (exclude PRINTER:* virtual whole-printer targets).
-    pm = requests.get(f"{api_base_url}/api/printer_map", timeout=5).json().get("printers", {})
-    real_toolheads = [
-        str(e.get("location_id", "")).upper()
+    box, slot, toolhead = QUICKSWAP_TEST_BOX, QUICKSWAP_TEST_SLOT, QUICKSWAP_TEST_TOOLHEAD
+    pm = requests.get(f"{api_base_url}/api/printer_map", timeout=8).json().get("printers", {})
+    toolheads = {
+        str(e.get("location_id", "")).strip().upper()
         for entries in pm.values() for e in (entries or [])
-        if str(e.get("location_id", "")).strip()
-    ]
-    if not real_toolheads:
-        pytest.skip("No real toolheads in printer_map to bind a slot against.")
-
-    slots = requests.get(f"{api_base_url}/api/dryer_boxes/slots", timeout=5).json().get("slots", [])
-    boxes = sorted({s["box"] for s in slots})
-
-    # Find a box slot that currently holds a spool (no spool is moved to create
-    # one — we only read what's already loaded).
-    loaded = None  # (box, slot, spool_id)
-    for box in boxes:
-        try:
-            contents = requests.get(
-                f"{api_base_url}/api/get_contents?id={box}", timeout=5
-            ).json() or []
-        except requests.RequestException:
-            continue
-        for it in contents:
-            sl = str(it.get("slot", "")).replace('"', '').strip()
-            if sl:
-                loaded = (box, sl, it.get("id"))
-                break
-        if loaded:
-            break
-    if not loaded:
-        pytest.skip("No loaded dryer-box slot in dev state to open an overlay against.")
-    box, slot, spool_id = loaded
-
-    # Prefer the slot's CURRENT binding when it already targets a real toolhead —
-    # then we mutate nothing at all.
-    snap = requests.get(f"{api_base_url}/api/dryer_box/{box}/bindings", timeout=5).json()
-    original = snap.get("slot_targets", {}) or {}
-    current = str(original.get(str(slot), "")).upper()
-    mutated = False
-    if current in real_toolheads:
-        toolhead = current
-    else:
-        toolhead = real_toolheads[0]
-        new_targets = dict(original)
-        new_targets[str(slot)] = toolhead
-        requests.put(
-            f"{api_base_url}/api/dryer_box/{box}/bindings",
-            json={"slot_targets": new_targets},
-            timeout=5,
-        )
-        mutated = True
-
-    yield {"box": box, "slot": str(slot), "toolhead": toolhead, "spool_id": spool_id}
-
-    if mutated:
-        requests.put(
-            f"{api_base_url}/api/dryer_box/{box}/bindings",
-            json={"slot_targets": original},
-            timeout=5,
-        )
+    }
+    if toolhead not in toolheads:
+        pytest.fail(f"bound_loaded_slot: {toolhead} is no longer a toolhead in dev's "
+                    f"printer_map; point QUICKSWAP_TEST_TOOLHEAD at one that is.", pytrace=False)
+    contents = requests.get(f"{api_base_url}/api/get_contents?id={box}", timeout=8).json() or []
+    spool_id = next((it.get("id") for it in contents
+                     if str(it.get("slot", "")).replace('"', '').strip() == slot), None)
+    if spool_id is None:
+        pytest.fail(f"bound_loaded_slot: {box} slot {slot} holds no spool. Put a virtual dev "
+                    f"spool there (it held #123); the Quick-Swap overlays only open on a loaded "
+                    f"slot.", pytrace=False)
+    borrow_box_bindings(box, {slot: toolhead})
+    yield {"box": box, "slot": slot, "toolhead": toolhead, "spool_id": spool_id}
 
 
 @pytest.fixture

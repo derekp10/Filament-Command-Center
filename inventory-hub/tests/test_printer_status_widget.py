@@ -158,85 +158,70 @@ def test_widget_visual_collapsed_baseline(page: Page, base_url, snapshot):
     snapshot(page.locator("#printer-status-widget"), "printer-status-widget-collapsed")
 
 
+# Group 45.5: two made-up printers and NO dryer-box binding anywhere (every
+# toolhead_slots answer is empty), one head loaded. Every source the widget
+# reads is stubbed, as in the 46.3 label tests below, so no dev box is touched.
+# This test used to clear EVERY dryer box in dev, Derek's real multi-slot boxes
+# included, and put back whatever it had found (Derek chose stubbed data,
+# 2026-10-13).
+_UNBOUND_FLEET = {
+    "ZZ Unbound A": [{"location_id": "ZA-1", "position": 0}, {"location_id": "ZA-2", "position": 1}],
+    "ZZ Unbound B": [{"location_id": "ZB-1", "position": 0}],
+}
+_UNBOUND_ITEM = {"id": 9011, "color": "00AAFF", "color_direction": "longitudinal",
+                 "remaining_weight": 640, "initial_weight": 1000, "display": "#9011 Unbound Test"}
+
+
+def _stub_unbound_fleet(page: Page):
+    def handle(route):
+        url = urlsplit(route.request.url)
+        if url.path == "/api/printer_map":
+            body = {"printers": _UNBOUND_FLEET}
+        elif url.path.startswith("/api/machine/") and url.path.endswith("/toolhead_slots"):
+            body = {"toolheads": {}, "printer_pool": []}
+        elif url.path == "/api/get_contents":
+            wanted = (parse_qs(url.query).get("id") or [""])[0].upper()
+            body = [_UNBOUND_ITEM] if wanted == "ZA-2" else []
+        elif url.path == "/api/dashboard_pulse":
+            body = {}
+        else:
+            route.continue_()
+            return
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
+    page.route("**/api/**", handle)
+
+
 @pytest.mark.usefixtures("require_server")
-def test_widget_shows_unbound_printers_with_placeholder(page: Page, base_url, api_base_url):
+def test_widget_shows_unbound_printers_with_placeholder(page: Page, base_url):
     """L140 + box-bounding fix: with zero bound dryer-slots the widget
     previously hid EVERY printer (the symptom that hid Core One on prod
     when only XL had slot_targets). After the fix, every printer in
     printer_map renders. An unbound toolhead that is EMPTY gets the
     "🔗 no bound slot" placeholder; an unbound toolhead that HOLDS a spool
     surfaces the spool (occupancy keys off the toolhead, not the dryer
-    box) while keeping the fcc-ps-th-unbound class + 🔗 hint. Both kinds
-    carry the fcc-ps-th-unbound class, so the L140 assert below still
-    holds AND the box-bounding regression is pinned: a loaded toolhead
-    with no dryer box is no longer masked."""
-    # Snapshot every dryer box's bindings, then clear them. This wipes the
-    # WHOLE fleet — the real boxes included — so the clearing loop has to run
-    # INSIDE the try: a request that fails partway through it used to leave
-    # every already-cleared box wiped with no restore, because `finally` had
-    # not been entered yet. Each box is snapshotted before it is cleared, so
-    # the finally below restores exactly the ones this test touched.
-    boxes = requests.get(f"{api_base_url}/api/dryer_boxes/slots", timeout=5).json().get("slots", [])
-    box_originals = {}
-    seen_boxes = set()
-    try:
-        for s in boxes:
-            b = s["box"]
-            if b in seen_boxes:
-                continue
-            seen_boxes.add(b)
-            snap = requests.get(
-                f"{api_base_url}/api/dryer_box/{b}/bindings", timeout=5
-            ).json().get("slot_targets", {})
-            box_originals[b] = snap
-            requests.put(
-                f"{api_base_url}/api/dryer_box/{b}/bindings",
-                json={"slot_targets": {}},
-                timeout=5,
-            )
-        page.goto(base_url)
-        page.wait_for_selector("#buffer-zone", timeout=10000)
-        # Wait for the widget body to populate (aggregation takes a sec).
-        page.wait_for_function(
-            "() => { const w = document.getElementById('printer-status-widget');"
-            "       return w && getComputedStyle(w).display !== 'none'"
-            "         && w.querySelectorAll('.fcc-ps-row').length > 0; }",
-            timeout=5000,
-        )
-        widget = page.locator("#printer-status-widget")
-        # The widget should now show printers (rather than be hidden).
-        rows = widget.locator(".fcc-ps-row")
-        assert rows.count() > 0, "Widget should render rows even when no toolheads are bound"
-        # Every rendered toolhead now carries the unbound class (bindings cleared),
-        # whether it's an empty placeholder OR a loaded-but-unbound tile.
-        unbound = widget.locator(".fcc-ps-th-unbound")
-        assert unbound.count() > 0, (
-            "With all bindings cleared, every rendered toolhead should carry the unbound class"
-        )
-        # Box-bounding regression guard: any toolhead that physically holds a
-        # spool must still surface it (data-spool-id present on the unbound
-        # tile) — occupancy is NOT masked by the absence of a dryer-box
-        # binding. Tolerant of an empty dev: only asserts when the live
-        # payload reports a loaded toolhead.
-        ps = requests.get(
-            f"{api_base_url}/api/dashboard_pulse?include=printer_status", timeout=15
-        ).json().get("printer_status", {})
-        any_loaded = any(
-            th.get("item") for p in ps.values() for th in p.get("toolheads", [])
-        )
-        if any_loaded:
-            occupied_unbound = widget.locator(".fcc-ps-th-unbound[data-spool-id]")
-            assert occupied_unbound.count() > 0, (
-                "A loaded toolhead with no dryer-box binding must still render its "
-                "spool (box-bounding fix), not a bare placeholder"
-            )
-    finally:
-        for b, original in box_originals.items():
-            requests.put(
-                f"{api_base_url}/api/dryer_box/{b}/bindings",
-                json={"slot_targets": original},
-                timeout=5,
-            )
+    box) while keeping the fcc-ps-th-unbound class + 🔗 hint."""
+    _stub_unbound_fleet(page)
+    page.goto(base_url)
+    widget = page.locator("#printer-status-widget")
+    # Every printer renders although none has a bound slot.
+    for name in _UNBOUND_FLEET:
+        expect(widget.locator(f".fcc-ps-row[data-printer='{name}']")).to_have_count(1, timeout=10000)
+    expect(widget).to_be_visible()
+
+    def tile(th):
+        return widget.locator(f".fcc-ps-body .fcc-ps-th[data-toolhead='{th}']").first
+
+    for th in ("ZA-1", "ZA-2", "ZB-1"):
+        assert "fcc-ps-th-unbound" in (tile(th).get_attribute("class") or "").split(), th
+    # Unbound and empty: the bare placeholder.
+    for th in ("ZA-1", "ZB-1"):
+        assert tile(th).get_attribute("data-spool-id") is None, th
+        assert "no bound slot" in (tile(th).text_content() or ""), th
+    # Unbound and loaded: the spool still shows (box-bounding fix), hint kept.
+    loaded = tile("ZA-2")
+    assert loaded.get_attribute("data-spool-id") == "9011"
+    text = loaded.text_content() or ""
+    assert "640" in text and "no bound slot" in text, text
 
 
 @pytest.mark.usefixtures("require_server")
