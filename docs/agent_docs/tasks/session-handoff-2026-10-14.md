@@ -8,12 +8,43 @@ it is updated after every milestone and committed (and pushed) on `dev` at every
 _Run in progress. Started from `dev` @ `4203ffe` (= `origin/dev`) at ~18:15 on 2026-10-13._
 
 - Queue (Derek's pick): 43.2 + 46.3 → Group 45 → Group 41 → Group 42 → Group 40.
+- **Landed (21:30):** Groups 43 and 46 are DONE (43.2 the uncharged-grams card, 46.3 toolhead labels), merged
+  `1d0fc39` and pushed. Next: Group 45.
 - Evening prep done: Derek's go-ahead for all-night full test runs, a push after each merge, and read-only prod
   counts (taken ~18:25; table in the plan file).
 
 ## Landed
 
-_Nothing yet._
+### Groups 43 and 46 finished: 43.2 + 46.3 → `DONE` (merged `1d0fc39`, pushed)
+
+- **Commits:** `4140673` (both items), `80dcd6e` (the review's fixes), `b5336b2` (housekeeping: archive, rows,
+  banners, CLAUDE.md; it also filed Group 45.8 and a standalone item about FCC's full spool-list reads).
+- **What changed for you:**
+  - **43.2, the uncharged-grams card.** When a print's grams can't all be charged (job 1104: #99's record hit
+    0 g after 34.2 g of 61.32 g), FCC now opens a ⚖️ card in 🛑 Print Reviews for the rest, at 1 g or more
+    (Settings → Behavior → "Uncharged-grams review (g)"). Each head's line says why and picks the spool that
+    really took it; after a SpoolJoin runout that's the joined spool. Your answer is built: a picked archived
+    spool is charged what it has on record and stays archived and in place. What a pick can't take stays on the
+    card to pick again or discard. Every other review card accepts archived picks too, and grams its picks
+    couldn't take open a card instead of vanishing. The ledger entry now records the shortfall.
+  - **46.3, toolhead labels.** Settings → This Browser → "Printer Status toolhead labels": `XL-3` (today's look),
+    `3`, or `Tool 3`. Only the tile text changes; the collapsed strip keeps the full id.
+- **Review:** 5 agents (4 lenses + 1 batched skeptic), 1.77M tokens, 33 raw findings → 12 confirmed + 4
+  plausible, all fixed (16 duplicates; 1 refuted, the CLAUDE.md rows, done in housekeeping). The serious one: a
+  write that timed out after landing was offered as a plain pick, so one tap would have charged it twice. It
+  now rides on the card as a row whose Apply checks the spool's weight first. Also: card revisions refuse a
+  stale tab's Apply, a crash between card and ledger can't re-run a deduct, and a hand-archived spool keeps its
+  slot.
+- **Tests:** every new pin proven red on the pre-change code (17 of the review-fix pins fail on the first
+  build's backend; the browser pins fail on the old JS). `--offline` **2084 passed, 0 failed** (no TestCart
+  reds any more). Targeted E2E: 38 + 37 passed; `test_widget_toolhead_click_opens_quickswap` and
+  `test_collapsed_header_chip_clickable` timed out once in a batch and passed 6/6 in isolation (the
+  Location-Manager-open family Group 45 fixes). **Full `RUN_INTEGRATION` sweep: 8 failed / 2954 passed / 30
+  skipped in 37:21**, the cleanest in weeks. Triage: 7 are the recurring families Group 45.8 owns (the bind
+  picker from Quick-Swap, a deployed-flag Quick-Swap button, the doassign buffer race, the two bad-target
+  slot-scan toasts, two wizard pre-fill tests), none touching this branch's files;
+  `test_widget_shows_unbound_printers_with_placeholder` passed 3/3 in isolation with dev's box bindings
+  unchanged (a live-data 5 s wait under sweep load; Group 45.5 stubs it).
 
 ## Parked
 
@@ -121,3 +152,4 @@ _None yet._
 | Workflow | Unit | Agents | Tokens | Notes |
 |---|---|---|---|---|
 | `wf_1a1ff135-1c6` preflight-questions-tonight | Groups 45/41/42/40 | 5 (4 readers + 1 batched fact-checker) | 2,580,267 subagent | ~70 min, 660 tool calls; 36 questions (6 to Derek in two rounds + 2 more he answered, 29 Claude calls with no veto) and 51 stale claims; read-only |
+| `wf_6284177c-d05` review-finish-43-46 | 43.2 + 46.3 | 5 (4 lenses + 1 batched skeptic) | 1,765,406 subagent | ~38 min, 336 tool calls; 33 raw findings → 12 confirmed + 4 plausible, 16 duplicates, 1 refuted; all fixed (`80dcd6e`) |
