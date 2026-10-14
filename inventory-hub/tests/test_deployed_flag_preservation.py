@@ -65,10 +65,14 @@ def test_perform_smart_move_auto_deploys_when_slot_is_bound():
     Previously this logic lived only in api_identify_scan's assignment
     branch, so non-scan callers (manage_contents, feeds editor, etc.)
     silently skipped the deploy. This test covers any direct perform_smart_move
-    caller, proving the behavior is now universal."""
+    caller, proving the behavior is now universal.
+
+    A multi-slot box (Group 42.2): a single-slot box's slot 1 binding records
+    where its own spool is loaded (the 20.2 lifecycle), not a feed, so it never
+    auto-deploys. This pin used to use one."""
     printer_map = {"XL-1": {"printer_name": "🦝 XL", "position": 0}}
     loc_list = [
-        {"LocationID": "PM-DB-1", "Type": "Dryer Box", "Max Spools": "1",
+        {"LocationID": "PM-DB-1", "Type": "Dryer Box", "Max Spools": "4",
          "extra": {"slot_targets": {"1": "XL-1"}}},
         {"LocationID": "XL-1", "Type": "Tool Head", "Max Spools": "1"},
     ]

@@ -998,7 +998,11 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     # The bound head counts only when the chain will load it (I1-06): Return
     # parks a spool with auto_deploy=False, and must not ask about a head it
     # never touches.
-    if tgt_row and tgt_row.get('Type') == 'Dryer Box' and target_slot and auto_deploy:
+    # A single-slot box's slot 1 binding records where its OWN spool is loaded
+    # (the Group 20.2 lifecycle), not a feed, so it is never a feeds head and
+    # never auto-deploys (Group 42.2).
+    if (tgt_row and tgt_row.get('Type') == 'Dryer Box' and target_slot and auto_deploy
+            and not locations_db._is_single_slot_dryer_box(tgt_row)):
         bound = locations_db.bindings_from_row(tgt_row)
         if str(target_slot).isdigit():
             bound_th = bound.get(str(target_slot)) or bound.get(str(int(target_slot)))
@@ -1057,6 +1061,13 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                         f"🪑 Auto-slot: {target} has free slot {i} — assigning spool there"
                     )
                     break
+        elif locations_db._is_single_slot_dryer_box(tgt_info_auto):
+            # Group 42.2: a single-slot box has one place, so its spool is in
+            # slot 1. It used to be stored blank, which left a toolhead's
+            # Quick-Swap tile for the box reading empty while its spool was
+            # loaded. A spool already there is unseated to slotless (both still
+            # sit in the box; a Max-1 box has never refused a second spool).
+            target_slot = '1'
 
     # L298 Phase 0 — undo hardening: `extras` snapshots each moved spool's
     # system-managed extras (container_slot / physical_source /
@@ -1387,7 +1398,8 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     auto_deployed: typing.List[typing.Any] = []
     auto_deploy_skipped: typing.Dict[str, str] = {}
     bound_toolhead = None
-    if auto_deploy and target_slot and tgt_info and tgt_info.get('Type') == 'Dryer Box':
+    if (auto_deploy and target_slot and tgt_info and tgt_info.get('Type') == 'Dryer Box'
+            and not locations_db._is_single_slot_dryer_box(tgt_info)):
         bindings = locations_db.bindings_from_row(tgt_info)
         bound_toolhead = bindings.get(str(target_slot))
         # PRINTER:<id> sentinels declare "this slot is staged for the named
@@ -1728,19 +1740,14 @@ def _bound_feeds_for_move(contents, movable_ids, loc_info_map):
         targets = _slot_targets_for(loc, loc_info_map)
         if not targets:
             continue
-        slot = str(sp.get('slot') or '').strip()
-        if not slot:
-            # A SINGLE-slot box records no container_slot (Group 20.2 auto-binds
-            # exactly this class), so treating blank as "no slot" made the
-            # warning permanently dead for the boxes most likely to feed a
-            # toolhead. One capacity => the spool IS in slot 1.
-            row = loc_info_map.get(loc) or {}
-            try:
-                max_spools = int(str(row.get('Max Spools', '0')).strip() or '0')
-            except (TypeError, ValueError):
-                max_spools = 0
-            if max_spools == 1:
-                slot = '1'
+        # A SINGLE-slot box used to record no container_slot (Group 20.2 auto-binds
+        # exactly this class), so treating blank as "no slot" made the warning
+        # permanently dead for the boxes most likely to feed a toolhead. Group
+        # 42.2's one rule: its lone spool IS in slot 1 (locations_db.effective_slot).
+        occupants = sum(1 for o in (contents or [])
+                        if not o.get('is_ghost')
+                        and str(o.get('location', '') or '').strip().upper() == loc)
+        slot = locations_db.effective_slot(loc_info_map.get(loc), sp.get('slot'), occupants=occupants)
         if not slot:
             continue
         target = targets.get(slot) or targets.get(str(slot))
@@ -2381,7 +2388,15 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
         # [ALEX FIX] Retain the assignment slot when returning home.
         # Move the saved slot back into container_slot
         saved_slot_clean = dest['slot']
-        if extra.get('physical_source_slot', ''):
+        home_row = next((r for r in (locations_db.load_locations_list() or [])
+                         if isinstance(r, dict)
+                         and str(r.get('LocationID', '')).strip().upper() == str(saved_source).strip().upper()),
+                        None)
+        if not saved_slot_clean and locations_db._is_single_slot_dryer_box(home_row):
+            # Group 42.2: a single-slot box's spool is in slot 1 (a legacy
+            # PolyDryer trail kept it blank).
+            saved_slot_clean = '1'
+        if saved_slot_clean:
             # 13.2 — Don't recreate a slot binding that's already claimed by
             # another spool (direct OR ghost from a different spool). The
             # auto-deploy chain can leave a ghost in our former slot moments
@@ -2392,10 +2407,10 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
             slot_taken_by_other = False
             try:
                 here = spoolman_api.get_spools_at_location_detailed(saved_source) or []
-                for other in here:
-                    if int(other.get('id', 0)) == int(spool_id):
-                        continue
-                    if str(other.get('slot', '')).strip('"') == saved_slot_clean:
+                others = [o for o in here if int(o.get('id', 0)) != int(spool_id)]
+                for other in others:
+                    if locations_db.effective_slot(home_row, other.get('slot', ''),
+                                                   occupants=len(others)) == saved_slot_clean:
                         slot_taken_by_other = True
                         state.logger.info(
                             f"🛑 Slot collision: {saved_source} slot {saved_slot_clean} "
@@ -3076,9 +3091,13 @@ def find_spool_in_slot(box_loc_id, slot):
     if not box_loc_id or not str(slot).strip():
         return None
     wanted = str(slot).strip().strip('"')
-    items = spoolman_api.get_spools_at_location_detailed(box_loc_id)
+    items = spoolman_api.get_spools_at_location_detailed(box_loc_id) or []
+    # Group 42.2: a single-slot box's lone spool is in slot 1 even when its slot
+    # was stored blank (a legacy PolyDryer row), so Quick-Swap can find it.
+    box_up = str(box_loc_id).strip().upper()
+    row = next((r for r in (locations_db.load_locations_list() or [])
+                if isinstance(r, dict) and str(r.get('LocationID', '')).strip().upper() == box_up), None)
     for item in items:
-        item_slot = str(item.get('slot', '')).strip().strip('"')
-        if item_slot == wanted:
+        if locations_db.effective_slot(row, item.get('slot', ''), occupants=len(items)) == wanted:
             return int(item['id'])
     return None

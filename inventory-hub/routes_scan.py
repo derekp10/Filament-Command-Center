@@ -334,7 +334,11 @@ def api_manage_contents():
                 skipped_loaded.append(sid)
                 continue
             slot_val = spool.get('slot', '')
-            if slot_val and slot_val != 'None':
+            # Group 42.2 x 41.2 (Claude's call 19): a single-slot box's spool is
+            # now stored in slot 1, but it is that box's only place, not a slot
+            # chosen among others, so Eject All keeps ejecting it, as before.
+            if (slot_val and slot_val != 'None'
+                    and not locations_db._is_single_slot_dryer_box(rows_by_id.get(own))):
                 # 27.6 — a spool in a real slot is deliberately NOT auto-ejected
                 # by a bulk clear; it is reported, not swept.
                 skipped_slotted.append(sid)

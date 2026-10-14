@@ -1927,6 +1927,28 @@ def _is_single_slot_dryer_box(row):
         return False
 
 
+def effective_slot(box_row, slot, occupants=1):
+    """Group 42.2 — the slot a spool occupies in `box_row`, for comparing slots.
+
+    A single-slot dryer box has one place, so a spool in it is in slot "1". FCC
+    used to store that slot blank (a box-label scan sends no slot), which made a
+    toolhead's Quick-Swap grid show an occupied PolyDryer as empty and made
+    /api/quickswap answer quickswap_empty_slot. New writes store "1"; this reads
+    a legacy blank slot as "1" too, but only while that spool is the box's sole
+    occupant (Claude's call 20, g42-q5): a box FCC thinks holds two spools stays
+    unsorted rather than one of them becoming "slot 1" at random. `occupants` is
+    how many spools the caller sees in the box. Every other slot reads as is.
+
+    One rule for every slot comparison (Bulk Move's feed check, Quick-Swap,
+    Return, the eject's slot restore); Group 40 reuses it."""
+    s = str(slot if slot is not None else '').strip().strip('"')
+    if s in ('None', 'null'):
+        s = ''
+    if s or occupants != 1 or not _is_single_slot_dryer_box(box_row):
+        return s
+    return '1'
+
+
 def attach_single_slot_box_to_toolhead(box_id, toolhead_id):
     """Group 20.2 — bind a SINGLE-SLOT (`Max Spools <= 1`) dryer box's slot '1'
     to `toolhead_id` so the box follows its deployed spool onto the toolhead

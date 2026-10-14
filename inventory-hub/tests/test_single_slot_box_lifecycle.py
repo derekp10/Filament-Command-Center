@@ -275,3 +275,80 @@ def test_a_spare_scanned_onto_a_head_never_takes_its_polydryer_as_home(logs):
     assert sm.direct_at("RCOI-1") == [61] and sm.spools[60]["location"] == "PM-DB-4"
     assert (sm.spools[61]["extra"].get("physical_source") or "") == "", sm.spools[61]
     assert store.bound("PM-DB-4") == "", "#60, PM-DB-4's own spool, left RCOI-1"
+
+
+# --- 42.2: a single-slot box's spool is in slot 1 ---------------------------------
+
+@pytest.mark.parametrize("box", BOXES)
+def test_a_spool_put_in_a_single_slot_box_is_in_slot_1_and_its_trail_says_so(box, logs):
+    """A box-label scan sends no slot, so the spool was stored with a blank slot,
+    and a toolhead's Quick-Swap grid read the PolyDryer as empty while its spool
+    was loaded."""
+    store = LocationsStore(BASE + [_box_row(box, head=None)])
+    sm = FakeSpoolman({50: {"location": "CR-CT-2-R1", "extra": {}}})
+    assert logic.smart_move_failure(_go(sm, store, target=box, raw_spools=[50]), 50) == ""
+    assert sm.spools[50]["extra"]["container_slot"] == "1"
+    assert logic.smart_move_failure(_go(sm, store, target="XL-2", raw_spools=[50]), 50) == ""
+    assert sm.spools[50]["extra"]["physical_source"] == box
+    assert sm.spools[50]["extra"]["physical_source_slot"] == "1"
+    assert store.bound(box) == "XL-2"
+
+
+def test_quickswap_finds_a_legacy_blank_slot_polydryer_spool(logs):
+    """/api/quickswap looks the tile's spool up by (box, slot 1)."""
+    store = LocationsStore(BASE + [_box_row("PM-DB-2")])
+    sm = FakeSpoolman({50: {"location": "XL-2", "extra": {"physical_source": "PM-DB-2",
+                                                           "physical_source_slot": ""}}})
+    assert _go(sm, store, call=lambda: logic.find_spool_in_slot("PM-DB-2", "1")) == 50
+
+
+def test_a_doubled_polydryer_has_no_slot_1(logs):
+    """Claude's call 20: two blank-slot spools in a Max-1 box stay unsorted;
+    neither becomes "slot 1" at random (dev's PM-DB-4 holds three)."""
+    store = LocationsStore(BASE + [_box_row("PM-DB-2", head=None)])
+    sm = FakeSpoolman({139: {"location": "PM-DB-2", "extra": {}},
+                       140: {"location": "PM-DB-2", "extra": {}}})
+    assert _go(sm, store, call=lambda: logic.find_spool_in_slot("PM-DB-2", "1")) is None
+
+
+def test_eject_all_keeps_ejecting_a_polydryer_spool_in_slot_1(client, logs):
+    """Claude's call 19: Eject All leaves slotted spools in place, so slot 1
+    alone would have stopped it ejecting a PolyDryer's spool."""
+    store = LocationsStore(BASE + [_box_row("PM-DB-2", head=None)])
+    sm = FakeSpoolman({18: {"location": "PM-DB-2", "extra": {"container_slot": "1"}}})
+    body = _go(sm, store, call=lambda: client.post("/api/manage_contents", json={
+        "action": "clear_location", "location": "PM-DB-2", "confirmed_unassign_ids": [18]})).get_json()
+    assert body["ejected"] == [18] and body["skipped_slotted"] == [], body
+
+
+def test_a_spool_put_in_its_polydryer_is_not_deployed_by_the_lifecycle_binding(logs):
+    """The box's slot 1 binding records where ITS spool is loaded; it isn't a
+    feed. With slot 1 written, the auto-deploy chain would have pushed #77 onto
+    XL-2 and unloaded #50, the box's own spool. (Passes before 42.2 too: no
+    slot, no chain. It guards the slot-1 change.)"""
+    store, sm = _seed("PM-DB-2")
+    sm.spools[77] = {"location": "CR-CT-2-R1", "extra": {}}
+    assert logic.smart_move_failure(_go(sm, store, target="PM-DB-2", raw_spools=[77]), 77) == ""
+    assert sm.direct_at("XL-2") == [50] and sm.spools[77]["location"] == "PM-DB-2"
+    assert store.bound("PM-DB-2") == "XL-2"
+
+
+def test_a_legacy_blank_trail_returns_into_slot_1(logs):
+    store, sm = _seed("PM-DB-2")
+    sm.spools[50]["extra"]["physical_source_slot"] = ""
+    assert _go(sm, store, call=lambda: logic.perform_smart_eject(50)) is True
+    assert sm.spools[50]["location"] == "PM-DB-2"
+    assert sm.spools[50]["extra"]["container_slot"] == "1"
+
+
+def test_return_sees_a_lone_legacy_spool_holding_slot_1(client, logs):
+    """Return's "that slot is taken" check reads PM-DB-2's lone blank-slot #18 as
+    holding slot 1, through the same rule, and says so."""
+    store = LocationsStore(BASE + [_box_row("PM-DB-2")])
+    sm = FakeSpoolman({
+        18: {"location": "PM-DB-2", "extra": {}},
+        50: {"location": "XL-2", "extra": {"physical_source": "PM-DB-2", "physical_source_slot": "1"}},
+    })
+    body = _go(sm, store, call=lambda: client.post("/api/quickswap/return", json={"toolhead": "XL-2"})).get_json()
+    assert body.get("action") == "return_done", body
+    assert any("PM-DB-2 slot 1 already holds #18" in m for m, a in logs), logs

@@ -794,10 +794,16 @@ def api_quickswap_return():
     # slot assignment would silently clear its container_slot (2026-09-12
     # review). Let the engine pick a free slot instead, and say so.
     if found_slot:
+        # Group 42.2: compared through the one slot rule, so a single-slot box's
+        # lone spool stored with a blank slot counts as holding slot 1.
+        _box_row = next((r for r in loc_list if isinstance(r, dict)
+                         and str(r.get('LocationID', '')).strip().upper() == str(found_box).strip().upper()), None)
+        _others = [o for o in (spoolman_api.get_spools_at_location_detailed(found_box) or [])
+                   if str(o.get('id')) != str(spool_id)]
         taken_by = next((
-            o.get('id') for o in (spoolman_api.get_spools_at_location_detailed(found_box) or [])
-            if str(o.get('id')) != str(spool_id)
-            and str(o.get('slot', '')).strip('"') == str(found_slot)), None)
+            o.get('id') for o in _others
+            if locations_db.effective_slot(_box_row, o.get('slot', ''), occupants=len(_others))
+            == str(found_slot).strip().strip('"')), None)
         if taken_by is not None:
             state.add_log_entry(
                 f"⚠️ Return: {found_box} slot {found_slot} already holds #{taken_by} — "
