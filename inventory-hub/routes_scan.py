@@ -470,14 +470,14 @@ def api_bulk_move():
     logic.perform_smart_move call (ONE undo record), applying the pre-flights +
     skip rules the single-move path lacks.
 
-    Body: {source, dest, confirm_active_print?}. On success returns an HONEST
-    per-spool tally: {success, source, dest, moved, moved_ids,
-    skipped:[{id,reason}], failed:[{id,err}]}. A blocking guard returns
-    {success:False, msg} (unknown/self/descendant dest · single-occupancy dest ·
-    capacity overflow) or {require_confirm, confirm_type:'active_print', ...}
-    when the SOURCE location is itself an actively-printing toolhead (single-
-    occupancy dests are rejected up front, so the dest is never a live toolhead;
-    auto_deploy is off so a bulk move never chain-deploys onto one either).
+    Body: {source, dest}. On success returns an HONEST per-spool tally:
+    {success, source, dest, moved, moved_ids, skipped:[{id,reason}],
+    failed:[{id,err}], unverified?}. A blocking guard returns {success:False,
+    msg} (unknown/self/descendant dest · single-occupancy dest · capacity
+    overflow). Nothing here asks about a print: a bulk move never moves a spool
+    loaded on a head (the plan skips them), single-occupancy dests are rejected
+    up front, and auto_deploy is off, so it never chain-deploys onto one either
+    (Group 41.7 removed the source-print confirm, which could never fire).
 
     Thin HTTP shell over logic.plan_bulk_move + logic.execute_bulk_move — the
     SAME core the CMD:BULKMOVE scan session uses (L298 Phase 2), so the two

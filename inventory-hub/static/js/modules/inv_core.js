@@ -981,7 +981,8 @@ const _renderLocationsPayload = (d) => {
                     LocationID: 'Unassigned',
                     Name: 'Unassigned Spools',
                     Type: 'Virtual',
-                    Occupancy: '--'
+                    Occupancy: '--',
+                    Synthesized: true
                 });
             }
 
@@ -1219,7 +1220,13 @@ const _renderLocationsPayload = (d) => {
                     // "(Room)" FCC only knows from its spools have no row to edit
                     // or delete, and the server refuses a delete of any id with no
                     // row, so a Spoolman-native row keeps only its ✏️ (saving it
-                    // there makes it an FCC location).
+                    // there makes it an FCC location). Keyed on the server's
+                    // Synthesized flag, never the Type (Group 41 review): a real
+                    // "Virtual Room / Zone" row, prod's blank-id "Unknown
+                    // Location" row and a promoted blank-Type parent share Types
+                    // with synthesized rows, and lost their buttons.
+                    const synth = !!l.Synthesized;
+                    const canEdit = !synth || l.Type === 'Spoolman Native';
 
                     return `
                 <tr data-locid="${escAttr(lidUC)}" data-ancestors="${ancAttr}" id="loc-row-${lidEsc}">
@@ -1230,9 +1237,9 @@ const _renderLocationsPayload = (d) => {
                     <td class="col-actions text-end" style="white-space: nowrap;">
                         <button class="btn btn-sm btn-outline-light me-1 btn-qr" data-id="${lidEsc}" title="Show QR">📱 QR</button>
                         ${canAddChild(l) ? `<button class="btn btn-sm btn-outline-success me-1 btn-add-child" data-id="${lidEsc}" title="Add a child location here">➕</button>` : ''}
-                        ${!['Virtual', 'Virtual Room', 'Unknown'].includes(l.Type) ? `
+                        ${canEdit ? `
                         <button class="btn btn-sm btn-outline-warning me-1 btn-edit" data-id="${lidEsc}">✏️</button>` : ''}
-                        ${!['Virtual', 'Virtual Room', 'Unknown', 'Spoolman Native'].includes(l.Type) ? `
+                        ${!synth ? `
                         <button class="btn btn-sm btn-outline-danger me-1 btn-delete" data-id="${lidEsc}">🗑️</button>` : ''}
                         <button class="btn btn-sm btn-info btn-manage fw-bold" data-id="${lidEsc}">Manage</button>
                     </td>

@@ -273,6 +273,9 @@ def test_undo_log_line_names_spool_and_source(mock_state, mock_spoolman, mock_co
     logic.perform_smart_move("NEW_SHELF", [123])
     record = mock_state.UNDO_STACK[0]
     assert record['labels'][123] == 'Test Spool'
+    # The move landed, so Spoolman now has the spool on NEW_SHELF (perform_undo
+    # reads where it is, and names a spool found somewhere else: Group 41 review).
+    mock_spoolman.get_spool.return_value = {'id': 123, 'location': 'NEW_SHELF', 'extra': {}}
 
     # 2. Undo emits a readable from→to line (not the count-only summary).
     logic.perform_undo()
@@ -304,6 +307,11 @@ def test_undo_log_line_lists_multiple_spools(mock_state, mock_spoolman, mock_con
     }[int(sd['id'])]
 
     logic.perform_smart_move("NEW_SHELF", [123, 124])
+    # Both moves landed: Spoolman now has them on NEW_SHELF.
+    mock_spoolman.get_spool.side_effect = lambda sid: {
+        123: {'id': 123, 'location': 'NEW_SHELF', 'extra': {}},
+        124: {'id': 124, 'location': 'NEW_SHELF', 'extra': {}},
+    }.get(int(sid))
     logic.perform_undo()
 
     logged = [c.args[0] for c in state.add_log_entry.call_args_list if c.args]

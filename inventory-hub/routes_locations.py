@@ -211,12 +211,16 @@ def api_get_locations():
         if existing_type_blank:
             # Replace the broken blank-Type row in-place rather than appending
             # a duplicate (would trip duplicate-LocationID guards downstream).
+            # It is still a real row: not marked Synthesized.
             for i, r in enumerate(csv_rows):
                 if str(r.get('LocationID', '')).upper() == parent:
                     csv_rows[i] = {**r, **synthetic_row}
                     break
         else:
-            csv_rows.append(synthetic_row)
+            # Synthesized: no locations.json row behind it, so nothing to edit
+            # or delete (Group 41 review: the frontend hid ✏️ / 🗑️ by Type,
+            # which real rows share).
+            csv_rows.append({**synthetic_row, "Synthesized": True})
 
     final_list = []
     # [ALEX FIX] Inject Virtual Unassigned Row
@@ -227,6 +231,7 @@ def api_get_locations():
         "Occupancy": f"{unassigned_count} items",
         "Max Spools": 0,
         "parent_id": None,  # L271 Phase 2.5 — virtual top-level row
+        "Synthesized": True,
     })
 
     for row in csv_rows:
@@ -275,8 +280,11 @@ def api_get_locations():
         # once no live spool (or deployed ghost) sits at it and nothing nests
         # under it — but only when the spool list was actually read: a failed
         # read leaves every count at 0 and would hide live locations too.
-        if row.pop('_synth_native', False) and spools_read_ok and direct_cnt == 0 and not is_parent:
+        synth_native = row.pop('_synth_native', False)
+        if synth_native and spools_read_ok and direct_cnt == 0 and not is_parent:
             continue
+        if synth_native:
+            row['Synthesized'] = True   # a Spoolman location with no FCC row
         final_list.append(row)
 
     # 18.1 — virtual UNKNOWN bucket, pinned to the BOTTOM of the list
@@ -294,6 +302,7 @@ def api_get_locations():
         "Occupancy": f"{unknown_count} items",
         "Max Spools": 0,
         "parent_id": None,  # L271 Phase 2.5 — virtual top-level row
+        "Synthesized": True,
     })
     # FilaBridge Phase-2: per-printer credentials (ip + api_key) live on the
     # Printer rows but must NEVER reach the browser — locations.json has no
@@ -535,6 +544,21 @@ def _delete_blank_id_rows():
     return jsonify({"success": True, "deleted": len(blank)})
 
 
+def _not_deleted(target, why, unassigned=(), trails_cleared=(), undeployed=()):
+    """A delete that stopped keeps its row, but the spool writes before the stop
+    landed. Say which, so a kept box isn't silently missing a spool that still
+    sits in it (Group 41 review)."""
+    ids = lambda sids: ", ".join(f"#{s}" for s in sids)  # noqa: E731
+    msg = f"{target} was NOT deleted: {why}"
+    if unassigned:
+        msg += f" Already unassigned: {ids(unassigned)}."
+    if undeployed:
+        msg += f" Already un-deployed: {ids(undeployed)}."
+    if trails_cleared:
+        msg += f" Box link already cleared: {ids(trails_cleared)}."
+    return msg
+
+
 @app.route('/api/locations', methods=['DELETE'])
 def api_delete_location():
     target = request.args.get('id', '').strip()
@@ -628,16 +652,17 @@ def api_delete_location():
                 # Group 41.3 — keep the row. The cascade's locations.json edits
                 # live only in `current` and are not saved, so nothing
                 # half-applies on disk; a retry finds only what's still there.
-                msg = (f"{target} was NOT deleted: {'; '.join(result['errors'])}. "
-                       f"Fix that and delete it again.")
+                msg = _not_deleted(target, f"{'; '.join(result['errors'])}. Fix that and delete it again.",
+                                   unassigned=result["unassigned"], undeployed=result["undeployed"])
                 state.add_log_entry(f"❌ {msg}", "ERROR", "ff4444")
                 return jsonify({"success": False, "msg": msg, "error": msg, "cascade": result}), 502
             new_list = [row for row in current if str(row.get('LocationID', '')).strip() != target]
             saved = locations_db.save_locations_list(new_list)
         if not saved:
-            msg = f"{target} was NOT deleted: locations.json could not be saved."
+            msg = _not_deleted(target, "locations.json could not be saved.",
+                               unassigned=result["unassigned"], undeployed=result["undeployed"])
             state.add_log_entry(f"❌ {msg}", "ERROR", "ff4444")
-            return jsonify({"success": False, "msg": msg, "error": msg}), 500
+            return jsonify({"success": False, "msg": msg, "error": msg, "cascade": result}), 500
         bits = []
         if result["unassigned"]:
             bits.append(f"{len(result['unassigned'])} spool(s) → UNASSIGNED")
@@ -660,9 +685,12 @@ def api_delete_location():
     #     and loses only that trail (the toolhead cascade does the same);
     #   - the rest are unassigned WITH their box links cleared (it used to be a
     #     location-only PATCH that left container_slot / physical_source);
-    #   - an emptied Room unassigns only the spools filed on the Room itself
-    #     (Derek's Q4 C), never the prefix hits the matcher adds;
-    #   - any write that fails keeps the row, logged at ERROR.
+    #   - only the spools filed on the row itself, never the prefix hits the
+    #     matcher adds for a dash-less id: Derek's Q4 C for an emptied Room, and
+    #     the Group 41 review for every other type (a "Virtual Room / Zone" or an
+    #     untyped parent was swept by prefix). A dashed id has no prefix hits;
+    #   - any write that fails keeps the row, logged at ERROR, and the answer
+    #     names what had already landed.
     try:
         contents = spoolman_api.get_spools_at_location_detailed_strict(target)
     except Exception as e:
@@ -671,7 +699,6 @@ def api_delete_location():
         return jsonify({"success": False, "msg": msg, "error": msg}), 502
     printer_map = locations_db.get_active_printer_map()
     rows_by_id = {str(r.get('LocationID', '')).strip().upper(): r for r in current if isinstance(r, dict)}
-    is_room = str(target_row.get('Type', '')).strip().lower() == 'room'
     unassigned, trails_cleared, skipped_loaded, errors = [], [], [], []
     for item in contents:
         sid = item.get('id')
@@ -686,8 +713,8 @@ def api_delete_location():
             if own != _t_u and logic._is_single_occupancy(own, printer_map, rows_by_id):
                 skipped_loaded.append(sid)
                 continue
-            if is_room and own != _t_u:
-                continue
+            if own != _t_u:
+                continue  # a prefix hit: filed on another location, not this row
             payload = {"location": "", "extra": {"container_slot": "", "physical_source": "",
                                                  "physical_source_slot": ""}}
             done, bucket = "unassigned", unassigned
@@ -698,8 +725,8 @@ def api_delete_location():
             errors.append(f"#{sid} ({err})")
             state.add_log_entry(f"❌ Deleting {target}: Spool #{sid} not {done}: {err}", "ERROR", "ff4444")
     if errors:
-        msg = (f"{target} was NOT deleted: {', '.join(errors)} could not be updated. "
-               f"Fix that and delete it again.")
+        msg = _not_deleted(target, f"{', '.join(errors)} could not be updated. Fix that and delete it again.",
+                           unassigned=unassigned, trails_cleared=trails_cleared)
         state.add_log_entry(f"❌ {msg}", "ERROR", "ff4444")
         return jsonify({"success": False, "msg": msg, "error": msg, "unassigned": unassigned,
                         "trails_cleared": trails_cleared, "skipped_loaded": skipped_loaded}), 502
@@ -715,9 +742,11 @@ def api_delete_location():
         new_list = [row for row in current if str(row.get('LocationID', '')).strip() != target]
         saved = locations_db.save_locations_list(new_list)
     if not saved:
-        msg = f"{target} was NOT deleted: locations.json could not be saved."
+        msg = _not_deleted(target, "locations.json could not be saved.",
+                           unassigned=unassigned, trails_cleared=trails_cleared)
         state.add_log_entry(f"❌ {msg}", "ERROR", "ff4444")
-        return jsonify({"success": False, "msg": msg, "error": msg}), 500
+        return jsonify({"success": False, "msg": msg, "error": msg, "unassigned": unassigned,
+                        "trails_cleared": trails_cleared, "skipped_loaded": skipped_loaded}), 500
     bits = []
     if unassigned:
         bits.append(f"{len(unassigned)} spool(s) → Unassigned")
@@ -932,13 +961,32 @@ def api_undo():
     undo would change is called out (D6), and its Yes carries the heads it saw
     as `confirmed_toolheads`. The Yes must quote `undo_id`; a different record
     on top (another move landed meanwhile; the stack is shared by every tab) is
-    refused. Refused outright while a bulk move is armed (Claude's call 9: its
-    panel would hide the prompt)."""
-    data = request.get_json(silent=True) or {}
+    refused. Refused outright while a bulk move is armed or an audit runs
+    (Claude's call 9, and the Group 41 review for the audit: either panel would
+    hide the prompt, and the scans it then swallowed were lost)."""
+    data = request.get_json(silent=True)
+    if data is None:
+        # A page loaded before Group 41.4 POSTs no body and ignores the answer,
+        # so the question would make Undo do nothing, silently. Its next log
+        # refresh shows this line (Group 41 review).
+        msg = ("Undo Last Move was pressed in a page that is out of date, so nothing was undone. "
+               "Reload the page (Ctrl+F5) and press it again.")
+        state.add_log_entry(f"⚠️ {msg}", "WARNING", "ffaa00")
+        return jsonify({"success": False, "stale_page": True, "msg": msg})
+    if not isinstance(data, dict):
+        data = {}
     if (state.BULK_MOVE_SESSION or {}).get('active'):
         msg = "Undo Last Move is off while a bulk move is armed. Commit or cancel the bulk move first."
         state.add_log_entry(f"⚠️ {msg}", "WARNING", "ffaa00")
         return jsonify({"success": False, "msg": msg})
+    if (state.AUDIT_SESSION or {}).get('active'):
+        msg = "Undo Last Move is off while an audit is running. Finish or cancel the audit first."
+        state.add_log_entry(f"⚠️ {msg}", "WARNING", "ffaa00")
+        return jsonify({"success": False, "msg": msg})
+    if data.get('confirm') and data.get('undo_id') in (None, ''):
+        msg = "That Yes didn't say which move it answers, so nothing was undone. Press Undo Last Move again."
+        state.add_log_entry(f"⚠️ Undo refused: {msg}", "WARNING", "ffaa00")
+        return jsonify({"success": False, "stale": True, "msg": msg})
     rec = logic.peek_undo()
     if rec is None:
         return jsonify(logic.perform_undo())
@@ -946,9 +994,10 @@ def api_undo():
         return jsonify(logic.undo_confirm_answer(rec))
     if str(data.get('undo_id')) != str(rec.get('id')):
         return jsonify(logic.perform_undo(expected_id=data.get('undo_id')))
-    # A head that started printing after the question still asks.
+    # A head that started printing after the question still asks; a spool that
+    # can't be read now refuses (an answer with no requires_confirm).
     ask = logic.undo_confirm_answer(rec, confirmed_heads=logic.confirmed_heads(data))
-    if ask.get("active_prints"):
+    if ask.get("active_prints") or not ask.get("requires_confirm"):
         return jsonify(ask)
     return jsonify(logic.perform_undo(expected_id=rec.get('id')))
 
@@ -959,6 +1008,13 @@ def api_get_contents_route():
     # (the matcher reads '' that way). Every caller expects a list.
     if not loc:
         return jsonify([])
+    # strict=1 (the delete prompt, Group 41 review): a Spoolman blip is an error,
+    # not an empty list that reads as "It holds no spools."
+    if request.args.get('strict', '').strip().lower() in ('1', 'true', 'yes'):
+        try:
+            return jsonify(spoolman_api.get_spools_at_location_detailed_strict(loc))
+        except Exception as e:
+            return jsonify({"error": f"Couldn't read {loc} from Spoolman ({e})."}), 502
     return jsonify(spoolman_api.get_spools_at_location_detailed(loc))
 
 @app.route('/api/spool_details', methods=['GET'])

@@ -2496,17 +2496,20 @@ const _deleteLocRequest = (id) => {
 const _deletePromptFor = (id, req) => {
     const loc = String(id == null ? '' : id).trim();
     if (!loc) return Promise.resolve(req.prompt);
-    const rows = state.allLocations || [];
     const up = (v) => String(v == null ? '' : v).replace(/"/g, '').trim().toUpperCase();
-    const typeOf = (lid) => ((rows.find((l) => up(l.LocationID) === up(lid)) || {}).Type || '');
-    const isRoom = typeOf(loc) === 'Room';
-    const heads = ['Tool Head', 'MMU Slot', 'No MMU Direct Load', 'Printer'];
-    return fetch(`/api/get_contents?id=${encodeURIComponent(loc)}`)
-        .then((r) => r.json())
+    // Group 41 review: read STRICTLY. The fail-open read answered [] on a
+    // Spoolman blip, so the prompt said "It holds no spools." about a box whose
+    // spools the delete then unassigned. And count only the spools filed on this
+    // row, as the server now does for every type.
+    return fetch(`/api/get_contents?id=${encodeURIComponent(loc)}&strict=1`)
+        .then((r) => (r.ok ? r.json() : null))
         .then((items) => {
-            const list = Array.isArray(items) ? items : [];
-            const goes = list.filter((i) => !i.is_ghost
-                && (up(i.location) === up(loc) || (!isRoom && !heads.includes(typeOf(i.location)))));
+            if (!Array.isArray(items)) {
+                return `Delete ${loc}? FCC couldn't read its spools from Spoolman just now, `
+                    + "so it can't say how many go to Unassigned.";
+            }
+            const list = items;
+            const goes = list.filter((i) => !i.is_ghost && up(i.location) === up(loc));
             const kept = list.filter((i) => i.is_ghost && up(i.location) === up(loc)).length;
             let msg = `Delete ${loc}?`;
             if (goes.length === 1) msg += ` Its spool #${goes[0].id} goes to Unassigned.`;

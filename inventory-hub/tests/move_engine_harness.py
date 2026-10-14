@@ -34,15 +34,22 @@ class FakeSpoolman:
     `unreadable` read as None, like get_spool on a Spoolman timeout.
     """
 
-    def __init__(self, spools, reject_locations=(), unreadable=(), reject_ids=()):
+    def __init__(self, spools, reject_locations=(), unreadable=(), reject_ids=(), landed_but_failed=()):
         self.spools = {int(k): copy.deepcopy(v) for k, v in spools.items()}
         self.reject_locations = {str(r).upper() for r in reject_locations}
         self.unreadable = {int(u) for u in unreadable}
         # Group 41.2: Spoolman rejects every write to these spools.
         self.reject_ids = {int(r) for r in reject_ids}
+        # Group 41 review: writes to these spools LAND but answer as failed, like
+        # a PATCH Spoolman committed after update_spool's read timeout.
+        self.landed_but_failed = {int(r) for r in landed_but_failed}
         # True = Spoolman's spool LIST is down: the fail-open readers answer []
         # (they swallow the error) and the strict reader raises.
         self.list_reads_fail = False
+        # Every spool-LIST read, counted in order; `fail_list_reads` holds the
+        # 0-based numbers of the reads that fail (list_reads_fail fails them all).
+        self.list_reads = 0
+        self.fail_list_reads = set()
         self.writes = []
 
     def get_spool(self, sid):
@@ -61,7 +68,15 @@ class FakeSpoolman:
             rec["location"] = data["location"]
         if "extra" in data:
             rec["extra"] = copy.deepcopy(data["extra"])
+        if int(sid) in self.landed_but_failed:
+            logic.spoolman_api.LAST_SPOOLMAN_ERROR = "Read timed out. (read timeout=15) (test)"
+            return None
         return {"id": int(sid), **copy.deepcopy(rec)}
+
+    def _list_read_fails(self):
+        n = self.list_reads
+        self.list_reads += 1
+        return self.list_reads_fail or n in self.fail_list_reads
 
     def direct_at(self, loc):
         loc = str(loc).upper()
@@ -79,19 +94,22 @@ class FakeSpoolman:
         return None
 
     def at_location(self, loc):
-        if self.list_reads_fail:
+        if self._list_read_fails():
             return []
         loc = str(loc).upper()
         return sorted(sid for sid, rec in self.spools.items() if self._match(rec, loc))
 
     def at_location_detailed_strict(self, loc):
-        if self.list_reads_fail:
+        if self._list_read_fails():
             raise logic.spoolman_api.requests.ConnectionError("Spoolman spool list unreachable (test)")
-        return self.at_location_detailed(loc)
+        return self._detailed(loc)
 
     def at_location_detailed(self, loc):
-        if self.list_reads_fail:
+        if self._list_read_fails():
             return []
+        return self._detailed(loc)
+
+    def _detailed(self, loc):
         loc = str(loc).upper()
         items = []
         for sid in sorted(self.spools):

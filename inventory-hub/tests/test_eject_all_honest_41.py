@@ -121,10 +121,11 @@ def test_a_refused_view_reads_and_writes_nothing(client, logs, loc, reason, what
         12: {"location": "XL-2", "extra": {"physical_source": "LR-MDB-1", "physical_source_slot": "2"}},
         13: {"location": "", "extra": {"physical_source": "LR-MDB-1"}},
     })
-    with patch.object(logic.spoolman_api, "get_spools_at_location_detailed_strict") as strict:
-        body = _clear(sm, client, loc)
+    body = _clear(sm, client, loc)
     assert body["success"] is False and body["blocked_reason"] == reason, body
-    assert strict.call_count == 0, "a refused view read Spoolman"
+    # Counted on the fake: run_move patches the reader itself, so an outer mock
+    # here never saw a call (Group 41 review).
+    assert sm.list_reads == 0, "a refused view read Spoolman"
     assert sm.writes == [], "a refused view wrote"
     assert (f"⚠️ Eject All refused on {loc.upper()} ({what}): nothing was moved", ("WARNING", "ffaa00")) in logs
 
@@ -151,26 +152,30 @@ def test_a_printers_refusal_names_its_heads(client, logs):
 def test_check_only_answers_without_reading_spoolman(client, logs):
     """The browser asks before it shows "Nuke all unslotted in …?"."""
     sm = FakeSpoolman({11: {"location": "LR-MDB-1", "extra": {}}})
-    with patch.object(logic.spoolman_api, "get_spools_at_location_detailed_strict") as strict:
-        ok = _clear(sm, client, "LR-MDB-1", check_only=True)
-        refused = _clear(sm, client, "LR", check_only=True)
+    ok = _clear(sm, client, "LR-MDB-1", check_only=True)
+    refused = _clear(sm, client, "LR", check_only=True)
     assert ok == {"success": True, "check_only": True}, ok
     assert refused["blocked_reason"] == "room_view", refused
-    assert strict.call_count == 0 and sm.writes == []
+    assert sm.list_reads == 0 and sm.writes == []
 
 
 # --- 41.1 belt and braces: a head's spool is never swept from another view ---
 
 def test_a_heads_resident_reached_by_prefix_is_left_loaded(client, logs):
-    """FAILS on the old route: the cart TB's matcher reaches TB-1's resident by
-    first segment, and Eject All ejected it off the head."""
+    """The cart TB's matcher reaches TB-1's resident by first segment. #21 has a
+    saved home, so a guard that only listed it (no `continue`) would send it
+    back to LR-MDB-1 off the head mid-print. (The old route answered
+    REQUIRE_CONFIRM for a homeless resident and wrote nothing, so a resident
+    with no home could never show a sweep: Group 41 review.) FAILS on the old
+    route, which returned #21 home."""
     sm = FakeSpoolman({
-        21: {"location": "TB-1", "extra": {}},          # loaded on the head TB-1
+        21: {"location": "TB-1", "extra": {"physical_source": "LR-MDB-1", "physical_source_slot": "2"}},
         22: {"location": "TB", "extra": {}},            # loose on the cart, no home
     })
     body = _clear(sm, client, "TB", confirmed_unassign_ids=[22])
-    assert body["skipped_loaded"] == [21], body
+    assert body["skipped_loaded"] == [21] and body["needs_unassign"] == [], body
     assert sm.direct_at("TB-1") == [21], "the head's spool was swept"
+    assert [w for w in sm.writes if w[0] == 21] == [], "the head's spool was written"
     assert body["ejected"] == [22], body
 
 
