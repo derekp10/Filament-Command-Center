@@ -12,11 +12,36 @@ window.doAssign directly without needing a live Spoolman/printer.
 """
 from __future__ import annotations
 
+import json
+
 from playwright.sync_api import Page
+
+
+def _own_the_buffer(page: Page, initial):
+    """Group 45.8 (family D): the page's 2 s buffer poll and its persist talk
+    to a per-test buffer instead of dev's shared server buffer. The poll used
+    to overwrite the injected spool once its 3 s grace window lapsed (a red in
+    5 sweeps), and the grace path's persist could write these made-up spools
+    (#42-#45, #99) into dev's real buffer."""
+    held = {"buffer": list(initial)}
+
+    def handle(route):
+        if route.request.method == "POST":
+            try:
+                held["buffer"] = (route.request.post_data_json or {}).get("buffer", [])
+            except ValueError:
+                pass
+            route.fulfill(status=200, content_type="application/json", body='{"success": true}')
+        else:
+            route.fulfill(status=200, content_type="application/json",
+                          body=json.dumps(held["buffer"]))
+    page.route("**/api/state/buffer", handle)
+    return held
 
 
 def _setup_page_with_held_spool(page: Page, spool_id=42):
     """Open the dashboard, prime state.heldSpools with one spool, return."""
+    _own_the_buffer(page, [{"id": spool_id, "display": f"#{spool_id}", "color": "ff0000"}])
     page.goto("http://localhost:8000")
     page.wait_for_selector("#buffer-zone")
     page.wait_for_function("typeof window.doAssign === 'function'")
