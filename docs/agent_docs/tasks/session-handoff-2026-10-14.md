@@ -45,6 +45,28 @@ answered; the builders follow these over the task files until the task files are
    log", e.g. "Ejected #50 from XL-2 back into PM-DB-2; PM-DB-2 is no longer attached to XL-2.").
    _(Group 42.5a / 42.5c; reader g42-q2)_
 
+**Round 2 (~19:10, Group 40):**
+
+5. **The "XL-1 is already running another spool" dialog on a slot-label scan** → **Enter stores** ("Just store it"
+   is highlighted). Wording as proposed: "Load #57 onto XL-1?" / "LR-MDB-1 slot 1 feeds XL-1, and XL-1 is
+   running #1 (from PM-DB-3). Loading #57 sends #1 back to PM-DB-3." / [Load it instead] [Just store it in
+   LR-MDB-1 slot 1] [Cancel], each with a scan QR. _(Group 40.3 / 40.0c; reader g40-q1)_
+6. **Return when the spool has no recorded slot** → **one tap when the answer is obvious** (exactly one free slot
+   feeds that head; the confirm still names it); the chooser otherwise. Derek: "the only time this might get
+   tricky is if I've swapped something out for a dryerbox, but we probably already took care of that scenario."
+   Builder note: a PolyDryer-fed spool HAS a recorded origin (its trail names the box), so Return sends it back
+   there; and count an attached single-slot box as a second feed of that head, so a spool with no trail on a
+   head a PolyDryer feeds gets the chooser, never a silent guess. _(Group 40.6, manual check R4; reader g40-q2)_
+7. **A Location change in the Add/Edit Spool wizard** → **behaves like Force Location** (slot chooser for a
+   multi-slot box, the toolhead chooser for XL/RCOI, Save moves the spool through the engine and loads the
+   head a slot feeds, asking first when printing or busy; a refused move says so and the other edits stay
+   saved). _(Group 40.7, manual check W1; reader g40-q3)_
+8. **An empty-buffer scan of a location label** → **a single-spool dryer box still grabs its spool**, even when
+   that spool is loaded on a head; printers, rooms, sections and rows open their view instead. Derek: **"also
+   other single spool dryboxes"** — he has new Prusa dry boxes to add, and one of his scanners can't read a
+   spool's barcode through their smoked plastic, so the box label is how he grabs the spool. Key the rule on
+   Type "Dryer Box" with Max Spools 1 (Group 42.7), never on the PM prefix. _(Group 40.5 item F; reader g40-q4)_
+
 ## Manual checks for Derek
 
 _None yet._
