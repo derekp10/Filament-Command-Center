@@ -1545,6 +1545,13 @@ const SCAN_GATING_MODALS = ['confirmModal', 'safetyModal', 'actionModal'];
 const _gatingPhase = {};    // id -> 'showing' | 'shown' | 'hiding' | 'hidden'
 const _deferredShow = {};   // id -> token of the ONE show queued for hidden.bs.modal
 const _deferredHide = {};   // id -> token of the ONE hide queued for shown.bs.modal
+// The phase is mirrored onto the dialog as data-fcc-phase so global.css can keep
+// a dialog that is still fading in from taking clicks (Group 41.2).
+const _setGatingPhase = (el, id, phase) => {
+    _gatingPhase[id] = phase;
+    if (phase) el.dataset.fccPhase = phase;
+    else delete el.dataset.fccPhase;
+};
 [['show.bs.modal', 'showing'], ['shown.bs.modal', 'shown'],
  ['hide.bs.modal', 'hiding'], ['hidden.bs.modal', 'hidden']].forEach(([evt, phase]) => {
     // Capture phase: the phase is current before ANY element- or document-level
@@ -1556,11 +1563,11 @@ const _deferredHide = {};   // id -> token of the ONE hide queued for shown.bs.m
         // started (Bootstrap accepts show() during the backdrop-fade tail).
         if (phase === 'hidden' && _gatingPhase[id] !== 'hiding') return;
         const prev = _gatingPhase[id];
-        _gatingPhase[id] = phase;
+        _setGatingPhase(ev.target, id, phase);
         // show/hide are cancelable and capture runs first, so re-check after the
         // dispatch: a later preventDefault() means the transition never started.
         if (phase === 'showing' || phase === 'hiding') {
-            queueMicrotask(() => { if (ev.defaultPrevented && _gatingPhase[id] === phase) _gatingPhase[id] = prev; });
+            queueMicrotask(() => { if (ev.defaultPrevented && _gatingPhase[id] === phase) _setGatingPhase(ev.target, id, prev); });
         }
     }, true);
 });
