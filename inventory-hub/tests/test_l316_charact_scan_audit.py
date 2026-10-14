@@ -177,9 +177,11 @@ def test_active_audit_hijacks_location_scan(client):
 def test_inactive_audit_location_scan_uses_normal_branch(client):
     """Control for the hijack tests: with NO active audit session, the same
     LOC: scan flows to the normal location branch and returns the pinned
-    {'type':'location', 'id', 'display', 'contents'} shape."""
+    {'type':'location', 'id', 'display', 'contents'} shape. The branch reads
+    strictly since the Group 42 review (a Spoolman blip read as "empty"; a
+    failed read now adds `contents_error`, test_review_fixes_42.py)."""
     with patch.object(app_module.logic, "process_audit_scan") as pas, \
-         patch.object(app_module.spoolman_api, "get_spools_at_location_detailed",
+         patch.object(app_module.spoolman_api, "get_spools_at_location_detailed_strict",
                       return_value=[]) as gl, \
          patch.object(app_module.state, "add_log_entry") as log:
         r = client.post("/api/identify_scan",
@@ -397,20 +399,22 @@ def test_remove_legacy_require_confirm_string_translated_to_json(client):
         "msg": "#55 is loose in CR with no saved home. Unassign it?",
     }
     eject.assert_called_once_with(
-        55, confirmed_unassign=False, confirm_active_print=False)
+        55, confirmed_unassign=False, confirm_active_print=False, report={})
 
 
 def test_remove_true_maps_to_success_and_confirmed_flag_passthrough(client):
-    """perform_smart_eject → True maps to bare {success:true}; the caller's
-    `confirmed` flag rides through as confirmed_unassign."""
+    """perform_smart_eject → True maps to {success: true} plus the spool id and
+    whatever the eject put in `report` (Group 42.5a: where it went, which box
+    let go; this mock fills nothing); the caller's `confirmed` flag rides
+    through as confirmed_unassign."""
     with patch.object(app_module.logic, "perform_smart_eject",
                       return_value=True) as eject:
         r = client.post("/api/manage_contents", json={
             "action": "remove", "spool_id": "55", "confirmed": True,
         })
-    assert r.get_json() == {"success": True}
+    assert r.get_json() == {"success": True, "spool_id": 55}
     eject.assert_called_once_with(
-        55, confirmed_unassign=True, confirm_active_print=False)
+        55, confirmed_unassign=True, confirm_active_print=False, report={})
 
 
 @pytest.mark.parametrize("eject_result", [False, None])

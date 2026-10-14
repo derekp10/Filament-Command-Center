@@ -233,14 +233,16 @@ def test_single_slot_attach_replaces_a_malformed_slot_targets(monkeypatch):
         "the sibling slot_order must survive; only the malformed slot_targets is replaced"
 
 
-def test_single_slot_detach_skips_a_bad_row_and_still_detaches_the_rest(monkeypatch):
-    """locations_db.detach_single_slot_boxes_from_toolhead — one bad box aborted
-    the detach for EVERY box on that head."""
+def test_single_slot_detach_is_untroubled_by_a_bad_row(monkeypatch):
+    """locations_db.detach_single_slot_box (Group 42.1's spool-keyed release; the
+    toolhead-keyed helper this pinned is gone): a bad box elsewhere neither
+    stops the release nor is rewritten, and a bad box itself is a no-op."""
     rows = [_bad("PM-DB-1", max_spools="1"), _good("PM-DB-2", {"1": "XL-2"}, max_spools="1")]
     saves = _store(monkeypatch, rows)
-    assert locations_db.detach_single_slot_boxes_from_toolhead("XL-2") == ["PM-DB-2"]
+    assert locations_db.detach_single_slot_box("PM-DB-2", "XL-2") is True
     assert saves[-1][1]["extra"]["slot_targets"] == {}
     assert saves[-1][0]["extra"] == POISON, "a reader-side skip must not rewrite the bad row"
+    assert locations_db.detach_single_slot_box("PM-DB-1", "XL-2") is False
 
 
 PRINTER_MAP = {"XL-1": {"printer_name": "XL", "position": 0},

@@ -25,6 +25,7 @@ import requests  # type: ignore
 import state  # type: ignore
 import config_loader  # type: ignore
 import spoolman_api  # type: ignore
+import logic  # type: ignore  # Group 42 review: single-slot box release on a direct edit
 import attr_migration  # type: ignore  # Group 36: hidden filament-attribute choices
 
 from app_core import app
@@ -666,6 +667,9 @@ def api_edit_spool_wizard():
                         "error": err,
                     })
                 spool_committed = True
+                # Group 42 review: a Location edit off a head releases the spool's
+                # own single-slot box, as a move would (the engine never ran).
+                logic.release_box_after_direct_write(spool_id, original_spool, spool_res)
                 # 24.F — the wizard edit-spool save is ALSO a manual weight surface.
                 # Log the before➔after breakdown when a weight field was dirty
                 # (`spool_data` is the dirty diff at this point; `original_spool` is
@@ -691,7 +695,11 @@ def api_edit_spool_wizard():
                     "spool_saved": spool_committed,
                 })
 
-        return jsonify({"success": True, "spool_id": spool_id})
+        out = {"success": True, "spool_id": spool_id}
+        # Group 42.3c: see /api/spool/update.
+        if spool_data and isinstance(spool_res, dict) and spool_res.get('fcc_warning'):
+            out["warning"] = spool_res['fcc_warning']
+        return jsonify(out)
 
     except Exception as e:
         state.logger.error(f"Wizard Edit Error: {e}")
@@ -724,6 +732,9 @@ def api_spool_update():
         if not res:
             err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the update"
             return jsonify({"status": "error", "msg": f"Failed to update spool: {err}", "error": err})
+        # Group 42 review: a location change off a head releases the spool's own
+        # single-slot box, as a move would (the engine never ran).
+        logic.release_box_after_direct_write(spool_id, pre, res)
 
         # 24.F — Manual weight adjustments leave a before➔after breakdown in the
         # Activity Log. Fire ONLY when a weight field was actually requested so
@@ -750,12 +761,17 @@ def api_spool_update():
                 return v is None or (isinstance(v, (int, float)) and v <= 0)
             needs_prompt = _missing(fil_weight) and _missing(vendor_weight)
 
-        return jsonify({
+        out = {
             "status": "success",
             "auto_archived": auto_archived,
             "needs_empty_weight_prompt": needs_prompt,
             "filament_id": filament_id,
-        })
+        }
+        # Group 42.3c: an auto-unarchived spool whose old toolhead holds another
+        # spool now went to Unassigned; the weigh screen toasts this at 7 s.
+        if res.get('fcc_warning'):
+            out["warning"] = res['fcc_warning']
+        return jsonify(out)
     except Exception as e:
         state.logger.error(f"Spool Update Error: {e}")
         return jsonify({"status": "error", "msg": str(e)})

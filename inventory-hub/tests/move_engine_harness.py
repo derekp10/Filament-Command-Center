@@ -188,26 +188,62 @@ def _probe_for(printing):
 IDLE = _probe_for(set())
 
 
-def run_move(sm, *, probe, locations, printer_map, call=None, **move_kwargs):
+class LocationsStore:
+    """A real, mutable locations.json for lifecycle tests (Group 42). Pass it as
+    run_move(store=...): load / save go through it, and the REAL single-slot
+    attach / release helpers run against it, so a binding is observable across
+    hops ([[mocked engine hides chain bugs]]). `saves` keeps every saved list."""
+
+    def __init__(self, rows):
+        self.rows = copy.deepcopy(list(rows))
+        self.saves = []
+
+    def load(self, *a, **k):
+        return copy.deepcopy(self.rows)
+
+    def save(self, rows, *a, **k):
+        self.rows = copy.deepcopy(list(rows))
+        self.saves.append(copy.deepcopy(self.rows))
+        return True
+
+    def row(self, lid):
+        return next(r for r in self.rows if str(r.get("LocationID", "")).upper() == str(lid).upper())
+
+    def bound(self, box, slot="1"):
+        """What `box`'s slot is bound to now ('' when unbound)."""
+        return logic.locations_db.bindings_from_row(self.row(box)).get(str(slot), "")
+
+
+def run_move(sm, *, probe, printer_map, locations=None, store=None, call=None, **move_kwargs):
     """Run perform_smart_move(**move_kwargs), or `call()`, against the fakes:
-    `locations` is what locations.json holds, `printer_map` the active map."""
-    locs = locations
+    `locations` is what locations.json holds, `printer_map` the active map.
+    With `store` (a LocationsStore) instead, locations.json is that live store
+    and the single-slot box attach / release run for real against it."""
+    if store is not None:
+        locations_patches = (
+            patch.object(logic.locations_db, "load_locations_list", side_effect=store.load),
+            patch.object(logic.locations_db, "save_locations_list", side_effect=store.save),
+        )
+    else:
+        locs = locations
+        locations_patches = (
+            patch.object(logic.locations_db, "load_locations_list",
+                         side_effect=lambda *a, **k: copy.deepcopy(locs)),
+            # The single-slot box attach / release persist locations.json, and
+            # save_locations_list isn't patched here: keep them off the real file.
+            patch.object(logic.locations_db, "attach_single_slot_box_to_toolhead",
+                         return_value=(False, "mocked")),
+            patch.object(logic.locations_db, "detach_single_slot_box", return_value=False),
+        )
     with ExitStack() as stack:
-        for p in (
+        for p in locations_patches + (
             patch.object(logic.config_loader, "load_config",
                          return_value={"printer_map": printer_map}),
             patch.object(logic.config_loader, "get_api_urls",
                          return_value=("http://spoolman", "http://filabridge")),
             patch.object(logic.locations_db, "get_active_printer_map",
                          return_value=printer_map),
-            patch.object(logic.locations_db, "load_locations_list",
-                         side_effect=lambda *a, **k: copy.deepcopy(locs)),
             patch.object(logic.locations_db, "is_descendant", return_value=False),
-            # Group 20.2 box attach/detach both persist locations.json.
-            patch.object(logic.locations_db, "attach_single_slot_box_to_toolhead",
-                         return_value=(False, "mocked")),
-            patch.object(logic.locations_db, "detach_single_slot_boxes_from_toolhead",
-                         return_value=[]),
             patch.object(logic.spoolman_api, "LAST_SPOOLMAN_ERROR", None),
             patch.object(logic.spoolman_api, "get_spool", side_effect=sm.get_spool),
             patch.object(logic.spoolman_api, "update_spool", side_effect=sm.update_spool),

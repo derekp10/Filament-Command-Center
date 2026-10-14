@@ -122,14 +122,20 @@
             const allRows = await Promise.all(toolheadIds.map(async th => {
                 const unbound = !((bindings.toolheads[th.id] || []).length > 0);
                 let item = null;
+                let loaded = [];
                 try {
                     const r = await fetch(`/api/get_contents?id=${encodeURIComponent(th.id)}`);
-                    const items = r.ok ? await r.json() : [];
-                    item = (items || [])[0] || null;
+                    const items = (r.ok ? await r.json() : []) || [];
+                    // Group 42.4 (mirrors the pulse): the loaded spool, never a
+                    // ghost while one exists; a doubled head carries both ids.
+                    loaded = items.filter(i => !i.is_ghost);
+                    item = loaded[0] || items[0] || null;
                 } catch (e) {
                     item = null;
                 }
-                return { ...th, item, unbound };
+                const out = { ...th, item, unbound, loaded_count: loaded.length };
+                if (loaded.length > 1) out.loaded_ids = loaded.map(i => i.id);
+                return out;
             }));
             // Re-sort by position so the visual order matches printer layout.
             allRows.sort((a, b) => (a.position || 0) - (b.position || 0));
@@ -177,7 +183,8 @@
                 // 30.4 — include material so a material-only change (e.g. a
                 // material correction, or a same-color/same-weight swap) still
                 // repaints the new material line.
-                return th.id + (th.unbound ? '!u' : '') + ':' + (it ? `${it.id}:${it.color || ''}:${(it.details && it.details.material) || ''}:${Math.round(it.remaining_weight || 0)}/${Math.round(it.initial_weight || 0)}` : 'empty');
+                // 42.4: a second loaded spool appearing or leaving repaints the chip.
+                return th.id + (th.unbound ? '!u' : '') + ((th.loaded_count || 0) > 1 ? `!n${th.loaded_count}` : '') + ':' + (it ? `${it.id}:${it.color || ''}:${(it.details && it.details.material) || ''}:${Math.round(it.remaining_weight || 0)}/${Math.round(it.initial_weight || 0)}` : 'empty');
             }).join(','));
         });
         return parts.join('||');
@@ -191,6 +198,21 @@
         if (weight < 100) return '#ffc107';
         return '#0dcaf0';
     };
+
+    // Group 42.4 — a toolhead holds one spool (Derek: "If looking at the
+    // toolhead, I should only ever see one in there"). When FCC's records put
+    // two loaded spools on a head, the tile shows the first and says so. The
+    // background is OPAQUE: the contrast guard mis-reads translucent ones. The
+    // hover text uses the full head id whatever the label setting (call 23).
+    const _doubledText = (th) => {
+        const ids = (th.loaded_ids || []).map(i => `#${i}`);
+        const who = ids.length > 2 ? `${ids.slice(0, -1).join(', ')} and ${ids[ids.length - 1]}` : ids.join(' and ');
+        return `${th.id} holds ${who} — a toolhead holds one spool. Open ${th.id} and eject the one that isn't loaded.`;
+    };
+    const _doubledChip = (th) => ((th.loaded_count || 0) > 1
+        ? `<div class="fcc-ps-th-chip fcc-ps-th-doubled" style="font-size:0.72rem; color:#ffd54a; background:#2b2200; border-radius:4px; padding:0 4px;" title="${_doubledText(th).replace(/"/g, '&quot;')}">⚠️ ${th.loaded_count} spools</div>`
+        : '');
+    window.fccDoubledHeadText = _doubledText;
 
     const _renderToolheadBlock = (th) => {
         const it = th.item;
@@ -280,6 +302,7 @@
                 </div>
                 ${chipHtml}
                 ${unboundHint}
+                ${_doubledChip(th)}
             </div>
         `;
     };
@@ -329,9 +352,13 @@
         // accent + a trailing 🔗 hint while still showing the swatch + weight.
         const unboundMiniCls = th.unbound ? ' fcc-ps-mini-unbound' : '';
         const unboundMiniBorder = th.unbound ? 'border:1px dashed #ffd54a;' : '';
-        const unboundMiniHint = th.unbound
+        const unboundMiniHint = (th.unbound
             ? ` <span class="fcc-ps-mini-unbound-hint" style="color:#ffd54a;" title="No dryer-box slot bound (auto-deduct still follows the toolhead)">🔗</span>`
-            : '';
+            : '')
+            // Group 42.4: the doubled-head warning, compact.
+            + ((th.loaded_count || 0) > 1
+                ? ` <span class="fcc-ps-mini-doubled" style="color:#ffd54a; background:#2b2200;" title="${_doubledText(th).replace(/"/g, '&quot;')}">⚠️${th.loaded_count}</span>`
+                : '');
         return `<span class="fcc-ps-mini${unboundMiniCls}"
                       data-toolhead="${th.id}"
                       style="${unboundMiniBorder}"

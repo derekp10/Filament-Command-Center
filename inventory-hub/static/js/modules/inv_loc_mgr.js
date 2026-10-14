@@ -1085,11 +1085,45 @@ const _syncDepositCard = () => {
 };
 
 // --- GREEN ZONE: LIST RENDERER ---
+// Group 42.4 — a toolhead holds one spool (Derek: "If looking at the toolhead, I
+// should only ever see one in there"). When FCC's records put two loaded spools
+// on a head, its view says so above the cards, in the Printer Status chip's
+// words (Claude's call 23).
+const _isOneSpoolHeadRow = (row, lid) => {
+    if (!row) return false;
+    if (['Tool Head', 'MMU Slot', 'No MMU Direct Load'].includes(row.Type)) return true;
+    // A dual-role printer that is its own (only) head, the CORE1 shape (Group 42
+    // review: its tile said "⚠️ 2 spools" while its view showed no banner).
+    if (row.Type !== 'Printer') return false;
+    const heads = (row.toolheads || []).map(t => String((t && t.location_id) || '').toUpperCase()).filter(Boolean);
+    return heads.length > 0 && heads.every(h => h === lid);
+};
+const _doubledHeadBanner = (data, locId) => {
+    const lid = String(locId || '').toUpperCase();
+    const row = (state.allLocations || []).find(l => String(l.LocationID || '').toUpperCase() === lid);
+    if (!_isOneSpoolHeadRow(row, lid)) return null;
+    const loaded = (data || []).filter(s => !s.is_ghost
+        && String(s.location || '').replace(/"/g, '').trim().toUpperCase() === lid);
+    if (loaded.length < 2) return null;
+    const ids = loaded.map(s => `#${s.id}`);
+    const who = ids.length > 2 ? `${ids.slice(0, -1).join(', ')} and ${ids[ids.length - 1]}` : ids.join(' and ');
+    const banner = document.createElement('div');
+    banner.className = 'fcc-doubled-head-banner';
+    banner.setAttribute('role', 'alert');
+    banner.style.cssText = 'background:#2b2200; color:#ffd54a; border:1px solid #ffd54a; border-radius:6px;'
+        + ' padding:8px 12px; margin-bottom:8px; font-weight:bold;';
+    banner.textContent = `⚠️ ${lid} holds ${who} — a toolhead holds one spool. Open ${lid} and eject the one that isn't loaded.`;
+    return banner;
+};
+window._doubledHeadBanner = _doubledHeadBanner;   // for the node tests
+
 const renderList = (data, locId) => {
     const list = document.getElementById('manage-contents-list');
     const emptyMsg = document.getElementById('manage-empty-msg');
 
     list.innerHTML = "";
+    const doubled = _doubledHeadBanner(data, locId);
+    if (doubled) list.appendChild(doubled);
 
     // 1. DEPOSIT CARD
     if (state.heldSpools.length > 0) {
@@ -1549,6 +1583,29 @@ window.ejectSpool = (sid, loc, pickup) => {
     }
 };
 
+// Group 42.5a: the eject says where the spool went and which single-slot box let
+// go of the head (Derek, 2026-10-13: "short arrows for toast. And a full
+// sentence in the activity log"; the sentence is the server's): "⏏️ #50 → back
+// in PM-DB-2 (PM-DB-2 detached from XL-2)", "⏏️ #134 → back in LR-MDB-1 slot
+// 3", "⏏️ #88 → Unassigned". An answer with no report keeps "Ejected".
+const _ejectToastText = (res, sid) => {
+    if (!res || res.to === undefined) return 'Ejected';
+    const id = res.spool_id != null ? res.spool_id : sid;
+    const typeOf = (lid) => ((state.allLocations || []).find(
+        (l) => String(l.LocationID || '').toUpperCase() === String(lid || '').toUpperCase()) || {}).Type || '';
+    let where;
+    if (res.home) {
+        const prep = ['Dryer Box', 'Storage', 'Sliding Drawer', 'Room', 'Virtual Room'].includes(typeOf(res.to))
+            ? 'in' : 'on';
+        where = `back ${prep} ${res.to}` + (res.slot ? ` slot ${res.slot}` : '');
+    } else {
+        where = res.to ? `Room ${res.to}` : 'Unassigned';
+    }
+    const boxes = res.released_boxes || [];
+    const released = boxes.length ? ` (${boxes.join(', ')} detached from ${res.from})` : '';
+    return `⏏️ #${id} → ${where}${released}`;
+};
+
 window.doEject = (sid, loc, isConfirmed = false, confirmActivePrint = false) => {
     setProcessing(true);
     window.fetchT('/api/manage_contents', {
@@ -1598,7 +1655,7 @@ window.doEject = (sid, loc, isConfirmed = false, confirmActivePrint = false) => 
                 return;
             }
 
-            showToast("Ejected");
+            showToast(_ejectToastText(res, sid), 'success', 4000);
             if (loc !== "Scan") {
                 // [ALEX FIX] Force a re-render by clearing the hash.
                 // This ensures the UI updates to "Empty" even if the API data is cached/similar.

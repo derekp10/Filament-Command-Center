@@ -3140,6 +3140,9 @@ window.wizardSubmit = async () => {
         if (data.success) {
             wizardState.isDirty = false;
             msg.innerHTML = `<span class="text-success fw-bold">Success! ${wizardState.mode === 'edit_spool' ? 'Spool Updated' : 'Spool(s) Generated'}.</span>`;
+            // Group 42.3c: see inv_weigh_out.js (a weight fix that brought an
+            // archived spool back, but its old toolhead holds another one now).
+            if (data.warning && typeof showToast === 'function') showToast(data.warning, 'warning', 7000);
             // 17.3 follow-up: render queue-label chips into the dedicated
             // `wiz-postcreate-actions` row in the modal footer (alongside
             // Cancel + Create Inventory) so subsequent status-message

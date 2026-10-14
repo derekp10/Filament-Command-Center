@@ -4,7 +4,9 @@
 **Estimated effort:** MEDIUM (~8–12 h, 1–2 sessions). Release rule + pins ~3 h · slot-1 normalization ~1 h · one-spool engine guards + undo ~2 h · eject feedback + visibility ~2–3 h · tests throughout.
 **Risk:** **MEDIUM.** It adds `locations.json` writes to more move paths and touches `spoolman_api.update_spool` (the auto-archive edge). Every change is best-effort on the binding side and must never fail or roll back the spool write it follows.
 
-> **Status: `TODO` — scoped 2026-09-13, not started.**
+> **Status: `DONE` — built in the 2026-10-13/14 overnight run on `feature/group-42-single-slot-box-lifecycle`, merged to `dev` (sha in [session-handoff-2026-10-14.md](session-handoff-2026-10-14.md)).** All of 42.1–42.8 shipped, built from Derek's answers (Q-A with its caveat, Q-B, and his 2026-10-13 answers: a weighed-back spool whose head is taken goes to Unassigned with a warning; eject feedback is short arrows in the toast and a full sentence in the log) and Claude's calls 18–23. The ⚠️ notes below were reconciled before building (Q-B and Group 41's Q1 were answered; line refs drifted). Two corrections the build found: 39.7's "one strict direct residents reader" was a closure, so 42.3b extracted `logic.strict_direct_occupants` (Group 40 reuses it); and the 13.6 PolyDryer hazard was live on every RCOI head, not only behind Group 40.0d. Archived in `completed-archive.md`.
+>
+> _Planning history:_ scoped 2026-09-13.
 > Built from Derek's single-slot box release rule and his one-spool principle ([open-decisions-2026-09-13.md](open-decisions-2026-09-13.md) § D3).
 > Evidence: [active-print-chain-investigation-2026-09-12.md](active-print-chain-investigation-2026-09-12.md) (I5-8, I5-9, I5-10, I5-15, I5-17, and the verifier's "A refused eject still detaches…") and [active-print-chain-diff-reviews-2026-09-12.md](active-print-chain-diff-reviews-2026-09-12.md) (R1-01, R1-03, R3-06).
 > Every `file:line` was re-read on `dev` @ `be9f045`. Re-grep the named function before editing.

@@ -69,7 +69,8 @@ import logic  # noqa: E402
 import state  # noqa: E402
 
 from move_engine_harness import (  # noqa: E402,F401
-    IDLE, REAL_UPDATE_SPOOL, FakeSpoolman, WireSpoolman, _probe_for, _unwire, _wire, run_move,
+    IDLE, REAL_UPDATE_SPOOL, FakeSpoolman, LocationsStore, WireSpoolman, _probe_for, _unwire, _wire,
+    run_move,
 )
 
 
@@ -570,46 +571,61 @@ def test_moving_off_a_toolhead_clears_the_trail_through_the_real_extras_merge(de
 
 
 # ---------------------------------------------------------------------------
-# E. The Group 20.2 box detach follows a real eject, never a refused one
+# E. A single-slot box is released by a real eject, never a refused one, and
+#    only its OWN spool releases it (Group 20.2's detach-after-write, made
+#    spool-keyed by Group 42.1). The real binding helpers run on a live store.
 # ---------------------------------------------------------------------------
+
+PM_DB_1_ON_XL_1 = {"LocationID": "PM-DB-1", "Type": "Dryer Box", "Max Spools": "1", "Name": "PolyDryer",
+                   "extra": {"slot_targets": {"1": "XL-1"}}}
+
 
 def test_refused_eject_leaves_the_single_slot_box_bound():
     """#99 on XL-1 has no saved home, so an interactive eject answers
     "REQUIRE_CONFIRM" and writes nothing. It used to detach XL-1's single-slot
     box first, so cancelling the unassign prompt left the box unbound."""
+    store = LocationsStore(LOCATIONS + [PM_DB_1_ON_XL_1])
     sm = FakeSpoolman({99: {"location": "XL-1", "extra": {}}})
 
-    def eject():
-        with patch.object(logic.locations_db, "detach_single_slot_boxes_from_toolhead",
-                          return_value=[]) as detach:
-            return logic.perform_smart_eject(99), detach.call_count
-
-    res, detach_calls = _run(sm, probe=IDLE, call=eject)
+    res = run_move(sm, probe=IDLE, store=store, printer_map=PRINTER_MAP,
+                   call=lambda: logic.perform_smart_eject(99))
 
     assert res == "REQUIRE_CONFIRM", res
     assert not sm.writes, sm.writes
-    assert detach_calls == 0
+    assert store.saves == [] and store.bound("PM-DB-1") == "XL-1"
 
 
-@pytest.mark.parametrize("extra, landed", [
-    ({"physical_source": "LR-MDB-1", "physical_source_slot": "2"}, "LR-MDB-1"),
-    ({}, ""),
-], ids=["returns-home", "no-home"])
-def test_successful_eject_detaches_the_box_after_the_spool_write(extra, landed):
+@pytest.mark.parametrize("extra, landed, released", [
+    ({"physical_source": "PM-DB-1", "physical_source_slot": "1"}, "PM-DB-1", True),
+    ({"physical_source": "LR-MDB-1", "physical_source_slot": "2"}, "LR-MDB-1", False),
+    ({}, "", False),
+], ids=["own-single-slot-box", "multi-slot-trail", "no-home"])
+def test_successful_eject_releases_only_its_own_box_after_the_spool_write(extra, landed, released):
+    """Group 42.1 rewrite of the 2026-09-12 pin. The release runs once the
+    spool's write has landed, and only for the spool's own single-slot box:
+    before, any spool leaving XL-1 (the multi-slot and no-home cases here)
+    detached every single-slot box bound to XL-1."""
+    store = LocationsStore(LOCATIONS + [PM_DB_1_ON_XL_1])
     sm = FakeSpoolman({99: {"location": "XL-1", "extra": extra}})
     seen = []
+    real_detach = logic.locations_db.detach_single_slot_box
 
     def eject():
-        def detach(toolhead):
-            seen.append((toolhead, sm.spools[99]["location"]))
-            return []
-        with patch.object(logic.locations_db, "detach_single_slot_boxes_from_toolhead",
-                          side_effect=detach):
+        def spy(box, head):
+            seen.append((box, head, sm.spools[99]["location"]))
+            return real_detach(box, head)
+        with patch.object(logic.locations_db, "detach_single_slot_box", side_effect=spy):
             return logic.perform_smart_eject(99, confirmed_unassign=True)
 
-    assert _run(sm, probe=IDLE, call=eject) is True
-    # Detached exactly once, and only after #99 had actually left XL-1.
-    assert seen == [("XL-1", landed)], seen
+    assert run_move(sm, probe=IDLE, store=store, printer_map=PRINTER_MAP, call=eject) is True
+    assert sm.spools[99]["location"] == landed
+    if released:
+        # Exactly once, and only after #99 had actually left XL-1.
+        assert seen == [("PM-DB-1", "XL-1", "PM-DB-1")], seen
+        assert store.bound("PM-DB-1") == ""
+    else:
+        assert store.bound("PM-DB-1") == "XL-1", "a box that wasn't #99's was released"
+        assert store.saves == []
 
 
 # ---------------------------------------------------------------------------

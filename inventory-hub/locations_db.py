@@ -1927,7 +1927,29 @@ def _is_single_slot_dryer_box(row):
         return False
 
 
-def attach_single_slot_box_to_toolhead(box_id, toolhead_id):
+def effective_slot(box_row, slot, occupants=1):
+    """Group 42.2 — the slot a spool occupies in `box_row`, for comparing slots.
+
+    A single-slot dryer box has one place, so a spool in it is in slot "1". FCC
+    used to store that slot blank (a box-label scan sends no slot), which made a
+    toolhead's Quick-Swap grid show an occupied PolyDryer as empty and made
+    /api/quickswap answer quickswap_empty_slot. New writes store "1"; this reads
+    a legacy blank slot as "1" too, but only while that spool is the box's sole
+    occupant (Claude's call 20, g42-q5): a box FCC thinks holds two spools stays
+    unsorted rather than one of them becoming "slot 1" at random. `occupants` is
+    how many spools the caller sees in the box. Every other slot reads as is.
+
+    One rule for every slot comparison (Bulk Move's feed check, Quick-Swap,
+    Return, the eject's slot restore); Group 40 reuses it."""
+    s = str(slot if slot is not None else '').strip().strip('"')
+    if s in ('None', 'null'):
+        s = ''
+    if s or occupants != 1 or not _is_single_slot_dryer_box(box_row):
+        return s
+    return '1'
+
+
+def attach_single_slot_box_to_toolhead(box_id, toolhead_id, steal=True):
     """Group 20.2 — bind a SINGLE-SLOT (`Max Spools <= 1`) dryer box's slot '1'
     to `toolhead_id` so the box follows its deployed spool onto the toolhead
     (feeds the Core One "missing box" notification for non-Core-One printers).
@@ -1936,7 +1958,14 @@ def attach_single_slot_box_to_toolhead(box_id, toolhead_id):
 
     NOTE: this makes a single-slot box's slot binding LIFECYCLE-DRIVEN — it
     mirrors where the box's one spool is deployed (paired with
-    detach_single_slot_boxes_from_toolhead on eject). Returns (attached, detail).
+    detach_single_slot_box, which logic._release_single_slot_box calls when the
+    box's own spool leaves the head by any path, Group 42.1). Returns
+    (attached, detail).
+
+    `steal=False` (Group 42 review) leaves a box that is bound to ANOTHER head
+    where it is: the 42.6 follow and Undo's re-attach must never take a
+    PolyDryer off the head its own spool runs on. A deploy keeps steal=True:
+    its spool just left that box, so the box goes with it.
     """
     box_up = str(box_id or '').strip().upper()
     th_up = str(toolhead_id or '').strip().upper()
@@ -1955,8 +1984,11 @@ def attach_single_slot_box_to_toolhead(box_id, toolhead_id):
         extra = dict(_existing_extra) if isinstance(_existing_extra, dict) else {}
         _existing_targets = extra.get('slot_targets')
         targets = dict(_existing_targets) if isinstance(_existing_targets, dict) else {}
-        if str(targets.get('1', '')).strip().upper() == th_up:
+        _bound_now = str(targets.get('1') or '').strip().upper()
+        if _bound_now == th_up:
             return True, "already attached"  # idempotent — skip the write
+        if _bound_now and not steal:
+            return False, f"attached to {_bound_now}"
         targets['1'] = th_up
         extra['slot_targets'] = targets
         row['extra'] = extra
@@ -1966,36 +1998,44 @@ def attach_single_slot_box_to_toolhead(box_id, toolhead_id):
     return True, f"{box_up} slot 1 -> {th_up}"
 
 
-def detach_single_slot_boxes_from_toolhead(toolhead_id):
-    """Group 20.2 — clear the slot '1' binding of every SINGLE-SLOT dryer box that
-    currently feeds `toolhead_id` (on eject/unload). Multi-slot boxes are left
-    untouched (their bindings are user config). Returns the list of detached box
-    LocationIDs (empty if none, or on persist failure)."""
-    th_up = str(toolhead_id or '').strip().upper()
-    if not th_up:
-        return []
+def detach_single_slot_box(box_id, toolhead_id):
+    """Group 42.1 — release ONE single-slot dryer box from `toolhead_id`: drop
+    its slot '1' binding, only while that binding names this head.
+
+    Derek's rule (2026-09-13): a single-slot box stays bound to a head until ITS
+    OWN spool leaves that head, by any path; ejecting a different spool from the
+    head no longer unbinds it. The caller knows "its own" from the leaving
+    spool's trail (`physical_source`), so this is keyed on the box, never on the
+    head. It replaces Group 20.2's `detach_single_slot_boxes_from_toolhead`,
+    which unbound EVERY single-slot box on the head whichever spool left.
+
+    Keeps the `slot_targets` key (as `{}`): `dryer_bindings_are_authoritative`
+    reads its presence (Group 46.4). Returns True when it released the box;
+    False when it isn't a single-slot box, isn't bound to that head, or the
+    save failed."""
+    box_up = str(box_id or '').strip().strip('"').upper()
+    th_up = str(toolhead_id or '').strip().strip('"').upper()
+    if not box_up or not th_up:
+        return False
     with locations_write_lock():
         loc_list = load_locations_list()
-        detached = []
-        for row in loc_list:
-            if not _is_single_slot_dryer_box(row):
-                continue
-            # A non-dict `extra` holds no binding to clear; skip it rather than
-            # raise, which aborted the detach for every box on this head.
-            _existing_extra = row.get('extra')
-            if not isinstance(_existing_extra, dict):
-                continue
-            targets = _existing_extra.get('slot_targets')
-            if not isinstance(targets, dict):
-                continue
-            if str(targets.get('1', '')).strip().upper() == th_up:
-                extra = dict(_existing_extra)
-                extra['slot_targets'] = {k: v for k, v in targets.items() if str(k) != '1'}
-                row['extra'] = extra
-                detached.append(row.get('LocationID'))
-        if detached and not save_locations_list(loc_list):
-            return []
-    return detached
+        idx, row = _find_location(loc_list, box_up)
+        if idx is None or not _is_single_slot_dryer_box(row):
+            return False
+        # A non-dict `extra` or `slot_targets` holds no binding to drop.
+        _existing_extra = row.get('extra')
+        if not isinstance(_existing_extra, dict):
+            return False
+        targets = _existing_extra.get('slot_targets')
+        if not isinstance(targets, dict) or str(targets.get('1', '')).strip().upper() != th_up:
+            return False
+        extra = dict(_existing_extra)
+        extra['slot_targets'] = {k: v for k, v in targets.items() if str(k) != '1'}
+        row['extra'] = extra
+        loc_list[idx] = row
+        if not save_locations_list(loc_list):
+            return False
+    return True
 
 
 def set_dryer_box_bindings(loc_id, slot_targets, printer_map):
@@ -2128,12 +2168,20 @@ def get_bindings_for_machine(printer_name, printer_map):
         if row.get('Type') != DRYER_BOX_TYPE:
             continue
         box_id = str(row.get('LocationID', '')).strip()
+        # Group 42.5c: a single-slot box's binding is the 20.2 lifecycle (its
+        # own spool is on that head), not a feed, so the grid labels it
+        # "attached" and offers Unbind when that spool isn't there; 42.2's
+        # slot-1 rule maps its lone blank-slot spool.
+        single = _is_single_slot_dryer_box(row)
         for slot, target in bindings_from_row(row).items():
             if not target:
                 continue
             target_up = target.strip().upper()
             if target_up in toolheads:
-                toolheads[target_up].append({"box": box_id, "slot": slot})
+                entry = {"box": box_id, "slot": slot}
+                if single:
+                    entry["single_slot"] = True
+                toolheads[target_up].append(entry)
                 continue
             if is_printer_sentinel(target_up):
                 suffix = target_up.split(':', 1)[1]

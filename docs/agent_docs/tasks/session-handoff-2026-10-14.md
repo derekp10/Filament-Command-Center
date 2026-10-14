@@ -15,10 +15,52 @@ _Run in progress. Started from `dev` @ `4203ffe` (= `origin/dev`) at ~18:15 on 2
   sweep was **fully green: 3004 passed, 0 failed, in 21:01** (it took 37:21 with 8 reds earlier tonight). Left
   for you: 45.6, the dev-data refresh from prod (an evening; it needs your OK on the prod reads). Next: Group 41.
 - **Landed (~01:45):** Group 41 is DONE, merged `f49ccfe` and pushed. Eject All refuses rooms and printers and says what it did; a delete never reaches a loaded head; Undo is "Undo Last Move" and asks first; a confirm dialog fading in ignores clicks. The review's red (an auto-deployed undo mid-print) is fixed. Next: Group 42.
+- **Landed (04:05):** Group 42 is DONE, merged `MERGE_SHA` and pushed. A PolyDryer lets go of a head only when its own spool leaves it, follows that spool head to head, and an eject out of the box puts the spool back where it sat before; one loaded spool per head on every writer; eject says where the spool went and which box let go. The review's 14 findings are fixed. Next: Group 40, whose engine prerequisites start on a parked branch (the group spans 2–3 sessions, and its one prompt you'd feel waits for you).
 - Evening prep done: Derek's go-ahead for all-night full test runs, a push after each merge, and read-only prod
   counts (taken ~18:25; table in the plan file).
 
 ## Landed
+
+### Group 42 → `DONE`: single-slot box lifecycle, one spool per head (merged `MERGE_SHA`, pushed)
+
+- **Commits:** `4d71361` (42.1 + 42.5a), `c787d4b` (42.2), `b1e98d4` (42.3), `82ca8c6` (42.5b), `538f2e7`
+  (42.4), `458b4af` (42.5c), `86c8fa2` (42.6), `b3793c7` (42.8 docs), `3cf3957` (the review's fixes),
+  `9642819` (the sweep's one new warning), and the housekeeping commit.
+- **What changed for you:**
+  - **A PolyDryer lets go of a head only when its own spool leaves it**, by any path: eject, Return,
+    Quick-Swap, any move, Force Location, force-unassign, a print to 0 g, or a Location edit in the wizard.
+    Ejecting a different spool from the same head no longer unbinds it. A spare scanned onto an RCOI head no
+    longer records that head's PolyDryer as its home.
+  - **Head to head, the PolyDryer follows its spool** (your Q-A). The spool also remembers where it sat before
+    it went into the box (a new Spoolman field, "Pre-Box Location (system)", registered on dev): ejecting it out
+    of the box puts it back there, e.g. on CR-CT-2-R1, with no "Unassign?" prompt.
+  - **One loaded spool per head, everywhere.** Two spools sent to one head are refused ("XL-1 holds one spool —
+    move them one at a time"). Undo won't put a spool back on a head that holds another one now. A used-up
+    spool weighed back above 0 g goes back to its old head only if that head is empty, else to Unassigned with
+    a 7 s warning naming the spool there (your option A; on prod this is #99 → RCOI-1 and #95 → RCOI-5). A
+    doubled head shows "⚠️ 2 spools" on its tile, the strip and its view.
+  - **A PolyDryer's spool is in slot 1**, so its Quick-Swap tile shows the spool instead of reading empty.
+  - **Eject says what it did:** "⏏️ #50 → back in PM-DB-2 (PM-DB-2 detached from XL-2)" in the toast, and a
+    full sentence in the Activity Log.
+  - **Eject mode reads toolhead labels** (your Q-B): a head's label ejects its one loaded spool; a box or
+    printer label, or a head holding 0 or 2 spools, warns and does nothing. Eject mode now stays on through
+    the eject's own "Unassign?" / "printing?" question.
+  - **A toolhead's grid says what is attached:** "🔗 attached — follows #50", or "🔗 attached, but its spool
+    isn't on XL-2" with an Unbind button.
+- **Review:** 5 agents (4 lenses + 1 batched skeptic), 2.22M tokens, 25 raw findings → 14 confirmed (4
+  orange, 10 yellow), 6 duplicates, 5 refuted; all fixed with 28 pins that failed first. The oranges: a
+  PolyDryer could follow a spool from a head it wasn't attached to (a stale trail) and leave its own spool's
+  head; a spool put in a PolyDryer could take slot 1 from the box's own deployed spool, after which Quick-Swap
+  moved a different spool than its card showed; eject mode switched itself off when the eject asked a
+  question, so the next head label loaded the buffer onto that head; and the deposit tile on a PolyDryer still
+  promised a load onto the head that 42.2 had removed. Also fixed: Return into a taken PolyDryer unseated
+  its spool, a deduct that timed out after landing left the box attached, Undo refused a spool back onto XL
+  itself, a Spoolman blip read as "empty" (and offered an Unbind), and Unbind could detach a box that had
+  moved on.
+- **Tests:** every new pin proven red on the pre-change code. `--offline` **2335 passed**; full `RUN_INTEGRATION` sweep **3229 passed / 21 skipped / 0 failed in 21:40** (load 1.03×), fully green; its one warning, new tonight, is fixed in `9642819` (a test read setup_fields' UTF-8 output as cp1252).
+- **Handed on, not done here:** Group 40 reuses `logic.strict_direct_occupants` and
+  `locations_db.effective_slot`. The wizard's Location edit still writes straight to Spoolman (40.7 routes it
+  through the engine); for now it releases the box after the write.
 
 ### Group 41 → `DONE`: honest bulk results (merged `f49ccfe`, pushed)
 
@@ -216,6 +258,7 @@ harness's 1% tolerance let stale CORE1 text pass).
 
 ## Manual checks for Derek
 
+- **Group 42:** none required (all automated). Optional hands-on checks: the table in [42-single-slot-box-lifecycle.md](42-single-slot-box-lifecycle.md) ("Manual checks for Derek", L0–L12, dev). Two rows changed since it was written: L8b now expects **Unassigned with a 7 s warning naming the spool on XL-1** (your option A), and L10 runs on an XL or RCOI head (dev's CORE1 row is gone). Worth one look each if you only do a few: L11 + L12 (the follow, and the eject back to the cart), and L10 on a printing head (eject mode should stay on after you answer the question).
 - **Group 41:** none required (all automated). Two notes for the buglist's ⏸️ PENDING DEREK section, which tonight's rules leave untouched (fold them in when you next edit it):
   - **Bulk Moves check 1** (`CMD:UNDO` after the commit) now gets one prompt first, naming the move ("Undo: put #156 back in CR-CT-2-R3 and #194 back in CR-CT-2-R3?"); Yes puts both back and the toast says so.
   - **A suggested mid-print check:** right after check 3's Yes (XL-3's spool moved to `CR-CT-2-R1`), tap UNDO MOVE. Pass if one prompt says the XL is printing and that this undo changes XL-3 mid-print, then "Undo: put #N back on XL-3?", and Yes puts the spool back on XL-3. Does the wording read right?
@@ -228,3 +271,4 @@ harness's 1% tolerance let stale CORE1 text pass).
 | `wf_6284177c-d05` review-finish-43-46 | 43.2 + 46.3 | 5 (4 lenses + 1 batched skeptic) | 1,765,406 subagent | ~38 min, 336 tool calls; 33 raw findings → 12 confirmed + 4 plausible, 16 duplicates, 1 refuted; all fixed (`80dcd6e`) |
 | `wf_cf280365-f17` review-group-45 | Group 45 | 5 (4 lenses + 1 batched skeptic) | 1,552,636 subagent | ~46 min, 392 tool calls; 11 raw findings → 7 confirmed (3 orange, 4 yellow), 4 refuted; all fixed (`0323b9e`) |
 | `wf_80ce168f-fb2` review-group-41 | Group 41 | 5 (4 lenses + 1 batched skeptic) | 1,719,943 subagent | ~34 min, 385 tool calls; 18 raw findings → 17 confirmed (1 red, 4 orange, 12 yellow), 1 refuted (kept as hardening); all fixed (`3169abe`) |
+| `wf_cf1df12e-797` review-group-42 | Group 42 | 5 (4 lenses + 1 batched skeptic) | 2,216,289 subagent | ~44 min, 434 tool calls; 25 raw findings → 14 confirmed (4 orange, 10 yellow), 6 duplicates, 5 refuted; all fixed (`3cf3957`) |

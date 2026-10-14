@@ -544,15 +544,21 @@ def api_all_dryer_box_slots():
         # The guarded reader (a malformed row 500'd the whole picker). It also
         # reports a blank binding as None, which is what "unbound" means here.
         targets = locations_db.bindings_from_row(row)
+        # Group 42 review: Return's preview skips a single-slot box's lifecycle
+        # binding, as the server does, so it needs to know which boxes those are.
+        single = locations_db._is_single_slot_dryer_box(row)
         for n in range(1, max_slots + 1):
             slot = str(n)
             target = targets.get(slot)
-            out.append({
+            entry = {
                 "box": box_id,
                 "box_name": row.get('Name', box_id),
                 "slot": slot,
                 "target": target,  # None => unbound
-            })
+            }
+            if single:
+                entry["single_slot"] = True
+            out.append(entry)
     # Sort: unbound first (so the picker can promote quickly), then by box id.
     out.sort(key=lambda e: (e['target'] is not None, e['box'], int(e['slot'])))
     return jsonify({"slots": out})
@@ -575,6 +581,18 @@ def api_single_slot_binding_put(loc_id, slot):
             "ERROR", "ff0000"
         )
         return jsonify({"error": "not_a_dryer_box", "location": loc_id}), 404
+    # Group 42 review: the toolhead grid's Unbind names the head it showed. A
+    # repaint is 5-30 s behind, and meanwhile the box can follow its spool onto
+    # another head; detaching it from there unbound a box whose spool runs on it.
+    expected = str(data.get('expected_target') or '').strip().upper()
+    if expected and target in (None, '', 'null', 'None'):
+        bound_now = str(current.get(str(slot)) or '').strip().upper()
+        if bound_now and bound_now != expected:
+            msg = (f"{loc_id} is attached to {bound_now} now, not {expected}, so nothing was changed. "
+                   f"Reopen {expected} to see where it is.")
+            state.add_log_entry(f"⚠️ Unbind refused: {msg}", "WARNING", "ffaa00")
+            return jsonify({"error": "binding_moved", "msg": msg, "location": loc_id,
+                            "slot": slot, "bound_to": bound_now}), 409
     next_targets = dict(current)
     if target in (None, '', 'null', 'None'):
         next_targets.pop(str(slot), None)
@@ -755,9 +773,14 @@ def api_quickswap_return():
             break
 
     # Fallback: scan bindings for the first dryer-box slot bound to this toolhead.
+    # A single-slot box's binding records where ITS spool is loaded, not a feed
+    # (Groups 42.2 / 42.1 step 5), so a stranger is never sent into it: a stale
+    # PolyDryer attachment took a cart's spool (Group 42 review).
     if not found_box:
         for row in loc_list:
             if not isinstance(row, dict) or row.get('Type') != locations_db.DRYER_BOX_TYPE:
+                continue
+            if locations_db._is_single_slot_dryer_box(row):
                 continue
             targets = locations_db.bindings_from_row(row)   # guarded: a bad row 500'd Return
             for slot, target in targets.items():
@@ -794,14 +817,26 @@ def api_quickswap_return():
     # slot assignment would silently clear its container_slot (2026-09-12
     # review). Let the engine pick a free slot instead, and say so.
     if found_slot:
+        # Group 42.2: compared through the one slot rule, so a single-slot box's
+        # lone spool stored with a blank slot counts as holding slot 1.
+        _box_row = next((r for r in loc_list if isinstance(r, dict)
+                         and str(r.get('LocationID', '')).strip().upper() == str(found_box).strip().upper()), None)
+        _others = [o for o in (spoolman_api.get_spools_at_location_detailed(found_box) or [])
+                   if str(o.get('id')) != str(spool_id)]
         taken_by = next((
-            o.get('id') for o in (spoolman_api.get_spools_at_location_detailed(found_box) or [])
-            if str(o.get('id')) != str(spool_id)
-            and str(o.get('slot', '')).strip('"') == str(found_slot)), None)
+            o.get('id') for o in _others
+            if locations_db.effective_slot(_box_row, o.get('slot', ''), occupants=len(_others))
+            == str(found_slot).strip().strip('"')), None)
         if taken_by is not None:
+            # A single-slot box has no other slot: the engine leaves the spool
+            # unslotted there (it never takes slot 1 from #taken_by), and the
+            # line says so instead of promising a free slot (Group 42 review).
+            instead = (f"#{spool_id} goes back into {found_box} unslotted"
+                       if locations_db._is_single_slot_dryer_box(_box_row)
+                       else f"returning #{spool_id} to a free slot instead")
             state.add_log_entry(
-                f"⚠️ Return: {found_box} slot {found_slot} already holds #{taken_by} — "
-                f"returning #{spool_id} to a free slot instead", "WARNING", "ffaa00")
+                f"⚠️ Return: {found_box} slot {found_slot} already holds #{taken_by} — {instead}",
+                "WARNING", "ffaa00")
             found_slot = None
 
     # 3) Send the spool back. perform_smart_move handles Filabridge + extras.
@@ -943,7 +978,19 @@ def api_quickswap():
             "error": "slot is not bound to this toolhead",
         }), 400
 
-    spool_id = logic.find_spool_in_slot(box, slot)
+    # Two spools claiming the slot: the grid's card named one of them, and moving
+    # either could load a different spool than the user picked (Group 42 review).
+    claimants: list = []
+    spool_id = logic.find_spool_in_slot(box, slot, claimants=claimants)
+    if len(claimants) > 1:
+        msg = (f"{box} slot {slot} is claimed by {logic._and_list([f'#{c}' for c in claimants])} — "
+               f"open {box} and move one of them first")
+        state.add_log_entry(f"⚠️ Quick-swap: {msg}", "WARNING", "ffaa00")
+        return jsonify({
+            "action": "quickswap_ambiguous_slot",
+            "box": box, "slot": slot, "toolhead": toolhead,
+            "spools": claimants, "error": msg,
+        }), 409
     if not spool_id:
         state.add_log_entry(
             f"⚠️ Quick-swap: slot {box}:SLOT:{slot} is empty — no spool to move to {toolhead}",

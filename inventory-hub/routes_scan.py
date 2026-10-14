@@ -334,7 +334,11 @@ def api_manage_contents():
                 skipped_loaded.append(sid)
                 continue
             slot_val = spool.get('slot', '')
-            if slot_val and slot_val != 'None':
+            # Group 42.2 x 41.2 (Claude's call 19): a single-slot box's spool is
+            # now stored in slot 1, but it is that box's only place, not a slot
+            # chosen among others, so Eject All keeps ejecting it, as before.
+            if (slot_val and slot_val != 'None'
+                    and not locations_db._is_single_slot_dryer_box(rows_by_id.get(own))):
                 # 27.6 — a spool in a real slot is deliberately NOT auto-ejected
                 # by a bulk clear; it is reported, not swept.
                 skipped_slotted.append(sid)
@@ -392,10 +396,14 @@ def api_manage_contents():
 
     if action == 'remove':
         is_confirmed = data.get('confirmed', False)
+        # Group 42.5a: the eject fills this with where the spool went and which
+        # single-slot box let go, so the toast can say it ("I had to dig").
+        report = {}
         result = logic.perform_smart_eject(
             spool_id,
             confirmed_unassign=is_confirmed,
             confirm_active_print=confirm_active_print,
+            report=report,
         )
         if isinstance(result, dict) and result.get('status') == 'requires_confirm':
             # Group 39.6 — one prompt, not two in a row: if the spool would also
@@ -430,7 +438,7 @@ def api_manage_contents():
             return jsonify({"success": False, "require_confirm": True, "confirm_types": ["unassign"],
                             "msg": _no_home_unassign_msg(spool_id)})
         elif result is True:
-            return jsonify({"success": True})
+            return jsonify({"success": True, "spool_id": spool_id, **report})
         else:
             return jsonify({"success": False, "msg": "DB Update Failed"})
     elif action == 'force_unassign':
@@ -1093,8 +1101,17 @@ def api_identify_scan():
         })
 
     if res['type'] == 'location':
-        lid = res['id']; 
-        items = spoolman_api.get_spools_at_location_detailed(lid)
+        lid = res['id']
+        # Read strictly (Group 42 review): a Spoolman blip answered "0 items", and
+        # eject mode then called a loaded toolhead empty and pointed at an Unbind.
+        # A failed read says so (`contents_error`) instead of looking empty.
+        try:
+            items = spoolman_api.get_spools_at_location_detailed_strict(lid)
+        except Exception as e:
+            why = f"couldn't read {lid} from Spoolman ({e})"
+            state.add_log_entry(f"⚠️ 🔎 {lid}: {why}", "WARNING", "ffaa00")
+            return jsonify({"type": "location", "id": lid, "display": f"LOC: {lid}",
+                            "contents": [], "contents_error": why})
         state.add_log_entry(f"🔎 {lid}: {len(items)} item(s)")
         return jsonify({"type": "location", "id": lid, "display": f"LOC: {lid}", "contents": items})
         
