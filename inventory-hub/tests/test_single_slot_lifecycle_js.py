@@ -178,3 +178,60 @@ def test_without_eject_mode_a_toolhead_label_still_assigns_the_buffer(tmp_path):
 def test_a_bulk_move_keeps_its_own_location_scans(tmp_path):
     res = _scan(tmp_path, "LOC:RCOI-1", contents=[_loaded(60, "RCOI-1")], bulk=True)
     assert res["ejects"] == [], res
+
+
+# --- 42.4: "⚠️ 2 spools" on a doubled head --------------------------------------
+
+DOUBLED_TEXT = "XL-2 holds #42 and #50 — a toolhead holds one spool. Open XL-2 and eject the one that isn't loaded."
+
+WIDGET = """
+window.makeSwatchHtml = () => '';
+window.getFilamentStyle = () => ({ frame: '#333' });
+const rows = { XL: { state: null, toolheads: [
+  { id: 'XL-1', position: 0, unbound: false, loaded_count: 0, item: null },
+  { id: 'XL-2', position: 1, unbound: false, loaded_count: __COUNT__, loaded_ids: __IDS__,
+    item: { id: 42, color: 'ff0000', remaining_weight: 500, initial_weight: 1000, display: '#42' } },
+] } };
+window.refreshPrinterStatusWidgetFromAggregate(rows);
+const w = document.getElementById('printer-status-widget');
+return { body: w.querySelector('.fcc-ps-body').innerHTML, strip: w.querySelector('.fcc-ps-header-chips').innerHTML };
+"""
+
+
+def test_the_tile_and_the_strip_say_a_head_holds_two_spools(tmp_path):
+    res = run_js(tmp_path, ["inv_printer_status.js"],
+                 WIDGET.replace("__COUNT__", "2").replace("__IDS__", "[42, 50]"))
+    assert res["unhandled"] == [], res
+    assert "⚠️ 2 spools" in res["body"] and f'title="{DOUBLED_TEXT}"' in res["body"], res["body"]
+    assert "background:#2b2200" in res["body"], "the chip needs an opaque background (contrast guard)"
+    assert "⚠️2" in res["strip"] and DOUBLED_TEXT in res["strip"], res["strip"]
+
+
+def test_one_loaded_spool_shows_no_warning(tmp_path):
+    res = run_js(tmp_path, ["inv_printer_status.js"],
+                 WIDGET.replace("__COUNT__", "1").replace("__IDS__", "undefined"))
+    assert "spools" not in res["body"] and "⚠️" not in res["strip"], res
+
+
+MANAGE = """
+state.allLocations = [{ LocationID: 'XL-2', Type: 'Tool Head', 'Max Spools': '1' },
+                      { LocationID: 'LR-MDB-1', Type: 'Dryer Box', 'Max Spools': '4' }];
+const out = {};
+for (const [key, loc, data] of __CASES__) {
+    const el = window._doubledHeadBanner(data, loc);
+    out[key] = el ? el.textContent : null;
+}
+return out;
+"""
+
+
+def test_a_doubled_heads_view_says_so_above_its_cards(tmp_path):
+    """renderList puts this banner first (the full sweep renders it in a browser)."""
+    two = [{"id": 42, "location": "XL-2", "is_ghost": False}, {"id": 50, "location": "XL-2", "is_ghost": False}]
+    one = [two[0], {"id": 7, "location": "XL-2", "is_ghost": True}]
+    cases = [["two", "XL-2", two], ["one", "XL-2", one], ["box", "LR-MDB-1",
+             [{"id": 1, "location": "LR-MDB-1"}, {"id": 2, "location": "LR-MDB-1"}]]]
+    res = run_js(tmp_path, ["inv_loc_mgr.js"], MANAGE.replace("__CASES__", json.dumps(cases)))
+    assert res["unhandled"] == [], res
+    assert res["two"] == f"⚠️ {DOUBLED_TEXT}", res
+    assert res["one"] is None and res["box"] is None, res

@@ -362,13 +362,23 @@ def _pulse_section_printer_status():
             tid = entry['location_id']
             is_bound = bool(bindings.get(tid, []))
             contents = spools_by_tid.get(tid, [])
-            item_data = contents[0] if contents else None
-            toolheads.append({
+            # Group 42.4: the tile shows the one LOADED spool, a spool whose own
+            # location is this head, never a ghost (a trail naming the head) while
+            # a loaded one exists. A head holding two loaded spools (Derek: "If
+            # looking at the toolhead, I should only ever see one in there") says
+            # so instead of hiding the second.
+            direct = [c for c in contents if not c.get('is_ghost')]
+            item_data = (direct or contents)[0] if contents else None
+            th_out = {
                 'id': tid,
                 'position': entry['position'],
                 'item': item_data,
                 'unbound': not is_bound,
-            })
+                'loaded_count': len(direct),
+            }
+            if len(direct) > 1:
+                th_out['loaded_ids'] = [c.get('id') for c in direct]
+            toolheads.append(th_out)
         toolheads.sort(key=lambda t: (t['position'], t['id']))
         # Direct PrusaLink probe — runs regardless of dryer-box bindings,
         # so the widget ticks for dryer-box-less printers (L56). NOTE: cancel
