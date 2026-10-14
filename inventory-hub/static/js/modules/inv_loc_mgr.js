@@ -1303,6 +1303,20 @@ const renderBadgeQRs = (s, i) => {
 // --- INTERACTION ---
 window.handleSlotInteraction = (slot) => {
     const locId = document.getElementById('manage-loc-id').value, item = state.currentGrid[slot];
+    // A slot needs a box: CMD:SLOT:<n> with the Location Manager closed used to
+    // act on the last grid with a blank location (closing the manager blanks
+    // #manage-loc-id but keeps state.currentGrid), which moved the buffered spool
+    // to Unassigned and toasted "Assigned". Like CMD:TRASH and CMD:EJECTALL, it
+    // needs the manager open on a location (found by Group 40's door review).
+    const manageModal = document.getElementById('manageModal');
+    if (!String(locId || '').trim() || !(manageModal && manageModal.classList.contains('show'))) {
+        showToast(`Slot ${slot} scan ignored: open a box in the Location Manager first, then scan its slot`,
+            'warning', 7000);
+        if (window.logClientEvent) window.logClientEvent(
+            `⚠️ CMD:SLOT:${slot} ignored: no box is open in the Location Manager, so nothing was moved`,
+            'WARNING');
+        return;
+    }
     if (state.heldSpools.length > 0) {
         const newId = state.heldSpools[0].id;
         // IMPORTANT: don't shift the buffer here. _doAssignFinalize's success
