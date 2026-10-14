@@ -1,8 +1,10 @@
+import itertools
 import re
 import threading
 import time
 import typing
 import urllib.parse
+import uuid
 import requests
 import state
 import config_loader
@@ -590,6 +592,82 @@ def _known_room_of(loc_id, loc_list):
     return room if row and row.get('Type') == 'Room' else ""
 
 
+# Group 41.1 / 41.9 — the views Eject All refuses, decided from locations.json
+# and the printer map only (no Spoolman read), so the browser can ask before it
+# shows "Nuke all unslotted in …?" (manage_contents clear_location check_only).
+_EJECT_ALL_REFUSED = {
+    'blank': "no location",
+    'unassigned': "the Unassigned list",
+    'unknown': "the Unknown list",
+    'synthesized': "not a saved location",
+    'room_view': "a room",
+    'printer_view': "a printer",
+}
+
+
+def eject_all_block_reason(loc_id, loc_row, printer_map):
+    """Why Eject All refuses `loc_id`, or None when it may run.
+
+    - 'blank': no location (the 2026-09-13 guard: '' matches every Unassigned spool);
+    - 'unassigned' / 'unknown': the two virtual lists. The matcher reads UNASSIGNED
+      as every spool with no location, and Eject All there "returned" trail-carrying
+      spools into their old boxes (41.9);
+    - 'synthesized': no locations.json row (a "<prefix> (Room)" or a Spoolman-native
+      name); a prefix sweep with nothing on disk to scope it;
+    - 'room_view': Derek's D4 ("an eject all on a room would be catastrophic"): a
+      Room, a "Virtual Room / Zone", or a dash-less row with no Type, which
+      /api/locations shows as "<id> (Room)" (Group 41 review);
+    - 'printer_view': a Printer row that is not itself a head (XL, RCOI, or one with
+      no heads yet), so Eject All can't sweep every head mid-print.
+    Every other view (a box, cart, shelf, row, or a head) keeps Eject All."""
+    lid = str(loc_id or '').strip().upper()
+    if not lid:
+        return 'blank'
+    if lid in ('UNASSIGNED', 'UNKNOWN'):
+        return lid.lower()
+    if not isinstance(loc_row, dict):
+        return 'synthesized'
+    rtype = str(loc_row.get('Type', '')).strip().lower()
+    if rtype in ('room', 'virtual room') or (not rtype and '-' not in lid):
+        return 'room_view'
+    if locations_db.is_printer_row_not_head(lid, loc_row, printer_map):
+        return 'printer_view'
+    return None
+
+
+def eject_all_block_message(reason, loc_id, loc_list, bulk_moves_enabled):
+    """The toast for a refused Eject All (Derek, 2026-10-13: a room's pointer
+    follows the Bulk Moves switch; a printer points at its cards and heads)."""
+    lid = str(loc_id or '').strip().upper()
+    if reason == 'blank':
+        return "No location given. Open a location in the Location Manager, then use Eject All."
+    if reason == 'unassigned':
+        return ("Eject All doesn't apply to the Unassigned list: those spools have no "
+                "location to leave. Nothing was moved.")
+    if reason == 'unknown':
+        return ("Eject All doesn't apply to the Unknown (lost) list. Eject spool by spool "
+                "once you've found them. Nothing was moved.")
+    if reason == 'synthesized':
+        return (f"Eject All is off here: {lid} isn't a saved location (FCC only knows it "
+                f"from its spools), so nothing was moved. Eject spool by spool from its cards.")
+    if reason == 'room_view':
+        if bulk_moves_enabled:
+            return (f"Eject All is off for rooms, so nothing was moved. To empty {lid}, use "
+                    f"🔀 Move all →. Its preview includes the spools in {lid}'s boxes, "
+                    f"drawers and shelves too, so check it before you commit.")
+        return (f"Eject All is off for rooms, so nothing was moved. Eject from {lid}'s "
+                f"boxes, drawers and shelves, or spool by spool from its cards.")
+    if reason == 'printer_view':
+        heads = locations_db.printer_row_toolheads(loc_list, lid)
+        if not heads:
+            return (f"Eject All is off for printers, so nothing was moved. {lid} has no "
+                    f"toolheads yet; add them in ⚙️ Settings → Toolheads.")
+        span = heads[0] if len(heads) == 1 else f"{heads[0]} … {heads[-1]}"
+        return (f"Eject All is off for printers, so nothing was moved. Eject each spool "
+                f"from its card, or open a head ({span}); FCC asks first if {lid} is printing.")
+    return "Eject All was refused. Nothing was moved."
+
+
 def _eject_refusal_reason(result):
     """Why perform_smart_eject did not return True, in words for a log line.
 
@@ -609,12 +687,52 @@ def _eject_refusal_reason(result):
 _chain_undo_sink = threading.local()
 
 
+_UNDO_IDS = itertools.count(1)
+# The stack lives in memory and the count restarts with the process, so a bare
+# number left in a dialog across a restart named a DIFFERENT move: the first one
+# after the restart (Group 41 review). The process's own token makes it unique.
+_UNDO_EPOCH = uuid.uuid4().hex[:8]
+
+
 def _push_undo(record):
-    """Push a move's undo record, and hand it to an enclosing auto-deploy chain."""
+    """Push a move's undo record, and hand it to an enclosing auto-deploy chain.
+
+    Group 41.4: every record gets a number. Undo asks first, naming the move it
+    will reverse, and UNDO_STACK is shared by every tab, so the Yes carries the
+    number and is refused if another move landed on top meanwhile."""
+    record['id'] = f"{_UNDO_EPOCH}-{next(_UNDO_IDS)}"
     state.UNDO_STACK.append(record)
     sink = getattr(_chain_undo_sink, 'records', None)
     if sink is not None:
         sink.append(record)
+
+
+def _move_write(sid, target, new_extra):
+    """The move engine's spool write: True when it landed.
+
+    update_spool's timeout is a READ timeout, so a PATCH Spoolman committed but
+    answered slowly comes back as a failure (Group 43.6's lesson). The move then
+    reported the spool as failed, left it out of the undo record and tallied it
+    as failed in a bulk move, although it had moved (Group 41 review). So a
+    failed write is re-read, and counts as landed when the spool now sits at
+    `target` with exactly the slot and trail this write set."""
+    if spoolman_api.update_spool(sid, {"location": target, "extra": new_extra}):
+        return True
+    err = spoolman_api.LAST_SPOOLMAN_ERROR
+    rec = spoolman_api.get_spool(sid)
+    if not isinstance(rec, dict) or rec.get('id') is None:
+        return False
+    if str(rec.get('location') or '').strip().upper() != str(target).strip().upper():
+        return False
+    have = rec.get('extra') or {}
+    for k in spoolman_api.SYSTEM_MANAGED_EXTRAS:
+        if (str(have.get(k) or '').strip().strip('"')
+                != str(new_extra.get(k) or '').strip().strip('"')):
+            return False
+    state.add_log_entry(
+        f"⚠️ Spoolman answered an error moving Spool #{sid} -> {target} ({err or 'no detail'}), "
+        f"but a re-read shows it there: counted as moved.", "WARNING", "ffaa00")
+    return True
 
 
 # Thread-local re-entry depth for perform_smart_move. The auto-deploy chain
@@ -686,6 +804,20 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
     loc_list = locations_db.load_locations_list()
     loc_info_map = {row['LocationID'].upper(): row for row in loc_list}
+
+    # Group 41.9: a non-numeric item names a LOCATION and expands to its spools.
+    # A blank one matched every spool with no location (plus every spool with no
+    # trail, as a ghost), and the two virtual lists sweep the same way, so any
+    # door that passed one moved essentially every live spool. Refuse before
+    # any read or write.
+    for item in (raw_spools or []):
+        name = str(item).strip().strip('"').upper()
+        if not str(item).isdigit() and name in ('', 'UNASSIGNED', 'UNKNOWN'):
+            state.add_log_entry(
+                f"⚠️ Move to {target or 'UNASSIGNED'} refused: {name or 'a blank'} isn't a "
+                f"spool or a place to move spools from. Nothing was moved.", "WARNING", "ffaa00")
+            return {"status": "error",
+                    "msg": f"{name or 'A blank item'} isn't a spool or a location to move from. Nothing was moved."}
 
     spools = []
     for item in raw_spools:
@@ -861,8 +993,18 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         except (TypeError, ValueError):
             max_slots_auto = 0
         if max_slots_auto > 1:
-            # Collect currently-occupied slot numbers at this target.
-            existing_at_target = spoolman_api.get_spools_at_location_detailed(target) or []
+            # Collect currently-occupied slot numbers at this target. Strictly
+            # (Group 41 review): a fail-open read answered [] on a Spoolman blip,
+            # so slot 1 was picked whoever held it, and the strict slot block
+            # below then unseated that spool. Nothing has been written yet.
+            try:
+                existing_at_target = spoolman_api.get_spools_at_location_detailed_strict(target) or []
+            except Exception as _pick_err:
+                why = f"couldn't read {target} from Spoolman to pick a free slot ({_pick_err})"
+                for sid in spools:
+                    failures[str(sid)] = why
+                state.add_log_entry(f"❌ Not moved to <b>{target}</b>: {why}", "ERROR", "ff4444")
+                return {"status": "error", "msg": f"Not moved: {why}.", "failures": failures}
             occupied_slots = set()
             for existing in existing_at_target:
                 # Skip the spool we're about to move — otherwise its own current slot
@@ -995,9 +1137,32 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         new_extra: typing.Dict[str, typing.Any] = dict(current_extra)
         
 # Handle Slot Assignment
-        if target_slot:
-            existing_items = spoolman_api.get_spools_at_location_detailed(target)
+        # A head holds one spool, and Smart Load has already emptied it after a
+        # strict read, so a head named with a slot (LOC:SOLO:SLOT:1) has nothing
+        # to unseat. Reading it again, after that unload, could only fail the
+        # load and leave the head empty (Group 41 review).
+        if target_slot and not (is_printer or is_toolhead):
+            # Group 41.6: read the slot STRICTLY, and seat nothing in a slot that
+            # couldn't be cleared. The fail-open read answered [] on a timeout,
+            # and a rejected unseat only logged, so the incoming spool was seated
+            # anyway and two spools claimed one slot.
+            try:
+                existing_items = spoolman_api.get_spools_at_location_detailed_strict(target)
+            except Exception as _slot_err:
+                failures[str(sid)] = (f"couldn't read {target} from Spoolman to check slot "
+                                      f"{target_slot} ({_slot_err})")
+                state.add_log_entry(
+                    f"❌ Not moving Spool #{sid} into {target} slot {target_slot}: couldn't read "
+                    f"{target} from Spoolman ({_slot_err})", "ERROR", "ff4444")
+                continue
+            unseat_failed = None
             for existing in existing_items:
+                # A ghost (a spool deployed FROM this slot) is listed with its
+                # trail's slot. Clearing its own container_slot never frees that
+                # slot, and since 41.6 a failure of that pointless write refused
+                # the incoming spool (Group 41 review), so ghosts are left alone.
+                if existing.get('is_ghost'):
+                    continue
                 # [ALEX FIX] Improved comparison to catch string vs int mismatches
                 if str(existing.get('slot', '')).strip('"') == str(target_slot) and existing['id'] != int(sid):
                     state.logger.info(f"🪑 Unseating Spool {existing['id']} from Slot {target_slot}")
@@ -1014,11 +1179,17 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                             f"❌ Failed to unseat Spool #{existing['id']} from slot: {err}",
                             "ERROR", "ff4444"
                         )
+                        unseat_failed = f"couldn't unseat #{existing['id']} from slot {target_slot}: {err}"
+                        break
+            if unseat_failed:
+                failures[str(sid)] = unseat_failed
+                state.add_log_entry(
+                    f"❌ Not moving Spool #{sid} into {target} slot {target_slot}: {unseat_failed}",
+                    "ERROR", "ff4444")
+                continue
 
-            new_extra['container_slot'] = str(target_slot)
-        else:
-            # If moving to a non-slotted location, clear the slot
-            new_extra['container_slot'] = ""
+        # Moving to a non-slotted location clears the slot.
+        new_extra['container_slot'] = str(target_slot) if target_slot else ""
 
         # PRINTER MOVE
         if target in printer_map:
@@ -1074,7 +1245,7 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                         f"already holds Spool #{claimed_by}."
                     )
 
-            if spoolman_api.update_spool(sid, {"location": target, "extra": new_extra}):
+            if _move_write(sid, target, new_extra):
                 state.add_log_entry(f"🖨️ {info['text']} -> {target}", "INFO", info['color'])
                 # Group 20.2: a spool deployed FROM a single-slot dryer box
                 # attaches that box to this toolhead so the box follows its
@@ -1107,7 +1278,7 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
             # [ALEX FIX] Clean up the source slot memory too, since we are home now.
             new_extra['physical_source_slot'] = ""
 
-            if spoolman_api.update_spool(sid, {"location": target, "extra": new_extra}):
+            if _move_write(sid, target, new_extra):
                 slot_txt = f" [Slot {target_slot}]" if target_slot else ""
                 state.add_log_entry(f"📦 {info['text']} -> Dryer {target}{slot_txt}", "INFO", info['color'])
             else:
@@ -1134,7 +1305,7 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                 new_extra['physical_source'] = ""
                 new_extra['physical_source_slot'] = ""
 
-            if spoolman_api.update_spool(sid, {"location": target, "extra": new_extra}):
+            if _move_write(sid, target, new_extra):
                 state.add_log_entry(f"🚚 {info['text']} -> {target}", "INFO", info['color'])
             else:
                 err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
@@ -1143,7 +1314,15 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                     f"❌ Failed to move Spool #{sid} -> {target}: {err}", "ERROR", "ff4444"
                 )
 
-    _push_undo(undo_record)
+    # Group 41.4: record only what landed. A spool whose write was rejected, or
+    # that was skipped (an unseat that failed, an unreadable slot), never moved,
+    # so "undoing" it would move it from where it is to where it already is.
+    # A move where nothing landed pushes no record at all.
+    for _sid in [s for s in list(undo_record['moves']) if str(s) in failures]:
+        for _key in ('moves', 'extras', 'labels'):
+            undo_record[_key].pop(_sid, None)
+    if undo_record['moves'] or undo_record['ejections']:
+        _push_undo(undo_record)
 
     # --- AUTO-DEPLOY CHAIN ---
     # If this move placed spool(s) into a Dryer Box slot that's bound to a
@@ -1276,18 +1455,23 @@ def can_start_bulk_move():
     return True, ""
 
 
-def plan_bulk_move(source, dest, confirm_active_print=False):
+def plan_bulk_move(source, dest):
     """DRY-RUN a bulk move: resolve the source fail-closed, decide who is
     movable, and run every pre-flight — WITHOUT writing anything.
 
     Returns a plan dict:
-      {ok, msg, blocked_reason, require_confirm, confirm_type, active_print,
-       source, dest, movable_ids, skipped:[{id,reason}]}
+      {ok, msg, blocked_reason, source, dest, movable_ids, skipped:[{id,reason}]}
 
     `ok=False` means a guard blocked the whole batch (`blocked_reason` is the
-    machine-readable cause). `require_confirm=True` means an active print on the
-    SOURCE needs explicit opt-in. `ok=True` with an empty `movable_ids` is the
-    benign "nothing to move" case.
+    machine-readable cause). `ok=True` with an empty `movable_ids` is the benign
+    "nothing to move" case.
+
+    Group 41.7 (Q3 A, 2026-10-13): there is no "source is printing" confirm. A
+    bulk move never moves a loaded spool: every head-loaded or deployed spool is
+    a skip, so a printing source always ended as a skip or "Nothing to move"
+    and the confirm could never fire on real data (it was only ever tested with
+    a fake printing dryer box). Taking a spool off a printing head is a single
+    move, which asks under D6.
 
     Shared by `/api/bulk_move` (Phase 1) and the CMD:BULKMOVE session preview
     (Phase 2) so the preview a user confirms is computed by the SAME code that
@@ -1295,8 +1479,7 @@ def plan_bulk_move(source, dest, confirm_active_print=False):
     """
     source = str(source or '').strip().upper()
     dest = str(dest or '').strip().upper()
-    plan = {"ok": False, "msg": "", "blocked_reason": None, "require_confirm": False,
-            "confirm_type": None, "active_print": None, "source": source, "dest": dest,
+    plan = {"ok": False, "msg": "", "blocked_reason": None, "source": source, "dest": dest,
             "movable_ids": [], "skipped": [], "source_feeds": [],
             # Phase 3 display-only fields (see the skip loop): `rows` is the
             # id -> {display,color,color_direction,slot,remaining_weight} cache
@@ -1449,26 +1632,6 @@ def plan_bulk_move(source, dest, confirm_active_print=False):
             plan["blocked_reason"] = "capacity"
             return plan
 
-    # --- Pre-flight 4: source-side active print (confirm) -------------------
-    # The single-move path guards only the DEST. If the SOURCE location is itself
-    # an actively-printing toolhead, a bulk sweep would disrupt the print.
-    if not confirm_active_print:
-        ap = _active_print_info_for_location(source, printer_map)
-        if ap:
-            plan["require_confirm"] = True
-            plan["confirm_type"] = "active_print"
-            plan["active_print"] = ap
-            # Carry the movable set on the confirm return too. Without it the
-            # preview rendered "0 will move" and DISABLED Commit, so the
-            # active-print confirm was unreachable from the panel — the user
-            # could see the warning but had no way to act on it.
-            plan["movable_ids"] = movable_ids
-            # require_confirm IS committable, so the feed warning belongs here too.
-            plan["source_feeds"] = _bound_feeds_for_move(contents, movable_ids, loc_info_map)
-            plan["msg"] = (f"{ap['printer_name']} is {ap['state']} — bulk-moving from "
-                           f"this location will disrupt the print.")
-            return plan
-
     plan["ok"] = True
     plan["movable_ids"] = movable_ids
     # Informational only — never blocks, never mutates the bindings. Set ONLY on
@@ -1547,7 +1710,7 @@ def _bound_feeds_for_move(contents, movable_ids, loc_info_map):
     return sorted(feeds)
 
 
-def execute_bulk_move(plan, confirm_active_print=False):
+def execute_bulk_move(plan):
     """Commit an OK plan: ONE perform_smart_move + an honest per-spool tally.
 
     Returns {success, source, dest, moved, moved_ids, skipped, failed} — or a
@@ -1567,22 +1730,14 @@ def execute_bulk_move(plan, confirm_active_print=False):
     #
     # confirm_active_print=True (Group 39 review, engine-3): plan_bulk_move has
     # just re-planned from live state, skipping every head-loaded spool and
-    # refusing a printer-head destination, and it owns the bulk move's own
-    # active-print prompt. So the engine's per-spool source reads (39.4) have
-    # nothing to find, and their fail-closed refusal would turn one Spoolman
-    # blip into "nothing moved" plus a reset armed session. `confirm_active_print`
-    # stays on the signature for callers; the plan gate above already used it.
+    # refusing a printer-head destination. So the engine's per-spool source
+    # reads (39.4) have nothing to find, and their fail-closed refusal would
+    # turn one Spoolman blip into "nothing moved" plus a reset armed session.
+    # The engine therefore never answers requires_confirm here (Group 41.7
+    # removed the backstop that relayed one).
     move_result = perform_smart_move(dest, movable_ids, origin='bulk_move',
                                      auto_deploy=False,
                                      confirm_active_print=True)
-    # Defensive backstop: surface any requires_confirm the engine returns (with
-    # auto_deploy off + single-occ dests rejected this is currently unreachable,
-    # but the contract is honored if perform_smart_move ever changes).
-    if isinstance(move_result, dict) and move_result.get('status') == 'requires_confirm':
-        return {"success": False, "require_confirm": True,
-                "confirm_type": move_result.get('confirm_type'),
-                "active_print": move_result.get('active_print'),
-                "msg": move_result.get('msg', 'Confirmation required.')}
     if isinstance(move_result, dict) and move_result.get('status') == 'error':
         return {"success": False, "source": source, "dest": dest,
                 "msg": move_result.get('msg', 'Move failed.')}
@@ -1593,10 +1748,20 @@ def execute_bulk_move(plan, confirm_active_print=False):
     # the source: any movable id STILL present as a DIRECT (non-ghost) match
     # never left — it failed. Best-effort: advisory only; the Activity Log is
     # authoritative for the per-spool outcome (per Derek 2026-07-11).
-    moved_ids = list(movable_ids)
-    failed = []
+    # Per-spool attribution from the map perform_smart_move captured ADJACENT to
+    # each failing write. Reading the LAST_SPOOLMAN_ERROR module global here
+    # instead (the Phase-2 behaviour) was wrong twice over: a later SUCCESS
+    # resets it to None, and a second failure overwrites the first — so a mixed
+    # batch mislabelled every row. Group 41.5: those failures ALWAYS count. They
+    # used to be read only when the readback found a spool still at the source,
+    # so a rejected write plus a readback that missed it was tallied as moved.
+    per_spool = (move_result or {}).get('failures') or {}
+    failed_ids = {str(k) for k in per_spool}
+    unverified = False
     try:
-        still = spoolman_api.get_spools_at_location_detailed(source) or []
+        # Group 41.5: strict, so a Spoolman blip reads as "couldn't verify", not
+        # as an empty source that "proves" every spool left.
+        still = spoolman_api.get_spools_at_location_detailed_strict(source) or []
         still_direct = {str(s.get('id')) for s in still if not s.get('is_ghost')}
         stuck = {str(m) for m in movable_ids} & still_direct
         if stuck:
@@ -1607,31 +1772,29 @@ def execute_bulk_move(plan, confirm_active_print=False):
             # still flat-matches the source and would be mis-counted as failed.
             # Subtract anything that actually landed at dest before deciding.
             at_dest = {str(s.get('id'))
-                       for s in (spoolman_api.get_spools_at_location_detailed(dest) or [])}
+                       for s in (spoolman_api.get_spools_at_location_detailed_strict(dest) or [])}
             stuck -= at_dest
-        if stuck:
-            # Per-spool attribution from the map perform_smart_move captured
-            # ADJACENT to each failing write. Reading the LAST_SPOOLMAN_ERROR
-            # module global here instead (the Phase-2 behaviour) was wrong twice
-            # over: a later SUCCESS resets it to None, and a second failure
-            # overwrites the first — so a mixed batch mislabelled every row.
-            per_spool = (move_result or {}).get('failures') or {}
-            moved_ids = [m for m in movable_ids if str(m) not in stuck]
-            failed = [{"id": m, "err": per_spool.get(str(m)) or "see Activity Log"}
-                      for m in movable_ids if str(m) in stuck]
+        failed_ids |= stuck
     except Exception as e:
+        unverified = True
         state.logger.warning(f"bulk_move: tally readback failed for {source}: {e}")
+    moved_ids = [m for m in movable_ids if str(m) not in failed_ids]
+    failed = [{"id": m, "err": per_spool.get(str(m)) or "see Activity Log"}
+              for m in movable_ids if str(m) in failed_ids]
 
     # Per-spool INFO/ERROR lines already came from perform_smart_move; add one
     # aggregate summary line.
-    level, color = ("SUCCESS", "00ff00") if not failed else ("WARNING", "ffaa00")
+    quiet = not failed and not unverified
+    level, color = ("SUCCESS", "00ff00") if quiet else ("WARNING", "ffaa00")
+    moved_txt = (f"moved {len(moved_ids)} (couldn't verify with Spoolman)" if unverified
+                 else f"moved {len(moved_ids)}")
     state.add_log_entry(
-        f"🔀 Bulk move {source} → {dest}: moved {len(moved_ids)}, "
+        f"🔀 Bulk move {source} → {dest}: {moved_txt}, "
         f"skipped {len(skipped)}, failed {len(failed)}", level, color)
 
     return {"success": len(failed) == 0, "source": source, "dest": dest,
             "moved": len(moved_ids), "moved_ids": moved_ids,
-            "skipped": skipped, "failed": failed}
+            "skipped": skipped, "failed": failed, "unverified": unverified}
 
 
 def start_bulk_move_session(source_id=None):
@@ -1672,8 +1835,7 @@ def _apply_plan_to_session(sess, plan):
     dest (single-occupancy / unknown / capacity / unreadable) stays at
     awaiting_dest so the user is still prompted for a valid one. Without that,
     the stage rides the heartbeat and the deck tile goes GREEN "COMMIT" with a
-    live CMD:DONE QR for a move that can never run. (require_confirm IS
-    committable — it just needs the active-print opt-in.)
+    live CMD:DONE QR for a move that can never run.
 
     Factored out because commit_bulk_move_session's re-plan wrote sess['preview']
     WITHOUT the stage guard, so a commit that re-blocked (a spool landed in the
@@ -1681,19 +1843,18 @@ def _apply_plan_to_session(sess, plan):
     green and advertising a commit that every retry refused.
     """
     sess['preview'] = plan
-    sess['stage'] = 'preview' if (plan.get('ok') or plan.get('require_confirm')) else 'awaiting_dest'
+    sess['stage'] = 'preview' if plan.get('ok') else 'awaiting_dest'
     return plan
 
 
-def _refresh_bulk_move_preview(confirm_active_print=False):
+def _refresh_bulk_move_preview():
     """(Re)compute the dry-run preview for a session that has both locations."""
     sess = state.BULK_MOVE_SESSION
-    plan = plan_bulk_move(sess.get('source_id'), sess.get('dest_id'),
-                          confirm_active_print=confirm_active_print)
+    plan = plan_bulk_move(sess.get('source_id'), sess.get('dest_id'))
     return _apply_plan_to_session(sess, plan)
 
 
-def set_bulk_move_dest(dest_id, confirm_active_print=False):
+def set_bulk_move_dest(dest_id):
     """Set/re-target the destination and recompute the preview. (ok, plan|None, msg).
 
     Serialized against a running commit for the same reason cancel is: the
@@ -1716,7 +1877,7 @@ def set_bulk_move_dest(dest_id, confirm_active_print=False):
                              "destination can't be changed until it finishes.")
     try:
         state.BULK_MOVE_SESSION['dest_id'] = dest_id
-        plan = _refresh_bulk_move_preview(confirm_active_print=confirm_active_print)
+        plan = _refresh_bulk_move_preview()
         return True, plan, plan.get('msg') or ""
     finally:
         _BULK_MOVE_COMMIT_LOCK.release()
@@ -1726,8 +1887,8 @@ def bulk_move_session_snapshot(sess=None):
     """The JSON-safe view of the bulk-move session the frontend polls/renders.
 
     Returns {active:False} when idle (cheap), else the stage + both locations +
-    a flattened preview (counts, the movable/skipped detail, and any block or
-    active-print confirm), with each row carrying the display label / colour /
+    a flattened preview (counts, the movable/skipped detail, and any block),
+    with each row carrying the display label / colour /
     slot / remaining weight the panel renders as a spool tile.
 
     ⚡ ZERO Spoolman I/O — the panel polls this every 2s, so it formats the rows
@@ -1779,9 +1940,6 @@ def bulk_move_session_snapshot(sess=None):
             "ok": bool(plan.get('ok')),
             "msg": plan.get('msg') or "",
             "blocked_reason": plan.get('blocked_reason'),
-            "require_confirm": bool(plan.get('require_confirm')),
-            "confirm_type": plan.get('confirm_type'),
-            "active_print": plan.get('active_print'),
             "movable": movable,
             "skipped": skipped,
             "source_feeds": plan.get('source_feeds') or [],
@@ -1818,9 +1976,6 @@ def process_bulk_move_scan(scan_result):
                     "WARNING", "ffaa00")
                 return {"status": "error", "msg": "Scan a source and destination first."}
             result = commit_bulk_move_session()
-            if result.get('require_confirm'):
-                # Leave the session standing so the UI can confirm + retry.
-                return {"status": "error", "msg": result.get('msg', 'Confirmation required.')}
             if not result.get('success'):
                 # A PARTIAL failure returns success=False with a `failed` list and
                 # NO `msg` (execute_bulk_move's tally shape), so a `msg`-gated check
@@ -1833,6 +1988,11 @@ def process_bulk_move_scan(scan_result):
                     msg = (f"{n_failed} spool(s) failed to move — see the Activity Log."
                            if n_failed else "Bulk move failed.")
                 return {"status": "error", "msg": msg}
+            if result.get('unverified'):
+                # Group 41.5: done, but Spoolman couldn't be read back to check it.
+                return {"status": "warning",
+                        "msg": (f"Bulk move done: moved {result.get('moved', 0)}, but FCC couldn't "
+                                f"verify it with Spoolman. Check the Activity Log.")}
             return {"status": "success", "msg": "Bulk move complete"}
         return {"status": "error", "msg": "Command not allowed during a bulk move."}
 
@@ -1858,12 +2018,9 @@ def process_bulk_move_scan(scan_result):
             if not ok:
                 state.add_log_entry(f"⚠️ Bulk move: {msg}", "WARNING", "ffaa00")
                 return {"status": "error", "msg": msg}
-            if not plan.get('ok') and not plan.get('require_confirm'):
+            if not plan.get('ok'):
                 state.add_log_entry(f"⚠️ Bulk move blocked: {plan.get('msg')}", "WARNING", "ffaa00")
                 return {"status": "error", "msg": plan.get('msg')}
-            if plan.get('require_confirm'):
-                state.add_log_entry(f"⚠️ {plan.get('msg')}", "WARNING", "ffaa00")
-                return {"status": "success"}
             n = len(plan.get('movable_ids') or [])
             k = len(plan.get('skipped') or [])
             state.add_log_entry(
@@ -1951,7 +2108,7 @@ def cancel_bulk_move_session():
         _BULK_MOVE_COMMIT_LOCK.release()
 
 
-def commit_bulk_move_session(confirm_active_print=False):
+def commit_bulk_move_session():
     """Execute the active session's plan, then clear the session on success.
 
     Re-plans from the CURRENT world state rather than trusting the stored
@@ -1968,16 +2125,11 @@ def commit_bulk_move_session(confirm_active_print=False):
         if not sess.get('active') or not source or not dest:
             return {"success": False, "msg": "No bulk move is ready to commit."}
 
-        plan = plan_bulk_move(source, dest, confirm_active_print=confirm_active_print)
+        plan = plan_bulk_move(source, dest)
         # Same helper the preview path uses, so a commit that RE-BLOCKS demotes
         # the stage instead of leaving the deck tile green + advertising a
         # CMD:DONE for a plan every retry refuses.
         _apply_plan_to_session(sess, plan)
-        if plan.get('require_confirm'):
-            return {"success": False, "require_confirm": True,
-                    "confirm_type": plan.get('confirm_type'),
-                    "active_print": plan.get('active_print'),
-                    "msg": plan.get('msg'), "source": source, "dest": dest}
         if not plan.get('ok'):
             return {"success": False, "msg": plan.get('msg'),
                     "blocked_reason": plan.get('blocked_reason'),
@@ -1992,9 +2144,7 @@ def commit_bulk_move_session(confirm_active_print=False):
         # read-only guard work, and a cancel arriving during THAT deserves an
         # honest "nothing has moved" rather than "too late".
         _BULK_MOVE_WRITING = True
-        result = execute_bulk_move(plan, confirm_active_print=confirm_active_print)
-        if result.get('require_confirm'):
-            return result  # leave the session standing for the confirm+retry
+        result = execute_bulk_move(plan)
         state.reset_bulk_move()
         return result
     finally:
@@ -2088,13 +2238,15 @@ def _eject_destination(spool_data, printer_map, homeless_destination=None):
     if homeless_destination is not None:
         # The caller already decided where a spool with no home goes.
         target_loc = str(homeless_destination or '').strip().upper()
-    # Normal unslotted eject with Room Fallback
-    # [Universal Fallback fix] A printer is not a Room. If ejecting from a printer and missing physical_source, default to Unassigned.
-    elif current_location in printer_map:
-        target_loc = ""
     else:
-        room_fallback = get_room_from_location(current_location)
-        target_loc = room_fallback if room_fallback else ""
+        # Group 41.8 (Derek's Q1, option B, 2026-09-18): a spool with no saved
+        # home goes to Unassigned after one "unassign?" prompt, from a printer
+        # head as from a box, cart, drawer or shelf. It used to go UP to its
+        # Room's loose pile, which made exactly the Room-only spools Derek finds
+        # a pain to find. Smart Load's resident keeps the printer's Room through
+        # homeless_destination (his 2026-09-12 rule). A Room-valued trail
+        # ("CR") is still a saved home, handled above.
+        target_loc = ""
     # Protected Unassign (a caller-decided destination needs no prompt)
     needs = target_loc == "" and current_location != "" and homeless_destination is None
     return {"home": None, "slot": "", "target": target_loc, "needs_unassign_confirm": needs}
@@ -2284,8 +2436,11 @@ def perform_toolhead_delete_cascade(target, loc_list, confirm_active_print=False
                "slot_bindings_cleared": [], "toolhead_pruned_from": [], "errors": []}
 
     # --- Spoolman: re-home spools that reference the toolhead ---
+    # Strictly (Group 41 review): the fail-open reader answered [] on a Spoolman
+    # blip, so this except never fired, and the head was deleted with its spool
+    # still filed on it. A read error keeps the row (the route checks errors).
     try:
-        at_loc = spoolman_api.get_spools_at_location_detailed(target_up)
+        at_loc = spoolman_api.get_spools_at_location_detailed_strict(target_up)
     except Exception as e:
         at_loc = []
         summary["errors"].append(f"could not list spools at {target_up}: {e}")
@@ -2394,12 +2549,146 @@ def perform_force_unassign(spool_id, confirm_active_print=False):
     )
     return False
 
-def perform_undo():
-    if not state.UNDO_STACK: return {"success": False, "msg": "Nothing to undo (Undo reverts spool moves only)."}
+NOTHING_TO_UNDO_MSG = "Nothing to undo (Undo Last Move reverts spool moves only)."
+
+
+def peek_undo():
+    """Group 41.4 — the record Undo Last Move would reverse, without popping it."""
+    return state.UNDO_STACK[-1] if state.UNDO_STACK else None
+
+
+def _undo_get(mapping, sid):
+    mapping = mapping or {}
+    hit = mapping.get(sid)
+    return mapping.get(str(sid)) if hit is None else hit
+
+
+def _undo_place(loc, slot, printer_map):
+    """'in LR-MDB-1 slot 2', 'on XL-2', 'in CR', 'in Unassigned'."""
+    lid = str(loc or '').strip().strip('"').upper()
+    if not lid:
+        return "in Unassigned"
+    if lid in (printer_map or {}):
+        return f"on {lid}"
+    slot = str(slot or '').strip().strip('"')
+    return f"in {lid} slot {slot}" if slot else f"in {lid}"
+
+
+def _undo_items(record, printer_map):
+    """[(sid, place)] for every spool the record would put back: the moved
+    spools first, then the residents a Smart Load had unloaded."""
+    items = []
+    for sid, loc in (record.get('moves') or {}).items():
+        snap = _undo_get(record.get('extras'), sid) or {}
+        items.append((sid, _undo_place(loc, snap.get('container_slot'), printer_map)))
+    for sid, loc in (record.get('ejections') or {}).items():
+        snap = _undo_get(record.get('ejection_extras'), sid) or {}
+        items.append((sid, _undo_place(loc, snap.get('container_slot'), printer_map)))
+    return items
+
+
+def describe_undo(record, printer_map):
+    """The question Undo Last Move asks: "Undo: put #57 back in LR-MDB-1 slot 2
+    and #196 back on XL-2?" (Derek, 2026-10-13: it always asks first, naming
+    the move it will reverse)."""
+    items = _undo_items(record, printer_map)
+    if not items:
+        return f"Undo: {record.get('summary') or 'the last move'}?"
+    return "Undo: put " + _and_list(f"#{sid} back {place}" for sid, place in items) + "?"
+
+
+def _undo_current_heads(record, printer_map):
+    """([(head, 'source', [sid])], unreadable ids): the printer heads the spools
+    this undo would move sit on NOW, read from Spoolman. The record's target is
+    not that: a box-slot move whose auto-deploy loaded the bound head keeps the
+    BOX as its target, and a spool can have moved on since (Group 41 review)."""
+    heads: typing.Dict[str, typing.List[typing.Any]] = {}
+    unreadable = []
+    for sid in list((record.get('moves') or {}).keys()) + list((record.get('ejections') or {}).keys()):
+        rec = spoolman_api.get_spool(sid)
+        if not isinstance(rec, dict) or rec.get('id') is None:
+            unreadable.append(sid)
+            continue
+        here = str(rec.get('location') or '').strip().strip('"').upper()
+        if here in (printer_map or {}):
+            heads.setdefault(here, []).append(sid)
+    return [(head, 'source', sids) for head, sids in heads.items()], unreadable
+
+
+def _undo_heads(record, printer_map, current_heads=()):
+    """[(head, role, [sid])] — every printer head this undo would change: where
+    the moved spools are now (`current_heads`, from _undo_current_heads) and
+    every head it puts a spool back on."""
+    touched = list(current_heads)
+    for sid, loc in list((record.get('moves') or {}).items()) + list((record.get('ejections') or {}).items()):
+        lid = str(loc or '').strip().strip('"').upper()
+        if lid in (printer_map or {}):
+            touched.append((lid, 'destination', [sid]))
+    return touched
+
+
+def undo_confirm_answer(record, confirmed_heads=None):
+    """What /api/undo answers before it writes anything: the question naming the
+    move, the record's number (the Yes must quote it), and, when a head it would
+    change belongs to a printer that is printing, those heads with D6's
+    call-out. A PAUSED printer isn't active, so it gets the plain question.
+    Where the spools are now is read first; a spool that can't be read asks
+    nothing (an error answer), since which heads to ask about is unknown."""
+    printer_map = locations_db.get_active_printer_map()
+    current, unreadable = _undo_current_heads(record, printer_map)
+    if unreadable:
+        names = _and_list(f"#{sid}" for sid in unreadable)
+        msg = (f"Couldn't read {names} from Spoolman, so FCC can't tell whether this undo changes a "
+               f"printing head. Nothing was undone; try again in a moment.")
+        state.add_log_entry(f"❌ Undo not asked: {msg}", "ERROR", "ff4444")
+        return {"success": False, "msg": msg}
+    question = describe_undo(record, printer_map)
+    active = []
+    _pa = None
+    try:
+        import prusalink_api as _pa
+        _pa.begin_probe_cache()
+    except Exception:
+        _pa = None
+    try:
+        active = _uncovered_active_heads(_undo_heads(record, printer_map, current),
+                                         confirmed_heads or [], printer_map)
+    finally:
+        if _pa is not None:
+            try:
+                _pa.clear_probe_cache()
+            except Exception:
+                pass
+    msg = question
+    if active:
+        heads = _and_list(sorted({a['toolhead'] for a in active}))
+        printers = _and_list(sorted({f"{a['printer_name']} is {a['state']}" for a in active}))
+        msg = (f"{printers}: this undo changes {heads} mid-print, and FCC charges the print "
+               f"to whatever spool ends up loaded. {question}")
+    return {"success": False, "requires_confirm": True, "undo_id": record.get('id'),
+            "confirm_type": "active_print" if active else "undo",
+            "active_prints": active, "msg": msg}
+
+
+def perform_undo(expected_id=None):
+    """Reverse the last move. Group 41.4: honest about what it did. Only the
+    restores that land are reported (and logged) as undone; a rejected or
+    blocked restore makes the answer success: False, naming the spool, with an
+    ERROR line. `expected_id` is the record the user said Yes to; a different
+    record on top (another move landed meanwhile) is refused, writing nothing."""
+    if not state.UNDO_STACK:
+        state.add_log_entry(f"↩️ {NOTHING_TO_UNDO_MSG}", "INFO")
+        return {"success": False, "nothing": True, "msg": NOTHING_TO_UNDO_MSG}
+    if expected_id is not None and str(state.UNDO_STACK[-1].get('id')) != str(expected_id):
+        msg = "The last move changed since you pressed Undo. Press Undo Last Move again."
+        state.add_log_entry(f"⚠️ Undo refused: {msg}", "WARNING", "ffaa00")
+        return {"success": False, "stale": True, "msg": msg}
     last = state.UNDO_STACK.pop()
     moves = last['moves']
     target = last.get('target')
     origin = last.get('origin', '')
+    printer_map = locations_db.get_active_printer_map()
+    restored, failed = [], []
 
     # Reassign each moved spool back to its origin location in Spoolman, and
     # (L298 Phase 0) restore the pre-move system-managed extras so the undo is a
@@ -2414,6 +2703,9 @@ def perform_undo():
     # also now surfaces a rejection to the Activity Log instead of dropping it
     # silently. A legacy record without 'extras' (pre-L298) restores location only.
     extras_by_sid = last.get('extras', {})
+    # Where each spool really was before this undo (the record's target is not
+    # always it: an auto-deploy loads the box slot's head), for the log line.
+    was_at: typing.Dict[str, str] = {}
     for sid, loc in moves.items():
         payload: typing.Dict[str, typing.Any] = {"location": loc}
         snap = extras_by_sid.get(sid)
@@ -2421,12 +2713,16 @@ def perform_undo():
             snap = extras_by_sid.get(str(sid))
         if snap is not None:
             cur = spoolman_api.get_spool(sid) or {}
+            was_at[str(sid)] = str(cur.get('location') or '').strip().strip('"').upper()
             merged = dict(cur.get('extra') or {})
             for k in spoolman_api.SYSTEM_MANAGED_EXTRAS:
                 merged[k] = snap.get(k, '')
             payload["extra"] = merged
-        if not spoolman_api.update_spool(sid, payload):
+        if spoolman_api.update_spool(sid, payload):
+            restored.append(sid)
+        else:
             err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+            failed.append(f"#{sid} ({err})")
             state.add_log_entry(
                 f"❌ Undo: failed to restore Spool #{sid} → {loc or 'UNASSIGNED'}: {err}",
                 "ERROR", "ff4444")
@@ -2439,35 +2735,32 @@ def perform_undo():
     # (2026-09-12). A record without 'ejection_extras' restores location only.
     ejections = last.get('ejections', {})
     ejection_extras = last.get('ejection_extras', {})
-    blocked_restores: typing.List[str] = []
-    undo_printer_map = None
+    restored_ejections = []
     undo_rows: typing.Dict[str, typing.Any] = {}
+    if ejections:
+        undo_rows = {str(r.get('LocationID', '')).strip().upper(): r
+                     for r in (locations_db.load_locations_list() or [])}
     for ejected_sid, original_loc in ejections.items():
         # Back onto a single-occupancy head only if that head is really free.
         # The incoming spool's restore above may have been rejected, or
         # something may have been loaded there since; restoring blind stacked
         # two spools on one head (2026-09-12 review).
-        if original_loc:
-            if undo_printer_map is None:
-                undo_printer_map = locations_db.get_active_printer_map()
-                undo_rows = {str(r.get('LocationID', '')).strip().upper(): r
-                             for r in (locations_db.load_locations_list() or [])}
-            if _is_single_occupancy(original_loc, undo_printer_map, undo_rows):
-                head = str(original_loc).strip().upper()
-                try:
-                    occupants = [
-                        o.get('id') for o in spoolman_api.get_spools_at_location_detailed_strict(head)
-                        if not o.get('is_ghost') and str(o.get('id')) != str(ejected_sid)
-                        and str(o.get('location') or '').strip().upper() == head]
-                    why = ("it holds " + ", ".join(f"#{o}" for o in occupants)) if occupants else ""
-                except Exception as _occ_err:
-                    why = f"it could not be read from Spoolman ({_occ_err})"
-                if why:
-                    state.add_log_entry(
-                        f"❌ Undo: not putting Spool #{ejected_sid} back on {head} — {why}",
-                        "ERROR", "ff4444")
-                    blocked_restores.append(f"#{ejected_sid} ({why})")
-                    continue
+        if original_loc and _is_single_occupancy(original_loc, printer_map, undo_rows):
+            head = str(original_loc).strip().upper()
+            try:
+                occupants = [
+                    o.get('id') for o in spoolman_api.get_spools_at_location_detailed_strict(head)
+                    if not o.get('is_ghost') and str(o.get('id')) != str(ejected_sid)
+                    and str(o.get('location') or '').strip().upper() == head]
+                why = ("it holds " + ", ".join(f"#{o}" for o in occupants)) if occupants else ""
+            except Exception as _occ_err:
+                why = f"it could not be read from Spoolman ({_occ_err})"
+            if why:
+                state.add_log_entry(
+                    f"❌ Undo: not putting Spool #{ejected_sid} back on {head} — {why}",
+                    "ERROR", "ff4444")
+                failed.append(f"#{ejected_sid} ({why})")
+                continue
         eject_payload: typing.Dict[str, typing.Any] = {"location": original_loc}
         snap = ejection_extras.get(ejected_sid)
         if snap is None:
@@ -2478,17 +2771,19 @@ def perform_undo():
             for k in spoolman_api.SYSTEM_MANAGED_EXTRAS:
                 merged[k] = snap.get(k, '')
             eject_payload["extra"] = merged
-        if not spoolman_api.update_spool(ejected_sid, eject_payload):
+        if spoolman_api.update_spool(ejected_sid, eject_payload):
+            restored_ejections.append(ejected_sid)
+        else:
             err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+            failed.append(f"#{ejected_sid} ({err})")
             state.add_log_entry(
                 f"❌ Undo: failed to restore ejected Spool #{ejected_sid} → "
                 f"{original_loc or 'UNASSIGNED'}: {err}", "ERROR", "ff4444")
-            
-            
+
     # [ALEX FIX] Restore to Buffer Memory
     state.logger.info(f"UNDO RECORD TRIGGER: {last}")
     if origin == 'buffer':
-        for sid in moves.keys():
+        for sid in restored:
             spool_data = spoolman_api.get_spool(sid)
             if spool_data:
                 info = spoolman_api.format_spool_display(spool_data)
@@ -2497,32 +2792,47 @@ def perform_undo():
                     if not hasattr(state, 'GLOBAL_BUFFER'): state.GLOBAL_BUFFER = []
                     # Prepend to buffer so it shows up first
                     state.GLOBAL_BUFFER.insert(0, {'id': int(sid), 'display': info['text'], 'color': info['color']})
-                    
-    # Render a readable from→to line: label + source were captured at move time
-    # (logic.py undo_record build). Fall back to bare #sid / UNASSIGNED for legacy
-    # records or a spool deleted between the move and the undo.
+
+    # Group 41.4: the line reads forwards and names only what really went back,
+    # so a user can put the rest right by hand: "↩️ Undo: Spool A is back in
+    # LR-MDB-1 slot 2 (it had been moved to XL-2)". Labels were captured at move
+    # time (fall back to #sid for a legacy record or a deleted spool).
     labels = last.get('labels', {})
+    extras = last.get('extras', {})
 
-    def _undo_seg(sid, with_target):
-        label = labels.get(sid) or labels.get(str(sid)) or f"#{sid}"
-        src = moves.get(sid) or moves.get(str(sid)) or "UNASSIGNED"
-        # The multi-spool header already states the destination, so the per-spool
-        # segments drop the redundant "-> target".
-        return f"{label} from {src} -> {target}" if with_target else f"{label} from {src}"
+    def _label(sid):
+        return labels.get(sid) or labels.get(str(sid)) or f"#{sid}"
 
-    if len(moves) == 1:
-        detail = f"moved {_undo_seg(next(iter(moves)), True)}"
-    elif moves:
-        detail = f"moved {len(moves)} spools -> {target} (" + "; ".join(_undo_seg(s, False) for s in moves) + ")"
-    else:
-        # Legacy / no-move record: its summary already reads "Moved N -> target",
-        # so don't prepend a second "moved".
-        detail = last.get('summary', f"moved -> {target}")
-    state.add_log_entry(f"↩️ Undid: {detail}", "WARNING")
-    if blocked_restores:
-        return {"success": False,
-                "msg": f"Undo could not put back {', '.join(blocked_restores)}."}
-    return {"success": True}
+    parts = []
+    if restored:
+        segs = [f"{_label(sid)} is back "
+                f"{_undo_place(moves.get(sid), (_undo_get(extras, sid) or {}).get('container_slot'), printer_map)}"
+                for sid in restored]
+        note = f"{'it' if len(segs) == 1 else 'they'} had been moved to {target or 'UNASSIGNED'}"
+        # Name a spool that was somewhere else, e.g. the head an auto-deploy
+        # loaded it onto, so a user knows which head was just emptied.
+        tgt = str(target or '').strip().upper()
+        drift = [f"#{sid} was at {was_at[str(sid)]}" for sid in restored
+                 if was_at.get(str(sid)) and was_at[str(sid)] != tgt]
+        if drift:
+            note += "; " + _and_list(drift)
+        parts.append(f"{_and_list(segs)} ({note})")
+    if restored_ejections:
+        segs = [f"#{sid} is back "
+                f"{_undo_place(ejections.get(sid), (_undo_get(ejection_extras, sid) or {}).get('container_slot'), printer_map)}"
+                for sid in restored_ejections]
+        parts.append(_and_list(segs))
+    if not moves and not ejections:
+        # Legacy / no-move record: its summary already reads "Moved N -> target".
+        parts.append(last.get('summary', f"moved -> {target}"))
+    if parts:
+        state.add_log_entry(f"↩️ Undo: {'; '.join(parts)}", "WARNING")
+    if failed:
+        msg = f"Undo could not put back {', '.join(failed)}."
+        state.add_log_entry(f"⚠️ Undo partly failed: {msg}", "ERROR", "ff4444")
+        return {"success": False, "msg": msg, "restored": restored + restored_ejections}
+    return {"success": True, "msg": f"↩️ Undo: {'; '.join(parts)}" if parts else "↩️ Undone",
+            "restored": restored + restored_ejections}
 
 def process_audit_scan(scan_result):
     """Handles scans when in Audit Mode."""

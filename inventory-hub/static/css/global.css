@@ -1087,14 +1087,22 @@ body {
     z-index: 1100 !important;
 }
 
-/* A gating dialog that is fading OUT still paints and still takes clicks, and FCC
-   re-arms it with the NEXT prompt's text before it has gone, so a double-click on
-   YES confirmed that next prompt (e.g. the active-print override) unseen.
-   Bootstrap removes .show synchronously in hide() and adds it back on show, so
-   only the fade-out goes inert (2026-09-12 review). */
+/* A gating dialog takes clicks only once it is fully shown.
+   Fading OUT: it still paints and still takes clicks, and FCC re-arms it with the
+   NEXT prompt's text before it has gone, so a double-click on YES confirmed that
+   next prompt (e.g. the active-print override) unseen. Bootstrap removes .show
+   synchronously in hide() (2026-09-12 review).
+   Fading IN: Eject All chains FORCE EXECUTE (#safetyModal) into "Unassign?"
+   (#confirmModal), whose YES is painted under FORCE EXECUTE, so the second click
+   of a double-click unassigned the spools while that prompt was still appearing.
+   .show is already on by then; inv_core.js mirrors the phase onto
+   data-fcc-phase, which reads "showing" until shown.bs.modal (Group 41.2). */
 #actionModal:not(.show) .modal-content,
 #safetyModal:not(.show) .modal-content,
-#confirmModal:not(.show) .modal-content {
+#confirmModal:not(.show) .modal-content,
+#actionModal[data-fcc-phase="showing"] .modal-content,
+#safetyModal[data-fcc-phase="showing"] .modal-content,
+#confirmModal[data-fcc-phase="showing"] .modal-content {
     pointer-events: none;
 }
 

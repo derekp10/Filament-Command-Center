@@ -99,7 +99,18 @@ def test_blank_clear_location_no_longer_ejects_the_unassigned_pile_through_the_r
         hits = spoolman_api.get_spools_at_location_detailed("")
     assert sorted(h["id"] for h in hits if not h["is_ghost"]) == [901, 902]
 
-    with patch.object(spoolman_api, "get_all_spools", return_value=_fake_spools()), \
+    # Group 41.2 reads the location strictly, so the fake pile is fed through that
+    # reader's HTTP call: were both blank refusals gone, the route would read it
+    # and eject it, hermetically (patching get_all_spools no longer reached the
+    # route: Group 41 review).
+    from unittest.mock import MagicMock
+    resp = MagicMock()
+    resp.raise_for_status.return_value = None
+    resp.json.return_value = _fake_spools()
+    with patch.object(spoolman_api.requests, "get", return_value=resp), \
+         patch.object(spoolman_api.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
+         patch.object(logic.locations_db, "load_locations_list", return_value=[]), \
+         patch.object(logic.locations_db, "get_active_printer_map", return_value={}), \
          patch.object(logic, "_active_print_info_for_location", return_value=None), \
          patch.object(logic, "perform_smart_eject", return_value=True) as eject, \
          patch.object(state, "add_log_entry"):
@@ -109,14 +120,25 @@ def test_blank_clear_location_no_longer_ejects_the_unassigned_pile_through_the_r
 
 
 def test_a_real_location_still_clears_through_the_real_matcher(client):
-    """Control, PASSES on the old route too: the guard is blank-only. PM-DB-1
-    ejects its own unslotted spool (#903) and skips #902, whose trail makes it
-    a ghost of PM-DB-1 rather than a resident."""
-    with patch.object(spoolman_api, "get_all_spools", return_value=_fake_spools()), \
+    """Control: the guard is blank-only. PM-DB-1 ejects its own unslotted spool
+    (#903) and skips #902, whose trail makes it a ghost of PM-DB-1 rather than a
+    resident. Group 41.2 reads the location strictly, so the real matcher is fed
+    through that reader's HTTP call, and the answer now lists what happened."""
+    from unittest.mock import MagicMock
+    resp = MagicMock()
+    resp.raise_for_status.return_value = None
+    resp.json.return_value = _fake_spools()
+    with patch.object(spoolman_api.requests, "get", return_value=resp), \
+         patch.object(spoolman_api.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
+         patch.object(logic.locations_db, "load_locations_list",
+                      return_value=[{"LocationID": "PM-DB-1", "Type": "Dryer Box", "Max Spools": "1"}]), \
+         patch.object(logic.locations_db, "get_active_printer_map", return_value={}), \
          patch.object(logic, "_active_print_info_for_location", return_value=None), \
          patch.object(logic, "perform_smart_eject", return_value=True) as eject, \
          patch.object(state, "add_log_entry"):
         r = client.post("/api/manage_contents", json={"action": "clear_location", "location": "pm-db-1"})
-    assert r.get_json() == {"success": True}
+    body = r.get_json()
+    assert body["success"] is True and body["ejected"] == [903], body
+    assert body["needs_unassign"] == [] and body["failed"] == [], body
     assert [c.args[0] for c in eject.call_args_list] == [903]
-    assert eject.call_args_list[0].kwargs == {"confirm_active_print": True}
+    assert eject.call_args_list[0].kwargs == {"confirmed_unassign": False, "confirm_active_print": True}

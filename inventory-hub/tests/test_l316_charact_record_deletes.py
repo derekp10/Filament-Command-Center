@@ -474,10 +474,12 @@ def test_delete_location_toolhead_happy_path_saves_mutated_list_once(monkeypatch
     assert args == ("WARNING",)
 
 
-def test_delete_location_toolhead_cascade_errors_add_second_error_log(monkeypatch):
-    """A cascade with a non-empty errors[] still succeeds (200) but writes a
-    SECOND log entry at ERROR/ff4444 joining the errors; the first WARNING entry
-    falls back to 'nothing referenced it' when every detail list is empty."""
+def test_delete_location_toolhead_cascade_errors_keep_the_row(monkeypatch):
+    """Group 41.3 flipped this pin on purpose. A cascade with a non-empty
+    errors[] used to delete the row anyway and answer 200 success; now the row
+    is kept (locations.json is not saved, so the cascade's in-memory edits never
+    reach disk), the answer is a 502 naming the errors, and one ERROR line says
+    the toolhead was NOT deleted."""
     client = app_module.app.test_client()
     rows = [{"LocationID": "XL-1", "Type": "Tool Head"}]
     saves = _patch_locations(monkeypatch, rows)
@@ -490,16 +492,13 @@ def test_delete_location_toolhead_cascade_errors_add_second_error_log(monkeypatc
 
     r = client.delete("/api/locations?id=XL-1")
 
-    assert r.status_code == 200
-    assert r.get_json()["success"] is True
-    assert len(saves) == 1
-    assert len(calls) == 2
-    warn_msg, warn_args, _ = calls[0]
-    assert "Deleted toolhead XL-1" in warn_msg
-    assert "nothing referenced it" in warn_msg
-    assert warn_args == ("WARNING",)
-    err_msg, err_args, _ = calls[1]
-    assert "Toolhead-delete cascade for XL-1 had errors: boom; bang" in err_msg
+    assert r.status_code == 502
+    body = r.get_json()
+    assert body["success"] is False and "boom; bang" in body["msg"], body
+    assert saves == [], "the row was deleted despite the cascade's errors"
+    assert len(calls) == 1
+    err_msg, err_args, _ = calls[0]
+    assert "XL-1 was NOT deleted: boom; bang" in err_msg
     assert err_args == ("ERROR", "ff4444")
 
 
@@ -523,18 +522,20 @@ def test_delete_location_confirm_active_print_query_param_forwarding(monkeypatch
     assert seen == [False, True]
 
 
-def test_delete_location_non_toolhead_best_effort_unassign_continues_on_failure(monkeypatch):
-    """Non-toolhead delete: every direct spool gets a best-effort
-    update_spool(sid, {'location': ''}); a failing unassign logs a
-    state.logger.warning naming LAST_SPOOLMAN_ERROR but does NOT abort — the
-    row is still removed, save still fires once, and the response is a plain
-    200 {'success': True} with a 'Deleted: <id>' WARNING log entry."""
+def test_delete_location_non_toolhead_a_failed_unassign_keeps_the_row(monkeypatch):
+    """Group 41.3 flipped this pin on purpose. Every spool filed on the location
+    is unassigned WITH its box links cleared (it was a location-only PATCH); a
+    rejected write keeps the row (no save), answers a 502 naming the spool, and
+    logs ERROR lines. It used to log only to hub.log and delete the row anyway."""
     client = app_module.app.test_client()
     box_row = {"LocationID": "BOX-1", "Type": "Box"}
     keep_row = {"LocationID": "BOX-2", "Type": "Box"}
     saves = _patch_locations(monkeypatch, [box_row, keep_row])
+    monkeypatch.setattr(app_module.locations_db, "get_active_printer_map", lambda *a, **k: {})
     monkeypatch.setattr(
-        app_module.spoolman_api, "get_spools_at_location", lambda loc: [1, 2],
+        app_module.spoolman_api, "get_spools_at_location_detailed_strict",
+        lambda loc: [{"id": 1, "location": "BOX-1", "is_ghost": False},
+                     {"id": 2, "location": "BOX-1", "is_ghost": False}],
     )
     updates = []
 
@@ -551,21 +552,22 @@ def test_delete_location_non_toolhead_best_effort_unassign_continues_on_failure(
 
     r = client.delete("/api/locations?id=BOX-1")
 
-    assert r.status_code == 200
-    assert r.get_json() == {"success": True}
-    assert updates == [(1, {"location": ""}), (2, {"location": ""})]
-    assert len(warnings) == 1
-    assert "failed to unassign Spool #2 from BOX-1: HTTP 500: nope" in warnings[0]
-    assert saves == [[keep_row]]  # row removed, save exactly once
-    assert len(calls) == 1
-    msg, args, _ = calls[0]
-    assert "Deleted: BOX-1" in msg
-    assert args == ("WARNING",)
+    assert r.status_code == 502
+    body = r.get_json()
+    assert body["success"] is False and "#2 (HTTP 500: nope)" in body["msg"], body
+    cleared = {"location": "", "extra": {"container_slot": "", "physical_source": "",
+                                         "physical_source_slot": ""}}
+    assert updates == [(1, cleared), (2, cleared)]
+    assert warnings == []
+    assert saves == [], "the row was deleted although a spool is still filed on it"
+    assert [(m, a) for m, a, _ in calls][-1][1] == ("ERROR", "ff4444")
+    assert any("Spool #2 not unassigned: HTTP 500: nope" in m for m, _, _ in calls), calls
 
 
-def test_delete_location_non_toolhead_cascade_exception_still_deletes(monkeypatch):
-    """get_spools_at_location raising is swallowed into a logger.warning and the
-    delete still completes: row removed, saved once, 200 success."""
+def test_delete_location_non_toolhead_an_unreadable_location_is_not_deleted(monkeypatch):
+    """Group 41.3 flipped this pin on purpose: a Spoolman outage used to be
+    swallowed (the location read as empty) and the row deleted with its spools
+    still filed on it. The strict read now refuses: 502, no save, ERROR line."""
     client = app_module.app.test_client()
     box_row = {"LocationID": "BOX-1", "Type": "Box"}
     saves = _patch_locations(monkeypatch, [box_row])
@@ -573,18 +575,15 @@ def test_delete_location_non_toolhead_cascade_exception_still_deletes(monkeypatc
     def _boom(loc):
         raise RuntimeError("spoolman down")
 
-    monkeypatch.setattr(app_module.spoolman_api, "get_spools_at_location", _boom)
-    warnings = _capture_logger_warnings(monkeypatch)
+    monkeypatch.setattr(app_module.spoolman_api, "get_spools_at_location_detailed_strict", _boom)
     calls = _capture_logs(monkeypatch)
 
     r = client.delete("/api/locations?id=BOX-1")
 
-    assert r.status_code == 200
-    assert r.get_json() == {"success": True}
-    assert len(warnings) == 1
-    assert "cascade unassign failed" in warnings[0]
-    assert "spoolman down" in warnings[0]
-    assert saves == [[]]
+    assert r.status_code == 502
+    body = r.get_json()
+    assert body["success"] is False and "spoolman down" in body["msg"], body
+    assert saves == []
     msg, args, _ = calls[0]
-    assert "Deleted: BOX-1" in msg
-    assert args == ("WARNING",)
+    assert "Couldn't read BOX-1 from Spoolman, so it was NOT deleted" in msg
+    assert args == ("ERROR", "ff4444")

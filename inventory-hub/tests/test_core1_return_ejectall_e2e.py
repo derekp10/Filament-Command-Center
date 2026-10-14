@@ -377,9 +377,13 @@ def test_ejectall_scan_with_no_location_open_prompts_nothing(
 @pytest.mark.usefixtures("require_server")
 def test_ejectall_scan_with_a_location_open_still_prompts_and_clears(
         page: Page, base_url: str, reset_dom_state_js: str):
-    """Control, PASSES on the pre-fix modules too: with the manager open on
-    FCC-TEST-BOX the scan prompts for that box and FORCE EXECUTE clears it."""
-    be = FakeBackend(page, contents={BOX: []}, extra_locations=[BOX_ROW])
+    """Control: with the manager open on FCC-TEST-BOX the scan prompts for that
+    box and FORCE EXECUTE clears it. Group 41: the browser asks the server first
+    (check_only), and the run's answer lists what it did."""
+    done = {"success": True, "ejected": [], "needs_unassign": [], "failed": [],
+            "skipped_slotted": [], "skipped_loaded": [], "msg": f"Eject All on {BOX}: nothing to eject."}
+    be = FakeBackend(page, contents={BOX: []}, extra_locations=[BOX_ROW],
+                     manage_contents=lambda b: OK if b.get("check_only") else done)
     _boot(page, base_url, reset_dom_state_js)
     _wait_rows(page, [BOX])
 
@@ -391,9 +395,11 @@ def test_ejectall_scan_with_a_location_open_still_prompts_and_clears(
     _safety_on_screen(page, f"Nuke all unslotted in {BOX}?", "the Eject All prompt never showed for the open box")
     page.click("#safetyModal .btn-danger")
 
-    _until(page, lambda: be.bodies("/api/manage_contents"), 5_000, "FORCE EXECUTE sent nothing")
-    assert be.bodies("/api/manage_contents") == [{"action": "clear_location", "location": BOX}]
-    _toast(page, "no Cleared! toast after a successful Eject All", contains=("Cleared!",))
+    _until(page, lambda: len(be.bodies("/api/manage_contents")) >= 2, 5_000, "FORCE EXECUTE sent nothing")
+    assert be.bodies("/api/manage_contents") == [
+        {"action": "clear_location", "location": BOX, "check_only": True},
+        {"action": "clear_location", "location": BOX}]
+    _toast(page, "no summary toast after a successful Eject All", contains=(f"Eject All on {BOX}",))
 
 
 @pytest.mark.usefixtures("require_server")
@@ -401,7 +407,9 @@ def test_eject_all_backend_refusal_is_not_reported_as_cleared(
         page: Page, base_url: str, reset_dom_state_js: str):
     """FAILS on the pre-fix inv_loc_mgr.js: a {success: false} answer toasted
     "Cleared!"."""
-    be = FakeBackend(page, manage_contents=lambda b: {"success": False, "msg": REFUSAL})
+    # Group 41: the check passes; the run itself is refused.
+    be = FakeBackend(page, manage_contents=lambda b: OK if b.get("check_only")
+                     else {"success": False, "msg": REFUSAL})
     _boot(page, base_url, reset_dom_state_js)
 
     page.evaluate("(id) => window.triggerEjectAll(id)", BOX)

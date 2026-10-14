@@ -266,18 +266,23 @@ def test_empty_toolhead_buffer_swap(mock_state, mock_spoolman, mock_config, mock
 
 def test_undo_log_line_names_spool_and_source(mock_state, mock_spoolman, mock_config, mock_locations, mock_requests):
     """The Undo activity-log line must name the spool + its source, not just a
-    count (the '↩️ Undid: Moved 1 -> CR' readability bug, 2026-06-15)."""
+    count (the '↩️ Undid: Moved 1 -> CR' readability bug, 2026-06-15). Group 41.4
+    rewords it to read forwards, so it can't be read backwards (Derek,
+    2026-10-13): where the spool is now, and where it had been moved to."""
     # 1. The move captures the rich display label alongside the source location.
     logic.perform_smart_move("NEW_SHELF", [123])
     record = mock_state.UNDO_STACK[0]
     assert record['labels'][123] == 'Test Spool'
+    # The move landed, so Spoolman now has the spool on NEW_SHELF (perform_undo
+    # reads where it is, and names a spool found somewhere else: Group 41 review).
+    mock_spoolman.get_spool.return_value = {'id': 123, 'location': 'NEW_SHELF', 'extra': {}}
 
     # 2. Undo emits a readable from→to line (not the count-only summary).
     logic.perform_undo()
     logged = [c.args[0] for c in state.add_log_entry.call_args_list if c.args]
-    undo_lines = [m for m in logged if isinstance(m, str) and m.startswith("↩️ Undid:")]
+    undo_lines = [m for m in logged if isinstance(m, str) and m.startswith("↩️ Undo:")]
     assert undo_lines, "no Undo line was logged"
-    assert undo_lines[-1] == "↩️ Undid: moved Test Spool from OLD_SHELF -> NEW_SHELF"
+    assert undo_lines[-1] == "↩️ Undo: Test Spool is back in OLD_SHELF (it had been moved to NEW_SHELF)"
 
 
 def test_undo_empty_stack_message_signals_move_only_scope(mock_state):
@@ -302,15 +307,20 @@ def test_undo_log_line_lists_multiple_spools(mock_state, mock_spoolman, mock_con
     }[int(sd['id'])]
 
     logic.perform_smart_move("NEW_SHELF", [123, 124])
+    # Both moves landed: Spoolman now has them on NEW_SHELF.
+    mock_spoolman.get_spool.side_effect = lambda sid: {
+        123: {'id': 123, 'location': 'NEW_SHELF', 'extra': {}},
+        124: {'id': 124, 'location': 'NEW_SHELF', 'extra': {}},
+    }.get(int(sid))
     logic.perform_undo()
 
     logged = [c.args[0] for c in state.add_log_entry.call_args_list if c.args]
-    line = [m for m in logged if isinstance(m, str) and m.startswith("↩️ Undid:")][-1]
-    assert "2 spools -> NEW_SHELF" in line
-    assert "Spool A from OLD_A" in line
-    assert "Spool B from OLD_B" in line
-    # destination stated once (in the header), not repeated per segment
-    assert line.count("-> NEW_SHELF") == 1, f"target should appear once: {line!r}"
+    line = [m for m in logged if isinstance(m, str) and m.startswith("↩️ Undo:")][-1]
+    assert "Spool A is back in OLD_A" in line
+    assert "Spool B is back in OLD_B" in line
+    assert "(they had been moved to NEW_SHELF)" in line
+    # destination stated once, not repeated per segment
+    assert line.count("NEW_SHELF") == 1, f"target should appear once: {line!r}"
 
 
 def test_undo_legacy_record_without_labels_renders(mock_state):
@@ -330,13 +340,13 @@ def test_undo_legacy_record_without_labels_renders(mock_state):
     assert res['success'] is True
     upd.assert_called_once_with(77, {"location": "LR"})   # location-only restore
     logged = [c.args[0] for c in state.add_log_entry.call_args_list if c.args]
-    line = [m for m in logged if isinstance(m, str) and m.startswith("↩️ Undid:")][-1]
-    assert "#77 from LR -> CR" in line
+    line = [m for m in logged if isinstance(m, str) and m.startswith("↩️ Undo:")][-1]
+    assert "#77 is back in LR (it had been moved to CR)" in line
 
 
 def test_undo_empty_moves_record_no_double_moved(mock_state):
     """A legacy/no-move record (empty moves + old 'Moved N -> X' summary) must NOT
-    render the double word '↩️ Undid: moved Moved 1 -> CR'."""
+    render a doubled phrase (it once read '↩️ Undid: moved Moved 1 -> CR')."""
     state.UNDO_STACK = [{
         'target': 'CR', 'moves': {}, 'ejections': {},
         'summary': 'Moved 1 -> CR', 'origin': ''
@@ -347,8 +357,8 @@ def test_undo_empty_moves_record_no_double_moved(mock_state):
 
     assert res['success'] is True
     logged = [c.args[0] for c in state.add_log_entry.call_args_list if c.args]
-    line = [m for m in logged if isinstance(m, str) and m.startswith("↩️ Undid:")][-1]
-    assert line == "↩️ Undid: Moved 1 -> CR", f"unexpected legacy render: {line!r}"
+    line = [m for m in logged if isinstance(m, str) and m.startswith("↩️ Undo:")][-1]
+    assert line == "↩️ Undo: Moved 1 -> CR", f"unexpected legacy render: {line!r}"
     assert "moved Moved" not in line
 
 

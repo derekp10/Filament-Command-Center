@@ -449,6 +449,121 @@ def test_double_click_on_yes_never_confirms_the_reprompt_unseen(
     _js_until(page, "window.__toasts.includes('Ejected')", 5_000, "no 'Ejected' toast")
 
 
+EJECT_ALL_BOX = "FCC-TEST-BOX"   # fake, like every id here
+EJECT_ALL_RUN = {
+    "success": True, "ejected": [], "needs_unassign": [SID], "failed": [],
+    "skipped_slotted": [], "skipped_loaded": [],
+    "msg": f"Eject All on {EJECT_ALL_BOX}: nothing ejected; 1 spool has no saved home.",
+    "unassign_msg": f"#{SID} has no saved home, so ejecting it leaves it Unassigned. Unassign it?",
+}
+
+# Holds the "Unassign?" dialog still at its final position and keeps it fading
+# in (show.bs.modal fired, shown.bs.modal not yet) for 2.5 s. shown.bs.modal is
+# keyed to this transition, so Bootstrap's fallback timer still fires it.
+STILL_SLOW_FADE_IN_CSS = ("#confirmModal.fade .modal-dialog"
+                          " { transform: none !important; transition: transform 2.5s linear !important; }")
+
+
+@pytest.mark.usefixtures("require_server")
+def test_double_click_on_force_execute_never_confirms_the_unassign_unseen(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """Group 41.2 chains two DIFFERENT gating dialogs: Eject All's FORCE EXECUTE
+    (#safetyModal), then one "Unassign?" (#confirmModal) for the spools with no
+    saved home. At 1600x1300 that dialog's YES is painted under FORCE EXECUTE.
+    The fade-out rule the test above pins can't help here: the second click
+    lands on the NEXT dialog while it is still fading in, before anyone could
+    read it, and unassigned the spools. A gating dialog now takes clicks only
+    once it is fully shown. Real CDP mouse input, so hit-testing decides."""
+    def backend(b):
+        if b.get("check_only"):
+            return {"success": True}
+        if b.get("confirmed_unassign_ids"):
+            return dict(EJECT_ALL_RUN, ejected=[SID], needs_unassign=[],
+                        msg=f"Eject All on {EJECT_ALL_BOX}: 1 unassigned.")
+        return EJECT_ALL_RUN
+
+    be = FakeBackend(page, backend)
+
+    def runs():
+        return [b for b in be.ejects() if not b.get("check_only")]
+
+    _boot(page, base_url, reset_dom_state_js)
+    page.add_style_tag(content=STILL_SLOW_FADE_IN_CSS)
+
+    page.evaluate(f"triggerEjectAll({json.dumps(EJECT_ALL_BOX)})")
+    _wait_shown(page, 1, "the Eject All safety prompt never showed", modal="safetyModal")
+    at = page.evaluate("""() => {
+        const r = document.querySelector('#safetyModal .btn-danger').getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    }""")
+    page.mouse.click(at["x"], at["y"])
+
+    # The second click, timed into the window it really has: FORCE EXECUTE's
+    # dialog is gone (#safetyModal paints above #confirmModal while it fades)
+    # and "Unassign?" is on its way in, its YES under the pointer.
+    _js_until(page, f"""(() => {{
+        const c = document.getElementById('confirmModal'), s = document.getElementById('safetyModal');
+        const ev = window.__ev.filter(e => e.id === 'confirmModal');
+        if (!ev.some(e => e.k === 'show') || ev.some(e => e.k === 'shown')) return false;
+        if (!c.classList.contains('show') || getComputedStyle(s).display !== 'none') return false;
+        const r = c.querySelector('.btn-success').getBoundingClientRect();
+        return r.left <= {at["x"]} && {at["x"]} <= r.right && r.top <= {at["y"]} && {at["y"]} <= r.bottom;
+    }})()""", 5_000, "precondition: the unassign prompt never came up under FORCE EXECUTE while fading in")
+    page.mouse.click(at["x"], at["y"])
+
+    _wait_shown(page, 1, "the unassign prompt never finished showing after a double-click")
+    page.wait_for_timeout(300)
+    assert len(runs()) == 1, (
+        f"the second click of a double-click on FORCE EXECUTE unassigned the spools unseen: {runs()}")
+    snap = page.evaluate(SNAPSHOT_JS)
+    assert (snap["confirmShown"] and "no saved home" in snap["msg"]
+            and snap["pendingConfirm"] == "function" and snap["activeModal"] == "confirm"), snap
+
+    page.click(YES)   # a deliberate click on the fully shown prompt
+    _until(page, lambda: len(runs()) >= 2, 5_000, "a deliberate YES on the shown unassign prompt sent nothing")
+    assert runs()[1]["confirmed_unassign_ids"] == [SID], runs()
+
+
+STILL_SLOW_FADE_IN_ALL_CSS = (", ".join(f"#{d['modal']}.fade .modal-dialog" for d in DIALOGS.values())
+                              + " { transform: none !important; transition: transform 2.5s linear !important; }")
+
+
+@pytest.mark.usefixtures("require_server")
+@pytest.mark.parametrize("kind", list(DIALOGS))
+def test_a_dialog_still_fading_in_takes_no_click(
+        page: Page, base_url: str, reset_dom_state_js: str, kind: str):
+    """The general form of the FORCE EXECUTE pin above, for all three gating
+    dialogs (41.2 owns the double-click on the safety AND action dialogs): a real
+    click on the primary button before shown.bs.modal runs nothing, and one
+    after it runs the callback."""
+    FakeBackend(page)
+    _boot(page, base_url, reset_dom_state_js)
+    page.add_style_tag(content=STILL_SLOW_FADE_IN_ALL_CSS)
+    d = DIALOGS[kind]
+    page.evaluate("(kind) => __open(kind, 'probe', 'probe')", kind)
+    _js_until(page, f"""(() => {{
+        const m = document.getElementById({json.dumps(d['modal'])});
+        const ev = window.__ev.filter(e => e.id === m.id);
+        return m.classList.contains('show') && ev.some(e => e.k === 'show') && !ev.some(e => e.k === 'shown');
+    }})()""", 5_000, f"precondition: the {kind} dialog never started fading in")
+    at = page.evaluate("""(sel) => {
+        const r = document.querySelector(sel).getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width };
+    }""", d["yes"])
+    assert at["w"] > 0, at
+    page.mouse.click(at["x"], at["y"])
+    page.wait_for_timeout(200)
+    assert _count(page, "shown", d["modal"]) == 0, "precondition: the click must land before shown.bs.modal"
+    assert page.evaluate("window.__ran") == [], f"a click on a {kind} dialog still fading in ran its callback"
+
+    _wait_shown(page, 1, f"the {kind} dialog never finished showing", modal=d["modal"])
+    snap = _dialog_snapshot(page, kind)
+    assert snap["shown"] and snap["armed"] == "function" and snap["activeModal"] == kind, snap
+    page.click(d["yes"])
+    _js_until(page, "window.__ran.length > 0", 3_000, f"a click on the shown {kind} dialog ran nothing")
+    assert page.evaluate("window.__ran") == ["probe"]
+
+
 # ---------------------------------------------------------------------------
 # A CONFIRM scan must not fire a callback whose dialog is not on screen
 # ---------------------------------------------------------------------------

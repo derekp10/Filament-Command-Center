@@ -1057,6 +1057,43 @@ def get_active_printer_map(loc_list=None):
     return build_printer_map_from_rows(loc_list)
 
 
+def printer_row_toolheads(loc_list, loc_id):
+    """L271 — the toolhead LocationIDs a Printer row owns (its toolheads[]),
+    uppercased, in stored order; [] when `loc_id` is not a Printer row.
+
+    The row, not the spelling of its id, says which heads belong to a printer: a
+    toolhead id need not start with "<printer id>-" (a Core One+ row can own
+    CORE1-T1/CORE1-T2), and a head can share the printer's own id (CORE1).
+    (Moved here from routes_bindings in Group 41.1, beside the classifier.)"""
+    want = str(loc_id or '').strip().upper()
+    for row in (loc_list or []):
+        if not isinstance(row, dict):
+            continue
+        if str(row.get('Type', '')).strip().lower() != 'printer':
+            continue
+        if str(row.get('LocationID', '')).strip().upper() != want:
+            continue
+        return [str(th.get('location_id', '')).strip().upper()
+                for th in (row.get('toolheads') or [])
+                if isinstance(th, dict) and str(th.get('location_id', '')).strip()]
+    return []
+
+
+def is_printer_row_not_head(loc_id, row, printer_map):
+    """Groups 40.0a / 41.1 — True when `row` is a Printer row that is not itself
+    one of its printer's toolheads. get_active_printer_map is built only from
+    the Printer rows' toolheads[], so "is a head" means exactly "is a
+    printer_map key": XL (heads XL-1..XL-5) is not a head; a dual-role row that
+    lists itself (the old CORE1) is. A Printer row with no toolheads[] is not a
+    head either, so it is classified with the multi-head printers."""
+    if not isinstance(row, dict):
+        return False
+    if str(row.get('Type', '')).strip().lower() != 'printer':
+        return False
+    keys = {str(k).strip().upper() for k in (printer_map or {})}
+    return str(loc_id or '').strip().upper() not in keys
+
+
 # --- FilaBridge Phase-2 cutover: printer credentials on the Printer row -------
 # The whole PrusaLink read path (state/job/MMU probe, cancel-deduct download)
 # needs each printer's ip_address + api_key. They used to come from FilaBridge

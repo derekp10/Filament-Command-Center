@@ -441,29 +441,62 @@ def test_ejectall_scan_with_a_location_open_still_ejects_it(tmp_path, text):
 # ---------------------------------------------------------------------------
 # triggerEjectAll (inv_loc_mgr.js)
 # ---------------------------------------------------------------------------
+# Group 41.1 / 41.2: the browser asks the server first (check_only), and only a
+# view Eject All may sweep gets "Nuke all unslotted in …?". The run then reports
+# what it did, prompts once for the homeless spools, and asks first on a head
+# that is printing. Each POST is answered by its kind: __CHECK__ for the check,
+# then __RUNS__ in order for the runs.
 
 TRIGGER_SCENARIO = """
-const answer = __ANSWER__;
-window.__respond = (url) => url === '/api/manage_contents' ? { body: answer } : { body: [] };
+const check = __CHECK__;
+const runs = __RUNS__;
+let runIdx = 0;
+window.__respond = (url, method, body) => {
+    if (url !== '/api/manage_contents') return { body: [] };
+    if (body && body.check_only) return { body: check };
+    return { body: runs[Math.min(runIdx++, runs.length - 1)] };
+};
+const confirms = [];
+globalThis.requestConfirmation = (msg, cb) => { confirms.push(String(msg)); window.__confirmCb = cb; };
+const printAsks = [];
+window.confirmActivePrint = (o) => { printAsks.push(o.msg); window.__printYes = o.onConfirm; };
 window.triggerEjectAll(__LOC__);
+await __settle(40);
 if (typeof window.__safetyCb === 'function') window.__safetyCb();
-await __settle(80);
-return { safety: __rec.safety, toasts: __rec.toasts, logs: __rec.logs,
+await __settle(60);
+if (__PRINT_YES__ && typeof window.__printYes === 'function') { window.__printYes(); await __settle(60); }
+if (__CONFIRM_YES__ && typeof window.__confirmCb === 'function') { window.__confirmCb(); await __settle(60); }
+return { safety: __rec.safety, toasts: __rec.toasts, logs: __rec.logs, confirms, printAsks,
          posts: __rec.fetches.filter(f => f.method === 'POST').map(f => [f.url, f.body]) };
 """
 
+CHECK_OK = {"success": True, "check_only": True}
+POST_CHECK = ["/api/manage_contents", {"action": "clear_location", "location": "PM-DB-1", "check_only": True}]
+POST_RUN = ["/api/manage_contents", {"action": "clear_location", "location": "PM-DB-1"}]
 
-def _trigger(tmp_path, loc, answer) -> dict:
+
+def _result(msg, **lists):
+    out = {"success": not lists.get("failed") and not lists.get("needs_unassign"),
+           "ejected": [], "needs_unassign": [], "failed": [], "skipped_slotted": [],
+           "skipped_loaded": [], "msg": msg}
+    out.update(lists)
+    return out
+
+
+def _trigger(tmp_path, loc, check=CHECK_OK, runs=(), confirm_yes=False, print_yes=False) -> dict:
     return run_js(tmp_path, ["inv_loc_mgr.js"], (TRIGGER_SCENARIO
                                                  .replace("__LOC__", json.dumps(loc))
-                                                 .replace("__ANSWER__", json.dumps(answer))))
+                                                 .replace("__CHECK__", json.dumps(check))
+                                                 .replace("__RUNS__", json.dumps(list(runs) or [{}]))
+                                                 .replace("__CONFIRM_YES__", "true" if confirm_yes else "false")
+                                                 .replace("__PRINT_YES__", "true" if print_yes else "false")))
 
 
 @pytest.mark.parametrize("loc", ["", "   ", None])
 def test_trigger_eject_all_refuses_a_blank_location(tmp_path, loc):
     """FAILS on the old module: it prompted "Nuke all unslotted in ?" (or
     "in null") and, confirmed, posted clear_location for that location."""
-    res = _trigger(tmp_path, loc, {"success": True})
+    res = _trigger(tmp_path, loc)
 
     assert res["safety"] == [], res
     assert res["posts"] == [], res
@@ -473,23 +506,261 @@ def test_trigger_eject_all_refuses_a_blank_location(tmp_path, loc):
     assert res["unhandled"] == []
 
 
-def test_trigger_eject_all_reports_a_backend_refusal_instead_of_cleared(tmp_path):
-    """FAILS on the old module: a {success: false} answer toasted "Cleared!"."""
-    msg = "No location given. Open a location in the Location Manager, then use Eject All."
-    res = _trigger(tmp_path, "PM-DB-1", {"success": False, "msg": msg})
+def test_a_view_the_server_refuses_never_shows_the_nuke_prompt(tmp_path):
+    """Group 41.1, FAILS on the old module: it asked "Nuke all unslotted in
+    LR?" and the refusal (if any) came after the user had said yes."""
+    msg = "Eject All is off for rooms, so nothing was moved. Eject from LR's boxes, drawers and shelves."
+    res = _trigger(tmp_path, "PM-DB-1", check={"success": False, "blocked_reason": "room_view", "msg": msg})
 
-    assert res["safety"] == ["Nuke all unslotted in PM-DB-1?"]
-    assert res["posts"] == [["/api/manage_contents", {"action": "clear_location", "location": "PM-DB-1"}]]
+    assert res["safety"] == [], res
+    assert res["posts"] == [POST_CHECK], res
     assert [t["msg"] for t in res["toasts"]] == [msg], res["toasts"]
     assert res["toasts"][0]["type"] == "warning" and res["toasts"][0]["duration"] >= 7000
     assert res["unhandled"] == []
 
 
-def test_trigger_eject_all_success_still_says_cleared(tmp_path):
-    """Control, PASSES on the old module too."""
-    res = _trigger(tmp_path, "PM-DB-1", {"success": True})
+def test_trigger_eject_all_reports_a_backend_refusal_instead_of_cleared(tmp_path):
+    """A refusal on the run itself (an unreadable location) is reported, never
+    "Cleared!"."""
+    msg = "Couldn't read PM-DB-1 from Spoolman, so nothing was ejected. Try again."
+    res = _trigger(tmp_path, "PM-DB-1", runs=[{"success": False, "msg": msg}])
 
     assert res["safety"] == ["Nuke all unslotted in PM-DB-1?"]
-    assert res["posts"] == [["/api/manage_contents", {"action": "clear_location", "location": "PM-DB-1"}]]
-    assert "Cleared!" in [t["msg"] for t in res["toasts"]], res["toasts"]
+    assert res["posts"] == [POST_CHECK, POST_RUN]
+    assert [t["msg"] for t in res["toasts"]] == [msg], res["toasts"]
+    assert res["toasts"][0]["type"] == "warning" and res["toasts"][0]["duration"] >= 7000
+    assert res["unhandled"] == []
+
+
+def test_a_clean_eject_all_says_what_it_did(tmp_path):
+    """Group 41.2, FAILS on the old module: it toasted a bare "Cleared!"."""
+    msg = "Eject All on PM-DB-1: ejected 2."
+    res = _trigger(tmp_path, "PM-DB-1", runs=[_result(msg, ejected=[1, 2])])
+
+    assert res["posts"] == [POST_CHECK, POST_RUN]
+    assert [(t["msg"], t["type"]) for t in res["toasts"]] == [(msg, "success")], res["toasts"]
+    assert res["confirms"] == [] and res["unhandled"] == []
+
+
+def test_a_failed_eject_raises_an_error_toast(tmp_path):
+    msg = "Eject All on PM-DB-1: ejected 1, 1 failed (#33: its eject failed (see the Activity Log))."
+    res = _trigger(tmp_path, "PM-DB-1", runs=[_result(msg, ejected=[1], failed=[{"id": 33, "err": "x"}])])
+
+    assert [(t["msg"], t["type"]) for t in res["toasts"]] == [(msg, "error")], res["toasts"]
+    assert res["toasts"][0]["duration"] >= 7000
+    assert res["unhandled"] == []
+
+
+def test_the_homeless_spools_get_one_prompt_and_its_yes_names_them(tmp_path):
+    """Derek's Q1: one "unassign?" prompt for the batch; Yes posts exactly the
+    ids it named."""
+    ask = "2 spools on PM-DB-1 have no saved home (#32, #35). Unassign them?"
+    first = dict(_result("Eject All on PM-DB-1: ejected 1, 2 need a decision.",
+                         ejected=[31], needs_unassign=[32, 35]), unassign_msg=ask)
+    second = _result("Eject All on PM-DB-1: ejected 2.", ejected=[32, 35])
+    res = _trigger(tmp_path, "PM-DB-1", runs=[first, second], confirm_yes=True)
+
+    assert res["confirms"] == [ask], res
+    assert res["posts"] == [POST_CHECK, POST_RUN,
+                            ["/api/manage_contents", {"action": "clear_location", "location": "PM-DB-1",
+                                                      "confirmed_unassign_ids": [32, 35]}]], res["posts"]
+    assert [t["type"] for t in res["toasts"]] == ["warning", "success"], res["toasts"]
+    assert res["unhandled"] == []
+
+
+def test_a_printing_head_asks_first_and_its_yes_retries_with_the_flag(tmp_path):
+    """Group 41.2, FAILS on the old module: a require_confirm answer was left
+    unhandled (the old code returned without a word)."""
+    ask = {"success": False, "require_confirm": True, "confirm_type": "active_print",
+           "active_print": {"printer_name": "XL", "state": "PRINTING"},
+           "msg": "XL is PRINTING — clearing this location will disrupt the print."}
+    done = _result("Eject All on PM-DB-1: ejected 1.", ejected=[1])
+    res = _trigger(tmp_path, "PM-DB-1", runs=[ask, done], print_yes=True)
+
+    assert res["printAsks"] == [ask["msg"]], res
+    assert res["posts"][-1] == ["/api/manage_contents", {"action": "clear_location", "location": "PM-DB-1",
+                                                         "confirm_active_print": True}], res["posts"]
+    assert [t["type"] for t in res["toasts"]] == ["success"], res["toasts"]
+    assert res["unhandled"] == []
+
+
+# ---------------------------------------------------------------------------
+# Undo Last Move (inv_cmd.js), Group 41.4
+# ---------------------------------------------------------------------------
+# The first press only asks: the server answers the question naming the move
+# (and the record's number), the Yes quotes that number, and a printing head
+# goes through the shared active-print confirm with its heads. Each POST
+# /api/undo is answered by the next of __ANSWERS__.
+
+UNDO_SCENARIO = """
+const answers = __ANSWERS__;
+let n = 0;
+window.__respond = (url, method, body) =>
+    url === '/api/undo' ? { body: answers[Math.min(n++, answers.length - 1)] } : { body: [] };
+globalThis.updateLogState = () => {};
+const confirms = [];
+globalThis.requestConfirmation = (msg, cb) => { confirms.push(String(msg)); window.__yes = cb; };
+const printAsks = [];
+window.confirmActivePrint = (o) => { printAsks.push(o.msg); window.__yes = o.onConfirm; };
+window.unionConfirmHeads = (prior, ans) => {
+    const out = new Set(prior || []);
+    (ans.active_prints || []).forEach(a => out.add(a.toolhead));
+    return [...out];
+};
+triggerUndo();
+await __settle(60);
+if (__YES__ && typeof window.__yes === 'function') { window.__yes(); await __settle(60); }
+return { confirms, printAsks, toasts: __rec.toasts,
+         posts: __rec.fetches.filter(f => f.url === '/api/undo').map(f => f.body) };
+"""
+
+ASK = {"success": False, "requires_confirm": True, "undo_id": 7, "confirm_type": "undo",
+       "active_prints": [], "msg": "Undo: put #57 back in LR-MDB-1 slot 2 and #196 back on XL-2?"}
+DONE = {"success": True, "msg": "↩️ Undo: #57 is back in LR-MDB-1 slot 2 (it had been moved to XL-2)",
+        "restored": [57]}
+
+
+def _undo_js(tmp_path, answers, yes=False) -> dict:
+    return run_js(tmp_path, ["inv_cmd.js"], (UNDO_SCENARIO
+                                             .replace("__ANSWERS__", json.dumps(answers))
+                                             .replace("__YES__", "true" if yes else "false")))
+
+
+def test_undo_asks_first_and_the_yes_quotes_the_record(tmp_path):
+    """FAILS on the old module: it posted once, read nothing, and said nothing."""
+    res = _undo_js(tmp_path, [ASK, DONE], yes=True)
+
+    assert res["confirms"] == [ASK["msg"]], res
+    assert res["posts"] == [{}, {"confirm": True, "undo_id": 7, "confirmed_toolheads": []}], res["posts"]
+    assert [(t["msg"], t["type"]) for t in res["toasts"]] == [(DONE["msg"], "success")], res["toasts"]
+    assert res["unhandled"] == []
+
+
+def test_a_no_to_the_question_changes_nothing(tmp_path):
+    res = _undo_js(tmp_path, [ASK, DONE], yes=False)
+
+    assert res["posts"] == [{}], res["posts"]
+    assert res["toasts"] == [] and res["unhandled"] == []
+
+
+def test_a_printing_head_goes_through_the_shared_confirm(tmp_path):
+    ask = dict(ASK, confirm_type="active_print",
+               active_prints=[{"toolhead": "XL-2", "printer_name": "XL", "state": "PRINTING", "role": "source"}],
+               msg="XL is PRINTING: this undo changes XL-2 mid-print. " + ASK["msg"])
+    res = _undo_js(tmp_path, [ask, DONE], yes=True)
+
+    assert res["printAsks"] == [ask["msg"]] and res["confirms"] == [], res
+    assert res["posts"][-1] == {"confirm": True, "undo_id": 7, "confirmed_toolheads": ["XL-2"]}, res["posts"]
+    assert res["unhandled"] == []
+
+
+def test_nothing_to_undo_is_an_info_toast(tmp_path):
+    msg = "Nothing to undo (Undo Last Move reverts spool moves only)."
+    res = _undo_js(tmp_path, [{"success": False, "nothing": True, "msg": msg}])
+
+    assert [(t["msg"], t["type"]) for t in res["toasts"]] == [(msg, "info")], res["toasts"]
+    assert res["unhandled"] == []
+
+
+def test_a_failed_undo_names_the_spool_at_seven_seconds(tmp_path):
+    msg = "Undo could not put back #57 (400: rejected)."
+    res = _undo_js(tmp_path, [ASK, {"success": False, "msg": msg}], yes=True)
+
+    assert [(t["msg"], t["type"]) for t in res["toasts"]] == [(msg, "error")], res["toasts"]
+    assert res["toasts"][0]["duration"] >= 7000
+    assert res["unhandled"] == []
+
+
+# ---------------------------------------------------------------------------
+# Location delete (inv_loc_mgr.js), Group 41.3
+# ---------------------------------------------------------------------------
+# The prompt names what happens to the spools (one contents read); a 409
+# requires_confirm (a toolhead whose printer is printing) goes through the
+# shared confirm and retries with the flag; a success raises a toast.
+
+DELETE_SCENARIO = """
+state.allLocations = __ROWS__;
+const contents = __CONTENTS__;
+const deletes = __DELETES__;
+let d = 0;
+window.__respond = (url, method) => {
+    if (url.startsWith('/api/get_contents')) return { body: contents };
+    if (method === 'DELETE') { const a = deletes[Math.min(d++, deletes.length - 1)]; return { status: a.status || 200, body: a.body }; }
+    return { body: [] };
+};
+globalThis.fetchLocations = () => {};
+const confirms = [];
+globalThis.requestConfirmation = (msg, cb) => { confirms.push(String(msg)); window.__yes = cb; };
+const printAsks = [];
+window.confirmActivePrint = (o) => { printAsks.push(o.msg); window.__print = o.onConfirm; };
+window.deleteLoc(__LOC__);
+await __settle(60);
+if (typeof window.__yes === 'function') { window.__yes(); await __settle(60); }
+if (typeof window.__print === 'function') { window.__print(); await __settle(60); }
+return { confirms, printAsks, toasts: __rec.toasts,
+         deletes: __rec.fetches.filter(f => f.method === 'DELETE').map(f => f.url) };
+"""
+
+
+def _delete_js(tmp_path, loc, rows, contents, deletes) -> dict:
+    return run_js(tmp_path, ["inv_loc_mgr.js"], (DELETE_SCENARIO
+                                                 .replace("__ROWS__", json.dumps(rows))
+                                                 .replace("__CONTENTS__", json.dumps(contents))
+                                                 .replace("__DELETES__", json.dumps(deletes))
+                                                 .replace("__LOC__", json.dumps(loc))))
+
+
+ROW = {"LocationID": "CR-CT-2-R1", "Type": "Cart Row"}
+DELETED = {"status": 200, "body": {"success": True, "msg": "Deleted CR-CT-2-R1: 2 spool(s) → Unassigned."}}
+
+
+def test_the_delete_prompt_says_what_happens_to_the_spools(tmp_path):
+    """Claude's call 16, FAILS on the old module: it asked a bare "Delete
+    CR-CT-2-R1?" and raised no toast after a successful delete."""
+    contents = [{"id": 3, "location": "CR-CT-2-R1"}, {"id": 4, "location": "CR-CT-2-R1"},
+                {"id": 5, "location": "CR-CT-2-R1", "is_ghost": True}]
+    res = _delete_js(tmp_path, "CR-CT-2-R1", [ROW], contents, [DELETED])
+
+    assert res["confirms"] == ["Delete CR-CT-2-R1? Its 2 spools go to Unassigned. "
+                               "1 spool(s) deployed from it keep their place."], res
+    assert res["deletes"] == ["/api/locations?id=CR-CT-2-R1"]
+    assert [(t["msg"], t["type"]) for t in res["toasts"]] == [(DELETED["body"]["msg"], "success")]
+    assert res["unhandled"] == []
+
+
+def test_an_emptied_rooms_prompt_counts_only_its_own_spools(tmp_path):
+    rows = [{"LocationID": "DR", "Type": "Room"}]
+    contents = [{"id": 1, "location": "DR"}, {"id": 2, "location": "DR-X-9"}]
+    res = _delete_js(tmp_path, "DR", rows, contents, [{"body": {"success": True}}])
+
+    assert res["confirms"] == ["Delete DR? Its spool #1 goes to Unassigned."], res
+    assert res["unhandled"] == []
+
+
+def test_a_printing_toolhead_asks_first_and_retries_with_the_flag(tmp_path):
+    """Group 41.3, FAILS on the old module: the 409 was toasted as an error
+    with no way to confirm and go on."""
+    ask = {"status": 409, "body": {"success": False, "status": "requires_confirm",
+                                   "confirm_type": "active_print",
+                                   "active_print": {"printer_name": "XL", "state": "PRINTING", "toolhead": "XL-5"},
+                                   "msg": "XL is PRINTING on XL-5 — deleting it orphans the running spool."}}
+    rows = [{"LocationID": "XL-5", "Type": "Tool Head"}]
+    res = _delete_js(tmp_path, "XL-5", rows, [{"id": 57, "location": "XL-5"}],
+                     [ask, {"body": {"success": True, "msg": "Deleted toolhead XL-5: 1 spool(s) → UNASSIGNED."}}])
+
+    assert res["confirms"] == ["Delete XL-5? Its spool #57 goes to Unassigned."], res
+    assert res["printAsks"] == [ask["body"]["msg"]], res
+    assert res["deletes"] == ["/api/locations?id=XL-5", "/api/locations?id=XL-5&confirm_active_print=1"]
+    assert [t["type"] for t in res["toasts"]] == ["success"], res["toasts"]
+    assert res["unhandled"] == []
+
+
+def test_a_refused_delete_is_an_error_toast(tmp_path):
+    msg = "CR-CT-2 still contains CR-CT-2-R1 — move or delete them first."
+    rows = [{"LocationID": "CR-CT-2", "Type": "Cart"}]
+    res = _delete_js(tmp_path, "CR-CT-2", rows, [], [{"status": 409, "body": {"success": False, "msg": msg}}])
+
+    assert res["confirms"] == ["Delete CR-CT-2? It holds no spools."], res
+    assert [(t["msg"], t["type"]) for t in res["toasts"]] == [(msg, "error")], res["toasts"]
+    assert res["toasts"][0]["duration"] >= 7000
     assert res["unhandled"] == []

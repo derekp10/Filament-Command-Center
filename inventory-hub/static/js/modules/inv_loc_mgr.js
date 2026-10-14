@@ -1720,33 +1720,73 @@ window.triggerEjectAll = (loc) => {
         if (window.logClientEvent) window.logClientEvent('⚠️ Eject All ignored: no location was given', 'WARNING');
         return;
     }
-    promptSafety(`Nuke all unslotted in ${target}?`, () => {
+    // Group 41.1: ask the server first. A room, a printer that isn't a head, a
+    // row FCC only knows from its spools and the Unassigned/Unknown lists are
+    // refused there (and logged), so the user never answers "Nuke all?" only to
+    // be refused. One rule, one wording, in logic.eject_all_block_reason.
     setProcessing(true);
-    window.fetchT('/api/manage_contents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'clear_location', location: target }) })
+    window.fetchT('/api/manage_contents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'clear_location', location: target, check_only: true }) })
+        .then(r => r.json())
+        .then((chk) => {
+            setProcessing(false);
+            if (!chk || chk.success === false) {
+                showToast((chk && chk.msg) || 'Eject All was refused', 'warning', 9000);
+                return;
+            }
+            promptSafety(`Nuke all unslotted in ${target}?`, () => _runEjectAll(target, {}));
+        })
+        .catch(() => { setProcessing(false); showToast("Eject-all failed", "error", 7000); });
+};
+
+// Group 41.2: run Eject All and say what really happened. The answer lists
+// ejected / needs_unassign / failed / skipped_slotted / skipped_loaded; the toast
+// is its one-line summary (an error toast when anything failed). A head that is
+// printing asks first (the shared confirm), and the spools with no saved home
+// get ONE "unassign?" prompt for the batch (Derek's Q1), whose Yes names them.
+const _runEjectAll = (target, opts) => {
+    const body = { action: 'clear_location', location: target };
+    if (opts.confirmActivePrint) body.confirm_active_print = true;
+    if (opts.unassignIds && opts.unassignIds.length) body.confirmed_unassign_ids = opts.unassignIds;
+    setProcessing(true);
+    window.fetchT('/api/manage_contents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
         .then(r => r.json())
         .then((res) => {
             setProcessing(false);
-            // A plain refusal (e.g. the backend's no-location guard) is not
-            // "Cleared!". A require_confirm answer is left to the planned
-            // eject-all results work.
-            if (res && res.success === false && !res.require_confirm) {
-                showToast(res.msg || 'Eject All was refused', 'warning', 7000);
+            if (res && res.require_confirm && res.confirm_type === 'active_print' && window.confirmActivePrint) {
+                window.confirmActivePrint({
+                    activePrint: res.active_print, msg: res.msg,
+                    host: document.getElementById('manageModal'),
+                    onConfirm: () => _runEjectAll(target, Object.assign({}, opts, { confirmActivePrint: true })),
+                });
                 return;
             }
-            if(window.fetchLocations) window.fetchLocations();
+            const listed = res && Array.isArray(res.ejected);
+            if (!listed) {
+                if (res && res.success === true) {
+                    // A bare success (no per-spool lists): done, nothing to itemise.
+                    if (window.fetchLocations) window.fetchLocations();
+                    refreshManageView(target);
+                    showToast(res.msg || `Eject All on ${target}: done.`, 'success', 4000);
+                    return;
+                }
+                // A refusal (a blocked view, an unreadable location): nothing ran.
+                showToast((res && res.msg) || 'Eject All was refused', 'warning', 7000);
+                return;
+            }
+            if (window.fetchLocations) window.fetchLocations();
             refreshManageView(target);
-            // 27.6 — a bulk clear leaves SLOTTED spools (toolhead/MMU-loaded) in
-            // place on purpose. Be honest about it rather than always saying
-            // "Cleared!": warn when survivors remain so the user knows the
-            // location isn't actually empty (matches the backend Activity Log).
-            if (res && Array.isArray(res.skipped_slotted) && res.skipped_slotted.length) {
-                showToast(res.msg || `${res.skipped_slotted.length} slotted spool(s) left in place — unload the slot to remove them.`, "warning", 7000);
-            } else {
-                showToast("Cleared!");
+            const failed = res.failed || [];
+            const needs = res.needs_unassign || [];
+            const leftover = (res.skipped_slotted || []).length + (res.skipped_loaded || []).length;
+            if (failed.length) showToast(res.msg, 'error', 9000);
+            else if (needs.length || leftover) showToast(res.msg, 'warning', 7000);
+            else showToast(res.msg, 'success', 4000);
+            if (needs.length && !opts.unassignIds) {
+                requestConfirmation(res.unassign_msg || `Unassign ${needs.length} spool(s) with no saved home?`,
+                    () => _runEjectAll(target, Object.assign({}, opts, { unassignIds: needs })));
             }
         })
         .catch(() => { setProcessing(false); showToast("Eject-all failed", "error", 7000); });
-    });
 };
 
 window.printCurrentLocationLabel = () => {
@@ -2448,23 +2488,68 @@ const _deleteLocRequest = (id) => {
     return { prompt: `Delete the location with a blank Location ID${name}?`, url: '/api/locations?blank_id=1' };
 };
 
+// Group 41.3 (Claude's call 16): the prompt says what happens to the spools
+// ("Delete CR-CT-2-R1? Its 3 spools go to Unassigned."), from one contents
+// read; it falls back to the bare question if that read fails. It mirrors the
+// server: a spool loaded on a head is left alone, an emptied Room counts only
+// the spools filed on the Room itself, and a deployed spool keeps its place.
+const _deletePromptFor = (id, req) => {
+    const loc = String(id == null ? '' : id).trim();
+    if (!loc) return Promise.resolve(req.prompt);
+    const up = (v) => String(v == null ? '' : v).replace(/"/g, '').trim().toUpperCase();
+    // Group 41 review: read STRICTLY. The fail-open read answered [] on a
+    // Spoolman blip, so the prompt said "It holds no spools." about a box whose
+    // spools the delete then unassigned. And count only the spools filed on this
+    // row, as the server now does for every type.
+    return fetch(`/api/get_contents?id=${encodeURIComponent(loc)}&strict=1`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((items) => {
+            if (!Array.isArray(items)) {
+                return `Delete ${loc}? FCC couldn't read its spools from Spoolman just now, `
+                    + "so it can't say how many go to Unassigned.";
+            }
+            const list = items;
+            const goes = list.filter((i) => !i.is_ghost && up(i.location) === up(loc));
+            const kept = list.filter((i) => i.is_ghost && up(i.location) === up(loc)).length;
+            let msg = `Delete ${loc}?`;
+            if (goes.length === 1) msg += ` Its spool #${goes[0].id} goes to Unassigned.`;
+            else if (goes.length > 1) msg += ` Its ${goes.length} spools go to Unassigned.`;
+            else msg += ' It holds no spools.';
+            if (kept) msg += ` ${kept} spool(s) deployed from it keep their place.`;
+            return msg;
+        })
+        .catch(() => req.prompt);
+};
+
 window.deleteLoc = (id) => {
     const req = _deleteLocRequest(id);
-    return requestConfirmation(req.prompt, () => fetch(req.url, { method: 'DELETE' })
+    const run = (url) => fetch(url, { method: 'DELETE' })
         .then(async (r) => {
             let body = {};
             try { body = await r.json(); } catch (_) { /* non-JSON */ }
+            // Group 41.3: a toolhead whose printer is printing asks first (the
+            // shared confirm), then retries with the flag; it used to be
+            // toasted as an error with no way to go on.
+            if (r.status === 409 && body.status === 'requires_confirm' && window.confirmActivePrint) {
+                window.confirmActivePrint({
+                    activePrint: body.active_print, msg: body.msg,
+                    onConfirm: () => run(url + '&confirm_active_print=1'),
+                });
+                return;
+            }
             if (!r.ok || body.success === false) {
                 const msg = body.error || body.msg || `Delete failed (HTTP ${r.status})`;
                 if (typeof showToast === 'function') showToast(msg, 'error', 8000);
                 return;
             }
+            if (typeof showToast === 'function') showToast(body.msg || `Deleted ${id}.`, 'success', 4000);
             const _row = (state.allLocations || []).find((l) => l.LocationID == id);
             if (_row && _isPrinterTopologyType(_row.Type)) _announcePrinterMapChange();
         })
         .catch((e) => {
             if (typeof showToast === 'function') showToast('Delete failed: ' + (e && e.message ? e.message : e), 'error', 7000);
         })
-        .then(fetchLocations));
+        .then(fetchLocations);
+    return _deletePromptFor(id, req).then((prompt) => requestConfirmation(prompt, () => run(req.url)));
 };
 

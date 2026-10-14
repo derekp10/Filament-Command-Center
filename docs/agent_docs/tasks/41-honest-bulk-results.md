@@ -4,7 +4,9 @@
 **Estimated effort:** MEDIUM, about 1–1.5 sessions (~8–12 h), once Derek has answered Q1 and Q3 (both answered: Q1 on 2026-09-18, Q3 on 2026-10-13).
 **Risk:** **MEDIUM.** Every change is on a destructive path: Eject All, location delete, Undo, and the bulk-move commit. It makes each path refuse more and report more. The hazards are a correct action now refused (a false block), and pinned wording or response shapes that tests assert.
 
-> **Status: `TODO`.** Planned 2026-09-13 from Derek's D4 answer and the related buglist items
+> **Status: `DONE` — built in the 2026-10-13/14 overnight run on `feature/group-41-honest-bulk-results`, merged to `dev` (sha in [session-handoff-2026-10-14.md](session-handoff-2026-10-14.md)).** All nine items shipped (41.1–41.9), plus 41.2's double-click test debt, which found a real hole (a gating dialog took clicks while it faded IN), and the adversarial review's 17 fixes (the red one: undoing a box-slot move whose auto-deploy had loaded the bound head never asked about that head mid-print). Archived in `completed-archive.md`. The ⚠️ stale claims below were reconciled before building. Two cross-group notes were NOT done here: the shared strict "direct residents" helper (41's reads also need ghosts and prefix hits, so they filter inline; Group 42.3b extracts it) and an `inv_core.js` mirror of the Printer-row classifier (Eject All asks the server; Group 40.0a builds one if it needs it).
+>
+> _Planning history:_ Planned 2026-09-13 from Derek's D4 answer and the related buglist items
 > ([open-decisions-2026-09-13.md](open-decisions-2026-09-13.md)). Nothing has been built yet.
 > All code references were read on `dev` @ `be9f045`. Line numbers drift, so re-read before editing.
 >

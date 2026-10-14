@@ -981,7 +981,8 @@ const _renderLocationsPayload = (d) => {
                     LocationID: 'Unassigned',
                     Name: 'Unassigned Spools',
                     Type: 'Virtual',
-                    Occupancy: '--'
+                    Occupancy: '--',
+                    Synthesized: true
                 });
             }
 
@@ -1215,6 +1216,17 @@ const _renderLocationsPayload = (d) => {
                     // via Name / LocationID).
                     const ancAttr = escAttr(JSON.stringify(entry.ancestors || []));
                     const lidEsc = escAttr(l.LocationID);
+                    // Group 41.3 (Claude's call 12): the built-in lists and a
+                    // "(Room)" FCC only knows from its spools have no row to edit
+                    // or delete, and the server refuses a delete of any id with no
+                    // row, so a Spoolman-native row keeps only its ✏️ (saving it
+                    // there makes it an FCC location). Keyed on the server's
+                    // Synthesized flag, never the Type (Group 41 review): a real
+                    // "Virtual Room / Zone" row, prod's blank-id "Unknown
+                    // Location" row and a promoted blank-Type parent share Types
+                    // with synthesized rows, and lost their buttons.
+                    const synth = !!l.Synthesized;
+                    const canEdit = !synth || l.Type === 'Spoolman Native';
 
                     return `
                 <tr data-locid="${escAttr(lidUC)}" data-ancestors="${ancAttr}" id="loc-row-${lidEsc}">
@@ -1225,10 +1237,10 @@ const _renderLocationsPayload = (d) => {
                     <td class="col-actions text-end" style="white-space: nowrap;">
                         <button class="btn btn-sm btn-outline-light me-1 btn-qr" data-id="${lidEsc}" title="Show QR">📱 QR</button>
                         ${canAddChild(l) ? `<button class="btn btn-sm btn-outline-success me-1 btn-add-child" data-id="${lidEsc}" title="Add a child location here">➕</button>` : ''}
-                        ${l.Type !== 'Virtual' ? `
-                        <button class="btn btn-sm btn-outline-warning me-1 btn-edit" data-id="${lidEsc}">✏️</button>
-                        <button class="btn btn-sm btn-outline-danger me-1 btn-delete" data-id="${lidEsc}">🗑️</button>
-                        ` : ''}
+                        ${canEdit ? `
+                        <button class="btn btn-sm btn-outline-warning me-1 btn-edit" data-id="${lidEsc}">✏️</button>` : ''}
+                        ${!synth ? `
+                        <button class="btn btn-sm btn-outline-danger me-1 btn-delete" data-id="${lidEsc}">🗑️</button>` : ''}
                         <button class="btn btn-sm btn-info btn-manage fw-bold" data-id="${lidEsc}">Manage</button>
                     </td>
                 </tr>`;
@@ -1540,6 +1552,13 @@ const SCAN_GATING_MODALS = ['confirmModal', 'safetyModal', 'actionModal'];
 const _gatingPhase = {};    // id -> 'showing' | 'shown' | 'hiding' | 'hidden'
 const _deferredShow = {};   // id -> token of the ONE show queued for hidden.bs.modal
 const _deferredHide = {};   // id -> token of the ONE hide queued for shown.bs.modal
+// The phase is mirrored onto the dialog as data-fcc-phase so global.css can keep
+// a dialog that is still fading in from taking clicks (Group 41.2).
+const _setGatingPhase = (el, id, phase) => {
+    _gatingPhase[id] = phase;
+    if (phase) el.dataset.fccPhase = phase;
+    else delete el.dataset.fccPhase;
+};
 [['show.bs.modal', 'showing'], ['shown.bs.modal', 'shown'],
  ['hide.bs.modal', 'hiding'], ['hidden.bs.modal', 'hidden']].forEach(([evt, phase]) => {
     // Capture phase: the phase is current before ANY element- or document-level
@@ -1551,11 +1570,11 @@ const _deferredHide = {};   // id -> token of the ONE hide queued for shown.bs.m
         // started (Bootstrap accepts show() during the backdrop-fade tail).
         if (phase === 'hidden' && _gatingPhase[id] !== 'hiding') return;
         const prev = _gatingPhase[id];
-        _gatingPhase[id] = phase;
+        _setGatingPhase(ev.target, id, phase);
         // show/hide are cancelable and capture runs first, so re-check after the
         // dispatch: a later preventDefault() means the transition never started.
         if (phase === 'showing' || phase === 'hiding') {
-            queueMicrotask(() => { if (ev.defaultPrevented && _gatingPhase[id] === phase) _gatingPhase[id] = prev; });
+            queueMicrotask(() => { if (ev.defaultPrevented && _gatingPhase[id] === phase) _setGatingPhase(ev.target, id, prev); });
         }
     }, true);
 });
