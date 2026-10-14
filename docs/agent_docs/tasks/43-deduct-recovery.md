@@ -4,7 +4,7 @@
 **Estimated effort:** MEDIUM (~8–12 h, 1–2 sessions). Double-deduct guard ~1 h · log wording ~0.5 h · pick-the-spool on reviews ~2–3 h · shortfall review ~3–4 h · 22.5 ~1–2 h · retry idempotency ~1–2 h · tests throughout.
 **Risk:** **MEDIUM–HIGH.** Every item writes `used_weight` or the exactly-once ledger. There are two failure modes to design against: a **double-deduct** (grams charged twice) and a **silent loss** (grams charged to nobody). Each sub-task must name which one it could cause and pin it.
 
-> **Status: `PARTIAL` — 43.1, 43.5, 43.3 and 43.6 shipped in the 2026-10-13 overnight run (merged to `dev`, `985aba8`; see `completed-archive.md`). 43.4 shipped with Group 39 (`c389e26`). Left: 43.2, which needs Derek's answer on where a top-up goes when the clamped spool was auto-archived.**
+> **Status: `PARTIAL` — 43.1, 43.5, 43.3 and 43.6 shipped in the 2026-10-13 overnight run (merged to `dev`, `985aba8`; see `completed-archive.md`). 43.4 shipped with Group 39 (`c389e26`). Left: 43.2, answered by Derek on 2026-10-13 (a picked archived spool is charged and stays archived; see 43.2 below) and ready to build.**
 > Grouped by Derek's call (2026-10-12). The unblocked deduct work stops waiting behind [Group 22](22-filabridge-phase2-detection-deduct-followups.md), whose only open item (the M600 multi-color split) is blocked on print data.
 > It absorbs the "unblocked 22.5" that [Group 41's plan](41-honest-bulk-results.md) asked to file under Group 22 (it never landed there), and the standalone cancel-deduct retry row (Derek, 2026-10-12: "Into Group 43").
 > Code anchors were read on `dev` @ `3949aba`. Line numbers drift, so re-grep the named function before editing.
@@ -43,7 +43,7 @@
 
 ### Excluded: these need print data first and stay standalone
 
-- **SpoolJoin detection** (piece (1) of the spool-join triage). It needs a pollable signal for the printer's auto-switch. The ATTENTION-park and resume swap-diff logging added 2026-10-08 will show whether one exists on the next SpoolJoin print (⏸️ PENDING DEREK).
+- **SpoolJoin detection** (piece (1) of the spool-join triage). It needs a pollable signal for the printer's auto-switch. The ATTENTION-park and resume swap-diff logging added 2026-10-08 will show whether one exists on the next SpoolJoin print (⏸️ PENDING DEREK). Derek's 2026-10-13 idea of a toolhead-change history is recorded as a follow-up at the end of 43.2.
 - **📉 The cancel-path prefix parser lands ~7% below the footer on a multi-tool INDX print.** It needs the INDX `.bgcode`. `tests/fixtures/` holds only `sample.bgcode`, so re-pull the file read-only or use the ⏸️ PENDING DEREK multi-slot capture.
 - **Group 22's M600 multi-color split**: blocked on a real M600 print.
 
@@ -76,14 +76,23 @@
 - Before building, run a read-only count on dev AND prod of loaded spools whose `initial_weight` is null. That sizes the exposure.
 - **Pin:** a spool with `initial_weight: null` and a 1000 g filament takes 50 g → the ledger records 50 g, with no shortfall WARNING. On HEAD it records 0 g.
 
-### 43.2 — A shortfall becomes a recoverable review (filed design, 2026-10-08)
+### 43.2 — A shortfall becomes a recoverable review (filed design, 2026-10-08) — ✅ ANSWERED 2026-10-13: charge the picked archived spool, leave it archived
+
+**Derek chose "charge it and leave it archived" (2026-10-13).** A picked archived spool is charged up to what it still has on record (the usual clamp) and stays archived where it is: it is never un-archived or moved, and a charge that takes a spool to 0 g archives it, as today. `_rows_from_charges` stops refusing archived picks, so today's review cards accept them too, and the shortfall card defaults to the spool that was on the head when the print ended, asking for another spool when that one is archived. Derek added that on small spools the recorded weight can be well off (job 1104: he thought #99 had enough to finish); his joined-spool idea is the follow-up note at the end of this section. Build it that way, on the filed design below, which still stands; the original question is kept for the record.
 
 - **No ledger migration needed.** Stash the shortfall under a derived key, `"<job_id>#shortfall"`. `_key` is `f"{printer}::{job_id}"` and both stores stringify ids without parsing them, so the real-id poppers can never touch it.
 - **Stash before `record_deduct`.** A crash then leaves the recoverable review rather than the terminal ledger key. Today `record_deduct` (`:401`) fires two lines before the shortfall is computed (`:403`). A naive "if shortfall: stash" afterwards is therefore a guaranteed silent no-op, because `_stash_unresolved_review` refuses once the job is in the ledger.
 - **`api_cancel_deduct_confirm` pops the record before any ledger check.** A half-wired version would lose the grams a second time, silently. Pin it.
 - **Threshold:** add a `shortfall_review_min_g` config value (~1.0 g), separate from the 0.05 g the log line uses. A 0.06 g card trains you to Discard without reading, which is how jobs 1105/1106 got dismissed.
 - **Ledger:** record the shortfall on the entry too, so the record alone explains a discrepancy.
-- ❓ **Open question for Derek (ask before building):** when the clamped spool was **auto-archived** at 0 g (as #99 was), where should the top-up go, and how does he tell FCC which spool? 43.3's picker is the natural answer: the card asks which spool takes the remainder. Give background, where he meets it, and a worked example with job 1104 before asking.
+- ✅ **Answered 2026-10-13 (the bold line above); this was the open question for Derek:** when the clamped spool was **auto-archived** at 0 g (as #99 was), where should the top-up go, and how does he tell FCC which spool? 43.3's picker is the natural answer: the card asks which spool takes the remainder. The plain-language brief, with the job 1104 worked example and the code it was checked against, is "Where a print's uncharged grams go when the spool ran out and was archived" in [open-decisions-2026-10-13.md](open-decisions-2026-10-13.md).
+- **Build notes from the answer** (code read on `dev` @ `f0d00f3`; re-grep before editing):
+  - The refusal to remove is in `_rows_from_charges` (`print_deduct.py:1739-1741`, "Charging an archived spool is still an open question."), along with its docstring (`:1675-1676`). It covers a redirect target, a `no_spool` pick and a 43.4 uncharged-head pick; a kept archived row already goes on to the clamp.
+  - The write already behaves: `_deduct_payload` (`:294`) sends `archived: True` for an archived spool, so a charge never trips `update_spool`'s auto-unarchive.
+  - Picking a run-out spool such as #99 (0 g on record) charges 0 g, so the card still shows those grams as uncharged: pick another spool or discard.
+  - Take the card's default spool from the deduct's own details. By the time the card is stashed, the auto-archive has already moved a run-out spool off its head, so a heads snapshot taken after the deduct won't show it.
+  - The card's typed-#id lookup still says an archived spool "is archived — pick another spool" (`static/js/modules/cancel_review.js:596-597`); change it to match.
+- 💡 **Follow-up idea, not a commitment (Derek, 2026-10-13):** have FCC catch a joined-spool (SpoolJoin) switch, where one head runs out and the printer carries on from another, if the printer exposes it. It would need a history of toolhead changes during a print and may get messy. Known so far: PrusaLink reports nothing per slot ([[reference_fcc_indx_hardware_and_gcode]]), and the swap-diff logging shipped 2026-10-08 will show what FCC can see on the next joined-spool runout (the SpoolJoin item in `Feature-Buglist.md`'s ⏸️ PENDING DEREK section). Revisit once that log exists. It belongs with "SpoolJoin detection" (Excluded, above), not with 43.2's build.
 
 ### 43.3 — Pick the spool on a review
 
@@ -94,7 +103,7 @@
   - a search for any spool.
 
   A head picker covers Derek's sliced-for-T1, printed-on-T2 case.
-- Apply re-validates the chosen spool, clamps against its real remaining (43.1's rule), then records the ledger. How an **archived** spool is handled is part of the 43.2 question.
+- Apply re-validates the chosen spool, clamps against its real remaining (43.1's rule), then records the ledger. How an **archived** spool is handled was part of the 43.2 question, answered 2026-10-13: it is charged and stays archived (see 43.2).
 - The same picker serves 43.2's shortfall card and 43.4's "no spool" rows.
 
 ### 43.4 — 22.5: a cancel review keeps every head
@@ -124,7 +133,7 @@
 1. **43.1**, with its read-only exposure count.
 2. **43.5**: tiny, and it gets the log lines right before new paths emit them.
 3. **43.3**: the review record carries the expected spool, plus the picker. 43.2 and 43.4 both reuse it.
-4. **43.2**, after Derek answers the auto-archived top-up question.
+4. **43.2**: Derek answered the auto-archived top-up question on 2026-10-13 (charge it and leave it archived), so it's ready to build.
 5. **43.4**, with or after Group 39.4.
 6. **43.6**.
 
@@ -134,7 +143,7 @@
 - **[Group 39](39-confirm-on-every-door.md) 39.4.** D6's "ask before moving a spool off a printing head" is what makes an emptied head an everyday case. Land 43.4 with it or after it.
 - **[Group 42](42-single-slot-box-lifecycle.md) 42.3c.** The auto-unarchive redirect touches the same `_auto_archive_on_empty` / `_auto_unarchive_on_refill` pair that 43.1 reads. There's no conflict, but coordinate if both are open at once.
 - **[Group 44](44-printer-first-class.md).** The ledger and review keys use the printer's display **Name**. If 44 re-keys per-printer state, it must migrate these stores too. Don't change the key here.
-- **CLAUDE.md "Spool / Filament write surfaces".** Update the `_apply_usage_to_printer` and `api_cancel_deduct_confirm` rows when their contracts change.
+- **CLAUDE.md "Spool / Filament write surfaces".** Update the `_apply_usage_to_printer` and `api_cancel_deduct_confirm` rows when their contracts change. When 43.2 lands, the `api_cancel_deduct_confirm` row's "is refused until 43.2 settles where a top-up goes" becomes "is charged and stays archived".
 
 ## Verification
 

@@ -8,6 +8,8 @@
 > Derek, 2026-10-08: *"we should come back and fix this properly with a proper way to add/configure printers, instead of treating them as generic locations, and marrying them up to the toolheads in the settings based on name alone, which cannot be changed after the fact."*
 > The epic itself says: *"This is the parent the surrounding printer items are all symptoms of — file fixes under it rather than as new siblings."* This group is that parent.
 > Code anchors were read on `dev` @ `3949aba`.
+>
+> **🔄 2026-10-13: still open.** Booked for one design sit-down together with [Group 37](37-location-system-redesign.md)'s fork 1. Derek added input while answering Group 41 Q4: reorganise by rename / re-ID, and keep IDs readable (where it is, what it is, which one). See "The design pass".
 
 ---
 
@@ -67,6 +69,10 @@ All three failed for `RCOI`. The INDX rendered as a top-level root beside the ro
 
 ## The design pass (deliver a doc, then ask Derek)
 
+> **🔄 2026-10-13: still open, booked for one design sit-down together with [Group 37](37-location-system-redesign.md)'s fork 1**, because the two answers must match. A plain-language brief with the options and Claude's recommendation (the Printer row's LocationID as the permanent identity, the display Name only a label) is in [open-decisions-2026-10-13.md](open-decisions-2026-10-13.md), "What should permanently identify a printer in FCC: its display name, its Location ID, or a new hidden ID?" under "Needs a sit-down later".
+>
+> **Derek's input for that sit-down** (2026-10-13, given while answering Group 41 Q4, where he chose to refuse deleting a Room that still has locations inside): *"Deleting a room with stuff in it seems like a bad idea to begin with. A rename and re-id might be more appropriate. But the ID system still needs some sort of work to get it in a better shape than what it currently is. (LR-MDB-1 to something else, but still maintains a readable Location, what it is, which it is based ID kinda system.)"* In short: reorganise by renaming / re-ID'ing rather than deleting, and keep IDs readable, saying where it is, what it is and which one. For printers this bears on question 1 below and on 44.1 (a real LocationID rename cascade).
+
 At minimum, the epic asks:
 1. **What identifies a printer?** A stable id that is neither the Name nor the LocationID prefix. Compare at least two options:
    - keep the Printer row's LocationID as the id, so a rename becomes a display-Name change only;
@@ -74,7 +80,7 @@ At minimum, the epic asks:
 2. **How are heads attached and re-ordered?** Today it's the `<printer>-<n>` prefix plus the `toolheads[]` position. Position = slicer tool index (the 2026-09-29 hotfix convention).
 3. **Where does the connection live?** On the row today, edited in Settings.
 4. **What does per-printer runtime state key on?** The latch, pending fetches, reviews, the ledger and per-printer config are all keyed by Name today (44.2).
-5. **The migration for the existing printers.** Prod has `XL` and `RCOI`; `CORE1` is retired there but still referenced by `PRINTER_ROOM_OVERRIDES` and prod's inert `config.json:printer_map`. Dev's fleet differs; see the dev-data refresh in [Group 45](45-sweep-load-tolerance-test-hygiene.md).
+5. **The migration for the existing printers.** Prod has `XL` and `RCOI`; `CORE1` is retired there but still referenced by `PRINTER_ROOM_OVERRIDES` and prod's inert `config.json:printer_map`. Dev's locations have matched that fleet since the 2026-10-08 copy from prod (only the reset snapshot still has `CORE1`); see the dev-data refresh in [Group 45](45-sweep-load-tolerance-test-hygiene.md).
 6. **An add/configure flow** that creates the row, its heads and its connection in one place, so Settings and the Location Manager stop being two halves of one job.
 7. **The printer fields L271 promised but never built** _(added 2026-10-12 by [Group 47](47-buglist-reconciliation.md) 47.21, Derek's call)_: a printer `model` field; `mmu_attached` on the Printer row and `mmu_routed` per toolhead, which were meant to make the M0/M1 alias heuristic dissolve (it still sits in `print_deduct.py:47-80`, dormant since the MMU Core One was retired); and rejecting a location row with no `Type` on write (only the orphan-`parent_id` half of L271 recommendation #5 shipped). Decide which still earn their keep in the new model.
 

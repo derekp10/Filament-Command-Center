@@ -88,7 +88,7 @@ type/active-print check), not inherit it.
    in either the edit window or the Location List. ✅ **Confirmed in live dev data** — row
    index 0 of `data/locations.json` is
    `{"LocationID": "", "Name": "TestCart", "Type": "Cart", "Max Spools": "0", "parent_id": "CR"}`.
-   That is Derek's repro, **not test residue — do not delete it without asking.**
+   That is Derek's repro, **not test residue — do not delete it without asking.** _(Deleted 2026-10-13 with Derek's OK, after Group 46.5 shipped the repair path.)_
 2. **Unassigned list on a new location** pushes UI elements off-screen; needs to be scrollable
    within the viewport and collapsible from anywhere in the list.
 3. **Parent/child creation is tedious** — `+` on a parent doesn't autofill the child; no smart
@@ -137,7 +137,7 @@ From `inventory-hub/data/locations.json` (56 rows, read-only inspection 2026-08-
 1. **Is the human-readable composite LocationID still the right model?** Derek is questioning
    it directly (§2.3). Alternatives: opaque id + display path; or keep composite ids but
    generate/maintain them entirely automatically from the tree. This is the biggest fork —
-   nearly every other pain point downstream of it.
+   nearly every other pain point downstream of it. _(2026-10-13: still open, booked for one design sit-down together with Group 44's "what identifies a printer?"; Derek's input and the current status are in [37-location-system-redesign.md](37-location-system-redesign.md) §Fork 1.)_
 2. **What should a subtree contents view show?** Derek's refinement: distinguish spools sitting
    **directly on the cart** ("unassigned at row level") from those filed into `R1/R2/R3`,
    rather than one undifferentiated list.

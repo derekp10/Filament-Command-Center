@@ -8,12 +8,22 @@
 > Built from Derek's single-slot box release rule and his one-spool principle ([open-decisions-2026-09-13.md](open-decisions-2026-09-13.md) § D3).
 > Evidence: [active-print-chain-investigation-2026-09-12.md](active-print-chain-investigation-2026-09-12.md) (I5-8, I5-9, I5-10, I5-15, I5-17, and the verifier's "A refused eject still detaches…") and [active-print-chain-diff-reviews-2026-09-12.md](active-print-chain-diff-reviews-2026-09-12.md) (R1-01, R1-03, R3-06).
 > Every `file:line` was re-read on `dev` @ `be9f045`. Re-grep the named function before editing.
+> ⚠️ **Two older answers not yet folded in (noticed 2026-10-13; reconcile before building):**
+> - **Q-B** was answered on 2026-09-18 (eject that head's one loaded spool), but 42.5b ("Until Derek answers
+>   Q-B"), item row G, the order line, manual check L10, cross-plan step 1 and Q-B's default line still treat it as open.
+> - **Group 41's Q1** was answered on 2026-09-18 (Unassigned, after one "unassign?" prompt), but 42.3c ("Wait for
+>   Group 41's Q1"), the Group 41 dependency row, the order line and manual check L8b still wait on it. What that
+>   answer means for 42.3c's auto-unarchive redirect still has to be worked out.
+> - Line refs have drifted too, e.g. `_is_single_slot_dryer_box` is now about `locations_db.py:1877` and the PRINTER
+>   MOVE branch about `logic.py:1023-1098`.
 > **Sweep-triage item 3** (the five E2E fixtures that borrow PM-DB-1 → XL-1 and "restore" whatever they saw) is fixed on `test/sweep-reds-hermetic`, merged into `dev` as `75e8279` on 2026-10-08. This group's tests must not borrow a real dev box either: use `conftest.borrow_box_bindings` with its fixed baselines.
 > **🔄 2026-10-12 (`/refresh-groups`):**
 > - **Q-B is answered** (eject that head's one loaded spool).
-> - **Q-A is answered** (the box follows), but with Derek's caveat: remember where the spool was before the box. That is still an **open design question before 42.6** (see the Q-A section).
+> - **Q-A is answered** (the box follows), but with Derek's caveat: remember where the spool was before the box. That was an **open design question before 42.6** until 2026-10-13 (see the line below and the Q-A section).
 > - The standalone "Unattaching a single-spool box (PolyDryer)" index row is folded in as item **G**.
 > - Two related groups were filed: [Group 43](43-deduct-recovery.md) shares the auto-archive edge that 42.3c touches, and [Group 46](46-quick-fix-sweep-2026-10.md) fixes a deposit-card wrong-spool race on the same "one loaded spool" theme.
+>
+> **✅ 2026-10-13:** the Q-A caveat is settled, so **42.6 is unblocked**: a separate "before the box" field, written when a spool enters a single-slot box and used to send it back there when it is ejected out of the box, built together with the follow behaviour (option 1; Claude's call, Derek reviewed it and didn't object). Derek also answered the Undo question that day: Undo stays moves-only, is renamed "Undo Last Move", and always asks first, naming the move it will reverse (see Group 41.4; 42.3b notes the overlap). Briefs: [open-decisions-2026-10-13.md](open-decisions-2026-10-13.md).
 
 ---
 
@@ -66,7 +76,7 @@ Dev rows used in the examples below (read-only `data/locations.json`): **PM-DB-1
 | Smart Load unloading a resident (Quick-Swap, deposit chain, toolhead QR, Location Manager assign) | `logic.py:650-653` → `perform_smart_eject` | Via eject, toolhead-keyed | Via eject, spool-keyed |
 | Quick-Swap Return | `routes_bindings.py:711-714` → DRYER branch `logic.py:819-836` | **No** (item A) | Yes |
 | Buffer scan / Force Location / LM assign / `/api/smart_move` to a box, room or shelf | DRYER `logic.py:819-836`, GENERIC `logic.py:839-862` | **No** (item B) | Yes |
-| Head → head move | PRINTER MOVE `logic.py:742-816`; `_ghost_trail_from` drops a head-sourced trail `logic.py:382-383` | **No** | Released from the old head; re-attach at the new head is **Q-A** |
+| Head → head move | PRINTER MOVE `logic.py:742-816`; `_ghost_trail_from` drops a head-sourced trail `logic.py:382-383` | **No** | Released from the old head, and re-attached at the new head (Q-A: the box follows; 42.6) |
 | Force Location → Unassigned (`force_unassign`) | `perform_force_unassign` write `logic.py:2067` | **No** | Yes (also covers an archive that still has weight left, see 42.1b) |
 | Weigh-out to 0 g | `inv_weigh_out.js` first sends `archived: true` with the weight through `/api/spool/update` (`:416`, `:432`), then `force_unassign` (`:493`). Inside that update, `_auto_archive_on_empty` has already set the location to `''` and cleared the trail (`spoolman_api.py:215-241`). `perform_force_unassign` therefore sees an unassigned spool, and its "left a head" gate never fires | **No** | Yes, through **42.1b** (the archive edge), **not** the `force_unassign` call |
 | Undo of a deploy | `perform_undo` moves restore `logic.py:2096-2111` | **No** | Yes (and attach on the reverse, 42.3b) |
@@ -241,7 +251,7 @@ Also:
 - **Release:** if the spool is currently on a head (re-read before restoring) and the restore takes it elsewhere, run `_release_single_slot_box` with its current trail. Example: undo of a PolyDryer deploy puts #50 back in PM-DB-2 and PM-DB-2 lets go of XL-2.
 - **Attach:** if the restore puts a spool onto a head and its snapshot trail (`extras`, `ejection_extras`) is a single-slot box → `attach_single_slot_box_to_toolhead`. Example: undo of "#50 moved XL-2 → shelf" puts #50 back on XL-2 and PM-DB-2 re-binds.
 - **Reporting and frontend: owned by [Group 41.4](41-honest-bulk-results.md).** 41.4 collects failed and blocked restores into one `success: false` answer, stops recording undo for writes that never landed, and makes `triggerUndo` (`inv_cmd.js:1953`) toast the result. This group's blocked restores feed that same list. If 42 lands first, add only a 7 s toast of `msg` when `success` is false, and let 41.4 replace it.
-- **Group 41.4 also edits these restore loops.** It adds D6's printing-head ask, through Group 39's `_uncovered_active_heads`, by default. There is no logic dependency; whichever lands second merges the loops.
+- **Group 41.4 also edits these restore loops.** It adds D6's printing-head ask, through Group 39's `_uncovered_active_heads`, by default. Derek widened that ask on 2026-10-13: Undo stays moves-only, is renamed "Undo Last Move", and always asks first, naming the move it will reverse, printing or not, with a printing head called out as on any move (see [open-decisions-2026-10-13.md](open-decisions-2026-10-13.md) and Group 41.4). There is no logic dependency; whichever lands second merges the loops.
 
 **Tests (real engine).**
 - The I5-10 sequence → undo refused, XL-1 == [42], ERROR names #77.
@@ -394,13 +404,21 @@ The order a location scan must take:
 
 **Decided part (42.1):** PM-DB-2 is released from XL-2.
 
-**Pending Q-A:** whether PM-DB-2 re-binds to XL-4 and #50 keeps PM-DB-2 as its home. If yes, the change is narrow: in the PRINTER MOVE branch, when the spool comes from a head and its old trail is a **single-slot** Dryer Box, keep that trail and attach the box to the new head. Head-valued and multi-slot trails keep today's behaviour. **Default until answered:** release only.
+**Q-A, answered (a) on 2026-09-18, caveat settled 2026-10-13:** PM-DB-2 re-binds to XL-4 and #50 keeps PM-DB-2 as its home. The change is narrow: in the PRINTER MOVE branch, when the spool comes from a head and its old trail is a **single-slot** Dryer Box, keep that trail and attach the box to the new head. Head-valued and multi-slot trails keep today's behaviour. **Default until answered:** release only _(no longer applies: build the follow behaviour, together with the field below)_.
 
-**Tests (whichever answer):**
+**The "before the box" field (the Q-A caveat; option 1, decided 2026-10-13, Claude's call, Derek reviewed it and didn't object).** Build it in the same change as the follow behaviour.
+- **Write.** When a spool enters a single-slot box (`locations_db._is_single_slot_dryer_box`) from a place that is not a head, record that place in a new extra (for example `fcc_pre_box_location`, named like the two existing breadcrumbs). A return from a head keeps the value it already has. Today the DRYER branch blanks `physical_source` on box entry (`logic.py:1100-1118`), so that place is lost.
+- **Carry.** Each move starts from a copy of the whole `extra` (`logic.py:995`), so the key survives a move onto a head, head to head, and back into the box without extra code. Any other move (the user puts the spool somewhere else) clears it.
+- **Restore.** Ejecting the spool out of the box sends it to that place and clears the field, instead of the "unassign?" prompt a PolyDryer spool gets today (`_eject_destination`, `logic.py:2029-2100`, where `get_room_from_location` answers `''` for the `PM` pseudo-room, `locations_db.py:641`). Multi-slot boxes and every other move behave exactly as today.
+- **Register it** in `spoolman_api.SYSTEM_MANAGED_EXTRAS` (`spoolman_api.py:511-522`), in `spoolman_api.REQUIRED_SPOOL_EXTRAS` (beside `fcc_pre_audit_location`, `:984`) so app startup registers the field on a Spoolman that lacks it (Spoolman rejects a whole PATCH that carries an unregistered extra, and every move writes the spool's whole `extra`), and as a text field in `setup-and-rebuild/setup_fields.py` (beside `:322-334`). It then shows on Spoolman's own spool page, prod included, as one more "(system)" field, like Pre-Archive Location (system) and Pre-Audit Location (system).
+- **Details the brief settles without asking Derek:** never record a bare Room or Unassigned, and fall back to today's prompt if the recorded place has since been deleted.
+
+**Tests (Q-A answered: the box follows):**
 - #50 XL-2 → XL-4 with trail PM-DB-2 → PM-DB-2 not bound to XL-2;
-- (if yes) bound to XL-4, and #50's trail is PM-DB-2;
+- bound to XL-4, and #50's trail is PM-DB-2;
 - a multi-slot trail is unchanged.
 - `test_head_to_head_move_takes_the_new_heads_bound_box` (`tests/test_active_print_chain_confirm.py:637`) stays green.
+- the "before the box" field: #50 placed from `CR-CT-2-R1` into PM-DB-2 records `CR-CT-2-R1`; the value survives PM-DB-2 → XL-2 → XL-4; ejecting from XL-4 puts #50 back in PM-DB-2, and ejecting it again puts it on `CR-CT-2-R1` with no unassign prompt and clears the field; a user move elsewhere clears it; a Room or Unassigned origin is never recorded; a deleted origin falls back to the prompt.
 
 ---
 
@@ -428,7 +446,8 @@ Caveats:
   - `perform_undo`: moves-restore occupancy check, attach/release;
   - `_perform_smart_move_impl`: release after a move off a head, single-occupancy multi-spool refusal;
   - `spoolman_api.update_spool`: auto-archive releases a single-slot box; auto-unarchive never restores onto an occupied head.
-- **CLAUDE.md "Dryer Box ↔ Toolhead Bindings":** add the single-slot lifecycle rule, and "use Max Spools 1 for a single-spool dryer".
+- **CLAUDE.md "Dryer Box ↔ Toolhead Bindings":** add the single-slot lifecycle rule (with 42.6's follow behaviour and "before the box" field), and "use Max Spools 1 for a single-spool dryer".
+- **CLAUDE.md `SYSTEM_MANAGED_EXTRAS` note** (in "Spool / Filament write surfaces"): add 42.6's "before the box" key to the keys the engine owns.
 
 ---
 
@@ -446,7 +465,7 @@ Caveats:
 
 **Recommended order across the four groups:** 39 → 41 → 42 → 40 (see Cross-plan notes).
 
-**Order inside the group:** 42.1 (+ pin rewrites) → 42.2 → 42.3a → 42.5b (its safe default; the Q-B answer when it comes) → 42.3b (after, or alongside, 41.4) → 42.3c (after 41's Q1) → 42.5a → 42.4 → 42.5c → 42.6 once Derek answers Q-A → 42.8. Run the offline suite after each commit, and the full sweep before merging to `dev`.
+**Order inside the group:** 42.1 (+ pin rewrites) → 42.2 → 42.3a → 42.5b (its safe default; the Q-B answer when it comes) → 42.3b (after, or alongside, 41.4) → 42.3c (after 41's Q1) → 42.5a → 42.4 → 42.5c → 42.6 (unblocked 2026-10-13: the box follows, with the "before the box" field) → 42.8. Run the offline suite after each commit, and the full sweep before merging to `dev`.
 
 ---
 
@@ -490,7 +509,7 @@ The full reasoning is in [Group 39's Cross-plan notes](39-confirm-on-every-door.
 
 **The test harness.** 39.1 extracts `tests/move_engine_harness.py`. This group adds the stateful in-memory locations store, and Group 40 reuses it.
 
-**`perform_undo` (`logic.py:2076-2204`).** 42.3b and Group 41.4 (honest reporting plus the D6 ask) edit the same loops. Whichever lands second merges.
+**`perform_undo` (`logic.py:2076-2204`).** 42.3b and Group 41.4 (honest reporting plus the ask, which Derek widened on 2026-10-13 to an always-ask "Undo Last Move" confirm that names the move) edit the same loops. Whichever lands second merges.
 
 **`spoolman_api.update_spool`.**
 - 42.1b (the archive-edge release) and 42.3c (the unarchive redirect) are the only new branches in FCC's most-called write.
@@ -549,23 +568,26 @@ Dev container. Dev spools are virtual test constructs (your standing rule), but 
 | L4 | **Force Location releases the box** | Reload it onto XL-2, then Force Location → a Room | Same as L3 |
 | L5 | **The other spool doesn't unbind it** | Reload the PM-DB-2 spool onto XL-2. In dev Spoolman's web page, set a second spool's location to `XL-2` | The status bar shows **⚠️ 2 spools** on XL-2, and XL-2's view shows the banner. Eject the *second* spool: PM-DB-2 stays attached, and the chip goes away |
 | L6 | **Printed to empty** | With the PM-DB-2 spool on XL-2, weigh it out to 0 g | Spool archived and unassigned; PM-DB-2 detached (the archive edge releases it, 42.1b) |
-| L7 | **Undo won't stack two spools** | Move a spool off XL-1 to a shelf. In dev Spoolman's web page, put a different spool on XL-1. Scan `CMD:UNDO` | A 7 s message says it could not put the first spool back; XL-1 still holds one |
-| L8 | **Undo follows the box** | Load the PM-DB-2 spool onto XL-2, then `CMD:UNDO` | Spool back in PM-DB-2, and PM-DB-2 not attached to XL-2 |
+| L7 | **Undo won't stack two spools** | Move a spool off XL-1 to a shelf. In dev Spoolman's web page, put a different spool on XL-1. Scan `CMD:UNDO`; say Yes when Undo names the move (Group 41.4) | A 7 s message says it could not put the first spool back; XL-1 still holds one |
+| L8 | **Undo follows the box** | Load the PM-DB-2 spool onto XL-2, then `CMD:UNDO`; say Yes when Undo names the move (Group 41.4) | Spool back in PM-DB-2, and PM-DB-2 not attached to XL-2 |
 | L8b | **A refill never doubles a head** | Weigh a spare spool that is loaded on XL-1 out to 0 g (it archives and leaves XL-1). Load a different spool onto XL-1. Then correct the first spool's weight back up with quick-weigh | The first spool comes back where you told Group 41's Q1 a spool with no home should go (the printer's Room, or Unassigned), with a warning, not onto XL-1. XL-1 still holds one |
 | L9 | **A future dryer works the same** (optional) | Create Dryer Box `SD-DB-1` with Max Spools **1** in LR. Put a spool in, load it onto XL-5, eject it | Attaches, then detaches, exactly like a PolyDryer (delete the row afterwards if you like) |
 | L10 | **Eject mode + location scan** (after Q-B) | Scan `CMD:EJECT`, then the CORE1 label, with CORE1 loaded | Behaves as you chose in Q-B. Until then: a warning, and nothing is assigned or picked up |
-| L11 | **Head to head** (after Q-A) | Load the PM-DB-2 spool onto XL-2, pick it up, scan XL-4's QR | Behaves as you chose in Q-A. PM-DB-2 is never still attached to XL-2 |
+| L11 | **Head to head** (Q-A: the box follows) | Load the PM-DB-2 spool onto XL-2, pick it up, scan XL-4's QR | PM-DB-2 attaches to XL-4, and ejecting the spool later puts it back in PM-DB-2. PM-DB-2 is never still attached to XL-2 |
+| L12 | **Back where it was before the box** | Put a spool that sits on cart row `CR-CT-2-R1` into PM-DB-2 (scan the spool, then PM-DB-2's label). Load it onto XL-2, eject it, then eject it again from PM-DB-2's view | The first eject puts it back in PM-DB-2; the second puts it back on `CR-CT-2-R1`, with no "unassign?" prompt |
 
 ---
 
 ## Open questions for Derek
 
-### Q-A — When a PolyDryer spool moves from one head to another, does the PolyDryer follow it? — ✅ ANSWERED 2026-09-18: option (a), with a caveat
+### Q-A — When a PolyDryer spool moves from one head to another, does the PolyDryer follow it? — ✅ ANSWERED 2026-09-18: option (a), with a caveat — ✅ ANSWERED 2026-10-13: the caveat, option 1 (a separate "before the box" field)
 
-**Derek chose (a): the box follows.** His caveat, which needs a design answer BEFORE this is built: "we shouldn't overwrite the spool location before the box load. (Say it was on a cart or something, so that if we unload it from the box, we know where it was before and move it back to that location.)"
+**Decided 2026-10-13 (Claude's call; Derek reviewed it and didn't object): option 1, a separate "before the box" field.** When a spool enters a single-slot box, FCC records where it came from in a new system-managed extra that rides along on every move (onto a head, head to head, back into the box); ejecting the spool out of the box sends it back to that place instead of asking "unassign?", and a move the user makes elsewhere drops it. It shows on Spoolman's own spool page as one more "(system)" field, like Pre-Archive Location (system) and Pre-Audit Location (system), and it ships together with the follow behaviour in 42.6, which is now unblocked. Build it that way; the background below is kept for the record.
+
+**Derek chose (a): the box follows.** His caveat, which needed a design answer BEFORE this is built (settled 2026-10-13, above): "we shouldn't overwrite the spool location before the box load. (Say it was on a cart or something, so that if we unload it from the box, we know where it was before and move it back to that location.)"
 - Today `physical_source` holds one level only, so a spool that came from a cart into a PolyDryer and then onto a head has lost the cart.
-- Options to put to him: a home chain (the box in `physical_source`, plus a separate "before the box" field), or a general "last non-container location" recorded on every move.
-- Coordinate with Group 40's "record it as coming from" prompt, which is where a second level would be captured or shown.
+- Options to put to him (the first, the separate field, was chosen 2026-10-13): a home chain (the box in `physical_source`, plus a separate "before the box" field), or a general "last non-container location" recorded on every move.
+- Coordinate with Group 40's "record it as coming from" prompt, which is where a second level would be captured or shown. (Option 1 needs nothing from that prompt: the field is written on box entry, and FCC doesn't display it.)
 
 **Background.** Your rule says a single-slot box lets go when its own spool leaves the head, so PM-DB-2 releases XL-2 either way. The open part is what happens at the NEW head. Today a head-to-head move deliberately forgets where the spool came from, because remembering "it came from XL-2" once caused spools to be sent back onto the wrong head. That also forgets the PolyDryer.
 
@@ -575,7 +597,7 @@ Dev container. Dev spools are virtual test constructs (your standing rule), but 
 - **(a) The box follows (recommended).** PM-DB-2 attaches to XL-4, and #50 still remembers PM-DB-2 as home. Ejecting #50 later puts it back in PM-DB-2, and XL-4's grid shows "attached — follows #50".
 - **(b) Release only.** PM-DB-2 is unattached. #50's home becomes LR-MDB-2 slot 1 (the free slot that feeds XL-4) or nothing. Ejecting #50 later would send it to LR-MDB-2 slot 1, not back into the PolyDryer.
 
-**Default if unanswered:** (b), because it is only the part you already decided.
+**Default if unanswered:** (b), because it is only the part you already decided. _(No longer applies: Derek chose (a) on 2026-09-18, and its caveat was settled on 2026-10-13.)_
 
 ### Q-B — What should scanning a LOCATION do while eject mode is on? — ✅ ANSWERED 2026-09-18: option (a)
 
@@ -598,9 +620,10 @@ Dev container. Dev spools are virtual test constructs (your standing rule), but 
 
 | Area | Files |
 |---|---|
-| Engine | `inventory-hub/logic.py` (`_perform_smart_move_impl` release + multi-spool refusal + slot 1, `perform_smart_eject`, `perform_force_unassign`, `perform_undo`, `find_spool_in_slot`) |
+| Engine | `inventory-hub/logic.py` (`_perform_smart_move_impl` release + multi-spool refusal + slot 1 + 42.6's follow and "before the box" field, `perform_smart_eject` and `_eject_destination` (42.6 restore), `perform_force_unassign`, `perform_undo`, `find_spool_in_slot`) |
 | Binding store | `inventory-hub/locations_db.py` (`detach_single_slot_box`, `effective_slot`, `known_room_of` moved from `logic`, `get_bindings_for_machine` `single_slot`; remove `detach_single_slot_boxes_from_toolhead`) |
-| Spoolman | `inventory-hub/spoolman_api.py` (auto-archive edge release; auto-unarchive occupancy redirect) |
+| Spoolman | `inventory-hub/spoolman_api.py` (auto-archive edge release; auto-unarchive occupancy redirect; 42.6's "before the box" key in `SYSTEM_MANAGED_EXTRAS` and `REQUIRED_SPOOL_EXTRAS`) |
+| Setup | `setup-and-rebuild/setup_fields.py` (register 42.6's "before the box" field as a "(system)" text field) |
 | Routes | `routes_scan.py` (`manage_contents remove` report), `routes_state_pulse.py` (`loaded_count`) |
 | Frontend | `inv_loc_mgr.js` (eject toast, toolhead banner), `inv_printer_status.js` (chip, fingerprint, fallback aggregator), `inv_quickswap.js` (slot-1 map, attached / stale tile, Unbind), `inv_cmd.js` (eject-mode location scan, undo toast if needed) |
 | Tests | `tests/move_engine_harness.py` (shared, from 39.1; add the stateful locations store), `tests/test_auto_unarchive_occupancy.py`, new `tests/test_single_slot_box_lifecycle.py`, `tests/test_one_spool_per_toolhead.py`, `tests/test_printer_status_loaded_count.py`, route-stubbed `tests/test_single_slot_lifecycle_e2e.py`; deliberate rewrites in `test_l271_single_slot_autoattach.py` and `test_active_print_chain_confirm.py` (E section) |

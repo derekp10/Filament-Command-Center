@@ -11,13 +11,15 @@ prerequisite for any data-touching phase.
 > **Forks 2, 3 and 4 were DECIDED 2026-08-07 (see below); only fork 1 remains open.**
 > **🔄 2026-10-12 (`/refresh-groups`):**
 > - **37.1 moved to [Group 46](46-quick-fix-sweep-2026-10.md) 46.5** (Derek's call). It was root-caused 2026-10-08, its fix doesn't depend on fork 1, and it carries the two standing sweep reds.
-> - **Prod has a blank-ID row too:** `"Unknown Location"` (Virtual Room), hand-made, not dev-only test residue. Both blank rows stay until Derek says otherwise.
+> - **Prod has a blank-ID row too:** `"Unknown Location"` (Virtual Room), hand-made, not dev-only test residue. Both blank rows stay until Derek says otherwise. _(2026-10-13: dev's "TestCart" row was deleted by Claude with Derek's OK, through the app's own `DELETE /api/locations?blank_id=1`; prod's "Unknown Location" row is untouched.)_
 > - **New cross-references:**
 >   - On-device filament storage (evaluate here, per the buglist).
 >   - [Group 44](44-printer-first-class.md)'s "what identifies a printer?", which is **fork 1 applied to printers**. Decide them together.
 > Derek's framing: *"I think we might need a refactor on how this whole location system works and
 > displays… I feel like things need a re-design before we dig deep into developing a
 > preserve-row-structure path."*
+>
+> **🔄 2026-10-13:** fork 1 is still open, now booked for one design sit-down together with [Group 44](44-printer-first-class.md). Derek added input while answering Group 41 Q4: reorganise by rename / re-ID, and keep IDs readable (where it is, what it is, which one). See §Fork 1.
 >
 > **Full evidence + open forks → [location-system-redesign-scoping.md](location-system-redesign-scoping.md).**
 > Related plan docs: [sub-location-add-redesign-plan.md](sub-location-add-redesign-plan.md),
@@ -57,7 +59,7 @@ That single fact produces all three observed display symptoms, because `/api/get
 (`routes_locations.py:648`), the bulk-move source resolver
 (`get_spools_at_location_detailed_strict`), and the destructive clear/delete paths **all call the
 same matcher** — one flat reader answering three different questions (*what is in here* / *what may
-I move* / *what may I destroy*). **Only the third needs to stay flat.**
+I move* / *what may I destroy*). **Only the third needs to stay flat.** _(2026-10-13: once [Group 41](41-honest-bulk-results.md) lands, not even the third needs the room-wide reach for a Room: 41.1 blocks Eject All on a Room (D4), and Derek's answer to Group 41 Q4 refuses to delete a Room while any location has it as its `parent_id`, then unassigns only spools filed exactly on the Room.)_
 
 ### ⚠️ Two hazards that fall out of this
 
@@ -75,17 +77,19 @@ I move* / *what may I destroy*). **Only the third needs to stay flat.**
 
 | # | Item | Notes |
 |---|---|---|
-| **37.1** | **Blank LocationID is accepted, then "already exists" on re-edit** — with no value visible on the field or in the Location List | ➡️ **MOVED to [Group 46](46-quick-fix-sweep-2026-10.md) 46.5 on 2026-10-12** (root-caused 2026-10-08; its minimal fix doesn't depend on fork 1). Kept here as the record. ⚠️ **Derek's repro row is LIVE in `data/locations.json`** — index 0, `{"LocationID": "", "Name": "TestCart", "Type": "Cart", "Max Spools": "0", "parent_id": "CR"}`. **Do NOT delete it without asking.** It costs **TWO reds on every full sweep** (see below). |
+| **37.1** | **Blank LocationID is accepted, then "already exists" on re-edit** — with no value visible on the field or in the Location List | ➡️ **MOVED to [Group 46](46-quick-fix-sweep-2026-10.md) 46.5 on 2026-10-12** (root-caused 2026-10-08; its minimal fix doesn't depend on fork 1). Kept here as the record. ⚠️ **Derek's repro row was LIVE in `data/locations.json`** — index 0, `{"LocationID": "", "Name": "TestCart", "Type": "Cart", "Max Spools": "0", "parent_id": "CR"}`. **Do NOT delete it without asking.** It cost **TWO reds on every full sweep** (see below). ✅ **Deleted 2026-10-13** by Claude with Derek's OK, through the app's own `DELETE /api/locations?blank_id=1` (82 → 81 rows, no spool touched); both reds now pass. `CR-TC-1` (also named "TestCart", with row `CR-TC-R1`) is kept. |
 | **37.2** | **Unassigned list overflow on a new location's Manage view** — the list pushes UI elements off the visible screen | Wants: scrollable within the available viewport + easily collapsible from anywhere in the list, so the user can always reach the lower UI elements. |
-| **37.3** | **Parent/child creation is still tedious** | The `+` on a parent doesn't autofill the child. Derek also wants **smart LocationID suggestions** and is openly questioning whether human-readable composite ids are still the right model (`CR-TC-R1` is hard to remember, set up, and track when each new row must be created from scratch). |
+| **37.3** | **Parent/child creation is still tedious** | The `+` on a parent doesn't autofill the child. Derek also wants **smart LocationID suggestions** and is openly questioning whether human-readable composite ids are still the right model (`CR-TC-R1` is hard to remember, set up, and track when each new row must be created from scratch). **2026-10-13:** he wants IDs to stay readable (where it is, what it is, which one) and the ID system reworked; see §Fork 1. |
 | **37.4** | **Cart-display fix** (a cart shows a transitive Total but lists zero contents) | ✅ **Decision 2026-08-03: folded in here rather than shipped as a point fix** — the redesign changes those semantics anyway. |
 | _(x-ref)_ | Group 34 **auto-gen-id finickiness** — breadcrumb-id doesn't re-sync on parent change; numbering isn't topology-aware (always `R1`, never `R2`) | Owned by **Group 34**; land it after this group settles the model. |
 | _(x-ref)_ | Group 34 **S5** (add-redesign phase 4 — "create missing levels" + demote the shelf-grouping boot migration) | Owned by **Group 34**; ⏸️ deferred, and its plan **mandates a `locations.json` backup as step 1**. |
 | _(x-ref)_ | The older buglist item *"adding sub-locations is messy"* | Same surface as 37.3. |
 | _(x-ref, 2026-10-12)_ | **On-device filament storage** — Derek: *"Printers sometimes have on device filament storage, spool roll holders, etc. Perhaps we should make a new slot type, or virtual slot…"* The 2026-09-29 investigation: *"a new storage Type (e.g. 'Spool Holder') parented under the Printer row, NOT added to `TOOLHEAD_TYPES`; if it should feed toolheads, widen the Dryer-Box-only feeder checks (`== DRYER_BOX_TYPE`) to a feeder-type set and reuse `slot_targets`. Evaluate with the location-system redesign."* | Evaluate here. If it's adopted, it attaches to the printer model that [Group 44](44-printer-first-class.md) defines. |
-| _(x-ref, 2026-10-12)_ | [Group 44](44-printer-first-class.md)'s **"what identifies a printer?"** | This is **fork 1 applied to printers**. Decide them together, or at least consistently. |
+| _(x-ref, 2026-10-12)_ | [Group 44](44-printer-first-class.md)'s **"what identifies a printer?"** | This is **fork 1 applied to printers**. Decide them together, or at least consistently. 2026-10-13: booked for one design sit-down together. |
 
 ### 🧪 The two sweep reds 37.1 currently causes
+
+> ✅ **2026-10-13:** both now pass. Dev's blank-ID "TestCart" row was deleted (the Group 46.5 follow-up), so neither red appears any more. Kept as the record.
 
 Measured on the `RUN_INTEGRATION=1` sweep of 2026-08-06 (`2406 passed / 2 failed`) — **these
 two ARE the entire red tail.** Both A/B-proven pre-existing (they fail identically with
@@ -231,6 +235,10 @@ Treat `Max Spools` as: **absent / `''` / `0` → no cap enforced. Any positive i
 ---
 
 ## ❓ Fork 1 — STILL OPEN (the big one)
+
+> **🔄 2026-10-13: still open, now booked for one design sit-down together with [Group 44](44-printer-first-class.md)'s "what identifies a printer?"**, because the two answers must match. A plain-language brief with the options and Claude's recommendation (keep every ID and label; only the tree says what's inside what) is in [open-decisions-2026-10-13.md](open-decisions-2026-10-13.md), "Should a location's ID still decide what it sits inside, or should only the tree?" under "Needs a sit-down later".
+>
+> **Derek's input for that sit-down** (2026-10-13, given while answering Group 41 Q4, where he chose to refuse deleting a Room that still has locations inside): *"Deleting a room with stuff in it seems like a bad idea to begin with. A rename and re-id might be more appropriate. But the ID system still needs some sort of work to get it in a better shape than what it currently is. (LR-MDB-1 to something else, but still maintains a readable Location, what it is, which it is based ID kinda system.)"* In short: reorganise by renaming / re-ID'ing a location rather than deleting it; keep IDs readable, saying where it is, what it is and which one (`LR-MDB-1` could become something else that still reads that way); and the current ID scheme still needs work. The sit-down has to square a deliberate re-ID with the NO FORCED RELABELING invariant below: its source ([34-location-tree-cluster.md](34-location-tree-cluster.md)) says existing LocationIDs are immutable, yet lets a relabel prompt fire "only on a deliberate rename", and [Group 44](44-printer-first-class.md) 44.1's printer rename cascade already assumes such a rename.
 
 **Is the human-readable composite LocationID still the right model?** Nearly every remaining pain
 point is downstream of it, and it deserves a worked comparison rather than a cold call.

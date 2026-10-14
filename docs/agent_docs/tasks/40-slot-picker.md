@@ -5,10 +5,17 @@
 **Risk:** **MEDIUM–HIGH.** Every sub-task edits `_perform_smart_move_impl`, the hottest write path in FCC, and 40.3 adds a new prompt on Derek's own daily path (slot-label scans). Everything else protects other users.
 
 > **Status: `TODO` — scoped 2026-09-13, not started.**
-> **🔄 2026-10-12 (`/refresh-groups`):** item **H** was added (a multi-head Printer row is treated as single-occupancy by Bulk Move; build it with 40.0a). Q1 and Q2 are still open. The printer-identity redesign in [Group 44](44-printer-first-class.md) may change what a "Printer row" is; 40.0a's rule should key on whether a row is one of its printer's toolheads, which survives either design.
+> **🔄 2026-10-12 (`/refresh-groups`):** item **H** was added (a multi-head Printer row is treated as single-occupancy by Bulk Move; build it with 40.0a). Q1 and Q2 were still open then (both answered 2026-10-13, see the next line). The printer-identity redesign in [Group 44](44-printer-first-class.md) may change what a "Printer row" is; 40.0a's rule should key on whether a row is one of its printer's toolheads, which survives either design.
+> **✅ 2026-10-13 — Q1 and Q2 answered** (plain-language briefs, with the code checks behind them: [open-decisions-2026-10-13.md](open-decisions-2026-10-13.md)): **Q1 → loop**, one picker per buffered spool; Escape stops and the rest stay in the buffer (Derek's choice). **Q2 → (a)**, a full box offers the grid's Swap / Overwrite, so the incoming spool always gets a real slot (Claude's call; Derek reviewed it and didn't object). No open questions for Derek remain in this file; the veto points at manual checks R4 and W1 stay.
 > Built from Derek's answers to D2, D3 and D5 ([open-decisions-2026-09-13.md](open-decisions-2026-09-13.md)).
 > Evidence records: [active-print-chain-investigation-2026-09-12.md](active-print-chain-investigation-2026-09-12.md) (I1-03, I1-05, I1-06, I5-5, I5-8, I5-11) and [active-print-chain-diff-reviews-2026-09-12.md](active-print-chain-diff-reviews-2026-09-12.md) (R1-05, R2-03, R2-08, "Return overlay previews the first bound slot").
 > Every `file:line` below was re-read on `dev` @ `be9f045`. Line numbers drift; re-grep the named function before editing.
+>
+> **⚠️ Stale facts found 2026-10-13 (re-check before building).** Re-verified read-only on `dev` @ `f0d00f3`. The spec below was not rewritten, so in places it still says otherwise.
+> - **A multi-head Printer row is no longer single-occupancy.** Since the 2026-09-29 INDX hotfix, a Printer row counts as a head only when its Max Spools is ≤ 1 and its `toolheads[]` lists no head but itself (`logic.py:738-746`). So `LOC:XL` or `LOC:RCOI` with a buffer runs no Smart Load, and the generic branch (`logic.py:1120-1144`) files every buffered spool on the row itself. The door table's `LOC:XL` row and 40.0a's "Today" predate this; 40.0a's refusal is still needed. `_is_single_occupancy` (`logic.py:541-550`) and Bulk Move's `single_occ_types` (`logic.py:1317`, used at `:1348` / `:1408`) still count every Printer row (item H).
+> - **Dev topology changed** (dev `inventory-hub/data/locations.json`, 81 rows). Dev has no CORE1: RCOI (Printer, Max 0, heads RCOI-1…RCOI-8) replaced it, and prod retired it too (per the docs' 2026-10-12 read-only check). So no dev Printer row is its own head, and manual checks P5 and W2 name a row that no longer exists. CR-MDB-1 has no bindings. TST-MDB-1 reads `{}`, and Derek confirmed on 2026-10-13 that it is just a test box (Group 45.5). PM-DB-1…PM-DB-10 exist. Dev's only bindings are LR-MDB-1 (1→XL-1, 2→XL-2, 3→XL-3, 4→`PRINTER:XL`) and LR-MDB-2 (1→XL-4, 2→XL-5). The examples that bind TST-MDB-1, or CR-MDB-1 slot 1 → CORE1 (the topology line under the door table, 40.0d, the 40.1 tests, 40.5, P5, Q2), are still fine as hermetic fixtures but no longer describe dev.
+> - **Line refs drifted** since `be9f045`. For example: the pre-write contract comment is `logic.py:699-719`; auto-slot is `:851-882` (single-spool check `:858`) and still runs after the confirm (`:842-844`); PRINTER MOVE is `:1023-1098` (13.6 at `:1041-1075`); the chain starts at `:1148`; the location-scan branch is `inv_cmd.js:1705-1772` (L124 trim `:1730-1740`, Quick-Pick `:1747-1755`); `performContextAssign` is at `inv_cmd.js:1864` and already takes a `confirmedHeads` list; the grid's Swap / Overwrite prompt is `inv_loc_mgr.js:1269-1285`.
+> - **Prerequisites have landed.** Group 39 merged on 2026-10-13 (`c389e26`). 40.0b's change is in: the pre-flight walks a named slot's binding only when `auto_deploy` (`logic.py:831-841`). `_requires_confirm_answer` (`logic.py:216-231`) reserves `fed_heads`, `can_store` and `target_slot`, but no picker code exists yet. `fix/core1-return-ejectall-guard` and `test/sweep-reds-hermetic` are both merged into `dev`, and `_printer_row_toolheads` is at `routes_bindings.py:335`.
 
 ---
 
@@ -242,7 +249,7 @@ One component serves all three pickers: box (D2), printer (D3) and return (D5).
 1. If the spool is already in this box, its current slot.
 2. Else the lowest-numbered empty slot that **would not prompt**: unbound, a pool sentinel, or bound to a head with no resident.
 3. Else the lowest-numbered empty slot.
-4. Else none: the box is full. Never assume an empty slot exists.
+4. Else none: the box is full. Never assume an empty slot exists. A full box still opens the picker, and a tap on any slot offers the grid's Swap / Overwrite (Q2, decided 2026-10-13; see 40.2).
 
 Rationale: other users scanning a box label mostly want to store, and a recommendation that can be confirmed with Enter should never surprise. Derek's own example, "the next empty one", is rule 3 whenever no prompt-free slot exists.
 
@@ -295,10 +302,10 @@ Rationale: other users scanning a box label mostly want to store, and a recommen
 - In the location branch with a non-empty buffer: when the row is a Dryer Box with `Max Spools > 1`, open the picker (box mode) for the TOP buffered spool instead of `performContextAssign`.
 - Single-slot boxes (PolyDryers) and every other type keep today's path.
 - On a pick, call `performContextAssign(box, slot, false, [top.id])` (`inv_cmd.js:1889`), extended (after 39.1) to send `confirmed_toolheads` / `confirmed_fed_heads` and to handle `requires_confirm` with `confirm_type` `head_fed` / `active_print` via the three-way confirm (40.3).
-- Picking an occupied slot → the same Swap / Overwrite choice the grid uses (`inv_loc_mgr.js:1212-1228`), until Q2 is answered.
-- Several spools in the buffer → see **Q1**. Default until answered: place the top spool; the rest stay in the buffer.
+- Picking an occupied slot → the same Swap / Overwrite choice the grid uses (`inv_loc_mgr.js:1212-1228`), as Q2 settled on 2026-10-13: no "store without a slot" tile and no refusal, so the incoming spool always gets a real slot.
+- Several spools in the buffer → see **Q1**, answered 2026-10-13: **loop**. After each pick the picker reopens for the next spool that was in the buffer when the label was scanned; Escape stops, and the rest stay in the buffer. Build note: iterate over that scan-time list, so a spool that a Swap pushes onto the end of the buffer (`inv_loc_mgr.js:1493-1497`) is not offered again and the loop always ends. The old default (place only the top spool) no longer applies.
 
-**Tests.** Route-stubbed E2E: `LOC:LR-MDB-1` with one buffered spool opens the picker; picking slot 2 posts `{location: LR-MDB-1, slot: "2", spools: [top]}`; a `head_fed` answer opens the three-way confirm; the buffer keeps the spool on Cancel. Hermetic: none new (engine covered by 40.0).
+**Tests.** Route-stubbed E2E: `LOC:LR-MDB-1` with one buffered spool opens the picker; picking slot 2 posts `{location: LR-MDB-1, slot: "2", spools: [top]}`; a `head_fed` answer opens the three-way confirm; the buffer keeps the spool on Cancel; with two buffered spools, the picker reopens for the second after the first pick, and Escape leaves it in the buffer (Q1); on a full box, a tap on an occupied slot opens Swap / Overwrite (Q2). Hermetic: none new (engine covered by 40.0).
 
 **Risk.** `state.lastScannedLoc` double-scan (`inv_cmd.js:1658`) opens the manager on a second scan of the same label. Keep that behaviour when no picker is open.
 
@@ -382,7 +389,7 @@ Leave the list filter as is: Printer rows stay listed because picking one now op
      - if the only option is No box, skip the question and say so in the toast.
   5. POST `/api/smart_move {location: H, spools: [sid], confirmed_toolheads, record_source}`. The server still re-checks (39.1 destination, 39.4 source, `record_source` validation); a changed state reopens the confirm.
 - **`CORE1`**: its own head with no pool → skip the head list and go straight to step 3 on CORE1, then step 4 (CR-MDB-1 slot 1 feeds CORE1).
-- **Several buffered spools** → Q1.
+- **Several buffered spools** → Q1, answered 2026-10-13: loop, one head or Printer Pool slot per spool, as in 40.2; Escape stops.
 - **Item F, decided: fix now, frontend only.** In the empty-buffer branch (`inv_cmd.js:1694-1702`):
   - Quick-Pick only when the scanned row is single-occupancy by type (Tool Head / MMU Slot / No MMU Direct Load, a Printer row that is its own head, or any other row with `Max Spools == 1`) AND the item is a DIRECT resident (`!is_ghost && location === res.id`);
   - a Printer row like XL → `openManage('XL')`, whose Quick-Swap grid already shows every head;
@@ -534,7 +541,7 @@ Leave the list filter as is: Printer rows stay listed because picking one now op
 The full reasoning is in [Group 39's Cross-plan notes](39-confirm-on-every-door.md).
 
 0. Merge `fix/core1-return-ejectall-guard` (`1fb5678`, `76398cb`) and `test/sweep-reds-hermetic` (`d785444`) into `dev`. Both are local only.
-1. Ask Derek the three contract-shaping questions first: Group 41's Q1, Group 39's Q1 and Group 42's Q-B. This doc's Q1 and Q2 can wait for 40.2.
+1. Ask Derek the three contract-shaping questions first: Group 41's Q1, Group 39's Q1 and Group 42's Q-B (all three answered 2026-09-18). This doc's Q1 and Q2 can wait for 40.2 (both answered 2026-10-13).
 2. Build in this order: Group 39, then Group 41, then Group 42, then **Group 40** (this group, last). Group 40 goes last because:
    - it is the largest group;
    - it builds on 39.1, 39.3, 39.4 and 39.5, and on 42.1, 42.2 and 42.5b;
@@ -675,7 +682,9 @@ Dev container, after the branch is merged to `dev`. Empty the scan buffer before
 
 ## Open questions for Derek
 
-### Q1 — Several spools in the buffer when a box label or `LOC:XL` is scanned
+### Q1 — Several spools in the buffer when a box label or `LOC:XL` is scanned — ✅ ANSWERED 2026-10-13: (a) loop
+
+**Derek chose (a), loop (2026-10-13).** One scan of a multi-slot box's label or a Printer row's label opens the picker once per buffered spool, top first, and each spool still gets its own load confirms; Escape stops the loop and the rest stay in the buffer. For `LOC:XL` (or `LOC:RCOI`) each spool picks a head or a Printer Pool slot. Build it that way; the background below is kept for the record.
 
 **Background.** The pickers place ONE spool. Today, a box-label scan with several buffered spools puts all of them in the box with no slot, because the engine only auto-picks a slot for a single spool (`logic.py:554`). That is exactly the floating "5/4" state you called "what went wrong". A Printer-row scan today sends the whole buffer to the row.
 
@@ -688,9 +697,11 @@ Dev container, after the branch is merged to `dev`. Empty the scan buffer before
 
 For `LOC:XL`, (a) means picking a head (or pool slot) per spool, because each head holds one.
 
-**Default if unanswered:** (b), the least surprising.
+**Default if unanswered:** (b), the least surprising. _(No longer applies: Derek chose (a) on 2026-10-13.)_
 
-### Q2 — What the box picker offers when the box is full
+### Q2 — What the box picker offers when the box is full — ✅ ANSWERED 2026-10-13: (a), same as the grid
+
+**Decided 2026-10-13 (Claude's call; Derek reviewed it and didn't object): (a), the same as the Location Manager grid.** A full box shows no ⭐, and tapping or scanning an occupied slot asks Swap / Overwrite exactly as the grid does (now `inv_loc_mgr.js:1269-1285`), so the incoming spool always gets a real slot; there is no "store without a slot" tile and no refusal. Build it that way; the background below is kept for the record.
 
 **Background.** D2 says the picker "recommends a slot … without assuming one exists", but not what happens when no slot is free. The Location Manager grid already answers a tap on an occupied slot with **Swap** (the old spool goes to your buffer) or **Overwrite** (the old spool stays in the box, unslotted) (`inv_loc_mgr.js:1212-1228`).
 
@@ -703,7 +714,7 @@ For `LOC:XL`, (a) means picking a head (or pool slot) per spool, because each he
 
 Tapping slot 1 (the CORE1 feed) additionally runs the load prompt, since the swapped-in spool would deploy.
 
-**Default if unanswered:** (a).
+**Default if unanswered:** (a). _(No longer applies: (a) was decided on 2026-10-13.)_
 
 ---
 
