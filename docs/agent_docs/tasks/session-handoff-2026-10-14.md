@@ -9,13 +9,17 @@ _Run in progress. Started from `dev` @ `4203ffe` (= `origin/dev`) at ~18:15 on 2
 
 - Queue (Derek's pick): 43.2 + 46.3 → Group 45 → Group 41 → Group 42 → Group 40.
 - **Landed (21:30):** Groups 43 and 46 are DONE (43.2 the uncharged-grams card, 46.3 toolhead labels), merged
-  `1d0fc39` and pushed. Next: Group 45.
+  `1d0fc39` and pushed. 
+- **Landed (23:35):** Group 45 is PARTIAL, merged `af879ac` and pushed. The dashboard no longer re-reads Spoolman's
+  whole spool list per toolhead every 5 s (prod paid that too); test runs label their own load; the last full
+  sweep was **fully green: 3004 passed, 0 failed, in 21:01** (it took 37:21 with 8 reds earlier tonight). Left
+  for you: 45.6, the dev-data refresh from prod (an evening; it needs your OK on the prod reads). Next: Group 41.
 - Evening prep done: Derek's go-ahead for all-night full test runs, a push after each merge, and read-only prod
   counts (taken ~18:25; table in the plan file).
 
 ## Landed
 
-### Group 45 → `PARTIAL`: sweep hygiene, and FCC was the load (merged `MERGESHA`, pushed)
+### Group 45 → `PARTIAL`: sweep hygiene, and FCC was the load (merged `af879ac`, pushed)
 
 - **Commits:** `b32e9f9` (45.2), `061c33a` (45.1(b)(c) + 45.3), `66637bf` (45.5 + 45.4), `f3245b1` + `ffc9d1e`
   (45.8), `0a38442` (latent races), `0323b9e` (the review's fixes), and the housekeeping commit.
