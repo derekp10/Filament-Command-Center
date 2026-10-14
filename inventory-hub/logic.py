@@ -271,6 +271,13 @@ def _find_box_slot_feeding_toolhead(toolhead_id, loc_list=None):
     for row in loc_list:
         if not isinstance(row, dict) or row.get('Type') != 'Dryer Box':
             continue
+        # Group 42.1 step 5: a single-slot box is attached only by its OWN spool
+        # (the Group 20.2 attach), never by this lookup. Its spool's blank slot
+        # read as free, so a stranger scanned onto a head with a PolyDryer
+        # attached (every RCOI head: no multi-slot box feeds the INDX) recorded
+        # that PolyDryer as its home, and a later Return landed it on top.
+        if locations_db._is_single_slot_dryer_box(row):
+            continue
         # The guarded reader: one malformed box row must not break every
         # source-less move onto a toolhead (this runs unguarded in the PRINTER
         # MOVE branch).
@@ -733,6 +740,34 @@ def _move_write(sid, target, new_extra):
         f"⚠️ Spoolman answered an error moving Spool #{sid} -> {target} ({err or 'no detail'}), "
         f"but a re-read shows it there: counted as moved.", "WARNING", "ffaa00")
     return True
+
+
+def _release_single_slot_box(sid, from_loc, pre_extra, printer_map, log=True):
+    """Group 42.1 — Derek's rule (2026-09-13): a single-slot box stays bound to a
+    head until ITS OWN spool leaves that head, by any path (eject, Return,
+    Quick-Swap, any move). Call it after `sid`'s write has landed somewhere
+    other than `from_loc`. `pre_extra` is the spool's extra BEFORE the move: its
+    trail (`physical_source`) names its own box, so ejecting a different spool
+    from a doubled head no longer unbinds the box feeding the one that stays.
+
+    Returns the released box id, or None. Best-effort, like the attach: it
+    never fails the move it follows. `log=False` lets a caller name the release
+    in its own Activity Log sentence (the eject does, 42.5a)."""
+    head = str(from_loc or '').strip().strip('"').upper()
+    if not head or head not in (printer_map or {}):
+        return None
+    box = str((pre_extra or {}).get('physical_source') or '').strip().strip('"').upper()
+    if not box or box == head:
+        return None
+    try:
+        if not locations_db.detach_single_slot_box(box, head):
+            return None
+    except Exception as _re:
+        state.logger.warning(f"42.1 single-slot box release skipped: {_re}")
+        return None
+    if log:
+        state.add_log_entry(f"🔓 {box} detached from {head} — its spool #{sid} left the head", "INFO")
+    return box
 
 
 # Thread-local re-entry depth for perform_smart_move. The auto-deploy chain
@@ -1313,6 +1348,12 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                 state.add_log_entry(
                     f"❌ Failed to move Spool #{sid} -> {target}: {err}", "ERROR", "ff4444"
                 )
+
+        # Group 42.1 (step 6 of the pre-write contract): a spool that left a head
+        # releases its own single-slot box, whichever branch wrote it. Smart
+        # Load's residents are released inside their own eject, never here.
+        if str(sid) not in failures and current_loc != target and current_loc in printer_map:
+            _release_single_slot_box(sid, current_loc, current_extra, printer_map)
 
     # Group 41.4: record only what landed. A spool whose write was rejected, or
     # that was skipped (an unseat that failed, an unreadable slot), never moved,
@@ -2253,13 +2294,18 @@ def _eject_destination(spool_data, printer_map, homeless_destination=None):
 
 
 def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print=False,
-                        homeless_destination=None):
+                        homeless_destination=None, report=None):
     """Remove `spool_id` from its current location.
 
     `homeless_destination`: where to send a spool with no saved home to return
     to ('' = Unassigned), for a caller that has already decided (Smart Load).
     It skips the protected-unassign prompt. None keeps the interactive
-    behaviour: room fallback, else "REQUIRE_CONFIRM".
+    behaviour: "REQUIRE_CONFIRM" for a spool with no saved home.
+
+    `report` (Group 42.5a): a dict the caller passes in; on success it is filled
+    with {"from", "to", "slot", "home", "released_boxes"} so the eject can say
+    where the spool went and which single-slot box let go of the head. The
+    return contract below does not change (callers test `is True`).
 
     Returns:
       - True on successful eject
@@ -2275,6 +2321,9 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
 
     current_location = spool_data.get('location', '').strip().upper()
     extra = spool_data.get('extra', {})
+    # The trail before this eject edits `extra`: it names the spool's own
+    # single-slot box, the one that lets go of the head (Group 42.1).
+    pre_extra = dict(extra or {})
 
     cfg = config_loader.load_config()
     printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
@@ -2291,23 +2340,33 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
                 "msg": f"{ap['printer_name']} is {ap['state']} — ejecting from this toolhead will disrupt the print.",
             }
 
-    def _detach_single_slot_boxes():
-        # Group 20.2: ejecting off a toolhead detaches any single-slot dryer box
-        # that was following its spool onto this toolhead (the lifecycle pair of
-        # the auto-attach in perform_smart_move). Best-effort — never fail the
-        # eject. Called only once the spool's own write has landed: it used to
-        # run first, so a refused ("REQUIRE_CONFIRM") or rejected eject left the
-        # spool on the head with its box already unbound (2026-09-12).
-        if current_location not in printer_map:
-            return
-        try:
-            _detached = locations_db.detach_single_slot_boxes_from_toolhead(current_location)
-            if _detached:
-                state.add_log_entry(
-                    f"🔓 Single-slot box(es) auto-detached from {current_location}: "
-                    f"{', '.join(str(d) for d in _detached)}", "INFO")
-        except Exception as _de:
-            state.logger.warning(f"20.2 box auto-detach skipped: {_de}")
+    def _landed(to_loc, slot, home):
+        """The eject's write landed. Release the spool's OWN single-slot box from
+        the head it left (Group 42.1: only after the write, so a refused or
+        rejected eject leaves it bound; and keyed on the spool, so ejecting a
+        different spool from a doubled head no longer unbinds it), write ONE
+        Activity Log sentence that says both (Derek, 2026-10-13: "a full
+        sentence in the activity log"), and fill the caller's report (42.5a)."""
+        released = _release_single_slot_box(spool_id, current_location, pre_extra, printer_map, log=False)
+        from_txt = current_location or "Unassigned"
+        if home:
+            _row = next((r for r in (locations_db.load_locations_list() or [])
+                         if isinstance(r, dict)
+                         and str(r.get('LocationID', '')).strip().upper() == str(to_loc).strip().upper()), None)
+            into = "into" if (_row or {}).get('Type') == locations_db.DRYER_BOX_TYPE else "to"
+            # A single-slot box has one place: "back into PM-DB-2", not "slot 1".
+            if locations_db._is_single_slot_dryer_box(_row):
+                slot = ""
+            where = f"back {into} {to_loc}" + (f" slot {slot}" if slot else "")
+        else:
+            where = f"to Room {to_loc}" if to_loc else "to Unassigned"
+        sentence = f"⏏️ Ejected #{spool_id} from {from_txt} {where}"
+        if released:
+            sentence += f"; {released} is no longer attached to {current_location}"
+        state.add_log_entry(sentence + ".", "WARNING")
+        if isinstance(report, dict):
+            report.update({"from": current_location, "to": to_loc, "slot": slot or "",
+                           "home": bool(home), "released_boxes": [released] if released else []})
 
     # [ALEX FIX] Explicitly overwrite the slot with empty string.
     # .pop() just removes the key, which causes PATCH to ignore it (keeping the old value).
@@ -2359,8 +2418,7 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
         extra['physical_source'] = "" 
         
         if spoolman_api.update_spool(spool_id, {"location": saved_source, "extra": extra}):
-            state.add_log_entry(f"↩️ Returned #{spool_id} -> {saved_source}", "WARNING")
-            _detach_single_slot_boxes()
+            _landed(saved_source, extra.get('container_slot', ''), home=True)
             return True
         err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
         state.add_log_entry(
@@ -2378,9 +2436,7 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
         extra['container_slot'] = ""
 
         if spoolman_api.update_spool(spool_id, {"location": target_loc, "extra": extra}):
-            dest_msg = f" to Room {target_loc}" if target_loc else " (Unassigned)"
-            state.add_log_entry(f"⏏️ Ejected #{spool_id}{dest_msg}", "WARNING")
-            _detach_single_slot_boxes()
+            _landed(target_loc, "", home=False)
             return True
         err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
         state.add_log_entry(
@@ -2534,6 +2590,8 @@ def perform_force_unassign(spool_id, confirm_active_print=False):
                 "msg": f"{ap['printer_name']} is {ap['state']} — force-unassigning from this toolhead will disrupt the print.",
             }
 
+    # The trail before it is blanked below names the spool's own single-slot box.
+    pre_extra = dict(extra or {})
     # [ALEX FIX] Explicitly overwrite slots and sources with empty strings
     # to guarantee Spoolman API removes them instead of ignoring dropped keys
     extra['container_slot'] = ""
@@ -2542,6 +2600,10 @@ def perform_force_unassign(spool_id, confirm_active_print=False):
 
     if spoolman_api.update_spool(spool_id, {"location": "", "extra": extra}):
         state.add_log_entry(f"🗑️ Force Unassigned #{spool_id}", "WARNING")
+        # Group 42.1: leaving a head this way releases its own single-slot box
+        # too (Force Location → Unassigned, an archive with weight left). A
+        # weigh-out to 0 g is released earlier, by update_spool's archive edge.
+        _release_single_slot_box(spool_id, current_location, pre_extra, printer_map)
         return True
     err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
     state.add_log_entry(

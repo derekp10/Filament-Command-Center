@@ -1936,7 +1936,9 @@ def attach_single_slot_box_to_toolhead(box_id, toolhead_id):
 
     NOTE: this makes a single-slot box's slot binding LIFECYCLE-DRIVEN — it
     mirrors where the box's one spool is deployed (paired with
-    detach_single_slot_boxes_from_toolhead on eject). Returns (attached, detail).
+    detach_single_slot_box, which logic._release_single_slot_box calls when the
+    box's own spool leaves the head by any path, Group 42.1). Returns
+    (attached, detail).
     """
     box_up = str(box_id or '').strip().upper()
     th_up = str(toolhead_id or '').strip().upper()
@@ -1966,36 +1968,44 @@ def attach_single_slot_box_to_toolhead(box_id, toolhead_id):
     return True, f"{box_up} slot 1 -> {th_up}"
 
 
-def detach_single_slot_boxes_from_toolhead(toolhead_id):
-    """Group 20.2 — clear the slot '1' binding of every SINGLE-SLOT dryer box that
-    currently feeds `toolhead_id` (on eject/unload). Multi-slot boxes are left
-    untouched (their bindings are user config). Returns the list of detached box
-    LocationIDs (empty if none, or on persist failure)."""
-    th_up = str(toolhead_id or '').strip().upper()
-    if not th_up:
-        return []
+def detach_single_slot_box(box_id, toolhead_id):
+    """Group 42.1 — release ONE single-slot dryer box from `toolhead_id`: drop
+    its slot '1' binding, only while that binding names this head.
+
+    Derek's rule (2026-09-13): a single-slot box stays bound to a head until ITS
+    OWN spool leaves that head, by any path; ejecting a different spool from the
+    head no longer unbinds it. The caller knows "its own" from the leaving
+    spool's trail (`physical_source`), so this is keyed on the box, never on the
+    head. It replaces Group 20.2's `detach_single_slot_boxes_from_toolhead`,
+    which unbound EVERY single-slot box on the head whichever spool left.
+
+    Keeps the `slot_targets` key (as `{}`): `dryer_bindings_are_authoritative`
+    reads its presence (Group 46.4). Returns True when it released the box;
+    False when it isn't a single-slot box, isn't bound to that head, or the
+    save failed."""
+    box_up = str(box_id or '').strip().strip('"').upper()
+    th_up = str(toolhead_id or '').strip().strip('"').upper()
+    if not box_up or not th_up:
+        return False
     with locations_write_lock():
         loc_list = load_locations_list()
-        detached = []
-        for row in loc_list:
-            if not _is_single_slot_dryer_box(row):
-                continue
-            # A non-dict `extra` holds no binding to clear; skip it rather than
-            # raise, which aborted the detach for every box on this head.
-            _existing_extra = row.get('extra')
-            if not isinstance(_existing_extra, dict):
-                continue
-            targets = _existing_extra.get('slot_targets')
-            if not isinstance(targets, dict):
-                continue
-            if str(targets.get('1', '')).strip().upper() == th_up:
-                extra = dict(_existing_extra)
-                extra['slot_targets'] = {k: v for k, v in targets.items() if str(k) != '1'}
-                row['extra'] = extra
-                detached.append(row.get('LocationID'))
-        if detached and not save_locations_list(loc_list):
-            return []
-    return detached
+        idx, row = _find_location(loc_list, box_up)
+        if idx is None or not _is_single_slot_dryer_box(row):
+            return False
+        # A non-dict `extra` or `slot_targets` holds no binding to drop.
+        _existing_extra = row.get('extra')
+        if not isinstance(_existing_extra, dict):
+            return False
+        targets = _existing_extra.get('slot_targets')
+        if not isinstance(targets, dict) or str(targets.get('1', '')).strip().upper() != th_up:
+            return False
+        extra = dict(_existing_extra)
+        extra['slot_targets'] = {k: v for k, v in targets.items() if str(k) != '1'}
+        row['extra'] = extra
+        loc_list[idx] = row
+        if not save_locations_list(loc_list):
+            return False
+    return True
 
 
 def set_dryer_box_bindings(loc_id, slot_targets, printer_map):

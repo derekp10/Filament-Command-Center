@@ -311,6 +311,30 @@ def _auto_unarchive_on_refill(data, existing):
             data['location'] = prev_loc
 
 
+def _release_box_on_archive(sid, data, existing, pre_archived):
+    """Group 42.1b — a spool printed (or weighed) to empty is archived and taken
+    off its head by _auto_archive_on_empty. Derek's rule says a single-slot box
+    lets go when its own spool leaves the head "by any path", so this edge
+    releases the spool's own box (the trail it carried on the head). A later
+    force_unassign (the weigh-out's second call) then finds nothing to release.
+
+    Only on the archive edge, only when THIS update cleared the location (so a
+    box is never released while its spool is still on the head), and
+    best-effort: it never changes the write's result or LAST_SPOOLMAN_ERROR."""
+    try:
+        if not (data.get('archived') and not pre_archived and data.get('location') == ''):
+            return
+        head = str((existing or {}).get('location') or '').strip().strip('"').upper()
+        if not head or head not in locations_db.get_active_printer_map():
+            return
+        box = str(((existing or {}).get('extra') or {}).get('physical_source') or '').strip().strip('"').upper()
+        if box and box != head and locations_db.detach_single_slot_box(box, head):
+            state.add_log_entry(
+                f"🔓 {box} detached from {head} — its spool #{sid} was archived empty", "INFO")
+    except Exception as e:
+        state.logger.warning(f"42.1b archive-edge box release skipped for #{sid}: {e}")
+
+
 def update_spool(sid, data):
     """Returns the updated spool dict on success, or None on failure.
 
@@ -420,6 +444,7 @@ def update_spool(sid, data):
         r = requests.patch(f"{sm_url}/api/v1/spool/{sid}", json=clean_data, timeout=15)
         if r.ok:
             LAST_SPOOLMAN_ERROR = None
+            _release_box_on_archive(sid, data, existing, pre_archived)
             return r.json()
         err_body = r.text
         state.logger.error(f"Failed to update spool {sid}: {r.status_code} - {err_body}")

@@ -80,7 +80,9 @@ def test_a_homeless_spool_on_a_printing_head_is_asked_once(client):
     # ONE Yes: both confirms in one request.
     second = _run(sm, _remove(client, 42, confirmed=True, confirm_active_print=True),
                   probe=_probe_for({"XL"}))
-    assert second == {"success": True}, second
+    # Group 42.5a: the answer says where it went (no box let go: no trail).
+    assert second == {"success": True, "spool_id": 42, "from": "XL-3", "to": "", "slot": "",
+                      "home": False, "released_boxes": []}, second
     assert sm.spools[42]["location"] == ""
 
 

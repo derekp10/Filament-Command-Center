@@ -392,10 +392,14 @@ def api_manage_contents():
 
     if action == 'remove':
         is_confirmed = data.get('confirmed', False)
+        # Group 42.5a: the eject fills this with where the spool went and which
+        # single-slot box let go, so the toast can say it ("I had to dig").
+        report = {}
         result = logic.perform_smart_eject(
             spool_id,
             confirmed_unassign=is_confirmed,
             confirm_active_print=confirm_active_print,
+            report=report,
         )
         if isinstance(result, dict) and result.get('status') == 'requires_confirm':
             # Group 39.6 — one prompt, not two in a row: if the spool would also
@@ -430,7 +434,7 @@ def api_manage_contents():
             return jsonify({"success": False, "require_confirm": True, "confirm_types": ["unassign"],
                             "msg": _no_home_unassign_msg(spool_id)})
         elif result is True:
-            return jsonify({"success": True})
+            return jsonify({"success": True, "spool_id": spool_id, **report})
         else:
             return jsonify({"success": False, "msg": "DB Update Failed"})
     elif action == 'force_unassign':

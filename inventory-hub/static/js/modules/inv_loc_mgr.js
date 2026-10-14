@@ -1549,6 +1549,29 @@ window.ejectSpool = (sid, loc, pickup) => {
     }
 };
 
+// Group 42.5a: the eject says where the spool went and which single-slot box let
+// go of the head (Derek, 2026-10-13: "short arrows for toast. And a full
+// sentence in the activity log"; the sentence is the server's): "⏏️ #50 → back
+// in PM-DB-2 (PM-DB-2 detached from XL-2)", "⏏️ #134 → back in LR-MDB-1 slot
+// 3", "⏏️ #88 → Unassigned". An answer with no report keeps "Ejected".
+const _ejectToastText = (res, sid) => {
+    if (!res || res.to === undefined) return 'Ejected';
+    const id = res.spool_id != null ? res.spool_id : sid;
+    const typeOf = (lid) => ((state.allLocations || []).find(
+        (l) => String(l.LocationID || '').toUpperCase() === String(lid || '').toUpperCase()) || {}).Type || '';
+    let where;
+    if (res.home) {
+        const prep = ['Dryer Box', 'Storage', 'Sliding Drawer', 'Room', 'Virtual Room'].includes(typeOf(res.to))
+            ? 'in' : 'on';
+        where = `back ${prep} ${res.to}` + (res.slot ? ` slot ${res.slot}` : '');
+    } else {
+        where = res.to ? `Room ${res.to}` : 'Unassigned';
+    }
+    const boxes = res.released_boxes || [];
+    const released = boxes.length ? ` (${boxes.join(', ')} detached from ${res.from})` : '';
+    return `⏏️ #${id} → ${where}${released}`;
+};
+
 window.doEject = (sid, loc, isConfirmed = false, confirmActivePrint = false) => {
     setProcessing(true);
     window.fetchT('/api/manage_contents', {
@@ -1598,7 +1621,7 @@ window.doEject = (sid, loc, isConfirmed = false, confirmActivePrint = false) => 
                 return;
             }
 
-            showToast("Ejected");
+            showToast(_ejectToastText(res, sid), 'success', 4000);
             if (loc !== "Scan") {
                 // [ALEX FIX] Force a re-render by clearing the hash.
                 // This ensures the UI updates to "Empty" even if the API data is cached/similar.

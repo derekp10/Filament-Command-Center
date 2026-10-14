@@ -85,30 +85,49 @@ def test_attach_overwrites_to_follow_the_spool(monkeypatch):
     assert box["extra"]["slot_targets"] == {"1": "XL-2"}
 
 
-# --- detach ---
+# --- detach (Group 42.1: spool-keyed, one box at a time) ---
+# Group 20.2's detach_single_slot_boxes_from_toolhead unbound EVERY single-slot
+# box on a head whichever spool left it. Derek's rule (2026-09-13): a box stays
+# bound until ITS OWN spool leaves, so the release names the box (the leaving
+# spool's trail) and the head.
 
-def test_detach_clears_single_slot_leaves_multislot(monkeypatch):
+def test_detach_releases_only_the_named_single_slot_box(monkeypatch):
     saved = _patch_locs(monkeypatch, [
         {"LocationID": "PM-DB-1", "Type": "Dryer Box", "Max Spools": "1",
+         "extra": {"slot_targets": {"1": "XL-1"}}},
+        # another single-slot box ALSO bound to XL-1: not this spool's box
+        {"LocationID": "PM-DB-2", "Type": "Dryer Box", "Max Spools": "1",
          "extra": {"slot_targets": {"1": "XL-1"}}},
         # multi-slot box ALSO bound to XL-1 — must be left untouched (user config)
         {"LocationID": "LR-MDB-1", "Type": "Dryer Box", "Max Spools": "4",
          "extra": {"slot_targets": {"1": "XL-1", "2": "XL-2"}}}])
-    detached = locations_db.detach_single_slot_boxes_from_toolhead("XL-1")
-    assert detached == ["PM-DB-1"]
-    box = next(r for r in saved["list"] if r["LocationID"] == "PM-DB-1")
-    assert box["extra"]["slot_targets"] == {}
-    multi = next(r for r in saved["list"] if r["LocationID"] == "LR-MDB-1")
-    assert multi["extra"]["slot_targets"] == {"1": "XL-1", "2": "XL-2"}
+    assert locations_db.detach_single_slot_box("PM-DB-1", "xl-1") is True
+    rows = {r["LocationID"]: r for r in saved["list"]}
+    # The key stays ({}): dryer_bindings_are_authoritative reads its presence.
+    assert rows["PM-DB-1"]["extra"]["slot_targets"] == {}
+    assert rows["PM-DB-2"]["extra"]["slot_targets"] == {"1": "XL-1"}
+    assert rows["LR-MDB-1"]["extra"]["slot_targets"] == {"1": "XL-1", "2": "XL-2"}
 
 
 def test_detach_noop_when_bound_elsewhere(monkeypatch):
     saved = _patch_locs(monkeypatch, [
         {"LocationID": "PM-DB-1", "Type": "Dryer Box", "Max Spools": "1",
          "extra": {"slot_targets": {"1": "XL-2"}}}])
-    detached = locations_db.detach_single_slot_boxes_from_toolhead("XL-1")
-    assert detached == []
+    assert locations_db.detach_single_slot_box("PM-DB-1", "XL-1") is False
     assert "list" not in saved  # nothing to do, no save
+
+
+def test_detach_noop_for_a_multislot_box(monkeypatch):
+    saved = _patch_locs(monkeypatch, [
+        {"LocationID": "LR-MDB-1", "Type": "Dryer Box", "Max Spools": "4",
+         "extra": {"slot_targets": {"1": "XL-1"}}}])
+    assert locations_db.detach_single_slot_box("LR-MDB-1", "XL-1") is False
+    assert "list" not in saved
+
+
+def test_the_toolhead_keyed_detach_is_gone():
+    """So a whole-head detach can't creep back (Group 42.1)."""
+    assert not hasattr(locations_db, "detach_single_slot_boxes_from_toolhead")
 
 
 def test_attach_detach_round_trip(monkeypatch):
@@ -120,6 +139,5 @@ def test_attach_detach_round_trip(monkeypatch):
     assert attached_rows[0]["extra"]["slot_targets"] == {"1": "XL-3"}
     # detach (feed the attached state back in)
     saved2 = _patch_locs(monkeypatch, attached_rows)
-    detached = locations_db.detach_single_slot_boxes_from_toolhead("XL-3")
-    assert detached == ["PM-DB-1"]
+    assert locations_db.detach_single_slot_box("PM-DB-1", "XL-3") is True
     assert saved2["list"][0]["extra"]["slot_targets"] == {}

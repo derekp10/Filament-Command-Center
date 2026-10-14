@@ -397,20 +397,22 @@ def test_remove_legacy_require_confirm_string_translated_to_json(client):
         "msg": "#55 is loose in CR with no saved home. Unassign it?",
     }
     eject.assert_called_once_with(
-        55, confirmed_unassign=False, confirm_active_print=False)
+        55, confirmed_unassign=False, confirm_active_print=False, report={})
 
 
 def test_remove_true_maps_to_success_and_confirmed_flag_passthrough(client):
-    """perform_smart_eject → True maps to bare {success:true}; the caller's
-    `confirmed` flag rides through as confirmed_unassign."""
+    """perform_smart_eject → True maps to {success: true} plus the spool id and
+    whatever the eject put in `report` (Group 42.5a: where it went, which box
+    let go; this mock fills nothing); the caller's `confirmed` flag rides
+    through as confirmed_unassign."""
     with patch.object(app_module.logic, "perform_smart_eject",
                       return_value=True) as eject:
         r = client.post("/api/manage_contents", json={
             "action": "remove", "spool_id": "55", "confirmed": True,
         })
-    assert r.get_json() == {"success": True}
+    assert r.get_json() == {"success": True, "spool_id": 55}
     eject.assert_called_once_with(
-        55, confirmed_unassign=True, confirm_active_print=False)
+        55, confirmed_unassign=True, confirm_active_print=False, report={})
 
 
 @pytest.mark.parametrize("eject_result", [False, None])
