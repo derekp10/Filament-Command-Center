@@ -254,6 +254,20 @@ def api_manage_contents():
     if action not in ('clear_location', 'add', 'remove', 'force_unassign'):
         return jsonify({"success": False, "msg": f"Unknown action: {action}"})
 
+    # A blank location is not a place to put a spool (found by Group 40's door
+    # review, 2026-10-14). A CMD:SLOT:<n> scan with the Location Manager closed
+    # sent `add` with location "" (closing the manager blanks #manage-loc-id), and
+    # the engine's generic branch wrote the buffered spool to Unassigned with that
+    # slot number while the toast said "Assigned". Unassigning goes through
+    # force_unassign. Refused before any read, like clear_location below.
+    if action == 'add' and not loc_id:
+        state.add_log_entry(
+            "⚠️ Not moved: no location was given (a slot scan needs a box open in the "
+            "Location Manager)", "WARNING", "ffaa00")
+        return jsonify({"success": False, "status": "error",
+                        "msg": "No location given, so nothing was moved. Open a box in the "
+                               "Location Manager first, then scan its slot."})
+
     if action == 'clear_location':
         # A blank location is not the Unassigned pile (2026-09-13). The location
         # matcher treats "" == "" as a direct hit for every spool with no
