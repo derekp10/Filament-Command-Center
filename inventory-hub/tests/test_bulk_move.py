@@ -384,47 +384,6 @@ def test_capacity_fail_closed_on_dest_read_error(client):
 # Pre-flight: source-side active print
 # ---------------------------------------------------------------------------
 
-def test_source_active_print_requires_confirm(client):
-    """A bulk move from an actively-printing source bails for confirmation."""
-    ap = {"printer_name": "XL", "state": "PRINTING", "toolhead": "PM-DB-A"}
-    with _bulk_env(strict_map={"PM-DB-A": [_spool(1)]},
-                   active_print_for={"PM-DB-A": ap}) as mv:
-        r = client.post("/api/bulk_move", json={"source": "PM-DB-A", "dest": "SHELF-B"})
-    body = r.get_json()
-    assert body["success"] is False
-    assert body["require_confirm"] is True
-    assert body["confirm_type"] == "active_print"
-    assert body["active_print"]["printer_name"] == "XL"
-    mv.assert_not_called()
-
-
-def test_confirm_active_print_bypasses_source_guard(client):
-    """confirm_active_print=True flows through the source active-print guard."""
-    ap = {"printer_name": "XL", "state": "PRINTING", "toolhead": "PM-DB-A"}
-    with _bulk_env(strict_map={"PM-DB-A": [_spool(1)]},
-                   active_print_for={"PM-DB-A": ap}) as mv:
-        r = client.post("/api/bulk_move", json={
-            "source": "PM-DB-A", "dest": "SHELF-B", "confirm_active_print": True})
-    body = r.get_json()
-    assert body["success"] is True
-    assert body["moved"] == 1
-    assert mv.call_args[1].get("confirm_active_print") is True
-
-
-def test_dest_active_print_from_engine_is_propagated(client):
-    """perform_smart_move's own requires_confirm (eventual dest active) surfaces
-    as a require_confirm response — no partial write happened."""
-    engine = {"status": "requires_confirm", "confirm_type": "active_print",
-              "active_print": {"printer_name": "Core One", "state": "PAUSED"}}
-    with _bulk_env(strict_map={"PM-DB-A": [_spool(1)]}, move_result=engine):
-        r = client.post("/api/bulk_move", json={"source": "PM-DB-A", "dest": "SHELF-B"})
-    body = r.get_json()
-    assert body["success"] is False
-    assert body["require_confirm"] is True
-    assert body["confirm_type"] == "active_print"
-    assert body["active_print"]["printer_name"] == "Core One"
-
-
 # ---------------------------------------------------------------------------
 # Honest tally via readback
 # ---------------------------------------------------------------------------

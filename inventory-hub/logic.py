@@ -1401,18 +1401,23 @@ def can_start_bulk_move():
     return True, ""
 
 
-def plan_bulk_move(source, dest, confirm_active_print=False):
+def plan_bulk_move(source, dest):
     """DRY-RUN a bulk move: resolve the source fail-closed, decide who is
     movable, and run every pre-flight — WITHOUT writing anything.
 
     Returns a plan dict:
-      {ok, msg, blocked_reason, require_confirm, confirm_type, active_print,
-       source, dest, movable_ids, skipped:[{id,reason}]}
+      {ok, msg, blocked_reason, source, dest, movable_ids, skipped:[{id,reason}]}
 
     `ok=False` means a guard blocked the whole batch (`blocked_reason` is the
-    machine-readable cause). `require_confirm=True` means an active print on the
-    SOURCE needs explicit opt-in. `ok=True` with an empty `movable_ids` is the
-    benign "nothing to move" case.
+    machine-readable cause). `ok=True` with an empty `movable_ids` is the benign
+    "nothing to move" case.
+
+    Group 41.7 (Q3 A, 2026-10-13): there is no "source is printing" confirm. A
+    bulk move never moves a loaded spool: every head-loaded or deployed spool is
+    a skip, so a printing source always ended as a skip or "Nothing to move"
+    and the confirm could never fire on real data (it was only ever tested with
+    a fake printing dryer box). Taking a spool off a printing head is a single
+    move, which asks under D6.
 
     Shared by `/api/bulk_move` (Phase 1) and the CMD:BULKMOVE session preview
     (Phase 2) so the preview a user confirms is computed by the SAME code that
@@ -1420,8 +1425,7 @@ def plan_bulk_move(source, dest, confirm_active_print=False):
     """
     source = str(source or '').strip().upper()
     dest = str(dest or '').strip().upper()
-    plan = {"ok": False, "msg": "", "blocked_reason": None, "require_confirm": False,
-            "confirm_type": None, "active_print": None, "source": source, "dest": dest,
+    plan = {"ok": False, "msg": "", "blocked_reason": None, "source": source, "dest": dest,
             "movable_ids": [], "skipped": [], "source_feeds": [],
             # Phase 3 display-only fields (see the skip loop): `rows` is the
             # id -> {display,color,color_direction,slot,remaining_weight} cache
@@ -1574,26 +1578,6 @@ def plan_bulk_move(source, dest, confirm_active_print=False):
             plan["blocked_reason"] = "capacity"
             return plan
 
-    # --- Pre-flight 4: source-side active print (confirm) -------------------
-    # The single-move path guards only the DEST. If the SOURCE location is itself
-    # an actively-printing toolhead, a bulk sweep would disrupt the print.
-    if not confirm_active_print:
-        ap = _active_print_info_for_location(source, printer_map)
-        if ap:
-            plan["require_confirm"] = True
-            plan["confirm_type"] = "active_print"
-            plan["active_print"] = ap
-            # Carry the movable set on the confirm return too. Without it the
-            # preview rendered "0 will move" and DISABLED Commit, so the
-            # active-print confirm was unreachable from the panel — the user
-            # could see the warning but had no way to act on it.
-            plan["movable_ids"] = movable_ids
-            # require_confirm IS committable, so the feed warning belongs here too.
-            plan["source_feeds"] = _bound_feeds_for_move(contents, movable_ids, loc_info_map)
-            plan["msg"] = (f"{ap['printer_name']} is {ap['state']} — bulk-moving from "
-                           f"this location will disrupt the print.")
-            return plan
-
     plan["ok"] = True
     plan["movable_ids"] = movable_ids
     # Informational only — never blocks, never mutates the bindings. Set ONLY on
@@ -1672,7 +1656,7 @@ def _bound_feeds_for_move(contents, movable_ids, loc_info_map):
     return sorted(feeds)
 
 
-def execute_bulk_move(plan, confirm_active_print=False):
+def execute_bulk_move(plan):
     """Commit an OK plan: ONE perform_smart_move + an honest per-spool tally.
 
     Returns {success, source, dest, moved, moved_ids, skipped, failed} — or a
@@ -1692,22 +1676,14 @@ def execute_bulk_move(plan, confirm_active_print=False):
     #
     # confirm_active_print=True (Group 39 review, engine-3): plan_bulk_move has
     # just re-planned from live state, skipping every head-loaded spool and
-    # refusing a printer-head destination, and it owns the bulk move's own
-    # active-print prompt. So the engine's per-spool source reads (39.4) have
-    # nothing to find, and their fail-closed refusal would turn one Spoolman
-    # blip into "nothing moved" plus a reset armed session. `confirm_active_print`
-    # stays on the signature for callers; the plan gate above already used it.
+    # refusing a printer-head destination. So the engine's per-spool source
+    # reads (39.4) have nothing to find, and their fail-closed refusal would
+    # turn one Spoolman blip into "nothing moved" plus a reset armed session.
+    # The engine therefore never answers requires_confirm here (Group 41.7
+    # removed the backstop that relayed one).
     move_result = perform_smart_move(dest, movable_ids, origin='bulk_move',
                                      auto_deploy=False,
                                      confirm_active_print=True)
-    # Defensive backstop: surface any requires_confirm the engine returns (with
-    # auto_deploy off + single-occ dests rejected this is currently unreachable,
-    # but the contract is honored if perform_smart_move ever changes).
-    if isinstance(move_result, dict) and move_result.get('status') == 'requires_confirm':
-        return {"success": False, "require_confirm": True,
-                "confirm_type": move_result.get('confirm_type'),
-                "active_print": move_result.get('active_print'),
-                "msg": move_result.get('msg', 'Confirmation required.')}
     if isinstance(move_result, dict) and move_result.get('status') == 'error':
         return {"success": False, "source": source, "dest": dest,
                 "msg": move_result.get('msg', 'Move failed.')}
@@ -1805,8 +1781,7 @@ def _apply_plan_to_session(sess, plan):
     dest (single-occupancy / unknown / capacity / unreadable) stays at
     awaiting_dest so the user is still prompted for a valid one. Without that,
     the stage rides the heartbeat and the deck tile goes GREEN "COMMIT" with a
-    live CMD:DONE QR for a move that can never run. (require_confirm IS
-    committable — it just needs the active-print opt-in.)
+    live CMD:DONE QR for a move that can never run.
 
     Factored out because commit_bulk_move_session's re-plan wrote sess['preview']
     WITHOUT the stage guard, so a commit that re-blocked (a spool landed in the
@@ -1814,19 +1789,18 @@ def _apply_plan_to_session(sess, plan):
     green and advertising a commit that every retry refused.
     """
     sess['preview'] = plan
-    sess['stage'] = 'preview' if (plan.get('ok') or plan.get('require_confirm')) else 'awaiting_dest'
+    sess['stage'] = 'preview' if plan.get('ok') else 'awaiting_dest'
     return plan
 
 
-def _refresh_bulk_move_preview(confirm_active_print=False):
+def _refresh_bulk_move_preview():
     """(Re)compute the dry-run preview for a session that has both locations."""
     sess = state.BULK_MOVE_SESSION
-    plan = plan_bulk_move(sess.get('source_id'), sess.get('dest_id'),
-                          confirm_active_print=confirm_active_print)
+    plan = plan_bulk_move(sess.get('source_id'), sess.get('dest_id'))
     return _apply_plan_to_session(sess, plan)
 
 
-def set_bulk_move_dest(dest_id, confirm_active_print=False):
+def set_bulk_move_dest(dest_id):
     """Set/re-target the destination and recompute the preview. (ok, plan|None, msg).
 
     Serialized against a running commit for the same reason cancel is: the
@@ -1849,7 +1823,7 @@ def set_bulk_move_dest(dest_id, confirm_active_print=False):
                              "destination can't be changed until it finishes.")
     try:
         state.BULK_MOVE_SESSION['dest_id'] = dest_id
-        plan = _refresh_bulk_move_preview(confirm_active_print=confirm_active_print)
+        plan = _refresh_bulk_move_preview()
         return True, plan, plan.get('msg') or ""
     finally:
         _BULK_MOVE_COMMIT_LOCK.release()
@@ -1859,8 +1833,8 @@ def bulk_move_session_snapshot(sess=None):
     """The JSON-safe view of the bulk-move session the frontend polls/renders.
 
     Returns {active:False} when idle (cheap), else the stage + both locations +
-    a flattened preview (counts, the movable/skipped detail, and any block or
-    active-print confirm), with each row carrying the display label / colour /
+    a flattened preview (counts, the movable/skipped detail, and any block),
+    with each row carrying the display label / colour /
     slot / remaining weight the panel renders as a spool tile.
 
     ⚡ ZERO Spoolman I/O — the panel polls this every 2s, so it formats the rows
@@ -1912,9 +1886,6 @@ def bulk_move_session_snapshot(sess=None):
             "ok": bool(plan.get('ok')),
             "msg": plan.get('msg') or "",
             "blocked_reason": plan.get('blocked_reason'),
-            "require_confirm": bool(plan.get('require_confirm')),
-            "confirm_type": plan.get('confirm_type'),
-            "active_print": plan.get('active_print'),
             "movable": movable,
             "skipped": skipped,
             "source_feeds": plan.get('source_feeds') or [],
@@ -1951,9 +1922,6 @@ def process_bulk_move_scan(scan_result):
                     "WARNING", "ffaa00")
                 return {"status": "error", "msg": "Scan a source and destination first."}
             result = commit_bulk_move_session()
-            if result.get('require_confirm'):
-                # Leave the session standing so the UI can confirm + retry.
-                return {"status": "error", "msg": result.get('msg', 'Confirmation required.')}
             if not result.get('success'):
                 # A PARTIAL failure returns success=False with a `failed` list and
                 # NO `msg` (execute_bulk_move's tally shape), so a `msg`-gated check
@@ -1996,12 +1964,9 @@ def process_bulk_move_scan(scan_result):
             if not ok:
                 state.add_log_entry(f"⚠️ Bulk move: {msg}", "WARNING", "ffaa00")
                 return {"status": "error", "msg": msg}
-            if not plan.get('ok') and not plan.get('require_confirm'):
+            if not plan.get('ok'):
                 state.add_log_entry(f"⚠️ Bulk move blocked: {plan.get('msg')}", "WARNING", "ffaa00")
                 return {"status": "error", "msg": plan.get('msg')}
-            if plan.get('require_confirm'):
-                state.add_log_entry(f"⚠️ {plan.get('msg')}", "WARNING", "ffaa00")
-                return {"status": "success"}
             n = len(plan.get('movable_ids') or [])
             k = len(plan.get('skipped') or [])
             state.add_log_entry(
@@ -2089,7 +2054,7 @@ def cancel_bulk_move_session():
         _BULK_MOVE_COMMIT_LOCK.release()
 
 
-def commit_bulk_move_session(confirm_active_print=False):
+def commit_bulk_move_session():
     """Execute the active session's plan, then clear the session on success.
 
     Re-plans from the CURRENT world state rather than trusting the stored
@@ -2106,16 +2071,11 @@ def commit_bulk_move_session(confirm_active_print=False):
         if not sess.get('active') or not source or not dest:
             return {"success": False, "msg": "No bulk move is ready to commit."}
 
-        plan = plan_bulk_move(source, dest, confirm_active_print=confirm_active_print)
+        plan = plan_bulk_move(source, dest)
         # Same helper the preview path uses, so a commit that RE-BLOCKS demotes
         # the stage instead of leaving the deck tile green + advertising a
         # CMD:DONE for a plan every retry refuses.
         _apply_plan_to_session(sess, plan)
-        if plan.get('require_confirm'):
-            return {"success": False, "require_confirm": True,
-                    "confirm_type": plan.get('confirm_type'),
-                    "active_print": plan.get('active_print'),
-                    "msg": plan.get('msg'), "source": source, "dest": dest}
         if not plan.get('ok'):
             return {"success": False, "msg": plan.get('msg'),
                     "blocked_reason": plan.get('blocked_reason'),
@@ -2130,9 +2090,7 @@ def commit_bulk_move_session(confirm_active_print=False):
         # read-only guard work, and a cancel arriving during THAT deserves an
         # honest "nothing has moved" rather than "too late".
         _BULK_MOVE_WRITING = True
-        result = execute_bulk_move(plan, confirm_active_print=confirm_active_print)
-        if result.get('require_confirm'):
-            return result  # leave the session standing for the confirm+retry
+        result = execute_bulk_move(plan)
         state.reset_bulk_move()
         return result
     finally:

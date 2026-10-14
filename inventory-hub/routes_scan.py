@@ -494,18 +494,14 @@ def api_bulk_move():
     data = request.json or {}
     source = str(data.get('source', '') or '').strip().upper()
     dest = str(data.get('dest', '') or '').strip().upper()
-    confirm_active_print = bool(data.get('confirm_active_print', False))
 
     if not source or not dest:
         return jsonify({"success": False, "msg": "Both source and dest are required."})
 
-    plan = logic.plan_bulk_move(source, dest, confirm_active_print=confirm_active_print)
+    # Group 41.7: a stale page's confirm_active_print is ignored; a bulk move
+    # has no print confirm (it never moves a loaded spool).
+    plan = logic.plan_bulk_move(source, dest)
 
-    if plan.get('require_confirm'):
-        return jsonify({"success": False, "require_confirm": True,
-                        "confirm_type": plan.get('confirm_type'),
-                        "active_print": plan.get('active_print'),
-                        "msg": plan.get('msg')})
     if not plan.get('ok'):
         # Capacity is the one block that reports the batch context it refused.
         if plan.get('blocked_reason') == 'capacity':
@@ -517,7 +513,7 @@ def api_bulk_move():
                         "moved": 0, "moved_ids": [], "skipped": plan.get('skipped') or [],
                         "failed": [], "msg": plan.get('msg')})
 
-    return jsonify(logic.execute_bulk_move(plan, confirm_active_print=confirm_active_print))
+    return jsonify(logic.execute_bulk_move(plan))
 
 
 def _bulk_moves_enabled():
@@ -556,7 +552,7 @@ def api_bulk_move_session_action():
     """L298 Phase 2 — mouse/keyboard control of the scan-driven bulk-move
     session (the scanner drives the same session via CMD: codes).
 
-    Body: {action, source?, dest?, confirm_active_print?} where action is:
+    Body: {action, source?, dest?} where action is:
       start   — arm a session; optional `source` pre-seeds it (the Location-
                 Manager "Move all →" button) and jumps to awaiting_dest.
       set_dest— set/re-target the destination and recompute the preview.
@@ -574,7 +570,6 @@ def api_bulk_move_session_action():
     action = str(data.get('action', '') or '').strip().lower()
     if not _bulk_moves_enabled() and action != 'cancel':
         return jsonify({"success": False, "msg": _BULK_MOVES_OFF_MSG}), 403
-    confirm_active_print = bool(data.get('confirm_active_print', False))
 
     if action == 'start':
         # Mutual exclusion with audit (see logic.can_start_bulk_move).
@@ -613,19 +608,15 @@ def api_bulk_move_session_action():
     if action == 'set_dest':
         # Shared setter: refuses a re-target while a commit holds the lock, so a
         # late destination change can't redirect a batch mid-flight.
-        ok, plan, msg = logic.set_bulk_move_dest(
-            data.get('dest'), confirm_active_print=confirm_active_print)
+        ok, plan, msg = logic.set_bulk_move_dest(data.get('dest'))
         if not ok:
             return jsonify({"success": False, "msg": msg,
                             "session": logic.bulk_move_session_snapshot()})
         return jsonify({"success": bool(plan.get('ok')), "msg": plan.get('msg'),
-                        "require_confirm": bool(plan.get('require_confirm')),
-                        "confirm_type": plan.get('confirm_type'),
-                        "active_print": plan.get('active_print'),
                         "session": logic.bulk_move_session_snapshot()})
 
     if action == 'commit':
-        result = logic.commit_bulk_move_session(confirm_active_print=confirm_active_print)
+        result = logic.commit_bulk_move_session()
         result["session"] = logic.bulk_move_session_snapshot()
         return jsonify(result)
 

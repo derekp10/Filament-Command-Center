@@ -137,8 +137,7 @@ def _row(sid, display, color="00aa55", slot="", weight=None, reason=None):
 _PREVIEW = {
     "active": True, "stage": "preview", "source_id": "PM-DB-A", "dest_id": "SHELF-B",
     "preview": {
-        "ok": True, "msg": "", "blocked_reason": None, "require_confirm": False,
-        "confirm_type": None, "active_print": None,
+        "ok": True, "msg": "", "blocked_reason": None,
         "movable": [
             _row(101, "Sunlu PLA (Black)", "111111", slot="1", weight=812.4),
             _row(102, "Prusament Galaxy Black", "2b2b3a", slot="2", weight=245.0),
@@ -151,18 +150,6 @@ _PREVIEW = {
         "stats": {"movable": 2, "skipped": 3},
     },
 }
-
-
-def _ap_payload(dest="SHELF-B"):
-    """The standard preview, but with an ACTIVE PRINT require_confirm on it."""
-    p = json.loads(json.dumps(_PREVIEW))
-    p["dest_id"] = dest
-    p["preview"].update({
-        "ok": False, "require_confirm": True, "confirm_type": "active_print",
-        "active_print": {"printer_name": "Core One", "state": "PRINTING"},
-        "msg": "Core One is PRINTING - this will disrupt the print.",
-    })
-    return p
 
 
 @pytest.mark.usefixtures("require_server")
@@ -259,7 +246,6 @@ def test_blocked_plan_shows_the_reason_and_the_refused_spools(
         "preview": {
             "ok": False, "blocked_reason": "capacity",
             "msg": "PM-DB-B has 2 free of 4; source has 5 to move — nothing moved.",
-            "require_confirm": False, "confirm_type": None, "active_print": None,
             "movable": [_row(400 + i, f"Spool {i}") for i in range(5)],
             "skipped": [],
             "stats": {"movable": 5, "skipped": 0},
@@ -280,49 +266,6 @@ def test_blocked_plan_shows_the_reason_and_the_refused_spools(
     _stub_session(page, payload)
     expect(overlay).to_contain_text("Would have moved (5)", timeout=6_000)
     expect(overlay.locator("#fcc-bulkmove-commit")).to_be_disabled()
-
-
-@pytest.mark.usefixtures("require_server")
-def test_active_print_confirm_is_in_panel_and_gates_commit(
-        page: Page, base_url: str, reset_dom_state_js: str):
-    """THE Phase-3 safety fix. Phase 2 answered require_confirm by calling
-    requestConfirmation, which opens Bootstrap's #confirmModal at z-index ~1100
-    — BEHIND this overlay at 20000 — and set state.activeModal='confirm', which
-    then swallowed the next scan. The confirm was effectively unreachable.
-
-    It now lives in the panel: an explicit checkbox gates the Commit button, and
-    the commit carries confirm_active_print only once it is ticked.
-    """
-    payload = json.loads(json.dumps(_PREVIEW))
-    payload["preview"].update({
-        "ok": False, "require_confirm": True, "confirm_type": "active_print",
-        "active_print": {"printer_name": "Core One", "state": "PRINTING",
-                         "toolhead": "PM-DB-A"},
-        "msg": "Core One is PRINTING — bulk-moving from this location will disrupt the print.",
-    })
-    overlay = _open(page, base_url, reset_dom_state_js, payload)
-
-    strip = overlay.locator("#fcc-bulkmove-ap")
-    expect(strip).to_be_visible()
-    expect(strip).to_contain_text("ACTIVE PRINT")
-    expect(strip).to_contain_text("Core One is PRINTING")
-
-    commit = overlay.locator("#fcc-bulkmove-commit")
-    expect(commit).to_contain_text("Commit Anyway")
-    expect(commit).to_be_disabled()             # unreachable until acknowledged
-
-    # Capture the commit payload instead of firing a real move.
-    # NOTE the arrow-function form: page.evaluate() INVOKES a script whose value
-    # is a function, so `window.x = () => …` as the trailing expression calls the
-    # stub once, immediately (it cost an hour of chasing a phantom commit).
-    page.evaluate("""() => {
-        window.__commitArgs = [];
-        window.commitBulkMove = (c) => window.__commitArgs.push(c);
-    }""")
-    overlay.locator("#fcc-bulkmove-ap-ack").check()
-    expect(commit).to_be_enabled()
-    commit.click()
-    assert page.evaluate("window.__commitArgs") == [True]
 
 
 @pytest.mark.usefixtures("require_server")
@@ -384,78 +327,6 @@ def test_panel_closes_itself_when_the_session_ends(
 # ---------------------------------------------------------------------------
 # Review fixes (adversarial review, 2026-08-02)
 # ---------------------------------------------------------------------------
-
-@pytest.mark.usefixtures("require_server")
-def test_ack_checkbox_does_not_disarm_the_barcode_scanner(
-        page: Page, base_url: str, reset_dom_state_js: str):
-    """THE checkbox's hidden cost. The global scan handler's FIRST line is
-    `if (e.target.tagName === 'INPUT' || ...) return;` — so leaving the ack
-    checkbox focused kills the scanner for every subsequent scan, including the
-    CMD:DONE / CMD:CANCEL the panel's own QR codes tell the user to scan. The
-    onchange handler must blur it."""
-    overlay = _open(page, base_url, reset_dom_state_js, _ap_payload())
-
-    overlay.locator("#fcc-bulkmove-ap-ack").check()
-    assert page.evaluate("document.activeElement && document.activeElement.id") != "fcc-bulkmove-ap-ack"
-    assert page.evaluate("document.activeElement && document.activeElement.tagName") != "INPUT"
-    # ...and the ack still took effect.
-    expect(overlay.locator("#fcc-bulkmove-commit")).to_be_enabled()
-    assert page.evaluate("document.getElementById('fcc-bulkmove-ap-ack').checked") is True
-
-
-@pytest.mark.usefixtures("require_server")
-def test_ack_resets_when_the_destination_changes(
-        page: Page, base_url: str, reset_dom_state_js: str):
-    """The ack is keyed to the plan it acknowledged. Re-targeting the
-    destination must drop the tick — otherwise a user who acknowledged
-    "disrupt the print to fill SHELF-B" silently pre-authorises SHELF-C."""
-    overlay = _open(page, base_url, reset_dom_state_js, _ap_payload("SHELF-B"))
-    overlay.locator("#fcc-bulkmove-ap-ack").check()
-    expect(overlay.locator("#fcc-bulkmove-commit")).to_be_enabled()
-
-    _stub_session(page, _ap_payload("SHELF-C"))     # the user re-scans a dest
-    expect(overlay).to_contain_text("SHELF-C", timeout=8_000)
-    expect(overlay.locator("#fcc-bulkmove-ap-ack")).not_to_be_checked()
-    expect(overlay.locator("#fcc-bulkmove-commit")).to_be_disabled()
-
-
-@pytest.mark.usefixtures("require_server")
-def test_ack_resets_when_the_movable_set_changes(
-        page: Page, base_url: str, reset_dom_state_js: str):
-    """Same principle for WHAT moves: re-scanning the SAME destination after the
-    source contents changed yields an identical source|dest|printer|state tuple
-    but a different spool list, which the user has not reviewed."""
-    overlay = _open(page, base_url, reset_dom_state_js, _ap_payload())
-    overlay.locator("#fcc-bulkmove-ap-ack").check()
-    expect(overlay.locator("#fcc-bulkmove-commit")).to_be_enabled()
-
-    changed = _ap_payload()
-    changed["preview"]["movable"] = [_row(999, "A spool nobody reviewed")]
-    changed["preview"]["stats"] = {"movable": 1, "skipped": 3}
-    _stub_session(page, changed)
-    expect(overlay).to_contain_text("A spool nobody reviewed", timeout=8_000)
-    expect(overlay.locator("#fcc-bulkmove-ap-ack")).not_to_be_checked()
-    expect(overlay.locator("#fcc-bulkmove-commit")).to_be_disabled()
-
-
-@pytest.mark.usefixtures("require_server")
-def test_ack_does_not_survive_hide_and_reopen(
-        page: Page, base_url: str, reset_dom_state_js: str):
-    """_apAck is module-scoped. Without an explicit reset on close, the panel
-    reopened with the safety gate ALREADY satisfied — one click from disrupting
-    a live print with no fresh acknowledgement in that view."""
-    overlay = _open(page, base_url, reset_dom_state_js, _ap_payload())
-    overlay.locator("#fcc-bulkmove-ap-ack").check()
-    expect(overlay.locator("#fcc-bulkmove-commit")).to_be_enabled()
-
-    page.locator("#fcc-bulkmove-close").click()
-    expect(page.locator("#fcc-bulkmove-panel-overlay")).to_have_count(0, timeout=3_000)
-    page.evaluate("window.openBulkMovePanel({ user: true })")
-    reopened = page.locator("#fcc-bulkmove-panel-overlay")
-    expect(reopened).to_be_visible(timeout=5_000)
-    expect(reopened.locator("#fcc-bulkmove-ap-ack")).not_to_be_checked()
-    expect(reopened.locator("#fcc-bulkmove-commit")).to_be_disabled()
-
 
 @pytest.mark.usefixtures("require_server")
 def test_commit_button_locks_out_while_a_commit_is_in_flight(

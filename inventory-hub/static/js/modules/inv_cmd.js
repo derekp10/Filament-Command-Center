@@ -427,7 +427,7 @@ window.cancelBulkMove = () => {
 // 15-spool sweep is dozens of sequential round-trips in ONE request, so the
 // default abort fired over moves that had ALREADY SUCCEEDED and the user was
 // told a completed move failed.
-window.commitBulkMove = (confirmActivePrint = false) => {
+window.commitBulkMove = () => {
     // Re-entrancy guard. The panel button is disabled on click, but this is also
     // reachable programmatically, and a second commit would either be refused by
     // the backend lock (and then clear the FIRST commit's processing overlay) or
@@ -441,25 +441,9 @@ window.commitBulkMove = (confirmActivePrint = false) => {
     setProcessing(true);
     window.fetchT('/api/bulk_move_session', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'commit', confirm_active_print: !!confirmActivePrint }),
+        body: JSON.stringify({ action: 'commit' }),
     }, 120000).then(r => r.json()).then((res) => {
         _done();
-        if (res && res.require_confirm && res.confirm_type === 'active_print') {
-            // Phase 3: the confirm lives IN the panel now. The old
-            // requestConfirmation hop opened Bootstrap's #confirmModal at
-            // z-index ~1100 — BEHIND this panel's overlay at 20000 — and set
-            // state.activeModal='confirm', which then swallowed scans: the
-            // active-print safety path was effectively unreachable. The backend
-            // stores the require_confirm plan on the session, so re-syncing +
-            // re-rendering surfaces the acknowledgement strip inline.
-            window.applyBulkMoveSession(res && res.session);
-            window.openBulkMovePanel({ user: true });
-            if (typeof window.refreshBulkMoveSession === 'function') window.refreshBulkMoveSession();
-            const ap = res.active_print || {};
-            showToast(res.msg || `${ap.printer_name || 'A printer'} is ${ap.state || 'ACTIVE'} — confirm in the Bulk Move panel to continue.`,
-                      "warning", 7000);
-            return;
-        }
         window.applyBulkMoveSession(res && res.session);
         // A PARTIAL failure comes back success=false + a `failed` list + NO msg
         // (execute_bulk_move's tally shape). Bailing on !success therefore toasted
@@ -631,16 +615,6 @@ window.commitBulkMove = (confirmActivePrint = false) => {
     // shapeshift onEnter), which used to yank a dismissed panel straight back
     // open. Latched here, cleared when the deck button reopens or the session ends.
     let _userHidPanel = false;
-    // Active-print acknowledgement (the in-panel confirm). Keyed to the printer
-    // + locations + the exact movable set it was given for, so re-targeting the
-    // destination, a different printer going live, OR the spool list changing
-    // RESETS it — an ack can never carry silently onto a plan the user didn't
-    // read. Also cleared on close and on session end (see _resetAck): these are
-    // module-scoped, and relying on the key comparison alone let a ticked box
-    // survive Hide→reopen and even a whole session boundary.
-    let _apAck = false;
-    let _apAckKey = null;
-    const _resetAck = () => { _apAck = false; _apAckKey = null; };
     // True from the moment Commit is fired until the response (or its failure)
     // lands. Blocks a second commit at the UI, keeps the button disabled across
     // the mid-commit repaints, and stops a refused duplicate from tearing down
@@ -762,24 +736,6 @@ window.commitBulkMove = (confirmActivePrint = false) => {
         const stage = d.stage || 'idle';
         const p = d.preview || null;
 
-        // --- active-print acknowledgement bookkeeping -----------------------
-        // Recomputed per render; a changed key (different dest, different
-        // printer, printer state moved on) drops a stale tick.
-        const ap = (p && p.require_confirm) ? (p.active_print || {}) : null;
-        // The movable ids are part of the key: WHAT will move is as much a part
-        // of what the user acknowledged as which printer is running. Re-scanning
-        // the same destination after the source contents changed produces the
-        // same source|dest|printer|state tuple but a different spool list.
-        const apKey = ap
-            ? `${d.source_id}|${d.dest_id}|${ap.printer_name || ''}|${ap.state || ''}`
-              + `|${((p && p.movable) || []).map(r => r.id).join(',')}`
-            : null;
-        // ...but NOT while a commit is running: the commit re-plans with
-        // confirm_active_print=true, which drops require_confirm from the stored
-        // preview, so a mid-flight repaint would silently un-tick the box the
-        // user is currently waiting on.
-        if (apKey !== _apAckKey && !_commitInflight) { _apAckKey = apKey; _apAck = false; }
-
         const src = d.source_id ? `<b style="color:#0ff;">${_esc(d.source_id)}</b>` : '<span style="color:#888;">—</span>';
         const dst = d.dest_id ? `<b style="color:#0ff;">${_esc(d.dest_id)}</b>` : '<span style="color:#888;">—</span>';
         const prompt = stage === 'awaiting_source'
@@ -793,7 +749,7 @@ window.commitBulkMove = (confirmActivePrint = false) => {
             const movable = p.movable || [];
             const skipped = p.skipped || [];
             const st = p.stats || { movable: movable.length, skipped: skipped.length };
-            if (!p.ok && !p.require_confirm) {
+            if (!p.ok) {
                 // BLOCKED. The block message names the constraint; the tiles name
                 // the spools it refused, so "2 free of 4, source has 5" is
                 // actionable without opening another screen. `movable` here is
@@ -809,22 +765,6 @@ window.commitBulkMove = (confirmActivePrint = false) => {
                         ${_grid(movable.map(r => _tile(r, 'blocked')).join(''))}` : ''}
                     ${_skippedHtml(skipped)}`;
             } else {
-                // The in-panel active-print confirm. This REPLACES the Phase-2
-                // requestConfirmation hop, which opened #confirmModal (z ~1100)
-                // behind this overlay (z 20000) and set state.activeModal so the
-                // next scan was swallowed — the safety path was unreachable.
-                const apStrip = ap ? `
-                    <div id="fcc-bulkmove-ap" style="padding:10px; border:1px solid #fc0; background:#241f10;
-                                border-radius:6px; color:#ffe08a; margin-bottom:10px;">
-                        <div style="font-weight:bold; margin-bottom:4px;">⚠️ ACTIVE PRINT</div>
-                        <div style="font-size:0.88rem; margin-bottom:8px;">${_esc(p.msg)}</div>
-                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer;
-                                      font-size:0.88rem; margin:0;">
-                            <input type="checkbox" id="fcc-bulkmove-ap-ack" ${_apAck ? 'checked' : ''}
-                                   style="width:18px; height:18px; cursor:pointer;">
-                            <span>I understand a print is active — move anyway</span>
-                        </label>
-                    </div>` : '';
                 // Heads-up when the SOURCE is a dryer box wired to toolheads.
                 // The bindings are deliberately left intact (they describe the
                 // plumbing, not the contents) — this only makes the consequence
@@ -840,7 +780,6 @@ window.commitBulkMove = (confirmActivePrint = false) => {
                         ${feeds.length > 1 ? 'them' : 'it'}.
                     </div>` : '';
                 previewHtml = `
-                    ${apStrip}
                     ${feedNote}
                     <div style="margin-bottom:8px;">
                         <span style="color:#0f0; font-weight:bold;">${st.movable}</span> will move,
@@ -854,20 +793,17 @@ window.commitBulkMove = (confirmActivePrint = false) => {
             }
         }
 
-        // require_confirm (active print on the source) is COMMITTABLE — it just
-        // needs the opt-in, now collected by the in-panel checkbox above.
-        const hasPlan = stage === 'preview' && p && (p.ok || p.require_confirm)
-            && (p.movable || []).length > 0;
-        const needAck = !!ap;
+        // Group 41.7: no "source is printing" opt-in any more. A bulk move never
+        // moves a loaded spool, so that strip could never appear on real data.
+        const hasPlan = stage === 'preview' && p && p.ok && (p.movable || []).length > 0;
         // _commitInflight: the backend re-plans and stores the result BEFORE the
         // multi-second execute, so the 2s poll repaints mid-commit with an
         // ok/committable plan and used to paint a live, enabled Commit button
         // over a move already in progress. Clicking it was refused by the
         // backend lock — but the client had already cleared the processing
         // overlay, unfreezing the whole dashboard mid-write.
-        const canCommit = hasPlan && (!needAck || _apAck) && !_commitInflight;
-        const commitLabel = _commitInflight
-            ? '⏳ Committing…' : (needAck ? '⚠️ Commit Anyway' : '🔀 Commit Move');
+        const canCommit = hasPlan && !_commitInflight;
+        const commitLabel = _commitInflight ? '⏳ Committing…' : '🔀 Commit Move';
         // Tell the user the session expires. The idle watchdog silently clears an
         // armed-but-idle session after N minutes; without this notice, walking
         // back to a dead SCAN DEST tile reads as "the app broke" rather than
@@ -885,12 +821,10 @@ window.commitBulkMove = (confirmActivePrint = false) => {
             ${expiryNote}
             <div class="d-flex justify-content-between align-items-stretch gap-3 mt-3 pt-3 border-top border-secondary">
                 <div style="flex:1; text-align:center;">
-                    <button id="fcc-bulkmove-commit" class="btn ${needAck ? 'btn-warning' : 'btn-success'} fw-bold w-100 mb-2"
+                    <button id="fcc-bulkmove-commit" class="btn btn-success fw-bold w-100 mb-2"
                             ${canCommit ? '' : 'disabled'}>${commitLabel}</button>
                     <div id="fcc-bulkmove-qr-done" style="display:inline-block; background:#fff; padding:4px; border-radius:4px;"></div>
-                    <div class="small mt-1" style="color:rgba(255,255,255,0.75);">${needAck
-                        ? 'Tick the box above first — scanning CMD:DONE won’t bypass it'
-                        : 'Moves everything listed above'}</div>
+                    <div class="small mt-1" style="color:rgba(255,255,255,0.75);">Moves everything listed above</div>
                 </div>
                 <div style="flex:1; text-align:center;">
                     <button id="fcc-bulkmove-cancel" class="btn btn-outline-danger fw-bold w-100 mb-2">❌ Cancel</button>
@@ -899,9 +833,8 @@ window.commitBulkMove = (confirmActivePrint = false) => {
                 </div>
             </div>`;
 
-        // --- wire up (listeners, not inline onclick — the handlers need to
-        //     close over needAck, and a spool/location value must never be
-        //     interpolated into JS source inside an attribute).
+        // --- wire up (listeners, not inline onclick — a spool/location value
+        //     must never be interpolated into JS source inside an attribute).
         const commitBtn = body.querySelector('#fcc-bulkmove-commit');
         if (commitBtn) commitBtn.onclick = () => {
             if (commitBtn.disabled || _commitInflight) return;
@@ -910,25 +843,10 @@ window.commitBulkMove = (confirmActivePrint = false) => {
             // stays physically clickable for the whole commit.
             commitBtn.disabled = true;
             commitBtn.innerText = '⏳ Committing…';
-            window.commitBulkMove && window.commitBulkMove(needAck && _apAck);
+            window.commitBulkMove && window.commitBulkMove();
         };
         const cancelBtn = body.querySelector('#fcc-bulkmove-cancel');
         if (cancelBtn) cancelBtn.onclick = () => { window.cancelBulkMove && window.cancelBulkMove(); };
-        const ackBox = body.querySelector('#fcc-bulkmove-ap-ack');
-        if (ackBox) ackBox.onchange = () => {
-            _apAck = !!ackBox.checked;
-            // Toggle in place rather than re-rendering: a full repaint would
-            // destroy + regenerate both QR codes on every tick of the box.
-            if (commitBtn) commitBtn.disabled = !(hasPlan && _apAck && !_commitInflight);
-            // ⚠️ BLUR IS LOAD-BEARING, not cosmetic. This is the panel's only
-            // <input>, and the global scan handler bails on the FIRST line —
-            // `if (e.target.tagName === 'INPUT' ...) return;`
-            // (templates/components/scripts.html) — so leaving it focused kills
-            // the barcode scanner for every subsequent scan, including the
-            // CMD:DONE / CMD:CANCEL the panel's own QR codes advertise. Ticking
-            // the safety box must not disarm the scanner.
-            ackBox.blur();
-        };
         body.querySelectorAll('.fcc-bulk-skip-group').forEach((el) => {
             el.addEventListener('toggle', () => {
                 _groupState.set(el.dataset.reason, el.open);
@@ -1025,11 +943,6 @@ window.commitBulkMove = (confirmActivePrint = false) => {
     window.closeBulkMovePanel = (opts) => {
         _userHidPanel = !!(opts && opts.hidden);
         _panelGen += 1;          // invalidate any poll response still in flight
-        // The acknowledgement dies with the view. It is module-scoped, so
-        // without this a ticked box survived Hide→reopen (and even a whole
-        // session boundary) and the safety gate was pre-satisfied the instant
-        // the panel reappeared.
-        _resetAck();
         if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
         if (_handle) { try { _handle.cleanup(); } catch (_) { /* noop */ } _handle = null; }
     };
