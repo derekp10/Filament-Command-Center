@@ -14,10 +14,51 @@ _Run in progress. Started from `dev` @ `4203ffe` (= `origin/dev`) at ~18:15 on 2
   whole spool list per toolhead every 5 s (prod paid that too); test runs label their own load; the last full
   sweep was **fully green: 3004 passed, 0 failed, in 21:01** (it took 37:21 with 8 reds earlier tonight). Left
   for you: 45.6, the dev-data refresh from prod (an evening; it needs your OK on the prod reads). Next: Group 41.
+- **Landed (~01:45):** Group 41 is DONE, merged `f49ccfe` and pushed. Eject All refuses rooms and printers and says what it did; a delete never reaches a loaded head; Undo is "Undo Last Move" and asks first; a confirm dialog fading in ignores clicks. The review's red (an auto-deployed undo mid-print) is fixed. Next: Group 42.
 - Evening prep done: Derek's go-ahead for all-night full test runs, a push after each merge, and read-only prod
   counts (taken ~18:25; table in the plan file).
 
 ## Landed
+
+### Group 41 → `DONE`: honest bulk results (merged `f49ccfe`, pushed)
+
+- **Commits:** `a17aec6` (41.1, 41.2, 41.8, 41.9), `c38ae1b` (41.5, 41.6), `082b024` (41.4), `0978d43` (41.3),
+  `27239dc` (41.7), `e6b2780` + `a1b2db7` (a double-click hole found while paying 41.2's test debt), `3169abe`
+  (the review's fixes), and the housekeeping commit.
+- **What changed for you:**
+  - **Eject All refuses rooms and printers, before it asks.** On LR, XL or RCOI (also a "(Room)" row, a zone,
+    and the Unassigned / Unknown lists) it says why and what to do instead: a room follows the Bulk Moves
+    switch, a printer names its heads. The Activity Log says "Eject All refused on LR (a room): nothing was
+    moved." Boxes, carts, shelves and heads keep it.
+  - **Eject All says what it did.** "Cleared!" is gone. The toast says what went home, what failed and what
+    was skipped (slotted, or loaded on a head); spools with no saved home get ONE "Unassign?" prompt for the
+    batch. A printing head asks first.
+  - **Deleting a location is safe.** A location that still contains locations is refused ("LR still contains
+    … — move or delete them first"). A delete never takes a spool off a head (deleting LR-MDB-1 used to take
+    #57 off XL-1), unassigns only the spools filed on that row, keeps the row if any write fails and says what
+    had already moved. The prompt says what happens to the spools.
+  - **Undo is "Undo Last Move".** The tile reads UNDO MOVE. It always asks first, naming the move ("Undo: put
+    #57 back in LR-MDB-1 slot 2 and #196 back on XL-2?"), calls out a printing head, and says what it put
+    back. It's off while a bulk move or an audit is running.
+  - **Smaller items.** The bulk-move tally can't count a rejected spool as moved, and says "couldn't verify"
+    when Spoolman can't be read back. A spool is never seated in a slot whose occupant couldn't be moved.
+    Bulk Move's "source is printing" tick-box is gone (it could never appear). An eject never sends a homeless
+    spool up to its Room: Unassigned, after one prompt.
+  - **Every confirm dialog ignores clicks while it fades in.** Double-clicking FORCE EXECUTE on Eject All used
+    to land the second click on the "Unassign?" YES before it was readable.
+  - **After the next release:** a tab left open across the update answers Undo with "… a page that is out of
+    date … reload" in the Activity Log. Ctrl+F5 fixes it.
+- **Review:** 5 agents (4 lenses + 1 batched skeptic), 1.72M tokens, 18 raw findings → 17 confirmed (1 red,
+  4 orange, 12 yellow), 1 refuted (unreachable from today's UI; kept as hardening); all fixed. The red one:
+  undoing a box-slot move whose auto-deploy had loaded the bound head never asked about that head mid-print
+  (the question now reads where each spool is NOW). Also: prod's blank-id "Unknown Location" row had lost
+  its 🗑️ (the table hid buttons by Type), the toolhead delete read Spoolman fail-open, Undo during an audit
+  hid its dialog behind the audit panel, and a write that timed out after landing counted as failed.
+- **Tests:** every new pin proven red on the pre-change code. `--offline` **2212 passed**; full `RUN_INTEGRATION` sweep **3104 passed / 21 skipped / 0 failed in 21:12** (load 1.03×), fully green.
+- **Handed on, not done here:** the shared strict "direct residents" helper the preflight gave Group 41
+  (41's reads also need ghosts and prefix hits, so they filter inline; Group 42.3b extracts it), and an
+  `inv_core.js` mirror of the Printer-row classifier (Eject All asks the server; Group 40.0a builds one if
+  needed).
 
 ### Group 45 → `PARTIAL`: sweep hygiene, and FCC was the load (merged `af879ac`, pushed)
 
@@ -175,7 +216,9 @@ harness's 1% tolerance let stale CORE1 text pass).
 
 ## Manual checks for Derek
 
-_None yet._
+- **Group 41:** none required (all automated). Two notes for the buglist's ⏸️ PENDING DEREK section, which tonight's rules leave untouched (fold them in when you next edit it):
+  - **Bulk Moves check 1** (`CMD:UNDO` after the commit) now gets one prompt first, naming the move ("Undo: put #156 back in CR-CT-2-R3 and #194 back in CR-CT-2-R3?"); Yes puts both back and the toast says so.
+  - **A suggested mid-print check:** right after check 3's Yes (XL-3's spool moved to `CR-CT-2-R1`), tap UNDO MOVE. Pass if one prompt says the XL is printing and that this undo changes XL-3 mid-print, then "Undo: put #N back on XL-3?", and Yes puts the spool back on XL-3. Does the wording read right?
 
 ## Budget log
 
@@ -184,3 +227,4 @@ _None yet._
 | `wf_1a1ff135-1c6` preflight-questions-tonight | Groups 45/41/42/40 | 5 (4 readers + 1 batched fact-checker) | 2,580,267 subagent | ~70 min, 660 tool calls; 36 questions (6 to Derek in two rounds + 2 more he answered, 29 Claude calls with no veto) and 51 stale claims; read-only |
 | `wf_6284177c-d05` review-finish-43-46 | 43.2 + 46.3 | 5 (4 lenses + 1 batched skeptic) | 1,765,406 subagent | ~38 min, 336 tool calls; 33 raw findings → 12 confirmed + 4 plausible, 16 duplicates, 1 refuted; all fixed (`80dcd6e`) |
 | `wf_cf280365-f17` review-group-45 | Group 45 | 5 (4 lenses + 1 batched skeptic) | 1,552,636 subagent | ~46 min, 392 tool calls; 11 raw findings → 7 confirmed (3 orange, 4 yellow), 4 refuted; all fixed (`0323b9e`) |
+| `wf_80ce168f-fb2` review-group-41 | Group 41 | 5 (4 lenses + 1 batched skeptic) | 1,719,943 subagent | ~34 min, 385 tool calls; 18 raw findings → 17 confirmed (1 red, 4 orange, 12 yellow), 1 refuted (kept as hardening); all fixed (`3169abe`) |
