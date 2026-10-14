@@ -332,6 +332,11 @@ create_field("spool", "fcc_pre_archive_location", "Pre-Archive Location (system)
 # spoolman_api.SYSTEM_MANAGED_EXTRAS. App startup self-heals via
 # ensure_required_extras() too, so this entry is the canonical-rebuild path.
 create_field("spool", "fcc_pre_audit_location", "Pre-Audit Location (system)", "text")
+# Group 42.6: where a spool sat before it went into a single-slot box (a
+# PolyDryer), so ejecting it out of the box puts it back there. System-managed
+# (spoolman_api.SYSTEM_MANAGED_EXTRAS); app startup self-heals it too
+# (ensure_required_extras).
+create_field("spool", "fcc_pre_box_location", "Pre-Box Location (system)", "text")
 create_field("spool", "needs_label_print", "Needs Label Print", "boolean")
 create_field("spool", "is_refill", "Is Refill", "boolean")
 create_field("spool", "spool_temp", "Temp Resistance", "text")

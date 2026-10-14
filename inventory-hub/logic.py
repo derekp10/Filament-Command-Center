@@ -578,6 +578,47 @@ def _ghost_trail_from(current_loc, current_extra, printer_map, loc_info_map):
     return current_loc, current_extra.get('container_slot')
 
 
+# Group 42.6 — the "before the box" note (Derek's Q-A caveat: "we shouldn't
+# overwrite the spool location before the box load. Say it was on a cart or
+# something, so that if we unload it from the box, we know where it was before
+# and move it back to that location"; option 1, decided 2026-10-13).
+PRE_BOX_KEY = 'fcc_pre_box_location'
+
+
+def _pre_box_note(loc, slot, printer_map, loc_info_map):
+    """What a spool entering a single-slot box from `loc` records: `loc`, plus
+    ":<slot>" when it sat in a slot of a multi-slot box (Claude's call 21:
+    "LR-MDB-1 slot 4" goes back to slot 4). '' for places never recorded: a
+    toolhead or printer, a room (a bare Room is a pain to find, D4), Unassigned
+    or Unknown."""
+    lid = str(loc or '').strip().strip('"').upper()
+    if not lid or lid in ('UNASSIGNED', 'UNKNOWN') or lid in (printer_map or {}):
+        return ''
+    row = (loc_info_map or {}).get(lid)
+    typ = str((row or {}).get('Type', '')).strip()
+    if typ in (locations_db.TOOLHEAD_TYPES | {'Printer', 'Room', 'Virtual Room'}):
+        return ''
+    if row is None and '-' not in lid:
+        return ''   # a "(Room)" FCC only knows from its spools
+    s = str(slot or '').strip().strip('"')
+    try:
+        multi = int(str((row or {}).get('Max Spools', '0')).strip() or '0') > 1
+    except (TypeError, ValueError):
+        multi = False
+    return f"{lid}:{s}" if s and multi else lid
+
+
+def _pre_box_place(note):
+    """(location, slot) from a "before the box" note, or ('', '')."""
+    n = str(note or '').strip().strip('"').upper()
+    if not n:
+        return '', ''
+    loc, _, slot = n.rpartition(':')
+    if loc and slot.isdigit():
+        return loc, slot
+    return n, ''
+
+
 def _known_room_of(loc_id, loc_list):
     """The Room `loc_id` really sits in according to the location tree, or ''.
 
@@ -1266,6 +1307,21 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         # Moving to a non-slotted location clears the slot.
         new_extra['container_slot'] = str(target_slot) if target_slot else ""
 
+        # Group 42.6: the "before the box" note. Into a single-slot box from a
+        # place that isn't a head, it records where the spool was (Claude's call
+        # 21); coming back from a head, going onto one (a deploy, head to head)
+        # or a re-scan carries it; any other move clears it.
+        _note = str(current_extra.get(PRE_BOX_KEY) or '').strip().strip('"')
+        follow_box = None
+        if locations_db._is_single_slot_dryer_box(tgt_info):
+            if current_loc != target and not _is_single_occupancy(current_loc, printer_map, loc_info_map):
+                _new_note = _pre_box_note(current_loc, current_extra.get('container_slot'),
+                                          printer_map, loc_info_map)
+                if _new_note or _note:
+                    new_extra[PRE_BOX_KEY] = _new_note
+        elif not (is_printer or is_toolhead) and _note:
+            new_extra[PRE_BOX_KEY] = ''
+
         # PRINTER MOVE
         if target in printer_map:
             # Preserve ghost trail when the spool is already deployed to
@@ -1277,9 +1333,20 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
             # the spool is genuinely arriving from somewhere else.
             existing_source = str(current_extra.get('physical_source', '') or '').strip().strip('"')
             is_already_here = (current_loc == target) and bool(existing_source)
+            # Group 42.6 (Derek's Q-A, 2026-09-18): head to head, a spool from a
+            # single-slot box keeps that box as its home and the box follows it
+            # (attached to the new head below, once the old head has let go).
+            # Every other head-sourced trail is still dropped (_ghost_trail_from).
+            _old_src = existing_source.upper()
+            _follows = (not is_already_here and current_loc in printer_map and _old_src
+                        and locations_db._is_single_slot_dryer_box(loc_info_map.get(_old_src)))
             if is_already_here:
                 new_extra['physical_source'] = existing_source
                 new_extra['physical_source_slot'] = current_extra.get('physical_source_slot')
+            elif _follows:
+                follow_box = _old_src
+                new_extra['physical_source'] = _old_src
+                new_extra['physical_source_slot'] = str(current_extra.get('physical_source_slot') or '').strip('"') or '1'
             else:
                 new_extra['physical_source'], new_extra['physical_source_slot'] = \
                     _ghost_trail_from(current_loc, current_extra, printer_map, loc_info_map)
@@ -1394,6 +1461,14 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         # Load's residents are released inside their own eject, never here.
         if str(sid) not in failures and current_loc != target and current_loc in printer_map:
             _release_single_slot_box(sid, current_loc, current_extra, printer_map)
+            # Group 42.6: head to head, the box follows its spool to the new head.
+            if follow_box:
+                try:
+                    _att, _ad = locations_db.attach_single_slot_box_to_toolhead(follow_box, target)
+                    if _att and _ad != "already attached":
+                        state.add_log_entry(f"🔗 {follow_box} follows its spool #{sid} to {target}", "INFO")
+                except Exception as _fe:
+                    state.logger.warning(f"42.6 box follow skipped: {_fe}")
 
     # Group 41.4: record only what landed. A spool whose write was rejected, or
     # that was skipped (an unseat that failed, an unreadable slot), never moved,
@@ -2312,6 +2387,17 @@ def _eject_destination(spool_data, printer_map, homeless_destination=None):
         return {"home": home, "slot": str(extra.get('physical_source_slot', '') or '').strip('"'),
                 "target": home, "needs_unassign_confirm": False}
 
+    # Group 42.6: out of a single-slot box, back to where the spool sat before
+    # it (its "before the box" note) instead of the "unassign?" prompt. A
+    # remembered place that has since been deleted falls back to the prompt.
+    pb_loc, pb_slot = _pre_box_place(extra.get(PRE_BOX_KEY))
+    if pb_loc and pb_loc != current_location:
+        _rows = {str(r.get('LocationID', '')).strip().upper(): r
+                 for r in (locations_db.load_locations_list() or []) if isinstance(r, dict)}
+        if locations_db._is_single_slot_dryer_box(_rows.get(current_location)) and pb_loc in _rows:
+            return {"home": pb_loc, "slot": pb_slot, "target": pb_loc,
+                    "needs_unassign_confirm": False, "pre_box": True}
+
     if homeless_destination is not None:
         # The caller already decided where a spool with no home goes.
         target_loc = str(homeless_destination or '').strip().upper()
@@ -2452,14 +2538,25 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
                 state.logger.warning(f"Slot-collision check failed: {_slot_check_err}")
             if slot_taken_by_other:
                 extra['container_slot'] = ""
+                if dest.get('pre_box'):
+                    # Claude's call 21: back into that box, unslotted, and say so.
+                    state.add_log_entry(
+                        f"⚠️ #{spool_id} went back into {saved_source} unslotted: slot {saved_slot_clean} "
+                        f"holds another spool now.", "WARNING", "ffaa00")
             else:
                 extra['container_slot'] = saved_slot_clean
             extra['physical_source_slot'] = ""
         else:
             extra['container_slot'] = ""
-            
+
         # Clear the source memory so we don't bounce back again later
-        extra['physical_source'] = "" 
+        extra['physical_source'] = ""
+        # Group 42.6: the "before the box" note rides along only while the spool
+        # goes back into its single-slot box; leaving it (to the noted place, or
+        # anywhere else) uses it up.
+        if extra.get(PRE_BOX_KEY) and (dest.get('pre_box')
+                                       or not locations_db._is_single_slot_dryer_box(home_row)):
+            extra[PRE_BOX_KEY] = ""
         
         if spoolman_api.update_spool(spool_id, {"location": saved_source, "extra": extra}):
             _landed(saved_source, extra.get('container_slot', ''), home=True)
@@ -2478,6 +2575,8 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
         extra['physical_source'] = ""
         extra['physical_source_slot'] = ""
         extra['container_slot'] = ""
+        if extra.get(PRE_BOX_KEY):
+            extra[PRE_BOX_KEY] = ""   # Group 42.6: any move elsewhere uses the note up
 
         if spoolman_api.update_spool(spool_id, {"location": target_loc, "extra": extra}):
             _landed(target_loc, "", home=False)
@@ -2641,6 +2740,8 @@ def perform_force_unassign(spool_id, confirm_active_print=False):
     extra['container_slot'] = ""
     extra['physical_source'] = ""
     extra['physical_source_slot'] = ""
+    if extra.get(PRE_BOX_KEY):
+        extra[PRE_BOX_KEY] = ""   # Group 42.6: a move elsewhere uses the note up
 
     if spoolman_api.update_spool(spool_id, {"location": "", "extra": extra}):
         state.add_log_entry(f"🗑️ Force Unassigned #{spool_id}", "WARNING")

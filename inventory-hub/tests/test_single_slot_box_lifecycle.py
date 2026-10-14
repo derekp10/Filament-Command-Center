@@ -362,3 +362,100 @@ def test_bindings_for_machine_flags_single_slot_boxes():
         out = logic.locations_db.get_bindings_for_machine(XL, PRINTER_MAP)
     assert out["toolheads"]["XL-2"] == [{"box": "PM-DB-2", "slot": "1", "single_slot": True}], out
     assert out["toolheads"]["XL-1"] == [{"box": "LR-MDB-1", "slot": "1"}], out
+
+
+# --- 42.6: the box follows its spool, and the "before the box" note -----------------
+# Derek's Q-A (2026-09-18): PM-DB-2 follows #50 from XL-2 to XL-4 and #50 keeps
+# PM-DB-2 as its home; his caveat (settled 2026-10-13, option 1): remember where
+# the spool was before the box, so ejecting it out of the box puts it back there.
+
+BASE_42_6 = BASE + [_box_row("PM-DB-2", head=None),
+                    {"LocationID": "CR-CT-2-R2", "Type": "Cart Row", "Max Spools": "0", "parent_id": "CR"}]
+NOTE = "fcc_pre_box_location"
+
+
+def _note(sm, sid):
+    return (sm.spools[sid].get("extra") or {}).get(NOTE, "")
+
+
+def test_derek_s_worked_example_end_to_end(logs):
+    """#50 sits on CR-CT-2-R1. Into PM-DB-2 (the note records CR-CT-2-R1), onto
+    XL-2, then to XL-4 (PM-DB-2 follows). Eject: back into PM-DB-2. Eject again:
+    back on CR-CT-2-R1 with no "unassign?" prompt, and the note is used up."""
+    store = LocationsStore(BASE_42_6)
+    sm = FakeSpoolman({50: {"location": "CR-CT-2-R1", "extra": {}}})
+    for target in ("PM-DB-2", "XL-2", "XL-4"):
+        res = _go(sm, store, target=target, raw_spools=[50])
+        assert logic.smart_move_failure(res, 50) == "", (target, res)
+        assert _note(sm, 50) == "CR-CT-2-R1", (target, sm.spools[50])
+    assert sm.spools[50]["extra"]["physical_source"] == "PM-DB-2", "#50 keeps PM-DB-2 as its home"
+    assert store.bound("PM-DB-2") == "XL-4", "the box followed its spool"
+    assert (f"🔗 PM-DB-2 follows its spool #50 to XL-4", ("INFO",)) in logs, logs
+
+    assert _go(sm, store, call=lambda: logic.perform_smart_eject(50)) is True
+    assert sm.spools[50]["location"] == "PM-DB-2" and _note(sm, 50) == "CR-CT-2-R1"
+    assert store.bound("PM-DB-2") == ""
+
+    report = {}
+    assert _go(sm, store, call=lambda: logic.perform_smart_eject(50, report=report)) is True, \
+        "ejecting out of the box asked 'unassign?'"
+    assert sm.spools[50]["location"] == "CR-CT-2-R1" and _note(sm, 50) == ""
+    assert report["to"] == "CR-CT-2-R1" and report["home"] is True, report
+    assert ("⏏️ Ejected #50 from PM-DB-2 back to CR-CT-2-R1.", ("WARNING",)) in logs, logs
+
+
+def test_a_spool_from_a_multi_slot_box_goes_back_to_its_slot(logs):
+    """Claude's call 21: "LR-MDB-1 slot 4" goes back to slot 4 while it's free."""
+    store = LocationsStore(BASE_42_6)
+    sm = FakeSpoolman({60: {"location": "LR-MDB-1", "extra": {"container_slot": "4"}}})
+    _go(sm, store, target="PM-DB-2", raw_spools=[60])
+    assert _note(sm, 60) == "LR-MDB-1:4"
+    assert _go(sm, store, call=lambda: logic.perform_smart_eject(60)) is True
+    assert sm.spools[60]["location"] == "LR-MDB-1" and sm.spools[60]["extra"]["container_slot"] == "4"
+
+
+def test_its_slot_taken_meanwhile_it_goes_back_unslotted_with_a_warning(logs):
+    store = LocationsStore(BASE_42_6)
+    sm = FakeSpoolman({60: {"location": "PM-DB-2", "extra": {"container_slot": "1", NOTE: "LR-MDB-1:4"}},
+                       61: {"location": "LR-MDB-1", "extra": {"container_slot": "4"}}})
+    assert _go(sm, store, call=lambda: logic.perform_smart_eject(60)) is True
+    assert sm.spools[60]["location"] == "LR-MDB-1" and sm.spools[60]["extra"]["container_slot"] == ""
+    assert any("#60 went back into LR-MDB-1 unslotted: slot 4" in m and a[0] == "WARNING" for m, a in logs), logs
+
+
+@pytest.mark.parametrize("origin", ["CR", "XL-2", ""], ids=["a-room", "a-toolhead", "unassigned"])
+def test_a_room_a_head_or_unassigned_is_never_recorded(origin, logs):
+    store = LocationsStore(BASE_42_6)
+    sm = FakeSpoolman({62: {"location": origin, "extra": {}}})
+    assert logic.smart_move_failure(_go(sm, store, target="PM-DB-2", raw_spools=[62]), 62) == ""
+    assert _note(sm, 62) == ""
+
+
+@pytest.mark.parametrize("move", ["to-a-shelf", "force-unassign"])
+def test_a_move_elsewhere_uses_the_note_up(move, logs):
+    store = LocationsStore(BASE_42_6)
+    sm = FakeSpoolman({50: {"location": "PM-DB-2", "extra": {"container_slot": "1", NOTE: "CR-CT-2-R1"}}})
+    if move == "to-a-shelf":
+        assert logic.smart_move_failure(_go(sm, store, target="CR-CT-2-R2", raw_spools=[50]), 50) == ""
+    else:
+        assert _go(sm, store, call=lambda: logic.perform_force_unassign(50)) is True
+    assert _note(sm, 50) == ""
+
+
+def test_a_deleted_origin_falls_back_to_the_prompt(logs):
+    store = LocationsStore(BASE_42_6)
+    sm = FakeSpoolman({50: {"location": "PM-DB-2", "extra": {"container_slot": "1", NOTE: "GONE-SHELF-9"}}})
+    assert _go(sm, store, call=lambda: logic.perform_smart_eject(50)) == "REQUIRE_CONFIRM"
+    assert sm.spools[50]["location"] == "PM-DB-2"
+
+
+def test_the_note_is_a_registered_system_managed_text_field():
+    """Spoolman rejects a whole PATCH carrying an unregistered extra, and every
+    Undo / Smart Load snapshot writes the system-managed keys: the field must be
+    registered at startup (ensure_required_extras) and by setup_fields.py."""
+    assert NOTE in spoolman_api.SYSTEM_MANAGED_EXTRAS
+    assert (NOTE, "Pre-Box Location (system)", "text") in spoolman_api.REQUIRED_SPOOL_EXTRAS
+    assert NOTE in spoolman_api.JSON_STRING_FIELDS
+    setup = open(os.path.join(os.path.dirname(__file__), "..", "..", "setup-and-rebuild", "setup_fields.py"),
+                 encoding="utf-8").read()
+    assert 'create_field("spool", "fcc_pre_box_location", "Pre-Box Location (system)", "text")' in setup

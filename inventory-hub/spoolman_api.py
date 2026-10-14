@@ -47,6 +47,8 @@ JSON_STRING_FIELDS = [
     "prusament_manufacturing_date", "sheet_link", "slicer_profile",
     # Vendor extras (Group 6 — Edit Modal new panels):
     "website",
+    # Group 42.6: a location id is text even when it looks like a number.
+    "fcc_pre_box_location",
 ]
 
 # Captures the last Spoolman non-ok response body so callers like
@@ -611,6 +613,10 @@ SYSTEM_MANAGED_EXTRAS = frozenset({
     # recovery scan can route it home; never user-editable (would lose
     # the breadcrumb).
     "fcc_pre_audit_location",
+    # Group 42.6 — where a spool sat before it went into a single-slot box
+    # (a PolyDryer), so ejecting it out of the box puts it back there.
+    # Written and cleared only by the move engine and the eject.
+    "fcc_pre_box_location",
 })
 
 
@@ -1074,6 +1080,10 @@ REQUIRED_SPOOL_EXTRAS = [
     # ("Unknown extra field fcc_pre_audit_location") and missing spools stay
     # at their stale location (silent failure surfaces as red Activity Log).
     ("fcc_pre_audit_location", "Pre-Audit Location (system)", "text"),
+    # Group 42.6 — every Undo and Smart Load snapshot writes the
+    # SYSTEM_MANAGED_EXTRAS, and Spoolman rejects a whole PATCH carrying an
+    # unregistered extra, so startup must register this before the first move.
+    ("fcc_pre_box_location", "Pre-Box Location (system)", "text"),
 ]
 
 # Vendor extras the Manufacturer/Vendor Edit modal V1 writes (Group 6.2).
