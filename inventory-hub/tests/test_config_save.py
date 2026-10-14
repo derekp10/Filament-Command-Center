@@ -300,6 +300,50 @@ def test_non_bind_mount_replace_error_is_not_masked(cfg_file, monkeypatch):
     assert cfg_file.read_text(encoding="utf-8") == before  # no partial write
 
 
+# --- Windows sharing collision on the swap (Group 45.2) --------------------
+# On a Windows host another process can hold config.json for a moment (an
+# antivirus scan of the file just written) and os.replace raises
+# PermissionError. Two one-off reds in full hermetic runs (2026-09-29) fit that
+# shape. The swap rides it out like the other JSON stores' (atomic_store).
+
+def _tmp_leftovers(cfg_file):
+    return [f for f in os.listdir(cfg_file.parent) if f.endswith(".tmp")]
+
+
+def test_a_momentary_permission_error_on_the_swap_is_retried(cfg_file, monkeypatch):
+    real_replace = os.replace
+    calls = {"n": 0}
+
+    def held_twice(src, dst):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise PermissionError(errno.EACCES, "Access is denied")  # WinError 5 / 32
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(config_loader.os, "replace", held_twice)
+    result = config_loader.save_config({"sync_delay": 6.0})
+    assert result["ok"] is True, result["error"]
+    assert calls["n"] == 3
+    assert _read(cfg_file)["sync_delay"] == 6.0
+    assert _tmp_leftovers(cfg_file) == []
+
+
+def test_a_file_that_stays_held_still_fails_the_save(cfg_file, monkeypatch):
+    # The retry is bounded: a target that never frees up is a failed save
+    # with the disk untouched, not a hang or a silently dropped write.
+    before = cfg_file.read_text(encoding="utf-8")
+
+    def held(src, dst):
+        raise PermissionError(errno.EACCES, "Access is denied")
+
+    monkeypatch.setattr(config_loader.os, "replace", held)
+    result = config_loader.save_config({"sync_delay": 6.0})
+    assert result["ok"] is False
+    assert "write failed" in result["error"].lower()
+    assert cfg_file.read_text(encoding="utf-8") == before
+    assert _tmp_leftovers(cfg_file) == []
+
+
 # --- Rolling .bak snapshot (last-known-good, refreshed every save) ---
 
 def test_bak_holds_pre_edit_state_and_rolls(cfg_file):

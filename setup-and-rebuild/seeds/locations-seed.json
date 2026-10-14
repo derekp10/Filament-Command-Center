@@ -607,9 +607,7 @@
         "Label Printed": "No",
         "parent_id": "TST",
         "extra": {
-            "slot_targets": {
-                "1": "PRINTER:XL"
-            }
+            "slot_targets": {}
         }
     },
     {

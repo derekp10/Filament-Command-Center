@@ -14,9 +14,13 @@ from __future__ import annotations
 
 from playwright.sync_api import Page
 
+import conftest
+
 
 def _setup_page_with_held_spool(page: Page, spool_id=42):
     """Open the dashboard, prime state.heldSpools with one spool, return."""
+    # Group 45.8 (family D): this page gets its own buffer endpoint.
+    conftest.own_the_buffer(page, [{"id": spool_id, "display": f"#{spool_id}", "color": "ff0000"}])
     page.goto("http://localhost:8000")
     page.wait_for_selector("#buffer-zone")
     page.wait_for_function("typeof window.doAssign === 'function'")
@@ -193,6 +197,9 @@ def _setup_active_print_overlay(page: Page):
     via inline display:block — otherwise focus on overlay descendants
     silently fails because focus can't land on a hidden ancestor's child.
     """
+    # Group 45.8 review: these seven tests injected #99 against dev's shared
+    # buffer too, and the Enter test's successful assign persisted [] over it.
+    conftest.own_the_buffer(page, [{"id": 99, "display": "#99", "color": "ff0000"}])
     page.goto("http://localhost:8000")
     page.wait_for_selector("#buffer-zone")
     page.wait_for_function("typeof window.doAssign === 'function'")

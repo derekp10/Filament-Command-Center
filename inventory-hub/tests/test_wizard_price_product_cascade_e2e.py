@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from playwright.sync_api import Page, expect
 
+import conftest
+
 
 def _goto(page: Page) -> None:
     page.goto("http://localhost:8000")
@@ -79,8 +81,6 @@ def test_scan_populates_both_url_inputs(page: Page):
     expect(page.locator("#wiz-spool-product_url")).to_have_value("https://prod.example/x")
     expect(page.locator("#wiz-spool-purchase_url")).to_have_value("https://buy.example/y")
 
-    # Clean close so we don't pollute later tests.
-    page.evaluate("""
-        const m = bootstrap.Modal.getInstance(document.getElementById('wizardModal'));
-        if (m) { try { wizardState.forceClose = true; wizardState.isDirty = false; } catch (_) {} m.hide(); }
-    """)
+    # Clean close so we don't pollute later tests (waits out the show
+    # transition first; a bare hide() inside it is dropped, Group 45.8).
+    conftest.close_wizard(page)

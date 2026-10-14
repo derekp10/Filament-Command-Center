@@ -158,85 +158,87 @@ def test_widget_visual_collapsed_baseline(page: Page, base_url, snapshot):
     snapshot(page.locator("#printer-status-widget"), "printer-status-widget-collapsed")
 
 
+# Group 45.5: two made-up printers and NO dryer-box binding anywhere (every
+# toolhead_slots answer is empty), one head loaded. Every source the widget
+# reads is stubbed, as in the 46.3 label tests below, so no dev box is touched.
+# This test used to clear EVERY dryer box in dev, Derek's real multi-slot boxes
+# included, and put back whatever it had found (Derek chose stubbed data,
+# 2026-10-13).
+_UNBOUND_FLEET = {
+    "ZZ Unbound A": [{"location_id": "ZA-1", "position": 0}, {"location_id": "ZA-2", "position": 1}],
+    "ZZ Unbound B": [{"location_id": "ZB-1", "position": 0}],
+}
+_UNBOUND_ITEM = {"id": 9011, "color": "00AAFF", "color_direction": "longitudinal",
+                 "remaining_weight": 640, "initial_weight": 1000, "display": "#9011 Unbound Test"}
+
+
+def _stub_unbound_fleet(page: Page):
+    def handle(route):
+        url = urlsplit(route.request.url)
+        if url.path == "/api/printer_map":
+            body = {"printers": _UNBOUND_FLEET}
+        elif url.path.startswith("/api/machine/") and url.path.endswith("/toolhead_slots"):
+            body = {"toolheads": {}, "printer_pool": []}
+        elif url.path == "/api/get_contents":
+            wanted = (parse_qs(url.query).get("id") or [""])[0].upper()
+            body = [_UNBOUND_ITEM] if wanted == "ZA-2" else []
+        elif url.path == "/api/dashboard_pulse":
+            body = {}
+        else:
+            route.continue_()
+            return
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
+    page.route("**/api/**", handle)
+
+
 @pytest.mark.usefixtures("require_server")
-def test_widget_shows_unbound_printers_with_placeholder(page: Page, base_url, api_base_url):
+def test_other_sync_pulse_sources_still_refresh_the_widget_at_once(page: Page, base_url):
+    """Group 45.8 stopped the widget's client fan-out on HEARTBEAT ticks (the
+    tick's printer_status section already rendered it; see
+    test_dashboard_pulse_frontend). Any other source, such as an eject, a
+    details save or a review, must still refresh it right away instead of
+    waiting up to a heartbeat (5-30 s)."""
+    page.goto(base_url)
+    expect(page.locator("#printer-status-widget .fcc-ps-row").first).to_be_attached(timeout=15000)
+    with page.expect_request(lambda r: urlsplit(r.url).path == "/api/printer_map", timeout=5000):
+        page.evaluate("() => document.dispatchEvent(new CustomEvent('inventory:sync-pulse',"
+                      " { detail: { source: 'eject' } }))")
+
+
+@pytest.mark.usefixtures("require_server")
+def test_widget_shows_unbound_printers_with_placeholder(page: Page, base_url):
     """L140 + box-bounding fix: with zero bound dryer-slots the widget
     previously hid EVERY printer (the symptom that hid Core One on prod
     when only XL had slot_targets). After the fix, every printer in
     printer_map renders. An unbound toolhead that is EMPTY gets the
     "🔗 no bound slot" placeholder; an unbound toolhead that HOLDS a spool
     surfaces the spool (occupancy keys off the toolhead, not the dryer
-    box) while keeping the fcc-ps-th-unbound class + 🔗 hint. Both kinds
-    carry the fcc-ps-th-unbound class, so the L140 assert below still
-    holds AND the box-bounding regression is pinned: a loaded toolhead
-    with no dryer box is no longer masked."""
-    # Snapshot every dryer box's bindings, then clear them. This wipes the
-    # WHOLE fleet — the real boxes included — so the clearing loop has to run
-    # INSIDE the try: a request that fails partway through it used to leave
-    # every already-cleared box wiped with no restore, because `finally` had
-    # not been entered yet. Each box is snapshotted before it is cleared, so
-    # the finally below restores exactly the ones this test touched.
-    boxes = requests.get(f"{api_base_url}/api/dryer_boxes/slots", timeout=5).json().get("slots", [])
-    box_originals = {}
-    seen_boxes = set()
-    try:
-        for s in boxes:
-            b = s["box"]
-            if b in seen_boxes:
-                continue
-            seen_boxes.add(b)
-            snap = requests.get(
-                f"{api_base_url}/api/dryer_box/{b}/bindings", timeout=5
-            ).json().get("slot_targets", {})
-            box_originals[b] = snap
-            requests.put(
-                f"{api_base_url}/api/dryer_box/{b}/bindings",
-                json={"slot_targets": {}},
-                timeout=5,
-            )
-        page.goto(base_url)
-        page.wait_for_selector("#buffer-zone", timeout=10000)
-        # Wait for the widget body to populate (aggregation takes a sec).
-        page.wait_for_function(
-            "() => { const w = document.getElementById('printer-status-widget');"
-            "       return w && getComputedStyle(w).display !== 'none'"
-            "         && w.querySelectorAll('.fcc-ps-row').length > 0; }",
-            timeout=5000,
-        )
-        widget = page.locator("#printer-status-widget")
-        # The widget should now show printers (rather than be hidden).
-        rows = widget.locator(".fcc-ps-row")
-        assert rows.count() > 0, "Widget should render rows even when no toolheads are bound"
-        # Every rendered toolhead now carries the unbound class (bindings cleared),
-        # whether it's an empty placeholder OR a loaded-but-unbound tile.
-        unbound = widget.locator(".fcc-ps-th-unbound")
-        assert unbound.count() > 0, (
-            "With all bindings cleared, every rendered toolhead should carry the unbound class"
-        )
-        # Box-bounding regression guard: any toolhead that physically holds a
-        # spool must still surface it (data-spool-id present on the unbound
-        # tile) — occupancy is NOT masked by the absence of a dryer-box
-        # binding. Tolerant of an empty dev: only asserts when the live
-        # payload reports a loaded toolhead.
-        ps = requests.get(
-            f"{api_base_url}/api/dashboard_pulse?include=printer_status", timeout=15
-        ).json().get("printer_status", {})
-        any_loaded = any(
-            th.get("item") for p in ps.values() for th in p.get("toolheads", [])
-        )
-        if any_loaded:
-            occupied_unbound = widget.locator(".fcc-ps-th-unbound[data-spool-id]")
-            assert occupied_unbound.count() > 0, (
-                "A loaded toolhead with no dryer-box binding must still render its "
-                "spool (box-bounding fix), not a bare placeholder"
-            )
-    finally:
-        for b, original in box_originals.items():
-            requests.put(
-                f"{api_base_url}/api/dryer_box/{b}/bindings",
-                json={"slot_targets": original},
-                timeout=5,
-            )
+    box) while keeping the fcc-ps-th-unbound class + 🔗 hint.
+
+    The stubbed heartbeat carries no printer_status, so this also pins the
+    Group 45.8 fallback: such a tick still runs the client fan-out."""
+    _stub_unbound_fleet(page)
+    page.goto(base_url)
+    widget = page.locator("#printer-status-widget")
+    # Every printer renders although none has a bound slot.
+    for name in _UNBOUND_FLEET:
+        expect(widget.locator(f".fcc-ps-row[data-printer='{name}']")).to_have_count(1, timeout=10000)
+    expect(widget).to_be_visible()
+
+    def tile(th):
+        return widget.locator(f".fcc-ps-body .fcc-ps-th[data-toolhead='{th}']").first
+
+    for th in ("ZA-1", "ZA-2", "ZB-1"):
+        assert "fcc-ps-th-unbound" in (tile(th).get_attribute("class") or "").split(), th
+    # Unbound and empty: the bare placeholder.
+    for th in ("ZA-1", "ZB-1"):
+        assert tile(th).get_attribute("data-spool-id") is None, th
+        assert "no bound slot" in (tile(th).text_content() or ""), th
+    # Unbound and loaded: the spool still shows (box-bounding fix), hint kept.
+    loaded = tile("ZA-2")
+    assert loaded.get_attribute("data-spool-id") == "9011"
+    text = loaded.text_content() or ""
+    assert "640" in text and "no bound slot" in text, text
 
 
 @pytest.mark.usefixtures("require_server")
@@ -415,6 +417,37 @@ def test_l361_toolhead_click_survives_rerender(page: Page, base_url):
     expect(page.locator("#manageModal")).to_be_visible(timeout=5000)
 
 
+# Holds the page's own /api/locations load back 2.5 s (the in-page fetch-delay
+# lever from Group 38), so an early openManage always lands in the gap.
+_DELAY_LOCATIONS_JS = """(() => {
+    const orig = window.fetch;
+    window.fetch = (url, opts) => {
+        const u = typeof url === 'string' ? url : (url && url.url) || '';
+        if (u === '/api/locations') {
+            return new Promise(r => setTimeout(r, 2500)).then(() => orig(url, opts));
+        }
+        return orig(url, opts);
+    };
+})();"""
+
+
+@pytest.mark.usefixtures("require_server")
+def test_openmanage_before_the_first_locations_load_opens_when_it_lands(page: Page, base_url):
+    """Group 45.8: the widget now paints from the first heartbeat, ~100 ms after
+    load, sooner than the cold /api/locations load (1-2 s on dev). openManage()
+    did nothing for an id it hadn't loaded yet, so a tile clicked in that gap
+    was lost; test_l361_toolhead_click_survives_rerender went red on it. The
+    open is now parked until the load lands."""
+    page.add_init_script(_DELAY_LOCATIONS_JS)
+    page.goto(base_url, wait_until="domcontentloaded")
+    page.wait_for_function("() => typeof window.openManage === 'function'", timeout=10000)
+    assert page.evaluate("() => state.allLocations.length") == 0, (
+        "the locations landed before the click; the gap this pins was not exercised")
+    page.evaluate("(id) => window.openManage(id)", TEST_TOOLHEAD)
+    expect(page.locator("#manageModal")).to_be_visible(timeout=10000)
+    expect(page.locator("#manage-loc-id")).to_have_value(TEST_TOOLHEAD)
+
+
 @pytest.mark.usefixtures("require_server")
 def test_dashboard_primes_all_locations_for_openmanage(page: Page, base_url, api_base_url):
     """Regression (2026-06-01): the L206 adaptive pulse only fetched
@@ -518,3 +551,88 @@ def test_changing_the_label_mode_repaints_the_same_data(page: Page, base_url):
     page.evaluate("(k) => localStorage.setItem(k, 'Tool 3')", _LABEL_KEY)
     page.evaluate("() => window.refreshPrinterStatusWidget()")
     expect(label).to_have_text("Tool 3", timeout=5000)
+
+
+# --- Group 45.8 review: a heartbeat section that failed, or predates a change ---
+# One made-up printer with one head, ZF-1. The client fan-out (printer_map,
+# toolhead_slots, get_contents) is stubbed to see one spool there; the
+# heartbeat's printer_status section is stubbed separately, verbatim.
+_FEED_PRINTER = "ZZ Feed Printer"
+_FEED_HEAD = "ZF-1"
+
+
+def _feed_item(sid):
+    return {"id": sid, "color": "00AAFF", "color_direction": "longitudinal",
+            "remaining_weight": 500, "initial_weight": 1000, "display": f"#{sid} Feed Test"}
+
+
+def _stub_feed(page: Page, pulse_status, contents_sid):
+    def handle(route):
+        url = urlsplit(route.request.url)
+        if url.path == "/api/printer_map":
+            body = {"printers": {_FEED_PRINTER: [{"location_id": _FEED_HEAD, "position": 0}]}}
+        elif url.path.startswith("/api/machine/") and url.path.endswith("/toolhead_slots"):
+            body = {"toolheads": {_FEED_HEAD: [{"box": "ZZ-BOX"}]}, "printer_pool": []}
+        elif url.path == "/api/get_contents":
+            wanted = (parse_qs(url.query).get("id") or [""])[0].upper()
+            body = [_feed_item(contents_sid)] if wanted == _FEED_HEAD else []
+        elif url.path == "/api/dashboard_pulse":
+            body = {"printer_status": pulse_status}
+        else:
+            route.continue_()
+            return
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
+    page.route("**/api/**", handle)
+
+
+def _feed_tile(page: Page):
+    return page.locator(
+        f"#printer-status-widget .fcc-ps-body .fcc-ps-th[data-toolhead='{_FEED_HEAD}']").first
+
+
+@pytest.mark.usefixtures("require_server")
+def test_a_failed_printer_status_section_falls_back_to_the_fan_out(page: Page, base_url):
+    """The server sends printer_status: {error: "..."} when it can't build the
+    section. The widget used to take that for printer data, throw in its
+    fingerprint (aborting the tick before its event), and sit on the loading
+    skeleton until the 15 s load fallback. Now that tick takes the fan-out."""
+    _stub_feed(page, {"error": "boom"}, 9201)
+    page.goto(base_url)
+    expect(_feed_tile(page)).to_have_attribute("data-spool-id", "9201", timeout=6000)
+
+
+_RECORD_TILE_JS = """(head) => {
+    window.__fccTileSeq = [];
+    const body = document.querySelector('#printer-status-widget .fcc-ps-body');
+    const read = () => {
+        const t = body.querySelector(`.fcc-ps-th[data-toolhead='${head}']`);
+        const v = t ? t.getAttribute('data-spool-id') : null;
+        const seq = window.__fccTileSeq;
+        if (seq[seq.length - 1] !== v) seq.push(v);
+    };
+    new MutationObserver(read).observe(body, {childList: true, subtree: true, attributes: true});
+}"""
+
+
+@pytest.mark.usefixtures("require_server")
+def test_a_tick_older_than_a_local_change_cannot_leave_the_old_spool_up(page: Page, base_url):
+    """The heartbeat here always reports the OLD spool (#9301, a snapshot taken
+    before the change); the fan-out sees the new one (#9302). The server reads
+    Spoolman before it probes the printers, so in real use such a tick can land
+    right after a Quick-Swap's own refresh. After a local change, a tick's stale
+    repaint is followed by a fan-out: the new spool is back at once instead of
+    staying hidden until the next tick."""
+    stale = {_FEED_PRINTER: {"state": None, "toolheads": [
+        {"id": _FEED_HEAD, "position": 0, "unbound": False, "item": _feed_item(9301)}]}}
+    _stub_feed(page, stale, 9302)
+    page.goto(base_url)
+    tile = _feed_tile(page)
+    expect(tile).to_have_attribute("data-spool-id", "9301", timeout=10000)   # the first tick
+    page.evaluate(_RECORD_TILE_JS, _FEED_HEAD)
+    page.evaluate("() => document.dispatchEvent(new CustomEvent('inventory:locations-changed'))")
+    # The change's own refresh shows the new spool, then the next tick repaints the old one.
+    page.wait_for_function(
+        """() => { const s = window.__fccTileSeq || [];
+                   const i = s.indexOf('9302');
+                   return i >= 0 && s.indexOf('9301', i) > i; }""", timeout=12000)
+    expect(tile).to_have_attribute("data-spool-id", "9302", timeout=5000)

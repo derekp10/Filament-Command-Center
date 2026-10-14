@@ -257,12 +257,10 @@ _NON_LITERAL_BINDINGS_PUT = re.compile(r"""json\s*=\s*\{\s*["']slot_targets["']\
 # Test files that still restore an observed binding on a baseline box, each with
 # why it has not been converted. An entry that stops matching fails the canary,
 # so converting a file forces its entry out of this list.
-_OBSERVED_RESTORE_ALLOWED = {
-    "test_printer_status_widget.py": (
-        "test_widget_shows_unbound_printers_with_placeholder clears EVERY dryer box "
-        "in dev, real multi-slot setups included, and PUTs what it observed back. A "
-        "fixed baseline for the whole fleet needs Derek's decision; standalone follow-up."
-    ),
+_OBSERVED_RESTORE_ALLOWED: dict = {
+    # Empty since Group 45.5: test_printer_status_widget.py's placeholder test
+    # now stubs its data instead of clearing every dev box and putting back
+    # what it found (Derek, 2026-10-13).
 }
 
 
@@ -334,3 +332,22 @@ def test_no_test_file_restores_an_observed_snapshot_of_a_baseline_box():
     assert stale == [], (
         f"_OBSERVED_RESTORE_ALLOWED lists files that no longer restore an observed "
         f"binding on a baseline box; drop them from the list: {stale}")
+
+
+# The two conftest factories forward their CALLER's own `slot_targets` argument
+# (borrow_box_bindings' PUT, seed_dryer_box). That is the only non-literal
+# payload conftest may send.
+_FORWARDED_CALLER_BINDINGS = re.compile(
+    r"""json\s*=\s*\{\s*["']slot_targets["']\s*:\s*slot_targets\s*\}""")
+
+
+def test_conftest_restores_no_observed_snapshot_either():
+    """Group 45.5: `bound_loaded_slot` lived in conftest.py, which the canary
+    above never reads, and it put back whatever binding it had observed on the
+    first loaded box it found: Derek's real CR-MDB-1, later LR-MDB-1. It now
+    borrows TST-MDB-1 at a fixed baseline. Red on the old conftest."""
+    with open(os.path.join(TESTS_DIR, "conftest.py"), encoding="utf-8") as fh:
+        src = fh.read()
+    assert len(_FORWARDED_CALLER_BINDINGS.findall(src)) == 2, (
+        "the factories' forwarding PUTs moved; re-check what this canary exempts")
+    assert _observed_restore_idioms(_FORWARDED_CALLER_BINDINGS.sub("", src)) == []

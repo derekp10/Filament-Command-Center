@@ -72,30 +72,35 @@ def test_feeds_section_save_round_trip(page: Page, open_manage_modal, api_base_u
     assert r.json()["slot_targets"].get("1") == "XL-2"
 
 
-@pytest.mark.usefixtures("require_server", "restore_bindings")
-def test_feeds_section_save_with_some_slots_none(page: Page, open_manage_modal, api_base_url):
+# The split/partial scenario needs a multi-slot box; PM-DB-1 has one slot, so
+# this test skipped on every run until Group 45.4 pointed it at TST-MDB-1 (6
+# slots, empty fixed baseline) instead of widening PM-DB-1 (Derek, 2026-10-13).
+MULTI_SLOT_BOX = "TST-MDB-1"
+
+
+@pytest.mark.usefixtures("require_server")
+def test_feeds_section_save_with_some_slots_none(page: Page, open_manage_modal, api_base_url,
+                                                 borrow_box_bindings):
     """User asked to support split/partial use — some slots bound, some left None."""
-    open_manage_modal(TEST_BOX)
+    borrow_box_bindings(MULTI_SLOT_BOX)
+    open_manage_modal(MULTI_SLOT_BOX)
     page.locator("#feeds-toggle-btn").click()
-    page.wait_for_timeout(300)
-    selects = page.locator("select.feeds-select")
-    if selects.count() < 2:
-        pytest.skip("Test box needs at least 2 slots for this scenario.")
-    # Slot 1 → XL-1, slot 2 → None (empty string value).
+    expect(page.locator("#feeds-body")).to_be_visible()
+    expect(page.locator("select.feeds-select")).to_have_count(6)
+    # Slot 1 → XL-1, slot 2 → None (empty string value), slot 3 → XL-2.
     page.evaluate(
         "() => { "
         "const a = document.querySelector('select.feeds-select[data-slot=\"1\"]'); a.value = 'XL-1'; "
         "const b = document.querySelector('select.feeds-select[data-slot=\"2\"]'); b.value = ''; "
+        "const c = document.querySelector('select.feeds-select[data-slot=\"3\"]'); c.value = 'XL-2'; "
         "}"
     )
     page.locator("#feeds-body button:has-text('Save Feeds')").click()
     expect(page.locator("#feeds-status")).to_contain_text("Saved", timeout=5000)
 
-    r = requests.get(f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings", timeout=5)
-    targets = r.json()["slot_targets"]
-    assert targets.get("1") == "XL-1"
-    # Slot 2 is absent (not null) — absence == unassigned in storage.
-    assert "2" not in targets
+    r = requests.get(f"{api_base_url}/api/dryer_box/{MULTI_SLOT_BOX}/bindings", timeout=5)
+    # Slots 2 and 4-6 are absent (not null): absence == unassigned in storage.
+    assert r.json()["slot_targets"] == {"1": "XL-1", "3": "XL-2"}
 
 
 @pytest.mark.usefixtures("require_server", "restore_bindings")

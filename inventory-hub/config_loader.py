@@ -4,6 +4,7 @@ import os
 import sys
 import tempfile
 import threading
+import atomic_store
 import state
 import config_schema
 
@@ -242,6 +243,15 @@ def _write_config_atomic(cfg_dict, path):
     caller's rolling .bak snapshot + exact-equality verify-after-write +
     retry-once still guard the write.
 
+    WINDOWS SHARING COLLISION (Group 45.2): on a Windows host, another process
+    briefly holding the target (an antivirus scan of the file just written, the
+    container's side of the dev bind mount) makes os.replace raise
+    PermissionError; that is the likeliest cause of two one-off
+    test_config_save.py reds in full hermetic runs. The swap goes through
+    atomic_store.replace_with_retry, as the other JSON stores' swaps do (Group
+    32.1): a few short retries on PermissionError only, then the error
+    propagates. On Linux (prod) the retry never triggers for this reason.
+
     Raises on failure; the caller decides whether to retry."""
     parent_dir = os.path.dirname(path) or '.'
     # Serialize ONCE up front: a serialization error is caught before any file
@@ -263,7 +273,7 @@ def _write_config_atomic(cfg_dict, path):
         finally:
             tmp.close()
         try:
-            os.replace(tmp_path, path)
+            atomic_store.replace_with_retry(tmp_path, path)
         except OSError as e:
             if e.errno not in _BIND_MOUNT_REPLACE_ERRNOS:
                 raise

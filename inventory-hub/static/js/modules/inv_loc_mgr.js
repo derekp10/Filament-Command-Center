@@ -150,6 +150,22 @@ window.openManage = (id) => {
     const dismissAtStart = window._fccManageDismissSeq;
 
     const loc = state.allLocations.find(l => l.LocationID == id);
+    if (!loc && !state.locationsLoaded) {
+        // Group 45.8: the first /api/locations load hasn't landed yet (it takes
+        // a second or two; the Printer Status widget can be clicked sooner).
+        // Park the open: _renderLocationsPayload (inv_core.js) opens it when the
+        // load lands. The latest click wins. Bounded, so a load that never comes
+        // still says so instead of spinning.
+        window._fccPendingManageId = id;
+        setTimeout(() => {
+            if (window._fccPendingManageId !== id) return;
+            window._fccPendingManageId = null;
+            setProcessing(false);
+            console.warn(`openManage: locations never loaded, so "${id}" could not open`);
+            showToast(`Couldn't open ${id}: the location list didn't load. Try again.`, 'warning', 7000);
+        }, 10000);
+        return;   // the processing spinner stays up while the open is parked
+    }
     if (!loc) {
         // A silent bail here is exactly how the dashboard "clicking a Printer
         // Status badge does nothing" regression hid: allLocations was empty on

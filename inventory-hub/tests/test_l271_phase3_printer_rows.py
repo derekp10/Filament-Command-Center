@@ -180,9 +180,17 @@ def test_printers_are_first_class_on_disk(api_base_url, require_server):
     just re-arm the same trap for the next hardware change, so it now derives
     the fleet from disk and asserts the property for whatever is there.
     """
+    import json
     import requests
     rows = requests.get(f"{api_base_url}/api/locations", timeout=10).json()
-    on_disk = locations_db.load_locations_list() or []
+    # The container's own file, by absolute path (Group 45.8). locations_db's
+    # JSON_FILE is relative ('data/locations.json'), so a run started from the
+    # repo root read a stray June 2026 repo-root data/locations.json that still
+    # had CORE1 as a Printer, and failed on a printer dev hasn't had since.
+    dev_file = os.path.join(os.path.dirname(os.path.abspath(locations_db.__file__)),
+                            "data", "locations.json")
+    with open(dev_file, encoding="utf-8") as fh:
+        on_disk = json.load(fh) or []
     printers = [str(r.get("LocationID")) for r in on_disk
                 if str(r.get("Type", "")).strip() == "Printer"]
     assert printers, "no Printer rows on disk — this phase's whole point is that they exist"

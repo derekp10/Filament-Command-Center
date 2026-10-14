@@ -12,32 +12,21 @@ import pytest
 import requests
 from playwright.sync_api import Page, expect
 
+import conftest
 
-TEST_BOX = "TST-MDB-1"  # max=6, baseline-empty bindings — safe to mutate per-test.
+
+TEST_BOX = "TST-MDB-1"  # max=6, empty fixed baseline (conftest DEV_BOX_BINDING_BASELINES).
 TEST_TOOLHEAD = "XL-1"
 TEST_PRINTER_PREFIX = "XL"
 POOL_SLOT = "4"
 
 
 @pytest.fixture
-def pool_binding(api_base_url):
-    """Bind slot 1 → toolhead and slot 4 → PRINTER:XL on TEST_BOX. Restore
-    the original bindings on teardown."""
-    snap = requests.get(
-        f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings", timeout=5
-    ).json()
-    original = snap.get("slot_targets", {})
-    requests.put(
-        f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings",
-        json={"slot_targets": {"1": TEST_TOOLHEAD, POOL_SLOT: f"PRINTER:{TEST_PRINTER_PREFIX}"}},
-        timeout=5,
-    )
-    yield
-    requests.put(
-        f"{api_base_url}/api/dryer_box/{TEST_BOX}/bindings",
-        json={"slot_targets": original},
-        timeout=5,
-    )
+def pool_binding(borrow_box_bindings):
+    """Bind slot 1 → toolhead and slot 4 → PRINTER:XL on TEST_BOX, borrowed
+    from and back to its fixed empty baseline (Group 45.5; it used to put back
+    whatever bindings it had found)."""
+    borrow_box_bindings(TEST_BOX, {"1": TEST_TOOLHEAD, POOL_SLOT: f"PRINTER:{TEST_PRINTER_PREFIX}"})
 
 
 @pytest.mark.usefixtures("require_server", "pool_binding")
@@ -86,6 +75,8 @@ def test_quickswap_grid_renders_printer_pool_section(page: Page, open_manage_mod
 
 @pytest.mark.usefixtures("require_server", "pool_binding", "clean_buffer")
 def test_pool_slot_disabled_when_buffer_empty(page: Page, open_manage_modal):
+    # Group 45.8: the buffer this test fills is its own, never dev's shared one.
+    conftest.own_the_buffer(page, [])
     open_manage_modal(TEST_TOOLHEAD)
     page.evaluate("() => { state.heldSpools = []; if (window.renderBuffer) window.renderBuffer(); }")
     pool_btn = _wait_pool_btn(page, TEST_BOX, POOL_SLOT)
@@ -98,6 +89,8 @@ def test_pool_slot_disabled_when_buffer_empty(page: Page, open_manage_modal):
 def test_pool_slot_becomes_deposit_target_when_buffer_has_spool(
     page: Page, open_manage_modal
 ):
+    # Group 45.8: the buffer this test fills is its own, never dev's shared one.
+    conftest.own_the_buffer(page, [])
     open_manage_modal(TEST_TOOLHEAD)
     # Wait for the grid's first render before mutating buffer state — the
     # buffer-updated re-render needs the prior render's currentLoc set.

@@ -11,6 +11,8 @@ import pytest
 import requests
 from playwright.sync_api import Page, expect
 
+import conftest
+
 
 TEST_TOOLHEAD = "XL-1"
 
@@ -55,6 +57,8 @@ def test_empty_slot_disabled_when_buffer_empty(page: Page, open_manage_modal, ap
     if not hit:
         pytest.skip("No bound + empty slot in the current dev state.")
     box, slot, toolhead = hit
+    # Group 45.8: the buffer this test fills is its own, never dev's shared one.
+    conftest.own_the_buffer(page, [])
     open_manage_modal(toolhead)
     # Make absolutely sure no spool is in the buffer (past test bleed).
     page.evaluate("() => { state.heldSpools = []; if (window.renderBuffer) window.renderBuffer(); }")
@@ -77,6 +81,8 @@ def test_empty_slot_becomes_deposit_target_when_buffer_has_spool(page: Page, ope
     if not spool_id:
         pytest.skip("No unassigned spool to park in the buffer for this test.")
 
+    # Group 45.8: the buffer this test fills is its own, never dev's shared one.
+    conftest.own_the_buffer(page, [])
     open_manage_modal(toolhead)
 
     # Put a spool in the buffer via the same path the scan handler uses,
@@ -109,6 +115,8 @@ def test_deposit_confirm_overlay_names_the_spool_and_toolhead(page: Page, open_m
     if not spool_id:
         pytest.skip("No unassigned spool to park in the buffer for this test.")
 
+    # Group 45.8: the buffer this test fills is its own, never dev's shared one.
+    conftest.own_the_buffer(page, [])
     open_manage_modal(toolhead)
     page.evaluate(f"""
         () => {{

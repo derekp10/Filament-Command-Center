@@ -446,6 +446,19 @@ def _pin_box_contents(page: Page, box: str, items: list) -> None:
     page.route("**/api/get_contents*", _handler)
 
 
+def _open_manage_when_ready(page: Page, loc: str) -> None:
+    """window.openManage silently does nothing until the cold /api/locations
+    load has put `loc` into state.allLocations (see conftest.open_manage_modal).
+    These tests slept a fixed 500 ms instead, and lost that race in five of
+    five sweeps (Group 45.8, family B)."""
+    page.wait_for_function(
+        "(id) => typeof state === 'object' && Array.isArray(state.allLocations)"
+        " && state.allLocations.some(l => l.LocationID === id)",
+        arg=loc, timeout=15_000)
+    page.evaluate("(id) => window.openManage(id)", loc)
+    expect(page.locator("#manageModal")).to_be_visible(timeout=8_000)
+
+
 @pytest.fixture
 def bound_and_live(borrow_box_bindings):
     """Bind PM-DB-1 slot 1 → XL-1. The slot's occupancy is pinned by
@@ -460,9 +473,7 @@ def test_quickswap_button_shows_spool_info_when_slot_loaded(page: Page, base_url
     _pin_box_contents(page, TEST_BOX, [PINNED_SPOOL])
     page.goto(base_url)
     page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
-    page.wait_for_timeout(500)
-    page.evaluate(f"window.openManage({TEST_TOOLHEAD!r})")
-    expect(page.locator("#manageModal")).to_be_visible(timeout=5000)
+    _open_manage_when_ready(page, TEST_TOOLHEAD)
     page.wait_for_timeout(1200)  # give the fetch chain time to finish
     btn = page.locator(f".fcc-qs-slot[data-box='{TEST_BOX}'][data-slot='1']").first
     expect(btn).to_be_visible(timeout=3000)
@@ -492,9 +503,7 @@ def test_quickswap_button_disabled_when_slot_empty(
     borrow_box_bindings(victim_box, {victim_slot: TEST_TOOLHEAD})
     page.goto(base_url)
     page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
-    page.wait_for_timeout(500)
-    page.evaluate(f"window.openManage({TEST_TOOLHEAD!r})")
-    expect(page.locator("#manageModal")).to_be_visible(timeout=5000)
+    _open_manage_when_ready(page, TEST_TOOLHEAD)
     # Force an empty buffer before asserting disabled — otherwise a
     # buffered spool would enable the same button as a Deposit target.
     page.evaluate("() => { state.heldSpools = []; if (window.renderBuffer) window.renderBuffer(); }")

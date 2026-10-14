@@ -15,6 +15,32 @@ _Run in progress. Started from `dev` @ `4203ffe` (= `origin/dev`) at ~18:15 on 2
 
 ## Landed
 
+### Group 45 → `PARTIAL`: sweep hygiene, and FCC was the load (merged `MERGESHA`, pushed)
+
+- **Commits:** `b32e9f9` (45.2), `061c33a` (45.1(b)(c) + 45.3), `66637bf` (45.5 + 45.4), `f3245b1` + `ffc9d1e`
+  (45.8), `0a38442` (latent races), `0323b9e` (the review's fixes), and the housekeeping commit.
+- **What changed for you:**
+  - **The dashboard stopped hammering Spoolman (prod too).** Every 5 s, and on every page load, the Printer Status
+    widget re-read Spoolman's whole spool list once per toolhead (13 reads per tick with XL + RCOI), although the
+    heartbeat had just delivered the same data. It now uses the heartbeat's data. An idle dashboard went from 95
+    requests per 21 s to 35. A tile clicked in the first second or two after a page load used to do nothing; it
+    now opens once the location list arrives.
+  - **Test runs label themselves.** The last line says how long the run took and how loaded the machine was
+    against this PC's usual times (BUSY RUN at 1.25× or more), and a failed browser test lists its slow requests.
+  - **Smaller items.** The OFFLINE printer label is a touch brighter (text opacity 0.45 → 0.50), so it passes the
+    contrast check. Saving settings retries if Windows briefly locks `config.json`. Tests no longer touch your real
+    dryer boxes or write fake spools into dev's buffer.
+- **Sweeps:** 15 red in 21:44 (tests that had leaned on the old slowness; fixed), then 1 red in 20:46 (the same
+  race in one more file; fixed), then **0 red: 3004 passed / 19 skipped in 21:01**, the first fully green full
+  sweep in weeks. The last sweep before this took 37:21 with 8 reds.
+- **Review:** 5 agents (4 lenses + 1 batched skeptic), 1.55M tokens, 11 raw findings → 7 confirmed (3 orange, 4
+  yellow), all fixed. The notable one: pytest held the container's `hub.log` open, which on Windows blocked its log
+  rotation, so the container's own log lines were being dropped during test runs.
+- **Left in Group 45:** a sweep on a genuinely busy desktop (the load line will label it); three clean sweeps in a
+  row for 45.8; **45.6/45.7 the dev-data refresh from prod, an evening with you** (it needs your OK on the prod reads).
+- **Filed:** host-side test imports run FCC's startup migrations against whichever `data/locations.json` the working
+  directory points at (dev's real file from `inventory-hub/`; a stray June file from the repo root).
+
 ### Groups 43 and 46 finished: 43.2 + 46.3 → `DONE` (merged `1d0fc39`, pushed)
 
 - **Commits:** `4140673` (both items), `80dcd6e` (the review's fixes), `b5336b2` (housekeeping: archive, rows,
@@ -153,3 +179,4 @@ _None yet._
 |---|---|---|---|---|
 | `wf_1a1ff135-1c6` preflight-questions-tonight | Groups 45/41/42/40 | 5 (4 readers + 1 batched fact-checker) | 2,580,267 subagent | ~70 min, 660 tool calls; 36 questions (6 to Derek in two rounds + 2 more he answered, 29 Claude calls with no veto) and 51 stale claims; read-only |
 | `wf_6284177c-d05` review-finish-43-46 | 43.2 + 46.3 | 5 (4 lenses + 1 batched skeptic) | 1,765,406 subagent | ~38 min, 336 tool calls; 33 raw findings → 12 confirmed + 4 plausible, 16 duplicates, 1 refuted; all fixed (`80dcd6e`) |
+| `wf_cf280365-f17` review-group-45 | Group 45 | 5 (4 lenses + 1 batched skeptic) | 1,552,636 subagent | ~46 min, 392 tool calls; 11 raw findings → 7 confirmed (3 orange, 4 yellow), 4 refuted; all fixed (`0323b9e`) |
