@@ -292,8 +292,8 @@ def test_arrows_wrap_a_digit_highlights_and_enter_picks(picker_page):
     page.keyboard.press("2")         # highlights after a 50 ms beat (D1), never picks
     page.wait_for_function(ACTIVE_IS, arg="2", timeout=2_000)
     assert page.evaluate("() => window.__pickDone") is False
-    page.wait_for_timeout(300)       # a lone digit is dropped from the scan buffer
-    assert page.evaluate("() => state.scanBuffer") == ""
+    # A lone digit is dropped from the scan buffer once nothing followed it.
+    page.wait_for_function("() => state.scanBuffer === ''", timeout=2_000)
     page.keyboard.press("Enter")
     # Deliberately changed (Group 40.2, Q2 + D4): slot 2 holds #999202, so Enter
     # asks what happens to it first; Swap is the first answer and has the focus.
@@ -695,6 +695,81 @@ def test_the_same_slot_swap_has_one_answer(picker_page):
     page.keyboard.press("Enter")
     got = _pick(page)
     assert got["choice"] == "swap_out" and got["send"] == {"slot": "3"} and got["expected_feed"] == "FCCX-3", got
+
+
+def test_a_slow_scanners_digit_label_is_still_a_scan(picker_page):
+    """The review's D1 gap (wf_0b3cc1a9-578): a scanner slower than 50 ms a key
+    typed "12": the "1" became a hotkey, its clear emptied the scan buffer, the
+    "2" became a hotkey too, and Enter picked slot 2. Now the second digit puts
+    the highlight back and the Enter is the scan's (refused). HEAD proof
+    (f5f3ba2): both digits are hotkeys and the Enter acts on slot 2 (here it
+    holds a spool, so it opens its Swap / Overwrite step); "12" is never refused."""
+    page, setup, open_ = picker_page
+    setup({"FCC-TEST-BOX": build_model("FCC-TEST-BOX", spool=999201)})
+    open_({"location": "FCC-TEST-BOX", "spool": 999201})
+    assert _active(page) == "3"
+    page.keyboard.type("12", delay=90)
+    page.keyboard.press("Enter")
+    expect(page.locator(STATUS)).to_contain_text("(Ignored: 12)")
+    assert page.evaluate("() => window.__pickDone") is False
+    assert _active(page) == "3"
+
+
+def test_a_lone_digit_on_the_choice_step_doesnt_spoil_the_next_scan(picker_page):
+    """The review's stray-digit regression: a digit pressed on the Swap /
+    Overwrite step stayed in the scan buffer, so the next scan read
+    "2CMD:CONFIRM:…" and was refused. HEAD proof (f5f3ba2): the buffer keeps it."""
+    page, setup, open_ = picker_page
+    setup({"FCC-TEST-BOX": build_model("FCC-TEST-BOX", spool=999201)})
+    open_({"location": "FCC-TEST-BOX", "spool": 999201})
+    page.locator("#fcc-slot-picker .fcc-sp-tile[data-sp-slot='2']").click()
+    page.wait_for_selector(CHOICE, timeout=5_000)
+    page.keyboard.press("2")
+    # Well inside the accumulator's own 2 s timeout, which would clear it anyway.
+    page.wait_for_timeout(700)
+    assert page.evaluate("() => state.scanBuffer") == ""
+    expect(page.locator(CHOICE)).to_have_count(1)
+
+
+def test_a_stale_cancel_qr_does_not_cancel_the_picker(picker_page):
+    """The Back QR read twice: the first goes back to the slots, the second (its
+    session gone) used to cancel the whole picker. HEAD proof (f5f3ba2): the
+    picker closes."""
+    page, setup, open_ = picker_page
+    setup({"FCC-TEST-BOX": build_model("FCC-TEST-BOX", spool=999201)})
+    open_({"location": "FCC-TEST-BOX", "spool": 999201})
+    page.locator("#fcc-slot-picker .fcc-sp-tile[data-sp-slot='2']").click()
+    page.wait_for_selector(CHOICE, timeout=5_000)
+    sid = page.evaluate("() => Object.keys(window._fccActiveConfirms || {}).pop()")
+    page.evaluate("(sid) => processScan('CMD:CANCEL:' + sid, 'barcode')", sid)
+    page.wait_for_selector(READY, timeout=5_000)
+    page.evaluate("(sid) => processScan('CMD:CANCEL:' + sid, 'barcode')", sid)
+    page.wait_for_timeout(200)
+    assert page.evaluate("() => window.__pickDone") is False
+    expect(page.locator(STATUS)).to_contain_text("belongs to a step that has closed")
+
+
+def test_an_occupied_slot_that_only_stores_sends_a_store(picker_page):
+    """The review's yellow: #999201 runs on FCCX-2, and slot 2 (fed FCCX-2 here)
+    holds a stored spool. The tile says it is stored, not loaded back, and Swap /
+    Overwrite now send a store (auto_deploy false); {slot} alone loaded it back.
+    HEAD proof (f5f3ba2): no auto_deploy in the send."""
+    page, setup, open_ = picker_page
+    rows = [r for r in copy.deepcopy(ROWS) if r["LocationID"] != "FCC-TEST-BOX"] + [
+        _box("FCC-TEST-BOX", 4, {"1": "FCCX-1", "2": "FCCX-2", "3": "FCCX-3", "4": "PRINTER:FCCX"})]
+    spools = [_sp(999202, "FCC-TEST-BOX", slot=2), _sp(999201, "FCCX-2", src="FCC-TEST-PM", src_slot=1)]
+    model = build_model("FCC-TEST-BOX", rows=rows, spools=spools, spool=999201)
+    assert _slot_of(model, "2")["stores_only"] is True
+    setup({"FCC-TEST-BOX": model})
+    open_({"location": "FCC-TEST-BOX", "spool": 999201})
+    expect(page.locator("#fcc-slot-picker .fcc-sp-tile[data-sp-slot='2']")).to_contain_text(
+        "stored here, not loaded back")
+    page.locator("#fcc-slot-picker .fcc-sp-tile[data-sp-slot='2']").click()
+    page.wait_for_selector(CHOICE, timeout=5_000)
+    expect(page.locator(CHOICE)).to_contain_text("It is stored there, not loaded onto FCCX-2.")
+    page.locator("#fcc-slot-picker [data-sp-choice='overwrite']").click()
+    got = _pick(page)
+    assert got["send"] == {"slot": "2", "auto_deploy": False}, got
 
 
 def _slot_of(model, slot):

@@ -1352,6 +1352,26 @@ def api_identify_scan():
             first_spool = {"id": named_id}
         else:
             first_spool = next((item for item in buffer if isinstance(item, dict) and item.get('id')), None)
+            # Group 40.2 review: the same-slot swap leaves the slot's old spool at
+            # the end of the buffer, which is its only entry after a one-spool
+            # swap. A second read of the same label (a scanner double-read, a
+            # "did it take?" re-scan) took it as the buffer's first spool and
+            # reversed the swap: the run-out spool back on the head, the new one
+            # in the buffer. Refused, nothing written; a scan that names the
+            # spool (the deposit) is not a blind scan and is never held back.
+            held_back = logic.swapped_back_refusal(first_spool, target, slot) if first_spool else None
+            if held_back:
+                state.add_log_entry(f"⚠️ Slot scan {target}:SLOT:{slot} not loaded: {held_back}.",
+                                    "WARNING", "ffaa00")
+                return jsonify({
+                    "type": "assignment",
+                    "action": "assignment_held",
+                    "location": target, "slot": slot,
+                    "spool": int(first_spool['id']),
+                    "msg": f"Not loaded: {held_back}.",
+                    "toast": (f"↩️ #{first_spool['id']} just came out of {target} slot {slot} — not put back "
+                              f"(it's in your buffer)"),
+                }), 200
         if not first_spool:
             return jsonify({
                 "type": "assignment",

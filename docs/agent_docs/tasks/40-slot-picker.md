@@ -402,13 +402,44 @@ The slot-scan door filters the LIVE buffer replica after the move (its pre-move 
 counts only the user's own spools in "still in buffer".
 
 **Tests.** `test_same_slot_swap_to_buffer.py` (real engine + doors, 17 of 22 fail on `d8f6128`),
-`test_same_slot_swap_buffer_js.py` (node vm, 5 of 7), `test_door_to_buffer_canary.py`, `test_box_label_picker_js.py`
-(node vm, the door and loop, 10 of 11), the D4 section of `test_placement_options.py` (9 of 9),
-`test_box_label_picker_e2e.py` (the real picker and door, route-stubbed), and 13 new D1–D4 tests in
-`test_slot_picker_e2e.py`. Deliberate changes: `test_slot_picker_e2e.py`'s digit + Enter test (a digit highlights
+`test_same_slot_swap_buffer_js.py` (node vm, 5 of 7), `test_door_to_buffer_canary.py` (6 of 6),
+`test_box_label_picker_js.py` (node vm, the door and loop, 11 of 12 on `d8f6128`), the D4 section of
+`test_placement_options.py` (9 of 9), `test_box_label_picker_e2e.py` (the real picker and door, route-stubbed),
+and 12 new D1–D4 tests (14 cases) in `test_slot_picker_e2e.py`. The review round below adds more. Deliberate changes: `test_slot_picker_e2e.py`'s digit + Enter test (a digit highlights
 after the 50 ms beat; Enter on an occupied slot asks Swap / Overwrite first), `test_fed_head_confirm_40_0c.py`'s
 same-slot swap (#99 Unassigned, in `to_buffer`), and `test_toolhead_scan_single_spool.py`'s whole-buffer pin (now a
 synthetic Shelf row: every dev Max > 1 row is a Dryer Box, which opens the picker).
+
+### The review (2026-10-15, `wf_0b3cc1a9-578`): 18 findings, 1 red, all but one fixed
+
+4 agents (3 lenses + 1 batched skeptic), 1.80M subagent tokens, ~59 min: 18 findings, none refuted (1 duplicate).
+- **Red, fixed: a second read of the slot label reversed Derek's same-slot swap.** With one spool buffered, the
+  swapped-out spool is the buffer's only entry, so a scanner's double-read (queued while the first scan was handled)
+  or a "did it take?" re-scan loaded the run-out spool back onto the head and handed the new one to the buffer.
+  Two guards: the browser drops an identical `LOC:` scan read before the last one was answered or within 1.5 s
+  after (`capturedAt` from `scripts.html`); the server tags the buffer entry (`swapped_from` / `swapped_at` /
+  `swapped_for`) and the slot door holds back a blind scan whose buffer top is the spool just taken out of that
+  very slot for `SWAP_BACK_GUARD_S` (2 min): `assignment_held`, nothing written, "↩️ #99 just came out of LR-MDB-1
+  slot 1 — not put back (it's in your buffer)". Undo Last Move is the way back; a door that names its spool is
+  never held back.
+- **Yellows, fixed:** a swap-out PATCH that landed but timed out is re-read (`_move_write`), so the spool still
+  reaches the buffer and the undo; a picker Swap / Overwrite into a slot that only stores the spool
+  (`stores_only`: the engine's store_only rule, binding = the head it is leaving OR its own ghost slot) sends
+  `auto_deploy: false` (`opts.autoDeploy`), where `{slot}` alone loaded it straight back; a slow scanner's digit
+  label no longer picks (a digit hotkey keeps the scan buffer, a second digit within 300 ms puts the highlight back,
+  and two characters own the Enter); a lone digit is cleared in every view (it spoiled the next scan on the loading
+  and Swap / Overwrite views); the old double-scan rule fires only while the buffer is as its first scan left it
+  (`lastScannedBufferSig`), so a spool picked up in the manager isn't silently dropped before the picker; the
+  queued double-read in the loop is the repeat guard's; a "Put it in slot N" pick over a stale record offers no
+  "Just store it" (`store_ok` → `ctx.noStore`), since the engine refuses that store.
+- **Notes, fixed:** Undo takes out only what the move added to the buffer; the doubled-head stuck path is pinned;
+  `_put_in_buffer` moved off `_smart_move_depth`'s comment; only the picker's own bare `CMD:CANCEL` cancels it (a
+  stale session cancel QR is ignored); the dim says "⏳ Checking XL…" for a picked slot too; the ⭐ / auto-slot
+  divergence (a free slot bound to a non-head) is documented, not changed (Claude's call (c), kept 2026-10-14); doc
+  and test counts corrected; the Shelf E2E owns its buffer.
+- **Deferred to 40.5 (with the 40.3 "Open, narrow" note):** the engine still offers "Just store it" in a question
+  about a slot that holds a stale record (the slot-label scan meets it too) and then refuses the store, writing
+  nothing. Asking it right needs the slot read before the question, the same read 40.5 adds.
 
 ---
 
@@ -523,7 +554,10 @@ heads its spools leave (`leaving`).
 
 **Open, narrow (take it with 40.5, which reads the same slots):** on a printing XL, a slot whose own spool runs
 on ANOTHER head (re-pointed after it was loaded) still gets the three-way first, and both answers are then
-refused at the slot read (nothing is written). Asking it right means reading the slot before the question.
+refused at the slot read (nothing is written). Asking it right means reading the slot before the question. The
+40.2 review found a sibling: a question about a slot holding a stale record offers "Just store it", which the
+step-6 guard then refuses (nothing written); the box picker already offers no store there (`store_ok`), the
+slot-label scan still does.
 
 **Tests.** `test_head_load_confirm_js.py` (node-vm: the dialog, the router, the replay builder across rounds,
 the Location Manager's recorded-source toast), `test_door_fed_heads_canary.py` (every POST to the three doors
@@ -765,6 +799,7 @@ workflow journal).
 | A picker Swap of a STORED spool | **The grid's semantics**: the engine's Overwrite (it stays in the box, unslotted) plus the page putting it in the buffer | "The same choice the grid uses" (Q2). The same-slot swap's Unassigned is engine-side; making Swap match it is a question for Derek (buglist). |
 | Slots the picker greys out | **Two spools claiming it, a binding to a non-head, its own spool on another head, a stale record where nothing loads, any occupied slot in return mode** | The engine refuses the ghost cases (pinned), Quick-Swap refuses doubly-claimed slots, and a non-head binding stores with a warning nobody asked for. The ⭐ skips them. |
 | The box picker's loop (Claude's call 24, as built) | **Escape stops; Cancel on a load question steps back to the same spool's picker; a failure ends the loop; several spools end with a summary** | Escape is "I'm done", Cancel is "not that slot". An unanswerable question ends it rather than reopening the picker on it. |
+| A location label read twice (40.2 review's red) | **Read once: an identical `LOC:` scan before the last was answered, or within 1.5 s after, is dropped (toast + log); and a blind slot scan never puts back the spool the same-slot swap took out of that slot in the last 2 min** | The double-read reversed Derek's own swap. 1.5 s covers a queued double-read without blocking a deliberate re-scan; 2 min covers a "did it take?" re-scan, and Undo Last Move is the deliberate way back. Only `LOC:` labels: CMD:NEXT / PREV are meant to repeat. |
 
 ---
 

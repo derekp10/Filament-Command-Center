@@ -23,7 +23,11 @@ once and asks each printer itself (/api/printer_state).
 
 The ⭐ is logic.recommend_box_slot over logic.box_slot_claims and
 logic.slot_would_prompt, the rule the engine's auto-slot uses (40.0e), read the
-same way, so the slot the picker stars is the slot a slotless move would take.
+same way, so the slot the picker stars is the slot a slotless move would take,
+with one exception (Group 40.2): the ⭐ skips a slot the picker greys out. The
+only free one is a slot bound to something that isn't a toolhead, which a
+slotless move still fills (storing the spool, with a warning; Claude's call (c),
+kept 2026-10-14).
 
 Python 3.9 runtime (the container image) — keep syntax 3.9-safe.
 """
@@ -184,23 +188,37 @@ def _occupant_state(item, feed, printer_map, loc_info_map):
     return 'stale'
 
 
-def _slot_block(mode, box, slot, claimants, free, feed, occupant, occ_state):
+def _stores_only(row, slot, moving_from, ghost_slot):
+    """Whether a move of the spool into `slot` only stores it there (Group 40.2
+    review): the engine's own store_only rule for a pick, `_slot_binding(row,
+    slot) == moving_from or slot == ghost_slot`. The slot feeds the head the
+    spool is leaving, or it is the slot the spool was deployed from; either way
+    it is not loaded (back) onto a head."""
+    return bool((moving_from and logic._slot_binding(row, slot) == moving_from)
+                or (ghost_slot and logic._norm_slot(ghost_slot) == slot))
+
+
+def _slot_block(mode, box, slot, claimants, free, feed, occupant, occ_state, stores_only=False):
     """Why the picker can't take `slot` (Group 40.2, D4), or None. The engine's
     own refusals (its step-6 ghost guard, logic._ghost_claim_refusal), worded
-    for a tile, so a pick never asks a question and then refuses: two spools
+    for a tile, so a pick never sends what the engine refuses: two spools
     claiming the slot; a binding to something that isn't a toolhead (the chain
     can't load it); a spool deployed from the slot onto a head the slot doesn't
     feed (only the slot's own head swaps it out); a record that still claims the
     slot of a spool on no head, where nothing loads (a store refuses it); and,
     in return mode, any slot that holds a spool (Return takes a free slot, or
-    No slot)."""
+    No slot). A stale record on a slot that DOES load is open (a load ignores
+    it); the door then offers no "Just store it" in any question it meets
+    (the picker's `store_ok`, Group 40.2 review), since a store would be refused.
+    The engine still offers one there on other doors (the slot-label scan): the
+    40.3 "Open, narrow" note, taken with 40.5."""
     if mode == 'return' and not free:
         return f"Holds {_ids(claimants)}: Return takes a free slot, or No slot"
     if len(claimants) > 1:
         return f"{len(claimants)} spools claim slot {slot} ({_ids(claimants)}): open {box} and sort them out first"
     if feed and feed.get('kind') == 'other':
         return f"Slot {slot} is bound to {feed.get('id')}, which isn't a toolhead: fix it in 🔗 Edit feeds first"
-    loads = bool(feed and feed.get('kind') == 'toolhead' and not feed.get('is_source'))
+    loads = bool(feed and feed.get('kind') == 'toolhead' and not stores_only)
     gid = (occupant or {}).get('id')
     dep = _u((occupant or {}).get('deployed_to'))
     if occ_state == 'on_other_head' or (occ_state == 'on_feed' and not loads):
@@ -299,7 +317,9 @@ def _box_model(row, box, sid, toolhead, mode, loc_list, loc_info_map, printer_ma
         free = s not in claims
         claimants = [i.get('id') for i in shown]
         occ_state = _occupant_state(shown[0] if shown else None, feed, printer_map, loc_info_map)
-        blocked = _slot_block(mode, box, s, claimants, free, feed, shown[0] if shown else None, occ_state)
+        stores_only = _stores_only(row, s, moving_from, ghost_slot)
+        blocked = _slot_block(mode, box, s, claimants, free, feed, shown[0] if shown else None, occ_state,
+                              stores_only=stores_only)
         model["slots"].append({
             "slot": s,
             "spool": _card(shown[0]) if shown else None,
@@ -314,6 +334,9 @@ def _box_model(row, box, sid, toolhead, mode, loc_list, loc_info_map, printer_ma
             # why the picker can't take this slot (None: it can).
             "occupant_state": occ_state,
             "blocked": blocked,
+            # The move only stores the spool here (the engine's store_only rule):
+            # the picker sends a store for it even after Swap / Overwrite.
+            "stores_only": stores_only,
         })
     model["unslotted"] = unslotted
     model["printers"] = [{"name": n, "head": h} for n, h in printers_seen.items()]

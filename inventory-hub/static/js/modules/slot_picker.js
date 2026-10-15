@@ -247,8 +247,15 @@
                 claimants: d.claimants || [], feeds: d.feeds || null, free: !!d.free, current: !!d.current,
                 // D4: a free slot is a pick (kept only while still free); an
                 // occupied one is the engine's Overwrite, sent only after a choice.
-                send: d.free ? { picked_slot: t.slot } : { slot: t.slot },
+                // A slot that only stores the spool (stores_only) stays a store
+                // after the choice too: an explicit slot otherwise loads it back
+                // onto the head it is leaving (Group 40.2 review).
+                send: d.free ? { picked_slot: t.slot }
+                    : (d.stores_only ? { slot: t.slot, auto_deploy: false } : { slot: t.slot }),
                 expected_feed: _feedToken(d.feeds),
+                // A stale record in the slot: the engine refuses a store over it,
+                // so the door's question offers none.
+                store_ok: d.occupant_state !== 'stale',
                 choice, swap,
                 displaced: (swap && occupant) ? { id: occupant.id, display: occupant.display, color: occupant.color,
                     color_direction: occupant.color_direction, remaining_weight: occupant.remaining_weight,
@@ -323,10 +330,16 @@
         let feed = '<div class="fcc-sp-feed is-storage">Storage slot (feeds no toolhead)</div>';
         let extra = '';
         if (f && f.kind === 'toolhead') {
-            feed = f.is_source
-                ? `<div class="fcc-sp-feed">→ ${_esc(f.id)} · ${_pstate(f.printer)}</div>`
-                  + `<div class="fcc-sp-note">#${_esc(m.spool)} is on ${_esc(f.id)} now: it is stored here, not loaded back</div>`
-                : `<div class="fcc-sp-feed">→ ${_esc(f.id)} · ${_pstate(f.printer)}</div>`;
+            // The engine's store_only rule (placement's stores_only; Group 40.2
+            // review): the slot feeds the head the spool is leaving, or it is the
+            // slot the spool was deployed from. Either way it is not loaded.
+            const storesOnly = d.stores_only != null ? !!d.stores_only : !!f.is_source;
+            feed = `<div class="fcc-sp-feed">→ ${_esc(f.id)} · ${_pstate(f.printer)}</div>`;
+            if (storesOnly) {
+                feed += f.is_source
+                    ? `<div class="fcc-sp-note">#${_esc(m.spool)} is on ${_esc(f.id)} now: it is stored here, not loaded back</div>`
+                    : `<div class="fcc-sp-note">#${_esc(m.spool)} came from this slot: it goes back in, stored, not loaded onto ${_esc(f.id)}</div>`;
+            }
             extra = _runsLine(f.id, f.residents);
         } else if (f && f.kind === 'pool') {
             feed = `<div class="fcc-sp-feed">🏭 Printer Pool (${_esc(f.printer_name || f.printer)})</div>`;
@@ -568,7 +581,8 @@
         const feed = d.feeds || null;
         const who = `#${occ.id}${occ.display ? ` (${occ.display})` : ''}`;
         const incoming = s.model && s.model.spool != null ? `#${s.model.spool}` : 'the spool';
-        const loads = !!(feed && feed.kind === 'toolhead' && !feed.is_source);
+        const storesOnly = d.stores_only != null ? !!d.stores_only : !!(feed && feed.is_source);
+        const loads = !!(feed && feed.kind === 'toolhead' && !storesOnly);
         const onto = loads ? ` and onto ${feed.id}` : '';
         if (d.occupant_state === 'on_feed') {
             return {
@@ -585,8 +599,9 @@
                 actions: [{ key: 'put', label: `Put it in slot ${t.slot}`, sub: `#${occ.id} isn't moved`, qr: 'Scan to put it there' }],
             };
         }
+        const stored = (storesOnly && feed && feed.kind === 'toolhead') ? ` It is stored there, not loaded onto ${feed.id}.` : '';
         return {
-            text: `Slot ${t.slot} holds ${who}. Put ${incoming} in slot ${t.slot}${onto}?`,
+            text: `Slot ${t.slot} holds ${who}. Put ${incoming} in slot ${t.slot}${onto}?${stored}`,
             actions: [
                 { key: 'swap', label: 'Swap', sub: `#${occ.id} → your scan buffer`, qr: 'Scan to Swap' },
                 { key: 'overwrite', label: 'Overwrite', sub: `#${occ.id} stays in ${t.box} without a slot`, qr: 'Scan to Overwrite' },
@@ -753,15 +768,55 @@
 
     // ---- keys ---------------------------------------------------------------------
 
-    // A scan owns its Enter (D1): one in flight (any length, under 500 ms), a
-    // scanner-speed burst, or a slower scanner's buffer that looks like a scan
-    // payload. That Enter reaches processScan, then routePickerScan. A 1–2 digit
-    // spool label is in flight too, so its Enter is never a pick.
-    const _enterIsAScans = () => {
+    // D1, a digit as a hotkey: nothing may follow it within HOTKEY_WAIT_MS (a
+    // scanner types its next key in a few ms), and a key that follows it within
+    // HOTKEY_HOLD_MS still makes it a scan (a slower scanner, Group 40.2 review).
+    const HOTKEY_WAIT_MS = 50;
+    const HOTKEY_HOLD_MS = 300;
+
+    // A scan owns its Enter (D1): two or more characters in the scan buffer (a
+    // slow scanner's 2-digit label still in it; a digit hotkey no longer clears
+    // it), one in flight (under 500 ms), a scanner-speed burst, or a buffer that
+    // looks like a scan payload. That Enter reaches processScan, then
+    // routePickerScan, which refuses it. Only the lone digit just taken as a
+    // hotkey, then Enter, is a person picking.
+    const _enterIsAScans = (s) => {
+        const buf = String(_st().scanBuffer || '');
+        if (s && s.hotkey && buf === s.hotkey.digit) return false;
+        if (buf.length >= 2) return true;
         if (window.isScanInFlight && window.isScanInFlight()) return true;
         if (window.isScannerBurst && window.isScannerBurst()) return true;
-        const buf = String(_st().scanBuffer || '');
         return !!(buf && window.looksLikeScanPayload && window.looksLikeScanPayload(buf));
+    };
+
+    // A digit key, in any view (the digit is collected by the scan accumulator
+    // meanwhile). In the grid it highlights that slot once nothing followed it;
+    // a digit that follows a hotkey within HOTKEY_HOLD_MS puts the highlight back
+    // (the two were a slow scanner's label). A lone digit nothing followed is
+    // dropped from the scan buffer in every view, so the next scan isn't read as
+    // "2LOC:…" (Group 40.2 review: the loading view and the Swap / Overwrite step
+    // used to keep it).
+    const _digitKey = (s, k) => {
+        if (window.isScannerBurst && window.isScannerBurst()) return;
+        if (String(_st().scanBuffer || '')) {
+            if (s.hotkey && Date.now() - s.hotkey.at < HOTKEY_HOLD_MS) {
+                if (s.view === 'grid' && s.hotkey.from >= 0) _setActive(s, s.hotkey.from);
+                s.hotkey = null;
+            }
+            return;
+        }
+        setTimeout(() => {
+            if (s.settled || _session !== s) return;
+            if (_st().scanBuffer !== k) return;   // more keys came: a scan, not a hotkey
+            if (s.view === 'grid') {
+                s.hotkey = { digit: k, at: Date.now(), from: s.activeIdx };
+                _jump(s, parseInt(k, 10));
+            }
+            setTimeout(() => {
+                if (_st().scanBuffer === k && window.clearScanBuffer) window.clearScanBuffer();
+                if (s.hotkey && s.hotkey.digit === k) s.hotkey = null;
+            }, HOTKEY_HOLD_MS);
+        }, HOTKEY_WAIT_MS);
     };
 
     const _choiceKeys = (s, e, k) => {
@@ -776,7 +831,7 @@
             return;
         }
         if (k === 'Enter') {
-            if (_enterIsAScans()) return;
+            if (_enterIsAScans(s)) return;
             e.preventDefault();
             e.stopImmediatePropagation();
             if (window.clearScanBuffer) window.clearScanBuffer();
@@ -784,8 +839,11 @@
             if (ae && ae.matches && ae.matches('[data-sp-act]')) { ae.click(); return; }
             const btn = btns.includes(ae) ? ae : btns[0];
             if (btn) _choose(s, btn.getAttribute('data-sp-choice'));
+            return;
         }
-        // Digits do nothing here: there is no slot to jump to.
+        // A digit jumps nowhere here, but a lone one is still dropped from the
+        // scan buffer.
+        if (/^[1-9]$/.test(k)) _digitKey(s, k);
     };
 
     const _keyHandler = (s) => (e) => {
@@ -817,10 +875,11 @@
             return;
         }
         if (k === 'Enter') {
-            if (_enterIsAScans()) return;
+            if (_enterIsAScans(s)) return;
             e.preventDefault();
             e.stopImmediatePropagation();
             if (window.clearScanBuffer) window.clearScanBuffer();
+            s.hotkey = null;
             if (ae && s.handle && s.handle.element.contains(ae) && ae.matches && ae.matches('[data-sp-act]')) {
                 ae.click();
                 return;
@@ -830,22 +889,9 @@
             if (el) _pick(s, s.tiles[parseInt(el.dataset.spIdx, 10)], 'key');
             return;
         }
-        if (/^[1-9]$/.test(k)) {
-            // D1: a scan may start with a digit, and a short spool label is all
-            // digits. A digit is a hotkey only when the scan buffer was empty and
-            // nothing followed it within 50 ms (a scanner types its next key in a
-            // few ms); the accumulator collects it meanwhile, and a lone one is
-            // dropped from the scan buffer once taken.
-            if (window.isScannerBurst && window.isScannerBurst()) return;
-            if (String(_st().scanBuffer || '')) return;
-            setTimeout(() => {
-                if (s.settled || _session !== s || s.view !== 'grid') return;
-                const st = _st();
-                if (st.scanBuffer !== k) return;   // more keys came: a scan, not a hotkey
-                if (window.clearScanBuffer) window.clearScanBuffer();
-                _jump(s, parseInt(k, 10));
-            }, 50);
-        }
+        // D1: a scan may start with a digit, and a short spool label is all
+        // digits (_digitKey says when a digit is a person's hotkey).
+        if (/^[1-9]$/.test(k)) _digitKey(s, k);
     };
 
     // ---- mount --------------------------------------------------------------------
@@ -978,12 +1024,22 @@
         if (!s || s.settled) return false;
         const up = String(text == null ? '' : text).trim().toUpperCase();
         if (!up) return false;
-        if (up === 'CMD:CANCEL' || up.startsWith('CMD:CANCEL:')) {
+        if (up === 'CMD:CANCEL') {
             // D3: said, not silent.
             if (typeof showToast === 'function') showToast('Slot picker cancelled — nothing moved', 'info', 4000);
             if (window.logClientEvent) window.logClientEvent(
                 `ℹ️ Slot picker for ${s.location} cancelled by a CMD:CANCEL scan — nothing moved`, 'INFO');
             _finish(s, null);
+            return true;
+        }
+        if (up.startsWith('CMD:CANCEL:')) {
+            // A session's cancel QR whose dialog has gone (routeConfirmScan
+            // answers a live one first): the second read of "Back", or of a load
+            // question's Cancel the loop stepped back from. It used to cancel the
+            // whole picker (Group 40.2 review); only the picker's own CMD:CANCEL does.
+            _flash(s, 'That cancel QR belongs to a step that has closed: ignored');
+            if (window.logClientEvent) window.logClientEvent(
+                `ℹ️ Stale cancel QR "${String(text).trim()}" ignored by the slot picker for ${s.location}`, 'INFO');
             return true;
         }
         if (s.view === 'choice') {

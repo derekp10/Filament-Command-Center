@@ -1429,12 +1429,54 @@ const _slotScanOutcome = (r, { stored = false, head = null, prior = null } = {})
         showToast(`❌ #${r.spool} was NOT loaded into ${r.location}:${r.slot}: ${r.msg}`, 'error', 7000);
         return true;
     }
+    if (r && r.action === 'assignment_held') {
+        // Group 40.2 review: the buffer's first spool is the one the same-slot
+        // swap just took out of this very slot (a double-read, or a re-scan), so
+        // the server didn't put it back. Nothing moved; the log has the sentence.
+        showToast(r.toast || r.msg, 'warning', 7000);
+        return true;
+    }
     return false;
 };
 
+// The location-scan double-scan rule's memory: which label a scan left open (or
+// Quick-Picked from) and the buffer as that scan left it (Group 40.2 review).
+const _bufferSig = () => (state.heldSpools || []).map(s => String(s.id)).join(',');
+const _noteScannedLoc = (id) => { state.lastScannedLoc = id; state.lastScannedBufferSig = _bufferSig(); };
+
+// Group 40.2 review (s2-rescan-reverses-swap, queued-double-read-hits-next-picker):
+// a location label read twice. The second read, queued while the first was being
+// handled and replayed after it, reversed a same-slot swap (the spool it had
+// just taken off went back onto the head), and in the box picker's loop it
+// picked a slot for the NEXT spool. An identical LOC: scan read before the last
+// one was answered, or within LOC_REPEAT_MS after, is dropped and said so. Only
+// LOC: labels: CMD:NEXT / CMD:PREV are meant to repeat, and a spool read twice
+// is already "Already in Buffer". `capturedAt`: when the scanner delivered it
+// (scripts.html); a direct call counts as read now.
+const LOC_REPEAT_MS = 1500;
+window._fccLastLocScan = window._fccLastLocScan || null;
+const _isLocRepeat = (key, capturedAt) => {
+    const last = window._fccLastLocScan;
+    if (!key.startsWith('LOC:') || !last || last.text !== key) return false;
+    const at = capturedAt || Date.now();
+    return last.doneAt == null || at < last.doneAt + LOC_REPEAT_MS;
+};
+
 // --- SCAN ROUTER ---
-const processScan = (text, source = 'keyboard') => {
+const processScan = (text, source = 'keyboard', capturedAt = null) => {
     const upper = text.toUpperCase();
+    const locKey = upper.trim();
+    if (_isLocRepeat(locKey, capturedAt)) {
+        showToast(`ℹ️ Ignored a second read of ${String(text).trim()}`, 'info', 3500);
+        if (window.logClientEvent) window.logClientEvent(
+            `ℹ️ Scan "${String(text).trim()}" ignored: the same label was read twice within ${LOC_REPEAT_MS / 1000} s`, 'INFO');
+        return;
+    }
+    // Answered at once unless it reaches the server below (every early return
+    // here is an answer); in flight from the request until its answer.
+    const locScan = locKey.startsWith('LOC:') ? (window._fccLastLocScan = { text: locKey, doneAt: Date.now() }) : null;
+    const locInFlight = () => { if (locScan) locScan.doneAt = null; };
+    const locDone = () => { if (locScan && locScan.doneAt == null) locScan.doneAt = Date.now(); };
     // Active-dialog confirm-by-scan (registered via window.attachConfirmQRs).
     // Must run BEFORE the regular CMD: branches so a CMD:CONFIRM:<sid> scan
     // routes to the dialog's callback instead of hitting the backend or the
@@ -1463,12 +1505,13 @@ const processScan = (text, source = 'keyboard') => {
         if (openQuestion.flash) openQuestion.flash(`${why}. (Ignored: ${text})`);
         if (window.logClientEvent) window.logClientEvent(
             `⚠️ Scan "${text}" ignored: "${openQuestion.title}" is still open`, 'WARNING');
+        locDone();
         return;
     }
     // Group 40.1: an open slot picker claims every scan next. A choice's label
     // picks it, CMD:CANCEL cancels, anything else is refused with a warning, so
     // a scan never acts behind the picker (slot_picker.js).
-    if (window.routePickerScan && window.routePickerScan(text)) return;
+    if (window.routePickerScan && window.routePickerScan(text)) { locDone(); return; }
     // A session-scoped CMD:CONFIRM:<sid> that routeConfirmScan didn't claim
     // belongs to a dialog that has already closed. Never let it fall through to
     // the substring-matching routes below and answer whatever unrelated dialog
@@ -1549,6 +1592,7 @@ const processScan = (text, source = 'keyboard') => {
     }
     setProcessing(true, { label: slotScan && window.printerLabelForTarget
         ? window.printerLabelForTarget(slotScan[1], slotScan[2]) : null });
+    locInFlight();
     // `confirmed_fed_heads` (Group 40.3): this page can show the "already
     // running another spool" question, so a slot scan is asked it instead of
     // being refused as a stale page (logic.stale_fed_refusal). Empty: the user
@@ -1557,6 +1601,7 @@ const processScan = (text, source = 'keyboard') => {
     window.fetchT('/api/identify_scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: text, source: source, confirmed_fed_heads: [] }) })
         .then(r => r.json())
         .then(res => {
+            locDone();
             setProcessing(false);
             if (res.type === 'command') {
                 // Group 41.5: a bulk-move commit the server couldn't verify.
@@ -1598,9 +1643,11 @@ const processScan = (text, source = 'keyboard') => {
                     // replays of a question below, so the two can't drift.
                     _slotScanOutcome(res);
                     document.dispatchEvent(new CustomEvent('inventory:locations-changed'));
-                } else if (res.action === 'assignment_failed') {
+                } else if (res.action === 'assignment_failed' || res.action === 'assignment_held') {
                     // The write was rejected (2026-09-12: this used to come back as
-                    // assignment_done). The spool is still in the buffer.
+                    // assignment_done), or the server held back the spool the
+                    // same-slot swap just took out of this slot (Group 40.2
+                    // review). The spool is still in the buffer.
                     _slotScanOutcome(res);
                 } else if (res.action === 'assignment_no_buffer') {
                     // Buffer Empty → treat as pickup: read slot contents and
@@ -1726,7 +1773,13 @@ const processScan = (text, source = 'keyboard') => {
                     showToast(msg, "warning", 3500);
                     fetch('/api/log_event', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({msg: "SCAN LOG: Legacy Location Barcode Scanned (" + text + ")", level: "WARNING"}) });
                 }
-                if (state.lastScannedLoc === res.id) { state.heldSpools = []; renderBuffer(); openManage(res.id); state.lastScannedLoc = null; return; }
+                // The double-scan rule: the same label again right after it opened
+                // the manager or Quick-Picked its spool clears that and opens the
+                // manager. Only while the buffer is as that scan left it (Group
+                // 40.2 review): a spool buffered since by a pickup or the ID field
+                // was silently dropped, and the box picker never opened.
+                if (state.lastScannedLoc === res.id && state.lastScannedBufferSig === _bufferSig()) { state.heldSpools = []; renderBuffer(); openManage(res.id); state.lastScannedLoc = null; return; }
+                state.lastScannedLoc = null;
                 if (state.heldSpools.length > 0) {
                     // L124 fix: a toolhead / single-spool location can only hold
                     // one spool. Bulk-assigning the entire buffer to a toolhead
@@ -1777,7 +1830,7 @@ const processScan = (text, source = 'keyboard') => {
                     state.heldSpools.unshift({ id: spool.id, display: spool.display, color: spool.color, color_direction: spool.color_direction, remaining_weight: spool.remaining_weight, details: spool.details, archived: spool.archived, location: spool.location, is_ghost: spool.is_ghost, slot: spool.slot, deployed_to: spool.deployed_to });
                     renderBuffer();
                     showToast("⚡ Quick Pick: #" + spool.id);
-                    state.lastScannedLoc = res.id;
+                    _noteScannedLoc(res.id);
                     return;
                 }
                 // Empty-location scan (buglist: "if a legacy barcode has no spools
@@ -1793,7 +1846,7 @@ const processScan = (text, source = 'keyboard') => {
                     showToast(`Couldn't read ${res.id} from Spoolman — opening it so you can check.`, 'warning', 7000);
                     if (window.logClientEvent) window.logClientEvent(
                         `⚠️ Location scan ${res.id} — ${res.contents_error} (opened manager)`, 'WARNING');
-                    openManage(res.id); state.lastScannedLoc = res.id;
+                    openManage(res.id); _noteScannedLoc(res.id);
                     return;
                 }
                 if (!res.contents || res.contents.length === 0) {
@@ -1802,10 +1855,10 @@ const processScan = (text, source = 'keyboard') => {
                         `📭 Location scan ${res.id} — no spools attached (opened manager)`,
                         'WARNING'
                     );
-                    openManage(res.id); state.lastScannedLoc = res.id;
+                    openManage(res.id); _noteScannedLoc(res.id);
                     return;
                 }
-                openManage(res.id); state.lastScannedLoc = res.id;
+                openManage(res.id); _noteScannedLoc(res.id);
             } else if (res.type === 'spool') {
                 if (state.dropMode) { removeBufferItem(res.id); return; }
                 if (state.ejectMode) { ejectSpool(res.id, "Scan", false); return; }
@@ -1879,7 +1932,7 @@ const processScan = (text, source = 'keyboard') => {
                 }
             } else if (res.type === 'error') showToast(res.msg, 'error');
         })
-        .catch((e) => { setProcessing(false); console.error(e); showToast("Scan Error", "error"); });
+        .catch((e) => { locDone(); setProcessing(false); console.error(e); showToast("Scan Error", "error"); });
 };
 
 // The active-print confirm for a scan assign: the shared one (inv_core.js,
@@ -1937,6 +1990,11 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
         confirmed_toolheads: [],
         confirmed_fed_heads: [],
     };
+    // `opts.autoDeploy === false` (Group 40.2 review): the picker's tile said the
+    // spool is stored there, not loaded back (a slot feeding the head it is
+    // leaving); an explicit `slot` would otherwise load it straight back. On
+    // `original`, so every replay stays a store.
+    if (opts && opts.autoDeploy === false) original.auto_deploy = false;
     const first = Object.assign({}, original, {
         confirmed_toolheads: Array.isArray(confirmedHeads) ? confirmedHeads : [],
     });
@@ -1945,7 +2003,11 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
     if (expectedFeed != null) first.expected_feed = expectedFeed;
 
     const post = (payload, prior) => {
-        setProcessing(true, { label: window.printerLabelForTarget ? window.printerLabelForTarget(tid, slot) : null });
+        // The slot this request fills, named or picked (Group 40.2 review: a
+        // picker's free slot goes as picked_slot, and the dim lost its
+        // "⏳ Checking XL…" while the chain asked the printer).
+        const filling = (payload.slot != null && payload.slot !== '') ? payload.slot : payload.picked_slot;
+        setProcessing(true, { label: window.printerLabelForTarget ? window.printerLabelForTarget(tid, filling) : null });
         // Only a request that got no answer says "failed": an exception in the
         // success handling below follows a move that landed, so it goes to the
         // console (as it always did) and never toasts a failure over it.
@@ -1993,6 +2055,10 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
                         }),
                         send: (body, next) => post(body, next),
                         onCancel: cancelled,
+                        // The picker knew the slot holds a stale record the engine
+                        // would refuse a store over (Group 40.2 review): no "Just
+                        // store it" that would only be refused.
+                        noStore: !!(opts && opts.noStore),
                     });
                     return;
                 }
@@ -2016,6 +2082,10 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
                         // Group 40.3: "Just store it" put it in the slot and left the head alone.
                         showToast(`📦 #${movedIds[0]} stored in ${tid}${hasSlot ? ` slot ${storedIn}` : ''}`
                             + `${window.storeToastTail(prior)}`, 'success', 4000);
+                    } else if (payload.auto_deploy === false && movedCount === 1) {
+                        // A store from the start (the picker's "stored here, not loaded back").
+                        showToast(`📦 #${movedIds[0]} stored in ${tid}${hasSlot ? ` slot ${storedIn}` : ''}`,
+                            'success', 4000);
                     } else if (rec && rec.length === 2) {
                         showToast(`#${movedIds[0]} → ${tid} (recorded as from ${rec[0]} slot ${rec[1]})`, "success");
                     } else if (movedCount === 1 && hasSlot) {
@@ -2106,6 +2176,11 @@ const _placeBufferWithPicker = async (box) => {
                     send.slot != null ? send.slot : null, [], [sid],
                     send.picked_slot != null ? send.picked_slot : null,
                     { expectedFeed: pick.expected_feed, swapDisplaced: pick.swap ? pick.displaced : null,
+                      // What the tile promised (Group 40.2 review): "stored here,
+                      // not loaded back" is a store; a stale record's slot can't
+                      // take a store, so its question offers none.
+                      autoDeploy: send.auto_deploy === false ? false : undefined,
+                      noStore: pick.store_ok === false,
                       onOutcome: resolve }));
                 if (out.outcome === 'moved') { loop.placed.push({ id: sid, slot: pick.slot }); break; }
                 if (out.outcome === 'cancelled') continue;   // step back: this spool's picker again

@@ -117,7 +117,10 @@ def test_multispool_shelf_scan_still_sends_full_buffer(page: Page, base_url: str
     always a Dryer Box, and a multi-slot box's label now opens the slot picker
     instead (tests/test_box_label_picker_e2e.py). It runs on a synthetic Shelf
     row now: /api/identify_scan is stubbed to answer it as a location, so no dev
-    row is needed and nothing is written."""
+    row is needed, and the page gets its own buffer endpoint (own_the_buffer), so
+    its saves never reach dev's shared buffer (Group 40.2 review)."""
+    from conftest import own_the_buffer
+    own_the_buffer(page, [])
     page.goto(base_url)
     page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
     page.evaluate(reset_dom_state_js)

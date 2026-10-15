@@ -537,8 +537,11 @@ window.askMoveConfirm = (answer, ctx = {}) => {
             }
             if (ctx.onCancel) ctx.onCancel(info);
         };
+        // `ctx.noStore` (Group 40.2 review): the door knows a store would be
+        // refused (the box picker's slot holds a stale record), so no "Just
+        // store it"; Enter then cancels, as in any three-way with no store.
         return window.confirmHeadLoad({ answer, host: ctx.host, ids: ctx.ids || {}, box: ctx.box, slot: ctx.slot,
-            onLoad: () => replay('load'), onStore: () => replay('store'), onCancel: cancelled });
+            onLoad: () => replay('load'), onStore: ctx.noStore ? null : () => replay('store'), onCancel: cancelled });
     }
     if (kind === 'active_print') {
         const yes = () => replay(prior.store ? 'store' : 'load');

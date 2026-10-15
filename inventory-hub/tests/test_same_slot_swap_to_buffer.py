@@ -282,8 +282,9 @@ def test_the_slot_scan_counts_only_the_users_spools_as_still_in_the_buffer(clien
 
 
 def test_a_slot_scan_with_nothing_swapped_answers_as_before(client):
-    """A control: an empty idle head; to_buffer is empty and the buffer is just
-    the user's remaining spools."""
+    """An empty idle head: to_buffer is empty and the buffer is just the user's
+    remaining spools. (It fails on d8f6128 only because the door answered no
+    `to_buffer` key there; the behaviour is unchanged.)"""
     state.GLOBAL_BUFFER = [{"id": 42, "display": "#42"}]
     sm = _sm()
     body = _door(sm, client, "/api/identify_scan", {
@@ -303,6 +304,97 @@ def test_the_other_doors_answer_to_buffer(client, path, body):
     assert res.get("auto_deployed_to") == "XL-1", res
     assert [i["id"] for i in res.get("to_buffer") or []] == [99], res
     assert _buffer_ids() == [99]
+
+
+# ---- the review's fixes (wf_0b3cc1a9-578) ---------------------------------------------------------
+# HEAD proof (f5f3ba2): each fails there except where marked a control: the second
+# read reversed the swap, a timed-out swap-out lost the spool from the buffer and
+# the undo, and an undo dropped a spool the user had buffered.
+
+def _scan(client, sm, body, store=None):
+    return _door(sm, client, "/api/identify_scan", dict(
+        {"text": "LOC:LR-MDB-1:SLOT:1", "source": "barcode", "confirmed_fed_heads": []}, **body),
+        store=store).get_json()
+
+
+def test_a_second_read_of_the_slot_label_never_puts_the_old_spool_back(client):
+    """The red: one buffered spool, the same-slot swap, then the label read again
+    (a scanner double-read, a "did it take?" re-scan). The buffer's only entry
+    is #99, the spool just taken out; the second scan loaded it back onto XL-1
+    and handed #42 to the buffer. It is held back now, nothing written."""
+    state.GLOBAL_BUFFER = [{"id": 42, "display": "#42"}]
+    sm = _sm(OWN_SLOT_1)
+    store = LocationsStore(ROWS)
+    first = _scan(client, sm, {}, store=store)
+    assert first["action"] == "assignment_done" and _buffer_ids() == [99], first
+    entry = state.GLOBAL_BUFFER[0]
+    assert entry["swapped_from"] == "LR-MDB-1:1" and entry["swapped_for"] == [42], entry
+    writes = len(sm.writes)
+    second = _scan(client, sm, {}, store=store)
+    assert second["action"] == "assignment_held" and second["spool"] == 99, second
+    assert "#99 just came out of LR-MDB-1 slot 1 (#42 took its place)" in second["msg"], second
+    assert "Undo Last Move" in second["msg"] and second["toast"].startswith("↩️ #99"), second
+    assert len(sm.writes) == writes, "nothing is written"
+    assert sm.direct_at("XL-1") == [42] and _buffer_ids() == [99]
+    assert any("not loaded" in str(e.get("msg", "")) and e.get("type") == "WARNING" for e in state.RECENT_LOGS)
+
+
+def test_the_hold_back_ends_after_its_window_and_never_stops_a_named_spool(client):
+    """Controls: two minutes later the same scan is a deliberate one (it loads),
+    and a door that names the spool (the deposit) is never held back."""
+    state.GLOBAL_BUFFER = [{"id": 42, "display": "#42"}]
+    sm = _sm(OWN_SLOT_1)
+    store = LocationsStore(ROWS)
+    _scan(client, sm, {}, store=store)
+    named = _scan(client, sm, {"spool_id": 99}, store=store)
+    assert named["action"] == "assignment_done" and sm.direct_at("XL-1") == [99], named
+    # Swap back again, then age the entry past the window: a blind scan loads it.
+    state.GLOBAL_BUFFER = [{"id": 42, "display": "#42"}]
+    _scan(client, sm, {}, store=store)
+    state.GLOBAL_BUFFER[0]["swapped_at"] -= (logic.SWAP_BACK_GUARD_S + 5) * 1000
+    later = _scan(client, sm, {}, store=store)
+    assert later["action"] == "assignment_done" and later["moved"] == 99, later
+
+
+def test_a_swap_out_that_lands_but_times_out_still_reaches_the_buffer_and_the_undo():
+    """Spoolman commits the swap-out PATCH but answers after update_spool's read
+    timeout. A re-read shows it landed: #99 is buffered and recorded for Undo,
+    and #42 is loaded (it used to say "XL-1 still holds #99", with #99 in no
+    buffer and no undo record)."""
+    sm = _sm(OWN_SLOT_1, landed_but_failed=[99])
+    res, store = _move(sm)
+    assert res.get("auto_deployed_to") == "XL-1", res
+    assert [i["id"] for i in res.get("to_buffer") or []] == [99] and _buffer_ids() == [99]
+    assert sm.direct_at("XL-1") == [42] and sm.spools[99]["location"] == ""
+    rec = state.UNDO_STACK[-1]
+    assert rec["ejections"] == {99: "XL-1"} and rec["buffered"] == [99], rec
+    assert any("a re-read shows it there" in str(e.get("msg", "")) for e in state.RECENT_LOGS)
+
+
+def test_undo_keeps_a_spool_the_user_had_buffered_before_the_swap():
+    """#99 was already in the buffer when the swap took it off XL-1: the move
+    adds nothing, so Undo takes nothing out (it used to drop #99)."""
+    state.GLOBAL_BUFFER = [{"id": 99, "display": "#99"}]
+    sm = _sm(OWN_SLOT_1)
+    store = LocationsStore(ROWS)
+    res, _ = _move(sm, store=store)
+    assert [i["id"] for i in res["to_buffer"]] == [99] and not state.UNDO_STACK[-1].get("buffered")
+    undone = _call(sm, lambda: logic.perform_undo(), store=store)
+    assert undone.get("success") is True and undone.get("unbuffered") == [], undone
+    assert _buffer_ids() == [99]
+
+
+def test_a_doubled_head_that_refuses_still_reports_the_buffered_spool():
+    """XL-1 holds #99 (slot 1's own) and #77 (from the PolyDryer). The load is
+    confirmed, #99 goes to the buffer, then #77's eject is rejected: the move is
+    refused, but #99, already Unassigned, is still answered as to_buffer and
+    recorded for Undo."""
+    sm = _sm(OWN_SLOT_1, more={77: {"location": "XL-1", "extra": _trail("PM-DB-2", 1)}}, reject_ids=[77])
+    res, _ = _move(sm, confirmed_fed_heads=["XL-1#77"])
+    assert sm.spools[99]["location"] == "" and _buffer_ids() == [99]
+    assert [i["id"] for i in res.get("to_buffer") or []] == [99], res
+    assert "42" in (res.get("auto_deploy_skipped") or {}), res
+    assert state.UNDO_STACK[-1]["buffered"] == [99] and 99 in state.UNDO_STACK[-1]["ejections"]
 
 
 def test_undo_through_the_route_answers_unbuffered(client):

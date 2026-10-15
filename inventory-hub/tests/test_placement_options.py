@@ -496,6 +496,43 @@ def test_a_greyed_out_ghost_slot_is_one_the_engine_refuses(slot, refused):
     assert bool(logic.smart_move_failure(result, 42)) is refused, result
 
 
+def test_stores_only_follows_the_engines_rule_for_both_cases():
+    """Group 40.2 review: placement's "stored here, not loaded back" is the
+    engine's store_only rule: the slot feeds the head the spool is leaving
+    (is_source), or it is the slot the spool was deployed from even after the
+    slot was re-pointed to another head (it used to read "-> XL-1 · XL-1 is
+    empty" while Enter only stored it). HEAD proof (f5f3ba2): no stores_only."""
+    # #42 runs on XL-3; slot 3 feeds XL-3 and holds a stored #77.
+    model, _ = _build([_sp(42, "XL-3", src="PM-DB-2", src_slot=1), _sp(77, "LR-MDB-1", slot=3)],
+                      "LR-MDB-1", spool=42)
+    assert _slot(model, 3)["stores_only"] is True and _slot(model, 3)["feeds"]["is_source"] is True
+    assert _slot(model, 3)["free"] is False and _slot(model, 3)["blocked"] is None
+    assert _slot(model, 1)["stores_only"] is False
+    # #42 runs on XL-2, deployed from slot 1, which now feeds XL-1.
+    model, _ = _build([_sp(42, "XL-2", src="LR-MDB-1", src_slot=1)], "LR-MDB-1", spool=42)
+    s1 = _slot(model, 1)
+    assert s1["stores_only"] is True and s1["feeds"]["is_source"] is False and s1["current"] is True
+
+
+@pytest.mark.parametrize("send, loads", [({"target_slot": "3"}, True),
+                                         ({"target_slot": "3", "auto_deploy": False}, False)],
+                         ids=["slot-alone-loads-it-back", "the-pickers-store"])
+def test_an_occupied_stores_only_slot_is_stored_only_with_the_pickers_send(send, loads):
+    """The occupied case of the review's yellow: the picker's {slot} alone made
+    the engine load #42 straight back onto XL-3 (the tile said it is stored).
+    With auto_deploy false (what the picker sends now) it is stored, and #77 is
+    unseated, as Overwrite says. Runs the REAL engine on the same data."""
+    spools = [_sp(42, "XL-3", src="PM-DB-2", src_slot=1), _sp(77, "LR-MDB-1", slot=3)]
+    sm = FakeSpoolman({s["id"]: {"location": s["location"], "extra": dict(s["extra"])} for s in spools})
+    printer_map = logic.locations_db.build_printer_map_from_rows(copy.deepcopy(ROWS))
+    result = run_move(sm, probe=IDLE, printer_map=printer_map, locations=copy.deepcopy(ROWS),
+                      target="LR-MDB-1", raw_spools=[42], **send)
+    assert result.get("status") == "success", result
+    assert (result.get("auto_deployed_to") == "XL-3") is loads, result
+    assert sm.spools[42]["location"] == ("XL-3" if loads else "LR-MDB-1"), sm.spools[42]
+    assert str(sm.spools[77]["extra"].get("container_slot") or "") == ""
+
+
 # ---- refusals -------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("location,kwargs,status,error", [
