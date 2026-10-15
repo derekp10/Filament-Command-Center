@@ -323,6 +323,14 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
   2026-10-14.)_ Force Location is meant as a last resort, but without a label per INDX head it's often the easy way.
   Group 40.4 / 40.5's pickers (Force Location or `LOC:RCOI` → pick a head) cover part of it; the spool holders on the
   printer are still being thought through (Derek).
+* **🟡 A same-slot swap files the old spool in the box with no slot.** _(Found 2026-10-14 by Group 40's engine
+  review, `engine:s2-swap-old-spool-unslotted`; it predates Group 40.)_ XL-3 runs #99, which came from LR-MDB-1
+  slot 3. You buffer a new spool #42 and scan `LOC:LR-MDB-1:SLOT:3`: #42 goes into slot 3 and onto XL-3, and #99 is
+  sent home to LR-MDB-1, but slot 3 now belongs to #42, so FCC files #99 in LR-MDB-1 with no slot (the eject's
+  slot-collision check in `logic.perform_smart_eject`). The box can read 5/4, and #99 gets no Quick-Swap tile.
+  **Question for Derek:** where does the swapped-out spool physically go? (a) the box's next free slot; (b) the scan
+  buffer, since it's in your hand right after the swap and your next scan files it; (c) unslotted in the box, as
+  today; (d) the printer's room. Recommendation: (b). Default if unanswered: (c), unchanged.
 
 ## 🎟️ Print Queue, Labels & Filament Usage
 *(No open items — resolved entries archived in `completed-archive.md`.)*

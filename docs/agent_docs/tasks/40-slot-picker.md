@@ -4,7 +4,7 @@
 **Estimated effort:** LARGE (~14–20 h, 2–3 sessions). Engine prerequisites ~3 h · shared picker ~4 h · box-label + slot-label doors ~3 h · printer picker ~3 h · Return picker ~2–3 h · wizard doors ~2 h · tests throughout.
 **Risk:** **MEDIUM–HIGH.** Every sub-task edits `_perform_smart_move_impl`, the hottest write path in FCC, and 40.3 adds a new prompt on Derek's own daily path (slot-label scans). Everything else protects other users.
 
-> **Status: `IN PROGRESS`.** Engine part built on `feature/group-40-slot-picker` (pushed): 40.0a, a 40.0b pin, 40.0d and item H (`ab69c56`, overnight 2026-10-13/14), then **40.0e and 40.0c (`e8a2706`, 2026-10-14 day session)**, reviewed in `wf_6946f24e-3da` (2 orange + 5 yellow fixed in `db1952a`; 21 notes deferred, listed before the decisions table). Not merged: 40.0c's question can't ship before 40.3's dialog. **Next:** 40.1 → **40.3 with Derek** (S1–S6) → 40.2 → 40.4 → 40.5 → 40.6 → 40.7; full sweep before `dev`. See [session-handoff-2026-10-14.md](session-handoff-2026-10-14.md), "Group 40, day session".
+> **Status: `IN PROGRESS`.** Engine part built on `feature/group-40-slot-picker` (pushed): 40.0a, a 40.0b pin, 40.0d and item H (`ab69c56`, overnight 2026-10-13/14), then **40.0e and 40.0c (`e8a2706`, 2026-10-14 day session)**, reviewed in `wf_6946f24e-3da` (2 orange + 5 yellow fixed in `db1952a`; 21 notes deferred, listed before the decisions table). **40.1 built (`14c5bc5`) and 40.3 built (browser `d2f076f`; engine `4489cbf`, first on `feature/group-40-engine-403`), 2026-10-14 evening; reviewed in `wf_ca12a7f0-f09`.** Not merged to `dev`. **Next:** Derek's S1–S6 → the review's fixes → full sweep → `dev`; then 40.2 → 40.4 → 40.5 → 40.6 → 40.7. See [session-handoff-2026-10-14.md](session-handoff-2026-10-14.md), "Group 40, day session".
 > **🔄 2026-10-14 (day) — 40.0e and 40.0c are built (`e8a2706`); where they differ from the 40.0c / 40.0e text below, the code and this note win:**
 > - **One rule for the pick:** `logic.recommend_box_slot(max_slots, claims, own_slot, would_prompt)` (own slot → lowest free slot that won't ask → lowest free → none). 40.1's ⭐ reuses it with its own `would_prompt`. The engine's `would_prompt` also avoids a binding to something that isn't a head, and never asks about the head the spool is leaving.
 > - **Confirm keys, not bare heads:** each `fed_heads` entry carries `confirm_key` ("XL-1#99": the head and the spools the question named). "Load it instead" sends the keys in `confirmed_fed_heads`; a key covers the head only while it runs exactly those spools (a different spool there is asked about again). A bare head id still covers it whatever it runs (internal callers, tests).
@@ -390,6 +390,59 @@ The server half of 40.3 shipped with 40.0c. The browser half is what 40.3 builds
   non-barcode assignment to INDX heads is a buglist item); (c) auto-slot passes over non-head bindings (an unbound
   slot is a storage slot; lazily filling the next free slot, bound or not, is fine).
 
+### As built (2026-10-14, evening): browser `d2f076f`, engine `4489cbf`
+
+This replaces the pre-build "Today / Design / Tests / Risks" text (dropped by `d6cac7d`; recoverable from git).
+The contract is in CLAUDE.md ("One move question, one replay builder, …"); this is the map.
+
+**Browser (`d2f076f`).**
+- **One dialog.** `window.confirmActivePrint` (inv_core.js) gained a three-way mode, used when the answer has a
+  `title`: **Load it instead** (`.fcc-apc-yes`) · **Just store it in LR-MDB-1 slot 1** (`.fcc-apc-store`) ·
+  **Cancel**. Enter stores (it cancels when the dialog offers no store), and an answer with `can_load: false`
+  shows no Load button; Tab / ← / → move between the buttons; the QRs are `CMD:CONFIRM:<sid>` /
+  `CMD:STORE:<sid>` / `CMD:CANCEL:<sid>` (`attachConfirmQRs` / `routeConfirmScan` gained STORE, and a stale STORE
+  QR is guarded like a stale CONFIRM). While it is open, any other scan is held off with a 7 s warning
+  (`window._fccOpenMoveQuestion`, read by `processScan`; `CMD:CANCEL` cancels it), and its host modal closing
+  cancels it.
+- **One router.** `window.askMoveConfirm(answer, ctx)`: `window.moveConfirmKind` sends `head_fed`, `feed_changed`
+  and an `active_print` answer with `can_store` to `window.confirmHeadLoad` (the three-way); any other
+  `active_print` (or a missing `confirm_type`) to the two-way confirm; anything else is a 7 s warning, nothing
+  moved. Cancel: "Cancelled — nothing moved" + an INFO log line.
+- **One replay builder.** `window.buildMoveReplay(door, original, answer, choice, prior)`: Load = the union of
+  every answer's `fed_heads[].confirm_key` (`window.unionConfirmFedHeads`) + `window.unionConfirmHeads`; Store =
+  `auto_deploy: false`, keys unchanged, only the printing heads that aren't a `feeds` entry, and a store stays a
+  store in later rounds. Both send `expected_feed` (the answer's `feed`), `picked_slot` when the answer says
+  `slot_picked`, and the spools the question named (`spool_id` at the slot scan, `spools` at `/api/smart_move`).
+  It never re-applies `_doAssignFinalize`'s MMU 0-based correction: a replay re-sends the original `slot`.
+- **Doors:** the slot-label scan and `performContextAssign` (inv_cmd.js); the Location Manager's
+  `_doAssignFinalize` (via `_postManageAdd`; the DEPLOYED card's ↩️ now sends `auto_deploy: false`, so it no longer
+  offers a load; `manualAddSpool` routes typed `LOC:` / `CMD:` text through `processScan`); Force Location
+  (inv_details.js, split into the unassign and the add); the Quick-Swap ⬇️ Deposit (inv_quickswap.js). The deposit
+  is ONE dialog: when the slot's head runs a spool or its printer prints, it posts at once and the server's
+  three-way is the question; an idle, empty head keeps the deposit overlay. Its first request carries
+  `expected_feed` (the tile's head, or "" for a Printer Pool tile; none for a single-slot box).
+
+**Engine (`4489cbf`).** `expected_feed` → `confirm_type: "feed_changed"` (nothing written; on a store replay as on
+a load; even for an empty idle head); `target` / `slot_picked` / `feed` / `can_load` on every question; the
+`identify_scan` slot branch relays every engine key; and the engine review's deferred notes marked ✅ 40.3 below.
+
+**Tests.** `test_head_load_confirm_js.py` (node-vm: the dialog, the router, the replay builder across rounds,
+the Location Manager's recorded-source toast), `test_door_fed_heads_canary.py` (every POST to the three doors
+sends `confirmed_fed_heads`, or is on the allow-list with a reason), `test_head_load_confirm_e2e.py` (route-stubbed
+three-way: click, Enter, each QR; stubbed visual `head-load-confirm-fed.png`), `test_expected_feed_40_3.py` (the
+engine and the three doors), the deferred-note pins in `test_fed_head_confirm_40_0c.py` and
+`test_auto_slot_before_preflight_40_0e.py`; deliberate updates in `test_move_result_consumers_e2e.py`
+(`PRINTING_STORE_Q`, the Force Location body) and `test_quickswap_deposit_and_header.py` (route stubs, so no run
+can post a real deposit).
+
+**Risks (kept from the design).**
+- This is the prompt Derek meets on his own path. The same-slot swap (S2) and a blind first slot scan into an
+  empty idle head (S1) must stay prompt-free: pinned (`test_the_slots_own_spool_coming_back_out_asks_nothing`,
+  `test_a_first_slot_scan_never_gets_a_feed_change`).
+- `routeConfirmScan` is on the scan hot path; its regex stays minimal and keeps the sid's case.
+- Not from 40.3: S2's swap sends the old spool back into the box unslotted (`engine:s2-swap-old-spool-unslotted`,
+  filed as a standalone buglist item).
+
 ## 40.4 — Force Location into a multi-slot box or a Printer row (D2.4, D3.1)
 
 **Today.** `promptEditLocation` (`inv_details.js:942-1244`) posts `manage_contents add` with no slot and no confirm (`:1211-1216`). A `requires_confirm` answer shows *"Override failed"* (`:1236`). Group 39.5 adds the active-print yes-path (39.4's shared confirm, retry with `confirmed_toolheads`).
@@ -545,27 +598,27 @@ The review confirmed 28 findings. The 2 orange and 5 yellow ones are fixed in `d
 are real but low-risk; take them with the sub-task that touches the same code (refs are `lens:id` in the
 workflow journal).
 
-- **fed_seen counts a resident the fed check skipped as 'left', so if it returns during the probe the chain unloads it without asking** (`engine:fed-seen-includes-left`). Fix: Build fed_seen only from the residents whose record still said bound_th (asked about, or classified as the slot's own spool).
+- ✅ 40.3 (`4489cbf`). **fed_seen counts a resident the fed check skipped as 'left', so if it returns during the probe the chain unloads it without asking** (`engine:fed-seen-includes-left`). Fix: Build fed_seen only from the residents whose record still said bound_th (asked about, or classified as the slot's own spool).
 - **Bulk Move still skips a spool filed on a head-less one-slot Printer row as 'loaded in a toolhead slot', against item H** (`engine:headless-printer-bulk-skip`). Fix: In the bulk plan's skip, count as loaded only a real head: in printer_map, or a row whose Type is in TOOLHEAD_TYPES (equivalently, _holds_one_spool and not is_printer_row_not_head).
 - **Not from this diff: Derek's same-slot swap (S2) sends the old spool back into the box unslotted, so the box over-counts** (`engine:s2-swap-old-spool-unslotted`). Fix: Out of scope for this branch. File it as a standalone follow-up: either the chained Smart Load treats the resident whose trail is the slot being filled as leaving the box, or Derek decides where a swapped-out spool goes.
 - **target_slot '0' now means 'no slot', but the Location Manager's 0-based MMU Slot grid sends 0 for its first slot** (`engine:slot-zero-dropped`). Fix: Either drop the 0-based correction in _doAssignFinalize (inv_loc_mgr.js:1462-1470), or keep the slot for MMU Slot rows.
 - **40.0d's claimed-slot check compares slots raw, while the rest of the move normalizes them** (`engine:free-feed-slots-raw-compare`). Fix: Compare `_norm_slot(effective_slot(...)) == _norm_slot(slot)`, and normalize _feed_slots_for's slot.
 - **Read cost: each bound-slot scan pays one more full spool-list GET (the head is now listed three times per scan), and step 3 pays one full-list GET per candidate head instead of the spec's single bucket read** (`io:daily-path-read-cost`). Fix: Optional. At step 3, make one strict full-list fetch and bucket it for [box, *bound heads] with bucket_spools_by_location(spools=...), feeding the memo.
-- **The picked-slot race refusal blames 'checking the printer' even when no printer was asked, and picked_slot_taken says 'taken' for a slot that no longer exists** (`io:race-refusal-text-says-printer`). Fix: Say '…was filled by #77 meanwhile…' unless the memo shows a live probe.
-- **The head_fed body loses "XL is PRINTING … so FCC stops charging this print to #99" whenever the fed head isn't a 'feeds' entry in active_prints** (`protocol:fed-text-drops-print-consequence`). Fix: For the fed sentence, take the fed head's printer state from the probe memo whatever the confirm or role, and keep the charging clause.
-- **A 40.3 replay can't be built from the answer alone: no pick-vs-named flag, no target, and the Location Manager replay still drops picked_slot** (`protocol:answer-cannot-drive-a-shared-replay`). Fix: In 40.3, thread picked_slot through _doAssignFinalize the way performContextAssign and Force Location do.
-- **CLAUDE.md's move-confirm convention and the slot-unseat row don't describe 40.0c/40.0e, and one sentence in them is now wrong** (`protocol:claude-md-door-contract-drift`). Fix: Extend CLAUDE.md:62 with the 40.0c door contract: the key-presence stale rule (checked before Group 39's), confirm keys, picked_slot, the head_fed shape, and the chain-guard exception.
-- **The stale-rule order (fed before Group 39) is correct but no test pins it** (`protocol:stale-rule-order-unpinned`). Fix: Add one test, parametrized over the three doors, that sends {confirm_active_print: true} with a head_fed answer and asserts the fed message.
-- **Known item 40.6-E: the deployed card's ↩️ RETURN SPOOL is still a silent round trip, and its answer now advertises a load/store choice** (`protocol:lm-return-round-trip-now-offers-store`). Fix: Land 40.6-E's reroute before 40.3's three-way dialog reaches doAssign.
+- ✅ 40.3 (`4489cbf`). **The picked-slot race refusal blames 'checking the printer' even when no printer was asked, and picked_slot_taken says 'taken' for a slot that no longer exists** (`io:race-refusal-text-says-printer`). Fix: Say '…was filled by #77 meanwhile…' unless the memo shows a live probe.
+- ✅ 40.3 (`4489cbf`). **The head_fed body loses "XL is PRINTING … so FCC stops charging this print to #99" whenever the fed head isn't a 'feeds' entry in active_prints** (`protocol:fed-text-drops-print-consequence`). Fix: For the fed sentence, take the fed head's printer state from the probe memo whatever the confirm or role, and keep the charging clause.
+- ✅ 40.3 (answers carry `target` / `slot_picked` / `feed`; every door replays through `window.buildMoveReplay`). **A 40.3 replay can't be built from the answer alone: no pick-vs-named flag, no target, and the Location Manager replay still drops picked_slot** (`protocol:answer-cannot-drive-a-shared-replay`). Fix: In 40.3, thread picked_slot through _doAssignFinalize the way performContextAssign and Force Location do.
+- ✅ 40.3 (CLAUDE.md's 40.3 bullet, the chain-guard exception and the unseat row). **CLAUDE.md's move-confirm convention and the slot-unseat row don't describe 40.0c/40.0e, and one sentence in them is now wrong** (`protocol:claude-md-door-contract-drift`). Fix: Extend CLAUDE.md:62 with the 40.0c door contract: the key-presence stale rule (checked before Group 39's), confirm keys, picked_slot, the head_fed shape, and the chain-guard exception.
+- ✅ 40.3 (`test_a_pre_39_page_asked_a_fed_question_hears_the_fed_reload`). **The stale-rule order (fed before Group 39) is correct but no test pins it** (`protocol:stale-rule-order-unpinned`). Fix: Add one test, parametrized over the three doors, that sends {confirm_active_print: true} with a head_fed answer and asserts the fed message.
+- ◐ 40.3 (`d2f076f`): the ↩️ now sends `auto_deploy: false`, so it offers no load; 40.6-E's reroute still stands. **Known item 40.6-E: the deployed card's ↩️ RETURN SPOOL is still a silent round trip, and its answer now advertises a load/store choice** (`protocol:lm-return-round-trip-now-offers-store`). Fix: Land 40.6-E's reroute before 40.3's three-way dialog reaches doAssign.
 - **The HEAD-proof notes get HEAD's actual failure wrong for 4 of the 40.0e tests and some 40.0c ones, and two test docstrings repeat the wrong history** (`tests:head-proof-records-misdescribe-head`). Fix: Rewrite those docstrings from a real HEAD run, counting signature-only failures as controls.
-- **No pin for the two 40.3 replays of a head_fed question about an auto-picked slot** (`tests:auto-picked-head-fed-replays-unpinned`). Fix: Extend test_auto_slot_before_preflight_40_0e.py:201 with both replays.
+- ✅ 40.3 (`test_the_lowest_slots_question_answered_load_and_store`). **No pin for the two 40.3 replays of a head_fed question about an auto-picked slot** (`tests:auto-picked-head-fed-replays-unpinned`). Fix: Extend test_auto_slot_before_preflight_40_0e.py:201 with both replays.
 - **40.0d's rule that one unreadable feed box voids every candidate is unpinned; the blip test can't tell it apart from skipping that box** (`tests:free-feed-all-or-nothing-unpinned`). Fix: Add the TWO_FEEDS case with TST-MDB-1 unreadable, expecting nothing recorded and no recorded_source.…
-- **The chain for a slot bound to something that isn't a head has no pin; with an explicit slot, a binding to a missing head still moves the spool out of the box and reports a deploy** (`tests:non-head-binding-chain-unpinned`). Fix: Chain only when loads_head (`bound_toolhead = bound_th if loads_head else None`), with a WARNING such as 'slot 1 is bound to XL-9, which isn't a toolhead'.
+- ✅ 40.3 (`4489cbf`: no chain to a non-head, and the ghost guard covers it). **The chain for a slot bound to something that isn't a head has no pin; with an explicit slot, a binding to a missing head still moves the spool out of the box and reports a deploy** (`tests:non-head-binding-chain-unpinned`). Fix: Chain only when loads_head (`bound_toolhead = bound_th if loads_head else None`), with a WARNING such as 'slot 1 is bound to XL-9, which isn't a toolhead'.
 - **Nothing pins 40.0a's "refused before any read"; the tests only check that nothing is written** (`tests:printer-row-before-reads-unpinned`). Fix: In test_a_printer_row_that_is_not_a_head_takes_no_spool, use a counting FakeSpoolman and assert zero get_spool calls and zero list reads.…
-- **Several narrow branches have no pin, and two are unreachable as wired** (`tests:narrow-branches-unpinned`). Fix: Pin (a) with a probe stub that moves the resident away, and (b) with picked_slot '9'.
-- **The `scan` fixture comment says a current page sends confirmed_fed_heads (none does until 40.3), and e8a2706 records no full E2E run for its frontend change** (`tests:scan-fixture-comment-and-e2e-record`). Fix: Reword the comment to 'as a 40.3 page sends it', and run the full sweep before merging.…
+- ◐ 40.3: (a), (b) pinned and (d) commented; (c) stays for 40.5. **Several narrow branches have no pin, and two are unreachable as wired** (`tests:narrow-branches-unpinned`). Fix: Pin (a) with a probe stub that moves the resident away, and (b) with picked_slot '9'.
+- ◐ 40.3: the comment is true now that a 40.3 page sends the key; the full sweep is still due before `dev`. **The `scan` fixture comment says a current page sends confirmed_fed_heads (none does until 40.3), and e8a2706 records no full E2E run for its frontend change** (`tests:scan-fixture-comment-and-e2e-record`). Fix: Reword the comment to 'as a 40.3 page sends it', and run the full sweep before merging.…
 - **Tests coupled to read order and to another test module, plus one artificial race state** (`tests:fragile-coupling`). Fix: Move the shared rows into move_engine_harness or a fixtures module.
-- **The 13.6 recorded feed slot is still silent on the Location Manager's toolhead assign, and nothing pins that path** (`tests:lm-toolhead-recorded-source-toast`). Fix: When that follow-up lands, mirror the inv_cmd.js toast in _doAssignFinalize and add a node-vm pin like test_reverse_binding_40_0d_js.py.…
+- ✅ 40.3 (`d2f076f`: the toast, pinned in `test_head_load_confirm_js.py`). **The 13.6 recorded feed slot is still silent on the Location Manager's toolhead assign, and nothing pins that path** (`tests:lm-toolhead-recorded-source-toast`). Fix: When that follow-up lands, mirror the inv_cmd.js toast in _doAssignFinalize and add a node-vm pin like test_reverse_binding_40_0d_js.py.…
 
 ---
 
