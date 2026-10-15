@@ -1406,8 +1406,11 @@ const _slotScanOutcome = (r, { stored = false, head = null, prior = null } = {})
         if (movedId != null) {
             state.heldSpools = state.heldSpools.filter(s => s.id !== movedId);
             _markAssignedOut(movedId); // 21.6 — don't let a stale pulse resurrect it
-            renderBuffer();
         }
+        // Group 40, the same-slot swap (Derek, 2026-10-15): the slot's old spool
+        // came off its head into the scan buffer. One render, one save.
+        const handedBack = window.takeIntoBuffer(r, { render: false, toast: false });
+        if (movedId != null || handedBack.length) renderBuffer();
         const partial = r.action === 'assignment_partial';
         const extraMsg = partial ? ` (${r.remaining_buffer} still in buffer)` : '';
         const msg = stored
@@ -1418,6 +1421,7 @@ const _slotScanOutcome = (r, { stored = false, head = null, prior = null } = {})
             // In the box, but the bound toolhead did not get it.
             showToast(`⚠️ #${movedId} is in ${r.location}:${r.slot} but was NOT deployed to ${r.not_deployed_target || 'its toolhead'}: ${r.not_deployed}`, 'warning', 7000);
         }
+        window.toastIntoBuffer(handedBack);
         return true;
     }
     if (r && r.action === 'assignment_failed') {
@@ -1984,6 +1988,9 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
                     const movedSet = new Set(movedIds.map(String));
                     state.heldSpools = state.heldSpools.filter(s => !movedSet.has(String(s.id)));
                     movedSet.forEach(id => _markAssignedOut(id)); // 21.6
+                    // Group 40, the same-slot swap: the slot's old spool came off
+                    // its head into the scan buffer. One render, one save.
+                    window.takeIntoBuffer(res, { render: false });
                     renderBuffer();
                     if (document.getElementById('manage-loc-id').value === tid) refreshManageView(tid);
                     // Dispatch the canonical "something moved" event instead of
@@ -2024,6 +2031,19 @@ const triggerUndo = (opts = {}) => {
                     requestConfirmation(res.msg, yes);
                 }
                 return;
+            }
+            // Group 40, the same-slot swap: a spool the undone move had handed
+            // into the scan buffer is back on its head, so it leaves the buffer
+            // on screen at once. The server already dropped it from its replica
+            // (and put back any spool the undo returns to the buffer), so this
+            // render saves nothing: loadBuffer below adopts the server's list,
+            // which a local save would have overwritten.
+            const unbuffered = new Set(((res && res.unbuffered) || []).map(String));
+            if (unbuffered.size) {
+                state.heldSpools = state.heldSpools.filter(s => !unbuffered.has(String(s.id)));
+                unbuffered.forEach(id => _markAssignedOut(id));
+                window.suppressBufferDirty = true;
+                try { renderBuffer(); } finally { window.suppressBufferDirty = false; }
             }
             updateLogState(); loadBuffer(); if (window.fetchLocations) window.fetchLocations();
             if (res && res.success) showToast(res.msg || '↩️ Undone', 'success', 4000);

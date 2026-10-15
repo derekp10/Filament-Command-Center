@@ -1439,12 +1439,20 @@ def api_identify_scan():
         auto_deployed_to = (move_result or {}).get('auto_deployed_to')
         not_deployed = ((move_result or {}).get('auto_deploy_skipped') or {}).get(str(spool_id))
 
-        # Remove the spool from the backend's buffer replica.
+        # Remove the spool from the backend's buffer replica: the replica as it
+        # is NOW, after the move. A same-slot swap (Group 40; Derek, 2026-10-15)
+        # put the slot's old spool at its end, and the snapshot taken before the
+        # move would drop it again.
+        to_buffer = [i for i in ((move_result or {}).get('to_buffer') or []) if isinstance(i, dict)]
         state.GLOBAL_BUFFER = [
-            item for item in buffer
+            item for item in (getattr(state, 'GLOBAL_BUFFER', []) or [])
             if not (isinstance(item, dict) and int(item.get('id') or 0) == spool_id)
         ]
-        remaining = len(state.GLOBAL_BUFFER)
+        # "Still in buffer" counts the spools the user buffered, not the one the
+        # swap just handed back (its own toast says so).
+        swapped = {str(i.get('id')) for i in to_buffer}
+        remaining = len([item for item in state.GLOBAL_BUFFER
+                         if not (isinstance(item, dict) and str(item.get('id')) in swapped)])
         action = 'assignment_partial' if remaining > 0 else 'assignment_done'
 
         suffix = f" ({remaining} still in buffer)" if remaining else ""
@@ -1466,6 +1474,9 @@ def api_identify_scan():
             "not_deployed": not_deployed,
             "not_deployed_target": (move_result or {}).get('auto_deploy_target') if not_deployed else None,
             "remaining_buffer": remaining,
+            # Group 40, the same-slot swap: the slot's old spool, now in the scan
+            # buffer (Unassigned); the page adds it to its own buffer.
+            "to_buffer": to_buffer,
             "smart_move": move_result,
         }), 200
 

@@ -119,12 +119,16 @@ def test_an_empty_idle_head_loads_with_no_question():
                          ids=["plain", "quoted-trail", "int-slot", "zero-padded"])
 def test_the_slots_own_spool_coming_back_out_asks_nothing(trail_slot, slot):
     """XL-1 runs #99, deployed from LR-MDB-1 slot 1. Putting #42 in slot 1 is the
-    normal swap: #99 goes home, #42 loads, and no new question is asked."""
+    normal swap: #42 loads, and no new question is asked. Deliberately changed
+    (Group 40.2, Derek's 2026-10-15 answer): #99 used to go "home" into the slot
+    #42 now holds (it landed there with no slot); it goes to the scan buffer,
+    Unassigned (test_same_slot_swap_to_buffer.py pins the rest)."""
     sm = _sm({"physical_source": "LR-MDB-1", "physical_source_slot": trail_slot, "container_slot": ""})
     res, _ = _move(sm, slot=slot)
     assert res.get("status") == "success" and res.get("auto_deployed_to") == "XL-1", res
     assert sm.direct_at("XL-1") == [42]
-    assert sm.spools[99]["location"] == "LR-MDB-1", sm.writes
+    assert sm.spools[99]["location"] == "", sm.writes
+    assert [i["id"] for i in res.get("to_buffer") or []] == [99], res
 
 
 # ---- the question ------------------------------------------------------------------

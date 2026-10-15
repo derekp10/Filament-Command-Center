@@ -1234,6 +1234,9 @@ window.promptEditLocation = (spoolId, currentLoc) => {
                             }
                             const notDeployed = (res.auto_deploy_skipped || {})[String(spoolId)];
                             if (notDeployed) showToast(`⚠️ #${spoolId} was placed, but NOT deployed to ${res.auto_deploy_target || 'its toolhead'}: ${notDeployed}`, 'warning', 7000);
+                            // Group 40, the same-slot swap: the slot's old spool came
+                            // off its head into the scan buffer.
+                            window.takeIntoBuffer(res);
                             document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
                             openSpoolDetails(spoolId, true);
                         } else {

@@ -921,8 +921,11 @@
                         // so the user doesn't briefly see the old spool.
                         if (body.moved != null) {
                             state.heldSpools = (state.heldSpools || []).filter(s => s.id !== body.moved);
-                            if (window.renderBuffer) window.renderBuffer();
                         }
+                        // Group 40, the same-slot swap: the slot's old spool came
+                        // off the head into the scan buffer. One render, one save.
+                        const handedBack = window.takeIntoBuffer(body, { render: false });
+                        if ((body.moved != null || handedBack.length) && window.renderBuffer) window.renderBuffer();
                         _refreshAfterMove();
                     } else if (body.action === 'assignment_no_buffer') {
                         showToast('Buffer is empty — scan a spool first', 'warning', 3500);
