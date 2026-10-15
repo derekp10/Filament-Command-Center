@@ -306,6 +306,24 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
 
 * Location Manager not syncing status across browser instances? _[ON HOLD — requires a real-time transport (SSE / WebSocket) on the backend. Current architecture is pull-only via `/api/locations` polling. Non-trivial; revisit after mobile mode since that work will establish the multi-client baseline anyway.]_
 
+* **🟡 A spool "just stored" in a bound slot mid-print leaves a load to remember after the print.** _(Derek,
+  2026-10-14, while answering Group 40.3's questions.)_ Mid-print you can't load a toolhead, so a slot-label scan
+  into a bound slot gets stored (Enter = Just store it). After the print you load the head physically (from the
+  laptop at the XL), and must ALSO remember to tell FCC (scan the slot again or Quick-Swap). Forget either half and
+  FCC and the printer disagree, and FCC can't warn the way the slicer does. Ideas, none decided: offer the pending
+  load when the print ends; mark the slot "stored, waiting to load" on its Quick-Swap tile; or auto-load the head
+  after the print. Needs a design pass with Derek.
+* **🟡 Multi-user awareness: a confirm should re-ask when what it showed changed.** _(Derek, 2026-10-14.)_ "One user
+  might not be aware" that another changed something while a dialog was open: e.g. you confirm loading via
+  LR-MDB-1 slot 1 onto XL-1, but meanwhile someone re-points slot 1 to XL-2 in the Feeds editor. You put a spool in
+  slot 1 because a slicer file depends on it, so you want to know. The first case is built into Group 40.3 (the Yes
+  carries the head it was about; the server asks again if the slot now feeds another head, even an empty idle one).
+  Audit the other doors for the same pattern (Quick-Swap, Return, Bulk Move commit, the wizard).
+* **🟡 Assigning spools to INDX heads (and printer spool holders) without printed labels is clunky.** _(Derek,
+  2026-10-14.)_ Force Location is meant as a last resort, but without a label per INDX head it's often the easy way.
+  Group 40.4 / 40.5's pickers (Force Location or `LOC:RCOI` → pick a head) cover part of it; the spool holders on the
+  printer are still being thought through (Derek).
+
 ## 🎟️ Print Queue, Labels & Filament Usage
 *(No open items — resolved entries archived in `completed-archive.md`.)*
 
