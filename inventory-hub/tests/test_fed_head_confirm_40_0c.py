@@ -525,3 +525,89 @@ def test_door_helpers_read_the_request():
     assert logic._fed_covered(["XL-1#7,99"], "XL-1", [99, 7]) is True
     assert logic._fed_covered(["XL-1#99"], "XL-1", [99, 7]) is False
     assert logic._fed_covered(["XL-1"], "XL-1", [5]) is True and logic._fed_covered(True, "XL-9", [5]) is True
+
+
+# ---- the Group 40 review's deferred notes, pinned with 40.3 ------------------------------
+
+class _ListedButGone(FakeSpoolman):
+    """Spoolman's spool list is a moment behind: its first read of XL-1 still
+    shows `listed` there, though their own records already say they left.
+    Later reads show where they really are."""
+
+    def __init__(self, spools, listed=()):
+        super().__init__(spools)
+        self.stale = {int(s) for s in listed}
+
+    def _detailed(self, loc):
+        items = super()._detailed(loc)
+        if str(loc).upper() == "XL-1" and self.stale:
+            have = {i["id"] for i in items}
+            items += [{"id": sid, "is_ghost": False, "location": "XL-1", "slot": ""}
+                      for sid in sorted(self.stale) if sid not in have]
+            self.stale = set()
+        return items
+
+
+def test_a_spool_that_left_and_came_back_during_the_check_is_not_unloaded_unasked():
+    """The review's engine:fed-seen-includes-left. XL-1's list still shows #7,
+    but #7's own record says it already went back to PM-DB-3, so nothing is
+    asked. While FCC checks the printer, #7 is put back on XL-1. It was never
+    shown to the user, so the chain must not unload it: "seen" used to count
+    every LISTED spool, so #7 counted as seen and went to PM-DB-3 unasked."""
+    sm = _ListedButGone({42: {"location": "CR-CT-2-R1", "extra": {}},
+                         7: {"location": "PM-DB-3", "extra": {"container_slot": "1"}}}, listed=[7])
+    probe = _loads_during_the_probe(sm, 7, {"physical_source": "PM-DB-3", "physical_source_slot": "1",
+                                            "container_slot": ""})
+    res, _ = _move(sm, probe=probe)
+    assert res.get("status") == "success" and "auto_deployed_to" not in res, res
+    assert sm.direct_at("XL-1") == [7], sm.writes
+    assert sm.spools[42]["location"] == "LR-MDB-1" and sm.spools[42]["extra"]["container_slot"] == "1"
+    assert (res.get("auto_deploy_skipped") or {}).get("42", "").startswith(
+        "XL-1 started running #7 (from PM-DB-3) while FCC was checking the printer"), res
+
+
+def test_a_spool_that_left_between_the_two_reads_is_not_named():
+    """The review's narrow branch (a): the list shows #7 on XL-1, but its record
+    says PM-DB-3, so it left between the two reads. The question would name a
+    spool that isn't there; nothing is asked and #42 loads. A control: it pins
+    the `continue` that skips such a spool."""
+    sm = _ListedButGone({42: {"location": "CR-CT-2-R1", "extra": {}},
+                         7: {"location": "PM-DB-3", "extra": {"container_slot": "1"}}}, listed=[7])
+    res, _ = _move(sm)
+    assert res.get("status") == "success" and res.get("auto_deployed_to") == "XL-1", res
+    assert sm.direct_at("XL-1") == [42] and sm.spools[7]["location"] == "PM-DB-3", sm.writes
+
+
+def test_a_fed_question_keeps_the_print_consequence_when_the_head_was_already_confirmed():
+    """The review's protocol:fed-text-drops-print-consequence. The Quick-Swap
+    deposit's first request already confirms XL-1 (its banner said the XL is
+    printing), so XL-1 isn't in active_prints. Unloading #99 still stops the
+    print being charged to it, and the question must say so."""
+    res, _ = _move(_sm(FROM_POLYDRYER), probe=_probe_for({"XL"}), confirm_active_print=["XL-1"])
+    assert res.get("confirm_type") == "head_fed" and res["active_prints"] == [], res
+    assert res["body"] == ("XL is PRINTING. LR-MDB-1 slot 1 feeds XL-1, and XL-1 is running #99 (from "
+                           "PM-DB-2). Loading #42 sends #99 back to PM-DB-2, so FCC stops charging this "
+                           "print to #99."), res["body"]
+
+
+@pytest.mark.parametrize("printing", [False, True], ids=["idle", "printing"])
+@pytest.mark.parametrize("path, body", [
+    ("/api/identify_scan", {"text": "LOC:LR-MDB-1:SLOT:1", "source": "barcode", "spool_id": 42}),
+    ("/api/manage_contents", {"action": "add", "location": "LR-MDB-1", "slot": "1", "spool_id": "ID:42"}),
+    ("/api/smart_move", {"location": "LR-MDB-1", "slot": "1", "spools": [42]}),
+], ids=["slot_scan", "manage_contents", "smart_move"])
+def test_a_pre_39_page_asked_a_fed_question_hears_the_fed_reload(client, path, body, printing):
+    """The review's protocol:stale-rule-order-unpinned. A page from before
+    Group 39 sends only the bare confirm_active_print flag. Asked a fed
+    question, it must hear what the load would unload, idle or printing: the
+    doors run stale_fed_refusal BEFORE stale_confirm_refusal, which answers any
+    question. A control: it pins that order."""
+    state.GLOBAL_BUFFER = [{"id": 42, "display": "#42"}]
+    sm = _sm(FROM_POLYDRYER)
+    r, _ = _door(sm, client, path, dict(body, confirm_active_print=True),
+                 probe=_probe_for({"XL"}) if printing else IDLE)
+    out = r.get_json()
+    assert out.get("stale_page") is True, out
+    assert out["msg"] == ("Not moved: XL-1 is running #99, and this request can't ask before loading "
+                          "over it. Reload the page (Ctrl+F5) and try again."), out
+    assert sm.writes == []

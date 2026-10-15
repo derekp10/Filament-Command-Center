@@ -285,3 +285,116 @@ def test_recommend_box_slot_rules():
     assert logic.recommend_box_slot(2, ['"1"', "02"], would_prompt=busy(set())) == (None, "full")
     assert logic.recommend_box_slot("x", [], would_prompt=None) == (None, "full")
     assert logic.recommend_box_slot(4, [], own_slot="9", would_prompt=None) == ("1", "no_prompt")
+
+
+# ---- the Group 40 review's deferred notes, pinned with 40.3 ------------------------------
+
+# CR-MDB-1 feeds nothing (as on dev); GHOST-MDB's slot 1 is bound to XL-9, a head
+# that doesn't exist (deleted, or a hand edit).
+ROWS_X = ROWS_E + [
+    {"LocationID": "CR-MDB-1", "Type": "Dryer Box", "Max Spools": "4", "parent_id": "LR",
+     "extra": {"slot_targets": {}}},
+    {"LocationID": "GHOST-MDB", "Type": "Dryer Box", "Max Spools": "4", "parent_id": "LR",
+     "extra": {"slot_targets": {"1": "XL-9"}}},
+]
+
+
+def test_the_lowest_slots_question_answered_load_and_store():
+    """The review's tests:auto-picked-head-fed-replays-unpinned: the question
+    above, answered. "Load it instead" sends the pick back as picked_slot with
+    XL-1's confirm key: #42 loads, #99 goes home and PM-DB-2 lets go of XL-1.
+    "Just store it" sends the pick with auto_deploy off: #42 waits in slot 1 and
+    no head is read. A control."""
+    spools = {42: {"location": "CR-CT-2-R1", "extra": {}}, 20: _in("2"), 30: _in("3"),
+              40: _in("4"), 99: {"location": "XL-1", "extra": dict(FROM_POLYDRYER)}}
+    sm = _Reads(spools)
+    store = LocationsStore(ROWS_E)
+    res = _move(sm, store=store)
+    assert res.get("confirm_type") == "head_fed" and res["target_slot"] == "1", res
+    loaded = _move(sm, store=store, picked_slot=res["target_slot"],
+                   confirmed_fed_heads=[res["fed_heads"][0]["confirm_key"]])
+    assert loaded.get("auto_deployed_to") == "XL-1", loaded
+    assert sm.direct_at("XL-1") == [42] and sm.spools[99]["location"] == "PM-DB-2", sm.writes
+    assert store.bound("PM-DB-2") == ""
+
+    sm2 = _Reads(spools)
+    stored = _move(sm2, picked_slot="1", auto_deploy=False)
+    assert stored.get("status") == "success" and "auto_deployed_to" not in stored, stored
+    assert sm2.spools[42]["location"] == "LR-MDB-1" and _slot_of(sm2, 42) == "1"
+    assert sm2.direct_at("XL-1") == [99]
+    assert "XL-1" not in sm2.read_locs, sm2.read_locs
+
+
+class _FilledAtRead(FakeSpoolman):
+    """Puts #77 in CR-MDB-1 slot 1 just before the `nth` strict list read of
+    CR-MDB-1 (read 1 is step 3's pick, read 2 step 6's slot read)."""
+
+    def __init__(self, spools, nth):
+        super().__init__(spools)
+        self.nth, self.box_reads = nth, 0
+
+    def at_location_detailed_strict(self, loc):
+        if str(loc).upper() == "CR-MDB-1":
+            self.box_reads += 1
+            if self.box_reads == self.nth:
+                self.spools[77] = _in("1", box="CR-MDB-1")
+        return super().at_location_detailed_strict(loc)
+
+
+def test_a_slot_filled_without_a_printer_check_says_meanwhile():
+    """The review's io:race-refusal-text-says-printer: CR-MDB-1 feeds nothing,
+    so no printer is asked, yet the refusal said "while FCC was checking the
+    printer". #77 takes the picked slot between the pick and the write."""
+    sm = _FilledAtRead({42: {"location": "CR-CT-2-R1", "extra": {}},
+                        77: {"location": "CR-CT-2-R1", "extra": {}}}, nth=2)
+    probes = []
+
+    def probe(url, name):
+        probes.append(name)
+        return IDLE(url, name)
+
+    res = _move(sm, probe=probe, store=LocationsStore(ROWS_X), target="CR-MDB-1")
+    assert res["failures"].get("42") == ("CR-MDB-1 slot 1 was filled by #77 meanwhile, so nothing moved "
+                                         "— try again"), res
+    assert probes == [] and sm.box_reads == 2, (probes, sm.box_reads)
+    assert sm.spools[42]["location"] == "CR-CT-2-R1" and _slot_of(sm, 77) == "1", sm.writes
+
+
+def test_a_picked_slot_that_no_longer_exists_says_so():
+    """The review's narrow branch (b): a replayed pick of slot 9 in a 4-slot box
+    (its Max Spools lowered while the user decided). It was "taken while you
+    were deciding", by nobody; without the range check slot 9 was written."""
+    sm = FakeSpoolman({42: {"location": "CR-CT-2-R1", "extra": {}}})
+    res = _move(sm, picked_slot="9")
+    assert res.get("status") == "error" and res.get("blocked_reason") == "picked_slot_taken", res
+    assert res["msg"] == "Not moved: LR-MDB-1 has no slot 9 any more, so nothing moved — try again.", res
+    assert sm.writes == []
+
+
+@pytest.mark.parametrize("box, bound", [("TST-MDB-1", "XL"), ("GHOST-MDB", "XL-9")],
+                         ids=["printer-row", "no-such-head"])
+def test_a_named_slot_bound_to_something_that_isnt_a_head_keeps_the_spool_in_the_box(box, bound):
+    """The review's tests:non-head-binding-chain-unpinned: slot 1 is bound to the
+    XL printer row, or to XL-9, which doesn't exist. The chain moved #42 out of
+    the box ("Auto-deployed → XL-9"), or was refused at the printer row. It now
+    stays in its slot, and the answer says why."""
+    sm = FakeSpoolman({42: {"location": "CR-CT-2-R1", "extra": {}}})
+    res = _move(sm, store=LocationsStore(ROWS_X), target=box, target_slot="1")
+    assert res.get("status") == "success" and "auto_deployed_to" not in res, res
+    assert sm.spools[42]["location"] == box and _slot_of(sm, 42) == "1", sm.spools[42]
+    assert res["auto_deploy_skipped"] == {"42": (f"{box} slot 1 is bound to {bound}, which isn't a toolhead — "
+                                                 f"fix it in {box}'s 🔗 Slot → Toolhead Feeds")}, res
+    assert res["auto_deploy_target"] == bound, res
+    assert sm.direct_at(bound) == []
+
+
+def test_storing_over_a_deployed_spools_slot_bound_to_a_non_head_is_refused():
+    """The companion gap: with no chain to swap it out, a spool put in a slot
+    whose own spool is deployed (#5 runs on XL-1 from GHOST-MDB slot 1) left two
+    spools claiming the slot. Refused, nothing written."""
+    sm = FakeSpoolman({42: {"location": "CR-CT-2-R1", "extra": {}},
+                       5: {"location": "XL-1", "extra": {"physical_source": "GHOST-MDB",
+                                                         "physical_source_slot": "1", "container_slot": ""}}})
+    res = _move(sm, store=LocationsStore(ROWS_X), target="GHOST-MDB", target_slot="1")
+    assert "GHOST-MDB slot 1 still holds #5, loaded on XL-1" in logic.smart_move_failure(res, 42), res
+    assert sm.writes == []

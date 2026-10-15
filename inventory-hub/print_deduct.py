@@ -269,6 +269,8 @@ def api_smart_move():
         # Group 40.0e: the slot an earlier answer picked (its target_slot), kept
         # only while it is still free.
         picked_slot=payload.get('picked_slot'),
+        # Group 40.3: the feed the question named; a re-pointed slot asks again.
+        expected_feed=logic.expected_feed_from(payload),
     )
     stale = logic.stale_fed_refusal(payload, result) or logic.stale_confirm_refusal(payload, result)
     if stale:

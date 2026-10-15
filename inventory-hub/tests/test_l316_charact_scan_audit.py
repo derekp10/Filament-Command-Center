@@ -511,6 +511,8 @@ def test_add_returns_perform_smart_move_result_verbatim(client):
         "confirm_active_print": [],
         "confirmed_fed_heads": [],
         "picked_slot": None,
+        # Group 40.3: the feed a replay's question named (None: no check).
+        "expected_feed": None,
     }
 
 
