@@ -232,6 +232,44 @@ _Run finished at ~04:45 on 2026-10-14. Started from `dev` @ `4203ffe` (= `origin
   Three new buglist items came out of it (a stored-mid-print load to remember, multi-user awareness, INDX heads
   without labels).
 
+### Group 40, evening and night (2026-10-14 → 15): 40.1 + 40.3 built, reviewed twice, merged to `dev`
+
+- **Where it is:** `feature/group-40-slot-picker`, merged to `dev` (`__DEVMERGE__`) and pushed. `main` is still held
+  for you (last release 2026-10-08).
+- **What you get on dev:**
+  - A slot-label scan into a bound slot whose toolhead runs a spool from elsewhere asks first: "Load #57 onto XL-1?
+    LR-MDB-1 slot 1 feeds XL-1, and XL-1 is running #99 (from PM-DB-2). Loading #57 sends #99 back to PM-DB-2."
+    Buttons **Load it instead** · **Just store it in LR-MDB-1 slot 1** · **Cancel**, each with a scannable QR;
+    Enter stores. The same dialog comes up from the Location Manager, the Quick-Swap deposit (one dialog), Force
+    Location and the buffer assign.
+  - If someone re-points the slot while that question is open, FCC asks again before doing anything ("LR-MDB-1 slot
+    1 now feeds XL-2 (it fed XL-1 when you were asked)"); a store is asked again as a store.
+  - Your blind first scan into an empty idle head, and your same-slot swap, still ask nothing.
+  - The shared slot picker (40.1) is built, but nothing opens it yet: 40.2 wires it to box-label scans.
+- **Reviews:** the review (`wf_ca12a7f0-f09`, 6 agents) found 25 things, none red, 4 orange: all fixed (`f055def`).
+  A 3-agent check of those fixes (`wf_0dddaf03-9a6`) found no red but one regression in them, fixed before
+  anything reached `dev` (`1bbc1f9`): a spool moved off a head by a Location edit keeps its old slot trail, and the
+  new "slot still holds a spool" guard refused your blind slot scan into that slot. A load now ignores such a stale
+  trail, as it always did.
+- **Tests:** offline 2589 passed; full `RUN_INTEGRATION` sweeps on `f055def` (3499 passed, 0 failed) and `1bbc1f9`
+  (3512 passed, 0 failed, 22:18, load 1.04×).
+- **For you, whenever (nothing here blocks anything):**
+  - The buglist's ⏸️ PENDING DEREK section has the hands-on checks for this (S1–S7), and the mid-print list's checks
+    5, 6 and 9 now expect the three-button question (Enter stores), plus a new check 12 (undo a mid-print move).
+  - One question in the buglist, "A same-slot swap files the old spool in the box with no slot" (older than this
+    work): where does a swapped-out spool physically go? Recommended: the scan buffer, since it's in your hand;
+    default if you don't answer: unchanged (in the box, no slot).
+  - Calls I made (veto any): a store is asked again as a store, with no Load button (a "Load it instead" offered
+    there used to store anyway); when only the printer the spool LEAVES is printing, you get the plain yes / no, not
+    the three-way with Enter = store (your reason for Enter = store was that a head can't be loaded mid-print); a
+    page that saw a print tells FCC (`seen_printing`), so a PrusaLink timeout at the wrong moment can't load a spool
+    mid-print unasked; a spool whose record still names a slot but sits on no head never blocks a load.
+- **Left for later:** the picker's four issues (scans and Enter, opening guards, refusals hidden under it, what a
+  caller sends) are 40.2's first step (task file, end of 40.1); one narrow wording gap is noted in the task file's
+  40.3 section (a printing XL plus a slot whose own spool runs on another head asks first and then refuses both
+  answers; nothing is written).
+- **Next:** 40.2 → 40.4 → 40.5 → 40.6 → 40.7.
+
 ## Questions for Derek
 
 Asked before Derek went to bed, from the pre-flight reconcile (`wf_1a1ff135-1c6`, read-only). Recorded as
@@ -343,3 +381,6 @@ harness's 1% tolerance let stale CORE1 text pass).
 | `wf_cf1df12e-797` review-group-42 | Group 42 | 5 (4 lenses + 1 batched skeptic) | 2,216,289 subagent | ~44 min, 434 tool calls; 25 raw findings → 14 confirmed (4 orange, 10 yellow), 6 duplicates, 5 refuted; all fixed (`3cf3957`) |
 | `wf_b49ee3d2-388` g40-design-critique-and-impact | 40.0e + 40.0c design | 4 (2 critics + 2 impact scanners) | 1,790,243 subagent | ~29 min, 356 tool calls, read-only on a frozen snapshot; folded in before the commit |
 | `wf_6946f24e-3da` review-group-40-engine | Group 40 engine part | 5 (4 lenses + 1 batched skeptic) | 2,252,046 subagent | ~78 min, 457 tool calls; 35 raw → 28 confirmed (2 orange, 5 yellow, 21 notes), 7 duplicates; 7 fixed (`db1952a`), 21 deferred |
+| `wf_004a1b5e-00e` g40-prebuild-analysis | 40.1 + 40.3 design | 4 (read-only analysts) | 2,588,491 subagent | ~41 min, 464 tool calls; doors / engine / tests / picker-api reports, folded into the build (estimated 1.8M) |
+| `wf_ca12a7f0-f09` g40-review-401-403 | 40.1 + 40.3 | 6 (4 lenses + 2 batched skeptics) | 3,020,979 subagent | ~60 min, 609 tool calls; 25 raw → 0 red, 4 orange confirmed (+1 duplicate), 1 re-rated, the rest yellow; fixed in `f055def` (estimated 2.2–3M) |
+| `wf_0dddaf03-9a6` g40-verify-review-fixes | the review's fixes | 3 (self-probing checkers) | 1,298,181 subagent | ~43 min, 312 tool calls; no red; 1 regression in the fixes (E1/S1, two checkers) + 1 older orange (W1) + yellows; fixed in `1bbc1f9` (estimated ~1M) |

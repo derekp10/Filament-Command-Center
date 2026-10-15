@@ -455,7 +455,14 @@ asks); `printing` on every question; one unanswered dialog per overlay id (a rep
 superseded, no false "Cancelled"); one deposit at a time; `window.storeToastTail` ("taken off XL-1"); a slot whose
 own spool runs on another head takes no new spool; a printing answer offers the store only when the head the slot
 loads is mid-print; "None" / "null" bindings read as unbound. Round trips through both halves:
-`tests/roundtrip_harness.py` + `tests/test_move_question_round_trip.py`.
+`tests/roundtrip_harness.py` + `tests/test_move_question_round_trip.py`. The fix check (`wf_0dddaf03-9a6`,
+`1bbc1f9`): a stale trail (a spool on no head whose record still names the slot) never blocks a load; a deposit
+owns the screen until its answer; scans stay held off while any three-way is open; every question names the
+heads its spools leave (`leaving`).
+
+**Open, narrow (take it with 40.5, which reads the same slots):** on a printing XL, a slot whose own spool runs
+on ANOTHER head (re-pointed after it was loaded) still gets the three-way first, and both answers are then
+refused at the slot read (nothing is written). Asking it right means reading the slot before the question.
 
 **Tests.** `test_head_load_confirm_js.py` (node-vm: the dialog, the router, the replay builder across rounds,
 the Location Manager's recorded-source toast), `test_door_fed_heads_canary.py` (every POST to the three doors
