@@ -41,14 +41,53 @@ def _active_print_info_for_location(location_str, printer_map=None):
         _, fb_url = config_loader.get_api_urls()
         state_dict = prusalink_api.get_printer_state(fb_url, printer_name)
     except Exception:
+        state_dict = None
+    if not state_dict:
+        # The probe couldn't tell (fail open). A printer the page itself saw
+        # printing when the user chose still counts as printing (Group 40.3
+        # review, C1): the deposit skips its own dialog when its probe sees a
+        # print and trusts the move to ask, so a second probe failing open
+        # loaded a spool mid-print with no question at all.
+        if _page_saw_printing(printer_name, printer_map):
+            return {'toolhead': loc_up, 'printer_name': printer_name, 'state': 'PRINTING'}
         return None
-    if not state_dict or not state_dict.get('is_active'):
+    if not state_dict.get('is_active'):
         return None
     return {
         'toolhead': loc_up,
         'printer_name': printer_name,
         'state': state_dict.get('state', 'ACTIVE'),
     }
+
+
+# Group 40.3 review (C1): the toolheads the page saw printing, for the move in
+# progress on this thread (perform_smart_move sets it for its outermost call).
+_move_seen_printing = threading.local()
+
+
+def _page_saw_printing(printer_name, printer_map):
+    """True when the page saw a head of `printer_name` printing (the move's
+    `seen_printing`): its printer counts as printing whenever the move's own
+    probe can't reach it."""
+    heads = getattr(_move_seen_printing, 'heads', None)
+    if not heads or not printer_name:
+        return False
+    return any(str((printer_map.get(h) or {}).get('printer_name') or '') == str(printer_name) for h in heads)
+
+
+def seen_printing_from(data):
+    """Group 40.3 review (C1) — the toolheads a page saw printing when the user
+    chose (`seen_printing`: the Quick-Swap deposit probes before it posts, and
+    leaves the question to FCC when it sees a print). The move treats their
+    printers as printing whenever its own probe fails open, so the question
+    never hangs on a second probe. Upper-cased head ids; anything that isn't a
+    non-blank string is ignored. Read by the three doors that can load a bound
+    box slot's head."""
+    d = data if isinstance(data, dict) else {}
+    value = d.get('seen_printing')
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [str(h).strip().strip('"').upper() for h in value if isinstance(h, str) and h.strip().strip('"')]
 
 
 def _confirm_scope(confirm):
@@ -378,8 +417,10 @@ def _slot_binding(box_row, slot):
         return ''
     for key, bound in locations_db.bindings_from_row(box_row).items():
         if _norm_slot(key) == s:
-            t = str(bound or '').strip().strip('"').upper()
-            return '' if not t or locations_db.is_printer_sentinel(t) else t
+            # _feed_token's form (Group 40.3 review, A2): a hand-edited "None" /
+            # "null" (the Feeds editor saves them as unassigned) reads as
+            # unbound, so `feed` and a replay's `expected_feed` compare equal.
+            return _feed_token(bound)
     return ''
 
 
@@ -605,6 +646,9 @@ def _head_fed_answer(fed_heads, active_prints, target, target_slot, spools, empt
         "title": f"Load #{loading} onto {fed_heads[0]['toolhead']}?",
         "body": msg,
         "msg": msg,
+        # The dialog's printing style follows the body (Group 40.3 review, C4):
+        # a fed head the caller already confirmed is printing too.
+        "printing": bool(told) or bool(active_prints),
     }
 
 
@@ -684,7 +728,31 @@ def _feed_changed_answer(feed_changed, fed_heads, active_prints, target, target_
         "title": title,
         "body": body,
         "msg": f"{body} {title}",
+        "printing": bool(told) or bool(active_prints),
     }
+
+
+def _ghost_head(item):
+    """Where a spool deployed FROM a slot (a ghost in the slot read) is now."""
+    return str((item or {}).get('deployed_to') or '').strip().strip('"').upper()
+
+
+def _ghost_claim_refusal(target, slot, ghost, slot_feed, bound_th, loads_head, printer_map, loc_info_map):
+    """Why a slot whose own spool is deployed refuses another spool (the step-6
+    ghost guard), with the one thing the user can do about it. "Load the new
+    spool instead" is offered only where a load swaps the spool out: the slot
+    feeds the head it runs on (Group 40.3 review, A3)."""
+    gid = (ghost or {}).get('id')
+    dep = _ghost_head(ghost) or 'a toolhead'
+    lead = f"{target} slot {slot} still holds #{gid}, loaded on {dep}"
+    if loads_head:
+        return f"{lead}, but the slot now feeds {bound_th}: take #{gid} off {dep} first, so nothing moved"
+    if bound_th:
+        return (f"{lead}, and the slot is bound to {bound_th}, which isn't a toolhead: take #{gid} off {dep} "
+                f"first, and fix the binding in {target}'s 🔗 Slot → Toolhead Feeds, so nothing moved")
+    if slot_feed and slot_feed == dep and _holds_one_spool(slot_feed, printer_map, loc_info_map):
+        return f"{lead}: take it off first, or load the new spool instead, so nothing moved"
+    return f"{lead}: take it off first, so nothing moved"
 
 
 def _toolhead_of(location_str, printer_map=None):
@@ -1402,7 +1470,8 @@ _smart_move_depth = threading.local()
 
 
 def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_deploy=True, confirm_active_print=False,
-                       confirmed_fed_heads=(), fed_check_from=None, picked_slot=None, expected_feed=None):
+                       confirmed_fed_heads=(), fed_check_from=None, picked_slot=None, expected_feed=None,
+                       seen_printing=()):
     """Entry point for the slot-move pipeline.
 
     Owns the per-move printer-state probe cache (L3 fix A) so the auto-deploy
@@ -1426,12 +1495,17 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
     feeds something else now, the move asks again (`feed_changed`) and writes
     nothing. None: no check. Multi-slot Dryer Box targets only; the auto-deploy
     chain never passes it (the outer move already checked before any write).
+    `seen_printing` (Group 40.3 review): toolheads the page saw printing; for
+    this whole move (the chain too), their printers count as printing whenever
+    the move's own probe can't reach them. Only the outermost call sets it.
     """
     depth = getattr(_smart_move_depth, "n", 0)
     owns_move = depth == 0
     _smart_move_depth.n = depth + 1
     _pa = None
     if owns_move:
+        _move_seen_printing.heads = frozenset(
+            str(h).strip().strip('"').upper() for h in (seen_printing or ()) if str(h or '').strip())
         # Deferred import keeps logic.py importable in unit tests that don't
         # satisfy prusalink_api's import graph (mirrors _active_print_info_*).
         try:
@@ -1451,6 +1525,8 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
         )
     finally:
         _smart_move_depth.n = getattr(_smart_move_depth, "n", 1) - 1
+        if owns_move:
+            _move_seen_printing.heads = None
         if owns_move and _pa is not None:
             try:
                 _pa.clear_probe_cache()
@@ -1837,16 +1913,19 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     slot_feed = _slot_binding(tgt_info, target_slot) if (feed_box and target_slot) else ''
     # Step 4 (Group 40.3, Derek 2026-10-14, multi-user awareness): a replay names
     # the feed its question was about. A slot re-pointed while the dialog was
-    # open is asked about again with nothing written: on a store as on a load
-    # (a stored spool is staged for whatever the slot feeds), and even when the
-    # new head is empty and idle ("he fills slot 1 because a slicer file depends
-    # on it"). No I/O here; the new head is read below as for a load, so step
-    # 5's question describes it and the next Yes covers it.
+    # open is asked about again with nothing written, even when the new head is
+    # empty and idle ("he fills slot 1 because a slicer file depends on it"). A
+    # load is asked as a load: the new head is read below as for any load, so
+    # step 5's question describes it and the next Yes covers it. A store
+    # (auto_deploy off) is asked as a store (a stored spool is staged for
+    # whatever the slot feeds), offering no load (Group 40.3 review, B1: the
+    # browser keeps a chosen store a store, so a "Load it instead" there stored)
+    # and reading no head. No I/O here.
     feed_changed = None
     if expected_feed is not None and feed_box and expected_feed != slot_feed:
         feed_changed = {"was": expected_feed, "now": slot_feed}
     bound_th = ''
-    if feed_box and target_slot and (auto_deploy or feed_changed) and not store_only:
+    if feed_box and target_slot and auto_deploy and not store_only:
         bound_th = slot_feed
         if feed_changed and bound_th in sources:
             bound_th = ''   # the new feed is the head a moving spool leaves: a store (40.0e's rule)
@@ -1969,11 +2048,16 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         # which no button there answers); `msg` keeps the yes/no wording.
         # Not while the head runs the slot's own spool (Group 40 review): the
         # slot still holds it, so storing another there makes two claim it.
-        answer['can_store'] = loads_head and not own_on_head
-        if loads_head:
+        # And only when the head the chain loads is itself mid-print (Group 40.3
+        # review, C5): Enter stores because a head isn't loaded mid-print, so a
+        # print on the head the spool only LEAVES keeps the yes / no.
+        offers_store = bool(loads_head and _head_print_state(bound_th, active_prints, printer_map))
+        answer['can_store'] = offers_store and not own_on_head
+        if offers_store:
             answer['title'] = f"Load #{spools[-1]} onto {bound_th}?"
             m = answer['msg']
             answer['body'] = m[:-len("Continue?")].strip() if m.endswith("Continue?") else m
+        answer['printing'] = True
         return answer
 
     # L298 Phase 0 — undo hardening: `extras` snapshots each moved spool's
@@ -2174,24 +2258,27 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                         state.add_log_entry(f"❌ Not moving Spool #{sid}: {failures[str(sid)]}",
                                             "ERROR", "ff4444")
                         continue
-            elif not loads_head:
+            else:
                 # Group 40 review: a slot whose own spool is deployed (its ghost
-                # claims the slot) still physically holds that spool. With no chain
-                # to swap it out (a store, an unbound slot, or since 40.3 a slot
-                # bound to something that isn't a head), seating another spool
-                # there made two claim one slot. Refused, nothing written (a
-                # single-slot box takes it unslotted, as 42.2 does).
+                # claims the slot) still physically holds that spool. Only the
+                # chain's Smart Load swaps it out, and only from the head the slot
+                # feeds (Derek's same-slot swap). Anywhere else, seating another
+                # spool there made two claim one slot: a store, an unbound slot, a
+                # slot bound to something that isn't a head (40.3), or a slot
+                # re-pointed while its own spool stayed on the head it used to
+                # feed (Group 40.3 review, A1: the load, and a blind scan, took
+                # the slot anyway). Refused, nothing written (a single-slot box
+                # takes it unslotted, as 42.2 does).
                 _moving = {str(s) for s in spools}
                 _ghosts = [e for e in existing_items if e.get('is_ghost') and str(e.get('id')) not in _moving
-                           and _norm_slot(e.get('slot', '')) == target_slot]
+                           and _norm_slot(e.get('slot', '')) == target_slot
+                           and not (loads_head and _ghost_head(e) == bound_th)]
                 if _ghosts:
                     if locations_db._is_single_slot_dryer_box(tgt_info):
                         seat_slot = ''
                     else:
-                        _g = _ghosts[0]
-                        failures[str(sid)] = (f"{target} slot {target_slot} still holds #{_g.get('id')}, loaded "
-                                              f"on {_g.get('deployed_to') or 'a toolhead'}: take it off first, or "
-                                              f"load the new spool instead, so nothing moved")
+                        failures[str(sid)] = _ghost_claim_refusal(target, target_slot, _ghosts[0], slot_feed,
+                                                                  bound_th, loads_head, printer_map, loc_info_map)
                         state.add_log_entry(f"❌ Not moving Spool #{sid}: {failures[str(sid)]}",
                                             "ERROR", "ff4444")
                         continue

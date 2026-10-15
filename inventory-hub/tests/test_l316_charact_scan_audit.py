@@ -513,6 +513,8 @@ def test_add_returns_perform_smart_move_result_verbatim(client):
         "picked_slot": None,
         # Group 40.3: the feed a replay's question named (None: no check).
         "expected_feed": None,
+        # Group 40.3 review: heads the page saw printing (none here).
+        "seen_printing": [],
     }
 
 

@@ -41,9 +41,9 @@ PRINTING_STORE = {
     "body": "XL is PRINTING. LR-MDB-1 slot 2 feeds XL-2, so this also loads #57 onto XL-2.",
 }
 
-OPEN_JS = """([answer, box]) => {
+OPEN_JS = """([answer, box, hostId]) => {
   window.__choice = null;
-  window.confirmHeadLoad({ answer, box,
+  window.confirmHeadLoad({ answer, box, host: hostId ? document.getElementById(hostId) : null,
     onLoad: () => { window.__choice = 'load'; },
     onStore: () => { window.__choice = 'store'; },
     onCancel: () => { window.__choice = 'cancel'; } });
@@ -83,8 +83,8 @@ def dialog_page(page: Page, base_url):
         pass
 
 
-def _open(page, answer, box="LR-MDB-1"):
-    page.evaluate(OPEN_JS, [answer, box])
+def _open(page, answer, box="LR-MDB-1", host=None):
+    page.evaluate(OPEN_JS, [answer, box, host])
     expect(page.locator(f"{OVERLAY} .fcc-apc-store, {OVERLAY} .fcc-apc-no").first).to_be_visible()
     page.wait_for_function("(sel) => document.activeElement && document.activeElement.closest(sel)",
                            arg=OVERLAY, timeout=3_000)
@@ -131,6 +131,25 @@ def test_escape_cancels(dialog_page):
     page.keyboard.press("Escape")
     assert _choice(page) == "cancel"
     expect(page.locator(OVERLAY)).to_have_count(0)
+
+
+def test_escape_cancels_and_leaves_the_location_manager_open(dialog_page):
+    """The docstring's claim, tested (Group 40.3 review, D7): over the Location
+    Manager, Escape cancels the dialog only; mountOverlay owns it, so the
+    manager underneath stays open."""
+    from conftest import wait_modal_settled
+    page = dialog_page
+    page.evaluate("() => bootstrap.Modal.getOrCreateInstance(document.getElementById('manageModal')).show()")
+    wait_modal_settled(page, "manageModal")
+    expect(page.locator("#manageModal")).to_be_visible()
+    _open(page, FED_IDLE, host="manageModal")
+    page.keyboard.press("Escape")
+    assert _choice(page) == "cancel"
+    expect(page.locator(OVERLAY)).to_have_count(0)
+    page.wait_for_timeout(500)   # long enough for a second Escape handler to start the fade
+    wait_modal_settled(page, "manageModal")
+    expect(page.locator("#manageModal")).to_be_visible()
+    assert page.evaluate("() => document.getElementById('manageModal').classList.contains('show')")
 
 
 def test_a_scanner_bursts_enter_is_not_a_click(dialog_page):

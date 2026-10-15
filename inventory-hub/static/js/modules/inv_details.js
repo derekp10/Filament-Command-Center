@@ -1228,7 +1228,7 @@ window.promptEditLocation = (spoolId, currentLoc) => {
                                 // Group 40.3: "Just store it" put it in the slot and left the head alone.
                                 showToast(`📦 #${spoolId} stored in ${newLoc}`
                                     + `${prior.pickedSlot != null ? ` slot ${prior.pickedSlot}` : ''}`
-                                    + `${prior.expectedFeed ? ` — ${prior.expectedFeed} left as it was` : ''}`, 'success', 4000);
+                                    + `${window.storeToastTail(prior)}`, 'success', 4000);
                             } else {
                                 showToast('Location updated via override', 'success');
                             }

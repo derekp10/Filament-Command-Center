@@ -15,11 +15,15 @@ prompt-free.
 
 The REAL engine runs over tests/move_engine_harness.py with a live locations
 store; the doors run through the Flask client.
-HEAD proof (d2f076f): the engine tests fail on the signature there (no
-`expected_feed` keyword: a signature-only red, a control in the review's
-terms); the door tests T1-15 / T1-16 / T1-17 are the behavioural proofs (HEAD's
-doors ignore the field and load or store over the re-point unasked), and
-T1-19 fails there because the slot door dropped the new keys.
+HEAD proof (run on d2f076f; corrected by the Group 40.3 review, A6): most
+engine tests fail there in their FIRST round, on an answer key that didn't
+exist yet (`feed`, `slot_picked`, `target`): an answer-shape red. The few that
+send `expected_feed` in round 1 fail on the keyword (signature only), and the
+parse table on the missing helper. The behavioural proofs are the door tests
+T1-15 / T1-16 / T1-17: on d2f076f their replays load #42 onto XL-2, or store
+it, with no question. T1-19 passes its key-relay half there (the engine had no
+new keys to drop) and fails at its `feed_changed` half, a question the replay
+never got. T1-18 (a first scan asks nothing) is a control.
 """
 from __future__ import annotations
 
@@ -119,6 +123,7 @@ def test_a_slot_repointed_to_an_empty_idle_head_is_asked_again_naming_both():
         "title": "Load #42 onto XL-2?",
         "body": "LR-MDB-1 slot 1 now feeds XL-2 (it fed XL-1 when you were asked).",
         "msg": "LR-MDB-1 slot 1 now feeds XL-2 (it fed XL-1 when you were asked). Load #42 onto XL-2?",
+        "printing": False,
     }, again
     assert sm.writes == []
     # The Yes to the new question (naming XL-2) loads XL-2; XL-1 keeps #99.
@@ -130,17 +135,27 @@ def test_a_slot_repointed_to_an_empty_idle_head_is_asked_again_naming_both():
 
 def test_the_store_replay_is_asked_again_too():
     """Claude's call (Derek can veto): a stored spool is staged for whatever the
-    slot feeds, so a store into a re-pointed slot asks too."""
-    sm = _base()
+    slot feeds, so a store into a re-pointed slot asks too, as a STORE (Group
+    40.3 review, B1): the browser keeps a chosen store a store, so a "Load it
+    instead" offered here stored. It reads no head: XL-2 runs #77 from PM-DB-3,
+    which a store never touches, so the question doesn't name it."""
+    sm = _Reads({42: {"location": "CR-CT-2-R1", "extra": {}},
+                 99: {"location": "XL-1", "extra": dict(FROM_POLYDRYER)},
+                 77: {"location": "XL-2", "extra": dict(FROM_PM3)}})
     _, store = _first_fed_question(sm)
     _repoint(store, 1, "XL-2")
+    sm.read_locs.clear()
     again, _ = _move(sm, store=store, auto_deploy=False, expected_feed="XL-1")
     assert again.get("confirm_type") == "feed_changed" and again["feed"] == "XL-2", again
+    assert (again["title"], again["body"]) == (
+        "Store #42 in LR-MDB-1 slot 1?", "LR-MDB-1 slot 1 now feeds XL-2 (it fed XL-1 when you were asked)."), again
+    assert again["can_load"] is False and again["can_store"] is True and again["fed_heads"] == [], again
+    assert again["printing"] is False and "XL-2" not in sm.read_locs, sm.read_locs
     assert sm.writes == []
     stored, _ = _move(sm, store=store, auto_deploy=False, expected_feed="XL-2")
     assert stored.get("status") == "success" and "auto_deployed_to" not in stored, stored
     assert sm.spools[42]["location"] == "LR-MDB-1" and _slot_of(sm, 42) == "1"
-    assert sm.direct_at("XL-2") == [] and sm.direct_at("XL-1") == [99]
+    assert sm.direct_at("XL-2") == [77] and sm.direct_at("XL-1") == [99]
 
 
 def test_a_repointed_slot_whose_new_head_runs_a_spool_from_elsewhere_is_one_question():

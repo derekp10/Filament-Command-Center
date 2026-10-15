@@ -484,6 +484,9 @@ def api_manage_contents():
             picked_slot=data.get('picked_slot'),
             # Group 40.3: the feed the question named; a re-pointed slot asks again.
             expected_feed=logic.expected_feed_from(data),
+            # Group 40.3 review: heads the page saw printing still count when the
+            # move's own probe can't reach their printer.
+            seen_printing=logic.seen_printing_from(data),
         )
         stale = logic.stale_fed_refusal(data, result) or logic.stale_confirm_refusal(data, result)
         if stale:
@@ -1371,6 +1374,9 @@ def api_identify_scan():
             # Group 40.3: the feed the question named (a replay, or a deposit tile
             # that showed it); a blind scan sends none, so it never asks this.
             expected_feed=logic.expected_feed_from(request.json),
+            # Group 40.3 review: a deposit that saw the printer printing leaves the
+            # question to this move, so a probe failing open still asks.
+            seen_printing=logic.seen_printing_from(request.json),
         )
         # If perform_smart_move bailed on an active-print check, surface the
         # confirmation prompt to the client. Frontend slot-QR path (scan

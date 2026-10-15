@@ -151,6 +151,11 @@ window.unionConfirmFedHeads = unionConfirmFedHeads;
 // `host`: the Bootstrap modal it sits over. `ids`: {overlay, yes, no, store}, for
 // a caller that keeps its proven DOM ids (the Location Manager and scan-assign
 // overlays, and their tests).
+// One unanswered question per overlay id (Group 40.3 review, B2 / B3): a dialog
+// mounted on the same id over an unanswered one replaces it, and the older one
+// is settled as superseded (`onCancel({superseded: true})`), so its host
+// listener, QR session and scan hold-off never outlive its DOM.
+const _openMoveConfirms = {};
 window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', host = null,
                                ids = {}, onConfirm = null, onCancel = null,
                                title = '', onStore = null, storeLabel = '', loadLabel = '',
@@ -194,17 +199,20 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
             </div>
             ${extras}
         </div>`;
+    const overlayId = ids.overlay || 'fcc-active-print-confirm-overlay';
     let handle = null;
     let qrSession = null;
     let settled = false;
     let hostOff = null;
     let question = null;
     let statusTimer = null;
+    let superseded = null;
     const cleanup = () => {
         if (qrSession) { try { qrSession.cleanup(); } catch (_) { /* noop */ } qrSession = null; }
         if (handle) { try { handle.cleanup(); } catch (_) { /* noop */ } handle = null; }
         if (hostOff) { try { hostOff(); } catch (_) { /* noop */ } hostOff = null; }
         if (question && window._fccOpenMoveQuestion === question) window._fccOpenMoveQuestion = null;
+        if (superseded && _openMoveConfirms[overlayId] === superseded) delete _openMoveConfirms[overlayId];
         clearTimeout(statusTimer);
     };
     // Once only: a double click, or a click racing a scan, must not move twice.
@@ -212,14 +220,23 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
     const yes = settle(onConfirm);
     const store = settle(onStore);
     const no = settle(onCancel);
+    superseded = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        if (onCancel) onCancel({ superseded: true });
+    };
+    const prior = _openMoveConfirms[overlayId];
+    if (prior) prior();
     handle = window.mountOverlay({
-        id: ids.overlay || 'fcc-active-print-confirm-overlay',
+        id: overlayId,
         content,
         tier: 'confirm',
         host: host || undefined,
         initialFocus: threeWay ? (hasStore ? '.fcc-apc-store' : '.fcc-apc-no') : '.fcc-apc-yes',
         onEscape: no,
     });
+    _openMoveConfirms[overlayId] = superseded;
     const ov = handle.element;
     const yesBtn = hasLoad ? ov.querySelector('.fcc-apc-yes') : null;
     const storeBtn = hasStore ? ov.querySelector('.fcc-apc-store') : null;
@@ -294,6 +311,8 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         // the toast layer (z 11000) sits under this dialog.
         question = {
             title,
+            // processScan drops a hold-off whose dialog is no longer on the page.
+            element: ov,
             cancel: () => no(),
             flash: (text) => {
                 const line = ov.querySelector('.fcc-apc-status');
@@ -336,7 +355,11 @@ window.confirmHeadLoad = ({ answer = {}, box = '', slot = '', host = null, ids =
     return window.confirmActivePrint({
         title, msg: body, host, ids,
         activePrints: Array.isArray(a.active_prints) ? a.active_prints : [],
-        printing: Array.isArray(a.active_prints) && a.active_prints.length > 0,
+        // The server's own word (Group 40.3 review, C4): a printing head the
+        // caller already confirmed is not in active_prints, yet the body says
+        // the XL is printing.
+        printing: typeof a.printing === 'boolean' ? a.printing
+            : (Array.isArray(a.active_prints) && a.active_prints.length > 0),
         loadLabel: 'Load it instead', onConfirm: onLoad,
         storeLabel: `Just store it in ${where}`,
         onStore: (a.can_store === true && typeof onStore === 'function') ? onStore : null,
@@ -409,7 +432,23 @@ window.buildMoveReplay = (door, original, answer, choice, prior = {}) => {
     } else if (door === 'smart_move' && spools.length) {
         body.spools = spools.slice();
     }
-    return { body, prior: { heads, fedKeys, store, expectedFeed: feed, pickedSlot: picked } };
+    // The heads a moving spool leaves, as every round named them, for the store
+    // toast (window.storeToastTail).
+    const sources = Array.from(new Set([].concat(
+        Array.isArray(p.sources) ? p.sources : [],
+        prints.filter(x => x && x.role === 'source').map(x => String(x.toolhead || '').toUpperCase()).filter(Boolean))));
+    return { body, prior: { heads, fedKeys, store, expectedFeed: feed, pickedSlot: picked, sources } };
+};
+
+// The end of a "Just store it" toast (Group 40.3 review, B4): " — XL-1 left as it
+// was", unless the stored spool came off that very head (a spool on XL-1 scanned
+// into the slot that feeds XL-1, mid-print), where it says " — taken off XL-1".
+// '' when the question named no head. `prior`: a buildMoveReplay prior.
+window.storeToastTail = (prior) => {
+    const p = prior || {};
+    const head = p.expectedFeed ? String(p.expectedFeed).toUpperCase() : '';
+    if (!head) return '';
+    return (Array.isArray(p.sources) && p.sources.includes(head)) ? ` — taken off ${head}` : ` — ${head} left as it was`;
 };
 
 // askMoveConfirm(answer, ctx): the one place a door shows a move question and
@@ -427,11 +466,19 @@ window.askMoveConfirm = (answer, ctx = {}) => {
     };
     const toast = (m, type, ms) => { if (typeof showToast === 'function') showToast(m, type, ms); };
     if (kind === 'head_load') {
-        const cancelled = () => {
-            toast('Cancelled — nothing moved', 'info', 4000);
-            if (window.logClientEvent) window.logClientEvent(
-                `ℹ️ Cancelled "${answer.title || 'a load question'}" — nothing moved`, 'INFO');
-            if (ctx.onCancel) ctx.onCancel();
+        const cancelled = (info) => {
+            if (info && info.superseded) {
+                // Another question took its place (Group 40.3 review, B2): the
+                // user never answered this one, and a toast here read as if the
+                // move they did answer had been cancelled.
+                if (window.logClientEvent) window.logClientEvent(
+                    `ℹ️ "${answer.title || 'a load question'}" was replaced by another question — nothing moved`, 'INFO');
+            } else {
+                toast('Cancelled — nothing moved', 'info', 4000);
+                if (window.logClientEvent) window.logClientEvent(
+                    `ℹ️ Cancelled "${answer.title || 'a load question'}" — nothing moved`, 'INFO');
+            }
+            if (ctx.onCancel) ctx.onCancel(info);
         };
         return window.confirmHeadLoad({ answer, host: ctx.host, ids: ctx.ids || {}, box: ctx.box, slot: ctx.slot,
             onLoad: () => replay('load'), onStore: () => replay('store'), onCancel: cancelled });

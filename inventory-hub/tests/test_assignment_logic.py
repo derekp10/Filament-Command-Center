@@ -97,7 +97,7 @@ def test_assignment_happy_path_moves_spool_and_clears_buffer(client, fake_locati
     # with none passes None (no check), so a first scan never asks it.
     mv.assert_called_once_with("LR-MDB-1", [42], target_slot="2", origin="slot_qr_scan",
                                auto_deploy=True, confirm_active_print=[], confirmed_fed_heads=[],
-                               expected_feed=None)
+                               expected_feed=None, seen_printing=[])
     assert state.GLOBAL_BUFFER == []
     assert any("Spool #42" in e["msg"] for e in _last_log_entries())
 
@@ -232,7 +232,7 @@ def test_assignment_non_spool_items_in_buffer_are_skipped(client, fake_locations
     assert body["moved"] == 99
     mv.assert_called_once_with("LR-MDB-1", [99], target_slot="1", origin="slot_qr_scan",
                                auto_deploy=True, confirm_active_print=[], confirmed_fed_heads=[],
-                               expected_feed=None)
+                               expected_feed=None, seen_printing=[])
     # Non-spool item stays.
     assert any(e.get("type") == "filament" for e in state.GLOBAL_BUFFER)
 

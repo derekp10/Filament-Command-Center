@@ -271,6 +271,9 @@ def api_smart_move():
         picked_slot=payload.get('picked_slot'),
         # Group 40.3: the feed the question named; a re-pointed slot asks again.
         expected_feed=logic.expected_feed_from(payload),
+        # Group 40.3 review: heads the page saw printing still count when the
+        # move's own probe can't reach their printer.
+        seen_printing=logic.seen_printing_from(payload),
     )
     stale = logic.stale_fed_refusal(payload, result) or logic.stale_confirm_refusal(payload, result)
     if stale:

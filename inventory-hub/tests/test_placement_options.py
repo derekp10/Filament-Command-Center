@@ -198,11 +198,45 @@ def test_a_spool_on_a_printer_row_itself_or_ghosted_to_a_head_is_not_that_heads_
     assert _slot(model, 2)["would_prompt"] is False
 
 
+def test_a_dash_free_heads_prefix_hits_are_not_its_residents():
+    """The flat matcher's first-segment hit only reaches a dash-free id, so the
+    case above can't show it (Group 40.3 review, D6): CORE1 is its own head and
+    CR-MDB-1 slot 1 feeds it; a spool filed on "CORE1-SHELF" is listed "at
+    CORE1" by prefix, but it doesn't run on CORE1."""
+    spools = [_sp(80, "CORE1-SHELF"), _sp(42, "CR-CT-2-R1")]
+    model, _ = _build(spools, "CR-MDB-1", spool=42)
+    assert _slot(model, 1)["feeds"]["residents"] == [], _slot(model, 1)
+    printer, _ = _build(spools, "CORE1", spool=42)
+    assert printer["heads"][0]["resident"] is None and printer["heads"][0]["residents"] == [], printer["heads"]
+
+
 def test_an_archived_spool_still_gets_its_title_from_a_direct_read():
     spools = [_sp(42, "LR-MDB-2", slot=1)]
     model, _ = _build(spools, "LR-MDB-1", spool=42, archived=(42,))
     assert model["spool_display"].startswith("#42 ")
     assert model["spool_location"] == "LR-MDB-2"
+
+
+def test_the_strict_spool_read_raises_instead_of_answering_nothing():
+    """Group 40.3 review, D5: every other test patches get_all_spools_strict, so
+    a fail-open rewrite ("except: return []") passed the whole suite while the
+    picker drew every slot empty under a confident star. A 5xx and a dropped
+    connection raise; a 200 parses."""
+    from unittest.mock import MagicMock
+    api = placement.spoolman_api
+    ok = MagicMock(status_code=200, json=MagicMock(return_value=[{"id": 1, "location": "X", "extra": {}}]))
+    bad = MagicMock(status_code=500)
+    bad.raise_for_status = MagicMock(side_effect=api.requests.HTTPError("500 (test)"))
+    with patch.object(api.config_loader, "get_api_urls", return_value=("http://spoolman", "")):
+        with patch.object(api.requests, "get", return_value=ok) as get:
+            assert [s["id"] for s in api.get_all_spools_strict()] == [1]
+            assert get.call_args[0][0] == "http://spoolman/api/v1/spool"
+        with patch.object(api.requests, "get", return_value=bad):
+            with pytest.raises(api.requests.HTTPError):
+                api.get_all_spools_strict()
+        with patch.object(api.requests, "get", side_effect=api.requests.ConnectionError("down (test)")):
+            with pytest.raises(api.requests.ConnectionError):
+                api.get_all_spools_strict()
 
 
 def test_a_spoolman_blip_says_so_instead_of_drawing_empty_slots():
@@ -282,6 +316,18 @@ def test_printer_mode_pre_selects_only_when_exactly_one_free_choice_exists():
     model, _ = _build(spools, "XL", spool=42)
     assert model["recommended"] == {"kind": "head", "head": "XL-4"}
     assert model["recommend_reason"] == "only_free"
+
+
+def test_printer_mode_never_stars_the_head_the_spool_already_sits_on():
+    """Group 40.3 review, D8: #42 is on XL-2 and every other choice is taken.
+    XL-2 is where it is now, not "the only free choice" (Enter re-scanned it
+    onto its own head)."""
+    spools = [_sp(90 + i, h) for i, h in enumerate(XL_HEADS) if h != "XL-2"]
+    spools += [_sp(61, "TST-MDB-1", slot=1), _sp(62, "LR-MDB-1", slot=4), _sp(42, "XL-2")]
+    model, _ = _build(spools, "XL", spool=42)
+    xl2 = next(h for h in model["heads"] if h["id"] == "XL-2")
+    assert xl2["current"] is True and xl2["resident"] is None
+    assert model["recommended"] is None and model["recommend_reason"] == "nothing_free", model["recommended"]
 
 
 def test_core_one_is_its_own_head_with_its_feed_and_no_pool():

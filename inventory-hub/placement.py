@@ -361,7 +361,10 @@ def _printer_model(row, printer_id, sid, loc_list, loc_info_map, printer_map):
         if res:
             entry["residents"] = [_resident(i, h, raw_by_id, printer_map, loc_list, loc_info_map) for i in res]
             entry["resident"] = entry["residents"][0]
-        else:
+        elif not entry["current"]:
+            # The head the spool already sits on is where it is now, never a
+            # free choice for it (Group 40.3 review, D8: it was starred as "the
+            # only free choice", and Enter re-scanned it onto its own head).
             free_options.append({"kind": "head", "head": h})
         model["heads"].append(entry)
     for box, slot in pool:

@@ -1583,7 +1583,7 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedH
                 } else if (prior && prior.store) {
                     // Group 40.3: "Just store it" put it in the slot and left the head alone.
                     showToast(`📦 #${spoolIdStr} stored in ${loc}${slotText}`
-                        + `${prior.expectedFeed ? ` — ${prior.expectedFeed} left as it was` : ''}`, 'success', 4000);
+                        + `${window.storeToastTail(prior)}`, 'success', 4000);
                 } else if (rec && rec.length === 2) {
                     // Group 40.0d: a spare loaded onto a head records the one free
                     // slot that feeds it as its home; the toast is where that shows.

@@ -1400,7 +1400,7 @@ const _ejectModeLocationScan = (res) => {
 // in its slot but not on the head. A store says so ("📦 #57 stored in LR-MDB-1
 // slot 1 — XL-1 left as it was"): "Loaded" would claim a load that never
 // happened. False for an answer that is not an outcome.
-const _slotScanOutcome = (r, { stored = false, head = null } = {}) => {
+const _slotScanOutcome = (r, { stored = false, head = null, prior = null } = {}) => {
     if (r && (r.action === 'assignment_done' || r.action === 'assignment_partial')) {
         const movedId = r.moved;
         if (movedId != null) {
@@ -1411,7 +1411,7 @@ const _slotScanOutcome = (r, { stored = false, head = null } = {}) => {
         const partial = r.action === 'assignment_partial';
         const extraMsg = partial ? ` (${r.remaining_buffer} still in buffer)` : '';
         const msg = stored
-            ? `📦 #${movedId} stored in ${r.location} slot ${r.slot}${head ? ` — ${head} left as it was` : ''}${extraMsg}`
+            ? `📦 #${movedId} stored in ${r.location} slot ${r.slot}${window.storeToastTail(prior || { expectedFeed: head })}${extraMsg}`
             : `✅ Loaded #${movedId} into ${r.location}:${r.slot}${extraMsg}`;
         showToast(msg, partial ? 'info' : 'success', partial ? 5000 : 4000);
         if (r.not_deployed) {
@@ -1442,7 +1442,13 @@ const processScan = (text, source = 'keyboard') => {
     // Its own QRs were answered just above; CMD:CANCEL cancels it; anything else
     // is refused and does nothing (a second slot label used to start a second
     // move behind the dialog). The dialog says why too: toasts sit under it.
-    const openQuestion = window._fccOpenMoveQuestion;
+    let openQuestion = window._fccOpenMoveQuestion;
+    if (openQuestion && openQuestion.element && openQuestion.element.isConnected === false) {
+        // Its dialog left the page without being answered (Group 40.3 review,
+        // B3): every scan was refused while nothing was on screen.
+        window._fccOpenMoveQuestion = null;
+        openQuestion = null;
+    }
     if (openQuestion) {
         if (/^CMD:CANCEL(:.*)?$/.test(upper)) { openQuestion.cancel(); return; }
         const why = 'Answer the question on screen first: Load it instead, Just store it, or Cancel';
@@ -1671,7 +1677,7 @@ const processScan = (text, source = 'keyboard') => {
                                     // The same outcome toasts as a first answer
                                     // (a confirmed load used to get no toast and
                                     // keep the spool in the buffer strip).
-                                    if (!_slotScanOutcome(r2, { stored: next.store, head: next.expectedFeed })) {
+                                    if (!_slotScanOutcome(r2, { stored: next.store, head: next.expectedFeed, prior: next })) {
                                         if (r2 && r2.type === 'error' && r2.msg) {
                                             showToast(r2.msg, 'error', 7000);
                                         } else {
@@ -1961,7 +1967,7 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
                     if (prior && prior.store && movedCount === 1) {
                         // Group 40.3: "Just store it" put it in the slot and left the head alone.
                         showToast(`📦 #${movedIds[0]} stored in ${tid}${storedIn != null && storedIn !== '' ? ` slot ${storedIn}` : ''}`
-                            + `${prior.expectedFeed ? ` — ${prior.expectedFeed} left as it was` : ''}`, 'success', 4000);
+                            + `${window.storeToastTail(prior)}`, 'success', 4000);
                     } else if (rec && rec.length === 2) {
                         showToast(`#${movedIds[0]} → ${tid} (recorded as from ${rec[0]} slot ${rec[1]})`, "success");
                     } else if (movedCount) {

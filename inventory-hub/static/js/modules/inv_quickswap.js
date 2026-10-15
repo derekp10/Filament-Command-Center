@@ -485,6 +485,13 @@
     // the first one's DOM but not its document keydown handler, which then ate
     // every Tab on the page until a reload.
     let _overlayGen = 0;
+    // Group 40.3 review (B2): one deposit at a time. When the tap was taken
+    // (Date.now()), 0 when idle. The deposit probes the printer and reads the
+    // head first (up to ~6 s), and a second tap meanwhile posted a second
+    // deposit: two dialogs, and the unanswered one later said "Cancelled —
+    // nothing moved" after a move that landed. Cleared when a dialog takes over
+    // or the deposit ends; a flag older than 20 s no longer blocks a tap.
+    let _depositBusyAt = 0;
 
     // Helper: race the printer-state probe against a short timeout so a slow
     // or unreachable PrusaLink can't stall the confirm UI. Returns stateInfo
@@ -827,6 +834,10 @@
     // per deposit without duplication.
     window.quickSwapDeposit = (btn) => {
         if (!btn) return;
+        if (_depositBusyAt && Date.now() - _depositBusyAt < 20000) {
+            showToast('⏳ Still working on the last deposit — one moment', 'info', 2500);
+            return;
+        }
         // Group 46 review — the spool this deposit names is the one it writes,
         // captured once: a server re-ask replays it rather than re-reading the
         // (possibly rotated) buffer.
@@ -835,6 +846,16 @@
             showToast('Buffer is empty — scan a spool first', 'warning', 3500);
             return;
         }
+        // Busy from the tap until a dialog takes over or the deposit ends; the
+        // tile dims meanwhile, so the wait shows.
+        _depositBusyAt = Date.now();
+        const tileOpacity = btn.style ? btn.style.opacity : '';
+        if (btn.style) btn.style.opacity = '0.55';
+        const idle = () => {
+            _depositBusyAt = 0;
+            if (btn.style) btn.style.opacity = tileOpacity;
+        };
+        const gen = ++_overlayGen;
         const box = btn.dataset.box;
         const slot = btn.dataset.slot;
         const toolhead = btn.dataset.toolhead;
@@ -869,6 +890,7 @@
         };
         if (btn.dataset.singleSlot !== '1') original.expected_feed = notLoaded ? '' : String(toolhead).toUpperCase();
         const postDeposit = (payload, prior) => {
+            _depositBusyAt = Date.now();
             window.fetchT('/api/identify_scan', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -876,6 +898,8 @@
             })
                 .then(async r => ({ ok: r.ok, body: await r.json() }))
                 .then(({ ok, body }) => {
+                    // The answer is in: it ends the deposit, or its dialog takes over.
+                    idle();
                     if (ok && (body.action === 'assignment_done' || body.action === 'assignment_partial')) {
                         const destNote = body.auto_deployed_to
                             ? ` → ${body.auto_deployed_to}`
@@ -889,7 +913,7 @@
                         } else if (prior && prior.store) {
                             // Group 40.3: "Just store it" put it in the slot and left the head alone.
                             showToast(`📦 ${movedLabel} stored in ${box} slot ${slot}`
-                                + `${prior.expectedFeed ? ` — ${prior.expectedFeed} left as it was` : ''}`, 'success', 4000);
+                                + `${window.storeToastTail(prior)}`, 'success', 4000);
                         } else {
                             showToast(`⬇️ ${movedLabel} → ${box}:SLOT:${slot}${destNote}`, 'success', 2500);
                         }
@@ -941,6 +965,7 @@
                     }
                 })
                 .catch(e => {
+                    idle();
                     console.error(e);
                     showToast('Deposit — network error', 'error', 7000);
                     if (window.logClientEvent) window.logClientEvent(
@@ -975,6 +1000,7 @@
             },
         });
         if (notLoaded || !window.askMoveConfirm) {
+            idle();
             confirmDeposit(undefined);
             return;
         }
@@ -984,20 +1010,28 @@
         // asks anyway, so this overlay is skipped and the server's three-way is
         // the question (Enter stores: a toolhead isn't loaded mid-print). An
         // idle, empty head keeps this overlay. A head that couldn't be read keeps
-        // it too; the server re-checks either way.
+        // it too; the server re-checks either way. The spool being deposited
+        // isn't a resident (Group 40.3 review, C3): a head whose only spool is
+        // that one is asked nothing by FCC, so it keeps this overlay.
         const headResidents = window.fetchT(`/api/get_contents?id=${encodeURIComponent(toolhead)}&strict=1`, {}, 6000)
             .then(r => (r.ok ? r.json() : null))
             .then(items => (Array.isArray(items)
-                ? items.filter(it => it && !it.is_ghost
+                ? items.filter(it => it && !it.is_ghost && String(it.id) !== String(buffered.id)
                     && String(it.location || '').replace(/"/g, '').trim().toUpperCase() === String(toolhead).toUpperCase())
                 : null))
             .catch(() => null);
         Promise.all([_probeWithTimeout(toolhead), headResidents]).then(([detail, residents]) => {
+            if (gen !== _overlayGen) { idle(); return; }   // a later tap owns the screen now
             const printing = !!(detail && detail.active);
             if (printing || (residents && residents.length)) {
+                // The print this page saw goes with the request (Group 40.3
+                // review, C1): if FCC's own printer check fails a moment later,
+                // it still asks instead of loading mid-print unasked.
+                if (printing) original.seen_printing = [String(toolhead).toUpperCase()];
                 postDeposit(original, { heads: [] });
                 return;
             }
+            idle();
             confirmDeposit(detail);
         });
     };
