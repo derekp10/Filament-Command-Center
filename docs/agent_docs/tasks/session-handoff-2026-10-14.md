@@ -234,7 +234,7 @@ _Run finished at ~04:45 on 2026-10-14. Started from `dev` @ `4203ffe` (= `origin
 
 ### Group 40, evening and night (2026-10-14 → 15): 40.1 + 40.3 built, reviewed twice, merged to `dev`
 
-- **Where it is:** `feature/group-40-slot-picker`, merged to `dev` (`__DEVMERGE__`) and pushed. `main` is still held
+- **Where it is:** `feature/group-40-slot-picker`, merged to `dev` (`d6fc8b2`) and pushed. `main` is still held
   for you (last release 2026-10-08).
 - **What you get on dev:**
   - A slot-label scan into a bound slot whose toolhead runs a spool from elsewhere asks first: "Load #57 onto XL-1?
