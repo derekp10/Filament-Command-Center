@@ -17,6 +17,9 @@ _Run finished at ~04:45 on 2026-10-14. Started from `dev` @ `4203ffe` (= `origin
 - **Landed (~01:45):** Group 41 is DONE, merged `f49ccfe` and pushed. Eject All refuses rooms and printers and says what it did; a delete never reaches a loaded head; Undo is "Undo Last Move" and asks first; a confirm dialog fading in ignores clicks. The review's red (an auto-deployed undo mid-print) is fixed. Next: Group 42.
 - **Landed (04:05):** Group 42 is DONE, merged `efc7181` and pushed. A PolyDryer lets go of a head only when its own spool leaves it, follows that spool head to head, and an eject out of the box puts the spool back where it sat before; one loaded spool per head on every writer; eject says where the spool went and which box let go. The review's 14 findings are fixed. Next: Group 40, whose engine prerequisites start on a parked branch (the group spans 2–3 sessions, and its one prompt you'd feel waits for you).
 - **Parked (~04:45):** Group 40 started. On the branch `feature/group-40-slot-picker` (pushed to GitHub as a backup the next morning; not reviewed, not merged): nothing is filed on XL / RCOI (or a printer with no heads yet) any more, Bulk Move says so in printer words, and a spare scanned onto a head records which box slot it came from only when exactly one free slot feeds that head (the toast names it). Its full `RUN_INTEGRATION` sweep is green: 3249 passed / 21 skipped / 0 failed in 21:35 (load 1.06×). Not merged: the next part (40.0c + 40.3) adds a question to your slot-label scans, so it waits for a session with you. See Parked.
+- **Day session (2026-10-14):** Group 40's 40.0e + 40.0c built and reviewed on the branch (not merged; it waits for
+  40.3, which needs you), and a standalone fix on `dev` (`bfb7bd0`): a slot scan with the Location Manager closed
+  moved the buffered spool to Unassigned. See "Group 40, day session" under Parked.
 - **For you:** nothing blocks. `main` is held for you. The next release would carry everything on `dev` since the 2026-10-08 release: 9 merges, 107 commits (Group 47's docs, Group 46, the 2026-10-13 standalone fixes, Group 43, Group 39, then tonight's 43.2 + 46.3, Group 45, Group 41 and Group 42). **Derek, morning of 2026-10-14:** continue with Group 40 next; consider moving to `main` once the new group set is done. Optional hands-on checks are under "Manual checks for Derek". The buglist's ⏸️ PENDING DEREK section was left untouched (tonight's rule).
 - Evening prep done: Derek's go-ahead for all-night full test runs, a push after each merge, and read-only prod
   counts (taken ~18:25; table in the plan file).
@@ -191,6 +194,43 @@ _Run finished at ~04:45 on 2026-10-14. Started from `dev` @ `4203ffe` (= `origin
 - **The task file's banner lists what Groups 41 and 42 changed underneath it** (helpers that now exist, single-slot
   boxes out of every feed path, the location scan's strict read and check order).
 
+### Group 40, day session (2026-10-14): 40.0e + 40.0c built on the branch, reviewed; not merged
+
+- **Branch:** `feature/group-40-slot-picker`, pushed (backup). Commits `e8a2706` (40.0e + 40.0c) and `db1952a` (the
+  review's fixes), plus merges of `dev`. Not merged to `dev`: 40.0c's question can't ship before 40.3's dialog.
+- **What it does (all server-side; the browser half is 40.3):**
+  - **A slot scan into a bound slot asks first when the head it feeds runs a spool from somewhere else** (Derek's
+    D2.2/D2.3, e.g. XL-1 running off a PolyDryer): "Load #57 onto XL-1? LR-MDB-1 slot 1 feeds XL-1, and XL-1 is
+    running #1 (from PM-DB-3). Loading #57 sends #1 back to PM-DB-3." The slot's own spool coming back out (your
+    everyday same-slot swap) asks nothing; an empty head on an idle printer loads with no prompt. "Just store it" puts
+    the spool in the slot and leaves the head alone. A Yes covers only the spools it named; a spool loaded onto the head
+    while FCC checks the printer is never unloaded unasked (the new spool stays stored, and the warning says to use
+    the head's Quick-Swap).
+  - **A slotless move into a multi-slot box picks its slot before asking**, by the same rule the slot picker will
+    use: the spool's own slot, else the lowest free slot that loads no busy head, else the lowest free slot. The
+    question names the picked slot's head, and the Yes lands in that slot (or nothing moves, if someone took it).
+    Force Location off a head into the box that feeds it now stores the spool instead of loading it straight back.
+- **How it was built:** a 4-agent design critique + test-impact scan first (`wf_b49ee3d2-388`, read-only, 1.79M
+  tokens): the trail-keyed race guard (orange), head-only confirm scope, a replayed slot acting as Overwrite, the
+  off-the-head round trip and the message composition were all folded in before the commit. Then the engine review:
+  5 agents (4 lenses + 1 batched skeptic), 2.25M subagent tokens, 35 raw findings → 28 confirmed (2 orange, 5
+  yellow, 21 notes), 7 duplicates, none refuted. The 7 orange/yellow are fixed in `db1952a` with red-first pins;
+  the 21 notes are listed in the task file. The oranges: a spool deployed from a box slot and moved back into that
+  box (slotless) took the lowest free slot and was loaded onto another head; and "Just store it" was offered while
+  the head runs the slot's own spool, a store that left two spools claiming the slot.
+- **Tests:** every new pin proven red on the pre-change code (39 of 53 hermetic; the other 14 are controls; both new
+  browser pins fail on the old JS). `--offline` 2426 passed; the 14 browser files that touch the changed surfaces:
+  129 passed. No full `RUN_INTEGRATION` sweep yet (it runs before the merge to `dev`, after 40.3).
+- **Found on the way, fixed on `dev` (`bfb7bd0`, pushed):** a `CMD:SLOT:<n>` scan with the Location Manager closed moved
+  the buffered spool to Unassigned (with a slot number) while the toast said "Assigned". A slot scan now needs a box
+  open, and `manage_contents add` refuses a blank location.
+- **Next session, in order:** 40.1 (the shared picker; its ⭐ calls `logic.recommend_box_slot`), **40.3 with you**
+  (S1–S6; the task file's 40.3 section now lists exactly what the browser must send, plus three small questions for
+  you), then 40.2, 40.4, 40.5, 40.6, 40.7; full sweep before `dev`.
+- **Questions for you at 40.3** (no rush; defaults in brackets): Enter on a printing-only "Just store it" dialog also
+  stores? [yes] · the Quick-Swap Deposit onto a fed head shows one dialog (the three-way) instead of its own plus the
+  three-way? [one dialog] · a Yes whose slot got rebound to an empty idle head in the meantime just loads it? [yes].
+
 ## Questions for Derek
 
 Asked before Derek went to bed, from the pre-flight reconcile (`wf_1a1ff135-1c6`, read-only). Recorded as
@@ -300,3 +340,5 @@ harness's 1% tolerance let stale CORE1 text pass).
 | `wf_cf280365-f17` review-group-45 | Group 45 | 5 (4 lenses + 1 batched skeptic) | 1,552,636 subagent | ~46 min, 392 tool calls; 11 raw findings → 7 confirmed (3 orange, 4 yellow), 4 refuted; all fixed (`0323b9e`) |
 | `wf_80ce168f-fb2` review-group-41 | Group 41 | 5 (4 lenses + 1 batched skeptic) | 1,719,943 subagent | ~34 min, 385 tool calls; 18 raw findings → 17 confirmed (1 red, 4 orange, 12 yellow), 1 refuted (kept as hardening); all fixed (`3169abe`) |
 | `wf_cf1df12e-797` review-group-42 | Group 42 | 5 (4 lenses + 1 batched skeptic) | 2,216,289 subagent | ~44 min, 434 tool calls; 25 raw findings → 14 confirmed (4 orange, 10 yellow), 6 duplicates, 5 refuted; all fixed (`3cf3957`) |
+| `wf_b49ee3d2-388` g40-design-critique-and-impact | 40.0e + 40.0c design | 4 (2 critics + 2 impact scanners) | 1,790,243 subagent | ~29 min, 356 tool calls, read-only on a frozen snapshot; folded in before the commit |
+| `wf_6946f24e-3da` review-group-40-engine | Group 40 engine part | 5 (4 lenses + 1 batched skeptic) | 2,252,046 subagent | ~78 min, 457 tool calls; 35 raw → 28 confirmed (2 orange, 5 yellow, 21 notes), 7 duplicates; 7 fixed (`db1952a`), 21 deferred |
