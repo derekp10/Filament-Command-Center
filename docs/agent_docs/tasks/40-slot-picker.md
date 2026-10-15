@@ -4,7 +4,7 @@
 **Estimated effort:** LARGE (~14–20 h, 2–3 sessions). Engine prerequisites ~3 h · shared picker ~4 h · box-label + slot-label doors ~3 h · printer picker ~3 h · Return picker ~2–3 h · wizard doors ~2 h · tests throughout.
 **Risk:** **MEDIUM–HIGH.** Every sub-task edits `_perform_smart_move_impl`, the hottest write path in FCC, and 40.3 adds a new prompt on Derek's own daily path (slot-label scans). Everything else protects other users.
 
-> **Status: `IN PROGRESS`.** Engine part built on `feature/group-40-slot-picker` (pushed): 40.0a, a 40.0b pin, 40.0d and item H (`ab69c56`, overnight 2026-10-13/14), then **40.0e and 40.0c (`e8a2706`, 2026-10-14 day session)**, reviewed in `wf_6946f24e-3da` (2 orange + 5 yellow fixed in `db1952a`; 21 notes deferred, listed before the decisions table). **40.1 built (`14c5bc5`) and 40.3 built (browser `d2f076f`; engine `4489cbf`, first on `feature/group-40-engine-403`), 2026-10-14 evening; reviewed in `wf_ca12a7f0-f09`.** Not merged to `dev`. **Next:** Derek's S1–S6 → the review's fixes → full sweep → `dev`; then 40.2 → 40.4 → 40.5 → 40.6 → 40.7. See [session-handoff-2026-10-14.md](session-handoff-2026-10-14.md), "Group 40, day session".
+> **Status: `IN PROGRESS`.** Engine part built on `feature/group-40-slot-picker` (pushed): 40.0a, a 40.0b pin, 40.0d and item H (`ab69c56`, overnight 2026-10-13/14), then **40.0e and 40.0c (`e8a2706`, 2026-10-14 day session)**, reviewed in `wf_6946f24e-3da` (2 orange + 5 yellow fixed in `db1952a`; 21 notes deferred, listed before the decisions table). **40.1 built (`14c5bc5`) and 40.3 built (browser `d2f076f`; engine `4489cbf`), 2026-10-14 evening; reviewed in `wf_ca12a7f0-f09` (25 findings, none red, 4 orange: all fixed with the shipped-behaviour yellows in `f055def`; full `RUN_INTEGRATION` sweep 3499 passed, 0 failed), the fixes re-checked in `wf_0dddaf03-9a6`.** Derek's hands-on S1–S7 are in the buglist's ⏸️ PENDING DEREK section (they don't block anything). **Next:** `dev`; then 40.2 (its first step: the picker follow-ups at the end of 40.1) → 40.4 → 40.5 → 40.6 → 40.7. See [session-handoff-2026-10-14.md](session-handoff-2026-10-14.md), "Group 40, evening".
 > **🔄 2026-10-14 (day) — 40.0e and 40.0c are built (`e8a2706`); where they differ from the 40.0c / 40.0e text below, the code and this note win:**
 > - **One rule for the pick:** `logic.recommend_box_slot(max_slots, claims, own_slot, would_prompt)` (own slot → lowest free slot that won't ask → lowest free → none). 40.1's ⭐ reuses it with its own `would_prompt`. The engine's `would_prompt` also avoids a binding to something that isn't a head, and never asks about the head the spool is leaving.
 > - **Confirm keys, not bare heads:** each `fed_heads` entry carries `confirm_key` ("XL-1#99": the head and the spools the question named). "Load it instead" sends the keys in `confirmed_fed_heads`; a key covers the head only while it runs exactly those spools (a different spool there is asked about again). A bare head id still covers it whatever it runs (internal callers, tests).
@@ -309,6 +309,29 @@ Rationale: other users scanning a box label mostly want to store, and a recommen
   - "Checking XL…" appears when `/api/printer_state` is delayed in-page (the Group 38 in-page fetch-delay lever) and turns into the timeout text.
 - Visual baseline over stubbed data only. Never snapshot live dev contents (the `test_quickswap_visual` lesson).
 
+### Before 40.2 wires the picker: what the 40.1 + 40.3 review found in it
+
+The review (`wf_ca12a7f0-f09`, D-tests-picker) confirmed these in the built picker. They can't happen yet
+(nothing opens `window.openSlotPicker` until 40.2), so they are 40.2's first step, each with a pin:
+- **D1, scans and Enter.** A short numeric scan (a 1–2 digit spool id) moves the highlight with its digits and
+  its Enter picks a slot; any scan while focus sits in an input behind the picker picks too. Yield Enter to
+  `window.isScanInFlight()` (as `confirmActivePrint` does), never pick while `document.activeElement` is outside
+  the panel, and take a digit as a hotkey only with an empty scan buffer and a gap of at least 50 ms.
+- **D2, opening guards.** It stacks over another overlay (one Escape then cancels the dialog underneath, a second
+  closes the picker), opens during an audit and over a gating dialog. Refuse to open (null, a 7 s warning, a log
+  line) while another `[data-overlay-mount="1"]` is mounted or `state.auditActive` / `state.activeModal` /
+  `state.processing` is set; close itself when a bulk move or an audit starts (`inventory:sync-pulse`).
+- **D3, refusals nobody sees.** Its only refusal feedback is a toast, which sits under the panel (z 11000 vs
+  20000): add a `role=alert` status line inside the panel (as the three-way has); keep a slot label scanned while
+  the model loads and apply it once the tiles exist; toast and log `CMD:CANCEL`.
+- **D4, what a caller sends.** The result carries no `send` / `expected_feed` and disables no tile, so a caller
+  that sends the natural `slot` reloads a spool the tile promised to store ("stored here, not loaded back"). Return
+  `send` (`picked_slot` for an empty or own-ghost slot, `slot` only after a Swap / Overwrite choice) and
+  `expected_feed` (the tile's feed token), and disable doubly-claimed and non-head-binding slots (and occupied
+  ones in return mode) with a why-string.
+- Done already: D8 (printer mode no longer stars the spool's own head, `f055def`), D5 / D6 (pins), and
+  `placement.py` in the slot_targets reader canary (`09c3d5a`).
+
 ---
 
 ## 40.2 — Box-label scan opens the picker (D2.1)
@@ -422,9 +445,17 @@ The contract is in CLAUDE.md ("One move question, one replay builder, …"); thi
   three-way is the question; an idle, empty head keeps the deposit overlay. Its first request carries
   `expected_feed` (the tile's head, or "" for a Printer Pool tile; none for a single-slot box).
 
-**Engine (`4489cbf`).** `expected_feed` → `confirm_type: "feed_changed"` (nothing written; on a store replay as on
-a load; even for an empty idle head); `target` / `slot_picked` / `feed` / `can_load` on every question; the
-`identify_scan` slot branch relays every engine key; and the engine review's deferred notes marked ✅ 40.3 below.
+**Engine (`4489cbf`).** `expected_feed` → `confirm_type: "feed_changed"` (nothing written, even for an empty idle
+head; since `f055def` a store replay is asked as a store, with no Load button); `target` / `slot_picked` / `feed` /
+`can_load` on every question; the `identify_scan` slot branch relays every engine key; and the engine review's
+deferred notes marked ✅ 40.3 below.
+
+**The review's fixes (`f055def`).** `seen_printing` (the deposit sends the print it saw, so a fail-open probe still
+asks); `printing` on every question; one unanswered dialog per overlay id (a replaced one is settled as
+superseded, no false "Cancelled"); one deposit at a time; `window.storeToastTail` ("taken off XL-1"); a slot whose
+own spool runs on another head takes no new spool; a printing answer offers the store only when the head the slot
+loads is mid-print; "None" / "null" bindings read as unbound. Round trips through both halves:
+`tests/roundtrip_harness.py` + `tests/test_move_question_round_trip.py`.
 
 **Tests.** `test_head_load_confirm_js.py` (node-vm: the dialog, the router, the replay builder across rounds,
 the Location Manager's recorded-source toast), `test_door_fed_heads_canary.py` (every POST to the three doors
