@@ -1212,30 +1212,68 @@ window.promptEditLocation = (spoolId, currentLoc) => {
                     // the error branch as a 7 s toast with no way to proceed. `confirm`
                     // is the heads for an add (39.1), or true for force_unassign,
                     // whose route keeps the boolean.
-                    const sendOverride = (confirm) => {
+                    // `pickedSlot` (Group 40.0e): the slot the engine picked for this
+                    // slotless move before it asked (the answer's `target_slot`), sent
+                    // back as `picked_slot` so the Yes lands where the question said;
+                    // the server keeps it only while it is still free. The first
+                    // request sends no slot.
+                    const spoolModalEl = document.getElementById('spoolModal');
+                    // What the move did, once the server stopped asking. A rejected
+                    // write still answers status 'success' and names the spool in
+                    // res.failures (2026-09-12).
+                    const done = (res, prior) => {
+                        const failedWhy = res.status === 'success' ? (res.failures || {})[String(spoolId)] : null;
+                        if (!failedWhy && (res.status === 'success' || res.success)) {
+                            if (prior && prior.store) {
+                                // Group 40.3: "Just store it" put it in the slot and left the head alone.
+                                showToast(`📦 #${spoolId} stored in ${newLoc}`
+                                    + `${prior.pickedSlot != null ? ` slot ${prior.pickedSlot}` : ''}`
+                                    + `${window.storeToastTail(prior)}`, 'success', 4000);
+                            } else {
+                                showToast('Location updated via override', 'success');
+                            }
+                            const notDeployed = (res.auto_deploy_skipped || {})[String(spoolId)];
+                            if (notDeployed) showToast(`⚠️ #${spoolId} was placed, but NOT deployed to ${res.auto_deploy_target || 'its toolhead'}: ${notDeployed}`, 'warning', 7000);
+                            document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
+                            openSpoolDetails(spoolId, true);
+                        } else {
+                            showToast(failedWhy ? `❌ #${spoolId} was NOT moved: ${failedWhy}` : (res.msg || 'Override failed'), 'error', 7000);
+                        }
+                    };
+                    const post = (payload, onAnswer) => {
                         if (typeof setProcessing === 'function') setProcessing(true);
-                        const payload = {
-                            action: unassign ? 'force_unassign' : 'add',
-                            location: newLoc,
-                            spool_id: spoolId,
-                            origin: 'manual_override'
-                        };
-                        if (unassign) payload.confirm_active_print = confirm === true;
-                        else payload.confirmed_toolheads = Array.isArray(confirm) ? confirm : [];
-
-                        fetch('/api/manage_contents', {
+                        window.fetchT('/api/manage_contents', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(payload)
                         })
+                        // Only a request that got no answer says "failed": an
+                        // exception after a move landed only reaches the console.
                         .then(r => r.json())
-                        .then(res => {
+                        .then(x => x, (e) => {
                             if (typeof setProcessing === 'function') setProcessing(false);
-                            // The `add` answer (status requires_confirm) or the
-                            // force_unassign one (require_confirm + confirm_type). The
-                            // Swal has closed by now, so the confirm sits over the
-                            // details modal, and Cancel leaves the details open.
-                            const asks = res && res.confirm_type === 'active_print'
+                            showToast(`Override failed: ${(e && e.message) || 'network error'}`, 'error', 7000);
+                            return null;
+                        })
+                        .then(res => {
+                            if (res === null) return;
+                            if (typeof setProcessing === 'function') setProcessing(false);
+                            onAnswer(res || {});
+                        })
+                        .catch(e => {
+                            if (typeof setProcessing === 'function') setProcessing(false);
+                            console.error(e);
+                        });
+                    };
+                    // The Swal has closed by now, so a question sits over the details
+                    // modal, and Cancel leaves the details open.
+                    if (unassign) {
+                        // force_unassign keeps its boolean confirm (39.1).
+                        const sendUnassign = (confirm) => post({
+                            action: 'force_unassign', location: newLoc, spool_id: spoolId,
+                            origin: 'manual_override', confirm_active_print: confirm === true,
+                        }, (res) => {
+                            const asks = res.confirm_type === 'active_print'
                                 && (res.status === 'requires_confirm' || res.require_confirm);
                             if (asks) {
                                 if (window.logClientEvent) window.logClientEvent(
@@ -1245,30 +1283,39 @@ window.promptEditLocation = (spoolId, currentLoc) => {
                                     activePrint: res.active_print,
                                     activePrints: res.active_prints,
                                     msg: res.msg,
-                                    host: document.getElementById('spoolModal'),
-                                    onConfirm: () => sendOverride(unassign ? true : window.unionConfirmHeads(confirm, res)),
+                                    host: spoolModalEl,
+                                    onConfirm: () => sendUnassign(true),
                                 });
                                 return;
                             }
-                            // A rejected write still answers status 'success' and names
-                            // the spool in res.failures (2026-09-12).
-                            const failedWhy = res.status === 'success' ? (res.failures || {})[String(spoolId)] : null;
-                            if (!failedWhy && (res.status === 'success' || res.success)) {
-                                showToast('Location updated via override', 'success');
-                                const notDeployed = (res.auto_deploy_skipped || {})[String(spoolId)];
-                                if (notDeployed) showToast(`⚠️ #${spoolId} was placed, but NOT deployed to ${res.auto_deploy_target || 'its toolhead'}: ${notDeployed}`, 'warning', 7000);
-                                document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
-                                openSpoolDetails(spoolId, true); 
-                            } else {
-                                showToast(failedWhy ? `❌ #${spoolId} was NOT moved: ${failedWhy}` : (res.msg || 'Override failed'), 'error', 7000);
-                            }
-                        })
-                        .catch(e => {
-                            if (typeof setProcessing === 'function') setProcessing(false);
-                            showToast('Override Network Error', 'error');
+                            done(res, null);
                         });
-                    };
-                    sendOverride(unassign ? false : []);
+                        sendUnassign(false);
+                    } else {
+                        // The `add` as first sent; a server question's replay is
+                        // rebuilt from it (Group 40.3, window.buildMoveReplay): the
+                        // slot the engine picked for this slotless move (Group 40.0e:
+                        // `picked_slot`, kept only while still free), every head and
+                        // confirm key confirmed so far, and the feed it named.
+                        const original = {
+                            action: 'add', location: newLoc, spool_id: spoolId,
+                            origin: 'manual_override', confirmed_toolheads: [], confirmed_fed_heads: [],
+                        };
+                        const sendAdd = (payload, prior) => post(payload, (res) => {
+                            if (res.status === 'requires_confirm' && window.askMoveConfirm) {
+                                if (window.logClientEvent) window.logClientEvent(
+                                    `⚠️ Force Location of #${spoolId} needs a confirm: ${res.msg || 'a printer is printing'}`,
+                                    'WARNING');
+                                window.askMoveConfirm(res, {
+                                    door: 'manage_add', original, prior, host: spoolModalEl, box: newLoc,
+                                    send: (body, next) => sendAdd(body, next),
+                                });
+                                return;
+                            }
+                            done(res, prior);
+                        });
+                        sendAdd(original, {});
+                    }
                 }
             });
         });

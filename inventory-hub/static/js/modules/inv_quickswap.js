@@ -485,6 +485,13 @@
     // the first one's DOM but not its document keydown handler, which then ate
     // every Tab on the page until a reload.
     let _overlayGen = 0;
+    // Group 40.3 review (B2): one deposit at a time. When the tap was taken
+    // (Date.now()), 0 when idle. The deposit probes the printer and reads the
+    // head first (up to ~6 s), and a second tap meanwhile posted a second
+    // deposit: two dialogs, and the unanswered one later said "Cancelled —
+    // nothing moved" after a move that landed. Cleared when a dialog takes over
+    // or the deposit ends; a flag older than 20 s no longer blocks a tap.
+    let _depositBusyAt = 0;
 
     // Helper: race the printer-state probe against a short timeout so a slow
     // or unreachable PrusaLink can't stall the confirm UI. Returns stateInfo
@@ -525,8 +532,11 @@
         // fails open — null means "unknown, show overlay normally."
         // opts.knownState: the backend has just said the printer is active, so
         // show that banner without re-probing (the probe is what missed it).
+        // opts.probed (Group 40.3): the caller already probed this head (the
+        // deposit decides first whether to show this overlay at all).
         const gen = ++_overlayGen;
-        const detail = opts.knownState ? null : await _probeWithTimeout(opts.toolhead);
+        const detail = opts.knownState ? null
+            : (opts.probed !== undefined ? opts.probed : await _probeWithTimeout(opts.toolhead));
         if (gen !== _overlayGen) return;   // a later tap owns the overlay now
         const stateInfo = opts.knownState || (detail && detail.active
             ? { state: detail.state || 'ACTIVE', printer_name: detail.printer_name || opts.toolhead }
@@ -824,6 +834,10 @@
     // per deposit without duplication.
     window.quickSwapDeposit = (btn) => {
         if (!btn) return;
+        if (_depositBusyAt && Date.now() - _depositBusyAt < 20000) {
+            showToast('⏳ Still working on the last deposit — one moment', 'info', 2500);
+            return;
+        }
         // Group 46 review — the spool this deposit names is the one it writes,
         // captured once: a server re-ask replays it rather than re-reading the
         // (possibly rotated) buffer.
@@ -832,37 +846,60 @@
             showToast('Buffer is empty — scan a spool first', 'warning', 3500);
             return;
         }
+        // Busy from the tap until a dialog takes over or the deposit ends; the
+        // tile dims meanwhile, so the wait shows.
+        _depositBusyAt = Date.now();
+        const tileOpacity = btn.style ? btn.style.opacity : '';
+        if (btn.style) btn.style.opacity = '0.55';
+        const idle = () => {
+            _depositBusyAt = 0;
+            if (btn.style) btn.style.opacity = tileOpacity;
+        };
+        const gen = ++_overlayGen;
         const box = btn.dataset.box;
         const slot = btn.dataset.slot;
         const toolhead = btn.dataset.toolhead;
         const bsDisplay = buffered.display || `#${buffered.id}`;
         const title = `Deposit ${bsDisplay} into ${box} slot ${slot}?`;
-        // POST the deposit confirming `sent`: the heads whose warning the user saw
-        // (Group 39.1), always the union of every answer so far.
-        const postDeposit = (sent) => {
-            fetch('/api/identify_scan', {
+        // Group 42 review: nothing deposited into a single-slot box (attached to
+        // the head for its own spool, not as a feed; 42.2) or a printer-pool slot
+        // is loaded onto a head, so neither promises it, and neither probes a
+        // head it never touches. The server still asks about a printing head the
+        // buffered spool LEAVES (_reaskFromServer).
+        const notLoaded = btn.dataset.singleSlot === '1' || btn.dataset.pool === '1' || !toolhead;
+        // The deposit as first sent (Group 40.3): every replay of a server
+        // question is rebuilt from it (window.buildMoveReplay).
+        //   - `spool_id` (Group 46 review): deposit the spool this deposit NAMED.
+        //     Without it the server took the first spool of its buffer replica,
+        //     which can differ by the time Yes is pressed: the overlay waits up to
+        //     3 s on the printer probe while the carousel stays clickable.
+        //   - `confirmed_toolheads` (Group 39.1): the heads whose warning the user
+        //     saw, never a bare flag a stale grid could carry onto another head.
+        //   - `confirmed_fed_heads`: this page can show the "already running
+        //     another spool" question.
+        //   - `expected_feed`: what the tile showed the slot feeding (its head, or
+        //     "" for a Printer Pool slot), so a slot re-pointed while the deposit
+        //     was being decided is asked about again. A single-slot box's binding
+        //     is its own spool's attachment, never a feed: it names none.
+        const original = {
+            text: `LOC:${box}:SLOT:${slot}`,
+            source: 'quickswap_deposit',
+            confirmed_toolheads: [],
+            confirmed_fed_heads: [],
+            spool_id: buffered.id,
+        };
+        if (btn.dataset.singleSlot !== '1') original.expected_feed = notLoaded ? '' : String(toolhead).toUpperCase();
+        const postDeposit = (payload, prior) => {
+            _depositBusyAt = Date.now();
+            window.fetchT('/api/identify_scan', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    text: `LOC:${box}:SLOT:${slot}`,
-                    source: 'quickswap_deposit',
-                    // The overlay showed the "is PRINTING" banner and the user
-                    // confirmed it. Without the confirm the backend asked again,
-                    // this handler had no branch for that and toasted "Deposit
-                    // failed", so a deposit during a print never worked
-                    // (2026-09-12). Group 39.1: it names the heads the user
-                    // saw, so a stale grid can't carry it onto another head.
-                    confirmed_toolheads: sent,
-                    // Group 46 review — deposit the spool this overlay NAMED.
-                    // Without it the server took the first spool of its buffer
-                    // replica, which can differ by the time Yes is pressed: the
-                    // overlay waits up to 3 s on the printer probe while the
-                    // carousel stays clickable.
-                    spool_id: buffered.id,
-                }),
+                body: JSON.stringify(payload),
             })
                 .then(async r => ({ ok: r.ok, body: await r.json() }))
                 .then(({ ok, body }) => {
+                    // The answer is in: it ends the deposit, or its dialog takes over.
+                    idle();
                     if (ok && (body.action === 'assignment_done' || body.action === 'assignment_partial')) {
                         const destNote = body.auto_deployed_to
                             ? ` → ${body.auto_deployed_to}`
@@ -873,6 +910,10 @@
                         if (body.not_deployed) {
                             // In the box, but the chain did not deploy it.
                             showToast(`⚠️ ${movedLabel} → ${box}:SLOT:${slot}, but NOT deployed to ${body.not_deployed_target || toolhead}: ${body.not_deployed}`, 'warning', 7000);
+                        } else if (prior && prior.store) {
+                            // Group 40.3: "Just store it" put it in the slot and left the head alone.
+                            showToast(`📦 ${movedLabel} stored in ${box} slot ${slot}`
+                                + `${window.storeToastTail(prior)}`, 'success', 4000);
                         } else {
                             showToast(`⬇️ ${movedLabel} → ${box}:SLOT:${slot}${destNote}`, 'success', 2500);
                         }
@@ -886,22 +927,45 @@
                     } else if (body.action === 'assignment_no_buffer') {
                         showToast('Buffer is empty — scan a spool first', 'warning', 3500);
                     } else if (body.action === 'assignment_requires_confirm') {
-                        // The server re-checked and a printing head needs a
-                        // confirm the overlay's probe missed (slow or
-                        // unreachable printer), or one it couldn't know about
-                        // (the spool LEAVING a printing head, D6). Re-ask with
-                        // the server's own message, which names those heads
-                        // (Group 39 review, routes-wire-7: the re-open repeated
-                        // this deposit's text, so its Yes covered heads the
-                        // dialog never named), and replay the same spool.
-                        _reaskFromServer(body, sent, { toolhead, box, slot, title },
-                            (heads) => postDeposit(heads));
+                        // Group 40.3, Derek (2026-10-14): one dialog. The slot's
+                        // head runs a spool from elsewhere, or its printer prints
+                        // and the deposit could just store: the server's three-way
+                        // (Load it instead / Just store it / Cancel) is the
+                        // question, over the Location Manager.
+                        if (window.moveConfirmKind && window.moveConfirmKind(body) === 'head_load'
+                                && window.askMoveConfirm) {
+                            window.askMoveConfirm(body, {
+                                door: 'slot_scan', original, prior,
+                                host: document.getElementById('manageModal'), box, slot,
+                                send: (next, nextPrior) => postDeposit(next, nextPrior),
+                            });
+                            return;
+                        }
+                        // A printing head the overlay's probe missed (slow or
+                        // unreachable printer), or one it couldn't know about (the
+                        // spool LEAVING a printing head, D6). Re-ask with the
+                        // server's own message, which names those heads (Group 39
+                        // review, routes-wire-7: the re-open repeated this
+                        // deposit's text, so its Yes covered heads the dialog
+                        // never named), and replay the same spool.
+                        _reaskFromServer(body, (prior && prior.heads) || [], { toolhead, box, slot, title },
+                            (heads) => {
+                                if (window.buildMoveReplay) {
+                                    const r = window.buildMoveReplay('slot_scan', original, body,
+                                        prior && prior.store ? 'store' : 'load', prior || {});
+                                    postDeposit(r.body, r.prior);
+                                } else {
+                                    postDeposit(Object.assign({}, original, { confirmed_toolheads: heads }),
+                                        Object.assign({}, prior || {}, { heads }));
+                                }
+                            });
                     } else {
                         // Includes assignment_failed: the spool stays in the buffer.
                         showToast(`❌ Deposit failed: ${body.msg || body.error || body.action || 'unknown'}`, 'error', 7000);
                     }
                 })
                 .catch(e => {
+                    idle();
                     console.error(e);
                     showToast('Deposit — network error', 'error', 7000);
                     if (window.logClientEvent) window.logClientEvent(
@@ -910,12 +974,6 @@
                     );
                 });
         };
-        // Group 42 review: nothing deposited into a single-slot box (attached to
-        // the head for its own spool, not as a feed; 42.2) or a printer-pool slot
-        // is loaded onto a head, so neither promises it, and neither probes a
-        // head it never touches. The server still asks about a printing head the
-        // buffered spool LEAVES (_reaskFromServer).
-        const notLoaded = btn.dataset.singleSlot === '1' || btn.dataset.pool === '1' || !toolhead;
         const spoolLine = `<div class="text-warning fw-bold mb-2" style="font-size:1rem;">Spool: ${bsDisplay}</div>`;
         let depositBody;
         if (btn.dataset.singleSlot === '1') {
@@ -931,16 +989,72 @@
                 `<b>${toolhead}</b>, it auto-deploys to the toolhead once placed. ` +
                 `If ${toolhead} currently has another spool, that one goes back to its recorded source box first (or the printer’s room / Unassigned if it has none).</div>`;
         }
-        showConfirmOverlay({
+        // The overlay's probe of the slot's bound head: its banner is what Yes confirms.
+        const confirmDeposit = (probed) => showConfirmOverlay({
             toolhead: notLoaded ? null : toolhead, box, slot, title,
             body: depositBody,
-            // The overlay's probe of the slot's bound head: its banner is what Yes confirms.
-            onConfirm: (stateInfo) => postDeposit(notLoaded ? [] : _headsShown([], stateInfo, toolhead)),
+            probed,
+            onConfirm: (stateInfo) => {
+                const heads = notLoaded ? [] : _headsShown([], stateInfo, toolhead);
+                postDeposit(Object.assign({}, original, { confirmed_toolheads: heads }), { heads });
+            },
+        });
+        if (notLoaded || !window.askMoveConfirm) {
+            idle();
+            confirmDeposit(undefined);
+            return;
+        }
+        // Group 40.3, Derek (2026-10-14): ONE dialog for a deposit. When the slot's
+        // head runs a spool (it can't be this slot's own: the deposit tile exists
+        // only while nothing claims the slot), or its printer is printing, FCC
+        // asks anyway, so this overlay is skipped and the server's three-way is
+        // the question (Enter stores: a toolhead isn't loaded mid-print). An
+        // idle, empty head keeps this overlay. A head that couldn't be read keeps
+        // it too; the server re-checks either way. The spool being deposited
+        // isn't a resident (Group 40.3 review, C3): a head whose only spool is
+        // that one is asked nothing by FCC, so it keeps this overlay.
+        const headResidents = window.fetchT(`/api/get_contents?id=${encodeURIComponent(toolhead)}&strict=1`, {}, 6000)
+            .then(r => (r.ok ? r.json() : null))
+            .then(items => (Array.isArray(items)
+                ? items.filter(it => it && !it.is_ghost && String(it.id) !== String(buffered.id)
+                    && String(it.location || '').replace(/"/g, '').trim().toUpperCase() === String(toolhead).toUpperCase())
+                : null))
+            .catch(() => null);
+        Promise.all([_probeWithTimeout(toolhead), headResidents]).then(([detail, residents]) => {
+            if (gen !== _overlayGen) {
+                // Another question took the screen meanwhile (a swap's re-ask, a
+                // later tap): this deposit isn't sent, and says so (Group 40.3
+                // fix check, W2: it used to vanish).
+                idle();
+                showToast(`Deposit of ${bsDisplay} not sent: another question took the screen — tap it again`,
+                    'info', 4000);
+                if (window.logClientEvent) window.logClientEvent(
+                    `ℹ️ Deposit of ${bsDisplay} into ${box} slot ${slot} not sent: another question took the screen`, 'INFO');
+                return;
+            }
+            const printing = !!(detail && detail.active);
+            if (printing || (residents && residents.length)) {
+                // The print this page saw goes with the request (Group 40.3
+                // review, C1): if FCC's own printer check fails a moment later,
+                // it still asks instead of loading mid-print unasked.
+                if (printing) original.seen_printing = [String(toolhead).toUpperCase()];
+                postDeposit(original, { heads: [] });
+                return;
+            }
+            idle();
+            confirmDeposit(detail);
         });
     };
 
     window.quickSwapTap = (btn) => {
         if (!btn) return;
+        // A deposit in flight owns the screen until its answer (Group 40.3 fix
+        // check, W1 / S2): a swap tapped meanwhile stacked a second dialog with
+        // the deposit's question, and its Tab handler took the question's keys.
+        if (_depositBusyAt && Date.now() - _depositBusyAt < 20000) {
+            showToast('⏳ Still working on the last deposit — one moment', 'info', 2500);
+            return;
+        }
         // Disabled buttons (empty slot) should be a no-op. A tile that is
         // disabled for another reason (two spools claim it, its box couldn't
         // be read) carries that reason in data-why (Group 42 review).
@@ -1505,6 +1619,11 @@
     document.addEventListener('keydown', (e) => {
         const grid = document.getElementById('quickswap-grid');
         if (!grid || grid.childElementCount === 0) return;
+        // An overlay on top (a confirm, the three-way load question, the slot
+        // picker) owns the keys: `q` (scanned session ids contain it) or an arrow
+        // used to move this grid's focus behind it, and a later Enter then ran
+        // quickSwapTap on a tile nobody could see (Group 40.3 / 40.1 review).
+        if (document.querySelectorAll('[data-overlay-mount="1"]').length) return;
 
         const tag = (e.target && e.target.tagName) || '';
         if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.isContentEditable) return;

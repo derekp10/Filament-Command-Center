@@ -1448,7 +1448,8 @@ window.doAssign = (loc, spool, slot, isFromBufferFlag = null, options = {}) => {
 // clicks while a print was active. mountOverlay's tier='confirm' sits
 // above any Bootstrap modal and the host=manageModal binding cleans
 // the overlay when the user dismisses the Location Manager.
-const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateInfo, options = {}, heads = [], msg = '' }) => {
+const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateInfo, options = {}, heads = [], msg = '',
+                                     onConfirm = null }) => {
     // Name the spool this confirm writes (Group 46 review): the prompt can
     // outlive a buffer change (a queued CMD:NEXT scan, a re-sync), and the spool
     // captured at the click is the one that moves.
@@ -1459,16 +1460,18 @@ const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateIn
     // overlay's proven ids. It shows the server's message when the backend asked
     // (`msg`: Derek's D6 wording, e.g. a spool LEAVING a printing head), else this
     // door's own sentence. Its Yes finalizes with `heads`: the probed head, or the
-    // answer's heads unioned with any confirmed before (39.1).
+    // answer's heads unioned with any confirmed before (39.1). `onConfirm`: a
+    // server question's replay (Group 40.3, window.askMoveConfirm), which owns
+    // the request it sends.
     window.confirmActivePrint({
         activePrint: stateInfo,
         msg: msg || `Reassigning ${spoolLabel} to ${loc} during an active print will disrupt the print. Continue anyway?`,
         host: document.getElementById('manageModal'),
         ids: { overlay: 'fcc-active-print-confirm-overlay', yes: 'fcc-apc-yes', no: 'fcc-apc-no' },
-        onConfirm: () => {
+        onConfirm: onConfirm || (() => {
             setProcessing(true);
             _doAssignFinalize(loc, spool, slot, isFromBufferFlag, heads, options);
-        },
+        }),
     });
 };
 
@@ -1501,35 +1504,69 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedH
         }
     }
 
-    fetch('/api/manage_contents', {
+    // The request as first sent: every replay of a server question is rebuilt
+    // from it (Group 40.3, window.buildMoveReplay), so a Yes sends the slot,
+    // the spool and every head / confirm key confirmed so far.
+    // `confirmed_fed_heads`: this page can show the "already running another
+    // spool" question. `auto_deploy: false` (options.autoDeploy): the DEPLOYED
+    // card's ↩️ puts the spool back in its slot and leaves the head alone (the
+    // 40.6-E fallback; it used to load it straight back onto its head).
+    const original = {
+        action: 'add',
+        location: loc,
+        spool_id: "ID:" + spool,
+        slot: finalSlot,
+        origin: isFromBuffer ? 'buffer' : '',
+        confirmed_toolheads: [],
+        confirmed_fed_heads: [],
+    };
+    if (options.autoDeploy === false) original.auto_deploy = false;
+    // The heads whose warning the user confirmed (Group 39.1), so the backend's
+    // safety net doesn't re-prompt for them.
+    const first = Object.assign({}, original, {
+        confirmed_toolheads: Array.isArray(confirmedHeads) ? confirmedHeads : [],
+    });
+    const post = (payload, prior) => {
+        setProcessing(true);
+        _postManageAdd(payload, prior);
+    };
+    // Only a request that got no answer says "failed": an exception in the
+    // success handling follows a move that landed, so it only reaches the console.
+    const noAnswer = (e) => {
+        setProcessing(false);
+        showToast(`❌ #${spoolIdStr} → ${loc} failed: ${(e && e.message) || 'network error'} — check the Activity Log`, 'error', 7000);
+        if (window.logClientEvent) window.logClientEvent(
+            `❌ Assign #${spoolIdStr} → ${loc} got no answer: ${(e && e.message) || 'network error'}`, 'ERROR');
+    };
+    const _postManageAdd = (payload, prior) => window.fetchT('/api/manage_contents', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            action: 'add',
-            location: loc,
-            spool_id: "ID:" + spool,
-            slot: finalSlot,
-            origin: isFromBuffer ? 'buffer' : '',
-            // The heads whose warning the user confirmed (Group 39.1), so the
-            // backend's safety net doesn't re-prompt for them.
-            confirmed_toolheads: Array.isArray(confirmedHeads) ? confirmedHeads : [],
-        }),
+        body: JSON.stringify(payload),
     })
         .then(r => r.json())
+        .then(x => x, (e) => { noAnswer(e); return null; })
         .then(res => {
+            if (res === null) return;
             setProcessing(false);
-            // Backend safety net: if the printer flipped from IDLE to PRINTING
-            // in the race window between our UI probe and the POST, the probe
-            // missed it, or the spool is LEAVING a printing head (39.4), the
-            // backend returns requires_confirm. Show our confirm overlay and
-            // retry with every head confirmed so far.
-            if (res.status === 'requires_confirm' && res.confirm_type === 'active_print') {
-                _confirmActivePrintAssign({
-                    loc, spool, slot, isFromBufferFlag,
-                    stateInfo: res.active_print || { printer_name: loc, state: 'ACTIVE' },
-                    options,
-                    msg: res.msg,
-                    heads: window.unionConfirmHeads(confirmedHeads, res),
+            // The server asks before it moves: a printing head (the yes / no:
+            // the printer flipped to PRINTING after our probe, the probe missed
+            // it, or the spool is LEAVING a printing head, 39.4), or a bound
+            // slot's head already running a spool from elsewhere or printing
+            // (40.3's three-way, over the Location Manager).
+            if (res.status === 'requires_confirm' && window.askMoveConfirm) {
+                window.askMoveConfirm(res, {
+                    door: 'manage_add', original, prior,
+                    host: document.getElementById('manageModal'),
+                    box: loc, slot: finalSlot,
+                    ids: { overlay: 'fcc-active-print-confirm-overlay', yes: 'fcc-apc-yes', no: 'fcc-apc-no', store: 'fcc-apc-store' },
+                    askYesNo: (ans, yes) => _confirmActivePrintAssign({
+                        loc, spool, slot, isFromBufferFlag,
+                        stateInfo: ans.active_print || { printer_name: loc, state: 'ACTIVE' },
+                        options,
+                        msg: ans.msg,
+                        onConfirm: yes,
+                    }),
+                    send: (body, next) => post(body, next),
                 });
                 return;
             }
@@ -1538,7 +1575,22 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedH
             // spool from the buffer anyway (2026-09-12).
             const failedWhy = res.status === 'success' ? (res.failures || {})[spoolIdStr] : null;
             if (res.status === 'success' && !failedWhy) {
-                showToast("Assigned");
+                const storedIn = payload.picked_slot != null ? payload.picked_slot : payload.slot;
+                const slotText = storedIn != null && storedIn !== '' ? ` slot ${storedIn}` : '';
+                const rec = res.recorded_source ? String(res.recorded_source).split(':') : null;
+                if (options.autoDeploy === false) {
+                    showToast(`↩️ #${spoolIdStr} → ${loc}${slotText}`, 'success', 4000);
+                } else if (prior && prior.store) {
+                    // Group 40.3: "Just store it" put it in the slot and left the head alone.
+                    showToast(`📦 #${spoolIdStr} stored in ${loc}${slotText}`
+                        + `${window.storeToastTail(prior)}`, 'success', 4000);
+                } else if (rec && rec.length === 2) {
+                    // Group 40.0d: a spare loaded onto a head records the one free
+                    // slot that feeds it as its home; the toast is where that shows.
+                    showToast(`#${spoolIdStr} → ${loc} (recorded as from ${rec[0]} slot ${rec[1]})`, 'success');
+                } else {
+                    showToast("Assigned");
+                }
                 const notDeployed = (res.auto_deploy_skipped || {})[spoolIdStr];
                 if (notDeployed) {
                     showToast(`⚠️ #${spoolIdStr} is in ${loc} but was NOT deployed to ${res.auto_deploy_target || 'its toolhead'}: ${notDeployed}`, 'warning', 7000);
@@ -1570,7 +1622,8 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedH
                 ? `❌ #${spoolIdStr} was NOT assigned to ${loc}: ${failedWhy}`
                 : (res.msg || 'Assign failed'), 'error', 7000);
         })
-        .catch(() => setProcessing(false));
+        .catch((e) => { setProcessing(false); console.error(e); });
+    _postManageAdd(first, { heads: first.confirmed_toolheads });
 };
 
 window.ejectSpool = (sid, loc, pickup) => {
@@ -1712,6 +1765,18 @@ window.doEject = (sid, loc, isConfirmed = false, confirmActivePrint = false) => 
 window.manualAddSpool = () => {
     const val = document.getElementById('manual-spool-id').value.trim();
     if (!val) return;
+    // Group 40.3: a typed label or command (`LOC:LR-MDB-1:SLOT:1`, `CMD:DONE`)
+    // is a scan, so it takes the scan path: the same questions (a slot whose
+    // toolhead runs a spool from elsewhere asks first) and the same outcome
+    // toasts. It used to post as a manual entry, so a slot move that landed
+    // still toasted "Invalid Code". Only ids are looked up here.
+    if (/^(LOC|CMD):/i.test(val) && typeof window.processScan === 'function') {
+        const input = document.getElementById('manual-spool-id');
+        input.value = '';
+        input.focus();
+        window.processScan(val, 'keyboard');
+        return;
+    }
     setProcessing(true);
     window.fetchT('/api/identify_scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: val, source: 'keyboard' }) })
         .then(r => r.json())

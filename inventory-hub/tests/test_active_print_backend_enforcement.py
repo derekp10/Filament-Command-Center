@@ -288,7 +288,11 @@ def test_smart_move_checks_slot_binding_for_active_print(client):
 
     User-reported scenario: swap a spool between slots 1 and 2 of
     LR-MDB-1 where slot 1 is bound to an active toolhead. Expected:
-    requires_confirm before the swap happens."""
+    requires_confirm before the swap happens.
+
+    Group 40.0c: before it asks, the engine reads XL-1 strictly to see whether
+    it already runs a spool from elsewhere (fail closed: an unread head refuses
+    the move). XL-1 is empty here, so the question stays the active-print one."""
     # Fake dryer box with slot 1 bound to XL-1 (which we'll mark active).
     box_row = {
         "LocationID": "LR-MDB-1",
@@ -306,6 +310,7 @@ def test_smart_move_checks_slot_binding_for_active_print(client):
          patch("prusalink_api.get_printer_state", return_value={"state": "PRINTING", "is_active": True}), \
          patch.object(logic, "resolve_scan", return_value={"type": "spool", "id": 42}), \
          patch.object(logic.spoolman_api, "get_spool", return_value=_in_room(42)), \
+         patch.object(logic.spoolman_api, "get_spools_at_location_detailed_strict", return_value=[]), \
          patch.object(app_module.spoolman_api, "update_spool") as upd:
         r = client.post("/api/manage_contents", json={
             "action": "add",

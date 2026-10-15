@@ -106,6 +106,20 @@ def get_all_spools(allow_archived=True):
         state.logger.error(f"get_all_spools failed: {e}")
         return []
 
+def get_all_spools_strict(allow_archived=False):
+    """Like get_all_spools (default: the non-archived list, as every location
+    reader uses) but RAISES on a Spoolman transport/HTTP failure instead of
+    answering [] — for a reader that must not draw "nothing here" when it simply
+    couldn't ask. Group 40.1: the slot picker's placement model reads the spool
+    list once through this and says "couldn't read Spoolman" rather than show
+    every slot empty."""
+    sm_url, _ = config_loader.get_api_urls()
+    q = "?allow_archived=true" if allow_archived else ""
+    resp = requests.get(f"{sm_url}/api/v1/spool{q}", timeout=5)
+    resp.raise_for_status()  # raise on 4xx/5xx so the caller can fail closed
+    return parse_inbound_data(resp.json())
+
+
 def get_all_locations():
     """Fetches all locations from Spoolman."""
     sm_url, _ = config_loader.get_api_urls()

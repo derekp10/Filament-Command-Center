@@ -65,6 +65,10 @@ def mock_locations():
             {'LocationID': 'PRINTER-1', 'Type': 'Tool Head'},
             {'LocationID': 'CORE1-M4', 'Type': 'MMU Slot'}
         ]
+        # The whole module is a MagicMock, so every call answers a truthy mock.
+        # Group 40.0a's step-2 refusal asks this classifier first; none of these
+        # targets is a Printer row (a real answer, not a stub of the behaviour).
+        mock_db.is_printer_row_not_head.return_value = False
         yield mock_db
 
 @pytest.fixture

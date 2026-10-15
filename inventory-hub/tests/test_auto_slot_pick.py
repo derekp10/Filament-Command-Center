@@ -10,7 +10,9 @@ Tests mock the Spoolman / filabridge / state helpers so they run on the host
 without needing a live container. The spec:
 
   - If Max Spools > 1 AND target_slot is omitted AND at least one slot is free,
-    pick the lowest free slot.
+    pick a slot by the slot picker's rule (Group 40.0e, logic.recommend_box_slot):
+    the spool's own slot when it already sits in the box, else the lowest free
+    slot that loads no busy toolhead, else the lowest free slot.
   - If every slot is occupied, leave target_slot as None (caller's explicit
     slot-less move stays unchanged — no surprise unseat).
   - If the target is single-occupancy (toolhead, MMU slot, etc.) or flat
@@ -34,6 +36,13 @@ FAKE_LOCATIONS = [
     {"LocationID": "CORE1-M0", "Type": "Tool Head", "Max Spools": "1", "Name": "M0"},
     {"LocationID": "CR", "Type": "Room", "Max Spools": "0", "Name": "Computer Room"},
 ]
+
+
+def _held(sid, slot):
+    """A box item in the shape spoolman_api._build_location_match gives it (Group
+    40.0e reads `location` / `is_ghost`, so a bare {id, slot} could pass for
+    the wrong reason)."""
+    return {"id": sid, "slot": slot, "location": "LR-MDB-1", "is_ghost": False}
 
 
 def _capture_update_spool_calls():
@@ -107,10 +116,7 @@ def test_auto_slot_pick_skips_occupied_slots():
     """Slots 1 and 2 are taken → auto-pick slot 3."""
     _, calls = _run_move(
         "LR-MDB-1",
-        existing_at_target=[
-            {"id": 101, "slot": "1"},
-            {"id": 102, "slot": "2"},
-        ],
+        existing_at_target=[_held(101, "1"), _held(102, "2")],
     )
     _, payload = calls[0]
     assert payload["extra"].get("container_slot") == "3"
@@ -120,34 +126,44 @@ def test_auto_slot_pick_handles_noncontiguous_occupied_slots():
     """Only slot 2 is taken → slot 1 is still the lowest free."""
     _, calls = _run_move(
         "LR-MDB-1",
-        existing_at_target=[{"id": 101, "slot": "2"}],
+        existing_at_target=[_held(101, "2")],
     )
     _, payload = calls[0]
     assert payload["extra"].get("container_slot") == "1"
 
 
-def test_auto_slot_pick_ignores_own_slot_for_reassigns():
-    """If the moving spool is already in slot 3 of the target, its own slot
-    doesn't count as occupied — it gets re-picked (lowest free)."""
+def test_auto_slot_pick_keeps_a_spools_own_slot_in_the_same_box():
+    """The moving spool already sits in slot 3 of the target: it keeps slot 3.
+    Group 40.0e (the slot picker's rule 1, Derek's D2.1): it used to hop to the
+    lowest free slot, which can feed a different toolhead. Slots 1 and 2 are
+    free here. (This test was test_auto_slot_pick_ignores_own_slot_for_reassigns,
+    whose fake item had no `location`, as a real box listing always does.)"""
     _, calls = _run_move(
         "LR-MDB-1",
-        existing_at_target=[{"id": 42, "slot": "3"}],  # the spool we're moving
+        existing_at_target=[{"id": 42, "slot": "3", "location": "LR-MDB-1", "is_ghost": False}],
     )
     _, payload = calls[0]
-    # Slot 1 is free (spool 42's current slot 3 is excluded from the occupied set).
-    assert payload["extra"].get("container_slot") == "1"
+    assert payload["extra"].get("container_slot") == "3"
+
+
+def test_auto_slot_pick_puts_a_deployed_spool_back_in_its_own_slot():
+    """A spool deployed FROM slot 3 is listed in the box as a ghost of slot 3, and
+    physically still sits in slot 3, so a slotless move into the box puts it back
+    there (Group 40 review; it used to take the lowest free slot, which loaded
+    another head)."""
+    _, calls = _run_move(
+        "LR-MDB-1",
+        existing_at_target=[{"id": 42, "slot": "3", "location": "LR-MDB-1", "is_ghost": True}],
+    )
+    _, payload = calls[0]
+    assert payload["extra"].get("container_slot") == "3"
 
 
 def test_auto_slot_pick_leaves_slot_empty_when_box_is_full():
     """All 4 slots occupied → leave target_slot as None (caller meant staging)."""
     _, calls = _run_move(
         "LR-MDB-1",
-        existing_at_target=[
-            {"id": 101, "slot": "1"},
-            {"id": 102, "slot": "2"},
-            {"id": 103, "slot": "3"},
-            {"id": 104, "slot": "4"},
-        ],
+        existing_at_target=[_held(101, "1"), _held(102, "2"), _held(103, "3"), _held(104, "4")],
     )
     _, payload = calls[0]
     # When no free slot is found, target_slot stays None, which the downstream

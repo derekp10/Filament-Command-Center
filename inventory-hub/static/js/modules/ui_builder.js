@@ -154,9 +154,12 @@ const SpoolCardBuilder = {
                     </div>`;
                 
                 // For deployed items, we swap out the bottom action row completely for a thick RETURN button overlay.
+                // Group 40.3 (the 40.6-E fallback): RETURN puts the spool back in
+                // its slot and leaves the head alone (autoDeploy false); it used to
+                // load it straight back onto the head it was deployed to.
                 row4FooterHTML = `
                     <div class="d-flex justify-content-center mt-3 pt-3 border-top border-secondary">
-                        <div class="action-badge" style="flex: 0 0 auto; height: fit-content; width: auto; margin: auto;" onclick="event.stopPropagation(); doAssign('${locId}', ${item.id}, '${item.slot || ''}')">
+                        <div class="action-badge" style="flex: 0 0 auto; height: fit-content; width: auto; margin: auto;" onclick="event.stopPropagation(); doAssign('${locId}', ${item.id}, '${item.slot || ''}', null, { autoDeploy: false })">
                             <div class="badge-btn-gold btn-pick-bg px-4 fcc-btn-return" style="font-size: 1.2rem; border-radius: 6px;">↩️ RETURN SPOOL</div>
                         </div>
                     </div>`;
@@ -211,7 +214,7 @@ const SpoolCardBuilder = {
                         </div>
                         
                         <div class="d-flex justify-content-around gap-1 mt-2 w-100 pt-2 border-top" style="border-color: rgba(255,255,255,0.2) !important;">
-                            <div class="fcc-card-action-btn js-btn-pick" onclick="event.stopPropagation(); doAssign('${locId}', ${item.id}, ${options.slotNum})" title="Return Spool">↩️</div>
+                            <div class="fcc-card-action-btn js-btn-pick" onclick="event.stopPropagation(); doAssign('${locId}', ${item.id}, ${options.slotNum}, null, { autoDeploy: false })" title="Return Spool (back into this slot; the toolhead is left alone)">↩️</div>
                             <div class="fcc-card-action-btn" onclick="event.stopPropagation(); openSpoolDetails(${item.id})" title="View Details">🔍</div>
                             <div class="fcc-card-action-btn" onclick="event.stopPropagation(); typeof openEditWizard !== 'undefined' && openEditWizard(${item.id});" title="Edit Spool">✏️</div>
                             <div class="fcc-card-action-btn" onclick="${printHoverClick}" title="Add to Print Queue">🖨️</div>
@@ -291,6 +294,37 @@ const SpoolCardBuilder = {
                     ${matLine}
                 </div>
             `;
+        }
+        else if (mode === 'picker') {
+            // Group 40.1 — the slot picker's spool block. Passive: the picker's
+            // tile owns the click, the keys and the scan, so there are no action
+            // buttons here. The grid's colour frame and its three lines, so a
+            // spool looks the same in the picker as in the box it sits in. Text
+            // from Spoolman is escaped (a colour name is free text).
+            const esc = window.escHtml || ((s) => String(s == null ? '' : s));
+            const swatch = window.makeSwatchHtml
+                ? window.makeSwatchHtml(item.color, item.color_direction, { size: 14 }) : '';
+            const weightStr = (item.remaining_weight !== undefined && item.remaining_weight !== null)
+                ? `${Math.round(item.remaining_weight)}g` : '';
+            const name = info.line3 || (item.display || '').replace(/^#\d+\s*/, '');
+            const deployed = item.is_ghost
+                ? `<div class="fcc-sp-deployed" style="font-size:0.78rem; font-weight:800; color:#111; background:#ffc107; border-radius:3px; padding:0 4px; display:inline-block; margin-top:3px;">DEPLOYED → ${esc(item.deployed_to || '?')}</div>`
+                : '';
+            const inner = `background: linear-gradient(to bottom, rgba(30,30,30,0.95) 0%, rgba(5,5,5,0.25) 100%), ${styles.frame}; border-radius:5px; padding:5px 7px;`;
+            return `
+                <div class="fcc-sp-spool-card" data-spool-id="${esc(item.id)}" style="background:${styles.frame}; border-radius:6px; padding:1px; text-align:left;">
+                    <div style="${inner}">
+                        <div class="d-flex justify-content-between align-items-center" style="font-size:0.8rem; color:#ddd;">
+                            <span class="fw-bold">#${esc(item.id)}</span>
+                            <span class="fw-bold">${weightStr ? '⚖️ ' + esc(weightStr) : ''}</span>
+                        </div>
+                        <div class="d-flex align-items-center gap-1" style="font-size:0.92rem; color:#fff;">
+                            ${swatch}<span class="fw-bold text-truncate" style="max-width:150px;">${esc(name)}</span>
+                        </div>
+                        <div style="font-size:0.78rem; color:#ddd; opacity:0.9;">${esc(info.line2)}</div>
+                        ${deployed}
+                    </div>
+                </div>`;
         }
         else if (mode === 'quickswap') {
             // Quick-Swap variant — compact card for the dryer-box → toolhead

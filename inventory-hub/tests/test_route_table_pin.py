@@ -70,6 +70,7 @@ EXPECTED_ROUTES = [
     ("/api/machine/<path:printer_name>/toolhead_slots", "GET", "api_machine_toolhead_slots"),
     ("/api/manage_contents", "POST", "api_manage_contents"),
     ("/api/materials", "GET", "api_materials"),
+    ("/api/placement_options", "GET", "api_placement_options"),  # Group 40.1 slot picker model
     ("/api/print_batch_csv", "POST", "api_print_batch_csv"),
     ("/api/print_label", "POST", "api_print_label"),
     ("/api/print_location_label", "POST", "api_print_location_label"),

@@ -475,9 +475,20 @@ def api_manage_contents():
         result = logic.perform_smart_move(
             loc_id, [spool_id],
             target_slot=slot_arg, origin=origin,
+            # Group 40.0c: "Just store it" sends auto_deploy false, and the heads
+            # whose "already running another spool" warning the user saw.
+            auto_deploy=logic.auto_deploy_requested(data),
             confirm_active_print=logic.confirmed_heads(data),
+            confirmed_fed_heads=logic.confirmed_fed_heads_from(data),
+            # Group 40.0e: the slot an earlier answer picked, kept only while free.
+            picked_slot=data.get('picked_slot'),
+            # Group 40.3: the feed the question named; a re-pointed slot asks again.
+            expected_feed=logic.expected_feed_from(data),
+            # Group 40.3 review: heads the page saw printing still count when the
+            # move's own probe can't reach their printer.
+            seen_printing=logic.seen_printing_from(data),
         )
-        stale = logic.stale_confirm_refusal(data, result)
+        stale = logic.stale_fed_refusal(data, result) or logic.stale_confirm_refusal(data, result)
         if stale:
             return jsonify({"status": "error", "msg": stale, "stale_page": True})
         return jsonify(result)
@@ -1355,13 +1366,24 @@ def api_identify_scan():
         # printer went active between the probe and the scan, we still bail.
         move_result = logic.perform_smart_move(
             target, [spool_id], target_slot=slot, origin='slot_qr_scan',
+            # Group 40.0c: "Just store it" replays the scan with auto_deploy
+            # false, and "Load it instead" with the head in confirmed_fed_heads.
+            auto_deploy=logic.auto_deploy_requested(request.json),
             confirm_active_print=logic.confirmed_heads(request.json),
+            confirmed_fed_heads=logic.confirmed_fed_heads_from(request.json),
+            # Group 40.3: the feed the question named (a replay, or a deposit tile
+            # that showed it); a blind scan sends none, so it never asks this.
+            expected_feed=logic.expected_feed_from(request.json),
+            # Group 40.3 review: a deposit that saw the printer printing leaves the
+            # question to this move, so a probe failing open still asks.
+            seen_printing=logic.seen_printing_from(request.json),
         )
         # If perform_smart_move bailed on an active-print check, surface the
         # confirmation prompt to the client. Frontend slot-QR path (scan
         # handler) renders this as a modal and retries on confirm, sending
         # back the heads in `active_prints`.
-        stale = logic.stale_confirm_refusal(request.json, move_result)
+        stale = (logic.stale_fed_refusal(request.json, move_result)
+                 or logic.stale_confirm_refusal(request.json, move_result))
         if stale:
             return jsonify({
                 "type": "assignment",
@@ -1375,17 +1397,24 @@ def api_identify_scan():
             state.add_log_entry(
                 f"⚠️ Spool #{spool_id} → <b>{target}:SLOT:{slot}</b> waits for a confirm: "
                 f"{move_result.get('msg')}", "WARNING", "ffaa00")
-            return jsonify({
+            # Every key of the engine's question (Group 40.3): a fixed list here
+            # silently dropped what a replay needs (`feed`, `slot_picked`,
+            # `target`, `can_load`, `feed_changed`) on Derek's own door. The
+            # door's own keys (where the scan pointed, the spool it named) win.
+            answer = {k: v for k, v in move_result.items() if k != 'status'}
+            answer.update({
                 "type": "assignment",
                 "action": "assignment_requires_confirm",
                 "location": target, "slot": slot,
-                "confirm_type": move_result.get('confirm_type'),
-                "active_print": move_result.get('active_print'),
                 "active_prints": move_result.get('active_prints') or [],
-                "target_slot": move_result.get('target_slot'),
-                "msg": move_result.get('msg'),
+                # Group 40.0c: the head that runs a spool from elsewhere, and
+                # whether "Just store it" is an answer.
+                "fed_heads": move_result.get('fed_heads') or [],
+                "can_store": bool(move_result.get('can_store')),
+                "spools": move_result.get('spools') or [spool_id],
                 "moved": spool_id,
-            }), 200
+            })
+            return jsonify(answer), 200
         # 2026-09-12: a rejected write used to fall through to the success path
         # below, which logged "✅", dropped the spool from the buffer and
         # answered assignment_done although the spool never moved.

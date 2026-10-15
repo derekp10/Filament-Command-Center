@@ -348,30 +348,62 @@ def _deposit(page: Page) -> None:
 # (a) The deposit tells the backend whether an active-print banner was confirmed
 # ---------------------------------------------------------------------------
 
+PRINTING_STORE_Q = _assignment(
+    "assignment_requires_confirm", confirm_type="active_print", can_store=True, target_slot=None,
+    active_print={"printer_name": PRINTER, "state": "PRINTING", "toolhead": TH},
+    active_prints=[{"toolhead": TH, "printer_name": PRINTER, "state": "PRINTING", "role": "feeds",
+                    "spools": [SPOOL["id"]]}],
+    fed_heads=[], spools=[SPOOL["id"]], moved=SPOOL["id"],
+    title=f"Load #{SPOOL['id']} onto {TH}?",
+    body=f"{PRINTER} is PRINTING. {BOX} slot {SLOT} feeds {TH}, so this also loads #{SPOOL['id']} onto {TH}.",
+    msg=f"{PRINTER} is PRINTING. {BOX} slot {SLOT} feeds {TH}, so this also loads #{SPOOL['id']} onto {TH}. Continue?")
+
+
 @pytest.mark.usefixtures("require_server")
-@pytest.mark.parametrize("how", ["click", "enter", "qr"])
-def test_deposit_confirmed_over_a_printing_banner_sends_its_head(
+@pytest.mark.parametrize("how", ["click_load", "enter_stores", "qr_load"])
+def test_a_deposit_while_printing_is_one_question_the_three_way(
         page: Page, base_url: str, reset_dom_state_js: str, how: str):
-    """The overlay showed "<printer> is PRINTING" and the user confirmed it, by
-    click, by Enter on the focused Yes (R2-01), or by scanning the overlay's
-    CMD:CONFIRM:<sid> QR. FAILS on HEAD for all three: HEAD's deposit sent no
-    confirm at all, so the backend asked again every time. Group 39.1: the
-    confirm names the head the banner was for (`confirmed_toolheads`)."""
-    be = FakeBackend(page, printer_active=True, identify=lambda b: DONE)
+    """Group 40.3, Derek (2026-10-14): one dialog. While the slot's head's
+    printer prints, FCC asks anyway, so the deposit's own confirm is skipped and
+    the server's three-way is the question. Load it instead (click, or its
+    CMD:CONFIRM QR) confirms the head the question named; Enter stores (Derek: a
+    toolhead isn't loaded mid-print) and confirms no head it doesn't load.
+    Replaces the Group 39 test of the deposit's own PRINTING banner, which the
+    deposit no longer shows (the server's question carries the print).
+    FAILS on HEAD: HEAD opened the deposit's own banner confirm first, and its
+    re-ask had no store."""
+    be = FakeBackend(page, printer_active=True, identify=lambda b: (
+        DONE if (b.get("confirmed_toolheads") or b.get("auto_deploy") is False) else PRINTING_STORE_Q))
     _boot(page, base_url, reset_dom_state_js)
     _seed_buffer(page, be, [SPOOL])
     _deposit(page)
-    ov = _wait_overlay(page, "the deposit confirm never opened with the PRINTING banner", banner=True)
-    assert f"{PRINTER} is PRINTING" in ov["body"], ov
+    page.wait_for_selector("#fcc-active-print-confirm-overlay .fcc-apc-store", state="visible", timeout=8_000)
+    assert page.locator("#fcc-quickswap-confirm-overlay").count() == 0, "two dialogs for one deposit"
+    assert page.text_content("#fcc-active-print-confirm-overlay .fcc-apc-store").strip() \
+        == f"Just store it in {BOX} slot {SLOT}"
+    first = be.bodies("/api/identify_scan")[0]
+    assert (first["confirmed_toolheads"], first["confirmed_fed_heads"], first["spool_id"], first["expected_feed"]) \
+        == ([], [], SPOOL["id"], TH), first
 
-    _confirm_overlay(page, how, ov)
-    _until(page, lambda: be.bodies("/api/identify_scan"), 5_000, f"confirming the deposit via {how} sent nothing")
-    body = be.bodies("/api/identify_scan")[0]
-    assert body["text"] == f"LOC:{BOX}:SLOT:{SLOT}" and body["source"] == "quickswap_deposit", body
-    assert body.get("confirmed_toolheads") == [TH], (
-        f"a deposit confirmed via {how} over the PRINTING banner did not tell the backend: {body}")
-    assert "confirm_active_print" not in body, body
-    _until(page, lambda: _held(page) == [], 5_000, "the confirmed deposit did not leave the buffer")
+    if how == "click_load":
+        page.click("#fcc-active-print-confirm-overlay .fcc-apc-yes")
+    elif how == "enter_stores":
+        page.wait_for_function("() => document.activeElement && document.activeElement.classList.contains('fcc-apc-store')",
+                               timeout=3_000)
+        page.keyboard.press("Enter")
+    else:
+        sid = page.evaluate("() => document.querySelector('#fcc-active-print-confirm-overlay .fcc-confirm-qr-row')"
+                            ".id.replace(/-row$/, '')")
+        page.evaluate("(t) => processScan(t, 'barcode')", f"CMD:CONFIRM:{sid}")
+    _until(page, lambda: len(be.bodies("/api/identify_scan")) >= 2, 5_000, f"{how} sent no replay")
+    replay = be.bodies("/api/identify_scan")[1]
+    if how == "enter_stores":
+        assert replay["auto_deploy"] is False and replay["confirmed_toolheads"] == [], replay
+    else:
+        assert replay["confirmed_toolheads"] == [TH] and "auto_deploy" not in replay, replay
+    assert replay["spool_id"] == SPOOL["id"] and replay["expected_feed"] == TH, replay
+    assert be.probes == [TH], f"one probe decides the dialog: {be.probes}"
+    _until(page, lambda: _held(page) == [], 5_000, "the answered deposit did not leave the buffer")
 
 
 @pytest.mark.usefixtures("require_server")
@@ -533,6 +565,51 @@ def test_context_assign_with_failures_drops_only_the_moved_spools(
 
 
 @pytest.mark.usefixtures("require_server")
+def test_context_assign_yes_names_the_slot_and_the_spool_it_asked_about(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """Group 40.0e: a slotless move into a multi-slot box is given its slot before
+    the question, and the answer carries it (`target_slot`). The Yes sends that
+    slot back as `picked_slot` (the server keeps it only while it is still free,
+    so it never unseats anyone), and names the spool the question was about: a
+    spool scanned into the buffer while the dialog is open stays in the buffer.
+    FAILS on HEAD: the replay sent no slot and re-read the live buffer (both
+    spools).
+    Group 40.3: a printing answer that can store is the three-way (the engine
+    sends its title and body for a slot that loads a head); Load it instead
+    keeps the Yes button's id, and the replay also says what it confirmed and
+    which feed it was about."""
+    ask = {"status": "requires_confirm", "confirm_type": "active_print",
+           "active_print": {"toolhead": TH, "printer_name": PRINTER, "state": "PRINTING"},
+           "active_prints": [{"toolhead": TH, "printer_name": PRINTER, "state": "PRINTING",
+                              "role": "feeds", "spools": [999211]}],
+           "fed_heads": [], "can_store": True, "target_slot": SLOT,
+           "title": f"Load #999211 onto {TH}?",
+           "body": f"{PRINTER} is PRINTING. {BOX} slot {SLOT} feeds {TH}, so this also loads #999211 "
+                   f"onto {TH} and unloads what {TH} holds.",
+           "msg": f"{PRINTER} is PRINTING. {BOX} slot {SLOT} feeds {TH}, so this also loads #999211 "
+                  f"onto {TH} and unloads what {TH} holds. Continue?"}
+    be = FakeBackend(page, smart_move=lambda b: (
+        {"status": "success", "failures": {}} if b.get("confirmed_toolheads") else ask))
+    _boot(page, base_url, reset_dom_state_js)
+    _seed_buffer(page, be, [{"id": 999211, "display": "FCC Test #999211", "color": "00ff00"}])
+
+    page.evaluate("(tid) => performContextAssign(tid, null, [], null)", BOX)
+    page.wait_for_selector("#fcc-active-print-scan-overlay #fcc-aps-yes", state="visible", timeout=5_000)
+    assert be.bodies("/api/smart_move")[0]["slot"] is None, be.bodies("/api/smart_move")
+    page.evaluate("() => { state.heldSpools.push({id: 999212, display: 'FCC Test #999212', color: '0000ff'});"
+                  " renderBuffer(); }")
+    page.click("#fcc-active-print-scan-overlay #fcc-aps-yes")
+    _until(page, lambda: len(be.bodies("/api/smart_move")) >= 2, 5_000, "Yes sent no retry")
+    replay = be.bodies("/api/smart_move")[1]
+    assert replay["picked_slot"] == SLOT and replay["slot"] is None, replay
+    assert replay["spools"] == [999211], replay
+    assert replay["confirmed_toolheads"] == [TH], replay
+    assert replay["confirmed_fed_heads"] == [] and replay["expected_feed"] == TH, replay
+    assert "auto_deploy" not in replay, replay
+    _until(page, lambda: _held(page) == [999212], 5_000, "the late spool should stay in the buffer")
+
+
+@pytest.mark.usefixtures("require_server")
 def test_slot_assign_with_a_failure_leaves_the_buffer_untouched(
         page: Page, base_url: str, reset_dom_state_js: str):
     """doAssign -> _doAssignFinalize (a non-toolhead target, so no probe) with
@@ -572,9 +649,11 @@ def test_force_location_override_with_a_failure_shows_the_error(
     page.wait_for_selector(item, state="attached", timeout=10_000)
     page.dispatch_event(item, "dblclick")
     _until(page, lambda: be.bodies("/api/manage_contents"), 5_000, "the override sent nothing")
+    # Group 40.3: every door request carries confirmed_fed_heads (one without it
+    # gets the stale-page refusal instead of the head_fed question).
     assert be.bodies("/api/manage_contents")[0] == {
         "action": "add", "location": BOX, "spool_id": 999401, "origin": "manual_override",
-        "confirmed_toolheads": []}
+        "confirmed_toolheads": [], "confirmed_fed_heads": []}
 
     err = _toast(page, "a failed override raised no error toast", type_="error", contains=("#999401", REJECT))
     assert err["duration"] and err["duration"] >= 7000, err
@@ -611,6 +690,36 @@ def test_force_location_asks_on_an_active_print_then_moves_with_the_head(
     page.click("#fcc-active-print-confirm-overlay .fcc-apc-yes")
     _until(page, lambda: len(be.bodies("/api/manage_contents")) >= 2, 5_000, "Yes sent no retry")
     assert be.bodies("/api/manage_contents")[1]["confirmed_toolheads"] == [TH], be.bodies("/api/manage_contents")
+    _toast(page, "the confirmed override raised no success toast", type_="success",
+           contains=("Location updated via override",))
+
+
+@pytest.mark.usefixtures("require_server")
+def test_force_location_yes_lands_in_the_slot_the_engine_picked(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """Group 40.0e: Force Location into a multi-slot box sends no slot; the engine
+    picks one before it asks and names it (`target_slot`). The Yes sends it back
+    as `picked_slot`, so it lands where the question said (or, if someone took
+    that slot meanwhile, nothing moves). FAILS on HEAD: the retry sent no slot,
+    so the engine could pick another one."""
+    ask = {"status": "requires_confirm", "confirm_type": "active_print",
+           "active_print": {"toolhead": TH, "printer_name": PRINTER, "state": "PRINTING"},
+           "active_prints": [{"toolhead": TH, "printer_name": PRINTER, "state": "PRINTING",
+                              "role": "feeds", "spools": [999401]}],
+           "fed_heads": [], "can_store": True, "target_slot": SLOT,
+           "msg": f"{PRINTER} is PRINTING. {BOX} slot {SLOT} feeds {TH}, so this also loads #999401 "
+                  f"onto {TH} and unloads what {TH} holds. Continue?"}
+    be = FakeBackend(page, manage_contents=lambda b: (
+        {"status": "success"} if b.get("confirmed_toolheads") else ask), extra_locations=[BOX_ROW])
+    _boot(page, base_url, reset_dom_state_js)
+    _force_to_box(page)
+    page.wait_for_selector("#fcc-active-print-confirm-overlay .fcc-apc-yes", state="visible", timeout=5_000)
+    page.click("#fcc-active-print-confirm-overlay .fcc-apc-yes")
+    _until(page, lambda: len(be.bodies("/api/manage_contents")) >= 2, 5_000, "Yes sent no retry")
+    first, retry = be.bodies("/api/manage_contents")[:2]
+    assert "slot" not in first and "picked_slot" not in first, first
+    assert retry["picked_slot"] == SLOT and "slot" not in retry, retry
+    assert retry["confirmed_toolheads"] == [TH], retry
     _toast(page, "the confirmed override raised no success toast", type_="success",
            contains=("Location updated via override",))
 

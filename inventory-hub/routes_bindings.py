@@ -30,6 +30,7 @@ import locations_db  # type: ignore
 import spoolman_api  # type: ignore
 import logic  # type: ignore
 import prusalink_api  # type: ignore
+import placement  # type: ignore
 
 from app_core import app
 
@@ -562,6 +563,23 @@ def api_all_dryer_box_slots():
     # Sort: unbound first (so the picker can promote quickly), then by box id.
     out.sort(key=lambda e: (e['target'] is not None, e['box'], int(e['slot'])))
     return jsonify({"slots": out})
+
+
+@app.route('/api/placement_options', methods=['GET'])
+def api_placement_options():
+    """Group 40.1 — what the slot picker shows for a place: a multi-slot box's
+    slots (spool, the toolhead each feeds and what it runs now, the ⭐), a
+    Printer row's heads and Printer Pool slots, or (mode=return) the box a
+    head's spool goes back to. Read-only: one strict Spoolman read, no printer
+    probe (the picker asks each printer itself). Query: location (required),
+    spool, toolhead, mode ('return'; box / printer come from the row).
+    `read_ok: false` (200) when Spoolman can't be read; 404 for an unknown
+    location; 400 for a place no picker opens on."""
+    args = request.args
+    model, status = placement.build_placement_options(
+        args.get('location', ''), spool=args.get('spool'),
+        toolhead=args.get('toolhead'), mode=args.get('mode'))
+    return jsonify(model), status
 
 
 @app.route('/api/dryer_box/<loc_id>/bindings/<slot>', methods=['PUT'])

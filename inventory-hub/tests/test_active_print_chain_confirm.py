@@ -166,7 +166,10 @@ def test_confirmed_box_move_deploys_onto_the_printing_bound_toolhead():
 def test_autodeploy_refused_by_smart_load_is_not_reported_as_deployed():
     """The chained deploy is refused: XL-3's resident can't go home (Spoolman
     rejects the write). The box placement stands, but neither the result nor
-    the Activity Log may claim a deploy, and the reason must be reported."""
+    the Activity Log may claim a deploy, and the reason must be reported.
+
+    #99 runs from LR-MDB-2, not from slot 3, so since Group 40.0c the move asks
+    first; the user has said "Load it instead" (confirmed_fed_heads)."""
     sm = FakeSpoolman({
         240: {"location": "CR", "extra": {}},
         99: {"location": "XL-3",
@@ -174,7 +177,8 @@ def test_autodeploy_refused_by_smart_load_is_not_reported_as_deployed():
     }, reject_locations={"LR-MDB-2"})
 
     result = _run(sm, probe=IDLE,
-                  target="LR-MDB-1", raw_spools=[240], target_slot="3", origin="test")
+                  target="LR-MDB-1", raw_spools=[240], target_slot="3", origin="test",
+                  confirmed_fed_heads=["XL-3"])
 
     assert sm.spools[240]["location"] == "LR-MDB-1", sm.writes
     assert sm.direct_at("XL-3") == [99], sm.writes
@@ -215,11 +219,15 @@ def test_autodeploy_skips_a_spool_whose_box_write_was_rejected():
     assert "240" in result["failures"], result
 
 
-def test_confirm_does_not_cover_the_head_of_an_auto_picked_slot():
-    """No slot named: auto-slot picks slot 1, which feeds the PRINTING XL-3. The
-    caller's confirm was never about XL-3 (the pre-flight probes only a named
-    slot's toolhead), so the chain must not use it to unload #99 mid-print. The
-    box placement stands and the skip is reported."""
+def test_auto_slot_passes_over_a_slot_whose_head_runs_another_spool():
+    """No slot named; slot 1 feeds the PRINTING XL-3, which runs #99 from LR-MDB-2.
+    Auto-slot used to take slot 1 AFTER the pre-flight, so the caller's confirm
+    was never about XL-3 and the chain skipped the deploy with a warning
+    (this test was test_confirm_does_not_cover_the_head_of_an_auto_picked_slot).
+    Group 40.0e picks before anything is asked, by the slot picker's rule: slot 2
+    is unbound and loads no busy head, so #240 is stored there and XL-3 is never
+    touched. (A pick that does feed a busy head is asked about, with
+    `target_slot`: test_auto_slot_before_preflight_40_0e.py.)"""
     sm = FakeSpoolman({
         240: {"location": "CR", "extra": {}},
         99: {"location": "XL-3",
@@ -231,10 +239,9 @@ def test_confirm_does_not_cover_the_head_of_an_auto_picked_slot():
                   confirm_active_print=True)
 
     assert sm.spools[240]["location"] == "LR-MDB-1", sm.writes
-    assert (sm.spools[240].get("extra") or {}).get("container_slot") == "1", sm.spools[240]
+    assert (sm.spools[240].get("extra") or {}).get("container_slot") == "2", sm.spools[240]
     assert sm.direct_at("XL-3") == [99], sm.writes
-    assert "auto_deployed_to" not in result, result
-    assert "PRINTING" in (result.get("auto_deploy_skipped") or {}).get("240", ""), result
+    assert "auto_deployed_to" not in result and "auto_deploy_skipped" not in result, result
 
 
 def test_several_spools_into_one_bound_slot_deploy_only_the_last():
@@ -697,7 +704,8 @@ def test_undo_after_the_head_was_reloaded_does_not_double_it_up():
 def test_undo_of_an_autodeploy_is_one_step_and_restores_the_resident():
     """A box-slot assign that auto-deploys onto XL-3, unloading #99 there, is one
     user action. It used to push two undo records (the first undo only pulled
-    the spool back into the box), and neither put #99 back."""
+    the spool back into the box), and neither put #99 back. (#99 runs from
+    LR-MDB-2, so since Group 40.0c the load is confirmed: confirmed_fed_heads.)"""
     sm = FakeSpoolman({
         240: {"location": "CR", "extra": {}},
         99: {"location": "XL-3",
@@ -705,7 +713,8 @@ def test_undo_of_an_autodeploy_is_one_step_and_restores_the_resident():
     })
 
     result = _run(sm, probe=IDLE,
-                  target="LR-MDB-1", raw_spools=[240], target_slot="3", origin="test")
+                  target="LR-MDB-1", raw_spools=[240], target_slot="3", origin="test",
+                  confirmed_fed_heads=["XL-3"])
     assert result.get("auto_deployed_to") == "XL-3", result
     assert sm.spools[99]["location"] == "LR-MDB-2", sm.writes
     assert len(state.UNDO_STACK) == 1, state.UNDO_STACK
@@ -887,7 +896,8 @@ def test_slot_qr_assign_reports_a_rejected_load_and_keeps_the_buffer(client):
 def test_slot_qr_assign_says_why_the_spool_was_not_deployed(client):
     """The spool is loaded into the box slot, but the chain can't deploy it
     (XL-3's resident can't go home). The response must not imply a deploy and
-    must carry the reason for the toast."""
+    must carry the reason for the toast. (#99 runs from LR-MDB-2, so the scan is
+    the "Load it instead" replay of Group 40.0c's question.)"""
     state.GLOBAL_BUFFER = [{"id": 240, "display": "#240"}]
     sm = FakeSpoolman({
         240: {"location": "CR", "extra": {}},
@@ -896,7 +906,8 @@ def test_slot_qr_assign_says_why_the_spool_was_not_deployed(client):
     }, reject_locations={"LR-MDB-2"})
 
     r = _run(sm, probe=IDLE, call=lambda: client.post(
-        "/api/identify_scan", json={"text": "LOC:LR-MDB-1:SLOT:3", "source": "barcode"}))
+        "/api/identify_scan", json={"text": "LOC:LR-MDB-1:SLOT:3", "source": "barcode",
+                                    "confirmed_fed_heads": ["XL-3#99"]}))  # a page sends confirm keys (Group 40 review)
 
     body = r.get_json()
     assert body["action"] == "assignment_done", body

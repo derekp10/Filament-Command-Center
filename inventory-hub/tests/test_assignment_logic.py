@@ -91,7 +91,13 @@ def test_assignment_happy_path_moves_spool_and_clears_buffer(client, fake_locati
     assert body["slot"] == "2"
     assert body["moved"] == 42
     assert body["remaining_buffer"] == 0
-    mv.assert_called_once_with("LR-MDB-1", [42], target_slot="2", origin="slot_qr_scan", confirm_active_print=[])
+    # Group 40.0c: the slot door also passes "Just store it" (auto_deploy) and the
+    # heads whose "already running another spool" warning the user saw.
+    # Group 40.3: and the feed a replay's question named (expected_feed); a scan
+    # with none passes None (no check), so a first scan never asks it.
+    mv.assert_called_once_with("LR-MDB-1", [42], target_slot="2", origin="slot_qr_scan",
+                               auto_deploy=True, confirm_active_print=[], confirmed_fed_heads=[],
+                               expected_feed=None, seen_printing=[])
     assert state.GLOBAL_BUFFER == []
     assert any("Spool #42" in e["msg"] for e in _last_log_entries())
 
@@ -224,7 +230,9 @@ def test_assignment_non_spool_items_in_buffer_are_skipped(client, fake_locations
     body = resp.get_json()
     assert body["action"] == "assignment_partial"
     assert body["moved"] == 99
-    mv.assert_called_once_with("LR-MDB-1", [99], target_slot="1", origin="slot_qr_scan", confirm_active_print=[])
+    mv.assert_called_once_with("LR-MDB-1", [99], target_slot="1", origin="slot_qr_scan",
+                               auto_deploy=True, confirm_active_print=[], confirmed_fed_heads=[],
+                               expected_feed=None, seen_printing=[])
     # Non-spool item stays.
     assert any(e.get("type") == "filament" for e in state.GLOBAL_BUFFER)
 

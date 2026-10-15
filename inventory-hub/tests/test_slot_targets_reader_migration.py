@@ -301,7 +301,7 @@ HERE = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 _DIRECT_READ = re.compile(r"""\.get\(\s*['"]extra['"]\s*\)\s*or\s*\{\}\s*\)\s*\.get\(\s*['"]slot_targets['"]""")
 
 
-@pytest.mark.parametrize("module", ["logic.py", "routes_bindings.py", "locations_db.py"])
+@pytest.mark.parametrize("module", ["logic.py", "routes_bindings.py", "locations_db.py", "placement.py"])
 def test_no_unguarded_slot_targets_read_remains(module):
     """`(row.get('extra') or {}).get('slot_targets')` raises on a non-dict
     `extra` — read through locations_db.bindings_from_row instead (or guard the
