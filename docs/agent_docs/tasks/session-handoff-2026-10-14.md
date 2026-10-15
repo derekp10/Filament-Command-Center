@@ -276,7 +276,7 @@ _Run finished at ~04:45 on 2026-10-14. Started from `dev` @ `4203ffe` (= `origin
 ### Group 40.2, day session (2026-10-15): the box-label picker, the picker follow-ups, the same-slot swap → buffer
 
 - **Where it is:** `feature/group-40-slot-picker` (pushed): `2a45ba5` (the same-slot swap → scan buffer), `f5f3ba2`
-  (40.2 + the picker follow-ups D1–D4), `6b59b1c` (the review's fixes). Merged to `dev` and pushed (the docs commit right after the merge names it); `main` is still held for you.
+  (40.2 + the picker follow-ups D1–D4), `6b59b1c` (the review's fixes). Merged to `dev` (`9b299d9`) and pushed; `main` is still held for you.
 - **What you get:**
   - **Your same-slot swap (S2):** the old spool comes off the head into your scan buffer ("✋ #99 → your buffer
     (taken off XL-3)"), Unassigned in Spoolman until you scan it somewhere or weigh it out; the box no longer reads
