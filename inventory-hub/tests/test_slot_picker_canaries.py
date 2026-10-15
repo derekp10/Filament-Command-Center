@@ -49,7 +49,7 @@ def test_process_scan_routes_to_the_picker_before_any_command():
     confirm = body.index("window.routeConfirmScan(text)")
     picker = body.index("window.routePickerScan(text)")
     first_cmd = body.index("if (upper === 'CMD:AUDIT')")
-    stale_guard = body.index("/^CMD:CONFIRM:.+/.test(upper)")
+    stale_guard = body.index("/^CMD:(CONFIRM|STORE):.+/.test(upper)")
     assert confirm < picker < stale_guard < first_cmd
 
 

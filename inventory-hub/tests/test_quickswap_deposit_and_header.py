@@ -7,6 +7,8 @@ Tests for Quick-Swap grid enhancements:
 """
 from __future__ import annotations
 
+import re
+
 import pytest
 import requests
 from playwright.sync_api import Page, expect
@@ -117,6 +119,21 @@ def test_deposit_confirm_overlay_names_the_spool_and_toolhead(page: Page, open_m
 
     # Group 45.8: the buffer this test fills is its own, never dev's shared one.
     conftest.own_the_buffer(page, [])
+    # Group 40.3 (Derek's one-dialog rule): a deposit onto a busy head (a spool
+    # on it, or its printer printing) skips this overlay and posts at once, so
+    # the server's three-way is the one question. This test reads the overlay of
+    # an idle, empty head: it says so (dev's real XL may be printing, or the head
+    # may run a spool from elsewhere), and no deposit can reach dev (the door is
+    # answered synthetically).
+    page.route(re.compile(r".*/api/printer_state/.*"), lambda route: route.fulfill(
+        status=200, content_type="application/json",
+        body='{"known": true, "is_active": false, "state": "IDLE", "printer_name": "XL"}'))
+    page.route(re.compile(r".*/api/get_contents\?id=" + re.escape(toolhead) + r"&strict=1$"),
+               lambda route: route.fulfill(status=200, content_type="application/json", body="[]"))
+    page.route(re.compile(r".*/api/identify_scan$"), lambda route: (
+        route.fulfill(status=200, content_type="application/json",
+                      body='{"type": "error", "msg": "stubbed by the test: no deposit reaches dev"}')
+        if route.request.method == "POST" else route.continue_()))
     open_manage_modal(toolhead)
     page.evaluate(f"""
         () => {{

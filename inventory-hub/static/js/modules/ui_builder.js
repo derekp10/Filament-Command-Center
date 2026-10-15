@@ -154,9 +154,12 @@ const SpoolCardBuilder = {
                     </div>`;
                 
                 // For deployed items, we swap out the bottom action row completely for a thick RETURN button overlay.
+                // Group 40.3 (the 40.6-E fallback): RETURN puts the spool back in
+                // its slot and leaves the head alone (autoDeploy false); it used to
+                // load it straight back onto the head it was deployed to.
                 row4FooterHTML = `
                     <div class="d-flex justify-content-center mt-3 pt-3 border-top border-secondary">
-                        <div class="action-badge" style="flex: 0 0 auto; height: fit-content; width: auto; margin: auto;" onclick="event.stopPropagation(); doAssign('${locId}', ${item.id}, '${item.slot || ''}')">
+                        <div class="action-badge" style="flex: 0 0 auto; height: fit-content; width: auto; margin: auto;" onclick="event.stopPropagation(); doAssign('${locId}', ${item.id}, '${item.slot || ''}', null, { autoDeploy: false })">
                             <div class="badge-btn-gold btn-pick-bg px-4 fcc-btn-return" style="font-size: 1.2rem; border-radius: 6px;">↩️ RETURN SPOOL</div>
                         </div>
                     </div>`;
@@ -211,7 +214,7 @@ const SpoolCardBuilder = {
                         </div>
                         
                         <div class="d-flex justify-content-around gap-1 mt-2 w-100 pt-2 border-top" style="border-color: rgba(255,255,255,0.2) !important;">
-                            <div class="fcc-card-action-btn js-btn-pick" onclick="event.stopPropagation(); doAssign('${locId}', ${item.id}, ${options.slotNum})" title="Return Spool">↩️</div>
+                            <div class="fcc-card-action-btn js-btn-pick" onclick="event.stopPropagation(); doAssign('${locId}', ${item.id}, ${options.slotNum}, null, { autoDeploy: false })" title="Return Spool (back into this slot; the toolhead is left alone)">↩️</div>
                             <div class="fcc-card-action-btn" onclick="event.stopPropagation(); openSpoolDetails(${item.id})" title="View Details">🔍</div>
                             <div class="fcc-card-action-btn" onclick="event.stopPropagation(); typeof openEditWizard !== 'undefined' && openEditWizard(${item.id});" title="Edit Spool">✏️</div>
                             <div class="fcc-card-action-btn" onclick="${printHoverClick}" title="Add to Print Queue">🖨️</div>
