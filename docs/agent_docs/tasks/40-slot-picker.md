@@ -479,7 +479,27 @@ can post a real deposit).
   `test_a_first_slot_scan_never_gets_a_feed_change`).
 - `routeConfirmScan` is on the scan hot path; its regex stays minimal and keeps the sid's case.
 - Not from 40.3: S2's swap sends the old spool back into the box unslotted (`engine:s2-swap-old-spool-unslotted`,
-  filed as a standalone buglist item).
+  filed as a standalone buglist item; Derek, 2026-10-15: it goes to the scan buffer).
+
+### Derek's answers (2026-10-15, morning) — the four calls made overnight
+
+All four kept as built (Derek reviewed them before starting 40.2):
+- **A store is asked again as a store** (no Load button). His context: re-pointing a slot means physically
+  re-routing its PTFE tube, so nobody should change a mapping before the tube moves; a re-point mid-question is a
+  multi-user edge case (someone else's setup), not his own flow.
+- **A print only on the head the spool leaves keeps the plain yes / no.** His context: a roll a print is
+  actively feeding isn't going anywhere, and moving it mid-print isn't something to do; these questions mostly
+  came from moving spools on dev while prod was printing on the same physical printers (dev reads the same
+  PrusaLink), or from data weirdness such as one label on two spools.
+- **A stale trail never blocks a load; a store over one is refused, saying how to clear it.** His point, for
+  40.7: a spool forced to a new location (the wizard's Location edit, Force Location) shouldn't still be flagged as
+  coming from its old slot: "historically, yes it was there", but a forced location is either a needed
+  correction or him not getting up to rescan. The engine's own moves already clear the trail (the dryer and
+  generic branches write it blank); the wizard's Location edit and `/api/spool/update` keep it (they strip
+  system-managed extras from the diff). 40.7 routes the wizard's edit through the engine, which fixes that door;
+  `/api/spool/update`'s location path needs the same (add it to 40.7).
+- **`seen_printing`** (a page that saw a print tells FCC) kept; not asked, a pure safety net.
+- And the standalone same-slot-swap item: the swapped-out spool goes to the **scan buffer** (buglist).
 
 ## 40.4 — Force Location into a multi-slot box or a Printer row (D2.4, D3.1)
 

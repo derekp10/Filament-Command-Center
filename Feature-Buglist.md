@@ -344,9 +344,11 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
   slot 3. You buffer a new spool #42 and scan `LOC:LR-MDB-1:SLOT:3`: #42 goes into slot 3 and onto XL-3, and #99 is
   sent home to LR-MDB-1, but slot 3 now belongs to #42, so FCC files #99 in LR-MDB-1 with no slot (the eject's
   slot-collision check in `logic.perform_smart_eject`). The box can read 5/4, and #99 gets no Quick-Swap tile.
-  **Question for Derek:** where does the swapped-out spool physically go? (a) the box's next free slot; (b) the scan
-  buffer, since it's in your hand right after the swap and your next scan files it; (c) unslotted in the box, as
-  today; (d) the printer's room. Recommendation: (b). Default if unanswered: (c), unchanged.
+  **Derek's answer (2026-10-15): the scan buffer.** He only swaps a slot's spool once it has run out (or when
+  the old one didn't zero out properly, or to fix a load he forgot to scan before a deduct lands), so the
+  swapped-out spool is in his hand and usually needs zeroing: in the buffer he can zero it or file it with the
+  next scan. Build: the chained Smart Load sends the slot's own outgoing spool to the buffer instead of back into
+  the box unslotted (decide its Spoolman location while building; the buffer is also where a weigh-out starts).
 
 ## 🎟️ Print Queue, Labels & Filament Usage
 *(No open items — resolved entries archived in `completed-archive.md`.)*
