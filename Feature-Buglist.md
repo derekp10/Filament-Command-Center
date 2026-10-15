@@ -20,14 +20,14 @@
   **The checks, with fixtures re-read 2026-10-08 so this is runnable cold:**
   | # | Check | Steps | Pass if |
   |---|---|---|---|
-  | 1 | Undo | `CR-CT-2-R3` (#156, #194) → `CR-TC-2-R1` (empty), commit, then `CMD:UNDO` | both spools back in `CR-CT-2-R3`. Stronger: move `LR-MDB-1`'s spool out and undo — it returns to the same box AND slot |
+  | 1 | Undo | `CR-CT-2-R3` (#156, #194) → `CR-TC-2-R1` (empty), commit, then `CMD:UNDO` | One prompt first, naming the move ("Undo: put #156 back in CR-CT-2-R3 and #194 back in CR-CT-2-R3?"; since Group 41.4); Yes puts both back and the toast says so. Stronger: move `LR-MDB-1`'s spool out and undo — it returns to the same box AND slot |
   | 2 | Capacity block | `CR-CT-2-R1` (#42, #95, #126) → `LR-MDB-2` (**full**: #242@1, #230@2) | whole batch refused with a capacity message, nothing moves. ⚠️ the 2026-09-13 handoff said "2 free"; it is now 0 free |
   | 3 | Deployed-spool skip | ⚠️ **can't run as written** — `CR-MDB-1` is empty, so there's nothing to deploy. Put a spool in slot 1 first (dev spools are disposable), then bulk move `CR-MDB-1` → `CR-TC-2-R2` | the deployed spool is listed as skipped, with a reason |
   | 4 | Active print | while printing, a bulk move touching the loaded spool | a skip, not a prompt (bulk move refuses spools on a toolhead) |
   Optional sanity: source == destination blocked; a destination inside the source blocked; a toolhead
   destination blocked; reloading while armed brings the pill back. **Known, NOT a failure:** scanning
   a cart *parent* (e.g. `CR-CT-2`) finds only its direct spools (Group 37.4).
-* **⏸️ PENDING DEREK — one session with a print running (mid-print checks; updated 2026-10-13).** Covers the
+* **⏸️ PENDING DEREK — one session with a print running (mid-print checks; updated 2026-10-14).** Covers the
   active-print chain fix (2026-09-12) and Group 39 "Confirm on Every Door" (merged to `dev` 2026-10-13, **not
   released yet**, so run these on dev, `http://localhost:8000`, which reads the same printers). Everything here
   has automated coverage too; these are what only a real printer, the real scanner and your eyes can check: does
@@ -39,13 +39,14 @@
   | 2 | Return mid-print | Open XL-3 → ↩️ Return | The banner names the XL. Yes → the spool is back in its box slot. No second prompt |
   | 3 | Move off a printing head | Pick XL-3's spool into the buffer → scan `CR-CT-2-R1` | **One** prompt naming the spool, XL-3, `CR-CT-2-R1` and "stops charging this print to it". Cancel → nothing moves; again with Yes → it moves. **Does the wording read right to you?** |
   | 4 | Head to head asks once | Pick up XL-1's spool → scan XL-3's toolhead QR. Then the same from the Location Manager (open XL-3, assign it) | Exactly one prompt each time, naming both heads |
-  | 5 | A bound slot is named | Pick XL-3's spool → scan the `LR-MDB-1` slot 2 label (it feeds XL-2) | One prompt that names XL-3 AND says the slot feeds XL-2 ("…so this also loads #N onto XL-2 and unloads what XL-2 holds") |
-  | 6 | Slot label → toolhead | Scan a spare spool, then the `LR-MDB-1` slot 1 label | The spool reaches XL-1 after one confirm |
+  | 5 | A bound slot is named | Pick XL-3's spool → scan the `LR-MDB-1` slot 2 label (it feeds XL-2) | One prompt that names XL-3 AND says the slot feeds XL-2 ("…so this also loads #N onto XL-2…"). Since Group 40 it has three buttons: **Load it instead** loads XL-2, **Just store it** (Enter) leaves the spool in slot 2 and XL-2 alone, Cancel moves nothing |
+  | 6 | Slot label → toolhead | Scan a spare spool, then the `LR-MDB-1` slot 1 label | One prompt with three buttons. **Load it instead** (click, or scan its QR) puts the spool on XL-1; Enter means **Just store it** (the spool waits in slot 1, XL-1 untouched: your 2026-10-14 answer, a head isn't loaded mid-print by default). If XL-1 runs a spool from another box, the prompt names it too |
   | 7 | Force Location mid-print | Details of XL-3's spool → Force Location → `CR-CT-2-R1`; then again with "-- Unassigned --" | A confirm both times (not a red "failed" toast); Yes moves it |
   | 8 | Eject asks once | Eject a spool that has no saved home (put one on XL-2 with Force Location first) | **One** prompt beyond "Eject spool #N?", mentioning XL-2 and Unassigned. ⚠️ This INVERTS the old check ("the second prompt appears"): Group 39 merged the two prompts |
-  | 9 | Deposit, three ways | XL-2's Quick-Swap grid → Deposit a buffered spool; confirm once with Enter, once with a click, once by scanning the confirm QR | All three load after one confirm |
+  | 9 | Deposit, three ways | XL-2's Quick-Swap grid → Deposit a buffered spool; answer once with a click on Load it instead, once by scanning its QR, once with Enter | One prompt each time (since Group 40, the three-button one). The click and the QR load; Enter stores (Just store it) |
   | 10 | Paused never asks | Pause the print → repeat check 3 | No prompt; the spool moves |
   | 11 | An emptied head keeps its grams | Mid-print, move one head's spool to a shelf (confirm). Then cancel the print | The cancel review lists that head as "no spool loaded" with its grams and a spool picker; Apply without a pick reports those grams as not charged |
+  | 12 | Undo a mid-print move | Right after check 3's Yes (XL-3's spool moved to `CR-CT-2-R1`), tap UNDO MOVE | One prompt that says the XL is printing and this undo changes XL-3 mid-print, then "Undo: put #N back on XL-3?"; Yes puts the spool back on XL-3. **Does the wording read right?** (Group 41.4) |
   Still valid from the 2026-09-12 list: `CMD:EJECTALL` with no location open is refused with a message, so it's
   safe to try. (Its "Core One Return" check is dropped: it covered the one-head `CORE1` printer, which is now the
   INDX.) **With the
@@ -54,6 +55,21 @@
   INDX…" notice appears within about half a second (a pill at the top, or a label on the dimmed screen), and the
   move still goes through. **After the next release:** a tab left open across the update says "This FCC page is
   out of date … reload" when it confirms a mid-print move; Ctrl+F5 fixes it.
+* **⏸️ PENDING DEREK — the "head already runs another spool" question on slot labels (Group 40; on dev once its
+  2026-10-15 merge lands, see that night's handoff).** Your everyday path: a slot-label scan into a bound
+  `LR-MDB-1` slot now asks first when the head that slot feeds runs a spool from somewhere else (e.g. a PolyDryer),
+  with three buttons, each with a scannable QR: **Load it instead** · **Just store it in LR-MDB-1 slot N** ·
+  **Cancel**; Enter = Just store it. Automated tests cover all of it; these check the wording, your scanner and the
+  feel. **Setup:** printer idle unless a row says otherwise; empty the buffer between rows.
+  | # | Check | Steps | Pass if |
+  |---|---|---|---|
+  | S1 | Empty idle head (your path) | XL-2 empty. Buffer a spool, scan `LOC:LR-MDB-1:SLOT:2` | Loads onto XL-2 with no prompt |
+  | S2 | The slot's own spool (your path) | XL-3 runs a spool that came from `LR-MDB-1` slot 3. Buffer a new spool, scan `LOC:LR-MDB-1:SLOT:3` | No prompt; the new spool is on XL-3 and the old one back in `LR-MDB-1`. Known, not a failure: the old one may land with no slot (the "same-slot swap files the old spool … with no slot" item further down has a question for you) |
+  | S3 | Head fed from a PolyDryer | Load a `PM-DB-2` spool onto XL-1 (scan it, then XL-1's QR). Buffer another spool, scan `LOC:LR-MDB-1:SLOT:1` | One prompt naming the PolyDryer spool, with the three buttons. Just store it → the spool is in slot 1, XL-1 unchanged. Again with Load it instead → the PolyDryer spool is back in `PM-DB-2`, the new one on XL-1. **Does the wording read right?** |
+  | S4 | Scan the choice | Repeat S3, but scan the on-screen QRs instead of clicking | Each QR does what its label says; Cancel writes nothing |
+  | S5 | Printing: store by default | While the XL prints, XL-2 empty: scan a spool, then `LOC:LR-MDB-1:SLOT:2` | The prompt says the XL is printing; Enter stores the spool in slot 2 and leaves XL-2 alone |
+  | S6 | Deposit onto a fed head | As in S3 (XL-1 runs the PolyDryer spool): open XL-1 → Quick-Swap grid → ⬇️ Deposit a buffered spool into `LR-MDB-1` slot 1. Then once more, tapping the tile twice quickly | The same prompt as S3, and only ONE prompt, even on the double tap |
+  | S7 | Someone re-points the slot meanwhile (optional, two tabs) | Tab A: S3's scan; leave the prompt open. Tab B: Location Manager → `LR-MDB-1` → 🔗 Slot → Toolhead Feeds → slot 1 → XL-2, save. Tab A: Load it instead | FCC asks again: "LR-MDB-1 slot 1 now feeds XL-2 (it fed XL-1 when you were asked). Load #N onto XL-2?" Set slot 1 back to XL-1 afterwards |
 * **⏸️ PENDING DEREK — the next INDX cancel review for a print you ran from a different head than it was sliced
   for.** Nothing to set up; it will happen on its own (your job 1104/1105 case). Open 🛑 Review, and on that
   T-line pick the spool on the head the print really used, then Apply. Pass if the deduct lands on that spool (the
