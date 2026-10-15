@@ -16,13 +16,18 @@
   (`printing`), not only when active_prints lists a head.
 - B4: a store that took the spool off the head the slot feeds says "taken off
   XL-1", never "XL-1 left as it was".
-HEAD proof (run on c1c2c38: all 8 fail): the double tap posts twice; the
-replaced dialog keeps its hold-off and logs nothing; the stale hold-off refuses
-the next scan; the deposit sends no `seen_printing`; the deposited spool counts
-as the head's resident, so it posts with no confirm; the dialog ignores
-`printing`; the store toast says "XL-1 left as it was" after taking #57 off
-XL-1; and window.storeToastTail, which the last test (otherwise a control for
-the unchanged "left as it was" wording) calls, doesn't exist there.
+HEAD proof of the first set (run on c1c2c38: 8 of 9 fail; corrected by the fix
+check, S3, from "all 8"): the double tap posts twice; the replaced dialog keeps
+its hold-off and logs nothing; the stale hold-off refuses the next scan; the
+deposit sends no `seen_printing`; the deposited spool counts as the head's
+resident, so it posts with no confirm; the dialog ignores `printing`; the store
+toast says "XL-1 left as it was" after taking #57 off XL-1; and
+window.storeToastTail, which the "left alone" test calls, doesn't exist there.
+The store-only dialog pin (D7) passes there: a coverage control.
+The fix check (wf_0dddaf03-9a6) pins, at the end, all fail on f055def: a swap
+tile tapped during a deposit stacks a second dialog (W1 / S2); answering the
+newer of two questions frees scans (W3); a replaced yes / no logs nothing (W5);
+an idle leave's store toast says "left as it was" (W4).
 """
 from __future__ import annotations
 
@@ -182,3 +187,62 @@ const r = window.buildMoveReplay('slot_scan', {{ text: 'LOC:LR-MDB-1:SLOT:1' }},
 return {{ tail: window.storeToastTail(r.prior), sources: r.prior.sources }};
 """)
     assert res["tail"] == " — XL-1 left as it was" and res["sources"] == [], res
+
+
+# ---- the fix check (wf_0dddaf03-9a6) --------------------------------------------------------------
+
+def test_a_swap_tile_tapped_during_a_deposit_waits(tmp_path):
+    """W1 / S2 (orange): a swap tapped while the deposit posted stacked a second
+    dialog with the deposit's question, and its Tab handler took the question's
+    keys. A tile tap now waits for the deposit's answer."""
+    res = _run(tmp_path, QS, f"""
+window.__extra = (url) => url.startsWith('/api/get_contents?id=XL-1&strict=1')
+  ? {{ body: [{{ id: 99, location: 'XL-1', is_ghost: false }}] }} : null;
+answerWith('/api/identify_scan', [{_js(_slot(FED))}]);
+window.quickSwapDeposit({DEPOSIT_BTN});
+window.quickSwapTap({{ dataset: {{ box: 'LR-MDB-2', slot: '1', toolhead: 'XL-2' }}, hasAttribute: () => false }});
+await __settle(250);
+return {{ shown: html().slice(), toasts: toasts(), swaps: posts('/api/quickswap') }};
+""")
+    assert len(res["shown"]) == 1 and "Load #57 onto XL-1?" in res["shown"][0], res["shown"]
+    assert res["swaps"] == [], res
+    assert any("Still working on the last deposit" in t["msg"] for t in res["toasts"]), res["toasts"]
+
+
+def test_answering_the_newer_of_two_questions_keeps_scans_held_off(tmp_path):
+    """W3: a scan's question and the deposit's, on two overlay ids. Answering the
+    newer one let the next slot label start a move behind the older one."""
+    res = _run(tmp_path, CORE, f"""
+window.confirmHeadLoad({{ answer: {_js(FED)}, ids: {{ overlay: 'fcc-active-print-scan-overlay' }},
+                          onLoad() {{}}, onStore() {{}}, onCancel() {{}} }});
+const older = window._fccOpenMoveQuestion;
+window.confirmHeadLoad({{ answer: {_js(dict(FED, title="Load #58 onto XL-2?"))}, onLoad() {{}}, onStore() {{}},
+                          onCancel() {{}} }});
+await click('.fcc-apc-store');
+return {{ heldByOlder: window._fccOpenMoveQuestion === older && !!older, open: (window._fccOpenMoveQuestions || []).length }};
+""")
+    assert res["heldByOlder"] is True and res["open"] == 1, res
+
+
+def test_a_replaced_yes_no_is_logged(tmp_path):
+    """W5: a yes / no replaced by another dialog on its overlay id left no trace."""
+    res = _run(tmp_path, CORE, """
+const ap = [{ toolhead: 'XL-2', printer_name: 'XL', state: 'PRINTING' }];
+window.confirmActivePrint({ activePrints: ap, msg: 'XL is PRINTING. Continue?', onConfirm() {} });
+window.confirmActivePrint({ activePrints: ap, msg: 'XL is PRINTING. Continue?', onConfirm() {} });
+await __settle(80);
+return { logs: posts('/api/log_event'), toasts: toasts() };
+""")
+    assert any('"XL is PRINTING" was replaced by another question' in (lg.get("msg") or "") for lg in res["logs"]), res
+    assert not any("Cancelled" in t["msg"] for t in res["toasts"]), res["toasts"]
+
+
+def test_a_store_after_an_idle_leave_says_taken_off(tmp_path):
+    """W4: nothing prints, so no answer lists a 'source' head; the engine's
+    `leaving` says #42 left XL-2, and the toast must not say XL-2 was left alone."""
+    leave = dict(STORE_ONLY, feed="XL-2", leaving=["XL-2"], feed_changed={"was": "XL-1", "now": "XL-2"})
+    res = _run(tmp_path, CORE, f"""
+const r = window.buildMoveReplay('slot_scan', {{ text: 'LOC:LR-MDB-1:SLOT:1' }}, {_js(leave)}, 'store', {{}});
+return {{ tail: window.storeToastTail(r.prior), sources: r.prior.sources }};
+""")
+    assert res["tail"] == " — taken off XL-2" and res["sources"] == ["XL-2"], res

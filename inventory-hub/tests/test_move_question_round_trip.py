@@ -37,6 +37,8 @@ return { q1, q2, toasts: toasts(), where: { s42: st.spools['42'].location, slot:
     assert res["q2"]["load"] is False and res["q2"]["store"] is True, res["q2"]
     assert res["q2"]["title"].endswith("Store #42 in LR-MDB-1 slot 1?"), res["q2"]
     assert res["where"] == {"s42": "LR-MDB-1", "slot": "1", "s99": "XL-1"} and res["onXL2"] == [], res["where"]
+    assert res["unhandled"] == []
+    assert any(t["msg"] == "📦 #42 stored in LR-MDB-1 slot 1 — XL-2 left as it was" for t in res["toasts"]), res["toasts"]
 
 
 def test_the_deployed_cards_return_in_a_repoint_race_stays_a_return(tmp_path):
@@ -55,11 +57,13 @@ await click('.fcc-apc-yes', 1500);
 const q2 = offered(html().pop());
 await click('.fcc-apc-store', 1500);
 const st = await ctl('state');
-return { q2, where: { s50: st.spools['50'].location, slot: (st.spools['50'].extra || {}).container_slot },
+return { q2, toasts: toasts(), where: { s50: st.spools['50'].location, slot: (st.spools['50'].extra || {}).container_slot },
          onRC1: Object.keys(st.spools).filter(k => st.spools[k].location === 'RC-1') };
 """)
     assert res["q2"]["load"] is False and res["q2"]["store"] is True, res["q2"]
     assert res["where"] == {"s50": "LR-MDB-1", "slot": "1"} and res["onRC1"] == [], res
+    assert res["unhandled"] == []
+    assert any(t["msg"] == "↩️ #50 → LR-MDB-1 slot 1" for t in res["toasts"]), res["toasts"]
 
 
 def test_a_deposit_whose_move_time_printer_check_fails_still_asks(tmp_path):
@@ -76,12 +80,14 @@ const shown = html().length;
 const q = shown ? offered(html().pop()) : null;
 if (shown) { document.activeElement = null; await key('Enter'); }
 const st = await ctl('state');
-return { shown, q, first: posts('/api/identify_scan')[0], where: st.spools['42'].location,
+return { shown, q, toasts: toasts(), first: posts('/api/identify_scan')[0], where: st.spools['42'].location,
          onXL1: Object.keys(st.spools).filter(k => st.spools[k].location === 'XL-1') };
 """)
     assert res["first"].get("seen_printing") == ["XL-1"], res["first"]
     assert res["shown"] == 1 and res["q"]["store"] is True, res
     assert res["onXL1"] == [] and res["where"] == "LR-MDB-1", res
+    assert res["unhandled"] == []
+    assert any(t["msg"] == "📦 #42 stored in LR-MDB-1 slot 1 — XL-1 left as it was" for t in res["toasts"]), res["toasts"]
 
 
 def test_load_it_instead_after_a_repoint_lands_on_the_new_head(tmp_path):
@@ -99,7 +105,9 @@ await click('.fcc-apc-yes', 1500);
 const q2 = offered(html().pop());
 await click('.fcc-apc-yes', 1500);
 const st = await ctl('state');
-return { q2, s42: st.spools['42'].location, s99: st.spools['99'].location };
+return { q2, toasts: toasts(), s42: st.spools['42'].location, s99: st.spools['99'].location };
 """)
     assert res["q2"]["load"] is True and res["q2"]["title"].endswith("Load #42 onto XL-2?"), res["q2"]
     assert (res["s42"], res["s99"]) == ("XL-2", "XL-1"), res
+    assert res["unhandled"] == []
+    assert any(t["msg"].startswith("✅ Loaded #42") for t in res["toasts"]), res["toasts"]

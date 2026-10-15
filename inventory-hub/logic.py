@@ -743,10 +743,17 @@ def _ghost_claim_refusal(target, slot, ghost, slot_feed, bound_th, loads_head, p
     spool instead" is offered only where a load swaps the spool out: the slot
     feeds the head it runs on (Group 40.3 review, A3)."""
     gid = (ghost or {}).get('id')
-    dep = _ghost_head(ghost) or 'a toolhead'
+    dep = _ghost_head(ghost)
+    if not _holds_one_spool(dep, printer_map, loc_info_map):
+        # A stale trail (Group 40.3 fix check, E1/S1): the spool isn't loaded
+        # anywhere; its record never let go of the slot.
+        here = f"on {dep}" if dep else "in Unassigned"
+        there = f"{dep}'s label" if dep else "the label of where it sits"
+        return (f"{target} slot {slot} is still claimed by #{gid}, whose record says it came from there, "
+                f"though it is {here}: scan #{gid}, then {there}, to clear that, so nothing moved")
     lead = f"{target} slot {slot} still holds #{gid}, loaded on {dep}"
     if loads_head:
-        return f"{lead}, but the slot now feeds {bound_th}: take #{gid} off {dep} first, so nothing moved"
+        return f"{lead}, while the slot feeds {bound_th}: take #{gid} off {dep} first, so nothing moved"
     if bound_th:
         return (f"{lead}, and the slot is bound to {bound_th}, which isn't a toolhead: take #{gid} off {dep} "
                 f"first, and fix the binding in {target}'s 🔗 Slot → Toolhead Feeds, so nothing moved")
@@ -1501,11 +1508,15 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
     """
     depth = getattr(_smart_move_depth, "n", 0)
     owns_move = depth == 0
+    # Built before the depth goes up (Group 40.3 fix check, E4): a value that
+    # can't be iterated raises here, not after the counter that only the
+    # finally below restores.
+    seen = frozenset(str(h).strip().strip('"').upper() for h in (seen_printing or ())
+                     if str(h or '').strip()) if owns_move else None
     _smart_move_depth.n = depth + 1
     _pa = None
     if owns_move:
-        _move_seen_printing.heads = frozenset(
-            str(h).strip().strip('"').upper() for h in (seen_printing or ()) if str(h or '').strip())
+        _move_seen_printing.heads = seen
         # Deferred import keeps logic.py importable in unit tests that don't
         # satisfy prusalink_api's import graph (mirrors _active_print_info_*).
         try:
@@ -1612,8 +1623,8 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     #      the bound head's residents and their records (40.0c; step 3's pick
     #      read them already, once per head). A replay's `expected_feed` (40.3)
     #      is compared here with no I/O against what the slot feeds now; when it
-    #      differs, the slot's new head is read as for a load, even on a store
-    #      replay, so step 5 can describe it.
+    #      differs, a load reads the slot's new head as for any load, so step 5
+    #      can describe it, and a store reads no head (it is asked as a store).
     #   5. ONE confirm answer: _uncovered_active_heads over the destination /
     #      feeds / source heads (one probe per printer, through the memo), plus
     #      40.0c's fed heads: `feed_changed` (_feed_changed_answer, 40.3) first
@@ -2021,8 +2032,12 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     # as an Overwrite `slot`), what the slot feeds (`feed`: replayed as
     # expected_feed; None for a target that isn't a multi-slot box) and whether
     # the Yes loads a head (`can_load`).
+    # `leaving` (Group 40.3 fix check, W4): the heads the moving spools leave,
+    # printing or not, so a store's toast never says such a head "was left as
+    # it was".
     replay = {"target": target, "slot_picked": bool(slot_was_picked),
-              "feed": slot_feed if feed_box else None, "can_load": loads_head}
+              "feed": slot_feed if feed_box else None, "can_load": loads_head,
+              "leaving": sorted(sources)}
     if feed_changed:
         answer = _feed_changed_answer(
             feed_changed, fed_heads, active_prints, target, target_slot, spools, tgt_info,
@@ -2268,11 +2283,16 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                 # re-pointed while its own spool stayed on the head it used to
                 # feed (Group 40.3 review, A1: the load, and a blind scan, took
                 # the slot anyway). Refused, nothing written (a single-slot box
-                # takes it unslotted, as 42.2 does).
+                # takes it unslotted, as 42.2 does). A trail whose spool is on
+                # no head is stale (a Location edit keeps the trail): a load
+                # ignores it, as it always did (Group 40.3 fix check, E1/S1:
+                # Derek's blind slot scan was refused over a spool on a cart),
+                # and a store still refuses, naming it.
                 _moving = {str(s) for s in spools}
                 _ghosts = [e for e in existing_items if e.get('is_ghost') and str(e.get('id')) not in _moving
                            and _norm_slot(e.get('slot', '')) == target_slot
-                           and not (loads_head and _ghost_head(e) == bound_th)]
+                           and not (loads_head and (_ghost_head(e) == bound_th or not _holds_one_spool(
+                               _ghost_head(e), printer_map, loc_info_map)))]
                 if _ghosts:
                     if locations_db._is_single_slot_dryer_box(tgt_info):
                         seat_slot = ''

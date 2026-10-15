@@ -211,7 +211,16 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         if (qrSession) { try { qrSession.cleanup(); } catch (_) { /* noop */ } qrSession = null; }
         if (handle) { try { handle.cleanup(); } catch (_) { /* noop */ } handle = null; }
         if (hostOff) { try { hostOff(); } catch (_) { /* noop */ } hostOff = null; }
-        if (question && window._fccOpenMoveQuestion === question) window._fccOpenMoveQuestion = null;
+        if (question) {
+            // Scans are held off while ANY three-way is open (Group 40.3 fix
+            // check, W3): answering the newer of two let a scan start a move
+            // behind the older one.
+            const open = (window._fccOpenMoveQuestions || []).filter(q => q !== question);
+            window._fccOpenMoveQuestions = open;
+            if (window._fccOpenMoveQuestion === question) {
+                window._fccOpenMoveQuestion = open.length ? open[open.length - 1] : null;
+            }
+        }
         if (superseded && _openMoveConfirms[overlayId] === superseded) delete _openMoveConfirms[overlayId];
         clearTimeout(statusTimer);
     };
@@ -224,6 +233,11 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         if (settled) return;
         settled = true;
         cleanup();
+        // Logged here, whatever the caller (Group 40.3 fix check, W5: a
+        // replaced yes / no left no trace); never toasted as "Cancelled".
+        const said = threeWay ? title : `${first.printer_name || 'A printer'} is ${first.state || 'PRINTING'}`;
+        if (window.logClientEvent) window.logClientEvent(
+            `ℹ️ "${said}" was replaced by another question — nothing moved`, 'INFO');
         if (onCancel) onCancel({ superseded: true });
     };
     const prior = _openMoveConfirms[overlayId];
@@ -323,6 +337,7 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
                 statusTimer = setTimeout(() => { line.style.display = 'none'; }, 7000);
             },
         };
+        window._fccOpenMoveQuestions = (window._fccOpenMoveQuestions || []).concat([question]);
         window._fccOpenMoveQuestion = question;
     }
     return { close: no };
@@ -433,9 +448,11 @@ window.buildMoveReplay = (door, original, answer, choice, prior = {}) => {
         body.spools = spools.slice();
     }
     // The heads a moving spool leaves, as every round named them, for the store
-    // toast (window.storeToastTail).
+    // toast (window.storeToastTail): the answer's `leaving` (printing or not),
+    // and a printing answer's 'source' heads.
     const sources = Array.from(new Set([].concat(
         Array.isArray(p.sources) ? p.sources : [],
+        (Array.isArray(a.leaving) ? a.leaving : []).map(x => String(x || '').toUpperCase()).filter(Boolean),
         prints.filter(x => x && x.role === 'source').map(x => String(x.toolhead || '').toUpperCase()).filter(Boolean))));
     return { body, prior: { heads, fedKeys, store, expectedFeed: feed, pickedSlot: picked, sources } };
 };
@@ -470,9 +487,8 @@ window.askMoveConfirm = (answer, ctx = {}) => {
             if (info && info.superseded) {
                 // Another question took its place (Group 40.3 review, B2): the
                 // user never answered this one, and a toast here read as if the
-                // move they did answer had been cancelled.
-                if (window.logClientEvent) window.logClientEvent(
-                    `ℹ️ "${answer.title || 'a load question'}" was replaced by another question — nothing moved`, 'INFO');
+                // move they did answer had been cancelled. confirmActivePrint
+                // logged it.
             } else {
                 toast('Cancelled — nothing moved', 'info', 4000);
                 if (window.logClientEvent) window.logClientEvent(

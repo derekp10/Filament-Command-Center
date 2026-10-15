@@ -35,6 +35,14 @@ const { spawn } = require('child_process');
 const __py = spawn(__PYTHON__, [__BRIDGE__, __HUB__, __SETUP__], { cwd: __RUN__, stdio: ['pipe', 'pipe', 'pipe'] });
 let __pyBuf = ''; let __pyErr = ''; const __waiters = new Map(); let __seq = 0;
 __py.stderr.on('data', d => { __pyErr += d; });
+// A bridge that dies early says why (Group 40.3 fix check, S5): it used to
+// surface as 'rc=0' with nothing to go on.
+let __bridgeDone = false;
+__py.on('exit', (code) => {
+  if (__bridgeDone) return;
+  console.error('roundtrip bridge exited (' + code + ') before the scenario finished:\n' + __pyErr.slice(-4000));
+  process.exit(4);
+});
 __py.stdout.on('data', d => {
   __pyBuf += d;
   let i;
@@ -163,9 +171,10 @@ def run(tmp_path: Path, setup: dict, modules: list, scenario: str) -> dict:
     driver = driver.replace("const vm = require('vm');", "const vm = require('vm');\n" + bridge, 1)
     driver = driver.replace("vm.createContext({ console, setTimeout, clearTimeout })",
                             "vm.createContext({ console, setTimeout, clearTimeout, __bridgeCall })", 1)
-    driver = driver.replace("  process.exit(0);", "  __py.kill();\n  process.exit(0);", 1)
+    driver = driver.replace("  process.exit(0);", "  __bridgeDone = true; __py.kill();\n  process.exit(0);", 1)
     driver = driver.replace("  process.exit(3);",
-                            "  try { __py.kill(); } catch (_) {}\n  console.error(__pyErr.slice(-4000));\n  process.exit(3);", 1)
+                            "  __bridgeDone = true; try { __py.kill(); } catch (_) {}\n"
+                            "  console.error(__pyErr.slice(-4000));\n  process.exit(3);", 1)
     script = tmp_path / "driver.js"
     script.write_text(driver, encoding="utf-8")
     proc = subprocess.run([NODE, str(script)], capture_output=True, text=True, encoding="utf-8",

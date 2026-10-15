@@ -57,6 +57,14 @@ def _u(v):
     return str(v if v is not None else '').strip().strip('"').upper()
 
 
+def _bound(v):
+    """A slot binding the way the engine reads it (logic._feed_token's rule, Group
+    40.3 fix check, E2): a hand-edited "None" / "null" is unbound, and quotes
+    with spaces inside them are trimmed. A PRINTER:<id> pool sentinel is kept."""
+    t = str(v if v is not None else '').strip().strip('"').strip().upper()
+    return '' if t in ('NONE', 'NULL') else t
+
+
 def _max_slots(row):
     try:
         return int(str((row or {}).get('Max Spools', '0')).strip() or '0')
@@ -137,7 +145,7 @@ def _slot_feed(row, slot, printer_map, loc_info_map, moving_from):
         if logic._norm_slot(key) == slot:
             raw = bound
             break
-    target = _u(raw)
+    target = _bound(raw)
     if not target:
         return None
     if locations_db.is_printer_sentinel(target):
@@ -280,7 +288,7 @@ def _return_recommendation(row, slot_ids, claims, ghost_slot, toolhead, loc_list
             return s, 'head_slot'
     owner = locations_db.printer_owning_toolhead(loc_list, th) if th else None
     pool_ids = _printer_prefixes(owner, loc_list) if owner else set()
-    targets = {logic._norm_slot(k): _u(v) for k, v in locations_db.bindings_from_row(row).items()}
+    targets = {logic._norm_slot(k): _bound(v) for k, v in locations_db.bindings_from_row(row).items()}
     for s in free:
         t = targets.get(s, '')
         if not t or (locations_db.is_printer_sentinel(t) and t.split(':', 1)[1] in pool_ids):
@@ -315,7 +323,7 @@ def _printer_model(row, printer_id, sid, loc_list, loc_info_map, printer_map):
         if locations_db._is_single_slot_dryer_box(r):
             continue
         for slot, target in locations_db.bindings_from_row(r).items():
-            t = _u(target)
+            t = _bound(target)
             if t and locations_db.is_printer_sentinel(t) and t.split(':', 1)[1] in prefixes:
                 pool.append((_u(r.get('LocationID')), logic._norm_slot(slot)))
     boxes = []
@@ -367,11 +375,15 @@ def _printer_model(row, printer_id, sid, loc_list, loc_info_map, printer_map):
             # only free choice", and Enter re-scanned it onto its own head).
             free_options.append({"kind": "head", "head": h})
         model["heads"].append(entry)
+    # The Printer Pool slot the spool already sits in is where it is now, never a
+    # free choice for it either (Group 40.3 fix check, D8).
+    mover_slot = logic._norm_slot(str(((mover or {}).get('extra') or {}).get('container_slot') or '').strip('"'))
     for box, slot in pool:
         held = sorted(_slot_holders(box, slot), key=lambda i: bool(i.get('is_ghost')))
+        current = bool(mover_slot) and model["spool_location"] == box and mover_slot == slot
         model["pool"].append({"box": box, "slot": slot, "spool": _card(held[0]) if held else None,
-                              "free": not held})
-        if not held:
+                              "free": not held, "current": current})
+        if not held and not current:
             free_options.append({"kind": "pool", "box": box, "slot": slot})
     if len(free_options) == 1:
         model["recommended"], why = free_options[0], 'only_free'

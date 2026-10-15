@@ -1021,7 +1021,17 @@
                 : null))
             .catch(() => null);
         Promise.all([_probeWithTimeout(toolhead), headResidents]).then(([detail, residents]) => {
-            if (gen !== _overlayGen) { idle(); return; }   // a later tap owns the screen now
+            if (gen !== _overlayGen) {
+                // Another question took the screen meanwhile (a swap's re-ask, a
+                // later tap): this deposit isn't sent, and says so (Group 40.3
+                // fix check, W2: it used to vanish).
+                idle();
+                showToast(`Deposit of ${bsDisplay} not sent: another question took the screen — tap it again`,
+                    'info', 4000);
+                if (window.logClientEvent) window.logClientEvent(
+                    `ℹ️ Deposit of ${bsDisplay} into ${box} slot ${slot} not sent: another question took the screen`, 'INFO');
+                return;
+            }
             const printing = !!(detail && detail.active);
             if (printing || (residents && residents.length)) {
                 // The print this page saw goes with the request (Group 40.3
@@ -1038,6 +1048,13 @@
 
     window.quickSwapTap = (btn) => {
         if (!btn) return;
+        // A deposit in flight owns the screen until its answer (Group 40.3 fix
+        // check, W1 / S2): a swap tapped meanwhile stacked a second dialog with
+        // the deposit's question, and its Tab handler took the question's keys.
+        if (_depositBusyAt && Date.now() - _depositBusyAt < 20000) {
+            showToast('⏳ Still working on the last deposit — one moment', 'info', 2500);
+            return;
+        }
         // Disabled buttons (empty slot) should be a no-op. A tile that is
         // disabled for another reason (two spools claim it, its box couldn't
         // be read) carries that reason in data-why (Group 42 review).

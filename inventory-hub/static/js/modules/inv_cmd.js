@@ -1443,11 +1443,14 @@ const processScan = (text, source = 'keyboard') => {
     // is refused and does nothing (a second slot label used to start a second
     // move behind the dialog). The dialog says why too: toasts sit under it.
     let openQuestion = window._fccOpenMoveQuestion;
-    if (openQuestion && openQuestion.element && openQuestion.element.isConnected === false) {
+    while (openQuestion && openQuestion.element && openQuestion.element.isConnected === false) {
         // Its dialog left the page without being answered (Group 40.3 review,
-        // B3): every scan was refused while nothing was on screen.
-        window._fccOpenMoveQuestion = null;
-        openQuestion = null;
+        // B3): every scan was refused while nothing was on screen. The next
+        // question still open, if any, holds scans off instead (W3).
+        const open = (window._fccOpenMoveQuestions || []).filter(q => q !== openQuestion);
+        window._fccOpenMoveQuestions = open;
+        openQuestion = open.length ? open[open.length - 1] : null;
+        window._fccOpenMoveQuestion = openQuestion;
     }
     if (openQuestion) {
         if (/^CMD:CANCEL(:.*)?$/.test(upper)) { openQuestion.cancel(); return; }

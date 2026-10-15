@@ -123,7 +123,7 @@ def test_a_slot_repointed_to_an_empty_idle_head_is_asked_again_naming_both():
         "title": "Load #42 onto XL-2?",
         "body": "LR-MDB-1 slot 1 now feeds XL-2 (it fed XL-1 when you were asked).",
         "msg": "LR-MDB-1 slot 1 now feeds XL-2 (it fed XL-1 when you were asked). Load #42 onto XL-2?",
-        "printing": False,
+        "printing": False, "leaving": [],
     }, again
     assert sm.writes == []
     # The Yes to the new question (naming XL-2) loads XL-2; XL-1 keeps #99.

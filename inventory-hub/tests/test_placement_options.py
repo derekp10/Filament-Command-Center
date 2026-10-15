@@ -225,7 +225,7 @@ def test_the_strict_spool_read_raises_instead_of_answering_nothing():
     from unittest.mock import MagicMock
     api = placement.spoolman_api
     ok = MagicMock(status_code=200, json=MagicMock(return_value=[{"id": 1, "location": "X", "extra": {}}]))
-    bad = MagicMock(status_code=500)
+    bad = MagicMock(status_code=500, ok=False)
     bad.raise_for_status = MagicMock(side_effect=api.requests.HTTPError("500 (test)"))
     with patch.object(api.config_loader, "get_api_urls", return_value=("http://spoolman", "")):
         with patch.object(api.requests, "get", return_value=ok) as get:
@@ -328,6 +328,27 @@ def test_printer_mode_never_stars_the_head_the_spool_already_sits_on():
     xl2 = next(h for h in model["heads"] if h["id"] == "XL-2")
     assert xl2["current"] is True and xl2["resident"] is None
     assert model["recommended"] is None and model["recommend_reason"] == "nothing_free", model["recommended"]
+
+
+def test_printer_mode_never_stars_the_pool_slot_the_spool_already_sits_in():
+    """Group 40.3 fix check, D8: #42 sits in LR-MDB-1 slot 4 (a Printer Pool
+    slot), and every head and the other pool slot are taken. Its own slot is
+    where it is now, not "the only free choice"."""
+    spools = [_sp(90 + i, h) for i, h in enumerate(XL_HEADS)]
+    spools += [_sp(61, "TST-MDB-1", slot=1), _sp(42, "LR-MDB-1", slot=4)]
+    model, _ = _build(spools, "XL", spool=42)
+    pool = {(p["box"], p["slot"]): p for p in model["pool"]}
+    assert pool[("LR-MDB-1", "4")]["current"] is True and pool[("TST-MDB-1", "1")]["current"] is False
+    assert model["recommended"] is None and model["recommend_reason"] == "nothing_free", model["recommended"]
+
+
+def test_a_none_or_null_binding_is_a_plain_storage_slot():
+    """Group 40.3 fix check, E2: the engine reads a hand-edited "None" / "null"
+    binding as unbound, so the model does too (its tile said "bound to NONE")."""
+    rows = ROWS + [_box("NN-BOX", 3, {"1": "None", "2": "null", "3": "XL-2"})]
+    model, _ = _build([_sp(42, "CR-CT-2-R1")], "NN-BOX", rows=rows, spool=42)
+    assert _slot(model, 1)["feeds"] is None and _slot(model, 2)["feeds"] is None, model["slots"]
+    assert _slot(model, 3)["feeds"]["kind"] == "toolhead"
 
 
 def test_core_one_is_its_own_head_with_its_feed_and_no_pool():

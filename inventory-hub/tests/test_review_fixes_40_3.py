@@ -17,7 +17,17 @@
   can't reach their printer, so a fail-open probe never loads mid-print
   unasked.
 The REAL engine runs over tests/move_engine_harness.py with a live locations store.
-HEAD proof (run on c1c2c38: 21 of 25 fail): A1's blind-scan load and the
+The fix check (wf_0dddaf03-9a6) pins, at the end: a stale trail (a spool on no
+head whose record still names the slot) never blocks a load (E1/S1, a
+regression in f055def) and a store over one says what it is; `leaving`;
+`printing` for a re-point back to a confirmed printing head; a seen_printing
+that can't be read; seen_printing forgotten outside the move. Run on f055def:
+the stale-trail loads fail (behavioural: refused), the store texts, the A1
+wording ("while the slot feeds"), `leaving` (KeyError) and the depth leak fail;
+the `printing` and forgetting pins pass there (controls for gaps the check
+named).
+HEAD proof of the first set (run on c1c2c38: 17 of 21 fail; corrected by the
+fix check, S3, from "21 of 25"): A1's blind-scan load and the
 printing question's Yes load #42 onto XL-1 there (behavioural), and its store
 is refused with the old advice (text); the two A3 texts differ (text); the
 "None" / "null" question names the feed "NONE", which no replay can match
@@ -111,7 +121,7 @@ def _other_head():
 
 
 @pytest.mark.parametrize("auto_deploy, why", [
-    (True, "LR-MDB-1 slot 1 still holds #60, loaded on XL-3, but the slot now feeds XL-1: take #60 off XL-3 "
+    (True, "LR-MDB-1 slot 1 still holds #60, loaded on XL-3, while the slot feeds XL-1: take #60 off XL-3 "
            "first, so nothing moved"),
     (False, "LR-MDB-1 slot 1 still holds #60, loaded on XL-3: take it off first, so nothing moved"),
 ], ids=["blind-scan-load", "store"])
@@ -132,7 +142,7 @@ def test_the_yes_to_a_printing_question_is_refused_the_same_way():
     asked, store = _move(sm, probe=probe)
     assert asked.get("status") == "requires_confirm", asked
     res, _ = _move(sm, store=store, probe=probe, confirm_active_print=["XL-1"], expected_feed="XL-1")
-    assert "still holds #60, loaded on XL-3, but the slot now feeds XL-1" in logic.smart_move_failure(res, 42), res
+    assert "still holds #60, loaded on XL-3, while the slot feeds XL-1" in logic.smart_move_failure(res, 42), res
     assert sm.writes == []
 
 
@@ -279,3 +289,86 @@ def test_the_deposit_door_asks_when_its_page_saw_the_print(client):
 def test_seen_printing_from_reads_the_request(value, expected):
     assert logic.seen_printing_from(value) == expected
     assert logic.seen_printing_from(None) == []
+
+
+# ---- the fix check (wf_0dddaf03-9a6) --------------------------------------------------------------
+
+@pytest.mark.parametrize("where", ["CR-CT-2-R1", ""], ids=["on-a-cart-row", "unassigned"])
+def test_a_stale_trail_never_blocks_a_load(where):
+    """E1 / S1 (orange; a regression in f055def): #60 was loaded from LR-MDB-1
+    slot 1, then moved off XL-1 by a Location edit, which keeps the trail. Slot 1
+    still feeds XL-1 (empty, idle), so Derek's blind slot scan loads #42, as it
+    did before f055def: a stale trail is not a spool in the slot."""
+    sm = _sm({42: {"location": "CR-CT-2-R1", "extra": {}},
+              60: {"location": where, "extra": _trail("LR-MDB-1", 1)}})
+    res, _ = _move(sm)
+    assert res.get("status") == "success" and res.get("auto_deployed_to") == "XL-1", res
+    assert sm.direct_at("XL-1") == [42]
+
+
+@pytest.mark.parametrize("where, said", [
+    ("CR-CT-2-R1", "LR-MDB-1 slot 1 is still claimed by #60, whose record says it came from there, though it is "
+                   "on CR-CT-2-R1: scan #60, then CR-CT-2-R1's label, to clear that, so nothing moved"),
+    ("", "LR-MDB-1 slot 1 is still claimed by #60, whose record says it came from there, though it is in "
+         "Unassigned: scan #60, then the label of where it sits, to clear that, so nothing moved"),
+], ids=["on-a-cart-row", "unassigned"])
+def test_a_store_over_a_stale_trail_says_what_it_is(where, said):
+    """A store still refuses a slot a record claims (as before f055def), but no
+    longer calls a cart row "loaded" or a blank location "a toolhead"."""
+    sm = _sm({42: {"location": "CR-CT-2-R1", "extra": {}},
+              60: {"location": where, "extra": _trail("LR-MDB-1", 1)}})
+    res, _ = _move(sm, auto_deploy=False)
+    assert logic.smart_move_failure(res, 42) == said, res
+    assert sm.writes == []
+
+
+def test_every_question_names_the_heads_its_spools_leave():
+    """W4: `leaving` (printing or not), so a store's toast never says that a
+    head the spool left "was left as it was"."""
+    res, _ = _move(_sm({42: {"location": "RC-1", "extra": {}}}), probe=_probe_for({"RC"}))
+    assert res.get("status") == "requires_confirm" and res["leaving"] == ["RC-1"], res
+    fed, _ = _move(_sm({42: {"location": "CR-CT-2-R1", "extra": {}},
+                        99: {"location": "XL-1", "extra": dict(FROM_POLYDRYER)}}))
+    assert fed.get("confirm_type") == "head_fed" and fed["leaving"] == [], fed
+
+
+def test_a_repoint_back_to_a_confirmed_printing_head_is_drawn_printing():
+    """S4: the XL prints; the user confirmed XL-1, the slot went to XL-2 and back
+    to XL-1. Every head is covered, so active_prints is empty, yet the body says
+    the XL is printing, and so must `printing`."""
+    sm = _sm({42: {"location": "CR-CT-2-R1", "extra": {}}, 99: {"location": "XL-1", "extra": dict(FROM_POLYDRYER)}})
+    printing = _probe_for({"XL"})
+    first, store = _move(sm, probe=printing)
+    key = first["fed_heads"][0]["confirm_key"]
+    store.row("LR-MDB-1")["extra"]["slot_targets"]["1"] = "XL-2"
+    mid, _ = _move(sm, store=store, probe=printing, confirm_active_print=["XL-1"], confirmed_fed_heads=[key],
+                   expected_feed="XL-1")
+    assert mid.get("confirm_type") == "feed_changed", mid
+    store.row("LR-MDB-1")["extra"]["slot_targets"]["1"] = "XL-1"
+    back, _ = _move(sm, store=store, probe=printing, confirm_active_print=["XL-1", "XL-2"],
+                    confirmed_fed_heads=[key], expected_feed="XL-2")
+    assert back.get("confirm_type") == "feed_changed" and back["active_prints"] == [], back
+    assert back["printing"] is True and "XL is PRINTING." in back["body"], back
+
+
+def test_a_seen_printing_that_cannot_be_read_leaves_no_move_half_open():
+    """E4: a value that isn't a list raises before the move counts as started,
+    so the next move still owns its printer checks and its seen_printing."""
+    sm = _sm({42: {"location": "CR-CT-2-R1", "extra": {}}})
+    with pytest.raises(TypeError):
+        _move(sm, probe=_probe_fails, seen_printing=5)
+    assert getattr(logic._smart_move_depth, "n", 0) == 0
+    res, _ = _move(sm, probe=_probe_fails, seen_printing=["XL-1"])
+    assert res.get("status") == "requires_confirm", res
+
+
+def test_what_the_page_saw_is_forgotten_outside_the_move():
+    """S4: after a move with seen_printing, a printer check outside any move
+    (eject, force-unassign) fails open again."""
+    from unittest.mock import patch
+    sm = _sm({42: {"location": "CR-CT-2-R1", "extra": {}}})
+    _move(sm, probe=_probe_fails, seen_printing=["XL-1"])
+    assert getattr(logic._move_seen_printing, "heads", None) is None
+    with patch("prusalink_api._probe_printer_state", side_effect=_probe_fails), \
+            patch.object(logic.config_loader, "get_api_urls", return_value=("http://spoolman", "http://fb")):
+        assert logic._active_print_info_for_location("XL-1", PRINTER_MAP_F) is None
