@@ -275,15 +275,18 @@ def test_a_head_named_with_a_slot_is_not_read_again_after_smart_load(logs):
 def test_a_ghost_in_the_slot_is_never_unseated(logs):
     """#57 is deployed from LR-MDB-2 slot 2 onto XL-2, so the box lists it as a
     ghost in slot 2. Clearing #57's own container_slot never frees a trail's
-    slot, and since 41.6 that pointless write's failure refused #99."""
+    slot, and since 41.6 that pointless write's failure refused #99.
+
+    Group 40 review: the slot still physically holds #57, and with no chain to
+    swap it out (the slot is unbound here) seating #99 made two spools claim slot
+    2. #99 is now refused with nothing written; the ghost is still never written."""
     sm = FakeSpoolman({
         57: {"location": "XL-2", "extra": {"physical_source": "LR-MDB-2", "physical_source_slot": "2"}},
         99: {"location": "CR-CT-2-R1", "extra": {}},
     }, reject_ids=[57])
     res = _move(sm, target="LR-MDB-2", raw_spools=[99], target_slot="2")
-    assert logic.smart_move_failure(res, 99) == "", res
-    assert _in_slot(sm, "LR-MDB-2", "2") == [99]
-    assert [w for w in sm.writes if w[0] == 57] == [], "the ghost was written"
+    assert "LR-MDB-2 slot 2 still holds #57" in logic.smart_move_failure(res, 99), res
+    assert sm.spools[99]["location"] == "CR-CT-2-R1" and sm.writes == [], sm.writes
 
 
 def test_auto_slot_reads_the_box_strictly(logs):

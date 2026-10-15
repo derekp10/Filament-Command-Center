@@ -907,7 +907,7 @@ def test_slot_qr_assign_says_why_the_spool_was_not_deployed(client):
 
     r = _run(sm, probe=IDLE, call=lambda: client.post(
         "/api/identify_scan", json={"text": "LOC:LR-MDB-1:SLOT:3", "source": "barcode",
-                                    "confirmed_fed_heads": ["XL-3"]}))
+                                    "confirmed_fed_heads": ["XL-3#99"]}))  # a page sends confirm keys (Group 40 review)
 
     body = r.get_json()
     assert body["action"] == "assignment_done", body

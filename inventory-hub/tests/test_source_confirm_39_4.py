@@ -276,7 +276,7 @@ def test_a_bound_head_on_another_printer_keeps_the_source_sentence():
     assert res.get("status") == "requires_confirm", res
     assert res["msg"] == ("#42 is loaded on CORE1-M0. Moving it to LR-MDB-1 means FCC stops charging "
                           "this print to it. XL is PRINTING. LR-MDB-1 slot 2 feeds XL-1, so this also "
-                          "loads #42 onto XL-1 and unloads what XL-1 holds. Continue?")
+                          "loads #42 onto XL-1. Continue?")  # XL-1 is empty: nothing to unload (Group 40 review)
 
 
 @pytest.fixture

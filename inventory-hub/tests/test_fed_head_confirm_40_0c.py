@@ -378,8 +378,8 @@ def test_can_store_marks_a_bound_slots_printing_question():
     res, _ = _move(sm, probe=_probe_for({"XL"}))
     assert res.get("confirm_type") == "active_print" and res["can_store"] is True, res
     assert res["title"] == "Load #42 onto XL-1?" and res["spools"] == [42], res
-    assert res["body"] == "XL is PRINTING. LR-MDB-1 slot 1 feeds XL-1, so this also loads #42 onto XL-1 " \
-                          "and unloads what XL-1 holds.", res
+    # XL-1 is empty, so nothing is "unloaded" (Group 40 review).
+    assert res["body"] == "XL is PRINTING. LR-MDB-1 slot 1 feeds XL-1, so this also loads #42 onto XL-1.", res
 
 
 def test_can_store_is_false_for_a_head_target():
@@ -512,7 +512,9 @@ def test_a_stale_page_move_that_needs_no_question_still_goes_ahead(client):
 
 def test_door_helpers_read_the_request():
     assert logic.confirmed_fed_heads_from(
-        {"confirmed_fed_heads": [" xl-1#99 ", "", None, '"XL-2"', {"toolhead": "XL-3"}]}) == ["XL-1#99", "XL-2"]
+        {"confirmed_fed_heads": [" xl-1#99 ", "", None, '"XL-2"', {"toolhead": "XL-3"}]}) == ["XL-1#99"]
+    # Only confirm keys count at the door: a bare head id ("XL-2") would cover the
+    # head whatever it runs (Group 40 review); it stays an engine keyword.
     assert logic.confirmed_fed_heads_from({"confirmed_fed_heads": "XL-1"}) == []
     assert logic.confirmed_fed_heads_from(None) == []
     for off in (False, "false", "False", 0, "0", "no", "off"):

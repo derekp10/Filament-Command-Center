@@ -146,16 +146,17 @@ def test_auto_slot_pick_keeps_a_spools_own_slot_in_the_same_box():
     assert payload["extra"].get("container_slot") == "3"
 
 
-def test_auto_slot_pick_ignores_a_ghost_of_the_moving_spool():
-    """A spool deployed FROM slot 3 is listed in the box as a ghost of slot 3. It
-    is on a head, not in the box, so its slot is free for it but not kept: the
-    lowest free slot (40.0e's rule 2)."""
+def test_auto_slot_pick_puts_a_deployed_spool_back_in_its_own_slot():
+    """A spool deployed FROM slot 3 is listed in the box as a ghost of slot 3, and
+    physically still sits in slot 3, so a slotless move into the box puts it back
+    there (Group 40 review; it used to take the lowest free slot, which loaded
+    another head)."""
     _, calls = _run_move(
         "LR-MDB-1",
         existing_at_target=[{"id": 42, "slot": "3", "location": "LR-MDB-1", "is_ghost": True}],
     )
     _, payload = calls[0]
-    assert payload["extra"].get("container_slot") == "1"
+    assert payload["extra"].get("container_slot") == "3"
 
 
 def test_auto_slot_pick_leaves_slot_empty_when_box_is_full():
