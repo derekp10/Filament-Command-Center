@@ -1751,6 +1751,15 @@ const processScan = (text, source = 'keyboard') => {
                         const raw = parseInt(locData['Max Spools'], 10);
                         if (!isNaN(raw)) maxSpools = raw;
                     }
+                    // Group 40.2 (Derek's D2.1): a multi-slot box's own label opens
+                    // the slot picker, once per buffered spool (Q1: loop), instead
+                    // of filing the buffer with no slot. A single-slot box (a
+                    // PolyDryer) and every other row keep the path below.
+                    if (locType === 'dryer box' && maxSpools > 1 && window.openSlotPicker) {
+                        state.lastScannedLoc = null;
+                        _placeBufferWithPicker(res.id);
+                        return;
+                    }
                     const singleOccupancy = isSingleSpoolType || (maxSpools > 0 && maxSpools <= 1);
                     if (singleOccupancy && state.heldSpools.length > 1) {
                         const top = state.heldSpools[0];
@@ -1877,12 +1886,13 @@ const processScan = (text, source = 'keyboard') => {
 // Group 39.4), with this overlay's proven ids (#fcc-active-print-scan-overlay,
 // #fcc-aps-yes/no). It shows the server's message when the backend asked
 // (`msg`: Derek's D6 wording), else this door's own sentence.
-const _confirmActivePrintScan = ({ tid, slot, stateInfo, onConfirm, msg = '' }) => {
+const _confirmActivePrintScan = ({ tid, slot, stateInfo, onConfirm, onCancel = null, msg = '' }) => {
     window.confirmActivePrint({
         activePrint: stateInfo,
         msg: msg || `Assigning the buffered spool(s) to ${tid} will disrupt the active print. Continue anyway?`,
         ids: { overlay: 'fcc-active-print-scan-overlay', yes: 'fcc-aps-yes', no: 'fcc-aps-no' },
         onConfirm,
+        onCancel,
     });
 };
 
@@ -1890,7 +1900,25 @@ const _confirmActivePrintScan = ({ tid, slot, stateInfo, onConfirm, msg = '' }) 
 // (Group 39.1); anything else (the old `false`) confirms none. `pickedSlot`
 // (Group 40.0e): the slot the engine picked for this slotless move when it
 // asked (`target_slot`), sent back as `picked_slot`: kept only while still free.
-const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOverride = null, pickedSlot = null) => {
+// `opts` (Group 40.2, the box picker): `expectedFeed`, what the picked tile
+// showed the slot feeding (sent on the FIRST request, so a slot re-pointed
+// meanwhile is asked about again); `swapDisplaced`, the slot's old spool the
+// user chose to Swap into the buffer once the move lands (the grid's Swap);
+// `onOutcome({outcome, res})`, called once when the move has ended: 'moved',
+// 'cancelled' (the user cancelled a question it asked: nothing moved) or
+// 'failed'. A callback, never a returned Promise: a caller (or a test's
+// page.evaluate) that awaited one would wait on a question nobody can answer
+// until it returns.
+const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOverride = null, pickedSlot = null,
+                              opts = {}) => {
+    let ended = false;
+    const end = (how, res = null) => {
+        if (ended) return;
+        ended = true;
+        if (opts && typeof opts.onOutcome === 'function') {
+            try { opts.onOutcome({ outcome: how, res }); } catch (e) { console.error(e); }
+        }
+    };
     // L124: callers can pass an explicit `spoolIdsOverride` subset (e.g. the
     // single topmost id when the target is a toolhead) so the rest of the
     // buffer stays untouched. Default = entire buffer (the legacy bulk-assign
@@ -1913,6 +1941,8 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
         confirmed_toolheads: Array.isArray(confirmedHeads) ? confirmedHeads : [],
     });
     if (pickedSlot != null) first.picked_slot = pickedSlot;
+    const expectedFeed = (opts && opts.expectedFeed != null) ? String(opts.expectedFeed).toUpperCase() : null;
+    if (expectedFeed != null) first.expected_feed = expectedFeed;
 
     const post = (payload, prior) => {
         setProcessing(true, { label: window.printerLabelForTarget ? window.printerLabelForTarget(tid, slot) : null });
@@ -1924,7 +1954,14 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
             showToast(`❌ Assign to ${tid} failed: ${(e && e.message) || 'network error'} — check the Activity Log`, 'error', 7000);
             if (window.logClientEvent) window.logClientEvent(
                 `❌ Assign to ${tid} got no answer: ${(e && e.message) || 'network error'}`, 'ERROR');
+            end('failed');
         };
+        // A question the user cancelled moved nothing; a replaced one, or one
+        // this page can't show, is the end of it too (nobody answered).
+        const cancelled = (info) => end(info && (info.superseded || info.unknown) ? 'failed' : 'cancelled');
+        // How a move that answered ended, decided before the screen updates, so
+        // an exception while updating it can't report a landed move as failed.
+        let landed = null;
         window.fetchT('/api/smart_move', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1952,8 +1989,10 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
                             stateInfo: ans.active_print || { printer_name: tid, state: 'ACTIVE' },
                             msg: ans.msg,
                             onConfirm: yes,
+                            onCancel: cancelled,
                         }),
                         send: (body, next) => post(body, next),
+                        onCancel: cancelled,
                     });
                     return;
                 }
@@ -1965,18 +2004,25 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
                     const failures = res.failures || {};
                     const movedIds = moving.filter(id => !failures[String(id)]);
                     const movedCount = movedIds.length;
+                    landed = movedCount ? 'moved' : 'failed';
                     // Group 40.0d: a toolhead scan names the feed slot the engine
                     // recorded as the spool's home; the choice is silent, so the
                     // toast is where it shows.
                     const rec = (res.recorded_source && movedCount === 1)
                         ? String(res.recorded_source).split(':') : null;
                     const storedIn = payload.picked_slot != null ? payload.picked_slot : payload.slot;
+                    const hasSlot = storedIn != null && storedIn !== '';
                     if (prior && prior.store && movedCount === 1) {
                         // Group 40.3: "Just store it" put it in the slot and left the head alone.
-                        showToast(`📦 #${movedIds[0]} stored in ${tid}${storedIn != null && storedIn !== '' ? ` slot ${storedIn}` : ''}`
+                        showToast(`📦 #${movedIds[0]} stored in ${tid}${hasSlot ? ` slot ${storedIn}` : ''}`
                             + `${window.storeToastTail(prior)}`, 'success', 4000);
                     } else if (rec && rec.length === 2) {
                         showToast(`#${movedIds[0]} → ${tid} (recorded as from ${rec[0]} slot ${rec[1]})`, "success");
+                    } else if (movedCount === 1 && hasSlot) {
+                        // Group 40.2: a picked slot says where it went (and the head
+                        // its slot loaded), in short arrows.
+                        showToast(`✅ #${movedIds[0]} → ${tid} slot ${storedIn}`
+                            + `${res.auto_deployed_to ? ` → ${res.auto_deployed_to}` : ''}`, 'success', 4000);
                     } else if (movedCount) {
                         showToast("Assigned " + movedCount + " item" + (movedCount === 1 ? '' : 's') + "!", "success");
                     }
@@ -1988,6 +2034,13 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
                     const movedSet = new Set(movedIds.map(String));
                     state.heldSpools = state.heldSpools.filter(s => !movedSet.has(String(s.id)));
                     movedSet.forEach(id => _markAssignedOut(id)); // 21.6
+                    // Group 40.2: the user chose Swap, so the slot's old spool goes
+                    // to the buffer now the move landed (the grid's Swap).
+                    const displaced = opts && opts.swapDisplaced;
+                    if (movedCount && displaced && displaced.id != null
+                            && !state.heldSpools.some(s => String(s.id) === String(displaced.id))) {
+                        state.heldSpools.push(Object.assign({}, displaced));
+                    }
                     // Group 40, the same-slot swap: the slot's old spool came off
                     // its head into the scan buffer. One render, one save.
                     window.takeIntoBuffer(res, { render: false });
@@ -1999,15 +2052,100 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
                     // the buffer cards' data immediately (no 5s pulse wait). Mirrors
                     // the scan-assignment path above.
                     document.dispatchEvent(new CustomEvent('inventory:locations-changed'));
-                } else showToast(res.msg || 'Assign failed', 'error', 7000);
+                    end(landed, res);
+                } else {
+                    showToast(res.msg || 'Assign failed', 'error', 7000);
+                    end('failed', res);
+                }
             })
-            .catch((e) => { setProcessing(false); console.error(e); });
+            .catch((e) => { setProcessing(false); console.error(e); end(landed || 'failed'); });
     };
     post(first, {
         heads: first.confirmed_toolheads,
         pickedSlot: pickedSlot != null ? String(pickedSlot) : null,
+        expectedFeed,
     });
 };
+
+// Group 40.2 (Derek's D2.1; Q1 answered 2026-10-13: loop) — a multi-slot box's
+// own label scanned with spools in the buffer opens the slot picker (40.1) once
+// per spool that was in the buffer when the label was scanned, top first: each
+// slot's spool and feed, the ⭐, and a tap, a number, Enter or the slot's own
+// label picks. It used to file the whole buffer with no slot (one spool: a slot
+// the engine chose unseen). Iterating the scan-time list means a spool a Swap
+// hands back is never offered again, so the loop always ends. Each pick is one
+// move through /api/smart_move, with its own questions (40.3). Escape, ✕ or
+// CMD:CANCEL stops the loop and the rest stay in the buffer; Cancel on a
+// question steps back to this spool's picker; a failure ends the loop after its
+// 7 s error (Claude's call 24). Several spools end with a summary.
+let _pickerLoop = null;
+const _placeBufferWithPicker = async (box) => {
+    if (_pickerLoop) {
+        const why = `Still placing your buffer into ${_pickerLoop.box}: finish or cancel that first`;
+        showToast(why, 'warning', 7000);
+        if (window.logClientEvent) window.logClientEvent(`⚠️ LOC:${box} ignored: ${why}`, 'WARNING');
+        return;
+    }
+    const queue = state.heldSpools.map(s => ({ id: s.id }));
+    const loop = _pickerLoop = { box, placed: [], stop: '' };
+    const manage = document.getElementById('manageModal');
+    const host = manage && manage.classList && manage.classList.contains('show') ? manage : null;
+    try {
+        for (let i = 0; i < queue.length && !loop.stop; i++) {
+            const sid = queue[i].id;
+            // It left the buffer meanwhile (dropped, or placed some other way).
+            if (!state.heldSpools.some(s => String(s.id) === String(sid))) continue;
+            for (;;) {
+                const pick = await window.openSlotPicker({
+                    location: box, spool: sid, host,
+                    step: queue.length > 1 ? `${i + 1} of ${queue.length}` : '',
+                });
+                if (!pick || pick.kind !== 'slot' || !pick.send) { loop.stop = 'stopped'; break; }
+                const send = pick.send;
+                const out = await new Promise((resolve) => performContextAssign(box,
+                    send.slot != null ? send.slot : null, [], [sid],
+                    send.picked_slot != null ? send.picked_slot : null,
+                    { expectedFeed: pick.expected_feed, swapDisplaced: pick.swap ? pick.displaced : null,
+                      onOutcome: resolve }));
+                if (out.outcome === 'moved') { loop.placed.push({ id: sid, slot: pick.slot }); break; }
+                if (out.outcome === 'cancelled') continue;   // step back: this spool's picker again
+                loop.stop = 'failed';
+                break;
+            }
+        }
+    } finally {
+        _pickerLoop = null;
+        _summarizePickerLoop(loop, queue);
+    }
+};
+
+// What the loop did, when the moves' own toasts don't already say it: several
+// spools, or one that was never placed because the picker was cancelled.
+const _summarizePickerLoop = (loop, queue) => {
+    const held = (id) => state.heldSpools.some(s => String(s.id) === String(id));
+    const placedIds = new Set(loop.placed.map(p => String(p.id)));
+    const left = queue.filter(q => !placedIds.has(String(q.id)) && held(q.id)).map(q => `#${q.id}`);
+    const and = (list) => (list.length < 2 ? list.join('') : `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`);
+    if (queue.length < 2) {
+        if (loop.stop === 'stopped' && !loop.placed.length && left.length) {
+            showToast(`Nothing placed in ${loop.box}: ${left[0]} stays in your buffer`, 'info', 4000);
+            if (window.logClientEvent) window.logClientEvent(
+                `ℹ️ Slot picker for ${loop.box} closed — ${left[0]} stays in the buffer, nothing moved`, 'INFO');
+        }
+        return;
+    }
+    const placed = loop.placed.map(p => `#${p.id} → slot ${p.slot}`);
+    const parts = [];
+    if (placed.length) parts.push(placed.join(', '));
+    if (left.length) parts.push(`${and(left)} ${left.length === 1 ? 'stays' : 'stay'} in your buffer`);
+    const after = loop.stop === 'failed' ? ' (stopped after an error)' : '';
+    const text = `📦 ${loop.box}: ${parts.join('; ') || 'nothing placed'}${after}`;
+    showToast(text, (left.length || loop.stop) ? 'info' : 'success', 6000);
+    if (window.logClientEvent) window.logClientEvent(
+        `${loop.stop === 'failed' ? '⚠️' : 'ℹ️'} Box picker for ${loop.box}: ${parts.join('; ') || 'nothing placed'}${after}`,
+        loop.stop === 'failed' ? 'WARNING' : 'INFO');
+};
+window._placeBufferWithPicker = _placeBufferWithPicker;
 
 // Group 41.4 — Undo Last Move. The first press asks the server, which answers
 // the question naming the move it would reverse ("Undo: put #57 back in

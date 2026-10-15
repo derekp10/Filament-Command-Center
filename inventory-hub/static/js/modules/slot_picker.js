@@ -16,31 +16,52 @@
 //       toolhead: 'XL-3',       // return mode: the head the spool leaves
 //       host: modalEl,          // a Bootstrap modal/offcanvas: closing it cancels the picker
 //       title: '…',             // optional heading
+//       step: '1 of 3',         // optional: where a caller's loop is (40.2's several spools)
 //       allowNone: true,        // a "No slot" tile (return mode shows one by default)
 //       preselect: {slot: '2'} | {head: 'XL-4'},  // the first highlight (else the ⭐)
 //   }) -> Promise<null
-//              | {kind: 'slot', box, slot, occupant, claimants, feeds, free, current, recommended, via}
+//              | {kind: 'slot', box, slot, occupant, claimants, feeds, free, current, recommended, via,
+//                 send, expected_feed, choice, swap, displaced}
 //              | {kind: 'pool', box, slot, occupant, free, recommended, via}
 //              | {kind: 'head', head, printer, resident, residents, feeds, recommended, via}
 //              | {kind: 'none', box, recommended, via}>
 //   null = cancelled: Escape, ✕, a CMD:CANCEL scan, "Edit feeds", the host
-//   closing, or an open refused (a bulk move is armed). The picker writes
+//   closing, a bulk move or an audit starting, or an open refused (D2: another
+//   dialog is up, a bulk move or an audit runs, FCC is busy). The picker writes
 //   nothing: callers own the move and every confirm after it.
+//
+//   What a box-slot pick tells its caller to send (Group 40.2, D4): `send` is
+//   {picked_slot: n} for a free slot (or the spool's own: kept only while still
+//   free, and a slot feeding the head the spool is leaving stores it there, as
+//   the tile says), and {slot: n} only after the user chose what happens to the
+//   slot's spool (Swap / Overwrite, or the same-slot swap's "Swap it out"):
+//   `slot` is the engine's Overwrite. `expected_feed` is what the tile showed the
+//   slot feeding (a head id, or '' for a pool or storage slot), so a slot
+//   re-pointed meanwhile is asked about again. `swap` / `displaced`: the user
+//   chose Swap, so the caller puts the slot's old spool in the buffer once the
+//   move lands (the grid's Swap). Greyed-out slots (the model's `blocked`: two
+//   spools claim it, it is bound to something that isn't a toolhead, its own
+//   spool runs on another head, a stale record where nothing loads, and any
+//   occupied slot in return mode) say why and are never picked.
 //
 //   window.routePickerScan(text) -> bool. processScan calls it right after
 //   routeConfirmScan. While a picker is open it claims EVERY scan: a choice's
 //   label picks it (LOC:<box>:SLOT:<n> or CMD:SLOT:<n> for a box; LOC:<head> or
 //   a Printer Pool slot label for a printer), CMD:CANCEL cancels, and anything
-//   else is refused with a 7 s warning and an Activity Log line. It never
-//   falls through and acts.
+//   else is refused with a 7 s warning, an Activity Log line and the panel's
+//   own status line (toasts sit under the panel). It never falls through and
+//   acts. A choice's label scanned while the picker is still loading is kept
+//   and applied once the slots are drawn.
 //   window.isSlotPickerOpen() -> bool.
 //
 // Keys (listed in the ? overlay): ←/→/↑/↓ move the highlight (wraps), 1–9
 // highlight that slot (or the Nth choice), Enter picks the highlight, Escape
-// cancels (mountOverlay owns it). A scanner burst stays the scan accumulator's:
-// a digit only MOVES the highlight (a scan may start with one), and an Enter
-// that ends a scan is the scan's. No text <input> anywhere: a focused input
-// disarms the hardware scanner (the L298 lesson).
+// cancels (mountOverlay owns it). A scanner burst stays the scan accumulator's
+// (D1): an Enter while a scan is in flight is the scan's, and a digit is a
+// hotkey only when the scan buffer was empty and nothing followed it within
+// 50 ms (a 1–2 digit spool label is a scan, not two jumps and a pick). Focus in
+// a field behind the picker never drives it. No text <input> anywhere: a
+// focused input disarms the hardware scanner (the L298 lesson).
 //
 // Printers: the picker opens at once and asks each printer it touches itself
 // (fetchPrinterStateDetailed through withPrinterCheck); its chip and every
@@ -100,20 +121,75 @@
 #${OVERLAY_ID} .fcc-sp-keys { color:#c8c8c8; font-size:0.8rem; }
 #${OVERLAY_ID} .fcc-sp-msg { padding:14px 18px; font-size:1rem; }
 #${OVERLAY_ID} .fcc-sp-link { color:#8fe3ff; text-decoration:underline; background:none; border:0; padding:0; font-size:0.85rem; }
+#${OVERLAY_ID} .fcc-sp-tile.is-blocked { border-style:dashed; border-color:#6b5a3a; background:#151515; }
+#${OVERLAY_ID} .fcc-sp-tile.is-blocked .fcc-sp-num { color:#b9a77f; }
+#${OVERLAY_ID} .fcc-sp-tile.is-blocked.kb-active { border-color:#ffb74d; box-shadow:0 0 0 3px rgba(255,183,77,0.45); }
+#${OVERLAY_ID} .fcc-sp-block { font-size:0.78rem; color:#ffd27a; font-weight:700; }
+#${OVERLAY_ID} .fcc-sp-status { display:none; margin:10px 12px 0; padding:6px 10px; border-radius:6px; background:#4a3200; color:#ffd27a; border:1px solid #ffb74d; font-weight:bold; }
+#${OVERLAY_ID} .fcc-sp-step { font-size:0.8rem; font-weight:800; color:#111; background:#9fe8ff; border-radius:10px; padding:1px 8px; margin-left:8px; white-space:nowrap; }
+#${OVERLAY_ID} .fcc-sp-choice { display:flex; gap:16px; padding:14px 18px; align-items:flex-start; flex-wrap:wrap; }
+#${OVERLAY_ID} .fcc-sp-choice-card { width:205px; }
+#${OVERLAY_ID} .fcc-sp-choice-text { flex:1; min-width:240px; font-size:1rem; color:#f1f1f1; }
+#${OVERLAY_ID} .fcc-sp-choice-btns { display:flex; gap:10px; flex-wrap:wrap; margin-top:12px; }
+#${OVERLAY_ID} .fcc-sp-choice-btn { display:flex; flex-direction:column; align-items:flex-start; min-width:150px; text-align:left; }
+#${OVERLAY_ID} .fcc-sp-choice-btn small { font-weight:400; font-size:0.78rem; }
+#${OVERLAY_ID} .fcc-sp-choice-btn:focus { box-shadow:0 0 0 3px rgba(13,202,240,0.6); }
 `;
         document.head.appendChild(css);
     };
 
     // ---- session lifecycle -------------------------------------------------------
 
+    const _dropChoiceQR = (s) => {
+        if (s && s.choiceQR) { try { s.choiceQR.cleanup(); } catch (_) { /* noop */ } s.choiceQR = null; }
+    };
+
     const _finish = (s, result) => {
         if (!s || s.settled) return;
         s.settled = true;
+        _dropChoiceQR(s);
+        clearTimeout(s.statusTimer);
         (s.disposers || []).forEach((d) => { try { d(); } catch (_) { /* noop */ } });
         s.disposers = [];
         if (s.handle) { try { s.handle.cleanup(); } catch (_) { /* noop */ } }
         if (_session === s) _session = null;
         try { s.resolve(result); } catch (_) { /* noop */ }
+    };
+
+    // D3: what a refusal says, said INSIDE the panel too (role=alert). The toast
+    // layer (z 11000) sits under the picker (z 20000+), so a toast alone was
+    // feedback nobody saw.
+    const _flash = (s, text) => {
+        if (!s || !s.handle || s.settled) return;
+        const line = s.handle.element.querySelector('.fcc-sp-status');
+        if (!line) return;
+        line.textContent = text;
+        line.style.display = 'block';
+        clearTimeout(s.statusTimer);
+        s.statusTimer = setTimeout(() => { line.style.display = 'none'; }, 7000);
+    };
+
+    // A refusal: the panel's status line, a 7 s warning toast and an Activity Log line.
+    const _refuse = (s, text, logText) => {
+        _flash(s, text);
+        if (typeof showToast === 'function') showToast(text, 'warning', 7000);
+        if (window.logClientEvent) window.logClientEvent(`⚠️ ${logText || text}`, 'WARNING');
+    };
+
+    // D2: a bulk move or an audit started while the picker was open. Location
+    // scans belong to that session now, so the picker gets out of the way.
+    const _sessionStarted = () => {
+        const st = _st();
+        if (st.bulkMoveActive) return 'a bulk move';
+        if (st.auditActive) return 'an audit';
+        return '';
+    };
+    const _closeForSession = (s, what) => {
+        if (!s || s.settled) return;
+        const msg = `Slot picker closed: ${what} started, so nothing was placed`;
+        if (typeof showToast === 'function') showToast(msg, 'warning', 7000);
+        if (window.logClientEvent) window.logClientEvent(`⚠️ ${msg}`, 'WARNING');
+        _finish(s, null);
     };
 
     const _isTopmost = (s) => {
@@ -155,12 +231,28 @@
         if (i >= 0) _setActive(s, i);
     };
 
-    const _resultFor = (s, t, via) => {
+    // What a slot tile showed it feeds, as the engine's `feed` token (D4): a
+    // head id, or '' for a Printer Pool or storage slot.
+    const _feedToken = (feeds) => (feeds && feeds.kind === 'toolhead' ? _u(feeds.id) : '');
+
+    // `choice`: what the user chose for an occupied slot ('swap', 'overwrite',
+    // 'swap_out', 'put'); none for a free slot.
+    const _resultFor = (s, t, via, choice = null) => {
         const d = t.data || {};
         const base = { kind: t.kind, recommended: !!t.star, via };
         if (t.kind === 'slot') {
-            return Object.assign(base, { box: t.box, slot: t.slot, occupant: d.spool || null,
-                claimants: d.claimants || [], feeds: d.feeds || null, free: !!d.free, current: !!d.current });
+            const occupant = d.spool || null;
+            const swap = choice === 'swap';
+            return Object.assign(base, { box: t.box, slot: t.slot, occupant,
+                claimants: d.claimants || [], feeds: d.feeds || null, free: !!d.free, current: !!d.current,
+                // D4: a free slot is a pick (kept only while still free); an
+                // occupied one is the engine's Overwrite, sent only after a choice.
+                send: d.free ? { picked_slot: t.slot } : { slot: t.slot },
+                expected_feed: _feedToken(d.feeds),
+                choice, swap,
+                displaced: (swap && occupant) ? { id: occupant.id, display: occupant.display, color: occupant.color,
+                    color_direction: occupant.color_direction, remaining_weight: occupant.remaining_weight,
+                    details: occupant.details, archived: occupant.archived } : null });
         }
         if (t.kind === 'pool') {
             return Object.assign(base, { box: t.box, slot: t.slot, occupant: d.spool || null, free: !!d.free });
@@ -174,6 +266,22 @@
 
     const _pick = (s, t, via) => {
         if (!s || s.settled || !t) return;
+        const started = _sessionStarted();
+        if (started) { _closeForSession(s, started); return; }
+        const d = t.data || {};
+        if (t.kind === 'slot' && d.blocked) {
+            // D4: greyed out, never picked; the panel says why.
+            _refuse(s, `${t.box} slot ${t.slot}: ${d.blocked}`,
+                `Slot picker: ${t.box} slot ${t.slot} can't take #${s.model && s.model.spool}: ${d.blocked}`);
+            return;
+        }
+        if (t.kind === 'slot' && !d.free && s.model && s.model.mode !== 'return') {
+            // Q2 (decided 2026-10-13): an occupied slot asks what happens to its
+            // spool, as the grid's Swap / Overwrite does, so the incoming spool
+            // always gets a real slot.
+            _openChoice(s, t, via);
+            return;
+        }
         _finish(s, _resultFor(s, t, via));
     };
 
@@ -230,12 +338,16 @@
             ? `<div class="fcc-sp-warn">⚠️ ${d.claimants.length} spools claim this slot (${d.claimants.map((c) => '#' + _esc(c)).join(', ')})</div>` : '';
         const here = d.current
             ? `<div class="fcc-sp-note">📍 #${_esc(m.spool)} ${_u(m.spool_location) === _u(m.location) ? 'sits here now' : 'came from here'}</div>` : '';
+        // D4: a slot the picker can't take says why on the tile (and again, in
+        // the status line, if it is picked anyway).
+        const block = d.blocked ? `<div class="fcc-sp-block">⛔ ${_esc(d.blocked)}</div>` : '';
+        const label = `${t.box} slot ${t.slot}${d.blocked ? ` (unavailable: ${d.blocked})` : ''}`;
         return `
-            <button type="button" class="fcc-sp-tile${t.star ? ' is-star' : ''}" role="option"
+            <button type="button" class="fcc-sp-tile${t.star ? ' is-star' : ''}${d.blocked ? ' is-blocked' : ''}" role="option"
                     data-sp-idx="${i}" data-sp-kind="slot" data-sp-box="${_esc(t.box)}" data-sp-slot="${_esc(t.slot)}"
-                    aria-label="${_esc(`${t.box} slot ${t.slot}`)}">
+                    ${d.blocked ? 'aria-disabled="true" data-sp-blocked="1"' : ''} aria-label="${_esc(label)}">
                 <div class="fcc-sp-top"><span class="fcc-sp-num">SLOT ${_esc(t.slot)}</span>${t.star ? '<span class="fcc-sp-star">⭐ Recommended</span>' : ''}</div>
-                ${body}${more}${feed}${extra}${here}
+                ${body}${more}${feed}${extra}${here}${block}
                 <div class="fcc-sp-qr" id="fcc-sp-qr-${s.id}-${i}"></div>
             </button>`;
     };
@@ -354,13 +466,15 @@
     const _header = (s, chips) => {
         const m = s.model || {};
         const sub = m.spool_display ? `<div class="small" style="color:#e0e0e0;">${_esc(m.spool_display)}</div>` : '';
+        const step = s.opts.step ? `<span class="fcc-sp-step">${_esc(s.opts.step)}</span>` : '';
         return `
             <div class="card-header d-flex align-items-start justify-content-between gap-2">
-                <div><div class="fw-bold text-info" style="font-size:1.1rem;">🎯 ${_esc(_title(s))}</div>${sub}</div>
+                <div><div class="fw-bold text-info" style="font-size:1.1rem;">🎯 ${_esc(_title(s))}${step}</div>${sub}</div>
                 <div class="d-flex align-items-center gap-2 flex-wrap justify-content-end">${chips || ''}
                     <button type="button" class="btn-close btn-close-white" data-sp-act="cancel" title="Cancel (Esc)" aria-label="Cancel"></button>
                 </div>
-            </div>`;
+            </div>
+            <div class="fcc-sp-status" role="alert"></div>`;
     };
 
     const _setContent = (s, html) => {
@@ -368,11 +482,17 @@
         s.handle.setContent(html);
     };
 
-    const _renderLoading = (s) => _setContent(s, `
-        <div class="card bg-dark text-light shadow-lg fcc-sp-panel" data-sp-state="loading">
-            ${_header(s)}
-            <div class="fcc-sp-msg">⏳ Loading ${_esc(s.location)}…</div>
-        </div>`);
+    const _renderLoading = (s) => {
+        _setContent(s, `
+            <div class="card bg-dark text-light shadow-lg fcc-sp-panel" data-sp-state="loading" tabindex="-1">
+                ${_header(s)}
+                <div class="fcc-sp-msg">⏳ Loading ${_esc(s.location)}…</div>
+            </div>`);
+        // D1: the panel takes the focus at once, so a field behind it (the
+        // Location Manager's ID box, say) no longer receives a scanner's keys.
+        const panel = s.handle && s.handle.element.querySelector('.fcc-sp-panel');
+        if (panel) { try { panel.focus({ preventScroll: true }); } catch (_) { try { panel.focus(); } catch (__) { /* noop */ } } }
+    };
 
     const _renderMessage = (s, text, retry) => {
         _setContent(s, `
@@ -405,8 +525,9 @@
         });
         const msg = m.msg ? `<div class="fcc-sp-msg">${_esc(m.msg)}</div>` : '';
         const empty = !s.tiles.length && !m.msg ? '<div class="fcc-sp-msg">Nothing to pick here.</div>' : '';
+        s.view = 'grid';
         _setContent(s, `
-            <div class="card bg-dark text-light shadow-lg fcc-sp-panel" data-sp-state="ready" data-sp-mode="${_esc(m.mode)}">
+            <div class="card bg-dark text-light shadow-lg fcc-sp-panel" data-sp-state="ready" data-sp-mode="${_esc(m.mode)}" tabindex="-1">
                 ${_header(s, chips)}
                 <div class="card-body p-0 fcc-sp-scroll">${msg}${empty}<div class="fcc-sp-grid" role="listbox">${grid}</div></div>
                 <div class="card-footer fcc-sp-footer">${_footer(s)}</div>
@@ -416,12 +537,15 @@
             s.tiles.forEach((t, i) => { const q = _qrText(t); if (q) generateSafeQR(`fcc-sp-qr-${s.id}-${i}`, q, 56); });
             generateSafeQR(`fcc-sp-qr-${s.id}-cancel`, 'CMD:CANCEL', 48);
         }
-        // First highlight: the caller's preselect, else the ⭐, else the first choice.
-        const pre = s.opts.preselect || {};
+        // First highlight: the caller's preselect (or the tile a Back returned
+        // from), else the ⭐, else the first slot the picker can take.
+        const pre = s.returnTo || s.opts.preselect || {};
+        s.returnTo = null;
         let idx = s.tiles.findIndex((t) => (pre.slot != null && (t.kind === 'slot' || t.kind === 'pool')
             && t.slot === _normSlot(pre.slot) && (!pre.box || _u(pre.box) === t.box))
             || (pre.head && t.kind === 'head' && t.head === _u(pre.head)));
-        if (idx < 0) idx = s.tiles.findIndex((t) => t.star);
+        if (idx < 0) idx = s.tiles.findIndex((t) => t.star && !(t.data && t.data.blocked));
+        if (idx < 0) idx = s.tiles.findIndex((t) => !(t.data && t.data.blocked));
         if (s.tiles.length) _setActive(s, idx < 0 ? 0 : idx);
         else {
             const c = s.handle.element.querySelector('[data-sp-act="cancel"]');
@@ -429,6 +553,103 @@
         }
         // Re-apply printer answers that came in before this render.
         Object.keys(s.printerState).forEach((name) => _paintPrinter(s, name));
+    };
+
+    // ---- an occupied slot: what happens to its spool (Q2, D4) -------------------------
+
+    // The actions for an occupied slot's spool, by what it is (placement's
+    // occupant_state). A stored spool gets the grid's Swap / Overwrite. The
+    // slot's own spool running on the head the slot feeds is the same-slot swap
+    // (it comes off into the scan buffer either way, so there is one action). A
+    // stale record on a slot that loads a head is ignored by the load.
+    const _choiceFor = (s, t) => {
+        const d = t.data || {};
+        const occ = d.spool || {};
+        const feed = d.feeds || null;
+        const who = `#${occ.id}${occ.display ? ` (${occ.display})` : ''}`;
+        const incoming = s.model && s.model.spool != null ? `#${s.model.spool}` : 'the spool';
+        const loads = !!(feed && feed.kind === 'toolhead' && !feed.is_source);
+        const onto = loads ? ` and onto ${feed.id}` : '';
+        if (d.occupant_state === 'on_feed') {
+            return {
+                text: `Slot ${t.slot}'s spool ${who} is loaded on ${_u(occ.deployed_to)}. ${incoming} goes in slot ${t.slot}${onto}, `
+                    + `and #${occ.id} comes off into your scan buffer.`,
+                actions: [{ key: 'swap_out', label: 'Swap it out', sub: `#${occ.id} → your scan buffer`, qr: 'Scan to Swap it out' }],
+            };
+        }
+        if (d.occupant_state === 'stale') {
+            const dep = _u(occ.deployed_to);
+            return {
+                text: `#${occ.id}'s record still names slot ${t.slot}, though it is ${dep ? `on ${dep}` : 'in Unassigned'}. `
+                    + `${incoming} goes in slot ${t.slot}${onto}; #${occ.id}'s record is left as it is.`,
+                actions: [{ key: 'put', label: `Put it in slot ${t.slot}`, sub: `#${occ.id} isn't moved`, qr: 'Scan to put it there' }],
+            };
+        }
+        return {
+            text: `Slot ${t.slot} holds ${who}. Put ${incoming} in slot ${t.slot}${onto}?`,
+            actions: [
+                { key: 'swap', label: 'Swap', sub: `#${occ.id} → your scan buffer`, qr: 'Scan to Swap' },
+                { key: 'overwrite', label: 'Overwrite', sub: `#${occ.id} stays in ${t.box} without a slot`, qr: 'Scan to Overwrite' },
+            ],
+        };
+    };
+
+    const _openChoice = (s, t, via) => {
+        const c = _choiceFor(s, t);
+        const actions = c.actions.concat([{ key: 'back', label: 'Back', sub: 'pick another slot' }]);
+        s.view = 'choice';
+        s.choice = { tile: t, via, actions };
+        const occ = (t.data && t.data.spool) || null;
+        const btns = actions.map((a, i) => `
+            <button type="button" class="btn btn-sm ${a.key === 'back' ? 'btn-secondary' : (i === 0 ? 'btn-warning' : 'btn-info')} fcc-sp-choice-btn"
+                    data-sp-choice="${_esc(a.key)}">${_esc(a.label)}<small>${_esc(a.sub || '')}</small></button>`).join('');
+        _setContent(s, `
+            <div class="card bg-dark text-light shadow-lg fcc-sp-panel" data-sp-state="choice" data-sp-slot="${_esc(t.slot)}" tabindex="-1">
+                ${_header(s)}
+                <div class="fcc-sp-choice">
+                    <div class="fcc-sp-choice-card">${occ ? _card(occ) : ''}</div>
+                    <div class="fcc-sp-choice-text">
+                        <div class="fw-bold" style="color:#ffd36b;">${_esc(t.box)} slot ${_esc(t.slot)}</div>
+                        <div class="fcc-sp-choice-msg">${_esc(c.text)}</div>
+                        <div class="fcc-sp-choice-btns">${btns}</div>
+                        <div class="fcc-sp-choice-qrs"></div>
+                    </div>
+                </div>
+                <div class="card-footer fcc-sp-footer"><div class="fcc-sp-keys">←/→ move · Enter chooses · Back returns to the slots · Esc cancels · or scan a choice's QR</div></div>
+            </div>`);
+        // Scannable choices (session-scoped, so a stale printout can't fire):
+        // the first action, Overwrite as the third QR, and Back as the cancel.
+        if (window.attachConfirmQRs) {
+            const host = s.handle.element.querySelector('.fcc-sp-choice-qrs');
+            const first = c.actions[0];
+            const over = c.actions.find((a) => a.key === 'overwrite');
+            s.choiceQR = window.attachConfirmQRs({
+                host,
+                onConfirm: () => _choose(s, first.key),
+                onStore: over ? () => _choose(s, over.key) : undefined,
+                onCancel: () => _choose(s, 'back'),
+                confirmLabel: first.qr, storeLabel: over ? over.qr : undefined, cancelLabel: 'Scan to go Back',
+                theme: 'info',
+            });
+        }
+        const btn = s.handle.element.querySelector('[data-sp-choice]');
+        if (btn) { try { btn.focus(); } catch (_) { /* noop */ } }
+    };
+
+    const _choose = (s, key) => {
+        if (!s || s.settled || s.view !== 'choice' || !s.choice) return;
+        const { tile, via } = s.choice;
+        _dropChoiceQR(s);
+        if (key === 'back') {
+            s.view = 'grid';
+            s.choice = null;
+            s.returnTo = { slot: tile.slot, box: tile.box };
+            _render(s);
+            return;
+        }
+        const started = _sessionStarted();
+        if (started) { _closeForSession(s, started); return; }
+        _finish(s, _resultFor(s, tile, via, key));
     };
 
     // ---- printer state ---------------------------------------------------------------
@@ -471,9 +692,22 @@
 
     // ---- load ---------------------------------------------------------------------
 
+    // D3: a choice's label scanned while the slots were loading, applied once
+    // they are drawn (or refused, if they never are).
+    const _applyPendingScan = (s, ok) => {
+        const text = s.pendingScan;
+        s.pendingScan = null;
+        if (!text || s.settled) return;
+        if (ok) { window.routePickerScan(text); return; }
+        _refuse(s, `"${text}" wasn't applied: the slot picker couldn't load ${s.location}`);
+    };
+
     const _load = (s) => {
         if (s.settled) return;
         const gen = ++s.loadGen;
+        s.model = null;   // loading: a choice's label scanned now waits for the slots
+        s.tiles = [];
+        s.view = 'loading';
         _renderLoading(s);
         const q = new URLSearchParams({ location: s.location });
         if (s.opts.spool != null && s.opts.spool !== '') q.set('spool', String(s.opts.spool));
@@ -487,33 +721,95 @@
                 if (!ok) {
                     const why = (body && body.msg) || 'The slot picker could not open here.';
                     if (window.logClientEvent) window.logClientEvent(`⚠️ Slot picker for ${s.location}: ${why}`, 'WARNING');
+                    s.model = body || {};
+                    s.view = 'message';
                     _renderMessage(s, why, false);
+                    _applyPendingScan(s, false);
                     return;
                 }
                 s.model = body || {};
                 if (s.model.read_ok === false) {
                     if (window.logClientEvent) window.logClientEvent(
                         `⚠️ Slot picker for ${s.location}: ${s.model.read_error || "couldn't read Spoolman"}`, 'WARNING');
+                    s.view = 'message';
                     _renderMessage(s, `⚠️ Couldn't read Spoolman, so FCC can't tell which places are free. Retry in a moment, or cancel.`, true);
+                    _applyPendingScan(s, false);
                     return;
                 }
                 _render(s);
                 _probe(s);
+                _applyPendingScan(s, true);
             })
             .catch((e) => {
                 if (s.settled || gen !== s.loadGen) return;
                 const why = (e && e.message) || 'network error';
                 if (window.logClientEvent) window.logClientEvent(`⚠️ Slot picker for ${s.location} didn't load: ${why}`, 'WARNING');
+                s.model = { read_ok: false };
+                s.view = 'message';
                 _renderMessage(s, `⚠️ The slot picker couldn't load (${why}). Retry, or cancel.`, true);
+                _applyPendingScan(s, false);
             });
     };
 
     // ---- keys ---------------------------------------------------------------------
 
+    // A scan owns its Enter (D1): one in flight (any length, under 500 ms), a
+    // scanner-speed burst, or a slower scanner's buffer that looks like a scan
+    // payload. That Enter reaches processScan, then routePickerScan. A 1–2 digit
+    // spool label is in flight too, so its Enter is never a pick.
+    const _enterIsAScans = () => {
+        if (window.isScanInFlight && window.isScanInFlight()) return true;
+        if (window.isScannerBurst && window.isScannerBurst()) return true;
+        const buf = String(_st().scanBuffer || '');
+        return !!(buf && window.looksLikeScanPayload && window.looksLikeScanPayload(buf));
+    };
+
+    const _choiceKeys = (s, e, k) => {
+        const btns = Array.from(s.handle.element.querySelectorAll('[data-sp-choice]'));
+        if (k === 'ArrowRight' || k === 'ArrowDown' || k === 'ArrowLeft' || k === 'ArrowUp' || k === 'Tab') {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            const back = k === 'ArrowLeft' || k === 'ArrowUp' || (k === 'Tab' && e.shiftKey);
+            const at = btns.indexOf(document.activeElement);
+            const next = at < 0 ? (back ? btns.length - 1 : 0) : (at + (back ? btns.length - 1 : 1)) % btns.length;
+            if (btns[next]) { try { btns[next].focus(); } catch (_) { /* noop */ } }
+            return;
+        }
+        if (k === 'Enter') {
+            if (_enterIsAScans()) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            if (window.clearScanBuffer) window.clearScanBuffer();
+            const ae = document.activeElement;
+            if (ae && ae.matches && ae.matches('[data-sp-act]')) { ae.click(); return; }
+            const btn = btns.includes(ae) ? ae : btns[0];
+            if (btn) _choose(s, btn.getAttribute('data-sp-choice'));
+        }
+        // Digits do nothing here: there is no slot to jump to.
+    };
+
     const _keyHandler = (s) => (e) => {
         if (_session !== s || s.settled || !_isTopmost(s)) return;
         if (e.ctrlKey || e.altKey || e.metaKey) return;
+        // D1: a key aimed at a field behind the picker (focus outside its panel)
+        // never drives it: a scan typed into that field used to pick a slot.
+        const ae = document.activeElement;
+        if (ae && ae !== document.body && s.handle && !s.handle.element.contains(ae)) return;
         const k = e.key;
+        if (s.view === 'choice') { _choiceKeys(s, e, k); return; }
+        if (k === 'Tab') {
+            // Tab stays inside the panel (its tiles and buttons): focus that
+            // left it would leave every key above ignored.
+            const items = Array.from(s.handle.element.querySelectorAll('.fcc-sp-tile, [data-sp-act]'));
+            if (!items.length) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            const at = items.indexOf(ae);
+            const next = at < 0 ? (e.shiftKey ? items.length - 1 : 0)
+                : (at + (e.shiftKey ? items.length - 1 : 1)) % items.length;
+            try { items[next].focus(); } catch (_) { /* noop */ }
+            return;
+        }
         if (k === 'ArrowRight' || k === 'ArrowDown' || k === 'ArrowLeft' || k === 'ArrowUp') {
             e.preventDefault();
             e.stopImmediatePropagation();
@@ -521,16 +817,10 @@
             return;
         }
         if (k === 'Enter') {
-            // An Enter that ends a scan belongs to the scan accumulator (scripts.html):
-            // a scanner-speed burst, or a slower scanner's buffer that looks like a
-            // scan payload. It reaches processScan, then routePickerScan.
-            if (window.isScannerBurst && window.isScannerBurst()) return;
-            const buf = String(_st().scanBuffer || '');
-            if (buf && window.looksLikeScanPayload && window.looksLikeScanPayload(buf)) return;
+            if (_enterIsAScans()) return;
             e.preventDefault();
             e.stopImmediatePropagation();
             if (window.clearScanBuffer) window.clearScanBuffer();
-            const ae = document.activeElement;
             if (ae && s.handle && s.handle.element.contains(ae) && ae.matches && ae.matches('[data-sp-act]')) {
                 ae.click();
                 return;
@@ -541,16 +831,20 @@
             return;
         }
         if (/^[1-9]$/.test(k)) {
-            // A scan may start with a digit: never pick on one, and leave it to the
-            // accumulator. A human's lone digit is dropped once nothing follows at
-            // scanner speed, so the next scan isn't prefixed with it.
+            // D1: a scan may start with a digit, and a short spool label is all
+            // digits. A digit is a hotkey only when the scan buffer was empty and
+            // nothing followed it within 50 ms (a scanner types its next key in a
+            // few ms); the accumulator collects it meanwhile, and a lone one is
+            // dropped from the scan buffer once taken.
             if (window.isScannerBurst && window.isScannerBurst()) return;
             if (String(_st().scanBuffer || '')) return;
-            _jump(s, parseInt(k, 10));
             setTimeout(() => {
+                if (s.settled || _session !== s || s.view !== 'grid') return;
                 const st = _st();
-                if (st.scanBuffer === k && window.clearScanBuffer) window.clearScanBuffer();
-            }, 200);
+                if (st.scanBuffer !== k) return;   // more keys came: a scan, not a hotkey
+                if (window.clearScanBuffer) window.clearScanBuffer();
+                _jump(s, parseInt(k, 10));
+            }, 50);
         }
     };
 
@@ -584,6 +878,12 @@
                 else if (a === 'feeds') _editFeeds(s);
                 return;
             }
+            const choice = e.target.closest && e.target.closest('[data-sp-choice]');
+            if (choice) {
+                e.preventDefault();
+                _choose(s, choice.getAttribute('data-sp-choice'));
+                return;
+            }
             const tile = e.target.closest && e.target.closest('.fcc-sp-tile');
             if (tile) _pick(s, s.tiles[parseInt(tile.dataset.spIdx, 10)], 'click');
         };
@@ -610,6 +910,30 @@
                 host.removeEventListener('hidden.bs.offcanvas', onHostClose);
             });
         }
+        // D2: a bulk move or an audit that starts while the picker is open (in
+        // another tab, say: the heartbeat brings it) owns the location scans, so
+        // the picker closes itself.
+        const onPulse = () => {
+            const started = _sessionStarted();
+            if (started) _closeForSession(s, started);
+        };
+        document.addEventListener('inventory:sync-pulse', onPulse);
+        s.disposers.push(() => document.removeEventListener('inventory:sync-pulse', onPulse));
+    };
+
+    // D2: why the picker must not open now, or ''. It never stacks over another
+    // dialog (one Escape cancelled the dialog underneath, a second the picker),
+    // never runs over an audit or a gating dialog, and never starts while FCC is
+    // still handling the last scan.
+    const _openBlockedBy = () => {
+        const st = _st();
+        if (st.auditActive) return 'The slot picker waits until the audit is finished or cancelled';
+        if (st.activeModal) return 'Answer the dialog on screen first, then try again';
+        if (st.processing) return 'FCC is still handling the last scan: try again in a moment';
+        const mine = _session && _session.handle ? _session.handle.element : null;
+        const other = Array.from(document.querySelectorAll('[data-overlay-mount="1"]')).find((el) => el !== mine);
+        if (other) return 'Finish or close the dialog on screen first: the slot picker won\'t open over it';
+        return '';
     };
 
     // ---- public -------------------------------------------------------------------
@@ -624,10 +948,17 @@
             if (window.logClientEvent) window.logClientEvent(`ℹ️ Slot picker for ${loc} not opened: a bulk move is armed`, 'INFO');
             return Promise.resolve(null);
         }
+        const blocked = _openBlockedBy();
+        if (blocked) {
+            if (typeof showToast === 'function') showToast(blocked, 'warning', 7000);
+            if (window.logClientEvent) window.logClientEvent(`⚠️ Slot picker for ${loc} not opened: ${blocked}`, 'WARNING');
+            return Promise.resolve(null);
+        }
         if (_session) _finish(_session, null);   // one picker at a time
         return new Promise((resolve) => {
             const s = { id: ++_seq, opts: o, location: loc, resolve, settled: false, model: null,
-                tiles: [], printerState: {}, disposers: [], loadGen: 0, activeIdx: -1 };
+                tiles: [], printerState: {}, disposers: [], loadGen: 0, activeIdx: -1,
+                view: 'loading', choice: null, choiceQR: null, pendingScan: null, statusTimer: null, returnTo: null };
             _session = s;
             _mount(s);
             _load(s);
@@ -636,12 +967,39 @@
 
     window.isSlotPickerOpen = () => !!(_session && !_session.settled);
 
+    // A choice's label (what the picker could pick once loaded): a slot label,
+    // CMD:SLOT:<n>, or another location's LOC: label (a printer's head). The
+    // label of the place the picker is for is not one.
+    const _looksLikeAChoice = (up, s) => /^LOC:.+:SLOT:\d+$/.test(up) || /^CMD:SLOT:\d+$/.test(up)
+        || (up.startsWith('LOC:') && !up.includes(':SLOT:') && up.slice(4).trim() !== s.location);
+
     window.routePickerScan = (text) => {
         const s = _session;
         if (!s || s.settled) return false;
         const up = String(text == null ? '' : text).trim().toUpperCase();
         if (!up) return false;
-        if (up === 'CMD:CANCEL' || up.startsWith('CMD:CANCEL:')) { _finish(s, null); return true; }
+        if (up === 'CMD:CANCEL' || up.startsWith('CMD:CANCEL:')) {
+            // D3: said, not silent.
+            if (typeof showToast === 'function') showToast('Slot picker cancelled — nothing moved', 'info', 4000);
+            if (window.logClientEvent) window.logClientEvent(
+                `ℹ️ Slot picker for ${s.location} cancelled by a CMD:CANCEL scan — nothing moved`, 'INFO');
+            _finish(s, null);
+            return true;
+        }
+        if (s.view === 'choice') {
+            // Its own choices have session QRs (routeConfirmScan answers them
+            // first); any other label waits.
+            _refuse(s, `Choose what happens to slot ${s.choice && s.choice.tile ? s.choice.tile.slot : ''}'s spool first, or Back. (Ignored: ${text})`,
+                `Scan "${text}" ignored: the slot picker is asking what happens to a slot's spool`);
+            return true;
+        }
+        if (s.view === 'loading' && !s.model && _looksLikeAChoice(up, s)) {
+            // D3: scanned before the slots were drawn: kept, and applied once they are.
+            s.pendingScan = String(text).trim();
+            const msgEl = s.handle && s.handle.element.querySelector('.fcc-sp-msg');
+            if (msgEl) msgEl.textContent = `⏳ Loading ${s.location}… (${s.pendingScan} is picked once it has loaded)`;
+            return true;
+        }
         const ready = !!(s.model && s.model.read_ok !== false && s.tiles.length);
         if (ready) {
             let m = /^LOC:(.+?):SLOT:(\d+)$/.exec(up);
@@ -662,6 +1020,7 @@
             }
         }
         _warn('Finish or cancel the slot picker first');
+        _flash(s, `Finish or cancel the slot picker first. (Ignored: ${text})`);
         return true;
     };
 
@@ -676,6 +1035,9 @@
             description: 'Pick the highlighted slot. Scanning a slot label (or the tile\'s QR) picks it too.' });
         window.registerShortcut({ id: 'slot-picker-cancel', scope: 'Slot Picker', keys: ['Esc'],
             description: 'Cancel the picker; nothing moves. CMD:CANCEL does the same.' });
+        window.registerShortcut({ id: 'slot-picker-choice', scope: 'Slot Picker', keys: ['←', '→', 'Enter'],
+            description: 'A slot that holds a spool asks what happens to it (Swap / Overwrite, or Swap it out): '
+                + '←/→ choose, Enter confirms, Back returns to the slots. Each answer has a QR too.' });
     };
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _registerShortcuts);
     else _registerShortcuts();

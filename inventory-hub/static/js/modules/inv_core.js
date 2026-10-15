@@ -550,7 +550,9 @@ window.askMoveConfirm = (answer, ctx = {}) => {
     toast(`${what} — nothing moved. Reload the page if this keeps happening.`, 'warning', 7000);
     if (window.logClientEvent) window.logClientEvent(
         `⚠️ Unrecognised move question (${answer && answer.confirm_type}) — nothing moved`, 'WARNING');
-    if (ctx.onCancel) ctx.onCancel();
+    // `unknown`: nobody answered anything (Group 40.2: the box picker's loop ends
+    // here instead of reopening the picker on the same unanswerable question).
+    if (ctx.onCancel) ctx.onCancel({ unknown: true });
     return null;
 };
 

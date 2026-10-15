@@ -162,6 +162,58 @@ def _slot_feed(row, slot, printer_map, loc_info_map, moving_from):
     return {"kind": "other", "id": target}
 
 
+def _ids(ids):
+    return logic._and_list(f"#{i}" for i in ids)
+
+
+def _occupant_state(item, feed, printer_map, loc_info_map):
+    """What the spool a slot shows is (Group 40.2, D4), so the picker can say what
+    a pick does to it: 'stored' (in the slot); 'on_feed' (deployed onto the head
+    the slot feeds: the same-slot swap takes it off into the scan buffer);
+    'on_other_head' (deployed onto a head the slot doesn't feed); 'stale' (its
+    record names the slot, but it is on no head). None for an empty slot."""
+    if not item:
+        return None
+    if not item.get('is_ghost'):
+        return 'stored'
+    dep = _u(item.get('deployed_to'))
+    if dep and logic._holds_one_spool(dep, printer_map, loc_info_map):
+        if feed and feed.get('kind') == 'toolhead' and feed.get('id') == dep:
+            return 'on_feed'
+        return 'on_other_head'
+    return 'stale'
+
+
+def _slot_block(mode, box, slot, claimants, free, feed, occupant, occ_state):
+    """Why the picker can't take `slot` (Group 40.2, D4), or None. The engine's
+    own refusals (its step-6 ghost guard, logic._ghost_claim_refusal), worded
+    for a tile, so a pick never asks a question and then refuses: two spools
+    claiming the slot; a binding to something that isn't a toolhead (the chain
+    can't load it); a spool deployed from the slot onto a head the slot doesn't
+    feed (only the slot's own head swaps it out); a record that still claims the
+    slot of a spool on no head, where nothing loads (a store refuses it); and,
+    in return mode, any slot that holds a spool (Return takes a free slot, or
+    No slot)."""
+    if mode == 'return' and not free:
+        return f"Holds {_ids(claimants)}: Return takes a free slot, or No slot"
+    if len(claimants) > 1:
+        return f"{len(claimants)} spools claim slot {slot} ({_ids(claimants)}): open {box} and sort them out first"
+    if feed and feed.get('kind') == 'other':
+        return f"Slot {slot} is bound to {feed.get('id')}, which isn't a toolhead: fix it in 🔗 Edit feeds first"
+    loads = bool(feed and feed.get('kind') == 'toolhead' and not feed.get('is_source'))
+    gid = (occupant or {}).get('id')
+    dep = _u((occupant or {}).get('deployed_to'))
+    if occ_state == 'on_other_head' or (occ_state == 'on_feed' and not loads):
+        if loads:
+            return f"#{gid} from this slot is loaded on {dep}, but the slot feeds {feed.get('id')}: take #{gid} off {dep} first"
+        return f"#{gid} from this slot is loaded on {dep}: take it off {dep} first"
+    if occ_state == 'stale' and not loads:
+        here = f"on {dep}" if dep else "in Unassigned"
+        there = f"{dep}'s label" if dep else "the label of where it sits"
+        return f"#{gid}'s record still claims slot {slot}, though it is {here}: scan #{gid}, then {there}, to clear that"
+    return None
+
+
 def _unreadable(model, err):
     model.update({"read_ok": False,
                   "read_error": f"couldn't read Spoolman ({err})",
@@ -245,28 +297,42 @@ def _box_model(row, box, sid, toolhead, mode, loc_list, loc_info_map, printer_ma
             if feed['printer'] not in printers_seen:
                 printers_seen[feed['printer']] = feed['id']
         free = s not in claims
+        claimants = [i.get('id') for i in shown]
+        occ_state = _occupant_state(shown[0] if shown else None, feed, printer_map, loc_info_map)
+        blocked = _slot_block(mode, box, s, claimants, free, feed, shown[0] if shown else None, occ_state)
         model["slots"].append({
             "slot": s,
             "spool": _card(shown[0]) if shown else None,
             # More than one spool claims it (the grid shows the rest unslotted).
-            "claimants": [i.get('id') for i in shown],
+            "claimants": claimants,
             "current": bool(mine),
             "free": free,
             "feeds": feed,
             "would_prompt": bool(free and logic.slot_would_prompt(
                 row, s, moving_from, printer_map, loc_info_map, lambda h: residents.get(h, []))),
+            # Group 40.2 (the picker follow-ups, D4): what the shown spool is, and
+            # why the picker can't take this slot (None: it can).
+            "occupant_state": occ_state,
+            "blocked": blocked,
         })
     model["unslotted"] = unslotted
     model["printers"] = [{"name": n, "head": h} for n, h in printers_seen.items()]
+    # The ⭐ never lands on a slot the picker greys out (D4): the one rule below,
+    # over the slots it can take. Only a free slot bound to something that isn't
+    # a toolhead is both free and greyed out.
+    star_claims = dict(claims)
+    for entry in model["slots"]:
+        if entry["blocked"] and entry["slot"] not in star_claims:
+            star_claims[entry["slot"]] = ["(greyed out)"]
 
     if mode == 'return':
-        pick, why = _return_recommendation(row, slot_ids, claims, ghost_slot, toolhead, loc_list, printer_map)
+        pick, why = _return_recommendation(row, slot_ids, star_claims, ghost_slot, toolhead, loc_list, printer_map)
         model["recommended"] = {"kind": "slot", "box": box, "slot": pick} if pick else {"kind": "none", "box": box}
         model["recommend_reason"] = why
         model["recommend_text"] = RECOMMEND_TEXT.get(why, "").format(head=_u(toolhead))
         return model
     pick, why = logic.recommend_box_slot(
-        max_slots, claims, own_slot,
+        max_slots, star_claims, own_slot,
         lambda s: logic.slot_would_prompt(row, s, moving_from, printer_map, loc_info_map,
                                           lambda h: residents.get(h, [])))
     model["recommended"] = {"kind": "slot", "box": box, "slot": pick} if pick else None

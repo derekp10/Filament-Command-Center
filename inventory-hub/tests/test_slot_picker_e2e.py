@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 from contextlib import ExitStack
 from unittest.mock import patch
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -95,12 +96,17 @@ def build_model(location, rows=ROWS, spools=SPOOLS, fail=False, **kwargs):
 class PickerStub:
     """Answers the picker's GETs from fixed models and every non-GET with a
     synthetic OK (recorded). `models`: {location or (location, mode): model, or a
-    callable(query) -> model}."""
+    callable(query) -> model}. `answers` (Group 40.2): {path: callable(body) ->
+    payload or None} for the POSTs a door test needs answered (None: the
+    synthetic OK). The buffer endpoint is the page's own (it starts as `buffer`
+    and follows the page's saves), never dev's shared one."""
 
-    def __init__(self, page: Page, models, printer_state=None):
+    def __init__(self, page: Page, models, printer_state=None, answers=None, buffer=None):
         self.models = dict(models)
         self.printer_state = printer_state or (lambda head: {
             "known": True, "is_active": False, "state": "IDLE", "printer_name": PRINTER})
+        self.answers = dict(answers or {})
+        self.buffer = list(buffer or [])
         self.queries: list[dict] = []
         self.probes: list[str] = []
         self.posts: list[tuple[str, dict]] = []
@@ -138,7 +144,7 @@ class PickerStub:
                 self._json(route, self.printer_state(head))
                 return
             if path == "/api/state/buffer":
-                self._json(route, [])
+                self._json(route, self.buffer)
                 return
             route.continue_()
             return
@@ -147,7 +153,11 @@ class PickerStub:
         except (TypeError, ValueError):
             body = {}
         self.posts.append((path, body if isinstance(body, dict) else {"_raw": body}))
-        self._json(route, {"success": True})
+        if path == "/api/state/buffer" and isinstance(body, dict):
+            self.buffer = list(body.get("buffer") or [])
+        answer = self.answers.get(path)
+        payload = answer(body) if answer else None
+        self._json(route, payload if payload is not None else {"success": True})
 
     def posted(self, path):
         return [b for p, b in self.posts if p == path]
@@ -159,10 +169,14 @@ DELAY_JS = """
 (() => {
   const real = window.fetch.bind(window);
   window.__printerDelayMs = 0;
+  window.__placementDelayMs = 0;
   window.fetch = (url, opts) => {
     const u = String(url && url.url ? url.url : url);
     if (u.includes('/api/printer_state/') && window.__printerDelayMs > 0) {
       return new Promise((r) => setTimeout(r, window.__printerDelayMs)).then(() => real(url, opts));
+    }
+    if (u.includes('/api/placement_options') && window.__placementDelayMs > 0) {
+      return new Promise((r) => setTimeout(r, window.__placementDelayMs)).then(() => real(url, opts));
     }
     return real(url, opts);
   };
@@ -185,6 +199,11 @@ OPEN_JS = """(opts) => {
 }"""
 
 READY = "#fcc-slot-picker [data-sp-state='ready']"
+CHOICE = "#fcc-slot-picker [data-sp-state='choice']"
+STATUS = "#fcc-slot-picker .fcc-sp-status"
+# The highlighted tile is `arg` (a slot, a head or a kind).
+ACTIVE_IS = """(want) => { const t = document.querySelector('#fcc-slot-picker .fcc-sp-tile.kb-active');
+  return !!t && (t.dataset.spSlot || t.dataset.spHead || t.dataset.spKind) === want; }"""
 
 
 @pytest.fixture
@@ -194,8 +213,8 @@ def picker_page(page: Page, base_url, request):
 
     holder = {}
 
-    def _setup(models, printer_state=None):
-        stub = PickerStub(page, models, printer_state=printer_state)
+    def _setup(models, printer_state=None, answers=None, buffer=None):
+        stub = PickerStub(page, models, printer_state=printer_state, answers=answers, buffer=buffer)
         quiet_heartbeat(page)
         page.add_init_script(DELAY_JS)
         page.goto(base_url)
@@ -270,15 +289,21 @@ def test_arrows_wrap_a_digit_highlights_and_enter_picks(picker_page):
     assert _active(page) == "4"
     page.keyboard.press("ArrowUp")
     assert _active(page) == "3"
-    page.keyboard.press("2")         # highlights, never picks
-    assert _active(page) == "2"
+    page.keyboard.press("2")         # highlights after a 50 ms beat (D1), never picks
+    page.wait_for_function(ACTIVE_IS, arg="2", timeout=2_000)
     assert page.evaluate("() => window.__pickDone") is False
     page.wait_for_timeout(300)       # a lone digit is dropped from the scan buffer
     assert page.evaluate("() => state.scanBuffer") == ""
     page.keyboard.press("Enter")
+    # Deliberately changed (Group 40.2, Q2 + D4): slot 2 holds #999202, so Enter
+    # asks what happens to it first; Swap is the first answer and has the focus.
+    page.wait_for_selector(CHOICE, timeout=5_000)
+    assert page.evaluate("() => window.__pickDone") is False
+    page.keyboard.press("Enter")
     got = _pick(page)
     assert got["kind"] == "slot" and got["box"] == "FCC-TEST-BOX" and got["slot"] == "2"
     assert got["occupant"]["id"] == 999202 and got["free"] is False and got["via"] == "key"
+    assert got["choice"] == "swap" and got["send"] == {"slot": "2"} and got["swap"] is True
     expect(page.locator("#fcc-slot-picker")).to_have_count(0)
 
 
@@ -475,6 +500,205 @@ def test_closing_the_host_modal_cancels_the_picker(picker_page):
     page.evaluate("() => document.getElementById('fcc-test-host').dispatchEvent(new Event('hidden.bs.modal'))")
     assert _pick(page) is None
     expect(page.locator("#fcc-slot-picker")).to_have_count(0)
+
+
+# ---- Group 40.2: the picker follow-ups (D1–D4, the 40.1 + 40.3 review) ---------------------------
+# HEAD proof (d8f6128): each of these fails there: a short numeric scan moved the
+# highlight and its Enter picked (D1), the picker opened over another dialog,
+# during an audit and while busy, and stayed open when a bulk move started (D2),
+# a refusal was only a toast under the panel, a label scanned while loading was
+# refused, CMD:CANCEL was silent (D3), and an occupied or greyed-out slot
+# resolved at once with no `send` (D4).
+
+# Slot 1 feeds FCCX-1 while its own spool runs on FCCX-2 (greyed out); slot 3's
+# own spool runs on FCCX-3, the head it feeds (the same-slot swap).
+D4_SPOOLS = SPOOLS[:1] + [
+    _sp(999211, "FCCX-2", src="FCC-TEST-BOX", src_slot=1, name="Test Orange", color="ee8822"),
+    _sp(999213, "FCCX-3", src="FCC-TEST-BOX", src_slot=3, name="Test Teal", color="22aaaa"),
+    _sp(999201, "FCC-TEST-SHELF"),
+]
+
+
+def test_a_short_numeric_scan_neither_moves_the_highlight_nor_picks(picker_page):
+    """D1: a 1–2 digit spool label typed at scanner speed is a scan: it is
+    refused like any other foreign scan, and its Enter picks nothing."""
+    page, setup, open_ = picker_page
+    setup({"FCC-TEST-BOX": build_model("FCC-TEST-BOX", spool=999201)})
+    open_({"location": "FCC-TEST-BOX", "spool": 999201})
+    assert _active(page) == "3"
+    page.keyboard.type("42", delay=0)
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(300)
+    assert page.evaluate("() => window.__pickDone") is False
+    assert _active(page) == "3"
+    expect(page.locator(STATUS)).to_contain_text("Finish or cancel the slot picker first. (Ignored: 42)")
+
+
+def test_keys_aimed_at_a_field_behind_the_picker_never_drive_it(picker_page):
+    """D1: focus in a field outside the panel (the Location Manager's ID box)
+    owns its keys; its Enter and digits neither pick nor move the highlight."""
+    page, setup, open_ = picker_page
+    setup({"FCC-TEST-BOX": build_model("FCC-TEST-BOX", spool=999201)})
+    open_({"location": "FCC-TEST-BOX", "spool": 999201})
+    page.evaluate("""() => { const i = document.createElement('input'); i.id = 'fcc-test-behind';
+        document.body.appendChild(i); i.focus(); }""")
+    page.keyboard.press("1")
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(300)
+    assert page.evaluate("() => window.__pickDone") is False
+    assert _active(page) == "3"
+
+
+@pytest.mark.parametrize("flag, why", [
+    ("auditActive", "waits until the audit is finished"),
+    ("activeModal", "Answer the dialog on screen first"),
+    ("processing", "still handling the last scan"),
+], ids=["audit", "gating-dialog", "busy"])
+def test_the_picker_wont_open_during_an_audit_a_gating_dialog_or_a_scan(picker_page, flag, why):
+    page, setup, open_ = picker_page
+    stub = setup({"FCC-TEST-BOX": build_model("FCC-TEST-BOX")})
+    page.evaluate(f"() => {{ state.{flag} = {'true' if flag != 'activeModal' else repr('confirm')}; }}")
+    try:
+        open_({"location": "FCC-TEST-BOX"}, ready=False)
+        assert _pick(page) is None
+        assert page.locator("#fcc-slot-picker").count() == 0 and stub.queries == []
+        assert any(why in t["text"] and t["type"] == "warning" for t in page.evaluate("() => window.__toastLog"))
+    finally:
+        page.evaluate(f"() => {{ state.{flag} = {'false' if flag != 'activeModal' else 'null'}; }}")
+
+
+def test_the_picker_never_stacks_over_another_dialog(picker_page):
+    """D2: one Escape used to cancel the dialog underneath, a second the picker."""
+    page, setup, open_ = picker_page
+    setup({"FCC-TEST-BOX": build_model("FCC-TEST-BOX")})
+    page.evaluate("() => window.mountOverlay({ id: 'fcc-test-under', content: '<div>a dialog</div>' })")
+    open_({"location": "FCC-TEST-BOX"}, ready=False)
+    assert _pick(page) is None
+    assert page.locator("#fcc-slot-picker").count() == 0
+    toasts = page.evaluate("() => window.__toastLog")
+    assert any("won't open over it" in t["text"] for t in toasts), toasts
+
+
+def test_the_picker_closes_itself_when_a_bulk_move_starts(picker_page):
+    page, setup, open_ = picker_page
+    setup({"FCC-TEST-BOX": build_model("FCC-TEST-BOX", spool=999201)})
+    open_({"location": "FCC-TEST-BOX", "spool": 999201})
+    try:
+        page.evaluate("() => { state.bulkMoveActive = true;"
+                      " document.dispatchEvent(new CustomEvent('inventory:sync-pulse')); }")
+        assert _pick(page) is None
+        expect(page.locator("#fcc-slot-picker")).to_have_count(0)
+        toasts = page.evaluate("() => window.__toastLog")
+        assert any(t["text"] == "Slot picker closed: a bulk move started, so nothing was placed" for t in toasts), toasts
+    finally:
+        page.evaluate("() => { state.bulkMoveActive = false; }")
+
+
+def test_cmd_cancel_says_the_picker_was_cancelled(picker_page):
+    page, setup, open_ = picker_page
+    stub = setup({"FCC-TEST-BOX": build_model("FCC-TEST-BOX", spool=999201)})
+    open_({"location": "FCC-TEST-BOX", "spool": 999201})
+    page.evaluate("() => processScan('CMD:CANCEL', 'barcode')")
+    assert _pick(page) is None
+    toasts = page.evaluate("() => window.__toastLog")
+    assert any(t["text"] == "Slot picker cancelled — nothing moved" for t in toasts), toasts
+    assert any("cancelled by a CMD:CANCEL scan" in b.get("msg", "") for b in stub.posted("/api/log_event"))
+
+
+def test_a_slot_label_scanned_while_the_slots_load_is_picked_once_they_are_drawn(picker_page):
+    page, setup, open_ = picker_page
+    setup({"FCC-TEST-BOX": build_model("FCC-TEST-BOX", spool=999201)})
+    page.evaluate("() => { window.__placementDelayMs = 1500; }")   # the in-page delay lever
+    page.evaluate(OPEN_JS, {"location": "FCC-TEST-BOX", "spool": 999201})
+    page.wait_for_selector("#fcc-slot-picker [data-sp-state='loading']", timeout=5_000)
+    page.evaluate("() => processScan('LOC:FCC-TEST-BOX:SLOT:4', 'barcode')")
+    expect(page.locator("#fcc-slot-picker .fcc-sp-msg")).to_contain_text("is picked once it has loaded")
+    got = _pick(page, timeout=10_000)
+    assert got["slot"] == "4" and got["via"] == "scan" and got["send"] == {"picked_slot": "4"}, got
+
+
+def test_a_free_pick_tells_the_caller_to_send_picked_slot_and_the_feed(picker_page):
+    page, setup, open_ = picker_page
+    setup({"FCC-TEST-BOX": build_model("FCC-TEST-BOX", spool=999201)})
+    open_({"location": "FCC-TEST-BOX", "spool": 999201})
+    page.keyboard.press("Enter")                       # the ⭐, slot 3 (feeds FCCX-3)
+    got = _pick(page)
+    assert got["send"] == {"picked_slot": "3"} and got["expected_feed"] == "FCCX-3", got
+    assert got["choice"] is None and got["swap"] is False and got["displaced"] is None
+    open_({"location": "FCC-TEST-BOX", "spool": 999201})
+    page.locator("#fcc-slot-picker .fcc-sp-tile[data-sp-slot='4']").click()   # a Printer Pool slot
+    got = _pick(page)
+    assert got["send"] == {"picked_slot": "4"} and got["expected_feed"] == "", got
+
+
+def test_a_greyed_out_slot_says_why_and_is_never_picked(picker_page):
+    page, setup, open_ = picker_page
+    model = build_model("FCC-TEST-BOX", spools=D4_SPOOLS, spool=999201)
+    assert _slot_of(model, "1")["blocked"], model["slots"]
+    setup({"FCC-TEST-BOX": model})
+    open_({"location": "FCC-TEST-BOX", "spool": 999201})
+    tile = page.locator("#fcc-slot-picker .fcc-sp-tile[data-sp-slot='1']")
+    expect(tile).to_have_class(re.compile(r"\bis-blocked\b"))
+    expect(tile).to_contain_text("#999211 from this slot is loaded on FCCX-2, but the slot feeds FCCX-1")
+    tile.click(force=True)     # aria-disabled: Playwright won't click it unforced; a person's click lands
+    page.evaluate("() => processScan('LOC:FCC-TEST-BOX:SLOT:1', 'barcode')")
+    page.wait_for_timeout(200)
+    assert page.evaluate("() => window.__pickDone") is False
+    expect(page.locator(STATUS)).to_contain_text("FCC-TEST-BOX slot 1: #999211 from this slot is loaded on FCCX-2")
+
+
+def test_an_occupied_slot_asks_swap_or_overwrite_and_back_returns(picker_page):
+    page, setup, open_ = picker_page
+    setup({"FCC-TEST-BOX": build_model("FCC-TEST-BOX", spool=999201)})
+    open_({"location": "FCC-TEST-BOX", "spool": 999201})
+    page.locator("#fcc-slot-picker .fcc-sp-tile[data-sp-slot='2']").click()
+    page.wait_for_selector(CHOICE, timeout=5_000)
+    choice = page.locator(CHOICE)
+    expect(choice).to_contain_text("Slot 2 holds #999202")
+    labels = page.evaluate("() => Array.from(document.querySelectorAll('#fcc-slot-picker [data-sp-choice]'))"
+                           ".map(b => b.dataset.spChoice)")
+    assert labels == ["swap", "overwrite", "back"], labels
+    page.locator("#fcc-slot-picker [data-sp-choice='back']").click()
+    page.wait_for_selector(READY, timeout=5_000)
+    assert _active(page) == "2"                          # Back lands on the slot it came from
+    page.keyboard.press("Enter")
+    page.wait_for_selector(CHOICE, timeout=5_000)
+    page.locator("#fcc-slot-picker [data-sp-choice='overwrite']").click()
+    got = _pick(page)
+    assert got["choice"] == "overwrite" and got["send"] == {"slot": "2"} and got["swap"] is False, got
+
+
+def test_the_choice_qrs_answer_it(picker_page):
+    page, setup, open_ = picker_page
+    setup({"FCC-TEST-BOX": build_model("FCC-TEST-BOX", spool=999201)})
+    open_({"location": "FCC-TEST-BOX", "spool": 999201})
+    page.evaluate("() => processScan('CMD:SLOT:2', 'barcode')")
+    page.wait_for_selector(CHOICE, timeout=5_000)
+    sid = page.evaluate("() => Object.keys(window._fccActiveConfirms || {}).pop()")
+    page.evaluate("(sid) => processScan('CMD:CONFIRM:' + sid, 'barcode')", sid)
+    got = _pick(page)
+    assert got["choice"] == "swap" and got["displaced"]["id"] == 999202, got
+    # The session ended with the picker: the same QR scanned again does nothing.
+    assert page.evaluate("(sid) => !(window._fccActiveConfirms || {})[sid]", sid) is True
+
+
+def test_the_same_slot_swap_has_one_answer(picker_page):
+    page, setup, open_ = picker_page
+    setup({"FCC-TEST-BOX": build_model("FCC-TEST-BOX", spools=D4_SPOOLS, spool=999201)})
+    open_({"location": "FCC-TEST-BOX", "spool": 999201})
+    page.locator("#fcc-slot-picker .fcc-sp-tile[data-sp-slot='3']").click()
+    page.wait_for_selector(CHOICE, timeout=5_000)
+    expect(page.locator(CHOICE)).to_contain_text("#999213 comes off into your scan buffer")
+    labels = page.evaluate("() => Array.from(document.querySelectorAll('#fcc-slot-picker [data-sp-choice]'))"
+                           ".map(b => b.dataset.spChoice)")
+    assert labels == ["swap_out", "back"], labels
+    page.keyboard.press("Enter")
+    got = _pick(page)
+    assert got["choice"] == "swap_out" and got["send"] == {"slot": "3"} and got["expected_feed"] == "FCCX-3", got
+
+
+def _slot_of(model, slot):
+    return next(s for s in model["slots"] if s["slot"] == str(slot))
 
 
 # ---- visual (stubbed data only; never dev contents) ----------------------------------------------
