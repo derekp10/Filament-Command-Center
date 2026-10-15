@@ -227,9 +227,10 @@ _Run finished at ~04:45 on 2026-10-14. Started from `dev` @ `4203ffe` (= `origin
 - **Next session, in order:** 40.1 (the shared picker; its ⭐ calls `logic.recommend_box_slot`), **40.3 with you**
   (S1–S6; the task file's 40.3 section now lists exactly what the browser must send, plus three small questions for
   you), then 40.2, 40.4, 40.5, 40.6, 40.7; full sweep before `dev`.
-- **Questions for you at 40.3** (no rush; defaults in brackets): Enter on a printing-only "Just store it" dialog also
-  stores? [yes] · the Quick-Swap Deposit onto a fed head shows one dialog (the three-way) instead of its own plus the
-  three-way? [one dialog] · a Yes whose slot got rebound to an empty idle head in the meantime just loads it? [yes].
+- **Questions for you at 40.3: answered the same afternoon** (task file, "Derek's answers"): Enter stores; one
+  Deposit dialog; a slot re-pointed mid-dialog asks again (new in 40.3, multi-user awareness); my three calls kept.
+  Three new buglist items came out of it (a stored-mid-print load to remember, multi-user awareness, INDX heads
+  without labels).
 
 ## Questions for Derek
 
