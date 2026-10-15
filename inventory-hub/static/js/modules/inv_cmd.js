@@ -1403,6 +1403,10 @@ const processScan = (text, source = 'keyboard') => {
     // generic CMD-routes below. Returns true on a matched session — fall
     // through to the rest of the dispatch otherwise.
     if (window.routeConfirmScan && window.routeConfirmScan(text)) return;
+    // Group 40.1: an open slot picker claims every scan next. A choice's label
+    // picks it, CMD:CANCEL cancels, anything else is refused with a warning, so
+    // a scan never acts behind the picker (slot_picker.js).
+    if (window.routePickerScan && window.routePickerScan(text)) return;
     // A session-scoped CMD:CONFIRM:<sid> that routeConfirmScan didn't claim
     // belongs to a dialog that has already closed. Never let it fall through to
     // the substring-matching routes below and answer whatever unrelated dialog

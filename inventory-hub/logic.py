@@ -400,6 +400,52 @@ _AUTO_SLOT_WHY = {
 }
 
 
+def box_slot_claims(box_row, box_id, in_box, moving_ids):
+    """Group 40.0e / 40.1 — who holds which slot of a multi-slot box, from one
+    read of it (get_spools_at_location_detailed(_strict) items, or a bucket of
+    them): the ONE reading the engine's auto-slot (step 3) and the slot
+    picker's ⭐ share, so the two can't drift. Returns (claims, own_slot,
+    ghost_slot):
+      - `claims` {slot: [ids]}: the slots OTHER spools hold, directly or as the
+        slot a deployed spool came from (the one slot rule, 42.2);
+      - `own_slot`: the slot a moving spool sits in directly, else `ghost_slot`;
+      - `ghost_slot`: the slot a moving spool was deployed from, which it still
+        holds physically (putting it back there from its head is an unload)."""
+    box = str(box_id or '').strip().strip('"').upper()
+    moving = {str(s) for s in (moving_ids or ())}
+    items = list(in_box or [])
+    others = [item for item in items if str(item.get('id')) not in moving]
+    claims: typing.Dict[str, typing.List[typing.Any]] = {}
+    for item in others:
+        s = _norm_slot(locations_db.effective_slot(box_row, item.get('slot', ''), occupants=len(others)))
+        if s:
+            claims.setdefault(s, []).append(item.get('id'))
+    own_slot = next((_norm_slot(item.get('slot', '')) for item in items
+                     if str(item.get('id')) in moving and not item.get('is_ghost')
+                     and str(item.get('location') or '').strip().strip('"').upper() == box), None)
+    ghost_slot = next((_norm_slot(item.get('slot', '')) for item in items
+                       if str(item.get('id')) in moving and item.get('is_ghost')), None)
+    return claims, (own_slot or ghost_slot), ghost_slot
+
+
+def slot_would_prompt(box_row, slot, moving_from, printer_map, loc_info_map, residents_of):
+    """Group 40.0e / 40.1 — whether loading `slot`'s head could ask: a one-spool
+    head that holds a spool. A binding to anything else (a deleted head, a
+    printer row) counts as asking too, since the chain would move the spool out
+    of the box to it. A slot feeding the head the spool is leaving (`moving_from`)
+    never asks: the move stores it there. Static, with no printer probe (the
+    engine's step 5 asks about a printing head either way). `residents_of(head)`
+    lists the spools whose own record is on that head, other than the moving
+    one; the engine reads it strictly (and may raise), the picker's model from
+    its one strict read. Shared by the engine's auto-slot and the picker's ⭐."""
+    head = _slot_binding(box_row, slot)
+    if not head or head == str(moving_from or '').strip().strip('"').upper():
+        return False
+    if not _holds_one_spool(head, printer_map, loc_info_map):
+        return True
+    return bool(residents_of(head))
+
+
 def _same_feed(rec, box_id, slot, loc_info_map):
     """True when a head's resident `rec` is the slot's OWN spool: its trail names
     exactly this box and slot. That is the same-slot swap (Derek's everyday
@@ -1467,25 +1513,14 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                     failures[str(sid)] = why
                 state.add_log_entry(f"❌ Not moved to <b>{target}</b>: {why}", "ERROR", "ff4444")
                 return {"status": "error", "msg": f"Not moved: {why}.", "failures": failures}
-            others = [item for item in in_box if str(item.get('id')) not in moving]
             # slot -> the other spools that hold it, directly or as the slot a
-            # deployed spool came from.
-            claims: typing.Dict[str, typing.List[typing.Any]] = {}
-            for item in others:
-                s = _norm_slot(locations_db.effective_slot(tgt_info, item.get('slot', ''),
-                                                           occupants=len(others)))
-                if s:
-                    claims.setdefault(s, []).append(item.get('id'))
-            # Its own slot: where it sits in the box, else (Group 40 review) the
-            # slot it was deployed from, which it still physically holds; putting
-            # it back there from its head is an unload, so that pick only stores
-            # it (below). It used to take the lowest free slot and load another head.
-            own_slot = next((_norm_slot(item.get('slot', '')) for item in in_box
-                             if str(item.get('id')) in moving and not item.get('is_ghost')
-                             and str(item.get('location') or '').strip().strip('"').upper() == target), None)
-            ghost_slot = next((_norm_slot(item.get('slot', '')) for item in in_box
-                               if str(item.get('id')) in moving and item.get('is_ghost')), None)
-            own_slot = own_slot or ghost_slot
+            # deployed spool came from. Its own slot: where it sits in the box,
+            # else (Group 40 review) the slot it was deployed from, which it
+            # still physically holds; putting it back there from its head is an
+            # unload, so that pick only stores it (below). It used to take the
+            # lowest free slot and load another head. One reading with the slot
+            # picker's ⭐ (box_slot_claims, Group 40.1).
+            claims, own_slot, ghost_slot = box_slot_claims(tgt_info, target, in_box, moving)
             box_feeds = tgt_info.get('Type') == locations_db.DRYER_BOX_TYPE and auto_deploy
             # Where the spool is now: a slot feeding the head it is leaving only
             # stores it (below), so that slot never asks. Read failing closed
@@ -1500,23 +1535,19 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                 return {"status": "error", "msg": f"Not moved: {why}.", "failures": failures}
             moving_from = str((mover or {}).get('location') or '').strip().strip('"').upper()
 
-            def _would_prompt(slot):
-                """Whether loading `slot`'s head could ask: a one-spool head that
-                holds a spool. A binding to anything else (a deleted head, a
-                printer row) is avoided too, since the chain would move the
-                spool out of the box to it. Static, with no printer probe: step 5
-                asks about a printing head either way."""
-                if not box_feeds:
-                    return False
-                head = _slot_binding(tgt_info, slot)
-                if not head or head == moving_from:
-                    return False
-                if not _holds_one_spool(head, printer_map, loc_info_map):
-                    return True
+            def _pick_residents(head):
                 try:
-                    return bool(_residents_of(head))
+                    return _residents_of(head)
                 except Exception as e:
                     raise RuntimeError(f"couldn't read {head} from Spoolman to pick a slot in {target} ({e})")
+
+            def _would_prompt(slot):
+                """The shared rule (slot_would_prompt), over strict reads that
+                refuse the move when Spoolman can't say."""
+                if not box_feeds:
+                    return False
+                return slot_would_prompt(tgt_info, slot, moving_from, printer_map, loc_info_map,
+                                         _pick_residents)
 
             if picked_slot:
                 # The replay of a question about this pick: the same slot while

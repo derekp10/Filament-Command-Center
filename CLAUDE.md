@@ -82,6 +82,7 @@ Prod: Hosted on a TrueNAS server. Keep deployment, storage, and networking sugge
 | `print_deduct.py` | The FCC-native deduct engine (cancel/completion, review pipeline, cancel_deduct routes, smart_move, `_resolve_active_locs_for_printer`). |
 | `print_monitor.py` | `_PRINT_TRACKER` latch, edge handlers, the cancel-monitor daemon, restart recovery, boot creds seed. Imports `print_deduct` (one-way). No routes. |
 | `routes_state_pulse.py` | audit_session + audit-idle watchdog + `/api/logs`, persistence routes, pulse sections, `/api/dashboard_pulse`. |
+| `placement.py` | Group 40.1: the slot picker's read model, `build_placement_options` (box / printer / return modes) behind `GET /api/placement_options` (registered in `routes_bindings.py`). One strict Spoolman read (`spoolman_api.get_all_spools_strict`; a blip answers `read_ok: false`), residents by exact location, no printer probe. Its ⭐ calls the engine's own `logic.recommend_box_slot` / `box_slot_claims` / `slot_would_prompt`, so it is the slot a slotless move takes. No routes of its own. |
 
 Rules that keep the test suite's patch semantics intact (violating these silently rots tests — they stop intercepting without failing):
 

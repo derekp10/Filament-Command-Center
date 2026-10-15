@@ -292,6 +292,37 @@ const SpoolCardBuilder = {
                 </div>
             `;
         }
+        else if (mode === 'picker') {
+            // Group 40.1 — the slot picker's spool block. Passive: the picker's
+            // tile owns the click, the keys and the scan, so there are no action
+            // buttons here. The grid's colour frame and its three lines, so a
+            // spool looks the same in the picker as in the box it sits in. Text
+            // from Spoolman is escaped (a colour name is free text).
+            const esc = window.escHtml || ((s) => String(s == null ? '' : s));
+            const swatch = window.makeSwatchHtml
+                ? window.makeSwatchHtml(item.color, item.color_direction, { size: 14 }) : '';
+            const weightStr = (item.remaining_weight !== undefined && item.remaining_weight !== null)
+                ? `${Math.round(item.remaining_weight)}g` : '';
+            const name = info.line3 || (item.display || '').replace(/^#\d+\s*/, '');
+            const deployed = item.is_ghost
+                ? `<div class="fcc-sp-deployed" style="font-size:0.78rem; font-weight:800; color:#111; background:#ffc107; border-radius:3px; padding:0 4px; display:inline-block; margin-top:3px;">DEPLOYED → ${esc(item.deployed_to || '?')}</div>`
+                : '';
+            const inner = `background: linear-gradient(to bottom, rgba(30,30,30,0.95) 0%, rgba(5,5,5,0.25) 100%), ${styles.frame}; border-radius:5px; padding:5px 7px;`;
+            return `
+                <div class="fcc-sp-spool-card" data-spool-id="${esc(item.id)}" style="background:${styles.frame}; border-radius:6px; padding:1px; text-align:left;">
+                    <div style="${inner}">
+                        <div class="d-flex justify-content-between align-items-center" style="font-size:0.8rem; color:#ddd;">
+                            <span class="fw-bold">#${esc(item.id)}</span>
+                            <span class="fw-bold">${weightStr ? '⚖️ ' + esc(weightStr) : ''}</span>
+                        </div>
+                        <div class="d-flex align-items-center gap-1" style="font-size:0.92rem; color:#fff;">
+                            ${swatch}<span class="fw-bold text-truncate" style="max-width:150px;">${esc(name)}</span>
+                        </div>
+                        <div style="font-size:0.78rem; color:#ddd; opacity:0.9;">${esc(info.line2)}</div>
+                        ${deployed}
+                    </div>
+                </div>`;
+        }
         else if (mode === 'quickswap') {
             // Quick-Swap variant — compact card for the dryer-box → toolhead
             // grid in the Location Manager. Outer is a focusable <div> (NOT

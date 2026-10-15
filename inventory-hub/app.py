@@ -259,6 +259,7 @@ from routes_bindings import (  # noqa: E402,F401
     _pm_prefix, _printer_map_blocked_removals, api_put_printer_map,
     api_all_dryer_box_slots, api_single_slot_binding_put,
     api_quickswap_return, api_quickswap, api_machine_toolhead_slots,
+    api_placement_options,
 )
 
 # L316 step 8: print-queue + label-flag routes live in routes_print_queue.py.
