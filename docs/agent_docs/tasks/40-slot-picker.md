@@ -369,51 +369,26 @@ The server half of 40.3 shipped with 40.0c. The browser half is what 40.3 builds
    breaks once a box label opens the picker (every dev Max>1 non-tool row is a Dryer Box); re-point it at a fake
    Cart / Shelf row or rewrite it in 40.2's commit.
 
-### Questions for Derek at 40.3 (S1–S6 time)
+### Derek's answers (2026-10-14, afternoon) — build 40.3 this way
 
-- **Enter on a printing-only "Just store it" dialog** (S5: the XL prints, the slot's head is empty). Your answer 5 made
-  Enter store for the "already running another spool" dialog. Same default here? Recommended: yes (storing never
-  disturbs a head); default if unanswered: yes.
-- **Quick-Swap ⬇️ Deposit onto a fed head** (S6). Its own overlay already says the head's spool goes back to its box.
-  Replace it with the three-way when the head is fed (one dialog), or keep both? Recommended: one dialog (the
-  three-way names the same spool and adds Just store it); default: one dialog.
-- **A Yes whose slot was rebound meanwhile to an EMPTY idle head** loads that head with no new question (your rule:
-  an empty idle head loads without a prompt). Rebinds happen only in the Feeds editor; recommended: leave it.
-
-**Today.** The slot-label answer `assignment_requires_confirm` is handled only as an active-print confirm (`inv_cmd.js:1570-1643`), replaying the scan with `confirm_active_print: true` (`:1586-1594`). Grid taps go through `doAssign` → `_doAssignFinalize` (`inv_loc_mgr.js:1391-1489`), which handles only `active_print` (`:1443-1450`). The deposit handles `assignment_requires_confirm` as active print only (`inv_quickswap.js:668-679`).
-
-**Design.**
-- **One three-way confirm**, `_confirmHeadLoad({fedHeads, activePrints, box, slot, spoolLabel})`: a thin wrapper over Group 39.4's shared confirm (`window.confirmActivePrint({activePrints, msg, host, onConfirm})`), extended with an optional third action (`onStore`) and a fed-head block, instead of a fourth hand-rolled copy. `mountOverlay` tier `confirm`; shared by the scan path, the grid path, the deposit and the pickers.
-  - Title: `Load #42 onto XL-1?`.
-  - Body names the real consequence, for example *"XL-1 is running #99 (from PM-DB-2). Loading #42 sends #99 back to PM-DB-2."* plus the `⚠️ XL is PRINTING` banner when `activePrint` is set.
-  - Buttons: **Load it instead** · **Just store it in LR-MDB-1 slot 1** · **Cancel**.
-  - Keyboard as the existing confirms (`inv_cmd.js:1842-1872`), including the `isScanInFlight` Enter guard.
-- **Scannable choices.** `attachConfirmQRs` (`inv_core.js:387`) supports CONFIRM and CANCEL only, and `routeConfirmScan` matches only those (`inv_core.js:459`).
-  - Extend both with an optional third action `STORE` (`CMD:STORE:<sid>`), so a blind scanner can pick "just store" from the screen.
-  - Apply the stale-QR guard (`inv_cmd.js:1414-1418`) to a stale `STORE` too.
-  - Mapping: CONFIRM = load it instead, CANCEL = cancel (always safe), STORE = just store.
-- **Replays (39.1's scoped lists):**
-  - load → `confirmed_fed_heads: [head]`, plus `confirmed_toolheads: [head]` when printing;
-  - store → `auto_deploy: false` (no head is touched, so no confirmed list is needed).
-  - The slot-label replay must re-send the ORIGINAL scan text (as today, `inv_cmd.js:1589-1593`).
-- **Printing-only answers** on a box-slot target (`confirm_type: active_print` with `can_store: true`) use the same overlay with the store option. It is Derek's 2026-09-12 sync-while-printing case: he may want the spool in the box without disturbing the head.
-- **Not changed:** toolhead-QR scans, Quick-Swap tile taps, the deposit's own semantics beyond handling `head_fed`.
-
-**Tests.**
-- Hermetic Flask-client tests for the slot-label route: `head_fed` answer shape; replay-load; replay-store; same-slot swap needs no confirm.
-- Route-stubbed E2E:
-  - scan path three-way (click each button; scan `CMD:CONFIRM:<sid>`, `CMD:STORE:<sid>`, `CMD:CANCEL:<sid>`);
-  - grid tap on a slot bound to a fed head;
-  - deposit answered `head_fed` reopens with the resident named;
-  - a stale `CMD:STORE:<sid>` is ignored with a warning;
-  - test debt from Move-pipeline follow-ups item 6, since these handlers are rewritten here anyway: `not_deployed` in the confirmed slot-QR replay (`inv_cmd.js:1620-1621`) and `auto_deploy_skipped` in `_doAssignFinalize` (`inv_loc_mgr.js:1457`) each raise their 7 s warning.
-- Extend `tests/test_confirm_chain_reshow_e2e.py`: the three-way overlay must never re-show a Bootstrap gating modal directly.
-
-**Risks.**
-- This is the prompt Derek meets. Mis-classifying the same-slot swap as "elsewhere" would add a prompt to his normal slot swap. Pin the slot normalization, especially a single-slot box's blank slot.
-- `routeConfirmScan` is on the scan hot path; keep the regex change minimal and case-preserving for the sid (`inv_core.js:456-459`).
-
----
+- **Enter on a printing-only "Just store it" dialog stores** (as on the fed dialog): a toolhead can't be loaded
+  mid-print. His follow-up worry, the load you must remember after the print, is a buglist item ("A spool 'just
+  stored' in a bound slot mid-print leaves a load to remember after the print").
+- **Quick-Swap Deposit onto a fed head: one dialog, the three-way.** His scenario (load LR-MDB-1 slot 1 onto XL-1 and
+  swap out the PolyDryer spool) IS "Load it instead": the body names #99 and where it goes ("XL-1 is running #99 (from
+  PM-DB-2) … sends #99 back to PM-DB-2"); "Just store it" leaves #99 on XL-1. Nothing new.
+- **A slot re-pointed to another head while the dialog was open asks again, even an empty idle head** (Derek
+  overruled the default: multi-user awareness; he fills slot 1 because a slicer file depends on it). New in 40.3:
+  every replay of a bound-slot question also sends the head the question named for the slot (e.g. `expected_feed:
+  "XL-1"`; the answers already carry it in `fed_heads[].toolhead` / the `feeds` entry of `active_prints`); the doors
+  thread it, and the engine answers a new question (nothing written) when `_slot_binding(box, slot)` differs, naming
+  both heads ("LR-MDB-1 slot 1 now feeds XL-2 (it fed XL-1 when you were asked). Load #57 onto XL-2?"). Pin it with
+  the existing rebind test plus an empty idle XL-2. The general audit is a buglist item ("Multi-user awareness").
+- **Claude's calls kept:** (a) a spare whose 40.0d toast named LR-MDB-1 slot 1 is that slot's own spool ("scans to
+  heads are effectively scans to the associated dry box, except transient boxes like the PolyDryer or the Prusa
+  USS"); (b) Force Location into the feeding box stores the spool (Force Location is a last resort; easier
+  non-barcode assignment to INDX heads is a buglist item); (c) auto-slot passes over non-head bindings (an unbound
+  slot is a storage slot; lazily filling the next free slot, bound or not, is fine).
 
 ## 40.4 — Force Location into a multi-slot box or a Printer row (D2.4, D3.1)
 
