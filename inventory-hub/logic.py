@@ -1405,7 +1405,7 @@ def _move_write(sid, target, new_extra):
                 != str(new_extra.get(k) or '').strip().strip('"')):
             return False
     state.add_log_entry(
-        f"⚠️ Spoolman answered an error moving Spool #{sid} -> {target} ({err or 'no detail'}), "
+        f"⚠️ Spoolman answered an error moving Spool #{sid} -> {target or 'Unassigned'} ({err or 'no detail'}), "
         f"but a re-read shows it there: counted as moved.", "WARNING", "ffaa00")
     return True
 
@@ -1470,6 +1470,67 @@ def release_box_after_direct_write(sid, pre, post):
         return None
 
 
+# How long a spool the same-slot swap just took out of a slot is kept from being
+# put straight back into that slot by a blind slot-label scan (Group 40.2
+# review): a scanner's double-read, or a "did it take?" re-scan, found it as the
+# buffer's only entry and reversed the swap. Undo Last Move is the way back.
+SWAP_BACK_GUARD_S = 120
+
+
+def _put_in_buffer(spool_ids, off_head='', from_slot=None, swapped_for=()):
+    """Group 40, the same-slot swap: put spools a move took off `off_head` (they
+    are in the user's hand) at the END of the scan buffer, behind the spools
+    already waiting there, so the next slot scan still loads the next new spool.
+    Returns (entries, added): the buffer entries (the fields the buffer renders,
+    read after the move, plus `off_head` for the page's toast) for the move's
+    answer, which the page adds to its own buffer too, since its next save
+    replaces this replica whole; and the ids it really appended (a spool already
+    buffered isn't added twice, and Undo takes out only what the move added).
+    Each entry records the slot it came out of (`swapped_from` "LR-MDB-1:1"), when
+    (`swapped_at`, epoch ms) and for which spool (`swapped_for`), so a blind scan
+    of that slot's label doesn't put it straight back (SWAP_BACK_GUARD_S)."""
+    live = get_live_spools_data(list(spool_ids))
+    tag: typing.Dict[str, typing.Any] = {}
+    if from_slot:
+        tag = {"swapped_from": f"{str(from_slot[0]).strip().upper()}:{_norm_slot(from_slot[1])}",
+               "swapped_at": int(time.time() * 1000),
+               "swapped_for": [int(s) for s in swapped_for if str(s).isdigit()]}
+    items: typing.List[typing.Dict[str, typing.Any]] = []
+    for sid in spool_ids:
+        data = live.get(str(sid)) or {"display": f"#{sid}", "color": "888888"}
+        items.append({"id": int(sid), **data, **tag, "off_head": str(off_head or '').strip().upper()})
+    buf = list(getattr(state, 'GLOBAL_BUFFER', None) or [])
+    held = {str(b.get('id')) for b in buf if isinstance(b, dict)}
+    added = [i['id'] for i in items if str(i['id']) not in held]
+    state.GLOBAL_BUFFER = buf + [dict(i) for i in items if str(i['id']) not in held]
+    return items, added
+
+
+def swapped_back_refusal(entry, box, slot):
+    """Group 40.2 review: why a blind slot-label scan must not put `entry` (the
+    buffer's first spool) into `box` slot `slot`, or None. It is the spool the
+    same-slot swap took out of that very slot moments ago (SWAP_BACK_GUARD_S):
+    a second read of the label used to load the run-out spool straight back and
+    hand the new one to the buffer."""
+    if not isinstance(entry, dict) or not entry.get('swapped_from'):
+        return None
+    here = f"{str(box or '').strip().upper()}:{_norm_slot(slot)}"
+    if str(entry.get('swapped_from')).strip().upper() != here:
+        return None
+    try:
+        age = time.time() - float(entry.get('swapped_at') or 0) / 1000.0
+    except (TypeError, ValueError):
+        return None
+    if age < 0 or age >= SWAP_BACK_GUARD_S:
+        return None
+    sid = entry.get('id')
+    took = _and_list(f"#{s}" for s in (entry.get('swapped_for') or []))
+    because = f" ({took} took its place)" if took else ""
+    return (f"#{sid} just came out of {str(box).strip().upper()} slot {_norm_slot(slot)}{because}, so it wasn't "
+            f"put back. It's still in your buffer: scan it somewhere else, or weigh it out. To reverse the "
+            f"swap, use Undo Last Move")
+
+
 # Thread-local re-entry depth for perform_smart_move. The auto-deploy chain
 # re-enters the wrapper synchronously on the same thread; depth 0 is the
 # outermost move, which owns the per-move printer-state probe cache (L3 fix A).
@@ -1478,7 +1539,7 @@ _smart_move_depth = threading.local()
 
 def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_deploy=True, confirm_active_print=False,
                        confirmed_fed_heads=(), fed_check_from=None, picked_slot=None, expected_feed=None,
-                       seen_printing=()):
+                       seen_printing=(), swap_slot=None):
     """Entry point for the slot-move pipeline.
 
     Owns the per-move printer-state probe cache (L3 fix A) so the auto-deploy
@@ -1505,6 +1566,10 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
     `seen_printing` (Group 40.3 review): toolheads the page saw printing; for
     this whole move (the chain too), their printers count as printing whenever
     the move's own probe can't reach them. Only the outermost call sets it.
+    `swap_slot` is internal: the auto-deploy chain passes the (box, slot) it is
+    loading the head from, so Smart Load sends that slot's OWN spool, coming off
+    the head, to the scan buffer instead of back into the box (the same-slot
+    swap; Derek, 2026-10-15). The answer names it in `to_buffer`.
     """
     depth = getattr(_smart_move_depth, "n", 0)
     owns_move = depth == 0
@@ -1533,6 +1598,7 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
             fed_check_from=fed_check_from,
             picked_slot=picked_slot,
             expected_feed=expected_feed,
+            swap_slot=swap_slot,
         )
     finally:
         _smart_move_depth.n = getattr(_smart_move_depth, "n", 1) - 1
@@ -1546,7 +1612,8 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
 
 
 def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', auto_deploy=True, confirm_active_print=False,
-                             confirmed_fed_heads=(), fed_check_from=None, picked_slot=None, expected_feed=None):
+                             confirmed_fed_heads=(), fed_check_from=None, picked_slot=None, expected_feed=None,
+                             swap_slot=None):
     """Move spool(s) to `target`, optionally into `target_slot` of that location.
 
     `auto_deploy` (default True): when the target is a Dryer Box AND the
@@ -2133,6 +2200,11 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
             return {"status": "error", "blocked_reason": "head_fed", "msg": f"Not loaded: {why}.",
                     "failures": failures}
 
+    # The slot's own spools Smart Load swapped out into the scan buffer (the
+    # same-slot swap, `swap_slot`), and their buffer entries for the answer.
+    swapped_out: typing.List[typing.Any] = []
+    to_buffer: typing.List[typing.Dict[str, typing.Any]] = []
+
     # --- SMART LOAD LOGIC (Auto-Eject Resident) ---
     if residents:
         # 2026-09-12: the head must really be empty before the incoming spool is
@@ -2161,12 +2233,18 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
             if homeless_dest is None:
                 homeless_dest = _known_room_of(target, loc_list)
             before_extra = dict(before.get('extra') or {})
+            # Group 40, the same-slot swap (Derek, 2026-10-15): the slot's OWN
+            # spool, coming off the head because the chain is loading that very
+            # slot's new spool, is in the user's hand. It goes to the scan
+            # buffer: "home" was the slot the new spool now holds, so it landed
+            # in the box with no slot (5/4, and no Quick-Swap tile).
+            swap_out = bool(swap_slot) and _same_feed(before, swap_slot[0], swap_slot[1], loc_info_map)
             # perform_smart_eject takes a boolean: covered when the confirm
             # covers the head this resident is unloaded from (Group 39.1).
             _eject_report: typing.Dict[str, typing.Any] = {}
             ejected = perform_smart_eject(
                 rid, confirm_active_print=_confirm_covers(confirm_active_print, target),
-                homeless_destination=homeless_dest, report=_eject_report,
+                homeless_destination=homeless_dest, report=_eject_report, to_buffer=swap_out,
             )
             if ejected is not True:
                 stuck[rid] = _eject_refusal_reason(ejected)
@@ -2179,7 +2257,21 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
             }
             undo_record['ejection_released'][str(rid)] = list(_eject_report.get('released_boxes') or [])
             # perform_smart_eject has already logged where it went.
-            state.add_log_entry(f"⚠️ <b>Smart Load:</b> unloaded #{rid} from {target}", "WARNING")
+            if swap_out:
+                # Undo takes it back out of the buffer when it puts it on the head.
+                swapped_out.append(rid)
+                state.add_log_entry(
+                    f"⚠️ <b>Smart Load:</b> unloaded #{rid} from {target} into the scan buffer: it came "
+                    f"from {swap_slot[0]} slot {_norm_slot(swap_slot[1])}, which "
+                    f"{_and_list('#' + str(s) for s in spools)} now takes", "WARNING")
+            else:
+                state.add_log_entry(f"⚠️ <b>Smart Load:</b> unloaded #{rid} from {target}", "WARNING")
+        if swapped_out:
+            to_buffer, _added = _put_in_buffer(swapped_out, off_head=target, from_slot=swap_slot,
+                                               swapped_for=spools)
+            # Only what the move added (Group 40.2 review): a spool the user had
+            # already buffered stays buffered when the move is undone.
+            undo_record['buffered'] = list(_added)
         if stuck:
             held = ", ".join(f"#{rid} ({why})" for rid, why in stuck.items())
             for sid in spools:
@@ -2193,8 +2285,11 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                 undo_record['summary'] = (
                     f"Unloaded {', '.join('#' + str(r) for r in undo_record['ejections'])} from {target}")
                 _push_undo(undo_record)
-            return {"status": "error", "msg": f"Not loaded: {target} still holds {held}.",
-                    "failures": failures}
+            stuck_answer: typing.Dict[str, typing.Any] = {
+                "status": "error", "msg": f"Not loaded: {target} still holds {held}.", "failures": failures}
+            if to_buffer:
+                stuck_answer["to_buffer"] = to_buffer
+            return stuck_answer
 
     # L298 Phase 3 — per-spool failure attribution. Each write branch below
     # already reads spoolman_api.LAST_SPOOLMAN_ERROR ADJACENT to its own failing
@@ -2594,6 +2689,9 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                     # checked the feed before any write (Group 40.3).
                     confirmed_fed_heads=confirmed_fed_heads,
                     fed_check_from=(target, target_slot, fed_seen) if fed_seen is not None else None,
+                    # The slot whose own spool, if it runs on the head, comes off
+                    # into the scan buffer (the same-slot swap; Derek, 2026-10-15).
+                    swap_slot=(target, target_slot),
                 )
             except Exception as _ad_err:
                 state.logger.error(f"Auto-deploy failed for {target}:SLOT:{target_slot}: {_ad_err}")
@@ -2617,6 +2715,10 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                 undo_record['ejections'].update(chained_undo.get('ejections') or {})
                 undo_record['ejection_extras'].update(chained_undo.get('ejection_extras') or {})
                 undo_record['ejection_released'].update(chained_undo.get('ejection_released') or {})
+                if chained_undo.get('buffered'):
+                    undo_record['buffered'] = list(undo_record.get('buffered') or []) + list(chained_undo['buffered'])
+            # The slot's own spool the chain swapped out into the scan buffer.
+            to_buffer = to_buffer + [i for i in (chained.get('to_buffer') or []) if isinstance(i, dict)]
             chained_failures = chained.get('failures') or {}
             for sid in to_deploy:
                 if chained.get('status') == 'success' and str(sid) not in chained_failures:
@@ -2651,6 +2753,10 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         result["recorded_source"] = next(iter(recorded_sources.values()))
     if auto_deployed:
         result["auto_deployed_to"] = str(bound_toolhead).upper()
+    if to_buffer:
+        # Group 40, the same-slot swap: the spools taken off a head into the scan
+        # buffer (Unassigned in Spoolman). The page adds them to its buffer.
+        result["to_buffer"] = to_buffer
     if auto_deploy_skipped:
         # sid(str) -> why it stayed in the box. The box placement itself stands.
         result["auto_deploy_skipped"] = auto_deploy_skipped
@@ -3495,7 +3601,7 @@ def _eject_destination(spool_data, printer_map, homeless_destination=None):
 
 
 def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print=False,
-                        homeless_destination=None, report=None):
+                        homeless_destination=None, report=None, to_buffer=False):
     """Remove `spool_id` from its current location.
 
     `homeless_destination`: where to send a spool with no saved home to return
@@ -3507,6 +3613,14 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
     with {"from", "to", "slot", "home", "released_boxes"} so the eject can say
     where the spool went and which single-slot box let go of the head. The
     return contract below does not change (callers test `is True`).
+
+    `to_buffer` (Group 40, the same-slot swap; Derek, 2026-10-15): the spool is
+    in the user's hand, headed for the scan buffer, not back into its box. A
+    slot's own spool swapped out by the spool now taking that slot used to "go
+    home" into a slot that is no longer its own, so it landed in the box with no
+    slot (the box read 5/4 and the spool got no Quick-Swap tile). It goes to
+    Unassigned with its trail cleared instead; the caller puts it in the buffer.
+    `report` gains "buffer": True.
 
     Returns:
       - True on successful eject
@@ -3541,7 +3655,7 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
                 "msg": f"{ap['printer_name']} is {ap['state']} — ejecting from this toolhead will disrupt the print.",
             }
 
-    def _landed(to_loc, slot, home):
+    def _landed(to_loc, slot, home, buffered=False):
         """The eject's write landed. Release the spool's OWN single-slot box from
         the head it left (Group 42.1: only after the write, so a refused or
         rejected eject leaves it bound; and keyed on the spool, so ejecting a
@@ -3550,7 +3664,9 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
         sentence in the activity log"), and fill the caller's report (42.5a)."""
         released = _release_single_slot_box(spool_id, current_location, pre_extra, printer_map, log=False)
         from_txt = current_location or "Unassigned"
-        if home:
+        if buffered:
+            where = "into the scan buffer (Unassigned until it is scanned somewhere)"
+        elif home:
             _row = next((r for r in (locations_db.load_locations_list() or [])
                          if isinstance(r, dict)
                          and str(r.get('LocationID', '')).strip().upper() == str(to_loc).strip().upper()), None)
@@ -3568,10 +3684,33 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
         if isinstance(report, dict):
             report.update({"from": current_location, "to": to_loc, "slot": slot or "",
                            "home": bool(home), "released_boxes": [released] if released else []})
+            if buffered:
+                report["buffer"] = True
 
     # [ALEX FIX] Explicitly overwrite the slot with empty string.
     # .pop() just removes the key, which causes PATCH to ignore it (keeping the old value).
     extra['container_slot'] = ""
+
+    if to_buffer:
+        # The same-slot swap (see the docstring): Unassigned, every trail key
+        # cleared, so the spool is a ghost in no box, and the "before the box"
+        # note used up like any other move elsewhere (42.6).
+        extra['physical_source'] = ""
+        extra['physical_source_slot'] = ""
+        if extra.get(PRE_BOX_KEY):
+            extra[PRE_BOX_KEY] = ""
+        # The engine's re-reading write (Group 40.2 review): a PATCH Spoolman
+        # committed but answered after update_spool's read timeout left the spool
+        # Unassigned yet reported "XL-1 still holds #99", in no buffer and with no
+        # undo record.
+        if _move_write(spool_id, "", extra):
+            _landed("", "", home=False, buffered=True)
+            return True
+        err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+        state.add_log_entry(
+            f"❌ Failed to take Spool #{spool_id} off {current_location or 'its location'} "
+            f"into the scan buffer: {err}", "ERROR", "ff4444")
+        return False
 
     # Where it goes: its saved home, else the homeless fallback (Group 39.6's
     # _eject_destination, which the eject route's combined confirm also runs).
@@ -4107,6 +4246,16 @@ def perform_undo(expected_id=None):
                 f"❌ Undo: failed to restore ejected Spool #{ejected_sid} → "
                 f"{original_loc or 'UNASSIGNED'}: {err}", "ERROR", "ff4444")
 
+    # Group 40, the same-slot swap: a spool the move took off its head into the
+    # scan buffer is back on that head now, so it leaves the buffer (only the
+    # ones whose restore landed). The page drops them too (`unbuffered`).
+    restored_set = {str(s) for s in restored_ejections}
+    unbuffered = [sid for sid in (last.get('buffered') or []) if str(sid) in restored_set]
+    if unbuffered:
+        gone = {str(s) for s in unbuffered}
+        state.GLOBAL_BUFFER = [b for b in (getattr(state, 'GLOBAL_BUFFER', None) or [])
+                               if not (isinstance(b, dict) and str(b.get('id')) in gone)]
+
     # [ALEX FIX] Restore to Buffer Memory
     state.logger.info(f"UNDO RECORD TRIGGER: {last}")
     if origin == 'buffer':
@@ -4157,9 +4306,10 @@ def perform_undo(expected_id=None):
     if failed:
         msg = f"Undo could not put back {', '.join(failed)}."
         state.add_log_entry(f"⚠️ Undo partly failed: {msg}", "ERROR", "ff4444")
-        return {"success": False, "msg": msg, "restored": restored + restored_ejections}
+        return {"success": False, "msg": msg, "restored": restored + restored_ejections,
+                "unbuffered": unbuffered}
     return {"success": True, "msg": f"↩️ Undo: {'; '.join(parts)}" if parts else "↩️ Undone",
-            "restored": restored + restored_ejections}
+            "restored": restored + restored_ejections, "unbuffered": unbuffered}
 
 def process_audit_scan(scan_result):
     """Handles scans when in Audit Mode."""

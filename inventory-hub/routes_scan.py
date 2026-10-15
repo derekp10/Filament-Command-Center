@@ -1352,6 +1352,26 @@ def api_identify_scan():
             first_spool = {"id": named_id}
         else:
             first_spool = next((item for item in buffer if isinstance(item, dict) and item.get('id')), None)
+            # Group 40.2 review: the same-slot swap leaves the slot's old spool at
+            # the end of the buffer, which is its only entry after a one-spool
+            # swap. A second read of the same label (a scanner double-read, a
+            # "did it take?" re-scan) took it as the buffer's first spool and
+            # reversed the swap: the run-out spool back on the head, the new one
+            # in the buffer. Refused, nothing written; a scan that names the
+            # spool (the deposit) is not a blind scan and is never held back.
+            held_back = logic.swapped_back_refusal(first_spool, target, slot) if first_spool else None
+            if held_back:
+                state.add_log_entry(f"⚠️ Slot scan {target}:SLOT:{slot} not loaded: {held_back}.",
+                                    "WARNING", "ffaa00")
+                return jsonify({
+                    "type": "assignment",
+                    "action": "assignment_held",
+                    "location": target, "slot": slot,
+                    "spool": int(first_spool['id']),
+                    "msg": f"Not loaded: {held_back}.",
+                    "toast": (f"↩️ #{first_spool['id']} just came out of {target} slot {slot} — not put back "
+                              f"(it's in your buffer)"),
+                }), 200
         if not first_spool:
             return jsonify({
                 "type": "assignment",
@@ -1439,12 +1459,20 @@ def api_identify_scan():
         auto_deployed_to = (move_result or {}).get('auto_deployed_to')
         not_deployed = ((move_result or {}).get('auto_deploy_skipped') or {}).get(str(spool_id))
 
-        # Remove the spool from the backend's buffer replica.
+        # Remove the spool from the backend's buffer replica: the replica as it
+        # is NOW, after the move. A same-slot swap (Group 40; Derek, 2026-10-15)
+        # put the slot's old spool at its end, and the snapshot taken before the
+        # move would drop it again.
+        to_buffer = [i for i in ((move_result or {}).get('to_buffer') or []) if isinstance(i, dict)]
         state.GLOBAL_BUFFER = [
-            item for item in buffer
+            item for item in (getattr(state, 'GLOBAL_BUFFER', []) or [])
             if not (isinstance(item, dict) and int(item.get('id') or 0) == spool_id)
         ]
-        remaining = len(state.GLOBAL_BUFFER)
+        # "Still in buffer" counts the spools the user buffered, not the one the
+        # swap just handed back (its own toast says so).
+        swapped = {str(i.get('id')) for i in to_buffer}
+        remaining = len([item for item in state.GLOBAL_BUFFER
+                         if not (isinstance(item, dict) and str(item.get('id')) in swapped)])
         action = 'assignment_partial' if remaining > 0 else 'assignment_done'
 
         suffix = f" ({remaining} still in buffer)" if remaining else ""
@@ -1466,6 +1494,9 @@ def api_identify_scan():
             "not_deployed": not_deployed,
             "not_deployed_target": (move_result or {}).get('auto_deploy_target') if not_deployed else None,
             "remaining_buffer": remaining,
+            # Group 40, the same-slot swap: the slot's old spool, now in the scan
+            # buffer (Unassigned); the page adds it to its own buffer.
+            "to_buffer": to_buffer,
             "smart_move": move_result,
         }), 200
 

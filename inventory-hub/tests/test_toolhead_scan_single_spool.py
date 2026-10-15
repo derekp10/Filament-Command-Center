@@ -108,25 +108,25 @@ def test_toolhead_scan_with_multi_spool_buffer_sends_only_topmost(page: Page, ba
 
 
 @pytest.mark.usefixtures("require_server")
-def test_multispool_dryer_box_scan_still_sends_full_buffer(page: Page, base_url: str, reset_dom_state_js: str):
-    """Negative regression: multi-spool destinations (dryer box, shelf, etc.)
-    should still get the entire buffer in one call — the L124 fix is scoped
-    to single-occupancy targets only."""
+def test_multispool_shelf_scan_still_sends_full_buffer(page: Page, base_url: str, reset_dom_state_js: str):
+    """Negative regression: a multi-spool destination that isn't a multi-slot
+    box (a shelf, a cart) still gets the entire buffer in one call — the L124
+    fix is scoped to single-occupancy targets only.
+
+    Deliberately re-pointed (Group 40.2): this used dev's first Max > 1 row,
+    always a Dryer Box, and a multi-slot box's label now opens the slot picker
+    instead (tests/test_box_label_picker_e2e.py). It runs on a synthetic Shelf
+    row now: /api/identify_scan is stubbed to answer it as a location, so no dev
+    row is needed, and the page gets its own buffer endpoint (own_the_buffer), so
+    its saves never reach dev's shared buffer (Group 40.2 review)."""
+    from conftest import own_the_buffer
+    own_the_buffer(page, [])
     page.goto(base_url)
     page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
     page.evaluate(reset_dom_state_js)
     page.wait_for_function("typeof window.processScan === 'function'", timeout=10000)
-    page.wait_for_function(
-        "Array.isArray(state.allLocations) && state.allLocations.some(l => parseInt(l['Max Spools']||'0') > 1)",
-        timeout=10000,
-    )
-    multi_id = page.evaluate(
-        """() => {
-            const m = state.allLocations.find(l => parseInt(l['Max Spools']||'0') > 1 && !(l.Type||'').toLowerCase().includes('tool'));
-            return m ? m.LocationID : null;
-        }"""
-    )
-    assert multi_id, "no multi-spool non-toolhead in dev environment"
+    page.wait_for_function("Array.isArray(state.allLocations) && state.allLocations.length > 0", timeout=10000)
+    multi_id = "FCC-TEST-SHELF-L124"
 
     # Stamp lastLocalBufferChange in the SAME evaluate as the injection so the
     # 2s loadBuffer poll's "local change wins" 3s grace skips overwriting our
@@ -135,13 +135,16 @@ def test_multispool_dryer_box_scan_still_sends_full_buffer(page: Page, base_url:
     # scan sends the wrong `spools`. The sibling topmost-spool test above already
     # does this; this one was missing it (Group 33.3, matches Group 26.8 idiom).
     page.evaluate(
-        """() => {
+        """(lid) => {
             window.lastLocalBufferChange = Date.now();
+            state.allLocations = state.allLocations.filter(l => l.LocationID !== lid)
+                .concat([{ LocationID: lid, Name: 'Shelf (test)', Type: 'Shelf', 'Max Spools': '12' }]);
             state.heldSpools = [
                 { id: 9991, display: 'TOP', color: '#ff0000', remaining_weight: 500 },
                 { id: 9992, display: 'BOTTOM', color: '#00ff00', remaining_weight: 500 },
             ];
-        }"""
+        }""",
+        multi_id,
     )
 
     captured = {}
@@ -160,6 +163,15 @@ def test_multispool_dryer_box_scan_still_sends_full_buffer(page: Page, base_url:
         else:
             route.continue_()
     page.route("**/api/smart_move", handle)
+
+    def scan(route):
+        body = json.loads(route.request.post_data or '{}')
+        if str(body.get('text', '')).upper() == f"LOC:{multi_id}":
+            route.fulfill(status=200, content_type='application/json',
+                          body=json.dumps({"type": "location", "id": multi_id, "contents": []}))
+        else:
+            route.continue_()
+    page.route("**/api/identify_scan", scan)
 
     page.evaluate(f"window.processScan('LOC:{multi_id}', 'test')")
     page.wait_for_function("() => state.heldSpools.length === 0", timeout=5000)

@@ -1612,6 +1612,10 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedH
                         state.heldSpools.push(options.swapDisplaced);
                     }
                 }
+                // Group 40, the same-slot swap: a slot whose own spool ran on its
+                // head handed that spool back into the scan buffer. One render,
+                // one save.
+                window.takeIntoBuffer(res, { render: false });
                 if (window.renderBuffer) window.renderBuffer();
                 if (typeof renderManagerNav === 'function') renderManagerNav();
 

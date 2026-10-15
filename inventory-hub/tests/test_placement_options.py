@@ -410,6 +410,129 @@ def test_return_never_recommends_a_slot_feeding_another_head_or_another_printers
     assert model["recommended"] == {"kind": "none", "box": "TST-MDB-1"}
 
 
+# ---- what each slot holds, and the slots the picker greys out (Group 40.2, D4) ------------------
+# HEAD proof (d8f6128): `occupant_state` / `blocked` don't exist there, and its ⭐
+# lands on a slot bound to a missing head, so all 9 tests in this section fail
+# there (the engine-mirror rows too: they read `blocked` first).
+
+GHOST_ROWS = [r for r in copy.deepcopy(ROWS) if r["LocationID"] != "TST-MDB-1"] + [
+    _box("TST-MDB-1", 3, {"1": "XL-9", "2": "XL-2"})]   # slot 1 bound to a head that doesn't exist
+
+
+def test_each_slot_says_what_its_spool_is_and_whether_the_picker_can_take_it():
+    spools = [
+        _sp(61, "XL-2", src="LR-MDB-1", src_slot=1),          # slot 1 feeds XL-1; its spool runs on XL-2
+        _sp(57, "LR-MDB-1", slot=2),                           # stored in slot 2
+        _sp(60, "XL-3", src="LR-MDB-1", src_slot=3),          # deployed onto XL-3, the head slot 3 feeds
+        _sp(62, "CR-CT-2-R1", src="LR-MDB-1", src_slot=4),    # a stale record on the pool slot
+        _sp(42, "CR-CT-2-R1"),
+    ]
+    model, _ = _build(spools, "LR-MDB-1", spool=42)
+    s1, s2, s3, s4 = (_slot(model, n) for n in (1, 2, 3, 4))
+    assert s1["occupant_state"] == "on_other_head"
+    assert s1["blocked"] == "#61 from this slot is loaded on XL-2, but the slot feeds XL-1: take #61 off XL-2 first"
+    assert s2["occupant_state"] == "stored" and s2["blocked"] is None
+    assert s3["occupant_state"] == "on_feed" and s3["blocked"] is None      # the same-slot swap
+    assert s4["occupant_state"] == "stale"
+    assert s4["blocked"] == ("#62's record still claims slot 4, though it is on CR-CT-2-R1: scan #62, "
+                             "then CR-CT-2-R1's label, to clear that")
+
+
+def test_a_stale_record_on_a_slot_that_loads_a_head_is_not_greyed_out():
+    """A load ignores a stale trail (Derek, 2026-10-15), so the picker takes it."""
+    spools = [_sp(63, "CR-CT-2-R1", src="LR-MDB-1", src_slot=1), _sp(42, "LR-MDB-2", slot=1)]
+    model, _ = _build(spools, "LR-MDB-1", spool=42)
+    s1 = _slot(model, 1)
+    assert s1["occupant_state"] == "stale" and s1["blocked"] is None and s1["free"] is False
+
+
+def test_two_spools_on_one_slot_and_a_binding_to_a_missing_head_are_greyed_out():
+    model, _ = _build([_sp(57, "LR-MDB-1", slot=2), _sp(58, "LR-MDB-1", slot=2)], "LR-MDB-1")
+    assert _slot(model, 2)["blocked"] == "2 spools claim slot 2 (#57 and #58): open LR-MDB-1 and sort them out first"
+    model, _ = _build([], "TST-MDB-1", rows=GHOST_ROWS)
+    assert _slot(model, 1)["feeds"]["kind"] == "other"
+    assert _slot(model, 1)["blocked"] == ("Slot 1 is bound to XL-9, which isn't a toolhead: "
+                                          "fix it in 🔗 Edit feeds first")
+    assert _slot(model, 2)["blocked"] is None and _slot(model, 3)["blocked"] is None
+
+
+def test_the_star_never_lands_on_a_greyed_out_slot():
+    """Slot 1 is bound to a missing head and slot 2's head holds a spool: both
+    would ask, so the lowest free slot rule took slot 1, which the picker greys
+    out. The ⭐ goes to the lowest slot the picker can take."""
+    model, _ = _build([_sp(99, "XL-2"), _sp(42, "CR-CT-2-R1")], "TST-MDB-1", rows=GHOST_ROWS, spool=42)
+    assert model["recommended"]["slot"] == "3" and model["recommend_reason"] == "no_prompt", model["recommended"]
+    rows = [r for r in copy.deepcopy(GHOST_ROWS) if r["LocationID"] != "TST-MDB-1"] + [
+        _box("TST-MDB-1", 2, {"1": "XL-9", "2": "XL-2"})]
+    model, _ = _build([_sp(99, "XL-2"), _sp(42, "CR-CT-2-R1")], "TST-MDB-1", rows=rows, spool=42)
+    assert model["recommended"]["slot"] == "2" and model["recommend_reason"] == "lowest_empty"
+
+
+def test_return_mode_greys_out_every_slot_that_holds_a_spool():
+    spools = [_sp(42, "XL-3", src="LR-MDB-1", src_slot=3), _sp(57, "LR-MDB-1", slot=1)]
+    model, _ = _build(spools, "LR-MDB-1", spool=42, toolhead="XL-3", mode="return")
+    assert _slot(model, 1)["blocked"] == "Holds #57: Return takes a free slot, or No slot"
+    assert _slot(model, 3)["blocked"] is None and _slot(model, 2)["blocked"] is None
+
+
+@pytest.mark.parametrize("slot, refused", [("1", True), ("2", False), ("3", False), ("4", True)],
+                         ids=["ghost-on-another-head", "stored", "same-slot-swap", "stale-on-the-pool-slot"])
+def test_a_greyed_out_ghost_slot_is_one_the_engine_refuses(slot, refused):
+    """The picker sends `slot` for an occupied slot (after Swap / Overwrite): run
+    the REAL engine with that slot over the same data. It refuses exactly the
+    ghost slots the picker greys out, so a pick never asks and then refuses."""
+    spools = [
+        _sp(61, "XL-2", src="LR-MDB-1", src_slot=1), _sp(57, "LR-MDB-1", slot=2),
+        _sp(60, "XL-3", src="LR-MDB-1", src_slot=3), _sp(62, "CR-CT-2-R1", src="LR-MDB-1", src_slot=4),
+        _sp(42, "CR-CT-2-R1"),
+    ]
+    model, _ = _build(spools, "LR-MDB-1", spool=42)
+    assert bool(_slot(model, slot)["blocked"]) is refused
+    sm = FakeSpoolman({s["id"]: {"location": s["location"], "extra": dict(s["extra"])} for s in spools})
+    printer_map = logic.locations_db.build_printer_map_from_rows(copy.deepcopy(ROWS))
+    result = run_move(sm, probe=IDLE, printer_map=printer_map, locations=copy.deepcopy(ROWS),
+                      target="LR-MDB-1", raw_spools=[42], target_slot=slot, auto_deploy=True,
+                      confirmed_fed_heads=True)
+    assert bool(logic.smart_move_failure(result, 42)) is refused, result
+
+
+def test_stores_only_follows_the_engines_rule_for_both_cases():
+    """Group 40.2 review: placement's "stored here, not loaded back" is the
+    engine's store_only rule: the slot feeds the head the spool is leaving
+    (is_source), or it is the slot the spool was deployed from even after the
+    slot was re-pointed to another head (it used to read "-> XL-1 · XL-1 is
+    empty" while Enter only stored it). HEAD proof (f5f3ba2): no stores_only."""
+    # #42 runs on XL-3; slot 3 feeds XL-3 and holds a stored #77.
+    model, _ = _build([_sp(42, "XL-3", src="PM-DB-2", src_slot=1), _sp(77, "LR-MDB-1", slot=3)],
+                      "LR-MDB-1", spool=42)
+    assert _slot(model, 3)["stores_only"] is True and _slot(model, 3)["feeds"]["is_source"] is True
+    assert _slot(model, 3)["free"] is False and _slot(model, 3)["blocked"] is None
+    assert _slot(model, 1)["stores_only"] is False
+    # #42 runs on XL-2, deployed from slot 1, which now feeds XL-1.
+    model, _ = _build([_sp(42, "XL-2", src="LR-MDB-1", src_slot=1)], "LR-MDB-1", spool=42)
+    s1 = _slot(model, 1)
+    assert s1["stores_only"] is True and s1["feeds"]["is_source"] is False and s1["current"] is True
+
+
+@pytest.mark.parametrize("send, loads", [({"target_slot": "3"}, True),
+                                         ({"target_slot": "3", "auto_deploy": False}, False)],
+                         ids=["slot-alone-loads-it-back", "the-pickers-store"])
+def test_an_occupied_stores_only_slot_is_stored_only_with_the_pickers_send(send, loads):
+    """The occupied case of the review's yellow: the picker's {slot} alone made
+    the engine load #42 straight back onto XL-3 (the tile said it is stored).
+    With auto_deploy false (what the picker sends now) it is stored, and #77 is
+    unseated, as Overwrite says. Runs the REAL engine on the same data."""
+    spools = [_sp(42, "XL-3", src="PM-DB-2", src_slot=1), _sp(77, "LR-MDB-1", slot=3)]
+    sm = FakeSpoolman({s["id"]: {"location": s["location"], "extra": dict(s["extra"])} for s in spools})
+    printer_map = logic.locations_db.build_printer_map_from_rows(copy.deepcopy(ROWS))
+    result = run_move(sm, probe=IDLE, printer_map=printer_map, locations=copy.deepcopy(ROWS),
+                      target="LR-MDB-1", raw_spools=[42], **send)
+    assert result.get("status") == "success", result
+    assert (result.get("auto_deployed_to") == "XL-3") is loads, result
+    assert sm.spools[42]["location"] == ("XL-3" if loads else "LR-MDB-1"), sm.spools[42]
+    assert str(sm.spools[77]["extra"].get("container_slot") or "") == ""
+
+
 # ---- refusals -------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("location,kwargs,status,error", [

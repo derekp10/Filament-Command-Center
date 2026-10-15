@@ -468,6 +468,47 @@ window.storeToastTail = (prior) => {
     return (Array.isArray(p.sources) && p.sources.includes(head)) ? ` — taken off ${head}` : ` — ${head} left as it was`;
 };
 
+// --- THE SAME-SLOT SWAP'S OLD SPOOL (Group 40; Derek, 2026-10-15) ---
+// A move that filled a box slot whose own spool was running on the slot's head
+// took that spool off the head into the scan buffer: it is in your hand (Derek
+// swaps a slot once its spool has run out, so it usually needs zeroing). The
+// server put it at the END of its buffer replica, Unassigned in Spoolman, and
+// names it in the answer's `to_buffer` (a slot scan's own `smart_move` too). This
+// page adds it to its buffer as well, behind the spools already waiting (its
+// next save replaces the replica whole, so the server's copy alone would be
+// lost), and toasts it in short arrows. Every door that can complete a move
+// calls it with the answer. A door that edits the buffer itself passes
+// {render: false} and renders ONCE after both edits: two saves in a row can
+// reach the server out of order, and the one without this spool would win.
+// {toast: false} leaves the toast to window.toastIntoBuffer(items). Returns the
+// entries it was told about.
+window.toastIntoBuffer = (items) => {
+    (items || []).forEach(i => {
+        const off = i && i.off_head ? ` (taken off ${i.off_head})` : '';
+        if (i && typeof showToast === 'function') showToast(`✋ #${i.id} → your buffer${off}`, 'info', 5000);
+    });
+};
+window.takeIntoBuffer = (answer, { render = true, toast = true } = {}) => {
+    const a = answer || {};
+    const list = Array.isArray(a.to_buffer) ? a.to_buffer
+        : ((a.smart_move && Array.isArray(a.smart_move.to_buffer)) ? a.smart_move.to_buffer : []);
+    const items = list.filter(i => i && i.id != null);
+    if (!items.length) return [];
+    const st = (typeof state !== 'undefined') ? state : window.state;
+    let added = false;
+    items.forEach(i => {
+        if (!st.heldSpools.some(s => String(s.id) === String(i.id))) {
+            const entry = Object.assign({}, i);
+            delete entry.off_head;
+            st.heldSpools.push(entry);
+            added = true;
+        }
+    });
+    if (render && added && window.renderBuffer) window.renderBuffer();
+    if (toast) window.toastIntoBuffer(items);
+    return items;
+};
+
 // askMoveConfirm(answer, ctx): the one place a door shows a move question and
 // sends its replay. ctx: {door, original, prior, host, ids, box, slot,
 // send(body, nextPrior, choice), askYesNo?(answer, yes), onCancel?}. A
@@ -496,8 +537,11 @@ window.askMoveConfirm = (answer, ctx = {}) => {
             }
             if (ctx.onCancel) ctx.onCancel(info);
         };
+        // `ctx.noStore` (Group 40.2 review): the door knows a store would be
+        // refused (the box picker's slot holds a stale record), so no "Just
+        // store it"; Enter then cancels, as in any three-way with no store.
         return window.confirmHeadLoad({ answer, host: ctx.host, ids: ctx.ids || {}, box: ctx.box, slot: ctx.slot,
-            onLoad: () => replay('load'), onStore: () => replay('store'), onCancel: cancelled });
+            onLoad: () => replay('load'), onStore: ctx.noStore ? null : () => replay('store'), onCancel: cancelled });
     }
     if (kind === 'active_print') {
         const yes = () => replay(prior.store ? 'store' : 'load');
@@ -509,7 +553,9 @@ window.askMoveConfirm = (answer, ctx = {}) => {
     toast(`${what} — nothing moved. Reload the page if this keeps happening.`, 'warning', 7000);
     if (window.logClientEvent) window.logClientEvent(
         `⚠️ Unrecognised move question (${answer && answer.confirm_type}) — nothing moved`, 'WARNING');
-    if (ctx.onCancel) ctx.onCancel();
+    // `unknown`: nobody answered anything (Group 40.2: the box picker's loop ends
+    // here instead of reopening the picker on the same unanswerable question).
+    if (ctx.onCancel) ctx.onCancel({ unknown: true });
     return null;
 };
 

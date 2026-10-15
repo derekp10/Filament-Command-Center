@@ -20,6 +20,9 @@ _Run finished at ~04:45 on 2026-10-14. Started from `dev` @ `4203ffe` (= `origin
 - **Day session (2026-10-14):** Group 40's 40.0e + 40.0c built and reviewed on the branch (not merged; it waits for
   40.3, which needs you), and a standalone fix on `dev` (`bfb7bd0`): a slot scan with the Location Manager closed
   moved the buffered spool to Unassigned. See "Group 40, day session" under Parked.
+- **Day session (2026-10-15):** Group 40.2 built, reviewed and merged to `dev`: your same-slot swap now puts the
+  old spool in your scan buffer (and a double-read can't reverse it), a multi-slot box label opens the slot picker,
+  and the picker's follow-ups D1–D4 are done. See "Group 40.2, day session" under Parked.
 - **For you:** nothing blocks. `main` is held for you. The next release would carry everything on `dev` since the 2026-10-08 release: 9 merges, 107 commits (Group 47's docs, Group 46, the 2026-10-13 standalone fixes, Group 43, Group 39, then tonight's 43.2 + 46.3, Group 45, Group 41 and Group 42). **Derek, morning of 2026-10-14:** continue with Group 40 next; consider moving to `main` once the new group set is done. Optional hands-on checks are under "Manual checks for Derek". The buglist's ⏸️ PENDING DEREK section was left untouched (tonight's rule).
 - Evening prep done: Derek's go-ahead for all-night full test runs, a push after each merge, and read-only prod
   counts (taken ~18:25; table in the plan file).
@@ -270,6 +273,41 @@ _Run finished at ~04:45 on 2026-10-14. Started from `dev` @ `4203ffe` (= `origin
   answers; nothing is written).
 - **Next:** 40.2 → 40.4 → 40.5 → 40.6 → 40.7.
 
+### Group 40.2, day session (2026-10-15): the box-label picker, the picker follow-ups, the same-slot swap → buffer
+
+- **Where it is:** `feature/group-40-slot-picker` (pushed): `2a45ba5` (the same-slot swap → scan buffer), `f5f3ba2`
+  (40.2 + the picker follow-ups D1–D4), `6b59b1c` (the review's fixes). Merged to `dev` and pushed (the docs commit right after the merge names it); `main` is still held for you.
+- **What you get:**
+  - **Your same-slot swap (S2):** the old spool comes off the head into your scan buffer ("✋ #99 → your buffer
+    (taken off XL-3)"), Unassigned in Spoolman until you scan it somewhere or weigh it out; the box no longer reads
+    5/4. It waits behind any new spools still buffered. Undo Last Move puts it back on the head and out of the buffer.
+    A second read of the same slot label right after (a scanner double-read, a "did it take?" re-scan) does nothing:
+    "Ignored a second read", or "↩️ #99 just came out of LR-MDB-1 slot 3 — not put back".
+  - **A multi-slot box's own label with a buffer** (other users' path; you never scan box labels) opens the slot
+    picker once per buffered spool: each slot's spool and feed, a ⭐, greyed-out slots that say why, and Swap /
+    Overwrite / Back inside the picker for a slot that holds a spool. Escape stops (the rest stay buffered); Cancel on
+    a load question goes back to the picker for that spool.
+  - The picker's keys and scans: a scan always owns its Enter (a 1–2 digit spool label, even from a slow scanner,
+    never picks), a lone digit never sticks to the next scan, the picker won't open over another dialog, an audit or
+    a busy page, and closes itself if a bulk move or audit starts.
+- **Review** (`wf_0b3cc1a9-578`, 4 agents, 1.80M tokens, ~59 min; estimated 2–2.5M): 18 findings, none refuted:
+  1 red (the double-read above, on your path), 7 yellow, the rest notes. All fixed except one note deferred to 40.5
+  (the engine offers "Just store it" over a slot holding a stale record and then refuses it; nothing is written).
+- **Found on the way:** a 30-minute test hang I introduced (`performContextAssign` returned a Promise a browser test
+  awaited forever); it reports through a callback now, pinned. Lessons saved (memory: Playwright E2E gotchas).
+- **Tests:** offline 2657 passed. The full `RUN_INTEGRATION` sweep on `6b59b1c`: 3602 passed, 2 failed in 24:10 (load 1.13x): the ? overlay visual (the new Slot Picker row, recaptured in `218a8dd` after a look at the image) and `test_quickswap_refreshes_manage_view_after_yes`, whose cleanup refused to undo its Quick-Swap because the XL was really printing (its own checks had passed; dev #134 was returned to LR-MDB-1 slot 3 by hand).
+- **For you, whenever (nothing blocks):**
+  - S2 in the buglist's ⏸️ PENDING DEREK section now expects the old spool in your buffer, and a re-scan doing nothing.
+  - One new question in the buglist: should the grid's (and the picker's) **Swap** make the old spool Unassigned
+    too, like the same-slot swap? Recommended: yes (one rule: a spool you take out is in your hand). Default: no change.
+  - Calls I made (veto any): the swapped-out spool's Spoolman location is Unassigned (it's in your hand; a Room is
+    the "Room-only spool" you dislike); it goes to the END of the buffer; the picker asks Swap / Overwrite itself
+    (not the grid's dialog); a picker Swap keeps the grid's meaning (the old spool stays filed in the box until
+    scanned); greyed-out slots: two spools on one slot, a binding to a non-toolhead, the slot's spool on another
+    head, a stale record where nothing loads; a re-read of the same label within 1.5 s is ignored, and a blind slot
+    scan won't put back the spool the swap just took out of that slot for 2 minutes (Undo is the way back).
+- **Next:** 40.4 (Force Location → the picker) → 40.5 → 40.6 → 40.7.
+
 ## Questions for Derek
 
 Asked before Derek went to bed, from the pre-flight reconcile (`wf_1a1ff135-1c6`, read-only). Recorded as
@@ -384,3 +422,4 @@ harness's 1% tolerance let stale CORE1 text pass).
 | `wf_004a1b5e-00e` g40-prebuild-analysis | 40.1 + 40.3 design | 4 (read-only analysts) | 2,588,491 subagent | ~41 min, 464 tool calls; doors / engine / tests / picker-api reports, folded into the build (estimated 1.8M) |
 | `wf_ca12a7f0-f09` g40-review-401-403 | 40.1 + 40.3 | 6 (4 lenses + 2 batched skeptics) | 3,020,979 subagent | ~60 min, 609 tool calls; 25 raw → 0 red, 4 orange confirmed (+1 duplicate), 1 re-rated, the rest yellow; fixed in `f055def` (estimated 2.2–3M) |
 | `wf_0dddaf03-9a6` g40-verify-review-fixes | the review's fixes | 3 (self-probing checkers) | 1,298,181 subagent | ~43 min, 312 tool calls; no red; 1 regression in the fixes (E1/S1, two checkers) + 1 older orange (W1) + yellows; fixed in `1bbc1f9` (estimated ~1M) |
+| `wf_0b3cc1a9-578` g40-2-review | 40.2 + the swap → buffer | 4 (3 lenses + 1 batched skeptic) | 1,799,764 subagent | ~59 min, 444 tool calls; 18 findings → 1 red (a double-read reversed the same-slot swap), 7 yellow, 10 notes (1 duplicate), none refuted; fixed in `6b59b1c`, one note deferred to 40.5 (estimated 2–2.5M) |

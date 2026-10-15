@@ -64,7 +64,7 @@
   | # | Check | Steps | Pass if |
   |---|---|---|---|
   | S1 | Empty idle head (your path) | XL-2 empty. Buffer a spool, scan `LOC:LR-MDB-1:SLOT:2` | Loads onto XL-2 with no prompt |
-  | S2 | The slot's own spool (your path) | XL-3 runs a spool that came from `LR-MDB-1` slot 3. Buffer a new spool, scan `LOC:LR-MDB-1:SLOT:3` | No prompt; the new spool is on XL-3 and the old one back in `LR-MDB-1`. Known, not a failure: the old one may land with no slot (the "same-slot swap files the old spool … with no slot" item further down has a question for you) |
+  | S2 | The slot's own spool (your path) | XL-3 runs a spool that came from `LR-MDB-1` slot 3. Buffer a new spool, scan `LOC:LR-MDB-1:SLOT:3` | No prompt; the new spool is on XL-3, and the old one is in your scan buffer with a toast "✋ #N → your buffer (taken off XL-3)" (your 2026-10-15 answer, built in 40.2): Unassigned until you scan it somewhere or weigh it out. `LR-MDB-1` no longer reads 5/4. Then scan the same slot label again: nothing moves ("Ignored a second read", or after 1.5 s "↩️ #N just came out of LR-MDB-1 slot 3 — not put back"); a double-read used to put the empty spool back on XL-3 |
   | S3 | Head fed from a PolyDryer | Load a `PM-DB-2` spool onto XL-1 (scan it, then XL-1's QR). Buffer another spool, scan `LOC:LR-MDB-1:SLOT:1` | One prompt naming the PolyDryer spool, with the three buttons. Just store it → the spool is in slot 1, XL-1 unchanged. Again with Load it instead → the PolyDryer spool is back in `PM-DB-2`, the new one on XL-1. **Does the wording read right?** |
   | S4 | Scan the choice | Repeat S3, but scan the on-screen QRs instead of clicking | Each QR does what its label says; Cancel writes nothing |
   | S5 | Printing: store by default | While the XL prints, XL-2 empty: scan a spool, then `LOC:LR-MDB-1:SLOT:2` | The prompt says the XL is printing; Enter stores the spool in slot 2 and leaves XL-2 alone |
@@ -339,16 +339,29 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
   2026-10-14.)_ Force Location is meant as a last resort, but without a label per INDX head it's often the easy way.
   Group 40.4 / 40.5's pickers (Force Location or `LOC:RCOI` → pick a head) cover part of it; the spool holders on the
   printer are still being thought through (Derek).
-* **🟡 A same-slot swap files the old spool in the box with no slot.** _(Found 2026-10-14 by Group 40's engine
-  review, `engine:s2-swap-old-spool-unslotted`; it predates Group 40.)_ XL-3 runs #99, which came from LR-MDB-1
-  slot 3. You buffer a new spool #42 and scan `LOC:LR-MDB-1:SLOT:3`: #42 goes into slot 3 and onto XL-3, and #99 is
-  sent home to LR-MDB-1, but slot 3 now belongs to #42, so FCC files #99 in LR-MDB-1 with no slot (the eject's
-  slot-collision check in `logic.perform_smart_eject`). The box can read 5/4, and #99 gets no Quick-Swap tile.
+* **✅ BUILT 2026-10-15 (Group 40.2 branch, `2a45ba5`) — A same-slot swap files the old spool in the box with no
+  slot.** _(Found 2026-10-14 by Group 40's engine review, `engine:s2-swap-old-spool-unslotted`; it predates Group
+  40.)_ XL-3 runs #99, which came from LR-MDB-1 slot 3. You buffer a new spool #42 and scan `LOC:LR-MDB-1:SLOT:3`:
+  #42 goes into slot 3 and onto XL-3, and #99 is sent home to LR-MDB-1, but slot 3 now belongs to #42, so FCC files
+  #99 in LR-MDB-1 with no slot (the eject's slot-collision check in `logic.perform_smart_eject`). The box can read
+  5/4, and #99 gets no Quick-Swap tile.
   **Derek's answer (2026-10-15): the scan buffer.** He only swaps a slot's spool once it has run out (or when
   the old one didn't zero out properly, or to fix a load he forgot to scan before a deduct lands), so the
   swapped-out spool is in his hand and usually needs zeroing: in the buffer he can zero it or file it with the
-  next scan. Build: the chained Smart Load sends the slot's own outgoing spool to the buffer instead of back into
-  the box unslotted (decide its Spoolman location while building; the buffer is also where a weigh-out starts).
+  next scan. **As built:** the chained Smart Load sends the slot's own outgoing spool (its trail is exactly the
+  slot being filled) to the scan buffer: Unassigned in Spoolman with its trail cleared (Claude's call: it is in
+  your hand; the box was the bug, and a Room is the "Room-only spool" you find a pain), at the END of the buffer
+  (behind new spools still waiting, so the next slot scan loads the next new one), with a toast "✋ #99 → your
+  buffer (taken off XL-3)" and a full Activity Log sentence. A spool from elsewhere (a PolyDryer) and a toolhead-QR
+  scan still go home. Undo puts it back on the head and out of the buffer. Archive at Group 40's finish.
+* **🟡 Should a Swap make the old spool Unassigned too?** _(Filed 2026-10-15 by Group 40.2; a question for Derek,
+  nothing broken.)_ The same-slot swap above now makes the swapped-out spool **Unassigned** (it's in your hand). The
+  Location Manager grid's **Swap** (and the new box picker's, which copies it) still files the old spool in the box
+  **without a slot** and puts it in your buffer, so `LR-MDB-1` reads 5/4 until you scan it somewhere. Example: slot 2
+  holds a stored #77; you tap slot 2 with #42 buffered → Swap → #42 in slot 2, #77 in your buffer but still filed in
+  `LR-MDB-1`. Options: (a) **make Swap match the same-slot swap: Unassigned** (recommended: one rule, "a spool you
+  take out is in your hand", and no 5/4); (b) keep today's grid behaviour. Default if unanswered: (b), nothing
+  changes. **Standalone.**
 
 ## 🎟️ Print Queue, Labels & Filament Usage
 *(No open items — resolved entries archived in `completed-archive.md`.)*
