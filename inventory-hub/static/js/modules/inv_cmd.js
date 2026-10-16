@@ -1429,13 +1429,6 @@ const _slotScanOutcome = (r, { stored = false, head = null, prior = null } = {})
         showToast(`❌ #${r.spool} was NOT loaded into ${r.location}:${r.slot}: ${r.msg}`, 'error', 7000);
         return true;
     }
-    if (r && r.action === 'assignment_held') {
-        // Group 40.2 review: the buffer's first spool is the one the same-slot
-        // swap just took out of this very slot (a double-read, or a re-scan), so
-        // the server didn't put it back. Nothing moved; the log has the sentence.
-        showToast(r.toast || r.msg, 'warning', 7000);
-        return true;
-    }
     return false;
 };
 
@@ -1452,7 +1445,10 @@ const _noteScannedLoc = (id) => { state.lastScannedLoc = id; state.lastScannedBu
 // one was answered, or within LOC_REPEAT_MS after, is dropped and said so. Only
 // LOC: labels: CMD:NEXT / CMD:PREV are meant to repeat, and a spool read twice
 // is already "Already in Buffer". `capturedAt`: when the scanner delivered it
-// (scripts.html); a direct call counts as read now.
+// (scripts.html); a direct call counts as read now. A scan of the same label
+// after that is meant, and acts: scanning a slot again right after a swap swaps
+// the two straight back (Derek, 2026-10-15: fixing a wrong scan must not hit a
+// hidden stop, so the server no longer holds the old spool back).
 const LOC_REPEAT_MS = 1500;
 window._fccLastLocScan = window._fccLastLocScan || null;
 const _isLocRepeat = (key, capturedAt) => {
@@ -1643,11 +1639,9 @@ const processScan = (text, source = 'keyboard', capturedAt = null) => {
                     // replays of a question below, so the two can't drift.
                     _slotScanOutcome(res);
                     document.dispatchEvent(new CustomEvent('inventory:locations-changed'));
-                } else if (res.action === 'assignment_failed' || res.action === 'assignment_held') {
+                } else if (res.action === 'assignment_failed') {
                     // The write was rejected (2026-09-12: this used to come back as
-                    // assignment_done), or the server held back the spool the
-                    // same-slot swap just took out of this slot (Group 40.2
-                    // review). The spool is still in the buffer.
+                    // assignment_done). The spool is still in the buffer.
                     _slotScanOutcome(res);
                 } else if (res.action === 'assignment_no_buffer') {
                     // Buffer Empty → treat as pickup: read slot contents and

@@ -307,9 +307,9 @@ def test_the_other_doors_answer_to_buffer(client, path, body):
 
 
 # ---- the review's fixes (wf_0b3cc1a9-578) ---------------------------------------------------------
-# HEAD proof (f5f3ba2): each fails there except where marked a control: the second
-# read reversed the swap, a timed-out swap-out lost the spool from the buffer and
-# the undo, and an undo dropped a spool the user had buffered.
+# HEAD proof (f5f3ba2): a timed-out swap-out lost the spool from the buffer and the
+# undo, and an undo dropped a spool the user had buffered (both fail there); the
+# deliberate re-scan and the doubled-head stuck path are pins that pass there.
 
 def _scan(client, sm, body, store=None):
     return _door(sm, client, "/api/identify_scan", dict(
@@ -317,43 +317,24 @@ def _scan(client, sm, body, store=None):
         store=store).get_json()
 
 
-def test_a_second_read_of_the_slot_label_never_puts_the_old_spool_back(client):
-    """The red: one buffered spool, the same-slot swap, then the label read again
-    (a scanner double-read, a "did it take?" re-scan). The buffer's only entry
-    is #99, the spool just taken out; the second scan loaded it back onto XL-1
-    and handed #42 to the buffer. It is held back now, nothing written."""
+def test_scanning_the_slot_again_on_purpose_swaps_the_two_straight_back(client):
+    """Derek, 2026-10-15: a wrong slot scan must be fixable by scanning that slot
+    again, with no hidden stop. The first scan puts #42 on XL-1 and #99 in the
+    buffer; scanning the same label again (on purpose, so the page's 1.5 s
+    double-read guard has passed) puts #99 back on XL-1 and #42 in the buffer,
+    asking nothing. (The 2-minute server hold-back the review's red first added
+    is gone; a scanner's double-read is the page's to drop, test_box_label_picker_js.)"""
     state.GLOBAL_BUFFER = [{"id": 42, "display": "#42"}]
     sm = _sm(OWN_SLOT_1)
     store = LocationsStore(ROWS)
     first = _scan(client, sm, {}, store=store)
     assert first["action"] == "assignment_done" and _buffer_ids() == [99], first
-    entry = state.GLOBAL_BUFFER[0]
-    assert entry["swapped_from"] == "LR-MDB-1:1" and entry["swapped_for"] == [42], entry
-    writes = len(sm.writes)
     second = _scan(client, sm, {}, store=store)
-    assert second["action"] == "assignment_held" and second["spool"] == 99, second
-    assert "#99 just came out of LR-MDB-1 slot 1 (#42 took its place)" in second["msg"], second
-    assert "Undo Last Move" in second["msg"] and second["toast"].startswith("↩️ #99"), second
-    assert len(sm.writes) == writes, "nothing is written"
-    assert sm.direct_at("XL-1") == [42] and _buffer_ids() == [99]
-    assert any("not loaded" in str(e.get("msg", "")) and e.get("type") == "WARNING" for e in state.RECENT_LOGS)
-
-
-def test_the_hold_back_ends_after_its_window_and_never_stops_a_named_spool(client):
-    """Controls: two minutes later the same scan is a deliberate one (it loads),
-    and a door that names the spool (the deposit) is never held back."""
-    state.GLOBAL_BUFFER = [{"id": 42, "display": "#42"}]
-    sm = _sm(OWN_SLOT_1)
-    store = LocationsStore(ROWS)
-    _scan(client, sm, {}, store=store)
-    named = _scan(client, sm, {"spool_id": 99}, store=store)
-    assert named["action"] == "assignment_done" and sm.direct_at("XL-1") == [99], named
-    # Swap back again, then age the entry past the window: a blind scan loads it.
-    state.GLOBAL_BUFFER = [{"id": 42, "display": "#42"}]
-    _scan(client, sm, {}, store=store)
-    state.GLOBAL_BUFFER[0]["swapped_at"] -= (logic.SWAP_BACK_GUARD_S + 5) * 1000
-    later = _scan(client, sm, {}, store=store)
-    assert later["action"] == "assignment_done" and later["moved"] == 99, later
+    assert second["action"] == "assignment_done" and second["moved"] == 99, second
+    assert [i["id"] for i in second["to_buffer"]] == [42], second
+    assert sm.direct_at("XL-1") == [99] and _buffer_ids() == [42]
+    assert _trail_of(sm, 99) == ("LR-MDB-1", "1", ""), sm.spools[99]
+    assert sm.spools[42]["location"] == "" and _trail_of(sm, 42) == ("", "", "")
 
 
 def test_a_swap_out_that_lands_but_times_out_still_reaches_the_buffer_and_the_undo():

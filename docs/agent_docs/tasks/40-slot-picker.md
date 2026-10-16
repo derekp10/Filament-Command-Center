@@ -416,12 +416,11 @@ synthetic Shelf row: every dev Max > 1 row is a Dryer Box, which opens the picke
 - **Red, fixed: a second read of the slot label reversed Derek's same-slot swap.** With one spool buffered, the
   swapped-out spool is the buffer's only entry, so a scanner's double-read (queued while the first scan was handled)
   or a "did it take?" re-scan loaded the run-out spool back onto the head and handed the new one to the buffer.
-  Two guards: the browser drops an identical `LOC:` scan read before the last one was answered or within 1.5 s
-  after (`capturedAt` from `scripts.html`); the server tags the buffer entry (`swapped_from` / `swapped_at` /
-  `swapped_for`) and the slot door holds back a blind scan whose buffer top is the spool just taken out of that
-  very slot for `SWAP_BACK_GUARD_S` (2 min): `assignment_held`, nothing written, "↩️ #99 just came out of LR-MDB-1
-  slot 1 — not put back (it's in your buffer)". Undo Last Move is the way back; a door that names its spool is
-  never held back.
+  The browser drops an identical `LOC:` scan read before the last one was answered or within 1.5 s after
+  (`capturedAt` from `scripts.html`). A server hold-back was added too (2 min, `assignment_held`) and **removed the
+  same evening at Derek's word** (2026-10-15): "if I scan the wrong barcode, then I'd probably want to fix that
+  issue", and a stop that refuses the fix "sounds more like a headache/hidden bug". So a deliberate re-scan of the
+  slot swaps the two straight back; only a scanner's double-read is dropped.
 - **Yellows, fixed:** a swap-out PATCH that landed but timed out is re-read (`_move_write`), so the spool still
   reaches the buffer and the undo; a picker Swap / Overwrite into a slot that only stores the spool
   (`stores_only`: the engine's store_only rule, binding = the head it is leaving OR its own ghost slot) sends
@@ -440,6 +439,28 @@ synthetic Shelf row: every dev Max > 1 row is a Dryer Box, which opens the picke
 - **Deferred to 40.5 (with the 40.3 "Open, narrow" note):** the engine still offers "Just store it" in a question
   about a slot that holds a stale record (the slot-label scan meets it too) and then refuses the store, writing
   nothing. Asking it right needs the slot read before the question, the same read 40.5 adds.
+
+### Derek's answers (2026-10-15, evening)
+
+- **No hard stop on re-scanning a slot** (above): the 2-minute server hold-back is removed; the 1.5 s double-read
+  guard stays.
+- **Prod waits for the end of Group 40** (no release before 40.7). His note: "This feels like it's taking way
+  longer and way more effort than I was expecting."
+- **Swap, option C (build in the next leg; not built yet).** His words: "it goes back to its previous location but
+  also in the buffer in case that isn't correct. It shouldn't go back to the slot it just came from (was just
+  ejected from), and shouldn't bump a spool in a slot if it's not empty. In the case that the old slot isn't
+  empty, then a non slot attached to a toolhead (like a cart, a box, a wall shelf, whatever)." As read for the
+  build (two points sent back to Derek to confirm; the defaults apply if he doesn't answer):
+  - A slot's STORED spool swapped out (the Location Manager grid's Swap, and the picker's) goes into the scan
+    buffer as today, AND is filed back where it sat before it went into this slot: a plain place (cart, shelf,
+    box without slots) as it was; another slot only if that slot is free (never bump; never the slot it was just
+    swapped out of).
+  - That slot taken: the last plain place it sat in before any slot (default; to confirm).
+  - FCC doesn't remember today where a spool sat before it went into a multi-slot box slot (only single-slot boxes
+    keep `fcc_pre_box_location`), so the build adds that record. Spools slotted before it have none: Unassigned +
+    the buffer (default; to confirm), not the box without a slot (that is the 5/4 he wants gone).
+  - Whether the same-slot swap's old spool (built as Unassigned + the buffer) follows the same rule is also sent
+    back to Derek; default: yes, one rule.
 
 ---
 
@@ -799,7 +820,7 @@ workflow journal).
 | A picker Swap of a STORED spool | **The grid's semantics**: the engine's Overwrite (it stays in the box, unslotted) plus the page putting it in the buffer | "The same choice the grid uses" (Q2). The same-slot swap's Unassigned is engine-side; making Swap match it is a question for Derek (buglist). |
 | Slots the picker greys out | **Two spools claiming it, a binding to a non-head, its own spool on another head, a stale record where nothing loads, any occupied slot in return mode** | The engine refuses the ghost cases (pinned), Quick-Swap refuses doubly-claimed slots, and a non-head binding stores with a warning nobody asked for. The ⭐ skips them. |
 | The box picker's loop (Claude's call 24, as built) | **Escape stops; Cancel on a load question steps back to the same spool's picker; a failure ends the loop; several spools end with a summary** | Escape is "I'm done", Cancel is "not that slot". An unanswerable question ends it rather than reopening the picker on it. |
-| A location label read twice (40.2 review's red) | **Read once: an identical `LOC:` scan before the last was answered, or within 1.5 s after, is dropped (toast + log); and a blind slot scan never puts back the spool the same-slot swap took out of that slot in the last 2 min** | The double-read reversed Derek's own swap. 1.5 s covers a queued double-read without blocking a deliberate re-scan; 2 min covers a "did it take?" re-scan, and Undo Last Move is the deliberate way back. Only `LOC:` labels: CMD:NEXT / PREV are meant to repeat. |
+| A location label read twice (40.2 review's red) | **Read once: an identical `LOC:` scan before the last was answered, or within 1.5 s after, is dropped (toast + log). A later scan of the same slot acts (it swaps the two back)** | The double-read reversed Derek's own swap. 1.5 s covers a queued double-read without blocking a deliberate re-scan. Only `LOC:` labels: CMD:NEXT / PREV are meant to repeat. A 2-minute server hold-back was removed at Derek's word (2026-10-15): fixing a wrong scan must not hit a hidden stop. |
 
 ---
 

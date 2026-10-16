@@ -64,7 +64,7 @@
   | # | Check | Steps | Pass if |
   |---|---|---|---|
   | S1 | Empty idle head (your path) | XL-2 empty. Buffer a spool, scan `LOC:LR-MDB-1:SLOT:2` | Loads onto XL-2 with no prompt |
-  | S2 | The slot's own spool (your path) | XL-3 runs a spool that came from `LR-MDB-1` slot 3. Buffer a new spool, scan `LOC:LR-MDB-1:SLOT:3` | No prompt; the new spool is on XL-3, and the old one is in your scan buffer with a toast "✋ #N → your buffer (taken off XL-3)" (your 2026-10-15 answer, built in 40.2): Unassigned until you scan it somewhere or weigh it out. `LR-MDB-1` no longer reads 5/4. Then scan the same slot label again: nothing moves ("Ignored a second read", or after 1.5 s "↩️ #N just came out of LR-MDB-1 slot 3 — not put back"); a double-read used to put the empty spool back on XL-3 |
+  | S2 | The slot's own spool (your path) | XL-3 runs a spool that came from `LR-MDB-1` slot 3. Buffer a new spool, scan `LOC:LR-MDB-1:SLOT:3` | No prompt; the new spool is on XL-3, and the old one is in your scan buffer with a toast "✋ #N → your buffer (taken off XL-3)" (your 2026-10-15 answer, built in 40.2): Unassigned until you scan it somewhere or weigh it out. `LR-MDB-1` no longer reads 5/4. A scanner's double-read of the label is ignored ("Ignored a second read"); scanning the same label again on purpose swaps the two straight back, so a wrong scan is fixed by re-scanning (your 2026-10-15 evening answer: no hard stop) |
   | S3 | Head fed from a PolyDryer | Load a `PM-DB-2` spool onto XL-1 (scan it, then XL-1's QR). Buffer another spool, scan `LOC:LR-MDB-1:SLOT:1` | One prompt naming the PolyDryer spool, with the three buttons. Just store it → the spool is in slot 1, XL-1 unchanged. Again with Load it instead → the PolyDryer spool is back in `PM-DB-2`, the new one on XL-1. **Does the wording read right?** |
   | S4 | Scan the choice | Repeat S3, but scan the on-screen QRs instead of clicking | Each QR does what its label says; Cancel writes nothing |
   | S5 | Printing: store by default | While the XL prints, XL-2 empty: scan a spool, then `LOC:LR-MDB-1:SLOT:2` | The prompt says the XL is printing; Enter stores the spool in slot 2 and leaves XL-2 alone |
@@ -354,8 +354,12 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
   (behind new spools still waiting, so the next slot scan loads the next new one), with a toast "✋ #99 → your
   buffer (taken off XL-3)" and a full Activity Log sentence. A spool from elsewhere (a PolyDryer) and a toolhead-QR
   scan still go home. Undo puts it back on the head and out of the buffer. Archive at Group 40's finish.
-* **🟡 Should a Swap make the old spool Unassigned too?** _(Filed 2026-10-15 by Group 40.2; a question for Derek,
-  nothing broken.)_ The same-slot swap above now makes the swapped-out spool **Unassigned** (it's in your hand). The
+* **🟡 Should a Swap make the old spool Unassigned too? → Derek, 2026-10-15 evening: option C, to build in Group 40's
+  next leg** (the full answer and the two points to confirm are in `40-slot-picker.md`, 40.2 "Derek's answers
+  (2026-10-15, evening)"): the swapped-out spool goes back to where it sat before that slot AND into the buffer
+  "in case that isn't correct"; never back into the slot it just left, never bumping a spool out of a taken slot,
+  and a taken slot falls back to a plain place (cart, box, shelf). _(Filed 2026-10-15 by Group 40.2; nothing broken.)_
+  The original question, kept for the record: The same-slot swap above now makes the swapped-out spool **Unassigned** (it's in your hand). The
   Location Manager grid's **Swap** (and the new box picker's, which copies it) still files the old spool in the box
   **without a slot** and puts it in your buffer, so `LR-MDB-1` reads 5/4 until you scan it somewhere. Example: slot 2
   holds a stored #77; you tap slot 2 with #42 buffered → Swap → #42 in slot 2, #77 in your buffer but still filed in

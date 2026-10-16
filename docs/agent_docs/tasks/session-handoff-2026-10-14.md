@@ -281,8 +281,8 @@ _Run finished at ~04:45 on 2026-10-14. Started from `dev` @ `4203ffe` (= `origin
   - **Your same-slot swap (S2):** the old spool comes off the head into your scan buffer ("✋ #99 → your buffer
     (taken off XL-3)"), Unassigned in Spoolman until you scan it somewhere or weigh it out; the box no longer reads
     5/4. It waits behind any new spools still buffered. Undo Last Move puts it back on the head and out of the buffer.
-    A second read of the same slot label right after (a scanner double-read, a "did it take?" re-scan) does nothing:
-    "Ignored a second read", or "↩️ #99 just came out of LR-MDB-1 slot 3 — not put back".
+    A scanner's double-read of the slot label is ignored ("Ignored a second read"); scanning it again on purpose
+    swaps the two straight back (your evening answer: no hard stop, so a wrong scan is fixed by re-scanning).
   - **A multi-slot box's own label with a buffer** (other users' path; you never scan box labels) opens the slot
     picker once per buffered spool: each slot's spool and feed, a ⭐, greyed-out slots that say why, and Swap /
     Overwrite / Back inside the picker for a slot that holds a spool. Escape stops (the rest stay buffered); Cancel on

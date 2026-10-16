@@ -239,22 +239,25 @@ return { calls: window.__pickerCalls.length,
     assert any("read twice within 1.5 s" in (m or "") for m in res["logs"]), res["logs"]
 
 
-def test_a_slot_scan_held_back_says_so_and_keeps_the_buffer(tmp_path):
-    """The server held back the spool the same-slot swap just took out of this
-    slot (assignment_held): a 7 s warning, nothing leaves the buffer."""
-    held = {"type": "assignment", "action": "assignment_held", "location": "LR-MDB-1", "slot": "1",
-            "spool": 99, "msg": "Not loaded: #99 just came out of LR-MDB-1 slot 1 …",
-            "toast": "↩️ #99 just came out of LR-MDB-1 slot 1 — not put back (it's in your buffer)"}
+def test_a_slot_label_scanned_again_after_the_double_read_window_acts(tmp_path):
+    """Derek, 2026-10-15: scanning a slot again on purpose (to fix a wrong scan)
+    must act, never hit a hidden stop. Only a read within 1.5 s of the last answer
+    (a scanner's double-read) is dropped; one after that reaches the server."""
+    done = {"type": "assignment", "action": "assignment_done", "location": "LR-MDB-1", "slot": "1",
+            "moved": 57, "remaining_buffer": 0}
     res = _run(tmp_path, f"""
-state.heldSpools = [{{ id: 99, display: '#99' }}];
-answerWith('/api/identify_scan', [{_js(held)}]);
+answerWith('/api/identify_scan', [{_js(done)}, {_js(done)}]);
 window.__extra = null;
 window.processScan('LOC:LR-MDB-1:SLOT:1', 'barcode');
 await __settle(200);
-return {{ held: state.heldSpools.map(s => s.id), toasts: toasts() }};
+// The last scan was answered more than 1.5 s ago.
+window._fccLastLocScan.doneAt -= 2000;
+window.processScan('LOC:LR-MDB-1:SLOT:1', 'barcode');
+await __settle(200);
+return {{ scans: posts('/api/identify_scan').length, toasts: toasts().map(t => t.msg) }};
 """)
-    assert res["held"] == [99], res
-    assert any(t["msg"] == held["toast"] and t["type"] == "warning" for t in res["toasts"]), res["toasts"]
+    assert res["scans"] == 2, res
+    assert not any("Ignored a second read" in m for m in res["toasts"]), res["toasts"]
 
 
 def test_the_double_scan_rule_never_drops_a_spool_it_did_not_put_in_the_buffer(tmp_path):

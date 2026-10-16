@@ -1470,14 +1470,7 @@ def release_box_after_direct_write(sid, pre, post):
         return None
 
 
-# How long a spool the same-slot swap just took out of a slot is kept from being
-# put straight back into that slot by a blind slot-label scan (Group 40.2
-# review): a scanner's double-read, or a "did it take?" re-scan, found it as the
-# buffer's only entry and reversed the swap. Undo Last Move is the way back.
-SWAP_BACK_GUARD_S = 120
-
-
-def _put_in_buffer(spool_ids, off_head='', from_slot=None, swapped_for=()):
+def _put_in_buffer(spool_ids, off_head=''):
     """Group 40, the same-slot swap: put spools a move took off `off_head` (they
     are in the user's hand) at the END of the scan buffer, behind the spools
     already waiting there, so the next slot scan still loads the next new spool.
@@ -1486,49 +1479,19 @@ def _put_in_buffer(spool_ids, off_head='', from_slot=None, swapped_for=()):
     answer, which the page adds to its own buffer too, since its next save
     replaces this replica whole; and the ids it really appended (a spool already
     buffered isn't added twice, and Undo takes out only what the move added).
-    Each entry records the slot it came out of (`swapped_from` "LR-MDB-1:1"), when
-    (`swapped_at`, epoch ms) and for which spool (`swapped_for`), so a blind scan
-    of that slot's label doesn't put it straight back (SWAP_BACK_GUARD_S)."""
+    A scanner's double-read of the slot label is the page's to drop (processScan's
+    repeat guard); scanning the label again on purpose swaps the two straight
+    back, as Derek expects (2026-10-15: no hard stop on fixing a wrong scan)."""
     live = get_live_spools_data(list(spool_ids))
-    tag: typing.Dict[str, typing.Any] = {}
-    if from_slot:
-        tag = {"swapped_from": f"{str(from_slot[0]).strip().upper()}:{_norm_slot(from_slot[1])}",
-               "swapped_at": int(time.time() * 1000),
-               "swapped_for": [int(s) for s in swapped_for if str(s).isdigit()]}
     items: typing.List[typing.Dict[str, typing.Any]] = []
     for sid in spool_ids:
         data = live.get(str(sid)) or {"display": f"#{sid}", "color": "888888"}
-        items.append({"id": int(sid), **data, **tag, "off_head": str(off_head or '').strip().upper()})
+        items.append({"id": int(sid), **data, "off_head": str(off_head or '').strip().upper()})
     buf = list(getattr(state, 'GLOBAL_BUFFER', None) or [])
     held = {str(b.get('id')) for b in buf if isinstance(b, dict)}
     added = [i['id'] for i in items if str(i['id']) not in held]
     state.GLOBAL_BUFFER = buf + [dict(i) for i in items if str(i['id']) not in held]
     return items, added
-
-
-def swapped_back_refusal(entry, box, slot):
-    """Group 40.2 review: why a blind slot-label scan must not put `entry` (the
-    buffer's first spool) into `box` slot `slot`, or None. It is the spool the
-    same-slot swap took out of that very slot moments ago (SWAP_BACK_GUARD_S):
-    a second read of the label used to load the run-out spool straight back and
-    hand the new one to the buffer."""
-    if not isinstance(entry, dict) or not entry.get('swapped_from'):
-        return None
-    here = f"{str(box or '').strip().upper()}:{_norm_slot(slot)}"
-    if str(entry.get('swapped_from')).strip().upper() != here:
-        return None
-    try:
-        age = time.time() - float(entry.get('swapped_at') or 0) / 1000.0
-    except (TypeError, ValueError):
-        return None
-    if age < 0 or age >= SWAP_BACK_GUARD_S:
-        return None
-    sid = entry.get('id')
-    took = _and_list(f"#{s}" for s in (entry.get('swapped_for') or []))
-    because = f" ({took} took its place)" if took else ""
-    return (f"#{sid} just came out of {str(box).strip().upper()} slot {_norm_slot(slot)}{because}, so it wasn't "
-            f"put back. It's still in your buffer: scan it somewhere else, or weigh it out. To reverse the "
-            f"swap, use Undo Last Move")
 
 
 # Thread-local re-entry depth for perform_smart_move. The auto-deploy chain
@@ -2267,8 +2230,7 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
             else:
                 state.add_log_entry(f"⚠️ <b>Smart Load:</b> unloaded #{rid} from {target}", "WARNING")
         if swapped_out:
-            to_buffer, _added = _put_in_buffer(swapped_out, off_head=target, from_slot=swap_slot,
-                                               swapped_for=spools)
+            to_buffer, _added = _put_in_buffer(swapped_out, off_head=target)
             # Only what the move added (Group 40.2 review): a spool the user had
             # already buffered stays buffered when the move is undone.
             undo_record['buffered'] = list(_added)
