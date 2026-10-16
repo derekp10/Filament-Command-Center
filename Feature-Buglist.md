@@ -355,8 +355,8 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
   buffer (taken off XL-3)" and a full Activity Log sentence. A spool from elsewhere (a PolyDryer) and a toolhead-QR
   scan still go home. Undo puts it back on the head and out of the buffer. Archive at Group 40's finish.
 * **🟡 Should a Swap make the old spool Unassigned too? → Derek, 2026-10-15 evening: option C, to build in Group 40's
-  next leg** (the full answer and the two points to confirm are in `40-slot-picker.md`, 40.2 "Derek's answers
-  (2026-10-15, evening)"): the swapped-out spool goes back to where it sat before that slot AND into the buffer
+  next leg** (the full answer and its three confirmed points, including the same rule for the same-slot swap, are in
+  `40-slot-picker.md`, 40.2 "Derek's answers (2026-10-15, evening)"): the swapped-out spool goes back to where it sat before that slot AND into the buffer
   "in case that isn't correct"; never back into the slot it just left, never bumping a spool out of a taken slot,
   and a taken slot falls back to a plain place (cart, box, shelf). _(Filed 2026-10-15 by Group 40.2; nothing broken.)_
   The original question, kept for the record: The same-slot swap above now makes the swapped-out spool **Unassigned** (it's in your hand). The

@@ -449,18 +449,20 @@ synthetic Shelf row: every dev Max > 1 row is a Dryer Box, which opens the picke
 - **Swap, option C (build in the next leg; not built yet).** His words: "it goes back to its previous location but
   also in the buffer in case that isn't correct. It shouldn't go back to the slot it just came from (was just
   ejected from), and shouldn't bump a spool in a slot if it's not empty. In the case that the old slot isn't
-  empty, then a non slot attached to a toolhead (like a cart, a box, a wall shelf, whatever)." As read for the
-  build (two points sent back to Derek to confirm; the defaults apply if he doesn't answer):
+  empty, then a non slot attached to a toolhead (like a cart, a box, a wall shelf, whatever)." The build spec, all
+  three points **confirmed by Derek the same evening**:
   - A slot's STORED spool swapped out (the Location Manager grid's Swap, and the picker's) goes into the scan
     buffer as today, AND is filed back where it sat before it went into this slot: a plain place (cart, shelf,
     box without slots) as it was; another slot only if that slot is free (never bump; never the slot it was just
     swapped out of).
-  - That slot taken: the last plain place it sat in before any slot (default; to confirm).
+  - That slot taken: the last plain place it sat in before any slot. ✅ "seems right".
   - FCC doesn't remember today where a spool sat before it went into a multi-slot box slot (only single-slot boxes
     keep `fcc_pre_box_location`), so the build adds that record. Spools slotted before it have none: Unassigned +
-    the buffer (default; to confirm), not the box without a slot (that is the 5/4 he wants gone).
-  - Whether the same-slot swap's old spool (built as Unassigned + the buffer) follows the same rule is also sent
-    back to Derek; default: yes, one rule.
+    the buffer, not the box without a slot (the 5/4 he wants gone). ✅ "seems right for now". His idea, not
+    chosen: "putting it in the room it was just stored in", which he sees as problematic where we can't or don't
+    want to put it back there.
+  - The same-slot swap's old spool (built as Unassigned + the buffer) follows the same rule: one rule. ✅ "sounds
+    right. I may have more of a nuanced opinion once I run into it a few times."
 
 ---
 
