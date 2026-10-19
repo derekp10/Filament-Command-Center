@@ -342,7 +342,19 @@ Progress is recorded below as each step lands (commit ids), and every branch is 
   Location opens the pickers; held for Save; the per-spool loop for a create).
 - `45de89d` merge of **40.6** (builder, `e8683f0`: Return dry run / chooser / `expected_spool`, the DEPLOYED ↩️).
   Offline 2850 passed. Worktrees removed.
-- Next: the builders' unrun browser tests, the one review, fixes, the one sweep, `dev`.
+- `7976b72` the builders' browser tests run in the main checkout (the wizard close test now waits for the fade).
+- **The one review** `wf_bd637c78-057` (5 agents, 2.31M tokens, ~48 min): 27 findings, none red, 4 orange
+  (R1 stale-trail DEPLOYED ↩️ = an unasked Overwrite of the viewed location, in a Room view across every LR-* box;
+  three wizard ones), the rest yellow / notes, all confirmed. Findings: this session's scratchpad
+  `review_result.json`.
+- Fixers (background, worktrees from `7976b72`): Return R1–R6 on `fix/g40-6-review`, wizard on `fix/g40-7-review`.
+- `1a480cf` **the engine and browser-door fixes** (engine-1..4, R1's engine part, BD-1..BD-6, the `opts.origin` /
+  `pickedSlot` contracts the fixers use); offline 2882 passed. `9fb9aaf` buglist (the PENDING DEREK checks).
+- `90815ba` merge of the **Return fixes** (builder, `79784b0` server R2–R5 + `0ce7b22` browser R1; 22 tests, 17 red on
+  `7976b72`); `12d769d` the stale-trail refusal wording + the open view repaints + the ghost-filter pin; Return browser
+  tests 96 passed. `5b4b591` merge of the **wizard fixes** (builder, `a675212` server + `f3216df` browser; 45 tests,
+  36 red on `7976b72`). CLAUDE.md rows for all of it.
+- Next: offline, the wizard browser files, commit, the one sweep, `dev`, docs.
 
 ## Questions for Derek
 
