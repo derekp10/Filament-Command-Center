@@ -4,7 +4,13 @@
 **Estimated effort:** ~4–7 hours (6 flakes + 5 test-infra residuals)
 **Risk:** **LOW.** Test-infra only — no product code expected.
 
-> **Status: `PARTIAL`** — filed 2026-08-06; **hermeticity residuals DONE 2026-08-07**
+> **Status: ✅ `DONE` — merged to `dev` 2026-08-13 (`367e9c9`), released to `main` 2026-10-08 (`e5b3a82`).**
+> _(Flipped by the 2026-10-12 `/refresh-groups`; the `PARTIAL` history below is kept. `/finish-group` never
+> ran; [Group 47](47-buglist-reconciliation.md) item 47.2 did its bookkeeping on 2026-10-12: the buglist
+> items are archived and `completed-archive.md` has a Group 38 block. The 37.1 fix now lives in
+> [Group 46](46-quick-fix-sweep-2026-10.md) 46.5.)_
+>
+> Filed 2026-08-06; **hermeticity residuals DONE 2026-08-07**
 > (`2d36a62`, branch `feature/group-38-hermeticity-residuals`, stacked on Group 36).
 > **38.7 / 38.8 / 38.9 / 38.10 / 38.11 are all closed** (38.9 by Group 36).
 >
@@ -241,6 +247,9 @@ here because they are exactly the levers that make the flakes above reproducible
   already in place.
 
 ## 📋 Follow-ups surfaced 2026-08-07 — for Derek to file STANDALONE
+
+_(2026-10-12: all four are done. #1 and #2 shipped as the `locations.json` write lock (`aa05526`, merged
+`ddbcdd9`); #3 and #4 shipped in `8de0823`. Archived by [Group 47](47-buglist-reconciliation.md) 47.2 / 47.3.)_
 
 Not filed into the buglist by me (it is Derek's), and deliberately **not nested under this group**
 — nesting a follow-up under an epic that later closes makes it vanish when the epic is archived

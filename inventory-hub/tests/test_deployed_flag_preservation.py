@@ -46,6 +46,8 @@ def _setup_smartmove_mocks(spool_data, printer_map, loc_list, captured):
         patch.object(logic.locations_db, "load_locations_list", return_value=loc_list),
         patch.object(logic.spoolman_api, "get_spool", return_value=spool_data),
         patch.object(logic.spoolman_api, "get_spools_at_location", return_value=[]),
+        # Smart Load's resident read is strict (Group 39.7): the head is empty.
+        patch.object(logic.spoolman_api, "get_spools_at_location_detailed_strict", return_value=[]),
         # The 13.6 reverse-binding checks the bound slot is free (2026-09-12).
         patch.object(logic.spoolman_api, "get_spools_at_location_detailed", return_value=[]),
         patch.object(logic.spoolman_api, "format_spool_display",
@@ -63,10 +65,14 @@ def test_perform_smart_move_auto_deploys_when_slot_is_bound():
     Previously this logic lived only in api_identify_scan's assignment
     branch, so non-scan callers (manage_contents, feeds editor, etc.)
     silently skipped the deploy. This test covers any direct perform_smart_move
-    caller, proving the behavior is now universal."""
+    caller, proving the behavior is now universal.
+
+    A multi-slot box (Group 42.2): a single-slot box's slot 1 binding records
+    where its own spool is loaded (the 20.2 lifecycle), not a feed, so it never
+    auto-deploys. This pin used to use one."""
     printer_map = {"XL-1": {"printer_name": "🦝 XL", "position": 0}}
     loc_list = [
-        {"LocationID": "PM-DB-1", "Type": "Dryer Box", "Max Spools": "1",
+        {"LocationID": "PM-DB-1", "Type": "Dryer Box", "Max Spools": "4",
          "extra": {"slot_targets": {"1": "XL-1"}}},
         {"LocationID": "XL-1", "Type": "Tool Head", "Max Spools": "1"},
     ]
@@ -85,6 +91,8 @@ def test_perform_smart_move_auto_deploys_when_slot_is_bound():
         patch.object(logic.locations_db, "load_locations_list", return_value=loc_list),
         patch.object(logic.spoolman_api, "get_spool", return_value=spool_data),
         patch.object(logic.spoolman_api, "get_spools_at_location", return_value=[]),
+        # Smart Load's resident read is strict (Group 39.7): the head is empty.
+        patch.object(logic.spoolman_api, "get_spools_at_location_detailed_strict", return_value=[]),
         patch.object(logic.spoolman_api, "get_spools_at_location_detailed", return_value=[]),
         patch.object(logic.spoolman_api, "format_spool_display",
                      return_value={"text": "Test", "color": "ff0000"}),
@@ -130,6 +138,8 @@ def test_perform_smart_move_skips_auto_deploy_when_slot_unbound():
         patch.object(logic.locations_db, "load_locations_list", return_value=loc_list),
         patch.object(logic.spoolman_api, "get_spool", return_value=spool_data),
         patch.object(logic.spoolman_api, "get_spools_at_location", return_value=[]),
+        # Smart Load's resident read is strict (Group 39.7): the head is empty.
+        patch.object(logic.spoolman_api, "get_spools_at_location_detailed_strict", return_value=[]),
         patch.object(logic.spoolman_api, "get_spools_at_location_detailed", return_value=[]),
         patch.object(logic.spoolman_api, "format_spool_display",
                      return_value={"text": "Test", "color": "ff0000"}),
@@ -440,6 +450,19 @@ def _pin_box_contents(page: Page, box: str, items: list) -> None:
     page.route("**/api/get_contents*", _handler)
 
 
+def _open_manage_when_ready(page: Page, loc: str) -> None:
+    """window.openManage silently does nothing until the cold /api/locations
+    load has put `loc` into state.allLocations (see conftest.open_manage_modal).
+    These tests slept a fixed 500 ms instead, and lost that race in five of
+    five sweeps (Group 45.8, family B)."""
+    page.wait_for_function(
+        "(id) => typeof state === 'object' && Array.isArray(state.allLocations)"
+        " && state.allLocations.some(l => l.LocationID === id)",
+        arg=loc, timeout=15_000)
+    page.evaluate("(id) => window.openManage(id)", loc)
+    expect(page.locator("#manageModal")).to_be_visible(timeout=8_000)
+
+
 @pytest.fixture
 def bound_and_live(borrow_box_bindings):
     """Bind PM-DB-1 slot 1 → XL-1. The slot's occupancy is pinned by
@@ -454,9 +477,7 @@ def test_quickswap_button_shows_spool_info_when_slot_loaded(page: Page, base_url
     _pin_box_contents(page, TEST_BOX, [PINNED_SPOOL])
     page.goto(base_url)
     page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
-    page.wait_for_timeout(500)
-    page.evaluate(f"window.openManage({TEST_TOOLHEAD!r})")
-    expect(page.locator("#manageModal")).to_be_visible(timeout=5000)
+    _open_manage_when_ready(page, TEST_TOOLHEAD)
     page.wait_for_timeout(1200)  # give the fetch chain time to finish
     btn = page.locator(f".fcc-qs-slot[data-box='{TEST_BOX}'][data-slot='1']").first
     expect(btn).to_be_visible(timeout=3000)
@@ -486,9 +507,7 @@ def test_quickswap_button_disabled_when_slot_empty(
     borrow_box_bindings(victim_box, {victim_slot: TEST_TOOLHEAD})
     page.goto(base_url)
     page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
-    page.wait_for_timeout(500)
-    page.evaluate(f"window.openManage({TEST_TOOLHEAD!r})")
-    expect(page.locator("#manageModal")).to_be_visible(timeout=5000)
+    _open_manage_when_ready(page, TEST_TOOLHEAD)
     # Force an empty buffer before asserting disabled — otherwise a
     # buffered spool would enable the same button as a Deposit target.
     page.evaluate("() => { state.heldSpools = []; if (window.renderBuffer) window.renderBuffer(); }")

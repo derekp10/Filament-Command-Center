@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from playwright.sync_api import Page, expect
 
+import conftest
+
 
 def _goto(page: Page) -> None:
     page.goto("http://localhost:8000")
@@ -73,6 +75,10 @@ def test_toast_beats_modal_close(page: Page):
     _goto(page)
     page.evaluate("window.openWizardModal && window.openWizardModal()")
     expect(page.locator("#wizardModal")).to_be_visible()
+    # Fully shown first (Group 45.8): mid-fade, Bootstrap ignores Escape on
+    # its own, so "the wizard stayed open" would prove nothing, and the
+    # closing Escape below would be dropped.
+    conftest.wait_modal_settled(page, "wizardModal")
 
     page.evaluate("window.showToast('OVER_WIZARD', 'warning', 30000)")
     assert _toast_count(page) == 1
@@ -95,6 +101,10 @@ def test_escape_consumed_during_toast_fadeout_keeps_modal_open(page: Page):
     _goto(page)
     page.evaluate("window.openWizardModal && window.openWizardModal()")
     expect(page.locator("#wizardModal")).to_be_visible()
+    # Fully shown first (Group 45.8): mid-fade, Bootstrap ignores Escape on
+    # its own, so "the wizard stayed open" would prove nothing, and the
+    # closing Escape below would be dropped.
+    conftest.wait_modal_settled(page, "wizardModal")
 
     page.evaluate("window.showToast('FADING_TOAST', 'info', 30000)")
     # Drive the toast into the fade window deterministically: opacity 0 but still

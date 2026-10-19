@@ -175,7 +175,7 @@
     window.registerShortcut({
         id: 'scan-loc-slot', scope: 'Scan Commands',
         keys: ['LOC:<id>:SLOT:<n>'],
-        description: 'Drop the buffered spool into slot N of the location (auto-deploys to the bound toolhead if one is set).'
+        description: 'Drop the buffered spool into slot N of the location (auto-deploys to the bound toolhead if one is set). Asks first when that toolhead runs a spool from somewhere else or its printer is printing: Load it instead / Just store it / Cancel.'
     });
     window.registerShortcut({
         id: 'scan-id', scope: 'Scan Commands',
@@ -230,7 +230,7 @@
     window.registerShortcut({
         id: 'scan-cmd-undo', scope: 'Scan Commands',
         keys: ['CMD:UNDO'],
-        description: 'Undo the last move.'
+        description: 'Undo Last Move: asks first, naming the move it will reverse.'
     });
     window.registerShortcut({
         id: 'scan-cmd-clear', scope: 'Scan Commands',
@@ -260,7 +260,31 @@
     window.registerShortcut({
         id: 'scan-cmd-cancel', scope: 'Scan Commands',
         keys: ['CMD:CANCEL'],
-        description: 'Cancel an active audit without moving any spools (safe bail; opposite of CMD:DONE).'
+        description: 'Cancel without moving anything: an active audit (safe bail; opposite of CMD:DONE), the slot picker, or the load question on screen.'
+    });
+    window.registerShortcut({
+        id: 'scan-cmd-store', scope: 'Scan Commands',
+        keys: ['CMD:STORE:<id>'],
+        description: '"Just store it" on the load question on screen (scan its own QR): the spool goes in the slot and the toolhead is left alone.'
+    });
+
+    // Group 40.3 — the load question ("Load #57 onto XL-1?"), asked when a box
+    // slot's toolhead already runs a spool from somewhere else, or its printer
+    // is printing.
+    window.registerShortcut({
+        id: 'load-question-enter', scope: 'Load / Store Question',
+        keys: ['Enter'],
+        description: 'Just store it (the highlighted answer: a toolhead is never loaded by a stray Enter). With no store option, Enter cancels.'
+    });
+    window.registerShortcut({
+        id: 'load-question-move', scope: 'Load / Store Question',
+        keys: ['←', '→', 'Tab'],
+        description: 'Move between Load it instead, Just store it and Cancel.'
+    });
+    window.registerShortcut({
+        id: 'load-question-cancel', scope: 'Load / Store Question',
+        keys: ['Esc'],
+        description: 'Cancel: nothing moves. While the question is open, other scans are held off (CMD:CANCEL cancels it).'
     });
     window.registerShortcut({
         id: 'scan-cmd-slot', scope: 'Scan Commands',

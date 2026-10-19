@@ -17,6 +17,8 @@ from __future__ import annotations
 import pytest
 from playwright.sync_api import Page, expect
 
+import conftest
+
 
 def _open_wizard(page: Page) -> None:
     page.goto("http://localhost:8000")
@@ -33,14 +35,8 @@ def _open_wizard(page: Page) -> None:
 
 
 def _force_close_wizard(page: Page) -> None:
-    page.evaluate("""
-        const m = bootstrap.Modal.getInstance(document.getElementById('wizardModal'));
-        if (m) {
-            try { wizardState.forceClose = true; wizardState.isDirty = false; } catch (_) {}
-            m.hide();
-        }
-    """)
-    expect(page.locator("#wizardModal")).not_to_be_visible(timeout=5_000)
+    # Waits out the show transition first; a bare hide() inside it is dropped (Group 45.8).
+    conftest.close_wizard(page)
 
 
 def _stub_add_choice_and_field_refresh(page: Page, new_value: str) -> None:

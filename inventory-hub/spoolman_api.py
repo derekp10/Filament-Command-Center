@@ -47,6 +47,8 @@ JSON_STRING_FIELDS = [
     "prusament_manufacturing_date", "sheet_link", "slicer_profile",
     # Vendor extras (Group 6 — Edit Modal new panels):
     "website",
+    # Group 42.6: a location id is text even when it looks like a number.
+    "fcc_pre_box_location",
 ]
 
 # Captures the last Spoolman non-ok response body so callers like
@@ -103,6 +105,20 @@ def get_all_spools(allow_archived=True):
     except Exception as e:
         state.logger.error(f"get_all_spools failed: {e}")
         return []
+
+def get_all_spools_strict(allow_archived=False):
+    """Like get_all_spools (default: the non-archived list, as every location
+    reader uses) but RAISES on a Spoolman transport/HTTP failure instead of
+    answering [] — for a reader that must not draw "nothing here" when it simply
+    couldn't ask. Group 40.1: the slot picker's placement model reads the spool
+    list once through this and says "couldn't read Spoolman" rather than show
+    every slot empty."""
+    sm_url, _ = config_loader.get_api_urls()
+    q = "?allow_archived=true" if allow_archived else ""
+    resp = requests.get(f"{sm_url}/api/v1/spool{q}", timeout=5)
+    resp.raise_for_status()  # raise on 4xx/5xx so the caller can fail closed
+    return parse_inbound_data(resp.json())
+
 
 def get_all_locations():
     """Fetches all locations from Spoolman."""
@@ -166,6 +182,28 @@ def sanitize_outbound_data(data):
             clean_extra[key] = json.dumps(str(value))
     data['extra'] = clean_extra
     return data
+
+def effective_initial_weight(spool):
+    """A spool record's net capacity in grams, or None when it is unknown.
+
+    Its own `initial_weight`, else its filament's net `weight` — how Spoolman
+    computes `remaining_weight`, and the same fallback `_auto_archive_on_empty`
+    and `_auto_unarchive_on_refill` apply (31.2). Only None falls through: an
+    own `initial_weight` of 0 is a real 0, as it is for the cap in update_spool.
+    The print deduct clamps against this (Group 43.1).
+    """
+    if not isinstance(spool, dict):
+        return None
+    raw = spool.get('initial_weight')
+    if raw is None:
+        raw = (spool.get('filament') or {}).get('weight')
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
 
 def _auto_archive_on_empty(data, existing_initial, existing_used, existing_location=None,
                            existing_filament_weight=None):
@@ -260,9 +298,11 @@ def _auto_unarchive_on_refill(data, existing):
     manually via the normal scan/move flow.
 
     The caller's explicit intent always wins: if the payload already sets
-    `archived` or `location`, we leave those keys alone.
+    `archived` or `location`, we leave those keys alone. A payload that sets
+    `archived: True` keeps the spool archived, so it gets no location restore
+    either (a deduct charging an archived spool is not a refill; Group 43 review).
     """
-    if not existing or not existing.get('archived'):
+    if not existing or not existing.get('archived') or data.get('archived') is True:
         return
     new_used = data.get('used_weight', existing.get('used_weight'))
     new_initial = data.get('initial_weight', existing.get('initial_weight'))
@@ -284,7 +324,96 @@ def _auto_unarchive_on_refill(data, existing):
     if 'location' not in data:
         prev_loc = (existing.get('extra') or {}).get('fcc_pre_archive_location')
         if prev_loc:
-            data['location'] = prev_loc
+            dest, warning = _unarchive_destination(existing, prev_loc, remaining)
+            data['location'] = dest
+            # Claude's call 22: the note is used up once the spool is back in
+            # stock. "" because the extras merge won't pop a system-managed key.
+            extra = data.get('extra')
+            if not isinstance(extra, dict):
+                extra = {}
+                data['extra'] = extra
+            extra['fcc_pre_archive_location'] = ''
+            return warning
+    return None
+
+
+def _unarchive_destination(existing, prev_loc, remaining):
+    """Group 42.3c — where an auto-unarchived spool goes: back to where it was
+    archived from, unless that place holds one spool and another spool is there
+    now. A print that used a spool up archived it off its toolhead; if a
+    different spool was loaded there since, a later weight correction put the
+    old spool back on top of it (I5-9: two spools on one head).
+
+    Derek, 2026-10-13 (option A): then it goes to Unassigned, with a 7-second
+    warning naming the spool on the head, as an ejected spool with no saved home
+    does. Claude's call 22: a place FCC can't read, or that no longer exists,
+    counts as taken; a remembered Printer label counts only spools filed on the
+    printer itself. A shelf, box or cart is restored with no read. A place with
+    no locations.json row is gone only if no live spool is filed there either
+    (Group 42 review): a Spoolman-native location FCC shows from its spools was
+    restored before 42.3c and still is.
+    Returns (location, warning or None)."""
+    loc = str(prev_loc).strip().strip('"')
+    lid = loc.upper()
+    sid = existing.get('id')
+    try:
+        printer_map = locations_db.get_active_printer_map() or {}
+        rows = {str(r.get('LocationID', '')).strip().upper(): r
+                for r in (locations_db.load_locations_list() or []) if isinstance(r, dict)}
+    except Exception as e:
+        state.logger.warning(f"42.3c: couldn't read the locations for #{sid}: {e}")
+        printer_map, rows = None, None
+    if rows is None:
+        why = "FCC couldn't check where it was"
+    elif lid not in printer_map and lid not in rows:
+        try:
+            in_use = any(not r.get('is_ghost') for r in (get_spools_at_location_detailed_strict(lid) or []))
+        except Exception as e:
+            state.logger.warning(f"42.3c: couldn't read {lid} for #{sid}: {e}")
+            in_use = None
+        if in_use:
+            return loc, None
+        why = f"FCC couldn't read {lid} from Spoolman" if in_use is None else f"{lid} no longer exists"
+    elif lid in printer_map or str(rows[lid].get('Type', '')).strip() in (locations_db.TOOLHEAD_TYPES | {'Printer'}):
+        try:
+            holders = [r.get('id') for r in (get_spools_at_location_detailed_strict(lid) or [])
+                       if not r.get('is_ghost') and str(r.get('id')) != str(sid)
+                       and str(r.get('location') or '').strip().strip('"').upper() == lid]
+        except Exception as e:
+            state.logger.warning(f"42.3c: couldn't read {lid} for #{sid}: {e}")
+            holders = None
+        if holders == []:
+            return loc, None
+        why = (f"FCC couldn't read {lid} from Spoolman" if holders is None
+               else f"{lid} now holds " + ", ".join(f"#{h}" for h in holders))
+    else:
+        return loc, None
+    return '', (f"#{sid} is back in stock ({remaining:.0f} g), but {why}, so it is Unassigned — "
+                f"scan it to where you put it.")
+
+
+def _release_box_on_archive(sid, data, existing, pre_archived):
+    """Group 42.1b — a spool printed (or weighed) to empty is archived and taken
+    off its head by _auto_archive_on_empty. Derek's rule says a single-slot box
+    lets go when its own spool leaves the head "by any path", so this edge
+    releases the spool's own box (the trail it carried on the head). A later
+    force_unassign (the weigh-out's second call) then finds nothing to release.
+
+    Only on the archive edge, only when THIS update cleared the location (so a
+    box is never released while its spool is still on the head), and
+    best-effort: it never changes the write's result or LAST_SPOOLMAN_ERROR."""
+    try:
+        if not (data.get('archived') and not pre_archived and data.get('location') == ''):
+            return
+        head = str((existing or {}).get('location') or '').strip().strip('"').upper()
+        if not head or head not in locations_db.get_active_printer_map():
+            return
+        box = str(((existing or {}).get('extra') or {}).get('physical_source') or '').strip().strip('"').upper()
+        if box and box != head and locations_db.detach_single_slot_box(box, head):
+            state.add_log_entry(
+                f"🔓 {box} detached from {head} — its spool #{sid} was archived empty", "INFO")
+    except Exception as e:
+        state.logger.warning(f"42.1b archive-edge box release skipped for #{sid}: {e}")
 
 
 def update_spool(sid, data):
@@ -297,6 +426,7 @@ def update_spool(sid, data):
     """
     global LAST_SPOOLMAN_ERROR
     sm_url, _ = config_loader.get_api_urls()
+    existing, pre_archived = {}, False   # read by the except branch's archive-edge check
     try:
         # [ALEX FIX] Intercept "UNASSIGNED" and coerce into empty string for Spoolman API
         if 'location' in data and isinstance(data['location'], str):
@@ -333,8 +463,10 @@ def update_spool(sid, data):
                 pass
 
         # Symmetric auto-unarchive: weight went from 0 back to >0 on an archived
-        # spool. Restores the pre-archive location when the breadcrumb is present.
-        _auto_unarchive_on_refill(data, existing)
+        # spool. Restores the pre-archive location when the breadcrumb is present
+        # (Group 42.3c: unless a one-spool head there holds another spool now;
+        # the warning then says so).
+        unarchive_warning = _auto_unarchive_on_refill(data, existing)
         if pre_archived and data.get('archived') is False:
             try:
                 restored_to = data.get('location') or 'UNASSIGNED'
@@ -396,14 +528,48 @@ def update_spool(sid, data):
         r = requests.patch(f"{sm_url}/api/v1/spool/{sid}", json=clean_data, timeout=15)
         if r.ok:
             LAST_SPOOLMAN_ERROR = None
-            return r.json()
+            _release_box_on_archive(sid, data, existing, pre_archived)
+            out = r.json()
+            if unarchive_warning:
+                # Every surface logs it; the weight screens also toast it at 7 s
+                # (/api/spool/update and the wizard pass `fcc_warning` on).
+                try:
+                    state.add_log_entry(f"⚠️ {unarchive_warning}", "WARNING", "ffaa00")
+                except Exception:
+                    pass
+                if isinstance(out, dict):
+                    out['fcc_warning'] = unarchive_warning
+            return out
         err_body = r.text
         state.logger.error(f"Failed to update spool {sid}: {r.status_code} - {err_body}")
         LAST_SPOOLMAN_ERROR = f"HTTP {r.status_code}: {err_body[:400]}"
     except Exception as e:
         state.logger.error(f"API Error updating spool {sid}: {e}")
         LAST_SPOOLMAN_ERROR = str(e)[:400]
+        _release_box_if_archive_landed(sid, data, existing, pre_archived)
     return None
+
+
+def _release_box_if_archive_landed(sid, data, existing, pre_archived):
+    """Group 42 review: `timeout` is a READ timeout, so the archive edge can land
+    while the PATCH reports failure (a print deduct that empties the spool, a
+    weigh-out to 0). The deduct re-reads and counts such a charge as landed
+    (print_deduct._write_landed), and nothing could release the box afterwards:
+    the spool is off the head and its trail is cleared. So when the write was an
+    archive edge, re-read, and release the box if the archive really landed.
+    Never changes the result or LAST_SPOOLMAN_ERROR (get_spool leaves it alone)."""
+    try:
+        if not isinstance(data, dict) or not isinstance(existing, dict):
+            return
+        if not (data.get('archived') and not pre_archived and data.get('location') == ''):
+            return
+        rec = get_spool(sid)
+        if not isinstance(rec, dict) or rec.get('id') is None:
+            return   # unreadable, or Spoolman's truthy 404 body
+        if rec.get('archived') and not str(rec.get('location') or '').strip().strip('"'):
+            _release_box_on_archive(sid, data, existing, pre_archived)
+    except Exception as e:
+        state.logger.warning(f"42.1b archive-edge re-read for #{sid} skipped: {e}")
 
 
 def update_spool_or_raise(sid, data):
@@ -495,6 +661,10 @@ SYSTEM_MANAGED_EXTRAS = frozenset({
     # recovery scan can route it home; never user-editable (would lose
     # the breadcrumb).
     "fcc_pre_audit_location",
+    # Group 42.6 — where a spool sat before it went into a single-slot box
+    # (a PolyDryer), so ejecting it out of the box puts it back there.
+    # Written and cleared only by the move engine and the eject.
+    "fcc_pre_box_location",
 })
 
 
@@ -958,6 +1128,10 @@ REQUIRED_SPOOL_EXTRAS = [
     # ("Unknown extra field fcc_pre_audit_location") and missing spools stay
     # at their stale location (silent failure surfaces as red Activity Log).
     ("fcc_pre_audit_location", "Pre-Audit Location (system)", "text"),
+    # Group 42.6 — every Undo and Smart Load snapshot writes the
+    # SYSTEM_MANAGED_EXTRAS, and Spoolman rejects a whole PATCH carrying an
+    # unregistered extra, so startup must register this before the first move.
+    ("fcc_pre_box_location", "Pre-Box Location (system)", "text"),
 ]
 
 # Vendor extras the Manufacturer/Vendor Edit modal V1 writes (Group 6.2).

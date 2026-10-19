@@ -86,6 +86,13 @@ def test_quickswap_confirm_overlay_has_no_gray_on_gray_text(page: Page, open_man
     # still renders the same overlay shell we want to check).
     page.locator("#quickswap-return-btn").click()
     overlay = page.locator("#fcc-quickswap-confirm-overlay")
+    # Group 40.6: a spool with no obvious slot opens the slot picker before the
+    # confirm; Enter takes its highlight (nothing is written: no Yes here).
+    page.wait_for_function(
+        "!!document.getElementById('fcc-quickswap-confirm-overlay')"
+        " || !!document.querySelector('#fcc-slot-picker [data-sp-state=\"ready\"]')", timeout=8000)
+    if page.evaluate("!!document.querySelector('#fcc-slot-picker [data-sp-state=\"ready\"]')"):
+        page.keyboard.press("Enter")
     # Overlay mount awaits a 3s active-print probe; 8s gives headroom
     # under sweep load (same fix as Group 14.2).
     expect(overlay).to_be_visible(timeout=8000)

@@ -1206,40 +1206,188 @@ window.promptEditLocation = (spoolId, currentLoc) => {
             }).then((result) => {
                 if (result.isConfirmed) {
                     const newLoc = result.value;
-                    
-                    if (typeof setProcessing === 'function') setProcessing(true);
-                    const payload = {
-                        action: newLoc === "" ? 'force_unassign' : 'add',
-                        location: newLoc,
-                        spool_id: spoolId,
-                        origin: 'manual_override'
-                    };
-                    
-                    fetch('/api/manage_contents', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload)
-                    })
-                    .then(r => r.json())
-                    .then(res => {
-                        if (typeof setProcessing === 'function') setProcessing(false);
-                        // A rejected write still answers status 'success' and names
-                        // the spool in res.failures (2026-09-12).
+                    const unassign = newLoc === "";
+
+                    // Group 39.5 — a yes-path. An active-print answer used to land in
+                    // the error branch as a 7 s toast with no way to proceed. `confirm`
+                    // is the heads for an add (39.1), or true for force_unassign,
+                    // whose route keeps the boolean.
+                    // `pickedSlot` (Group 40.0e): the slot the engine picked for this
+                    // slotless move before it asked (the answer's `target_slot`), sent
+                    // back as `picked_slot` so the Yes lands where the question said;
+                    // the server keeps it only while it is still free. The first
+                    // request sends no slot.
+                    const spoolModalEl = document.getElementById('spoolModal');
+                    // What the move did, once the server stopped asking. A rejected
+                    // write still answers status 'success' and names the spool in
+                    // res.failures (2026-09-12).
+                    // `placement` (Group 40.4 / 40.5): what the picker chose, for the toast.
+                    // Returns whether the move landed.
+                    const done = (res, prior, placement = null) => {
                         const failedWhy = res.status === 'success' ? (res.failures || {})[String(spoolId)] : null;
                         if (!failedWhy && (res.status === 'success' || res.success)) {
-                            showToast('Location updated via override', 'success');
+                            const where = placement ? placement.location : newLoc;
+                            if (prior && prior.store) {
+                                // Group 40.3: "Just store it" put it in the slot and left the head alone.
+                                showToast(`📦 #${spoolId} stored in ${where}`
+                                    + `${prior.pickedSlot != null ? ` slot ${prior.pickedSlot}` : ''}`
+                                    + `${window.storeToastTail(prior)}`, 'success', 4000);
+                            } else if (placement) {
+                                // The picker's choice, in short arrows (as the box-label door says it).
+                                const rec = res.recorded_source ? String(res.recorded_source).split(':') : null;
+                                const tail = (rec && rec.length === 2) ? ` (recorded as from ${rec[0]} slot ${rec[1]})`
+                                    // Group 40 review (BD-3): its own trail won over the answer.
+                                    : res.record_source_ignored ? ` (its home stays ${res.record_source_kept || 'its box'})`
+                                    : (placement.record_source === '' ? ' (no box slot recorded)' : '');
+                                showToast(`✅ #${spoolId} → ${placement.label}`
+                                    + `${res.auto_deployed_to ? ` → ${res.auto_deployed_to}` : ''}${tail}`, 'success', 4000);
+                            } else {
+                                showToast('Location updated via override', 'success');
+                            }
                             const notDeployed = (res.auto_deploy_skipped || {})[String(spoolId)];
                             if (notDeployed) showToast(`⚠️ #${spoolId} was placed, but NOT deployed to ${res.auto_deploy_target || 'its toolhead'}: ${notDeployed}`, 'warning', 7000);
+                            // Group 40, the same-slot swap: the slot's old spool came
+                            // off its head into the scan buffer.
+                            window.takeIntoBuffer(res);
                             document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
-                            openSpoolDetails(spoolId, true); 
-                        } else {
-                            showToast(failedWhy ? `❌ #${spoolId} was NOT moved: ${failedWhy}` : (res.msg || 'Override failed'), 'error', 7000);
+                            openSpoolDetails(spoolId, true);
+                            return true;
                         }
-                    })
-                    .catch(e => {
-                        if (typeof setProcessing === 'function') setProcessing(false);
-                        showToast('Override Network Error', 'error');
-                    });
+                        showToast(failedWhy ? `❌ #${spoolId} was NOT moved: ${failedWhy}` : (res.msg || 'Override failed'), 'error', 7000);
+                        // A spool the move had already handed to the buffer (a
+                        // Swap's old spool) is in the user's hand all the same.
+                        window.takeIntoBuffer(res);
+                        return false;
+                    };
+                    const post = (payload, onAnswer) => {
+                        if (typeof setProcessing === 'function') setProcessing(true);
+                        window.fetchT('/api/manage_contents', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        })
+                        // Only a request that got no answer says "failed": an
+                        // exception after a move landed only reaches the console.
+                        .then(r => r.json())
+                        .then(x => x, (e) => {
+                            if (typeof setProcessing === 'function') setProcessing(false);
+                            showToast(`Override failed: ${(e && e.message) || 'network error'}`, 'error', 7000);
+                            return null;
+                        })
+                        .then(res => {
+                            if (res === null) return;
+                            if (typeof setProcessing === 'function') setProcessing(false);
+                            onAnswer(res || {});
+                        })
+                        .catch(e => {
+                            if (typeof setProcessing === 'function') setProcessing(false);
+                            console.error(e);
+                        });
+                    };
+                    // The Swal has closed by now, so a question sits over the details
+                    // modal, and Cancel leaves the details open.
+                    if (unassign) {
+                        // force_unassign keeps its boolean confirm (39.1).
+                        const sendUnassign = (confirm) => post({
+                            action: 'force_unassign', location: newLoc, spool_id: spoolId,
+                            origin: 'manual_override', confirm_active_print: confirm === true,
+                        }, (res) => {
+                            const asks = res.confirm_type === 'active_print'
+                                && (res.status === 'requires_confirm' || res.require_confirm);
+                            if (asks) {
+                                if (window.logClientEvent) window.logClientEvent(
+                                    `⚠️ Force Location of #${spoolId} needs an active-print confirm: ${res.msg || 'a printer is printing'}`,
+                                    'WARNING');
+                                window.confirmActivePrint({
+                                    activePrint: res.active_print,
+                                    activePrints: res.active_prints,
+                                    msg: res.msg,
+                                    host: spoolModalEl,
+                                    onConfirm: () => sendUnassign(true),
+                                });
+                                return;
+                            }
+                            done(res, null);
+                        });
+                        sendUnassign(false);
+                    } else {
+                        // The `add` as first sent; a server question's replay is
+                        // rebuilt from it (Group 40.3, window.buildMoveReplay): the
+                        // slot the engine picked for this slotless move (Group 40.0e:
+                        // `picked_slot`, kept only while still free), every head and
+                        // confirm key confirmed so far, and the feed it named.
+                        // `ctx` (Group 40.4 / 40.5): the picker's placement (for the
+                        // toast), `noStore` (a slot whose record a store refuses) and
+                        // `outcome({outcome})` for the picker's flow (a cancelled
+                        // question steps back to the picker).
+                        const runAdd = (original, first, prior0, ctx = {}) => {
+                            const sendAdd = (payload, prior) => post(payload, (res) => {
+                                if (res.status === 'requires_confirm' && window.askMoveConfirm) {
+                                    if (window.logClientEvent) window.logClientEvent(
+                                        `⚠️ Force Location of #${spoolId} needs a confirm: ${res.msg || 'a printer is printing'}`,
+                                        'WARNING');
+                                    window.askMoveConfirm(res, {
+                                        door: 'manage_add', original, prior, host: spoolModalEl, box: original.location,
+                                        noStore: !!ctx.noStore,
+                                        send: (body, next) => sendAdd(body, next),
+                                        onCancel: (info) => {
+                                            if (ctx.outcome) ctx.outcome({
+                                                outcome: info && (info.superseded || info.unknown) ? 'failed' : 'cancelled' });
+                                        },
+                                    });
+                                    return;
+                                }
+                                const moved = done(res, prior, ctx.placement || null);
+                                if (ctx.outcome) ctx.outcome({ outcome: moved ? 'moved' : 'failed', res });
+                            });
+                            sendAdd(first, prior0);
+                        };
+                        // Group 40.4 (Derek's D2.4: "Force Location into a box behaves
+                        // exactly like a box-label scan") and 40.5 (D3): a multi-slot
+                        // Dryer Box opens the box picker, a Printer row that isn't its
+                        // own toolhead (XL, RCOI) the Printer picker (a head, or a
+                        // Printer Pool slot), instead of a slot or row chosen unseen.
+                        // Cancel on a question steps back to the picker; Escape there
+                        // moves nothing. Everything else keeps the direct path.
+                        const row = Array.isArray(locs) ? locs.find(l => String(l.LocationID) === String(newLoc)) : null;
+                        const usePicker = !!(row && window.placeOneWithPicker && window.openSlotPicker
+                            && ((window.isMultiSlotBox && window.isMultiSlotBox(row))
+                                || (window.isPrinterRowNotHead && window.isPrinterRowNotHead(row, locs))));
+                        if (usePicker) {
+                            window.placeOneWithPicker({
+                                loc: newLoc, sid: spoolId, host: spoolModalEl,
+                                send: (pl, outcome) => {
+                                    const original = {
+                                        action: 'add', location: pl.location, spool_id: spoolId,
+                                        origin: 'manual_override', confirmed_toolheads: [], confirmed_fed_heads: [],
+                                    };
+                                    if (pl.slot != null) original.slot = pl.slot;
+                                    if (pl.auto_deploy === false) original.auto_deploy = false;
+                                    if (pl.swap) original.swap = true;
+                                    if (pl.record_source !== undefined) original.record_source = pl.record_source;
+                                    const first = Object.assign({}, original);
+                                    if (pl.picked_slot != null) first.picked_slot = pl.picked_slot;
+                                    const feed = pl.expected_feed != null ? String(pl.expected_feed).toUpperCase() : null;
+                                    if (feed != null) first.expected_feed = feed;
+                                    runAdd(original, first,
+                                        { pickedSlot: pl.picked_slot != null ? String(pl.picked_slot) : null, expectedFeed: feed },
+                                        { placement: pl, noStore: !!pl.noStore, outcome });
+                                },
+                            }).then((out) => {
+                                if (out && out.outcome === 'stopped') {
+                                    showToast(`Force Location cancelled — #${spoolId} wasn't moved`, 'info', 4000);
+                                    if (window.logClientEvent) window.logClientEvent(
+                                        `ℹ️ Force Location of #${spoolId} into ${newLoc}: the picker was closed, nothing moved`, 'INFO');
+                                }
+                            });
+                            return;
+                        }
+                        const original = {
+                            action: 'add', location: newLoc, spool_id: spoolId,
+                            origin: 'manual_override', confirmed_toolheads: [], confirmed_fed_heads: [],
+                        };
+                        runAdd(original, original, {});
+                    }
                 }
             });
         });

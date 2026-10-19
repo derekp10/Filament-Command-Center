@@ -13,6 +13,8 @@ import pytest
 import requests
 from playwright.sync_api import Page, expect
 
+import conftest
+
 
 def _open_wizard_fresh(page: Page) -> None:
     page.goto("http://localhost:8000")
@@ -30,14 +32,8 @@ def _open_wizard_fresh(page: Page) -> None:
 
 
 def _force_close_wizard(page: Page) -> None:
-    page.evaluate("""
-        const m = bootstrap.Modal.getInstance(document.getElementById('wizardModal'));
-        if (m) {
-            try { wizardState.forceClose = true; wizardState.isDirty = false; } catch (_) {}
-            m.hide();
-        }
-    """)
-    expect(page.locator("#wizardModal")).not_to_be_visible(timeout=5_000)
+    # Waits out the show transition first; a bare hide() inside it is dropped (Group 45.8).
+    conftest.close_wizard(page)
 
 
 def test_filament_tab_no_longer_renders_purchase_url(page: Page):

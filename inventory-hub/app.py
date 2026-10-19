@@ -259,6 +259,7 @@ from routes_bindings import (  # noqa: E402,F401
     _pm_prefix, _printer_map_blocked_removals, api_put_printer_map,
     api_all_dryer_box_slots, api_single_slot_binding_put,
     api_quickswap_return, api_quickswap, api_machine_toolhead_slots,
+    api_placement_options,
 )
 
 # L316 step 8: print-queue + label-flag routes live in routes_print_queue.py.
@@ -281,7 +282,7 @@ from print_deduct import (  # noqa: E402,F401
     _record_swap_events, _log_cancel_uncomputable, _compute_cancel_usage,
     deduct_cancelled_print, deduct_completed_print, _route_completion_to_review,
     _resolve_usage_to_spools, _stash_unresolved_review, _enqueue_cancel_fetch,
-    _create_pending_cancel_review, api_cancel_deduct_pending,
+    _create_pending_cancel_review, api_cancel_deduct_pending, api_cancel_deduct_candidates,
     _confirm_no_spool_review, api_cancel_deduct_confirm, api_cancel_deduct_dismiss,
 )
 

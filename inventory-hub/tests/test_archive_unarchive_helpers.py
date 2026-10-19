@@ -20,6 +20,19 @@ import pytest
 import spoolman_api as sm
 
 
+@pytest.fixture(autouse=True)
+def _known_places():
+    """Group 42.3c reads where a breadcrumb points before restoring to it: a
+    place that no longer exists, or a one-spool head someone else is on now,
+    sends the spool to Unassigned instead. The breadcrumb these tests use is a
+    plain buffer shelf, which is restored with no read. (They used to read
+    whatever data/locations.json the working directory held.)"""
+    rows = [{"LocationID": "PM-XL-Buffer-1", "Type": "Shelf", "Max Spools": "0"}]
+    with patch.object(sm.locations_db, "load_locations_list", return_value=rows), \
+         patch.object(sm.locations_db, "get_active_printer_map", return_value={}):
+        yield
+
+
 def _mock_response(ok: bool, json_body: dict | None = None) -> MagicMock:
     m = MagicMock()
     m.ok = ok
@@ -378,6 +391,10 @@ class TestAutoUnarchiveOnRefill:
         data = {"used_weight": 200, "archived": True}  # caller wants to keep archived
         sm._auto_unarchive_on_refill(data, existing)
         assert data["archived"] is True
+        # Kept archived, so not put back where it was before (a deduct charging
+        # an archived spool sends this; Group 43 review). It used to restore the
+        # pre-archive location onto a spool that stayed archived.
+        assert "location" not in data
 
     def test_caller_location_intent_wins(self):
         existing = {

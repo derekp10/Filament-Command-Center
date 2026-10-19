@@ -17,8 +17,10 @@ from playwright.sync_api import Page
 
 
 def _wait_ready(page: Page, base_url: str) -> None:
-    """handleSlotInteraction only needs #manage-loc-id and state.currentGrid —
-    both exist independent of whether the manage modal is open."""
+    """handleSlotInteraction needs #manage-loc-id, state.currentGrid and, since
+    2026-10-14, the Location Manager open (a CMD:SLOT scan with it closed moved
+    the buffered spool to Unassigned). The tests mark #manageModal shown without
+    opening it for real, and restore it."""
     page.goto(base_url)
     page.wait_for_function(
         "() => typeof window.handleSlotInteraction === 'function' "
@@ -45,9 +47,14 @@ def test_filled_slot_click_picks_up_directly_no_modal(page: Page, base_url: str)
             const locIdEl = document.getElementById('manage-loc-id');
             const savedLocId = locIdEl ? locIdEl.value : '';
             if (locIdEl) locIdEl.value = 'PROBE-LOC';
+            // A slot acts only while the Location Manager is open (2026-10-14).
+            const mm = document.getElementById('manageModal');
+            const wasShown = mm.classList.contains('show');
+            mm.classList.add('show');
 
             // Call the interaction handler directly (simulates card-body click).
             window.handleSlotInteraction(3);
+            if (!wasShown) mm.classList.remove('show');
 
             const pickedUp = state.heldSpools.some(s => s.id === 77001);
             const actionModalEl = document.getElementById('actionModal');
@@ -89,8 +96,13 @@ def test_filled_slot_with_occupied_buffer_still_prompts_swap(page: Page, base_ur
             const locIdEl = document.getElementById('manage-loc-id');
             const savedLocId = locIdEl ? locIdEl.value : '';
             if (locIdEl) locIdEl.value = 'PROBE-LOC';
+            // A slot acts only while the Location Manager is open (2026-10-14).
+            const mm = document.getElementById('manageModal');
+            const wasShown = mm.classList.contains('show');
+            mm.classList.add('show');
 
             window.handleSlotInteraction(5);
+            if (!wasShown) mm.classList.remove('show');
             // promptAction is synchronous DOM manipulation + modal.show(); give it a tick.
             await new Promise(r => setTimeout(r, 150));
 

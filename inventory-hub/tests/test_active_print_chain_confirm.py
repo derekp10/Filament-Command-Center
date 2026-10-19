@@ -68,7 +68,10 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 import logic  # noqa: E402
 import state  # noqa: E402
 
-REAL_UPDATE_SPOOL = logic.spoolman_api.update_spool
+from move_engine_harness import (  # noqa: E402,F401
+    IDLE, REAL_UPDATE_SPOOL, FakeSpoolman, LocationsStore, WireSpoolman, _probe_for, _unwire, _wire,
+    run_move,
+)
 
 
 PRINTER_MAP = {
@@ -111,138 +114,6 @@ LOCATIONS_BOTH_BOUND = [
 ]
 
 
-class FakeSpoolman:
-    """A tiny in-memory Spoolman: reads reflect earlier writes, so a multi-hop
-    move (box placement -> chained toolhead deploy -> resident eject -> undo)
-    sees the state its own previous hop produced.
-
-    The location readers decide matches the way spoolman_api._build_location_match
-    does: the spool's location equals the target or has it as its first
-    '-'-segment (direct), else its physical_source does (ghost). Assertions use
-    direct_at(), which counts only spools really AT a location. Ids in
-    `unreadable` read as None, like get_spool on a Spoolman timeout.
-    """
-
-    def __init__(self, spools, reject_locations=(), unreadable=()):
-        self.spools = {int(k): copy.deepcopy(v) for k, v in spools.items()}
-        self.reject_locations = {str(r).upper() for r in reject_locations}
-        self.unreadable = {int(u) for u in unreadable}
-        self.writes = []
-
-    def get_spool(self, sid):
-        rec = self.spools.get(int(sid))
-        if rec is None or int(sid) in self.unreadable:
-            return None
-        return {"id": int(sid), **copy.deepcopy(rec)}
-
-    def update_spool(self, sid, data):
-        self.writes.append((int(sid), copy.deepcopy(data)))
-        if str(data.get("location", "")).upper() in self.reject_locations:
-            logic.spoolman_api.LAST_SPOOLMAN_ERROR = "400: rejected by test"
-            return None
-        rec = self.spools.setdefault(int(sid), {"location": "", "extra": {}})
-        if "location" in data:
-            rec["location"] = data["location"]
-        if "extra" in data:
-            rec["extra"] = copy.deepcopy(data["extra"])
-        return {"id": int(sid), **copy.deepcopy(rec)}
-
-    def direct_at(self, loc):
-        loc = str(loc).upper()
-        return sorted(sid for sid, rec in self.spools.items()
-                      if str(rec.get("location", "")).upper() == loc)
-
-    def _match(self, rec, loc):
-        prefix = logic.locations_db.location_prefix
-        sloc = str(rec.get("location") or "").strip().upper()
-        if sloc and (sloc == loc or prefix(sloc) == loc):
-            return "direct"
-        src = str((rec.get("extra") or {}).get("physical_source") or "").strip().strip('"').upper()
-        if src and (src == loc or prefix(src) == loc):
-            return "ghost"
-        return None
-
-    def at_location(self, loc):
-        loc = str(loc).upper()
-        return sorted(sid for sid, rec in self.spools.items() if self._match(rec, loc))
-
-    def at_location_detailed(self, loc):
-        loc = str(loc).upper()
-        items = []
-        for sid in sorted(self.spools):
-            rec = self.spools[sid]
-            kind = self._match(rec, loc)
-            extra = rec.get("extra") or {}
-            if kind == "direct":
-                items.append({"id": sid, "is_ghost": False, "location": rec.get("location", ""),
-                              "slot": extra.get("container_slot", "")})
-            elif kind == "ghost":
-                items.append({"id": sid, "is_ghost": True, "location": extra.get("physical_source", ""),
-                              "slot": extra.get("physical_source_slot", ""),
-                              "deployed_to": rec.get("location", "")})
-        return items
-
-
-def _wire(value):
-    return ("true" if value else "false") if isinstance(value, bool) else json.dumps(value)
-
-
-def _unwire(value):
-    if isinstance(value, str):
-        try:
-            return json.loads(value)
-        except ValueError:
-            return value
-    return value
-
-
-class WireSpoolman(FakeSpoolman):
-    """FakeSpoolman whose update_spool runs the REAL spoolman_api.update_spool
-    (sanitize + read-merge-write of extras) with only its HTTP calls faked, and
-    keeps every PATCH body: exactly what Spoolman would receive."""
-
-    def __init__(self, spools, reject_locations=(), unreadable=()):
-        super().__init__(spools, reject_locations, unreadable)
-        self.patch_bodies = []
-
-    def _http_get(self, url, *a, **k):
-        tail = str(url).split("?")[0].rstrip("/").rsplit("/", 1)[-1]
-        rec = self.spools.get(int(tail)) if tail.isdigit() else None
-        if rec is None:
-            return MagicMock(ok=False, status_code=404, text="not found",
-                             json=MagicMock(return_value={}))
-        body = {"id": int(tail), "location": rec.get("location", ""),
-                "extra": {key: _wire(val) for key, val in (rec.get("extra") or {}).items()}}
-        return MagicMock(ok=True, status_code=200, json=MagicMock(return_value=body))
-
-    def _http_patch(self, url, json=None, **k):
-        sid = int(str(url).rstrip("/").rsplit("/", 1)[-1])
-        body = copy.deepcopy(json)
-        self.patch_bodies.append((sid, body))
-        rec = self.spools.setdefault(sid, {"location": "", "extra": {}})
-        if "location" in body:
-            rec["location"] = body["location"]
-        if "extra" in body:
-            rec["extra"] = {key: _unwire(val) for key, val in body["extra"].items()}
-        return MagicMock(ok=True, status_code=200,
-                         json=MagicMock(return_value={"id": sid, **copy.deepcopy(rec)}))
-
-    def update_spool(self, sid, data):
-        self.writes.append((int(sid), copy.deepcopy(data)))
-        with patch.object(logic.spoolman_api.requests, "get", side_effect=self._http_get), \
-             patch.object(logic.spoolman_api.requests, "patch", side_effect=self._http_patch):
-            return REAL_UPDATE_SPOOL(sid, copy.deepcopy(data))
-
-
-def _probe_for(printing):
-    """PrusaLink HTTP probe stub: printers named in `printing` are PRINTING."""
-    def probe(_url, printer_name):
-        active = printer_name in printing
-        return {"state": "PRINTING" if active else "IDLE", "is_active": active}
-    return probe
-
-
-IDLE = _probe_for(set())
 
 
 @pytest.fixture(autouse=True)
@@ -264,45 +135,8 @@ def client():
 
 def _run(sm, *, probe, locations=None, call=None, **move_kwargs):
     """Run perform_smart_move(**move_kwargs), or `call()`, against the fakes."""
-    locs = LOCATIONS if locations is None else locations
-    with ExitStack() as stack:
-        for p in (
-            patch.object(logic.config_loader, "load_config",
-                         return_value={"printer_map": PRINTER_MAP}),
-            patch.object(logic.config_loader, "get_api_urls",
-                         return_value=("http://spoolman", "http://filabridge")),
-            patch.object(logic.locations_db, "get_active_printer_map",
-                         return_value=PRINTER_MAP),
-            patch.object(logic.locations_db, "load_locations_list",
-                         side_effect=lambda *a, **k: copy.deepcopy(locs)),
-            patch.object(logic.locations_db, "is_descendant", return_value=False),
-            # Group 20.2 box attach/detach both persist locations.json.
-            patch.object(logic.locations_db, "attach_single_slot_box_to_toolhead",
-                         return_value=(False, "mocked")),
-            patch.object(logic.locations_db, "detach_single_slot_boxes_from_toolhead",
-                         return_value=[]),
-            patch.object(logic.spoolman_api, "LAST_SPOOLMAN_ERROR", None),
-            patch.object(logic.spoolman_api, "get_spool", side_effect=sm.get_spool),
-            patch.object(logic.spoolman_api, "update_spool", side_effect=sm.update_spool),
-            patch.object(logic.spoolman_api, "get_spools_at_location",
-                         side_effect=sm.at_location),
-            patch.object(logic.spoolman_api, "get_spools_at_location_detailed",
-                         side_effect=sm.at_location_detailed),
-            patch.object(logic.spoolman_api, "get_spools_at_location_detailed_strict",
-                         side_effect=sm.at_location_detailed),
-            patch.object(logic.spoolman_api, "format_spool_display",
-                         side_effect=lambda s: {"text": f"#{(s or {}).get('id')}",
-                                                "color": "ff0000"}),
-            # Below the per-move memo, as in production.
-            patch("prusalink_api._probe_printer_state", side_effect=probe),
-            patch.object(logic.requests, "post", return_value=MagicMock(ok=True)),
-            patch.object(logic.requests, "get",
-                         return_value=MagicMock(ok=False, status_code=404)),
-        ):
-            stack.enter_context(p)
-        if call is not None:
-            return call()
-        return logic.perform_smart_move(**move_kwargs)
+    return run_move(sm, probe=probe, locations=LOCATIONS if locations is None else locations,
+                    printer_map=PRINTER_MAP, call=call, **move_kwargs)
 
 
 def _logs(needle, types=None):
@@ -332,7 +166,10 @@ def test_confirmed_box_move_deploys_onto_the_printing_bound_toolhead():
 def test_autodeploy_refused_by_smart_load_is_not_reported_as_deployed():
     """The chained deploy is refused: XL-3's resident can't go home (Spoolman
     rejects the write). The box placement stands, but neither the result nor
-    the Activity Log may claim a deploy, and the reason must be reported."""
+    the Activity Log may claim a deploy, and the reason must be reported.
+
+    #99 runs from LR-MDB-2, not from slot 3, so since Group 40.0c the move asks
+    first; the user has said "Load it instead" (confirmed_fed_heads)."""
     sm = FakeSpoolman({
         240: {"location": "CR", "extra": {}},
         99: {"location": "XL-3",
@@ -340,7 +177,8 @@ def test_autodeploy_refused_by_smart_load_is_not_reported_as_deployed():
     }, reject_locations={"LR-MDB-2"})
 
     result = _run(sm, probe=IDLE,
-                  target="LR-MDB-1", raw_spools=[240], target_slot="3", origin="test")
+                  target="LR-MDB-1", raw_spools=[240], target_slot="3", origin="test",
+                  confirmed_fed_heads=["XL-3"])
 
     assert sm.spools[240]["location"] == "LR-MDB-1", sm.writes
     assert sm.direct_at("XL-3") == [99], sm.writes
@@ -381,11 +219,15 @@ def test_autodeploy_skips_a_spool_whose_box_write_was_rejected():
     assert "240" in result["failures"], result
 
 
-def test_confirm_does_not_cover_the_head_of_an_auto_picked_slot():
-    """No slot named: auto-slot picks slot 1, which feeds the PRINTING XL-3. The
-    caller's confirm was never about XL-3 (the pre-flight probes only a named
-    slot's toolhead), so the chain must not use it to unload #99 mid-print. The
-    box placement stands and the skip is reported."""
+def test_auto_slot_passes_over_a_slot_whose_head_runs_another_spool():
+    """No slot named; slot 1 feeds the PRINTING XL-3, which runs #99 from LR-MDB-2.
+    Auto-slot used to take slot 1 AFTER the pre-flight, so the caller's confirm
+    was never about XL-3 and the chain skipped the deploy with a warning
+    (this test was test_confirm_does_not_cover_the_head_of_an_auto_picked_slot).
+    Group 40.0e picks before anything is asked, by the slot picker's rule: slot 2
+    is unbound and loads no busy head, so #240 is stored there and XL-3 is never
+    touched. (A pick that does feed a busy head is asked about, with
+    `target_slot`: test_auto_slot_before_preflight_40_0e.py.)"""
     sm = FakeSpoolman({
         240: {"location": "CR", "extra": {}},
         99: {"location": "XL-3",
@@ -397,10 +239,9 @@ def test_confirm_does_not_cover_the_head_of_an_auto_picked_slot():
                   confirm_active_print=True)
 
     assert sm.spools[240]["location"] == "LR-MDB-1", sm.writes
-    assert (sm.spools[240].get("extra") or {}).get("container_slot") == "1", sm.spools[240]
+    assert (sm.spools[240].get("extra") or {}).get("container_slot") == "2", sm.spools[240]
     assert sm.direct_at("XL-3") == [99], sm.writes
-    assert "auto_deployed_to" not in result, result
-    assert "PRINTING" in (result.get("auto_deploy_skipped") or {}).get("240", ""), result
+    assert "auto_deployed_to" not in result and "auto_deploy_skipped" not in result, result
 
 
 def test_several_spools_into_one_bound_slot_deploy_only_the_last():
@@ -737,46 +578,61 @@ def test_moving_off_a_toolhead_clears_the_trail_through_the_real_extras_merge(de
 
 
 # ---------------------------------------------------------------------------
-# E. The Group 20.2 box detach follows a real eject, never a refused one
+# E. A single-slot box is released by a real eject, never a refused one, and
+#    only its OWN spool releases it (Group 20.2's detach-after-write, made
+#    spool-keyed by Group 42.1). The real binding helpers run on a live store.
 # ---------------------------------------------------------------------------
+
+PM_DB_1_ON_XL_1 = {"LocationID": "PM-DB-1", "Type": "Dryer Box", "Max Spools": "1", "Name": "PolyDryer",
+                   "extra": {"slot_targets": {"1": "XL-1"}}}
+
 
 def test_refused_eject_leaves_the_single_slot_box_bound():
     """#99 on XL-1 has no saved home, so an interactive eject answers
     "REQUIRE_CONFIRM" and writes nothing. It used to detach XL-1's single-slot
     box first, so cancelling the unassign prompt left the box unbound."""
+    store = LocationsStore(LOCATIONS + [PM_DB_1_ON_XL_1])
     sm = FakeSpoolman({99: {"location": "XL-1", "extra": {}}})
 
-    def eject():
-        with patch.object(logic.locations_db, "detach_single_slot_boxes_from_toolhead",
-                          return_value=[]) as detach:
-            return logic.perform_smart_eject(99), detach.call_count
-
-    res, detach_calls = _run(sm, probe=IDLE, call=eject)
+    res = run_move(sm, probe=IDLE, store=store, printer_map=PRINTER_MAP,
+                   call=lambda: logic.perform_smart_eject(99))
 
     assert res == "REQUIRE_CONFIRM", res
     assert not sm.writes, sm.writes
-    assert detach_calls == 0
+    assert store.saves == [] and store.bound("PM-DB-1") == "XL-1"
 
 
-@pytest.mark.parametrize("extra, landed", [
-    ({"physical_source": "LR-MDB-1", "physical_source_slot": "2"}, "LR-MDB-1"),
-    ({}, ""),
-], ids=["returns-home", "no-home"])
-def test_successful_eject_detaches_the_box_after_the_spool_write(extra, landed):
+@pytest.mark.parametrize("extra, landed, released", [
+    ({"physical_source": "PM-DB-1", "physical_source_slot": "1"}, "PM-DB-1", True),
+    ({"physical_source": "LR-MDB-1", "physical_source_slot": "2"}, "LR-MDB-1", False),
+    ({}, "", False),
+], ids=["own-single-slot-box", "multi-slot-trail", "no-home"])
+def test_successful_eject_releases_only_its_own_box_after_the_spool_write(extra, landed, released):
+    """Group 42.1 rewrite of the 2026-09-12 pin. The release runs once the
+    spool's write has landed, and only for the spool's own single-slot box:
+    before, any spool leaving XL-1 (the multi-slot and no-home cases here)
+    detached every single-slot box bound to XL-1."""
+    store = LocationsStore(LOCATIONS + [PM_DB_1_ON_XL_1])
     sm = FakeSpoolman({99: {"location": "XL-1", "extra": extra}})
     seen = []
+    real_detach = logic.locations_db.detach_single_slot_box
 
     def eject():
-        def detach(toolhead):
-            seen.append((toolhead, sm.spools[99]["location"]))
-            return []
-        with patch.object(logic.locations_db, "detach_single_slot_boxes_from_toolhead",
-                          side_effect=detach):
+        def spy(box, head):
+            seen.append((box, head, sm.spools[99]["location"]))
+            return real_detach(box, head)
+        with patch.object(logic.locations_db, "detach_single_slot_box", side_effect=spy):
             return logic.perform_smart_eject(99, confirmed_unassign=True)
 
-    assert _run(sm, probe=IDLE, call=eject) is True
-    # Detached exactly once, and only after #99 had actually left XL-1.
-    assert seen == [("XL-1", landed)], seen
+    assert run_move(sm, probe=IDLE, store=store, printer_map=PRINTER_MAP, call=eject) is True
+    assert sm.spools[99]["location"] == landed
+    if released:
+        # Exactly once, and only after #99 had actually left XL-1.
+        assert seen == [("PM-DB-1", "XL-1", "PM-DB-1")], seen
+        assert store.bound("PM-DB-1") == ""
+    else:
+        assert store.bound("PM-DB-1") == "XL-1", "a box that wasn't #99's was released"
+        assert store.saves == []
 
 
 # ---------------------------------------------------------------------------
@@ -848,7 +704,8 @@ def test_undo_after_the_head_was_reloaded_does_not_double_it_up():
 def test_undo_of_an_autodeploy_is_one_step_and_restores_the_resident():
     """A box-slot assign that auto-deploys onto XL-3, unloading #99 there, is one
     user action. It used to push two undo records (the first undo only pulled
-    the spool back into the box), and neither put #99 back."""
+    the spool back into the box), and neither put #99 back. (#99 runs from
+    LR-MDB-2, so since Group 40.0c the load is confirmed: confirmed_fed_heads.)"""
     sm = FakeSpoolman({
         240: {"location": "CR", "extra": {}},
         99: {"location": "XL-3",
@@ -856,7 +713,8 @@ def test_undo_of_an_autodeploy_is_one_step_and_restores_the_resident():
     })
 
     result = _run(sm, probe=IDLE,
-                  target="LR-MDB-1", raw_spools=[240], target_slot="3", origin="test")
+                  target="LR-MDB-1", raw_spools=[240], target_slot="3", origin="test",
+                  confirmed_fed_heads=["XL-3"])
     assert result.get("auto_deployed_to") == "XL-3", result
     assert sm.spools[99]["location"] == "LR-MDB-2", sm.writes
     assert len(state.UNDO_STACK) == 1, state.UNDO_STACK
@@ -883,8 +741,11 @@ def test_quickswap_return_parks_the_spool_in_its_box(client, printing):
     sm = FakeSpoolman({240: {"location": "XL-3", "extra": {
         "physical_source": "LR-MDB-1", "physical_source_slot": "3", "container_slot": ""}}})
 
+    # Mid-print, the overlay showed the banner and the user confirmed XL-3
+    # (Group 39.1/39.2: Return now reads `confirmed_toolheads`).
     r = _run(sm, probe=_probe_for({"XL"} if printing else set()),
-             call=lambda: client.post("/api/quickswap/return", json={"toolhead": "XL-3"}))
+             call=lambda: client.post("/api/quickswap/return", json={
+                 "toolhead": "XL-3", "confirmed_toolheads": ["XL-3"] if printing else []}))
 
     body = r.get_json()
     assert r.status_code == 200 and body["action"] == "return_done", body
@@ -894,9 +755,33 @@ def test_quickswap_return_parks_the_spool_in_its_box(client, printing):
     assert not _logs("Auto-deployed"), state.RECENT_LOGS
 
 
+def test_quickswap_return_off_a_printing_head_asks_first(client):
+    """Group 39.2: Return passed confirm_active_print=True unconditionally, so a
+    Return whose overlay probe missed the print (it fails open on a timeout)
+    emptied a printing head with no warning. 39.4's source check now probes the
+    head Return empties and answers return_requires_confirm, in the 29.B3 shape,
+    before any write. HEAD proof: return_done."""
+    sm = FakeSpoolman({240: {"location": "XL-3", "extra": {
+        "physical_source": "LR-MDB-1", "physical_source_slot": "3", "container_slot": ""}}})
+    r = _run(sm, probe=_probe_for({"XL"}),
+             call=lambda: client.post("/api/quickswap/return", json={"toolhead": "XL-3"}))
+    body = r.get_json()
+    assert r.status_code == 200 and body["action"] == "return_requires_confirm", body
+    assert body["toolhead"] == "XL-3" and body["active_toolhead"] == "XL-3" and body["requested"] == "XL-3"
+    assert [(a["toolhead"], a["role"]) for a in body["active_prints"]] == [("XL-3", "source")], body
+    assert sm.writes == [] and sm.spools[240]["location"] == "XL-3", sm.writes
+    assert _logs("waits for a confirm"), state.RECENT_LOGS
+
+
 def test_quickswap_return_does_not_unseat_a_spool_staged_in_its_slot(client):
     """#77's trail names LR-MDB-1 slot 3, but #240 is staged there. Return must
-    park #77 in a free slot and say which, leaving #240 seated."""
+    leave #240 seated, and the slot #77 takes is the one it names.
+
+    Group 40.6 (deliberate; Derek's D5): it used to let the engine auto-pick a
+    free slot, which could feed another head, and the preview never knew which.
+    No free slot feeds XL-3 here, so Return writes nothing and asks
+    (return_choose_slot, 200), starring a spare slot (slot 1: unbound); the
+    replay with that slot puts #77 there."""
     sm = FakeSpoolman({
         240: {"location": "LR-MDB-1", "extra": {"container_slot": "3"}},
         77: {"location": "XL-3",
@@ -907,11 +792,19 @@ def test_quickswap_return_does_not_unseat_a_spool_staged_in_its_slot(client):
              call=lambda: client.post("/api/quickswap/return", json={"toolhead": "XL-3"}))
 
     body = r.get_json()
+    assert r.status_code == 200 and body["action"] == "return_choose_slot", body
+    assert sm.writes == [], sm.writes
+    assert body["box"] == "LR-MDB-1" and body["slot"] is None, body
+    assert body["recommended"] == {"kind": "slot", "box": "LR-MDB-1", "slot": "1"}, body
+    assert "where it came from, holds #240" in body["note"], body
+
+    r = _run(sm, probe=IDLE, call=lambda: client.post("/api/quickswap/return", json={
+        "toolhead": "XL-3", "box": "LR-MDB-1", "slot": "1", "expected_spool": 77}))
+    body = r.get_json()
     assert r.status_code == 200 and body["action"] == "return_done", body
     assert sm.spools[240]["extra"]["container_slot"] == "3", sm.spools[240]
-    landed = sm.spools[77]["extra"].get("container_slot")
-    assert sm.spools[77]["location"] == "LR-MDB-1" and landed not in ("", "3"), sm.spools[77]
-    assert body["slot"] == landed, body
+    assert sm.spools[77]["location"] == "LR-MDB-1" and sm.spools[77]["extra"]["container_slot"] == "1"
+    assert body["slot"] == "1" and body["source"] == "chosen", body
 
 
 def test_quickswap_return_ignores_a_ghost_resident(client):
@@ -961,7 +854,7 @@ def test_quickswap_return_reports_a_rejected_box_write(client):
              call=lambda: client.post("/api/quickswap/return", json={"toolhead": "XL-3"}))
 
     body = r.get_json()
-    assert r.status_code == 502 and body["action"] == "return_failed", body
+    assert r.status_code == 409 and body["action"] == "return_failed", body
     assert sm.spools[240]["location"] == "XL-3", sm.writes
     assert not _logs("Return: Spool", types={"SUCCESS"}), state.RECENT_LOGS
 
@@ -977,7 +870,7 @@ def test_quickswap_return_failure_names_the_requested_toolhead(client):
              call=lambda: client.post("/api/quickswap/return", json={"toolhead": "XL"}))
 
     body = r.get_json()
-    assert r.status_code == 502 and body["action"] == "return_failed", body
+    assert r.status_code == 409 and body["action"] == "return_failed", body
     assert (body["toolhead"], body["requested"], body["active_toolhead"]) == ("XL", "XL", "XL-3"), body
 
 
@@ -991,7 +884,7 @@ def test_quickswap_return_reports_an_unreadable_resident_as_a_failure(client):
              call=lambda: client.post("/api/quickswap/return", json={"toolhead": "XL-3"}))
 
     body = r.get_json()
-    assert r.status_code == 502 and body["action"] == "return_failed", body
+    assert r.status_code == 409 and body["action"] == "return_failed", body
     assert body["active_toolhead"] == "XL-3" and "could not read #240" in body["error"], body
     assert not sm.writes, sm.writes
 
@@ -1017,7 +910,8 @@ def test_slot_qr_assign_reports_a_rejected_load_and_keeps_the_buffer(client):
 def test_slot_qr_assign_says_why_the_spool_was_not_deployed(client):
     """The spool is loaded into the box slot, but the chain can't deploy it
     (XL-3's resident can't go home). The response must not imply a deploy and
-    must carry the reason for the toast."""
+    must carry the reason for the toast. (#99 runs from LR-MDB-2, so the scan is
+    the "Load it instead" replay of Group 40.0c's question.)"""
     state.GLOBAL_BUFFER = [{"id": 240, "display": "#240"}]
     sm = FakeSpoolman({
         240: {"location": "CR", "extra": {}},
@@ -1026,7 +920,8 @@ def test_slot_qr_assign_says_why_the_spool_was_not_deployed(client):
     }, reject_locations={"LR-MDB-2"})
 
     r = _run(sm, probe=IDLE, call=lambda: client.post(
-        "/api/identify_scan", json={"text": "LOC:LR-MDB-1:SLOT:3", "source": "barcode"}))
+        "/api/identify_scan", json={"text": "LOC:LR-MDB-1:SLOT:3", "source": "barcode",
+                                    "confirmed_fed_heads": ["XL-3#99"]}))  # a page sends confirm keys (Group 40 review)
 
     body = r.get_json()
     assert body["action"] == "assignment_done", body
@@ -1045,6 +940,6 @@ def test_quickswap_reports_a_rejected_toolhead_write(client):
         "/api/quickswap", json={"toolhead": "XL-3", "box": "LR-MDB-1", "slot": "3"}))
 
     body = r.get_json()
-    assert r.status_code == 502 and body["action"] == "quickswap_failed", body
+    assert r.status_code == 409 and body["action"] == "quickswap_failed", body
     assert sm.spools[240]["location"] == "LR-MDB-1", sm.writes
     assert not _logs("Quick-swap: Spool", types={"SUCCESS"}), state.RECENT_LOGS

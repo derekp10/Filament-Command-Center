@@ -1,16 +1,38 @@
 # Group 41: 🧾 Honest Bulk Results
 
 **Branch name (when started):** `feature/group-41-honest-bulk-results`
-**Estimated effort:** MEDIUM, about 1–1.5 sessions (~8–12 h), once Derek has answered Q1 and Q3.
+**Estimated effort:** MEDIUM, about 1–1.5 sessions (~8–12 h), once Derek has answered Q1 and Q3 (both answered: Q1 on 2026-09-18, Q3 on 2026-10-13).
 **Risk:** **MEDIUM.** Every change is on a destructive path: Eject All, location delete, Undo, and the bulk-move commit. It makes each path refuse more and report more. The hazards are a correct action now refused (a false block), and pinned wording or response shapes that tests assert.
 
-> **Status: `TODO`.** Planned 2026-09-13 from Derek's D4 answer and the related buglist items
+> **Status: `DONE` — built in the 2026-10-13/14 overnight run on `feature/group-41-honest-bulk-results`, merged to `dev` (sha in [session-handoff-2026-10-14.md](session-handoff-2026-10-14.md)).** All nine items shipped (41.1–41.9), plus 41.2's double-click test debt, which found a real hole (a gating dialog took clicks while it faded IN), and the adversarial review's 17 fixes (the red one: undoing a box-slot move whose auto-deploy had loaded the bound head never asked about that head mid-print). Archived in `completed-archive.md`. The ⚠️ stale claims below were reconciled before building. Two cross-group notes were NOT done here: the shared strict "direct residents" helper (41's reads also need ghosts and prefix hits, so they filter inline; Group 42.3b extracts it) and an `inv_core.js` mirror of the Printer-row classifier (Eject All asks the server; Group 40.0a builds one if it needs it).
+>
+> _Planning history:_ Planned 2026-09-13 from Derek's D4 answer and the related buglist items
 > ([open-decisions-2026-09-13.md](open-decisions-2026-09-13.md)). Nothing has been built yet.
 > All code references were read on `dev` @ `be9f045`. Line numbers drift, so re-read before editing.
 >
-> ⛔ **Hard dependency:** `fix/core1-return-ejectall-guard` (`1fb5678` + `76398cb`, committed locally,
-> not pushed or merged) refuses a blank location in `triggerEjectAll` and `clear_location`, the same
-> two functions 41.1 and 41.2 rewrite. Merge it into `dev` first, then branch from `dev`.
+> ✅ **Hard dependency SATISFIED (2026-10-08):** `fix/core1-return-ejectall-guard` (`1fb5678` + `76398cb`)
+> was merged into `dev` as `25168a8` and released in `main e5b3a82`. It refuses a blank location in
+> `triggerEjectAll` and `clear_location`, the same two functions 41.1 and 41.2 rewrite. Branch from `dev`.
+>
+> ⚠️ **Stale claims noticed 2026-10-13, not yet corrected below (re-check before building):**
+> - `deleteLoc` does read the answer now: it toasts a refusal's `msg` for 8 s (since the 2026-09-29 hotfix).
+> - Deleting the Printer row `XL` no longer unassigns every XL head: it is refused with a 409 while the printer
+>   still has heads ("Remove them in ⚙️ Settings → Toolheads first", `routes_locations.py` `api_delete_location`).
+> - The "Hard: merge `fix/core1-return-ejectall-guard` (local only)" dependency line further down is satisfied
+>   (see above).
+> - The `CORE1` examples in 41.1, 41.2 and 41-c name a row that exists on neither dev nor prod any more: the Core
+>   One is the INDX now (`RCOI`, heads `RCOI-1`…`RCOI-8`).
+>
+> **🔄 2026-10-12 (`/refresh-groups`):**
+> - Q1 was answered 2026-09-18 (Unassigned, after one "unassign?" prompt). Q2 is confirm-only. **Q3 and Q4 are still open.** _(Both answered 2026-10-13; see the next note.)_
+> - **41.3 grew:** `DELETE /api/locations` also ignores `save_locations_list()`'s result.
+> - **New 41.9:** three blank/sentinel-input guards from the "More destructive doors" item that no group owned.
+> - The "Placed in Group 22" deduct items now live in [Group 43](43-deduct-recovery.md) 43.3 / 43.4.
+>
+> **✅ 2026-10-13: no open questions remain** (Derek's answers; plain-language briefs in [open-decisions-2026-10-13.md](open-decisions-2026-10-13.md)):
+> - **Q3 → A** (Claude's call; Derek reviewed it and didn't object): remove Bulk Move's dead source-print confirm, its panel strip and its fake tests (41.7).
+> - **Q4 → C** (Derek's choice): refuse to delete a Room while any location still sits inside it; an empty Room's delete unassigns only spools filed on the Room itself (41.3).
+> - **Q2 is settled and 41.4 grew,** through Derek's answer to the standalone 🟡 Undo buglist item: Undo stays moves-only, is renamed "Undo Last Move", always asks first naming the move it will reverse (printing or not), toasts what it put back, and logs a reworded line. No weight-undo; Redo is a maybe-later.
 
 ---
 
@@ -34,17 +56,24 @@
 | **41.1** | 🟠 *Found while briefing the six open decisions*, item 3: **"Eject All on a Printer-row view unloads every head mid-print with no prompt."** | Fix direction as filed: *"skip head-loaded spools, as Bulk Move does."* D4's Printer-view block closes the user-facing door. 41.1 also adds that skip underneath. |
 | **41.2** | Same Eject All item, part 1: **"Eject all (`clear_location`…) ignores every eject's result."** | *"Fix direction: branch on the real per-spool result; return `ejected` / `needs_confirm` / `failed` lists; toast failures at ≥ 7 s."* |
 | **41.3** | Same item, part 2: **"Location delete… answers `success: true` when the cascade's unassign writes fail…"** | Same fix direction. |
-| **41.4** | Same item, part 3: **"Undo (`perform_undo`) always answers `success: true`…; `triggerUndo` discards the response."** | Same fix direction. |
+| **41.3** | _(added 2026-10-12)_ **"`DELETE /api/locations` ignores `save_locations_list()`'s result — both delete paths report success after a failed or refused save (the 2026-09-29 hotfix fixed only the POST)."** | Same endpoint and the same honesty contract. Branch on the save boolean on both delete paths, and return a failure the frontend toasts at ≥ 7 s. `deleteLoc` (`inv_loc_mgr.js`) must read the response. |
+| **41.4** | Same item, part 3: **"Undo (`perform_undo`) always answers `success: true`…; `triggerUndo` discards the response."** | Same fix direction. **2026-10-13:** Derek's answer to the standalone 🟡 *"Undo reverts moves only — wire weight-undo, or keep it move-only? (decide first)"* lands here too: moves-only, renamed "Undo Last Move", and it always asks first, naming the move (see 41.4). |
 | **41.5** | 🟡 *Bulk-move tally and slot unseat can report success for rejected writes*, item 1: **the tally trusts a fail-open readback.** | Filed fix: *"always union `failures` into `failed`; read back with the strict reader and report the tally as unverified on an exception."* |
 | **41.6** | Same item, item 2: **a rejected unseat still seats the incoming spool, so two spools claim one slot.** | Filed fix: *"record a failure and don't seat the incoming spool."* |
-| **41.7** | Same item, item 3: **"Bulk Move's 'source is printing' confirm can never fire on real data."** | *"To decide: whether the confirm is dead code to remove, or should cover a real case."* → **Q3** below. |
+| **41.7** | Same item, item 3: **"Bulk Move's 'source is printing' confirm can never fire on real data."** | *"To decide: whether the confirm is dead code to remove, or should cover a real case."* → **Q3** below. ✅ **Answered 2026-10-13: A, remove it.** |
 | **41.8** | Derek's principle, under D4: **Room-only spool locations are hard to find.** | *"A spool whose location is only a Room is a pain to find ('assuming it's even still in the room and somehow didn't get a location update'). Bulk filament still in its purchase boxes is the tolerated exception."* Implication to check: *"the eject fallback sends a box/cart/shelf spool with no saved home UP to its Room's loose pile, which creates exactly these Room-only spools."* → **Q1** below. |
+| **41.9** | _(added 2026-10-12)_ 🟠 *More destructive doors found while building and planning the 2026-09-13 follow-ups*, items 3–5. Items 1–2 are already 41.3. **(3)** *"`/api/smart_move` accepts a blank location item… a `""` item expands to everything the matcher returns for `""`: every Unassigned spool directly, plus located spools with no trail as ghosts."* **(4)** *"`clear_location` still accepts `UNASSIGNED`. Its `check_unassigned` path targets every spool with no location, and the blank-location guard on `fix/core1-return-ejectall-guard` doesn't cover it."* **(5)** *"`/api/get_contents?id=` with a blank id returns that same everything-set. Read-only, low risk."* | Reject blank items at the `/api/smart_move` route (filed fix). Refuse `UNASSIGNED` in `clear_location` the same way the blank location is refused, unless Derek wants Eject All on the Unassigned view to mean something; nothing calls it that way today. Answer a blank `get_contents` id with an empty list or a 400. Pin each with a hermetic test that fails on HEAD. |
 
 ### Depended on, not re-planned
 
 - 🟠 *Found while briefing the six open decisions*, item 2: **"A `CMD:EJECTALL` scan with no location open targets the Unassigned pile."** This is being fixed on **`fix/core1-return-ejectall-guard`**. This group assumes that refusal exists and doesn't re-plan it.
 
-### Placed in Group 22, not here
+### Placed in Group 22, not here → now [Group 43](43-deduct-recovery.md)
+
+> **2026-10-12:** the "unblocked 22.5" below was never filed in Group 22's task file. By Derek's call it
+> now lives in [Group 43 — Deduct Recovery](43-deduct-recovery.md) (43.4 = the dropped head, 43.3 = the
+> `no_spool` card that names no spool), so it isn't gated behind Group 22's data blocker. The analysis
+> below is kept as the record.
 
 - 🟡 *Found while briefing the six open decisions*, item 6: **the deduct side** (*"A cancelled print's review silently drops an uncharged head"*; *"A `no_spool` Review card never names a spool"*).
   - **Verdict: [Group 22](22-filabridge-phase2-detection-deduct-followups.md).**
@@ -226,7 +255,7 @@ The matcher reaches a location's own spools and, for a Room, its whole subtree b
 - Today that answer silently toasts "Cleared!" (I2-12).
 
 **`needs_unassign` depends on Q1.**
-- Under Q1 option B, and until Derek answers: one batch prompt, "3 spools on `CR-CT-2-R1` have no saved home. Unassign them?".
+- Under Q1 option B, which Derek chose on 2026-09-18: one batch prompt, "3 spools on `CR-CT-2-R1` have no saved home. Unassign them?".
 - A second POST then carries `confirmed_unassign_ids: [...]`. Only those ids get `confirmed_unassign=True`.
 
 **Response and toast.**
@@ -251,13 +280,15 @@ The matcher reaches a location's own spools and, for a Room, its whole subtree b
 
 ### 41.3 — Location delete reports honestly, and never reaches a head (part 2 + the plan-time finding)
 
+> **✅ Q4 answered 2026-10-13: C, refuse** (Derek's choice; see Q4 below). The design below still fits, with one change. A Room delete is refused while any location still has the Room as its `parent_id` (for `LR` today: `LR-MDB-1`, `LR-MDB-2`, `LR-SD-1`, `LR-SD-2` and the Printer row `XL`). The refusal runs before any Spoolman call and writes nothing; it answers `success: false` with a message naming those locations ("LR still contains LR-MDB-1, LR-MDB-2, LR-SD-1, LR-SD-2 and XL — move or delete them first"), which `deleteLoc` already shows (it toasts any refused delete's `msg` as an 8 s error since the 2026-09-29 hotfix). So a Room delete no longer cascades into the Room's boxes and drawers, and "Don't narrow the reach" below no longer applies to Rooms. Once the Room is empty, the delete unassigns only spools whose own `location` is exactly the Room's ID, not the first-segment prefix hits the matcher adds for a dash-less ID. That unassign keeps the rest of this design: never touch a toolhead spool, clear the box links it leaves behind, keep the row and toast the spools when an update fails. Every other location type keeps this design as written. (Derek's answer covers Rooms; the brief's code check notes that a `parent_id` check would also catch a cart with rows, which wasn't asked.)
+
 **Non-toolhead delete: keep what a delete reaches, and add the explicit guard Group 37 requires.**
 
 **Don't narrow the reach.**
 - Group 37 says "what may I destroy" is the one question that stays flat (`37-location-system-redesign.md:52-54`).
 - Its invariant asks only that a room-level clear or delete never reach a live toolhead, via an explicit guard (`:253`).
 - Narrowing "delete `LR`" to spools filed on `LR` itself would visibly change what happens to `LR-MDB-1`'s contents, and nobody has decided that.
-- It is **Q4** below. Build the default until Derek answers.
+- It is **Q4** below. Build the default until Derek answers. _(No longer applies: Derek chose C on 2026-10-13; see the note at the top of 41.3.)_
 - (An earlier draft of this plan narrowed the delete, and claimed Group 37 supported that. It had 37 backwards.)
 
 **Read with the strict reader** (`get_spools_at_location_detailed_strict`), and sort each match:
@@ -265,7 +296,7 @@ The matcher reaches a location's own spools and, for a Room, its whole subtree b
 - **A ghost**, matched through `physical_source` (`spoolman_api.py:1473-1479`) → it keeps its location.
   - Clear its trail only when the trail names exactly the deleted row, as the toolhead cascade already does (`logic.py:1987-1993`).
   - A prefix-hit ghost whose trail names a surviving child keeps that trail.
-- **Everything else** (direct matches, and, under the default, prefix hits in sub-locations) → unassigned with the trail cleared: `container_slot`, `physical_source` and `physical_source_slot` all `""`, through `update_spool`'s read-merge. This replaces today's location-only PATCH (`routes_locations.py:458`).
+- **Everything else** (direct matches, and, under the default, prefix hits in sub-locations; under C a Room delete reaches exact matches only) → unassigned with the trail cleared: `container_slot`, `physical_source` and `physical_source_slot` all `""`, through `update_spool`'s read-merge. This replaces today's location-only PATCH (`routes_locations.py:458`).
 
 **Log** every failure to the Activity Log at ERROR, not only `hub.log`.
 
@@ -285,20 +316,27 @@ The matcher reaches a location's own spools and, for a Room, its whole subtree b
 
 **Tests (hermetic, real matcher through `FakeSpoolman`).**
 - Deleting `LR-MDB-1` while `#57` is on `XL-1` with trail `LR-MDB-1:1` → `#57` is still on `XL-1`, its trail is cleared, the row is gone.
-- Deleting `LR` (the default) → `LR-MDB-1`'s staged spools are unassigned with their trails cleared, as today. No spool on an XL head is touched, and a head spool whose trail names `LR-MDB-1` keeps it.
+- Deleting `LR` (the default) → `LR-MDB-1`'s staged spools are unassigned with their trails cleared, as today. No spool on an XL head is touched, and a head spool whose trail names `LR-MDB-1` keeps it. _(No longer applies: Derek chose C. Test instead: deleting `LR` while it has child locations → refused, the message names `LR-MDB-1`, `LR-MDB-2`, `LR-SD-1`, `LR-SD-2` and `XL`, no Spoolman call at all, the row kept. Deleting a Room with no child locations → only spools whose `location` is exactly that Room are unassigned, with their trails cleared; a spool filed on any other location whose ID starts with the Room's code is untouched.)_
 - Deleting the Printer row `XL` → every XL-1…XL-5 resident is untouched and listed in `skipped_loaded`.
 - A rejected unassign → the row is still present, `success: false`, an ERROR line.
 - The toolhead cascade with one rejected unassign → the row is kept and `save_locations_list` is not called.
 - Route-stubbed E2E: a stubbed 409 opens the confirm and retries with the query flag.
 
-**Risk.** Under the default, a Room delete reaches the same spools as today. It now spares head spools, clears the trails it leaves behind, and reports failures. If Derek picks Q4's option B or C, that is the visible change: pin it with its own test and manual check.
+**Risk.** Under the default, a Room delete reaches the same spools as today. It now spares head spools, clears the trails it leaves behind, and reports failures. If Derek picks Q4's option B or C, that is the visible change: pin it with its own test and manual check. _(Derek picked C on 2026-10-13. The visible change: a Room with locations inside can no longer be deleted. Pin it with the hermetic test above, plus a route-stubbed E2E that the refusal's message reaches the toast; tests cover it, so it adds no manual check for Derek.)_
 
 ### 41.4 — Undo reports what really happened (part 3)
+
+> **✅ 2026-10-13: Derek's Undo answer reshapes this sub-task.** It answers the standalone 🟡 buglist item *"Undo reverts moves only — wire weight-undo, or keep it move-only? (decide first)"* and settles Q2; the brief is in [open-decisions-2026-10-13.md](open-decisions-2026-10-13.md), "Should Undo also undo a weight change, or stay moves-only?". Derek: *"the issue here boils down to Undo on the UI not being specific on what it does in the first place … It then moved a spool someplace I wasn't expecting … I'm thinking we change it to 'Undo Last Move' or something."* Where the text below disagrees, this note wins.
+> - **Moves only, renamed.** The deck tile labelled `UNDO` (`templates/dashboard.html:182`) becomes **"Undo Last Move"**, or **"UNDO MOVE"** if the tile is too narrow; rename it wherever the UI names the command (e.g. the `CMD:UNDO` entry in `shortcuts_registry.js`). The scan code `CMD:UNDO` stays, so printed labels keep working. **No weight-undo**: it gets messy once a print deduct or a review lands, and other kinds of undo wait until they make sense elsewhere. **Redo** is undecided, a maybe-later (the command deck is already crowded); don't build it.
+> - **It always asks first, naming the move it will reverse,** printing or not, e.g. "Undo: put #57 back in LR-MDB-1 slot 2 and #196 back on XL-2?". `api_undo` answers that confirm before any write, and Yes retries with a confirm flag. When a head the undo would change belongs to a printing printer, the same prompt calls it out with D6's wording, as on any move (the print ask below), and the Yes carries `confirmed_toolheads` as at Group 39's move doors. Show one confirm: Group 39.4's `window.confirmActivePrint` when a head is printing, otherwise a plain confirm with the same message.
+> - **The Yes must cover the move it named.** `UNDO_STACK` (`state.py:7`) is shared by every tab, so give each record an id in `_push_undo`, return it with the confirm, and refuse a Yes whose id is no longer on top ("The last move changed — press Undo Last Move again").
+> - **The toast says what it put back, and the Activity Log line is reworded** so it can't be read backwards. Today's "↩️ Undid: moved #57 from LR-MDB-1 -> XL-2" (built at `logic.py:2501-2521`) becomes e.g. "↩️ Undo: #57 is back in LR-MDB-1 (it had been moved to XL-2)", so a user can put things right by hand. `tests/test_logic_undo.py` pins today's wording (`:269-351`); change those pins on purpose.
+> - **Tests to add:** a press with no confirm flag answers the confirm naming the move and writes nothing; a Yes carrying a stale record id is refused and writes nothing; PAUSED gets the plain prompt with no print call-out.
 
 **`perform_undo`.**
 - Collect failed move-restores and ejection-restores into `failed`.
 - Answer `success: false, msg: "Undo could not restore #42 (…)"` when anything failed or was blocked.
-- Write "↩️ Undid: …" only for what landed. Otherwise write "⚠️ Undo partly failed: …" as ERROR.
+- Write "↩️ Undid: …" only for what landed. Otherwise write "⚠️ Undo partly failed: …" as ERROR. _(After the Undo answer the success line uses the new wording, e.g. "↩️ Undo: #57 is back in LR-MDB-1 (it had been moved to XL-2)".)_
 
 **"Nothing to undo."** Keep the answer and add an INFO Activity Log line: a `CMD:UNDO` scan is a scan outcome, so CLAUDE.md requires a log entry and a toast.
 
@@ -308,27 +346,27 @@ The matcher reaches a location's own spools and, for a Room, its whole subtree b
 
 **`triggerUndo`.**
 - Read the JSON.
-- On success: the existing refresh plus "↩️ Undone".
+- On success: the existing refresh plus "↩️ Undone". _(Now a toast that says what it put back, after the confirm in the note above.)_
 - "Nothing to undo": an info toast.
 - Any other failure: `msg` in a 7 s error toast.
 
 **Tests (hermetic, real engine).**
-- Every restore write rejected → `success: false`, no "Undid" SUCCESS/WARNING line, ERROR lines present.
+- Every restore write rejected → `success: false`, no "Undid" (reworded: "↩️ Undo: …") SUCCESS/WARNING line, ERROR lines present.
 - A move whose single write was rejected pushes no undo record.
 - Keep `test_logic_undo.py` and the four undo tests in `test_active_print_chain_confirm.py` (`:786-848`) green.
 - Route-stubbed E2E: a stubbed failure raises the 7 s toast; "Nothing to undo" raises the info toast.
 
-**Ask before touching a printing head (D6; built by default, and Q2 only confirms it).**
+**Ask before touching a printing head (D6; built by default, and Q2 only confirms it).** _(Q2 settled 2026-10-13: Undo now always asks, see the note above; this part is how that prompt calls out a printing head.)_
 
 D6's rule is "before a move writes anything, if a moving spool's own location is a toolhead whose printer is PRINTING…". Undo writes spool moves (`logic.py:2096-2111`), so Undo asks, the same way a move does.
 - **Collect the heads first.** Before any restore write, list the heads the undo would change: each move's current location and its restore target, and each ejection's original head. Pass them through Group 39.1's `_uncovered_active_heads`, which probes each printer once.
-- **Answer before writing.** If any printer is active, the Undo route (`api_undo`, `routes_locations.py:673`) answers `requires_confirm` with D6's wording and writes nothing.
-- **Frontend.** `triggerUndo` shows the shared confirm (Group 39.4) and retries with `confirm_active_print`.
+- **Answer before writing.** If any printer is active, the Undo route (`api_undo`, `routes_locations.py:673`) answers `requires_confirm` with D6's wording and writes nothing. _(Now it always answers its confirm first; an active printer adds D6's wording and the heads.)_
+- **Frontend.** `triggerUndo` shows the shared confirm (Group 39.4) and retries with `confirm_active_print`. _(When nothing is printing, the plain confirm from the note above.)_
 - **Merge note.** Build it in the same restore loops that Group 42.3b edits (occupancy check, attach/release). Whichever lands second merges.
 - **Test (hermetic, real engine).**
   - Undo of a Quick-Swap onto XL-2 while XL is PRINTING → `requires_confirm` naming XL-2, zero writes.
   - Confirmed → restored.
-  - PAUSED → no ask.
+  - PAUSED → no ask. _(Now: PAUSED gets the plain naming prompt, without the print call-out.)_
 
 ### 41.5 — The bulk-move tally never counts a rejected spool as moved
 
@@ -347,14 +385,15 @@ D6's rule is "before a move writes anything, if a moving spool's own location is
 
 ### 41.7 — Bulk Move's source-print confirm
 
-Implement Derek's answer to **Q3**. Under the recommended option A:
-- delete the pre-flight 4 block (`logic.py:1168-1186`) and its fake-box test (`tests/test_bulk_move.py:362-386`);
-- keep the `/api/bulk_move` and session `require_confirm` plumbing, because a destination confirm can still come back from the engine (`logic.py:1289-1293`);
+Implement Derek's answer to **Q3**. Under the recommended option A _(decided 2026-10-13: A; Claude's call, Derek reviewed it and didn't object)_:
+- delete the pre-flight 4 block (`logic.py:1168-1186`) and its fake-box test (`tests/test_bulk_move.py:362-386`) _(on `dev` after Group 39: `logic.py:1452-1470`, and two tests at `tests/test_bulk_move.py:376-401`, `test_source_active_print_requires_confirm` and `test_confirm_active_print_bypasses_source_guard`)_;
+- _(added 2026-10-13)_ delete the panel's "⚠️ ACTIVE PRINT" tick-box strip too (`inv_cmd.js`, `apStrip` at ~`:812-823` and its `#fcc-bulkmove-ap-ack` handling); the brief Derek reviewed says it goes. The other tests that fake the same printing box go or change with it: `test_commit_requires_confirm_on_source_active_print` and `test_require_confirm_plan_still_carries_the_movable_set` in `tests/test_bulk_move_session.py`, and `test_active_print_confirm_is_in_panel_and_gates_commit` plus the four `test_ack_*` tests in `tests/test_bulk_move_panel.py`;
+- keep the `/api/bulk_move` and session `require_confirm` plumbing, because a destination confirm can still come back from the engine (`logic.py:1289-1293`); _(⚠️ 2026-10-13: that reason no longer holds. Since Group 39, `execute_bulk_move` calls the engine with `confirm_active_print=True` (`logic.py:1575-1577`), so the engine backstop (`:1578-1585`), the `/api/bulk_move` answer (`routes_scan.py:444-448`), the session's `require_confirm` handling in `logic.py` (e.g. `_apply_plan_to_session`, `:1684`) and the commit handler's confirm branch (`inv_cmd.js:447-461`) are unreachable too. Remove them, with `test_dest_active_print_from_engine_is_propagated` (`tests/test_bulk_move.py:403`), or keep them only as a clearly labelled backstop.)_
 - update `L298-bulk-moves-plan.md`'s description of the flow.
 
 ### 41.8 — Room-only spools
 
-Implement Derek's answer to **Q1** in `perform_smart_eject`'s no-home branch (`logic.py:1890-1905`), and, if he says so, in Smart Load's `_known_room_of` use (`:647-653`).
+Implement Derek's answer to **Q1** in `perform_smart_eject`'s no-home branch (`logic.py:1890-1905`), and, if he says so, in Smart Load's `_known_room_of` use (`:647-653`). _(Q1 answered 2026-09-18: B. Derek kept Smart Load's 2026-09-12 rule, the printer's Room, so leave `_known_room_of`'s use as it is.)_
 
 **Tests** (hermetic, real engine, one per location kind):
 - a cart-row spool;
@@ -377,10 +416,10 @@ Implement Derek's answer to **Q1** in `perform_smart_eject`'s no-home branch (`l
   - 41.4 gives 42.3b's blocked restores a reporting channel.
 - **[Group 37](37-location-system-redesign.md):** compatible.
   - 41.1 classifies by `Type`, not by the flat matcher, so 37.4's transitive contents won't change it.
-  - 41.3 keeps 37's flat reach for a delete and adds 37's explicit head guard. Q4 decides whether to narrow the reach.
+  - 41.3 keeps 37's flat reach for a delete and adds 37's explicit head guard. Q4 decides whether to narrow the reach. _(Decided 2026-10-13: C. A Room delete is refused while it has child locations, so it never sweeps the Room's subtree.)_
 - **Recommended order across the four groups:** 39 → 41 → 42 → 40 (see Cross-plan notes).
 - **Order inside the group:**
-  1. Get Derek's answers to **Q1**, **Q3** and **Q4**, and his confirmation of **Q2**. They change 41.2, 41.3, 41.4, 41.7 and 41.8.
+  1. Get Derek's answers to **Q1**, **Q3** and **Q4**, and his confirmation of **Q2**. They change 41.2, 41.3, 41.4, 41.7 and 41.8. ✅ Done: Q1 on 2026-09-18; Q3, Q4 and Q2 (through the Undo answer) on 2026-10-13.
   2. **41.1** the block.
   3. **41.2** honest Eject All.
   4. **41.6** unseat.
@@ -398,10 +437,10 @@ Full reasoning is in [Group 39's Cross-plan notes](39-confirm-on-every-door.md).
 0. **Merge the two local-only branches into `dev`:**
    - `fix/core1-return-ejectall-guard` (`1fb5678`, `76398cb`), this group's hard dependency;
    - `test/sweep-reds-hermetic` (`d785444`).
-1. **Ask Derek the three contract-shaping questions first.**
+1. **Ask Derek the three contract-shaping questions first.** ✅ All three answered 2026-09-18.
    - **This doc's Q1** is one of them. It shapes Group 39.6's wording, 41.2's lists and Group 42.3c's redirect.
    - The other two are Group 39's Q1 and Group 42's Q-B.
-   - Q3, Q4 and the Q2 confirmation can wait for their sub-tasks.
+   - Q3, Q4 and the Q2 confirmation can wait for their sub-tasks. ✅ All answered 2026-10-13 (Q2 through the Undo answer).
 2. **Build order:** Group 39 → **Group 41** (this group) → Group 42 → Group 40.
    - 41 is the smallest group, and it closes the destructive doors: Eject All on a Printer view mid-print, and deleting a box unassigning head spools.
    - If Derek wants the PolyDryer release first, 41 and 42 can swap.
@@ -447,7 +486,7 @@ Full reasoning is in [Group 39's Cross-plan notes](39-confirm-on-every-door.md).
 
 **Group 37.**
 - 41.1's `skipped_loaded` and 41.3's head guard implement 37's invariant: "a room-level clear/delete must never reach a live toolhead, via an explicit guard".
-- 41.3 keeps 37's flat reach for a delete; Q4 decides whether to narrow it.
+- 41.3 keeps 37's flat reach for a delete; Q4 decides whether to narrow it. _(Decided 2026-10-13: C, refuse a Room delete while it has child locations.)_
 - 41.1's Room → Move all pointer inherits the room-wide bulk-move source (37's matcher root cause).
 
 **Move-pipeline follow-ups item 6.** This group takes the FE-1 double-click on the safety and action dialogs (41.2).
@@ -484,9 +523,9 @@ Full reasoning is in [Group 39's Cross-plan notes](39-confirm-on-every-door.md).
 | 41-f | **A homeless spool on a cart row** | Force Location a spare spool onto `CR-CT-2-R1` (it now has no saved home) → EJECT ALL there (scan) | Behaves as you answered Q1 (e.g. one "Unassign 1 spool?" prompt). It does **not** silently land on `CR` |
 | 41-g | **Deleting a location** | Add a throwaway Cart `TEST-DEL-CT` → Force Location a spare spool there → delete `TEST-DEL-CT` | The spool is Unassigned with no leftover box link. A toast names what happened |
 | 41-h | **Deleting a box that feeds a head** | XL idle. Add a Dryer Box `TEST-DEL-DB` (Max 2), bind slot 1 → `XL-5`, scan its slot-1 label with a spare spool so it loads onto XL-5 → delete `TEST-DEL-DB` (then restore XL-5's original spool) | The spare spool is **still on XL-5**; only its "from box" link is gone |
-| 41-i | **Undo with nothing to undo** | Refresh the page → press Undo twice | The second press shows "Nothing to undo" (today: nothing at all) |
-| 41-j | **Undo after a move** | Move a spare spool `CR-CT-2-R3` → `CR-TC-2-R1` → Undo | A "↩️ Undone" toast; the spool is back in `CR-CT-2-R3` |
-| 41-k | **Bulk Move source check** | Per Q3 (default: re-run Bulk Move check 4 while printing) | A skip reason for the loaded spool, never a prompt |
+| 41-i | **Undo with nothing to undo** | Refresh the page → press Undo twice | The second press shows "Nothing to undo" (today: nothing at all). Since 2026-10-13 a press that still finds a move asks first, naming it (41-j) |
+| 41-j | **Undo after a move** | Move a spare spool `CR-CT-2-R3` → `CR-TC-2-R1` → Undo Last Move | First a prompt names the move ("Undo: put #N back in `CR-CT-2-R3`?"), and No changes nothing. Yes: the toast says what it put back, the spool is back in `CR-CT-2-R3`, and the Activity Log reads like "↩️ Undo: #N is back in CR-CT-2-R3 (it had been moved to CR-TC-2-R1)" |
+| 41-k | **Bulk Move source check** | Per Q3 (answered A on 2026-10-13: re-run Bulk Move check 4 while printing) | A skip reason for the loaded spool, never a prompt, and no ⚠️ ACTIVE PRINT strip in the panel |
 | 41-l | **Undo mid-print asks** (41.4, Q2) | XL idle: Quick-Swap `LR-MDB-1` slot 2 onto XL-2. Start an XL print. Press Undo | One prompt naming XL-2 and which spool FCC would charge this print to. Cancel changes nothing; Yes puts both spools back |
 
 ---
@@ -526,7 +565,9 @@ Full reasoning is in [Group 39's Cross-plan notes](39-confirm-on-every-door.md).
 **Follow-up.** Should **Smart Load**'s homeless spool (pushed off XL-2 → `LR` today) follow the same rule?
 - **Recommended: keep your 2026-09-12 decision.** That spool comes off a printer that really is in `LR`, and it usually gets set down right there. The painful case is spools filed on carts and shelves.
 
-### Q2 — (confirm only) Undo asks before it takes a spool off, or puts one onto, a printing head
+### Q2 — (confirm only) Undo asks before it takes a spool off, or puts one onto, a printing head — ✅ ANSWERED 2026-10-13: always ask first (covers A)
+
+**Derek chose "Undo always asks first" (2026-10-13).** It covers option A and goes further. In his answer to the standalone 🟡 Undo buglist item, Undo is renamed "Undo Last Move" and always asks before it writes anything, naming the move it will reverse ("Undo: put #57 back in LR-MDB-1 slot 2 and #196 back on XL-2?"), whether or not a printer is printing; when a head it would change belongs to a printing printer, that same prompt calls it out with D6's wording, as on any move. Build it that way (41.4); the background below is kept for the record.
 
 **Status.** Built as option A by default, because your D6 rule already covers it. This question only confirms that. Don't treat it as open.
 
@@ -546,7 +587,9 @@ Full reasoning is in [Group 39's Cross-plan notes](39-confirm-on-every-door.md).
 - **A. Ask, like a move:** when a head the undo would change belongs to a printing printer, one prompt for the whole undo with D6's wording ("Undo takes #57 off XL-2 and puts #196 back while XL is printing, so FCC charges this print to #196. Continue?"). **(Recommended:** an undo can revert a move made long before the print started.)
 - **B. Never ask:** Undo means "put back what I just did", and you already confirmed the original move.
 
-### Q3 — Bulk Move's "the source is printing" prompt can never appear. Remove it, or make it cover something?
+### Q3 — Bulk Move's "the source is printing" prompt can never appear. Remove it, or make it cover something? — ✅ ANSWERED 2026-10-13: option A
+
+**Decided 2026-10-13 (Claude's call; Derek reviewed it and didn't object): A, remove the prompt.** Delete the source-print check (pre-flight 4 in `plan_bulk_move`), its "⚠️ ACTIVE PRINT" tick-box strip in the Bulk Move panel, and the tests that fake a printing dryer box. Bulk Move still never moves a loaded spool, and taking a spool off a printing head stays a single move that asks under D6. Build it that way (41.7); the background below is kept for the record.
 
 **Background.**
 - Bulk Move always leaves loaded and deployed spools where they are: a spool on a toolhead, or a box spool deployed to one, is listed as skipped with a reason.
@@ -568,7 +611,9 @@ Full reasoning is in [Group 39's Cross-plan notes](39-confirm-on-every-door.md).
 - **B. Make it cover staged slots:** ask when a spool is taken from a box slot bound to a head whose printer is printing, e.g. a spool staged in `LR-MDB-1` slot 2 while XL-2 runs off a PolyDryer. That spool isn't feeding the print, so the prompt only matters when FCC is out of step with the printer.
 - **C. Leave it as is** (dead but harmless).
 
-### Q4 — When you delete a Room, should the spools in its boxes and shelves be unassigned too?
+### Q4 — When you delete a Room, should the spools in its boxes and shelves be unassigned too? — ✅ ANSWERED 2026-10-13: option C
+
+**Derek chose C (2026-10-13).** Refuse to delete a Room while any location still sits inside it (has the Room as its `parent_id`), with a message naming them: "LR still contains LR-MDB-1, LR-MDB-2, LR-SD-1, LR-SD-2 and XL — move or delete them first". Once the Room is empty, deleting it unassigns only loose spools filed on the Room itself; toolheads are never touched. Derek added: *"Deleting a room with stuff in it seems like a bad idea to begin with. A rename and re-id might be more appropriate. But the ID system still needs some sort of work to get it in a better shape than what it currently is. (LR-MDB-1 to something else, but still maintains a readable Location, what it is, which it is based ID kinda system.)"* The rename / re-ID and readable-ID part is input for the [Group 37](37-location-system-redesign.md) fork 1 / [Group 44](44-printer-first-class.md) design sit-down, not a change to 41.3. Build it that way (41.3); the background below is kept for the record.
 
 **Background.**
 - Deleting a location in the Location Manager removes the row, then unassigns the spools FCC finds "in" it.

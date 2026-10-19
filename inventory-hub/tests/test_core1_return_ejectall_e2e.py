@@ -165,6 +165,14 @@ class FakeBackend:
             payload = self._identify(body)
         elif path == "/api/manage_contents":
             payload = self._manage_contents(body)
+        elif path == "/api/quickswap/return" and body.get("dry_run"):
+            # Group 40.6: the server's dry run names where Return will put it
+            # (the recorded source here, free), as the real route answers.
+            th = str(body.get("toolhead") or "").upper()
+            payload = {"action": "return_plan", "toolhead": th, "active_toolhead": th, "requested": th,
+                       "spool": SPOOL_ID, "display": RESIDENT["display"], "box": BOX, "slot": "2",
+                       "source": "physical_source", "needs_choice": False, "note": "",
+                       "occupancy": {"after": 1, "max": 4}, "options": None, "recommended": None}
         elif path == "/api/quickswap/return":
             payload = {"action": "return_done", "moved": SPOOL_ID, "box": BOX, "slot": "2"}
         else:
@@ -204,8 +212,13 @@ class FakeBackend:
 @pytest.fixture(autouse=True)
 def _drop_routes_in_flight(page: Page):
     """A route callback still running at context close otherwise surfaces its
-    TargetClosedError in the NEXT test's setup."""
+    TargetClosedError in the NEXT test's setup. Close the page FIRST: un-routing a
+    live page lets its next buffer poll or persist reach the real dev server."""
     yield
+    try:
+        page.close()
+    except PlaywrightError:
+        pass
     try:
         page.context.unroute_all(behavior="ignoreErrors")
     except PlaywrightError:
@@ -295,7 +308,8 @@ def _assert_no_safety_prompt(page: Page) -> None:
 def test_return_on_a_core1_shaped_printer_reaches_the_backend(
         page: Page, base_url: str, reset_dom_state_js: str):
     """FAILS on the pre-fix inv_quickswap.js: "Nothing to return on FCC-TEST-P1",
-    whose Yes sent nothing."""
+    whose Yes sent nothing. Group 40.6 (deliberate): the overlay is built from
+    the server's dry run, and the Yes sends the slot it named and the spool."""
     be = FakeBackend(page, contents={PRINTER_ID: [RESIDENT]}, extra_locations=[P1_ROW, BOX_ROW])
     errors = _boot(page, base_url, reset_dom_state_js)
     _wait_rows(page, [PRINTER_ID, BOX])
@@ -309,8 +323,11 @@ def test_return_on_a_core1_shaped_printer_reaches_the_backend(
     assert f"Sending back to: {BOX} slot 2 (original source)" in ov["body"], ov
 
     page.click("#fcc-quickswap-yes")
-    _until(page, lambda: be.bodies("/api/quickswap/return"), 5_000, "confirming the Return sent nothing")
-    assert be.bodies("/api/quickswap/return") == [{"toolhead": PRINTER_ID}]
+    _until(page, lambda: len(be.bodies("/api/quickswap/return")) >= 2, 5_000, "confirming the Return sent nothing")
+    # No banner showed (the printer is idle), so no head is confirmed (Group 39.1).
+    assert be.bodies("/api/quickswap/return") == [
+        {"toolhead": PRINTER_ID, "dry_run": True},
+        {"toolhead": PRINTER_ID, "box": BOX, "slot": "2", "expected_spool": SPOOL_ID, "confirmed_toolheads": []}]
     _toast(page, "no success toast after return_done", type_="success", contains=(str(SPOOL_ID),))
     assert errors == [], errors
 
@@ -371,9 +388,13 @@ def test_ejectall_scan_with_no_location_open_prompts_nothing(
 @pytest.mark.usefixtures("require_server")
 def test_ejectall_scan_with_a_location_open_still_prompts_and_clears(
         page: Page, base_url: str, reset_dom_state_js: str):
-    """Control, PASSES on the pre-fix modules too: with the manager open on
-    FCC-TEST-BOX the scan prompts for that box and FORCE EXECUTE clears it."""
-    be = FakeBackend(page, contents={BOX: []}, extra_locations=[BOX_ROW])
+    """Control: with the manager open on FCC-TEST-BOX the scan prompts for that
+    box and FORCE EXECUTE clears it. Group 41: the browser asks the server first
+    (check_only), and the run's answer lists what it did."""
+    done = {"success": True, "ejected": [], "needs_unassign": [], "failed": [],
+            "skipped_slotted": [], "skipped_loaded": [], "msg": f"Eject All on {BOX}: nothing to eject."}
+    be = FakeBackend(page, contents={BOX: []}, extra_locations=[BOX_ROW],
+                     manage_contents=lambda b: OK if b.get("check_only") else done)
     _boot(page, base_url, reset_dom_state_js)
     _wait_rows(page, [BOX])
 
@@ -385,9 +406,11 @@ def test_ejectall_scan_with_a_location_open_still_prompts_and_clears(
     _safety_on_screen(page, f"Nuke all unslotted in {BOX}?", "the Eject All prompt never showed for the open box")
     page.click("#safetyModal .btn-danger")
 
-    _until(page, lambda: be.bodies("/api/manage_contents"), 5_000, "FORCE EXECUTE sent nothing")
-    assert be.bodies("/api/manage_contents") == [{"action": "clear_location", "location": BOX}]
-    _toast(page, "no Cleared! toast after a successful Eject All", contains=("Cleared!",))
+    _until(page, lambda: len(be.bodies("/api/manage_contents")) >= 2, 5_000, "FORCE EXECUTE sent nothing")
+    assert be.bodies("/api/manage_contents") == [
+        {"action": "clear_location", "location": BOX, "check_only": True},
+        {"action": "clear_location", "location": BOX}]
+    _toast(page, "no summary toast after a successful Eject All", contains=(f"Eject All on {BOX}",))
 
 
 @pytest.mark.usefixtures("require_server")
@@ -395,7 +418,9 @@ def test_eject_all_backend_refusal_is_not_reported_as_cleared(
         page: Page, base_url: str, reset_dom_state_js: str):
     """FAILS on the pre-fix inv_loc_mgr.js: a {success: false} answer toasted
     "Cleared!"."""
-    be = FakeBackend(page, manage_contents=lambda b: {"success": False, "msg": REFUSAL})
+    # Group 41: the check passes; the run itself is refused.
+    be = FakeBackend(page, manage_contents=lambda b: OK if b.get("check_only")
+                     else {"success": False, "msg": REFUSAL})
     _boot(page, base_url, reset_dom_state_js)
 
     page.evaluate("(id) => window.triggerEjectAll(id)", BOX)

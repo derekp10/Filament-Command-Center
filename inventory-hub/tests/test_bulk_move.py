@@ -36,6 +36,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 import app as app_module  # noqa: E402
 import logic  # noqa: E402
+import routes_scan  # noqa: E402
 import locations_db  # noqa: E402
 import spoolman_api  # noqa: E402
 import state  # noqa: E402
@@ -65,6 +66,16 @@ def client():
     return app_module.app.test_client()
 
 
+@pytest.fixture(autouse=True)
+def _bulk_moves_on(monkeypatch):
+    """These tests exercise bulk-move BEHAVIOUR; the feature gate has its own file
+    (test_bulk_move_feature_gate.py). Turn the flag on explicitly: since every
+    door is gated (2026-10-13), relying on the machine's git-ignored config.json
+    made this file pass only where it happens to say true (dev's does; prod's
+    and a fresh checkout's don't)."""
+    monkeypatch.setattr(routes_scan, "_bulk_moves_enabled", lambda: True)
+
+
 def _spool(sid, location="PM-DB-A", is_ghost=False, archived=False):
     """A detailed-item dict shaped like get_spools_at_location_detailed emits."""
     return {"id": sid, "location": location, "is_ghost": is_ghost,
@@ -74,13 +85,16 @@ def _spool(sid, location="PM-DB-A", is_ghost=False, archived=False):
 @contextlib.contextmanager
 def _bulk_env(*, strict_map=None, raise_locs=None, readback=None,
               printer_map=None, locations=None, active_print_for=None,
-              move_result=None, move_side_effect=None, last_error=None, buffer=None):
+              move_result=None, move_side_effect=None, last_error=None, buffer=None,
+              readback_raises=False):
     """Patch every collaborator and yield the mocked perform_smart_move.
 
     strict_map:  {LOC_UPPER: [item, ...]} returned by the fail-closed reader
                  (drives BOTH source resolve and capacity occupancy).
     raise_locs:  {LOC_UPPER} for which the strict reader RAISES (outage sim).
-    readback:    {LOC_UPPER: [item, ...]} for the fail-open post-move readback.
+    readback:    {LOC_UPPER: [item, ...]} the post-move readback sees. Group 41.5
+                 made that readback strict, so the strict reader answers it once
+                 the move has run; `readback_raises` makes it raise instead.
     active_print_for: {LOC_UPPER: ap_dict} the active-print helper returns.
     """
     strict_map = strict_map or {}
@@ -89,8 +103,14 @@ def _bulk_env(*, strict_map=None, raise_locs=None, readback=None,
     printer_map = FAKE_PRINTER_MAP if printer_map is None else printer_map
     locations = FAKE_LOCATIONS if locations is None else locations
 
+    after_move = {"done": False}
+
     def _strict(loc):
         u = str(loc).upper()
+        if after_move["done"]:
+            if readback_raises:
+                raise RuntimeError("spoolman transport error (readback)")
+            return list(readback.get(u, []))
         if u in raise_locs:
             raise RuntimeError("spoolman transport error")
         return list(strict_map.get(u, []))
@@ -110,11 +130,13 @@ def _bulk_env(*, strict_map=None, raise_locs=None, readback=None,
         stack.enter_context(patch.object(state, "add_log_entry"))
         stack.enter_context(patch.object(state, "GLOBAL_BUFFER", buffer or []))
         stack.enter_context(patch.object(spoolman_api, "LAST_SPOOLMAN_ERROR", last_error))
-        if move_side_effect is not None:
-            mv = stack.enter_context(patch.object(logic, "perform_smart_move", side_effect=move_side_effect))
-        else:
-            mv = stack.enter_context(patch.object(
-                logic, "perform_smart_move", return_value=(move_result or {"status": "success"})))
+        def _move(*a, **k):
+            after_move["done"] = True
+            if move_side_effect is not None:
+                return move_side_effect(*a, **k)
+            return move_result or {"status": "success"}
+
+        mv = stack.enter_context(patch.object(logic, "perform_smart_move", side_effect=_move))
         yield mv
 
 
@@ -133,12 +155,15 @@ def test_happy_path_moves_all_movable(client):
     assert body["moved_ids"] == [1, 2]
     assert body["skipped"] == []
     assert body["failed"] == []
-    # Delegated exactly once with (dest, movable_ids) and the opt-in flag.
+    # Delegated exactly once with (dest, movable_ids). The engine gets True
+    # (Group 39 review, engine-3): the plan already skipped every loaded spool
+    # and refused a printer-head destination, so the engine's per-spool source
+    # reads have nothing to find and must not refuse the batch on one blip.
     mv.assert_called_once()
     args, kwargs = mv.call_args
     assert args[0] == "SHELF-B"
     assert args[1] == [1, 2]
-    assert kwargs.get("confirm_active_print") is False
+    assert kwargs.get("confirm_active_print") is True
     assert kwargs.get("origin") == "bulk_move"
     # A bulk move parks/relocates — it must NOT chain-deploy onto a live toolhead.
     assert kwargs.get("auto_deploy") is False
@@ -359,47 +384,6 @@ def test_capacity_fail_closed_on_dest_read_error(client):
 # Pre-flight: source-side active print
 # ---------------------------------------------------------------------------
 
-def test_source_active_print_requires_confirm(client):
-    """A bulk move from an actively-printing source bails for confirmation."""
-    ap = {"printer_name": "XL", "state": "PRINTING", "toolhead": "PM-DB-A"}
-    with _bulk_env(strict_map={"PM-DB-A": [_spool(1)]},
-                   active_print_for={"PM-DB-A": ap}) as mv:
-        r = client.post("/api/bulk_move", json={"source": "PM-DB-A", "dest": "SHELF-B"})
-    body = r.get_json()
-    assert body["success"] is False
-    assert body["require_confirm"] is True
-    assert body["confirm_type"] == "active_print"
-    assert body["active_print"]["printer_name"] == "XL"
-    mv.assert_not_called()
-
-
-def test_confirm_active_print_bypasses_source_guard(client):
-    """confirm_active_print=True flows through the source active-print guard."""
-    ap = {"printer_name": "XL", "state": "PRINTING", "toolhead": "PM-DB-A"}
-    with _bulk_env(strict_map={"PM-DB-A": [_spool(1)]},
-                   active_print_for={"PM-DB-A": ap}) as mv:
-        r = client.post("/api/bulk_move", json={
-            "source": "PM-DB-A", "dest": "SHELF-B", "confirm_active_print": True})
-    body = r.get_json()
-    assert body["success"] is True
-    assert body["moved"] == 1
-    assert mv.call_args[1].get("confirm_active_print") is True
-
-
-def test_dest_active_print_from_engine_is_propagated(client):
-    """perform_smart_move's own requires_confirm (eventual dest active) surfaces
-    as a require_confirm response — no partial write happened."""
-    engine = {"status": "requires_confirm", "confirm_type": "active_print",
-              "active_print": {"printer_name": "Core One", "state": "PAUSED"}}
-    with _bulk_env(strict_map={"PM-DB-A": [_spool(1)]}, move_result=engine):
-        r = client.post("/api/bulk_move", json={"source": "PM-DB-A", "dest": "SHELF-B"})
-    body = r.get_json()
-    assert body["success"] is False
-    assert body["require_confirm"] is True
-    assert body["confirm_type"] == "active_print"
-    assert body["active_print"]["printer_name"] == "Core One"
-
-
 # ---------------------------------------------------------------------------
 # Honest tally via readback
 # ---------------------------------------------------------------------------
@@ -480,6 +464,34 @@ def test_readback_subtracts_spools_that_landed_at_dest(client):
     assert body["success"] is True
     assert body["moved"] == 1
     assert body["failed"] == []
+
+
+def test_engine_failures_count_even_when_the_readback_misses_them(client):
+    """Group 41.5, FAILS on the old tally: the engine's per-spool failures were
+    read only when the readback still found a spool at the source, so a
+    rejected write the readback missed was tallied as moved."""
+    with _bulk_env(strict_map={"PM-DB-A": [_spool(1), _spool(2)]},
+                   readback={},          # the readback finds nothing at the source
+                   move_result={"status": "success",
+                                "failures": {"2": "HTTP 400: rejected"}}):
+        r = client.post("/api/bulk_move", json={"source": "PM-DB-A", "dest": "SHELF-B"})
+    body = r.get_json()
+    assert body["success"] is False and body["moved_ids"] == [1], body
+    assert body["failed"] == [{"id": 2, "err": "HTTP 400: rejected"}], body
+
+
+def test_an_unreadable_readback_is_done_but_not_verified(client):
+    """Group 41.5, FAILS on the old tally: the fail-open readback answered []
+    on a Spoolman timeout, which "proved" every spool had left (SUCCESS). Now
+    the strict readback raises, and the tally says it couldn't verify."""
+    with _bulk_env(strict_map={"PM-DB-A": [_spool(1), _spool(2)]}, readback_raises=True), \
+         patch.object(state, "add_log_entry") as log:
+        r = client.post("/api/bulk_move", json={"source": "PM-DB-A", "dest": "SHELF-B"})
+    body = r.get_json()
+    assert body["unverified"] is True and body["moved"] == 2 and body["failed"] == [], body
+    lines = [(c.args[0], c.args[1]) for c in log.call_args_list if "Bulk move" in c.args[0]]
+    assert lines == [("🔀 Bulk move PM-DB-A → SHELF-B: moved 2 (couldn't verify with Spoolman), "
+                      "skipped 0, failed 0", "WARNING")], lines
 
 
 def test_engine_error_status_surfaced(client):

@@ -164,8 +164,12 @@ def test_get_room_from_location_parsing():
         assert logic.get_room_from_location("PRINTER-1") == "PRINTER"
         assert logic.get_room_from_location("CORE1-MMU") == "CORE1"
 
-def test_smart_eject_falls_back_to_room():
-    """Verify normal slotted ejection from a Box falls back to its Room and preserves ghost slot."""
+def test_smart_eject_with_no_home_asks_to_unassign_instead_of_the_room():
+    """Group 41.8 flipped this pin on purpose (Derek's Q1, option B,
+    2026-09-18): a box spool with no saved home no longer goes UP to its Room
+    (LR) but to Unassigned, after one "unassign?" prompt. Unconfirmed, the eject
+    asks and writes nothing; confirmed, it unassigns with the slot and trail
+    cleared."""
     mock_db = {
         "id": 2,
         "location": "LR-MDB-1",
@@ -176,8 +180,11 @@ def test_smart_eject_falls_back_to_room():
         }
     }
     
+    writes = []
+
     def fake_update(sid, data):
-        assert data['location'] == "LR"
+        writes.append(data)
+        assert data['location'] == ""
         assert data['extra']['container_slot'] == ""
         # Verifying Ghost logic is strictly wiped on unslotted demotion
         assert data['extra']['physical_source'] == ""
@@ -188,8 +195,10 @@ def test_smart_eject_falls_back_to_room():
         with patch('spoolman_api.update_spool', side_effect=fake_update):
             with patch('state.add_log_entry'):
                 with patch('locations_db.load_locations_list', return_value=[]):
-                    res = logic.perform_smart_eject(2)
-                    assert res is True
+                    assert logic.perform_smart_eject(2) == "REQUIRE_CONFIRM"
+                    assert writes == [], "an unconfirmed eject wrote"
+                    assert logic.perform_smart_eject(2, confirmed_unassign=True) is True
+                    assert len(writes) == 1
 
 def test_smart_eject_requires_confirm_for_unassigned():
     """Verify ejecting from a Room (or no hyphen location) requires confirmation before moving to Unassigned."""

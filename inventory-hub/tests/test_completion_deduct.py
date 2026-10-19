@@ -124,7 +124,7 @@ def test_stopped_still_fires_cancel_not_completion_with_flag_on():
 def test_completed_print_deducts_footer(stores_tmp):
     captured = {}
 
-    def _apply(printer, usage_map, fb_url, strategy_label="", active_locs=None):
+    def _apply(printer, usage_map, fb_url, strategy_label="", active_locs=None, failed_out=None):
         captured["usage_map"] = dict(usage_map)
         captured["label"] = strategy_label
         return (2, [{"sid": 100, "grams": 25.0, "remaining": 900.0},
@@ -199,28 +199,38 @@ def test_completed_print_partial_bind_records_applied_not_full_and_warns(stores_
     ACTUALLY-applied grams (not the full footer sum, which over-states it AND, via
     the single (printer,job_id) key, would block the unbound position's recovery),
     and the shortfall must surface as a WARNING — not silent loss (review finding
-    F1, 2026-06-13)."""
-    def _apply(printer, usage_map, fb_url, strategy_label="", active_locs=None):
+    F1, 2026-06-13). Group 43.2 (changed on purpose): the real apply loop names
+    each detail's head position, so the 25 g of the empty head also open an
+    uncharged-grams card ("J-P#shortfall") and the WARNING points at the Review."""
+    def _apply(printer, usage_map, fb_url, strategy_label="", active_locs=None, failed_out=None):
         # pos 1 bound (40g); pos 0 unbound. known={0,1} so the 25g of pos 0 surfaces
         # as a shortfall (not excluded as an orphan).
-        return 1, [{"sid": 200, "grams": 40.0, "remaining": 800.0}], {0, 1}
+        return 1, [{"sid": 200, "grams": 40.0, "remaining": 800.0, "toolhead": "XL-2", "position": 1}], {0, 1}
     pm = {"XL-1": {"printer_name": "XL", "position": 0},
           "XL-2": {"printer_name": "XL", "position": 1}}
     gcode = "; filament used [g] = 25, 40\n"
+    heads = [{"toolhead": "XL-1", "position": 0, "sid": None}, {"toolhead": "XL-2", "position": 1, "sid": 200}]
     logs = []
     with patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
+         patch.object(print_deduct.config_loader, "load_config", return_value={}), \
          patch.object(app_module.locations_db, "get_active_printer_map", return_value=pm), \
          patch.object(app_module.prusalink_api, "fetch_printer_credentials", _creds), \
          patch.object(app_module.prusalink_api, "fetch_cancel_gcode",
                       side_effect=lambda ip, key, fn, frac: {"gcode": gcode, "fraction": frac}), \
          patch.object(print_deduct, "_apply_usage_to_printer", side_effect=_apply), \
+         patch.object(print_deduct, "_heads_snapshot", return_value=heads), \
+         patch.object(print_deduct.spoolman_api, "get_spools_at_location", return_value=[]), \
          patch.object(app_module.state, "add_log_entry", side_effect=lambda *a, **k: logs.append(a)):
         res = app_module.deduct_completed_print("XL", "done.gcode", "J-P")
     assert res["status"] == "deducted"
     entry = print_deduct_ledger._load()[print_deduct_ledger._key("XL", "J-P")]
     assert entry["grams"] == 40.0          # APPLIED 40g, NOT the full 65g
-    # shortfall (65 - 40 = 25g) surfaced as a WARNING, not silently dropped
-    assert any(len(a) > 1 and a[1] == "WARNING" and "25" in a[0] and "weigh" in a[0].lower()
+    assert entry["shortfall"] == 25.0
+    card = cancel_review_store.get_pending("XL", "J-P#shortfall")
+    assert card and card["unresolved_usage"] == {"0": 25.0}, card
+    assert card["shortfall_causes"]["0"]["why"] == "no_spool", card["shortfall_causes"]
+    # shortfall (65 - 40 = 25g) surfaced as a WARNING that points at the Review
+    assert any(len(a) > 1 and a[1] == "WARNING" and "25" in a[0] and "Review" in a[0]
                for a in logs), logs
 
 

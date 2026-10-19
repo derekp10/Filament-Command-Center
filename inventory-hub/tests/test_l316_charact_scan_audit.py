@@ -177,9 +177,11 @@ def test_active_audit_hijacks_location_scan(client):
 def test_inactive_audit_location_scan_uses_normal_branch(client):
     """Control for the hijack tests: with NO active audit session, the same
     LOC: scan flows to the normal location branch and returns the pinned
-    {'type':'location', 'id', 'display', 'contents'} shape."""
+    {'type':'location', 'id', 'display', 'contents'} shape. The branch reads
+    strictly since the Group 42 review (a Spoolman blip read as "empty"; a
+    failed read now adds `contents_error`, test_review_fixes_42.py)."""
     with patch.object(app_module.logic, "process_audit_scan") as pas, \
-         patch.object(app_module.spoolman_api, "get_spools_at_location_detailed",
+         patch.object(app_module.spoolman_api, "get_spools_at_location_detailed_strict",
                       return_value=[]) as gl, \
          patch.object(app_module.state, "add_log_entry") as log:
         r = client.post("/api/identify_scan",
@@ -376,32 +378,43 @@ def test_filament_scan_unknown_filament_returns_error_payload(client):
 def test_remove_legacy_require_confirm_string_translated_to_json(client):
     """perform_smart_eject's legacy 'REQUIRE_CONFIRM' string return is
     translated to a {success:false, require_confirm:true} JSON with the
-    exact unassign-to-nowhere prompt. Also pins the default kwargs the
-    route forwards (confirmed=False, confirm_active_print=False)."""
+    unassign prompt. Also pins the default kwargs the route forwards
+    (confirmed=False, confirm_active_print=False).
+    Group 39.6 flipped the text on purpose: it was "Spool is already in a room.
+    Confirm true unassign to nowhere?", which a toolhead spool got as well; it
+    now names the spool and where it is."""
+    rows = [{"LocationID": "CR", "Type": "Room", "Max Spools": "0"}]
     with patch.object(app_module.logic, "perform_smart_eject",
-                      return_value="REQUIRE_CONFIRM") as eject:
+                      return_value="REQUIRE_CONFIRM") as eject, \
+         patch.object(app_module.spoolman_api, "get_spool",
+                      return_value={"id": 55, "location": "CR", "extra": {}}), \
+         patch.object(app_module.locations_db, "load_locations_list", return_value=rows), \
+         patch.object(app_module.locations_db, "get_active_printer_map", return_value={}):
         r = client.post("/api/manage_contents",
                         json={"action": "remove", "spool_id": "55"})
     assert r.get_json() == {
         "success": False,
         "require_confirm": True,
-        "msg": "Spool is already in a room. Confirm true unassign to nowhere?",
+        "confirm_types": ["unassign"],
+        "msg": "#55 is loose in CR with no saved home. Unassign it?",
     }
     eject.assert_called_once_with(
-        55, confirmed_unassign=False, confirm_active_print=False)
+        55, confirmed_unassign=False, confirm_active_print=False, report={})
 
 
 def test_remove_true_maps_to_success_and_confirmed_flag_passthrough(client):
-    """perform_smart_eject → True maps to bare {success:true}; the caller's
-    `confirmed` flag rides through as confirmed_unassign."""
+    """perform_smart_eject → True maps to {success: true} plus the spool id and
+    whatever the eject put in `report` (Group 42.5a: where it went, which box
+    let go; this mock fills nothing); the caller's `confirmed` flag rides
+    through as confirmed_unassign."""
     with patch.object(app_module.logic, "perform_smart_eject",
                       return_value=True) as eject:
         r = client.post("/api/manage_contents", json={
             "action": "remove", "spool_id": "55", "confirmed": True,
         })
-    assert r.get_json() == {"success": True}
+    assert r.get_json() == {"success": True, "spool_id": 55}
     eject.assert_called_once_with(
-        55, confirmed_unassign=True, confirm_active_print=False)
+        55, confirmed_unassign=True, confirm_active_print=False, report={})
 
 
 @pytest.mark.parametrize("eject_result", [False, None])
@@ -489,10 +502,24 @@ def test_add_returns_perform_smart_move_result_verbatim(client):
     rs.assert_called_once_with("ID:7")
     args, kwargs = mv.call_args
     assert args == ("LR-MDB-1", [7])
+    # Group 40.0c: plus "Just store it" (auto_deploy) and the confirmed fed heads;
+    # 40.0e: plus the slot an earlier answer picked (kept only while free).
     assert kwargs == {
         "target_slot": "2",
         "origin": "buffer",
-        "confirm_active_print": False,
+        "auto_deploy": True,
+        "confirm_active_print": [],
+        "confirmed_fed_heads": [],
+        "picked_slot": None,
+        # Group 40.3: the feed a replay's question named (None: no check).
+        "expected_feed": None,
+        # Group 40.3 review: heads the page saw printing (none here).
+        "seen_printing": [],
+        # Swap option C: the grid's Swap (`swap: true`); not a Swap here.
+        "swap_out": False,
+        # Group 40.5: the Printer picker's "came from" answer (none here: the
+        # engine's silent 13.6 rule).
+        "record_source": None,
     }
 
 
@@ -515,11 +542,16 @@ def test_clear_location_ejects_unslotted_and_surfaces_slotted_survivors(client):
         {"id": 4, "slot": "None"},                  # 'None' string → ejected
         {"id": 5},                                  # no slot key → ejected
     ]
-    with patch.object(app_module.spoolman_api, "get_spools_at_location_detailed",
+    # Group 41.2: the strict reader, and an eject answer that really is True
+    # (a MagicMock answer now counts as failed, as any non-True result does).
+    with patch.object(app_module.spoolman_api, "get_spools_at_location_detailed_strict",
                       return_value=contents) as gl, \
+         patch.object(app_module.locations_db, "load_locations_list",
+                      return_value=[{"LocationID": "LR-MDB-1", "Type": "Dryer Box", "Max Spools": "4"}]), \
+         patch.object(app_module.locations_db, "get_active_printer_map", return_value={}), \
          patch.object(app_module.logic, "_active_print_info_for_location",
                       return_value=None) as ap, \
-         patch.object(app_module.logic, "perform_smart_eject") as eject, \
+         patch.object(app_module.logic, "perform_smart_eject", return_value=True) as eject, \
          patch.object(app_module.state, "add_log_entry") as log:
         r = client.post("/api/manage_contents", json={
             "action": "clear_location", "location": "lr-mdb-1",
@@ -535,25 +567,30 @@ def test_clear_location_ejects_unslotted_and_surfaces_slotted_survivors(client):
     ejected = [c[0][0] for c in eject.call_args_list]
     assert ejected == [3, 4, 5]
     for c in eject.call_args_list:
-        assert c[1] == {"confirm_active_print": True}
-    assert any("slotted spool(s) left in place" in c[0][0]
+        assert c[1] == {"confirmed_unassign": False, "confirm_active_print": True}
+    assert any("in a slot left in place" in c[0][0]
                for c in log.call_args_list)
 
 
 def test_clear_location_confirm_flag_skips_active_print_probe(client):
     """confirm_active_print=True bypasses the pre-flight printer probe
     entirely (it is not merely ignored — never called)."""
-    with patch.object(app_module.spoolman_api, "get_spools_at_location_detailed",
-                      return_value=[{"id": 3, "slot": ""}]), \
+    with patch.object(app_module.spoolman_api, "get_spools_at_location_detailed_strict",
+                      return_value=[{"id": 3, "slot": "", "location": "XL-1"}]), \
+         patch.object(app_module.locations_db, "load_locations_list",
+                      return_value=[{"LocationID": "XL-1", "Type": "Tool Head", "Max Spools": "1"}]), \
+         patch.object(app_module.locations_db, "get_active_printer_map",
+                      return_value={"XL-1": {"printer_name": "XL", "position": 0}}), \
          patch.object(app_module.logic, "_active_print_info_for_location") as ap, \
-         patch.object(app_module.logic, "perform_smart_eject") as eject:
+         patch.object(app_module.logic, "perform_smart_eject", return_value=True) as eject:
         r = client.post("/api/manage_contents", json={
             "action": "clear_location", "location": "XL-1",
             "confirm_active_print": True,
         })
-    assert r.get_json() == {"success": True}
+    body = r.get_json()
+    assert body["success"] is True and body["ejected"] == [3], body
     ap.assert_not_called()
-    eject.assert_called_once_with(3, confirm_active_print=True)
+    eject.assert_called_once_with(3, confirmed_unassign=False, confirm_active_print=True)
 
 
 # ---------------------------------------------------------------------------

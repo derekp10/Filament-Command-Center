@@ -90,10 +90,25 @@ CONFIG_SCHEMA = [
                "just reads a couple grams heavy until you zero it (usually fine, it's "
                "empty). Typical: ~2 g short-path (Core One), ~4 g longer-path (XL). One "
                "value covers all printers for now; a per-printer version is planned."),
+    Field("shortfall_review_min_g", "Uncharged-grams review (g)", "float", 1.0,
+          section="behavior", scope="server", min=0, max=100,
+          help="When a print's grams can't all be charged automatically (a spool ran out "
+               "mid-print, a head had no spool, a write failed), FCC opens a 🛑 review card "
+               "for the rest if it is at least this many grams, so you can pick the spool "
+               "that really took them (e.g. the joined spool after a SpoolJoin runout). "
+               "Smaller leftovers are only logged."),
     Field("fcc.weighEntry.defaultMode", "Default weigh-in mode", "select", "additive",
           section="client", scope="client",
           choices=["gross", "net", "additive", "set_used"],
           help="Which input mode the weight-entry overlay opens in."),
+    # Group 46.3. The choices are what XL-3's tile would read, so the dropdown
+    # shows the result; inv_printer_status.js keys on these exact strings.
+    Field("fcc.printerStatus.toolheadLabel", "Printer Status toolhead labels", "select", "XL-3",
+          section="client", scope="client",
+          choices=["XL-3", "3", "Tool 3"],
+          help="How each toolhead tile is labelled in Printer Status: its full id (XL-3), just "
+               "its number (3), or Tool and its number, counting from 1 like the printer's "
+               "own screen (Tool 3). The collapsed strip always shows the full id."),
     Field("fcc.bulkMove.enabled", "Enable Bulk Moves", "bool", False,
           section="behavior", scope="server",
           help="Show the 🔀 Bulk Move affordances and accept bulk-move scans. "

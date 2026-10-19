@@ -45,6 +45,11 @@ def _move_ctx(printer_map, loc_list, get_spool, update_spool,
         patch.object(logic.spoolman_api, "get_spool", **get_spool),
         patch.object(logic.spoolman_api, "get_spools_at_location",
                      return_value=spools_at_location if spools_at_location is not None else []),
+        # Smart Load's resident read is strict (Group 39.7): the same spools,
+        # each sitting directly at the queried head.
+        patch.object(logic.spoolman_api, "get_spools_at_location_detailed_strict",
+                     side_effect=lambda loc: [{"id": sid, "is_ghost": False, "location": loc}
+                                              for sid in (spools_at_location or [])]),
         patch.object(logic.spoolman_api, "get_spools_at_location_detailed", return_value=[]),
         patch.object(logic.spoolman_api, "format_spool_display",
                      return_value={"text": "#240", "color": "ff0000"}),
@@ -294,6 +299,10 @@ def test_move_result_carries_per_spool_failures():
         m.start()
     try:
         result = logic.perform_smart_move("SHELF-B", [1, 2, 3], origin="test")
+        # ...and the global is None by the end, which is exactly why reading it
+        # after the loop mislabelled the failure. Read before `prior` is put
+        # back, or a stale error left by an earlier test fails this one.
+        global_after_move = logic.spoolman_api.LAST_SPOOLMAN_ERROR
     finally:
         for m in reversed(ctx):
             m.stop()
@@ -301,9 +310,7 @@ def test_move_result_carries_per_spool_failures():
 
     assert result["status"] == "success"          # unchanged bare-success contract
     assert result["failures"] == {"2": "HTTP 400: bad location"}
-    # ...and the global is None by the end, which is exactly why reading it
-    # after the loop mislabelled the failure.
-    assert logic.spoolman_api.LAST_SPOOLMAN_ERROR is None
+    assert global_after_move is None
 
 
 def test_move_result_failures_is_present_and_empty_on_a_clean_move():

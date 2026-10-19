@@ -664,12 +664,22 @@ class TestFindBoxSlotFeedingToolhead:
 
     def test_case_insensitive_match(self):
         locs = [
-            {"LocationID": "PM-DB-CORE1", "Type": "Dryer Box", "Max Spools": "1",
+            {"LocationID": "CR-MDB-1", "Type": "Dryer Box", "Max Spools": "4",
              "extra": {"slot_targets": {"1": "core1-m0"}}},
         ]
         box, slot = logic._find_box_slot_feeding_toolhead("CORE1-M0", loc_list=locs)
-        assert box == "PM-DB-CORE1"
+        assert box == "CR-MDB-1"
         assert slot == "1"
+
+    def test_never_returns_a_single_slot_box(self):
+        """Group 42.1 step 5 (this pin used to use a single-slot box): a
+        single-slot box is attached only by its own spool, so it is never a
+        stranger's 13.6 home, even when it is the only box bound to the head."""
+        locs = [
+            {"LocationID": "PM-DB-CORE1", "Type": "Dryer Box", "Max Spools": "1",
+             "extra": {"slot_targets": {"1": "core1-m0"}}},
+        ]
+        assert logic._find_box_slot_feeding_toolhead("CORE1-M0", loc_list=locs) == (None, None)
 
     def test_ignores_non_dryer_boxes(self):
         """A reverse-binding only makes sense on a Dryer Box. A Cart or Room

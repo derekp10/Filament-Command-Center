@@ -61,7 +61,8 @@ def test_universal_fallback_move():
 
     with patch('locations_db.load_locations_list', return_value=mock_loc_list):
         with patch('config_loader.load_config', return_value={"printer_map": mock_printer_map}):
-            with patch('spoolman_api.get_spools_at_location', return_value=[]):
+            with patch('spoolman_api.get_spools_at_location', return_value=[]), \
+                 patch('spoolman_api.get_spools_at_location_detailed_strict', return_value=[]):
                 with patch('spoolman_api.get_spool', return_value=mock_spool):
                     with patch('spoolman_api.format_spool_display', return_value={"text": "Test", "color": "000"}):
                         with patch('spoolman_api.update_spool', side_effect=fake_update):
@@ -136,7 +137,10 @@ def test_smart_move_ejects_resident_before_remap():
     # be a ghost); this mock used to return Spool 8's record for every id.
     mock_spool_9 = {"id": 9, "location": "PRINTER-4", "extra": {}}
 
-    with patch('spoolman_api.get_spools_at_location', return_value=[9]):
+    # Smart Load reads the head's residents strictly (Group 39.7).
+    with patch('spoolman_api.get_spools_at_location', return_value=[9]), \
+         patch('spoolman_api.get_spools_at_location_detailed_strict',
+               return_value=[{"id": 9, "is_ghost": False, "location": "PRINTER-4"}]):
         with patch('spoolman_api.get_spool',
                    side_effect=lambda sid: mock_spool_9 if int(sid) == 9 else mock_spool_8):
             with patch('config_loader.load_config', return_value={"printer_map": mock_printer_map}):

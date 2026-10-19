@@ -43,6 +43,25 @@ for _utf8_stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError, OSError):
         pass
 
+# ---------------------------------------------------------------------------
+# The host never holds the container's hub.log (Group 45, review test-infra-1)
+# ---------------------------------------------------------------------------
+# state.py opens RotatingFileHandler('hub.log') relative to the working
+# directory at import. From inventory-hub/ (the canonical run) that is the dev
+# container's own bind-mounted log, so pytest held it open for the whole run.
+# Windows can't rename a file another process holds, so the container's 1 MB
+# rollover failed and Python's handler DROPPED the container's records until the
+# host happened to rotate; dev's hub.log.1 and .5 with no .2-.4 between them are
+# what those failed rollovers leave. It also mixed host unit-test lines ("DATA
+# LOSS in remove_choice('Doomed')") into the container's log, and starved the
+# request log's timeout count. Host log lines still reach stdout. Imported here,
+# before any test module imports state.
+import state as _fcc_state  # noqa: E402
+
+if _fcc_state.f_handler in _fcc_state.logger.handlers:
+    _fcc_state.logger.removeHandler(_fcc_state.f_handler)
+_fcc_state.f_handler.close()
+
 
 DEFAULT_BASE_URL = os.environ.get("INVENTORY_HUB_URL", "http://localhost:8000")
 DEFAULT_DEV_SPOOLMAN = os.environ.get("DEV_SPOOLMAN_URL", "http://192.168.1.29:7913")
@@ -183,6 +202,235 @@ def pytest_collection_modifyitems(config, items):
 
 
 # ---------------------------------------------------------------------------
+# Group 45.1(c) — a run labels itself: wall-clock and a load factor
+# ---------------------------------------------------------------------------
+# A busy desktop, or the run's own traffic (it saturates dev Spoolman: 8,577
+# five-second read timeouts in hub.log on 2026-10-13), slows every browser test
+# by roughly the same factor, and fixed waits trip all over the suite. So a run
+# says how slow it was: each passed browser test's call time against the fastest
+# time the same test has taken on this PC in recent runs; the median ratio is the
+# run's load factor. A fixed total-time limit would be wrong every time tests are
+# added (2,707 -> 2,951 tests in five days). The history is git-ignored at the
+# repo root, outside the inventory-hub/ bind mount the container sees.
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+TIMING_FILE = os.path.join(_REPO_ROOT, ".test-timings", "browser-call-times.json")
+TIMING_KEEP = 8           # recent call times kept per test
+LOAD_WARN = 1.25          # a median slowdown at or above this labels the run busy
+LOAD_MIN_TESTS = 30       # fewer comparable browser tests: no factor, just the time
+SLOW_REQUEST_S = 2.0      # a request slower than this is named on a failure
+HUB_LOG = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "hub.log"))
+DEV_SPOOLMAN_HOST = "192.168.1.29"
+_RUN = {"start": None, "browser": {}}
+
+
+def _times_of(entry):
+    """A history entry's numeric times; anything else in the file reads as
+    no history (a bare number used to crash the run's summary line)."""
+    if not isinstance(entry, list):
+        return []
+    return [p for p in entry if isinstance(p, (int, float)) and not isinstance(p, bool)]
+
+
+def load_factor(times, history, min_tests=LOAD_MIN_TESTS):
+    """Median of (this run's call time / the test's fastest recorded time) over
+    the tests that have a history; None with fewer than `min_tests` of them."""
+    ratios = []
+    for nodeid, t in times.items():
+        past = [p for p in _times_of(history.get(nodeid)) if p > 0]
+        if past and t > 0:
+            ratios.append(t / min(past))
+    if len(ratios) < min_tests:
+        return None
+    ratios.sort()
+    mid = len(ratios) // 2
+    return ratios[mid] if len(ratios) % 2 else (ratios[mid - 1] + ratios[mid]) / 2
+
+
+def update_history(history, times, keep=TIMING_KEEP):
+    """Append this run's call times, keeping each test's `keep` most recent."""
+    out = dict(history)
+    for nodeid, t in times.items():
+        past = _times_of(out.get(nodeid))
+        out[nodeid] = (past + [round(float(t), 3)])[-keep:]
+    return out
+
+
+def _read_json(path, default):
+    try:
+        import json as _json
+        with open(path, encoding="utf-8") as f:
+            data = _json.load(f)
+        return data if isinstance(data, type(default)) else default
+    except (OSError, ValueError):
+        return default
+
+
+def _write_json(path, data):
+    try:
+        import json as _json
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            _json.dump(data, f, indent=0, sort_keys=True)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def hub_log_size(path=HUB_LOG):
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return 0
+
+
+def _read_from(path, offset):
+    try:
+        with open(path, "rb") as f:
+            f.seek(offset)
+            return f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def count_spoolman_timeouts(offset, path=HUB_LOG, host=DEV_SPOOLMAN_HOST):
+    """Read timeouts to dev Spoolman that FCC logged since byte `offset` of
+    hub.log. Only lines naming the dev Spoolman host count: host-side unit tests
+    can write a hub.log too (state.py opens a relative path), with mocked hosts.
+    A file now smaller than `offset` rotated meanwhile: the rest of the old file
+    is `<path>.1`, and the new one is read from its start."""
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return 0
+    if size < offset:
+        text = _read_from(path + ".1", offset) + _read_from(path, 0)
+    else:
+        text = _read_from(path, offset)
+    return sum(1 for ln in text.splitlines() if "Read timed out" in ln and host in ln)
+
+
+def request_start(req):
+    """When the browser started `req`, in epoch seconds by its own clock (else
+    now). Playwright's sync API dispatches request events only inside a
+    Playwright call, so Python's clock at dispatch can be late by however long
+    the test spent between calls (a requests.get, a sleep)."""
+    try:
+        st = (req.timing or {}).get("startTime", -1)
+        if st and st > 0:
+            return st / 1000.0
+    except Exception:
+        pass
+    return time.time()
+
+
+def request_duration(req, started, now=None):
+    """Seconds a finished request took: the browser's responseEnd (ms after its
+    start) when it reported one, else the wall time since `started`."""
+    try:
+        end = (req.timing or {}).get("responseEnd", -1)
+        if end is not None and end >= 0:
+            return end / 1000.0
+    except Exception:
+        pass
+    return (time.time() if now is None else now) - started
+
+
+def format_request_log(net, timeouts, now=None):
+    """The section a failed browser test's report gets: its slow requests, the
+    ones that never finished, and FCC's dev-Spoolman timeouts during the test.
+    It answers "was this red load noise?" without a re-run. `net["pending"]`
+    maps each in-flight request to (method, url, start time in epoch seconds)."""
+    now = time.time() if now is None else now
+    lines = []
+    for method, url, took in net.get("slow", []):
+        lines.append(f"  slow ({took:.1f} s): {method} {url}")
+    for method, url, started in list(net.get("pending", {}).values()):
+        lines.append(f"  never finished ({now - started:.1f} s so far): {method} {url}")
+    if not lines:
+        lines.append(f"  no request took over {SLOW_REQUEST_S:.0f} s")
+    lines.append(f"  dev Spoolman read timeouts FCC logged during this test: {timeouts}")
+    return "\n".join(lines)
+
+
+def _short_url(url):
+    """Path + query only: the host is always the container."""
+    try:
+        from urllib.parse import urlsplit as _urlsplit
+        parts = _urlsplit(url)
+        return parts.path + (("?" + parts.query) if parts.query else "")
+    except ValueError:
+        return url
+
+
+# Group 45.1(b): Playwright's `expect` waits 5 s by default, which a loaded
+# desktop misses on checks that only say "this eventually shows". An expect
+# passes the moment its condition holds, so a longer default slows only a red.
+# An explicit `timeout=` still wins; those are triaged site by site (45.1(a)).
+EXPECT_TIMEOUT_MS = 10_000
+
+
+def pytest_configure(config):
+    try:
+        from playwright.sync_api import expect as _expect
+    except ImportError:
+        return
+    _expect.set_options(timeout=EXPECT_TIMEOUT_MS)
+
+
+def pytest_sessionstart(session):
+    _RUN["start"] = time.time()
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    rep = outcome.get_result()
+    net = getattr(item, "_fcc_net", None)
+    if rep.when == "call" and rep.passed and "page" in getattr(item, "fixturenames", ()):
+        _RUN["browser"][item.nodeid] = rep.duration
+    if rep.failed and net is not None and rep.when in ("setup", "call"):
+        page = getattr(item, "_fcc_page", None)
+        if page is not None:
+            try:
+                # Let queued request events dispatch first: a request that
+                # finished after the last Playwright call isn't still in flight.
+                page.wait_for_timeout(1)
+            except Exception:
+                pass
+        try:
+            timeouts = count_spoolman_timeouts(getattr(item, "_fcc_hub_offset", 0))
+            rep.sections.append(("FCC request log (Group 45.1)", format_request_log(net, timeouts)))
+        except Exception:  # diagnostics must never turn a red into an error
+            pass
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    """One line at the end of every run: how long it took and, for a run with
+    browser tests, how loaded the machine was against this PC's usual times."""
+    if _RUN["start"] is None:
+        return
+    elapsed = int(time.time() - _RUN["start"])
+    stats = terminalreporter.stats
+    ran = sum(len(stats.get(k, [])) for k in ("passed", "failed", "error"))
+    msg = f"⏱️ {elapsed // 60}:{elapsed % 60:02d} for {ran} tests"
+    times = dict(_RUN["browser"])
+    if times:
+        history = _read_json(TIMING_FILE, {})
+        factor = load_factor(times, history)
+        msg += f" ({len(times)} browser tests passed)"
+        if factor is None:
+            msg += " · load: no baseline yet for enough of these tests on this PC"
+        elif factor >= LOAD_WARN:
+            msg += (f" · BUSY RUN: browser tests took {factor:.2f}x their usual time here; "
+                    f"re-check any red on its own before believing it")
+        else:
+            msg += f" · load {factor:.2f}x usual"
+        _write_json(TIMING_FILE, update_history(history, times))
+    terminalreporter.write_sep("=", msg)
+
+
+# ---------------------------------------------------------------------------
 # Base URL / context overrides
 # ---------------------------------------------------------------------------
 
@@ -203,6 +451,33 @@ def browser_context_args(browser_context_args):
         **browser_context_args,
         "viewport": BASELINE_VIEWPORT,
     }
+
+
+@pytest.fixture
+def page(page, request):
+    """pytest-playwright's page, logging its network for the failure report
+    (Group 45.1(c)): requests slower than SLOW_REQUEST_S and requests still in
+    flight when the test fails, plus where hub.log stood when the test began.
+    Listeners only append to lists, so a passing test pays nothing visible."""
+    net = {"slow": [], "pending": {}}
+
+    def _started(req):
+        net["pending"][req] = (req.method, _short_url(req.url), request_start(req))
+
+    def _ended(req):
+        entry = net["pending"].pop(req, None)
+        if entry:
+            took = request_duration(req, entry[2])
+            if took > SLOW_REQUEST_S:
+                net["slow"].append((entry[0], entry[1], took))
+
+    page.on("request", _started)
+    page.on("requestfinished", _ended)
+    page.on("requestfailed", _ended)
+    request.node._fcc_net = net
+    request.node._fcc_page = page
+    request.node._fcc_hub_offset = hub_log_size()
+    return page
 
 
 # ---------------------------------------------------------------------------
@@ -292,6 +567,83 @@ def open_manage_modal(page, base_url):
         page.wait_for_timeout(600)
 
     return _open
+
+
+# ---------------------------------------------------------------------------
+# Bootstrap modal transitions (Group 45.8)
+# ---------------------------------------------------------------------------
+# Bootstrap 5.3's Modal.hide() returns silently while the modal's show
+# transition is still running (its `_isTransitioning` flag; see CLAUDE.md on
+# the gating dialogs). A test that opens the wizard and hides it inside that
+# ~0.5 s loses the hide and fails on "still visible". Two files were fixed
+# before: Group 26.7 retries the hide, and 38.6b waits for the public
+# shown.bs.modal event when it opens the wizard (the better fix where a test
+# controls the open). Once the dashboard stopped its per-tick fan-out (45.8)
+# the page got fast enough that eleven wizard tests in four other files hit it
+# in one sweep. This waits out the transition at close time instead.
+MODAL_SETTLED_JS = """(id) => {
+    const el = document.getElementById(id);
+    const m = (el && window.bootstrap) ? bootstrap.Modal.getInstance(el) : null;
+    return !m || !m._isTransitioning;
+}"""
+
+
+def wait_modal_settled(page, modal_id: str, timeout: int = 5_000) -> None:
+    """Block until Bootstrap modal `modal_id` is not mid-transition, so a
+    scripted hide() (or show()) isn't silently dropped."""
+    page.wait_for_function(MODAL_SETTLED_JS, arg=modal_id, timeout=timeout)
+
+
+def close_wizard(page, timeout: int = 5_000) -> None:
+    """Close the add/edit wizard past its unsaved-changes guard, once its show
+    transition is over, and wait until it is gone."""
+    from playwright.sync_api import expect as _expect
+    wait_modal_settled(page, "wizardModal", timeout)
+    page.evaluate("""
+        const m = bootstrap.Modal.getInstance(document.getElementById('wizardModal'));
+        if (m) {
+            // wizardState is script-scoped, not on window: reference it by name.
+            try { wizardState.forceClose = true; wizardState.isDirty = false; } catch (_) {}
+            m.hide();
+        }
+    """)
+    _expect(page.locator("#wizardModal")).not_to_be_visible(timeout=timeout)
+
+
+def own_the_buffer(page, initial):
+    """Give `page` its own buffer endpoint (Group 45.8, family D). A test that
+    injects spools into state.heldSpools otherwise talks to dev's SHARED server
+    buffer: the page's 2 s poll overwrites the injected spool once its 3 s grace
+    lapses, and renderBuffer's persist (or the grace path's) POSTs the test's
+    spools, real or made-up (#99, #8001, #99999), into dev's buffer, where every
+    later page loads them. /api/state/buffer then starts as `initial` and follows
+    the page's own persists. Install before page.goto. Returns the stored dict."""
+    import json as _json
+    held = {"buffer": list(initial)}
+
+    def handle(route):
+        if route.request.method == "POST":
+            try:
+                held["buffer"] = (route.request.post_data_json or {}).get("buffer", [])
+            except ValueError:
+                pass
+            route.fulfill(status=200, content_type="application/json", body='{"success": true}')
+        else:
+            route.fulfill(status=200, content_type="application/json",
+                          body=_json.dumps(held["buffer"]))
+    page.route("**/api/state/buffer", handle)
+    return held
+
+
+def quiet_heartbeat(page) -> None:
+    """Abort the dashboard's own status polls (the cold /api/logs fetch and
+    the /api/dashboard_pulse heartbeat) for a test that injects state those
+    polls own: a synthetic log row, a local audit flag. A real answer landing
+    between the injection and the assertion repaints that state, and is right
+    to (Group 38's lesson); in one sweep it took a 🛑 Review row and closed
+    the audit panel (Group 45.8). Install before page.goto."""
+    page.route("**/api/dashboard_pulse*", lambda route: route.abort())
+    page.route("**/api/logs*", lambda route: route.abort())
 
 
 @pytest.fixture
@@ -394,6 +746,10 @@ DEV_BOX_BINDING_BASELINES: typing.Dict[str, typing.Dict[str, str]] = {
     "PM-DB-2": {},
     "PM-DB-4": {},
     "PM-DB-5": {},
+    # Group 45.5: the 6-slot test box (Quick-Swap overlays, the printer pool,
+    # the multi-slot Feeds save). Its old seed binding {"1": "PRINTER:XL"} was
+    # a leftover, not dev state anyone wanted (Derek, 2026-10-13).
+    "TST-MDB-1": {},
 }
 
 
@@ -536,89 +892,49 @@ def borrow_box_bindings(api_base_url: str):
 # Quick-Swap overlay fixture (Group 26.3)
 # ---------------------------------------------------------------------------
 
+# The Quick-Swap overlay tests' slot (Group 45.5). TST-MDB-1 is a dev TEST box
+# (6 slots, no bindings at its baseline) whose slot 1 holds a virtual dev spool
+# (#123 as of 2026-10-13). The fixture used to take the first loaded slot in ANY
+# dryer box, which on dev meant Derek's real boxes (CR-MDB-1, then LR-MDB-1),
+# and it put back whatever binding it had found there.
+QUICKSWAP_TEST_BOX = "TST-MDB-1"
+QUICKSWAP_TEST_SLOT = "1"
+QUICKSWAP_TEST_TOOLHEAD = "XL-1"
+
+
 @pytest.fixture
-def bound_loaded_slot(api_base_url):
-    """A deterministic bound + loaded Quick-Swap slot for overlay/confirm tests.
+def bound_loaded_slot(api_base_url, borrow_box_bindings):
+    """A fixed bound + loaded Quick-Swap slot for overlay/confirm tests.
 
     The Quick-Swap confirm overlay + bind-picker only render for a slot that is
-    (a) bound to a REAL toolhead and (b) actually holds a spool. On a bare dev
-    state the fixture boxes are bound-but-empty, so `.fcc-qs-slot` stays disabled
-    (`slot N is empty — scan a spool into the buffer`) and the overlays never
-    mount — the root cause of the six pre-existing overlay reds this fixture
-    fixes. (The old per-file `bound_slot` fixtures bound an EMPTY slot; the old
-    `_find_*` helpers could return a slot bound to a virtual `PRINTER:*` target,
-    which doesn't render a grid at all.)
+    (a) bound to a REAL toolhead and (b) actually holds a spool. This borrows
+    QUICKSWAP_TEST_BOX through `borrow_box_bindings` (so it must be at its
+    fixed baseline, and teardown always restores that baseline) and binds
+    QUICKSWAP_TEST_SLOT to QUICKSWAP_TEST_TOOLHEAD. No spool is ever moved.
+    Yields ``{"box", "slot", "toolhead", "spool_id"}``.
 
-    Discovers a dryer-box slot that ALREADY holds a spool (get_contents) and
-    ensures it is bound to a real toolhead (never a virtual `PRINTER:*`
-    whole-printer target). Mutates ONLY the slot binding, and only when the slot
-    isn't already bound to a real toolhead — restored on teardown; no spool is
-    ever moved, so dev inventory is left exactly as found. Yields
-    ``{"box", "slot", "toolhead", "spool_id"}``. Skips (does not fail) when dev
-    state has no loaded dryer-box slot, mirroring the sibling helpers these
-    tests previously used.
+    Fails, rather than skips, when the slot holds no spool or the toolhead has
+    left the fleet: either is dev data drifting under the tests, and a skip
+    would hide every test built on this fixture.
     """
-    # Real toolheads only (exclude PRINTER:* virtual whole-printer targets).
-    pm = requests.get(f"{api_base_url}/api/printer_map", timeout=5).json().get("printers", {})
-    real_toolheads = [
-        str(e.get("location_id", "")).upper()
+    box, slot, toolhead = QUICKSWAP_TEST_BOX, QUICKSWAP_TEST_SLOT, QUICKSWAP_TEST_TOOLHEAD
+    pm = requests.get(f"{api_base_url}/api/printer_map", timeout=8).json().get("printers", {})
+    toolheads = {
+        str(e.get("location_id", "")).strip().upper()
         for entries in pm.values() for e in (entries or [])
-        if str(e.get("location_id", "")).strip()
-    ]
-    if not real_toolheads:
-        pytest.skip("No real toolheads in printer_map to bind a slot against.")
-
-    slots = requests.get(f"{api_base_url}/api/dryer_boxes/slots", timeout=5).json().get("slots", [])
-    boxes = sorted({s["box"] for s in slots})
-
-    # Find a box slot that currently holds a spool (no spool is moved to create
-    # one — we only read what's already loaded).
-    loaded = None  # (box, slot, spool_id)
-    for box in boxes:
-        try:
-            contents = requests.get(
-                f"{api_base_url}/api/get_contents?id={box}", timeout=5
-            ).json() or []
-        except requests.RequestException:
-            continue
-        for it in contents:
-            sl = str(it.get("slot", "")).replace('"', '').strip()
-            if sl:
-                loaded = (box, sl, it.get("id"))
-                break
-        if loaded:
-            break
-    if not loaded:
-        pytest.skip("No loaded dryer-box slot in dev state to open an overlay against.")
-    box, slot, spool_id = loaded
-
-    # Prefer the slot's CURRENT binding when it already targets a real toolhead —
-    # then we mutate nothing at all.
-    snap = requests.get(f"{api_base_url}/api/dryer_box/{box}/bindings", timeout=5).json()
-    original = snap.get("slot_targets", {}) or {}
-    current = str(original.get(str(slot), "")).upper()
-    mutated = False
-    if current in real_toolheads:
-        toolhead = current
-    else:
-        toolhead = real_toolheads[0]
-        new_targets = dict(original)
-        new_targets[str(slot)] = toolhead
-        requests.put(
-            f"{api_base_url}/api/dryer_box/{box}/bindings",
-            json={"slot_targets": new_targets},
-            timeout=5,
-        )
-        mutated = True
-
-    yield {"box": box, "slot": str(slot), "toolhead": toolhead, "spool_id": spool_id}
-
-    if mutated:
-        requests.put(
-            f"{api_base_url}/api/dryer_box/{box}/bindings",
-            json={"slot_targets": original},
-            timeout=5,
-        )
+    }
+    if toolhead not in toolheads:
+        pytest.fail(f"bound_loaded_slot: {toolhead} is no longer a toolhead in dev's "
+                    f"printer_map; point QUICKSWAP_TEST_TOOLHEAD at one that is.", pytrace=False)
+    contents = requests.get(f"{api_base_url}/api/get_contents?id={box}", timeout=8).json() or []
+    spool_id = next((it.get("id") for it in contents
+                     if str(it.get("slot", "")).replace('"', '').strip() == slot), None)
+    if spool_id is None:
+        pytest.fail(f"bound_loaded_slot: {box} slot {slot} holds no spool. Put a virtual dev "
+                    f"spool there (it held #123); the Quick-Swap overlays only open on a loaded "
+                    f"slot.", pytrace=False)
+    borrow_box_bindings(box, {slot: toolhead})
+    yield {"box": box, "slot": slot, "toolhead": toolhead, "spool_id": spool_id}
 
 
 @pytest.fixture
@@ -837,9 +1153,12 @@ def scan(api_base_url: str):
     scan input on the dashboard instead of using this fixture.
     """
     def _scan(text: str, source: str = "test") -> dict:
+        # `confirmed_fed_heads` as a current page sends it (Group 40.0c): a slot
+        # scan whose head runs a spool from elsewhere then asks (head_fed)
+        # instead of answering the stale-page "reload" refusal.
         r = requests.post(
             f"{api_base_url}/api/identify_scan",
-            json={"text": text, "source": source},
+            json={"text": text, "source": source, "confirmed_fed_heads": []},
             timeout=10,
         )
         r.raise_for_status()
@@ -1225,10 +1544,12 @@ def _cleanup_orphan_test_records(request):
 # nearest opaque ancestor background (then the <html> background, then a default
 # dark ground), and the ratio is taken against that composite.
 #
-# The FOREGROUND alpha is still ignored, on purpose. Compositing it the same way
-# is two lines, but it would newly flag the OFFLINE chip (rgba(255,255,255,0.45)
-# text: ~4.4:1 over the widget), which is dev's usual printer state, so turning
-# it on is a design decision about that chip, not a guard fix.
+# The FOREGROUND is composited too (Group 45.3): translucent text is painted
+# source-over onto that composited background and scored as painted. Until then
+# it scored at full strength, so white text at 25% on a white 8% tint over black
+# (rgb(79,79,79) on rgb(20,20,20), 2.24:1) read as 18.36:1 and passed. The fix
+# landed with the OFFLINE chip's text alpha raised 0.45 -> 0.50 in global.css
+# (4.41:1 -> 5.28:1 as the guard measures it); the chip stays dimmer than IDLE's 0.6.
 #
 # Only `background-color` is read. Gradients / images (e.g. .fcc-ps-widget's
 # linear-gradient) count as transparent and the walk continues past them.
@@ -1299,14 +1620,17 @@ CONTRAST_GUARD_JS = r"""
         const fg = parseColor(cs.color);
         if (!fg) continue;
         const { color: bg, layers } = effectiveBg(el);
-        const r = ratio(relLum(fg.r, fg.g, fg.b), relLum(bg.r, bg.g, bg.b));
+        // Translucent text is seen as painted over that background.
+        const fgPaint = fg.a >= OPAQUE ? fg : over(fg, bg);
+        const r = ratio(relLum(fgPaint.r, fgPaint.g, fgPaint.b), relLum(bg.r, bg.g, bg.b));
         if (r < minRatio) {
             offenders.push({
                 tag: el.tagName.toLowerCase(),
                 id: el.id || null,
                 className: el.className || null,
                 text: (el.innerText || '').trim().slice(0, 80),
-                fg: `rgb(${Math.round(fg.r)}, ${Math.round(fg.g)}, ${Math.round(fg.b)})`,
+                fg: `rgb(${Math.round(fgPaint.r)}, ${Math.round(fgPaint.g)}, ${Math.round(fgPaint.b)})`,
+                fgAlpha: fg.a >= OPAQUE ? null : fg.a,
                 bg: `rgb(${Math.round(bg.r)}, ${Math.round(bg.g)}, ${Math.round(bg.b)})`,
                 bgLayers: layers,
                 ratio: Number(r.toFixed(2)),
@@ -1347,8 +1671,11 @@ def check_contrast(root_locator, min_ratio: float = 4.5, skip_empty: bool = True
             bg_note = ""
             if o.get('bgLayers'):
                 bg_note = f" (composited from {o['bgLayers']} translucent layer(s))"
+            fg_note = ""
+            if o.get('fgAlpha') is not None:
+                fg_note = f" (text at alpha {o['fgAlpha']}, as painted)"
             msg_lines.append(
-                f"  {label} ratio={o['ratio']}:1  fg={o['fg']}  bg={o['bg']}{bg_note}  text={o['text']!r}"
+                f"  {label} ratio={o['ratio']}:1  fg={o['fg']}{fg_note}  bg={o['bg']}{bg_note}  text={o['text']!r}"
             )
         raise AssertionError("\n".join(msg_lines))
 

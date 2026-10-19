@@ -211,6 +211,29 @@ def api_update_filament():
             f"Filament #{fid} updated OK but activity-log write failed: {e}")
     return jsonify({"success": True, "filament": updated})
 
+def _no_home_unassign_msg(spool_id):
+    """Group 39.6 — the unassign prompt names the spool and where it is: "#88 is
+    loose in CR with no saved home. Unassign it?" for a Room, "… is loaded on
+    XL-3 and has no saved home …" for a toolhead, "… is on PM-DB-1 with no saved
+    home …" otherwise (under Group 41 Q1's option B, a cart, shelf or drawer
+    too). It replaced "Spool is already in a room. Confirm true unassign to
+    nowhere?", which a toolhead spool got as well."""
+    spool = spoolman_api.get_spool(spool_id)
+    loc = ''
+    if isinstance(spool, dict) and spool.get('id') is not None:
+        loc = str(spool.get('location') or '').strip().upper()
+    if not loc:
+        return f"#{spool_id} has no saved home. Unassign it?"
+    rows = {str(r.get('LocationID', '')).strip().upper(): r
+            for r in (locations_db.load_locations_list() or []) if isinstance(r, dict)}
+    row_type = str((rows.get(loc) or {}).get('Type', '')).strip()
+    if row_type == 'Room':
+        return f"#{spool_id} is loose in {loc} with no saved home. Unassign it?"
+    if loc in locations_db.get_active_printer_map() or row_type in locations_db.TOOLHEAD_TYPES:
+        return f"#{spool_id} is loaded on {loc} and has no saved home. Unassign it?"
+    return f"#{spool_id} is on {loc} with no saved home. Unassign it?"
+
+
 @app.route('/api/manage_contents', methods=['POST'])
 def api_manage_contents():
     data = request.json
@@ -231,6 +254,20 @@ def api_manage_contents():
     if action not in ('clear_location', 'add', 'remove', 'force_unassign'):
         return jsonify({"success": False, "msg": f"Unknown action: {action}"})
 
+    # A blank location is not a place to put a spool (found by Group 40's door
+    # review, 2026-10-14). A CMD:SLOT:<n> scan with the Location Manager closed
+    # sent `add` with location "" (closing the manager blanks #manage-loc-id), and
+    # the engine's generic branch wrote the buffered spool to Unassigned with that
+    # slot number while the toast said "Assigned". Unassigning goes through
+    # force_unassign. Refused before any read, like clear_location below.
+    if action == 'add' and not loc_id:
+        state.add_log_entry(
+            "⚠️ Not moved: no location was given (a slot scan needs a box open in the "
+            "Location Manager)", "WARNING", "ffaa00")
+        return jsonify({"success": False, "status": "error",
+                        "msg": "No location given, so nothing was moved. Open a box in the "
+                               "Location Manager first, then scan its slot."})
+
     if action == 'clear_location':
         # A blank location is not the Unassigned pile (2026-09-13). The location
         # matcher treats "" == "" as a direct hit for every spool with no
@@ -246,7 +283,35 @@ def api_manage_contents():
                 "success": False,
                 "msg": "No location given. Open a location in the Location Manager, then use Eject All.",
             })
-        contents = spoolman_api.get_spools_at_location_detailed(loc_id)
+        # Group 41.1 / 41.9 — the views where Eject All is off (a room, a printer
+        # that isn't itself a head, a row FCC only knows from its spools, the
+        # Unassigned and Unknown lists), decided from locations.json and the
+        # printer map alone so the browser can ask first (check_only) and never
+        # show "Nuke all unslotted in …?" only to refuse.
+        rows = locations_db.load_locations_list() or []
+        row = next((r for r in rows if isinstance(r, dict)
+                    and str(r.get('LocationID', '')).strip().upper() == loc_id), None)
+        printer_map = locations_db.get_active_printer_map()
+        reason = logic.eject_all_block_reason(loc_id, row, printer_map)
+        if reason:
+            what = logic._EJECT_ALL_REFUSED.get(reason, reason)
+            state.add_log_entry(f"⚠️ Eject All refused on {loc_id} ({what}): nothing was moved",
+                                "WARNING", "ffaa00")
+            return jsonify({"success": False, "blocked_reason": reason,
+                            "msg": logic.eject_all_block_message(reason, loc_id, rows,
+                                                                 _bulk_moves_enabled())})
+        if data.get('check_only'):
+            return jsonify({"success": True, "check_only": True})
+        # Group 41.2 — read strictly. The fail-open reader answered [] on a
+        # Spoolman timeout, so Eject All "cleared" a location it never read.
+        try:
+            contents = spoolman_api.get_spools_at_location_detailed_strict(loc_id)
+        except Exception as e:
+            state.add_log_entry(
+                f"❌ Eject All on {loc_id}: couldn't read it from Spoolman ({e}), so nothing was ejected",
+                "ERROR", "ff4444")
+            return jsonify({"success": False,
+                            "msg": f"Couldn't read {loc_id} from Spoolman, so nothing was ejected. Try again."})
         # Pre-flight: if the box being cleared is itself a toolhead that's
         # actively printing, bail. Individual per-spool checks are bypassed
         # (we don't want per-spool prompts during a bulk clear).
@@ -260,39 +325,75 @@ def api_manage_contents():
                     "active_print": ap,
                     "msg": f"{ap['printer_name']} is {ap['state']} — clearing this location will disrupt the print.",
                 })
-        ejected_ids = []
-        skipped_slotted = []
+        rows_by_id = {str(r.get('LocationID', '')).strip().upper(): r
+                      for r in rows if isinstance(r, dict)}
+        confirmed = set()
+        for x in (data.get('confirmed_unassign_ids') or []):
+            try:
+                confirmed.add(int(x))
+            except (TypeError, ValueError):
+                pass
+        ejected, needs_unassign, failed = [], [], []
+        skipped_slotted, skipped_loaded = [], []
         for spool in contents:
             # [ALEX FIX] Protect "Ghost" items from being ejected when a box is cleared
             if spool.get('is_ghost'):
                 continue
-
+            sid = spool['id']
+            own = str(spool.get('location') or '').strip().strip('"').upper()
+            # 41.1 — never sweep a spool loaded on a head from any other view
+            # (a prefix collision, a future Type edit): only the head's own view
+            # ejects its resident, behind the print probe above.
+            if own != loc_id and logic._is_single_occupancy(own, printer_map, rows_by_id):
+                skipped_loaded.append(sid)
+                continue
             slot_val = spool.get('slot', '')
-            if not slot_val or slot_val == 'None' or slot_val == '':
-                logic.perform_smart_eject(spool['id'], confirm_active_print=True)
-                ejected_ids.append(spool['id'])
+            # Group 42.2 x 41.2 (Claude's call 19): a single-slot box's spool is
+            # now stored in slot 1, but it is that box's only place, not a slot
+            # chosen among others, so Eject All keeps ejecting it, as before.
+            if (slot_val and slot_val != 'None'
+                    and not locations_db._is_single_slot_dryer_box(rows_by_id.get(own))):
+                # 27.6 — a spool in a real slot is deliberately NOT auto-ejected
+                # by a bulk clear; it is reported, not swept.
+                skipped_slotted.append(sid)
+                continue
+            # 41.2 — branch on what the eject really did (it used to be counted
+            # as ejected whatever it answered).
+            res = logic.perform_smart_eject(sid, confirmed_unassign=(int(sid) in confirmed),
+                                            confirm_active_print=True)
+            if res is True:
+                ejected.append(sid)
+            elif res == "REQUIRE_CONFIRM":
+                needs_unassign.append(sid)
             else:
-                # 27.6 — a spool loaded into a real slot (toolhead / MMU) is
-                # deliberately NOT auto-ejected by a bulk clear (that would
-                # silently unassign a live feed). Collect the survivors so the
-                # caller learns the location isn't actually empty rather than
-                # getting a bare success.
-                skipped_slotted.append(spool['id'])
+                failed.append({"id": sid, "err": logic._eject_refusal_reason(res)})
+        parts = []
+        if ejected:
+            parts.append(f"ejected {len(ejected)}")
+        if needs_unassign:
+            parts.append(f"{len(needs_unassign)} need a decision")
+        if failed:
+            shown = "; ".join(f"#{f['id']}: {f['err']}" for f in failed[:3])
+            parts.append(f"{len(failed)} failed ({shown}{' …' if len(failed) > 3 else ''})")
         if skipped_slotted:
-            _surv = ", ".join(str(i) for i in skipped_slotted)
-            state.add_log_entry(
-                f"⚠️ Cleared {loc_id}: {len(ejected_ids)} unslotted spool(s) "
-                f"ejected; {len(skipped_slotted)} slotted spool(s) left in place "
-                f"(IDs {_surv}) — unload the slot to remove.",
-                "WARNING", "ffaa00")
-            return jsonify({
-                "success": True,
-                "ejected": ejected_ids,
-                "skipped_slotted": skipped_slotted,
-                "msg": f"{len(skipped_slotted)} slotted spool(s) left in place — "
-                       f"unload the slot to remove them.",
-            })
-        return jsonify({"success": True})
+            parts.append(f"{len(skipped_slotted)} in a slot left in place")
+        if skipped_loaded:
+            parts.append(f"{len(skipped_loaded)} loaded on a head left in place")
+        summary = ", ".join(parts) or "nothing to eject"
+        clean = not failed and not needs_unassign
+        quiet = clean and not skipped_slotted and not skipped_loaded
+        state.add_log_entry(f"{'⏏️' if quiet else '⚠️'} Eject All on {loc_id}: {summary}",
+                            "SUCCESS" if quiet else "WARNING", "00ff00" if quiet else "ffaa00")
+        answer = {"success": clean, "ejected": ejected, "needs_unassign": needs_unassign,
+                  "failed": failed, "skipped_slotted": skipped_slotted,
+                  "skipped_loaded": skipped_loaded, "msg": f"Eject All on {loc_id}: {summary}."}
+        if needs_unassign:
+            # Derek's Q1 (2026-09-18): one prompt for the whole batch.
+            answer["unassign_msg"] = (
+                _no_home_unassign_msg(needs_unassign[0]) if len(needs_unassign) == 1 else
+                f"{len(needs_unassign)} spools on {loc_id} have no saved home "
+                f"({', '.join('#' + str(s) for s in needs_unassign)}). Unassign them?")
+        return jsonify(answer)
 
     spool_id = None
     if action == 'add':
@@ -309,23 +410,49 @@ def api_manage_contents():
 
     if action == 'remove':
         is_confirmed = data.get('confirmed', False)
+        # Group 42.5a: the eject fills this with where the spool went and which
+        # single-slot box let go, so the toast can say it ("I had to dig").
+        report = {}
         result = logic.perform_smart_eject(
             spool_id,
             confirmed_unassign=is_confirmed,
             confirm_active_print=confirm_active_print,
+            report=report,
         )
         if isinstance(result, dict) and result.get('status') == 'requires_confirm':
+            # Group 39.6 — one prompt, not two in a row: if the spool would also
+            # need the unassign confirm (no saved home), ask both now. The engine's
+            # answer is unchanged; _eject_destination is the code it runs.
+            unassign_too = False
+            spool = None if is_confirmed else spoolman_api.get_spool(spool_id)
+            if isinstance(spool, dict) and spool.get('id') is not None:
+                dest = logic._eject_destination(spool, locations_db.get_active_printer_map())
+                unassign_too = dest['needs_unassign_confirm']
+            ap = result.get('active_print') or {}
+            if unassign_too:
+                where = str(ap.get('toolhead') or spool.get('location') or '').strip().upper()
+                return jsonify({
+                    "success": False,
+                    "require_confirm": True,
+                    "confirm_types": ["active_print", "unassign"],
+                    "confirm_type": "active_print",
+                    "active_print": result.get('active_print'),
+                    "msg": (f"#{spool_id} is loaded on {where} and has no saved home. Ejecting it leaves "
+                            f"it Unassigned, and FCC stops charging this print to it. Continue?"),
+                })
             return jsonify({
                 "success": False,
                 "require_confirm": True,
+                "confirm_types": ["active_print"],
                 "confirm_type": result.get('confirm_type'),
                 "active_print": result.get('active_print'),
                 "msg": result.get('msg', 'Confirmation required.'),
             })
         if result == "REQUIRE_CONFIRM":
-            return jsonify({"success": False, "require_confirm": True, "msg": "Spool is already in a room. Confirm true unassign to nowhere?"})
+            return jsonify({"success": False, "require_confirm": True, "confirm_types": ["unassign"],
+                            "msg": _no_home_unassign_msg(spool_id)})
         elif result is True:
-            return jsonify({"success": True})
+            return jsonify({"success": True, "spool_id": spool_id, **report})
         else:
             return jsonify({"success": False, "msg": "DB Update Failed"})
     elif action == 'force_unassign':
@@ -343,11 +470,34 @@ def api_manage_contents():
         return jsonify({"success": False, "msg": "DB Update Failed"})
     elif action == 'add':
         origin = data.get('origin', '')
-        return jsonify(logic.perform_smart_move(
+        # Group 39.1: a move confirms by head (`confirmed_toolheads`); the
+        # boolean above stays for remove / force_unassign / clear_location.
+        result = logic.perform_smart_move(
             loc_id, [spool_id],
             target_slot=slot_arg, origin=origin,
-            confirm_active_print=confirm_active_print,
-        ))
+            # Group 40.0c: "Just store it" sends auto_deploy false, and the heads
+            # whose "already running another spool" warning the user saw.
+            auto_deploy=logic.auto_deploy_requested(data),
+            confirm_active_print=logic.confirmed_heads(data),
+            confirmed_fed_heads=logic.confirmed_fed_heads_from(data),
+            # Group 40.0e: the slot an earlier answer picked, kept only while free.
+            picked_slot=data.get('picked_slot'),
+            # Group 40.3: the feed the question named; a re-pointed slot asks again.
+            expected_feed=logic.expected_feed_from(data),
+            # Group 40.3 review: heads the page saw printing still count when the
+            # move's own probe can't reach their printer.
+            seen_printing=logic.seen_printing_from(data),
+            # Swap option C: the grid's Swap files the slot's old spool back where
+            # it sat before and puts it in the scan buffer (`to_buffer`).
+            swap_out=logic.swap_requested(data),
+            # Group 40.5: Force Location's Printer picker names where a spool put
+            # on a head came from ("No box" = '').
+            record_source=logic.record_source_from(data),
+        )
+        stale = logic.stale_fed_refusal(data, result) or logic.stale_confirm_refusal(data, result)
+        if stale:
+            return jsonify({"status": "error", "msg": stale, "stale_page": True})
+        return jsonify(result)
     # 28.C1 — the action set is validated at the top, so control never reaches
     # here; a defensive JSON error keeps Flask from returning None if it ever did.
     return jsonify({"success": False, "msg": f"Unknown action: {action}"})
@@ -359,14 +509,14 @@ def api_bulk_move():
     logic.perform_smart_move call (ONE undo record), applying the pre-flights +
     skip rules the single-move path lacks.
 
-    Body: {source, dest, confirm_active_print?}. On success returns an HONEST
-    per-spool tally: {success, source, dest, moved, moved_ids,
-    skipped:[{id,reason}], failed:[{id,err}]}. A blocking guard returns
-    {success:False, msg} (unknown/self/descendant dest · single-occupancy dest ·
-    capacity overflow) or {require_confirm, confirm_type:'active_print', ...}
-    when the SOURCE location is itself an actively-printing toolhead (single-
-    occupancy dests are rejected up front, so the dest is never a live toolhead;
-    auto_deploy is off so a bulk move never chain-deploys onto one either).
+    Body: {source, dest}. On success returns an HONEST per-spool tally:
+    {success, source, dest, moved, moved_ids, skipped:[{id,reason}],
+    failed:[{id,err}], unverified?}. A blocking guard returns {success:False,
+    msg} (unknown/self/descendant dest · single-occupancy dest · capacity
+    overflow). Nothing here asks about a print: a bulk move never moves a spool
+    loaded on a head (the plan skips them), single-occupancy dests are rejected
+    up front, and auto_deploy is off, so it never chain-deploys onto one either
+    (Group 41.7 removed the source-print confirm, which could never fire).
 
     Thin HTTP shell over logic.plan_bulk_move + logic.execute_bulk_move — the
     SAME core the CMD:BULKMOVE scan session uses (L298 Phase 2), so the two
@@ -374,21 +524,23 @@ def api_bulk_move():
     nothing here hand-rolls a spool write (CLAUDE.md "Spool / Filament write
     surfaces"; the 2026-04-26/27 outage class).
     """
+    # Feature gate (2026-10-13). The same rule as /api/bulk_move_session: a direct
+    # POST must not run a bulk move on an install where the feature is off. This
+    # door was open until Group 47's skeptic found it. There is nothing to cancel
+    # here, so no carve-out.
+    if not _bulk_moves_enabled():
+        return jsonify({"success": False, "msg": _BULK_MOVES_OFF_MSG}), 403
     data = request.json or {}
     source = str(data.get('source', '') or '').strip().upper()
     dest = str(data.get('dest', '') or '').strip().upper()
-    confirm_active_print = bool(data.get('confirm_active_print', False))
 
     if not source or not dest:
         return jsonify({"success": False, "msg": "Both source and dest are required."})
 
-    plan = logic.plan_bulk_move(source, dest, confirm_active_print=confirm_active_print)
+    # Group 41.7: a stale page's confirm_active_print is ignored; a bulk move
+    # has no print confirm (it never moves a loaded spool).
+    plan = logic.plan_bulk_move(source, dest)
 
-    if plan.get('require_confirm'):
-        return jsonify({"success": False, "require_confirm": True,
-                        "confirm_type": plan.get('confirm_type'),
-                        "active_print": plan.get('active_print'),
-                        "msg": plan.get('msg')})
     if not plan.get('ok'):
         # Capacity is the one block that reports the batch context it refused.
         if plan.get('blocked_reason') == 'capacity':
@@ -400,7 +552,7 @@ def api_bulk_move():
                         "moved": 0, "moved_ids": [], "skipped": plan.get('skipped') or [],
                         "failed": [], "msg": plan.get('msg')})
 
-    return jsonify(logic.execute_bulk_move(plan, confirm_active_print=confirm_active_print))
+    return jsonify(logic.execute_bulk_move(plan))
 
 
 def _bulk_moves_enabled():
@@ -419,12 +571,27 @@ def _bulk_moves_enabled():
     return bool(cfg.get('fcc.bulkMove.enabled', False))
 
 
+_BULK_MOVES_OFF_MSG = "Bulk Moves is turned off. Enable it in ⚙️ Settings → Behavior."
+
+
+def _bulk_moves_off_scan_answer():
+    """The scan path's refusal while Bulk Moves is off: an error the scanner UI
+    toasts, plus an Activity Log line (CLAUDE.md: every scan outcome does both).
+    Names CMD:CANCEL when a session is still armed, because that is the one scan
+    an armed session still answers."""
+    msg = _BULK_MOVES_OFF_MSG
+    if state.BULK_MOVE_SESSION.get('active'):
+        msg += " Scan CMD:CANCEL to clear the bulk move that is still armed."
+    state.add_log_entry(f"⚠️ {msg}", "WARNING", "ffaa00")
+    return jsonify({"type": "error", "msg": msg})
+
+
 @app.route('/api/bulk_move_session', methods=['POST'])
 def api_bulk_move_session_action():
     """L298 Phase 2 — mouse/keyboard control of the scan-driven bulk-move
     session (the scanner drives the same session via CMD: codes).
 
-    Body: {action, source?, dest?, confirm_active_print?} where action is:
+    Body: {action, source?, dest?} where action is:
       start   — arm a session; optional `source` pre-seeds it (the Location-
                 Manager "Move all →" button) and jumps to awaiting_dest.
       set_dest— set/re-target the destination and recompute the preview.
@@ -441,11 +608,7 @@ def api_bulk_move_session_action():
     data = request.json or {}
     action = str(data.get('action', '') or '').strip().lower()
     if not _bulk_moves_enabled() and action != 'cancel':
-        return jsonify({
-            "success": False,
-            "msg": "Bulk Moves is turned off. Enable it in ⚙️ Settings → Behavior.",
-        }), 403
-    confirm_active_print = bool(data.get('confirm_active_print', False))
+        return jsonify({"success": False, "msg": _BULK_MOVES_OFF_MSG}), 403
 
     if action == 'start':
         # Mutual exclusion with audit (see logic.can_start_bulk_move).
@@ -484,19 +647,15 @@ def api_bulk_move_session_action():
     if action == 'set_dest':
         # Shared setter: refuses a re-target while a commit holds the lock, so a
         # late destination change can't redirect a batch mid-flight.
-        ok, plan, msg = logic.set_bulk_move_dest(
-            data.get('dest'), confirm_active_print=confirm_active_print)
+        ok, plan, msg = logic.set_bulk_move_dest(data.get('dest'))
         if not ok:
             return jsonify({"success": False, "msg": msg,
                             "session": logic.bulk_move_session_snapshot()})
         return jsonify({"success": bool(plan.get('ok')), "msg": plan.get('msg'),
-                        "require_confirm": bool(plan.get('require_confirm')),
-                        "confirm_type": plan.get('confirm_type'),
-                        "active_print": plan.get('active_print'),
                         "session": logic.bulk_move_session_snapshot()})
 
     if action == 'commit':
-        result = logic.commit_bulk_move_session(confirm_active_print=confirm_active_print)
+        result = logic.commit_bulk_move_session()
         result["session"] = logic.bulk_move_session_snapshot()
         return jsonify(result)
 
@@ -914,6 +1073,10 @@ def api_identify_scan():
     # process_bulk_move_scan. Re-scanning CMD:BULKMOVE mid-session must NOT
     # reset an already-captured source (the audit 27.5 guard, cloned).
     if res and res.get('type') == 'command' and res.get('cmd') == 'bulkmove':
+        # Feature gate (2026-10-13): never arm a session, or refresh a stale
+        # one's idle watchdog, on an install where Bulk Moves is off.
+        if not _bulk_moves_enabled():
+            return _bulk_moves_off_scan_answer()
         if state.BULK_MOVE_SESSION.get('active'):
             state.BULK_MOVE_SESSION['last_activity_ts'] = time.time()
             state.add_log_entry(
@@ -928,6 +1091,13 @@ def api_identify_scan():
         return jsonify({"type": "command", "cmd": "clear"})
 
     if state.BULK_MOVE_SESSION.get('active'):
+        # Feature gate (2026-10-13): with the flag off, an armed session (left
+        # from before the flag was turned off) answers ONLY CMD:CANCEL, so it
+        # can always be cleared. A location scan used to set its destination
+        # and a scanned CMD:DONE (the deck's COMMIT QR) used to commit it.
+        if not _bulk_moves_enabled() and not (
+                res and res.get('type') == 'command' and res.get('cmd') == 'cancel'):
+            return _bulk_moves_off_scan_answer()
         # Refresh the watchdog BEFORE delegating so an explicit CMD:DONE /
         # CMD:CANCEL can't race the idle timeout (same reasoning as audit).
         state.BULK_MOVE_SESSION['last_activity_ts'] = time.time()
@@ -937,6 +1107,9 @@ def api_identify_scan():
                 "type": "error",
                 "msg": bulk_res.get('msg') or "Scan not allowed during a bulk move.",
             })
+        if isinstance(bulk_res, dict) and bulk_res.get('status') == 'warning':
+            # Group 41.5: a commit that couldn't be verified with Spoolman.
+            return jsonify({"type": "command", "cmd": "clear", "warning": bulk_res.get('msg')})
         return jsonify({"type": "command", "cmd": "clear"})
 
     if not res: return jsonify({"type": "unknown"})
@@ -959,8 +1132,17 @@ def api_identify_scan():
         })
 
     if res['type'] == 'location':
-        lid = res['id']; 
-        items = spoolman_api.get_spools_at_location_detailed(lid)
+        lid = res['id']
+        # Read strictly (Group 42 review): a Spoolman blip answered "0 items", and
+        # eject mode then called a loaded toolhead empty and pointed at an Unbind.
+        # A failed read says so (`contents_error`) instead of looking empty.
+        try:
+            items = spoolman_api.get_spools_at_location_detailed_strict(lid)
+        except Exception as e:
+            why = f"couldn't read {lid} from Spoolman ({e})"
+            state.add_log_entry(f"⚠️ 🔎 {lid}: {why}", "WARNING", "ffaa00")
+            return jsonify({"type": "location", "id": lid, "display": f"LOC: {lid}",
+                            "contents": [], "contents_error": why})
         state.add_log_entry(f"🔎 {lid}: {len(items)} item(s)")
         return jsonify({"type": "location", "id": lid, "display": f"LOC: {lid}", "contents": items})
         
@@ -1152,7 +1334,30 @@ def api_identify_scan():
         # That path emits its own log entry on success, so we don't add one
         # here — otherwise every pickup would generate a misleading warning.
         buffer = getattr(state, 'GLOBAL_BUFFER', []) or []
-        first_spool = next((item for item in buffer if isinstance(item, dict) and item.get('id')), None)
+        # Group 46 review — a caller that NAMED the spool (the Quick-Swap deposit
+        # confirm, `spool_id`) gets exactly that spool. GLOBAL_BUFFER is only the
+        # replica the client persists asynchronously, so its first entry can be a
+        # different spool by the time the user presses Yes. A scan names no spool
+        # and keeps the buffer's first.
+        named = request.json.get('spool_id')
+        if named not in (None, ''):
+            try:
+                named_id = int(str(named).replace('ID:', '').strip())
+            except (TypeError, ValueError):
+                named_id = 0
+            if named_id <= 0:
+                state.add_log_entry(
+                    f"❌ Load into <b>{target}:SLOT:{slot}</b> refused — bad spool id {named!r}",
+                    "ERROR", "ff4444")
+                return jsonify({
+                    "type": "assignment",
+                    "action": "assignment_failed",
+                    "location": target, "slot": slot,
+                    "msg": f"bad spool id {named!r}",
+                }), 400
+            first_spool = {"id": named_id}
+        else:
+            first_spool = next((item for item in buffer if isinstance(item, dict) and item.get('id')), None)
         if not first_spool:
             return jsonify({
                 "type": "assignment",
@@ -1161,28 +1366,61 @@ def api_identify_scan():
             }), 200
 
         spool_id = int(first_spool['id'])
-        # Slot-QR scans pass the caller's confirm-active-print flag through
-        # transparently. Frontend slot-QR paths pre-probe too, but the
-        # backend check is the authoritative safety net — if the printer
-        # went active between the probe and the scan, we still bail.
-        confirm_active_print = bool(request.json.get('confirm_active_print', False))
+        # Slot-QR scans pass the caller's confirm through: the heads whose
+        # warning the user saw (Group 39.1). Frontend slot-QR paths pre-probe
+        # too, but the backend check is the authoritative safety net — if the
+        # printer went active between the probe and the scan, we still bail.
         move_result = logic.perform_smart_move(
             target, [spool_id], target_slot=slot, origin='slot_qr_scan',
-            confirm_active_print=confirm_active_print,
+            # Group 40.0c: "Just store it" replays the scan with auto_deploy
+            # false, and "Load it instead" with the head in confirmed_fed_heads.
+            auto_deploy=logic.auto_deploy_requested(request.json),
+            confirm_active_print=logic.confirmed_heads(request.json),
+            confirmed_fed_heads=logic.confirmed_fed_heads_from(request.json),
+            # Group 40.3: the feed the question named (a replay, or a deposit tile
+            # that showed it); a blind scan sends none, so it never asks this.
+            expected_feed=logic.expected_feed_from(request.json),
+            # Group 40.3 review: a deposit that saw the printer printing leaves the
+            # question to this move, so a probe failing open still asks.
+            seen_printing=logic.seen_printing_from(request.json),
         )
         # If perform_smart_move bailed on an active-print check, surface the
         # confirmation prompt to the client. Frontend slot-QR path (scan
-        # handler) renders this as a modal and retries on confirm.
-        if isinstance(move_result, dict) and move_result.get('status') == 'requires_confirm':
+        # handler) renders this as a modal and retries on confirm, sending
+        # back the heads in `active_prints`.
+        stale = (logic.stale_fed_refusal(request.json, move_result)
+                 or logic.stale_confirm_refusal(request.json, move_result))
+        if stale:
             return jsonify({
+                "type": "assignment",
+                "action": "assignment_failed",
+                "location": target, "slot": slot,
+                "spool": spool_id,
+                "msg": stale,
+                "stale_page": True,
+            }), 200
+        if isinstance(move_result, dict) and move_result.get('status') == 'requires_confirm':
+            state.add_log_entry(
+                f"⚠️ Spool #{spool_id} → <b>{target}:SLOT:{slot}</b> waits for a confirm: "
+                f"{move_result.get('msg')}", "WARNING", "ffaa00")
+            # Every key of the engine's question (Group 40.3): a fixed list here
+            # silently dropped what a replay needs (`feed`, `slot_picked`,
+            # `target`, `can_load`, `feed_changed`) on Derek's own door. The
+            # door's own keys (where the scan pointed, the spool it named) win.
+            answer = {k: v for k, v in move_result.items() if k != 'status'}
+            answer.update({
                 "type": "assignment",
                 "action": "assignment_requires_confirm",
                 "location": target, "slot": slot,
-                "confirm_type": move_result.get('confirm_type'),
-                "active_print": move_result.get('active_print'),
-                "msg": move_result.get('msg'),
+                "active_prints": move_result.get('active_prints') or [],
+                # Group 40.0c: the head that runs a spool from elsewhere, and
+                # whether "Just store it" is an answer.
+                "fed_heads": move_result.get('fed_heads') or [],
+                "can_store": bool(move_result.get('can_store')),
+                "spools": move_result.get('spools') or [spool_id],
                 "moved": spool_id,
-            }), 200
+            })
+            return jsonify(answer), 200
         # 2026-09-12: a rejected write used to fall through to the success path
         # below, which logged "✅", dropped the spool from the buffer and
         # answered assignment_done although the spool never moved.
@@ -1207,12 +1445,20 @@ def api_identify_scan():
         auto_deployed_to = (move_result or {}).get('auto_deployed_to')
         not_deployed = ((move_result or {}).get('auto_deploy_skipped') or {}).get(str(spool_id))
 
-        # Remove the spool from the backend's buffer replica.
+        # Remove the spool from the backend's buffer replica: the replica as it
+        # is NOW, after the move. A same-slot swap (Group 40; Derek, 2026-10-15)
+        # put the slot's old spool at its end, and the snapshot taken before the
+        # move would drop it again.
+        to_buffer = [i for i in ((move_result or {}).get('to_buffer') or []) if isinstance(i, dict)]
         state.GLOBAL_BUFFER = [
-            item for item in buffer
+            item for item in (getattr(state, 'GLOBAL_BUFFER', []) or [])
             if not (isinstance(item, dict) and int(item.get('id') or 0) == spool_id)
         ]
-        remaining = len(state.GLOBAL_BUFFER)
+        # "Still in buffer" counts the spools the user buffered, not the one the
+        # swap just handed back (its own toast says so).
+        swapped = {str(i.get('id')) for i in to_buffer}
+        remaining = len([item for item in state.GLOBAL_BUFFER
+                         if not (isinstance(item, dict) and str(item.get('id')) in swapped)])
         action = 'assignment_partial' if remaining > 0 else 'assignment_done'
 
         suffix = f" ({remaining} still in buffer)" if remaining else ""
@@ -1234,6 +1480,9 @@ def api_identify_scan():
             "not_deployed": not_deployed,
             "not_deployed_target": (move_result or {}).get('auto_deploy_target') if not_deployed else None,
             "remaining_buffer": remaining,
+            # Group 40, the same-slot swap: the slot's old spool, now in the scan
+            # buffer (Unassigned); the page adds it to its own buffer.
+            "to_buffer": to_buffer,
             "smart_move": move_result,
         }), 200
 

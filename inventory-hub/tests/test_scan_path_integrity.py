@@ -43,14 +43,26 @@ def _read(p: Path) -> str:
 ENTER_OWNERSHIP_SITES = [
     # (file, label, minimum expected guard count)
     # The count matters: a bare "is the string present" check is VACUOUS for a
-    # file that uses isScanInFlight for something ELSE. inv_cmd.js has two
-    # independent uses — the Shift+B bulk-move closure AND the confirm-overlay
-    # Enter guard — so deleting the safety-critical one would still leave the
-    # string present and the test green.
+    # file that uses isScanInFlight for something ELSE. It counts guard LINES:
+    # one guard reads `window.isScanInFlight && window.isScanInFlight()`, so
+    # counting occurrences let inv_cmd.js's Shift+B line alone satisfy a
+    # minimum of 2 (found 2026-10-13).
+    # The Location Manager assign and scan-assign confirms render through the
+    # shared window.confirmActivePrint since Group 39.4; its guard is pinned by
+    # test_the_shared_active_print_confirm_owns_the_enter_guard below.
     (JS / "inv_quickswap.js", "Quick-Swap confirm overlay + slot grid", 2),
-    (JS / "inv_cmd.js", "Shift+B closure + active-print scan confirm overlay", 2),
-    (JS / "inv_loc_mgr.js", "active-print assign confirm overlay", 1),
+    (JS / "inv_cmd.js", "Shift+B closure", 1),
 ]
+
+
+def _guard_lines(src: str) -> int:
+    return sum(1 for line in src.splitlines() if "isScanInFlight" in line and "//" not in line.split("isScanInFlight")[0])
+
+
+def _function_body(src: str, header: str) -> str:
+    src = src.replace("\r\n", "\n")
+    start = src.index(header)
+    return src[start:src.index("\n};", start)]
 
 
 @pytest.mark.parametrize("path,label,minimum", ENTER_OWNERSHIP_SITES,
@@ -64,13 +76,28 @@ def test_enter_handlers_yield_to_an_in_flight_scan(path: Path, label: str, minim
     toolhead.
     """
     src = _read(path)
-    found = src.count("isScanInFlight")
+    found = _guard_lines(src)
     assert found >= minimum, (
         f"{path.name} ({label}) has {found} isScanInFlight guard(s), expected "
         f">= {minimum}. One of its scan-in-flight guards was removed — if that "
         "is the confirm-overlay one, scanning 'Scan to Cancel' performs the "
         "CONFIRM and yanks a spool off a live toolhead."
     )
+
+
+def test_the_shared_active_print_confirm_owns_the_enter_guard():
+    """Group 39.4: the Location Manager assign confirm and the scan-assign
+    confirm render through window.confirmActivePrint (inv_core.js), which owns
+    their Enter guard now. Pin that the shared one has it, and that both overlays
+    still route through it: a re-inlined copy would need its own guard again."""
+    core = _function_body(_read(JS / "inv_core.js"), "window.confirmActivePrint = ")
+    assert "isScanInFlight" in core, "window.confirmActivePrint lost its scan-in-flight Enter guard"
+    for path, fn in ((JS / "inv_loc_mgr.js", "const _confirmActivePrintAssign = "),
+                     (JS / "inv_cmd.js", "const _confirmActivePrintScan = ")):
+        body = _function_body(_read(path), fn)
+        assert "window.confirmActivePrint(" in body, (
+            f"{path.name}: {fn.strip()} no longer routes through window.confirmActivePrint; "
+            "a copy of the overlay needs its own isScanInFlight Enter guard")
 
 
 def test_quickswap_guards_both_its_enter_handlers():

@@ -27,7 +27,10 @@ def _patch(monkeypatch, *, spools_at, spool_extras, active=None):
     monkeypatch.setattr(logic.locations_db, "get_active_printer_map",
                         lambda loc_list=None: {"XL-3": {"printer_name": "🦝 XL", "position": 2}})
     monkeypatch.setattr(logic, "_active_print_info_for_location", lambda loc, pm=None: active)
-    monkeypatch.setattr(logic.spoolman_api, "get_spools_at_location_detailed", lambda loc: list(spools_at))
+    # Group 41 review: the cascade reads strictly (a Spoolman blip used to read
+    # as "nothing on this head" and the head was deleted anyway).
+    monkeypatch.setattr(logic.spoolman_api, "get_spools_at_location_detailed_strict",
+                        lambda loc: list(spools_at))
     monkeypatch.setattr(logic.spoolman_api, "get_spool",
                         lambda sid: {"id": sid, "extra": dict(spool_extras.get(sid, {}))})
     updates = []

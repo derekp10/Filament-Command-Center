@@ -5,6 +5,9 @@ document.addEventListener('inventory:buffer-updated', () => {
     const modal = document.getElementById('manageModal');
     if (modal && modal.classList.contains('show')) {
         renderManagerNav();
+        // Group 46.1 — redraw the DEPOSIT card now, in step with the carousel.
+        // Waiting for refreshManageView's fetch left it naming the previous spool.
+        _syncDepositCard();
         // Refresh to update Deposit button visibility
         const id = document.getElementById('manage-loc-id').value;
         if (id) refreshManageView(id);
@@ -147,6 +150,22 @@ window.openManage = (id) => {
     const dismissAtStart = window._fccManageDismissSeq;
 
     const loc = state.allLocations.find(l => l.LocationID == id);
+    if (!loc && !state.locationsLoaded) {
+        // Group 45.8: the first /api/locations load hasn't landed yet (it takes
+        // a second or two; the Printer Status widget can be clicked sooner).
+        // Park the open: _renderLocationsPayload (inv_core.js) opens it when the
+        // load lands. The latest click wins. Bounded, so a load that never comes
+        // still says so instead of spinning.
+        window._fccPendingManageId = id;
+        setTimeout(() => {
+            if (window._fccPendingManageId !== id) return;
+            window._fccPendingManageId = null;
+            setProcessing(false);
+            console.warn(`openManage: locations never loaded, so "${id}" could not open`);
+            showToast(`Couldn't open ${id}: the location list didn't load. Try again.`, 'warning', 7000);
+        }, 10000);
+        return;   // the processing spinner stays up while the open is parked
+    }
     if (!loc) {
         // A silent bail here is exactly how the dashboard "clicking a Printer
         // Status badge does nothing" regression hid: allLocations was empty on
@@ -418,24 +437,18 @@ const fetchPrinterMap = () => {
 //   window.FCC_DEBUG_ACTIVE_PRINT = true
 // in the DevTools console and rerun the swap. Leaves production quiet.
 window.FCC_DEBUG_ACTIVE_PRINT = window.FCC_DEBUG_ACTIVE_PRINT || false;
+// Group 39.3: a wrapper over window.fetchPrinterStateDetailed (inv_core.js),
+// kept because its null means both "idle" and "couldn't ask", which the banner
+// logic of its callers relies on. New code reads the detailed answer.
 window.fetchPrinterStateForToolhead = (toolheadLocId) => {
     const dbg = (...args) => { if (window.FCC_DEBUG_ACTIVE_PRINT) console.log('[active-print probe]', ...args); };
     if (!toolheadLocId) { dbg('no toolhead id, skipping'); return Promise.resolve(null); }
     dbg('querying', toolheadLocId);
-    return fetch(`/api/printer_state/${encodeURIComponent(toolheadLocId)}`)
-        .then(r => r.ok ? r.json() : null)
-        .then(d => {
-            dbg('response for', toolheadLocId, d);
-            if (!d) return null;
-            if (!d.known) { dbg('backend says unknown:', d.reason); return null; }
-            if (!d.is_active) { dbg('printer is idle:', d.state); return null; }
-            dbg('ACTIVE:', d.printer_name, d.state);
-            return {
-                state: d.state || 'ACTIVE',
-                printer_name: d.printer_name || toolheadLocId,
-            };
-        })
-        .catch((e) => { dbg('probe failed', e); return null; });
+    return window.fetchPrinterStateDetailed(toolheadLocId).then(d => {
+        dbg('response for', toolheadLocId, d);
+        if (!d || !d.active) return null;
+        return { state: d.state || 'ACTIVE', printer_name: d.printer_name || toolheadLocId };
+    });
 };
 
 // Render a searchable combobox backed by a native <select> so existing
@@ -824,6 +837,11 @@ const _ensureManageQRsFilled = () => {
 window._ensureManageQRsFilled = _ensureManageQRsFilled;
 
 const _renderManagePayload = (id, d) => {
+    // A late pulse or refreshManageView fetch for the PREVIOUS location must not
+    // paint over the one now open: its DEPOSIT card would deposit into the old
+    // location (Group 46 review). The pulse upper-cases the id, hence the compare.
+    const openId = (document.getElementById('manage-loc-id') || {}).value || '';
+    if (String(id).toUpperCase() !== String(openId).toUpperCase()) return false;
     const loc = state.allLocations.find(l => l.LocationID == id);
     if (!loc) return false;
     // --- NO WIGGLE CHECK ---
@@ -1000,38 +1018,129 @@ const renderGrid = (data, max) => {
     else un.style.display = 'none';
 };
 
+// --- GREEN ZONE: DEPOSIT CARD ---
+// Group 46.1 — the card must always act on the spool in the centre of the
+// carousel. It used to capture state.heldSpools[0] when renderList built it,
+// and was rebuilt only when refreshManageView's /api/get_contents fetch
+// landed, so prev/next followed by a quick click deposited the PREVIOUS spool
+// (Derek, prod 2026-10-08). Its click now resolves the spool when it happens,
+// and the buffer-updated listener repaints it synchronously (_syncDepositCard).
+// Its QR is the location's (LOC:<id>) and never depends on the spool.
+const _paintDepositCard = (card, item) => {
+    const styles = getFilamentStyle(item.color, item.color_direction || 'longitudinal');
+    card.style.background = styles.frame;
+    const inner = card.querySelector('.list-inner-gold');
+    if (inner) inner.style.background = styles.inner;
+    const label = card.querySelector('.js-deposit-spool');
+    if (label) label.textContent = `#${item.id} - ${item.display}`;
+};
+
+const _buildDepositCard = (locId) => {
+    const depositCard = document.createElement('div');
+    depositCard.id = 'manage-deposit-card';
+    depositCard.className = "cham-card manage-list-item";
+    depositCard.style.cssText = `border: 2px dashed #fff; cursor: pointer; margin-bottom: 15px;`;
+    depositCard.onclick = () => {
+        const top = state.heldSpools[0];
+        if (!top) { showToast('Buffer is empty — scan a spool first', 'warning', 3500); return; }
+        // Group 40.5 (and D2.4): the card's QR is this location's label, so a
+        // click does what scanning it does: a multi-slot box, or a Printer row
+        // that isn't its own toolhead (XL, RCOI), opens its picker for this spool
+        // (a slot; a head or a Printer Pool slot). It used to file the spool on
+        // the printer row itself, which the engine refuses since 40.0a.
+        const row = (state.allLocations || []).find(l => String(l.LocationID) === String(locId));
+        if (window._placeBufferWithPicker && window.openSlotPicker && row
+                && ((window.isMultiSlotBox && window.isMultiSlotBox(row))
+                    || (window.isPrinterRowNotHead && window.isPrinterRowNotHead(row)))) {
+            window._placeBufferWithPicker(locId, [top.id]);
+            return;
+        }
+        doAssign(locId, top.id, null);
+    };
+
+    depositCard.innerHTML = `
+        <div class="list-inner-gold" style="justify-content: center; align-items: center; flex-direction: column; padding: 15px;">
+            <div class="text-pop" style="font-size: 1.5rem; font-weight: 900; color: #fff; text-transform: uppercase;">
+                ⬇️ DEPOSIT HERE
+            </div>
+            <div id="qr-deposit-trigger" class="bg-white p-2 rounded mb-2 mt-2" style="box-shadow: 0 4px 10px rgba(0,0,0,0.5);"></div>
+
+            <div class="text-pop-light js-deposit-spool" style="color: #fff; margin-top: 5px; font-weight: bold;"></div>
+        </div>`;
+    _paintDepositCard(depositCard, state.heldSpools[0]);
+    return depositCard;
+};
+
+// Repaint, add or remove the DEPOSIT card from the live buffer, without
+// waiting for /api/get_contents. List view only: the grid has no deposit card,
+// and its slots resolve the buffered spool when tapped (handleSlotInteraction).
+const _syncDepositCard = () => {
+    const listView = document.getElementById('manage-list-view');
+    const list = document.getElementById('manage-contents-list');
+    if (!list || !listView || listView.style.display === 'none') return;
+    const card = document.getElementById('manage-deposit-card');
+    const emptyMsg = document.getElementById('manage-empty-msg');
+    const item = state.heldSpools[0];
+    if (item && card) {
+        _paintDepositCard(card, item);
+    } else if (item) {
+        const locId = document.getElementById('manage-loc-id').value;
+        if (!locId) return;
+        list.insertBefore(_buildDepositCard(locId), list.firstChild);
+        if (emptyMsg) emptyMsg.style.display = 'none';
+        const safeId = String(locId).replace(/['"]/g, '');
+        requestAnimationFrame(() => generateSafeQR('qr-deposit-trigger', 'LOC:' + safeId, 85));
+    } else if (card) {
+        card.remove();
+        if (emptyMsg && list.children.length === 0) emptyMsg.style.display = 'block';
+    }
+};
+
 // --- GREEN ZONE: LIST RENDERER ---
+// Group 42.4 — a toolhead holds one spool (Derek: "If looking at the toolhead, I
+// should only ever see one in there"). When FCC's records put two loaded spools
+// on a head, its view says so above the cards, in the Printer Status chip's
+// words (Claude's call 23).
+const _isOneSpoolHeadRow = (row, lid) => {
+    if (!row) return false;
+    if (['Tool Head', 'MMU Slot', 'No MMU Direct Load'].includes(row.Type)) return true;
+    // A dual-role printer that is its own (only) head, the CORE1 shape (Group 42
+    // review: its tile said "⚠️ 2 spools" while its view showed no banner).
+    if (row.Type !== 'Printer') return false;
+    const heads = (row.toolheads || []).map(t => String((t && t.location_id) || '').toUpperCase()).filter(Boolean);
+    return heads.length > 0 && heads.every(h => h === lid);
+};
+const _doubledHeadBanner = (data, locId) => {
+    const lid = String(locId || '').toUpperCase();
+    const row = (state.allLocations || []).find(l => String(l.LocationID || '').toUpperCase() === lid);
+    if (!_isOneSpoolHeadRow(row, lid)) return null;
+    const loaded = (data || []).filter(s => !s.is_ghost
+        && String(s.location || '').replace(/"/g, '').trim().toUpperCase() === lid);
+    if (loaded.length < 2) return null;
+    const ids = loaded.map(s => `#${s.id}`);
+    const who = ids.length > 2 ? `${ids.slice(0, -1).join(', ')} and ${ids[ids.length - 1]}` : ids.join(' and ');
+    const banner = document.createElement('div');
+    banner.className = 'fcc-doubled-head-banner';
+    banner.setAttribute('role', 'alert');
+    banner.style.cssText = 'background:#2b2200; color:#ffd54a; border:1px solid #ffd54a; border-radius:6px;'
+        + ' padding:8px 12px; margin-bottom:8px; font-weight:bold;';
+    banner.textContent = `⚠️ ${lid} holds ${who} — a toolhead holds one spool. Open ${lid} and eject the one that isn't loaded.`;
+    return banner;
+};
+window._doubledHeadBanner = _doubledHeadBanner;   // for the node tests
+
 const renderList = (data, locId) => {
     const list = document.getElementById('manage-contents-list');
     const emptyMsg = document.getElementById('manage-empty-msg');
 
     list.innerHTML = "";
+    const doubled = _doubledHeadBanner(data, locId);
+    if (doubled) list.appendChild(doubled);
 
     // 1. DEPOSIT CARD
     if (state.heldSpools.length > 0) {
-        const item = state.heldSpools[0];
-        const styles = getFilamentStyle(item.color, item.color_direction || 'longitudinal');
-
         if (emptyMsg) emptyMsg.style.display = 'none';
-
-        const depositCard = document.createElement('div');
-        depositCard.className = "cham-card manage-list-item";
-        depositCard.style.cssText = `background:${styles.frame}; border: 2px dashed #fff; cursor: pointer; margin-bottom: 15px;`;
-        depositCard.onclick = () => doAssign(locId, item.id, null);
-
-        depositCard.innerHTML = `
-            <div class="list-inner-gold" style="background: ${styles.inner}; justify-content: center; align-items: center; flex-direction: column; padding: 15px;">
-                <div class="text-pop" style="font-size: 1.5rem; font-weight: 900; color: #fff; text-transform: uppercase;">
-                    ⬇️ DEPOSIT HERE
-                </div>
-                <div id="qr-deposit-trigger" class="bg-white p-2 rounded mb-2 mt-2" style="box-shadow: 0 4px 10px rgba(0,0,0,0.5);"></div>
-                
-                <div class="text-pop-light" style="color: #fff; margin-top: 5px; font-weight: bold;">
-                    #${item.id} - ${item.display}
-                </div>
-            </div>`;
-
-        list.appendChild(depositCard);
+        list.appendChild(_buildDepositCard(locId));
     }
     else {
         if (data.length === 0) {
@@ -1206,6 +1315,20 @@ const renderBadgeQRs = (s, i) => {
 // --- INTERACTION ---
 window.handleSlotInteraction = (slot) => {
     const locId = document.getElementById('manage-loc-id').value, item = state.currentGrid[slot];
+    // A slot needs a box: CMD:SLOT:<n> with the Location Manager closed used to
+    // act on the last grid with a blank location (closing the manager blanks
+    // #manage-loc-id but keeps state.currentGrid), which moved the buffered spool
+    // to Unassigned and toasted "Assigned". Like CMD:TRASH and CMD:EJECTALL, it
+    // needs the manager open on a location (found by Group 40's door review).
+    const manageModal = document.getElementById('manageModal');
+    if (!String(locId || '').trim() || !(manageModal && manageModal.classList.contains('show'))) {
+        showToast(`Slot ${slot} scan ignored: open a box in the Location Manager first, then scan its slot`,
+            'warning', 7000);
+        if (window.logClientEvent) window.logClientEvent(
+            `⚠️ CMD:SLOT:${slot} ignored: no box is open in the Location Manager, so nothing was moved`,
+            'WARNING');
+        return;
+    }
     if (state.heldSpools.length > 0) {
         const newId = state.heldSpools[0].id;
         // IMPORTANT: don't shift the buffer here. _doAssignFinalize's success
@@ -1214,11 +1337,61 @@ window.handleSlotInteraction = (slot) => {
         // was cancelled or rejected (e.g. backend requires_confirm flow,
         // active-print bail, network error, swap-cancel-swap-continue race).
         if (item) {
-            promptAction("Slot Occupied", `Swap/Overwrite Slot ${slot}?`, [
+            // Name the spool this writes: the prompt can outlive a buffer change
+            // (a queued CMD:NEXT scan, a re-sync), and the captured id still wins.
+            const esc = window.escHtml || ((s) => s);
+            const top = state.heldSpools[0];
+            const what = `#${top.id}${top.display ? ` (${esc(String(top.display))})` : ''}`;
+            const old = `#${esc(String(item.id))}`;
+            // Word the choice from the slot's spool, as the slot picker does
+            // (Group 40 review, BD-4). A DEPLOYED card's spool loaded on the head
+            // the slot feeds comes off into the buffer either way (the same-slot
+            // swap); one loaded on any other head is refused by the server, so
+            // nothing is offered; a stale record isn't moved.
+            const headTypes = ['Tool Head', 'MMU Slot', 'No MMU Direct Load', 'Printer'];
+            const rowOf = (id) => (state.allLocations || []).find(l => String(l.LocationID || '').toUpperCase() === id);
+            const boxRow = rowOf(String(locId).toUpperCase()) || {};
+            const feed = String((((boxRow.extra || {}).slot_targets) || {})[String(slot)] || '').trim().toUpperCase();
+            const on = String(item.deployed_to || '').trim().toUpperCase();
+            const onHead = !!(item.is_ghost && on && headTypes.includes((rowOf(on) || {}).Type));
+            if (onHead && on === feed) {
+                promptAction("Slot Occupied", `Put ${what} into Slot ${slot}?<br>`
+                    + `<small>Slot ${slot}'s spool ${old} is loaded on ${esc(on)}: it comes off into your scan buffer, `
+                    + `and ${what} goes in slot ${slot} and onto ${esc(on)}.</small>`, [
+                    { label: "Swap it out", action: () => { doAssign(locId, newId, slot, true); } },
+                    { label: "Cancel", action: () => { closeModal('actionModal'); } }
+                ]);
+                return;
+            }
+            if (onHead) {
+                promptAction("Slot Occupied", `Slot ${slot}'s spool ${old} is loaded on ${esc(on)}`
+                    + `${feed && !feed.includes(':') ? `, while the slot feeds ${esc(feed)}` : ''}.<br>`
+                    + `<small>Take ${old} off ${esc(on)} first; nothing was moved.</small>`, [
+                    { label: "OK", action: () => { closeModal('actionModal'); } }
+                ]);
+                return;
+            }
+            if (item.is_ghost) {
+                promptAction("Slot Occupied", `Put ${what} into Slot ${slot}?<br>`
+                    + `<small>${old}'s record still names slot ${slot}, though it is `
+                    + `${on ? `on ${esc(on)}` : 'in Unassigned'}; ${old} isn't moved.</small>`, [
+                    { label: `Put it in slot ${slot}`, action: () => { doAssign(locId, newId, slot, true); } },
+                    { label: "Cancel", action: () => { closeModal('actionModal'); } }
+                ]);
+                return;
+            }
+            // Swap option C (Derek, 2026-10-15): Swap hands the slot's old spool to
+            // your buffer AND files it back where it sat before this slot, when
+            // FCC has that record (a spool slotted before Swap option C has none).
+            promptAction("Slot Occupied", `Put ${what} into Slot ${slot}: swap or overwrite?<br>`
+                + `<small>Swap: ${old} goes to your buffer, filed back where it sat before this slot `
+                + `(Unassigned if FCC has no record of that). `
+                + `Overwrite: ${old} stays in ${esc(String(locId))} without a slot.</small>`, [
                 {
                     label: "Swap", action: () => {
-                        // Pass the displaced item so doAssign can push it
-                        // into the buffer ONLY on success — never before.
+                        // The server files the slot's old spool back where it sat
+                        // before and names it in `to_buffer` once the move lands
+                        // (never before), which _doAssignFinalize adds to the buffer.
                         doAssign(locId, newId, slot, true, {
                             swapDisplaced: { id: item.id, display: item.display, color: item.color },
                         });
@@ -1238,10 +1411,28 @@ window.handleSlotInteraction = (slot) => {
         // Filled slot + empty buffer: direct Pick Up. Eject/Details/Edit/Queue
         // remain on the slot card's explicit action buttons, so this modal is
         // redundant — it used to be a 3-option chooser (Pick/Eject/Details).
-        state.heldSpools.unshift({ id: item.id, display: item.display, color: item.color });
+        // Where it was (Group 39 review, engine-6): doAssign needs to know when a
+        // spool is leaving a printer head. A ghost's own record is its head.
+        state.heldSpools.unshift({ id: item.id, display: item.display, color: item.color,
+                                   location: item.location || locId, is_ghost: !!item.is_ghost,
+                                   deployed_to: item.deployed_to || null });
         if (window.renderBuffer) window.renderBuffer();
         renderManagerNav();
     }
+};
+
+// The printer head a buffered spool's own record sits on, from what the buffer
+// knows (a scan and the Location Manager's pick-up carry location / is_ghost /
+// deployed_to), or null.
+const _ownHeadOf = (spool) => {
+    const sid = String(spool).replace('ID:', '');
+    const held = (state.heldSpools || []).find(s => String(s.id) === sid);
+    if (!held) return null;
+    const own = String((held.is_ghost ? held.deployed_to : held.location) || '').toUpperCase();
+    if (!own) return null;
+    const row = (state.allLocations || []).find(l => String(l.LocationID || '').toUpperCase() === own);
+    const headTypes = ['Tool Head', 'MMU Slot', 'No MMU Direct Load', 'Printer'];
+    return row && headTypes.includes(row.Type) ? own : null;
 };
 
 window.doAssign = (loc, spool, slot, isFromBufferFlag = null, options = {}) => {
@@ -1264,13 +1455,28 @@ window.doAssign = (loc, spool, slot, isFromBufferFlag = null, options = {}) => {
         locObjCheck.Type === 'No MMU Direct Load' ||
         locObjCheck.Type === 'Printer'
     );
-    if (isToolheadTarget && window.fetchPrinterStateForToolhead) {
-        return window.fetchPrinterStateForToolhead(loc).then(stateInfo => {
+    // Group 39 review (engine-6): a spool LEAVING a printer head gets ONE answer
+    // from the server, naming both heads in Derek's D6 wording. Confirming the
+    // destination here first made a head -> head move on one printer ask twice
+    // (this prompt, then the server's about the head it leaves).
+    const leaving = isToolheadTarget ? _ownHeadOf(spool) : null;
+    if (leaving && leaving !== String(loc).toUpperCase()) {
+        setProcessing(true, { label: window.printerLabelForTarget ? window.printerLabelForTarget(loc) : null });
+        return _doAssignFinalize(loc, spool, slot, isFromBufferFlag, [], options);
+    }
+    if (isToolheadTarget && window.checkPrinterForHead) {
+        // Group 39.3: the shared printer check: the "⏳ Checking XL…" pill and a
+        // timeout race (this fetch used to wait on the server with no cap).
+        return window.checkPrinterForHead(loc).then(detail => {
+            const stateInfo = detail && detail.active
+                ? { state: detail.state || 'ACTIVE', printer_name: detail.printer_name || loc }
+                : null;
             if (!stateInfo) {
                 // Unknown state → proceed normally.
-                return _doAssignFinalize(loc, spool, slot, isFromBufferFlag, false, options);
+                return _doAssignFinalize(loc, spool, slot, isFromBufferFlag, [], options);
             }
-            // Active print → inline confirm overlay (no nested Swal).
+            // Active print → inline confirm overlay (no nested Swal). Its Yes
+            // confirms this head, the one whose warning it shows (Group 39.1).
             setProcessing(false);
             return _confirmActivePrintAssign({
                 loc,
@@ -1279,11 +1485,12 @@ window.doAssign = (loc, spool, slot, isFromBufferFlag = null, options = {}) => {
                 isFromBufferFlag,
                 stateInfo,
                 options,
+                heads: [String(loc).toUpperCase()],
             });
         });
     }
 
-    return _doAssignFinalize(loc, spool, slot, isFromBufferFlag, false, options);
+    return _doAssignFinalize(loc, spool, slot, isFromBufferFlag, [], options);
 };
 
 // Inline confirm overlay for "you're moving onto a printer that's actively
@@ -1298,102 +1505,34 @@ window.doAssign = (loc, spool, slot, isFromBufferFlag = null, options = {}) => {
 // clicks while a print was active. mountOverlay's tier='confirm' sits
 // above any Bootstrap modal and the host=manageModal binding cleans
 // the overlay when the user dismisses the Location Manager.
-const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateInfo, options = {} }) => {
-    const escapeHtml = (s) => String(s || '')
-        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-    const content = `
-        <div style="background:#1e1e1e; color:#fff; border:2px solid #ff8800; border-radius:8px; padding:20px 24px; max-width:460px; text-align:center;">
-            <div style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">⚠️ ${escapeHtml(stateInfo.printer_name)} is ${escapeHtml(stateInfo.state)}</div>
-            <div style="color:#ffc; margin-bottom:14px;">
-                Reassigning a spool to <b>${escapeHtml(loc)}</b> during an active print will disrupt the print and may leave filabridge/Spoolman in a stale state. Continue anyway?
-            </div>
-            <div style="display:flex; gap:10px; justify-content:center;">
-                <button id="fcc-apc-yes" class="btn btn-warning btn-sm" style="min-width:120px;">Continue Anyway</button>
-                <button id="fcc-apc-no" class="btn btn-secondary btn-sm" style="min-width:120px;">Cancel</button>
-            </div>
-        </div>
-    `;
-    let handle = null;
-    let qrSession = null;
-    const cleanup = () => {
-        if (handle) { try { handle.cleanup(); } catch (_) { /* noop */ } handle = null; }
-        if (qrSession) { try { qrSession.cleanup(); } catch (_) { /* noop */ } qrSession = null; }
-    };
-    // After user confirms, call _doAssignFinalize with confirmActivePrint=true
-    // so the backend's safety check doesn't re-prompt. Without this flag,
-    // the backend would see the POST has no confirm and return requires_confirm,
-    // creating an infinite loop.
-    const proceed = () => {
-        cleanup();
-        setProcessing(true);
-        _doAssignFinalize(loc, spool, slot, isFromBufferFlag, true, options);
-    };
-    handle = window.mountOverlay({
-        id: 'fcc-active-print-confirm-overlay',
-        content,
-        tier: 'confirm',
+const _confirmActivePrintAssign = ({ loc, spool, slot, isFromBufferFlag, stateInfo, options = {}, heads = [], msg = '',
+                                     onConfirm = null }) => {
+    // Name the spool this confirm writes (Group 46 review): the prompt can
+    // outlive a buffer change (a queued CMD:NEXT scan, a re-sync), and the spool
+    // captured at the click is the one that moves.
+    const sid = String(spool).replace('ID:', '');
+    const held = (state.heldSpools || []).find(s => String(s.id) === sid);
+    const spoolLabel = `#${sid}${held && held.display ? ` (${held.display})` : ''}`;
+    // Group 39.4: the shared active-print confirm (inv_core.js) with this
+    // overlay's proven ids. It shows the server's message when the backend asked
+    // (`msg`: Derek's D6 wording, e.g. a spool LEAVING a printing head), else this
+    // door's own sentence. Its Yes finalizes with `heads`: the probed head, or the
+    // answer's heads unioned with any confirmed before (39.1). `onConfirm`: a
+    // server question's replay (Group 40.3, window.askMoveConfirm), which owns
+    // the request it sends.
+    window.confirmActivePrint({
+        activePrint: stateInfo,
+        msg: msg || `Reassigning ${spoolLabel} to ${loc} during an active print will disrupt the print. Continue anyway?`,
         host: document.getElementById('manageModal'),
-        initialFocus: '#fcc-apc-yes',
-        onEscape: cleanup,
+        ids: { overlay: 'fcc-active-print-confirm-overlay', yes: 'fcc-apc-yes', no: 'fcc-apc-no' },
+        onConfirm: onConfirm || (() => {
+            setProcessing(true);
+            _doAssignFinalize(loc, spool, slot, isFromBufferFlag, heads, options);
+        }),
     });
-    const ov = handle.element;
-    const yesBtn = ov.querySelector('#fcc-apc-yes');
-    const noBtn = ov.querySelector('#fcc-apc-no');
-    if (yesBtn) yesBtn.onclick = proceed;
-    if (noBtn) noBtn.onclick = cleanup;
-    // Keyboard contract (mirrors _confirmActivePrintScan in inv_cmd.js):
-    // Enter activates the focused button (Yes/No); Tab cycles between
-    // them; Escape always cancels (owned by mountOverlay's onEscape).
-    // Route Enter explicitly because the document capture-phase handler
-    // runs first and the native button activation was inconsistent
-    // across barcode-scanner setups.
-    const keyHandler = (e) => {
-        if (e.key === 'Enter') {
-            // ⚠️ SAFETY (axis-(a) audit, 2026-08-03) — see inv_quickswap.js for the
-            // full rationale. A scan in flight owns this Enter: it terminates the
-            // scan, it is not a button press. YES is focused by initialFocus, so
-            // without this the "📷 Scan to Cancel" QR performed the CONFIRM.
-            if (window.isScanInFlight && window.isScanInFlight()) return;
-            const active = document.activeElement;
-            if (active === yesBtn) { e.preventDefault(); e.stopPropagation(); proceed(); }
-            else if (active === noBtn) { e.preventDefault(); e.stopPropagation(); cleanup(); }
-            return;
-        }
-        if (e.key === 'Tab') {
-            const focusables = [yesBtn, noBtn].filter(Boolean);
-            if (focusables.length === 0) return;
-            const active = document.activeElement;
-            const idx = focusables.indexOf(active);
-            if (idx === -1) {
-                e.preventDefault(); e.stopPropagation();
-                focusables[e.shiftKey ? focusables.length - 1 : 0].focus();
-                return;
-            }
-            if (e.shiftKey && idx === 0) {
-                e.preventDefault(); e.stopPropagation();
-                focusables[focusables.length - 1].focus();
-            } else if (!e.shiftKey && idx === focusables.length - 1) {
-                e.preventDefault(); e.stopPropagation();
-                focusables[0].focus();
-            }
-        }
-    };
-    ov.addEventListener('keydown', keyHandler, true);
-    if (window.attachConfirmQRs && ov) {
-        qrSession = window.attachConfirmQRs({
-            // Mount inside the dialog PANEL, not the overlay root (a centered
-            // flex-ROW), so the QR row stacks below the buttons instead of
-            // landing beside the panel ("QR codes on the right" bug).
-            host: handle.panel,
-            onConfirm: proceed,
-            onCancel: cleanup,
-            theme: 'warning',
-        });
-    }
 };
 
-const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmActivePrint = false, options = {}) => {
+const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedHeads = [], options = {}) => {
     // FIX: 0-based index correction for MMU/CORE slots
     let finalSlot = slot;
     if (slot !== null) {
@@ -1422,34 +1561,77 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmAct
         }
     }
 
-    fetch('/api/manage_contents', {
+    // The request as first sent: every replay of a server question is rebuilt
+    // from it (Group 40.3, window.buildMoveReplay), so a Yes sends the slot,
+    // the spool and every head / confirm key confirmed so far.
+    // `confirmed_fed_heads`: this page can show the "already running another
+    // spool" question. `auto_deploy: false` (options.autoDeploy): the DEPLOYED
+    // card's ↩️ puts the spool back in its slot and leaves the head alone (the
+    // 40.6-E fallback; it used to load it straight back onto its head).
+    const original = {
+        action: 'add',
+        location: loc,
+        spool_id: "ID:" + spool,
+        slot: finalSlot,
+        origin: isFromBuffer ? 'buffer' : '',
+        confirmed_toolheads: [],
+        confirmed_fed_heads: [],
+    };
+    if (options.autoDeploy === false) original.auto_deploy = false;
+    // `options.pickedSlot` (Group 40 review, R1): a slot the engine fills only
+    // while it is free (`picked_slot`), never an Overwrite that unseats its
+    // spool. Sent with no `slot`: the DEPLOYED card's ↩️ for a stale trail.
+    if (options.pickedSlot != null && options.pickedSlot !== '') original.picked_slot = String(options.pickedSlot);
+    // Swap option C: the grid's Swap. The server files the slot's old spool back
+    // where it sat before this slot and names it in `to_buffer`. On `original`,
+    // so every replay of a question is still a Swap.
+    if (options.swapDisplaced) original.swap = true;
+    // The heads whose warning the user confirmed (Group 39.1), so the backend's
+    // safety net doesn't re-prompt for them.
+    const first = Object.assign({}, original, {
+        confirmed_toolheads: Array.isArray(confirmedHeads) ? confirmedHeads : [],
+    });
+    const post = (payload, prior) => {
+        setProcessing(true);
+        _postManageAdd(payload, prior);
+    };
+    // Only a request that got no answer says "failed": an exception in the
+    // success handling follows a move that landed, so it only reaches the console.
+    const noAnswer = (e) => {
+        setProcessing(false);
+        showToast(`❌ #${spoolIdStr} → ${loc} failed: ${(e && e.message) || 'network error'} — check the Activity Log`, 'error', 7000);
+        if (window.logClientEvent) window.logClientEvent(
+            `❌ Assign #${spoolIdStr} → ${loc} got no answer: ${(e && e.message) || 'network error'}`, 'ERROR');
+    };
+    const _postManageAdd = (payload, prior) => window.fetchT('/api/manage_contents', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            action: 'add',
-            location: loc,
-            spool_id: "ID:" + spool,
-            slot: finalSlot,
-            origin: isFromBuffer ? 'buffer' : '',
-            // Pass the UI-probe's opt-in through so the backend's safety net
-            // doesn't re-prompt us. Without this, the backend active-print
-            // check would flag the move even after the user already confirmed.
-            confirm_active_print: confirmActivePrint,
-        }),
+        body: JSON.stringify(payload),
     })
         .then(r => r.json())
+        .then(x => x, (e) => { noAnswer(e); return null; })
         .then(res => {
+            if (res === null) return;
             setProcessing(false);
-            // Backend safety net: if the printer flipped from IDLE to PRINTING
-            // in the race window between our UI probe and the POST, OR the
-            // user's browser skipped the UI probe for any reason (cache, older
-            // bundle), the backend returns requires_confirm. Show our confirm
-            // overlay and retry on user opt-in.
-            if (res.status === 'requires_confirm' && res.confirm_type === 'active_print') {
-                _confirmActivePrintAssign({
-                    loc, spool, slot, isFromBufferFlag,
-                    stateInfo: res.active_print || { printer_name: loc, state: 'ACTIVE' },
-                    options,
+            // The server asks before it moves: a printing head (the yes / no:
+            // the printer flipped to PRINTING after our probe, the probe missed
+            // it, or the spool is LEAVING a printing head, 39.4), or a bound
+            // slot's head already running a spool from elsewhere or printing
+            // (40.3's three-way, over the Location Manager).
+            if (res.status === 'requires_confirm' && window.askMoveConfirm) {
+                window.askMoveConfirm(res, {
+                    door: 'manage_add', original, prior,
+                    host: document.getElementById('manageModal'),
+                    box: loc, slot: finalSlot,
+                    ids: { overlay: 'fcc-active-print-confirm-overlay', yes: 'fcc-apc-yes', no: 'fcc-apc-no', store: 'fcc-apc-store' },
+                    askYesNo: (ans, yes) => _confirmActivePrintAssign({
+                        loc, spool, slot, isFromBufferFlag,
+                        stateInfo: ans.active_print || { printer_name: loc, state: 'ACTIVE' },
+                        options,
+                        msg: ans.msg,
+                        onConfirm: yes,
+                    }),
+                    send: (body, next) => post(body, next),
                 });
                 return;
             }
@@ -1458,7 +1640,22 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmAct
             // spool from the buffer anyway (2026-09-12).
             const failedWhy = res.status === 'success' ? (res.failures || {})[spoolIdStr] : null;
             if (res.status === 'success' && !failedWhy) {
-                showToast("Assigned");
+                const storedIn = payload.picked_slot != null ? payload.picked_slot : payload.slot;
+                const slotText = storedIn != null && storedIn !== '' ? ` slot ${storedIn}` : '';
+                const rec = res.recorded_source ? String(res.recorded_source).split(':') : null;
+                if (options.autoDeploy === false) {
+                    showToast(`↩️ #${spoolIdStr} → ${loc}${slotText}`, 'success', 4000);
+                } else if (prior && prior.store) {
+                    // Group 40.3: "Just store it" put it in the slot and left the head alone.
+                    showToast(`📦 #${spoolIdStr} stored in ${loc}${slotText}`
+                        + `${window.storeToastTail(prior)}`, 'success', 4000);
+                } else if (rec && rec.length === 2) {
+                    // Group 40.0d: a spare loaded onto a head records the one free
+                    // slot that feeds it as its home; the toast is where that shows.
+                    showToast(`#${spoolIdStr} → ${loc} (recorded as from ${rec[0]} slot ${rec[1]})`, 'success');
+                } else {
+                    showToast("Assigned");
+                }
                 const notDeployed = (res.auto_deploy_skipped || {})[spoolIdStr];
                 if (notDeployed) {
                     showToast(`⚠️ #${spoolIdStr} is in ${loc} but was NOT deployed to ${res.auto_deploy_target || 'its toolhead'}: ${notDeployed}`, 'warning', 7000);
@@ -1471,26 +1668,46 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmAct
                 // landed.
                 const bufIdx = state.heldSpools.findIndex(s => String(s.id) === spoolIdStr);
                 if (bufIdx > -1) state.heldSpools.splice(bufIdx, 1);
-                // Swap path: push the displaced item into the buffer too.
-                // Skipped if the displaced item is somehow already there
-                // (e.g. user opened multiple manage modals).
-                if (options.swapDisplaced && options.swapDisplaced.id) {
-                    const dispId = String(options.swapDisplaced.id);
-                    if (!state.heldSpools.some(s => String(s.id) === dispId)) {
-                        state.heldSpools.push(options.swapDisplaced);
-                    }
-                }
+                // The spools the move handed to the scan buffer: the slot's old
+                // spool a Swap took out (Swap option C: filed back where it sat
+                // before), and a same-slot swap's spool off the head (Group 40).
+                // The server names them in `to_buffer`; it used to be this page
+                // that pushed the Swap's old spool, while the server left it in
+                // the box with no slot. One render, one save.
+                window.takeIntoBuffer(res, { render: false });
                 if (window.renderBuffer) window.renderBuffer();
                 if (typeof renderManagerNav === 'function') renderManagerNav();
 
                 if (window.fetchLocations) window.fetchLocations();
-                refreshManageView(loc);
+                // The view on screen (Group 40 review): a DEPLOYED card's ↩️ in a
+                // Room view moves the spool into a box of that Room, and only the
+                // open view repaints (_renderManagePayload ignores any other id).
+                const openId = (document.getElementById('manage-loc-id') || {}).value;
+                refreshManageView(openId || loc);
             }
-            else showToast(failedWhy
-                ? `❌ #${spoolIdStr} was NOT assigned to ${loc}: ${failedWhy}`
-                : (res.msg || 'Assign failed'), 'error', 7000);
+            else {
+                // The DEPLOYED card's stale-trail ↩️ (Group 40 review): the slot its
+                // record names holds another spool now (or is gone). Nobody was
+                // "deciding", and trying again fails the same way until it moves.
+                const trailTaken = options.pickedSlot != null && res.blocked_reason === 'picked_slot_taken';
+                const why = trailTaken
+                    ? `#${spoolIdStr} wasn't put back in ${loc} slot ${options.pickedSlot}, the slot its record names: `
+                      + `another spool holds it now (or the box has no such slot). Scan #${spoolIdStr}, then the label `
+                      + `of where it really is, to fix its record`
+                    : null;
+                if (why && window.logClientEvent) window.logClientEvent(`⚠️ ${why}.`, 'WARNING');
+                showToast(why ? `❌ ${why}`
+                    : failedWhy
+                    ? `❌ #${spoolIdStr} was NOT assigned to ${loc}: ${failedWhy}`
+                    : (res.msg || 'Assign failed'), 'error', 7000);
+                // A spool the move had already handed to the buffer before this
+                // one's write failed (a Swap's old spool, a swapped-out head
+                // spool) is in the user's hand all the same.
+                window.takeIntoBuffer(res);
+            }
         })
-        .catch(() => setProcessing(false));
+        .catch((e) => { setProcessing(false); console.error(e); });
+    _postManageAdd(first, { heads: first.confirmed_toolheads });
 };
 
 window.ejectSpool = (sid, loc, pickup) => {
@@ -1515,6 +1732,29 @@ window.ejectSpool = (sid, loc, pickup) => {
         if (loc !== "Scan") requestConfirmation(`Eject spool #${sid}?`, () => doEject(sid, loc));
         else doEject(sid, loc);
     }
+};
+
+// Group 42.5a: the eject says where the spool went and which single-slot box let
+// go of the head (Derek, 2026-10-13: "short arrows for toast. And a full
+// sentence in the activity log"; the sentence is the server's): "⏏️ #50 → back
+// in PM-DB-2 (PM-DB-2 detached from XL-2)", "⏏️ #134 → back in LR-MDB-1 slot
+// 3", "⏏️ #88 → Unassigned". An answer with no report keeps "Ejected".
+const _ejectToastText = (res, sid) => {
+    if (!res || res.to === undefined) return 'Ejected';
+    const id = res.spool_id != null ? res.spool_id : sid;
+    const typeOf = (lid) => ((state.allLocations || []).find(
+        (l) => String(l.LocationID || '').toUpperCase() === String(lid || '').toUpperCase()) || {}).Type || '';
+    let where;
+    if (res.home) {
+        const prep = ['Dryer Box', 'Storage', 'Sliding Drawer', 'Room', 'Virtual Room'].includes(typeOf(res.to))
+            ? 'in' : 'on';
+        where = `back ${prep} ${res.to}` + (res.slot ? ` slot ${res.slot}` : '');
+    } else {
+        where = res.to ? `Room ${res.to}` : 'Unassigned';
+    }
+    const boxes = res.released_boxes || [];
+    const released = boxes.length ? ` (${boxes.join(', ')} detached from ${res.from})` : '';
+    return `⏏️ #${id} → ${where}${released}`;
 };
 
 window.doEject = (sid, loc, isConfirmed = false, confirmActivePrint = false) => {
@@ -1544,10 +1784,14 @@ window.doEject = (sid, loc, isConfirmed = false, confirmActivePrint = false) => 
             // and Yes appeared to "do nothing".
             if (res.require_confirm && res.confirm_type === 'active_print') {
                 const stateInfo = res.active_print || { printer_name: loc, state: 'ACTIVE' };
+                // Group 39.6: when the server asks both questions at once
+                // ("printing" + "no saved home"), the one Yes answers both, so
+                // there is no second prompt raised from this one's callback.
+                const both = Array.isArray(res.confirm_types) && res.confirm_types.includes('unassign');
                 requestConfirmation(
                     res.msg
                         || `${stateInfo.printer_name} is ${stateInfo.state} — ejecting will disrupt the print. Continue anyway?`,
-                    () => window.doEject(sid, loc, isConfirmed, true)
+                    () => window.doEject(sid, loc, isConfirmed || both, true)
                 );
                 return;
             }
@@ -1562,7 +1806,7 @@ window.doEject = (sid, loc, isConfirmed = false, confirmActivePrint = false) => 
                 return;
             }
 
-            showToast("Ejected");
+            showToast(_ejectToastText(res, sid), 'success', 4000);
             if (loc !== "Scan") {
                 // [ALEX FIX] Force a re-render by clearing the hash.
                 // This ensures the UI updates to "Empty" even if the API data is cached/similar.
@@ -1605,6 +1849,18 @@ window.doEject = (sid, loc, isConfirmed = false, confirmActivePrint = false) => 
 window.manualAddSpool = () => {
     const val = document.getElementById('manual-spool-id').value.trim();
     if (!val) return;
+    // Group 40.3: a typed label or command (`LOC:LR-MDB-1:SLOT:1`, `CMD:DONE`)
+    // is a scan, so it takes the scan path: the same questions (a slot whose
+    // toolhead runs a spool from elsewhere asks first) and the same outcome
+    // toasts. It used to post as a manual entry, so a slot move that landed
+    // still toasted "Invalid Code". Only ids are looked up here.
+    if (/^(LOC|CMD):/i.test(val) && typeof window.processScan === 'function') {
+        const input = document.getElementById('manual-spool-id');
+        input.value = '';
+        input.focus();
+        window.processScan(val, 'keyboard');
+        return;
+    }
     setProcessing(true);
     window.fetchT('/api/identify_scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: val, source: 'keyboard' }) })
         .then(r => r.json())
@@ -1684,33 +1940,73 @@ window.triggerEjectAll = (loc) => {
         if (window.logClientEvent) window.logClientEvent('⚠️ Eject All ignored: no location was given', 'WARNING');
         return;
     }
-    promptSafety(`Nuke all unslotted in ${target}?`, () => {
+    // Group 41.1: ask the server first. A room, a printer that isn't a head, a
+    // row FCC only knows from its spools and the Unassigned/Unknown lists are
+    // refused there (and logged), so the user never answers "Nuke all?" only to
+    // be refused. One rule, one wording, in logic.eject_all_block_reason.
     setProcessing(true);
-    window.fetchT('/api/manage_contents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'clear_location', location: target }) })
+    window.fetchT('/api/manage_contents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'clear_location', location: target, check_only: true }) })
+        .then(r => r.json())
+        .then((chk) => {
+            setProcessing(false);
+            if (!chk || chk.success === false) {
+                showToast((chk && chk.msg) || 'Eject All was refused', 'warning', 9000);
+                return;
+            }
+            promptSafety(`Nuke all unslotted in ${target}?`, () => _runEjectAll(target, {}));
+        })
+        .catch(() => { setProcessing(false); showToast("Eject-all failed", "error", 7000); });
+};
+
+// Group 41.2: run Eject All and say what really happened. The answer lists
+// ejected / needs_unassign / failed / skipped_slotted / skipped_loaded; the toast
+// is its one-line summary (an error toast when anything failed). A head that is
+// printing asks first (the shared confirm), and the spools with no saved home
+// get ONE "unassign?" prompt for the batch (Derek's Q1), whose Yes names them.
+const _runEjectAll = (target, opts) => {
+    const body = { action: 'clear_location', location: target };
+    if (opts.confirmActivePrint) body.confirm_active_print = true;
+    if (opts.unassignIds && opts.unassignIds.length) body.confirmed_unassign_ids = opts.unassignIds;
+    setProcessing(true);
+    window.fetchT('/api/manage_contents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
         .then(r => r.json())
         .then((res) => {
             setProcessing(false);
-            // A plain refusal (e.g. the backend's no-location guard) is not
-            // "Cleared!". A require_confirm answer is left to the planned
-            // eject-all results work.
-            if (res && res.success === false && !res.require_confirm) {
-                showToast(res.msg || 'Eject All was refused', 'warning', 7000);
+            if (res && res.require_confirm && res.confirm_type === 'active_print' && window.confirmActivePrint) {
+                window.confirmActivePrint({
+                    activePrint: res.active_print, msg: res.msg,
+                    host: document.getElementById('manageModal'),
+                    onConfirm: () => _runEjectAll(target, Object.assign({}, opts, { confirmActivePrint: true })),
+                });
                 return;
             }
-            if(window.fetchLocations) window.fetchLocations();
+            const listed = res && Array.isArray(res.ejected);
+            if (!listed) {
+                if (res && res.success === true) {
+                    // A bare success (no per-spool lists): done, nothing to itemise.
+                    if (window.fetchLocations) window.fetchLocations();
+                    refreshManageView(target);
+                    showToast(res.msg || `Eject All on ${target}: done.`, 'success', 4000);
+                    return;
+                }
+                // A refusal (a blocked view, an unreadable location): nothing ran.
+                showToast((res && res.msg) || 'Eject All was refused', 'warning', 7000);
+                return;
+            }
+            if (window.fetchLocations) window.fetchLocations();
             refreshManageView(target);
-            // 27.6 — a bulk clear leaves SLOTTED spools (toolhead/MMU-loaded) in
-            // place on purpose. Be honest about it rather than always saying
-            // "Cleared!": warn when survivors remain so the user knows the
-            // location isn't actually empty (matches the backend Activity Log).
-            if (res && Array.isArray(res.skipped_slotted) && res.skipped_slotted.length) {
-                showToast(res.msg || `${res.skipped_slotted.length} slotted spool(s) left in place — unload the slot to remove them.`, "warning", 7000);
-            } else {
-                showToast("Cleared!");
+            const failed = res.failed || [];
+            const needs = res.needs_unassign || [];
+            const leftover = (res.skipped_slotted || []).length + (res.skipped_loaded || []).length;
+            if (failed.length) showToast(res.msg, 'error', 9000);
+            else if (needs.length || leftover) showToast(res.msg, 'warning', 7000);
+            else showToast(res.msg, 'success', 4000);
+            if (needs.length && !opts.unassignIds) {
+                requestConfirmation(res.unassign_msg || `Unassign ${needs.length} spool(s) with no saved home?`,
+                    () => _runEjectAll(target, Object.assign({}, opts, { unassignIds: needs })));
             }
         })
         .catch(() => { setProcessing(false); showToast("Eject-all failed", "error", 7000); });
-    });
 };
 
 window.printCurrentLocationLabel = () => {
@@ -1935,6 +2231,14 @@ const _populateParentSelect = (selfIdUpper, currentParentId) => {
 };
 
 window.openEdit = (id) => {
+    // Group 46.5 — a row saved before the blank-ID guard can't be repaired here:
+    // with no id to name it, saving appends a SECOND row and leaves the blank one
+    // behind, and the next save says "already exists" (the original report).
+    if (!String(id == null ? '' : id).trim()) {
+        const msg = "This location has no Location ID, so it can't be edited — delete it with 🗑️ and add it again.";
+        if (typeof showToast === 'function') showToast(msg, 'warning', 7000); else alert(msg);
+        return;
+    }
     const i = state.allLocations.find(l => l.LocationID == id);
     if (i) {
         modals.locMgrModal.hide();
@@ -1983,7 +2287,20 @@ window.openEdit = (id) => {
 
 window.closeEdit = () => { modals.locModal.hide(); modals.locMgrModal.show(); };
 
+// One save at a time: a double Enter (or click) used to POST twice, and the
+// second create/rename answered "already exists" just after the first succeeded.
+let _locSaveInFlight = false;
 window.saveLocation = () => {
+    if (_locSaveInFlight) return;
+    // Group 46.5 — a blank LocationID is refused here and by the server (400).
+    // Checked before anything else, so a refused save persists no custom Type.
+    const _idEl = document.getElementById('edit-id');
+    if (!String((_idEl && _idEl.value) || '').trim()) {
+        const msg = 'Enter a Location ID before saving.';
+        if (typeof showToast === 'function') showToast(msg, 'error', 7000); else alert(msg);
+        if (_idEl) _idEl.focus();
+        return;
+    }
     // L271 Phase 5: a non-empty free-text custom Type wins over the dropdown so
     // you can add a brand-new type on the fly (persisted for next time).
     const _customType = (document.getElementById('edit-type-custom') || {}).value;
@@ -2001,6 +2318,7 @@ window.saveLocation = () => {
     if (pv === _LOC_PARENT_NONE) new_data.parent_id = null;
     else if (pv && pv !== _LOC_PARENT_AUTO) new_data.parent_id = pv;
 
+    _locSaveInFlight = true;
     fetch('/api/locations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2027,8 +2345,72 @@ window.saveLocation = () => {
         .catch(e => {
             const msg = 'Save failed: ' + (e && e.message ? e.message : e);
             if (typeof showToast === 'function') showToast(msg, 'error', 7000); else alert(msg);
-        });
+        })
+        .finally(() => { _locSaveInFlight = false; });
 };
+
+// Group 46.2 — Enter in the location editor saves it (the CLAUDE.md "Enter
+// confirms" idiom). The editor had no Enter-to-save, and the global scan
+// accumulator (scripts.html) skips only INPUT/TEXTAREA targets, so a letter
+// typed on the Type <select> (native typeahead) landed in state.scanBuffer and
+// Enter then submitted it as a scan of "t".
+// Deliberately NOT a global "ignore SELECT" in the scanner: a focused dropdown
+// would then swallow a blind barcode scan. So a scan on a dropdown or a button
+// is left to the accumulator: a scanner-speed burst (window.isScannerBurst), or
+// a slower scanner's buffer that looks like a scan payload (a ':' or '/' that
+// no typeahead produces). A scan typed INTO a text field never reaches the
+// accumulator at all; the shared field-scan capture installed below hands it to
+// the scan path and restores the field before this handler could save it.
+// Enter on a button activates that button. The accumulator cancels every Enter
+// outside INPUT/TEXTAREA, which also killed native button activation, and it
+// would have submitted leftover typeahead letters as a scan.
+// The parent tree picker mounts on document.body, so its keys never pass
+// through #locModal; it neutralises its own Enter.
+const _installLocEditorEnterToSave = () => {
+    const modalEl = document.getElementById('locModal');
+    if (!modalEl || modalEl._fccEnterToSave) return;
+    modalEl._fccEnterToSave = true;
+    if (window.installFieldScanCapture) {
+        window.installFieldScanCapture({
+            match: (el) => el.tagName === 'INPUT' && !!(el.closest && el.closest('#locModal')),
+            isScanPayload: (txt) => !!(window.looksLikeScanPayload && window.looksLikeScanPayload(txt)),
+        });
+    }
+    modalEl.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' || e.ctrlKey || e.altKey || e.metaKey || e.isComposing) return;
+        // A held key repeats keydown, and the modal stays focusable for its
+        // ~150 ms fade after a successful save: neither may save again.
+        if (e.repeat || !modalEl.classList.contains('show')) return;
+        const tag = ((e.target && e.target.tagName) || '').toUpperCase();
+        if (tag !== 'INPUT' && tag !== 'SELECT' && tag !== 'BUTTON') return;
+        if (tag !== 'INPUT') {
+            const st = (typeof state !== 'undefined') ? state : window.state;
+            if (window.isScannerBurst && window.isScannerBurst()) return;
+            if (st && st.scanBuffer && window.looksLikeScanPayload && window.looksLikeScanPayload(st.scanBuffer)) return;
+        }
+        e.preventDefault();
+        // The accumulator is a bubble-phase listener on `document`, so stopping
+        // here keeps it from seeing this Enter; the typeahead letters it already
+        // collected are cleared now and again after this tick (the L298 idiom).
+        e.stopImmediatePropagation();
+        if (window.clearScanBuffer) window.clearScanBuffer();
+        if (tag === 'BUTTON') { e.target.click(); return; }
+        window.saveLocation();
+    });
+    if (window.registerShortcut) {
+        window.registerShortcut({
+            id: 'loc-edit-enter-save', scope: 'Location Editor', keys: ['Enter'],
+            description: 'Save the location from any field, including the Type and Parent dropdowns.',
+        });
+    }
+};
+// After load: #locModal must exist, and scripts.html loads this file BEFORE
+// shortcuts_registry.js (the fab_drag.js / inv_cmd.js registration idiom).
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _installLocEditorEnterToSave);
+} else {
+    _installLocEditorEnterToSave();
+}
 
 // Group-34 add-redesign (S2/S4): infer a child's Type + Max Spools from the
 // parent's kind, and auto-generate an editable LocationID from parent + type +
@@ -2271,7 +2653,15 @@ const _renderParentTreePicker = (rows, selfIdUpper, sel, locModalEl) => {
         const cur = ns.findIndex(n => n.classList.contains('kb-active'));
         if (e.key === 'ArrowDown') { e.preventDefault(); setActive(cur + 1); }
         else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(cur - 1); }
-        else if (e.key === 'Enter') { e.preventDefault(); const n = ns[cur] || ns[0]; if (n) pick(n.dataset.tpVal); }
+        else if (e.key === 'Enter') {
+            // Same class as Group 46.2: this Enter reached the scan accumulator,
+            // which submitted any letters typed in the picker as a scan
+            // ("Unknown Code"). Picking a node consumes it.
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            if (window.clearScanBuffer) window.clearScanBuffer();
+            const n = ns[cur] || ns[0]; if (n) pick(n.dataset.tpVal);
+        }
     });
 
     handle = window.mountOverlay({
@@ -2306,20 +2696,80 @@ function _announcePrinterMapChange() {
 
 // Hotfix 2026-09-29 — surface a refused delete (e.g. a printer that still has
 // toolheads) instead of silently re-listing as if it had worked.
-window.deleteLoc = (id) => requestConfirmation(`Delete ${id}?`, () => fetch(`/api/locations?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
-    .then(async (r) => {
-        let body = {};
-        try { body = await r.json(); } catch (_) { /* non-JSON */ }
-        if (!r.ok || body.success === false) {
-            const msg = body.error || body.msg || `Delete failed (HTTP ${r.status})`;
-            if (typeof showToast === 'function') showToast(msg, 'error', 8000);
-            return;
-        }
-        const _row = (state.allLocations || []).find((l) => l.LocationID == id);
-        if (_row && _isPrinterTopologyType(_row.Type)) _announcePrinterMapChange();
-    })
-    .catch((e) => {
-        if (typeof showToast === 'function') showToast('Delete failed: ' + (e && e.message ? e.message : e), 'error', 7000);
-    })
-    .then(fetchLocations));
+// Group 46.5 — a row saved before the blank-id guard has LocationID "", which
+// ?id= can't name (the server answers 400). It goes to the explicit
+// ?blank_id=1 path instead, which removes only the blank row(s).
+const _deleteLocRequest = (id) => {
+    if (String(id == null ? '' : id).trim()) {
+        return { prompt: `Delete ${id}?`, url: `/api/locations?id=${encodeURIComponent(id)}` };
+    }
+    const row = (state.allLocations || []).find((l) => !String(l.LocationID || '').trim());
+    const name = row && row.Name ? ` ("${row.Name}")` : '';
+    return { prompt: `Delete the location with a blank Location ID${name}?`, url: '/api/locations?blank_id=1' };
+};
+
+// Group 41.3 (Claude's call 16): the prompt says what happens to the spools
+// ("Delete CR-CT-2-R1? Its 3 spools go to Unassigned."), from one contents
+// read; it falls back to the bare question if that read fails. It mirrors the
+// server: a spool loaded on a head is left alone, an emptied Room counts only
+// the spools filed on the Room itself, and a deployed spool keeps its place.
+const _deletePromptFor = (id, req) => {
+    const loc = String(id == null ? '' : id).trim();
+    if (!loc) return Promise.resolve(req.prompt);
+    const up = (v) => String(v == null ? '' : v).replace(/"/g, '').trim().toUpperCase();
+    // Group 41 review: read STRICTLY. The fail-open read answered [] on a
+    // Spoolman blip, so the prompt said "It holds no spools." about a box whose
+    // spools the delete then unassigned. And count only the spools filed on this
+    // row, as the server now does for every type.
+    return fetch(`/api/get_contents?id=${encodeURIComponent(loc)}&strict=1`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((items) => {
+            if (!Array.isArray(items)) {
+                return `Delete ${loc}? FCC couldn't read its spools from Spoolman just now, `
+                    + "so it can't say how many go to Unassigned.";
+            }
+            const list = items;
+            const goes = list.filter((i) => !i.is_ghost && up(i.location) === up(loc));
+            const kept = list.filter((i) => i.is_ghost && up(i.location) === up(loc)).length;
+            let msg = `Delete ${loc}?`;
+            if (goes.length === 1) msg += ` Its spool #${goes[0].id} goes to Unassigned.`;
+            else if (goes.length > 1) msg += ` Its ${goes.length} spools go to Unassigned.`;
+            else msg += ' It holds no spools.';
+            if (kept) msg += ` ${kept} spool(s) deployed from it keep their place.`;
+            return msg;
+        })
+        .catch(() => req.prompt);
+};
+
+window.deleteLoc = (id) => {
+    const req = _deleteLocRequest(id);
+    const run = (url) => fetch(url, { method: 'DELETE' })
+        .then(async (r) => {
+            let body = {};
+            try { body = await r.json(); } catch (_) { /* non-JSON */ }
+            // Group 41.3: a toolhead whose printer is printing asks first (the
+            // shared confirm), then retries with the flag; it used to be
+            // toasted as an error with no way to go on.
+            if (r.status === 409 && body.status === 'requires_confirm' && window.confirmActivePrint) {
+                window.confirmActivePrint({
+                    activePrint: body.active_print, msg: body.msg,
+                    onConfirm: () => run(url + '&confirm_active_print=1'),
+                });
+                return;
+            }
+            if (!r.ok || body.success === false) {
+                const msg = body.error || body.msg || `Delete failed (HTTP ${r.status})`;
+                if (typeof showToast === 'function') showToast(msg, 'error', 8000);
+                return;
+            }
+            if (typeof showToast === 'function') showToast(body.msg || `Deleted ${id}.`, 'success', 4000);
+            const _row = (state.allLocations || []).find((l) => l.LocationID == id);
+            if (_row && _isPrinterTopologyType(_row.Type)) _announcePrinterMapChange();
+        })
+        .catch((e) => {
+            if (typeof showToast === 'function') showToast('Delete failed: ' + (e && e.message ? e.message : e), 'error', 7000);
+        })
+        .then(fetchLocations);
+    return _deletePromptFor(id, req).then((prompt) => requestConfirmation(prompt, () => run(req.url)));
+};
 

@@ -71,7 +71,10 @@ def run_startup_migrations():
     # One-time feeder_map → slot_targets migration. Kept behind an explicit
     # `feeder_map` key check so old installs that still have it get upgraded
     # automatically the first time they boot the new code. No-op on modern
-    # installs where the key has been removed.
+    # installs where the key has been removed, AND retired once any Dryer Box
+    # carries slot_targets (Group 46.4, inside migrate_feeder_map_if_needed): a
+    # box whose slots were all cleared saves `{}`, which the old per-box check
+    # read as "never migrated" and re-bound from the stale seed on restart.
     #
     # Safety: the migration is purely additive (only sets extra.slot_targets
     # on Dryer Box records; never removes keys). Spool data lives in
@@ -279,9 +282,17 @@ def resurface_pending_cancel_reviews():
     try:
         _pending_reviews = cancel_review_store.list_pending()
         for _pr in _pending_reviews:
+            if _pr.get('kind') == 'shortfall':
+                # Group 43.2: grams no spool took, not a cancelled print.
+                _msg = (f"🛑 Uncharged grams from a previous session: {_pr.get('printer_name')} — "
+                        f"{_pr.get('total_grams')}g of '{_pr.get('filename')}' went to no spool. "
+                        f"Review to pick the spool that took them, or Discard.")
+            else:
+                _msg = (f"🛑 Pending cancel review from a previous session: {_pr.get('printer_name')} "
+                        f"— {_pr.get('total_grams')}g across {len(_pr.get('spools', []))} spool(s). "
+                        f"Review to confirm/dismiss.")
             state.add_log_entry(
-                f"🛑 Pending cancel review from a previous session: {_pr.get('printer_name')} "
-                f"— {_pr.get('total_grams')}g across {len(_pr.get('spools', []))} spool(s). Review to confirm/dismiss.",
+                _msg,
                 "WARNING", "ffaa00",
                 meta={"type": "cancel_deduct_pending",
                       "printer_name": _pr.get('printer_name'), "job_id": _pr.get('job_id')})

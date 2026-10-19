@@ -5,6 +5,13 @@
 **Risk:** **LOW–MEDIUM.** No prod data migration, no safety-critical matchers. Main hazards: the schema type + renderer must land together (else silent dict-stringify corruption), and the exact-equality config verify needs deterministic coercion. Phase-5 co-location is UI-only.
 
 > **Status: 📋 TODO — SCOPED + DECISIONS LOCKED 2026-07-07.** Graduated from the epic planning sprint ([planning-sprint-epic-grouping.md](planning-sprint-epic-grouping.md)). Full phased plan + reuse map + risks live in **[config-cluster-plan.md](config-cluster-plan.md)** — this file is the orchestration brief.
+>
+> ⚠️ **2026-10-12 (`/refresh-groups`): re-decide G1 before building.** G1 keys the per-printer map by display printer **Name**. Its rationale was *"matches the shipped `_path_filament_g` reader + the creds editor"*, and half of that no longer holds:
+> - The 2026-09-29 INDX hotfix (`main ab48e45`) moved the printer-connections grid to address Printer rows by **LocationID** ("display ≠ save ≠ lookup" was the bug).
+> - The new buglist item *"Per-printer state is keyed by display Name"* says *"long term: key all of it by the Printer row's LocationID (revisit Group 35 decision G1)."*
+> - [Group 44](44-printer-first-class.md) (Printer as a First-Class Object) will settle the stable printer id.
+>
+> Either build after 44's design pass, or put G1 back to Derek with that context first. The rest of the plan (G2–G4) is unaffected. The toolhead label display mode was considered here but placed in [Group 46](46-quick-fix-sweep-2026-10.md) 46.3 (global for now); its per-printer form would use this group's map type later.
 
 ## What this group is
 

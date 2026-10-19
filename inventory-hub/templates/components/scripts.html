@@ -64,6 +64,10 @@
 <!-- Phase 3: Quick-Swap + keyboard shortcuts registry. Must load after
      inv_loc_mgr.js since it hooks into state.printerMap. -->
 <script src="{{ url_for('static', filename='js/modules/inv_quickswap.js') }}?v=1.4"></script>
+<!-- Group 40.1: the shared slot picker (box / printer / return). After inv_cmd.js
+     (processScan calls window.routePickerScan at scan time) and before
+     shortcuts_registry.js (it registers its keys after DOMContentLoaded). -->
+<script src="{{ url_for('static', filename='js/modules/slot_picker.js') }}?v=1.0"></script>
 <script src="{{ url_for('static', filename='js/modules/inv_printer_status.js') }}?v=1.8"></script>
 <!-- Cancelled-print partial-deduct preview/confirm overlay (FilaBridge §9.7). -->
 <script src="{{ url_for('static', filename='js/modules/cancel_review.js') }}?v=1.1"></script>
@@ -137,8 +141,15 @@
         // ROOT CAUSE FIX: Removed the 'shown.bs.modal' listener for manageModal.
         // inv_loc_mgr.js -> openManage() now handles the full render cycle before showing.
 
-        // Modal Open Interceptor (Auto-disables Deck Modes)
-        document.addEventListener('show.bs.modal', () => {
+        // Modal Open Interceptor (Auto-disables Deck Modes). A gating dialog
+        // (#confirmModal / #safetyModal / #actionModal, inv_core.js's
+        // SCAN_GATING_MODALS) is a step of the action that raised it, not a new
+        // screen: an eject-mode eject that asked "unassign?" or "printing?"
+        // turned eject mode off, and the next toolhead label then loaded the
+        // buffer onto that head instead of ejecting it (Group 42 review).
+        document.addEventListener('show.bs.modal', (event) => {
+            const id = event && event.target && event.target.id;
+            if (typeof SCAN_GATING_MODALS !== 'undefined' && SCAN_GATING_MODALS.includes(id)) return;
             if (typeof window.resetCommandModes === 'function') {
                 window.resetCommandModes();
             }
@@ -265,10 +276,14 @@
                     const elapsed = Date.now() - state.scanStartTime;
                     // Normal human typing takes much longer. Scanners fire instantly < 150ms
                     const source = elapsed < 150 ? 'barcode' : 'keyboard';
-                    
+                    // When the scan was read (Group 40.2 review): processScan drops a
+                    // location label read again while the first read was still being
+                    // handled, which a queued scan replays only afterwards.
+                    const capturedAt = Date.now();
+
                     const g = document.getElementById('focus-guard');
                     const isFrozen = (g && g.style.display === 'flex') || state.processing;
-                    
+
                     if (isFrozen) {
                         console.warn("UI frozen, queuing scan:", state.scanBuffer);
                         const bffr = state.scanBuffer;
@@ -278,11 +293,11 @@
                             if (!state.processing && (!fg || fg.style.display !== 'flex')) {
                                 clearInterval(tryProcess);
                                 console.log("UI unfrozen, processing queued scan:", bffr);
-                                processScan(bffr, src);
+                                processScan(bffr, src, capturedAt);
                             }
                         }, 250);
                     } else {
-                        processScan(state.scanBuffer, source);
+                        processScan(state.scanBuffer, source, capturedAt);
                     }
                 }
                 state.scanBuffer = "";

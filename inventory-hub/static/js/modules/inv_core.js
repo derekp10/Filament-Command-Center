@@ -61,6 +61,535 @@ const isScanInFlight = () => {
 };
 window.isScanInFlight = isScanInFlight;
 
+// --- SCANNER BURST (the accumulator's barcode test, as a predicate) ---
+// "Did what is in scanBuffer arrive at scanner speed?" The accumulator
+// (scripts.html) calls a payload 'barcode' when it lands in under 150ms, and
+// installFieldScanCapture below uses the same threshold with a 3-character
+// floor. Narrower than isScanInFlight (500ms, any length): a typeahead letter
+// followed by Enter is "in flight" for 500ms but is never a burst. For a key
+// handler that owns a human's Enter yet must leave a real scan to the
+// accumulator (Group 46.2, the location editor).
+const isScannerBurst = () => {
+    const st = (typeof state !== 'undefined') ? state : window.state;
+    return !!(st && typeof st.scanBuffer === 'string' && st.scanBuffer.length >= 3
+        && st.scanStartTime && (Date.now() - st.scanStartTime) < 150);
+};
+window.isScannerBurst = isScannerBurst;
+
+// --- WHOSE ENTER IS IT? (Group 40 review, BD-2) ---
+// For a dialog that answers its focused button on Enter yet must leave a scan's
+// Enter to the accumulator (scripts.html), which hands the payload to the open
+// question: two or more characters in the scan buffer (a slower scanner's label
+// still arriving), one in flight (under 500 ms), a scanner-speed burst, or a
+// buffer that looks like a scan payload. A person's Enter on a focused button
+// finds the buffer empty. The slot picker's rule (slot_picker.js, D1).
+const enterIsAScan = () => {
+    const st = (typeof state !== 'undefined') ? state : window.state;
+    const buf = st && typeof st.scanBuffer === 'string' ? st.scanBuffer : '';
+    if (buf.length >= 2) return true;
+    if (isScanInFlight() || isScannerBurst()) return true;
+    return !!(buf && window.looksLikeScanPayload && window.looksLikeScanPayload(buf));
+};
+window.enterIsAScan = enterIsAScan;
+
+// --- SCAN BUFFER RESET (now, and again after this tick) ---
+// For a key handler that consumes a key the accumulator (scripts.html) would
+// otherwise collect or submit. The deferred second clear doesn't depend on
+// listener order (the L298 Shift+B lesson): if the accumulator still runs after
+// the caller, the buffer ends up empty anyway.
+const clearScanBuffer = () => {
+    const st = (typeof state !== 'undefined') ? state : window.state;
+    const clear = () => {
+        if (!st) return;
+        st.scanBuffer = '';
+        st.scanStartTime = 0;
+        try { clearTimeout(st.bufferTimeout); } catch (_) { /* noop */ }
+    };
+    clear();
+    setTimeout(clear, 0);
+};
+window.clearScanBuffer = clearScanBuffer;
+
+// --- CONFIRMED HEADS (Group 39.1) ---
+// A move's active-print confirm names the heads whose warning the user saw
+// (`confirmed_toolheads`); a bare `confirm_active_print: true` covers none.
+// unionConfirmHeads(prior, answer) is what a Yes sends: the heads already
+// confirmed plus the ones this answer showed (`active_prints`, else the legacy
+// `active_print`). Always the UNION: replaying only the latest answer's heads
+// would ping-pong the user between two printing heads forever.
+const unionConfirmHeads = (prior, answer) => {
+    const out = new Set((Array.isArray(prior) ? prior : []).map(h => String(h).toUpperCase()));
+    const shown = (answer && Array.isArray(answer.active_prints) && answer.active_prints.length)
+        ? answer.active_prints.map(a => a && a.toolhead)
+        : [answer && answer.active_print && answer.active_print.toolhead];
+    shown.forEach(h => { if (h) out.add(String(h).toUpperCase()); });
+    return [...out];
+};
+window.unionConfirmHeads = unionConfirmHeads;
+
+// --- CONFIRMED FED HEADS (Group 40.3) ---
+// The fed-head twin of unionConfirmHeads: what "Load it instead" sends in
+// `confirmed_fed_heads`, the confirm keys ("XL-1#99": the head AND the spools
+// the question named) of every head_fed answer so far. A different spool on
+// that head is asked about again. Always the UNION: an idle "already running"
+// question followed by a print starting would otherwise ping-pong between two
+// dialogs, each Yes forgetting the other.
+const unionConfirmFedHeads = (prior, answer) => {
+    const out = new Set((Array.isArray(prior) ? prior : []).map(k => String(k).toUpperCase()));
+    const fed = (answer && Array.isArray(answer.fed_heads)) ? answer.fed_heads : [];
+    fed.forEach(f => { if (f && f.confirm_key) out.add(String(f.confirm_key).toUpperCase()); });
+    return [...out];
+};
+window.unionConfirmFedHeads = unionConfirmFedHeads;
+
+// --- MOVE CONFIRM (Group 39.4; three-way mode Group 40.3) ---
+// The one overlay every move door shows when the server asks a question
+// (CLAUDE.md: a new door shows window.confirmActivePrint, never a new copy).
+// Two modes:
+//   - yes / no (39.4): a move touches a printing head. The server's `msg`
+//     (Derek's D6 wording), Continue Anyway / Cancel.
+//   - three-way (40.3, `title` given): loading a bound box slot's toolhead
+//     needs a word (`confirm_type: 'head_fed'`, or a printing answer that can
+//     store). `title` asks ("Load #57 onto XL-1?"), `msg` explains (the
+//     server's `body`, with no "Continue?"), and the buttons are Load it
+//     instead (the yes) · Just store it in <box> slot <n> (`onStore`) · Cancel
+//     (the no). Nothing about printing is invented: a printing answer's body
+//     says so itself. Enter stores (Derek, 2026-10-14: a toolhead can't be
+//     loaded mid-print, and on the fed dialog too); with no store option it
+//     cancels, never loads. While it is open, other scans are held off
+//     (window._fccOpenMoveQuestion, read by processScan).
+// Both: one answer only (a double click, or a click racing a scan, moves
+// once); a scan in flight owns its Enter, and so does a slower scanner's
+// buffered payload; Tab (and ←/→ in the three-way) cycles the buttons; Escape
+// cancels through mountOverlay; the QR row mirrors the buttons (CMD:CONFIRM /
+// CMD:STORE / CMD:CANCEL); and the host closing cancels it (its QR session used
+// to stay armed after the host had gone).
+// `host`: the Bootstrap modal it sits over. `ids`: {overlay, yes, no, store}, for
+// a caller that keeps its proven DOM ids (the Location Manager and scan-assign
+// overlays, and their tests).
+// One unanswered question per overlay id (Group 40.3 review, B2 / B3): a dialog
+// mounted on the same id over an unanswered one replaces it, and the older one
+// is settled as superseded (`onCancel({superseded: true})`), so its host
+// listener, QR session and scan hold-off never outlive its DOM.
+const _openMoveConfirms = {};
+window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', host = null,
+                               ids = {}, onConfirm = null, onCancel = null,
+                               title = '', onStore = null, storeLabel = '', loadLabel = '',
+                               printing = null, noLoad = false, hint = '' } = {}) => {
+    const esc = (s) => String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    const threeWay = !!title;
+    const first = activePrint || (Array.isArray(activePrints) && activePrints[0]) || {};
+    const isPrinting = printing != null ? !!printing
+        : !!(activePrint || (Array.isArray(activePrints) && activePrints.length));
+    const hasStore = threeWay && typeof onStore === 'function';
+    // A three-way question whose answer can't load (a slot that now feeds no
+    // toolhead, 40.3's feed_changed) offers only the store and Cancel.
+    const hasLoad = !(threeWay && noLoad && hasStore);
+    const idAttr = (id) => (id ? `id="${esc(id)}" ` : '');
+    const border = (!threeWay || isPrinting) ? '#ff8800' : '#0dcaf0';
+    const header = threeWay
+        ? `${isPrinting ? '⚠️' : '🔁'} ${esc(title)}`
+        : `⚠️ ${esc(first.printer_name || 'A printer')} is ${esc(first.state || 'PRINTING')}`;
+    const bodyText = threeWay ? msg : (msg || 'Moving a spool now will disrupt the print. Continue?');
+    const buttons = threeWay
+        ? (hasLoad ? `<button type="button" ${idAttr(ids.yes)}class="btn btn-warning btn-sm fcc-apc-yes" style="min-width:120px;">${esc(loadLabel || 'Load it instead')}</button>` : '')
+          + (hasStore ? `<button type="button" ${idAttr(ids.store)}class="btn btn-info btn-sm fcc-apc-store" style="min-width:120px;">${esc(storeLabel || 'Just store it')}</button>` : '')
+          + `<button type="button" ${idAttr(ids.no)}class="btn btn-secondary btn-sm fcc-apc-no" style="min-width:100px;">Cancel</button>`
+        : `<button type="button" ${idAttr(ids.yes)}class="btn btn-warning btn-sm fcc-apc-yes" style="min-width:120px;">Continue Anyway</button>
+                <button type="button" ${idAttr(ids.no)}class="btn btn-secondary btn-sm fcc-apc-no" style="min-width:120px;">Cancel</button>`;
+    const extras = threeWay
+        ? `<div class="fcc-apc-hint" style="font-size:0.8rem; color:#ccc; margin-top:8px;">Enter ${hasStore ? 'stores it' : 'cancels'} · Esc cancels</div>`
+        : '';
+    const status = threeWay
+        ? `<div class="fcc-apc-status" role="alert" style="display:none; margin-bottom:10px; padding:6px 10px; border-radius:6px; background:#4a3200; color:#ffd27a; border:1px solid #ffb74d; font-weight:bold; text-align:left;"></div>`
+        : '';
+    const content = `
+        <div class="fcc-apc-panel" style="background:#1e1e1e; color:#fff; border:2px solid ${border}; border-radius:8px; padding:20px 24px; max-width:${threeWay ? 560 : 480}px; text-align:center;">
+            <div class="fcc-apc-title" style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">${header}</div>
+            <div class="fcc-apc-msg" style="color:#ffc; margin-bottom:14px;${threeWay ? ' text-align:left;' : ''}">${esc(bodyText)}</div>
+            ${status}
+            <div style="display:flex; gap:10px; justify-content:center;${threeWay ? ' flex-wrap:wrap;' : ''}">
+                ${buttons}
+            </div>
+            ${extras}
+        </div>`;
+    const overlayId = ids.overlay || 'fcc-active-print-confirm-overlay';
+    let handle = null;
+    let qrSession = null;
+    let settled = false;
+    let hostOff = null;
+    let question = null;
+    let statusTimer = null;
+    let superseded = null;
+    const cleanup = () => {
+        if (qrSession) { try { qrSession.cleanup(); } catch (_) { /* noop */ } qrSession = null; }
+        if (handle) { try { handle.cleanup(); } catch (_) { /* noop */ } handle = null; }
+        if (hostOff) { try { hostOff(); } catch (_) { /* noop */ } hostOff = null; }
+        if (question) {
+            // Scans are held off while ANY three-way is open (Group 40.3 fix
+            // check, W3): answering the newer of two let a scan start a move
+            // behind the older one.
+            const open = (window._fccOpenMoveQuestions || []).filter(q => q !== question);
+            window._fccOpenMoveQuestions = open;
+            if (window._fccOpenMoveQuestion === question) {
+                window._fccOpenMoveQuestion = open.length ? open[open.length - 1] : null;
+            }
+        }
+        if (superseded && _openMoveConfirms[overlayId] === superseded) delete _openMoveConfirms[overlayId];
+        clearTimeout(statusTimer);
+    };
+    // Once only: a double click, or a click racing a scan, must not move twice.
+    const settle = (fn) => () => { if (settled) return; settled = true; cleanup(); if (fn) fn(); };
+    const yes = settle(onConfirm);
+    const store = settle(onStore);
+    const no = settle(onCancel);
+    superseded = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        // Logged here, whatever the caller (Group 40.3 fix check, W5: a
+        // replaced yes / no left no trace); never toasted as "Cancelled".
+        const said = threeWay ? title : `${first.printer_name || 'A printer'} is ${first.state || 'PRINTING'}`;
+        if (window.logClientEvent) window.logClientEvent(
+            `ℹ️ "${said}" was replaced by another question — nothing moved`, 'INFO');
+        if (onCancel) onCancel({ superseded: true });
+    };
+    const prior = _openMoveConfirms[overlayId];
+    if (prior) prior();
+    handle = window.mountOverlay({
+        id: overlayId,
+        content,
+        tier: 'confirm',
+        host: host || undefined,
+        initialFocus: threeWay ? (hasStore ? '.fcc-apc-store' : '.fcc-apc-no') : '.fcc-apc-yes',
+        onEscape: no,
+    });
+    _openMoveConfirms[overlayId] = superseded;
+    const ov = handle.element;
+    const yesBtn = hasLoad ? ov.querySelector('.fcc-apc-yes') : null;
+    const storeBtn = hasStore ? ov.querySelector('.fcc-apc-store') : null;
+    const noBtn = ov.querySelector('.fcc-apc-no');
+    if (yesBtn) yesBtn.onclick = yes;
+    if (storeBtn) storeBtn.onclick = store;
+    if (noBtn) noBtn.onclick = no;
+    // mountOverlay removes the DOM when the host closes; the answer must close
+    // too, or its QR session stays armed and a late CMD:CONFIRM still moves.
+    if (host && typeof host.addEventListener === 'function') {
+        const onHostGone = () => no();
+        host.addEventListener('hidden.bs.modal', onHostGone);
+        host.addEventListener('hidden.bs.offcanvas', onHostGone);
+        hostOff = () => {
+            host.removeEventListener('hidden.bs.modal', onHostGone);
+            host.removeEventListener('hidden.bs.offcanvas', onHostGone);
+        };
+    }
+    ov.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            // A scan in flight owns this Enter: it terminates the scan (a
+            // "Scan to Cancel" QR must never perform the CONFIRM). So does a
+            // slower scanner's buffered payload (a ':' no human types here):
+            // its Enter used to answer the focused button, and in the
+            // three-way that is "Just store it".
+            if (window.isScanInFlight && window.isScanInFlight()) return;
+            const st = (typeof state !== 'undefined') ? state : window.state;
+            const buffered = st && typeof st.scanBuffer === 'string' ? st.scanBuffer : '';
+            if (buffered && window.looksLikeScanPayload && window.looksLikeScanPayload(buffered)) return;
+            const ae = document.activeElement;
+            if (threeWay) {
+                e.preventDefault(); e.stopPropagation();
+                if (yesBtn && ae === yesBtn) yes();
+                else if (storeBtn && ae === storeBtn) store();
+                else if (ae === noBtn) no();
+                else if (hasStore) store();
+                else no();
+                return;
+            }
+            if (ae === yesBtn) { e.preventDefault(); e.stopPropagation(); yes(); }
+            else if (ae === noBtn) { e.preventDefault(); e.stopPropagation(); no(); }
+            return;
+        }
+        const arrow = threeWay && (e.key === 'ArrowLeft' || e.key === 'ArrowRight');
+        if (e.key === 'Tab' || arrow) {
+            const order = [yesBtn, storeBtn, noBtn].filter(Boolean);
+            const back = e.key === 'ArrowLeft' || (e.key === 'Tab' && e.shiftKey);
+            const idx = order.indexOf(document.activeElement);
+            const next = idx === -1 ? (back ? order.length - 1 : 0)
+                : (idx + (back ? order.length - 1 : 1)) % order.length;
+            e.preventDefault(); e.stopPropagation();
+            order[next].focus();
+        }
+    }, true);
+    if (window.attachConfirmQRs) {
+        // Inside the dialog PANEL, so the QR row stacks below the buttons.
+        // A three-way with no Load (it can only store) scans its store as the
+        // CONFIRM QR, so there are never two cancel codes.
+        const theme = isPrinting ? 'warning' : 'info';
+        qrSession = window.attachConfirmQRs(!threeWay
+            ? { host: handle.panel, onConfirm: yes, onCancel: no, theme: 'warning' }
+            : hasLoad
+                ? { host: handle.panel, onConfirm: yes, onCancel: no, onStore: hasStore ? store : undefined,
+                    confirmLabel: 'Scan to Load', storeLabel: 'Scan to Store', cancelLabel: 'Scan to Cancel', theme }
+                : { host: handle.panel, onConfirm: store, onCancel: no,
+                    confirmLabel: 'Scan to Store', cancelLabel: 'Scan to Cancel', theme });
+    }
+    if (threeWay) {
+        // The question on screen: processScan holds off every other scan until
+        // it is answered (a second slot label used to start a second move
+        // behind the dialog). The status line says why a scan did nothing:
+        // the toast layer (z 11000) sits under this dialog.
+        // What a held-off scan is told (processScan): the buttons on screen
+        // (Group 40 review, BD-6: a question with no store said "Just store it").
+        const said = [hasLoad ? (loadLabel || 'Load it instead') : '', hasStore ? 'Just store it' : '', 'Cancel']
+            .filter(Boolean);
+        question = {
+            title,
+            hint: hint || `Answer the question on screen first: ${said.slice(0, -1).join(', ')}`
+                + `${said.length > 2 ? ',' : ''} or ${said[said.length - 1]}`,
+            // processScan drops a hold-off whose dialog is no longer on the page.
+            element: ov,
+            cancel: () => no(),
+            flash: (text) => {
+                const line = ov.querySelector('.fcc-apc-status');
+                if (!line) return;
+                line.textContent = text;
+                line.style.display = 'block';
+                clearTimeout(statusTimer);
+                statusTimer = setTimeout(() => { line.style.display = 'none'; }, 7000);
+            },
+        };
+        window._fccOpenMoveQuestions = (window._fccOpenMoveQuestions || []).concat([question]);
+        window._fccOpenMoveQuestion = question;
+    }
+    return { close: no };
+};
+
+// --- HEAD-LOAD CONFIRM (Group 40.3, Derek's D2.2 / D2.3) ---
+// A server answer about loading a bound box slot's toolhead, shown as the
+// three-way above: `head_fed` (that head already runs a spool from somewhere
+// else, printing or not; e.g. XL-1 running off a PolyDryer while LR-MDB-1 slot 1
+// is prepped for later), a printing answer that can store (`can_store`), or a
+// slot that changed its feed while the user decided (`feed_changed`). The
+// title and body are the server's; the store button names the slot the
+// question was about. `box` / `slot`: the door's own, for an answer that names
+// neither.
+window.confirmHeadLoad = ({ answer = {}, box = '', slot = '', host = null, ids = {},
+                            onLoad = null, onStore = null, onCancel = null } = {}) => {
+    const a = answer || {};
+    const fed = (Array.isArray(a.fed_heads) && a.fed_heads[0]) || null;
+    const feedsEntry = (Array.isArray(a.active_prints) ? a.active_prints : []).find(p => p && p.role === 'feeds') || null;
+    const head = (fed && fed.toolhead) || (feedsEntry && feedsEntry.toolhead)
+        || (typeof a.feed === 'string' ? a.feed : '');
+    const spools = Array.isArray(a.spools) ? a.spools : [];
+    const sid = spools.length ? spools[spools.length - 1] : (a.moved != null ? a.moved : null);
+    const what = sid != null ? `#${sid}` : 'the spool';
+    const title = a.title || (head ? `Load ${what} onto ${head}?` : `Load ${what}?`);
+    const body = a.body || String(a.msg || '').replace(/\s*Continue\?\s*$/, '');
+    const storeBox = (fed && fed.box) || a.target || box || a.location || '';
+    const storeSlot = (fed && fed.slot) || a.target_slot || slot || a.slot || '';
+    const where = (storeSlot !== '' && storeSlot != null) ? `${storeBox} slot ${storeSlot}` : storeBox;
+    return window.confirmActivePrint({
+        title, msg: body, host, ids,
+        activePrints: Array.isArray(a.active_prints) ? a.active_prints : [],
+        // The server's own word (Group 40.3 review, C4): a printing head the
+        // caller already confirmed is not in active_prints, yet the body says
+        // the XL is printing.
+        printing: typeof a.printing === 'boolean' ? a.printing
+            : (Array.isArray(a.active_prints) && a.active_prints.length > 0),
+        loadLabel: 'Load it instead', onConfirm: onLoad,
+        storeLabel: `Just store it in ${where}`,
+        onStore: (a.can_store === true && typeof onStore === 'function') ? onStore : null,
+        noLoad: a.can_load === false,
+        onCancel,
+    });
+};
+
+// --- MOVE QUESTIONS: what kind, and what a door sends back (Group 40.3) ---
+// moveConfirmKind(answer): null (not a question), 'head_load' (the three-way:
+// head_fed / feed_changed, or a printing answer that can store), 'active_print'
+// (the yes / no; a missing confirm_type is still one, as every answer was
+// before 40.0c) or 'unknown' (never shown as an invented printing yes / no).
+window.moveConfirmKind = (answer) => {
+    const a = answer || {};
+    const asking = a.status === 'requires_confirm' || /_requires_confirm$/.test(String(a.action || ''));
+    if (!asking) return null;
+    const type = (a.confirm_type == null || a.confirm_type === '') ? 'active_print' : String(a.confirm_type);
+    if (type === 'head_fed' || type === 'feed_changed') return 'head_load';
+    if (type === 'active_print') return a.can_store === true ? 'head_load' : 'active_print';
+    return 'unknown';
+};
+
+// buildMoveReplay(door, original, answer, choice, prior) -> {body, prior}: the
+// request a door sends after the user answered `answer`, from the request it
+// first sent (`original`) and what earlier rounds confirmed (`prior`). Pure.
+//   door:   'slot_scan' (identify_scan: the slot is in `text`), 'smart_move'
+//           (`spools` + `slot`) or 'manage_add' (`spool_id` + `slot`).
+//   choice: 'load' (Load it instead, or the yes / no's Yes) or 'store'.
+// Load it instead adds every confirm key so far (`confirmed_fed_heads`) and
+// every printing head so far (`confirmed_toolheads`). Just store it sends
+// `auto_deploy: false`, and confirms only the printing heads it does NOT load
+// (a spool leaving a printing head still asks about that head); a store stays
+// a store in later rounds. Both send `expected_feed` (what the slot fed when
+// the user decided: a slot re-pointed meanwhile is asked about again), the slot
+// the engine picked for a slotless move (`picked_slot`: kept only while still
+// free, never an Overwrite), and the spools the question named, never a
+// re-read of a buffer that may have changed.
+window.buildMoveReplay = (door, original, answer, choice, prior = {}) => {
+    const a = answer || {};
+    const p = prior || {};
+    const store = choice === 'store' || !!p.store;
+    const fedKeys = store ? (Array.isArray(p.fedKeys) ? p.fedKeys.slice() : [])
+        : window.unionConfirmFedHeads(p.fedKeys, a);
+    const prints = Array.isArray(a.active_prints) ? a.active_prints : [];
+    const heads = store
+        ? window.unionConfirmHeads(p.heads, { active_prints: prints.filter(x => x && x.role !== 'feeds') })
+        : window.unionConfirmHeads(p.heads, a);
+    const body = Object.assign({}, original || {}, { confirmed_toolheads: heads, confirmed_fed_heads: fedKeys });
+    if (store) body.auto_deploy = false;
+    let feed = null;
+    if (typeof a.feed === 'string') feed = a.feed;
+    else {
+        const fed = (Array.isArray(a.fed_heads) && a.fed_heads[0]) || null;
+        const feedsEntry = prints.find(x => x && x.role === 'feeds') || null;
+        feed = (fed && fed.toolhead) || (feedsEntry && feedsEntry.toolhead) || (p.expectedFeed != null ? p.expectedFeed : null);
+    }
+    if (feed != null) body.expected_feed = String(feed).toUpperCase();
+    const o = original || {};
+    const noSlot = o.slot == null || String(o.slot).trim() === '';
+    let picked = p.pickedSlot != null ? p.pickedSlot : null;
+    if (a.slot_picked === true || (a.slot_picked === undefined && door !== 'slot_scan' && noSlot)) {
+        if (a.target_slot != null && a.target_slot !== '') picked = String(a.target_slot);
+    }
+    if (door !== 'slot_scan' && picked != null) body.picked_slot = picked;
+    const spools = Array.isArray(a.spools) ? a.spools : [];
+    if (door === 'slot_scan') {
+        const sid = a.moved != null ? a.moved : (spools.length ? spools[spools.length - 1] : null);
+        if (sid != null) body.spool_id = sid;
+    } else if (door === 'smart_move' && spools.length) {
+        body.spools = spools.slice();
+    }
+    // The heads a moving spool leaves, as every round named them, for the store
+    // toast (window.storeToastTail): the answer's `leaving` (printing or not),
+    // and a printing answer's 'source' heads.
+    const sources = Array.from(new Set([].concat(
+        Array.isArray(p.sources) ? p.sources : [],
+        (Array.isArray(a.leaving) ? a.leaving : []).map(x => String(x || '').toUpperCase()).filter(Boolean),
+        prints.filter(x => x && x.role === 'source').map(x => String(x.toolhead || '').toUpperCase()).filter(Boolean))));
+    return { body, prior: { heads, fedKeys, store, expectedFeed: feed, pickedSlot: picked, sources } };
+};
+
+// The end of a "Just store it" toast (Group 40.3 review, B4): " — XL-1 left as it
+// was", unless the stored spool came off that very head (a spool on XL-1 scanned
+// into the slot that feeds XL-1, mid-print), where it says " — taken off XL-1".
+// '' when the question named no head. `prior`: a buildMoveReplay prior.
+window.storeToastTail = (prior) => {
+    const p = prior || {};
+    const head = p.expectedFeed ? String(p.expectedFeed).toUpperCase() : '';
+    if (!head) return '';
+    return (Array.isArray(p.sources) && p.sources.includes(head)) ? ` — taken off ${head}` : ` — ${head} left as it was`;
+};
+
+// --- THE SAME-SLOT SWAP'S OLD SPOOL (Group 40; Derek, 2026-10-15) ---
+// A move that filled a box slot whose own spool was running on the slot's head
+// took that spool off the head into the scan buffer: it is in your hand (Derek
+// swaps a slot once its spool has run out, so it usually needs zeroing). So does
+// a slot's stored spool the user chose to Swap out (Swap option C). The server
+// put it at the END of its buffer replica, filed back in Spoolman where it sat
+// before that slot (else Unassigned), and names it in the answer's `to_buffer`
+// (a slot scan's own `smart_move` too). This
+// page adds it to its buffer as well, behind the spools already waiting (its
+// next save replaces the replica whole, so the server's copy alone would be
+// lost), and toasts it in short arrows. Every door that can complete a move
+// calls it with the answer. A door that edits the buffer itself passes
+// {render: false} and renders ONCE after both edits: two saves in a row can
+// reach the server out of order, and the one without this spool would win.
+// {toast: false} leaves the toast to window.toastIntoBuffer(items). Returns the
+// entries it was told about.
+// Swap option C (Derek, 2026-10-15): a spool swapped out of a slot is also filed
+// back where it sat before that slot (`filed_to`: "CR-CT-2-R1", "LR-MDB-2 slot 1";
+// none when FCC had no record, so it is Unassigned), and the toast says where.
+window.toastIntoBuffer = (items) => {
+    (items || []).forEach(i => {
+        const notes = [];
+        if (i && i.off_head) notes.push(`taken off ${i.off_head}`);
+        if (i && i.filed_to) notes.push(`filed back in ${i.filed_to}`);
+        const tail = notes.length ? ` (${notes.join('; ')})` : '';
+        if (i && typeof showToast === 'function') showToast(`✋ #${i.id} → your buffer${tail}`, 'info', 5000);
+    });
+};
+window.takeIntoBuffer = (answer, { render = true, toast = true } = {}) => {
+    const a = answer || {};
+    const list = Array.isArray(a.to_buffer) ? a.to_buffer
+        : ((a.smart_move && Array.isArray(a.smart_move.to_buffer)) ? a.smart_move.to_buffer : []);
+    const items = list.filter(i => i && i.id != null);
+    if (!items.length) return [];
+    const st = (typeof state !== 'undefined') ? state : window.state;
+    let added = false;
+    items.forEach(i => {
+        if (!st.heldSpools.some(s => String(s.id) === String(i.id))) {
+            const entry = Object.assign({}, i);
+            delete entry.off_head;
+            delete entry.filed_to;
+            st.heldSpools.push(entry);
+            added = true;
+        }
+    });
+    if (render && added && window.renderBuffer) window.renderBuffer();
+    if (toast) window.toastIntoBuffer(items);
+    return items;
+};
+
+// askMoveConfirm(answer, ctx): the one place a door shows a move question and
+// sends its replay. ctx: {door, original, prior, host, ids, box, slot,
+// send(body, nextPrior, choice), askYesNo?(answer, yes), onCancel?}. A
+// `head_load` answer gets the three-way; an `active_print` one the door's own
+// yes / no (`askYesNo`, which keeps its proven ids and wording) or the shared
+// one. Cancel moves nothing and says so.
+window.askMoveConfirm = (answer, ctx = {}) => {
+    const kind = window.moveConfirmKind(answer);
+    const prior = ctx.prior || {};
+    const replay = (choice) => {
+        const r = window.buildMoveReplay(ctx.door, ctx.original, answer, choice, prior);
+        ctx.send(r.body, r.prior, choice);
+    };
+    const toast = (m, type, ms) => { if (typeof showToast === 'function') showToast(m, type, ms); };
+    if (kind === 'head_load') {
+        const cancelled = (info) => {
+            if (info && info.superseded) {
+                // Another question took its place (Group 40.3 review, B2): the
+                // user never answered this one, and a toast here read as if the
+                // move they did answer had been cancelled. confirmActivePrint
+                // logged it.
+            } else {
+                toast('Cancelled — nothing moved', 'info', 4000);
+                if (window.logClientEvent) window.logClientEvent(
+                    `ℹ️ Cancelled "${answer.title || 'a load question'}" — nothing moved`, 'INFO');
+            }
+            if (ctx.onCancel) ctx.onCancel(info);
+        };
+        // `ctx.noStore` (Group 40.2 review): the door knows a store would be
+        // refused (the box picker's slot holds a stale record), so no "Just
+        // store it"; Enter then cancels, as in any three-way with no store.
+        return window.confirmHeadLoad({ answer, host: ctx.host, ids: ctx.ids || {}, box: ctx.box, slot: ctx.slot,
+            onLoad: () => replay('load'), onStore: ctx.noStore ? null : () => replay('store'), onCancel: cancelled });
+    }
+    if (kind === 'active_print') {
+        const yes = () => replay(prior.store ? 'store' : 'load');
+        if (typeof ctx.askYesNo === 'function') return ctx.askYesNo(answer, yes);
+        return window.confirmActivePrint({ activePrint: answer.active_print, activePrints: answer.active_prints || [],
+            msg: answer.msg, host: ctx.host, ids: ctx.ids || {}, onConfirm: yes, onCancel: ctx.onCancel });
+    }
+    const what = (answer && answer.msg) || 'FCC asked a question this page cannot show';
+    toast(`${what} — nothing moved. Reload the page if this keeps happening.`, 'warning', 7000);
+    if (window.logClientEvent) window.logClientEvent(
+        `⚠️ Unrecognised move question (${answer && answer.confirm_type}) — nothing moved`, 'WARNING');
+    // `unknown`: nobody answered anything (Group 40.2: the box picker's loop ends
+    // here instead of reopening the picker on the same unanswerable question).
+    if (ctx.onCancel) ctx.onCancel({ unknown: true });
+    return null;
+};
+
 // --- SCAN CAPTURE FROM A FOCUSED FIELD ---
 // The global accumulator bails on `e.target.tagName === 'INPUT'`, so any modal
 // that focuses a text field disarms the scanner. Sometimes dropping the
@@ -291,10 +820,204 @@ if (!window.__fccToastEscapeBound) {
     }, true);
 }
 
-const setProcessing = (s) => {
+// --- PRINTER CHECK (Group 39.3) ---
+// "⏳ Checking XL…" whenever FCC waits on a printer. The probe can take ~2 s for a
+// powered-down printer and ~4 s for a wrong key, and the screen used to show
+// nothing new. One pinned pill for clicks and scans alike (a scan has no pressed
+// control to spin): it shows after PRINTER_CHECK_DELAY_MS (a fast answer never
+// flashes it), goes when the probe settles, and on a client timeout says the
+// printer didn't answer and logs a WARNING. Deliberately NOT a .toast-msg:
+// Escape dismisses the newest toast, and the pill must never swallow an Escape
+// meant for a modal. Server-side waits label the processing dim instead
+// (setProcessing's `label`, from printerLabelForTarget).
+const PRINTER_CHECK_DELAY_MS = 300;
+const PRINTER_CHECK_TIMEOUT_MS = 3000;
+window.PRINTER_CHECK_DELAY_MS = PRINTER_CHECK_DELAY_MS;
+window.PRINTER_CHECK_TIMEOUT_MS = PRINTER_CHECK_TIMEOUT_MS;
+let _printerPillGen = 0;
+const _printerCheckPill = (text, tone) => {
+    let pill = document.getElementById('fcc-printer-check-pill');
+    if (!text) { if (pill) pill.remove(); return; }
+    if (!pill) {
+        pill = document.createElement('div');
+        pill.id = 'fcc-printer-check-pill';
+        pill.setAttribute('role', 'status');
+        pill.style.cssText = 'position:fixed; top:14px; left:50%; transform:translateX(-50%); z-index:11000;'
+            + ' padding:6px 16px; border-radius:16px; font-weight:bold; font-size:0.95rem;'
+            + ' box-shadow:0 2px 10px rgba(0,0,0,0.5); pointer-events:none;';
+        document.body.appendChild(pill);
+    }
+    const warn = tone === 'warn';
+    pill.textContent = text;
+    pill.style.background = warn ? '#4a3200' : '#1f3b57';
+    pill.style.color = warn ? '#ffd27a' : '#cfe6ff';
+    pill.style.border = warn ? '1px solid #ffb74d' : '1px solid #5ba7e8';
+};
+
+// Resolve to what `promise` resolves to, or to `fallback` when it rejects or
+// the client gives up after `timeoutMs` (then the pill warns and a WARNING is
+// logged). The probe fails open either way: callers never block a move on it.
+window.withPrinterCheck = (printerName, promise, { timeoutMs = PRINTER_CHECK_TIMEOUT_MS, fallback = null } = {}) => {
+    const name = printerName || 'the printer';
+    const gen = ++_printerPillGen;
+    const showTimer = setTimeout(() => { if (gen === _printerPillGen) _printerCheckPill(`⏳ Checking ${name}…`); },
+        PRINTER_CHECK_DELAY_MS);
+    let giveUpTimer = null;
+    const giveUp = new Promise((resolve) => { giveUpTimer = setTimeout(() => resolve({ __timedOut: true }), timeoutMs); });
+    return Promise.race([Promise.resolve(promise).catch(() => fallback), giveUp]).then((v) => {
+        clearTimeout(showTimer);
+        clearTimeout(giveUpTimer);
+        if (v && v.__timedOut) {
+            if (gen === _printerPillGen) {
+                _printerCheckPill(`⚠️ ${name} didn't answer — FCC couldn't check whether it is printing`, 'warn');
+                setTimeout(() => { if (gen === _printerPillGen) _printerCheckPill(null); }, 4000);
+            }
+            if (window.logClientEvent) window.logClientEvent(
+                `⚠️ ${name} didn't answer within ${Math.round(timeoutMs / 1000)} s — FCC couldn't check whether it is printing`,
+                'WARNING');
+            return fallback;
+        }
+        if (gen === _printerPillGen) _printerCheckPill(null);
+        return v;
+    });
+};
+
+// /api/printer_state, telling "idle" apart from "couldn't ask":
+// {active, known, reason, state, printer_name}. `reason` is the route's
+// (no_credentials, prusalink_unreachable, not_in_printer_map, ...).
+window.fetchPrinterStateDetailed = (toolheadLocId) => {
+    const none = (reason) => ({ active: false, known: false, reason, state: null, printer_name: null });
+    if (!toolheadLocId) return Promise.resolve(none('no_toolhead'));
+    return fetch(`/api/printer_state/${encodeURIComponent(toolheadLocId)}`)
+        .then(r => (r.ok ? r.json() : null))
+        .then(d => (d ? {
+            active: !!(d.known && d.is_active),
+            known: !!d.known,
+            reason: d.reason || null,
+            state: d.state || null,
+            printer_name: d.printer_name || null,
+        } : none('http_error')))
+        .catch(() => none('unreachable'));
+};
+
+// The printer that owns a head, so the pill can name it before the probe
+// answers: state.printerMap ({name: [{location_id}]}) when a view loaded it,
+// else the Printer rows in state.allLocations (Group 39 review, frontend-13:
+// only the Feeds editor and a toolhead's Quick-Swap view fill printerMap, so a
+// fresh dashboard's dim named no printer). A Printer row carries Name and
+// toolheads[].location_id; a dual-role printer (the Core One) is its own head.
+// null when unknown.
+window.printerNameForHead = (locId) => {
+    const id = String(locId || '').toUpperCase();
+    if (!id) return null;
+    const pm = (typeof state !== 'undefined' && state && state.printerMap) || null;
+    if (pm) {
+        for (const [name, heads] of Object.entries(pm)) {
+            if ((heads || []).some(h => String((h && h.location_id) || '').toUpperCase() === id)) return name;
+        }
+    }
+    const rows = (typeof state !== 'undefined' && state && Array.isArray(state.allLocations)) ? state.allLocations : [];
+    for (const row of rows) {
+        if (!row || row.Type !== 'Printer') continue;
+        const heads = Array.isArray(row.toolheads) ? row.toolheads : [];
+        if (String(row.LocationID || '').toUpperCase() === id
+            || heads.some(h => String((h && h.location_id) || '').toUpperCase() === id)) {
+            return row.Name || row.LocationID;
+        }
+    }
+    return null;
+};
+
+// --- WHICH PICKER A LOCATION NEEDS (Group 40.4 / 40.5) ---
+// The browser's copy of locations_db.is_printer_row_not_head, the one
+// classifier the engine's refusal (40.0a) and Eject All's (41.1) use: a Printer
+// row that isn't itself one of its printer's toolheads (XL, RCOI, or a printer
+// whose heads aren't set up yet). A Printer row is its own head only when some
+// Printer row's toolheads[] lists it (the old dual-role Core One). `rows`: the
+// location rows to read (default state.allLocations).
+window.isPrinterRowNotHead = (row, rows = null) => {
+    if (!row || String(row.Type || '').trim().toLowerCase() !== 'printer') return false;
+    const id = String(row.LocationID || '').trim().toUpperCase();
+    const all = Array.isArray(rows) ? rows
+        : ((typeof state !== 'undefined' && state && Array.isArray(state.allLocations)) ? state.allLocations : []);
+    return !all.some(r => r && String(r.Type || '').trim().toLowerCase() === 'printer'
+        && (Array.isArray(r.toolheads) ? r.toolheads : [])
+            .some(t => String((t && t.location_id) || '').trim().toUpperCase() === id));
+};
+// A multi-slot Dryer Box (the box picker's rows); and a single-slot one,
+// locations_db._is_single_slot_dryer_box's rule (Max Spools "1" or "0"; a blank
+// isn't managed).
+window.isMultiSlotBox = (row) => !!row && row.Type === 'Dryer Box' && (parseInt(row['Max Spools'], 10) || 0) > 1;
+window.isSingleSlotBox = (row) => {
+    if (!row || row.Type !== 'Dryer Box') return false;
+    const raw = String(row['Max Spools'] == null ? '' : row['Max Spools']).trim();
+    const n = parseInt(raw, 10);
+    return raw !== '' && !isNaN(n) && n <= 1;
+};
+
+// A client probe of a head, with the pill and the timeout race (every client
+// probe gets it; doAssign's used to wait on the server with no cap).
+window.checkPrinterForHead = (locId, { timeoutMs = PRINTER_CHECK_TIMEOUT_MS } = {}) => {
+    const name = window.printerNameForHead(locId) || locId;
+    return window.withPrinterCheck(name, window.fetchPrinterStateDetailed(locId), {
+        timeoutMs,
+        fallback: { active: false, known: false, reason: 'timeout', state: null, printer_name: name },
+    });
+};
+
+// The one line an overlay adds when FCC couldn't ask the printer, or '' when it
+// could (or the target isn't a printer head). No login is not "unreachable":
+// the fix is entering it, not checking the network.
+window.printerCheckNote = (detail, fallbackName) => {
+    if (!detail || detail.known || detail.reason === 'not_in_printer_map' || detail.reason === 'no_toolhead') return '';
+    const name = detail.printer_name || fallbackName || 'the printer';
+    if (detail.reason === 'no_credentials') {
+        return `ℹ️ FCC has no login for ${name} — add it in Config's printer credentials.`;
+    }
+    return `ℹ️ Couldn't reach ${name} — FCC can't tell whether it is printing.`;
+};
+
+// The dim's label for a server-side wait that implies a printer: a toolhead
+// gives its printer; a Dryer Box slot gives its bound head's printer. null
+// (no label, the dim exactly as before) when no printer is implied.
+window.printerLabelForTarget = (locId, slot = null) => {
+    const id = String(locId || '').toUpperCase();
+    if (!id) return null;
+    let head = id;
+    const rows = (typeof state !== 'undefined' && state && state.allLocations) || [];
+    const row = rows.find(l => String(l.LocationID || '').toUpperCase() === id);
+    if (row && row.Type === 'Dryer Box') {
+        const extra = (row.extra && typeof row.extra === 'object') ? row.extra : {};
+        const targets = (extra.slot_targets && typeof extra.slot_targets === 'object') ? extra.slot_targets : {};
+        head = slot != null ? (targets[String(slot)] || null) : null;
+    }
+    const name = head ? window.printerNameForHead(head) : null;
+    return name ? `⏳ Checking ${name}…` : null;
+};
+
+// `opts.label` (Group 39.3): a label centred on the dim after
+// PRINTER_CHECK_DELAY_MS, naming the printer FCC waits on. No label leaves the
+// dim exactly as before; the old one-argument call still works.
+const setProcessing = (s, opts = {}) => {
     let ov = document.getElementById('processing-overlay');
     if (!ov) { ov = document.createElement('div'); ov.id = 'processing-overlay'; ov.style.cssText = "display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:9999;"; document.body.appendChild(ov); }
     state.processing = s; ov.style.display = s ? 'block' : 'none';
+    clearTimeout(setProcessing._labelTimer);
+    const old = ov.querySelector('.fcc-processing-label');
+    if (old) old.remove();
+    if (s && opts && opts.label) {
+        setProcessing._labelTimer = setTimeout(() => {
+            if (!state.processing) return;
+            const el = document.createElement('div');
+            el.className = 'fcc-processing-label';
+            el.setAttribute('role', 'status');
+            el.textContent = opts.label;
+            el.style.cssText = 'position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);'
+                + ' background:#1f3b57; color:#cfe6ff; border:1px solid #5ba7e8; padding:10px 18px;'
+                + ' border-radius:18px; font-weight:bold; font-size:1.05rem;';
+            ov.appendChild(el);
+        }, PRINTER_CHECK_DELAY_MS);
+    }
 };
 
 // UI-lockout guard (2026-06-12): fetch with a hard wall-clock timeout so a hung
@@ -378,6 +1101,9 @@ let _fccConfirmSeq = 0;
  *   onCancel:  () => void  — fired on CMD:CANCEL scan or [No] click.
  *   confirmLabel: string, default "Scan to Confirm"
  *   cancelLabel:  string, default "Scan to Cancel"
+ *   onStore: () => void — optional (Group 40.3): a third QR between the two,
+ *     encoding CMD:STORE:<sid>, for the "Just store it" answer.
+ *   storeLabel: string, default "Scan to Store"
  *   theme: 'warning' | 'info' | 'danger' — drives the QR card border tint.
  *
  * @returns {{sessionId: string, cleanup: function}} cleanup() removes the QR
@@ -395,17 +1121,25 @@ window.attachConfirmQRs = (opts) => {
         danger:  { border: '#dc3545', tint: 'rgba(220,53,69,0.12)', confirmBg: '#1c0c0e', cancelBg: '#0f1014' },
     }[theme] || { border: '#ff8800', tint: 'rgba(255,136,0,0.12)', confirmBg: '#1a1208', cancelBg: '#0f1014' };
 
+    const hasStore = typeof opts.onStore === 'function';
     const row = document.createElement('div');
     row.id = `${sid}-row`;
     row.className = 'fcc-confirm-qr-row';
     row.style.cssText = 'display:flex; gap:14px; justify-content:center; margin-top:14px; padding-top:12px; border-top:1px dashed #444;';
+    const storeCell = hasStore ? `
+        <div style="display:flex; flex-direction:column; align-items:center; gap:4px;">
+            <div style="background:#0d1a20; border:2px solid #4fa2c9; border-radius:6px; padding:6px;">
+                <div id="${sid}-store-qr" style="background:#fff; padding:4px; border-radius:3px; line-height:0;"></div>
+            </div>
+            <div style="font-size:0.72rem; color:#8fd3f0; font-weight:700; letter-spacing:0.5px; text-transform:uppercase;">📷 ${opts.storeLabel || 'Scan to Store'}</div>
+        </div>` : '';
     row.innerHTML = `
         <div style="display:flex; flex-direction:column; align-items:center; gap:4px;">
             <div style="background:${palette.confirmBg}; border:2px solid ${palette.border}; border-radius:6px; padding:6px;">
                 <div id="${sid}-yes-qr" style="background:#fff; padding:4px; border-radius:3px; line-height:0;"></div>
             </div>
             <div style="font-size:0.72rem; color:${palette.border}; font-weight:700; letter-spacing:0.5px; text-transform:uppercase;">📷 ${opts.confirmLabel || 'Scan to Confirm'}</div>
-        </div>
+        </div>${storeCell}
         <div style="display:flex; flex-direction:column; align-items:center; gap:4px;">
             <div style="background:${palette.cancelBg}; border:2px solid #6c757d; border-radius:6px; padding:6px;">
                 <div id="${sid}-no-qr" style="background:#fff; padding:4px; border-radius:3px; line-height:0;"></div>
@@ -417,9 +1151,10 @@ window.attachConfirmQRs = (opts) => {
 
     // Generate the QR codes themselves (uses the same lib generateSafeQR uses).
     generateSafeQR(`${sid}-yes-qr`, `CMD:CONFIRM:${sid}`, 70);
+    if (hasStore) generateSafeQR(`${sid}-store-qr`, `CMD:STORE:${sid}`, 70);
     generateSafeQR(`${sid}-no-qr`, `CMD:CANCEL:${sid}`, 70);
 
-    // Register the callbacks. Both fire-then-clear so a duplicate scan can't
+    // Register the callbacks. All fire-then-clear so a duplicate scan can't
     // re-trigger after the dialog closed.
     window._fccActiveConfirms[sid] = {
         onConfirm: () => {
@@ -428,6 +1163,12 @@ window.attachConfirmQRs = (opts) => {
             delete window._fccActiveConfirms[sid];
             try { opts.onConfirm && opts.onConfirm(); } catch (e) { console.error('[confirm-qr]', e); }
         },
+        onStore: hasStore ? () => {
+            const entry = window._fccActiveConfirms[sid];
+            if (!entry) return;
+            delete window._fccActiveConfirms[sid];
+            try { opts.onStore(); } catch (e) { console.error('[confirm-qr]', e); }
+        } : null,
         onCancel: () => {
             const entry = window._fccActiveConfirms[sid];
             if (!entry) return;
@@ -456,7 +1197,7 @@ window.routeConfirmScan = (text) => {
     // Match the prefix case-insensitively but preserve the session id's
     // case verbatim — sid contains base-36 digits/letters that uppercase
     // would mangle (broke registry lookup in earlier draft).
-    const m = String(text).match(/^[Cc][Mm][Dd]:(CONFIRM|CANCEL|confirm|cancel):(.+)$/);
+    const m = String(text).match(/^[Cc][Mm][Dd]:(CONFIRM|CANCEL|STORE|confirm|cancel|store):(.+)$/);
     if (!m) return false;
     const action = m[1].toUpperCase();
     const sid = m[2].trim();
@@ -467,6 +1208,10 @@ window.routeConfirmScan = (text) => {
     const entry = window._fccActiveConfirms && window._fccActiveConfirms[sid];
     if (!entry) return false;
     if (action === 'CONFIRM') entry.onConfirm();
+    else if (action === 'STORE') {
+        // Group 40.3: only a dialog that offered "Just store it" has a STORE QR.
+        if (entry.onStore) entry.onStore();
+    }
     else entry.onCancel();
     return true;
 };
@@ -690,7 +1435,8 @@ const _renderLocationsPayload = (d) => {
                     LocationID: 'Unassigned',
                     Name: 'Unassigned Spools',
                     Type: 'Virtual',
-                    Occupancy: '--'
+                    Occupancy: '--',
+                    Synthesized: true
                 });
             }
 
@@ -802,6 +1548,15 @@ const _renderLocationsPayload = (d) => {
 
             const rowOnly = ordered.filter(e => e.row).map(e => e.row);
             state.allLocations = rowOnly;
+            // Group 45.8: an openManage() that came before this first load (a
+            // Printer Status tile clicked in the first seconds; the widget paints
+            // from the first heartbeat) was parked; open it now.
+            if (!state.locationsLoaded) {
+                state.locationsLoaded = true;
+                const parked = window._fccPendingManageId;
+                window._fccPendingManageId = null;
+                if (parked && window.openManage) setTimeout(() => window.openManage(parked), 0);
+            }
 
             // L271 Phase 3.5 (review fix #15): prune collapse state to live parent
             // nodes so a deleted/renamed id can't resurrect as collapsed on a
@@ -915,6 +1670,17 @@ const _renderLocationsPayload = (d) => {
                     // via Name / LocationID).
                     const ancAttr = escAttr(JSON.stringify(entry.ancestors || []));
                     const lidEsc = escAttr(l.LocationID);
+                    // Group 41.3 (Claude's call 12): the built-in lists and a
+                    // "(Room)" FCC only knows from its spools have no row to edit
+                    // or delete, and the server refuses a delete of any id with no
+                    // row, so a Spoolman-native row keeps only its ✏️ (saving it
+                    // there makes it an FCC location). Keyed on the server's
+                    // Synthesized flag, never the Type (Group 41 review): a real
+                    // "Virtual Room / Zone" row, prod's blank-id "Unknown
+                    // Location" row and a promoted blank-Type parent share Types
+                    // with synthesized rows, and lost their buttons.
+                    const synth = !!l.Synthesized;
+                    const canEdit = !synth || l.Type === 'Spoolman Native';
 
                     return `
                 <tr data-locid="${escAttr(lidUC)}" data-ancestors="${ancAttr}" id="loc-row-${lidEsc}">
@@ -925,10 +1691,10 @@ const _renderLocationsPayload = (d) => {
                     <td class="col-actions text-end" style="white-space: nowrap;">
                         <button class="btn btn-sm btn-outline-light me-1 btn-qr" data-id="${lidEsc}" title="Show QR">📱 QR</button>
                         ${canAddChild(l) ? `<button class="btn btn-sm btn-outline-success me-1 btn-add-child" data-id="${lidEsc}" title="Add a child location here">➕</button>` : ''}
-                        ${l.Type !== 'Virtual' ? `
-                        <button class="btn btn-sm btn-outline-warning me-1 btn-edit" data-id="${lidEsc}">✏️</button>
-                        <button class="btn btn-sm btn-outline-danger me-1 btn-delete" data-id="${lidEsc}">🗑️</button>
-                        ` : ''}
+                        ${canEdit ? `
+                        <button class="btn btn-sm btn-outline-warning me-1 btn-edit" data-id="${lidEsc}">✏️</button>` : ''}
+                        ${!synth ? `
+                        <button class="btn btn-sm btn-outline-danger me-1 btn-delete" data-id="${lidEsc}">🗑️</button>` : ''}
                         <button class="btn btn-sm btn-info btn-manage fw-bold" data-id="${lidEsc}">Manage</button>
                     </td>
                 </tr>`;
@@ -1240,6 +2006,13 @@ const SCAN_GATING_MODALS = ['confirmModal', 'safetyModal', 'actionModal'];
 const _gatingPhase = {};    // id -> 'showing' | 'shown' | 'hiding' | 'hidden'
 const _deferredShow = {};   // id -> token of the ONE show queued for hidden.bs.modal
 const _deferredHide = {};   // id -> token of the ONE hide queued for shown.bs.modal
+// The phase is mirrored onto the dialog as data-fcc-phase so global.css can keep
+// a dialog that is still fading in from taking clicks (Group 41.2).
+const _setGatingPhase = (el, id, phase) => {
+    _gatingPhase[id] = phase;
+    if (phase) el.dataset.fccPhase = phase;
+    else delete el.dataset.fccPhase;
+};
 [['show.bs.modal', 'showing'], ['shown.bs.modal', 'shown'],
  ['hide.bs.modal', 'hiding'], ['hidden.bs.modal', 'hidden']].forEach(([evt, phase]) => {
     // Capture phase: the phase is current before ANY element- or document-level
@@ -1251,11 +2024,11 @@ const _deferredHide = {};   // id -> token of the ONE hide queued for shown.bs.m
         // started (Bootstrap accepts show() during the backdrop-fade tail).
         if (phase === 'hidden' && _gatingPhase[id] !== 'hiding') return;
         const prev = _gatingPhase[id];
-        _gatingPhase[id] = phase;
+        _setGatingPhase(ev.target, id, phase);
         // show/hide are cancelable and capture runs first, so re-check after the
         // dispatch: a later preventDefault() means the transition never started.
         if (phase === 'showing' || phase === 'hiding') {
-            queueMicrotask(() => { if (ev.defaultPrevented && _gatingPhase[id] === phase) _gatingPhase[id] = prev; });
+            queueMicrotask(() => { if (ev.defaultPrevented && _gatingPhase[id] === phase) _setGatingPhase(ev.target, id, prev); });
         }
     }, true);
 });

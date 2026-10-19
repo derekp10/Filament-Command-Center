@@ -14,9 +14,13 @@ from __future__ import annotations
 
 from playwright.sync_api import Page
 
+import conftest
+
 
 def _setup_page_with_held_spool(page: Page, spool_id=42):
     """Open the dashboard, prime state.heldSpools with one spool, return."""
+    # Group 45.8 (family D): this page gets its own buffer endpoint.
+    conftest.own_the_buffer(page, [{"id": spool_id, "display": f"#{spool_id}", "color": "ff0000"}])
     page.goto("http://localhost:8000")
     page.wait_for_selector("#buffer-zone")
     page.wait_for_function("typeof window.doAssign === 'function'")
@@ -132,16 +136,22 @@ def test_doassign_swap_pushes_displaced_only_on_success(page: Page):
 
 def test_doassign_swap_pushes_displaced_on_success(page: Page):
     """Swap path success: displaced item lands in buffer alongside removal
-    of the assigned spool."""
+    of the assigned spool. Swap option C (Derek, 2026-10-15): the request says
+    `swap: true`, and the server, which files the old spool back where it sat
+    before the slot, names it in `to_buffer`; that answer is what buffers it
+    (the page used to push `swapDisplaced` itself on any success)."""
     _setup_page_with_held_spool(page, 45)
 
     page.evaluate(
         """
         const orig = window.fetch;
+        window.__manageBodies = [];
         window.fetch = async (url, opts) => {
             const u = typeof url === 'string' ? url : (url && url.url) || '';
             if (u === '/api/manage_contents') {
-                return new Response(JSON.stringify({status: 'success'}),
+                window.__manageBodies.push(JSON.parse((opts && opts.body) || '{}'));
+                return new Response(JSON.stringify({status: 'success', failures: {},
+                    to_buffer: [{id: 99, display: '#99', color: '00ff00', off_head: '', filed_to: 'CR-CT-2-R1'}]}),
                     {status: 200, headers: {'Content-Type': 'application/json'}});
             }
             if (u.startsWith('/api/get_contents')) {
@@ -164,6 +174,8 @@ def test_doassign_swap_pushes_displaced_on_success(page: Page):
     buffer_ids = page.evaluate("() => state.heldSpools.map(s => s.id)")
     assert 45 not in buffer_ids, "Assigned spool should be removed from buffer on success"
     assert 99 in buffer_ids, "Displaced spool should land in buffer on success"
+    bodies = page.evaluate("() => window.__manageBodies")
+    assert bodies and bodies[0].get("swap") is True, bodies
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +205,9 @@ def _setup_active_print_overlay(page: Page):
     via inline display:block — otherwise focus on overlay descendants
     silently fails because focus can't land on a hidden ancestor's child.
     """
+    # Group 45.8 review: these seven tests injected #99 against dev's shared
+    # buffer too, and the Enter test's successful assign persisted [] over it.
+    conftest.own_the_buffer(page, [{"id": 99, "display": "#99", "color": "ff0000"}])
     page.goto("http://localhost:8000")
     page.wait_for_selector("#buffer-zone")
     page.wait_for_function("typeof window.doAssign === 'function'")

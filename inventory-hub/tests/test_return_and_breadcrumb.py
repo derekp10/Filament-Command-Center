@@ -37,7 +37,11 @@ def client():
 def test_return_prefers_physical_source_over_first_binding(client):
     """When a spool on XL-4 has physical_source=LR-MDB-2 slot 1, Return
     should send it there — NOT to LR-MDB-1 slot 2 (which is also bound
-    to XL-4 but isn't where the spool came from)."""
+    to XL-4 but isn't where the spool came from).
+
+    Group 40.6 (deliberate): the route reads the box STRICTLY to check the
+    recorded slot is free (empty here), and sends it as `picked_slot` (taken
+    only while still free), not as an Overwrite `target_slot`."""
     printer_map = {"XL-4": {"printer_name": "🦝 XL", "position": 3}}
     locs = [
         {"LocationID": "LR-MDB-1", "Type": "Dryer Box", "Max Spools": "4",
@@ -51,7 +55,7 @@ def test_return_prefers_physical_source_over_first_binding(client):
     move_calls = []
 
     def fake_move(target, spools, target_slot=None, origin=None, **kwargs):
-        move_calls.append((target, list(spools), target_slot, origin))
+        move_calls.append((target, list(spools), target_slot, origin, kwargs.get("picked_slot")))
         return {"status": "success"}
 
     with patch.object(app_module.config_loader, "load_config",
@@ -61,6 +65,7 @@ def test_return_prefers_physical_source_over_first_binding(client):
          patch.object(app_module.locations_db, "load_locations_list", return_value=locs), \
          patch.object(app_module.spoolman_api, "get_spools_at_location", return_value=[77]), \
          patch.object(app_module.spoolman_api, "get_spool", return_value=fake_spool), \
+         patch.object(app_module.spoolman_api, "get_spools_at_location_detailed_strict", return_value=[]), \
          patch.object(app_module.logic, "perform_smart_move", side_effect=fake_move):
         r = client.post("/api/quickswap/return", json={"toolhead": "XL-4"})
 
@@ -72,12 +77,18 @@ def test_return_prefers_physical_source_over_first_binding(client):
     assert body["source"] == "physical_source"
     # And perform_smart_move was called with the physical_source target.
     assert move_calls[0][0] == "LR-MDB-2"
-    assert move_calls[0][2] == "1"
+    assert move_calls[0][2] is None and move_calls[0][4] == "1", move_calls
 
 
-def test_return_falls_back_to_first_binding_when_no_source(client):
+def test_return_with_no_source_and_two_free_feed_slots_asks_which(client):
     """Spool with no physical_source (e.g. manually placed before the
-    bindings system): Return uses the first bound slot."""
+    bindings system).
+
+    Group 40.6 (deliberate; Derek's answer 6, 2026-10-13: "one tap when the
+    answer is obvious, the chooser otherwise"): it used to go to the FIRST
+    bound slot in locations.json order. Two free slots feed XL-4 here, so
+    Return writes nothing and answers return_choose_slot (200) on the first
+    box that offers a slot feeding XL-4, with that slot starred."""
     printer_map = {"XL-4": {"printer_name": "🦝 XL", "position": 3}}
     locs = [
         {"LocationID": "LR-MDB-1", "Type": "Dryer Box", "Max Spools": "4",
@@ -95,19 +106,24 @@ def test_return_falls_back_to_first_binding_when_no_source(client):
          patch.object(app_module.locations_db, "load_locations_list", return_value=locs), \
          patch.object(app_module.spoolman_api, "get_spools_at_location", return_value=[77]), \
          patch.object(app_module.spoolman_api, "get_spool", return_value=fake_spool), \
-         patch.object(app_module.logic, "perform_smart_move", return_value={"status": "success"}):
+         patch.object(app_module.spoolman_api, "get_spools_at_location_detailed_strict", return_value=[]), \
+         patch.object(app_module.spoolman_api, "get_all_spools_strict", return_value=[]), \
+         patch.object(app_module.logic, "perform_smart_move", return_value={"status": "success"}) as mv:
         r = client.post("/api/quickswap/return", json={"toolhead": "XL-4"})
 
     assert r.status_code == 200
     body = r.get_json()
-    assert body["source"] == "first_binding"
-    assert body["box"] == "LR-MDB-1"  # first in loc_list iteration order
-    assert body["slot"] == "2"
+    assert body["action"] == "return_choose_slot", body
+    mv.assert_not_called()
+    assert body["box"] == "LR-MDB-1" and body["slot"] is None  # first in loc_list iteration order
+    assert body["recommended"] == {"kind": "slot", "box": "LR-MDB-1", "slot": "2"}, body
+    assert "2 free slots feed XL-4" in body["note"], body
 
 
 def test_return_from_virtual_printer_uses_first_loaded_toolhead_then_source(client):
     """Virtual-printer prefix: pick the first loaded toolhead, then honor
-    its spool's physical_source."""
+    its spool's physical_source. (Group 40.6: the box is read strictly to see
+    that slot is free; an empty box here.)"""
     printer_map = {
         "XL-1": {"printer_name": "🦝 XL", "position": 0},
         "XL-2": {"printer_name": "🦝 XL", "position": 1},
@@ -131,6 +147,7 @@ def test_return_from_virtual_printer_uses_first_loaded_toolhead_then_source(clie
          patch.object(app_module.locations_db, "load_locations_list", return_value=locs), \
          patch.object(app_module.spoolman_api, "get_spools_at_location", side_effect=resident_for), \
          patch.object(app_module.spoolman_api, "get_spool", return_value=fake_spool), \
+         patch.object(app_module.spoolman_api, "get_spools_at_location_detailed_strict", return_value=[]), \
          patch.object(app_module.logic, "perform_smart_move", return_value={"status": "success"}):
         r = client.post("/api/quickswap/return", json={"toolhead": "XL"})
 

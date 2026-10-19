@@ -4,10 +4,40 @@
 **Estimated effort:** LARGE (~14–20 h, 2–3 sessions). Engine prerequisites ~3 h · shared picker ~4 h · box-label + slot-label doors ~3 h · printer picker ~3 h · Return picker ~2–3 h · wizard doors ~2 h · tests throughout.
 **Risk:** **MEDIUM–HIGH.** Every sub-task edits `_perform_smart_move_impl`, the hottest write path in FCC, and 40.3 adds a new prompt on Derek's own daily path (slot-label scans). Everything else protects other users.
 
-> **Status: `TODO` — scoped 2026-09-13, not started.**
+> **Status: `DONE` (2026-10-19, overnight; merged to `dev` `8d0ff64`, `main` held for Derek).** The last leg built
+> Swap option C, 40.4, 40.5, 40.6 and 40.7 (as-built notes under each), had ONE review (`wf_bd637c78-057`: 27
+> findings, none red, all fixed; see "The final review" before the deferred notes) and ONE full sweep (`RUN_INTEGRATION`, 3910 passed, 18 skipped, 0 failed in 23:07, load 1.04×).
+> Derek's hands-on checks for it are the buglist's ⏸️ PENDING DEREK item "the pickers and Swap option C"; his open
+> questions are in [session-handoff-2026-10-14.md](session-handoff-2026-10-14.md), "Group 40, final leg".
+> **Earlier status:** Engine part built on `feature/group-40-slot-picker` (pushed): 40.0a, a 40.0b pin, 40.0d and item H (`ab69c56`, overnight 2026-10-13/14), then **40.0e and 40.0c (`e8a2706`, 2026-10-14 day session)**, reviewed in `wf_6946f24e-3da` (2 orange + 5 yellow fixed in `db1952a`; 21 notes deferred, listed before the decisions table). **40.1 built (`14c5bc5`) and 40.3 built (browser `d2f076f`; engine `4489cbf`), 2026-10-14 evening; reviewed in `wf_ca12a7f0-f09` (25 findings, none red, 4 orange: all fixed with the shipped-behaviour yellows in `f055def`; full `RUN_INTEGRATION` sweep 3499 passed, 0 failed), the fixes re-checked in `wf_0dddaf03-9a6`.** Fix-check findings fixed in `1bbc1f9` (sweep 3512 passed, 0 failed); **merged to `dev` `d6fc8b2` (2026-10-15)**. Derek's hands-on S1–S7 are in the buglist's ⏸️ PENDING DEREK section (they don't block anything). **40.2 built 2026-10-15** (day session, on `feature/group-40-slot-picker`): the picker follow-ups D1–D4, the box-label door with its loop, and the same-slot swap → scan buffer (`2a45ba5`); reviewed in `wf_0b3cc1a9-578` (18 findings, 1 red, fixed in `6b59b1c`), swept, **merged to `dev` `9b299d9`**; see 40.2 "As built". 40.4 → 40.7 followed on 2026-10-19 (above). See [session-handoff-2026-10-14.md](session-handoff-2026-10-14.md), "Group 40, evening", "Group 40.2, day session" and "Group 40, final leg".
+> **🔄 2026-10-14 (day) — 40.0e and 40.0c are built (`e8a2706`); where they differ from the 40.0c / 40.0e text below, the code and this note win:**
+> - **One rule for the pick:** `logic.recommend_box_slot(max_slots, claims, own_slot, would_prompt)` (own slot → lowest free slot that won't ask → lowest free → none). 40.1's ⭐ reuses it with its own `would_prompt`. The engine's `would_prompt` also avoids a binding to something that isn't a head, and never asks about the head the spool is leaving.
+> - **Confirm keys, not bare heads:** each `fed_heads` entry carries `confirm_key` ("XL-1#99": the head and the spools the question named). "Load it instead" sends the keys in `confirmed_fed_heads`; a key covers the head only while it runs exactly those spools (a different spool there is asked about again). A bare head id still covers it whatever it runs (internal callers, tests).
+> - **`picked_slot`, not `target_slot`, on a replay:** answers carry the pick as `target_slot`; replays send it back as `picked_slot`, kept only while still free (else `blocked_reason: picked_slot_taken`, nothing written). An explicit `slot` keeps Overwrite semantics. Within one call, a picked slot that someone took during the printer probe refuses the spool (a single-slot box takes it unslotted). A pick feeding the head the spool is leaving stores it there, not loaded back.
+> - **The chain guard keys on what the user saw:** `fed_check_from=(box, slot, the head's spools step 4 read)`; the chained deploy refuses to unload any spool that arrived after the question, whatever its trail (a spare scanned onto the head records the free slot as its trail, 40.0d).
+> - **The stale-page rule keys on the field:** a head_fed question goes only to a request carrying `confirmed_fed_heads` (`logic.stale_fed_refusal` otherwise answers "Not moved: XL-1 is running #99, and this request can't ask before loading over it. Reload the page…"). Until 40.3 lands, the current browser gets that message wherever a bound head is fed from elsewhere; that's why the branch can't merge before 40.3.
+> - **Answer fields for 40.3:** `title`, `body` (no "Continue?"), `spools`, `can_store`, `target_slot`, `fed_heads[].resident{id, display, trail, from, goes_to, goes}`; a printing-only answer on a bound slot carries `can_store` / `title` / `body` too. The doors read `logic.confirmed_fed_heads_from` / `logic.auto_deploy_requested`; the box doors also `picked_slot`.
+> - **Claude's calls (not asked; Derek can overrule):** a spare whose trail 40.0d recorded as LR-MDB-1 slot 1 IS that slot's own spool for the same-slot swap (its toast named the slot); the store-only rule above; the non-head-binding rule above.
+> - **Found on the way, fixed on `dev` (`bfb7bd0`):** `CMD:SLOT:<n>` with the Location Manager closed moved the buffered spool to Unassigned; a slot scan now needs a box open, and `manage_contents add` refuses a blank location.
+> - **When Group 40 merges:** the buglist's ⏸️ PENDING DEREK mid-print checks 5 and 6 scan `LR-MDB-1` slot labels; when XL-1 / XL-2 runs a spool from elsewhere they meet the new question, so update their "pass if".
+> **🔄 2026-10-14 — facts that changed overnight (Groups 41 and 42 landed on `dev`; read before building):**
+> - 40.0a is built (branch): `locations_db.is_printer_row_not_head` + `printer_row_toolheads` (41.1) decide it, `logic.printer_row_refusal` words it, and a Printer row with no toolheads is refused too (Claude's call 26). The `inv_core.js` mirror is still to build (40.5 needs it).
+> - 40.0d is built (branch) except the `record_source` keyword, whose only caller is the Printer picker (40.5): `_feed_slots_for` / `_free_feed_slots` record a slot only when exactly one is free, read strictly through the one slot rule, and answer `recorded_source`; the buffer scan's toast names it (the Location Manager's `doAssign` toast doesn't yet). 42.1 step 5 already keeps single-slot boxes out.
+> - The one slot rule exists: `locations_db.effective_slot` (42.2), for 40.0c's same-slot comparison. The one strict "direct residents" reader exists: `logic.strict_direct_occupants(loc, exclude)` (42.3b), for 40.0c's fed-head read. `logic._holds_one_spool` is the engine's one-spool rule (Undo and Bulk Move use it).
+> - A single-slot box is never a feed: no auto-deploy, no feeds head, no 13.6 home, not Return's fallback (`/api/dryer_boxes/slots` flags `single_slot`; Return's preview skips it). So 40.6's Return picker skips it too, 40.3 counts a resident whose trail names a PolyDryer as fed from elsewhere, and a Quick-Swap deposit into a PolyDryer promises no load (42 review); 40.3's prompt is for bound multi-slot slots.
+> - Two spools claiming one slot are refused by `/api/quickswap` (`quickswap_ambiguous_slot`, `logic.spools_in_slot`). The location scan reads strictly and answers `contents_error`, and eject mode decides first in the location branch (42.5b): 40.2 and 40.5 build on that order.
+> - The wizard's Location edit releases a single-slot box after its direct write (`logic.release_box_after_direct_write`); 40.7 replaces that write with the engine.
+> **🔄 2026-10-12 (`/refresh-groups`):** item **H** was added (a multi-head Printer row is treated as single-occupancy by Bulk Move; build it with 40.0a). Q1 and Q2 were still open then (both answered 2026-10-13, see the next line). The printer-identity redesign in [Group 44](44-printer-first-class.md) may change what a "Printer row" is; 40.0a's rule should key on whether a row is one of its printer's toolheads, which survives either design.
+> **✅ 2026-10-13 — Q1 and Q2 answered** (plain-language briefs, with the code checks behind them: [open-decisions-2026-10-13.md](open-decisions-2026-10-13.md)): **Q1 → loop**, one picker per buffered spool; Escape stops and the rest stay in the buffer (Derek's choice). **Q2 → (a)**, a full box offers the grid's Swap / Overwrite, so the incoming spool always gets a real slot (Claude's call; Derek reviewed it and didn't object). No open questions for Derek remain in this file; the veto points at manual checks R4 and W1 stay.
 > Built from Derek's answers to D2, D3 and D5 ([open-decisions-2026-09-13.md](open-decisions-2026-09-13.md)).
 > Evidence records: [active-print-chain-investigation-2026-09-12.md](active-print-chain-investigation-2026-09-12.md) (I1-03, I1-05, I1-06, I5-5, I5-8, I5-11) and [active-print-chain-diff-reviews-2026-09-12.md](active-print-chain-diff-reviews-2026-09-12.md) (R1-05, R2-03, R2-08, "Return overlay previews the first bound slot").
 > Every `file:line` below was re-read on `dev` @ `be9f045`. Line numbers drift; re-grep the named function before editing.
+>
+> **⚠️ Stale facts found 2026-10-13 (re-check before building).** Re-verified read-only on `dev` @ `f0d00f3`. The spec below was not rewritten, so in places it still says otherwise.
+> - **A multi-head Printer row is no longer single-occupancy.** Since the 2026-09-29 INDX hotfix, a Printer row counts as a head only when its Max Spools is ≤ 1 and its `toolheads[]` lists no head but itself (`logic.py:738-746`). So `LOC:XL` or `LOC:RCOI` with a buffer runs no Smart Load, and the generic branch (`logic.py:1120-1144`) files every buffered spool on the row itself. The door table's `LOC:XL` row and 40.0a's "Today" predate this; 40.0a's refusal is still needed. `_is_single_occupancy` (`logic.py:541-550`) and Bulk Move's `single_occ_types` (`logic.py:1317`, used at `:1348` / `:1408`) still count every Printer row (item H).
+> - **Dev topology changed** (dev `inventory-hub/data/locations.json`, 81 rows). Dev has no CORE1: RCOI (Printer, Max 0, heads RCOI-1…RCOI-8) replaced it, and prod retired it too (per the docs' 2026-10-12 read-only check). So no dev Printer row is its own head, and manual checks P5 and W2 name a row that no longer exists. CR-MDB-1 has no bindings. TST-MDB-1 reads `{}`, and Derek confirmed on 2026-10-13 that it is just a test box (Group 45.5). PM-DB-1…PM-DB-10 exist. Dev's only bindings are LR-MDB-1 (1→XL-1, 2→XL-2, 3→XL-3, 4→`PRINTER:XL`) and LR-MDB-2 (1→XL-4, 2→XL-5). The examples that bind TST-MDB-1, or CR-MDB-1 slot 1 → CORE1 (the topology line under the door table, 40.0d, the 40.1 tests, 40.5, P5, Q2), are still fine as hermetic fixtures but no longer describe dev.
+> - **Line refs drifted** since `be9f045`. For example: the pre-write contract comment is `logic.py:699-719`; auto-slot is `:851-882` (single-spool check `:858`) and still runs after the confirm (`:842-844`); PRINTER MOVE is `:1023-1098` (13.6 at `:1041-1075`); the chain starts at `:1148`; the location-scan branch is `inv_cmd.js:1705-1772` (L124 trim `:1730-1740`, Quick-Pick `:1747-1755`); `performContextAssign` is at `inv_cmd.js:1864` and already takes a `confirmedHeads` list; the grid's Swap / Overwrite prompt is `inv_loc_mgr.js:1269-1285`.
+> - **Prerequisites have landed.** Group 39 merged on 2026-10-13 (`c389e26`). 40.0b's change is in: the pre-flight walks a named slot's binding only when `auto_deploy` (`logic.py:831-841`). `_requires_confirm_answer` (`logic.py:216-231`) reserves `fed_heads`, `can_store` and `target_slot`, but no picker code exists yet. `fix/core1-return-ejectall-guard` and `test/sweep-reds-hermetic` are both merged into `dev`, and `_printer_row_toolheads` is at `routes_bindings.py:335`.
 
 ---
 
@@ -35,6 +65,7 @@
 | **E** | Same entry — item 4: *"🟡 The ↩️ Return button on a DEPLOYED slot card redeploys to the same head."* | Not decided by Derek. **Decided here (40.6)**: route it through the canonical Return. |
 | **F** | Same entry — item 8: *"🟡 `LOC:XL` with an empty buffer Quick-Picks one of the XL heads' spools… Fix together with the Printer-row placement decision / L271 Phase 5 prefix retirement."* | Not decided by Derek. **Decided here (40.5)**: fix the scan behaviour now; the flat matcher itself waits for Group 37. |
 | **G** | The **13.6 reverse-binding**, which silently records a free bound feed slot as `physical_source` when a spool lands on a head with no meaningful source. Decisions record, D3: *"Derek's addition turns that into a visible choice."* | **Decided here (40.0d)**: a visible choice in the Printer picker; for scans, record only when exactly one free slot feeds the head and name it in the toast. |
+| **H** | _(added 2026-10-12 by `/refresh-groups`)_ **"Bulk move treats a multi-head Printer row as single-occupancy."** After the 2026-09-29 INDX hotfix, a single move onto a multi-head Printer row (RCOI / XL) is a generic move, but dev's `_is_single_occupancy` (`logic.py:356`) and bulk-move `single_occ_types` (`logic.py:1047`, used at `:1078` / `:1138`) still include `'Printer'`, so a bulk move onto it is refused. *"Conservative, but align both on 'in printer_map or a toolhead Type'."* | Build with **40.0a**, which settles what a Printer row may hold. Keep the dual-role case (a Printer row that is its own toolhead, like the old `CORE1`) loadable. Bulk Moves ships behind the `fcc.bulkMove.enabled` flag (off on prod), so this is low urgency. |
 
 **Not in this group:** D1 / R2-08 / the "Checking XL…" indicator / D6 / Force Location's active-print yes-path / the fail-closed resident read (R1-03) / the I1-06 pre-flight gate ([Group 39 — Confirm on Every Door](39-confirm-on-every-door.md)); the single-slot box release rule and the other "one spool per toolhead" items ([Group 42](42-single-slot-box-lifecycle.md)); Eject All / delete / Undo honesty ([Group 41 — Honest Bulk Results](41-honest-bulk-results.md)).
 
@@ -240,7 +271,7 @@ One component serves all three pickers: box (D2), printer (D3) and return (D5).
 1. If the spool is already in this box, its current slot.
 2. Else the lowest-numbered empty slot that **would not prompt**: unbound, a pool sentinel, or bound to a head with no resident.
 3. Else the lowest-numbered empty slot.
-4. Else none: the box is full. Never assume an empty slot exists.
+4. Else none: the box is full. Never assume an empty slot exists. A full box still opens the picker, and a tap on any slot offers the grid's Swap / Overwrite (Q2, decided 2026-10-13; see 40.2).
 
 Rationale: other users scanning a box label mostly want to store, and a recommendation that can be confirmed with Enter should never surprise. Derek's own example, "the next empty one", is rule 3 whenever no prompt-free slot exists.
 
@@ -283,6 +314,29 @@ Rationale: other users scanning a box label mostly want to store, and a recommen
   - "Checking XL…" appears when `/api/printer_state` is delayed in-page (the Group 38 in-page fetch-delay lever) and turns into the timeout text.
 - Visual baseline over stubbed data only. Never snapshot live dev contents (the `test_quickswap_visual` lesson).
 
+### Before 40.2 wires the picker: what the 40.1 + 40.3 review found in it — ✅ built 2026-10-15 (see 40.2, "As built")
+
+The review (`wf_ca12a7f0-f09`, D-tests-picker) confirmed these in the built picker. They couldn't happen yet
+(nothing opened `window.openSlotPicker` until 40.2), so they were 40.2's first step, each with a pin:
+- **D1, scans and Enter.** A short numeric scan (a 1–2 digit spool id) moves the highlight with its digits and
+  its Enter picks a slot; any scan while focus sits in an input behind the picker picks too. Yield Enter to
+  `window.isScanInFlight()` (as `confirmActivePrint` does), never pick while `document.activeElement` is outside
+  the panel, and take a digit as a hotkey only with an empty scan buffer and a gap of at least 50 ms.
+- **D2, opening guards.** It stacks over another overlay (one Escape then cancels the dialog underneath, a second
+  closes the picker), opens during an audit and over a gating dialog. Refuse to open (null, a 7 s warning, a log
+  line) while another `[data-overlay-mount="1"]` is mounted or `state.auditActive` / `state.activeModal` /
+  `state.processing` is set; close itself when a bulk move or an audit starts (`inventory:sync-pulse`).
+- **D3, refusals nobody sees.** Its only refusal feedback is a toast, which sits under the panel (z 11000 vs
+  20000): add a `role=alert` status line inside the panel (as the three-way has); keep a slot label scanned while
+  the model loads and apply it once the tiles exist; toast and log `CMD:CANCEL`.
+- **D4, what a caller sends.** The result carries no `send` / `expected_feed` and disables no tile, so a caller
+  that sends the natural `slot` reloads a spool the tile promised to store ("stored here, not loaded back"). Return
+  `send` (`picked_slot` for an empty or own-ghost slot, `slot` only after a Swap / Overwrite choice) and
+  `expected_feed` (the tile's feed token), and disable doubly-claimed and non-head-binding slots (and occupied
+  ones in return mode) with a why-string.
+- Done already: D8 (printer mode no longer stars the spool's own head, `f055def`), D5 / D6 (pins), and
+  `placement.py` in the slot_targets reader canary (`09c3d5a`).
+
 ---
 
 ## 40.2 — Box-label scan opens the picker (D2.1)
@@ -293,51 +347,306 @@ Rationale: other users scanning a box label mostly want to store, and a recommen
 - In the location branch with a non-empty buffer: when the row is a Dryer Box with `Max Spools > 1`, open the picker (box mode) for the TOP buffered spool instead of `performContextAssign`.
 - Single-slot boxes (PolyDryers) and every other type keep today's path.
 - On a pick, call `performContextAssign(box, slot, false, [top.id])` (`inv_cmd.js:1889`), extended (after 39.1) to send `confirmed_toolheads` / `confirmed_fed_heads` and to handle `requires_confirm` with `confirm_type` `head_fed` / `active_print` via the three-way confirm (40.3).
-- Picking an occupied slot → the same Swap / Overwrite choice the grid uses (`inv_loc_mgr.js:1212-1228`), until Q2 is answered.
-- Several spools in the buffer → see **Q1**. Default until answered: place the top spool; the rest stay in the buffer.
+- Picking an occupied slot → the same Swap / Overwrite choice the grid uses (`inv_loc_mgr.js:1212-1228`), as Q2 settled on 2026-10-13: no "store without a slot" tile and no refusal, so the incoming spool always gets a real slot.
+- Several spools in the buffer → see **Q1**, answered 2026-10-13: **loop**. After each pick the picker reopens for the next spool that was in the buffer when the label was scanned; Escape stops, and the rest stay in the buffer. Build note: iterate over that scan-time list, so a spool that a Swap pushes onto the end of the buffer (`inv_loc_mgr.js:1493-1497`) is not offered again and the loop always ends. The old default (place only the top spool) no longer applies.
 
-**Tests.** Route-stubbed E2E: `LOC:LR-MDB-1` with one buffered spool opens the picker; picking slot 2 posts `{location: LR-MDB-1, slot: "2", spools: [top]}`; a `head_fed` answer opens the three-way confirm; the buffer keeps the spool on Cancel. Hermetic: none new (engine covered by 40.0).
+**Tests.** Route-stubbed E2E: `LOC:LR-MDB-1` with one buffered spool opens the picker; picking slot 2 posts `{location: LR-MDB-1, slot: "2", spools: [top]}`; a `head_fed` answer opens the three-way confirm; the buffer keeps the spool on Cancel; with two buffered spools, the picker reopens for the second after the first pick, and Escape leaves it in the buffer (Q1); on a full box, a tap on an occupied slot opens Swap / Overwrite (Q2). Hermetic: none new (engine covered by 40.0).
 
 **Risk.** `state.lastScannedLoc` double-scan (`inv_cmd.js:1658`) opens the manager on a second scan of the same label. Keep that behaviour when no picker is open.
+
+### As built (2026-10-15): the picker follow-ups, the box-label door, and the same-slot swap
+
+**The picker follow-ups (D1–D4), `slot_picker.js` + `placement.py`.**
+- **D1, scans and Enter.** An Enter while a scan is in flight (`window.isScanInFlight`), a scanner burst, or a buffered
+  payload belongs to the scan. A digit is a hotkey only when the scan buffer was empty and nothing followed it within
+  50 ms (a 1–2 digit spool label is refused like any foreign scan, and its Enter picks nothing). A key aimed at a
+  field behind the picker (focus outside the panel, not `body`) never drives it; the panel takes focus while it loads,
+  and Tab stays inside it.
+- **D2, opening guards.** `openSlotPicker` resolves `null` with a 7 s warning and a log line while another
+  `[data-overlay-mount="1"]` is mounted, an audit runs, a gating dialog is up (`state.activeModal`) or FCC is busy
+  (`state.processing`); a bulk move keeps its old info toast. Open, it closes itself (null, 7 s warning) when a bulk
+  move or an audit starts (`inventory:sync-pulse`, and at pick time).
+- **D3, feedback inside the panel.** A `role=alert` status line (`.fcc-sp-status`, 7 s) carries every refusal (a
+  foreign scan, a greyed-out slot); a choice's label scanned while the slots load is kept and applied once they are
+  drawn (refused if the load fails); `CMD:CANCEL` toasts "Slot picker cancelled — nothing moved" and logs.
+- **D4, what a pick tells its caller.** A box-slot result carries `send` (`{picked_slot}` for a free slot or the
+  spool's own; `{slot}` only after the user chose what happens to the slot's spool), `expected_feed` (the tile's
+  feed: a head id, or `''` for a pool or storage slot), `choice`, `swap` and `displaced`. The model marks each slot
+  `occupant_state` (`stored` / `on_feed` / `on_other_head` / `stale`) and `blocked` (a why-string, the engine's own
+  ghost-guard rules worded for a tile: two spools claim it; bound to something that isn't a toolhead; its own spool
+  runs on another head; a stale record where nothing loads; any occupied slot in return mode). Greyed-out tiles say
+  why and are never picked; the ⭐ is the shared rule over the slots the picker can take (it never lands on a greyed
+  one). An occupied slot opens an in-panel step (Q2): a stored spool gets **Swap** (it goes to your buffer) /
+  **Overwrite** (it stays in the box without a slot) / **Back**; the slot's own spool running on the head it feeds
+  gets **Swap it out** / **Back** (the same-slot swap below); a stale record on a loading slot gets **Put it in
+  slot N** / **Back**. ←/→ and Tab move, Enter chooses, Back returns to the tiles, Escape cancels the picker, and
+  each answer has a session-scoped QR (`attachConfirmQRs`: CONFIRM = the first answer, STORE = Overwrite, CANCEL =
+  Back). A test pins that the engine refuses exactly the ghost slots the picker greys out.
+
+**The box-label door (`inv_cmd.js`).** In the location branch with a buffer, a Dryer Box with Max Spools > 1 runs
+`_placeBufferWithPicker` (single-slot boxes and every other row keep today's path). It iterates the buffer as it
+was when the label was scanned (a spool a Swap hands back is never offered again): one picker per spool ("1 of 2"),
+each pick one `performContextAssign` with `[sid]`, `send.slot` / `send.picked_slot` and `opts.expectedFeed` on the
+FIRST request (a re-pointed slot is asked again), `opts.swapDisplaced` for a Swap. `performContextAssign` reports
+`{outcome: 'moved' | 'cancelled' | 'failed', res}` to `opts.onOutcome` and still returns nothing (a returned
+Promise hung `test_context_assign_yes_names_the_slot_and_the_spool_it_asked_about` for 30 minutes: its
+`page.evaluate` awaited a move that waited on the question the test answers next); askMoveConfirm's yes/no and
+three-way both report a cancel (`onCancel`; an unrecognised question reports `{unknown: true}`, which ends the loop). Claude's call
+24: Escape / ✕ / CMD:CANCEL stops (the rest stay buffered), Cancel on a load question steps back to the same
+spool's picker, a failure ends the loop after its 7 s error, and a loop of several spools ends with a summary
+("📦 LR-MDB-2: #150 → slot 1; #152 stays in your buffer"); one spool never placed says so too. A second box label
+scanned while a loop runs is refused. A slot pick's toast reads "✅ #57 → LR-MDB-1 slot 2 → XL-2".
+
+**The same-slot swap → the scan buffer (`2a45ba5`; Derek, 2026-10-15).** See the buglist item and CLAUDE.md's
+write-surface rows. The auto-deploy chain passes `swap_slot=(box, slot)`; Smart Load sends a resident whose trail is
+exactly that slot to the buffer (`perform_smart_eject(to_buffer=True)`: Unassigned, trail cleared), appended to the
+END of `state.GLOBAL_BUFFER` and answered as `to_buffer` (buffer entries + `off_head`). Every browser move door adds
+them with one save (`window.takeIntoBuffer`, pinned by `test_door_to_buffer_canary.py`) and toasts "✋ #99 → your
+buffer (taken off XL-1)". Undo puts the spool back on its head and out of the buffer (`buffered` / `unbuffered`).
+The slot-scan door filters the LIVE buffer replica after the move (its pre-move snapshot dropped the spool) and
+counts only the user's own spools in "still in buffer".
+
+**Tests.** `test_same_slot_swap_to_buffer.py` (real engine + doors, 17 of 22 fail on `d8f6128`),
+`test_same_slot_swap_buffer_js.py` (node vm, 5 of 7), `test_door_to_buffer_canary.py` (6 of 6),
+`test_box_label_picker_js.py` (node vm, the door and loop, 11 of 12 on `d8f6128`), the D4 section of
+`test_placement_options.py` (9 of 9), `test_box_label_picker_e2e.py` (the real picker and door, route-stubbed),
+and 12 new D1–D4 tests (14 cases) in `test_slot_picker_e2e.py`. The review round below adds more. Deliberate changes: `test_slot_picker_e2e.py`'s digit + Enter test (a digit highlights
+after the 50 ms beat; Enter on an occupied slot asks Swap / Overwrite first), `test_fed_head_confirm_40_0c.py`'s
+same-slot swap (#99 Unassigned, in `to_buffer`), and `test_toolhead_scan_single_spool.py`'s whole-buffer pin (now a
+synthetic Shelf row: every dev Max > 1 row is a Dryer Box, which opens the picker).
+
+### The review (2026-10-15, `wf_0b3cc1a9-578`): 18 findings, 1 red, all but one fixed
+
+4 agents (3 lenses + 1 batched skeptic), 1.80M subagent tokens, ~59 min: 18 findings, none refuted (1 duplicate).
+- **Red, fixed: a second read of the slot label reversed Derek's same-slot swap.** With one spool buffered, the
+  swapped-out spool is the buffer's only entry, so a scanner's double-read (queued while the first scan was handled)
+  or a "did it take?" re-scan loaded the run-out spool back onto the head and handed the new one to the buffer.
+  The browser drops an identical `LOC:` scan read before the last one was answered or within 1.5 s after
+  (`capturedAt` from `scripts.html`). A server hold-back was added too (2 min, `assignment_held`) and **removed the
+  same evening at Derek's word** (2026-10-15): "if I scan the wrong barcode, then I'd probably want to fix that
+  issue", and a stop that refuses the fix "sounds more like a headache/hidden bug". So a deliberate re-scan of the
+  slot swaps the two straight back; only a scanner's double-read is dropped.
+- **Yellows, fixed:** a swap-out PATCH that landed but timed out is re-read (`_move_write`), so the spool still
+  reaches the buffer and the undo; a picker Swap / Overwrite into a slot that only stores the spool
+  (`stores_only`: the engine's store_only rule, binding = the head it is leaving OR its own ghost slot) sends
+  `auto_deploy: false` (`opts.autoDeploy`), where `{slot}` alone loaded it straight back; a slow scanner's digit
+  label no longer picks (a digit hotkey keeps the scan buffer, a second digit within 300 ms puts the highlight back,
+  and two characters own the Enter); a lone digit is cleared in every view (it spoiled the next scan on the loading
+  and Swap / Overwrite views); the old double-scan rule fires only while the buffer is as its first scan left it
+  (`lastScannedBufferSig`), so a spool picked up in the manager isn't silently dropped before the picker; the
+  queued double-read in the loop is the repeat guard's; a "Put it in slot N" pick over a stale record offers no
+  "Just store it" (`store_ok` → `ctx.noStore`), since the engine refuses that store.
+- **Notes, fixed:** Undo takes out only what the move added to the buffer; the doubled-head stuck path is pinned;
+  `_put_in_buffer` moved off `_smart_move_depth`'s comment; only the picker's own bare `CMD:CANCEL` cancels it (a
+  stale session cancel QR is ignored); the dim says "⏳ Checking XL…" for a picked slot too; the ⭐ / auto-slot
+  divergence (a free slot bound to a non-head) is documented, not changed (Claude's call (c), kept 2026-10-14); doc
+  and test counts corrected; the Shelf E2E owns its buffer.
+- **Deferred to 40.5 (with the 40.3 "Open, narrow" note):** the engine still offers "Just store it" in a question
+  about a slot that holds a stale record (the slot-label scan meets it too) and then refuses the store, writing
+  nothing. Asking it right needs the slot read before the question, the same read 40.5 adds.
+
+### Derek's answers (2026-10-15, evening)
+
+- **No hard stop on re-scanning a slot** (above): the 2-minute server hold-back is removed; the 1.5 s double-read
+  guard stays.
+- **Prod waits for the end of Group 40** (no release before 40.7). His note: "This feels like it's taking way
+  longer and way more effort than I was expecting."
+- **Swap, option C (build in the next leg; not built yet).** His words: "it goes back to its previous location but
+  also in the buffer in case that isn't correct. It shouldn't go back to the slot it just came from (was just
+  ejected from), and shouldn't bump a spool in a slot if it's not empty. In the case that the old slot isn't
+  empty, then a non slot attached to a toolhead (like a cart, a box, a wall shelf, whatever)." The build spec, all
+  three points **confirmed by Derek the same evening**:
+  - A slot's STORED spool swapped out (the Location Manager grid's Swap, and the picker's) goes into the scan
+    buffer as today, AND is filed back where it sat before it went into this slot: a plain place (cart, shelf,
+    box without slots) as it was; another slot only if that slot is free (never bump; never the slot it was just
+    swapped out of).
+  - That slot taken: the last plain place it sat in before any slot. ✅ "seems right".
+  - FCC doesn't remember today where a spool sat before it went into a multi-slot box slot (only single-slot boxes
+    keep `fcc_pre_box_location`), so the build adds that record. Spools slotted before it have none: Unassigned +
+    the buffer, not the box without a slot (the 5/4 he wants gone). ✅ "seems right for now". His idea, not
+    chosen: "putting it in the room it was just stored in", which he sees as problematic where we can't or don't
+    want to put it back there.
+  - The same-slot swap's old spool (built as Unassigned + the buffer) follows the same rule: one rule. ✅ "sounds
+    right. I may have more of a nuanced opinion once I run into it a few times."
+
+### As built (2026-10-19, overnight): Swap option C (`73b3f88`)
+
+- **The record.** The "before the box" note (`fcc_pre_box_location`, Group 42.6) also records where a spool sat
+  before a multi-slot box's slot: `"LR-MDB-2:1>CR-CT-2-R1"` is the slot it came from, then the plain place behind it
+  (`logic._note_after_move`). Into a slot from a cart: the cart; from another slot, or off a head deployed from one:
+  that slot plus the plain place it remembered; back into the slot it was deployed from (a Return), a deploy, head to
+  head or a re-scan: kept; onto a head from a plain place: that place; anywhere else, or from a room / Unassigned:
+  used up. A spool sent home into its multi-slot slot by an eject keeps the note (it used to be dropped).
+- **The swap-out.** `perform_smart_move(swap_out=True)` (doors: `swap: true` through `logic.swap_requested`;
+  `manage_contents add` for the grid's Swap, `/api/smart_move` for the picker's): the slot's stored spool is filed
+  where `_swap_out_place` says (the free slot or single-slot box it sat in before, never bumping a spool and never
+  the slot it leaves, read strictly; else the plain place; else Unassigned) by `_swap_out_write` (a re-reading
+  write), joins the END of the buffer (`to_buffer` entries carry `filed_to`), and the undo record's `displaced`
+  puts it back in the slot once the slot is free again (a strict read; the question names it). A swap-out that
+  can't be read or written refuses the incoming spool. The same-slot swap uses the same rule
+  (`perform_smart_eject(to_buffer=True, swapped_from=(box, slot))`).
+- **Browser.** The grid's and the picker's Swap send `swap: true` and buffer only what the server names (also on a
+  failed answer that carries one); the toast says "✋ #77 → your buffer (filed back in CR-CT-2-R1)"; the grid's prompt
+  explains Swap vs Overwrite; the picker's Swap button says where the spool will go (placement's `swap_to`, the
+  engine's own rule over the model's one read).
+- **Claude's call (veto any):** a PolyDryer's spool whose noted slot is taken goes to the plain place behind it
+  instead of that box with no slot (a note from before this build has no plain place: call 21 unchanged).
+- **Tests:** `test_swap_option_c.py`, `test_swap_option_c_js.py` (44 of 53 fail on `0b0eeb7`; the rest are controls).
 
 ---
 
 ## 40.3 — Slot-label scans, grid taps and deposits get the "already fed" confirm (D2.2, D2.3)
 
-**Today.** The slot-label answer `assignment_requires_confirm` is handled only as an active-print confirm (`inv_cmd.js:1570-1643`), replaying the scan with `confirm_active_print: true` (`:1586-1594`). Grid taps go through `doAssign` → `_doAssignFinalize` (`inv_loc_mgr.js:1391-1489`), which handles only `active_print` (`:1443-1450`). The deposit handles `assignment_requires_confirm` as active print only (`inv_quickswap.js:668-679`).
+### Built first: what the server now expects from the browser (built 2026-10-14 with 40.0c / 40.0e)
 
-**Design.**
-- **One three-way confirm**, `_confirmHeadLoad({fedHeads, activePrints, box, slot, spoolLabel})`: a thin wrapper over Group 39.4's shared confirm (`window.confirmActivePrint({activePrints, msg, host, onConfirm})`), extended with an optional third action (`onStore`) and a fed-head block, instead of a fourth hand-rolled copy. `mountOverlay` tier `confirm`; shared by the scan path, the grid path, the deposit and the pickers.
-  - Title: `Load #42 onto XL-1?`.
-  - Body names the real consequence, for example *"XL-1 is running #99 (from PM-DB-2). Loading #42 sends #99 back to PM-DB-2."* plus the `⚠️ XL is PRINTING` banner when `activePrint` is set.
-  - Buttons: **Load it instead** · **Just store it in LR-MDB-1 slot 1** · **Cancel**.
-  - Keyboard as the existing confirms (`inv_cmd.js:1842-1872`), including the `isScanInFlight` Enter guard.
-- **Scannable choices.** `attachConfirmQRs` (`inv_core.js:387`) supports CONFIRM and CANCEL only, and `routeConfirmScan` matches only those (`inv_core.js:459`).
-  - Extend both with an optional third action `STORE` (`CMD:STORE:<sid>`), so a blind scanner can pick "just store" from the screen.
-  - Apply the stale-QR guard (`inv_cmd.js:1414-1418`) to a stale `STORE` too.
-  - Mapping: CONFIRM = load it instead, CANCEL = cancel (always safe), STORE = just store.
-- **Replays (39.1's scoped lists):**
-  - load → `confirmed_fed_heads: [head]`, plus `confirmed_toolheads: [head]` when printing;
-  - store → `auto_deploy: false` (no head is touched, so no confirmed list is needed).
-  - The slot-label replay must re-send the ORIGINAL scan text (as today, `inv_cmd.js:1589-1593`).
-- **Printing-only answers** on a box-slot target (`confirm_type: active_print` with `can_store: true`) use the same overlay with the store option. It is Derek's 2026-09-12 sync-while-printing case: he may want the spool in the box without disturbing the head.
-- **Not changed:** toolhead-QR scans, Quick-Swap tile taps, the deposit's own semantics beyond handling `head_fed`.
+The server half of 40.3 shipped with 40.0c. The browser half is what 40.3 builds:
 
-**Tests.**
-- Hermetic Flask-client tests for the slot-label route: `head_fed` answer shape; replay-load; replay-store; same-slot swap needs no confirm.
-- Route-stubbed E2E:
-  - scan path three-way (click each button; scan `CMD:CONFIRM:<sid>`, `CMD:STORE:<sid>`, `CMD:CANCEL:<sid>`);
-  - grid tap on a slot bound to a fed head;
-  - deposit answered `head_fed` reopens with the resident named;
-  - a stale `CMD:STORE:<sid>` is ignored with a warning;
-  - test debt from Move-pipeline follow-ups item 6, since these handlers are rewritten here anyway: `not_deployed` in the confirmed slot-QR replay (`inv_cmd.js:1620-1621`) and `auto_deploy_skipped` in `_doAssignFinalize` (`inv_loc_mgr.js:1457`) each raise their 7 s warning.
-- Extend `tests/test_confirm_chain_reshow_e2e.py`: the three-way overlay must never re-show a Bootstrap gating modal directly.
+1. **Every request to the three doors sends `confirmed_fed_heads`** (at least `[]`): the slot-label scan and every
+   replay of it, the Quick-Swap ⬇️ Deposit, Location Manager grid taps / Swap / Overwrite / `CMD:SLOT:n`
+   (`doAssign` → `_doAssignFinalize`), the ↩️ on a DEPLOYED grid card, `performContextAssign`, Force Location, and the
+   Location Manager ID field's typed `LOC:…:SLOT:n` (`manualAddSpool`; route its non-spool text through `processScan`,
+   which also fixes its "Invalid Code" toast for a slot move that landed). A request without the key gets the
+   stale-page "reload" refusal instead of the question. Add a source canary: every POST to `/api/identify_scan`,
+   `/api/smart_move` and `manage_contents` action `add` sends the key, or sits on an allow-list with a reason
+   (`CMD:AUDIT` / `CMD:CANCEL` / `CMD:DONE` posts, the `ID:` pickup).
+2. **Branch on `confirm_type === 'head_fed'` (and on `can_store`) before every active-print fallback.** An idle
+   head_fed answer has `active_print: null` and `active_prints: []`; today's handlers would invent a "… is
+   PRINTING" banner (askAndReplay, `_reaskFromServer`, `confirmActivePrint`, `_doAssignFinalize`,
+   `performContextAssign`). Pin: an idle head_fed answer never renders "is PRINTING" or "Continue Anyway" (node vm).
+3. **The dialog**: `title` asks ("Load #57 onto XL-1?"), `body` explains (Derek's wording; no "Continue?"), buttons
+   **Load it instead** · **Just store it in LR-MDB-1 slot 1** · **Cancel**, each with a scan QR (`CMD:CONFIRM`,
+   `CMD:STORE`, `CMD:CANCEL`). Enter = Just store it (Derek's answer 5). A printing-only answer with `can_store` also
+   has `title` and `body` and uses the same dialog.
+4. **Replays** (both name what the question was about):
+   - **Load it instead** = the original request + `confirmed_fed_heads`: the union of every answer's
+     `fed_heads[].confirm_key` so far ("XL-1#99": the head and the spools the question named; a different spool on the
+     head is asked again) + `confirmed_toolheads`: `unionConfirmHeads(prior, answer)` + `picked_slot: answer.target_slot`
+     (box doors, when the first request named no slot) + the spool ids in `answer.spools`.
+   - **Just store it** = the original request + `auto_deploy: false` + `picked_slot` + the spools + `confirmed_toolheads`
+     for every printing head that is NOT a `feeds` entry (a spool leaving a printing head still asks about that head).
+   - Both lists accumulate across rounds: add `unionConfirmFedHeads(prior, answer)` beside `unionConfirmHeads` in
+     `inv_core.js`, or an idle head_fed answer followed by a print starting ping-pongs between two dialogs. Pin with a
+     node-vm run across active_print → head_fed → active_print.
+5. **Answers the current UI already shows correctly** (no work): `picked_slot_taken` (an error with the reason), the
+   chain guard's "XL-1 started running #7 … use XL-1's Quick-Swap" (the existing 7 s "NOT deployed" warning).
+6. **Test debt for 40.3**: the `NEEDS_CONFIRM` stub in `test_move_result_consumers_e2e.py` has no `confirm_type`
+   (keep "missing ⇒ active_print" in the rewritten handlers, or update the stub deliberately); add a stubbed visual
+   baseline for the three-way dialog (don't reuse the Quick-Swap ones).
+7. **For 40.2** (heads-up): `test_toolhead_scan_single_spool.py::test_multispool_dryer_box_scan_still_sends_full_buffer`
+   breaks once a box label opens the picker (every dev Max>1 non-tool row is a Dryer Box); re-point it at a fake
+   Cart / Shelf row or rewrite it in 40.2's commit.
 
-**Risks.**
-- This is the prompt Derek meets. Mis-classifying the same-slot swap as "elsewhere" would add a prompt to his normal slot swap. Pin the slot normalization, especially a single-slot box's blank slot.
-- `routeConfirmScan` is on the scan hot path; keep the regex change minimal and case-preserving for the sid (`inv_core.js:456-459`).
+### Derek's answers (2026-10-14, afternoon) — build 40.3 this way
 
----
+- **Enter on a printing-only "Just store it" dialog stores** (as on the fed dialog): a toolhead can't be loaded
+  mid-print. His follow-up worry, the load you must remember after the print, is a buglist item ("A spool 'just
+  stored' in a bound slot mid-print leaves a load to remember after the print").
+- **Quick-Swap Deposit onto a fed head: one dialog, the three-way.** His scenario (load LR-MDB-1 slot 1 onto XL-1 and
+  swap out the PolyDryer spool) IS "Load it instead": the body names #99 and where it goes ("XL-1 is running #99 (from
+  PM-DB-2) … sends #99 back to PM-DB-2"); "Just store it" leaves #99 on XL-1. Nothing new.
+- **A slot re-pointed to another head while the dialog was open asks again, even an empty idle head** (Derek
+  overruled the default: multi-user awareness; he fills slot 1 because a slicer file depends on it). New in 40.3:
+  every replay of a bound-slot question also sends the head the question named for the slot (e.g. `expected_feed:
+  "XL-1"`; the answers already carry it in `fed_heads[].toolhead` / the `feeds` entry of `active_prints`); the doors
+  thread it, and the engine answers a new question (nothing written) when `_slot_binding(box, slot)` differs, naming
+  both heads ("LR-MDB-1 slot 1 now feeds XL-2 (it fed XL-1 when you were asked). Load #57 onto XL-2?"). Pin it with
+  the existing rebind test plus an empty idle XL-2. The general audit is a buglist item ("Multi-user awareness").
+- **Claude's calls kept:** (a) a spare whose 40.0d toast named LR-MDB-1 slot 1 is that slot's own spool ("scans to
+  heads are effectively scans to the associated dry box, except transient boxes like the PolyDryer or the Prusa
+  USS"); (b) Force Location into the feeding box stores the spool (Force Location is a last resort; easier
+  non-barcode assignment to INDX heads is a buglist item); (c) auto-slot passes over non-head bindings (an unbound
+  slot is a storage slot; lazily filling the next free slot, bound or not, is fine).
+
+### As built (2026-10-14, evening): browser `d2f076f`, engine `4489cbf`
+
+This replaces the pre-build "Today / Design / Tests / Risks" text (dropped by `d6cac7d`; recoverable from git).
+The contract is in CLAUDE.md ("One move question, one replay builder, …"); this is the map.
+
+**Browser (`d2f076f`).**
+- **One dialog.** `window.confirmActivePrint` (inv_core.js) gained a three-way mode, used when the answer has a
+  `title`: **Load it instead** (`.fcc-apc-yes`) · **Just store it in LR-MDB-1 slot 1** (`.fcc-apc-store`) ·
+  **Cancel**. Enter stores (it cancels when the dialog offers no store), and an answer with `can_load: false`
+  shows no Load button; Tab / ← / → move between the buttons; the QRs are `CMD:CONFIRM:<sid>` /
+  `CMD:STORE:<sid>` / `CMD:CANCEL:<sid>` (`attachConfirmQRs` / `routeConfirmScan` gained STORE, and a stale STORE
+  QR is guarded like a stale CONFIRM). While it is open, any other scan is held off with a 7 s warning
+  (`window._fccOpenMoveQuestion`, read by `processScan`; `CMD:CANCEL` cancels it), and its host modal closing
+  cancels it.
+- **One router.** `window.askMoveConfirm(answer, ctx)`: `window.moveConfirmKind` sends `head_fed`, `feed_changed`
+  and an `active_print` answer with `can_store` to `window.confirmHeadLoad` (the three-way); any other
+  `active_print` (or a missing `confirm_type`) to the two-way confirm; anything else is a 7 s warning, nothing
+  moved. Cancel: "Cancelled — nothing moved" + an INFO log line.
+- **One replay builder.** `window.buildMoveReplay(door, original, answer, choice, prior)`: Load = the union of
+  every answer's `fed_heads[].confirm_key` (`window.unionConfirmFedHeads`) + `window.unionConfirmHeads`; Store =
+  `auto_deploy: false`, keys unchanged, only the printing heads that aren't a `feeds` entry, and a store stays a
+  store in later rounds. Both send `expected_feed` (the answer's `feed`), `picked_slot` when the answer says
+  `slot_picked`, and the spools the question named (`spool_id` at the slot scan, `spools` at `/api/smart_move`).
+  It never re-applies `_doAssignFinalize`'s MMU 0-based correction: a replay re-sends the original `slot`.
+- **Doors:** the slot-label scan and `performContextAssign` (inv_cmd.js); the Location Manager's
+  `_doAssignFinalize` (via `_postManageAdd`; the DEPLOYED card's ↩️ now sends `auto_deploy: false`, so it no longer
+  offers a load; `manualAddSpool` routes typed `LOC:` / `CMD:` text through `processScan`); Force Location
+  (inv_details.js, split into the unassign and the add); the Quick-Swap ⬇️ Deposit (inv_quickswap.js). The deposit
+  is ONE dialog: when the slot's head runs a spool or its printer prints, it posts at once and the server's
+  three-way is the question; an idle, empty head keeps the deposit overlay. Its first request carries
+  `expected_feed` (the tile's head, or "" for a Printer Pool tile; none for a single-slot box).
+
+**Engine (`4489cbf`).** `expected_feed` → `confirm_type: "feed_changed"` (nothing written, even for an empty idle
+head; since `f055def` a store replay is asked as a store, with no Load button); `target` / `slot_picked` / `feed` /
+`can_load` on every question; the `identify_scan` slot branch relays every engine key; and the engine review's
+deferred notes marked ✅ 40.3 below.
+
+**The review's fixes (`f055def`).** `seen_printing` (the deposit sends the print it saw, so a fail-open probe still
+asks); `printing` on every question; one unanswered dialog per overlay id (a replaced one is settled as
+superseded, no false "Cancelled"); one deposit at a time; `window.storeToastTail` ("taken off XL-1"); a slot whose
+own spool runs on another head takes no new spool; a printing answer offers the store only when the head the slot
+loads is mid-print; "None" / "null" bindings read as unbound. Round trips through both halves:
+`tests/roundtrip_harness.py` + `tests/test_move_question_round_trip.py`. The fix check (`wf_0dddaf03-9a6`,
+`1bbc1f9`): a stale trail (a spool on no head whose record still names the slot) never blocks a load; a deposit
+owns the screen until its answer; scans stay held off while any three-way is open; every question names the
+heads its spools leave (`leaving`).
+
+**Open, narrow (take it with 40.5, which reads the same slots):** on a printing XL, a slot whose own spool runs
+on ANOTHER head (re-pointed after it was loaded) still gets the three-way first, and both answers are then
+refused at the slot read (nothing is written). Asking it right means reading the slot before the question. The
+40.2 review found a sibling: a question about a slot holding a stale record offers "Just store it", which the
+step-6 guard then refuses (nothing written); the box picker already offers no store there (`store_ok`), the
+slot-label scan still does.
+
+**Tests.** `test_head_load_confirm_js.py` (node-vm: the dialog, the router, the replay builder across rounds,
+the Location Manager's recorded-source toast), `test_door_fed_heads_canary.py` (every POST to the three doors
+sends `confirmed_fed_heads`, or is on the allow-list with a reason), `test_head_load_confirm_e2e.py` (route-stubbed
+three-way: click, Enter, each QR; stubbed visual `head-load-confirm-fed.png`), `test_expected_feed_40_3.py` (the
+engine and the three doors), the deferred-note pins in `test_fed_head_confirm_40_0c.py` and
+`test_auto_slot_before_preflight_40_0e.py`; deliberate updates in `test_move_result_consumers_e2e.py`
+(`PRINTING_STORE_Q`, the Force Location body) and `test_quickswap_deposit_and_header.py` (route stubs, so no run
+can post a real deposit).
+
+**Risks (kept from the design).**
+- This is the prompt Derek meets on his own path. The same-slot swap (S2) and a blind first slot scan into an
+  empty idle head (S1) must stay prompt-free: pinned (`test_the_slots_own_spool_coming_back_out_asks_nothing`,
+  `test_a_first_slot_scan_never_gets_a_feed_change`).
+- `routeConfirmScan` is on the scan hot path; its regex stays minimal and keeps the sid's case.
+- Not from 40.3: S2's swap sends the old spool back into the box unslotted (`engine:s2-swap-old-spool-unslotted`,
+  filed as a standalone buglist item; Derek, 2026-10-15: it goes to the scan buffer).
+
+### Derek's answers (2026-10-15, morning) — the four calls made overnight
+
+All four kept as built (Derek reviewed them before starting 40.2):
+- **A store is asked again as a store** (no Load button). His context: re-pointing a slot means physically
+  re-routing its PTFE tube, so nobody should change a mapping before the tube moves; a re-point mid-question is a
+  multi-user edge case (someone else's setup), not his own flow.
+- **A print only on the head the spool leaves keeps the plain yes / no.** His context: a roll a print is
+  actively feeding isn't going anywhere, and moving it mid-print isn't something to do; these questions mostly
+  came from moving spools on dev while prod was printing on the same physical printers (dev reads the same
+  PrusaLink), or from data weirdness such as one label on two spools.
+- **A stale trail never blocks a load; a store over one is refused, saying how to clear it.** His point, for
+  40.7: a spool forced to a new location (the wizard's Location edit, Force Location) shouldn't still be flagged as
+  coming from its old slot: "historically, yes it was there", but a forced location is either a needed
+  correction or him not getting up to rescan. The engine's own moves already clear the trail (the dryer and
+  generic branches write it blank); the wizard's Location edit and `/api/spool/update` keep it (they strip
+  system-managed extras from the diff). 40.7 routes the wizard's edit through the engine, which fixes that door;
+  `/api/spool/update`'s location path needs the same (add it to 40.7).
+- **`seen_printing`** (a page that saw a print tells FCC) kept; not asked, a pure safety net.
+- And the standalone same-slot-swap item: the swapped-out spool goes to the **scan buffer** (buglist).
 
 ## 40.4 — Force Location into a multi-slot box or a Printer row (D2.4, D3.1)
 
@@ -380,7 +689,7 @@ Leave the list filter as is: Printer rows stay listed because picking one now op
      - if the only option is No box, skip the question and say so in the toast.
   5. POST `/api/smart_move {location: H, spools: [sid], confirmed_toolheads, record_source}`. The server still re-checks (39.1 destination, 39.4 source, `record_source` validation); a changed state reopens the confirm.
 - **`CORE1`**: its own head with no pool → skip the head list and go straight to step 3 on CORE1, then step 4 (CR-MDB-1 slot 1 feeds CORE1).
-- **Several buffered spools** → Q1.
+- **Several buffered spools** → Q1, answered 2026-10-13: loop, one head or Printer Pool slot per spool, as in 40.2; Escape stops.
 - **Item F, decided: fix now, frontend only.** In the empty-buffer branch (`inv_cmd.js:1694-1702`):
   - Quick-Pick only when the scanned row is single-occupancy by type (Tool Head / MMU Slot / No MMU Direct Load, a Printer row that is its own head, or any other row with `Max Spools == 1`) AND the item is a DIRECT resident (`!is_ghost && location === res.id`);
   - a Printer row like XL → `openManage('XL')`, whose Quick-Swap grid already shows every head;
@@ -398,6 +707,33 @@ Leave the list filter as is: Printer rows stay listed because picking one now op
   - CORE1 skips the head list.
 
 **Risk.** Printer rows with no Quick-Swap grid data (no `printer_map` entry) → the picker must show *"XL has no registered toolheads"* instead of an empty list.
+
+### 40.4 / 40.5 as built (2026-10-19, overnight, `44ffbd2`)
+
+- **One flow.** `window.placeOneWithPicker({loc, sid, host, step, send})` (inv_cmd.js) opens the box or the Printer
+  picker and turns the pick into a placement the door's own `send` posts; Cancel on any question steps back to the
+  picker, Escape there ends it. Doors: the box-label and `LOC:XL` / `LOC:RCOI` loops (`_placeBufferWithPicker`), the
+  Location Manager's DEPOSIT card on such a row, Force Location (40.4, through `manage_contents add`), the wizard
+  (40.7, which holds the placement for Save).
+- **The Printer picker (40.5).** A head that holds a spool asks "Load #42 onto XL-3? XL-3 holds #99 (from LR-MDB-1
+  slot 3). Loading #42 sends #99 back to LR-MDB-1 slot 3." (Load it instead / Cancel; no store; Enter cancels). A
+  spool from no box then gets "Record it as coming from…": the head's feed slots (held ones shown with their spool),
+  the one free slot pre-selected (else No box focused), a feed slot's label scanned picks it, scans held off
+  meanwhile; sent as `record_source`. A Printer Pool slot is a box slot (Swap / Overwrite, greyed-out refusals).
+  A printer that is its own head keeps the direct path.
+- **Engine.** `record_source`: `''` records nothing; `{box, slot}` exactly that slot, validated strictly at step 4
+  (`blocked_reason: record_source`, nothing written) and re-checked at the write (taken meanwhile: not recorded, a
+  WARNING); a spool arriving from somewhere keeps its trail (`record_source_ignored`). **The slot read before a
+  question** (the 40.3 "Open, narrow" note and the 40.2 review's deferred note): a question about a NAMED slot is
+  asked only when its answers can land: a slot whose own spool runs on another head is refused first; a slot a
+  record still claims offers no "Just store it".
+- **Item F (Derek's answer 8).** An empty-buffer location scan grabs only a one-spool place's own direct spool; a
+  single-slot dryer box grabs its spool even while it is loaded on a head; printers, rooms, sections and rows open
+  their view. The browser's classifiers mirror the server's (`window.isPrinterRowNotHead`, `isMultiSlotBox`,
+  `isSingleSlotBox`; a parity test pins them).
+- **Tests:** `test_printer_picker_40_5.py`, `test_printer_picker_js.py` (38 of 49 fail on `73b3f88`); Force
+  Location's picker paths in `test_move_result_consumers_e2e.py`; occupied / greyed Printer Pool tiles in
+  `test_slot_picker_e2e.py`.
 
 ---
 
@@ -458,6 +794,22 @@ Leave the list filter as is: Printer rows stay listed because picking one now op
 
 **Dependencies.** Land after Group 39.2 / 39.4 (Return answers `return_requires_confirm` from the source check on the head it empties) and after `fix/core1-return-ejectall-guard`, which edits `_resolveReturnTarget` in the same file. The dry run should run the same source check, so the preview shows the printing banner before any picker opens.
 
+### 40.6 as built (2026-10-19, overnight; builder `e8683f0`, merged `45de89d`)
+
+- `/api/quickswap/return`: `dry_run` (`return_plan`), `slot` (+ `box`; a number or `"none"`), `expected_spool`.
+  One tap when the answer is obvious (Derek's answer 6): the recorded slot while free, else the only free slot
+  feeding the head when no single-slot box is attached to it; otherwise `return_choose_slot` (one box, D5's ⭐).
+  A chosen slot goes to the engine as `picked_slot` (never an Overwrite: taken meanwhile → `return_slot_taken`, the
+  picker reopens); `"none"` as the new `unslotted=True` (step 3 picks no slot). The log and toast say "LR-MDB-1 slot
+  2" / "(no slot)", never `SLOT:null`. The DEPLOYED card's ↩️ is this Return (`window.returnDeployedSpool`,
+  `expected_spool`); `doAssign(…, {autoDeploy: false})` only for a stale trail. `_resolveReturnDestination` is gone.
+- Builder's calls (veto any): a taken recorded slot with exactly one other free feed slot is one tap; the chooser
+  shows one box; `box` is sent with `slot`; the picker doesn't wait for the printer check (the banner is on the
+  confirm); log/answer wording ("(chosen)", `source: feed_slot`); what counts as a head for the DEPLOYED ↩️;
+  single-slot boxes keep their old rule.
+- Tests: `test_return_slot_choice.py`, `test_return_slot_choice_js.py`, `test_return_round_trip.py` (46 of 47 fail on
+  `0b0eeb7`), plus the Return browser tests in `test_move_result_consumers_e2e.py` and four live-data files.
+
 ---
 
 ## 40.7 — Wizard doors (item B's wizard bypass)
@@ -486,6 +838,114 @@ Leave the list filter as is: Printer rows stay listed because picking one now op
 - `api_edit_spool_wizard` is a documented write surface (CLAUDE.md table): update its row. Keep the `SYSTEM_MANAGED_EXTRAS` strip (`routes_inventory.py:620-630`); the engine owns those keys.
 - The 24.F manual-weight log (`:669-674`) must still see the weight diff.
 
+### 40.7 as built (2026-10-19, overnight; server `c239e16` merged `070291e`, browser `8561dcd`)
+
+- Server: the edit saves the other fields first, then moves the spool through the engine (`_wizard_move`:
+  `perform_force_unassign` for Unassigned, else `perform_smart_move(origin='wizard_edit')` with the door contract and
+  the picker's `record_source` / `swap`; both stale rules). The create is refused before anything is created for a
+  Printer row or several spools onto one head, then places each spool through the engine (`placements`, one per
+  spool; none = stays Unassigned). `/api/spool/update` refuses a head / printer location and clears the old trail
+  on any other location change.
+- Browser: picking a multi-slot box or a Printer row in the Location field opens the picker and holds the choice
+  (`wizardState.pendingPlacement`, "XL-3 (via XL)"); Escape puts the field back; Save sends it; the engine's question
+  is asked through `askMoveConfirm` and replayed on `/api/smart_move`. A create places the first spool where the
+  picker said and loops a picker for the rest (`window.wizardPlaceRemaining`, Claude's call 29). A clone of a head's
+  spool starts Unassigned (call 28). Fixed on the way: the Add form could keep the last edited spool's Location.
+- Builder's calls (veto any): the direct-write fix for `/api/spool/update` (not the engine); a create reports
+  success when spools were made even if a placement failed; the first write keeps the current location; a new slot
+  in the same box counts as a move; the stale-page wording; Unassigned uses Force Location's replay; the clone
+  fallback; locations are upper-cased by the engine.
+- Tests: `test_wizard_location_through_engine.py`, `test_wizard_location_save_js.py`, `test_wizard_picker_js.py`,
+  `test_wizard_location_e2e.py`.
+
+---
+
+## The final review (2026-10-19, `wf_bd637c78-057`): 27 findings, none red, 4 orange, all fixed or answered
+
+One review for the whole last leg (Swap option C, 40.4 → 40.7), as Derek asked: 5 agents, 2.31M tokens,
+~48 min. Four lenses (engine, Return, wizard, browser doors) wrote probe tests against the real engine and the
+real frontend modules; one batched skeptic re-checked every finding (all confirmed; BD-1 downgraded to a note).
+
+**Fixed (engine and browser doors, ``1a480cf`, `12d769d``):**
+- **R1 🟠 (engine part)** — the unseat loop touches only spools filed AT the target: a slot move onto a Room
+  ("LR", slot 1) unseated slot 1 of every LR-* box (the read lists them by prefix). The browser half is below.
+- **engine-1 🟡** — an eject out of a PolyDryer back into the box its note names kept nothing of the note, so a
+  later Swap filed the spool Unassigned ("FCC has no record"). The note now becomes the plain place behind it.
+- **engine-2 🟡** — the plain place behind '>' is trusted only while it is still a plain place
+  (`logic._is_plain_place`): never a deleted cart (the eject used to file the spool at a phantom id), never a
+  head named by a hand-edited note (a Swap used to write the spool straight onto XL-3, beside its spool).
+- **BD-2 🟡** — a slower scanner's Enter in "Record it as coming from…" answered the focused button (No box)
+  instead of the scan; `window.enterIsAScan` (the slot picker's rule) leaves it to the scan.
+- **BD-3 🟡** — a PolyDryer spool moving head to head was asked where it came from, and the engine silently kept
+  its PolyDryer: the model now says `spool_keeps_trail` and the question is skipped; an ignored answer is named
+  in the toast ("its home stays PM-DB-2", `record_source_kept`).
+- **BD-4 🟡** — the grid's Swap / Overwrite prompt promised things the engine doesn't do for a DEPLOYED card
+  ("stays in LR-MDB-1 without a slot") and for a spool slotted before Swap option C ("filed back where it sat").
+  It now words the choice from the slot's spool, as the picker does.
+- **BD-1 (note)** — "Record it as coming from…" settles when its host closes (it left the picker loop locked
+  until a reload), and the flow never re-opens the picker over a closed modal.
+- **BD-6 (note)** — a held-off scan's hint names only the buttons on screen; "No box" has its own scan code when
+  a slot is pre-selected. Not changed: a printing head that holds a spool still gets the head-load question,
+  then the server's printing question (40.5's deliberate split: the printing check stays the server's).
+- **engine-3 / engine-4 / BD-5 (notes)** — a shadowed local renamed; the review's Undo-after-Swap and
+  Swap-asks-head_fed probes adopted as tests; the DEPOSIT card on a printer view and Force Location's step back
+  after a cancelled question pinned.
+
+**Fixed (Return, ``79784b0` + `0ce7b22`, merged `90815ba``):** 
+- **R1 🟠 (browser half)** — the DEPLOYED card's stale-trail ↩️ names the spool's own box (its view id rides along to
+  refresh it) and sends its slot as `pickedSlot`, never an Overwrite; a slot another spool holds is refused with an
+  accurate message, and the view on screen repaints (`12d769d`). The engine half is above.
+- **R2 🟡** — a Dryer Box with a blank Max Spools: the plan and the Yes agree (the pre-40.6 rule; never offered in the
+  chooser; as a head's only feed, `return_no_binding` says to set Max Spools); a real single-slot box names only slot 1.
+- **R3 🟡** — `return_choose_slot` carries `error` / `msg` / `stale_page`: a page loaded before 40.6 toasts "…reload the
+  page (Ctrl+F5) to choose a slot" instead of "Return failed: return_choose_slot".
+- **R4 / R5 / R6 (notes)** — the single-slot path lets the engine's own pick decide (a spool put in the PolyDryer
+  during the printer check is never unseated); with `expected_spool` naming one of a doubled head's two spools,
+  Return acts on it; the reviewers' Return probes are tests now, and the printer-view ghost filter is pinned.
+
+**Fixed (wizard, ``a675212` + `f3216df`, merged `5b4b591``):** 
+- **🟠 three oranges** — a second Save moved an auto-deployed spool back into its box: the edit answer now carries
+  `location_now` and the page shows it; Tab / Enter reset a picked head to Unassigned: they keep a value the list
+  doesn't show unless the user typed; a slotless create into a box loaded an empty head: Save opens the picker, and a
+  slotless create into a multi-slot box stores server-side (`_create_guards`).
+- **🟡 yellows** — an edit that archives and moves takes the spool off first, then stores it (a ticked spool with
+  weight left is re-archived); a stale pick is dropped; a not-moved answer buffers what it names; a refused pick
+  (`pick_refused`) is asked again at the next Save; the loop's moves are `wizard_create` for Undo; a cancelled create
+  question says what stayed Unassigned.
+- **notes** — the create question keeps `noStore`; an older page never creates onto a head (Unassigned + a WARNING).
+
+Tests: `test_review_fixes_40_final.py`, `test_review_fixes_40_final_js.py`, the Return fixer's 22 (`test_return_slot_choice.py`, `_js.py`, `test_return_round_trip.py`; 17 red on `7976b72`) and the wizard fixer's 45 (`test_wizard_location_review.py`, `_js.py`, 3 canary rows; 36 red).
+
+---
+
+## Engine review (2026-10-14, `wf_6946f24e-3da`): deferred notes
+
+The review confirmed 28 findings. The 2 orange and 5 yellow ones are fixed in `db1952a`. These 21 notes
+are real but low-risk; take them with the sub-task that touches the same code (refs are `lens:id` in the
+workflow journal).
+
+- ✅ 40.3 (`4489cbf`). **fed_seen counts a resident the fed check skipped as 'left', so if it returns during the probe the chain unloads it without asking** (`engine:fed-seen-includes-left`). Fix: Build fed_seen only from the residents whose record still said bound_th (asked about, or classified as the slot's own spool).
+- **Bulk Move still skips a spool filed on a head-less one-slot Printer row as 'loaded in a toolhead slot', against item H** (`engine:headless-printer-bulk-skip`). Fix: In the bulk plan's skip, count as loaded only a real head: in printer_map, or a row whose Type is in TOOLHEAD_TYPES (equivalently, _holds_one_spool and not is_printer_row_not_head).
+- ✅ 40.2 (`2a45ba5`; Derek, 2026-10-15: the scan buffer). **Not from this diff: Derek's same-slot swap (S2) sends the old spool back into the box unslotted, so the box over-counts** (`engine:s2-swap-old-spool-unslotted`). Fix: Out of scope for this branch. File it as a standalone follow-up: either the chained Smart Load treats the resident whose trail is the slot being filled as leaving the box, or Derek decides where a swapped-out spool goes.
+- **target_slot '0' now means 'no slot', but the Location Manager's 0-based MMU Slot grid sends 0 for its first slot** (`engine:slot-zero-dropped`). Fix: Either drop the 0-based correction in _doAssignFinalize (inv_loc_mgr.js:1462-1470), or keep the slot for MMU Slot rows.
+- **40.0d's claimed-slot check compares slots raw, while the rest of the move normalizes them** (`engine:free-feed-slots-raw-compare`). Fix: Compare `_norm_slot(effective_slot(...)) == _norm_slot(slot)`, and normalize _feed_slots_for's slot.
+- **Read cost: each bound-slot scan pays one more full spool-list GET (the head is now listed three times per scan), and step 3 pays one full-list GET per candidate head instead of the spec's single bucket read** (`io:daily-path-read-cost`). Fix: Optional. At step 3, make one strict full-list fetch and bucket it for [box, *bound heads] with bucket_spools_by_location(spools=...), feeding the memo.
+- ✅ 40.3 (`4489cbf`). **The picked-slot race refusal blames 'checking the printer' even when no printer was asked, and picked_slot_taken says 'taken' for a slot that no longer exists** (`io:race-refusal-text-says-printer`). Fix: Say '…was filled by #77 meanwhile…' unless the memo shows a live probe.
+- ✅ 40.3 (`4489cbf`). **The head_fed body loses "XL is PRINTING … so FCC stops charging this print to #99" whenever the fed head isn't a 'feeds' entry in active_prints** (`protocol:fed-text-drops-print-consequence`). Fix: For the fed sentence, take the fed head's printer state from the probe memo whatever the confirm or role, and keep the charging clause.
+- ✅ 40.3 (answers carry `target` / `slot_picked` / `feed`; every door replays through `window.buildMoveReplay`). **A 40.3 replay can't be built from the answer alone: no pick-vs-named flag, no target, and the Location Manager replay still drops picked_slot** (`protocol:answer-cannot-drive-a-shared-replay`). Fix: In 40.3, thread picked_slot through _doAssignFinalize the way performContextAssign and Force Location do.
+- ✅ 40.3 (CLAUDE.md's 40.3 bullet, the chain-guard exception and the unseat row). **CLAUDE.md's move-confirm convention and the slot-unseat row don't describe 40.0c/40.0e, and one sentence in them is now wrong** (`protocol:claude-md-door-contract-drift`). Fix: Extend CLAUDE.md:62 with the 40.0c door contract: the key-presence stale rule (checked before Group 39's), confirm keys, picked_slot, the head_fed shape, and the chain-guard exception.
+- ✅ 40.3 (`test_a_pre_39_page_asked_a_fed_question_hears_the_fed_reload`). **The stale-rule order (fed before Group 39) is correct but no test pins it** (`protocol:stale-rule-order-unpinned`). Fix: Add one test, parametrized over the three doors, that sends {confirm_active_print: true} with a head_fed answer and asserts the fed message.
+- ◐ 40.3 (`d2f076f`): the ↩️ now sends `auto_deploy: false`, so it offers no load; 40.6-E's reroute still stands. **Known item 40.6-E: the deployed card's ↩️ RETURN SPOOL is still a silent round trip, and its answer now advertises a load/store choice** (`protocol:lm-return-round-trip-now-offers-store`). Fix: Land 40.6-E's reroute before 40.3's three-way dialog reaches doAssign.
+- **The HEAD-proof notes get HEAD's actual failure wrong for 4 of the 40.0e tests and some 40.0c ones, and two test docstrings repeat the wrong history** (`tests:head-proof-records-misdescribe-head`). Fix: Rewrite those docstrings from a real HEAD run, counting signature-only failures as controls.
+- ✅ 40.3 (`test_the_lowest_slots_question_answered_load_and_store`). **No pin for the two 40.3 replays of a head_fed question about an auto-picked slot** (`tests:auto-picked-head-fed-replays-unpinned`). Fix: Extend test_auto_slot_before_preflight_40_0e.py:201 with both replays.
+- **40.0d's rule that one unreadable feed box voids every candidate is unpinned; the blip test can't tell it apart from skipping that box** (`tests:free-feed-all-or-nothing-unpinned`). Fix: Add the TWO_FEEDS case with TST-MDB-1 unreadable, expecting nothing recorded and no recorded_source.…
+- ✅ 40.3 (`4489cbf`: no chain to a non-head, and the ghost guard covers it). **The chain for a slot bound to something that isn't a head has no pin; with an explicit slot, a binding to a missing head still moves the spool out of the box and reports a deploy** (`tests:non-head-binding-chain-unpinned`). Fix: Chain only when loads_head (`bound_toolhead = bound_th if loads_head else None`), with a WARNING such as 'slot 1 is bound to XL-9, which isn't a toolhead'.
+- **Nothing pins 40.0a's "refused before any read"; the tests only check that nothing is written** (`tests:printer-row-before-reads-unpinned`). Fix: In test_a_printer_row_that_is_not_a_head_takes_no_spool, use a counting FakeSpoolman and assert zero get_spool calls and zero list reads.…
+- ◐ 40.3: (a), (b) pinned and (d) commented; (c) stays for 40.5. **Several narrow branches have no pin, and two are unreachable as wired** (`tests:narrow-branches-unpinned`). Fix: Pin (a) with a probe stub that moves the resident away, and (b) with picked_slot '9'.
+- ◐ 40.3: the comment is true now that a 40.3 page sends the key; the full sweep is still due before `dev`. **The `scan` fixture comment says a current page sends confirmed_fed_heads (none does until 40.3), and e8a2706 records no full E2E run for its frontend change** (`tests:scan-fixture-comment-and-e2e-record`). Fix: Reword the comment to 'as a 40.3 page sends it', and run the full sweep before merging.…
+- **Tests coupled to read order and to another test module, plus one artificial race state** (`tests:fragile-coupling`). Fix: Move the shared rows into move_engine_harness or a fixtures module.
+- ✅ 40.3 (`d2f076f`: the toast, pinned in `test_head_load_confirm_js.py`). **The 13.6 recorded feed slot is still silent on the Location Manager's toolhead assign, and nothing pins that path** (`tests:lm-toolhead-recorded-source-toast`). Fix: When that follow-up lands, mirror the inv_cmd.js toast in _doAssignFinalize and add a node-vm pin like test_reverse_binding_40_0d_js.py.…
+
 ---
 
 ## Decisions taken in this doc (not asked of Derek), with rationale
@@ -499,13 +959,27 @@ Leave the list filter as is: Printer rows stay listed because picking one now op
 | Quick-Swap grid ⬇️ Deposit into a bound slot? | **Prompts when the head is fed from elsewhere** (40.3) | It posts the slot label through the slot-label route (`inv_quickswap.js:637`), and the spool chains onto the head. Only the swap tile names the head directly. |
 | Printer picker: prompt when the chosen head has ANY resident (40.5 step 3)? | **Yes**, broader than D2's "fed from elsewhere" | The Printer picker has no "this slot", so there is no same-slot swap to exempt. Picking a head that holds a spool always unloads it. |
 | Auto-slot for callers without a picker (40.0e) | **Move it ahead of the pre-flight**, using the picker's recommendation rule | Keeps slotless moves slotted, and makes their confirm cover the chain. Retiring it would bring back "5/4". |
-| Return of a head spool with no trail whose bound slot is free (40.6) | **Opens the picker**, pre-selected on that slot | D5's "none recorded", read literally; one extra Enter. Derek can overrule at R4. |
+| Return of a head spool with no trail whose bound slot is free (40.6) | ~~Opens the picker~~ → **one tap when the answer is obvious** (Derek's answer 6, 2026-10-13): the recorded slot while free, else the only free slot feeding the head when no single-slot box is attached to it; the chooser otherwise | His words. The confirm still names the slot ("the only free slot that feeds XL-3"). |
+| Return: a taken recorded slot with exactly one other free feed slot (40.6, builder's call 1) | **One tap into that slot** | Answer 6's "obvious"; a question for Derek in the handoff (he may prefer the chooser whenever the recorded slot is taken). |
 | Single-slot boxes as 13.6 reverse-binding candidates (40.0d) | **Never** (lands in 42.1 step 5) | A PolyDryer's blank slot always reads as free, so a stranger would be recorded as its spool. |
 | 13.6 reverse-binding | **Keep silent for scans; record only with exactly one free slot; name it in the toast; explicit choice in the Printer picker** | D3's pre-select rule applied everywhere, without slowing blind scanning. |
 | DEPLOYED ↩️ (item E) | **Canonical Return** (fallback: move back into the slot without deploy) | One Return path, one set of confirms, no duplicated slot logic. |
 | `LOC:XL` empty buffer (item F) | **Fix the scan now; matcher waits for 37** | A frontend guard, independent of the LocationID model. |
 | Wizard bypass | **Route location changes through the engine; wizard opens the pickers** | Last direct location writer; D2.4 by extension. |
 | Picker data | **One server model, exact-location matching, probe separate** | Fast open, testable hermetically, immune to the Group 37 matcher change. |
+| Same-slot swap: the old spool's Spoolman location (40.2, Derek left it to the build) | **Unassigned, trail cleared** | It is in his hand. The box count stays right (no 5/4), a weigh-out to 0 archives it anyway, and the next scan files it. The box itself was the bug; the printer's Room is the "Room-only spool" he finds a pain (41.8). |
+| Same-slot swap: where in the buffer | **The end**, behind spools already waiting | Swapping several slots in a row (several new spools buffered), the next slot scan must load the next NEW spool, not the empty one just taken off. |
+| Who asks Swap / Overwrite for a picker pick | **The picker, in its own panel** (not the grid's Bootstrap `promptAction`) | Every picker door (40.2, 40.4–40.7) gets it once, and no gating dialog fades in and out between a loop's pickers (D2 refuses to open over one). |
+| A picker Swap of a STORED spool | ~~The grid's semantics~~ → **Swap option C** (Derek, 2026-10-15 evening; built 2026-10-19): filed back where it sat before the slot, and into the buffer | His answer; the grid's and the picker's Swap and the same-slot swap share one rule (`_swap_out_place`). |
+| A PolyDryer's spool whose noted slot is taken (Swap option C, Claude's call) | **The plain place behind the note** (a cart, shelf), not the box with no slot | Derek's fallback rule for a taken slot; a note from before Swap option C has no plain place and keeps call 21. |
+| The Printer picker's questions (40.5) | **Head-load question client-side, printing question server-side** | The page has the model, not a fresh probe; the server's question is the one that knows the print. A printing head that holds a spool asks twice (review BD-6 (a), kept). |
+| "Record it as coming from…" for a spool whose PolyDryer follows it head to head (review BD-3) | **Not asked** (`spool_keeps_trail`) | The engine keeps the PolyDryer as its home (42.6), so the answer could change nothing. |
+| The grid's prompt for a DEPLOYED card (review BD-4) | **Worded from the slot's spool**: one "Swap it out" on its own head, nothing on another head, "Put it in slot N" for a stale record | The engine's own outcomes; the picker already says it this way. |
+| Wizard create into a box with an empty idle head (40.7, builder's call) | **Loads the head** (answer 7: the wizard behaves like Force Location) | A question for Derek in the handoff (the alternative: a create only stores). |
+| `/api/spool/update` and a printing head (40.7, builder's call) | **No printing check** (it refuses heads and printers outright; no page sends a location) | Nothing to ask about until a page uses it; listed for Derek. |
+| Slots the picker greys out | **Two spools claiming it, a binding to a non-head, its own spool on another head, a stale record where nothing loads, any occupied slot in return mode** | The engine refuses the ghost cases (pinned), Quick-Swap refuses doubly-claimed slots, and a non-head binding stores with a warning nobody asked for. The ⭐ skips them. |
+| The box picker's loop (Claude's call 24, as built) | **Escape stops; Cancel on a load question steps back to the same spool's picker; a failure ends the loop; several spools end with a summary** | Escape is "I'm done", Cancel is "not that slot". An unanswerable question ends it rather than reopening the picker on it. |
+| A location label read twice (40.2 review's red) | **Read once: an identical `LOC:` scan before the last was answered, or within 1.5 s after, is dropped (toast + log). A later scan of the same slot acts (it swaps the two back)** | The double-read reversed Derek's own swap. 1.5 s covers a queued double-read without blocking a deliberate re-scan. Only `LOC:` labels: CMD:NEXT / PREV are meant to repeat. A 2-minute server hold-back was removed at Derek's word (2026-10-15): fixing a wrong scan must not hit a hidden stop. |
 
 ---
 
@@ -532,7 +1006,7 @@ Leave the list filter as is: Printer rows stay listed because picking one now op
 The full reasoning is in [Group 39's Cross-plan notes](39-confirm-on-every-door.md).
 
 0. Merge `fix/core1-return-ejectall-guard` (`1fb5678`, `76398cb`) and `test/sweep-reds-hermetic` (`d785444`) into `dev`. Both are local only.
-1. Ask Derek the three contract-shaping questions first: Group 41's Q1, Group 39's Q1 and Group 42's Q-B. This doc's Q1 and Q2 can wait for 40.2.
+1. Ask Derek the three contract-shaping questions first: Group 41's Q1, Group 39's Q1 and Group 42's Q-B (all three answered 2026-09-18). This doc's Q1 and Q2 can wait for 40.2 (both answered 2026-10-13).
 2. Build in this order: Group 39, then Group 41, then Group 42, then **Group 40** (this group, last). Group 40 goes last because:
    - it is the largest group;
    - it builds on 39.1, 39.3, 39.4 and 39.5, and on 42.1, 42.2 and 42.5b;
@@ -640,12 +1114,16 @@ The full reasoning is in [Group 39's Cross-plan notes](39-confirm-on-every-door.
 
 ## Manual checks for Derek (add to the handoff checklist)
 
+> **2026-10-19:** the current list for 40.4–40.7 and Swap option C is the buglist's ⏸️ PENDING DEREK item "the
+> pickers and Swap option C" (C1–W2), which replaces F1, P1–P6, R1–R4 and W1–W2 below. R4 is one tap now (answer 6),
+> and P5 / W2 used `CORE1`, which dev no longer has (try an INDX head instead). S1–S7 stay in their own PENDING DEREK item.
+
 Dev container, after the branch is merged to `dev`. Empty the scan buffer before each row unless it says otherwise.
 
 | # | Check | Steps | Pass if |
 |---|---|---|---|
 | S1 | **Slot label, empty idle head** (your path) | XL-2 empty and XL idle. Buffer a spool, scan `LOC:LR-MDB-1:SLOT:2` | Loads onto XL-2 with no new prompt |
-| S2 | **Slot label, same slot's own spool** (your path) | XL-3 runs a spool that came from LR-MDB-1 slot 3. Buffer a new spool, scan `LOC:LR-MDB-1:SLOT:3` | No new prompt; the old spool goes back to LR-MDB-1, the new one is on XL-3 |
+| S2 | **Slot label, same slot's own spool** (your path) | XL-3 runs a spool that came from LR-MDB-1 slot 3. Buffer a new spool, scan `LOC:LR-MDB-1:SLOT:3` | No new prompt; the new one is on XL-3, and the old one is in your scan buffer (toast "✋ #N → your buffer (taken off XL-3)"), Unassigned until you scan it somewhere or weigh it out (since 40.2, your 2026-10-15 answer) |
 | S3 | **Slot label, head fed from a PolyDryer** | Load a spool from PM-DB-2 onto XL-1 (scan it, then the XL-1 QR). Buffer another spool, scan `LOC:LR-MDB-1:SLOT:1` | A prompt names the PolyDryer spool and offers Load it instead / Just store it / Cancel. Try **Just store it**: spool in slot 1, XL-1 unchanged. Repeat with **Load it instead**: PolyDryer spool back in PM-DB-2, new spool on XL-1 |
 | S4 | **Scan the choice** | Repeat S3 and scan the on-screen QRs for each choice instead of clicking | Each QR does what its label says; Cancel writes nothing |
 | S5 | **Printing prompt offers store** | While the XL prints, scan a slot label for an empty head | The printing banner shows with the store option; Just store it leaves the head alone |
@@ -653,7 +1131,9 @@ Dev container, after the branch is merged to `dev`. Empty the scan buffer before
 | B1 | **Box label opens the picker** | Buffer one spool, scan `LOC:LR-MDB-1` | Picker shows 4 slots with contents, `→ XL-1…XL-3`, `🏭 Printer Pool` on slot 4, and a ⭐ recommendation |
 | B2 | **Pick by scanning** | In B1's picker, scan `LOC:LR-MDB-1:SLOT:4` | Slot 4 is selected; confirming stores the spool (no deploy) |
 | B3 | **Keyboard and cancel** | Open B1 again: arrows, a number key, Escape | Highlight moves and wraps; Escape closes; the spool stays in the buffer |
-| B4 | **Other scans are held off** | With a picker open, scan a spool label | A warning says to finish or cancel the picker; nothing else happens |
+| B4 | **Other scans are held off** | With a picker open, scan a spool label | A warning inside the picker says to finish or cancel it; nothing else happens |
+| B5 | **A full slot asks first** (built 40.2) | Buffer one spool, scan `LOC:LR-MDB-1`, pick a slot that holds a stored spool | Swap / Overwrite / Back inside the picker (each with a QR); Swap puts the slot's old spool in your buffer |
+| B6 | **Two spools, one label** (built 40.2) | Buffer two spools, scan `LOC:LR-MDB-2` | The picker opens for the first ("1 of 2"), then the second; Escape on the second leaves it in the buffer, and a toast sums it up |
 | F1 | **Force Location into a box** | Spool details → Force Location → `LR-MDB-2` | The picker opens instead of silently picking a slot |
 | P1 | **Printer picker** | Buffer one spool, scan `LOC:XL` | Lists XL-1…XL-5 (what's on each, which slots feed each) plus the Printer Pool slots; "Checking XL…" shows until the printer answers |
 | P2 | **Record it as coming from** | In P1 pick an empty XL-4 | Asks to record it as from LR-MDB-2 slot 1 (pre-selected if it is the only free one) or no box; the toast names the choice |
@@ -673,7 +1153,9 @@ Dev container, after the branch is merged to `dev`. Empty the scan buffer before
 
 ## Open questions for Derek
 
-### Q1 — Several spools in the buffer when a box label or `LOC:XL` is scanned
+### Q1 — Several spools in the buffer when a box label or `LOC:XL` is scanned — ✅ ANSWERED 2026-10-13: (a) loop
+
+**Derek chose (a), loop (2026-10-13).** One scan of a multi-slot box's label or a Printer row's label opens the picker once per buffered spool, top first, and each spool still gets its own load confirms; Escape stops the loop and the rest stay in the buffer. For `LOC:XL` (or `LOC:RCOI`) each spool picks a head or a Printer Pool slot. Build it that way; the background below is kept for the record.
 
 **Background.** The pickers place ONE spool. Today, a box-label scan with several buffered spools puts all of them in the box with no slot, because the engine only auto-picks a slot for a single spool (`logic.py:554`). That is exactly the floating "5/4" state you called "what went wrong". A Printer-row scan today sends the whole buffer to the row.
 
@@ -686,9 +1168,11 @@ Dev container, after the branch is merged to `dev`. Empty the scan buffer before
 
 For `LOC:XL`, (a) means picking a head (or pool slot) per spool, because each head holds one.
 
-**Default if unanswered:** (b), the least surprising.
+**Default if unanswered:** (b), the least surprising. _(No longer applies: Derek chose (a) on 2026-10-13.)_
 
-### Q2 — What the box picker offers when the box is full
+### Q2 — What the box picker offers when the box is full — ✅ ANSWERED 2026-10-13: (a), same as the grid
+
+**Decided 2026-10-13 (Claude's call; Derek reviewed it and didn't object): (a), the same as the Location Manager grid.** A full box shows no ⭐, and tapping or scanning an occupied slot asks Swap / Overwrite exactly as the grid does (now `inv_loc_mgr.js:1269-1285`), so the incoming spool always gets a real slot; there is no "store without a slot" tile and no refusal. Build it that way; the background below is kept for the record.
 
 **Background.** D2 says the picker "recommends a slot … without assuming one exists", but not what happens when no slot is free. The Location Manager grid already answers a tap on an occupied slot with **Swap** (the old spool goes to your buffer) or **Overwrite** (the old spool stays in the box, unslotted) (`inv_loc_mgr.js:1212-1228`).
 
@@ -701,7 +1185,7 @@ For `LOC:XL`, (a) means picking a head (or pool slot) per spool, because each he
 
 Tapping slot 1 (the CORE1 feed) additionally runs the load prompt, since the swapped-in spool would deploy.
 
-**Default if unanswered:** (a).
+**Default if unanswered:** (a). _(No longer applies: (a) was decided on 2026-10-13.)_
 
 ---
 

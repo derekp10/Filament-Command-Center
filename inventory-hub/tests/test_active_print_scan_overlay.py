@@ -11,8 +11,12 @@ from __future__ import annotations
 import pytest
 from playwright.sync_api import Page, expect
 
+import conftest
+
 
 def _setup_page(page: Page, base_url: str, reset_dom_state_js: str):
+    # Group 45.8: the buffer this test fills is its own, never dev's shared one.
+    conftest.own_the_buffer(page, [])
     page.goto(base_url)
     page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
     page.evaluate(reset_dom_state_js)
