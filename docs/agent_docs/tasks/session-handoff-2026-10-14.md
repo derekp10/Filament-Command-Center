@@ -331,6 +331,19 @@ Group 40 (no release before 40.7; `main` needs his OK).
 
 Progress is recorded below as each step lands (commit ids), and every branch is pushed at each stopping point.
 
+**Progress (2026-10-19, overnight):**
+- 01:12 plan `0b0eeb7`; resume cron (session-only, hourly at :17) set; both builders launched.
+- `73b3f88` **Swap option C** (engine + grid / picker Swap + the same-slot swap; Undo `displaced`; the picker's
+  `swap_to`; a PolyDryer's taken noted slot → the plain place, a Claude's call). Offline 2710 passed; 86 browser passed.
+- `44ffbd2` **40.4 + 40.5** (one placement flow `window.placeOneWithPicker`; Force Location → pickers; LOC:XL /
+  DEPOSIT → the Printer picker with the head-load and "came from" questions; `record_source`; the slot read before a
+  question; item F; the classifier mirror). Offline 2759 passed; 91 browser passed.
+- `070291e` merge of **40.7's server half** (builder, `c239e16`); `8561dcd` **40.7's browser half** (the wizard's
+  Location opens the pickers; held for Save; the per-spool loop for a create).
+- `45de89d` merge of **40.6** (builder, `e8683f0`: Return dry run / chooser / `expected_spool`, the DEPLOYED ↩️).
+  Offline 2850 passed. Worktrees removed.
+- Next: the builders' unrun browser tests, the one review, fixes, the one sweep, `dev`.
+
 ## Questions for Derek
 
 Asked before Derek went to bed, from the pre-flight reconcile (`wf_1a1ff135-1c6`, read-only). Recorded as

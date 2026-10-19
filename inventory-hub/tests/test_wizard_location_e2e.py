@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 
 from playwright.sync_api import Page
 
+import conftest
 from test_move_result_consumers_e2e import (  # noqa: F401  (_drop_routes_in_flight: autouse fixture)
     BOX, TH, FakeBackend, _boot, _drop_routes_in_flight, _toast, _until,
 )
@@ -107,6 +108,42 @@ def test_the_wizards_move_question_opens_over_the_wizard_and_load_replays_on_sma
                            timeout=5_000)
 
 
+def test_picking_a_box_in_the_wizards_location_opens_the_slot_picker_and_save_sends_the_slot(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """Group 40.7 (Derek's answer 7): the wizard's Location behaves like Force
+    Location. Picking a multi-slot box from the dropdown opens the slot picker;
+    its choice (the ⭐, slot 3) is held and shown in the field, and Save sends it
+    with the edit (`picked_slot`, the tile's feed)."""
+    from test_slot_picker_e2e import ROWS as PICKER_ROWS, build_model
+    done = {"success": True, "spool_id": SID, "spool_saved": True, "location_moved": True,
+            "location_where": f"{BOX} slot 3 → FCCX-3",
+            "location_result": {"status": "success", "failures": {}, "auto_deployed_to": "FCCX-3"}}
+    be = WizardBackend(page, responders={"/api/edit_spool_wizard": lambda body: (200, done)},
+                       extra_locations=list(PICKER_ROWS), placement={BOX: build_model(BOX, spool=SID)})
+    _boot(page, base_url, reset_dom_state_js)
+    page.wait_for_function("typeof window.openEditWizard === 'function'", timeout=10_000)
+    page.evaluate("(sid) => { window.openEditWizard(sid); return true; }", SID)
+    page.wait_for_function(f"typeof wizardState !== 'undefined' && wizardState.mode === 'edit_spool'"
+                           f" && wizardState.editSpoolId === {SID}", timeout=15_000)
+    conftest.wait_modal_settled(page, "wizardModal")
+    page.wait_for_function("(wizardState.allLocationRows || []).some(r => r.LocationID === 'FCC-TEST-BOX')",
+                           timeout=10_000)
+    page.evaluate("() => { document.getElementById('wiz-spool-location-search').focus(); return true; }")
+    option = f"#dropdown-location .autocomplete-option[data-value='{BOX}']"
+    page.wait_for_selector(option, state="attached", timeout=5_000)
+    page.dispatch_event(option, "mousedown")
+    page.wait_for_selector("#fcc-slot-picker [data-sp-state='ready']", timeout=10_000)
+    page.keyboard.press("Enter")                       # the ⭐: slot 3 (FCCX-3, free and empty)
+    page.wait_for_function("wizardState.pendingPlacement && wizardState.pendingPlacement.picked_slot === '3'",
+                           timeout=5_000)
+    assert f"{BOX} slot 3" in page.input_value("#wiz-spool-location-search")
+    page.evaluate("() => { window.wizardSubmit(); return true; }")
+    _until(page, lambda: be.bodies("/api/edit_spool_wizard"), 8_000, "the wizard's Save sent nothing")
+    sent = be.bodies("/api/edit_spool_wizard")[0]
+    assert sent["spool_data"]["location"] == BOX and sent["picked_slot"] == "3", sent
+    assert sent["expected_feed"] == "FCCX-3" and "slot" not in sent, sent
+
+
 def test_closing_the_wizard_cancels_its_open_move_question(
         page: Page, base_url: str, reset_dom_state_js: str):
     be = WizardBackend(page, responders={"/api/edit_spool_wizard": lambda body: (200, ASKED)},
@@ -115,6 +152,10 @@ def test_closing_the_wizard_cancels_its_open_move_question(
 
     # The Location isn't saved, so the wizard's unsaved-changes guard would ask
     # first; this is the close it allows (Discard & Close sets the same flag).
+    # Bootstrap drops a hide() while the modal is still fading in, and with every
+    # request stubbed the question arrives within that fade (CLAUDE.md, Group
+    # 45.8): wait for the show transition first.
+    conftest.wait_modal_settled(page, "wizardModal")
     page.evaluate("() => { wizardState.forceClose = true; window.modals.wizardModal.hide(); return true; }")
     page.wait_for_selector("#fcc-active-print-confirm-overlay", state="detached", timeout=6_000)
     page.wait_for_timeout(300)
