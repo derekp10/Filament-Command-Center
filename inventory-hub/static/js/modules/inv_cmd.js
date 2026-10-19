@@ -1989,6 +1989,10 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
     // leaving); an explicit `slot` would otherwise load it straight back. On
     // `original`, so every replay stays a store.
     if (opts && opts.autoDeploy === false) original.auto_deploy = false;
+    // Swap option C: the picker's Swap. The server files the slot's old spool
+    // back where it sat before the slot and names it in `to_buffer`; on
+    // `original`, so every replay of a question is still a Swap.
+    if (opts && opts.swapDisplaced) original.swap = true;
     const first = Object.assign({}, original, {
         confirmed_toolheads: Array.isArray(confirmedHeads) ? confirmedHeads : [],
     });
@@ -2098,15 +2102,11 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
                     const movedSet = new Set(movedIds.map(String));
                     state.heldSpools = state.heldSpools.filter(s => !movedSet.has(String(s.id)));
                     movedSet.forEach(id => _markAssignedOut(id)); // 21.6
-                    // Group 40.2: the user chose Swap, so the slot's old spool goes
-                    // to the buffer now the move landed (the grid's Swap).
-                    const displaced = opts && opts.swapDisplaced;
-                    if (movedCount && displaced && displaced.id != null
-                            && !state.heldSpools.some(s => String(s.id) === String(displaced.id))) {
-                        state.heldSpools.push(Object.assign({}, displaced));
-                    }
-                    // Group 40, the same-slot swap: the slot's old spool came off
-                    // its head into the scan buffer. One render, one save.
+                    // The spools the move handed to the scan buffer (`to_buffer`):
+                    // a Swap's old spool (Swap option C: filed back where it sat
+                    // before the slot; this page used to push it itself while the
+                    // server left it in the box with no slot) and a same-slot
+                    // swap's spool off the head. One render, one save.
                     window.takeIntoBuffer(res, { render: false });
                     renderBuffer();
                     if (document.getElementById('manage-loc-id').value === tid) refreshManageView(tid);
@@ -2119,6 +2119,9 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
                     end(landed, res);
                 } else {
                     showToast(res.msg || 'Assign failed', 'error', 7000);
+                    // A spool the move had already handed to the buffer (a head's
+                    // swapped-out spool before Smart Load stopped) is in hand.
+                    window.takeIntoBuffer(res);
                     end('failed', res);
                 }
             })

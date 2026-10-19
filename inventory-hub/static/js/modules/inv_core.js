@@ -471,9 +471,11 @@ window.storeToastTail = (prior) => {
 // --- THE SAME-SLOT SWAP'S OLD SPOOL (Group 40; Derek, 2026-10-15) ---
 // A move that filled a box slot whose own spool was running on the slot's head
 // took that spool off the head into the scan buffer: it is in your hand (Derek
-// swaps a slot once its spool has run out, so it usually needs zeroing). The
-// server put it at the END of its buffer replica, Unassigned in Spoolman, and
-// names it in the answer's `to_buffer` (a slot scan's own `smart_move` too). This
+// swaps a slot once its spool has run out, so it usually needs zeroing). So does
+// a slot's stored spool the user chose to Swap out (Swap option C). The server
+// put it at the END of its buffer replica, filed back in Spoolman where it sat
+// before that slot (else Unassigned), and names it in the answer's `to_buffer`
+// (a slot scan's own `smart_move` too). This
 // page adds it to its buffer as well, behind the spools already waiting (its
 // next save replaces the replica whole, so the server's copy alone would be
 // lost), and toasts it in short arrows. Every door that can complete a move
@@ -482,10 +484,16 @@ window.storeToastTail = (prior) => {
 // reach the server out of order, and the one without this spool would win.
 // {toast: false} leaves the toast to window.toastIntoBuffer(items). Returns the
 // entries it was told about.
+// Swap option C (Derek, 2026-10-15): a spool swapped out of a slot is also filed
+// back where it sat before that slot (`filed_to`: "CR-CT-2-R1", "LR-MDB-2 slot 1";
+// none when FCC had no record, so it is Unassigned), and the toast says where.
 window.toastIntoBuffer = (items) => {
     (items || []).forEach(i => {
-        const off = i && i.off_head ? ` (taken off ${i.off_head})` : '';
-        if (i && typeof showToast === 'function') showToast(`✋ #${i.id} → your buffer${off}`, 'info', 5000);
+        const notes = [];
+        if (i && i.off_head) notes.push(`taken off ${i.off_head}`);
+        if (i && i.filed_to) notes.push(`filed back in ${i.filed_to}`);
+        const tail = notes.length ? ` (${notes.join('; ')})` : '';
+        if (i && typeof showToast === 'function') showToast(`✋ #${i.id} → your buffer${tail}`, 'info', 5000);
     });
 };
 window.takeIntoBuffer = (answer, { render = true, toast = true } = {}) => {
@@ -500,6 +508,7 @@ window.takeIntoBuffer = (answer, { render = true, toast = true } = {}) => {
         if (!st.heldSpools.some(s => String(s.id) === String(i.id))) {
             const entry = Object.assign({}, i);
             delete entry.off_head;
+            delete entry.filed_to;
             st.heldSpools.push(entry);
             added = true;
         }

@@ -274,6 +274,9 @@ def api_smart_move():
         # Group 40.3 review: heads the page saw printing still count when the
         # move's own probe can't reach their printer.
         seen_printing=logic.seen_printing_from(payload),
+        # Swap option C: the slot picker's Swap files the slot's old spool back
+        # where it sat before and puts it in the scan buffer (`to_buffer`).
+        swap_out=logic.swap_requested(payload),
     )
     stale = logic.stale_fed_refusal(payload, result) or logic.stale_confirm_refusal(payload, result)
     if stale:

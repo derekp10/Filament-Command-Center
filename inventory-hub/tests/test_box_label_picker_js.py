@@ -10,7 +10,9 @@ Pinned here:
   - what a pick sends: a free slot as `picked_slot` (never an Overwrite `slot`),
     an occupied one as `slot` after the user chose, the feed the tile showed as
     `expected_feed` on the FIRST request, the one spool, `confirmed_fed_heads`;
-  - Swap puts the slot's old spool in the buffer once the move lands;
+  - Swap sends `swap: true`, and the slot's old spool joins the buffer from the
+    server's answer (`to_buffer`, Swap option C: the server files it back where it
+    sat before the slot), never pushed by the page itself;
   - the loop: the next spool's picker after a move, "1 of 2" / "2 of 2",
     Escape stops and the rest stay buffered, Cancel on a load question steps
     back to the same spool's picker, a failure ends the loop, a spool a Swap
@@ -92,7 +94,37 @@ return { calls: window.__pickerCalls.length, posts: posts('/api/smart_move'),
     assert any(t["msg"] == "Nothing placed in LR-MDB-1: #57 stays in your buffer" for t in res["toasts"]), res
 
 
+SWAPPED = dict(DONE, to_buffer=[{"id": 77, "display": "#77 Old", "color": "888888", "off_head": "",
+                                 "filed_to": "CR-CT-2-R1"}])
+
+
 def test_an_occupied_slot_is_sent_as_slot_and_swap_buffers_its_old_spool(tmp_path):
+    """Swap option C (Derek, 2026-10-15): the pick's Swap is sent as `swap: true`
+    with the Overwrite `slot`; the server files #77 back where it sat before the
+    slot and names it in `to_buffer`, which puts it in the buffer and toasts
+    where it was filed. (Before Swap C the page pushed `displaced` itself while
+    the server left #77 in the box with no slot.)"""
+    swap = {"kind": "slot", "box": "LR-MDB-1", "slot": "3", "free": False, "via": "key",
+            "send": {"slot": "3"}, "expected_feed": "XL-3", "choice": "swap", "swap": True,
+            "displaced": {"id": 77, "display": "#77 Old"}}
+    res = _run(tmp_path, f"""
+answerWith('/api/smart_move', [{_js(SWAPPED)}]);
+window.__picks = [{_js(swap)}];
+await scanLoc('LR-MDB-1');
+return {{ posts: posts('/api/smart_move'), held: state.heldSpools.map(s => s.id), toasts: toasts(),
+         saves: posts('/api/state/buffer').map(b => (b.buffer || []).map(s => s.id)) }};
+""")
+    post = res["posts"][0]
+    assert post["slot"] == "3" and "picked_slot" not in post and post["expected_feed"] == "XL-3", post
+    assert post["swap"] is True, post
+    assert res["held"] == [77] and res["saves"][-1] == [77], res
+    assert any(t["msg"] == "✋ #77 → your buffer (filed back in CR-CT-2-R1)" for t in res["toasts"]), res["toasts"]
+
+
+def test_a_swap_the_server_did_not_make_buffers_nothing(tmp_path):
+    """The page no longer pushes the Swap's old spool itself: when the server
+    swapped nothing out (the slot was emptied meanwhile), no `to_buffer`, nothing
+    is added to the buffer."""
     swap = {"kind": "slot", "box": "LR-MDB-1", "slot": "3", "free": False, "via": "key",
             "send": {"slot": "3"}, "expected_feed": "XL-3", "choice": "swap", "swap": True,
             "displaced": {"id": 77, "display": "#77 Old"}}
@@ -100,12 +132,9 @@ def test_an_occupied_slot_is_sent_as_slot_and_swap_buffers_its_old_spool(tmp_pat
 answerWith('/api/smart_move', [{_js(DONE)}]);
 window.__picks = [{_js(swap)}];
 await scanLoc('LR-MDB-1');
-return {{ posts: posts('/api/smart_move'), held: state.heldSpools.map(s => s.id),
-         saves: posts('/api/state/buffer').map(b => (b.buffer || []).map(s => s.id)) }};
+return {{ held: state.heldSpools.map(s => s.id) }};
 """)
-    post = res["posts"][0]
-    assert post["slot"] == "3" and "picked_slot" not in post and post["expected_feed"] == "XL-3", post
-    assert res["held"] == [77] and res["saves"][-1] == [77], res
+    assert res["held"] == [], res
 
 
 def test_two_spools_get_one_picker_each_and_a_summary(tmp_path):
@@ -192,7 +221,7 @@ def test_a_spool_a_swap_hands_back_is_never_offered_again(tmp_path):
             "send": {"slot": "3"}, "expected_feed": "XL-3", "choice": "swap", "swap": True,
             "displaced": {"id": 77, "display": "#77 Old"}}
     res = _run(tmp_path, f"""
-answerWith('/api/smart_move', [{_js(DONE)}]);
+answerWith('/api/smart_move', [{_js(SWAPPED)}]);
 window.__picks = [{_js(swap)}];
 await scanLoc('LR-MDB-1');
 return {{ calls: window.__pickerCalls.map(c => c.spool), held: state.heldSpools.map(s => s.id) }};

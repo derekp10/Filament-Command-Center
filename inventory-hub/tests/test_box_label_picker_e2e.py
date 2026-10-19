@@ -120,8 +120,13 @@ def test_cancel_on_the_load_question_steps_back_to_the_picker(picker_page):
 
 
 def test_swap_into_an_occupied_slot_puts_its_old_spool_in_the_buffer(picker_page):
+    """Swap option C (Derek, 2026-10-15): the Swap is sent as `swap: true`, and
+    the server, which files the old spool back where it sat before the slot,
+    names it in `to_buffer`; that answer puts it in the buffer (the page used to
+    push it itself on any success)."""
     page, setup, _open = picker_page
-    stub = _start(page, setup, [999201], [{"status": "success", "failures": {}}])
+    stub = _start(page, setup, [999201], [{"status": "success", "failures": {}, "to_buffer": [
+        {"id": 999202, "display": "FCC Test #999202", "color": "00ff00", "off_head": "", "filed_to": "FCC-TEST-SHELF"}]}])
     page.wait_for_selector(READY, timeout=10_000)
     page.locator("#fcc-slot-picker .fcc-sp-tile[data-sp-slot='2']").click()
     page.wait_for_selector(CHOICE, timeout=5_000)
@@ -130,3 +135,4 @@ def test_swap_into_an_occupied_slot_puts_its_old_spool_in_the_buffer(picker_page
                            timeout=10_000)
     move = stub.posted("/api/smart_move")[0]
     assert move["slot"] == "2" and "picked_slot" not in move and move["expected_feed"] == "FCCX-2", move
+    assert move["swap"] is True, move

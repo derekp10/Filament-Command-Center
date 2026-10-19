@@ -323,6 +323,17 @@ def auto_deploy_requested(data):
     return str(value).strip().lower() not in ('false', '0', 'no', 'off')
 
 
+def swap_requested(data):
+    """Swap option C: the user chose Swap for a slot that holds a stored spool
+    (`swap: true`, sent by the Location Manager grid's Swap and the slot
+    picker's). The engine then files that spool back where it sat before the
+    slot and puts it in the scan buffer (`perform_smart_move(swap_out=True)`)
+    instead of leaving it in the box with no slot. Only a real true counts; read
+    by manage_contents add and /api/smart_move."""
+    value = (data or {}).get('swap') if isinstance(data, dict) else None
+    return value is True or str(value).strip().lower() == 'true'
+
+
 def _feed_token(value):
     """Group 40.3 — "what a box slot feeds" in one form: an upper-cased head id,
     or '' for none (unbound, a PRINTER:<id> Printer Pool slot, no slot). The form
@@ -1211,14 +1222,203 @@ def _pre_box_note(loc, slot, printer_map, loc_info_map):
 
 
 def _pre_box_place(note):
-    """(location, slot) from a "before the box" note, or ('', '')."""
-    n = str(note or '').strip().strip('"').upper()
+    """(location, slot) of the place a "before the box" note names first, or
+    ('', ''). A Swap option C note goes on with the plain place behind it
+    ("LR-MDB-2:1>CR-CT-2-R1"), which this leaves out."""
+    n = str(note or '').strip().strip('"').upper().split(PRE_SLOT_SEP, 1)[0].strip()
     if not n:
         return '', ''
     loc, _, slot = n.rpartition(':')
     if loc and slot.isdigit():
         return loc, slot
     return n, ''
+
+
+# Group 40, Swap option C (Derek, 2026-10-15): the note also remembers where a
+# spool sat before it went into a multi-slot box's slot, so a Swap that takes it
+# back out can file it there ("it goes back to its previous location but also in
+# the buffer in case that isn't correct"). "LR-MDB-2:1>CR-CT-2-R1" is the place it
+# came from (here another slot), then the last plain place it sat in before any
+# slot: a cart, shelf or drawer, the fallback when that slot is taken. A plain
+# place alone ("CR-CT-2-R1") is both.
+PRE_SLOT_SEP = '>'
+
+
+def _is_dryer_box_row(row):
+    return isinstance(row, dict) and str(row.get('Type', '')).strip() == locations_db.DRYER_BOX_TYPE
+
+
+def _pre_box_plain(note, loc_info_map):
+    """The last plain place a note remembers (a place with no slots: never a
+    dryer box), or ''."""
+    n = str(note or '').strip().strip('"').upper()
+    if PRE_SLOT_SEP in n:
+        return n.split(PRE_SLOT_SEP, 1)[1].strip()
+    loc, slot = _pre_box_place(n)
+    if not loc or slot or _is_dryer_box_row((loc_info_map or {}).get(loc)):
+        return ''
+    return loc
+
+
+def _join_note(place, plain):
+    """A note naming `place` first, then the plain place behind it."""
+    place = str(place or '').strip().upper()
+    plain = str(plain or '').strip().upper()
+    if not place:
+        return plain
+    return f"{place}{PRE_SLOT_SEP}{plain}" if plain and plain != place else place
+
+
+def _note_after_move(current_loc, current_extra, target, target_slot, tgt_info, to_head,
+                     printer_map, loc_info_map):
+    """What the "before the box" note (PRE_BOX_KEY) becomes when a spool moves
+    from `current_loc` to `target` (slot `target_slot`), or None to leave it.
+
+    Into a single-slot box (Group 42.6, Claude's call 21): where it sat, from a
+    place that isn't a head; coming back from a head, or a re-scan, keeps it.
+    Into a multi-slot box (Swap option C): the place it sat before this slot,
+    with the plain place behind it: from a cart, that cart; from another slot,
+    that slot (a spool deployed from a box counts as sitting in its slot); back
+    into the slot it was deployed from (a Return), or a spool with no box trail
+    coming off a head, keeps what it remembers. Onto a head: from a plain place,
+    that place (so a slot it goes into straight off the head still knows where it
+    sat); a deploy from a box, head to head and a re-scan keep it. Anywhere else,
+    or from a place FCC never records (a room, Unassigned), it is used up."""
+    extra = current_extra or {}
+    n0 = str(extra.get(PRE_BOX_KEY) or '').strip().strip('"')
+    plain0 = _pre_box_plain(n0, loc_info_map)
+    clear = '' if n0 else None
+    cur = str(current_loc or '').strip().strip('"').upper()
+    tgt = str(target or '').strip().strip('"').upper()
+    cur_row = (loc_info_map or {}).get(cur)
+    cur_slot = _norm_slot(extra.get('container_slot'))
+    from_head = _is_single_occupancy(cur, printer_map, loc_info_map)
+
+    def _slot_place(box, slot):
+        """'B:s' for a multi-slot box's slot, 'B' for a single-slot box, '' for
+        a multi-slot box with no slot (never a place to file a spool back)."""
+        row = (loc_info_map or {}).get(box)
+        if locations_db._is_single_slot_dryer_box(row):
+            return box
+        s = _norm_slot(slot)
+        return f"{box}:{s}" if s else ''
+
+    if locations_db._is_single_slot_dryer_box(tgt_info):
+        if cur == tgt or from_head:
+            return None
+        prev = _pre_box_note(cur, extra.get('container_slot'), printer_map, loc_info_map)
+        if prev and _is_dryer_box_row(cur_row):
+            prev = _join_note(prev, plain0)
+        return prev if (prev or n0) else None
+    if to_head:
+        if from_head or cur == tgt or _is_dryer_box_row(cur_row):
+            return None
+        return _pre_box_note(cur, '', printer_map, loc_info_map) or clear
+    if _is_dryer_box_row(tgt_info):
+        ts = _norm_slot(target_slot)
+        if cur == tgt:
+            if cur_slot and ts and cur_slot != ts:
+                return _join_note(_slot_place(tgt, cur_slot), plain0)
+            return None
+        if from_head:
+            src = str(extra.get('physical_source') or '').strip().strip('"').upper()
+            src_row = (loc_info_map or {}).get(src)
+            if not src or not _is_dryer_box_row(src_row):
+                return None
+            src_slot = _norm_slot(locations_db.effective_slot(src_row, extra.get('physical_source_slot')))
+            if src == tgt and (not ts or src_slot == ts):
+                return None
+            prev = _slot_place(src, src_slot)
+            return _join_note(prev, plain0) if prev else None
+        if _is_dryer_box_row(cur_row):
+            prev = _slot_place(cur, cur_slot)
+            if prev:
+                return _join_note(prev, plain0)
+            return plain0 if (plain0 or n0) else None
+        return _pre_box_note(cur, '', printer_map, loc_info_map) or clear
+    return clear
+
+
+def _swap_out_place(note, from_box, from_slot, loc_info_map, claims_of):
+    """Group 40, Swap option C (Derek, 2026-10-15; all three points confirmed
+    that evening): where a spool a Swap takes out of `from_box` slot `from_slot`
+    is filed while it waits in the scan buffer. From its note (PRE_BOX_KEY):
+      - the slot it sat in before (or the single-slot box), only while no other
+        spool claims it ("shouldn't bump a spool in a slot if it's not empty"),
+        and never the slot it is leaving;
+      - else the plain place it sat in before any slot (a cart, shelf, drawer);
+      - else ('', ''), Unassigned: a spool slotted before FCC kept the note
+        ("seems right for now"), never the box without a slot (the 5/4).
+    `claims_of(box)` gives the slots other spools hold there and may raise: an
+    unreadable box is passed over, never bumped. Returns (location, slot)."""
+    fb = str(from_box or '').strip().strip('"').upper()
+    fs = _norm_slot(from_slot)
+    rows = loc_info_map or {}
+
+    def _free(box, slot):
+        try:
+            return _norm_slot(slot) not in {_norm_slot(s) for s in (claims_of(box) or ())}
+        except Exception as e:
+            state.logger.info(f"Swap: couldn't read {box} to file a spool back into slot {slot} ({e})")
+            return False
+
+    prev, prev_slot = _pre_box_place(note)
+    row = rows.get(prev) if prev else None
+    if isinstance(row, dict):
+        if locations_db._is_single_slot_dryer_box(row):
+            if prev != fb and _free(prev, '1'):
+                return prev, '1'
+        elif _is_dryer_box_row(row):
+            try:
+                max_slots = int(str(row.get('Max Spools', '0')).strip() or '0')
+            except (TypeError, ValueError):
+                max_slots = 0
+            if (prev_slot.isdigit() and 1 <= int(prev_slot) <= max_slots
+                    and not (prev == fb and _norm_slot(prev_slot) == fs) and _free(prev, prev_slot)):
+                return prev, _norm_slot(prev_slot)
+        elif not prev_slot and str(row.get('Type', '')).strip() not in (
+                locations_db.TOOLHEAD_TYPES | {'Printer', 'Room', 'Virtual Room'}):
+            return prev, ''
+    plain = _pre_box_plain(note, rows)
+    if plain and plain != fb and isinstance(rows.get(plain), dict):
+        return plain, ''
+    return '', ''
+
+
+def _swap_out_write(sid, rec, from_box, from_slot, loc_info_map):
+    """File the spool a Swap took out of `from_box` slot `from_slot` where
+    _swap_out_place says, with its slot set, its trail cleared and its note
+    updated (back in the slot it came from, the note is what it was there: the
+    plain place behind it; anywhere else it is used up). A re-reading write
+    (_move_write). Returns (landed, location, slot)."""
+    extra = dict((rec or {}).get('extra') or {})
+    note = extra.get(PRE_BOX_KEY)
+
+    def _claims(box):
+        items = spoolman_api.get_spools_at_location_detailed_strict(box) or []
+        claims, _own, _ghost = box_slot_claims((loc_info_map or {}).get(box), box, items, [sid])
+        return set(claims)
+
+    loc, slot = _swap_out_place(note, from_box, from_slot, loc_info_map, _claims)
+    extra['container_slot'] = slot
+    extra['physical_source'] = ""
+    extra['physical_source_slot'] = ""
+    new_note = _pre_box_plain(note, loc_info_map) if slot else ''
+    if extra.get(PRE_BOX_KEY) or new_note:
+        extra[PRE_BOX_KEY] = new_note
+    return _move_write(sid, loc, extra), loc, slot
+
+
+def _filed_text(loc, slot, loc_info_map=None):
+    """'CR-CT-2-R1', 'LR-MDB-2 slot 1', 'PM-DB-2' (a single-slot box has one
+    place), or '' for Unassigned."""
+    lid = str(loc or '').strip().upper()
+    if not lid:
+        return ''
+    s = _norm_slot(slot)
+    if s and locations_db._is_single_slot_dryer_box((loc_info_map or {}).get(lid)):
+        s = ''
+    return f"{lid} slot {s}" if s else lid
 
 
 def _known_room_of(loc_id, loc_list):
@@ -1470,7 +1670,7 @@ def release_box_after_direct_write(sid, pre, post):
         return None
 
 
-def _put_in_buffer(spool_ids, off_head=''):
+def _put_in_buffer(spool_ids, off_head='', filed=None):
     """Group 40, the same-slot swap: put spools a move took off `off_head` (they
     are in the user's hand) at the END of the scan buffer, behind the spools
     already waiting there, so the next slot scan still loads the next new spool.
@@ -1481,12 +1681,15 @@ def _put_in_buffer(spool_ids, off_head=''):
     buffered isn't added twice, and Undo takes out only what the move added).
     A scanner's double-read of the slot label is the page's to drop (processScan's
     repeat guard); scanning the label again on purpose swaps the two straight
-    back, as Derek expects (2026-10-15: no hard stop on fixing a wrong scan)."""
+    back, as Derek expects (2026-10-15: no hard stop on fixing a wrong scan).
+    `filed` {sid: where FCC filed it} (Swap option C: back where it sat before
+    the slot, '' for Unassigned) rides on each entry as `filed_to` for the toast."""
     live = get_live_spools_data(list(spool_ids))
     items: typing.List[typing.Dict[str, typing.Any]] = []
     for sid in spool_ids:
         data = live.get(str(sid)) or {"display": f"#{sid}", "color": "888888"}
-        items.append({"id": int(sid), **data, "off_head": str(off_head or '').strip().upper()})
+        items.append({"id": int(sid), **data, "off_head": str(off_head or '').strip().upper(),
+                      "filed_to": str((filed or {}).get(str(sid)) or '')})
     buf = list(getattr(state, 'GLOBAL_BUFFER', None) or [])
     held = {str(b.get('id')) for b in buf if isinstance(b, dict)}
     added = [i['id'] for i in items if str(i['id']) not in held]
@@ -1502,7 +1705,7 @@ _smart_move_depth = threading.local()
 
 def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_deploy=True, confirm_active_print=False,
                        confirmed_fed_heads=(), fed_check_from=None, picked_slot=None, expected_feed=None,
-                       seen_printing=(), swap_slot=None):
+                       seen_printing=(), swap_slot=None, swap_out=False):
     """Entry point for the slot-move pipeline.
 
     Owns the per-move printer-state probe cache (L3 fix A) so the auto-deploy
@@ -1533,6 +1736,11 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
     loading the head from, so Smart Load sends that slot's OWN spool, coming off
     the head, to the scan buffer instead of back into the box (the same-slot
     swap; Derek, 2026-10-15). The answer names it in `to_buffer`.
+    `swap_out` (Swap option C; Derek, 2026-10-15): the user chose Swap for an
+    explicit slot that holds a stored spool (the Location Manager grid's Swap,
+    the slot picker's). That spool is filed back where it sat before the slot
+    (_swap_out_place) and put in the scan buffer (`to_buffer`), instead of the
+    Overwrite's "stays in the box with no slot". Undo puts it back in the slot.
     """
     depth = getattr(_smart_move_depth, "n", 0)
     owns_move = depth == 0
@@ -1562,6 +1770,7 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
             picked_slot=picked_slot,
             expected_feed=expected_feed,
             swap_slot=swap_slot,
+            swap_out=swap_out,
         )
     finally:
         _smart_move_depth.n = getattr(_smart_move_depth, "n", 1) - 1
@@ -1576,7 +1785,7 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
 
 def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', auto_deploy=True, confirm_active_print=False,
                              confirmed_fed_heads=(), fed_check_from=None, picked_slot=None, expected_feed=None,
-                             swap_slot=None):
+                             swap_slot=None, swap_out=False):
     """Move spool(s) to `target`, optionally into `target_slot` of that location.
 
     `auto_deploy` (default True): when the target is a Dryer Box AND the
@@ -2114,7 +2323,9 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     # `released` / `ejection_released` (Group 42 review): the single-slot box each
     # spool's leaving released from its head, so Undo re-attaches exactly that,
     # and never a box the move did not release.
-    undo_record: typing.Dict[str, typing.Any] = {"target": target, "moves": {}, "extras": {}, "labels": {}, "ejections": {}, "ejection_extras": {}, "released": {}, "ejection_released": {}, "summary": f"Moved {len(spools)} -> {target}", "origin": origin}
+    # `displaced` (Swap option C): {sid: {"location", "extras"}} for each stored
+    # spool a Swap took out of its slot, so Undo puts it back in that slot.
+    undo_record: typing.Dict[str, typing.Any] = {"target": target, "moves": {}, "extras": {}, "labels": {}, "ejections": {}, "ejection_extras": {}, "released": {}, "ejection_released": {}, "displaced": {}, "summary": f"Moved {len(spools)} -> {target}", "origin": origin}
 
     # Step 6 opens with a fresh strict list of the head (review engine-2): the
     # step-4 list was read BEFORE the source reads and the printer probe, which
@@ -2166,7 +2377,11 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     # The slot's own spools Smart Load swapped out into the scan buffer (the
     # same-slot swap, `swap_slot`), and their buffer entries for the answer.
     swapped_out: typing.List[typing.Any] = []
+    # Where each swapped-out spool was filed (Swap option C), for its toast.
+    swapped_filed: typing.Dict[str, str] = {}
     to_buffer: typing.List[typing.Dict[str, typing.Any]] = []
+    # The stored spools a Swap (`swap_out`) took out of the slot, in order.
+    displaced_out: typing.List[typing.Any] = []
 
     # --- SMART LOAD LOGIC (Auto-Eject Resident) ---
     if residents:
@@ -2208,6 +2423,8 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
             ejected = perform_smart_eject(
                 rid, confirm_active_print=_confirm_covers(confirm_active_print, target),
                 homeless_destination=homeless_dest, report=_eject_report, to_buffer=swap_out,
+                # Swap option C: filed back where it sat before that slot.
+                swapped_from=swap_slot if swap_out else None,
             )
             if ejected is not True:
                 stuck[rid] = _eject_refusal_reason(ejected)
@@ -2223,14 +2440,17 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
             if swap_out:
                 # Undo takes it back out of the buffer when it puts it on the head.
                 swapped_out.append(rid)
+                swapped_filed[str(rid)] = str(_eject_report.get('filed') or '')
+                _filed = swapped_filed[str(rid)]
                 state.add_log_entry(
-                    f"⚠️ <b>Smart Load:</b> unloaded #{rid} from {target} into the scan buffer: it came "
+                    f"⚠️ <b>Smart Load:</b> unloaded #{rid} from {target} into the scan buffer"
+                    f"{f' (filed back in {_filed})' if _filed else ''}: it came "
                     f"from {swap_slot[0]} slot {_norm_slot(swap_slot[1])}, which "
                     f"{_and_list('#' + str(s) for s in spools)} now takes", "WARNING")
             else:
                 state.add_log_entry(f"⚠️ <b>Smart Load:</b> unloaded #{rid} from {target}", "WARNING")
         if swapped_out:
-            to_buffer, _added = _put_in_buffer(swapped_out, off_head=target)
+            to_buffer, _added = _put_in_buffer(swapped_out, off_head=target, filed=swapped_filed)
             # Only what the move added (Group 40.2 review): a spool the user had
             # already buffered stays buffered when the move is undone.
             undo_record['buffered'] = list(_added)
@@ -2369,6 +2589,38 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                     continue
                 # [ALEX FIX] Improved comparison to catch string vs int mismatches
                 # (and, since 40.0c, quoted or zero-padded slots: one slot form).
+                if _norm_slot(existing.get('slot', '')) == seat_slot and existing['id'] != int(sid) and swap_out:
+                    # Swap option C (Derek, 2026-10-15): the user chose Swap, so
+                    # the slot's stored spool is in their hand. It goes to the scan
+                    # buffer AND is filed back where it sat before this slot (a
+                    # free slot it came from, else the plain place behind it, else
+                    # Unassigned), never left in the box with no slot.
+                    _out = _spool_record(existing['id'])
+                    if _out is None:
+                        unseat_failed = (f"couldn't read #{existing['id']} from Spoolman to swap it out of "
+                                         f"slot {target_slot}")
+                        state.add_log_entry(f"❌ Not swapping #{existing['id']} out of {target} slot "
+                                            f"{target_slot}: couldn't read it from Spoolman", "ERROR", "ff4444")
+                        break
+                    _snap = {k: (_out.get('extra') or {}).get(k, '') for k in spoolman_api.SYSTEM_MANAGED_EXTRAS}
+                    _landed_out, _floc, _fslot = _swap_out_write(existing['id'], _out, target, seat_slot,
+                                                                 loc_info_map)
+                    if not _landed_out:
+                        err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+                        state.add_log_entry(
+                            f"❌ Failed to swap Spool #{existing['id']} out of {target} slot {target_slot}: {err}",
+                            "ERROR", "ff4444")
+                        unseat_failed = f"couldn't swap #{existing['id']} out of slot {target_slot}: {err}"
+                        break
+                    undo_record['displaced'][str(existing['id'])] = {"location": target, "extras": _snap}
+                    _ftxt = _filed_text(_floc, _fslot, loc_info_map)
+                    displaced_out.append((existing['id'], _ftxt))
+                    state.add_log_entry(
+                        f"✋ Swapped #{existing['id']} out of {target} slot {target_slot} into the scan buffer; "
+                        + (f"FCC files it back in {_ftxt}, where it sat before that slot." if _ftxt else
+                           "it is Unassigned until it is scanned somewhere (FCC has no record of where it "
+                           "sat before that slot)."), "WARNING")
+                    continue
                 if _norm_slot(existing.get('slot', '')) == seat_slot and existing['id'] != int(sid):
                     state.logger.info(f"🪑 Unseating Spool {existing['id']} from Slot {target_slot}")
                     # Load the existing spool's full extra and MERGE — Spoolman's
@@ -2396,20 +2648,16 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         # Moving to a non-slotted location clears the slot.
         new_extra['container_slot'] = str(seat_slot) if seat_slot else ""
 
-        # Group 42.6: the "before the box" note. Into a single-slot box from a
-        # place that isn't a head, it records where the spool was (Claude's call
-        # 21); coming back from a head, going onto one (a deploy, head to head)
-        # or a re-scan carries it; any other move clears it.
-        _note = str(current_extra.get(PRE_BOX_KEY) or '').strip().strip('"')
+        # Group 42.6 + Swap option C: the "before the box" note. Into a box (a
+        # single-slot box, or a multi-slot box's slot) it records where the spool
+        # sat; onto a head from a plain place, that place; a deploy, a Return to
+        # its own slot, head to head or a re-scan carries it; any other move
+        # uses it up (_note_after_move).
         follow_box = None
-        if locations_db._is_single_slot_dryer_box(tgt_info):
-            if current_loc != target and not _is_single_occupancy(current_loc, printer_map, loc_info_map):
-                _new_note = _pre_box_note(current_loc, current_extra.get('container_slot'),
-                                          printer_map, loc_info_map)
-                if _new_note or _note:
-                    new_extra[PRE_BOX_KEY] = _new_note
-        elif not (is_printer or is_toolhead) and _note:
-            new_extra[PRE_BOX_KEY] = ''
+        _new_note = _note_after_move(current_loc, current_extra, target, seat_slot, tgt_info,
+                                     bool(is_printer or is_toolhead), printer_map, loc_info_map)
+        if _new_note is not None:
+            new_extra[PRE_BOX_KEY] = _new_note
 
         # PRINTER MOVE
         if target in printer_map:
@@ -2582,7 +2830,16 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     for _sid in [s for s in list(undo_record['moves']) if str(s) in failures]:
         for _key in ('moves', 'extras', 'labels'):
             undo_record[_key].pop(_sid, None)
-    if undo_record['moves'] or undo_record['ejections']:
+    if displaced_out:
+        # Swap option C: the stored spools a Swap took out are in the user's
+        # hand, so they join the scan buffer (behind the spools waiting there)
+        # whether or not the incoming spool's own write then landed; their slot
+        # is empty either way, and Undo puts them back in it.
+        _d_items, _d_added = _put_in_buffer([d for d, _t in displaced_out],
+                                            filed={str(d): t for d, t in displaced_out})
+        to_buffer = to_buffer + _d_items
+        undo_record['buffered'] = list(undo_record.get('buffered') or []) + list(_d_added)
+    if undo_record['moves'] or undo_record['ejections'] or undo_record['displaced']:
         _push_undo(undo_record)
 
     # --- AUTO-DEPLOY CHAIN ---
@@ -3563,7 +3820,7 @@ def _eject_destination(spool_data, printer_map, homeless_destination=None):
 
 
 def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print=False,
-                        homeless_destination=None, report=None, to_buffer=False):
+                        homeless_destination=None, report=None, to_buffer=False, swapped_from=None):
     """Remove `spool_id` from its current location.
 
     `homeless_destination`: where to send a spool with no saved home to return
@@ -3582,7 +3839,10 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
     home" into a slot that is no longer its own, so it landed in the box with no
     slot (the box read 5/4 and the spool got no Quick-Swap tile). It goes to
     Unassigned with its trail cleared instead; the caller puts it in the buffer.
-    `report` gains "buffer": True.
+    `report` gains "buffer": True. With `swapped_from` (box, slot), the slot it
+    is being swapped out of (Swap option C; Derek, 2026-10-15: "one rule" for
+    both swaps), it is filed back where it sat before that slot instead
+    (_swap_out_place), and `report["filed"]` says where ('' = Unassigned).
 
     Returns:
       - True on successful eject
@@ -3626,8 +3886,13 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
         sentence in the activity log"), and fill the caller's report (42.5a)."""
         released = _release_single_slot_box(spool_id, current_location, pre_extra, printer_map, log=False)
         from_txt = current_location or "Unassigned"
+        filed = ""
         if buffered:
-            where = "into the scan buffer (Unassigned until it is scanned somewhere)"
+            filed = _filed_text(to_loc, slot, {str(r.get('LocationID', '')).strip().upper(): r
+                                               for r in (locations_db.load_locations_list() or [])
+                                               if isinstance(r, dict)}) if to_loc else ""
+            where = (f"into the scan buffer; FCC files it back in {filed}, where it sat before that slot"
+                     if filed else "into the scan buffer (Unassigned until it is scanned somewhere)")
         elif home:
             _row = next((r for r in (locations_db.load_locations_list() or [])
                          if isinstance(r, dict)
@@ -3648,26 +3913,36 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
                            "home": bool(home), "released_boxes": [released] if released else []})
             if buffered:
                 report["buffer"] = True
+                report["filed"] = filed
 
     # [ALEX FIX] Explicitly overwrite the slot with empty string.
     # .pop() just removes the key, which causes PATCH to ignore it (keeping the old value).
     extra['container_slot'] = ""
 
     if to_buffer:
-        # The same-slot swap (see the docstring): Unassigned, every trail key
-        # cleared, so the spool is a ghost in no box, and the "before the box"
-        # note used up like any other move elsewhere (42.6).
-        extra['physical_source'] = ""
-        extra['physical_source_slot'] = ""
-        if extra.get(PRE_BOX_KEY):
-            extra[PRE_BOX_KEY] = ""
+        # The same-slot swap (see the docstring): every trail key cleared, so the
+        # spool is a ghost in no box. Swap option C: filed back where it sat
+        # before the slot it is swapped out of (its note), else Unassigned; the
+        # note is used up unless it went back into a slot (_swap_out_write).
         # The engine's re-reading write (Group 40.2 review): a PATCH Spoolman
         # committed but answered after update_spool's read timeout left the spool
         # Unassigned yet reported "XL-1 still holds #99", in no buffer and with no
         # undo record.
-        if _move_write(spool_id, "", extra):
-            _landed("", "", home=False, buffered=True)
-            return True
+        if swapped_from:
+            _rows = {str(r.get('LocationID', '')).strip().upper(): r
+                     for r in (locations_db.load_locations_list() or []) if isinstance(r, dict)}
+            _ok, _floc, _fslot = _swap_out_write(spool_id, spool_data, swapped_from[0], swapped_from[1], _rows)
+            if _ok:
+                _landed(_floc, _fslot, home=False, buffered=True)
+                return True
+        else:
+            extra['physical_source'] = ""
+            extra['physical_source_slot'] = ""
+            if extra.get(PRE_BOX_KEY):
+                extra[PRE_BOX_KEY] = ""
+            if _move_write(spool_id, "", extra):
+                _landed("", "", home=False, buffered=True)
+                return True
         err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
         state.add_log_entry(
             f"❌ Failed to take Spool #{spool_id} off {current_location or 'its location'} "
@@ -3718,7 +3993,20 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
                 state.logger.warning(f"Slot-collision check failed: {_slot_check_err}")
             if slot_taken_by_other:
                 extra['container_slot'] = ""
-                if dest.get('pre_box'):
+                _plain = _pre_box_plain(extra.get(PRE_BOX_KEY), {
+                    str(r.get('LocationID', '')).strip().upper(): r
+                    for r in (locations_db.load_locations_list() or []) if isinstance(r, dict)
+                }) if dest.get('pre_box') else ''
+                if _plain and _plain != str(saved_source).strip().upper():
+                    # Swap option C's rule (Derek, 2026-10-15: "In the case that
+                    # the old slot isn't empty, then a non slot ... like a cart"):
+                    # the plain place it sat in before that slot, when the note
+                    # remembers one, rather than the box with no slot (5/4).
+                    state.add_log_entry(
+                        f"⚠️ #{spool_id} went to {_plain}, where it sat before {saved_source}: slot "
+                        f"{saved_slot_clean} holds another spool now.", "WARNING", "ffaa00")
+                    saved_source = _plain
+                elif dest.get('pre_box'):
                     # Claude's call 21: back into that box, unslotted, and say so.
                     state.add_log_entry(
                         f"⚠️ #{spool_id} went back into {saved_source} unslotted: slot {saved_slot_clean} "
@@ -3731,11 +4019,12 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
 
         # Clear the source memory so we don't bounce back again later
         extra['physical_source'] = ""
-        # Group 42.6: the "before the box" note rides along only while the spool
-        # goes back into its single-slot box; leaving it (to the noted place, or
-        # anywhere else) uses it up.
-        if extra.get(PRE_BOX_KEY) and (dest.get('pre_box')
-                                       or not locations_db._is_single_slot_dryer_box(home_row)):
+        # Group 42.6 + Swap option C: the "before the box" note rides along while
+        # the spool goes back into the box it was deployed from (a single-slot
+        # box, or its slot of a multi-slot box: the note still says where it sat
+        # before that box, for a later Swap); leaving for the noted place, or
+        # anywhere else, uses it up.
+        if extra.get(PRE_BOX_KEY) and (dest.get('pre_box') or not _is_dryer_box_row(home_row)):
             extra[PRE_BOX_KEY] = ""
         
         if spoolman_api.update_spool(spool_id, {"location": saved_source, "extra": extra}):
@@ -3971,6 +4260,9 @@ def _undo_items(record, printer_map):
     for sid, loc in (record.get('ejections') or {}).items():
         snap = _undo_get(record.get('ejection_extras'), sid) or {}
         items.append((sid, _undo_place(loc, snap.get('container_slot'), printer_map)))
+    for sid, d in (record.get('displaced') or {}).items():
+        snap = (d or {}).get('extras') or {}
+        items.append((sid, _undo_place((d or {}).get('location'), snap.get('container_slot'), printer_map)))
     return items
 
 
@@ -3991,7 +4283,8 @@ def _undo_current_heads(record, printer_map):
     BOX as its target, and a spool can have moved on since (Group 41 review)."""
     heads: typing.Dict[str, typing.List[typing.Any]] = {}
     unreadable = []
-    for sid in list((record.get('moves') or {}).keys()) + list((record.get('ejections') or {}).keys()):
+    for sid in (list((record.get('moves') or {}).keys()) + list((record.get('ejections') or {}).keys())
+                + list((record.get('displaced') or {}).keys())):
         rec = spoolman_api.get_spool(sid)
         if not isinstance(rec, dict) or rec.get('id') is None:
             unreadable.append(sid)
@@ -4208,10 +4501,48 @@ def perform_undo(expected_id=None):
                 f"❌ Undo: failed to restore ejected Spool #{ejected_sid} → "
                 f"{original_loc or 'UNASSIGNED'}: {err}", "ERROR", "ff4444")
 
+    # Swap option C: a stored spool a Swap took out of its slot (filed back where
+    # it sat before, and put in the scan buffer) goes back into that slot, after
+    # the restores above have taken the spool that took the slot back out of
+    # it. Never on top of a spool that claims the slot now (read strictly).
+    displaced = last.get('displaced') or {}
+    restored_displaced = []
+    for d_sid, d in displaced.items():
+        d_box = str((d or {}).get('location') or '').strip().strip('"').upper()
+        d_snap = (d or {}).get('extras') or {}
+        d_slot = _norm_slot(d_snap.get('container_slot'))
+        why = ""
+        if d_box and d_slot:
+            try:
+                _items = spoolman_api.get_spools_at_location_detailed_strict(d_box) or []
+                _claims, _own, _ghost = box_slot_claims(undo_rows.get(d_box), d_box, _items, [d_sid])
+                _holders = _claims.get(d_slot) or []
+                if _holders:
+                    why = f"{d_box} slot {d_slot} holds " + ", ".join(f"#{h}" for h in _holders)
+            except Exception as _d_err:
+                why = f"{d_box} could not be read from Spoolman ({_d_err})"
+        if why:
+            failed.append(f"#{d_sid} ({why})")
+            state.add_log_entry(f"❌ Undo: not putting Spool #{d_sid} back in {d_box} slot {d_slot} — {why}",
+                                "ERROR", "ff4444")
+            continue
+        d_cur = spoolman_api.get_spool(d_sid) or {}
+        d_merged = dict(d_cur.get('extra') or {})
+        for k in spoolman_api.SYSTEM_MANAGED_EXTRAS:
+            d_merged[k] = d_snap.get(k, '')
+        if spoolman_api.update_spool(d_sid, {"location": d_box, "extra": d_merged}):
+            restored_displaced.append(int(d_sid) if str(d_sid).isdigit() else d_sid)
+        else:
+            err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+            failed.append(f"#{d_sid} ({err})")
+            state.add_log_entry(f"❌ Undo: failed to put Spool #{d_sid} back in {d_box} slot {d_slot}: {err}",
+                                "ERROR", "ff4444")
+
     # Group 40, the same-slot swap: a spool the move took off its head into the
     # scan buffer is back on that head now, so it leaves the buffer (only the
-    # ones whose restore landed). The page drops them too (`unbuffered`).
-    restored_set = {str(s) for s in restored_ejections}
+    # ones whose restore landed). The page drops them too (`unbuffered`). So does
+    # a spool a Swap took out of its slot, now back in it.
+    restored_set = {str(s) for s in restored_ejections + restored_displaced}
     unbuffered = [sid for sid in (last.get('buffered') or []) if str(sid) in restored_set]
     if unbuffered:
         gone = {str(s) for s in unbuffered}
@@ -4260,7 +4591,14 @@ def perform_undo(expected_id=None):
                 f"{_undo_place(ejections.get(sid), (_undo_get(ejection_extras, sid) or {}).get('container_slot'), printer_map)}"
                 for sid in restored_ejections]
         parts.append(_and_list(segs))
-    if not moves and not ejections:
+    if restored_displaced:
+        segs = []
+        for sid in restored_displaced:
+            d = _undo_get(displaced, sid) or {}
+            segs.append(f"#{sid} is back "
+                        f"{_undo_place(d.get('location'), (d.get('extras') or {}).get('container_slot'), printer_map)}")
+        parts.append(_and_list(segs))
+    if not moves and not ejections and not displaced:
         # Legacy / no-move record: its summary already reads "Moved N -> target".
         parts.append(last.get('summary', f"moved -> {target}"))
     if parts:
@@ -4268,10 +4606,10 @@ def perform_undo(expected_id=None):
     if failed:
         msg = f"Undo could not put back {', '.join(failed)}."
         state.add_log_entry(f"⚠️ Undo partly failed: {msg}", "ERROR", "ff4444")
-        return {"success": False, "msg": msg, "restored": restored + restored_ejections,
+        return {"success": False, "msg": msg, "restored": restored + restored_ejections + restored_displaced,
                 "unbuffered": unbuffered}
     return {"success": True, "msg": f"↩️ Undo: {'; '.join(parts)}" if parts else "↩️ Undone",
-            "restored": restored + restored_ejections, "unbuffered": unbuffered}
+            "restored": restored + restored_ejections + restored_displaced, "unbuffered": unbuffered}
 
 def process_audit_scan(scan_result):
     """Handles scans when in Audit Mode."""

@@ -487,6 +487,9 @@ def api_manage_contents():
             # Group 40.3 review: heads the page saw printing still count when the
             # move's own probe can't reach their printer.
             seen_printing=logic.seen_printing_from(data),
+            # Swap option C: the grid's Swap files the slot's old spool back where
+            # it sat before and puts it in the scan buffer (`to_buffer`).
+            swap_out=logic.swap_requested(data),
         )
         stale = logic.stale_fed_refusal(data, result) or logic.stale_confirm_refusal(data, result)
         if stale:

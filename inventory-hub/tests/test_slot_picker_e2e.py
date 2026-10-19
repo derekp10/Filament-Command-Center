@@ -668,6 +668,24 @@ def test_an_occupied_slot_asks_swap_or_overwrite_and_back_returns(picker_page):
     assert got["choice"] == "overwrite" and got["send"] == {"slot": "2"} and got["swap"] is False, got
 
 
+@pytest.mark.parametrize("swap_to, text", [
+    ("CR-CT-2-R1", "#999202 → your buffer, filed back in CR-CT-2-R1"),
+    ("", "#999202 → your buffer (Unassigned until you scan it somewhere)"),
+], ids=["filed-back", "no-record"])
+def test_the_swap_says_where_the_old_spool_is_filed(picker_page, swap_to, text):
+    """Swap option C (Derek, 2026-10-15): a Swap hands the slot's stored spool to
+    the buffer AND files it back where it sat before the slot; the model's
+    `swap_to` (the engine's own rule) is what the Swap button says."""
+    page, setup, open_ = picker_page
+    model = build_model("FCC-TEST-BOX", spool=999201)
+    next(s for s in model["slots"] if s["slot"] == "2")["swap_to"] = swap_to
+    setup({"FCC-TEST-BOX": model})
+    open_({"location": "FCC-TEST-BOX", "spool": 999201})
+    page.locator("#fcc-slot-picker .fcc-sp-tile[data-sp-slot='2']").click()
+    page.wait_for_selector(CHOICE, timeout=5_000)
+    expect(page.locator("#fcc-slot-picker [data-sp-choice='swap']")).to_contain_text(text)
+
+
 def test_the_choice_qrs_answer_it(picker_page):
     page, setup, open_ = picker_page
     setup({"FCC-TEST-BOX": build_model("FCC-TEST-BOX", spool=999201)})

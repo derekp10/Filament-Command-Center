@@ -289,6 +289,25 @@ def _box_model(row, box, sid, toolhead, mode, loc_list, loc_info_map, printer_ma
     model["spool_location"] = moving_from
     residents = {h: _direct(buckets.get(h), h, exclude=moving) for h in heads}
 
+    def _swap_to(item, slot):
+        """Where a Swap files the slot's stored spool (Swap option C), by the
+        engine's own rule over this one read: 'CR-CT-2-R1', 'LR-MDB-2 slot 1',
+        or '' (Unassigned: FCC has no record of where it sat before)."""
+        rec = raw_by_id.get(str((item or {}).get('id'))) or {}
+        note = (rec.get('extra') or {}).get(logic.PRE_BOX_KEY)
+
+        def _claims_of(b):
+            bucket = spoolman_api.bucket_spools_by_location([b], spools=spools).get(b, [])
+            claims_b, _own, _ghost = logic.box_slot_claims(loc_info_map.get(b), b, bucket, [item.get('id')])
+            return set(claims_b)
+
+        try:
+            loc, s2 = logic._swap_out_place(note, box, slot, loc_info_map, _claims_of)
+            return logic._filed_text(loc, s2, loc_info_map)
+        except Exception as e:   # a courtesy line; never fail the model on it
+            state.logger.warning(f"placement: couldn't tell where a Swap files #{item.get('id')}: {e}")
+            return None
+
     # Slots in the grid's own order (1..max; the picker reverses an rtl box).
     holders: typing.Dict[str, typing.List[dict]] = {}
     unslotted = []
@@ -337,6 +356,9 @@ def _box_model(row, box, sid, toolhead, mode, loc_list, loc_info_map, printer_ma
             # The move only stores the spool here (the engine's store_only rule):
             # the picker sends a store for it even after Swap / Overwrite.
             "stores_only": stores_only,
+            # Swap option C: where a Swap files the slot's stored spool ('' =
+            # Unassigned); None for an empty slot or one whose spool isn't stored.
+            "swap_to": _swap_to(shown[0], s) if occ_state == 'stored' else None,
         })
     model["unslotted"] = unslotted
     model["printers"] = [{"name": n, "head": h} for n, h in printers_seen.items()]

@@ -515,6 +515,8 @@ def test_add_returns_perform_smart_move_result_verbatim(client):
         "expected_feed": None,
         # Group 40.3 review: heads the page saw printing (none here).
         "seen_printing": [],
+        # Swap option C: the grid's Swap (`swap: true`); not a Swap here.
+        "swap_out": False,
     }
 
 

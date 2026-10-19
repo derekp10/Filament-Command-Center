@@ -1330,11 +1330,16 @@ window.handleSlotInteraction = (slot) => {
             const esc = window.escHtml || ((s) => s);
             const top = state.heldSpools[0];
             const what = `#${top.id}${top.display ? ` (${esc(String(top.display))})` : ''}`;
-            promptAction("Slot Occupied", `Put ${what} into Slot ${slot}: swap or overwrite?`, [
+            // Swap option C (Derek, 2026-10-15): Swap hands the slot's old spool to
+            // your buffer AND files it back where it sat before this slot.
+            promptAction("Slot Occupied", `Put ${what} into Slot ${slot}: swap or overwrite?<br>`
+                + `<small>Swap: #${esc(String(item.id))} goes to your buffer, filed back where it sat before this slot. `
+                + `Overwrite: #${esc(String(item.id))} stays in ${esc(String(locId))} without a slot.</small>`, [
                 {
                     label: "Swap", action: () => {
-                        // Pass the displaced item so doAssign can push it
-                        // into the buffer ONLY on success — never before.
+                        // The server files the slot's old spool back where it sat
+                        // before and names it in `to_buffer` once the move lands
+                        // (never before), which _doAssignFinalize adds to the buffer.
                         doAssign(locId, newId, slot, true, {
                             swapDisplaced: { id: item.id, display: item.display, color: item.color },
                         });
@@ -1521,6 +1526,10 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedH
         confirmed_fed_heads: [],
     };
     if (options.autoDeploy === false) original.auto_deploy = false;
+    // Swap option C: the grid's Swap. The server files the slot's old spool back
+    // where it sat before this slot and names it in `to_buffer`. On `original`,
+    // so every replay of a question is still a Swap.
+    if (options.swapDisplaced) original.swap = true;
     // The heads whose warning the user confirmed (Group 39.1), so the backend's
     // safety net doesn't re-prompt for them.
     const first = Object.assign({}, original, {
@@ -1603,18 +1612,12 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedH
                 // landed.
                 const bufIdx = state.heldSpools.findIndex(s => String(s.id) === spoolIdStr);
                 if (bufIdx > -1) state.heldSpools.splice(bufIdx, 1);
-                // Swap path: push the displaced item into the buffer too.
-                // Skipped if the displaced item is somehow already there
-                // (e.g. user opened multiple manage modals).
-                if (options.swapDisplaced && options.swapDisplaced.id) {
-                    const dispId = String(options.swapDisplaced.id);
-                    if (!state.heldSpools.some(s => String(s.id) === dispId)) {
-                        state.heldSpools.push(options.swapDisplaced);
-                    }
-                }
-                // Group 40, the same-slot swap: a slot whose own spool ran on its
-                // head handed that spool back into the scan buffer. One render,
-                // one save.
+                // The spools the move handed to the scan buffer: the slot's old
+                // spool a Swap took out (Swap option C: filed back where it sat
+                // before), and a same-slot swap's spool off the head (Group 40).
+                // The server names them in `to_buffer`; it used to be this page
+                // that pushed the Swap's old spool, while the server left it in
+                // the box with no slot. One render, one save.
                 window.takeIntoBuffer(res, { render: false });
                 if (window.renderBuffer) window.renderBuffer();
                 if (typeof renderManagerNav === 'function') renderManagerNav();
@@ -1622,9 +1625,15 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedH
                 if (window.fetchLocations) window.fetchLocations();
                 refreshManageView(loc);
             }
-            else showToast(failedWhy
-                ? `❌ #${spoolIdStr} was NOT assigned to ${loc}: ${failedWhy}`
-                : (res.msg || 'Assign failed'), 'error', 7000);
+            else {
+                showToast(failedWhy
+                    ? `❌ #${spoolIdStr} was NOT assigned to ${loc}: ${failedWhy}`
+                    : (res.msg || 'Assign failed'), 'error', 7000);
+                // A spool the move had already handed to the buffer before this
+                // one's write failed (a Swap's old spool, a swapped-out head
+                // spool) is in the user's hand all the same.
+                window.takeIntoBuffer(res);
+            }
         })
         .catch((e) => { setProcessing(false); console.error(e); });
     _postManageAdd(first, { heads: first.confirmed_toolheads });

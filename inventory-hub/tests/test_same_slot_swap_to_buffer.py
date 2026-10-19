@@ -323,7 +323,10 @@ def test_scanning_the_slot_again_on_purpose_swaps_the_two_straight_back(client):
     buffer; scanning the same label again (on purpose, so the page's 1.5 s
     double-read guard has passed) puts #99 back on XL-1 and #42 in the buffer,
     asking nothing. (The 2-minute server hold-back the review's red first added
-    is gone; a scanner's double-read is the page's to drop, test_box_label_picker_js.)"""
+    is gone; a scanner's double-read is the page's to drop, test_box_label_picker_js.)
+    Swap option C (Derek, 2026-10-15, one rule for both swaps): #42 sat on
+    CR-CT-2-R1 before it went into slot 1, so it is filed back there as well as
+    buffered (it used to go to Unassigned)."""
     state.GLOBAL_BUFFER = [{"id": 42, "display": "#42"}]
     sm = _sm(OWN_SLOT_1)
     store = LocationsStore(ROWS)
@@ -332,9 +335,11 @@ def test_scanning_the_slot_again_on_purpose_swaps_the_two_straight_back(client):
     second = _scan(client, sm, {}, store=store)
     assert second["action"] == "assignment_done" and second["moved"] == 99, second
     assert [i["id"] for i in second["to_buffer"]] == [42], second
+    assert second["to_buffer"][0]["filed_to"] == "CR-CT-2-R1", second
     assert sm.direct_at("XL-1") == [99] and _buffer_ids() == [42]
     assert _trail_of(sm, 99) == ("LR-MDB-1", "1", ""), sm.spools[99]
-    assert sm.spools[42]["location"] == "" and _trail_of(sm, 42) == ("", "", "")
+    assert sm.spools[42]["location"] == "CR-CT-2-R1" and _trail_of(sm, 42) == ("", "", "")
+    assert not sm.spools[42]["extra"].get(logic.PRE_BOX_KEY), sm.spools[42]
 
 
 def test_a_swap_out_that_lands_but_times_out_still_reaches_the_buffer_and_the_undo():

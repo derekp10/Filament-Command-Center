@@ -38,8 +38,9 @@
 //   `slot` is the engine's Overwrite. `expected_feed` is what the tile showed the
 //   slot feeding (a head id, or '' for a pool or storage slot), so a slot
 //   re-pointed meanwhile is asked about again. `swap` / `displaced`: the user
-//   chose Swap, so the caller puts the slot's old spool in the buffer once the
-//   move lands (the grid's Swap). Greyed-out slots (the model's `blocked`: two
+//   chose Swap, so the caller sends `swap: true` (Swap option C): the server
+//   files the slot's old spool back where it sat before the slot and hands it
+//   to the buffer (`to_buffer`). Greyed-out slots (the model's `blocked`: two
 //   spools claim it, it is bound to something that isn't a toolhead, its own
 //   spool runs on another head, a stale record where nothing loads, and any
 //   occupied slot in return mode) say why and are never picked.
@@ -600,10 +601,17 @@
             };
         }
         const stored = (storesOnly && feed && feed.kind === 'toolhead') ? ` It is stored there, not loaded onto ${feed.id}.` : '';
+        // Swap option C: a Swap hands the old spool to your buffer AND files it
+        // back where it sat before this slot (the model's `swap_to`, by the
+        // engine's own rule; '' when FCC has no record, so it is Unassigned).
+        const swapSub = typeof d.swap_to === 'string'
+            ? (d.swap_to ? `#${occ.id} → your buffer, filed back in ${d.swap_to}`
+                : `#${occ.id} → your buffer (Unassigned until you scan it somewhere)`)
+            : `#${occ.id} → your scan buffer`;
         return {
             text: `Slot ${t.slot} holds ${who}. Put ${incoming} in slot ${t.slot}${onto}?${stored}`,
             actions: [
-                { key: 'swap', label: 'Swap', sub: `#${occ.id} → your scan buffer`, qr: 'Scan to Swap' },
+                { key: 'swap', label: 'Swap', sub: swapSub, qr: 'Scan to Swap' },
                 { key: 'overwrite', label: 'Overwrite', sub: `#${occ.id} stays in ${t.box} without a slot`, qr: 'Scan to Overwrite' },
             ],
         };
