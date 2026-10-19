@@ -50,7 +50,6 @@ SPOOL = {"id": 999101, "display": "FCC Test PLA #999101", "color": "ff0000", "re
 REJECT = "400: rejected by test"
 PRINTER = "FCC Test XL"
 BOX_ROW = {"LocationID": BOX, "Name": "FCC Test Box", "Type": "Dryer Box", "Max Spools": "4"}
-TH2_ROW = {"LocationID": "FCC-TEST-TH2", "Name": "FCC Test Toolhead 2", "Type": "Tool Head", "Max Spools": "1"}
 BINDINGS = {"slots": [{"box": "FCC-TEST-BIND", "slot": "1", "target": TH}]}
 
 
@@ -135,10 +134,13 @@ class FakeBackend:
 
     def __init__(self, page: Page, *, printer_active=False, identify=None, manage_contents=None,
                  smart_move=None, contents=None, spools=None, dryer_slots=None, extra_locations=(),
-                 responders=None, printer_state=None):
+                 responders=None, printer_state=None, gets=None):
         # responders: {path: body -> (status, payload)}, payload a dict (JSON) or
         # a str (served as text/html, like a proxy's error page). Group 39.8.
         self.responders = dict(responders or {})
+        # gets: {path: query dict -> (status, payload)} for GETs a test answers
+        # itself (Group 40.6: the slot picker's /api/placement_options).
+        self.gets = dict(gets or {})
         # printer_state: toolhead -> the /api/printer_state answer (Group 39.3),
         # overriding the printer_active default.
         self._printer_state = printer_state
@@ -173,6 +175,10 @@ class FakeBackend:
         parts = urlsplit(req.url)
         path = parts.path
         if req.method in ("GET", "HEAD", "OPTIONS"):
+            if path in self.gets:
+                status, payload = self.gets[path](parse_qs(parts.query))
+                self._json(route, payload, status=status)
+                return
             if path == "/api/state/buffer":
                 self._json(route, self.buffer)
                 return
@@ -768,11 +774,23 @@ _GHOST = {"id": 999501, "display": "FCC ghost #999501", "is_ghost": True,
           "location": BOX, "slot": "3", "deployed_to": "FCC-TEST-TH2"}
 _DIRECT_A = {"id": 999511, "display": "FCC Test #999511", "location": TH, "slot": ""}
 _DIRECT_B = {"id": 999512, "display": "FCC Test #999512", "location": TH, "slot": ""}
+# Group 40.6: the server's dry run decides what a Return would do; these are
+# its answers for each head (the route's own tests pin them).
+_NO_SPOOL = (404, {"action": "return_no_spool", "toolhead": TH, "candidates": [TH]})
 RETURN_REFUSED = {
-    "empty": ([], f"Nothing to return on {TH}"),
-    "ghost_only": ([_GHOST], f"Nothing to return on {TH}"),
-    "two_direct": ([_DIRECT_A, _DIRECT_B], f"{TH} holds 2 spools"),
+    "empty": ([], _NO_SPOOL, f"Nothing to return on {TH}"),
+    "ghost_only": ([_GHOST], _NO_SPOOL, f"Nothing to return on {TH}"),
+    "two_direct": ([_DIRECT_A, _DIRECT_B],
+                   (409, {"action": "return_ambiguous", "toolhead": TH, "active_toolhead": TH, "requested": TH,
+                          "spools": [_DIRECT_A["id"], _DIRECT_B["id"]],
+                          "error": f"{TH} holds 2 spools — eject the wrong one first"}),
+                   f"{TH} holds 2 spools"),
 }
+
+
+def _returns(be: FakeBackend) -> list[dict]:
+    """The Return requests themselves: every POST but the dry run (Group 40.6)."""
+    return [b for b in be.bodies("/api/quickswap/return") if not b.get("dry_run")]
 
 
 @pytest.mark.usefixtures("require_server")
@@ -783,9 +801,12 @@ def test_return_overlay_offers_nothing_the_backend_would_refuse(
     overlay must be the no-op one, and its Yes must send nothing.
     FAILS on HEAD for all three: empty -> previewed the first bound slot;
     ghost_only -> previewed the ghost's box; two_direct -> previewed one spool.
-    Each offered a real "Return the spool on FCC-TEST-TH?" confirm."""
-    items, title = RETURN_REFUSED[case]
-    be = FakeBackend(page, contents={TH: items}, dryer_slots=BINDINGS)
+    Each offered a real "Return the spool on FCC-TEST-TH?" confirm.
+    Group 40.6 (deliberate): the server's dry run now says so (its answer is
+    stubbed per case), and the Yes sends no Return after it."""
+    items, answer, title = RETURN_REFUSED[case]
+    be = FakeBackend(page, contents={TH: items}, dryer_slots=BINDINGS,
+                     responders={"/api/quickswap/return": lambda b: answer})
     _boot(page, base_url, reset_dom_state_js)
 
     page.evaluate(OPEN_RETURN_JS, TH)
@@ -796,11 +817,34 @@ def test_return_overlay_offers_nothing_the_backend_would_refuse(
 
     page.click("#fcc-quickswap-yes")
     page.wait_for_timeout(500)
-    assert not be.bodies("/api/quickswap/return"), be.posts
+    assert be.bodies("/api/quickswap/return") == [{"toolhead": TH, "dry_run": True}], be.posts
     assert page.evaluate("!document.getElementById('fcc-quickswap-confirm-overlay')"), "the no-op overlay did not close"
 
 
 _RETURN_RESIDENT = {"id": 999531, "display": "FCC Test #999531", "location": TH, "slot": ""}
+
+
+def _ret_plan(**kw) -> dict:
+    """The server's dry-run answer (Group 40.6): a one-tap plan into BOX slot 3,
+    the spool's recorded source, unless `kw` says otherwise."""
+    plan = {"action": "return_plan", "toolhead": TH, "active_toolhead": TH, "requested": TH,
+            "spool": 999521, "display": "FCC Test PLA #999521", "box": BOX, "slot": "3",
+            "source": "physical_source", "needs_choice": False, "note": "",
+            "occupancy": {"after": 1, "max": 4}, "options": None, "recommended": None}
+    plan.update(kw)
+    return plan
+
+
+def _ret_responder(plan: dict, done):
+    """POST /api/quickswap/return: the dry run answers `plan`; every Return
+    answers `done` ((status, payload), or a callable of the body)."""
+    def respond(body):
+        if body.get("dry_run"):
+            return 200, plan
+        return done(body) if callable(done) else done
+    return respond
+
+
 OPEN_TAP_JS = """([box, slot, th]) => {
     const btn = document.createElement('button');
     btn.dataset.box = box; btn.dataset.slot = slot; btn.dataset.toolhead = th;
@@ -820,14 +864,16 @@ def test_return_failures_raise_a_7s_error_toast(
         page: Page, base_url: str, reset_dom_state_js: str, status, payload, expect):
     """Move-pipeline follow-ups item 6 / Group 39.8: no test drove these toasts.
     The non-JSON case FAILS on HEAD: r.json() threw and the catch toasted
-    "Return — network error" for a server that did answer."""
+    "Return — network error" for a server that did answer. (Group 40.6: the
+    dry run answers a plan first; the Return itself fails.)"""
+    plan = _ret_plan(spool=_RETURN_RESIDENT["id"], display=_RETURN_RESIDENT["display"])
     be = FakeBackend(page, contents={TH: [_RETURN_RESIDENT]}, dryer_slots=BINDINGS,
-                     responders={"/api/quickswap/return": lambda b: (status, payload)})
+                     responders={"/api/quickswap/return": _ret_responder(plan, (status, payload))})
     _boot(page, base_url, reset_dom_state_js)
     page.evaluate(OPEN_RETURN_JS, TH)
     _wait_overlay(page, "the Return overlay never opened", title_contains="Return the spool on")
     page.click("#fcc-quickswap-yes")
-    _until(page, lambda: be.bodies("/api/quickswap/return"), 5_000, "Yes sent no Return")
+    _until(page, lambda: _returns(be), 5_000, "Yes sent no Return")
     err = _toast(page, f"no error toast for {payload!r}", type_="error", contains=(expect,))
     assert err["duration"] and err["duration"] >= 7000, err
 
@@ -849,39 +895,160 @@ def test_quickswap_failures_raise_a_7s_error_toast(
     assert err["duration"] and err["duration"] >= 7000, err
 
 
+# Group 40.6 (deliberate): test_return_overlay_previews_the_spools_recorded_source_box
+# is replaced by the tests below. The preview no longer reads the spool and the
+# bindings itself (_resolveReturnDestination is gone): the server's dry run says
+# where the spool goes, and the overlay names exactly that.
+
+_PICK_SPOOL = {"id": 999599, "display": "FCC Test PLA #999599", "color": "00ff00", "remaining_weight": 700,
+               "details": {}, "archived": False, "is_ghost": False, "deployed_to": None}
+
+
+def _picker_slot(n, spool=None):
+    return {"slot": str(n), "spool": spool, "claimants": [spool["id"]] if spool else [], "current": False,
+            "free": spool is None, "feeds": None, "would_prompt": False,
+            "occupant_state": "stored" if spool else None, "stores_only": False,
+            "blocked": f"Holds #{spool['id']}: Return takes a free slot, or No slot" if spool else None}
+
+
+# What /api/placement_options answers for BOX in return mode: slot 3 holds
+# #999599 (greyed out), the others are free, ⭐ slot 2.
+PICKER_MODEL = {
+    "mode": "return", "location": BOX, "name": "FCC Test Box", "type": "Dryer Box", "spool": 999521,
+    "spool_display": "FCC Test PLA #999521", "spool_location": TH, "toolhead": TH, "read_ok": True,
+    "read_error": None, "max_slots": 4, "slot_order": "ltr",
+    "slots": [_picker_slot(1), _picker_slot(2), _picker_slot(3, _PICK_SPOOL), _picker_slot(4)],
+    "unslotted": [], "printers": [], "allow_none": True,
+    "recommended": {"kind": "slot", "box": BOX, "slot": "2"}, "recommend_reason": "spare_slot",
+    "recommend_text": "a free slot that feeds no toolhead",
+}
+CHOOSE_PLAN = _ret_plan(slot=None, needs_choice=True, note=f"{BOX} slot 3, where it came from, holds #999599",
+                        occupancy={"after": 2, "max": 4}, options=PICKER_MODEL,
+                        recommended=PICKER_MODEL["recommended"])
+
+
+def _ret_done(slot):
+    return 200, {"action": "return_done", "moved": 999521, "toolhead": TH, "active_toolhead": TH,
+                 "requested": TH, "box": BOX, "slot": slot, "source": "chosen"}
+
+
+def _wait_picker(page: Page) -> None:
+    _js_until(page, "!!document.querySelector('#fcc-slot-picker [data-sp-state=\"ready\"]')", 8_000,
+              "the slot picker never opened")
+
+
 @pytest.mark.usefixtures("require_server")
-@pytest.mark.parametrize("source", ["dryer_box", "not_a_dryer_box"])
-def test_return_overlay_previews_the_spools_recorded_source_box(
-        page: Page, base_url: str, reset_dom_state_js: str, source: str):
-    """get_contents reports a direct resident's location as the head itself, so
-    the preview reads the spool: extra.physical_source naming a Dryer Box row is
-    where Return will send it; anything else falls back to the first bound slot.
-    dryer_box FAILS on HEAD (it previewed the first bound slot every time).
-    not_a_dryer_box PASSES on HEAD too (both fall back); pinned so the preview
-    never trusts a physical_source that is not a Dryer Box."""
-    phys = BOX if source == "dryer_box" else "FCC-TEST-TH2"
-    resident = {"id": 999521, "display": "FCC Test PLA #999521", "location": TH, "slot": ""}
-    be = FakeBackend(
-        page, contents={TH: [resident]}, dryer_slots=BINDINGS, extra_locations=[BOX_ROW, TH2_ROW],
-        spools={999521: {"success": True, "data": {"id": 999521, "location": TH, "extra": {
-            "physical_source": json.dumps(phys), "physical_source_slot": json.dumps("3")}}}})
+@pytest.mark.parametrize("source, tag", [
+    ("physical_source", "(original source)"),
+    ("feed_slot", f"(the only free slot that feeds {TH})"),
+], ids=["recorded_slot", "only_free_feed_slot"])
+def test_return_preview_names_the_slot_the_server_will_use(
+        page: Page, base_url: str, reset_dom_state_js: str, source: str, tag: str):
+    """Item D: the confirm names the exact slot from the server's dry run (the
+    recorded slot, or the only free slot feeding the head: Derek's answer 6),
+    and No sends no Return."""
+    plan = _ret_plan(source=source, slot="3")
+    be = FakeBackend(page, contents={TH: [_RETURN_RESIDENT]},
+                     responders={"/api/quickswap/return": _ret_responder(plan, _ret_done("3"))})
     _boot(page, base_url, reset_dom_state_js)
-    page.wait_for_function(
-        "['FCC-TEST-BOX', 'FCC-TEST-TH2'].every(id => state.allLocations.some(l => l.LocationID === id))",
-        timeout=15_000)
 
     page.evaluate(OPEN_RETURN_JS, TH)
     ov = _wait_overlay(page, "the Return overlay never opened", title_contains="Return the spool on")
     assert ov["title"] == f"Return the spool on {TH}?", ov
     assert "FCC Test PLA #999521" in ov["body"], ov
-    if source == "dryer_box":
-        assert f"Sending back to: {BOX} slot 3 (original source)" in ov["body"], ov
-        assert "FCC-TEST-BIND" not in ov["body"], ov
-    else:
-        assert "Sending back to: FCC-TEST-BIND slot 1 (first bound slot" in ov["body"], ov
+    assert f"Sending back to: {BOX} slot 3 {tag}" in ov["body"], ov
     page.click("#fcc-quickswap-no")
     page.wait_for_timeout(300)
-    assert not be.bodies("/api/quickswap/return"), be.posts
+    assert be.bodies("/api/quickswap/return") == [{"toolhead": TH, "dry_run": True}], be.posts
+
+
+@pytest.mark.usefixtures("require_server")
+def test_return_with_no_usable_slot_opens_the_picker_then_names_the_choice(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """D5: the recorded slot is taken, so the slot picker (return mode) opens
+    BEFORE any confirm; the pick is named on the confirm, and the Return sends
+    it with the spool the page showed."""
+    be = FakeBackend(page, contents={TH: [_RETURN_RESIDENT]},
+                     responders={"/api/quickswap/return": _ret_responder(CHOOSE_PLAN, _ret_done("2"))},
+                     gets={"/api/placement_options": lambda q: (200, PICKER_MODEL)})
+    _boot(page, base_url, reset_dom_state_js)
+
+    page.evaluate(OPEN_RETURN_JS, TH)
+    _wait_picker(page)
+    assert page.evaluate("!document.getElementById('fcc-quickswap-confirm-overlay')"), "a confirm opened before the pick"
+    assert page.evaluate("document.querySelector('#fcc-slot-picker .fcc-sp-tile[data-sp-slot=\"3\"]')"
+                         ".getAttribute('aria-disabled')") == "true"
+    page.click('#fcc-slot-picker .fcc-sp-tile[data-sp-slot="2"]')
+    ov = _wait_overlay(page, "no confirm after the pick", title_contains="Return the spool on")
+    assert f"Sending back to: {BOX} slot 2 (your choice)" in ov["body"], ov
+    page.click("#fcc-quickswap-yes")
+    _until(page, lambda: _returns(be), 5_000, "Yes sent no Return")
+    assert _returns(be) == [{"toolhead": TH, "box": BOX, "slot": "2", "expected_spool": 999521,
+                             "confirmed_toolheads": []}], be.posts
+    _toast(page, "no success toast", type_="success", contains=(f"↩️ #999521 → {BOX} slot 2",))
+
+
+@pytest.mark.usefixtures("require_server")
+def test_return_with_no_slot_names_the_count_and_never_toasts_null(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """Item D: "No slot" in the picker is confirmed as "no slot — FCC-TEST-BOX
+    will show 2/4", sends slot "none", and the toast says "(no slot)", never
+    "SLOT:null"."""
+    be = FakeBackend(page, contents={TH: [_RETURN_RESIDENT]},
+                     responders={"/api/quickswap/return": _ret_responder(CHOOSE_PLAN, _ret_done(None))},
+                     gets={"/api/placement_options": lambda q: (200, PICKER_MODEL)})
+    _boot(page, base_url, reset_dom_state_js)
+
+    page.evaluate(OPEN_RETURN_JS, TH)
+    _wait_picker(page)
+    page.click('#fcc-slot-picker .fcc-sp-tile[data-sp-kind="none"]')
+    ov = _wait_overlay(page, "no confirm after No slot", title_contains="Return the spool on")
+    assert f"Sending back to: {BOX} — no slot ({BOX} will show 2/4)" in ov["body"], ov
+    page.click("#fcc-quickswap-yes")
+    _until(page, lambda: _returns(be), 5_000, "Yes sent no Return")
+    assert _returns(be)[0]["slot"] == "none", be.posts
+    _toast(page, "no success toast", type_="success", contains=(f"↩️ #999521 → {BOX} (no slot)",))
+    assert not [t for t in _toasts(page) if "null" in (t.get("text") or "")], _toasts(page)
+
+
+PR_ROW = {"LocationID": "FCC-TEST-PR", "Name": PRINTER, "Type": "Printer", "Max Spools": "0",
+          "toolheads": [{"location_id": TH, "position": 0}]}
+TH_ROW = {"LocationID": TH, "Name": "FCC Test Toolhead", "Type": "Tool Head", "Max Spools": "1"}
+_DEPLOYED_CARD = {"id": 999521, "display": "FCC Test PLA #999521", "color": "ff0000", "remaining_weight": 800,
+                  "is_ghost": True, "deployed_to": TH, "location": BOX, "slot": "3"}
+RENDER_CARD_JS = """([item, box]) => {
+    let host = document.getElementById('fcc-test-card');
+    if (!host) { host = document.createElement('div'); host.id = 'fcc-test-card'; document.body.appendChild(host); }
+    host.innerHTML = window.SpoolCardBuilder.buildCard(item, 'loc_grid', { slotNum: 3, locId: box });
+}"""
+
+
+@pytest.mark.usefixtures("require_server")
+def test_the_deployed_cards_return_posts_the_canonical_return_with_its_spool(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """Item E: the ↩️ on a DEPLOYED card is the canonical Return for the head
+    its spool is on (FCC-TEST-TH, a head of a fake printer): the dry run and the
+    Return both name the card's spool (expected_spool), and no manage_contents
+    add is posted (it used to post the slot straight back)."""
+    plan = _ret_plan()
+    be = FakeBackend(page, extra_locations=[PR_ROW, TH_ROW, BOX_ROW],
+                     responders={"/api/quickswap/return": _ret_responder(plan, _ret_done("3"))})
+    _boot(page, base_url, reset_dom_state_js)
+    page.wait_for_function(
+        "['FCC-TEST-PR', 'FCC-TEST-BOX'].every(id => state.allLocations.some(l => l.LocationID === id))",
+        timeout=15_000)
+
+    page.evaluate(RENDER_CARD_JS, [_DEPLOYED_CARD, BOX])
+    page.click("#fcc-test-card .js-btn-pick")
+    ov = _wait_overlay(page, "the Return overlay never opened", title_contains="Return the spool on")
+    assert f"Sending back to: {BOX} slot 3 (original source)" in ov["body"], ov
+    page.click("#fcc-quickswap-yes")
+    _until(page, lambda: _returns(be), 5_000, "Yes sent no Return")
+    assert be.bodies("/api/quickswap/return") == [
+        {"toolhead": TH, "dry_run": True, "expected_spool": 999521},
+        {"toolhead": TH, "box": BOX, "slot": "3", "expected_spool": 999521, "confirmed_toolheads": []}], be.posts
+    assert not be.bodies("/api/manage_contents"), be.posts
+    _toast(page, "no success toast", type_="success", contains=(f"↩️ #999521 → {BOX} slot 3",))
 
 
 # ---------------------------------------------------------------------------
