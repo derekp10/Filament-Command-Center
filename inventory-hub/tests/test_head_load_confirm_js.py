@@ -489,7 +489,14 @@ def test_the_deployed_cards_return_puts_the_spool_back_and_leaves_the_head(tmp_p
     """Group 40.6, item E (deliberate): the card's ↩️ calls returnDeployedSpool
     (inv_quickswap.js) with the head the spool is loaded on, which runs the
     canonical Return for a toolhead (pinned in test_return_slot_choice_js.py).
-    Its fallback for a stale trail is still this doAssign with autoDeploy off."""
+    Its fallback for a stale trail is doAssign with autoDeploy off; the doAssign
+    call below checks that half of doAssign's contract.
+
+    Changed on purpose (Group 40.6 review, R1): the card now names the spool's
+    own box (its trail; this ghost has no `location`, so the view's box) and
+    passes the view id as a fifth argument, so the view on screen refreshes. The
+    stale-trail fallback sends the slot as a picked slot, pinned in
+    test_return_slot_choice_js.py."""
     res = _run(tmp_path, LM, """
 const ghost = { id: 57, display: '#57', color: 'ff0000', is_ghost: true, deployed_to: 'XL-1', slot: '1' };
 const grid = window.SpoolCardBuilder.buildCard(ghost, 'loc_grid', { slotNum: 1, locId: 'LR-MDB-1' });
@@ -499,8 +506,8 @@ window.doAssign('LR-MDB-1', 57, 1, null, { autoDeploy: false });
 await __settle(150);
 return { grid, list, posts: posts('/api/manage_contents'), toasts: toasts() };
 """)
-    assert "returnDeployedSpool('LR-MDB-1', 57, 1, 'XL-1')" in res["grid"], res["grid"]
-    assert "returnDeployedSpool('LR-MDB-1', 57, '1', 'XL-1')" in res["list"], res["list"]
+    assert "returnDeployedSpool('LR-MDB-1', 57, 1, 'XL-1', 'LR-MDB-1')" in res["grid"], res["grid"]
+    assert "returnDeployedSpool('LR-MDB-1', 57, '1', 'XL-1', 'LR-MDB-1')" in res["list"], res["list"]
     assert "doAssign(" not in res["grid"] and "doAssign(" not in res["list"]
     assert res["posts"][0]["auto_deploy"] is False
     assert any(t["msg"] == "↩️ #57 → LR-MDB-1 slot 1" for t in res["toasts"]), res["toasts"]

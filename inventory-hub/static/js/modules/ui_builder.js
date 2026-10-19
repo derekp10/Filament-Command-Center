@@ -40,6 +40,13 @@ const SpoolCardBuilder = {
         // Group 40.6: the head a DEPLOYED card's spool is loaded on, for its ↩️
         // (a LocationID; anything that could break out of the onclick is dropped).
         const deployedId = String(item.deployed_to || '').replace(/[^A-Za-z0-9_.:\-]/g, '');
+        // Group 40.6 review (R1): the ↩️ names the spool's OWN box, its trail
+        // (a ghost's `location` is its physical_source), never the view it is
+        // listed in. A Room view lists every LR-* box's deployed spools, and
+        // naming the Room made a stale trail's fallback write slot N across every
+        // box in it. The view id rides along, so the view on screen refreshes.
+        const ownBoxId = String((item.is_ghost && item.location) || locId || '').replace(/[^A-Za-z0-9_.:\-]/g, '');
+        const viewId = String(locId || '').replace(/[^A-Za-z0-9_.:\-]/g, '');
         const info = this.getRichInfo(item);
         // Compute archived badge for Row 3 (weight row, left side)
         const isArchived = (item.archived === true || String(item.archived).toLowerCase() === 'true');
@@ -160,11 +167,12 @@ const SpoolCardBuilder = {
                 // Group 40.6 (item E): RETURN is the canonical Return for the head
                 // the spool is loaded on (inv_quickswap.js returnDeployedSpool: its
                 // printer check, slot rule and picker); a stale trail puts it back
-                // in this slot and leaves the head alone (autoDeploy false). It used
-                // to load it straight back onto the head it was deployed to.
+                // in its own box's slot while that slot is free, and leaves the head
+                // alone (autoDeploy false). It used to load it straight back onto
+                // the head it was deployed to.
                 row4FooterHTML = `
                     <div class="d-flex justify-content-center mt-3 pt-3 border-top border-secondary">
-                        <div class="action-badge" style="flex: 0 0 auto; height: fit-content; width: auto; margin: auto;" onclick="event.stopPropagation(); returnDeployedSpool('${locId}', ${item.id}, '${item.slot || ''}', '${deployedId}')">
+                        <div class="action-badge" style="flex: 0 0 auto; height: fit-content; width: auto; margin: auto;" onclick="event.stopPropagation(); returnDeployedSpool('${ownBoxId}', ${item.id}, '${item.slot || ''}', '${deployedId}', '${viewId}')">
                             <div class="badge-btn-gold btn-pick-bg px-4 fcc-btn-return" style="font-size: 1.2rem; border-radius: 6px;">↩️ RETURN SPOOL</div>
                         </div>
                     </div>`;
@@ -219,7 +227,7 @@ const SpoolCardBuilder = {
                         </div>
                         
                         <div class="d-flex justify-content-around gap-1 mt-2 w-100 pt-2 border-top" style="border-color: rgba(255,255,255,0.2) !important;">
-                            <div class="fcc-card-action-btn js-btn-pick" onclick="event.stopPropagation(); returnDeployedSpool('${locId}', ${item.id}, ${options.slotNum}, '${deployedId}')" title="Return Spool (off ${deployedId || 'its toolhead'} and back into a slot; FCC asks first when that printer is printing)">↩️</div>
+                            <div class="fcc-card-action-btn js-btn-pick" onclick="event.stopPropagation(); returnDeployedSpool('${ownBoxId}', ${item.id}, ${options.slotNum}, '${deployedId}', '${viewId}')" title="Return Spool (off ${deployedId || 'its toolhead'} and back into a slot; FCC asks first when that printer is printing)">↩️</div>
                             <div class="fcc-card-action-btn" onclick="event.stopPropagation(); openSpoolDetails(${item.id})" title="View Details">🔍</div>
                             <div class="fcc-card-action-btn" onclick="event.stopPropagation(); typeof openEditWizard !== 'undefined' && openEditWizard(${item.id});" title="Edit Spool">✏️</div>
                             <div class="fcc-card-action-btn" onclick="${printHoverClick}" title="Add to Print Queue">🖨️</div>
