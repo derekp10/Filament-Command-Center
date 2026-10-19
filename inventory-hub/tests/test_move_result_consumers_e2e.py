@@ -676,6 +676,25 @@ def test_force_location_override_with_a_failure_shows_the_error(
     assert not [t for t in _toasts(page) if "Location updated via override" in (t["text"] or "")], _toasts(page)
 
 
+@pytest.mark.usefixtures("require_server")
+def test_force_location_placed_but_not_deployed_raises_a_7s_warning(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """Force Location's override answered `auto_deploy_skipped` (placed, but not
+    loaded onto the head its slot feeds): a >= 7 s warning naming the head and
+    why. Unpinned since the 2026-09-12 diff review (the move-pipeline follow-ups,
+    item 6)."""
+    be = FakeBackend(page, manage_contents=lambda b: {
+        "status": "success", "failures": {},
+        "auto_deploy_skipped": {"999401": f"{TH} is printing"}, "auto_deploy_target": TH},
+        extra_locations=[SHELF_ROW])
+    _boot(page, base_url, reset_dom_state_js)
+    _force_to(page, SHELF)
+    _until(page, lambda: be.bodies("/api/manage_contents"), 5_000, "the override sent nothing")
+    warn = _toast(page, "the skipped deploy raised no warning", type_="warning",
+                  contains=("#999401", "NOT deployed", TH))
+    assert warn["duration"] and warn["duration"] >= 7000, warn
+
+
 _FORCE_ASK = {"status": "requires_confirm", "confirm_type": "active_print",
               "active_print": {"toolhead": TH, "printer_name": PRINTER, "state": "PRINTING"},
               "active_prints": [{"toolhead": TH, "printer_name": PRINTER, "state": "PRINTING",

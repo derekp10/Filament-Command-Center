@@ -446,3 +446,22 @@ return out();
 """)
     assert res["unhandled"] == [], res["unhandled"]
     assert res["posts"] and res["posts"][0]["toolhead"] == "XL-2" and res["posts"][0]["dry_run"] is True, res["posts"]
+
+
+def test_doassign_placed_but_not_deployed_raises_a_warning(tmp_path):
+    """The Location Manager's assign (_doAssignFinalize): a spool placed in a bound
+    slot but not loaded onto its head (`auto_deploy_skipped`) raises a warning
+    naming the head and why. Unpinned since the 2026-09-12 diff review (the
+    move-pipeline follow-ups, item 6)."""
+    answer = {"status": "success", "failures": {}, "auto_deploy_skipped": {"57": "XL-1 is printing"},
+              "auto_deploy_target": "XL-1"}
+    res = _grid(tmp_path, f"""
+state.heldSpools = [{{ id: 57, display: '#57' }}];
+answerWith('/api/manage_contents', [{_js(answer)}]);
+window.doAssign('LR-MDB-1', 57, 1, true);
+await __settle(250);
+return {{ toasts: toasts() }};
+""")
+    warn = [t for t in res["toasts"] if "NOT deployed" in t["msg"]]
+    assert warn and warn[0]["type"] == "warning", res["toasts"]
+    assert "#57 is in LR-MDB-1 but was NOT deployed to XL-1: XL-1 is printing" in warn[0]["msg"], warn
