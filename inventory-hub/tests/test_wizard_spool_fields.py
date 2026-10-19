@@ -16,7 +16,12 @@ def client():
 @patch('app.spoolman_api.create_filament')
 @patch('app.spoolman_api.create_spool')
 def test_spool_weight_passes_through(mock_create_spool, mock_create_filament, client):
-    """Ensure spool_weight is passed directly to Spoolman (not as empty_weight)."""
+    """Ensure spool_weight is passed directly to Spoolman (not as empty_weight).
+
+    Location blank since Group 40.7: a create with a location places each new
+    spool through the move engine, which reads (and moves) the id the mocked
+    create_spool returns, a REAL dev spool outside --offline. Placement is pinned
+    in tests/test_wizard_location_through_engine.py."""
     mock_create_filament.return_value = {'id': 10}
     mock_create_spool.return_value = {'id': 200}
 
@@ -29,7 +34,7 @@ def test_spool_weight_passes_through(mock_create_spool, mock_create_filament, cl
         "spool_data": {
             "spool_weight": 250,
             "used_weight": 0,
-            "location": "A1",
+            "location": "",
             "extra": {}
         },
         "quantity": 1
@@ -115,7 +120,8 @@ def test_purchase_url_in_spool_extra(mock_create_spool, mock_create_filament, cl
 @patch('app.spoolman_api.create_spool')
 def test_clone_spool_weight_existing_filament(mock_create_spool, client):
     """Simulate a clone scenario: existing filament mode with spool_weight set.
-    The wizard sends spool_weight directly when cloning."""
+    The wizard sends spool_weight directly when cloning. (Location blank since
+    Group 40.7: see test_spool_weight_passes_through.)"""
     mock_create_spool.return_value = {'id': 203}
 
     payload = {
@@ -123,7 +129,7 @@ def test_clone_spool_weight_existing_filament(mock_create_spool, client):
         "spool_data": {
             "spool_weight": 180,
             "used_weight": 0,
-            "location": "B3",
+            "location": "",
             "extra": {}
         },
         "quantity": 1
