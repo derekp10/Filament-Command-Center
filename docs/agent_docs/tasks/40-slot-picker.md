@@ -4,7 +4,7 @@
 **Estimated effort:** LARGE (~14–20 h, 2–3 sessions). Engine prerequisites ~3 h · shared picker ~4 h · box-label + slot-label doors ~3 h · printer picker ~3 h · Return picker ~2–3 h · wizard doors ~2 h · tests throughout.
 **Risk:** **MEDIUM–HIGH.** Every sub-task edits `_perform_smart_move_impl`, the hottest write path in FCC, and 40.3 adds a new prompt on Derek's own daily path (slot-label scans). Everything else protects other users.
 
-> **Status: `DONE` (2026-10-19, overnight; merged to `dev` `8d0ff64`, `main` held for Derek).** The last leg built
+> **Status: `DONE` (2026-10-19, overnight; merged to `dev` `8d0ff64`; released that morning, `main` `0140edf`).** The last leg built
 > Swap option C, 40.4, 40.5, 40.6 and 40.7 (as-built notes under each), had ONE review (`wf_bd637c78-057`: 27
 > findings, none red, all fixed; see "The final review" before the deferred notes) and ONE full sweep (`RUN_INTEGRATION`, 3910 passed, 18 skipped, 0 failed in 23:07, load 1.04×).
 > Derek's hands-on checks for it are the buglist's ⏸️ PENDING DEREK item "the pickers and Swap option C"; his open
@@ -960,7 +960,7 @@ workflow journal).
 | Printer picker: prompt when the chosen head has ANY resident (40.5 step 3)? | **Yes**, broader than D2's "fed from elsewhere" | The Printer picker has no "this slot", so there is no same-slot swap to exempt. Picking a head that holds a spool always unloads it. |
 | Auto-slot for callers without a picker (40.0e) | **Move it ahead of the pre-flight**, using the picker's recommendation rule | Keeps slotless moves slotted, and makes their confirm cover the chain. Retiring it would bring back "5/4". |
 | Return of a head spool with no trail whose bound slot is free (40.6) | ~~Opens the picker~~ → **one tap when the answer is obvious** (Derek's answer 6, 2026-10-13): the recorded slot while free, else the only free slot feeding the head when no single-slot box is attached to it; the chooser otherwise | His words. The confirm still names the slot ("the only free slot that feeds XL-3"). |
-| Return: a taken recorded slot with exactly one other free feed slot (40.6, builder's call 1) | **One tap into that slot** | Answer 6's "obvious"; a question for Derek in the handoff (he may prefer the chooser whenever the recorded slot is taken). |
+| Return: a taken recorded slot with exactly one other free feed slot (40.6, builder's call 1) | **One tap into that slot** (Derek, 2026-10-19: keep) | Answer 6's "obvious". On dev every XL head has one feeding slot, so it only arises where two boxes feed one head. |
 | Single-slot boxes as 13.6 reverse-binding candidates (40.0d) | **Never** (lands in 42.1 step 5) | A PolyDryer's blank slot always reads as free, so a stranger would be recorded as its spool. |
 | 13.6 reverse-binding | **Keep silent for scans; record only with exactly one free slot; name it in the toast; explicit choice in the Printer picker** | D3's pre-select rule applied everywhere, without slowing blind scanning. |
 | DEPLOYED ↩️ (item E) | **Canonical Return** (fallback: move back into the slot without deploy) | One Return path, one set of confirms, no duplicated slot logic. |
@@ -975,7 +975,7 @@ workflow journal).
 | The Printer picker's questions (40.5) | **Head-load question client-side, printing question server-side** | The page has the model, not a fresh probe; the server's question is the one that knows the print. A printing head that holds a spool asks twice (review BD-6 (a), kept). |
 | "Record it as coming from…" for a spool whose PolyDryer follows it head to head (review BD-3) | **Not asked** (`spool_keeps_trail`) | The engine keeps the PolyDryer as its home (42.6), so the answer could change nothing. |
 | The grid's prompt for a DEPLOYED card (review BD-4) | **Worded from the slot's spool**: one "Swap it out" on its own head, nothing on another head, "Put it in slot N" for a stale record | The engine's own outcomes; the picker already says it this way. |
-| Wizard create into a box with an empty idle head (40.7, builder's call) | **Loads the head** (answer 7: the wizard behaves like Force Location) | A question for Derek in the handoff (the alternative: a create only stores). |
+| Wizard create into a box with an empty idle head (40.7, builder's call) | **Loads the head** (answer 7; Derek, 2026-10-19: keep) | The picker shows each slot's head before you choose. |
 | `/api/spool/update` and a printing head (40.7, builder's call) | **No printing check** (it refuses heads and printers outright; no page sends a location) | Nothing to ask about until a page uses it; listed for Derek. |
 | Slots the picker greys out | **Two spools claiming it, a binding to a non-head, its own spool on another head, a stale record where nothing loads, any occupied slot in return mode** | The engine refuses the ghost cases (pinned), Quick-Swap refuses doubly-claimed slots, and a non-head binding stores with a warning nobody asked for. The ⭐ skips them. |
 | The box picker's loop (Claude's call 24, as built) | **Escape stops; Cancel on a load question steps back to the same spool's picker; a failure ends the loop; several spools end with a summary** | Escape is "I'm done", Cancel is "not that slot". An unanswerable question ends it rather than reopening the picker on it. |

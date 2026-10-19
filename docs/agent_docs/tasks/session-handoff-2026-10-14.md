@@ -24,10 +24,11 @@ _Run finished at ~04:45 on 2026-10-14. Started from `dev` @ `4203ffe` (= `origin
   old spool in your scan buffer (and a double-read can't reverse it), a multi-slot box label opens the slot picker,
   and the picker's follow-ups D1–D4 are done. See "Group 40.2, day session" under Parked.
 - **Overnight 2026-10-19:** Group 40 is **DONE**: Swap option C and 40.4–40.7 built, one review (27 findings, none
-  red, all fixed), one full sweep (3910 passed, 0 failed), merged to `dev` `8d0ff64` and pushed. `main` untouched.
-  Ten questions for you (two are your call, the rest just need a glance) and the hands-on checks: see "Group 40,
-  final leg" under Parked.
-- **For you:** nothing blocks. `main` is held for you. The next release would carry everything on `dev` since the 2026-10-08 release: 9 merges, 107 commits (Group 47's docs, Group 46, the 2026-10-13 standalone fixes, Group 43, Group 39, then tonight's 43.2 + 46.3, Group 45, Group 41 and Group 42). **Derek, morning of 2026-10-14:** continue with Group 40 next; consider moving to `main` once the new group set is done. Optional hands-on checks are under "Manual checks for Derek". The buglist's ⏸️ PENDING DEREK section was left untouched (tonight's rule).
+  red, all fixed), one full sweep (3910 passed, 0 failed), merged to `dev` `8d0ff64` and pushed. **Derek, that
+  morning:** kept both Group 40 calls, no vetoes, and **released: `main` `0140edf`** (everything on `dev` since
+  2026-10-08, 173 commits; he runs the TrueNAS update). Answers and his deduct question are under "Group 40, final
+  leg"; the hands-on checks stay in the buglist's ⏸️ PENDING DEREK section.
+- **For you:** nothing blocks. (`main` was held for you until the 2026-10-19 release, `0140edf`.) The next release would carry everything on `dev` since the 2026-10-08 release: 9 merges, 107 commits (Group 47's docs, Group 46, the 2026-10-13 standalone fixes, Group 43, Group 39, then tonight's 43.2 + 46.3, Group 45, Group 41 and Group 42). **Derek, morning of 2026-10-14:** continue with Group 40 next; consider moving to `main` once the new group set is done. Optional hands-on checks are under "Manual checks for Derek". The buglist's ⏸️ PENDING DEREK section was left untouched (tonight's rule).
 - Evening prep done: Derek's go-ahead for all-night full test runs, a push after each merge, and read-only prod
   counts (taken ~18:25; table in the plan file).
 
@@ -381,6 +382,17 @@ doors here, Return and the wizard by two background fixers), one full sweep (`RU
 
 Hands-on checks (when you like; nothing waits on them): the buglist's ⏸️ PENDING DEREK item "the pickers and Swap
 option C" (C1–W2).
+
+**Derek's answers (2026-10-19, morning):** (1) one tap stays; (2) a wizard create into a box loads the slot's head
+(stays); no vetoes on 3–10. On 3 he asked whether a mid-print swap of an empty spool is charged right and the empty one
+zeroed. Answered from the code: a swap after a runout pause opens a review card proposing the split (the old spool
+gets what was printed before the swap), a swap without a pause or a spool moved or zeroed mid-print gets a "spool
+changed" / "no spool loaded" review, and uncharged grams get their own card, so nothing lands on the wrong spool
+silently. The one real gap: the split charges what was PRINTED, so an old spool whose record was a bit high keeps a few
+phantom grams. Weighing or zeroing the spool in hand fixes it, and Settings → Behavior → "Runout path filament (g)"
+(0 today; ~4 g XL, ~2 g Core One) adds the sensor-to-nozzle grams. He agreed: no slot queues, no new deduct machinery;
+he filed "runout path filament per printer, maybe per toolhead" (→ Group 35). **Released the same morning: `main`
+`0140edf`.**
 
 **Questions for you (nothing waits on them; each has a default):**
 
