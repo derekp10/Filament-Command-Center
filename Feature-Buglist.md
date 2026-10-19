@@ -200,6 +200,14 @@ This should have an option to select a different loaded spool, or any spool. Cur
 
 * **Per-printer settings section in the Config tool (refactor).** _(→ **Group 35**, N6)_ `config_schema.py` only supports FLAT scalar fields (bool/int/float/string/select) — one value per key. Genuinely per-printer values need a per-printer **map** field type + a UI renderer (the "per-printer settings" modularization). First customer: **`path_filament_g`** (the runout sensor→nozzle remnant, Group 22.3b) shipped 2026-07-03 as a **single value for all printers** (Config → Behavior) as an interim — the reader already accepts a `{printer_name: grams}` map for when this lands (Core One ~2 g, XL ~4 g). Other candidates that would move here: printer creds, nozzle offsets, per-printer path length. Overlaps the **L18 Phase 5** config-modal-reorg follow-up (fold together). _(Derek 2026-07-03: per-printer settings are worth modularizing; "the whole thing probably needs a bit of refactoring.")_
 
+* **Runout path filament per printer (and maybe per toolhead).** _(Derek, 2026-10-19; → **Group 35**, whose per-printer
+  settings make it possible.)_ Settings → Behavior → "Runout path filament (g)" (`path_filament_g`) is ONE value for
+  every printer today (0 = off). Derek: each printer can have a different tube length between the filament sensor and the
+  toolhead; *"We may even want this to be per toolhead at some point. But I'm pretty sure that the sensor distance between
+  the xl and the indx are probably not the same length. But I haven't confirmed this, it's just based on eyeballing the
+  lengths."* The deduct already reads a `{printer_name: grams}` map (`print_deduct._path_filament_g`); Group 35 adds the
+  per-printer settings UI, keyed by whatever Group 44 decides identifies a printer.
+
 * **ColorMix support for Project Color Loadout (L391) — design addendum (2026-07-02).** ColorMix (new in PrusaSlicer 2.9.6) breaks L391's one-color-per-slot assumption: it renders a NEW apparent color by alternating 2–3 loaded filaments per-layer (ratios 1:1 / 1:3 / 3:1 / 1:1:1) on a toolchanger (XL / Core One+ INDX) or MMU. Full scoping in [docs/Project-Color-Loadout/colormix-addendum.md](docs/Project-Color-Loadout/colormix-addendum.md): (1) the loadout model needs a **"mixed slot"** (constituents + ratio → one apparent hex); (2) the `.3mf` parser must read the ColorMix **recipe**, not collapse it to one hex; (3) **killer synergy** — extend the Phase-4 Delta-E suggestion to propose a ColorMix **blend** when no single owned filament matches ("no Teal, but Blue+Green 1:1 = ΔE 3.2"); (4) Smart-Cart shortage math splits a color's grams across its constituent spools. FCC's completion deduct already handles the print-time reality (per-tool footer — no new deduct code). **Blocked on Derek slicing a real ColorMix `.3mf`** to confirm the recipe representation (capture checklist in the addendum). Do when L391 is picked up; standalone — don't nest under a completed epic.
 
 * **Filament waste / wipe-tower tracking (feature idea, 2026-07-02).** PrusaSlicer emits `; total filament used for wipe tower [g] = X` in multi-tool slices (confirmed via docs; NOT present in the single-tool `sample.bgcode` fixture — no wipe tower there). FCC parses per-tool `; filament used [g]` today but ignores the wipe-tower total. Opportunity: surface a **"waste vs. part"** figure per print — ColorMix is purge-heavy, so this quantifies the real cost of a multicolor job. ⚠️ A true **per-color** purge breakdown does NOT appear machine-readable from the gcode (only the wipe-tower *total* + per-tool totals; per-extruder flush looks like a slicer UI computation), so the feature is likely limited to a total-waste figure unless derived. Confirm the wipe-tower line on Derek's first real multi-tool slice (the single-tool fixture can't). Low priority; pairs with the ColorMix work above.
@@ -236,6 +244,14 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
 ## 🎨 UI & Theming
 * Refactor the longer "strip" cards used in the Location Manager window. Merge the horizontal layout with modern grid card features without cramping the text or making the button layout look weird.
 * High-Contrast Pop (White Text/colored text + Heavy Black Shadow/or similar color shadowing) - EVERYWHERE. Adaptive High-Contrast Pop (Shadows Only) on colors. Maintain existing colors, but give them a pop appropriate for their color.
+* **Printer Status: with 8 toolheads in a small window, the toolhead list wraps to a second line.** _(Derek,
+  2026-10-19.)_ It looks odd on the collapsed version, the small one meant to be read at a glance. Part of a Printer
+  Status redesign Derek wants.
+* **Printer Status: an easier way to reach the spool on a toolhead.** _(Derek, 2026-10-19: "perhaps this just needs
+  more time in the oven".)_ Clicking a toolhead tile opens that toolhead in the Location Manager (its assignments,
+  `inv_printer_status.js` → `openManage`), the most useful default, which should stay. But sometimes you just want the
+  spool loaded there, and getting to it is clunky. Ideas, none decided: a right-click or long-press, or a small spool
+  button on the tile.
 
 ## ⌨️ Keyboard Navigation
 * Audit and implement consistent keyboard navigation across the entire UI. Currently only the force location modal and wizard material/multiselect dropdowns support arrow keys, Enter, and Escape. Every modal, dropdown, list, and interactive element should have a unified keyboard interaction pattern: arrow keys to navigate, Enter to select/confirm, Escape to dismiss/go back, Tab to move between controls, and auto-focus on the primary input when a modal opens. _[PARTIAL 2026-05-12 (Group 8.1 / `feature/keyboard-nav-polish`) — full audit of 24 modals/overlays completed. Reference impls (mountOverlay-based, e.g. `weight_entry.js`, the bind-picker feeds combobox in `inv_loc_mgr.js`) already have full kb-active arrow-nav + Enter + Escape + auto-focus. `vendorEditModal` already auto-focuses on both Add and Edit paths. Delete overlays' Cancel-on-Enter (broad warning step) + Confirm-on-Enter (type-the-id step) is intentional UX. Only `locModal` actually lacked auto-focus — added: Add path focuses `#edit-id`, Edit path focuses + select()s `#edit-name`. Confirmed by `test_loc_modal_add_focuses_id_field` and `test_loc_modal_edit_focuses_name_field_and_selects`. **Focus-trap follow-up audit (2026-05-12, same session)**: Derek raised concern that Tab could leak from a modal into background modals or browser chrome. Probed every modal in single, stacked, and modal-on-offcanvas configurations (incl. `spoolModal` / `filamentModal` with their custom Escape handler bypassing `data-bs-keyboard`). All 16 surfaces correctly trap Tab and Shift+Tab via Bootstrap's `_enforceFocus`; topmost modal owns focus when stacked; Escape dismisses every surface. Could NOT reproduce the leak Derek saw — possible explanations: fixed by inv_core.js z-index stacking work, browser-specific (probe is Chromium), or a browser-level shortcut (Ctrl+Tab) that Playwright's `Tab` doesn't simulate. Locked the current correct behavior in with `test_modal_focus_trap.py` (19 tests covering single-modal trap, modal-on-modal stacking, modal-on-offcanvas, custom-Escape paths, auto-focus landing target). If the leak resurfaces, capture exact key combo + which modals are open before refreshing.]_
@@ -243,6 +259,11 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
 ## 🗂️ Modals & Add Inventory Wizard
 * Help button to provide information on how to use a modal, and to try and store information about how things work in the code.
 * Create an assignment tool/system to pair existing/migrated Spoolman IDs directly to physical legacy spools being updated (specifically for bulk-imported identical spools sharing a single legacy ID).
+* **Show the filament's slicer profile on the spool details card.** _(Derek, 2026-10-19.)_ *"I've had a few instances
+  where I wanted to see what spool profile I should use with some filaments, only to find that I have to open the spool,
+  click the swatch button, then find the profile suggestion there. If we could just have that data on the spool (sourced
+  from the filament data) then that would save a step."* Today the profile is the filament's `slicer_profile` extra, shown
+  (and editable with the ✏️) only on the filament fact card (`inv_details.js`).
 
 ## 🔍 Search, Display & Filtering
 *(No open items — resolved entries archived in `completed-archive.md`.)*
@@ -284,6 +305,12 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
   Group 40.4 / 40.5's pickers (Force Location or `LOC:RCOI` → pick a head) cover part of it (built 2026-10-19:
   Force Location → `RCOI` opens the Printer picker; ⏸️ PENDING DEREK check F2); the spool holders on the printer are
   still being thought through (Derek).
+* **Click a spool card's location to move the spool.** _(Derek, 2026-10-19.)_ *"Allow you to click on the location
+  portion of the buffer label (or any label that uses the code base) to allow you to move the spool. Currently you have
+  to open the spool display, and then click the pencil button to change its location (if doing it manually) and
+  sometimes I just want to click the location part of the info card to edit it. Like how updating weight works from the
+  buffer/display card."* Today a card's weight opens Quick Weigh (`window.openQuickWeigh`, `ui_builder.js`); its location
+  part does nothing. The natural target is Force Location's flow, which opens the box / printer pickers since Group 40.4.
 * **🟡 Group 40 leftovers (filed 2026-10-19 at Group 40's finish; none urgent).** _(Standalone: Group 40 is archived.)_
   1. **Moving a hand-archived spool unarchives it.** `spoolman_api.update_spool`'s refill edge treats any write
      without `archived: True` as a refill, so an engine move (Force Location, a scan, the wizard) of a spool archived
