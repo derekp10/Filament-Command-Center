@@ -412,13 +412,33 @@ def _return_recommendation(row, slot_ids, claims, ghost_slot, toolhead, loc_list
     return None, 'no_free_slot'
 
 
+def _keeps_trail(mover, loc_info_map, printer_map):
+    """Group 40 review (BD-3): the single-slot box a spool on a head keeps as
+    its home when it moves to another head (the engine's Group 42.6 follow,
+    `_follows` in `logic._perform_smart_move_impl`): its trail names a
+    single-slot Dryer Box attached to the head it is on. '' otherwise. The
+    Printer picker then skips "Record it as coming from…", whose answer the
+    engine would ignore."""
+    if not isinstance(mover, dict):
+        return ''
+    loc = _u(mover.get('location'))
+    if not loc or loc not in (printer_map or {}):
+        return ''
+    extra = mover.get('extra') if isinstance(mover.get('extra'), dict) else {}
+    src = _u(extra.get('physical_source'))
+    row = (loc_info_map or {}).get(src) if src else None
+    if not locations_db._is_single_slot_dryer_box(row):
+        return ''
+    return src if _u(locations_db.bindings_from_row(row).get('1')) == loc else ''
+
+
 def _printer_model(row, printer_id, sid, loc_list, loc_info_map, printer_map):
     pid = _u(printer_id)
     heads = locations_db.printer_row_toolheads(loc_list, pid)
     name = str(row.get('Name') or pid)
     model: typing.Dict[str, typing.Any] = {
         "mode": "printer", "location": pid, "name": name, "type": row.get('Type'),
-        "spool": sid, "spool_display": None, "spool_location": "",
+        "spool": sid, "spool_display": None, "spool_location": "", "spool_keeps_trail": "",
         "read_ok": True, "read_error": None,
         # A dual-role printer that is its own (only) head, the old Core One: the
         # Printer picker skips the head list (40.5).
@@ -460,6 +480,7 @@ def _printer_model(row, printer_id, sid, loc_list, loc_info_map, printer_map):
         mover = logic._spool_record(sid)
     model["spool_display"] = _spool_line(mover)
     model["spool_location"] = _u((mover or {}).get('location'))
+    model["spool_keeps_trail"] = _keeps_trail(mover, loc_info_map, printer_map)
 
     moving_ids = {str(m) for m in moving}
 

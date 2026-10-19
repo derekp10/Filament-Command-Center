@@ -1994,7 +1994,10 @@ const _confirmActivePrintScan = ({ tid, slot, stateInfo, onConfirm, onCancel = n
 // 'cancelled' (the user cancelled a question it asked: nothing moved) or
 // 'failed'. A callback, never a returned Promise: a caller (or a test's
 // page.evaluate) that awaited one would wait on a question nobody can answer
-// until it returns.
+// until it returns. `origin` (Group 40 review): what the undo record calls the
+// move; 'buffer' (the default) makes Undo put the spools back at the TOP of the
+// scan buffer, so a door placing spools that were never buffered (the wizard's
+// new spools) names itself instead.
 const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOverride = null, pickedSlot = null,
                               opts = {}) => {
     let ended = false;
@@ -2019,7 +2022,7 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
         location: tid,
         spools: spoolIds,
         slot: slot,
-        origin: 'buffer',
+        origin: (opts && opts.origin) || 'buffer',
         confirmed_toolheads: [],
         confirmed_fed_heads: [],
     };
@@ -2128,7 +2131,12 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
                             'success', 4000);
                     } else if (rec && rec.length === 2) {
                         showToast(`#${movedIds[0]} → ${tid} (recorded as from ${rec[0]} slot ${rec[1]})`, "success");
-                    } else if (movedCount === 1 && payload.record_source === '' && !res.record_source_ignored) {
+                    } else if (movedCount === 1 && res.record_source_ignored) {
+                        // Group 40 review (BD-3): the spool arrived with its own trail,
+                        // so the "came from" answer was not used; say which home it kept.
+                        showToast(`✅ #${movedIds[0]} → ${tid} (its home stays ${res.record_source_kept || 'its box'})`,
+                            'success', 4000);
+                    } else if (movedCount === 1 && payload.record_source === '') {
                         // Group 40.5: "No box" (or no free slot fed the head).
                         showToast(`✅ #${movedIds[0]} → ${tid} (no box slot recorded)`, 'success', 4000);
                     } else if (movedCount === 1 && hasSlot) {
@@ -2226,10 +2234,15 @@ const _confirmHeadPick = (pick, sid, host) => {
 // scanned picks it; CMD:CANCEL steps back. Asked only when there is something to
 // choose. Resolves {box, slot} | '' (No box: also when no slot is free) |
 // undefined (not asked: the spool arrives from somewhere, which stays its
-// trail) | null (Cancel: back to the picker).
+// trail) | null (Cancel: back to the picker) | false (its host closed: stop).
 const _askRecordSource = (pick, sid, host) => {
     const from = String(pick.spool_location || '').trim().toUpperCase();
     if (from && from === String(pick.head || '').toUpperCase()) return Promise.resolve(undefined);
+    // Head to head, a spool whose own single-slot box is attached to the head it
+    // is on keeps that box as its home (the engine's 42.6 follow; the model's
+    // `spool_keeps_trail`), so an answer here would change nothing (Group 40
+    // review, BD-3: it was asked, then silently not used).
+    if (pick.spool_keeps_trail) return Promise.resolve(undefined);
     const fromRow = (state.allLocations || []).find(l => String(l.LocationID || '').toUpperCase() === from);
     const headTypes = ['Tool Head', 'MMU Slot', 'No MMU Direct Load', 'Printer'];
     if (from && !(fromRow && headTypes.includes(fromRow.Type))) return Promise.resolve(undefined);
@@ -2247,9 +2260,11 @@ const _askRecordSource = (pick, sid, host) => {
         let qr = null;
         let question = null;
         let statusTimer = null;
+        let hostOff = null;
         const finish = (value) => {
             if (settled) return;
             settled = true;
+            if (hostOff) { try { hostOff(); } catch (_) { /* noop */ } hostOff = null; }
             if (qr) { try { qr.cleanup(); } catch (_) { /* noop */ } qr = null; }
             if (handle) { try { handle.cleanup(); } catch (_) { /* noop */ } handle = null; }
             const open = (window._fccOpenMoveQuestions || []).filter(q => q !== question);
@@ -2280,6 +2295,19 @@ const _askRecordSource = (pick, sid, host) => {
                 </div>`,
             initialFocus: pre ? `.fcc-rs-opt[data-rs-i="${feeds.indexOf(pre)}"]` : '.fcc-rs-none',
         });
+        // The host closing settles the question too (Group 40 review, BD-1), as
+        // it does confirmActivePrint's: mountOverlay only removes the DOM, which
+        // left this promise, its QR session and the picker loop's lock waiting
+        // until a reload. `false` stops the flow: no picker over a closed modal.
+        if (host && typeof host.addEventListener === 'function') {
+            const onHostGone = () => finish(false);
+            host.addEventListener('hidden.bs.modal', onHostGone);
+            host.addEventListener('hidden.bs.offcanvas', onHostGone);
+            hostOff = () => {
+                host.removeEventListener('hidden.bs.modal', onHostGone);
+                host.removeEventListener('hidden.bs.offcanvas', onHostGone);
+            };
+        }
         const ov = handle.element;
         const flash = (text) => {
             const line = ov.querySelector('.fcc-rs-status');
@@ -2302,7 +2330,11 @@ const _askRecordSource = (pick, sid, host) => {
         ov.addEventListener('keydown', (e) => {
             const order = Array.from(ov.querySelectorAll('.fcc-rs-opt:not([disabled]), .fcc-rs-none, .fcc-rs-cancel'));
             if (e.key === 'Enter') {
-                if (window.isScanInFlight && window.isScanInFlight()) return;
+                // A scan's Enter is the scan's (Group 40 review, BD-2): a slower
+                // scanner's slot label still in the scan buffer used to answer the
+                // focused button (No box, or the pre-selected slot) instead of
+                // reaching processScan, which picks the scanned slot.
+                if (window.enterIsAScan ? window.enterIsAScan() : (window.isScanInFlight && window.isScanInFlight())) return;
                 const ae = document.activeElement;
                 if (order.includes(ae)) { e.preventDefault(); e.stopPropagation(); ae.click(); }
                 return;
@@ -2317,11 +2349,15 @@ const _askRecordSource = (pick, sid, host) => {
         }, true);
         if (window.attachConfirmQRs) {
             const panel = ov.querySelector('.fcc-rs-panel') || handle.panel;
+            // With a slot pre-selected, No box gets its own code (Group 40
+            // review, BD-6): a scan-only user could pick only that slot or Back.
             qr = window.attachConfirmQRs({
                 host: panel,
                 onConfirm: pre ? () => choose(pre) : () => finish(''),
+                onStore: pre ? () => finish('') : undefined,
                 onCancel: () => finish(null),
                 confirmLabel: pre ? `Scan: ${pre.box} slot ${pre.slot}` : 'Scan: No box',
+                storeLabel: 'Scan: No box',
                 cancelLabel: 'Scan to go Back', theme: 'info',
             });
         }
@@ -2372,6 +2408,7 @@ const _placementFor = async (pick, sid, host, loc) => {
         if (!(await _confirmHeadPick(pick, sid, host))) return null;
         const rec = await _askRecordSource(pick, sid, host);
         if (rec === null) return null;
+        if (rec === false) return false;
         const p = { location: pick.head, label: pick.head, short: pick.head };
         if (rec !== undefined) p.record_source = rec;
         return p;
@@ -2387,9 +2424,14 @@ const _placementFor = async (pick, sid, host, loc) => {
 // door's own request and calls done({outcome: 'moved' | 'cancelled' |
 // 'failed', res}). Cancel on any question steps back to this spool's picker
 // (Claude's call 24); Escape there ends it. Resolves {outcome: 'moved' |
-// 'failed' | 'stopped', placement}.
+// 'failed' | 'stopped', placement}. Its host closing ends it too (Group 40
+// review, BD-1): a question that stepped back re-opened the picker over a modal
+// that had gone.
 const _placeOne = async ({ loc, sid, host = null, step = '', send }) => {
+    const shown = (el) => !!(el && el.classList && el.classList.contains('show'));
+    const hostWasShown = shown(host);
     for (;;) {
+        if (hostWasShown && !shown(host)) return { outcome: 'stopped', placement: null };
         const pick = await window.openSlotPicker({ location: loc, spool: sid, host, step });
         if (!pick) return { outcome: 'stopped', placement: null };
         const placement = await _placementFor(pick, sid, host, loc);

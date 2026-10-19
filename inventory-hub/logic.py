@@ -1279,6 +1279,19 @@ def _pre_box_plain(note, loc_info_map):
     return loc
 
 
+def _is_plain_place(loc, loc_info_map):
+    """Group 40 review (engine-2): a place a spool can be filed back at with a
+    bare write (no Smart Load, no slot): a location row that isn't a toolhead, a
+    printer, a room or a dryer box (a cart, shelf, drawer). A note's plain place
+    is trusted only while it still is one: a cart deleted since, a hand-edited
+    "Pre-Box Location (system)" or a retyped row fall back instead."""
+    lid = str(loc or '').strip().strip('"').upper()
+    row = (loc_info_map or {}).get(lid) if lid else None
+    if not isinstance(row, dict) or _is_dryer_box_row(row):
+        return False
+    return str(row.get('Type', '')).strip() not in (locations_db.TOOLHEAD_TYPES | {'Printer', 'Room', 'Virtual Room'})
+
+
 def _join_note(place, plain):
     """A note naming `place` first, then the plain place behind it."""
     place = str(place or '').strip().upper()
@@ -1395,11 +1408,10 @@ def _swap_out_place(note, from_box, from_slot, loc_info_map, claims_of):
             if (prev_slot.isdigit() and 1 <= int(prev_slot) <= max_slots
                     and not (prev == fb and _norm_slot(prev_slot) == fs) and _free(prev, prev_slot)):
                 return prev, _norm_slot(prev_slot)
-        elif not prev_slot and str(row.get('Type', '')).strip() not in (
-                locations_db.TOOLHEAD_TYPES | {'Printer', 'Room', 'Virtual Room'}):
+        elif not prev_slot and _is_plain_place(prev, rows):
             return prev, ''
     plain = _pre_box_plain(note, rows)
-    if plain and plain != fb and isinstance(rows.get(plain), dict):
+    if plain and plain != fb and _is_plain_place(plain, rows):
         return plain, ''
     return '', ''
 
@@ -2215,6 +2227,7 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     # A spool arriving from somewhere keeps that trail; the answer says the
     # named source (or "No box") was not used.
     record_ignored = False
+    record_kept = ''   # the trail it kept instead (Group 40 review, BD-3), for the toast
 
     # The head a named slot feeds: the auto-deploy chain loads it. It counts only
     # when the chain will load it (I1-06): Return parks a spool with
@@ -2518,15 +2531,15 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
             # slot's new spool, is in the user's hand. It goes to the scan
             # buffer: "home" was the slot the new spool now holds, so it landed
             # in the box with no slot (5/4, and no Quick-Swap tile).
-            swap_out = bool(swap_slot) and _same_feed(before, swap_slot[0], swap_slot[1], loc_info_map)
+            own_slot_swap = bool(swap_slot) and _same_feed(before, swap_slot[0], swap_slot[1], loc_info_map)
             # perform_smart_eject takes a boolean: covered when the confirm
             # covers the head this resident is unloaded from (Group 39.1).
             _eject_report: typing.Dict[str, typing.Any] = {}
             ejected = perform_smart_eject(
                 rid, confirm_active_print=_confirm_covers(confirm_active_print, target),
-                homeless_destination=homeless_dest, report=_eject_report, to_buffer=swap_out,
+                homeless_destination=homeless_dest, report=_eject_report, to_buffer=own_slot_swap,
                 # Swap option C: filed back where it sat before that slot.
-                swapped_from=swap_slot if swap_out else None,
+                swapped_from=swap_slot if own_slot_swap else None,
             )
             if ejected is not True:
                 stuck[rid] = _eject_refusal_reason(ejected)
@@ -2539,7 +2552,7 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
             }
             undo_record['ejection_released'][str(rid)] = list(_eject_report.get('released_boxes') or [])
             # perform_smart_eject has already logged where it went.
-            if swap_out:
+            if own_slot_swap:
                 # Undo takes it back out of the buffer when it puts it on the head.
                 swapped_out.append(rid)
                 swapped_filed[str(rid)] = str(_eject_report.get('filed') or '')
@@ -2689,6 +2702,11 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                 # the incoming spool (Group 41 review), so ghosts are left alone.
                 if existing.get('is_ghost'):
                     continue
+                # Only a spool filed AT this location (Group 40 review, R1): the
+                # read also lists first-segment prefix hits, so a slot move onto
+                # a Room ("LR", slot 1) unseated slot 1 of every LR-* box.
+                if str(existing.get('location') or '').strip().strip('"').upper() != target:
+                    continue
                 # [ALEX FIX] Improved comparison to catch string vs int mismatches
                 # (and, since 40.0c, quoted or zero-padded slots: one slot form).
                 if _norm_slot(existing.get('slot', '')) == seat_slot and existing['id'] != int(sid) and swap_out:
@@ -2813,6 +2831,7 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                 # Group 40.5: the spool arrives from somewhere (its trail), which
                 # wins over a "came from" answer; the answer says so.
                 record_ignored = True
+                record_kept = str(new_extra.get('physical_source') or '').strip().strip('"').upper()
                 state.logger.info(f"🔗 #{sid} -> {target}: kept its trail "
                                   f"{new_extra.get('physical_source')}; the named source was not used")
             elif record_source == '':
@@ -3106,6 +3125,8 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     if record_ignored:
         # Group 40.5: the spool arrived with its own trail, which was kept.
         result["record_source_ignored"] = True
+        if record_kept:
+            result["record_source_kept"] = record_kept
     if auto_deployed:
         result["auto_deployed_to"] = str(bound_toolhead).upper()
     if to_buffer:
@@ -4091,6 +4112,9 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
     saved_source = dest['home']
 
     if saved_source:
+        # The location rows, once, for the note's plain place (Group 40 review).
+        eject_rows = {str(r.get('LocationID', '')).strip().upper(): r
+                      for r in (locations_db.load_locations_list() or []) if isinstance(r, dict)}
         # [ALEX FIX] Retain the assignment slot when returning home.
         # Move the saved slot back into container_slot
         saved_slot_clean = dest['slot']
@@ -4129,11 +4153,12 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
                 state.logger.warning(f"Slot-collision check failed: {_slot_check_err}")
             if slot_taken_by_other:
                 extra['container_slot'] = ""
-                _plain = _pre_box_plain(extra.get(PRE_BOX_KEY), {
-                    str(r.get('LocationID', '')).strip().upper(): r
-                    for r in (locations_db.load_locations_list() or []) if isinstance(r, dict)
-                }) if dest.get('pre_box') else ''
-                if _plain and _plain != str(saved_source).strip().upper():
+                _plain = _pre_box_plain(extra.get(PRE_BOX_KEY), eject_rows) if dest.get('pre_box') else ''
+                # Only a place that still is a plain place (Group 40 review,
+                # engine-2): never a cart deleted since, nor a head or a room a
+                # hand-edited note names; those keep Claude's call 21 below.
+                if (_plain and _plain != str(saved_source).strip().upper()
+                        and _is_plain_place(_plain, eject_rows)):
                     # Swap option C's rule (Derek, 2026-10-15: "In the case that
                     # the old slot isn't empty, then a non slot ... like a cart"):
                     # the plain place it sat in before that slot, when the note
@@ -4158,10 +4183,17 @@ def perform_smart_eject(spool_id, confirmed_unassign=False, confirm_active_print
         # Group 42.6 + Swap option C: the "before the box" note rides along while
         # the spool goes back into the box it was deployed from (a single-slot
         # box, or its slot of a multi-slot box: the note still says where it sat
-        # before that box, for a later Swap); leaving for the noted place, or
-        # anywhere else, uses it up.
-        if extra.get(PRE_BOX_KEY) and (dest.get('pre_box') or not _is_dryer_box_row(home_row)):
-            extra[PRE_BOX_KEY] = ""
+        # before that box, for a later Swap). Back to its NOTED place (out of a
+        # single-slot box): into a box, the note becomes what it was there, the
+        # plain place behind it (Group 40 review, engine-1: it used to be dropped,
+        # so a later Swap filed the spool Unassigned); to the plain place itself,
+        # or anywhere else, it is used up.
+        if extra.get(PRE_BOX_KEY):
+            lands_in_box = _is_dryer_box_row(eject_rows.get(str(saved_source).strip().strip('"').upper()))
+            if dest.get('pre_box'):
+                extra[PRE_BOX_KEY] = _pre_box_plain(extra.get(PRE_BOX_KEY), eject_rows) if lands_in_box else ""
+            elif not lands_in_box:
+                extra[PRE_BOX_KEY] = ""
         
         if spoolman_api.update_spool(spool_id, {"location": saved_source, "extra": extra}):
             _landed(saved_source, extra.get('container_slot', ''), home=True)

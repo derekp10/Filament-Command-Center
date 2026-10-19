@@ -1236,7 +1236,9 @@ window.promptEditLocation = (spoolId, currentLoc) => {
                                 // The picker's choice, in short arrows (as the box-label door says it).
                                 const rec = res.recorded_source ? String(res.recorded_source).split(':') : null;
                                 const tail = (rec && rec.length === 2) ? ` (recorded as from ${rec[0]} slot ${rec[1]})`
-                                    : (placement.record_source === '' && !res.record_source_ignored ? ' (no box slot recorded)' : '');
+                                    // Group 40 review (BD-3): its own trail won over the answer.
+                                    : res.record_source_ignored ? ` (its home stays ${res.record_source_kept || 'its box'})`
+                                    : (placement.record_source === '' ? ' (no box slot recorded)' : '');
                                 showToast(`✅ #${spoolId} → ${placement.label}`
                                     + `${res.auto_deployed_to ? ` → ${res.auto_deployed_to}` : ''}${tail}`, 'success', 4000);
                             } else {

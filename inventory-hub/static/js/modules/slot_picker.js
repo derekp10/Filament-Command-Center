@@ -23,7 +23,8 @@
 //              | {kind: 'slot', box, slot, occupant, claimants, feeds, free, current, recommended, via,
 //                 send, expected_feed, choice, swap, displaced}
 //              | {kind: 'pool', ...the same fields as 'slot' (Group 40.5: a Printer Pool slot is a box slot)}
-//              | {kind: 'head', head, printer, resident, residents, feeds, spool_location, recommended, via}
+//              | {kind: 'head', head, printer, resident, residents, feeds, spool_location, spool_keeps_trail,
+//                 recommended, via}
 //              | {kind: 'none', box, recommended, via}>
 //   null = cancelled: Escape, ✕, a CMD:CANCEL scan, "Edit feeds", the host
 //   closing, a bulk move or an audit starting, or an open refused (D2: another
@@ -267,9 +268,11 @@
         if (t.kind === 'head') {
             // `spool_location`: where the spool is now, so the caller knows
             // whether it arrives from a box (its trail) or needs the "came from"
-            // question (Group 40.5, D3).
+            // question (Group 40.5, D3). `spool_keeps_trail`: the single-slot box a
+            // spool moving head to head keeps as its home (Group 40 review, BD-3).
             return Object.assign(base, { head: t.head, printer: s.model.location, resident: d.resident || null,
-                residents: d.residents || [], feeds: d.feeds || [], spool_location: s.model.spool_location || '' });
+                residents: d.residents || [], feeds: d.feeds || [], spool_location: s.model.spool_location || '',
+                spool_keeps_trail: s.model.spool_keeps_trail || '' });
         }
         return Object.assign(base, { box: t.box });
     };

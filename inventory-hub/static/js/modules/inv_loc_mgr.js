@@ -1342,11 +1342,51 @@ window.handleSlotInteraction = (slot) => {
             const esc = window.escHtml || ((s) => s);
             const top = state.heldSpools[0];
             const what = `#${top.id}${top.display ? ` (${esc(String(top.display))})` : ''}`;
+            const old = `#${esc(String(item.id))}`;
+            // Word the choice from the slot's spool, as the slot picker does
+            // (Group 40 review, BD-4). A DEPLOYED card's spool loaded on the head
+            // the slot feeds comes off into the buffer either way (the same-slot
+            // swap); one loaded on any other head is refused by the server, so
+            // nothing is offered; a stale record isn't moved.
+            const headTypes = ['Tool Head', 'MMU Slot', 'No MMU Direct Load', 'Printer'];
+            const rowOf = (id) => (state.allLocations || []).find(l => String(l.LocationID || '').toUpperCase() === id);
+            const boxRow = rowOf(String(locId).toUpperCase()) || {};
+            const feed = String((((boxRow.extra || {}).slot_targets) || {})[String(slot)] || '').trim().toUpperCase();
+            const on = String(item.deployed_to || '').trim().toUpperCase();
+            const onHead = !!(item.is_ghost && on && headTypes.includes((rowOf(on) || {}).Type));
+            if (onHead && on === feed) {
+                promptAction("Slot Occupied", `Put ${what} into Slot ${slot}?<br>`
+                    + `<small>Slot ${slot}'s spool ${old} is loaded on ${esc(on)}: it comes off into your scan buffer, `
+                    + `and ${what} goes in slot ${slot} and onto ${esc(on)}.</small>`, [
+                    { label: "Swap it out", action: () => { doAssign(locId, newId, slot, true); } },
+                    { label: "Cancel", action: () => { closeModal('actionModal'); } }
+                ]);
+                return;
+            }
+            if (onHead) {
+                promptAction("Slot Occupied", `Slot ${slot}'s spool ${old} is loaded on ${esc(on)}`
+                    + `${feed && !feed.includes(':') ? `, while the slot feeds ${esc(feed)}` : ''}.<br>`
+                    + `<small>Take ${old} off ${esc(on)} first; nothing was moved.</small>`, [
+                    { label: "OK", action: () => { closeModal('actionModal'); } }
+                ]);
+                return;
+            }
+            if (item.is_ghost) {
+                promptAction("Slot Occupied", `Put ${what} into Slot ${slot}?<br>`
+                    + `<small>${old}'s record still names slot ${slot}, though it is `
+                    + `${on ? `on ${esc(on)}` : 'in Unassigned'}; ${old} isn't moved.</small>`, [
+                    { label: `Put it in slot ${slot}`, action: () => { doAssign(locId, newId, slot, true); } },
+                    { label: "Cancel", action: () => { closeModal('actionModal'); } }
+                ]);
+                return;
+            }
             // Swap option C (Derek, 2026-10-15): Swap hands the slot's old spool to
-            // your buffer AND files it back where it sat before this slot.
+            // your buffer AND files it back where it sat before this slot, when
+            // FCC has that record (a spool slotted before Swap option C has none).
             promptAction("Slot Occupied", `Put ${what} into Slot ${slot}: swap or overwrite?<br>`
-                + `<small>Swap: #${esc(String(item.id))} goes to your buffer, filed back where it sat before this slot. `
-                + `Overwrite: #${esc(String(item.id))} stays in ${esc(String(locId))} without a slot.</small>`, [
+                + `<small>Swap: ${old} goes to your buffer, filed back where it sat before this slot `
+                + `(Unassigned if FCC has no record of that). `
+                + `Overwrite: ${old} stays in ${esc(String(locId))} without a slot.</small>`, [
                 {
                     label: "Swap", action: () => {
                         // The server files the slot's old spool back where it sat
@@ -1538,6 +1578,10 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedH
         confirmed_fed_heads: [],
     };
     if (options.autoDeploy === false) original.auto_deploy = false;
+    // `options.pickedSlot` (Group 40 review, R1): a slot the engine fills only
+    // while it is free (`picked_slot`), never an Overwrite that unseats its
+    // spool. Sent with no `slot`: the DEPLOYED card's ↩️ for a stale trail.
+    if (options.pickedSlot != null && options.pickedSlot !== '') original.picked_slot = String(options.pickedSlot);
     // Swap option C: the grid's Swap. The server files the slot's old spool back
     // where it sat before this slot and names it in `to_buffer`. On `original`,
     // so every replay of a question is still a Swap.

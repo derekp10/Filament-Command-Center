@@ -748,6 +748,37 @@ def test_force_location_into_a_box_opens_the_slot_picker_and_the_yes_keeps_its_s
 
 
 @pytest.mark.usefixtures("require_server")
+def test_force_location_steps_back_to_the_picker_when_its_question_is_cancelled(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """Group 40 review (BD-5): Cancel on the server's question in Force Location's
+    picker path steps back to the slot picker (Claude's call 24), with nothing
+    more sent; Escape there ends it with a toast, nothing moved."""
+    from test_slot_picker_e2e import ROWS as PICKER_ROWS, build_model
+    model = build_model(BOX, spool=999401)
+    ask = {"status": "requires_confirm", "confirm_type": "active_print",
+           "active_print": {"toolhead": "FCCX-3", "printer_name": PRINTER, "state": "PRINTING"},
+           "active_prints": [{"toolhead": "FCCX-3", "printer_name": PRINTER, "state": "PRINTING",
+                              "role": "feeds", "spools": [999401]}],
+           "fed_heads": [], "can_store": False, "target_slot": "3", "slot_picked": True, "feed": "FCCX-3",
+           "msg": f"{PRINTER} is PRINTING. {BOX} slot 3 feeds FCCX-3, so this also loads #999401 "
+                  f"onto FCCX-3. Continue?"}
+    be = FakeBackend(page, manage_contents=lambda b: ask,
+                     extra_locations=[r for r in PICKER_ROWS], placement={BOX: model})
+    _boot(page, base_url, reset_dom_state_js)
+    _force_to(page, BOX)
+    page.wait_for_selector("#fcc-slot-picker [data-sp-state='ready']", timeout=10_000)
+    page.keyboard.press("Enter")                       # the ⭐: slot 3
+    page.wait_for_selector("#fcc-active-print-confirm-overlay .fcc-apc-no", state="visible", timeout=5_000)
+    page.click("#fcc-active-print-confirm-overlay .fcc-apc-no")
+    page.wait_for_selector("#fcc-slot-picker [data-sp-state='ready']", timeout=10_000)
+    assert len(be.bodies("/api/manage_contents")) == 1, be.bodies("/api/manage_contents")
+    page.keyboard.press("Escape")
+    _toast(page, "closing the re-opened picker said nothing", contains=("Force Location cancelled",))
+    page.wait_for_timeout(300)
+    assert len(be.bodies("/api/manage_contents")) == 1, be.bodies("/api/manage_contents")
+
+
+@pytest.mark.usefixtures("require_server")
 def test_force_location_into_a_printer_opens_the_printer_picker(
         page: Page, base_url: str, reset_dom_state_js: str):
     """Group 40.5 (Derek's D3): Force Location onto a Printer row that isn't its

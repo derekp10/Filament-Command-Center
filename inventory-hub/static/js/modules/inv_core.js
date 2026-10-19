@@ -76,6 +76,22 @@ const isScannerBurst = () => {
 };
 window.isScannerBurst = isScannerBurst;
 
+// --- WHOSE ENTER IS IT? (Group 40 review, BD-2) ---
+// For a dialog that answers its focused button on Enter yet must leave a scan's
+// Enter to the accumulator (scripts.html), which hands the payload to the open
+// question: two or more characters in the scan buffer (a slower scanner's label
+// still arriving), one in flight (under 500 ms), a scanner-speed burst, or a
+// buffer that looks like a scan payload. A person's Enter on a focused button
+// finds the buffer empty. The slot picker's rule (slot_picker.js, D1).
+const enterIsAScan = () => {
+    const st = (typeof state !== 'undefined') ? state : window.state;
+    const buf = st && typeof st.scanBuffer === 'string' ? st.scanBuffer : '';
+    if (buf.length >= 2) return true;
+    if (isScanInFlight() || isScannerBurst()) return true;
+    return !!(buf && window.looksLikeScanPayload && window.looksLikeScanPayload(buf));
+};
+window.enterIsAScan = enterIsAScan;
+
 // --- SCAN BUFFER RESET (now, and again after this tick) ---
 // For a key handler that consumes a key the accumulator (scripts.html) would
 // otherwise collect or submit. The deferred second clear doesn't depend on
@@ -159,7 +175,7 @@ const _openMoveConfirms = {};
 window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', host = null,
                                ids = {}, onConfirm = null, onCancel = null,
                                title = '', onStore = null, storeLabel = '', loadLabel = '',
-                               printing = null, noLoad = false } = {}) => {
+                               printing = null, noLoad = false, hint = '' } = {}) => {
     const esc = (s) => String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -323,8 +339,14 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         // it is answered (a second slot label used to start a second move
         // behind the dialog). The status line says why a scan did nothing:
         // the toast layer (z 11000) sits under this dialog.
+        // What a held-off scan is told (processScan): the buttons on screen
+        // (Group 40 review, BD-6: a question with no store said "Just store it").
+        const said = [hasLoad ? (loadLabel || 'Load it instead') : '', hasStore ? 'Just store it' : '', 'Cancel']
+            .filter(Boolean);
         question = {
             title,
+            hint: hint || `Answer the question on screen first: ${said.slice(0, -1).join(', ')}`
+                + `${said.length > 2 ? ',' : ''} or ${said[said.length - 1]}`,
             // processScan drops a hold-off whose dialog is no longer on the page.
             element: ov,
             cancel: () => no(),
