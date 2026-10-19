@@ -364,7 +364,7 @@ Progress is recorded below as each step lands (commit ids), and every branch is 
 - `60f80a3` the last two not-deployed warning pins (test-only); **merged to `dev` `8d0ff64`**, pushed. Docs and
   `/finish-group 40` on `dev` after it.
 
-**Result (~04:50 on 2026-10-19):** Group 40 is **DONE**, merged to `dev` `8d0ff64` and pushed; `main` is untouched (held
+**Result (~04:35 on 2026-10-19):** Group 40 is **DONE**, merged to `dev` `8d0ff64` and pushed; `main` is untouched (held
 for your OK). One review (`wf_bd637c78-057`: 27 findings, none red, 4 orange, all fixed: the engine and browser
 doors here, Return and the wizard by two background fixers), one full sweep (`RUN_INTEGRATION`: 3910 passed, 18 skipped, 0 failed in 23:07, load 1.04×). What changed for you, in short:
 
