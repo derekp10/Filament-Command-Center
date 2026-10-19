@@ -839,7 +839,8 @@
                 } else if (body.action === 'return_no_spool') {
                     showToast(`⚠️ ${opts.toolhead} is empty — nothing to return`, 'warning', 4000);
                 } else if (body.action === 'return_no_binding') {
-                    showToast(`⚠️ ${opts.toolhead} has no bound slot to return to`, 'warning', 4000);
+                    showToast(body.msg ? `⚠️ ${body.msg}` : `⚠️ ${opts.toolhead} has no bound slot to return to`,
+                        'warning', body.msg ? 7000 : 4000);
                 } else {
                     // Includes return_failed (the box write was rejected) and
                     // return_ambiguous (two spools on the head; eject one first).
@@ -1228,8 +1229,11 @@
             nothing(`${th} holds ${n} spools`,
                 `<b>${_escapeHtml(th)}</b> holds ${n} spools — eject the wrong one first, then Return.`);
         } else if (body.action === 'return_no_binding') {
-            nothing(`Return the spool on ${th}?`,
-                `<b>${_escapeHtml(th)}</b> has no recorded source and no bound dryer box slot — nothing to return to.`);
+            // The server's reason when it has one (Group 40.6 review, R2: a box
+            // that feeds the head but has no slot count, and how to fix it).
+            nothing(`Return the spool on ${th}?`, body.msg
+                ? `${_escapeHtml(body.msg)} — nothing was moved.`
+                : `<b>${_escapeHtml(th)}</b> has no recorded source and no bound dryer box slot — nothing to return to.`);
         } else if (body.action === 'return_spool_mismatch') {
             showToast(`⚠️ ${body.error || `${th} holds another spool now — nothing moved`}`, 'warning', 7000);
             if (window.logClientEvent) window.logClientEvent(`⚠️ Return refused: ${body.error || 'another spool is on the head now'}`, 'WARNING');
@@ -1384,15 +1388,23 @@
     // (`expected_spool`), with its printer check, slot rule and picker. It used
     // to post the slot straight back, so it emptied a printing head unasked and
     // repeated Return's slot logic. A stale trail (the spool is on no toolhead
-    // FCC knows) puts it back in this slot with no chain, as before.
-    window.returnDeployedSpool = (box, spoolId, slot, deployedTo) => {
+    // FCC knows) puts it back in its box with no chain.
+    // Group 40.6 review (R1): `box` is the spool's OWN box (its trail), and
+    // `viewId` the view the card is in, refreshed after a Return. The stale
+    // trail's slot goes as a picked slot, kept only while it is free: an
+    // explicit slot was the engine's Overwrite, which unseated whatever spool
+    // the slot held, unasked (in a Room view, slot N of every box in it).
+    window.returnDeployedSpool = (box, spoolId, slot, deployedTo, viewId) => {
         const head = String(deployedTo || '').replace(/"/g, '').trim().toUpperCase();
         if (head && _isRegisteredHead(head)) {
             _startReturn({ th: head, vth: head, isVirtual: false, expectedSpool: Number(spoolId),
-                           refreshId: box, heads: [] });
+                           refreshId: viewId || box, heads: [] });
             return;
         }
-        if (typeof window.doAssign === 'function') window.doAssign(box, spoolId, slot, null, { autoDeploy: false });
+        const picked = String(slot == null ? '' : slot).replace(/"/g, '').trim();
+        const opts = { autoDeploy: false };
+        if (picked && !['null', 'none', 'undefined'].includes(picked.toLowerCase())) opts.pickedSlot = picked;
+        if (typeof window.doAssign === 'function') window.doAssign(box, spoolId, null, null, opts);
     };
 
     // --- Bind-a-Slot quick picker ---

@@ -22,8 +22,11 @@ Pinned here:
   - a dry run the server refuses shows the no-op overlay (nothing to return,
     two spools, no binding) or a 7 s toast (another spool on the head);
   - item E: the DEPLOYED card's ↩️ runs the canonical Return for the head its
-    spool is on, naming the spool; a stale trail falls back to doAssign with
-    autoDeploy off;
+    spool is on, naming the spool; a stale trail falls back to doAssign on the
+    spool's own box with autoDeploy off and its slot as a picked slot, never an
+    Overwrite (Group 40.6 review, R1, which also pins a Room view's card);
+  - the review's R2 (a no-binding answer's reason) and R3 (the reload answer
+    meant for a page older than 40.6 is never toasted here);
   - the Printer view's head lookup skips a ghost (move-pipeline follow-ups
     item 6, test debt).
 
@@ -31,6 +34,7 @@ HEAD proof (0b0eeb7): see the commit message.
 """
 from __future__ import annotations
 
+import html as html_lib
 import json
 import re
 from pathlib import Path
@@ -328,6 +332,29 @@ await yes();
 return Object.assign(out(), { call, shown });
 """
 
+# A stale-trail ghost as /api/get_contents lists it (spoolman_api._build_location_match):
+# `location` is its trail's box, `slot` its trail's slot, `deployed_to` where it really is
+# (Group 40.6 review, R1: the card's ↩️ names that box, not the view).
+STALE_GHOST = {"id": 60, "display": "#60", "color": "ff0000", "is_ghost": True, "location": "LR-MDB-1",
+               "deployed_to": "CR-CT-2-R1", "slot": "1"}
+
+GHOST_CARD = """
+const html = window.SpoolCardBuilder.buildCard(__ITEM__, __MODE__, { slotNum: 1, locId: __VIEW__ });
+const call = (html.match(/returnDeployedSpool\\([^)]*\\)/) || [''])[0];
+eval('window.' + call);
+await __settle(200);
+const shown = __rec.overlays.map(o => o.content);
+await yes();
+return Object.assign(out(), { call, shown });
+"""
+
+
+def _card(tmp_path, item, mode, view, **kw):
+    """Build `item`'s card in `mode` as the Location Manager does for the view
+    `view`, and tap its ↩️."""
+    return _run(tmp_path, GHOST_CARD.replace("__ITEM__", json.dumps(item)).replace("__MODE__", json.dumps(mode))
+                .replace("__VIEW__", json.dumps(view)), **kw)
+
 
 @pytest.mark.parametrize("mode", ["loc_grid", "loc_list"])
 def test_the_deployed_cards_return_is_the_canonical_return_for_its_head(tmp_path, mode):
@@ -344,12 +371,97 @@ def test_the_deployed_cards_return_is_the_canonical_return_for_its_head(tmp_path
     assert [t["msg"] for t in res["toasts"]] == ["↩️ #42 → LR-MDB-1 slot 1"], res["toasts"]
 
 
-def test_a_stale_trails_return_puts_it_back_in_its_slot_without_a_load(tmp_path):
+@pytest.mark.parametrize("mode", ["loc_grid", "loc_list"])
+def test_a_stale_trails_return_puts_it_back_in_its_slot_without_a_load(tmp_path, mode):
     """The card's spool sits on a cart (a stale trail), not a head: the 40.3
-    fallback, doAssign with autoDeploy off, and no Return request."""
-    res = _run(tmp_path, CARD.replace("__DEPLOYED__", json.dumps("CR-CT-2-R1")).replace("__MODE__", json.dumps("loc_grid")))
-    assert res["assigns"] == [["LR-MDB-1", 42, 1, None, {"autoDeploy": False}]], res["assigns"]
+    fallback, doAssign with autoDeploy off, and no Return request.
+
+    Changed on purpose (Group 40.6 review, R1): it pinned
+    ['LR-MDB-1', 42, 1, None, {autoDeploy: False}], an explicit slot, which
+    the engine treats as an Overwrite (it unseated the slot's stored spool,
+    unasked). The slot now goes as a picked slot, kept only while it is free
+    (`pickedSlot`, slot null: the doAssign contract inv_loc_mgr.js gains), and
+    the box is the spool's own, from the item the server lists (`location`, its
+    trail), on both card types."""
+    item = dict(STALE_GHOST, id=42)
+    res = _card(tmp_path, item, mode, "LR-MDB-1")
+    assert res["assigns"] == [["LR-MDB-1", 42, None, None, {"autoDeploy": False, "pickedSlot": "1"}]], \
+        res["assigns"]
     assert res["posts"] == [], res["posts"]
+
+
+# ---- Group 40.6 review (R1-R3): the browser half --------------------------------------------------
+# Each test fails on 7976b72 (the review's base) unless its docstring calls it a guard.
+
+def test_a_room_views_stale_trail_return_names_the_spools_own_box(tmp_path):
+    """R1 (the review's card probe): the Room view (openManage('LR')) lists, by
+    the flat prefix matcher, every spool deployed from an LR-* box. #60's
+    record names LR-MDB-1 slot 1, but it sits on a cart. Its ↩️ now names
+    LR-MDB-1, its own box, with the slot as a picked slot. 7976b72 named the
+    VIEW: doAssign('LR', 60, '1', null, {autoDeploy: false}), an Overwrite of
+    slot 1 across every LR-* box (test_return_round_trip pins the outcome)."""
+    res = _card(tmp_path, STALE_GHOST, "loc_list", "LR")
+    assert res["call"] == "returnDeployedSpool('LR-MDB-1', 60, '1', 'CR-CT-2-R1', 'LR')", res["call"]
+    assert res["assigns"] == [["LR-MDB-1", 60, None, None, {"autoDeploy": False, "pickedSlot": "1"}]], \
+        res["assigns"]
+    assert res["posts"] == [], res["posts"]
+
+
+def test_a_stale_trail_with_no_slot_lets_the_engine_pick_one(tmp_path):
+    """R1: a trail with no slot recorded sends no slot at all (the engine's own
+    pick, which never unseats anyone), never a blank slot."""
+    res = _card(tmp_path, dict(STALE_GHOST, slot=""), "loc_list", "LR")
+    assert res["assigns"] == [["LR-MDB-1", 60, None, None, {"autoDeploy": False}]], res["assigns"]
+
+
+def test_a_room_views_deployed_card_returns_off_its_head_and_refreshes_the_room(tmp_path):
+    """R1: the canonical Return from a Room view's card. The server decides
+    where the spool goes; the card names its own box, and the view refreshed
+    afterwards is the Room on screen (the trail box's refresh would be dropped
+    while the Room is open). A guard for the refresh, which 7976b72 got right by
+    naming the view as the box; red there on the call it pins."""
+    plan = _plan(toolhead="XL-1", active_toolhead="XL-1", requested="XL-1", spool=42, display="#42", slot="1")
+    item = dict(STALE_GHOST, id=42, display="#42", deployed_to="XL-1")
+    res = _card(tmp_path, item, "loc_list", "LR", plan={"body": plan},
+                writes=[{"body": dict(_done("1", 42), toolhead="XL-1")}])
+    assert res["call"] == "returnDeployedSpool('LR-MDB-1', 42, '1', 'XL-1', 'LR')", res["call"]
+    assert res["posts"] == [{"toolhead": "XL-1", "dry_run": True, "expected_spool": 42},
+                            {"toolhead": "XL-1", "box": "LR-MDB-1", "slot": "1", "expected_spool": 42,
+                             "confirmed_toolheads": []}], res["posts"]
+    assert res["assigns"] == [] and set(res["refreshed"]) == {"LR"}, res
+
+
+def test_a_no_binding_answer_with_a_reason_shows_the_reason(tmp_path):
+    """R2: a box that feeds the head but has no slot count isn't offered; the
+    server's answer says so (`msg`) and the no-op overlay shows it, instead of
+    "no bound dryer box slot" while the box's Feeds show one."""
+    msg = ("#42 has no recorded slot; LR-BOX-9 feeds XL-3 but has no slot count (Max Spools is blank), "
+           "so Return can't pick a slot there: set its Max Spools to return spools there")
+    res = _head(tmp_path, plan={"status": 404, "body": {"action": "return_no_binding", "toolhead": "XL-3",
+                                                         "active_toolhead": "XL-3", "requested": "XL-3", "msg": msg}})
+    assert len(res["shown"]) == 1, res["shown"]
+    shown = html_lib.unescape(_text(res["shown"][0]))   # the overlay escapes it; a browser shows the text
+    assert shown.startswith("Return the spool on XL-3?") and f"{msg} — nothing was moved." in shown, shown
+    assert "no bound dryer box slot" not in shown, shown
+    assert res["posts"] == [{"toolhead": "XL-3", "dry_run": True}], res["posts"]
+
+
+def test_a_reload_answer_meant_for_an_old_page_is_never_toasted_here(tmp_path):
+    """R3, a guard (passes on 7976b72): return_choose_slot now carries `error` /
+    `msg` / `stale_page` for a page older than 40.6. This page dispatches on the
+    action: it opens the picker again and toasts none of it."""
+    reload_msg = ("LR-MDB-1 slot 3, where it came from, holds #57; no free slot feeds XL-3, so nothing was "
+                  "moved: reload the page (Ctrl+F5) to choose a slot")
+    choose = dict(CHOOSE, action="return_choose_slot", error=reload_msg, msg=reload_msg, stale_page=True)
+    res = _run(tmp_path, """
+await openHead('XL-3');
+await yes();
+await yes();
+return out();
+""", plan={"body": _plan()}, writes=[{"body": choose}, {"body": _done("2", source="chosen")}], picks=[_pick("2")])
+    assert [p["slot"] for p in res["posts"][1:]] == ["3", "2"], res["posts"]
+    assert len(res["picker"]) == 1, res["picker"]
+    assert [t["msg"] for t in res["toasts"]] == ["↩️ #77 → LR-MDB-1 slot 2"], res["toasts"]
 
 
 # ---- the Printer view's head lookup (move-pipeline follow-ups item 6) ----------------------------
