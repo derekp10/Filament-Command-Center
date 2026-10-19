@@ -555,6 +555,16 @@ def _wizard_move(sid, new_loc, data, placement=None, current_loc='', origin='wiz
     return moved, result, stale
 
 
+def _is_multi_slot_box(row):
+    """A multi-slot Dryer Box row (Max Spools above 1): the box picker's rows."""
+    if not isinstance(row, dict) or row.get('Type') != locations_db.DRYER_BOX_TYPE:
+        return False
+    try:
+        return int(str(row.get('Max Spools', '0')).strip() or '0') > 1
+    except (TypeError, ValueError):
+        return False
+
+
 def _reslot_asked(data, spool, loc):
     """Group 40.7 — the request asks for a slot (`slot` / `picked_slot`) of the
     multi-slot Dryer Box the spool already sits in, other than its own: a spool
@@ -569,18 +579,22 @@ def _reslot_asked(data, spool, loc):
         return False
     row = next((r for r in (locations_db.load_locations_list() or []) if isinstance(r, dict)
                 and str(r.get('LocationID', '')).strip().upper() == loc), None)
-    if not row or row.get('Type') != locations_db.DRYER_BOX_TYPE:
-        return False
-    try:
-        return int(str(row.get('Max Spools', '0')).strip() or '0') > 1
-    except (TypeError, ValueError):
-        return False
+    return _is_multi_slot_box(row)
 
 
-def _landed_where(sid, target, result):
-    """Where a placed spool landed, in the toast's short arrows: "LR-MDB-1 slot 2
-    → XL-2", "CR-CT-2-R1", "Unassigned". Read back from Spoolman, because the
-    engine's answer doesn't name a slot it picked; a failed read names the target."""
+def _landed_at(sid, target, result):
+    """Where a placed spool landed, as (words, location_now): the toast's short
+    arrows ("LR-MDB-1 slot 2 → XL-2", "CR-CT-2-R1", "Unassigned") and the
+    LocationID it is filed on now ('' = Unassigned; the head, for a move whose
+    chain loaded one). Read back from Spoolman, because the engine's answer
+    doesn't name a slot it picked; a failed read names the target (and the head
+    the answer says it loaded).
+
+    Group 40.7 review (wizard-resave-unloads-head): the wizard puts
+    `location_now` in its Location field after a move, so a second Save in the
+    same session compares the head with the head and moves nothing. It used to
+    keep the box, and the second Save stored the spool back in it (its own
+    slot, which feeds the head it was leaving), unloading the head unasked."""
     head = str((result or {}).get('auto_deployed_to') or '').strip().upper() if isinstance(result, dict) else ''
 
     def _clean(value):
@@ -588,17 +602,45 @@ def _landed_where(sid, target, result):
 
     rec = spoolman_api.get_spool(sid)
     if not isinstance(rec, dict) or rec.get('id') is None:
-        return f"{target} → {head}" if head else (target or 'Unassigned')
+        return (f"{target} → {head}" if head else (target or 'Unassigned')), (head or target or '')
     extra = rec.get('extra') if isinstance(rec.get('extra'), dict) else {}
     loc = _clean(rec.get('location')).upper()
     if head and loc == head:
         box = _clean(extra.get('physical_source')).upper() or target
         slot = _clean(extra.get('physical_source_slot'))
-        return f"{box}{' slot ' + slot if slot else ''} → {head}"
+        return f"{box}{' slot ' + slot if slot else ''} → {head}", loc
     if not loc:
-        return 'Unassigned'
+        return 'Unassigned', ''
     slot = _clean(extra.get('container_slot'))
-    return f"{loc}{' slot ' + slot if slot else ''}"
+    return f"{loc}{' slot ' + slot if slot else ''}", loc
+
+
+def _landed_where(sid, target, result):
+    """_landed_at's words alone: "LR-MDB-1 slot 2 → XL-2", "CR-CT-2-R1", "Unassigned"."""
+    return _landed_at(sid, target, result)[0]
+
+
+def _pick_refused(data, new_loc, result, sid):
+    """Group 40.7 review (wizard-refused-pick-resent): True when a move was
+    refused over the picker's own choice, which the page holds and would send
+    again on every Save, only to be refused again: the slot it picked was taken
+    meanwhile (`picked_slot_taken`), the head's "came from" slot can't be
+    recorded (`record_source`), or the slot it named is still claimed by a
+    spool deployed from it (the engine's ghost guard, logic._ghost_claim_refusal,
+    which carries no blocked_reason: its words name "<box> slot <n>"). The page
+    then drops the pick, so its next Save opens the picker again. A refusal
+    about anything else (Spoolman rejecting the write, a read that failed)
+    keeps the pick: saving again may work."""
+    if not isinstance(result, dict):
+        return False
+    if result.get('blocked_reason') in ('picked_slot_taken', 'record_source'):
+        return True
+    slot = logic._norm_slot((data or {}).get('slot'))
+    if not slot:
+        return False
+    why = str((result.get('failures') or {}).get(str(sid)) or '')
+    lead = f"{new_loc} slot {slot} "
+    return why.startswith(lead + "still holds #") or why.startswith(lead + "is still claimed by #")
 
 
 def _deploy_skipped_note(sid, target, result):
@@ -625,7 +667,7 @@ def _create_wants(data, spool_data, spool_iter):
     multi-slot box works (Claude's call 29: the chosen slot first, the loop for
     the rest). A request without the key (a page from before 40.7) places every
     spool where `spool_data` says (or its own spool override, which wins as it
-    always did), through the engine."""
+    always did), through the engine, except onto a toolhead (_create_guards)."""
     out = []
     raw = data.get('placements')
     if isinstance(raw, list):
@@ -640,6 +682,47 @@ def _create_wants(data, spool_data, spool_iter):
         src = override if isinstance(override, dict) and 'location' in override else spool_data
         loc = _loc_key(src.get('location'))
         out.append({'location': loc} if loc else None)
+    return out
+
+
+def _no_slot(want):
+    return not logic._norm_slot(want.get('slot')) and not logic._norm_slot(want.get('picked_slot'))
+
+
+def _create_guards(data, wants):
+    """Group 40.7 review — two belts on a create's placements, applied once
+    _create_refusal has passed them (so its refusals are unchanged). Returns the
+    wants, a new dict for each one changed:
+      - a placement into a multi-slot Dryer Box that names no slot (`slot` /
+        `picked_slot`) is a store, `auto_deploy: false`
+        (wizard-slotless-create-loads-empty-head): the engine would take the
+        lowest free slot that "loads no busy toolhead", and a slot bound to an
+        EMPTY head qualifies, so the chain loaded a sealed new spool onto that
+        head with no question and no slot shown. A 40.7 page opens the slot
+        picker before it sends a box, so only an older page or another caller
+        sends one without a slot;
+      - a request without `placements` (a page from before 40.7) never puts a
+        new spool on a toolhead (wizard-stale-page-create-onto-head): that
+        page's reset left the last edited spool's head in its hidden Location,
+        so it could send XL-1 while showing Unassigned, and the engine's Smart
+        Load would unload XL-1's spool (unasked while idle) for the sealed one.
+        It is created Unassigned (`stale_page_head`; _place_created says to
+        reload in `warning`)."""
+    if not any(wants):
+        return wants
+    loc_list = locations_db.load_locations_list() or []
+    printer_map = locations_db.get_active_printer_map() or {}
+    rows = {str(r.get('LocationID', '')).strip().upper(): r for r in loc_list if isinstance(r, dict)}
+    stale_page = not isinstance((data or {}).get('placements'), list)
+    out = []
+    for want in wants:
+        if want:
+            loc = want['location']
+            if stale_page and logic._holds_one_spool(loc, printer_map, rows):
+                want = dict(want, stale_page_head=True)
+            elif _is_multi_slot_box(rows.get(loc)) and _no_slot(want):
+                want = dict(want, auto_deploy=False)
+        out.append(want)
     return out
 
 
@@ -674,12 +757,22 @@ def _place_created(created, wants, data):
     placement fields (see api_create_inventory_wizard)."""
     placed, unplaced, results, tried, to_buffer, notes = {}, [], {}, {}, [], []
     can_ask = 'confirmed_toolheads' in data
+    skipped = False
     for index, sid in created:
         want = wants[index] if index < len(wants) else None
         if not want:
             unplaced.append(sid)
             continue
         loc = want['location']
+        if want.get('stale_page_head'):
+            # _create_guards: a page from before 40.7 never loads a toolhead.
+            skipped = True
+            unplaced.append(sid)
+            note = (f"#{sid} was created but is Unassigned, not on {loc}: this page is out of date, so "
+                    f"FCC won't load {loc} from it. Reload the page (Ctrl+F5), then scan #{sid} onto {loc}.")
+            state.add_log_entry(f"⚠️ {note}", "WARNING", "ffaa00")
+            notes.append(note)
+            continue
         try:
             moved, result, stale = _wizard_move(sid, loc, data, placement=want, origin='wizard_create')
         except Exception as e:   # the spool exists: report it, never fail the create
@@ -700,7 +793,7 @@ def _place_created(created, wants, data):
         note = f"#{sid} was created but not placed in {loc}, so it is Unassigned: {why}"
         notes.append(note if note.endswith(('.', '?', '!')) else note + '.')
     out = {"placed": placed, "unplaced": unplaced, "location_results": results,
-           "placement_requests": tried, "placements_ok": len(placed) == len(results)}
+           "placement_requests": tried, "placements_ok": len(placed) == len(results) and not skipped}
     if to_buffer:
         out["to_buffer"] = to_buffer
     if notes:
@@ -724,7 +817,11 @@ def api_create_inventory_wizard():
     spool stays Unassigned: the browser's per-spool picker loop places it); the
     door contract (`confirmed_toolheads`, `confirmed_fed_heads`, `seen_printing`)
     at the top level. Without `placements` every spool goes where `spool_data`
-    says. Answer (when anything was to be placed, or `placements` was sent):
+    says. Group 40.7 review (_create_guards): a placement into a multi-slot box
+    that names no slot is stored, never loaded onto the head its slot feeds; and
+    a request without `placements` never puts a spool on a toolhead (it stays
+    Unassigned, and `warning` says to reload the page).
+    Answer (when anything was to be placed, or `placements` was sent):
     `placed` {id: where it landed}, `unplaced` [ids left Unassigned],
     `location_results` {id: the engine's answer, for every placement tried},
     `placement_requests` {id: the entry tried}, `placements_ok`, `to_buffer` (a
@@ -762,6 +859,9 @@ def api_create_inventory_wizard():
                 state.add_log_entry(f"⚠️ Not created: {msg}", "WARNING", "ffaa00")
                 return jsonify({"success": False, "blocked_reason": reason, "msg": msg,
                                 "created_spools": []})
+            # Group 40.7 review: a slotless box placement stores; an older page
+            # never loads a toolhead.
+            wants = _create_guards(data, wants)
 
         # Step 1: Resolve Filament
         if not filament_id and filament_data:
@@ -888,6 +988,79 @@ def _log_manual_weight_change(spool_id, pre, post):
         state.logger.warning(f"24.F weight-log skipped for spool {spool_id}: {_log_e}")
 
 
+def _take_archived_off(sid, original, written, dirty):
+    """Group 40.7 review (wizard-archive-before-asked-move) — an edit that
+    archived the spool (it weighed it out to empty, or ticked Archived) AND
+    changes its Location. The edit's first write names where the spool still is,
+    so update_spool's archive edge archived it IN PLACE: on its head, with its
+    trail, its single-slot box still attached. The engine's move came after, and
+    a move it asked about (the head is printing) or refused left it there,
+    archived ON the head and hidden from FCC's views, and a later weight fix
+    unarchived it on that head next to whatever was loaded since.
+
+    So before the move, this writes the archive edge's own outcome: location ''
+    and the trail cleared (`_TRAIL_KEYS`, as _direct_location_write blanks them)
+    and the spool's own single-slot box released, unasked even mid-print, as the
+    archive edge has always taken a used-up spool off its head. `archived: True`
+    rides along, because update_spool reads any write to an archived spool with
+    weight left (a ticked Archived) as a refill and unarchives it. No
+    `fcc_pre_archive_location` note: the user asked for the spool elsewhere, so a
+    later refill must not put it back here. The move then starts from Unassigned
+    (it asks about nothing it leaves) and stores the spool, never loading the
+    head a slot feeds (api_edit_spool_wizard); when it doesn't land, the spool
+    is archived and Unassigned, which is where an archive without a move leaves it.
+
+    `original` / `written` / `dirty`: the spool before the edit, the edit's first
+    write's answer and what that write sent. Whether it archived the spool is
+    the answer's `archived` (Spoolman answers the whole record), else a re-read,
+    and only when the write touched a weight or Archived. Returns the LocationID
+    it was taken off, or None (nothing archived here, already Unassigned, or the
+    write failed: then the move runs from where it is, as before)."""
+    was = _loc_key((original or {}).get('location'))
+    if not was or (original or {}).get('archived'):
+        return None
+    if not any(k in (dirty or {}) for k in ('used_weight', 'initial_weight', 'archived')):
+        return None
+    if isinstance(written, dict) and 'archived' in written:
+        archived_now = bool(written.get('archived'))
+    else:
+        rec = spoolman_api.get_spool(sid)
+        archived_now = bool(isinstance(rec, dict) and rec.get('id') is not None and rec.get('archived'))
+    if not archived_now:
+        return None
+    pre_extra = original.get('extra') if isinstance(original.get('extra'), dict) else {}
+    extra = {k: '' for k in _TRAIL_KEYS if str(pre_extra.get(k) or '').strip().strip('"')}
+    payload = dict({'location': '', 'archived': True}, **({'extra': extra} if extra else {}))
+    res = spoolman_api.update_spool(sid, payload)
+    if not res:
+        err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the update"
+        state.add_log_entry(f"❌ #{sid} was archived but is still filed on {was}: FCC couldn't take it "
+                            f"off ({err})", "ERROR", "ff4444")
+        return None
+    logic.release_box_after_direct_write(sid, original, res)
+    state.add_log_entry(f"📦 #{sid} is archived (used up), so it was taken off {was} before its move",
+                        "INFO", "00ccff")
+    return was
+
+
+def _archived_off_note(sid, was):
+    return f"#{sid} is archived (used up), so it was taken off {was}: it is Unassigned."
+
+
+def _keep_archived(sid):
+    """After the move of a spool the edit archived (_take_archived_off): the
+    move's own write carries no `archived`, and update_spool reads a write to an
+    archived spool with weight left (a ticked Archived) as a refill, so the move
+    unarchived it. Archive it again where it landed. A spool weighed out to
+    empty has no weight left and stays archived: nothing is written then."""
+    rec = spoolman_api.get_spool(sid)
+    if not isinstance(rec, dict) or rec.get('id') is None or rec.get('archived'):
+        return
+    if not spoolman_api.update_spool(sid, {'archived': True}):
+        err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the update"
+        state.add_log_entry(f"❌ #{sid} was moved but not archived again: {err}", "ERROR", "ff4444")
+
+
 @app.route('/api/edit_spool_wizard', methods=['POST'])
 def api_edit_spool_wizard():
     """Endpoint to handle natively editing Filaments and Spools from the Wizard Edit UI.
@@ -908,12 +1081,20 @@ def api_edit_spool_wizard():
     already in is a move too (a floating spool into a slot of its own box).
     Answer, when the location changes: `spool_saved` (every other edit is saved,
     also when there was none), `location_moved`, `location_result` (the engine's
-    answer, untouched), `location_where` (where it landed, once moved) and
-    `to_buffer` (a same-slot swap's old spool). `success` is true only when the
-    move landed too; otherwise `msg` says what was saved and why it didn't move,
-    in words a page from before 40.7 can show ("Saved your other changes, but
-    #57 was not moved to LR-MDB-1: …"), and `stale_page` marks a question such a
-    page can't answer (logic.stale_fed_refusal, then stale_confirm_refusal)."""
+    answer, untouched), `location_where` (where it landed, once moved),
+    `location_now` (the LocationID it is filed on once moved, '' = Unassigned:
+    the page's Location field shows it, so a second Save moves nothing; Group
+    40.7 review) and `to_buffer` (a same-slot swap's old spool). `success` is
+    true only when the move landed too; otherwise `msg` says what was saved and
+    why it didn't move, in words a page from before 40.7 can show ("Saved your
+    other changes, but #57 was not moved to LR-MDB-1: …"), `stale_page` marks a
+    question such a page can't answer (logic.stale_fed_refusal, then
+    stale_confirm_refusal), and `pick_refused` a refusal over the picker's own
+    choice (_pick_refused: the page drops it and picks again).
+    Group 40.7 review: an edit that archives the spool and changes its Location
+    takes it off where it is first (_take_archived_off), so a move that is asked
+    about or refused never leaves an archived spool on a head; the move then
+    stores it (`auto_deploy: false`) and it stays archived (_keep_archived)."""
     data = request.json
     spool_id = data.get('spool_id')
     filament_id = data.get('filament_id')
@@ -927,6 +1108,8 @@ def api_edit_spool_wizard():
     new_location = None
     original_spool = None
     spool_res = None
+    # Group 40.7 review: where an archived spool was taken off before its move.
+    archived_off = None
     try:
         # 28.B5 — track whether the spool half actually persisted so a later
         # filament rejection reports partial success accurately (the spool write
@@ -1034,6 +1217,13 @@ def api_edit_spool_wizard():
                 # the pre snapshot — None when get_spool blipped, handled by helper).
                 if any(k in spool_data for k in ("used_weight", "initial_weight")):
                     _log_manual_weight_change(spool_id, original_spool, spool_res)
+                if new_location is not None:
+                    # Group 40.7 review: an archived spool leaves where it is
+                    # before its move, even if a filament rejection stops below.
+                    archived_off = _take_archived_off(spool_id, original_spool, spool_res, spool_data)
+
+        # Unassigned was asked, and taking an archived spool off made it so.
+        unassigned_by_archive = archived_off is not None and new_location == ''
 
         # Update Filament Second (if applicable)
         if filament_id and filament_data:
@@ -1052,12 +1242,17 @@ def api_edit_spool_wizard():
                     "error": err,
                     "spool_saved": spool_committed,
                 }
-                if new_location is not None:
+                if unassigned_by_archive:
+                    failed["location_moved"] = True
+                    failed["msg"] += f" {_archived_off_note(spool_id, archived_off)}"
+                elif new_location is not None:
                     # Group 40.7: the move comes last, so nothing moved; saving
                     # again moves it (the spool's diff is empty by then).
                     failed["location_moved"] = False
                     failed["msg"] += (f" #{spool_id} was not moved to {new_location or 'Unassigned'} "
                                       f"either: save again to move it.")
+                    if archived_off:
+                        failed["msg"] += f" {_archived_off_note(spool_id, archived_off)}"
                 return jsonify(failed)
             fil_committed = True
 
@@ -1068,20 +1263,31 @@ def api_edit_spool_wizard():
             warnings.append(spool_res['fcc_warning'])
         if new_location is not None:
             # Group 40.7: the Location, last, through the engine.
-            try:
-                moved, result, stale = _wizard_move(
-                    spool_id, new_location, data, placement=data,
-                    current_loc=(original_spool or {}).get('location'))
-            except Exception as e:   # the other edits are saved: say so
-                state.add_log_entry(f"❌ Wizard edit: #{spool_id} was not moved to "
-                                    f"{new_location or 'Unassigned'}: {e}", "ERROR", "ff4444")
-                moved, result, stale = False, {"status": "error", "msg": f"the move crashed ({e})"}, None
+            if unassigned_by_archive:
+                # Group 40.7 review: _take_archived_off made it Unassigned already.
+                moved, result, stale = True, True, None
+            else:
+                try:
+                    # An archived spool is stored, never loaded onto the head a
+                    # box slot feeds (that would leave it archived on a head).
+                    moved, result, stale = _wizard_move(
+                        spool_id, new_location, data,
+                        placement=dict(data, auto_deploy=False) if archived_off else data,
+                        current_loc='' if archived_off else (original_spool or {}).get('location'))
+                except Exception as e:   # the other edits are saved: say so
+                    state.add_log_entry(f"❌ Wizard edit: #{spool_id} was not moved to "
+                                        f"{new_location or 'Unassigned'}: {e}", "ERROR", "ff4444")
+                    moved, result, stale = False, {"status": "error", "msg": f"the move crashed ({e})"}, None
+                if moved and archived_off:
+                    _keep_archived(spool_id)
             out.update(spool_saved=True, location_moved=moved, location_result=result)
             if isinstance(result, dict) and result.get('to_buffer'):
                 out["to_buffer"] = result['to_buffer']
             if moved:
-                out["location_where"] = (_landed_where(spool_id, new_location, result)
-                                         if new_location else 'Unassigned')
+                if new_location:
+                    out["location_where"], out["location_now"] = _landed_at(spool_id, new_location, result)
+                else:
+                    out["location_where"], out["location_now"] = 'Unassigned', ''
                 note = _deploy_skipped_note(spool_id, new_location, result)
                 if note:
                     warnings.append(note)
@@ -1092,6 +1298,14 @@ def api_edit_spool_wizard():
                                             saved_other=spool_committed or fil_committed)
                 if stale:
                     out["stale_page"] = True
+                if _pick_refused(data, new_location, result, spool_id):
+                    out["pick_refused"] = True
+                if archived_off:
+                    note = _archived_off_note(spool_id, archived_off)
+                    out["msg"] += f" {note}"
+                    if _is_question(result) and not stale:
+                        # A 40.7 page shows the question, not `msg`.
+                        warnings.append(note)
         if warnings:
             out["warning"] = " ".join(warnings)
         return jsonify(out)
