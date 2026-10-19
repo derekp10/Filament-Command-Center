@@ -8,6 +8,9 @@ filament/spool read proxies, the Spoolman extra-field schema cluster
 search dispatch, and global inventory search. `_log_manual_weight_change`
 is the shared before→after log for BOTH manual weight funnels
 (api_spool_update + api_edit_spool_wizard — CLAUDE.md Group 24.F).
+Group 40.7: the wizard's Location (edit and create) is a move through the
+engine (`_wizard_move`, `_place_created`), and /api/spool/update's location
+path is checked by `_direct_location_write`.
 
 Preserved quirks (do not 'fix' in a move — see the carve plan):
 - api_filaments deliberately returns raw double-encoded extras (no
