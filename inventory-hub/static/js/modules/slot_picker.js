@@ -22,8 +22,8 @@
 //   }) -> Promise<null
 //              | {kind: 'slot', box, slot, occupant, claimants, feeds, free, current, recommended, via,
 //                 send, expected_feed, choice, swap, displaced}
-//              | {kind: 'pool', box, slot, occupant, free, recommended, via}
-//              | {kind: 'head', head, printer, resident, residents, feeds, recommended, via}
+//              | {kind: 'pool', ...the same fields as 'slot' (Group 40.5: a Printer Pool slot is a box slot)}
+//              | {kind: 'head', head, printer, resident, residents, feeds, spool_location, recommended, via}
 //              | {kind: 'none', box, recommended, via}>
 //   null = cancelled: Escape, ✕, a CMD:CANCEL scan, "Edit feeds", the host
 //   closing, a bulk move or an audit starting, or an open refused (D2: another
@@ -241,7 +241,9 @@
     const _resultFor = (s, t, via, choice = null) => {
         const d = t.data || {};
         const base = { kind: t.kind, recommended: !!t.star, via };
-        if (t.kind === 'slot') {
+        // A Printer Pool slot (printer mode) is a box slot like any other (Group
+        // 40.5): the same `send`, Swap / Overwrite and refusals.
+        if (t.kind === 'slot' || t.kind === 'pool') {
             const occupant = d.spool || null;
             const swap = choice === 'swap';
             return Object.assign(base, { box: t.box, slot: t.slot, occupant,
@@ -262,12 +264,12 @@
                     color_direction: occupant.color_direction, remaining_weight: occupant.remaining_weight,
                     details: occupant.details, archived: occupant.archived } : null });
         }
-        if (t.kind === 'pool') {
-            return Object.assign(base, { box: t.box, slot: t.slot, occupant: d.spool || null, free: !!d.free });
-        }
         if (t.kind === 'head') {
+            // `spool_location`: where the spool is now, so the caller knows
+            // whether it arrives from a box (its trail) or needs the "came from"
+            // question (Group 40.5, D3).
             return Object.assign(base, { head: t.head, printer: s.model.location, resident: d.resident || null,
-                residents: d.residents || [], feeds: d.feeds || [] });
+                residents: d.residents || [], feeds: d.feeds || [], spool_location: s.model.spool_location || '' });
         }
         return Object.assign(base, { box: t.box });
     };
@@ -277,13 +279,14 @@
         const started = _sessionStarted();
         if (started) { _closeForSession(s, started); return; }
         const d = t.data || {};
-        if (t.kind === 'slot' && d.blocked) {
+        const boxSlot = t.kind === 'slot' || t.kind === 'pool';
+        if (boxSlot && d.blocked) {
             // D4: greyed out, never picked; the panel says why.
             _refuse(s, `${t.box} slot ${t.slot}: ${d.blocked}`,
                 `Slot picker: ${t.box} slot ${t.slot} can't take #${s.model && s.model.spool}: ${d.blocked}`);
             return;
         }
-        if (t.kind === 'slot' && !d.free && s.model && s.model.mode !== 'return') {
+        if (boxSlot && !d.free && s.model && s.model.mode !== 'return') {
             // Q2 (decided 2026-10-13): an occupied slot asks what happens to its
             // spool, as the grid's Swap / Overwrite does, so the incoming spool
             // always gets a real slot.
@@ -402,12 +405,15 @@
     const _poolTile = (s, t, i) => {
         const p = t.data;
         const body = p.spool ? _card(p.spool) : '<div class="fcc-sp-empty">EMPTY</div>';
+        // Group 40.5: the engine's refusals grey a pool slot out too.
+        const block = p.blocked ? `<div class="fcc-sp-block">⛔ ${_esc(p.blocked)}</div>` : '';
+        const label = `${t.box} slot ${t.slot}${p.blocked ? ` (unavailable: ${p.blocked})` : ''}`;
         return `
-            <button type="button" class="fcc-sp-tile${t.star ? ' is-star' : ''}" role="option"
+            <button type="button" class="fcc-sp-tile${t.star ? ' is-star' : ''}${p.blocked ? ' is-blocked' : ''}" role="option"
                     data-sp-idx="${i}" data-sp-kind="pool" data-sp-box="${_esc(t.box)}" data-sp-slot="${_esc(t.slot)}"
-                    aria-label="${_esc(`${t.box} slot ${t.slot}`)}">
+                    ${p.blocked ? 'aria-disabled="true" data-sp-blocked="1"' : ''} aria-label="${_esc(label)}">
                 <div class="fcc-sp-top"><span class="fcc-sp-num">🏭 ${_esc(t.box)} slot ${_esc(t.slot)}</span>${t.star ? '<span class="fcc-sp-star">⭐</span>' : ''}</div>
-                ${body}
+                ${body}${block}
                 <div class="fcc-sp-feed is-storage">Printer Pool: stages it, loads no toolhead</div>
                 <div class="fcc-sp-qr" id="fcc-sp-qr-${s.id}-${i}"></div>
             </button>`;

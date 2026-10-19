@@ -323,6 +323,25 @@ def auto_deploy_requested(data):
     return str(value).strip().lower() not in ('false', '0', 'no', 'off')
 
 
+def record_source_from(data):
+    """Group 40.5 (D3, item G) — the box slot the user chose as where a spool put
+    on a head came from (the Printer picker's "Record it as coming from…"):
+    None when the request names none (the engine's silent 13.6 rule), '' for
+    "No box" (record nothing), or {'box', 'slot'}. A malformed value reads as ''
+    (record nothing): a source is never guessed from a bad request. Read by
+    manage_contents add and /api/smart_move."""
+    d = data if isinstance(data, dict) else {}
+    if 'record_source' not in d or d.get('record_source') is None:
+        return None
+    value = d.get('record_source')
+    if isinstance(value, dict):
+        box = str(value.get('box') or '').strip().strip('"').upper()
+        slot = _norm_slot(value.get('slot'))
+        if box and slot.isdigit():
+            return {'box': box, 'slot': slot}
+    return ''
+
+
 def swap_requested(data):
     """Swap option C: the user chose Swap for a slot that holds a stored spool
     (`swap: true`, sent by the Location Manager grid's Swap and the slot
@@ -1705,7 +1724,7 @@ _smart_move_depth = threading.local()
 
 def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_deploy=True, confirm_active_print=False,
                        confirmed_fed_heads=(), fed_check_from=None, picked_slot=None, expected_feed=None,
-                       seen_printing=(), swap_slot=None, swap_out=False):
+                       seen_printing=(), swap_slot=None, swap_out=False, record_source=None):
     """Entry point for the slot-move pipeline.
 
     Owns the per-move printer-state probe cache (L3 fix A) so the auto-deploy
@@ -1741,6 +1760,14 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
     the slot picker's). That spool is filed back where it sat before the slot
     (_swap_out_place) and put in the scan buffer (`to_buffer`), instead of the
     Overwrite's "stays in the box with no slot". Undo puts it back in the slot.
+    `record_source` (Group 40.5, D3 / item G; toolhead targets): the Printer
+    picker's "Record it as coming from…" answer for a spool that arrives from no
+    box. None: the silent 13.6 rule (a feed slot only when exactly one is free);
+    '' : record no box; {'box', 'slot'}: exactly that slot, which must be a
+    multi-slot box's slot feeding the target head that no other spool holds
+    (checked strictly before anything is written; refused otherwise,
+    `blocked_reason: record_source`). A spool arriving from a box keeps its own
+    trail and the answer says `record_source_ignored`.
     """
     depth = getattr(_smart_move_depth, "n", 0)
     owns_move = depth == 0
@@ -1771,6 +1798,7 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
             expected_feed=expected_feed,
             swap_slot=swap_slot,
             swap_out=swap_out,
+            record_source=record_source,
         )
     finally:
         _smart_move_depth.n = getattr(_smart_move_depth, "n", 1) - 1
@@ -1785,7 +1813,7 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
 
 def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', auto_deploy=True, confirm_active_print=False,
                              confirmed_fed_heads=(), fed_check_from=None, picked_slot=None, expected_feed=None,
-                             swap_slot=None, swap_out=False):
+                             swap_slot=None, swap_out=False, record_source=None):
     """Move spool(s) to `target`, optionally into `target_slot` of that location.
 
     `auto_deploy` (default True): when the target is a Dryer Box AND the
@@ -2148,6 +2176,42 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         if refused:
             return refused
 
+    # Step 4 (Group 40.5, D3 / item G): the "came from" slot the user named in the
+    # Printer picker, checked before anything is written: a multi-slot Dryer
+    # Box's slot that feeds this head and that no other spool holds (read
+    # strictly). Re-checked at the write, which records nothing if another
+    # spool took it during the printer probe.
+    record_named = None
+    if (is_printer or is_toolhead) and isinstance(record_source, dict):
+        r_box = str(record_source.get('box') or '').strip().strip('"').upper()
+        r_slot = _norm_slot(record_source.get('slot'))
+        r_row = loc_info_map.get(r_box)
+        why = ''
+        if not _is_dryer_box_row(r_row) or locations_db._is_single_slot_dryer_box(r_row):
+            why = f"{r_box or 'that box'} isn't a box with slots"
+        elif _slot_binding(r_row, r_slot) != target:
+            why = f"{r_box} slot {r_slot} doesn't feed {target}"
+        else:
+            try:
+                _r_items = spoolman_api.get_spools_at_location_detailed_strict(r_box) or []
+                _r_claims, _o, _g = box_slot_claims(r_row, r_box, _r_items, spools)
+                _r_holders = _r_claims.get(r_slot) or []
+                if _r_holders:
+                    why = f"{r_box} slot {r_slot} holds {_and_list('#' + str(h) for h in _r_holders)}"
+            except Exception as _r_err:
+                why = f"couldn't read {r_box} from Spoolman ({_r_err})"
+        if why:
+            moving = _and_list('#' + str(s) for s in spools)
+            msg = f"Not moved: {why}, so {moving} can't be recorded as coming from it"
+            for sid in spools:
+                failures[str(sid)] = msg
+            state.add_log_entry(f"⚠️ {msg}.", "WARNING", "ffaa00")
+            return {"status": "error", "blocked_reason": "record_source", "msg": msg + ".", "failures": failures}
+        record_named = (r_box, r_slot)
+    # A spool arriving from somewhere keeps that trail; the answer says the
+    # named source (or "No box") was not used.
+    record_ignored = False
+
     # The head a named slot feeds: the auto-deploy chain loads it. It counts only
     # when the chain will load it (I1-06): Return parks a spool with
     # auto_deploy=False, and must not ask about a head it never touches. A
@@ -2277,10 +2341,44 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     replay = {"target": target, "slot_picked": bool(slot_was_picked),
               "feed": slot_feed if feed_box else None, "can_load": loads_head,
               "leaving": sorted(sources)}
+    # Step 5 (Group 40.5: the 40.3 "Open, narrow" note and the 40.2 review's
+    # stale-store note): before a question about a box slot, read the slot as
+    # step 6 will, so a question never offers an answer step 6 then refuses. A
+    # slot whose own spool runs on another head refuses the load and the store
+    # alike: said now, with nothing written and no question. A slot a record
+    # still claims (a spool deployed from it, or a stale trail) refuses a store:
+    # no "Just store it". Only on the question path (no read otherwise), and only
+    # for a named slot: a slot the engine picked (step 3) was read free of every
+    # claim, deployed spools included; a race there is step 6's. An unreadable
+    # slot asks as before, and step 6 reads it again.
+    slot_ghosts: typing.List[typing.Dict[str, typing.Any]] = []
+    if (feed_changed or fed_heads or active_prints) and feed_box and target_slot and not slot_was_picked:
+        try:
+            _q_items = spoolman_api.get_spools_at_location_detailed_strict(target) or []
+            _q_moving = {str(s) for s in spools}
+            slot_ghosts = [e for e in _q_items if e.get('is_ghost') and str(e.get('id')) not in _q_moving
+                           and _norm_slot(e.get('slot', '')) == target_slot]
+        except Exception as _q_err:
+            state.logger.info(f"Slot read before the question skipped for {target} slot {target_slot}: {_q_err}")
+        # The step-6 guard's own rule: a load passes over the slot's own spool on
+        # the head it feeds (the same-slot swap) and a stale trail; a store
+        # passes over none.
+        _blocking = [g for g in slot_ghosts
+                     if not (loads_head and (_ghost_head(g) == bound_th
+                                             or not _holds_one_spool(_ghost_head(g), printer_map, loc_info_map)))]
+        if _blocking:
+            why = _ghost_claim_refusal(target, target_slot, _blocking[0], slot_feed, bound_th, loads_head,
+                                       printer_map, loc_info_map)
+            for sid in spools:
+                failures[str(sid)] = why
+            state.add_log_entry(f"❌ Not moving {_and_list('#' + str(s) for s in spools)}: {why}",
+                                "ERROR", "ff4444")
+            return {"status": "error", "msg": f"Not moved: {why}.", "failures": failures}
+    no_store = bool(slot_ghosts)
     if feed_changed:
         answer = _feed_changed_answer(
             feed_changed, fed_heads, active_prints, target, target_slot, spools, tgt_info,
-            bound_th, loads_head, can_store=(not own_on_head) if loads_head else True,
+            bound_th, loads_head, can_store=((not own_on_head) if loads_head else True) and not no_store,
             leaving=bool(slot_feed) and slot_feed in sources,
             repicked=bool(slot_was_picked and picked_slot is None and not feed_changed['was']),
             empty_heads=empty_heads, printer_map=printer_map, loc_info_map=loc_info_map)
@@ -2288,7 +2386,7 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         return answer
     if fed_heads:
         answer = _head_fed_answer(fed_heads, active_prints, target, target_slot, spools,
-                                  empty_heads=empty_heads, can_store=not own_on_head,
+                                  empty_heads=empty_heads, can_store=not own_on_head and not no_store,
                                   printer_map=printer_map)
         answer.update(replay)
         return answer
@@ -2306,7 +2404,7 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         # review, C5): Enter stores because a head isn't loaded mid-print, so a
         # print on the head the spool only LEAVES keeps the yes / no.
         offers_store = bool(loads_head and _head_print_state(bound_th, active_prints, printer_map))
-        answer['can_store'] = offers_store and not own_on_head
+        answer['can_store'] = offers_store and not own_on_head and not no_store
         if offers_store:
             answer['title'] = f"Load #{spools[-1]} onto {bound_th}?"
             m = answer['msg']
@@ -2707,7 +2805,38 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
             current_source_meaningful = bool(
                 str(new_extra.get('physical_source') or '').strip().strip('"')
             )
-            if not current_source_meaningful:
+            if current_source_meaningful and record_source is not None:
+                # Group 40.5: the spool arrives from somewhere (its trail), which
+                # wins over a "came from" answer; the answer says so.
+                record_ignored = True
+                state.logger.info(f"🔗 #{sid} -> {target}: kept its trail "
+                                  f"{new_extra.get('physical_source')}; the named source was not used")
+            elif record_source == '':
+                # Group 40.5 (D3): "No box", the user's answer in the Printer picker.
+                state.logger.info(f"🔗 #{sid} -> {target}: no box slot recorded (the user's choice)")
+            elif record_named:
+                # Group 40.5 (D3): the slot the user named, checked at step 4 and
+                # again here (the printer probe can take seconds): a slot another
+                # spool took meanwhile is not recorded, never a double claim.
+                _r_box, _r_slot = record_named
+                try:
+                    _r_now = spoolman_api.get_spools_at_location_detailed_strict(_r_box) or []
+                    _r_claims, _o, _g = box_slot_claims(loc_info_map.get(_r_box), _r_box, _r_now, [sid])
+                    _r_free = _r_slot not in _r_claims
+                except Exception as _r_err:
+                    state.logger.warning(f"🔗 couldn't re-read {_r_box} for #{sid}'s source: {_r_err}")
+                    _r_free = False
+                if _r_free:
+                    new_extra['physical_source'] = _r_box
+                    new_extra['physical_source_slot'] = _r_slot
+                    _recorded_here = f"{_r_box}:{_r_slot}"
+                    state.logger.info(f"🔗 #{sid} -> {target}: recorded as from {_r_box} slot {_r_slot} "
+                                      f"(the user's choice)")
+                else:
+                    state.add_log_entry(
+                        f"⚠️ #{sid} -> {target}: not recorded as from {_r_box} slot {_r_slot}, which another "
+                        f"spool took meanwhile (or couldn't be read): no box slot recorded", "WARNING", "ffaa00")
+            elif not current_source_meaningful:
                 # Group 40.0d (Derek's D3 rule, "one is pre-selected only when
                 # exactly one free option exists"): record a feed slot only when
                 # exactly ONE free slot feeds this head. The first match in
@@ -2970,6 +3099,9 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         # home ("LR-MDB-1:1"), so the scan toast can name it. A head takes one
         # spool (42.3a), so one value.
         result["recorded_source"] = next(iter(recorded_sources.values()))
+    if record_ignored:
+        # Group 40.5: the spool arrived with its own trail, which was kept.
+        result["record_source_ignored"] = True
     if auto_deployed:
         result["auto_deployed_to"] = str(bound_toolhead).upper()
     if to_buffer:

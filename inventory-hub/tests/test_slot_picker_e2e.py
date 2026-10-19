@@ -412,6 +412,42 @@ def test_printer_mode_picks_a_head_or_a_pool_slot_by_scan(picker_page):
     page.evaluate("() => processScan('LOC:FCC-TEST-BOX:SLOT:4', 'barcode')")
     got = _pick(page)
     assert got["kind"] == "pool" and got["box"] == "FCC-TEST-BOX" and got["slot"] == "4"
+    # Group 40.5: a free Printer Pool slot is sent as a pick, with its (no-head) feed.
+    assert got["send"] == {"picked_slot": "4"} and got["expected_feed"] == "", got
+
+
+def test_an_occupied_printer_pool_slot_asks_swap_or_overwrite(picker_page):
+    """Group 40.5: a Printer Pool slot is a box slot like any other (Q2): one that
+    holds a stored spool asks Swap / Overwrite, and a Swap is sent as the
+    engine's Overwrite `slot` with `swap` (Swap option C)."""
+    page, setup, open_ = picker_page
+    spools = SPOOLS + [_sp(999244, "FCC-TEST-BOX", slot=4, name="Test Grey", color="777777")]
+    setup({"FCCX": build_model("FCCX", spools=spools, spool=999201)})
+    open_({"location": "FCCX", "spool": 999201})
+    page.locator("#fcc-slot-picker .fcc-sp-tile[data-sp-kind='pool'][data-sp-slot='4']").click()
+    page.wait_for_selector(CHOICE, timeout=5_000)
+    labels = page.evaluate("() => Array.from(document.querySelectorAll('#fcc-slot-picker [data-sp-choice]'))"
+                           ".map(b => b.dataset.spChoice)")
+    assert labels == ["swap", "overwrite", "back"], labels
+    page.locator("#fcc-slot-picker [data-sp-choice='swap']").click()
+    got = _pick(page)
+    assert got["kind"] == "pool" and got["send"] == {"slot": "4"} and got["swap"] is True, got
+    assert got["displaced"]["id"] == 999244 and got["expected_feed"] == "", got
+
+
+def test_a_printer_pool_slot_whose_spool_is_loaded_elsewhere_is_greyed_out(picker_page):
+    """Group 40.5: the engine refuses a slot whose own spool runs on a head, so the
+    picker greys the pool tile out and says why, as in box mode."""
+    page, setup, open_ = picker_page
+    spools = SPOOLS + [_sp(999245, "FCCX-2", src="FCC-TEST-BOX", src_slot=4, name="Test Grey", color="777777")]
+    setup({"FCCX": build_model("FCCX", spools=spools, spool=999201)})
+    open_({"location": "FCCX", "spool": 999201})
+    tile = page.locator("#fcc-slot-picker .fcc-sp-tile[data-sp-kind='pool'][data-sp-slot='4']")
+    expect(tile).to_have_class(re.compile(r"\bis-blocked\b"))
+    expect(tile).to_contain_text("#999245 from this slot is loaded on FCCX-2")
+    tile.click(force=True)
+    page.wait_for_timeout(200)
+    assert page.evaluate("() => window.__pickDone") is False
 
 
 # ---- return mode, rtl, unreadable ----------------------------------------------------------------

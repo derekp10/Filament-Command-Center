@@ -906,6 +906,33 @@ window.printerNameForHead = (locId) => {
     return null;
 };
 
+// --- WHICH PICKER A LOCATION NEEDS (Group 40.4 / 40.5) ---
+// The browser's copy of locations_db.is_printer_row_not_head, the one
+// classifier the engine's refusal (40.0a) and Eject All's (41.1) use: a Printer
+// row that isn't itself one of its printer's toolheads (XL, RCOI, or a printer
+// whose heads aren't set up yet). A Printer row is its own head only when some
+// Printer row's toolheads[] lists it (the old dual-role Core One). `rows`: the
+// location rows to read (default state.allLocations).
+window.isPrinterRowNotHead = (row, rows = null) => {
+    if (!row || String(row.Type || '').trim().toLowerCase() !== 'printer') return false;
+    const id = String(row.LocationID || '').trim().toUpperCase();
+    const all = Array.isArray(rows) ? rows
+        : ((typeof state !== 'undefined' && state && Array.isArray(state.allLocations)) ? state.allLocations : []);
+    return !all.some(r => r && String(r.Type || '').trim().toLowerCase() === 'printer'
+        && (Array.isArray(r.toolheads) ? r.toolheads : [])
+            .some(t => String((t && t.location_id) || '').trim().toUpperCase() === id));
+};
+// A multi-slot Dryer Box (the box picker's rows); and a single-slot one,
+// locations_db._is_single_slot_dryer_box's rule (Max Spools "1" or "0"; a blank
+// isn't managed).
+window.isMultiSlotBox = (row) => !!row && row.Type === 'Dryer Box' && (parseInt(row['Max Spools'], 10) || 0) > 1;
+window.isSingleSlotBox = (row) => {
+    if (!row || row.Type !== 'Dryer Box') return false;
+    const raw = String(row['Max Spools'] == null ? '' : row['Max Spools']).trim();
+    const n = parseInt(raw, 10);
+    return raw !== '' && !isNaN(n) && n <= 1;
+};
+
 // A client probe of a head, with the pill and the timeout race (every client
 // probe gets it; doAssign's used to wait on the server with no cap).
 window.checkPrinterForHead = (locId, { timeoutMs = PRINTER_CHECK_TIMEOUT_MS } = {}) => {

@@ -277,6 +277,9 @@ def api_smart_move():
         # Swap option C: the slot picker's Swap files the slot's old spool back
         # where it sat before and puts it in the scan buffer (`to_buffer`).
         swap_out=logic.swap_requested(payload),
+        # Group 40.5: the Printer picker names where a spool put on a head came
+        # from ("No box" = ''); absent, the engine's silent 13.6 rule.
+        record_source=logic.record_source_from(payload),
     )
     stale = logic.stale_fed_refusal(payload, result) or logic.stale_confirm_refusal(payload, result)
     if stale:

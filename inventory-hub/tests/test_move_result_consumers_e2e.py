@@ -50,6 +50,10 @@ SPOOL = {"id": 999101, "display": "FCC Test PLA #999101", "color": "ff0000", "re
 REJECT = "400: rejected by test"
 PRINTER = "FCC Test XL"
 BOX_ROW = {"LocationID": BOX, "Name": "FCC Test Box", "Type": "Dryer Box", "Max Spools": "4"}
+# Group 40.4: Force Location into a multi-slot box opens the slot picker, so the
+# tests of the DIRECT path's answers force onto a plain shelf.
+SHELF = "FCC-TEST-SHELF"
+SHELF_ROW = {"LocationID": SHELF, "Name": "FCC Test Shelf", "Type": "Shelf", "Max Spools": "12"}
 TH2_ROW = {"LocationID": "FCC-TEST-TH2", "Name": "FCC Test Toolhead 2", "Type": "Tool Head", "Max Spools": "1"}
 BINDINGS = {"slots": [{"box": "FCC-TEST-BIND", "slot": "1", "target": TH}]}
 
@@ -135,7 +139,7 @@ class FakeBackend:
 
     def __init__(self, page: Page, *, printer_active=False, identify=None, manage_contents=None,
                  smart_move=None, contents=None, spools=None, dryer_slots=None, extra_locations=(),
-                 responders=None, printer_state=None):
+                 responders=None, printer_state=None, placement=None):
         # responders: {path: body -> (status, payload)}, payload a dict (JSON) or
         # a str (served as text/html, like a proxy's error page). Group 39.8.
         self.responders = dict(responders or {})
@@ -153,6 +157,8 @@ class FakeBackend:
         self.spools = spools or {}
         self.dryer_slots = dryer_slots
         self.extra_locations = list(extra_locations)
+        # placement: {location: the /api/placement_options model} (Group 40.4).
+        self.placement = dict(placement or {})
         page.context.route("**/*", self._handle)
 
     @staticmethod
@@ -198,6 +204,11 @@ class FakeBackend:
                 else:
                     self._json(route, {"success": False, "msg": "Spool not found"}, status=404)
                 return
+            if path == "/api/placement_options" and self.placement:
+                loc = (parse_qs(parts.query).get("location") or [""])[0].upper()
+                if loc in self.placement:
+                    self._json(route, self.placement[loc])
+                    return
             if path == "/api/dryer_boxes/slots" and self.dryer_slots is not None:
                 self._json(route, self.dryer_slots)
                 return
@@ -637,22 +648,20 @@ def test_slot_assign_with_a_failure_leaves_the_buffer_untouched(
 @pytest.mark.usefixtures("require_server")
 def test_force_location_override_with_a_failure_shows_the_error(
         page: Page, base_url: str, reset_dom_state_js: str):
-    """Spool details -> Force Location -> double-click a box row (21.5 commits
+    """Spool details -> Force Location -> double-click a shelf row (21.5 commits
     in one gesture). manage_contents answers status 'success' + failures[spool].
-    FAILS on HEAD: "Location updated via override" (R2-05)."""
+    FAILS on HEAD: "Location updated via override" (R2-05). (A shelf since Group
+    40.4: a multi-slot box opens the slot picker first.)"""
     be = FakeBackend(page, manage_contents=lambda b: {"status": "success", "failures": {"999401": REJECT}},
-                     extra_locations=[BOX_ROW])
+                     extra_locations=[BOX_ROW, SHELF_ROW])
     _boot(page, base_url, reset_dom_state_js)
 
-    page.evaluate("(sid) => window.promptEditLocation(sid, 'Unassigned')", 999401)
-    item = f".swal-loc-item[data-id='{BOX}']"
-    page.wait_for_selector(item, state="attached", timeout=10_000)
-    page.dispatch_event(item, "dblclick")
+    _force_to(page, SHELF)
     _until(page, lambda: be.bodies("/api/manage_contents"), 5_000, "the override sent nothing")
     # Group 40.3: every door request carries confirmed_fed_heads (one without it
     # gets the stale-page refusal instead of the head_fed question).
     assert be.bodies("/api/manage_contents")[0] == {
-        "action": "add", "location": BOX, "spool_id": 999401, "origin": "manual_override",
+        "action": "add", "location": SHELF, "spool_id": 999401, "origin": "manual_override",
         "confirmed_toolheads": [], "confirmed_fed_heads": []}
 
     err = _toast(page, "a failed override raised no error toast", type_="error", contains=("#999401", REJECT))
@@ -665,12 +674,12 @@ _FORCE_ASK = {"status": "requires_confirm", "confirm_type": "active_print",
               "active_print": {"toolhead": TH, "printer_name": PRINTER, "state": "PRINTING"},
               "active_prints": [{"toolhead": TH, "printer_name": PRINTER, "state": "PRINTING",
                                  "role": "source", "spools": [999401]}],
-              "msg": f"#999401 is loaded on {TH}. Moving it to {BOX} means FCC stops charging this print to it. Continue?"}
+              "msg": f"#999401 is loaded on {TH}. Moving it to {SHELF} means FCC stops charging this print to it. Continue?"}
 
 
-def _force_to_box(page: Page) -> None:
+def _force_to(page: Page, loc: str) -> None:
     page.evaluate("(sid) => window.promptEditLocation(sid, 'Unassigned')", 999401)
-    item = f".swal-loc-item[data-id='{BOX}']"
+    item = f".swal-loc-item[data-id='{loc}']"
     page.wait_for_selector(item, state="attached", timeout=10_000)
     page.dispatch_event(item, "dblclick")
 
@@ -682,9 +691,9 @@ def test_force_location_asks_on_an_active_print_then_moves_with_the_head(
     the shared confirm shows the server's message, and Yes retries confirming the
     head it named. HEAD proof: no confirm, an error toast."""
     be = FakeBackend(page, manage_contents=lambda b: (
-        {"status": "success"} if b.get("confirmed_toolheads") else _FORCE_ASK), extra_locations=[BOX_ROW])
+        {"status": "success"} if b.get("confirmed_toolheads") else _FORCE_ASK), extra_locations=[SHELF_ROW])
     _boot(page, base_url, reset_dom_state_js)
-    _force_to_box(page)
+    _force_to(page, SHELF)
     page.wait_for_selector("#fcc-active-print-confirm-overlay .fcc-apc-yes", state="visible", timeout=5_000)
     assert "stops charging this print" in page.text_content("#fcc-active-print-confirm-overlay .fcc-apc-msg")
     page.click("#fcc-active-print-confirm-overlay .fcc-apc-yes")
@@ -695,41 +704,76 @@ def test_force_location_asks_on_an_active_print_then_moves_with_the_head(
 
 
 @pytest.mark.usefixtures("require_server")
-def test_force_location_yes_lands_in_the_slot_the_engine_picked(
+def test_force_location_into_a_box_opens_the_slot_picker_and_the_yes_keeps_its_slot(
         page: Page, base_url: str, reset_dom_state_js: str):
-    """Group 40.0e: Force Location into a multi-slot box sends no slot; the engine
-    picks one before it asks and names it (`target_slot`). The Yes sends it back
-    as `picked_slot`, so it lands where the question said (or, if someone took
-    that slot meanwhile, nothing moves). FAILS on HEAD: the retry sent no slot,
-    so the engine could pick another one."""
+    """Group 40.4 (Derek's D2.4: "Force Location into a box behaves exactly like
+    a box-label scan"): Force Location into a multi-slot box opens the slot
+    picker; the free slot picked is sent as `picked_slot` with the feed its tile
+    showed (`expected_feed`), and the Yes to the server's printing question sends
+    it back (Group 40.0e), so it lands where the question said. It used to post
+    the box with no slot, a slot chosen unseen."""
+    from test_slot_picker_e2e import ROWS as PICKER_ROWS, build_model
+    model = build_model(BOX, spool=999401)
+    assert model["recommended"]["slot"] == "3", model["recommended"]      # FCCX-3: free, empty
     ask = {"status": "requires_confirm", "confirm_type": "active_print",
-           "active_print": {"toolhead": TH, "printer_name": PRINTER, "state": "PRINTING"},
-           "active_prints": [{"toolhead": TH, "printer_name": PRINTER, "state": "PRINTING",
+           "active_print": {"toolhead": "FCCX-3", "printer_name": PRINTER, "state": "PRINTING"},
+           "active_prints": [{"toolhead": "FCCX-3", "printer_name": PRINTER, "state": "PRINTING",
                               "role": "feeds", "spools": [999401]}],
-           "fed_heads": [], "can_store": True, "target_slot": SLOT,
-           "msg": f"{PRINTER} is PRINTING. {BOX} slot {SLOT} feeds {TH}, so this also loads #999401 "
-                  f"onto {TH} and unloads what {TH} holds. Continue?"}
+           "fed_heads": [], "can_store": False, "target_slot": "3", "slot_picked": True, "feed": "FCCX-3",
+           "msg": f"{PRINTER} is PRINTING. {BOX} slot 3 feeds FCCX-3, so this also loads #999401 "
+                  f"onto FCCX-3. Continue?"}
     be = FakeBackend(page, manage_contents=lambda b: (
-        {"status": "success"} if b.get("confirmed_toolheads") else ask), extra_locations=[BOX_ROW])
+        {"status": "success", "failures": {}} if b.get("confirmed_toolheads") else ask),
+        extra_locations=[r for r in PICKER_ROWS], placement={BOX: model})
     _boot(page, base_url, reset_dom_state_js)
-    _force_to_box(page)
+    _force_to(page, BOX)
+    page.wait_for_selector("#fcc-slot-picker [data-sp-state='ready']", timeout=10_000)
+    page.keyboard.press("Enter")                       # the ⭐: slot 3
     page.wait_for_selector("#fcc-active-print-confirm-overlay .fcc-apc-yes", state="visible", timeout=5_000)
     page.click("#fcc-active-print-confirm-overlay .fcc-apc-yes")
     _until(page, lambda: len(be.bodies("/api/manage_contents")) >= 2, 5_000, "Yes sent no retry")
     first, retry = be.bodies("/api/manage_contents")[:2]
-    assert "slot" not in first and "picked_slot" not in first, first
-    assert retry["picked_slot"] == SLOT and "slot" not in retry, retry
-    assert retry["confirmed_toolheads"] == [TH], retry
+    assert first["picked_slot"] == "3" and first["expected_feed"] == "FCCX-3" and "slot" not in first, first
+    assert first["location"] == BOX and first["origin"] == "manual_override", first
+    assert retry["picked_slot"] == "3" and "slot" not in retry, retry
+    assert retry["confirmed_toolheads"] == ["FCCX-3"], retry
     _toast(page, "the confirmed override raised no success toast", type_="success",
-           contains=("Location updated via override",))
+           contains=(f"#999401 → {BOX} slot 3",))
+
+
+@pytest.mark.usefixtures("require_server")
+def test_force_location_into_a_printer_opens_the_printer_picker(
+        page: Page, base_url: str, reset_dom_state_js: str):
+    """Group 40.5 (Derek's D3): Force Location onto a Printer row that isn't its
+    own toolhead (the XL, the INDX) opens the Printer picker: a head, then (for a
+    spool from no box) which box slot it came from, the one free slot
+    pre-selected. It used to file the spool on the printer row itself (refused
+    since 40.0a)."""
+    from test_slot_picker_e2e import ROWS as PICKER_ROWS, build_model
+    model = build_model("FCCX", spool=999401)
+    be = FakeBackend(page, manage_contents=lambda b: {"status": "success", "failures": {},
+                                                      "recorded_source": "FCC-TEST-BOX:3"},
+                     extra_locations=[r for r in PICKER_ROWS], placement={"FCCX": model})
+    _boot(page, base_url, reset_dom_state_js)
+    _force_to(page, "FCCX")
+    page.wait_for_selector("#fcc-slot-picker [data-sp-state='ready']", timeout=10_000)
+    page.locator("#fcc-slot-picker .fcc-sp-tile[data-sp-head='FCCX-3']").click()
+    page.wait_for_selector("#fcc-record-source .fcc-rs-panel", timeout=5_000)
+    assert "Record #999401 as coming from" in page.text_content("#fcc-record-source .fcc-rs-panel")
+    page.keyboard.press("Enter")                       # the one free feed slot is pre-selected
+    _until(page, lambda: be.bodies("/api/manage_contents"), 5_000, "the head pick sent nothing")
+    body = be.bodies("/api/manage_contents")[0]
+    assert body["location"] == "FCCX-3" and body["record_source"] == {"box": "FCC-TEST-BOX", "slot": "3"}, body
+    _toast(page, "the head pick raised no success toast", type_="success",
+           contains=("#999401 → FCCX-3", "recorded as from FCC-TEST-BOX slot 3"))
 
 
 @pytest.mark.usefixtures("require_server")
 def test_force_location_cancelled_sends_nothing_more(
         page: Page, base_url: str, reset_dom_state_js: str):
-    be = FakeBackend(page, manage_contents=lambda b: _FORCE_ASK, extra_locations=[BOX_ROW])
+    be = FakeBackend(page, manage_contents=lambda b: _FORCE_ASK, extra_locations=[SHELF_ROW])
     _boot(page, base_url, reset_dom_state_js)
-    _force_to_box(page)
+    _force_to(page, SHELF)
     page.wait_for_selector("#fcc-active-print-confirm-overlay .fcc-apc-no", state="visible", timeout=5_000)
     page.click("#fcc-active-print-confirm-overlay .fcc-apc-no")
     page.wait_for_timeout(600)

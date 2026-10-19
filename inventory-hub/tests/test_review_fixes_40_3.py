@@ -134,15 +134,19 @@ def test_a_slot_whose_own_spool_runs_on_another_head_takes_no_new_spool(auto_dep
     assert "auto_deployed_to" not in res, res
 
 
-def test_the_yes_to_a_printing_question_is_refused_the_same_way():
-    """XL printing: the question comes first (nothing is known wrong yet), and
-    its Yes is refused at the slot read, with nothing written."""
+def test_a_printing_xl_refuses_it_before_asking_anything():
+    """XL printing. It used to ask the printing question first and then refuse
+    its Yes (and its "Just store it") at the slot read. Group 40.5 (the 40.3
+    "Open, narrow" note): the slot is read before any question, so the refusal
+    comes first: no question whose every answer is refused, nothing written. A
+    replay that confirmed XL-1 meets the same refusal."""
     sm = _other_head()
     probe = _probe_for({"XL"})
-    asked, store = _move(sm, probe=probe)
-    assert asked.get("status") == "requires_confirm", asked
-    res, _ = _move(sm, store=store, probe=probe, confirm_active_print=["XL-1"], expected_feed="XL-1")
+    res, store = _move(sm, probe=probe)
+    assert res.get("status") == "error", res
     assert "still holds #60, loaded on XL-3, while the slot feeds XL-1" in logic.smart_move_failure(res, 42), res
+    again, _ = _move(sm, store=store, probe=probe, confirm_active_print=["XL-1"], expected_feed="XL-1")
+    assert "still holds #60, loaded on XL-3, while the slot feeds XL-1" in logic.smart_move_failure(again, 42), again
     assert sm.writes == []
 
 

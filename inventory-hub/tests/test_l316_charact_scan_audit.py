@@ -517,6 +517,9 @@ def test_add_returns_perform_smart_move_result_verbatim(client):
         "seen_printing": [],
         # Swap option C: the grid's Swap (`swap: true`); not a Swap here.
         "swap_out": False,
+        # Group 40.5: the Printer picker's "came from" answer (none here: the
+        # engine's silent 13.6 rule).
+        "record_source": None,
     }
 
 

@@ -1043,6 +1043,18 @@ const _buildDepositCard = (locId) => {
     depositCard.onclick = () => {
         const top = state.heldSpools[0];
         if (!top) { showToast('Buffer is empty — scan a spool first', 'warning', 3500); return; }
+        // Group 40.5 (and D2.4): the card's QR is this location's label, so a
+        // click does what scanning it does: a multi-slot box, or a Printer row
+        // that isn't its own toolhead (XL, RCOI), opens its picker for this spool
+        // (a slot; a head or a Printer Pool slot). It used to file the spool on
+        // the printer row itself, which the engine refuses since 40.0a.
+        const row = (state.allLocations || []).find(l => String(l.LocationID) === String(locId));
+        if (window._placeBufferWithPicker && window.openSlotPicker && row
+                && ((window.isMultiSlotBox && window.isMultiSlotBox(row))
+                    || (window.isPrinterRowNotHead && window.isPrinterRowNotHead(row)))) {
+            window._placeBufferWithPicker(locId, [top.id]);
+            return;
+        }
         doAssign(locId, top.id, null);
     };
 

@@ -1458,6 +1458,32 @@ const _isLocRepeat = (key, capturedAt) => {
     return last.doneAt == null || at < last.doneAt + LOC_REPEAT_MS;
 };
 
+// Group 40.5 item F (Derek's answer 8, 2026-10-13): what an empty-buffer scan of
+// a location label grabs. Only a place that holds one spool grabs one, and only
+// the spool really there: a toolhead (or a printer that is its own head) or a
+// one-spool row grabs its DIRECT resident, never a ghost (LOC:XL used to grab a
+// spool loaded on one of the XL's heads, which the matcher lists under XL, and a
+// head scan could grab a stale trail's spool). A single-spool dryer box still
+// grabs its own spool, even while it is loaded on a head ("also other single
+// spool dryboxes": a scanner can't read a spool's label through a Prusa dry
+// box's lid). Printers, rooms, sections and rows open their view instead. A
+// label with no location row keeps the old first-spool rule. Returns the item
+// or null.
+const _quickPickItem = (locData, res) => {
+    const contents = (res && Array.isArray(res.contents)) ? res.contents : [];
+    if (!contents.length) return null;
+    if (!locData) return contents[0];
+    const id = String(res.id || '').toUpperCase();
+    const direct = contents.find(c => c && !c.is_ghost && String(c.location || '').toUpperCase() === id) || null;
+    if (window.isSingleSlotBox && window.isSingleSlotBox(locData)) return direct || contents[0];
+    const type = String(locData.Type || '').toLowerCase();
+    const headType = type.includes('tool') || type.includes('mmu') || type.includes('direct load');
+    const ownHead = type === 'printer' && !(window.isPrinterRowNotHead && window.isPrinterRowNotHead(locData));
+    const max = parseInt(locData['Max Spools'], 10);
+    if (!(headType || ownHead || (type !== 'printer' && max === 1))) return null;
+    return direct;
+};
+
 // --- SCAN ROUTER ---
 const processScan = (text, source = 'keyboard', capturedAt = null) => {
     const upper = text.toUpperCase();
@@ -1496,7 +1522,10 @@ const processScan = (text, source = 'keyboard', capturedAt = null) => {
     }
     if (openQuestion) {
         if (/^CMD:CANCEL(:.*)?$/.test(upper)) { openQuestion.cancel(); return; }
-        const why = 'Answer the question on screen first: Load it instead, Just store it, or Cancel';
+        // A question whose answers are labels (Group 40.5's "Record it as coming
+        // from…": a feed slot's label picks it) routes them itself.
+        if (typeof openQuestion.route === 'function' && openQuestion.route(text)) { locDone(); return; }
+        const why = openQuestion.hint || 'Answer the question on screen first: Load it instead, Just store it, or Cancel';
         showToast(why, 'warning', 7000);
         if (openQuestion.flash) openQuestion.flash(`${why}. (Ignored: ${text})`);
         if (window.logClientEvent) window.logClientEvent(
@@ -1807,6 +1836,16 @@ const processScan = (text, source = 'keyboard', capturedAt = null) => {
                         _placeBufferWithPicker(res.id);
                         return;
                     }
+                    // Group 40.5 (Derek's D3): a Printer row that isn't its own
+                    // toolhead (LOC:XL, LOC:RCOI) opens the Printer picker, once per
+                    // buffered spool (Q1: loop): a head, or a Printer Pool slot. It
+                    // used to file the whole buffer on the printer row itself (the
+                    // engine refuses that since 40.0a).
+                    if (window.isPrinterRowNotHead && window.isPrinterRowNotHead(locData) && window.openSlotPicker) {
+                        state.lastScannedLoc = null;
+                        _placeBufferWithPicker(res.id);
+                        return;
+                    }
                     const singleOccupancy = isSingleSpoolType || (maxSpools > 0 && maxSpools <= 1);
                     if (singleOccupancy && state.heldSpools.length > 1) {
                         const top = state.heldSpools[0];
@@ -1819,8 +1858,8 @@ const processScan = (text, source = 'keyboard', capturedAt = null) => {
                     return;
                 }
                 const locData = state.allLocations.find(l => l.LocationID === res.id);
-                if ((!locData || parseInt(locData['Max Spools']) <= 1) && res.contents && res.contents.length > 0) {
-                    const spool = res.contents[0];
+                const spool = _quickPickItem(locData, res);
+                if (spool) {
                     state.heldSpools.unshift({ id: spool.id, display: spool.display, color: spool.color, color_direction: spool.color_direction, remaining_weight: spool.remaining_weight, details: spool.details, archived: spool.archived, location: spool.location, is_ghost: spool.is_ghost, slot: spool.slot, deployed_to: spool.deployed_to });
                     renderBuffer();
                     showToast("⚡ Quick Pick: #" + spool.id);
@@ -1993,6 +2032,9 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
     // back where it sat before the slot and names it in `to_buffer`; on
     // `original`, so every replay of a question is still a Swap.
     if (opts && opts.swapDisplaced) original.swap = true;
+    // Group 40.5: the Printer picker's "came from" answer ('' = No box), on
+    // `original` so a replay of the server's printing question keeps it.
+    if (opts && opts.recordSource !== undefined) original.record_source = opts.recordSource;
     const first = Object.assign({}, original, {
         confirmed_toolheads: Array.isArray(confirmedHeads) ? confirmedHeads : [],
     });
@@ -2086,6 +2128,9 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
                             'success', 4000);
                     } else if (rec && rec.length === 2) {
                         showToast(`#${movedIds[0]} → ${tid} (recorded as from ${rec[0]} slot ${rec[1]})`, "success");
+                    } else if (movedCount === 1 && payload.record_source === '' && !res.record_source_ignored) {
+                        // Group 40.5: "No box" (or no free slot fed the head).
+                        showToast(`✅ #${movedIds[0]} → ${tid} (no box slot recorded)`, 'success', 4000);
                     } else if (movedCount === 1 && hasSlot) {
                         // Group 40.2: a picked slot says where it went (and the head
                         // its slot loaded), in short arrows.
@@ -2145,15 +2190,224 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
 // CMD:CANCEL stops the loop and the rest stay in the buffer; Cancel on a
 // question steps back to this spool's picker; a failure ends the loop after its
 // 7 s error (Claude's call 24). Several spools end with a summary.
+// Group 40.5 (Derek's D3): a head picked in the Printer picker that holds a
+// spool asks first, naming what happens to it ("Load #42 onto XL-3? XL-3 holds
+// #99 (from LR-MDB-1 slot 3). Loading #42 sends #99 back to LR-MDB-1 slot 3."):
+// Load it instead / Cancel, with no store (a head is not storage); Enter
+// cancels. An empty head asks nothing here (a printing printer is the server's
+// question, as on every door). Resolves true to load, false to step back.
+const _confirmHeadPick = (pick, sid, host) => {
+    const residents = (Array.isArray(pick.residents) && pick.residents.length) ? pick.residents
+        : (pick.resident ? [pick.resident] : []);
+    if (!residents.length) return Promise.resolve(true);
+    const and = (list) => (list.length < 2 ? list.join('') : `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`);
+    const runs = and(residents.map(r => `#${r.id}` + (r.from ? ` (from ${r.from})` : '')));
+    const goes = and(residents.map(r => `#${r.id} ` + (r.from ? `back to ${r.from}` : (r.goes || 'to Unassigned'))));
+    return new Promise((resolve) => window.confirmActivePrint({
+        title: `Load #${sid} onto ${pick.head}?`,
+        msg: `${pick.head} holds ${runs}. Loading #${sid} sends ${goes}.`,
+        host, printing: false, loadLabel: 'Load it instead',
+        ids: { overlay: 'fcc-head-pick-confirm' },
+        onConfirm: () => resolve(true),
+        onCancel: () => resolve(false),
+    }));
+};
+
+// Group 40.5 (Derek's D3, item G): "Record it as coming from…" for a spool put
+// on a head from no box (Unassigned, or another head): the box slots that feed
+// the head, the free ones choosable and the held ones shown with their spool,
+// plus No box. Pre-selected only when exactly one slot is free (D3); with
+// several, No box has the focus, so Enter never guesses. A feed slot's label
+// scanned picks it; CMD:CANCEL steps back. Asked only when there is something to
+// choose. Resolves {box, slot} | '' (No box: also when no slot is free) |
+// undefined (not asked: the spool arrives from somewhere, which stays its
+// trail) | null (Cancel: back to the picker).
+const _askRecordSource = (pick, sid, host) => {
+    const from = String(pick.spool_location || '').trim().toUpperCase();
+    if (from && from === String(pick.head || '').toUpperCase()) return Promise.resolve(undefined);
+    const fromRow = (state.allLocations || []).find(l => String(l.LocationID || '').toUpperCase() === from);
+    const headTypes = ['Tool Head', 'MMU Slot', 'No MMU Direct Load', 'Printer'];
+    if (from && !(fromRow && headTypes.includes(fromRow.Type))) return Promise.resolve(undefined);
+    const feeds = (Array.isArray(pick.feeds) ? pick.feeds : []).filter(f => f && f.box);
+    const free = feeds.filter(f => f.free);
+    if (!free.length) return Promise.resolve('');
+    const esc = window.escHtml || ((s) => String(s == null ? '' : s));
+    const head = String(pick.head || '');
+    const pre = free.length === 1 ? free[0] : null;
+    return new Promise((resolve) => {
+        let settled = false;
+        let handle = null;
+        let qr = null;
+        let question = null;
+        let statusTimer = null;
+        const finish = (value) => {
+            if (settled) return;
+            settled = true;
+            if (qr) { try { qr.cleanup(); } catch (_) { /* noop */ } qr = null; }
+            if (handle) { try { handle.cleanup(); } catch (_) { /* noop */ } handle = null; }
+            const open = (window._fccOpenMoveQuestions || []).filter(q => q !== question);
+            window._fccOpenMoveQuestions = open;
+            if (window._fccOpenMoveQuestion === question) window._fccOpenMoveQuestion = open.length ? open[open.length - 1] : null;
+            clearTimeout(statusTimer);
+            resolve(value);
+        };
+        const optBtns = feeds.map((f, i) => f.free
+            ? `<button type="button" class="btn btn-sm btn-info fcc-rs-opt" data-rs-i="${i}">${esc(`${f.box} slot ${f.slot}`)}<small style="display:block;font-weight:400;">free</small></button>`
+            : `<button type="button" class="btn btn-sm btn-outline-secondary fcc-rs-opt" data-rs-i="${i}" disabled aria-disabled="true">${esc(`${f.box} slot ${f.slot}`)}<small style="display:block;font-weight:400;">holds #${esc(f.claimed_by)}</small></button>`).join('');
+        handle = window.mountOverlay({
+            id: 'fcc-record-source',
+            tier: 'confirm',
+            host: host || undefined,
+            onEscape: () => finish(null),
+            content: `
+                <div class="fcc-rs-panel" style="background:#1e1e1e; color:#fff; border:2px solid #0dcaf0; border-radius:8px; padding:18px 22px; max-width:620px; text-align:center;">
+                    <div class="fcc-rs-title" style="font-size:1.15em; font-weight:bold; margin-bottom:6px;">🔗 Record #${esc(sid)} as coming from…</div>
+                    <div class="fcc-rs-msg" style="color:#ffc; margin-bottom:12px; text-align:left;">#${esc(sid)} isn't coming from a box. Which slot feeding ${esc(head)} is its home? Return and eject send it back there.</div>
+                    <div class="fcc-rs-status" role="alert" style="display:none; margin-bottom:10px; padding:6px 10px; border-radius:6px; background:#4a3200; color:#ffd27a; border:1px solid #ffb74d; font-weight:bold; text-align:left;"></div>
+                    <div style="display:flex; gap:10px; justify-content:center; flex-wrap:wrap;">
+                        ${optBtns}
+                        <button type="button" class="btn btn-sm btn-secondary fcc-rs-none">No box</button>
+                        <button type="button" class="btn btn-sm btn-dark fcc-rs-cancel">Cancel</button>
+                    </div>
+                    <div class="fcc-rs-hint" style="font-size:0.8rem; color:#ccc; margin-top:8px;">←/→ move · Enter chooses · scan a slot's label to choose it · Esc goes back</div>
+                </div>`,
+            initialFocus: pre ? `.fcc-rs-opt[data-rs-i="${feeds.indexOf(pre)}"]` : '.fcc-rs-none',
+        });
+        const ov = handle.element;
+        const flash = (text) => {
+            const line = ov.querySelector('.fcc-rs-status');
+            if (!line) return;
+            line.textContent = text;
+            line.style.display = 'block';
+            clearTimeout(statusTimer);
+            statusTimer = setTimeout(() => { line.style.display = 'none'; }, 7000);
+        };
+        const choose = (f) => finish({ box: String(f.box).toUpperCase(), slot: String(f.slot) });
+        feeds.forEach((f, i) => {
+            if (!f.free) return;
+            const b = ov.querySelector(`.fcc-rs-opt[data-rs-i="${i}"]`);
+            if (b) b.onclick = () => choose(f);
+        });
+        const noneBtn = ov.querySelector('.fcc-rs-none');
+        const cancelBtn = ov.querySelector('.fcc-rs-cancel');
+        noneBtn.onclick = () => finish('');
+        cancelBtn.onclick = () => finish(null);
+        ov.addEventListener('keydown', (e) => {
+            const order = Array.from(ov.querySelectorAll('.fcc-rs-opt:not([disabled]), .fcc-rs-none, .fcc-rs-cancel'));
+            if (e.key === 'Enter') {
+                if (window.isScanInFlight && window.isScanInFlight()) return;
+                const ae = document.activeElement;
+                if (order.includes(ae)) { e.preventDefault(); e.stopPropagation(); ae.click(); }
+                return;
+            }
+            if (e.key === 'Tab' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                const back = e.key === 'ArrowLeft' || (e.key === 'Tab' && e.shiftKey);
+                const idx = order.indexOf(document.activeElement);
+                const next = idx === -1 ? 0 : (idx + (back ? order.length - 1 : 1)) % order.length;
+                e.preventDefault(); e.stopPropagation();
+                order[next].focus();
+            }
+        }, true);
+        if (window.attachConfirmQRs) {
+            const panel = ov.querySelector('.fcc-rs-panel') || handle.panel;
+            qr = window.attachConfirmQRs({
+                host: panel,
+                onConfirm: pre ? () => choose(pre) : () => finish(''),
+                onCancel: () => finish(null),
+                confirmLabel: pre ? `Scan: ${pre.box} slot ${pre.slot}` : 'Scan: No box',
+                cancelLabel: 'Scan to go Back', theme: 'info',
+            });
+        }
+        // Scans are held off while it is open (processScan); a feed slot's label
+        // picks that slot.
+        question = {
+            title: `Record #${sid} as coming from…`,
+            element: ov,
+            hint: 'Answer the question on screen first: pick a slot (or scan its label), No box, or Cancel',
+            cancel: () => finish(null),
+            flash,
+            route: (text) => {
+                const m = /^LOC:(.+?):SLOT:(\d+)$/.exec(String(text || '').trim().toUpperCase());
+                if (!m) return false;
+                const f = feeds.find(x => String(x.box).toUpperCase() === m[1].trim() && String(x.slot) === String(parseInt(m[2], 10)));
+                if (!f) return false;
+                if (!f.free) {
+                    flash(`${f.box} slot ${f.slot} holds #${f.claimed_by}: pick a free slot, No box, or Cancel`);
+                    return true;
+                }
+                choose(f);
+                return true;
+            },
+        };
+        window._fccOpenMoveQuestions = (window._fccOpenMoveQuestions || []).concat([question]);
+        window._fccOpenMoveQuestion = question;
+    });
+};
+
+// What a pick becomes (Group 40.4 / 40.5): a placement the door sends,
+// {location, slot?, picked_slot?, expected_feed?, auto_deploy?, swap?,
+//  displaced?, noStore?, record_source?, label, short}; null to step back to
+// the picker (a question was cancelled); false to stop.
+const _placementFor = async (pick, sid, host, loc) => {
+    if (pick.kind === 'slot' || pick.kind === 'pool') {
+        const send = pick.send || (pick.free ? { picked_slot: pick.slot } : { slot: pick.slot });
+        const p = { location: pick.box, label: `${pick.box} slot ${pick.slot}`,
+            short: String(pick.box).toUpperCase() === String(loc).toUpperCase() ? `slot ${pick.slot}` : `${pick.box} slot ${pick.slot}`,
+            expected_feed: pick.expected_feed != null ? pick.expected_feed : '' };
+        if (send.slot != null) p.slot = send.slot;
+        if (send.picked_slot != null) p.picked_slot = send.picked_slot;
+        if (send.auto_deploy === false) p.auto_deploy = false;
+        if (pick.swap) { p.swap = true; p.displaced = pick.displaced || null; }
+        if (pick.store_ok === false) p.noStore = true;
+        return p;
+    }
+    if (pick.kind === 'head') {
+        if (!(await _confirmHeadPick(pick, sid, host))) return null;
+        const rec = await _askRecordSource(pick, sid, host);
+        if (rec === null) return null;
+        const p = { location: pick.head, label: pick.head, short: pick.head };
+        if (rec !== undefined) p.record_source = rec;
+        return p;
+    }
+    return false;   // a pick these doors can't place (a return-mode "No slot"): stop
+};
+
+// Group 40.4 / 40.5 (Derek's D2.4, D3) — place ONE spool through a picker: a
+// multi-slot Dryer Box opens the box picker, a Printer row that isn't its own
+// toolhead the Printer picker (a head, or a Printer Pool slot). Every door that
+// names such a row uses it: its label scanned with a buffer, the Location
+// Manager's DEPOSIT card, Force Location. `send(placement, done)` performs the
+// door's own request and calls done({outcome: 'moved' | 'cancelled' |
+// 'failed', res}). Cancel on any question steps back to this spool's picker
+// (Claude's call 24); Escape there ends it. Resolves {outcome: 'moved' |
+// 'failed' | 'stopped', placement}.
+const _placeOne = async ({ loc, sid, host = null, step = '', send }) => {
+    for (;;) {
+        const pick = await window.openSlotPicker({ location: loc, spool: sid, host, step });
+        if (!pick) return { outcome: 'stopped', placement: null };
+        const placement = await _placementFor(pick, sid, host, loc);
+        if (placement === false) return { outcome: 'stopped', placement: null };
+        if (!placement) continue;
+        const out = await new Promise((resolve) => {
+            try { send(placement, resolve); } catch (e) { console.error(e); resolve({ outcome: 'failed' }); }
+        });
+        if (out && out.outcome === 'cancelled') continue;
+        return Object.assign({ outcome: 'failed' }, out || {}, { placement });
+    }
+};
+window.placeOneWithPicker = _placeOne;
+
 let _pickerLoop = null;
-const _placeBufferWithPicker = async (box) => {
+// `ids` (Group 40.5): the spools to place (the DEPOSIT card's one), else the
+// whole buffer as it is now.
+const _placeBufferWithPicker = async (box, ids = null) => {
     if (_pickerLoop) {
         const why = `Still placing your buffer into ${_pickerLoop.box}: finish or cancel that first`;
         showToast(why, 'warning', 7000);
         if (window.logClientEvent) window.logClientEvent(`⚠️ LOC:${box} ignored: ${why}`, 'WARNING');
         return;
     }
-    const queue = state.heldSpools.map(s => ({ id: s.id }));
+    const queue = (Array.isArray(ids) && ids.length ? ids : state.heldSpools.map(s => s.id)).map(id => ({ id }));
     const loop = _pickerLoop = { box, placed: [], stop: '' };
     const manage = document.getElementById('manageModal');
     const host = manage && manage.classList && manage.classList.contains('show') ? manage : null;
@@ -2162,28 +2416,24 @@ const _placeBufferWithPicker = async (box) => {
             const sid = queue[i].id;
             // It left the buffer meanwhile (dropped, or placed some other way).
             if (!state.heldSpools.some(s => String(s.id) === String(sid))) continue;
-            for (;;) {
-                const pick = await window.openSlotPicker({
-                    location: box, spool: sid, host,
-                    step: queue.length > 1 ? `${i + 1} of ${queue.length}` : '',
-                });
-                if (!pick || pick.kind !== 'slot' || !pick.send) { loop.stop = 'stopped'; break; }
-                const send = pick.send;
-                const out = await new Promise((resolve) => performContextAssign(box,
-                    send.slot != null ? send.slot : null, [], [sid],
-                    send.picked_slot != null ? send.picked_slot : null,
-                    { expectedFeed: pick.expected_feed, swapDisplaced: pick.swap ? pick.displaced : null,
+            const out = await _placeOne({
+                loc: box, sid, host, step: queue.length > 1 ? `${i + 1} of ${queue.length}` : '',
+                send: (pl, done) => performContextAssign(pl.location, pl.slot != null ? pl.slot : null, [], [sid],
+                    pl.picked_slot != null ? pl.picked_slot : null,
+                    { expectedFeed: pl.expected_feed,
+                      // Swap option C: the server files the old spool back and buffers it.
+                      swapDisplaced: pl.swap ? (pl.displaced || { id: null }) : null,
                       // What the tile promised (Group 40.2 review): "stored here,
                       // not loaded back" is a store; a stale record's slot can't
                       // take a store, so its question offers none.
-                      autoDeploy: send.auto_deploy === false ? false : undefined,
-                      noStore: pick.store_ok === false,
-                      onOutcome: resolve }));
-                if (out.outcome === 'moved') { loop.placed.push({ id: sid, slot: pick.slot }); break; }
-                if (out.outcome === 'cancelled') continue;   // step back: this spool's picker again
-                loop.stop = 'failed';
-                break;
-            }
+                      autoDeploy: pl.auto_deploy === false ? false : undefined,
+                      noStore: !!pl.noStore,
+                      // Group 40.5: where a spool put on a head came from.
+                      recordSource: pl.record_source,
+                      onOutcome: done }),
+            });
+            if (out.outcome === 'moved') { loop.placed.push({ id: sid, short: out.placement.short }); continue; }
+            loop.stop = out.outcome === 'stopped' ? 'stopped' : 'failed';
         }
     } finally {
         _pickerLoop = null;
@@ -2206,7 +2456,7 @@ const _summarizePickerLoop = (loop, queue) => {
         }
         return;
     }
-    const placed = loop.placed.map(p => `#${p.id} → slot ${p.slot}`);
+    const placed = loop.placed.map(p => `#${p.id} → ${p.short}`);
     const parts = [];
     if (placed.length) parts.push(placed.join(', '));
     if (left.length) parts.push(`${and(left)} ${left.length === 1 ? 'stays' : 'stay'} in your buffer`);

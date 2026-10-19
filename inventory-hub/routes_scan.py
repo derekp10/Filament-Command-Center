@@ -490,6 +490,9 @@ def api_manage_contents():
             # Swap option C: the grid's Swap files the slot's old spool back where
             # it sat before and puts it in the scan buffer (`to_buffer`).
             swap_out=logic.swap_requested(data),
+            # Group 40.5: Force Location's Printer picker names where a spool put
+            # on a head came from ("No box" = '').
+            record_source=logic.record_source_from(data),
         )
         stale = logic.stale_fed_refusal(data, result) or logic.stale_confirm_refusal(data, result)
         if stale:
