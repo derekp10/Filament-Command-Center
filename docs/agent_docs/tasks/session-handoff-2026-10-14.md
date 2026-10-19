@@ -23,6 +23,10 @@ _Run finished at ~04:45 on 2026-10-14. Started from `dev` @ `4203ffe` (= `origin
 - **Day session (2026-10-15):** Group 40.2 built, reviewed and merged to `dev`: your same-slot swap now puts the
   old spool in your scan buffer (and a double-read can't reverse it), a multi-slot box label opens the slot picker,
   and the picker's follow-ups D1–D4 are done. See "Group 40.2, day session" under Parked.
+- **Overnight 2026-10-19:** Group 40 is **DONE**: Swap option C and 40.4–40.7 built, one review (27 findings, none
+  red, all fixed), one full sweep (3910 passed, 0 failed), merged to `dev` `8d0ff64` and pushed. `main` untouched.
+  Ten questions for you (two are your call, the rest just need a glance) and the hands-on checks: see "Group 40,
+  final leg" under Parked.
 - **For you:** nothing blocks. `main` is held for you. The next release would carry everything on `dev` since the 2026-10-08 release: 9 merges, 107 commits (Group 47's docs, Group 46, the 2026-10-13 standalone fixes, Group 43, Group 39, then tonight's 43.2 + 46.3, Group 45, Group 41 and Group 42). **Derek, morning of 2026-10-14:** continue with Group 40 next; consider moving to `main` once the new group set is done. Optional hands-on checks are under "Manual checks for Derek". The buglist's ⏸️ PENDING DEREK section was left untouched (tonight's rule).
 - Evening prep done: Derek's go-ahead for all-night full test runs, a push after each merge, and read-only prod
   counts (taken ~18:25; table in the plan file).
@@ -308,7 +312,7 @@ _Run finished at ~04:45 on 2026-10-14. Started from `dev` @ `4203ffe` (= `origin
     scan won't put back the spool the swap just took out of that slot for 2 minutes (Undo is the way back).
 - **Next:** 40.4 (Force Location → the picker) → 40.5 → 40.6 → 40.7.
 
-### Group 40, final leg (overnight 2026-10-19 → 20): Swap option C, 40.4 → 40.7 — IN PROGRESS
+### Group 40, final leg (overnight 2026-10-19 → 20): Swap option C, 40.4 → 40.7 — DONE
 
 Derek's ask (2026-10-19, going to bed): Swap option C, then 40.4 → 40.7, with one review and one sweep at
 the end. Budget at the start: 5-hour window 0 %, weekly 0 % (resets in 6 days). Prod still waits for the end of
@@ -354,7 +358,72 @@ Progress is recorded below as each step lands (commit ids), and every branch is 
   `7976b72`); `12d769d` the stale-trail refusal wording + the open view repaints + the ghost-filter pin; Return browser
   tests 96 passed. `5b4b591` merge of the **wizard fixes** (builder, `a675212` server + `f3216df` browser; 45 tests,
   36 red on `7976b72`). CLAUDE.md rows for all of it.
-- Next: offline, the wizard browser files, commit, the one sweep, `dev`, docs.
+- `bc2d7f2` the wizard loop's `origin` asserted on the real request; `7006773` CLAUDE.md; offline 2953 passed; the
+  wizard's 22 browser files 102 passed (load 0.98×).
+- **The one sweep** on `7006773`: `RUN_INTEGRATION`, **3910 passed, 18 skipped, 0 failed in 23:07** (load 1.04×).
+- `60f80a3` the last two not-deployed warning pins (test-only); **merged to `dev` `8d0ff64`**, pushed. Docs and
+  `/finish-group 40` on `dev` after it.
+
+**Result (~04:50 on 2026-10-19):** Group 40 is **DONE**, merged to `dev` `8d0ff64` and pushed; `main` is untouched (held
+for your OK). One review (`wf_bd637c78-057`: 27 findings, none red, 4 orange, all fixed: the engine and browser
+doors here, Return and the wizard by two background fixers), one full sweep (`RUN_INTEGRATION`: 3910 passed, 18 skipped, 0 failed in 23:07, load 1.04×). What changed for you, in short:
+
+- **Swap files the old spool back.** The grid's and the picker's Swap (and your same-slot swap) put the slot's old
+  spool in your buffer AND back where it sat before that slot (a free slot it came from, else the cart or shelf
+  behind it), toast "✋ #77 → your buffer (filed back in CR-CT-2-R1)". FCC starts recording "where it sat before"
+  with the next spool you slot, so older spools still end Unassigned (and buffered).
+- **Force Location, `LOC:XL` / `LOC:RCOI` and the DEPOSIT card on a printer** open the box or Printer picker:
+  pick a slot or a head (it asks before loading over a spool, and for a spool from no box, which slot it came from).
+- **Return** is one tap when the answer is obvious and opens a slot chooser otherwise; it never says `SLOT:null`;
+  a DEPLOYED card's ↩️ is the same Return.
+- **The Add / Edit Spool wizard's Location** opens the same pickers, and Save moves the spool through FCC's move
+  engine (so it loads the slot's head, asks when printing, and a refused move keeps your other edits).
+
+Hands-on checks (when you like; nothing waits on them): the buglist's ⏸️ PENDING DEREK item "the pickers and Swap
+option C" (C1–W2).
+
+**Questions for you (nothing waits on them; each has a default):**
+
+_Your call:_
+1. **Return when its own slot is taken but one other slot feeding that head is free.** Where: a head's ↩️ Return,
+   or a DEPLOYED card's ↩️. Example: XL-3 runs #60 from LR-MDB-1 slot 3; meanwhile #57 went into slot 3; if a second
+   free slot also feeds XL-3, Return puts #60 there in one tap and the confirm names it ("the only free slot that
+   feeds XL-3"). (a) **One tap (built; your answer 6, "one tap when the answer is obvious")**, or (b) open the
+   chooser whenever its own slot is taken. On dev each XL head has one feeding slot, so this only shows up where two
+   boxes feed one head. Default: (a). _(40.6, builder's decision 1)_
+2. **Adding new spools straight into a box with the Add Spool wizard.** Built as Force Location (your answer 7): each
+   new spool goes in the slot you pick and loads that slot's head (asking first when the XL prints or the head runs
+   another spool). Example: 3 new spools into `LR-MDB-1` with XL-1…3 empty and idle → three pickers, three heads
+   loaded. The alternative: a wizard create only stores, never loads a head. Recommendation and default: keep it
+   (each picker shows the slot's head before you choose). _(40.7, builder's question 1)_
+
+_Built this way; say if it's wrong:_
+3. **An edit that archives a spool (ticked, or weighed to empty) and changes its Location in the same Save** takes it
+   off where it was first, with no question even mid-print (as a weigh-out to empty already does), then stores it in
+   the new place without loading any head, and it stays archived. Example: #57 on XL-2, tick Archived, Location
+   `CR-CT-2-R1`, Save → #57 is off XL-2, on the cart, archived; XL-2 is empty. _(wizard review fix)_
+4. **The wizard asks for the slot at Save, not on Tab.** Picking a box from the list opens the picker at once (as
+   before); a box typed or tabbed into, or filled in by Clone, asks when you press Save (an overlay popping up while
+   you tab through fields would be jarring). A pick that's refused (the slot got taken meanwhile) asks again at the
+   next Save, not straight away (it would cover the 7 s error). _(wizard review fix)_
+5. **A dryer box with a blank "Max Spools"** is never offered in Return's chooser. If it is a head's only feed and
+   the spool has no recorded slot, Return moves nothing and says "set its Max Spools". Before, Return used its first
+   bound slot. _(Return review fix, builder's call 1)_
+6. **A PolyDryer's spool whose remembered slot is taken** goes to the cart or shelf it sat on before that slot,
+   not into the box with no slot (spools remembered before tonight keep the old rule). _(Swap option C)_
+
+_I decided (listed in case you object):_
+7. Picking a printing head that holds a spool in the Printer picker asks twice: first "Load #42 onto XL-3? XL-3
+   holds #99 …", then FCC's own "XL is PRINTING …" (the printing check stays the server's, the one with a fresh
+   printer reading).
+8. `/api/spool/update` (no page sends a Location through it) gets no printing check: it refuses heads and printers
+   outright, so there is nothing to ask about.
+9. A Return chooser spanning two boxes that feed one head → Group 37 (the location redesign).
+10. The Location Manager grid's Swap / Overwrite prompt now says what will happen: a DEPLOYED card loaded on the
+    slot's own head offers one "Swap it out" (it comes off into your buffer either way); one loaded on another head
+    offers nothing (FCC would refuse); a stale record offers "Put it in slot N".
+
+Follow-ups filed (standalone in the buglist, none urgent): moving a hand-archived spool un-archives it (it predates Group 40); a "stored only" note on Return's chooser tiles; a `blocked_reason` for the slot-still-claimed refusal; a Return chooser spanning two boxes (→ Group 37); and the first engine review's open notes. All in the buglist's "🟡 Group 40 leftovers".
 
 ## Questions for Derek
 
@@ -471,3 +540,6 @@ harness's 1% tolerance let stale CORE1 text pass).
 | `wf_ca12a7f0-f09` g40-review-401-403 | 40.1 + 40.3 | 6 (4 lenses + 2 batched skeptics) | 3,020,979 subagent | ~60 min, 609 tool calls; 25 raw → 0 red, 4 orange confirmed (+1 duplicate), 1 re-rated, the rest yellow; fixed in `f055def` (estimated 2.2–3M) |
 | `wf_0dddaf03-9a6` g40-verify-review-fixes | the review's fixes | 3 (self-probing checkers) | 1,298,181 subagent | ~43 min, 312 tool calls; no red; 1 regression in the fixes (E1/S1, two checkers) + 1 older orange (W1) + yellows; fixed in `1bbc1f9` (estimated ~1M) |
 | `wf_0b3cc1a9-578` g40-2-review | 40.2 + the swap → buffer | 4 (3 lenses + 1 batched skeptic) | 1,799,764 subagent | ~59 min, 444 tool calls; 18 findings → 1 red (a double-read reversed the same-slot swap), 7 yellow, 10 notes (1 duplicate), none refuted; fixed in `6b59b1c`, one note deferred to 40.5 (estimated 2–2.5M) |
+| builders (Agent, worktrees) 2026-10-19 | 40.6 Return / 40.7 wizard server | 2 | 780,466 + 629,973 subagent | 54 / 46 min, 225 / 212 tool calls; merged `45de89d` / `070291e` |
+| `wf_bd637c78-057` g40-final-leg-review | Swap option C + 40.4–40.7 | 5 (4 lenses + 1 batched skeptic) | 2,311,583 subagent | ~48 min; 27 findings, all confirmed (none red, 4 orange, the rest yellow / notes); fixed in `1a480cf`, `12d769d` and by the two fixers |
+| fixers (Agent, worktrees) 2026-10-19 | the review's Return / wizard findings | 2 | 437,535 + 545,086 subagent | 34 / 42 min; merged `90815ba` / `5b4b591` |
