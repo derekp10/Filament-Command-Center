@@ -12,7 +12,9 @@ switches on, plus the subtle non-dryer-box physical_source fallback:
   * all candidates empty  -> 404 return_no_spool     (+ sorted candidates list)
   * no source, no binding -> 404 return_no_binding   (toolhead = ACTIVE, not requested)
   * physical_source points at a NON-dryer-box row (or a ghost row) -> silently
-    falls through to the first_binding scan instead of erroring.
+    falls through to the feed-slot rule instead of erroring (Group 40.6: the
+    only free slot feeding the head is one tap, `source: feed_slot`; it was the
+    first bound slot, `first_binding`).
 
 PUT /api/printer_creds — the 500 failure branches (happy paths live in
 test_phase2_creds_gate.py; not duplicated here):
@@ -46,7 +48,9 @@ def client():
 def _return_harness(printer_map, locs, residents, spool, move_return=None):
     """The standard patch stack from test_return_and_breadcrumb.py: config +
     active printer_map + locations rows + Spoolman residents/spool + smart-move.
-    `residents` may be a list (same for every toolhead) or a callable(loc)."""
+    `residents` may be a list (same for every toolhead) or a callable(loc).
+    [6] (Group 40.6): the route reads a box strictly to check its slots; every
+    box here is empty."""
     side = residents if callable(residents) else (lambda loc: list(residents))
     return (
         patch.object(app_module.config_loader, "load_config",
@@ -58,6 +62,7 @@ def _return_harness(printer_map, locs, residents, spool, move_return=None):
         patch.object(app_module.spoolman_api, "get_spool", return_value=spool),
         patch.object(app_module.logic, "perform_smart_move",
                      return_value=move_return or {"status": "success"}),
+        patch.object(app_module.spoolman_api, "get_spools_at_location_detailed_strict", return_value=[]),
     )
 
 
@@ -210,8 +215,15 @@ def test_return_physical_source_pointing_at_non_dryer_box_falls_back_to_binding(
     """physical_source names an EXISTING row that is NOT a Dryer Box (a Tool
     Head here — e.g. the extra drifted after a toolhead-to-toolhead move).
     The type-check `break` must abandon the physical_source path and fall
-    through to the first_binding scan, returning 200 via the bound box —
-    never a 404 and never a move to the non-box row."""
+    through to the bound box, returning 200 — never a 404 and never a move to
+    the non-box row.
+
+    Group 40.6 (deliberate): the fallback is the feed-slot rule (Derek's answer
+    6): LR-MDB-1 slot 2 is the only free slot feeding XL-1 (the box is read
+    strictly: empty here), so it is one tap, `source: feed_slot` (it was the
+    first bound slot, `first_binding`, whether or not another one was free),
+    sent as `picked_slot` (taken only while still free), and the success line
+    says why."""
     printer_map = {"XL-1": {"printer_name": "XL", "position": 0}}
     locs = [
         {"LocationID": "XL-2", "Type": "Tool Head", "Max Spools": "1"},  # the bogus source
@@ -222,7 +234,7 @@ def test_return_physical_source_pointing_at_non_dryer_box_falls_back_to_binding(
     fake_spool = {"id": 77, "location": "XL-1",
                   "extra": {"physical_source": "XL-2", "physical_source_slot": "1"}}
     p = _return_harness(printer_map, locs, [77], fake_spool)
-    with p[0], p[1], p[2], p[3], p[4], \
+    with p[0], p[1], p[2], p[3], p[4], p[6], \
          patch.object(app_module.logic, "perform_smart_move",
                       return_value={"status": "success"}) as mv, \
          patch.object(app_module.state, "add_log_entry") as log:
@@ -230,23 +242,25 @@ def test_return_physical_source_pointing_at_non_dryer_box_falls_back_to_binding(
     assert r.status_code == 200
     body = r.get_json()
     assert body["action"] == "return_done"
-    assert body["source"] == "first_binding"   # NOT physical_source
+    assert body["source"] == "feed_slot"       # NOT physical_source
     assert body["box"] == "LR-MDB-1"
     assert body["slot"] == "2"                 # the bound slot, not the source slot
     # auto_deploy=False (2026-09-12): the bound slot would otherwise chain the
     # spool straight back onto XL-1 and Return would be a silent round trip.
-    mv.assert_called_once_with("LR-MDB-1", [77], target_slot="2",
+    mv.assert_called_once_with("LR-MDB-1", [77], picked_slot="2",
                                origin="quickswap_return", auto_deploy=False,
                                confirm_active_print=[])
     # Success log flags the fallback provenance.
     success_msgs = [c.args[0] for c in log.call_args_list if c.args[1] == "SUCCESS"]
-    assert success_msgs and "(first bound slot)" in success_msgs[0]
+    assert success_msgs and "(the only free slot that feeds XL-1)" in success_msgs[0], success_msgs
+    assert "LR-MDB-1 slot 2" in success_msgs[0], success_msgs
 
 
 def test_return_physical_source_ghost_row_falls_back_to_binding(client):
     """physical_source names a LocationID with no row at all (box deleted
     since the deploy): the scan exhausts without a match and the fallback
-    first_binding path still returns the spool via the bound box."""
+    still returns the spool via the bound box (Group 40.6: the only free
+    slot feeding XL-1, `source: feed_slot`)."""
     printer_map = {"XL-1": {"printer_name": "XL", "position": 0}}
     locs = [
         {"LocationID": "LR-MDB-1", "Type": "Dryer Box", "Max Spools": "4",
@@ -256,14 +270,14 @@ def test_return_physical_source_ghost_row_falls_back_to_binding(client):
     fake_spool = {"id": 88, "location": "XL-1",
                   "extra": {"physical_source": "GONE-BOX", "physical_source_slot": "3"}}
     p = _return_harness(printer_map, locs, [88], fake_spool)
-    with p[0], p[1], p[2], p[3], p[4], \
+    with p[0], p[1], p[2], p[3], p[4], p[6], \
          patch.object(app_module.logic, "perform_smart_move",
                       return_value={"status": "success"}) as mv, \
          patch.object(app_module.state, "add_log_entry"):
         r = client.post("/api/quickswap/return", json={"toolhead": "XL-1"})
     assert r.status_code == 200
     body = r.get_json()
-    assert body["source"] == "first_binding"
+    assert body["source"] == "feed_slot"
     assert body["box"] == "LR-MDB-1"
     assert body["slot"] == "2"
     mv.assert_called_once()

@@ -775,7 +775,13 @@ def test_quickswap_return_off_a_printing_head_asks_first(client):
 
 def test_quickswap_return_does_not_unseat_a_spool_staged_in_its_slot(client):
     """#77's trail names LR-MDB-1 slot 3, but #240 is staged there. Return must
-    park #77 in a free slot and say which, leaving #240 seated."""
+    leave #240 seated, and the slot #77 takes is the one it names.
+
+    Group 40.6 (deliberate; Derek's D5): it used to let the engine auto-pick a
+    free slot, which could feed another head, and the preview never knew which.
+    No free slot feeds XL-3 here, so Return writes nothing and asks
+    (return_choose_slot, 200), starring a spare slot (slot 1: unbound); the
+    replay with that slot puts #77 there."""
     sm = FakeSpoolman({
         240: {"location": "LR-MDB-1", "extra": {"container_slot": "3"}},
         77: {"location": "XL-3",
@@ -786,11 +792,19 @@ def test_quickswap_return_does_not_unseat_a_spool_staged_in_its_slot(client):
              call=lambda: client.post("/api/quickswap/return", json={"toolhead": "XL-3"}))
 
     body = r.get_json()
+    assert r.status_code == 200 and body["action"] == "return_choose_slot", body
+    assert sm.writes == [], sm.writes
+    assert body["box"] == "LR-MDB-1" and body["slot"] is None, body
+    assert body["recommended"] == {"kind": "slot", "box": "LR-MDB-1", "slot": "1"}, body
+    assert "where it came from, holds #240" in body["note"], body
+
+    r = _run(sm, probe=IDLE, call=lambda: client.post("/api/quickswap/return", json={
+        "toolhead": "XL-3", "box": "LR-MDB-1", "slot": "1", "expected_spool": 77}))
+    body = r.get_json()
     assert r.status_code == 200 and body["action"] == "return_done", body
     assert sm.spools[240]["extra"]["container_slot"] == "3", sm.spools[240]
-    landed = sm.spools[77]["extra"].get("container_slot")
-    assert sm.spools[77]["location"] == "LR-MDB-1" and landed not in ("", "3"), sm.spools[77]
-    assert body["slot"] == landed, body
+    assert sm.spools[77]["location"] == "LR-MDB-1" and sm.spools[77]["extra"]["container_slot"] == "1"
+    assert body["slot"] == "1" and body["source"] == "chosen", body
 
 
 def test_quickswap_return_ignores_a_ghost_resident(client):

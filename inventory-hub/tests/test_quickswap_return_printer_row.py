@@ -50,7 +50,12 @@ def _printer_map(*rows):
 
 class _Harness:
     """Patches the collaborators api_quickswap_return reads, records the probe
-    order and the move, and serves `loaded` ({toolhead: spool_id})."""
+    order and the move, and serves `loaded` ({toolhead: spool_id}).
+
+    Group 40.6 (deliberate): every box reads empty through the STRICT reader
+    too (the route checks slots against it now), and a move records the slot
+    it was given as `picked_slot` (taken only while still free), which is how
+    the route sends a slot of a multi-slot box since 40.6."""
 
     def __init__(self, rows, loaded, extra_rows=()):
         self.printer_map = _printer_map(*[r for r in rows if r.get("Type") == "Printer"])
@@ -71,7 +76,8 @@ class _Harness:
         return None
 
     def _move(self, target, spools, target_slot=None, origin=None, **kwargs):
-        self.moves.append((target, list(spools), target_slot, origin))
+        assert target_slot is None, "a multi-slot box's slot goes as picked_slot (Group 40.6)"
+        self.moves.append((target, list(spools), kwargs.get("picked_slot"), origin))
         return {"status": "success"}
 
     def post(self, client, toolhead):
@@ -82,6 +88,8 @@ class _Harness:
             stack.enter_context(patch.object(spoolman_api, "get_spools_at_location", side_effect=self._at))
             stack.enter_context(patch.object(spoolman_api, "get_spool", side_effect=self._spool))
             stack.enter_context(patch.object(spoolman_api, "get_spools_at_location_detailed", return_value=[]))
+            stack.enter_context(patch.object(spoolman_api, "get_spools_at_location_detailed_strict",
+                                             return_value=[]))
             stack.enter_context(patch.object(logic, "perform_smart_move", side_effect=self._move))
             stack.enter_context(patch.object(state, "add_log_entry"))
             return client.post("/api/quickswap/return", json={"toolhead": toolhead})
@@ -104,8 +112,9 @@ def test_return_on_a_printer_row_uses_its_toolheads_without_the_id_prefix(client
     assert r.status_code == 200, r.get_json()
     body = r.get_json()
     assert body["action"] == "return_done"
+    # Group 40.6: the only free slot feeding CORE1-T2 (was `first_binding`).
     assert (body["toolhead"], body["box"], body["slot"], body["source"]) == (
-        "CORE1-T2", "CR-DB-1", "1", "first_binding")
+        "CORE1-T2", "CR-DB-1", "1", "feed_slot")
     assert h.probed == ["CORE1-T1", "CORE1-T2"]
     assert h.moves == [("CR-DB-1", [55], "1", "quickswap_return")]
 
@@ -186,6 +195,7 @@ def test_return_reads_locations_json_once(client):
                       side_effect=lambda loc: [42] if str(loc).upper() == "CORE1" else []), \
          patch.object(spoolman_api, "get_spool", side_effect=_spool), \
          patch.object(spoolman_api, "get_spools_at_location_detailed", return_value=[]), \
+         patch.object(spoolman_api, "get_spools_at_location_detailed_strict", return_value=[]), \
          patch.object(logic, "perform_smart_move", return_value={"status": "success"}) as move, \
          patch.object(state, "add_log_entry"):
         r = client.post("/api/quickswap/return", json={"toolhead": "CORE1"})
