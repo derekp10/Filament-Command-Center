@@ -516,7 +516,8 @@ def _wizard_move(sid, new_loc, data, placement=None, current_loc='', origin='wiz
     logic.stale_confirm_refusal, in that order), else None.
 
     `placement`: the slot fields (`slot`, `picked_slot`, `expected_feed`,
-    `auto_deploy`): the edit request itself, or one `placements` entry of a
+    `auto_deploy`, and the picker's `record_source` / `swap`, Groups 40.5 and
+    Swap option C): the edit request itself, or one `placements` entry of a
     create. `data`: the door contract (`confirmed_toolheads`,
     `confirmed_fed_heads`, `seen_printing`). `current_loc`: where the spool is,
     so an unassign's confirm covers only the head the user was asked about."""
@@ -538,7 +539,11 @@ def _wizard_move(sid, new_loc, data, placement=None, current_loc='', origin='wiz
             confirmed_fed_heads=logic.confirmed_fed_heads_from(data),
             expected_feed=logic.expected_feed_from(p),
             seen_printing=logic.seen_printing_from(data),
-            # 40.5: record_source threads here
+            # Group 40.5: the Printer picker's "came from" answer for a head
+            # ('' = No box); absent, the engine's silent 13.6 rule.
+            record_source=logic.record_source_from(p),
+            # Swap option C: the slot picker's Swap of a slot's stored spool.
+            swap_out=logic.swap_requested(p),
         )
     stale = None
     if isinstance(result, dict):
@@ -607,7 +612,9 @@ def _deploy_skipped_note(sid, target, result):
     return note if note.endswith(('.', '?', '!')) else note + '.'
 
 
-_PLACEMENT_KEYS = ('location', 'slot', 'picked_slot', 'expected_feed', 'auto_deploy')
+_PLACEMENT_KEYS = ('location', 'slot', 'picked_slot', 'expected_feed', 'auto_deploy',
+                   # Group 40.5 / Swap option C: the picker's answers ride along.
+                   'record_source', 'swap')
 
 
 def _create_wants(data, spool_data, spool_iter):

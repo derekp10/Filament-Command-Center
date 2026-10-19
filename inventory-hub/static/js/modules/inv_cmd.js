@@ -2196,7 +2196,12 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
 // Load it instead / Cancel, with no store (a head is not storage); Enter
 // cancels. An empty head asks nothing here (a printing printer is the server's
 // question, as on every door). Resolves true to load, false to step back.
+// How a question names the spool: "#42", or "the new spool" for the wizard's
+// create (Group 40.7: the spool doesn't exist yet when its picker opens).
+const _spoolWord = (sid) => (sid != null && String(sid) !== '' ? `#${sid}` : 'the new spool');
+
 const _confirmHeadPick = (pick, sid, host) => {
+    const who = _spoolWord(sid);
     const residents = (Array.isArray(pick.residents) && pick.residents.length) ? pick.residents
         : (pick.resident ? [pick.resident] : []);
     if (!residents.length) return Promise.resolve(true);
@@ -2204,8 +2209,8 @@ const _confirmHeadPick = (pick, sid, host) => {
     const runs = and(residents.map(r => `#${r.id}` + (r.from ? ` (from ${r.from})` : '')));
     const goes = and(residents.map(r => `#${r.id} ` + (r.from ? `back to ${r.from}` : (r.goes || 'to Unassigned'))));
     return new Promise((resolve) => window.confirmActivePrint({
-        title: `Load #${sid} onto ${pick.head}?`,
-        msg: `${pick.head} holds ${runs}. Loading #${sid} sends ${goes}.`,
+        title: `Load ${who} onto ${pick.head}?`,
+        msg: `${pick.head} holds ${runs}. Loading ${who} sends ${goes}.`,
         host, printing: false, loadLabel: 'Load it instead',
         ids: { overlay: 'fcc-head-pick-confirm' },
         onConfirm: () => resolve(true),
@@ -2234,6 +2239,8 @@ const _askRecordSource = (pick, sid, host) => {
     const esc = window.escHtml || ((s) => String(s == null ? '' : s));
     const head = String(pick.head || '');
     const pre = free.length === 1 ? free[0] : null;
+    const who = _spoolWord(sid);
+    const Who = who.charAt(0).toUpperCase() + who.slice(1);
     return new Promise((resolve) => {
         let settled = false;
         let handle = null;
@@ -2261,8 +2268,8 @@ const _askRecordSource = (pick, sid, host) => {
             onEscape: () => finish(null),
             content: `
                 <div class="fcc-rs-panel" style="background:#1e1e1e; color:#fff; border:2px solid #0dcaf0; border-radius:8px; padding:18px 22px; max-width:620px; text-align:center;">
-                    <div class="fcc-rs-title" style="font-size:1.15em; font-weight:bold; margin-bottom:6px;">🔗 Record #${esc(sid)} as coming from…</div>
-                    <div class="fcc-rs-msg" style="color:#ffc; margin-bottom:12px; text-align:left;">#${esc(sid)} isn't coming from a box. Which slot feeding ${esc(head)} is its home? Return and eject send it back there.</div>
+                    <div class="fcc-rs-title" style="font-size:1.15em; font-weight:bold; margin-bottom:6px;">🔗 Record ${esc(who)} as coming from…</div>
+                    <div class="fcc-rs-msg" style="color:#ffc; margin-bottom:12px; text-align:left;">${esc(Who)} isn't coming from a box. Which slot feeding ${esc(head)} is its home? Return and eject send it back there.</div>
                     <div class="fcc-rs-status" role="alert" style="display:none; margin-bottom:10px; padding:6px 10px; border-radius:6px; background:#4a3200; color:#ffd27a; border:1px solid #ffb74d; font-weight:bold; text-align:left;"></div>
                     <div style="display:flex; gap:10px; justify-content:center; flex-wrap:wrap;">
                         ${optBtns}
@@ -2321,7 +2328,7 @@ const _askRecordSource = (pick, sid, host) => {
         // Scans are held off while it is open (processScan); a feed slot's label
         // picks that slot.
         question = {
-            title: `Record #${sid} as coming from…`,
+            title: `Record ${who} as coming from…`,
             element: ov,
             hint: 'Answer the question on screen first: pick a slot (or scan its label), No box, or Cancel',
             cancel: () => finish(null),

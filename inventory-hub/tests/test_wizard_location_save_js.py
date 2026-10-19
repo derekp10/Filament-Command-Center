@@ -130,7 +130,10 @@ return {{ body: posts('/api/edit_spool_wizard')[0] }};
 
 def test_a_create_places_a_picked_box_slot_for_the_first_spool_only(tmp_path):
     """Claude's call 29: the chosen slot for the first new spool, the rest left for
-    the per-spool picker loop; a typed place goes to every spool; blank, none."""
+    the per-spool picker loop; a typed place goes to every spool; blank, none. A
+    head the Printer picker chose takes the first spool only too (integration,
+    2026-10-19: the rest get their own picker; it used to send every spool to the
+    head, which the server refuses outright)."""
     res = _run(tmp_path, """
 creating(3, 'LR-MDB-1');
 wizardState.pendingPlacement = { location: 'LR-MDB-1', picked_slot: '1', expected_feed: '', auto_deploy: false };
@@ -151,7 +154,7 @@ return {
                                        "auto_deploy": False}, None, None], body
     assert body["confirmed_toolheads"] == [] and body["confirmed_fed_heads"] == [], body
     assert res["typed"] == [{"location": "CR-CT-2-R1"}, {"location": "CR-CT-2-R1"}], res
-    assert res["head"] == [{"location": "XL-3"}, {"location": "XL-3"}], res   # the server refuses two
+    assert res["head"] == [{"location": "XL-3"}, None], res   # the rest: the per-spool picker loop
     assert res["blank"] == [None, None], res
 
 
