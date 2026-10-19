@@ -172,6 +172,9 @@ return {{ calls: window.__pickerCalls.map(c => [c.location, c.spool, c.step]), p
     assert res["calls"] == [["LR-MDB-1", 502, "1 of 2 left"], ["LR-MDB-1", 503, "2 of 2 left"]], res["calls"]
     [post] = res["posts"]
     assert post["spools"] == [502] and post["picked_slot"] == "3" and post["expected_feed"] == "XL-3", post
+    # Group 40 review (wizard-loop-undo-buffer-top): the real request names the
+    # wizard, so Undo doesn't put a never-buffered spool at the top of the buffer.
+    assert post["origin"] == "wizard_create", post
     assert any(t["msg"].startswith("1 new spool stays Unassigned (#503)") for t in res["toasts"]), res["toasts"]
 
 
