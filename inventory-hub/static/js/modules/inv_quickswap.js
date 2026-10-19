@@ -790,9 +790,21 @@
             });
     };
 
-    const performReturn = (opts, stateInfo = null, prior = []) => {
+    // Group 40.6 (item D): where a Return puts the spool, as its toast and the
+    // confirm say it: "LR-MDB-1 slot 2", or "LR-MDB-1 (no slot)". It used to
+    // read "LR-MDB-1:SLOT:null" when the spool landed unslotted.
+    const _returnWhere = (box, slot) => {
+        const s = String(slot == null ? '' : slot).trim();
+        return (s && s !== 'none' && s !== 'null') ? `${box} slot ${s}` : `${box} (no slot)`;
+    };
+
+    // `opts`: {toolhead, box, slot (a number or 'none'), expected_spool}, the
+    // slot the confirm named (Group 40.6). `ctx`: the Return flow it belongs to
+    // (_startReturn), so a slot taken meanwhile is picked again.
+    const performReturn = (opts, stateInfo = null, prior = [], ctx = null) => {
         // The Return overlay probes the head it empties (opts.toolhead).
         const sent = _headsShown(prior, stateInfo, opts.toolhead);
+        if (ctx) ctx.heads = sent;
         fetch('/api/quickswap/return', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -801,12 +813,29 @@
             .then(_readAnswer)
             .then(({ ok, body }) => {
                 if (ok && body.action === 'return_done') {
-                    showToast(`↩️ Spool #${body.moved} → ${body.box}:SLOT:${body.slot}`, 'success', 2500);
-                    _refreshAfterMove();
+                    showToast(`↩️ #${body.moved} → ${_returnWhere(body.box, body.slot)}`, 'success', 4000);
+                    _refreshAfterReturn(ctx);
                 } else if (body.action === 'return_requires_confirm') {
                     _reaskFromServer(body, sent, {
                         toolhead: opts.toolhead, title: `Return the spool on ${opts.toolhead}?`,
-                    }, (heads) => performReturn(opts, null, heads));
+                    }, (heads) => performReturn(opts, null, heads, ctx));
+                } else if (body.action === 'return_slot_taken' || body.action === 'return_choose_slot') {
+                    // Nothing was written: the slot the confirm named was taken
+                    // meanwhile (or the server can't tell which slot without the
+                    // user). Pick again, on fresh slots.
+                    if (body.action === 'return_slot_taken') {
+                        showToast(`⚠️ ${body.error || `${opts.box} slot ${opts.slot} was taken meanwhile`} — pick another slot`,
+                            'warning', 7000);
+                        if (window.logClientEvent) window.logClientEvent(
+                            `⚠️ Return of #${body.spool || opts.expected_spool} off ${opts.toolhead}: `
+                            + `${body.error || 'its slot was taken meanwhile'} — asked again`, 'WARNING');
+                    }
+                    _pickReturnSlot(ctx || { th: opts.toolhead, vth: opts.toolhead, heads: sent },
+                        { ...body, spool: body.spool || opts.expected_spool, active_toolhead: body.active_toolhead || opts.toolhead });
+                } else if (body.action === 'return_spool_mismatch') {
+                    showToast(`⚠️ ${body.error || `${opts.toolhead} holds another spool now — nothing moved`}`, 'warning', 7000);
+                    if (window.logClientEvent) window.logClientEvent(`⚠️ Return refused: ${body.error || 'another spool is on the head now'}`, 'WARNING');
+                    _refreshAfterReturn(ctx);
                 } else if (body.action === 'return_no_spool') {
                     showToast(`⚠️ ${opts.toolhead} is empty — nothing to return`, 'warning', 4000);
                 } else if (body.action === 'return_no_binding') {
@@ -1127,72 +1156,210 @@
         return Promise.resolve(check(0));
     };
 
-    // Resolve the exact (box, slot) the return WILL target so the user
-    // isn't asked to confirm an abstract "physical_source." Mirrors the
-    // backend's /api/quickswap/return priority: spool.extra.physical_source
-    // first, first bound slot of the toolhead second.
-    const _resolveReturnDestination = (toolheadId) => {
-        const th = String(toolheadId || '').toUpperCase();
-        if (!th) return Promise.resolve(null);
-        return fetch(`/api/get_contents?id=${encodeURIComponent(th)}`)
-            .then(r => r.ok ? r.json() : [])
-            .then(items => {
-                // Only a spool really ON the head is what the backend acts on; a
-                // ghost entry (a stale physical_source naming this head) is loaded
-                // on some other head. Return refuses 0 or 2+ (2026-09-12).
-                const direct = (items || []).filter(it => !it.is_ghost);
-                if (direct.length !== 1) return { unusable: true, directCount: direct.length };
-                const resident = direct[0];
-                const firstBinding = () => fetch('/api/dryer_boxes/slots').then(r => r.json()).then(body => {
-                    for (const s of body.slots || []) {
-                        // A single-slot box's binding says where ITS spool is
-                        // loaded, not a feed; the server skips it (Group 42 review).
-                        if (s.single_slot) continue;
-                        if (s.target && String(s.target).toUpperCase() === th) {
-                            return {
-                                box: s.box, slot: s.slot,
-                                source: 'first_binding',
-                                spoolId: resident.id,
-                                display: resident.display,
-                            };
-                        }
-                    }
-                    return null;
-                });
-                // Preferred: the spool's own recorded source, read from the spool.
-                // get_contents reports a DIRECT item's location as the head itself,
-                // so it can't say where Return will really send it; the preview
-                // used to show the first bound slot every time (2026-09-12 review).
-                return fetch(`/api/spools/${encodeURIComponent(resident.id)}`)
-                    .then(r => r.ok ? r.json() : null)
-                    .then(res => {
-                        const extra = ((res && res.data) || {}).extra || {};
-                        const unq = (v) => String(v == null ? '' : v).replace(/"/g, '').trim();
-                        const srcBox = unq(extra.physical_source).toUpperCase();
-                        const srcRow = (state.allLocations || []).find(l => String(l.LocationID).toUpperCase() === srcBox);
-                        if (srcRow && srcRow.Type === 'Dryer Box') {
-                            return {
-                                box: srcRow.LocationID,
-                                slot: unq(extra.physical_source_slot) || null,
-                                source: 'physical_source',
-                                spoolId: resident.id,
-                                display: resident.display,
-                            };
-                        }
-                        return null;
-                    })
-                    .catch(() => null)
-                    .then(preferred => preferred || firstBinding());
+    // --- Return (Group 40.6: Derek's D5, item D, item E) ---------------------
+    // One flow for the toolhead view's ↩️ Return and a DEPLOYED slot card's ↩️:
+    //   1. the server's dry run (POST /api/quickswap/return {dry_run: true})
+    //      says where the spool goes, with the printer check beside it (the
+    //      "⏳ Checking XL…" pill), so the confirm's banner is ready before
+    //      anything moves;
+    //   2. no usable slot (none recorded, the recorded one taken, or more than
+    //      one obvious answer): the slot picker in return mode, with its ⭐ and
+    //      a No slot tile;
+    //   3. the confirm names the exact slot, or "no slot — LR-MDB-1 will show
+    //      5/4";
+    //   4. the Return sends that slot and the spool it showed
+    //      ({toolhead, box, slot, expected_spool}); a slot taken meanwhile is
+    //      picked again, nothing written.
+    // `ctx`: {th: the head it empties, vth / isVirtual: the printer view it was
+    // resolved from, expectedSpool, refreshId: a view to refresh when no head
+    // view is open (the box a DEPLOYED card sits in), probe: the printer check
+    // (a promise of its answer), heads: the heads confirmed so far}.
+
+    const _postReturn = (payload) => fetch('/api/quickswap/return', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    }).then(_readAnswer);
+
+    // Refresh the view after a Return: the head view (currentLoc), else the view
+    // the flow came from (the box a DEPLOYED card's ↩️ was tapped in).
+    const _refreshAfterReturn = (ctx) => {
+        if (currentLoc) { _refreshAfterMove(); return; }
+        const id = ctx && ctx.refreshId;
+        if (!id) return;
+        const doRefresh = () => {
+            try { if (typeof state !== 'undefined') state.lastLocRenderHash = null; } catch (e) { /* noop */ }
+            if (window.refreshManageView) window.refreshManageView(id);
+            document.dispatchEvent(new CustomEvent('inventory:locations-changed'));
+        };
+        doRefresh();
+        setTimeout(doRefresh, 450);
+    };
+
+    // What the box's count will read with the spool in it unslotted: the
+    // server's own count, else the picker model's (its No slot tile's rule).
+    const _occupancyAfter = (plan) => {
+        const occ = plan && plan.occupancy;
+        if (occ && occ.max) return occ;
+        const m = plan && plan.options;
+        if (!m || !m.max_slots) return null;
+        const after = (m.slots || []).reduce((n, s) => n + (s.claimants || []).length, 0)
+            + (m.unslotted || []).length + 1;
+        return { after, max: m.max_slots };
+    };
+
+    // The dry run answered something other than a plan: say so where the user
+    // looks (the overlay for "nothing to do here", a toast for a failure).
+    const _returnRefused = (ctx, body) => {
+        const th = body.active_toolhead || ctx.th;
+        const nothing = (title, text) => showConfirmOverlay({
+            toolhead: th,
+            // Nothing will move, so no printer banner (and no second check).
+            probed: null,
+            title,
+            body: `<div class="text-warning fw-bold" style="font-size:1.05rem;">${text}</div>`,
+            onConfirm: () => { /* no-op: nothing the server would do */ },
+        });
+        if (body.action === 'return_no_spool') {
+            nothing(`Nothing to return on ${ctx.th}`,
+                `No spool is loaded on <b>${_escapeHtml(ctx.th)}</b> — nothing to return.`);
+        } else if (body.action === 'return_ambiguous') {
+            const n = (body.spools || []).length || 2;
+            nothing(`${th} holds ${n} spools`,
+                `<b>${_escapeHtml(th)}</b> holds ${n} spools — eject the wrong one first, then Return.`);
+        } else if (body.action === 'return_no_binding') {
+            nothing(`Return the spool on ${th}?`,
+                `<b>${_escapeHtml(th)}</b> has no recorded source and no bound dryer box slot — nothing to return to.`);
+        } else if (body.action === 'return_spool_mismatch') {
+            showToast(`⚠️ ${body.error || `${th} holds another spool now — nothing moved`}`, 'warning', 7000);
+            if (window.logClientEvent) window.logClientEvent(`⚠️ Return refused: ${body.error || 'another spool is on the head now'}`, 'WARNING');
+            _refreshAfterReturn(ctx);
+        } else if (body.action === 'return_bad_toolhead') {
+            showToast(`⚠️ ${ctx.th} is not a registered toolhead — nothing to return`, 'warning', 7000);
+        } else {
+            showToast(`❌ Return failed: ${body.error || body.action || 'unknown'}`, 'error', 7000);
+            if (window.logClientEvent) window.logClientEvent(
+                `❌ Return off ${th} failed before anything moved: ${body.error || body.action || 'unknown'}`, 'ERROR');
+        }
+    };
+
+    // The confirm before anything moves: it names the exact slot (or no slot)
+    // and why, with the printer banner when the head's printer is printing.
+    // `chosen`: the user picked it in the slot picker.
+    const _confirmReturn = (ctx, plan, choice, chosen = false) => {
+        const th = plan.active_toolhead || ctx.th;
+        const box = choice.box || plan.box;
+        const none = !choice.slot || String(choice.slot) === 'none';
+        let where;
+        if (none) {
+            const occ = _occupancyAfter(plan);
+            where = `<span class="text-info fw-bold">${_escapeHtml(box)}</span> — `
+                + `<span class="text-warning fw-bold">no slot</span>`
+                + (occ ? ` <span class="text-warning">(${_escapeHtml(box)} will show ${occ.after}/${occ.max})</span>` : '');
+        } else {
+            where = `<span class="text-info fw-bold">${_escapeHtml(box)} slot ${_escapeHtml(choice.slot)}</span>`;
+        }
+        let tag = '';
+        if (!none && !chosen && plan.source === 'physical_source') {
+            tag = ' <span class="text-success fw-bold">(original source)</span>';
+        } else if (!none && !chosen && plan.source === 'feed_slot') {
+            tag = ` <span class="text-info fw-bold">(the only free slot that feeds ${_escapeHtml(th)})</span>`;
+        } else if (!none) {
+            tag = ' <span class="text-info fw-bold">(your choice)</span>';
+        }
+        const resolvedNote = ctx.isVirtual
+            ? `<div class="text-warning small mb-2" style="font-size:0.95rem;">`
+              + `(Resolved from the <b>${_escapeHtml(ctx.vth)}</b> virtual printer — first toolhead with a loaded spool.)</div>`
+            : '';
+        const spoolLine = plan.spool != null
+            ? `<div class="text-light mb-2" style="font-size:1rem;">Spool: <b>${_escapeHtml(plan.display || ('#' + plan.spool))}</b></div>`
+            : '';
+        const note = (!chosen && plan.note)
+            ? `<div class="text-warning mt-2" style="font-size:0.95rem;">${_escapeHtml(plan.note)}.</div>`
+            : '';
+        const slot = none ? 'none' : String(choice.slot);
+        // The printer check started beside the plan; the confirm waits for its
+        // answer (it never rejects), so the banner is on it before anything moves.
+        Promise.resolve(ctx.probe || null).then((detail) => showConfirmOverlay({
+            toolhead: th,
+            probed: detail,
+            title: `Return the spool on ${th}?`,
+            body: resolvedNote + spoolLine
+                + `<div class="text-light" style="font-size:1.05rem;">Sending back to: ${where}${tag}</div>` + note,
+            onConfirm: (stateInfo) => performReturn(
+                { toolhead: th, box, slot, expected_spool: plan.spool }, stateInfo, ctx.heads || [], ctx),
+        }));
+    };
+
+    // No usable slot: the slot picker in return mode (occupied slots greyed
+    // out, a ⭐: a free slot feeding this head, else a spare one, else No slot).
+    const _pickReturnSlot = (ctx, plan) => {
+        if (typeof window.openSlotPicker !== 'function') {
+            showToast('❌ The slot picker is missing — reload the page (Ctrl+F5) and try again', 'error', 7000);
+            return;
+        }
+        const head = plan.active_toolhead || ctx.th;
+        window.openSlotPicker({
+            location: plan.box,
+            spool: plan.spool,
+            mode: 'return',
+            toolhead: head,
+            host: document.getElementById('manageModal') || undefined,
+        }).then((pick) => {
+            if (!pick) {
+                if (window.logClientEvent) window.logClientEvent(
+                    `ℹ️ Return of #${plan.spool} off ${head}: no slot chosen — nothing moved`, 'INFO');
+                return;
+            }
+            const choice = pick.kind === 'none'
+                ? { box: pick.box || plan.box, slot: 'none' }
+                : { box: pick.box || plan.box, slot: String(pick.slot) };
+            _confirmReturn(ctx, plan, choice, true);
+        });
+    };
+
+    const _startReturn = (ctx) => {
+        const dry = { toolhead: ctx.th, dry_run: true };
+        if (ctx.expectedSpool != null) dry.expected_spool = ctx.expectedSpool;
+        // The printer check starts beside the plan ("⏳ Checking XL…"): the
+        // confirm shows its banner, and a slow printer never delays the plan or
+        // the slot picker (whose own chips say how each printer is doing).
+        ctx.probe = _probeWithTimeout(ctx.th);
+        _postReturn(dry)
+            .then(({ body }) => {
+                if (body.action !== 'return_plan') { _returnRefused(ctx, body); return; }
+                if (ctx.expectedSpool == null) ctx.expectedSpool = body.spool;
+                if (body.needs_choice) _pickReturnSlot(ctx, body);
+                else _confirmReturn(ctx, body, { box: body.box, slot: body.slot });
             })
-            .catch(() => null);
+            .catch(e => {
+                console.error(e);
+                showToast('Return — network error', 'error', 7000);
+                if (window.logClientEvent) window.logClientEvent(
+                    `❌ Return network error: ${e && e.message ? e.message : 'connection failed'}`, 'ERROR');
+            });
+    };
+
+    // A toolhead FCC knows: listed in a Printer row's toolheads[] (what the
+    // printer map is built from) or in state.printerMap. A Printer row that
+    // isn't its own head (XL) is not one.
+    const _isRegisteredHead = (locId) => {
+        const id = String(locId || '').replace(/"/g, '').trim().toUpperCase();
+        if (!id) return false;
+        const lists = (list) => (Array.isArray(list) ? list : [])
+            .some(e => e && String(e.location_id || '').trim().toUpperCase() === id);
+        if ((state.allLocations || []).some(r => r && r.Type === PRINTER_TYPE && lists(r.toolheads))) return true;
+        return Object.values(state.printerMap || {}).some(lists);
     };
 
     window.returnToolheadToSlot = () => {
         if (!currentLoc) return;
-        const vth = String(currentLoc.LocationID).toUpperCase();
-        _resolveReturnTarget(currentLoc).then(resolvedTh => {
+        // The view the button was pressed on (the user may move on meanwhile).
+        const loc = currentLoc;
+        const vth = String(loc.LocationID).toUpperCase();
+        _resolveReturnTarget(loc).then(resolvedTh => {
             const th = resolvedTh || vth;
-            const isVirtual = currentLoc.Type === PRINTER_TYPE;
+            const isVirtual = loc.Type === PRINTER_TYPE;
 
             if (isVirtual && !resolvedTh) {
                 // No toolhead of this printer has a loaded spool — don't
@@ -1206,53 +1373,26 @@
                 });
                 return;
             }
-
-            _resolveReturnDestination(th).then(dest => {
-                if (dest && dest.unusable) {
-                    // Nothing the backend would act on: no spool really on the
-                    // head, or two of them (Return refuses a doubled head).
-                    const n = dest.directCount;
-                    showConfirmOverlay({
-                        toolhead: th,
-                        title: n ? `${th} holds ${n} spools` : `Nothing to return on ${th}`,
-                        body: `<div class="text-warning fw-bold" style="font-size:1.05rem;">`
-                            + (n ? `<b>${th}</b> holds ${n} spools — eject the wrong one first, then Return.`
-                                 : `No spool is loaded on <b>${th}</b> — nothing to return.`)
-                            + `</div>`,
-                        onConfirm: () => { /* no-op */ },
-                    });
-                    return;
-                }
-                const resolvedNote = (isVirtual && resolvedTh)
-                    ? `<div class="text-warning small mb-2" style="font-size:0.95rem;">`
-                      + `(Resolved from the <b>${vth}</b> virtual printer — first toolhead with a loaded spool.)</div>`
-                    : '';
-
-                let destLine;
-                if (!dest) {
-                    destLine = `<div class="text-warning fw-bold mb-2" style="font-size:1.05rem;">`
-                        + `<b>${th}</b> has no recorded source and no bound dryer box slot — nothing to return to.</div>`;
-                } else {
-                    const slotPart = dest.slot ? ` slot ${dest.slot}` : '';
-                    const spoolLine = dest.spoolId
-                        ? `<div class="text-light mb-2" style="font-size:1rem;">Spool: <b>${dest.display || ('#' + dest.spoolId)}</b></div>`
-                        : '';
-                    const sourceTag = dest.source === 'physical_source'
-                        ? `<span class="text-success fw-bold">(original source)</span>`
-                        : `<span class="text-warning fw-bold">(first bound slot — the spool has no recorded origin)</span>`;
-                    destLine = spoolLine
-                        + `<div class="text-light" style="font-size:1.05rem;">`
-                        + `Sending back to: <span class="text-info fw-bold">${dest.box}${slotPart}</span> ${sourceTag}</div>`;
-                }
-
-                showConfirmOverlay({
-                    toolhead: th,
-                    title: `Return the spool on ${th}?`,
-                    body: resolvedNote + destLine,
-                    onConfirm: dest ? ((stateInfo) => performReturn({ toolhead: th }, stateInfo)) : (() => { /* no-op */ }),
-                });
-            });
+            _startReturn({ th, vth, isVirtual: isVirtual && !!resolvedTh, expectedSpool: null,
+                           refreshId: null, heads: [] });
         });
+    };
+
+    // Group 40.6, item E: the ↩️ RETURN SPOOL on a DEPLOYED slot card
+    // (ui_builder.js). The card's spool is loaded on `deployedTo`: a toolhead
+    // gets the canonical Return for that head, naming the spool the card showed
+    // (`expected_spool`), with its printer check, slot rule and picker. It used
+    // to post the slot straight back, so it emptied a printing head unasked and
+    // repeated Return's slot logic. A stale trail (the spool is on no toolhead
+    // FCC knows) puts it back in this slot with no chain, as before.
+    window.returnDeployedSpool = (box, spoolId, slot, deployedTo) => {
+        const head = String(deployedTo || '').replace(/"/g, '').trim().toUpperCase();
+        if (head && _isRegisteredHead(head)) {
+            _startReturn({ th: head, vth: head, isVirtual: false, expectedSpool: Number(spoolId),
+                           refreshId: box, heads: [] });
+            return;
+        }
+        if (typeof window.doAssign === 'function') window.doAssign(box, spoolId, slot, null, { autoDeploy: false });
     };
 
     // --- Bind-a-Slot quick picker ---

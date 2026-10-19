@@ -206,7 +206,10 @@ window.__respond = (url) => {
       extra: { physical_source: '"CR-CT-2-R1"' } } } };
   if (url === '/api/dryer_boxes/slots') return { body: { slots: [
       { box: 'PM-DB-4', box_name: 'PM-DB-4', slot: '1', target: 'RCOI-1', single_slot: true }] } };
-  if (url === '/api/quickswap/return') return { body: { action: 'return_done', moved: 61, box: 'PM-DB-4', slot: '1' } };
+  // Group 40.6: the server's dry run decides, as the real route does here
+  // (test_review_fixes_42.py::test_return_never_falls_back_to_a_polydryer_binding).
+  if (url === '/api/quickswap/return') return { status: 404, body: { action: 'return_no_binding',
+      toolhead: 'RCOI-1', active_toolhead: 'RCOI-1', requested: 'RCOI-1' } };
   return { body: [] };
 };
 window.renderQuickSwapSection(row);
@@ -218,16 +221,18 @@ const last = __overlayEls[__overlayEls.length - 1];
 const yes = last ? last.querySelector('#fcc-quickswap-yes') : null;
 if (yes && typeof yes.onclick === 'function') yes.onclick();
 await __settle(100);
-return { overlays, posts: __rec.fetches.filter(f => f.method === 'POST').map(f => f.url) };
+return { overlays, posts: __rec.fetches.filter(f => f.method === 'POST').map(f => [f.url, f.body]) };
 """
 
 
 def test_returns_preview_never_offers_a_polydryer_binding(tmp_path):
     """data-safety-3: the server no longer falls back to a single-slot box's
-    lifecycle binding, so the preview mustn't promise it either."""
+    lifecycle binding, so the preview mustn't promise it either. (Group 40.6,
+    deliberate: the preview is the server's dry run now, so the only POST is
+    that dry run, and its Yes is a no-op.)"""
     res = run_js(tmp_path, ["inv_quickswap.js"], RETURN)
     assert res["unhandled"] == [], res
     assert len(res["overlays"]) == 1, res
     assert "has no recorded source and no bound dryer box slot" in res["overlays"][0], res["overlays"]
     assert "PM-DB-4" not in res["overlays"][0]
-    assert "/api/quickswap/return" not in res["posts"], res
+    assert res["posts"] == [["/api/quickswap/return", {"toolhead": "RCOI-1", "dry_run": True}]], res

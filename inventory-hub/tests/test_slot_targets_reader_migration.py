@@ -182,7 +182,9 @@ def test_dryer_box_slots_picker_survives_a_bad_row(client, monkeypatch):
 def test_quickswap_return_binding_fallback_survives_a_bad_row(client, monkeypatch):
     """routes_bindings.py — Return's "first slot bound to this toolhead"
     fallback answered 500. The engine is spied, not run: this pins WHICH box and
-    slot the route resolves, which is all the fallback decides."""
+    slot the route resolves, which is all the fallback decides. (Group 40.6:
+    the fallback is now "the only free slot that feeds the head", read
+    strictly, and the slot goes to the engine as `picked_slot`.)"""
     rows = [_bad(), _good(targets={"3": "XL-2"}),
             {"LocationID": "XL-2", "Type": "Tool Head", "Max Spools": "1", "Name": "XL-2"}]
     monkeypatch.setattr(locations_db, "load_locations_list", lambda: rows)
@@ -191,6 +193,7 @@ def test_quickswap_return_binding_fallback_survives_a_bad_row(client, monkeypatc
     monkeypatch.setattr(spoolman_api, "get_spools_at_location", lambda loc: [42] if loc == "XL-2" else [])
     monkeypatch.setattr(spoolman_api, "get_spool", lambda sid: {"id": 42, "location": "XL-2", "extra": {}})
     monkeypatch.setattr(spoolman_api, "get_spools_at_location_detailed", lambda loc: [])
+    monkeypatch.setattr(spoolman_api, "get_spools_at_location_detailed_strict", lambda loc: [])
     calls = []
     monkeypatch.setattr(logic, "perform_smart_move",
                         lambda target, spools, **kw: calls.append((target, spools, kw)) or {"status": "success"})
@@ -199,7 +202,7 @@ def test_quickswap_return_binding_fallback_survives_a_bad_row(client, monkeypatc
     assert resp.status_code == 200, resp.get_data(as_text=True)[:300]
     body = resp.get_json()
     assert body["action"] == "return_done" and body["box"] == "PM-DB-OK" and body["slot"] == "3", body
-    assert calls and calls[0][0] == "PM-DB-OK" and calls[0][2].get("target_slot") == "3", calls
+    assert calls and calls[0][0] == "PM-DB-OK" and calls[0][2].get("picked_slot") == "3", calls
 
 
 # --------------------------------------------------------------------------- #

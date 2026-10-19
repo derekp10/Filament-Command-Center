@@ -165,6 +165,14 @@ class FakeBackend:
             payload = self._identify(body)
         elif path == "/api/manage_contents":
             payload = self._manage_contents(body)
+        elif path == "/api/quickswap/return" and body.get("dry_run"):
+            # Group 40.6: the server's dry run names where Return will put it
+            # (the recorded source here, free), as the real route answers.
+            th = str(body.get("toolhead") or "").upper()
+            payload = {"action": "return_plan", "toolhead": th, "active_toolhead": th, "requested": th,
+                       "spool": SPOOL_ID, "display": RESIDENT["display"], "box": BOX, "slot": "2",
+                       "source": "physical_source", "needs_choice": False, "note": "",
+                       "occupancy": {"after": 1, "max": 4}, "options": None, "recommended": None}
         elif path == "/api/quickswap/return":
             payload = {"action": "return_done", "moved": SPOOL_ID, "box": BOX, "slot": "2"}
         else:
@@ -300,7 +308,8 @@ def _assert_no_safety_prompt(page: Page) -> None:
 def test_return_on_a_core1_shaped_printer_reaches_the_backend(
         page: Page, base_url: str, reset_dom_state_js: str):
     """FAILS on the pre-fix inv_quickswap.js: "Nothing to return on FCC-TEST-P1",
-    whose Yes sent nothing."""
+    whose Yes sent nothing. Group 40.6 (deliberate): the overlay is built from
+    the server's dry run, and the Yes sends the slot it named and the spool."""
     be = FakeBackend(page, contents={PRINTER_ID: [RESIDENT]}, extra_locations=[P1_ROW, BOX_ROW])
     errors = _boot(page, base_url, reset_dom_state_js)
     _wait_rows(page, [PRINTER_ID, BOX])
@@ -314,9 +323,11 @@ def test_return_on_a_core1_shaped_printer_reaches_the_backend(
     assert f"Sending back to: {BOX} slot 2 (original source)" in ov["body"], ov
 
     page.click("#fcc-quickswap-yes")
-    _until(page, lambda: be.bodies("/api/quickswap/return"), 5_000, "confirming the Return sent nothing")
+    _until(page, lambda: len(be.bodies("/api/quickswap/return")) >= 2, 5_000, "confirming the Return sent nothing")
     # No banner showed (the printer is idle), so no head is confirmed (Group 39.1).
-    assert be.bodies("/api/quickswap/return") == [{"toolhead": PRINTER_ID, "confirmed_toolheads": []}]
+    assert be.bodies("/api/quickswap/return") == [
+        {"toolhead": PRINTER_ID, "dry_run": True},
+        {"toolhead": PRINTER_ID, "box": BOX, "slot": "2", "expected_spool": SPOOL_ID, "confirmed_toolheads": []}]
     _toast(page, "no success toast after return_done", type_="success", contains=(str(SPOOL_ID),))
     assert errors == [], errors
 

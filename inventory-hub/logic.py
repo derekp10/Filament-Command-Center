@@ -1724,7 +1724,7 @@ _smart_move_depth = threading.local()
 
 def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_deploy=True, confirm_active_print=False,
                        confirmed_fed_heads=(), fed_check_from=None, picked_slot=None, expected_feed=None,
-                       seen_printing=(), swap_slot=None, swap_out=False, record_source=None):
+                       seen_printing=(), swap_slot=None, swap_out=False, record_source=None, unslotted=False):
     """Entry point for the slot-move pipeline.
 
     Owns the per-move printer-state probe cache (L3 fix A) so the auto-deploy
@@ -1768,6 +1768,8 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
     (checked strictly before anything is written; refused otherwise,
     `blocked_reason: record_source`). A spool arriving from a box keeps its own
     trail and the answer says `record_source_ignored`.
+    `unslotted` (Group 40.6): the spool goes into the box with no slot on
+    purpose (Return's "No slot"), so step 3 picks none for it.
     """
     depth = getattr(_smart_move_depth, "n", 0)
     owns_move = depth == 0
@@ -1799,6 +1801,7 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
             swap_slot=swap_slot,
             swap_out=swap_out,
             record_source=record_source,
+            unslotted=unslotted,
         )
     finally:
         _smart_move_depth.n = getattr(_smart_move_depth, "n", 1) - 1
@@ -1813,7 +1816,7 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
 
 def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', auto_deploy=True, confirm_active_print=False,
                              confirmed_fed_heads=(), fed_check_from=None, picked_slot=None, expected_feed=None,
-                             swap_slot=None, swap_out=False, record_source=None):
+                             swap_slot=None, swap_out=False, record_source=None, unslotted=False):
     """Move spool(s) to `target`, optionally into `target_slot` of that location.
 
     `auto_deploy` (default True): when the target is a Dryer Box AND the
@@ -1992,7 +1995,8 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     # The pick feeds the head the spool is leaving: the spool is stored in the
     # box and not loaded straight back (a slotless move off a head into a box).
     store_only = False
-    if not target_slot and tgt_info and len(spools) == 1 and not (is_printer or is_toolhead):
+    # `unslotted` (Group 40.6): the caller chose no slot (Return's "No slot"), so none is picked.
+    if not target_slot and not unslotted and tgt_info and len(spools) == 1 and not (is_printer or is_toolhead):
         try:
             max_slots_auto = int(str(tgt_info.get('Max Spools', '0')).strip() or '0')
         except (TypeError, ValueError):

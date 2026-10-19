@@ -109,6 +109,15 @@ class FakeSpoolman:
             return []
         return self._detailed(loc)
 
+    def all_spools_strict(self, allow_archived=False):
+        """spoolman_api.get_all_spools_strict: the whole (non-archived) list, as
+        records, raising when the list is down. The slot picker's placement
+        model reads it (Group 40.6: Return's chooser answers carry that model)."""
+        if self._list_read_fails():
+            raise logic.spoolman_api.requests.ConnectionError("Spoolman spool list unreachable (test)")
+        return [{"id": sid, **copy.deepcopy(rec)} for sid, rec in sorted(self.spools.items())
+                if allow_archived or not rec.get("archived")]
+
     def _detailed(self, loc):
         loc = str(loc).upper()
         items = []
@@ -253,9 +262,14 @@ def run_move(sm, *, probe, printer_map, locations=None, store=None, call=None, *
                          side_effect=sm.at_location_detailed),
             patch.object(logic.spoolman_api, "get_spools_at_location_detailed_strict",
                          side_effect=sm.at_location_detailed_strict),
+            patch.object(logic.spoolman_api, "get_all_spools_strict", side_effect=sm.all_spools_strict),
+            # `slot` as the real formatter gives it: the placement model's bucket
+            # reader (_build_location_match) reads it.
             patch.object(logic.spoolman_api, "format_spool_display",
                          side_effect=lambda s: {"text": f"#{(s or {}).get('id')}",
-                                                "color": "ff0000"}),
+                                                "color": "ff0000",
+                                                "slot": str(((s or {}).get("extra") or {}).get("container_slot")
+                                                            or "").strip('"')}),
             # Below the per-move memo, as in production.
             patch("prusalink_api._probe_printer_state", side_effect=probe),
             patch.object(logic.requests, "post", return_value=MagicMock(ok=True)),
