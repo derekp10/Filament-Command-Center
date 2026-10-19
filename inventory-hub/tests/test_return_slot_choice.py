@@ -384,3 +384,190 @@ def test_the_unslotted_keyword_skips_the_slot_pick(unslotted, landed):
                       target="LR-MDB-1", raw_spools=[77], auto_deploy=False, origin="test", **kwargs)
     assert logic.smart_move_failure(result, 77) == "", result
     assert _at(sm, 77) == ("LR-MDB-1", landed), sm.spools[77]
+
+
+# ---- Group 40.6 review (R1-R5): the server half ---------------------------------------------------
+# Each test adopts a review probe and fails on 7976b72 (the review's base), unless its
+# docstring calls it a control.
+
+def _slotless(max_spools="", feeds=None, box="LR-BOX-9"):
+    """A Dryer Box whose Max Spools was cleared in the editor ("a blank isn't
+    managed"): neither a single-slot box nor a multi-slot one."""
+    return {"LocationID": box, "Type": "Dryer Box", "Max Spools": max_spools, "parent_id": "LR",
+            "extra": {"slot_targets": dict(feeds or {})}}
+
+
+@pytest.mark.parametrize("max_spools", ["", "?"], ids=["blank-max", "unreadable-max"])
+def test_a_box_with_no_slot_count_gets_the_slot_its_confirm_named(client, max_spools):
+    """R2 (probe P1): the dry run names LR-BOX-9 slot 3, where #77 came from, and
+    the Yes puts it there, as Return did before 40.6. Such a box used to take
+    the single-slot branch: the plan named slot 3 and the Yes refused it
+    ("LR-BOX-9 has one slot, not slot 3"), on every retry."""
+    rows = _rows(extra=[_slotless(max_spools)])
+    sm = FakeSpoolman({77: {"location": "XL-3", "extra": _deployed("LR-BOX-9", "3")}})
+    status, plan = _post(client, sm, {"toolhead": "XL-3", "dry_run": True}, rows=rows)
+    assert plan["action"] == "return_plan" and plan["needs_choice"] is False, plan
+    assert (plan["box"], plan["slot"], plan["source"]) == ("LR-BOX-9", "3", "physical_source"), plan
+    status, body = _post(client, sm, {"toolhead": "XL-3", "box": plan["box"], "slot": plan["slot"],
+                                      "expected_spool": 77}, rows=rows)
+    assert status == 200 and body["action"] == "return_done", body
+    assert (body["box"], body["slot"]) == ("LR-BOX-9", "3"), body
+    assert _at(sm, 77) == ("LR-BOX-9", "3") and sm.direct_at("XL-3") == []
+
+
+def test_a_box_with_no_slot_count_whose_slot_is_taken_takes_it_with_no_slot(client):
+    """R2, control (passes on 7976b72): as before 40.6, a taken recorded slot
+    is never a refusal; the plan says no slot and why, and #57 keeps slot 3."""
+    rows = _rows(extra=[_slotless()])
+    sm = FakeSpoolman({77: {"location": "XL-3", "extra": _deployed("LR-BOX-9", "3")},
+                       57: {"location": "LR-BOX-9", "extra": {"container_slot": "3"}}})
+    status, plan = _post(client, sm, {"toolhead": "XL-3", "dry_run": True}, rows=rows)
+    assert (plan["box"], plan["slot"], plan["needs_choice"]) == ("LR-BOX-9", None, False), plan
+    assert plan["note"] == "LR-BOX-9 slot 3 holds #57, so #77 goes in without a slot", plan
+    status, body = _post(client, sm, {"toolhead": "XL-3", "box": "LR-BOX-9", "slot": "none",
+                                      "expected_spool": 77}, rows=rows)
+    assert status == 200 and body["action"] == "return_done" and body["slot"] is None, body
+    assert _at(sm, 77) == ("LR-BOX-9", "") and _at(sm, 57) == ("LR-BOX-9", "3")
+
+
+def test_a_polydryer_trail_naming_another_slot_is_planned_as_slot_1(client):
+    """R2's other case: a single-slot box has slot 1 only, so the plan names
+    slot 1 whatever slot the trail recorded (here "2", legacy data), and the
+    Yes takes it. The plan used to name slot 2, which the Yes refused."""
+    rows = _rows(extra=[_polydryer(head="XL-2")])
+    sm = FakeSpoolman({50: {"location": "XL-2", "extra": _deployed("PM-DB-2", "2")}})
+    status, plan = _post(client, sm, {"toolhead": "XL-2", "dry_run": True}, rows=rows)
+    assert (plan["box"], plan["slot"], plan["needs_choice"]) == ("PM-DB-2", "1", False), plan
+    status, body = _post(client, sm, {"toolhead": "XL-2", "box": plan["box"], "slot": plan["slot"],
+                                      "expected_spool": 50}, rows=rows)
+    assert status == 200 and body["action"] == "return_done" and body["slot"] == "1", body
+    assert _at(sm, 50) == ("PM-DB-2", "1")
+
+
+def test_a_box_with_no_slot_count_is_never_offered_as_a_feed(client):
+    """R2's chooser half: LR-BOX-9 (Max Spools blank) is the only box bound to
+    XL-2, and #42 has no trail. The chooser used to open on LR-BOX-9, where the
+    slot picker can't open (not_pickable). Now nothing is offered, nothing is
+    written, and the answer says why and what fixes it."""
+    rows = _rows({"1": "XL-1", "3": "XL-3", "4": "PRINTER:XL"}, extra=[_slotless(feeds={"1": "XL-2"})])
+    sm = FakeSpoolman({42: {"location": "XL-2", "extra": {}}})
+    for dry in (True, False):
+        status, body = _post(client, sm, {"toolhead": "XL-2", "dry_run": dry}, rows=rows)
+        assert status == 404 and body["action"] == "return_no_binding", body
+        assert body["msg"] == ("#42 has no recorded slot; LR-BOX-9 feeds XL-2 but has no slot count "
+                               "(Max Spools is blank), so Return can't pick a slot there: set its Max "
+                               "Spools to return spools there"), body
+    assert sm.writes == [] and _at(sm, 42) == ("XL-2", "")
+    assert _logs("⚠️ Return: Spool #42 off <b>XL-2</b> not moved: #42 has no recorded slot; LR-BOX-9",
+                 types={"WARNING"}), state.RECENT_LOGS
+
+
+def test_a_return_with_no_slot_from_an_old_page_says_reload(client):
+    """R3 (the skeptic's probe): a page loaded before 40.6 posts {toolhead} only
+    and toasts `error`, else the bare action. return_choose_slot carried
+    neither, so the old page toasted "Return failed: return_choose_slot". It
+    now says why and to reload, like the move doors' stale-page answers."""
+    sm = FakeSpoolman({77: {"location": "XL-3", "extra": _deployed("LR-MDB-1", "3")}, 57: _stored(3)})
+    status, body = _post(client, sm, {"toolhead": "XL-3"})
+    assert status == 200 and body["action"] == "return_choose_slot", body
+    want = ("LR-MDB-1 slot 3, where it came from, holds #57; no free slot feeds XL-3, so nothing was "
+            "moved: reload the page (Ctrl+F5) to choose a slot")
+    assert body.get("error") == want and body.get("msg") == want and body.get("stale_page") is True, body
+    old_page_toast = f"❌ Return failed: {body.get('error') or body.get('action') or 'unknown'}"
+    assert "reload the page (Ctrl+F5)" in old_page_toast, old_page_toast
+    assert sm.writes == []
+
+
+@pytest.mark.parametrize("ask", [{"box": "PM-DB-2", "slot": "1", "expected_spool": 50}, {}],
+                         ids=["the-confirms-yes", "an-old-page"])
+def test_a_polydryer_slot_taken_while_fcc_checks_the_printer_is_never_unseated(client, ask):
+    """R4 (probe P3): #50 (PM-DB-2's own spool) leaves XL-2 while slot 1 is free;
+    during the printer check another request files #18 in PM-DB-2 slot 1. The
+    single-slot path sent an explicit slot 1, the engine's Overwrite: #18 lost
+    its slot and the box recorded two spools. Now the engine's own 42.2 pick
+    decides at write time and #50 goes in with no slot, which the answer, the
+    toast and a warning say."""
+    rows = _rows(extra=[_polydryer(head="XL-2")])
+    sm = FakeSpoolman({50: {"location": "XL-2", "extra": _deployed("PM-DB-2", "1")}})
+
+    def racing_probe(url, printer_name):
+        sm.spools[18] = {"location": "PM-DB-2", "extra": {"container_slot": "1"}}
+        return IDLE(url, printer_name)
+
+    status, body = _post(client, sm, dict({"toolhead": "XL-2"}, **ask), rows=rows, probe=racing_probe)
+    assert status == 200 and body["action"] == "return_done", body
+    assert [w for w in sm.writes if w[0] == 18] == [], "Return unseated #18 from PM-DB-2 slot 1"
+    assert _at(sm, 18) == ("PM-DB-2", "1") and _at(sm, 50) == ("PM-DB-2", ""), sm.spools
+    assert body["slot"] is None, body
+    assert _logs("⚠️ Return: PM-DB-2 slot 1 was taken meanwhile, so #50 went back into PM-DB-2 without a slot",
+                 types={"WARNING"}), state.RECENT_LOGS
+    assert _logs("↩️ Return: Spool #50 from <b>XL-2</b> → <b>PM-DB-2</b> (no slot)"), state.RECENT_LOGS
+
+
+def test_the_deployed_card_returns_its_own_spool_off_a_doubled_head(client):
+    """R5 (probe P2): XL-1 holds #42 (from LR-MDB-1 slot 1) and #43 (legacy data,
+    an old Location edit). The DEPLOYED card names #42, so Return acts on it and
+    leaves #43 on XL-1, and the confirm says so. It used to refuse the card
+    (return_ambiguous), whose ↩️ had repaired this before 40.6."""
+    sm = FakeSpoolman({42: {"location": "XL-1", "extra": _deployed("LR-MDB-1", "1")},
+                       43: {"location": "XL-1", "extra": {}}})
+    status, plan = _post(client, sm, {"toolhead": "XL-1", "dry_run": True, "expected_spool": 42})
+    assert status == 200 and plan["action"] == "return_plan", plan
+    assert (plan["spool"], plan["box"], plan["slot"]) == (42, "LR-MDB-1", "1"), plan
+    assert plan["note"] == "XL-1 also holds #43, which stays there", plan
+    status, body = _post(client, sm, {"toolhead": "XL-1", "box": "LR-MDB-1", "slot": "1", "expected_spool": 42})
+    assert status == 200 and body["action"] == "return_done" and body["moved"] == 42, body
+    assert _at(sm, 42) == ("LR-MDB-1", "1") and sm.direct_at("XL-1") == [43]
+    assert [w for w in sm.writes if w[0] == 43] == [], sm.writes
+    assert _logs("⚠️ Return: XL-1 holds 2 spools; returning #42, the one the page named, and #43 stays on XL-1",
+                 types={"WARNING"}), state.RECENT_LOGS
+
+
+@pytest.mark.parametrize("expected", [None, 99], ids=["no-named-spool", "a-spool-not-on-the-head"])
+def test_a_doubled_head_without_its_spool_named_is_still_ambiguous(client, expected):
+    """R5, control (passes on 7976b72): the toolhead view's Return names no spool,
+    so which of two spools to return is a guess; nothing moves."""
+    sm = FakeSpoolman({42: {"location": "XL-1", "extra": _deployed("LR-MDB-1", "1")},
+                       43: {"location": "XL-1", "extra": {}}})
+    ask = {"toolhead": "XL-1", "dry_run": True}
+    if expected is not None:
+        ask["expected_spool"] = expected
+    status, body = _post(client, sm, ask)
+    assert status == 409 and body["action"] == "return_ambiguous" and body["spools"] == [42, 43], body
+    assert sm.writes == []
+
+
+@pytest.mark.parametrize("slot_1_holder", [57, None], ids=["slot-1-taken", "slot-1-free"])
+def test_the_stale_trail_fallbacks_request_never_unseats_a_spool(client, slot_1_holder):
+    """R1, the engine half (probes P5 / P6): the DEPLOYED card's stale-trail
+    fallback now posts its OWN box with the slot as `picked_slot` (the
+    `doAssign(box, id, null, null, {autoDeploy: false, pickedSlot})` contract:
+    slot null, picked_slot kept only while free). #60 sits on a cart; its record
+    still names LR-MDB-1 slot 1. Whether slot 1 is taken or free, no other spool
+    is written: #57 keeps LR-MDB-1 slot 1 (nothing moves), and #58 in LR-MDB-2
+    slot 1, which the Room view also lists, is never touched.
+    A control: it passes on 7976b72, whose engine already kept a picked slot
+    only while free. What was wrong there is the request the card made (the
+    VIEW, 'LR', with an explicit slot: the Overwrite that unseated both), which
+    test_return_slot_choice_js and test_return_round_trip pin, red there."""
+    rows = _rows(extra=[{"LocationID": "LR-MDB-2", "Type": "Dryer Box", "Max Spools": "2", "parent_id": "LR",
+                         "extra": {"slot_targets": {}}}])
+    spools = {60: {"location": "CR-CT-2-R1", "extra": _deployed("LR-MDB-1", "1")},
+              58: {"location": "LR-MDB-2", "extra": {"container_slot": "1"}}}
+    if slot_1_holder:
+        spools[slot_1_holder] = _stored(1)
+    sm = FakeSpoolman(spools)
+    r = run_move(sm, probe=IDLE, store=LocationsStore(rows), printer_map=PRINTER_MAP,
+                 call=lambda: client.post("/api/manage_contents", json={
+                     "action": "add", "location": "LR-MDB-1", "spool_id": "ID:60", "slot": None,
+                     "picked_slot": "1", "origin": "", "confirmed_toolheads": [], "confirmed_fed_heads": [],
+                     "auto_deploy": False}))
+    body = r.get_json()
+    assert [w for w in sm.writes if w[0] != 60] == [], sm.writes
+    assert _at(sm, 58) == ("LR-MDB-2", "1")
+    if slot_1_holder:
+        assert body["status"] == "error" and body.get("blocked_reason") == "picked_slot_taken", body
+        assert sm.writes == [] and _at(sm, 57) == ("LR-MDB-1", "1") and _at(sm, 60) == ("CR-CT-2-R1", "")
+    else:
+        assert logic.smart_move_failure(body, 60) == "", body
+        assert _at(sm, 60) == ("LR-MDB-1", "1") and sm.direct_at("XL-1") == [], sm.spools[60]
