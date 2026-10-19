@@ -64,12 +64,32 @@
   | # | Check | Steps | Pass if |
   |---|---|---|---|
   | S1 | Empty idle head (your path) | XL-2 empty. Buffer a spool, scan `LOC:LR-MDB-1:SLOT:2` | Loads onto XL-2 with no prompt |
-  | S2 | The slot's own spool (your path) | XL-3 runs a spool that came from `LR-MDB-1` slot 3. Buffer a new spool, scan `LOC:LR-MDB-1:SLOT:3` | No prompt; the new spool is on XL-3, and the old one is in your scan buffer with a toast "✋ #N → your buffer (taken off XL-3)" (your 2026-10-15 answer, built in 40.2): Unassigned until you scan it somewhere or weigh it out. `LR-MDB-1` no longer reads 5/4. A scanner's double-read of the label is ignored ("Ignored a second read"); scanning the same label again on purpose swaps the two straight back, so a wrong scan is fixed by re-scanning (your 2026-10-15 evening answer: no hard stop) |
+  | S2 | The slot's own spool (your path) | XL-3 runs a spool that came from `LR-MDB-1` slot 3. Buffer a new spool, scan `LOC:LR-MDB-1:SLOT:3` | No prompt; the new spool is on XL-3, and the old one is in your scan buffer with a toast "✋ #N → your buffer (taken off XL-3)" (your 2026-10-15 answer, built in 40.2). Since Swap option C (2026-10-19) it is also filed back where it sat before that slot when FCC knows (the toast adds "filed back in CR-CT-2-R1"); a spool slotted before that build has no record, so it stays Unassigned until you scan it somewhere or weigh it out. `LR-MDB-1` no longer reads 5/4. A scanner's double-read of the label is ignored ("Ignored a second read"); scanning the same label again on purpose swaps the two straight back, so a wrong scan is fixed by re-scanning (your 2026-10-15 evening answer: no hard stop) |
   | S3 | Head fed from a PolyDryer | Load a `PM-DB-2` spool onto XL-1 (scan it, then XL-1's QR). Buffer another spool, scan `LOC:LR-MDB-1:SLOT:1` | One prompt naming the PolyDryer spool, with the three buttons. Just store it → the spool is in slot 1, XL-1 unchanged. Again with Load it instead → the PolyDryer spool is back in `PM-DB-2`, the new one on XL-1. **Does the wording read right?** |
   | S4 | Scan the choice | Repeat S3, but scan the on-screen QRs instead of clicking | Each QR does what its label says; Cancel writes nothing |
   | S5 | Printing: store by default | While the XL prints, XL-2 empty: scan a spool, then `LOC:LR-MDB-1:SLOT:2` | The prompt says the XL is printing; Enter stores the spool in slot 2 and leaves XL-2 alone |
   | S6 | Deposit onto a fed head | As in S3 (XL-1 runs the PolyDryer spool): open XL-1 → Quick-Swap grid → ⬇️ Deposit a buffered spool into `LR-MDB-1` slot 1. Then once more, tapping the tile twice quickly | The same prompt as S3, and only ONE prompt, even on the double tap |
   | S7 | Someone re-points the slot meanwhile (optional, two tabs) | Tab A: S3's scan; leave the prompt open. Tab B: Location Manager → `LR-MDB-1` → 🔗 Slot → Toolhead Feeds → slot 1 → XL-2, save. Tab A: Load it instead | FCC asks again: "LR-MDB-1 slot 1 now feeds XL-2 (it fed XL-1 when you were asked). Load #N onto XL-2?" Set slot 1 back to XL-1 afterwards |
+* **⏸️ PENDING DEREK — the pickers and Swap option C (Group 40's last leg, built 2026-10-19; on dev once that
+  night's merge lands).** Automated tests cover all of it; these check the feel, the wording and your scanner.
+  **Setup:** printer idle unless a row says otherwise; empty the buffer between rows. Spools slotted BEFORE this
+  build carry no "where it sat before" record, so a Swap leaves those Unassigned (and buffered); the record starts
+  with the next spool you put in a slot.
+  | # | Check | Steps | Pass if |
+  |---|---|---|---|
+  | C1 | Swap files it back | Put a spare from `CR-CT-2-R1` into `LR-MDB-1` slot 4 (scan it, then the slot label). Buffer another spare, open `LR-MDB-1`, tap slot 4 → **Swap** | The new spool is in slot 4; the old one is in your buffer AND back on `CR-CT-2-R1` in FCC, toast "✋ #N → your buffer (filed back in CR-CT-2-R1)". The box label's picker says it before you choose ("#N → your buffer, filed back in CR-CT-2-R1") |
+  | C2 | The same-slot swap, one rule | As S2, with a spool you put into `LR-MDB-1` slot 3 from a cart after this build | It comes off XL-3 into your buffer, filed back on that cart ("taken off XL-3; filed back in …"). **Does that read right** (your "I may have a more nuanced opinion once I run into it")? |
+  | F1 | Force Location into a box | A spool's details → Force Location → `LR-MDB-2` | The slot picker opens (each slot's spool and the head it feeds, a ⭐); it lands in the slot you pick and loads that slot's head, asking first when needed. Escape: nothing moves |
+  | F2 | Force Location onto an INDX head | Details → Force Location → `RCOI` | The Printer picker: RCOI-1…RCOI-8 with what each holds; pick an empty head and the spool lands on it (your "INDX heads without labels" item) |
+  | P1 | `LOC:XL` with a buffer | Buffer a spool, scan `LOC:XL` | The Printer picker: XL-1…XL-5 (what each runs, which slots feed it) plus the Printer Pool slots; "Checking XL…" until the printer answers |
+  | P2 | Load over a spool | In P1 pick a head that holds a spool | "Load #N onto XL-3? XL-3 holds #M (from …). Loading #N sends #M back to …": Load it instead / Cancel (no store: a head isn't storage), Cancel steps back to the picker. **Does the wording read right?** |
+  | P3 | "Record it as coming from…" | In P1, with a spare from Unassigned, pick the empty head `XL-4` | Asks which slot feeding XL-4 is its home (`LR-MDB-2` slot 1 pre-selected when it's the only free one; scanning that slot's label picks it); toast "(recorded as from LR-MDB-2 slot 1)" |
+  | P4 | Empty buffer | Empty buffer: scan `LOC:XL`; then `LOC:PM-DB-2` while its spool runs on a head | `LOC:XL` opens the XL view and grabs nothing; the PolyDryer label still grabs its spool (your answer 8) |
+  | R1 | Return, one tap | Open a head whose spool came from `LR-MDB-1` slot 3 → ↩️ Return | One tap; the confirm names "LR-MDB-1 slot 3"; toast `↩️ #N → LR-MDB-1 slot 3` |
+  | R2 | Return to a taken slot | Put another spool in that slot first, then Return | The return-mode picker opens with a ⭐; "No slot" says the box will read 5/4; no toast ever says `null` |
+  | R3 | DEPLOYED ↩️ | `LR-MDB-1` grid → ↩️ on a DEPLOYED card | Same as R1/R2: the spool comes back into its slot and the head is emptied (asking first if the XL prints) |
+  | W1 | Wizard Location → printer | Edit a spool, pick `XL` in Location | The Printer picker opens; the field then reads "XL-3 (via XL)"; Save puts it on XL-3. **If the picker gets in your way here, say so** (your veto point) |
+  | W2 | Wizard Location → box | Edit a spool, pick `LR-MDB-1` | The slot picker opens; Save moves it into that slot and loads its head (asking first when needed); a refused move says so and your other edits stay saved |
 * **⏸️ PENDING DEREK — the next INDX cancel review for a print you ran from a different head than it was sliced
   for.** Nothing to set up; it will happen on its own (your job 1104/1105 case). Open 🛑 Review, and on that
   T-line pick the spool on the head the print really used, then Apply. Pass if the deduct lands on that spool (the
@@ -337,9 +357,10 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
   Audit the other doors for the same pattern (Quick-Swap, Return, Bulk Move commit, the wizard).
 * **🟡 Assigning spools to INDX heads (and printer spool holders) without printed labels is clunky.** _(Derek,
   2026-10-14.)_ Force Location is meant as a last resort, but without a label per INDX head it's often the easy way.
-  Group 40.4 / 40.5's pickers (Force Location or `LOC:RCOI` → pick a head) cover part of it; the spool holders on the
-  printer are still being thought through (Derek).
-* **✅ BUILT 2026-10-15 (Group 40.2 branch, `2a45ba5`) — A same-slot swap files the old spool in the box with no
+  Group 40.4 / 40.5's pickers (Force Location or `LOC:RCOI` → pick a head) cover part of it (built 2026-10-19:
+  Force Location → `RCOI` opens the Printer picker; ⏸️ PENDING DEREK check F2); the spool holders on the printer are
+  still being thought through (Derek).
+* **✅ BUILT 2026-10-15 (Group 40.2 branch, `2a45ba5`; Swap option C `73b3f88`, 2026-10-19) — A same-slot swap files the old spool in the box with no
   slot.** _(Found 2026-10-14 by Group 40's engine review, `engine:s2-swap-old-spool-unslotted`; it predates Group
   40.)_ XL-3 runs #99, which came from LR-MDB-1 slot 3. You buffer a new spool #42 and scan `LOC:LR-MDB-1:SLOT:3`:
   #42 goes into slot 3 and onto XL-3, and #99 is sent home to LR-MDB-1, but slot 3 now belongs to #42, so FCC files
@@ -354,8 +375,7 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
   (behind new spools still waiting, so the next slot scan loads the next new one), with a toast "✋ #99 → your
   buffer (taken off XL-3)" and a full Activity Log sentence. A spool from elsewhere (a PolyDryer) and a toolhead-QR
   scan still go home. Undo puts it back on the head and out of the buffer. Archive at Group 40's finish.
-* **🟡 Should a Swap make the old spool Unassigned too? → Derek, 2026-10-15 evening: option C, to build in Group 40's
-  next leg** (the full answer and its three confirmed points, including the same rule for the same-slot swap, are in
+* **✅ BUILT 2026-10-19 (`73b3f88`, Group 40's last leg) — Should a Swap make the old spool Unassigned too? → Derek, 2026-10-15 evening: option C** (the full answer and its three confirmed points, including the same rule for the same-slot swap, are in
   `40-slot-picker.md`, 40.2 "Derek's answers (2026-10-15, evening)"): the swapped-out spool goes back to where it sat before that slot AND into the buffer
   "in case that isn't correct"; never back into the slot it just left, never bumping a spool out of a taken slot,
   and a taken slot falls back to a plain place (cart, box, shelf). _(Filed 2026-10-15 by Group 40.2; nothing broken.)_
