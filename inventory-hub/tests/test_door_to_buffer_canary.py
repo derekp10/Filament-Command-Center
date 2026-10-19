@@ -35,3 +35,20 @@ def test_every_move_door_takes_the_swapped_out_spool_into_the_buffer(filename, h
 def test_the_helper_lives_in_inv_core_so_every_page_has_it():
     src = _read(MODULES / "inv_core.js")
     assert "window.takeIntoBuffer = " in src and "window.toastIntoBuffer = " in src
+
+
+# Group 40.7 review (wizard-not-moved-drops-to-buffer): the wizard's first request
+# goes to its own routes (edit / create), whose answers carry a Swap's old spool in
+# `to_buffer` whether or not the move then landed (Swap option C). Each function
+# that reads such an answer takes it into this page's buffer, on every path; the
+# not-moved one used to drop it. Behaviour: test_wizard_location_review_js.py.
+# Base proof (7976b72): wizardEditLocationNotMoved fails; the other two pass there.
+WIZARD_ANSWER_READERS = ["window.wizardSubmit = ", "window.wizardEditLocationNotMoved = ",
+                         "window.wizardSettleCreatePlacements = "]
+
+
+@pytest.mark.parametrize("header", WIZARD_ANSWER_READERS, ids=[h.split("=")[0].strip() for h in WIZARD_ANSWER_READERS])
+def test_every_wizard_answer_reader_takes_the_swapped_out_spool_into_the_buffer(header):
+    assert "takeIntoBuffer(" in _body(_read(MODULES / "inv_wizard.js"), header), (
+        f"inv_wizard.js: {header.strip()} reads a wizard move's answer but never calls window.takeIntoBuffer, "
+        f"so a Swap's old spool would vanish from this page's buffer on its next save")

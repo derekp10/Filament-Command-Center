@@ -649,15 +649,359 @@ def api_single_slot_binding_put(loc_id, slot):
     })
 
 
+# ---------------------------------------------------------------------------
+# Return (Group 40.6): where the spool on a head goes back to, read strictly.
+# ---------------------------------------------------------------------------
+
+def _u(v):
+    return str(v if v is not None else '').strip().strip('"').upper()
+
+
+def _flag(value):
+    """A request flag the way a page may spell it: true, "true", "1"."""
+    return value is True or str(value).strip().lower() in ('true', '1', 'yes')
+
+
+def _ids_text(ids):
+    return logic._and_list(f"#{i}" for i in ids)
+
+
+class _ReturnReadError(Exception):
+    """A box Return needed couldn't be read from Spoolman."""
+
+    def __init__(self, box, err):
+        super().__init__(f"{box}: {err}")
+        self.box = box
+        self.err = err
+
+
+def _return_reader():
+    """Each box read STRICTLY at most once per request: a Spoolman blip raises
+    (_ReturnReadError) instead of reading a taken slot as free. The fail-open
+    read answered [] on a timeout, so a taken slot looked free."""
+    cache = {}
+
+    def read(box):
+        b = _u(box)
+        if b not in cache:
+            try:
+                cache[b] = spoolman_api.get_spools_at_location_detailed_strict(b) or []
+            except Exception as e:
+                raise _ReturnReadError(b, e)
+        return cache[b]
+    return read
+
+
+def _slot_holders(row, box, items, sid, slot):
+    """The other spools that claim `slot` of `box`, in it or deployed from it
+    (the one slot rule, 42.2's effective_slot, through logic.box_slot_claims)."""
+    claims, _own, _ghost = logic.box_slot_claims(row, box, items, [sid])
+    return list(claims.get(logic._norm_slot(slot)) or [])
+
+
+def _return_occupancy(items, sid, row):
+    """What the box's count reads once #sid is in it: every other spool it shows
+    (in a slot, deployed from one, or unslotted) plus #sid, out of Max Spools.
+    The slot picker's "No slot" tile counts the same way."""
+    others = {str(i.get('id')) for i in (items or []) if str(i.get('id')) != str(sid)}
+    return {"after": len(others) + 1, "max": placement._max_slots(row)}
+
+
+def _slotless_box(row):
+    """A Dryer Box with no slot count: its Max Spools is blank or unreadable, so
+    it is neither 20.2's single-slot box nor a multi-slot one ("a blank isn't
+    managed"). Group 40.6 review, R2: Return keeps its pre-40.6 rule for such a
+    box (the recorded slot while no other spool claims it, else no slot) and
+    never offers it as a feed, since FCC can't say which of its slots exist and
+    the slot picker doesn't open on it."""
+    return (isinstance(row, dict) and row.get('Type') == locations_db.DRYER_BOX_TYPE
+            and not locations_db._is_single_slot_dryer_box(row) and placement._max_slots(row) <= 1)
+
+
+def _head_feeds(rows, loc_list, head, sid, read):
+    """(feeds, free, attached) for `head`: every (box, slot) of a multi-slot box
+    bound to it (single-slot boxes never feed, 42.1 step 5, and neither does a
+    box with no slot count, _slotless_box), the ones no other spool claims (read
+    strictly), and the single-slot boxes attached to it (a PolyDryer's slot-1
+    binding: Derek's builder note counts it as a second feed)."""
+    feeds = [(box, slot) for box, slot in logic._feed_slots_for(head, loc_list)
+             if placement._max_slots(rows.get(box)) > 1]
+    free = []
+    for box, slot in feeds:
+        row = rows.get(box)
+        s = logic._norm_slot(slot)
+        if not (s.isdigit() and 1 <= int(s) <= placement._max_slots(row)):
+            continue
+        if not _slot_holders(row, box, read(box), sid, s):
+            free.append((box, s))
+    attached = [_u(r.get('LocationID')) for r in loc_list
+                if locations_db._is_single_slot_dryer_box(r) and logic._slot_binding(r, '1') == head]
+    return feeds, free, attached
+
+
+def _return_plan(rows, loc_list, printer_map, head, sid, spool_data, read):
+    """Where Return sends #sid off `head` when the request names no slot (Group
+    40.6: Derek's D5, and his 2026-10-13 answer 6, "one tap when the answer is
+    obvious"). Writes nothing. A dict: `box`, `slot` (where it lands, None for
+    no slot), `source`, `mode` ('pick': a free slot of a multi-slot box, taken
+    only while still free; 'legacy': a single-slot box, as before), or
+    `needs_choice` (with the box the chooser shows), or `no_binding`.
+      1. The recorded slot, while it exists and no other spool claims it: one
+         tap ('physical_source').
+      2. A recorded single-slot box: back there, slot 1 while free, else no
+         slot; the engine's own 42.2 pick decides at write time (send_slot
+         None). A recorded Dryer Box with no slot count (_slotless_box): back
+         there as before 40.6, in its recorded slot while free, else no slot.
+      3. Otherwise (no slot recorded, the recorded one taken or gone, or a trail
+         that isn't a Dryer Box): exactly one free slot of a multi-slot box
+         bound to `head`, with no single-slot box attached to `head` (a second
+         feed: Derek's builder note), is one tap ('feed_slot'); anything else
+         needs a choice, on one box: the recorded multi-slot box or a box
+         feeding `head`, whichever offers the best D5 slot (one feeding `head`,
+         else a spare), the recorded box then locations.json order on a tie.
+      4. No such box: `no_binding`.
+    `read(box)` raises _ReturnReadError when Spoolman can't say."""
+    extra = (spool_data or {}).get('extra') or {}
+    src = _u(extra.get('physical_source'))
+    src_slot = logic._norm_slot(extra.get('physical_source_slot'))
+    src_row = rows.get(src) if src else None
+    plan = {"box": None, "slot": None, "source": None, "mode": None, "needs_choice": False,
+            "send_slot": None, "taken_by": [], "note": "", "occupancy": None,
+            "recorded": {"box": src or None, "slot": src_slot or None}}
+    is_box = isinstance(src_row, dict) and src_row.get('Type') == locations_db.DRYER_BOX_TYPE
+    preferred = None
+    if is_box and locations_db._is_single_slot_dryer_box(src_row):
+        # A single-slot box has slot 1 only: back there, in slot 1 while free
+        # (whatever slot its trail names, 42.2), else no slot. Group 40.6
+        # review: the plan names only "1" or no slot, the two answers the Yes
+        # takes (R2: a recorded "3" was named, then refused); and the engine's
+        # own 42.2 pick decides at write time (send_slot None), taking slot 1
+        # only while still free, so a spool put in the box while FCC checks the
+        # printer is never unseated (R4: an explicit slot 1 was an Overwrite).
+        items = read(src)
+        taken = _slot_holders(src_row, src, items, sid, '1')
+        plan.update(box=src, source='physical_source', mode='legacy', taken_by=taken, checked_slot='1',
+                    slot=None if taken else '1', send_slot=None,
+                    occupancy=_return_occupancy(items, sid, src_row))
+        if taken:
+            plan['note'] = f"{src} slot 1 holds {_ids_text(taken)}, so #{sid} goes in without a slot"
+        return plan
+    if _slotless_box(src_row):
+        # Group 40.6 review, R2: a Dryer Box with no slot count keeps the
+        # pre-40.6 rule, its recorded slot while no other spool claims it, else
+        # no slot. (It used to fall into the single-slot branch above: the plan
+        # named slot 3 and the Yes refused it, "has one slot, not slot 3".)
+        # The engine has no picked slot for a box without a slot count, so the
+        # slot goes as before 40.6: checked free here, then sent as is.
+        items = read(src)
+        taken = _slot_holders(src_row, src, items, sid, src_slot) if src_slot else []
+        keep = src_slot if (src_slot and not taken) else None
+        plan.update(box=src, source='physical_source', mode='legacy', taken_by=taken, checked_slot=src_slot,
+                    slot=keep, send_slot=keep, occupancy=_return_occupancy(items, sid, src_row))
+        if taken:
+            plan['note'] = f"{src} slot {src_slot} holds {_ids_text(taken)}, so #{sid} goes in without a slot"
+        return plan
+    if is_box:
+        items = read(src)
+        held = _slot_holders(src_row, src, items, sid, src_slot) if src_slot else []
+        exists = src_slot.isdigit() and 1 <= int(src_slot) <= placement._max_slots(src_row)
+        if exists and not held:
+            plan.update(box=src, slot=src_slot, source='physical_source', mode='pick',
+                        occupancy=_return_occupancy(items, sid, src_row))
+            return plan
+        if not src_slot:
+            why_not = f"#{sid} has no slot recorded in {src}"
+        elif held:
+            why_not = f"{src} slot {src_slot}, where it came from, holds {_ids_text(held)}"
+        else:
+            why_not = f"{src} has no slot {src_slot} any more"
+        preferred = src
+    elif src:
+        why_not = (f"#{sid} came from {src}, which isn't a dryer box" if isinstance(src_row, dict)
+                   else f"#{sid} came from {src}, which isn't in the location list any more")
+    else:
+        why_not = f"#{sid} has no recorded slot"
+
+    feeds, free, attached = _head_feeds(rows, loc_list, head, sid, read)
+    if len(free) == 1 and not attached:
+        box, s = free[0]
+        plan.update(box=box, slot=s, source='feed_slot', mode='pick',
+                    note=f"{why_not}; {box} slot {s} is the only free slot that feeds {head}",
+                    occupancy=_return_occupancy(read(box), sid, rows.get(box)))
+        return plan
+
+    candidates = [preferred] if preferred else []
+    for box, _slot in feeds:
+        if box not in candidates:
+            candidates.append(box)
+    if not candidates:
+        plan['no_binding'] = True
+        # Group 40.6 review, R2: a box that feeds the head but has no slot count
+        # isn't offered (the picker can't open on it). Say so, and what makes it
+        # work, rather than "no bound dryer box slot" while its Feeds show one.
+        slotless = list(dict.fromkeys(box for box, _s in logic._feed_slots_for(head, loc_list)
+                                      if _slotless_box(rows.get(box))))
+        if slotless:
+            one = len(slotless) == 1
+            plan['note'] = (f"{why_not}; {logic._and_list(slotless)} {'feeds' if one else 'feed'} {head} but "
+                            f"{'has' if one else 'have'} no slot count (Max Spools is blank), so Return can't "
+                            f"pick a slot there: set {'its' if one else 'their'} Max Spools to return spools there")
+        return plan
+    best, best_rank = candidates[0], None
+    for box in candidates:
+        row = rows.get(box)
+        claims, _own, ghost = logic.box_slot_claims(row, box, read(box), [sid])
+        slot_ids = [str(i) for i in range(1, placement._max_slots(row) + 1)]
+        _pick, why = placement._return_recommendation(row, slot_ids, claims, ghost, head, loc_list, printer_map)
+        rank = {'recorded_slot': 0, 'head_slot': 0, 'spare_slot': 1}.get(why, 2)
+        if best_rank is None or rank < best_rank:
+            best, best_rank = box, rank
+    reasons = [why_not]
+    if len(free) > 1:
+        reasons.append(f"{len(free)} free slots feed {head}")
+    elif not free:
+        reasons.append(f"no free slot feeds {head}")
+    if attached:
+        reasons.append(f"{logic._and_list(attached)} {'is' if len(attached) == 1 else 'are'} "
+                       f"attached to {head} too")
+    plan.update(box=best, needs_choice=True, note="; ".join(reasons),
+                occupancy=_return_occupancy(read(best), sid, rows.get(best)))
+    return plan
+
+
+def _return_choice(rows, loc_list, head, sid, spool_data, box, choice, read):
+    """The slot the request chose (`choice`: a slot number, or 'none' for no slot
+    on purpose) in `box`, checked at write time against a strict read (Group
+    40.6). A dict like _return_plan's, or one with `refused` ({status, action,
+    error, taken_by}): a slot that doesn't exist or that another spool claims,
+    in it or deployed from it, is `return_slot_taken`; a box that isn't a Dryer
+    Box, or a slot a single-slot box doesn't have, is a bad request. Its
+    `source` says why that slot, as the plan would: the slot it came from, the
+    only free slot feeding the head (the confirm's one-tap answer), or a
+    choice."""
+    row = rows.get(_u(box))
+    if not (isinstance(row, dict) and row.get('Type') == locations_db.DRYER_BOX_TYPE):
+        return {"refused": {"status": 400, "action": "return_bad_request", "taken_by": [],
+                            "error": f"{box or 'That place'} isn't a dryer box to return a spool into"}}
+    box = _u(box)
+    extra = (spool_data or {}).get('extra') or {}
+    src = _u(extra.get('physical_source'))
+    src_slot = logic._norm_slot(extra.get('physical_source_slot'))
+    items = read(box)
+    mx = placement._max_slots(row)
+    dest = {"box": box, "slot": None, "source": 'physical_source' if box == src else 'chosen',
+            "mode": None, "needs_choice": False, "send_slot": None, "taken_by": [], "note": "",
+            "occupancy": _return_occupancy(items, sid, row),
+            "recorded": {"box": src or None, "slot": src_slot or None}}
+    if locations_db._is_single_slot_dryer_box(row):
+        # A single-slot box has slot 1 only; it keeps the old rule (slot 1
+        # while free, else unslotted with a warning), never a refusal. "none"
+        # (the confirm said no slot, because slot 1 was taken) stays no slot.
+        # Group 40.6 review, R4: slot 1 goes to the engine's own 42.2 pick
+        # (send_slot None), which takes it only while still free at write time;
+        # an explicit slot 1 unseated a spool put there during the printer check.
+        if choice not in ('1', 'none'):
+            return {"refused": {"status": 400, "action": "return_bad_request", "taken_by": [],
+                                "error": f"{box} has one slot, not slot {choice}"}}
+        taken = _slot_holders(row, box, items, sid, '1')
+        if choice == 'none' and not taken:
+            dest.update(mode='unslotted', source='chosen')
+            return dest
+        dest.update(mode='legacy', taken_by=taken, checked_slot='1', slot=None if taken else '1',
+                    send_slot=None)
+        if taken:
+            dest['note'] = f"{box} slot 1 holds {_ids_text(taken)}, so #{sid} goes in without a slot"
+        return dest
+    if _slotless_box(row):
+        # Group 40.6 review, R2: a Dryer Box with no slot count (Max Spools
+        # blank) keeps the pre-40.6 rule, as the plan does: the slot named
+        # while no other spool claims it (sent as is: the engine has no picked
+        # slot for a box without a slot count), else no slot with a warning,
+        # never a refusal. It used to take the single-slot branch above, which
+        # refused the recorded slot the confirm had just named.
+        if choice == 'none':
+            dest.update(mode='unslotted', source='chosen')
+            return dest
+        taken = _slot_holders(row, box, items, sid, choice)
+        keep = None if taken else choice
+        dest.update(mode='legacy', taken_by=taken, checked_slot=choice, slot=keep, send_slot=keep,
+                    source='physical_source' if (box == src and choice == src_slot) else 'chosen')
+        if taken:
+            dest['note'] = f"{box} slot {choice} holds {_ids_text(taken)}, so #{sid} goes in without a slot"
+        return dest
+    if choice == 'none':
+        dest.update(mode='unslotted', source='chosen')
+        return dest
+    if not (choice.isdigit() and 1 <= int(choice) <= mx):
+        return {"refused": {"status": 409, "action": "return_slot_taken", "taken_by": [], "box": box,
+                            "slot": choice, "error": f"{box} has no slot {choice}, so nothing was moved"}}
+    taken = _slot_holders(row, box, items, sid, choice)
+    if taken:
+        return {"refused": {"status": 409, "action": "return_slot_taken", "taken_by": taken, "box": box,
+                            "slot": choice,
+                            "error": f"{box} slot {choice} holds {_ids_text(taken)} now, so nothing was moved"}}
+    source = 'chosen'
+    if box == src and choice == src_slot:
+        source = 'physical_source'
+    elif logic._slot_binding(row, choice) == head:
+        _feeds, free, attached = _head_feeds(rows, loc_list, head, sid, read)
+        if free == [(box, choice)] and not attached:
+            source = 'feed_slot'
+    dest.update(slot=choice, mode='pick', source=source)
+    return dest
+
+
+def _return_options(box, sid, head):
+    """The slot picker's model for `box` in return mode, and its ⭐, for an
+    answer that lets the user choose (placement.build_placement_options)."""
+    try:
+        model, status = placement.build_placement_options(box, spool=sid, toolhead=head, mode='return')
+    except Exception as e:
+        state.logger.warning(f"Return: couldn't build the slot choices for {box}: {e}")
+        return None, None
+    return model, (model.get('recommended') if status == 200 else None)
+
+
+# How the success line names why a slot was used.
+_RETURN_SOURCE_NOTE = {"physical_source": " (original source)", "chosen": " (chosen)"}
+
+
 @app.route('/api/quickswap/return', methods=['POST'])
 def api_quickswap_return():
-    """Reverse quick-swap: take whatever spool is currently on `toolhead`
-    and send it back to the first dryer-box slot bound to that toolhead.
+    """Reverse quick-swap: take the spool on `toolhead` back to a dryer-box slot.
 
-    Accepts either a specific toolhead location ID (e.g. "XL-1") or a
-    Printer row / virtual-printer prefix (e.g. "XL") — in the latter case we
-    fan out across every toolhead of that printer and return the first one
-    that has a spool loaded.
+    `toolhead` is a toolhead id (e.g. "XL-1") or a Printer row / virtual-printer
+    prefix (e.g. "XL"); a printer fans out over its toolheads and acts on the
+    first one that has a spool loaded.
+
+    Group 40.6 (Derek's D5, and his 2026-10-13 answer 6), optional body fields:
+      - `dry_run: true` writes nothing and answers `return_plan` (200): the box
+        and the exact slot this Return would use (`slot` null = no slot), or
+        `needs_choice` with the slot picker's model in return mode (`options`)
+        and its ⭐ (`recommended`);
+      - `slot`: the user's choice, a slot number or "none" (no slot, on
+        purpose), in `box` (default: the plan's box), checked at write time
+        against a strict read: a slot that is gone, or that another spool
+        claims, answers `return_slot_taken` (409) with fresh `options`, and
+        nothing is written. A chosen slot is sent to the engine as
+        `picked_slot`, so a spool that takes it meanwhile is never unseated;
+      - `expected_spool`: the spool the page showed. Any other spool on the
+        head answers `return_spool_mismatch` (409), nothing written. On a head
+        holding two spools it picks the one to return (the DEPLOYED card's
+        repair; the other stays), where a request without it is
+        `return_ambiguous` (Group 40.6 review, R5).
+    Without `slot`: the recorded slot, present and free, is one tap; so is the
+    only free slot that feeds the head when no single-slot box is attached to
+    it; anything else answers `return_choose_slot` (200), nothing written, with
+    an `error` / `msg` telling the page to reload and `stale_page: true` (only
+    a page older than 40.6 posts no slot, R3). A recorded single-slot box works
+    as before (slot 1 while free at write time, else unslotted with a warning),
+    and so does a Dryer Box with no slot count (its recorded slot while free,
+    else unslotted, R2); a box with no slot count is never offered as a feed.
+    Answers that need the user are 200, refusals 409
+    (Group 39.8); every new action carries the 29.B3 keys (`toolhead` =
+    requested, `active_toolhead`, `requested`). An unslotted landing reads
+    `slot: null` and "(no slot)" in the log.
     """
     data = request.get_json(silent=True) or {}
     toolhead = str(data.get('toolhead', '')).strip().upper()
@@ -667,6 +1011,31 @@ def api_quickswap_return():
             "ERROR", "ff0000"
         )
         return jsonify({"action": "return_bad_request", "error": "toolhead required"}), 400
+
+    def _bad_request(msg):
+        state.add_log_entry(f"❌ Return rejected: {msg}", "ERROR", "ff0000")
+        return jsonify({"action": "return_bad_request", "toolhead": toolhead, "requested": toolhead,
+                        "error": msg}), 400
+
+    # Group 40.6: the page's choice and what it showed.
+    dry_run = _flag(data.get('dry_run'))
+    choice = None
+    raw_slot = data.get('slot')
+    slot_text = str(raw_slot if raw_slot is not None else '').strip().strip('"').strip()
+    if slot_text:
+        if slot_text.lower() == 'none':
+            choice = 'none'
+        else:
+            choice = logic._norm_slot(slot_text)
+            if not choice.isdigit() or int(choice) < 1:
+                return _bad_request(f'slot must be a slot number or "none" (got {raw_slot!r})')
+    box_req = _u(data.get('box')) or None
+    expected_spool = None
+    if data.get('expected_spool') not in (None, ''):
+        try:
+            expected_spool = int(str(data.get('expected_spool')).strip().strip('"'))
+        except (TypeError, ValueError):
+            return _bad_request(f"expected_spool must be a spool number (got {data.get('expected_spool')!r})")
 
     # 29.N1 — the vestigial `cfg = config_loader.load_config()` (unused
     # FilaBridge residue) was removed here; printer_map is the sole source.
@@ -713,6 +1082,7 @@ def api_quickswap_return():
     #    Return used to grab one of those off a different head (2026-09-12).
     active_toolhead, spool_id, spool_data = None, None, {}
     unreadable_at = {}  # toolhead -> ids Spoolman couldn't return a record for
+    also_on_head = []   # a doubled head's other spools, when the request named one (R5)
     for th in candidate_toolheads:
         loaded = []
         for rid in spoolman_api.get_spools_at_location(th):
@@ -721,6 +1091,17 @@ def api_quickswap_return():
                 unreadable_at.setdefault(th, []).append(int(rid))
             elif str(rec.get('location') or '').strip().upper() == th:
                 loaded.append((int(rid), rec))
+        named = [(sid, rec) for sid, rec in loaded if sid == expected_spool] if len(loaded) > 1 else []
+        if named:
+            # Group 40.6 review, R5: a DEPLOYED card names its spool
+            # (`expected_spool`), and that spool is one of the head's, so the
+            # card can repair a doubled head (legacy data, an old Location edit):
+            # Return acts on it and leaves the other spool where it is. Its ↩️
+            # did that before 40.6; without a named spool it is still a guess.
+            active_toolhead = th
+            spool_id, spool_data = named[0]
+            also_on_head = [sid for sid, _ in loaded if sid != expected_spool]
+            break
         if len(loaded) > 1:
             ids = ", ".join(f"#{sid}" for sid, _ in loaded)
             msg = f"{th} holds {len(loaded)} spools ({ids}) — eject the wrong one first"
@@ -763,99 +1144,115 @@ def api_quickswap_return():
             "candidates": candidate_toolheads,
         }), 404
 
-    # 2) Figure out where to send the spool back.
-    #    Preferred: the spool's recorded physical_source (where it came
-    #    from when it was deployed to this toolhead). That's what the
-    #    user's mental model of "return" maps to, and it handles the
-    #    multi-box-per-toolhead case correctly.
-    #    Fallback: the first dryer-box slot bound to this toolhead.
-    extra = spool_data.get('extra') or {}
-    src_loc = str(extra.get('physical_source', '') or '').strip().strip('"').upper()
-    src_slot = str(extra.get('physical_source_slot', '') or '').strip().strip('"')
+    # 29.B3: on every answer below `toolhead` is the REQUESTED value (return_done
+    # alone re-tags it to the head acted on), `active_toolhead` the head the
+    # fan-out landed on, and `requested` a back-compat alias.
+    requested = toolhead
+    head = active_toolhead
+    keys = {"toolhead": requested, "active_toolhead": head, "requested": requested}
 
-    found_box, found_slot, found_source = None, None, None
+    # Group 40.6: the page named the spool it showed. Another one on the head
+    # (it was swapped meanwhile) is not returned in its place.
+    if expected_spool is not None and int(spool_id) != expected_spool:
+        msg = (f"{head} holds #{spool_id} now, not #{expected_spool}, so nothing was moved. "
+               f"Reopen {head} to see what is on it.")
+        state.add_log_entry(f"⚠️ Return refused: {msg}", "WARNING", "ffaa00")
+        return jsonify({"action": "return_spool_mismatch", **keys, "spool": spool_id,
+                        "expected_spool": expected_spool, "error": msg}), 409
 
-    # Preferred path: physical_source points at a Dryer Box and that slot
-    # is currently bound to `active_toolhead`. If the slot has drifted
-    # (e.g. user reassigned it elsewhere), we still honor physical_source
-    # as long as the box exists — it's where the user pulled the spool from.
-    if src_loc:
-        for row in loc_list:
-            if str(row.get('LocationID', '')).strip().upper() != src_loc:
-                continue
-            if row.get('Type') != locations_db.DRYER_BOX_TYPE:
-                break
-            found_box = row['LocationID']
-            found_slot = src_slot or None
-            found_source = 'physical_source'
-            break
+    # 2) Where it goes: the plan (no slot named) or the request's own choice,
+    #    each box read strictly.
+    rows = {_u(r.get('LocationID')): r for r in loc_list if isinstance(r, dict)}
+    read = _return_reader()
+    try:
+        display = spoolman_api.format_spool_display(spool_data).get('text') or f"#{spool_id}"
+    except Exception:
+        display = f"#{spool_id}"
+    try:
+        if choice is None:
+            dest = _return_plan(rows, loc_list, printer_map, head, spool_id, spool_data, read)
+        else:
+            box, dest = box_req, None
+            if not box:
+                # The chosen slot is in the box this Return would show.
+                dest = _return_plan(rows, loc_list, printer_map, head, spool_id, spool_data, read)
+                box = dest.get('box')   # none: no_binding stands
+            if box:
+                dest = _return_choice(rows, loc_list, head, spool_id, spool_data, box, choice, read)
+    except _ReturnReadError as e:
+        msg = f"couldn't read {e.box} from Spoolman ({e.err}), so nothing was moved — try again"
+        state.add_log_entry(f"❌ Return: Spool #{spool_id} off <b>{head}</b>: {msg}", "ERROR", "ff4444")
+        return jsonify({"action": "return_failed", **keys, "spool": spool_id, "box": e.box,
+                        "error": msg}), 409
 
-    # Fallback: scan bindings for the first dryer-box slot bound to this toolhead.
-    # A single-slot box's binding records where ITS spool is loaded, not a feed
-    # (Groups 42.2 / 42.1 step 5), so a stranger is never sent into it: a stale
-    # PolyDryer attachment took a cart's spool (Group 42 review).
-    if not found_box:
-        for row in loc_list:
-            if not isinstance(row, dict) or row.get('Type') != locations_db.DRYER_BOX_TYPE:
-                continue
-            if locations_db._is_single_slot_dryer_box(row):
-                continue
-            targets = locations_db.bindings_from_row(row)   # guarded: a bad row 500'd Return
-            for slot, target in targets.items():
-                if target and str(target).upper() == active_toolhead:
-                    found_box = row['LocationID']
-                    found_slot = slot
-                    found_source = 'first_binding'
-                    break
-            if found_box:
-                break
-
-    if not found_box:
+    if dest.get('no_binding'):
+        why = dest.get('note') or ''
         state.add_log_entry(
-            f"⚠️ Return: {active_toolhead} has no bound dryer box slot and no physical_source — can't return",
+            f"⚠️ Return: Spool #{spool_id} off <b>{head}</b> not moved: {why}" if why else
+            f"⚠️ Return: {head} has no bound dryer box slot and no physical_source — can't return",
             "WARNING", "ffaa00"
         )
-        return jsonify({
-            # 29.B3 — `toolhead` now uniformly means the REQUESTED value in
-            # every error branch (return_no_spool already reported the request
-            # there). The resolved active toolhead this branch landed on is
-            # reported separately as `active_toolhead`; `requested` is retained
-            # as a back-compat alias. (At this point `toolhead` is still the
-            # original request — the re-tag to active happens only on success.)
+        no_binding = {
+            # 29.B3 — `toolhead` uniformly means the REQUESTED value in every
+            # error branch; the head the fan-out landed on is `active_toolhead`.
             "action": "return_no_binding",
-            "toolhead": toolhead,
-            "active_toolhead": active_toolhead,
-            "requested": toolhead,
-        }), 404
-    # Re-tag toolhead in the response to the actual one we acted on.
-    requested = toolhead
-    toolhead = active_toolhead
+            **keys,
+        }
+        if why:
+            # Group 40.6 review, R2: a box feeds the head but has no slot count;
+            # the page's no-op overlay says so, and how to make it work.
+            no_binding['msg'] = why
+        return jsonify(no_binding), 404
+    refused = dest.get('refused')
+    if refused:
+        if refused['action'] != 'return_slot_taken':
+            state.add_log_entry(f"❌ Return rejected: {refused['error']}", "ERROR", "ff0000")
+            return jsonify({"action": refused['action'], **keys, "spool": spool_id,
+                            "error": refused['error']}), refused['status']
+        options, recommended = _return_options(refused['box'], spool_id, head)
+        state.add_log_entry(f"⚠️ Return: Spool #{spool_id} off <b>{head}</b> not moved: {refused['error']}",
+                            "WARNING", "ffaa00")
+        return jsonify({"action": "return_slot_taken", **keys, "spool": spool_id, "display": display,
+                        "box": refused['box'], "slot": refused['slot'], "taken_by": refused['taken_by'],
+                        "error": refused['error'], "options": options, "recommended": recommended}), 409
 
-    # Never unseat a spool already staged in that slot: perform_smart_move's
-    # slot assignment would silently clear its container_slot (2026-09-12
-    # review). Let the engine pick a free slot instead, and say so.
-    if found_slot:
-        # Group 42.2: compared through the one slot rule, so a single-slot box's
-        # lone spool stored with a blank slot counts as holding slot 1.
-        _box_row = next((r for r in loc_list if isinstance(r, dict)
-                         and str(r.get('LocationID', '')).strip().upper() == str(found_box).strip().upper()), None)
-        _others = [o for o in (spoolman_api.get_spools_at_location_detailed(found_box) or [])
-                   if str(o.get('id')) != str(spool_id)]
-        taken_by = next((
-            o.get('id') for o in _others
-            if locations_db.effective_slot(_box_row, o.get('slot', ''), occupants=len(_others))
-            == str(found_slot).strip().strip('"')), None)
-        if taken_by is not None:
-            # A single-slot box has no other slot: the engine leaves the spool
-            # unslotted there (it never takes slot 1 from #taken_by), and the
-            # line says so instead of promising a free slot (Group 42 review).
-            instead = (f"#{spool_id} goes back into {found_box} unslotted"
-                       if locations_db._is_single_slot_dryer_box(_box_row)
-                       else f"returning #{spool_id} to a free slot instead")
-            state.add_log_entry(
-                f"⚠️ Return: {found_box} slot {found_slot} already holds #{taken_by} — {instead}",
-                "WARNING", "ffaa00")
-            found_slot = None
+    plan_answer = {**keys, "spool": spool_id, "display": display, "box": dest['box'],
+                   "slot": dest.get('slot'), "source": dest.get('source'),
+                   "needs_choice": bool(dest.get('needs_choice')), "note": dest.get('note') or "",
+                   "recorded": dest.get('recorded'), "occupancy": dest.get('occupancy'),
+                   "options": None, "recommended": None}
+    if also_on_head:
+        # R5: the confirm says the head's other spool stays where it is.
+        stays = (f"{head} also holds {_ids_text(also_on_head)}, which "
+                 f"{'stays' if len(also_on_head) == 1 else 'stay'} there")
+        plan_answer['note'] = "; ".join(n for n in (plan_answer['note'], stays) if n)
+    if dest.get('needs_choice'):
+        plan_answer['options'], plan_answer['recommended'] = _return_options(dest['box'], spool_id, head)
+    if dry_run:
+        return jsonify({"action": "return_plan", **plan_answer}), 200
+    if dest.get('needs_choice'):
+        state.add_log_entry(f"ℹ️ Return: Spool #{spool_id} off <b>{head}</b> waits for a slot choice in "
+                            f"{dest['box']}: {plan_answer['note']}", "INFO")
+        # Group 40.6 review, R3: only a page loaded before 40.6 posts a Return
+        # with no slot (this one asks a dry run first, then sends the slot it
+        # showed). Such a page toasts `error`, else the bare action ("Return
+        # failed: return_choose_slot"), so the answer says what to do, as the
+        # move doors' stale-page answers do. This page never shows it: it
+        # dispatches on the action and opens the slot picker.
+        why = plan_answer['note'] or f"#{spool_id} needs a slot choice"
+        reload_msg = f"{why}, so nothing was moved: reload the page (Ctrl+F5) to choose a slot"
+        return jsonify({"action": "return_choose_slot", **plan_answer, "error": reload_msg, "msg": reload_msg,
+                        "stale_page": True}), 200
+
+    found_box, found_slot, mode = dest['box'], dest.get('slot'), dest['mode']
+    found_source = dest.get('source')
+    if mode == 'legacy' and dest.get('taken_by'):
+        # A single-slot box has no other slot: the engine leaves the spool
+        # unslotted there (it never takes slot 1 from the spool holding it).
+        state.add_log_entry(
+            f"⚠️ Return: {found_box} slot {dest.get('checked_slot') or '1'} already holds "
+            f"{_ids_text(dest['taken_by'])} — #{spool_id} goes back into {found_box} unslotted",
+            "WARNING", "ffaa00")
 
     # 3) Send the spool back. perform_smart_move handles Filabridge + extras.
     # Group 39.2: the server re-checks. The spool's own location is the head
@@ -870,18 +1267,33 @@ def api_quickswap_return():
     # while this route still answered return_done. Every Return was a silent
     # round trip, and it would have become one mid-print too once the chain
     # honoured the caller's confirm.
-    move_result = logic.perform_smart_move(
-        found_box, [spool_id], target_slot=found_slot, origin='quickswap_return',
-        auto_deploy=False, confirm_active_print=logic.confirmed_heads(data),
-    )
+    # Group 40.6: a slot of a multi-slot box goes as `picked_slot`, taken only
+    # while still free (a spool that takes it during the printer check is
+    # never unseated, nothing moves); "No slot" goes in unslotted on purpose
+    # (`unslotted`, else the engine would pick a slot). 'legacy' sends
+    # `target_slot=send_slot`: None for a single-slot box, so the engine's 42.2
+    # pick takes slot 1 only while still free (Group 40.6 review, R4), and a
+    # box with no slot count its recorded slot as before 40.6 (R2).
+    move_kwargs = {"origin": 'quickswap_return', "auto_deploy": False,
+                   "confirm_active_print": logic.confirmed_heads(data)}
+    if also_on_head:
+        state.add_log_entry(
+            f"⚠️ Return: {head} holds {len(also_on_head) + 1} spools; returning #{spool_id}, the one the page "
+            f"named, and {_ids_text(also_on_head)} {'stays' if len(also_on_head) == 1 else 'stay'} on {head}",
+            "WARNING", "ffaa00")
+    if mode == 'pick':
+        move_result = logic.perform_smart_move(found_box, [spool_id], picked_slot=found_slot, **move_kwargs)
+    elif mode == 'unslotted':
+        move_result = logic.perform_smart_move(found_box, [spool_id], unslotted=True, **move_kwargs)
+    else:
+        move_result = logic.perform_smart_move(found_box, [spool_id], target_slot=dest.get('send_slot'),
+                                               **move_kwargs)
     stale = logic.stale_confirm_refusal(data, move_result)
     if stale:
         return jsonify({
             "action": "return_failed",
             "spool": spool_id,
-            "toolhead": requested,
-            "active_toolhead": toolhead,
-            "requested": requested,
+            **keys,
             "box": found_box,
             "slot": found_slot,
             "error": stale,
@@ -889,15 +1301,13 @@ def api_quickswap_return():
         }), 409
     if isinstance(move_result, dict) and move_result.get('status') == 'requires_confirm':
         state.add_log_entry(
-            f"⚠️ Return: Spool #{spool_id} off <b>{toolhead}</b> waits for a confirm: "
+            f"⚠️ Return: Spool #{spool_id} off <b>{head}</b> waits for a confirm: "
             f"{move_result.get('msg')}", "WARNING", "ffaa00")
         return jsonify({
             # 29.B3: `toolhead` is the REQUESTED value outside return_done.
             "action": "return_requires_confirm",
             "spool": spool_id,
-            "toolhead": requested,
-            "active_toolhead": toolhead,
-            "requested": requested,
+            **keys,
             "box": found_box,
             "slot": found_slot,
             "confirm_type": move_result.get('confirm_type'),
@@ -906,6 +1316,22 @@ def api_quickswap_return():
             "msg": move_result.get('msg'),
         }), 200
     move_failed = logic.smart_move_failure(move_result, spool_id)
+    if move_failed and mode == 'pick':
+        # The slot was taken while FCC checked the printer (the engine refuses a
+        # picked slot someone took): offer the slots again, nothing written.
+        try:
+            holders = _slot_holders(rows.get(found_box), found_box,
+                                    spoolman_api.get_spools_at_location_detailed_strict(found_box) or [],
+                                    spool_id, found_slot)
+        except Exception:
+            holders = []
+        if holders or (isinstance(move_result, dict) and move_result.get('blocked_reason') == 'picked_slot_taken'):
+            options, recommended = _return_options(found_box, spool_id, head)
+            state.add_log_entry(
+                f"⚠️ Return: Spool #{spool_id} off <b>{head}</b> not moved: {move_failed}", "WARNING", "ffaa00")
+            return jsonify({"action": "return_slot_taken", **keys, "spool": spool_id, "display": display,
+                            "box": found_box, "slot": found_slot, "taken_by": holders, "error": move_failed,
+                            "options": options, "recommended": recommended}), 409
     if move_failed:
         state.add_log_entry(
             f"❌ Return: Spool #{spool_id} was NOT returned to <b>{found_box}</b> — {move_failed}",
@@ -915,31 +1341,52 @@ def api_quickswap_return():
             "action": "return_failed",
             "spool": spool_id,
             # 29.B3: `toolhead` is the REQUESTED value in every error branch.
-            "toolhead": requested,
-            "active_toolhead": toolhead,
-            "requested": requested,
+            **keys,
             "box": found_box,
             "slot": found_slot,
             "error": move_failed,
             "smart_move": move_result,
         }), 409
-    if not found_slot:
-        # The engine picked the slot (none was recorded, or the recorded one was
-        # taken): report where the spool actually landed.
-        landed_extra = (spoolman_api.get_spool(spool_id) or {}).get('extra') or {}
-        found_slot = str(landed_extra.get('container_slot') or '').strip().strip('"') or None
-    src_note = " (original source)" if found_source == 'physical_source' else " (first bound slot)"
-    slot_part = f":SLOT:{found_slot}" if found_slot else ""
+    landed = found_slot if mode == 'pick' else None
+    if mode == 'legacy':
+        landed = dest.get('send_slot')
+        if not landed:
+            # The engine decided (42.2: a single-slot box's slot 1 while still
+            # free, else no slot): report where the spool actually landed.
+            landed_rec = spoolman_api.get_spool(spool_id)
+            if isinstance(landed_rec, dict) and landed_rec.get('id') is not None:
+                landed_extra = landed_rec.get('extra') or {}
+                landed = str(landed_extra.get('container_slot') or '').strip().strip('"') or None
+                if dest.get('slot') and not landed:
+                    # R4: the slot the confirm named was free when checked and
+                    # taken before the write; the engine put the spool in with
+                    # no slot rather than unseat the one that took it.
+                    state.add_log_entry(
+                        f"⚠️ Return: {found_box} slot {dest['slot']} was taken meanwhile, so #{spool_id} "
+                        f"went back into {found_box} without a slot", "WARNING", "ffaa00")
+            else:
+                # Couldn't re-read it: the slot the plan expected (a spool
+                # taking it in the moment FCC checked the printer is rare).
+                landed = dest.get('slot')
+    if landed:
+        where = f"{found_box} slot {landed}"
+        src_note = (f" (the only free slot that feeds {head})" if found_source == 'feed_slot'
+                    else _RETURN_SOURCE_NOTE.get(found_source, ""))
+    else:
+        where, src_note = found_box, " (no slot)"
     state.add_log_entry(
-        f"↩️ Return: Spool #{spool_id} from <b>{toolhead}</b> → <b>{found_box}{slot_part}</b>{src_note}",
+        f"↩️ Return: Spool #{spool_id} from <b>{head}</b> → <b>{where}</b>{src_note}",
         "SUCCESS", "00ff00"
     )
     return jsonify({
         "action": "return_done",
         "moved": spool_id,
-        "toolhead": toolhead,
+        # return_done names the head it acted on (the fan-out's pick).
+        "toolhead": head,
+        "active_toolhead": head,
+        "requested": requested,
         "box": found_box,
-        "slot": found_slot,
+        "slot": landed,
         "source": found_source,
         "smart_move": move_result,
     }), 200

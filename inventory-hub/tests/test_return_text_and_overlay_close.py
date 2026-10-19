@@ -45,6 +45,14 @@ def test_return_overlay_shows_concrete_box_and_slot(page: Page, open_manage_moda
 
     open_manage_modal(loaded_th)
     page.locator("#quickswap-return-btn").click()
+    # Group 40.6: a spool with no obvious slot (dev data decides) opens the slot
+    # picker before the confirm; Enter takes its highlight. Nothing is written:
+    # this test never clicks the confirm's Yes.
+    page.wait_for_function(
+        "!!document.getElementById('fcc-quickswap-confirm-overlay')"
+        " || !!document.querySelector('#fcc-slot-picker [data-sp-state=\"ready\"]')", timeout=8000)
+    if page.evaluate("!!document.querySelector('#fcc-slot-picker [data-sp-state=\"ready\"]')"):
+        page.keyboard.press("Enter")
     # Group 38.5: showConfirmOverlay awaits a ~3s active-print probe before it
     # mounts (inv_quickswap.js:340 `_probeWithTimeout(..., timeoutMs = 3000)`,
     # awaited at :368; mountOverlay not reached until :468 — offline dev

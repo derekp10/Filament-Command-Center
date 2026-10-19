@@ -412,6 +412,42 @@ def test_printer_mode_picks_a_head_or_a_pool_slot_by_scan(picker_page):
     page.evaluate("() => processScan('LOC:FCC-TEST-BOX:SLOT:4', 'barcode')")
     got = _pick(page)
     assert got["kind"] == "pool" and got["box"] == "FCC-TEST-BOX" and got["slot"] == "4"
+    # Group 40.5: a free Printer Pool slot is sent as a pick, with its (no-head) feed.
+    assert got["send"] == {"picked_slot": "4"} and got["expected_feed"] == "", got
+
+
+def test_an_occupied_printer_pool_slot_asks_swap_or_overwrite(picker_page):
+    """Group 40.5: a Printer Pool slot is a box slot like any other (Q2): one that
+    holds a stored spool asks Swap / Overwrite, and a Swap is sent as the
+    engine's Overwrite `slot` with `swap` (Swap option C)."""
+    page, setup, open_ = picker_page
+    spools = SPOOLS + [_sp(999244, "FCC-TEST-BOX", slot=4, name="Test Grey", color="777777")]
+    setup({"FCCX": build_model("FCCX", spools=spools, spool=999201)})
+    open_({"location": "FCCX", "spool": 999201})
+    page.locator("#fcc-slot-picker .fcc-sp-tile[data-sp-kind='pool'][data-sp-slot='4']").click()
+    page.wait_for_selector(CHOICE, timeout=5_000)
+    labels = page.evaluate("() => Array.from(document.querySelectorAll('#fcc-slot-picker [data-sp-choice]'))"
+                           ".map(b => b.dataset.spChoice)")
+    assert labels == ["swap", "overwrite", "back"], labels
+    page.locator("#fcc-slot-picker [data-sp-choice='swap']").click()
+    got = _pick(page)
+    assert got["kind"] == "pool" and got["send"] == {"slot": "4"} and got["swap"] is True, got
+    assert got["displaced"]["id"] == 999244 and got["expected_feed"] == "", got
+
+
+def test_a_printer_pool_slot_whose_spool_is_loaded_elsewhere_is_greyed_out(picker_page):
+    """Group 40.5: the engine refuses a slot whose own spool runs on a head, so the
+    picker greys the pool tile out and says why, as in box mode."""
+    page, setup, open_ = picker_page
+    spools = SPOOLS + [_sp(999245, "FCCX-2", src="FCC-TEST-BOX", src_slot=4, name="Test Grey", color="777777")]
+    setup({"FCCX": build_model("FCCX", spools=spools, spool=999201)})
+    open_({"location": "FCCX", "spool": 999201})
+    tile = page.locator("#fcc-slot-picker .fcc-sp-tile[data-sp-kind='pool'][data-sp-slot='4']")
+    expect(tile).to_have_class(re.compile(r"\bis-blocked\b"))
+    expect(tile).to_contain_text("#999245 from this slot is loaded on FCCX-2")
+    tile.click(force=True)
+    page.wait_for_timeout(200)
+    assert page.evaluate("() => window.__pickDone") is False
 
 
 # ---- return mode, rtl, unreadable ----------------------------------------------------------------
@@ -666,6 +702,24 @@ def test_an_occupied_slot_asks_swap_or_overwrite_and_back_returns(picker_page):
     page.locator("#fcc-slot-picker [data-sp-choice='overwrite']").click()
     got = _pick(page)
     assert got["choice"] == "overwrite" and got["send"] == {"slot": "2"} and got["swap"] is False, got
+
+
+@pytest.mark.parametrize("swap_to, text", [
+    ("CR-CT-2-R1", "#999202 → your buffer, filed back in CR-CT-2-R1"),
+    ("", "#999202 → your buffer (Unassigned until you scan it somewhere)"),
+], ids=["filed-back", "no-record"])
+def test_the_swap_says_where_the_old_spool_is_filed(picker_page, swap_to, text):
+    """Swap option C (Derek, 2026-10-15): a Swap hands the slot's stored spool to
+    the buffer AND files it back where it sat before the slot; the model's
+    `swap_to` (the engine's own rule) is what the Swap button says."""
+    page, setup, open_ = picker_page
+    model = build_model("FCC-TEST-BOX", spool=999201)
+    next(s for s in model["slots"] if s["slot"] == "2")["swap_to"] = swap_to
+    setup({"FCC-TEST-BOX": model})
+    open_({"location": "FCC-TEST-BOX", "spool": 999201})
+    page.locator("#fcc-slot-picker .fcc-sp-tile[data-sp-slot='2']").click()
+    page.wait_for_selector(CHOICE, timeout=5_000)
+    expect(page.locator("#fcc-slot-picker [data-sp-choice='swap']")).to_contain_text(text)
 
 
 def test_the_choice_qrs_answer_it(picker_page):

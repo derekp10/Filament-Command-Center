@@ -100,17 +100,20 @@ return { posts: posts('/api/quickswap'), overlays: __rec.overlays.map(o => o.con
 
 
 def test_a_return_replay_sends_every_head_confirmed_so_far(tmp_path):
+    """Group 40.6 (deliberate): the first POST is the dry run that names the
+    slot; the confirms and their replays follow it, unchanged."""
     res = _run(tmp_path, ["inv_core.js", "inv_quickswap.js"], """
 let returns = 0;
-window.__respond = (url, method) => {
+window.__respond = (url, method, body) => {
   if (url.startsWith('/api/printer_state/')) return printing('XL Test');
   if (url.startsWith('/api/machine/')) return { status: 404, body: { toolheads: {} } };
   if (url.startsWith('/api/get_contents?id=XL-1')) return { body: [] };
   if (url.startsWith('/api/get_contents?id=XL-2'))
     return { body: [{ id: 42, display: 'Test spool #42', location: 'XL-2', slot: '' }] };
-  if (url === '/api/spools/42') return { body: { success: true, data: { id: 42, location: 'XL-2',
-      extra: { physical_source: '"LR-MDB-1"', physical_source_slot: '"3"' } } } };
-  if (url === '/api/dryer_boxes/slots') return { body: { slots: [{ box: 'LR-MDB-1', slot: '3', target: 'XL-2' }] } };
+  if (url === '/api/quickswap/return' && body && body.dry_run)
+    return { body: { action: 'return_plan', toolhead: 'XL-2', active_toolhead: 'XL-2', requested: 'XL-2',
+                     spool: 42, display: 'Test spool #42', box: 'LR-MDB-1', slot: '3',
+                     source: 'physical_source', needs_choice: false, note: '' } };
   if (url === '/api/quickswap/return') {
     returns += 1;
     return returns === 1
@@ -129,8 +132,10 @@ await clickYes('#fcc-quickswap-yes');
 await clickYes('#fcc-quickswap-yes');
 return { posts: posts('/api/quickswap/return') };
 """)
-    sent = [p["confirmed_toolheads"] for p in res["posts"]]
+    assert res["posts"][0] == {"toolhead": "XL-2", "dry_run": True}, res["posts"]
+    sent = [p["confirmed_toolheads"] for p in res["posts"][1:]]
     assert sent == [["XL-2"], ["XL-2", "XL-9"]], sent
+    assert all(p["slot"] == "3" and p["expected_spool"] == 42 for p in res["posts"][1:]), res["posts"]
 
 
 def test_a_deposit_asked_again_shows_the_servers_message_and_replays_the_same_spool(tmp_path):

@@ -52,6 +52,14 @@ TABLE = {
     "inv_weigh_out.js": [
         ("window.saveSpoolWeight = ", "exempt", 1, "action force_unassign (the auto-archive)"),
     ],
+    # Group 40.7: the wizard's Location is a move. Its first request goes to its
+    # own route (edit / create, which carry the same contract); a question the
+    # engine asked there is replayed on /api/smart_move.
+    "inv_wizard.js": [
+        ("const _wizardMoveQuestion = ", SENDS, 1, None),    # a wizard move's question, replayed
+        ("const _wizardUnassignQuestion = ", "exempt", 1,
+         "action force_unassign: the wizard's Location -> Unassigned, Force Location's own path"),
+    ],
 }
 
 
@@ -99,8 +107,9 @@ def test_every_door_call_is_classified_and_counted():
 
 
 def test_the_canary_sees_every_door_call_site():
-    """Guard the guard: a regex that stops matching would report green forever."""
-    assert len(_calls()) == sum(r[2] for rows in TABLE.values() for r in rows) == 14
+    """Guard the guard: a regex that stops matching would report green forever.
+    16 since Group 40.7 (the wizard's question replay and its force_unassign)."""
+    assert len(_calls()) == sum(r[2] for rows in TABLE.values() for r in rows) == 16
 
 
 def test_every_sending_door_carries_the_key_and_asks_through_the_dispatcher():

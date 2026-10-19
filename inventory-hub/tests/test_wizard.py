@@ -11,10 +11,17 @@ def client():
     with app.test_client() as client:
         yield client
 
+# Group 40.7 — the create tests below leave `location` blank on purpose. A wizard
+# create with a location now places each new spool through the move engine, which
+# reads (and moves) the spool id the mocked create_spool returns; outside --offline
+# that id is a REAL dev Spoolman spool. Placement is pinned hermetically in
+# tests/test_wizard_location_through_engine.py; these tests pin other fields.
+
 @patch('app.spoolman_api.create_filament')
 @patch('app.spoolman_api.create_spool')
 def test_create_inventory_temps(mock_create_spool, mock_create_filament, client):
-    """Ensure temperatures are mapped natively instead of dumping to 'extra'."""
+    """Ensure temperatures are mapped natively instead of dumping to 'extra'.
+    (Location blank since Group 40.7: see the note above.)"""
     mock_create_filament.return_value = {'id': 1}
     mock_create_spool.return_value = {'id': 100}
 
@@ -28,7 +35,7 @@ def test_create_inventory_temps(mock_create_spool, mock_create_filament, client)
         },
         "spool_data": {
             "initial_weight": 1000,
-            "location": "A1"
+            "location": ""
         },
         "quantity": 1
     }
@@ -92,7 +99,8 @@ def test_edit_spool_wizard(mock_update_spool, mock_update_filament, mock_get_spo
 @patch('app.spoolman_api.create_filament')
 @patch('app.spoolman_api.create_spool')
 def test_filament_attributes_chips(mock_create_spool, mock_create_filament, client):
-    """Ensure that the wizard gracefully handles chip arrays inside the extra dictionary."""
+    """Ensure that the wizard gracefully handles chip arrays inside the extra dictionary.
+    (Location blank since Group 40.7: see the note above test_create_inventory_temps.)"""
     mock_create_filament.return_value = {'id': 2}
     mock_create_spool.return_value = {'id': 101}
 
@@ -104,7 +112,7 @@ def test_filament_attributes_chips(mock_create_spool, mock_create_filament, clie
             }
         },
         "spool_data": {
-            "location": "B2"
+            "location": ""
         },
         "quantity": 1
     }
@@ -154,7 +162,8 @@ def test_create_inventory_multi_color(mock_create_spool, mock_create_filament, c
 @patch('app.spoolman_api.create_filament')
 @patch('app.spoolman_api.create_spool')
 def test_spool_overrides_new_filament(mock_create_spool, mock_create_filament, client):
-    """Per-spool overrides drive count and merge onto spool_data per index."""
+    """Per-spool overrides drive count and merge onto spool_data per index.
+    (Location blank since Group 40.7: see the note above test_create_inventory_temps.)"""
     mock_create_filament.return_value = {'id': 7}
     mock_create_spool.side_effect = [{'id': 200}, {'id': 201}]
 
@@ -163,7 +172,7 @@ def test_spool_overrides_new_filament(mock_create_spool, mock_create_filament, c
         "spool_data": {
             "initial_weight": 1000,
             "spool_weight": 215,
-            "location": "A1",
+            "location": "",
             "extra": {"needs_label_print": True},
         },
         "quantity": 99,  # ignored when spool_overrides is present
@@ -207,12 +216,13 @@ def test_spool_overrides_new_filament(mock_create_spool, mock_create_filament, c
 @patch('app.spoolman_api.create_spool')
 def test_spool_overrides_existing_filament(mock_create_spool, mock_create_filament, client):
     """When filament_id is provided, no filament create/update happens but
-    per-spool overrides still apply correctly across N spools."""
+    per-spool overrides still apply correctly across N spools.
+    (Location blank since Group 40.7: see the note above test_create_inventory_temps.)"""
     mock_create_spool.side_effect = [{'id': 300}, {'id': 301}]
 
     payload = {
         "filament_id": 42,
-        "spool_data": {"initial_weight": 1000, "location": "B2", "extra": {}},
+        "spool_data": {"initial_weight": 1000, "location": "", "extra": {}},
         "spool_overrides": [
             {"initial_weight": 996},
             {"initial_weight": 1001},

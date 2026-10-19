@@ -226,12 +226,16 @@ const rows = { CORE1: core1, XL: xl, XLB: xlb };
 """
 
 # Opens Return on rows[ROW] with `loaded` ({toolhead: spool}) and `spools`
-# ({id: extra}); clicks Yes on whatever overlay it shows.
+# ({id: extra}); clicks Yes on whatever overlay it shows. Group 40.6: the
+# server's dry run says where the spool goes (its recorded source, else the
+# first slot in `slots` bound to the head), as the real route does for these
+# one-tap cases; the Return itself answers return_done.
 RETURN_SCENARIO = PRINTERS_JS + """
 const ROW = __ROW__;
 const loaded = __LOADED__;
 const spools = __SPOOLS__;
 const slots = __SLOTS__;
+const unq = (v) => String(v == null ? '' : v).replace(/"/g, '').trim();
 window.__respond = (url, method, body) => {
   if (url.startsWith('/api/machine/')) return { status: 404, body: { toolheads: {} } };
   const gc = url.match(/^\\/api\\/get_contents\\?id=(.+)$/);
@@ -239,12 +243,18 @@ window.__respond = (url, method, body) => {
     const th = decodeURIComponent(gc[1]);
     return { body: loaded[th] ? [{ id: loaded[th], display: 'Test spool #' + loaded[th], location: th, slot: '' }] : [] };
   }
-  const sp = url.match(/^\\/api\\/spools\\/(\\d+)$/);
-  if (sp) {
-    const th = Object.keys(loaded).find(k => String(loaded[k]) === sp[1]);
-    return { body: { success: true, data: { id: Number(sp[1]), location: th, extra: spools[sp[1]] || {} } } };
+  if (url === '/api/quickswap/return' && body && body.dry_run) {
+    const th = body.toolhead;
+    const sid = loaded[th];
+    const extra = spools[String(sid)] || {};
+    const bound = slots.find(s => s.target === th);
+    const plan = unq(extra.physical_source)
+      ? { box: unq(extra.physical_source), slot: unq(extra.physical_source_slot), source: 'physical_source' }
+      : (bound ? { box: bound.box, slot: bound.slot, source: 'feed_slot' } : null);
+    if (!plan) return { status: 404, body: { action: 'return_no_binding', toolhead: th, active_toolhead: th, requested: th } };
+    return { body: Object.assign({ action: 'return_plan', toolhead: th, active_toolhead: th, requested: th,
+                                   spool: sid, display: 'Test spool #' + sid, needs_choice: false, note: '' }, plan) };
   }
-  if (url === '/api/dryer_boxes/slots') return { body: { slots } };
   if (url === '/api/quickswap/return') return { body: { action: 'return_done', moved: 1, box: 'BOX', slot: '1' } };
   return { body: [] };
 };
@@ -287,30 +297,38 @@ def _posts(res: dict, url: str) -> list:
 def test_return_on_core1_reaches_the_backend_for_its_same_named_head(tmp_path):
     """The Core One: Printer row CORE1, single head CORE1, loaded, with a
     recorded source box. FAILS on the old module: "Nothing to return on CORE1"
-    without a single request, and its Yes posted nothing."""
+    without a single request, and its Yes posted nothing.
+
+    Group 40.6 (deliberate): the preview comes from the server's dry run (one
+    get_contents, by the head lookup; the preview's own second read is gone),
+    and the Yes sends the slot the confirm named and the spool it showed."""
     res = run_js(tmp_path, ["inv_quickswap.js"], _return_scenario(
         "CORE1", loaded={"CORE1": 912},
         spools={"912": {"physical_source": '"CR-DB-1"', "physical_source_slot": '"2"'}}))
 
     assert _titles(res) == ["Return the spool on CORE1?"], res["overlays"]
     assert "CR-DB-1 slot 2" in res["overlays"][0]
-    assert _gets(res, "/api/get_contents?id=") == ["/api/get_contents?id=CORE1"] * 2, res["fetches"]
-    assert _posts(res, "/api/quickswap/return") == [{"toolhead": "CORE1", "confirmed_toolheads": []}]
+    assert _gets(res, "/api/get_contents?id=") == ["/api/get_contents?id=CORE1"], res["fetches"]
+    assert _posts(res, "/api/quickswap/return") == [
+        {"toolhead": "CORE1", "dry_run": True},
+        {"toolhead": "CORE1", "box": "CR-DB-1", "slot": "2", "expected_spool": 912, "confirmed_toolheads": []}]
     assert any(t["type"] == "success" for t in res["toasts"]), res["toasts"]
     assert res["unhandled"] == []
 
 
 def test_return_on_xl_still_picks_its_first_loaded_head(tmp_path):
     """XL behaviour is unchanged: probe XL-1, then XL-2, act on XL-2. PASSES
-    on the old module too."""
+    on the old module too. (Group 40.6: the dry run for XL-2 names the slot.)"""
     res = run_js(tmp_path, ["inv_quickswap.js"], _return_scenario(
         "XL", loaded={"XL-2": 913}, slots=[{"box": "LR-DB-1", "slot": "3", "target": "XL-2"}]))
 
     assert _titles(res) == ["Return the spool on XL-2?"], res["overlays"]
     assert "virtual printer" in res["overlays"][0]
     assert _gets(res, "/api/get_contents?id=") == [
-        "/api/get_contents?id=XL-1", "/api/get_contents?id=XL-2", "/api/get_contents?id=XL-2"], res["fetches"]
-    assert _posts(res, "/api/quickswap/return") == [{"toolhead": "XL-2", "confirmed_toolheads": []}]
+        "/api/get_contents?id=XL-1", "/api/get_contents?id=XL-2"], res["fetches"]
+    assert _posts(res, "/api/quickswap/return") == [
+        {"toolhead": "XL-2", "dry_run": True},
+        {"toolhead": "XL-2", "box": "LR-DB-1", "slot": "3", "expected_spool": 913, "confirmed_toolheads": []}]
     assert res["unhandled"] == []
 
 

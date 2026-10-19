@@ -107,11 +107,13 @@ def _resident(item, head, raw_by_id, printer_map, loc_list, loc_info_map):
     PM-DB-2)"), worded by the same helper as the "already running" question."""
     card = _card(item)
     rec = raw_by_id.get(str(item.get('id')))
-    card.update({"from": "", "trail": None})
+    card.update({"from": "", "trail": None, "goes": ""})
     if rec:
         try:
             fed = logic._fed_resident(rec, head, printer_map, loc_list, loc_info_map)
-            card.update({"from": fed.get('from') or '', "trail": fed.get('trail')})
+            # `goes` (Group 40.5): where loading another spool sends it ("back to
+            # LR-MDB-1 slot 3"), for the Printer picker's load question.
+            card.update({"from": fed.get('from') or '', "trail": fed.get('trail'), "goes": fed.get('goes') or ''})
         except Exception as e:   # the line is a courtesy; never fail the model on it
             state.logger.warning(f"placement: couldn't word #{item.get('id')}'s origin on {head}: {e}")
     return card
@@ -232,6 +234,28 @@ def _slot_block(mode, box, slot, claimants, free, feed, occupant, occ_state, sto
     return None
 
 
+def _swap_to(item, box, slot, raw_by_id, spools, loc_info_map):
+    """Where a Swap files the slot's stored spool (Swap option C), by the
+    engine's own rule (logic._swap_out_place) over the model's one read:
+    'CR-CT-2-R1', 'LR-MDB-2 slot 1', or '' (Unassigned: FCC has no record of
+    where it sat before). None when it can't tell (a courtesy line; the model
+    never fails on it)."""
+    rec = raw_by_id.get(str((item or {}).get('id'))) or {}
+    note = (rec.get('extra') or {}).get(logic.PRE_BOX_KEY)
+
+    def _claims_of(b):
+        bucket = spoolman_api.bucket_spools_by_location([b], spools=spools).get(b, [])
+        claims_b, _own, _ghost = logic.box_slot_claims(loc_info_map.get(b), b, bucket, [(item or {}).get('id')])
+        return set(claims_b)
+
+    try:
+        loc, s2 = logic._swap_out_place(note, box, slot, loc_info_map, _claims_of)
+        return logic._filed_text(loc, s2, loc_info_map)
+    except Exception as e:
+        state.logger.warning(f"placement: couldn't tell where a Swap files #{(item or {}).get('id')}: {e}")
+        return None
+
+
 def _unreadable(model, err):
     model.update({"read_ok": False,
                   "read_error": f"couldn't read Spoolman ({err})",
@@ -337,6 +361,9 @@ def _box_model(row, box, sid, toolhead, mode, loc_list, loc_info_map, printer_ma
             # The move only stores the spool here (the engine's store_only rule):
             # the picker sends a store for it even after Swap / Overwrite.
             "stores_only": stores_only,
+            # Swap option C: where a Swap files the slot's stored spool ('' =
+            # Unassigned); None for an empty slot or one whose spool isn't stored.
+            "swap_to": _swap_to(shown[0], box, s, raw_by_id, spools, loc_info_map) if occ_state == 'stored' else None,
         })
     model["unslotted"] = unslotted
     model["printers"] = [{"name": n, "head": h} for n, h in printers_seen.items()]
@@ -385,13 +412,33 @@ def _return_recommendation(row, slot_ids, claims, ghost_slot, toolhead, loc_list
     return None, 'no_free_slot'
 
 
+def _keeps_trail(mover, loc_info_map, printer_map):
+    """Group 40 review (BD-3): the single-slot box a spool on a head keeps as
+    its home when it moves to another head (the engine's Group 42.6 follow,
+    `_follows` in `logic._perform_smart_move_impl`): its trail names a
+    single-slot Dryer Box attached to the head it is on. '' otherwise. The
+    Printer picker then skips "Record it as coming from…", whose answer the
+    engine would ignore."""
+    if not isinstance(mover, dict):
+        return ''
+    loc = _u(mover.get('location'))
+    if not loc or loc not in (printer_map or {}):
+        return ''
+    extra = mover.get('extra') if isinstance(mover.get('extra'), dict) else {}
+    src = _u(extra.get('physical_source'))
+    row = (loc_info_map or {}).get(src) if src else None
+    if not locations_db._is_single_slot_dryer_box(row):
+        return ''
+    return src if _u(locations_db.bindings_from_row(row).get('1')) == loc else ''
+
+
 def _printer_model(row, printer_id, sid, loc_list, loc_info_map, printer_map):
     pid = _u(printer_id)
     heads = locations_db.printer_row_toolheads(loc_list, pid)
     name = str(row.get('Name') or pid)
     model: typing.Dict[str, typing.Any] = {
         "mode": "printer", "location": pid, "name": name, "type": row.get('Type'),
-        "spool": sid, "spool_display": None, "spool_location": "",
+        "spool": sid, "spool_display": None, "spool_location": "", "spool_keeps_trail": "",
         "read_ok": True, "read_error": None,
         # A dual-role printer that is its own (only) head, the old Core One: the
         # Printer picker skips the head list (40.5).
@@ -433,6 +480,7 @@ def _printer_model(row, printer_id, sid, loc_list, loc_info_map, printer_map):
         mover = logic._spool_record(sid)
     model["spool_display"] = _spool_line(mover)
     model["spool_location"] = _u((mover or {}).get('location'))
+    model["spool_keeps_trail"] = _keeps_trail(mover, loc_info_map, printer_map)
 
     moving_ids = {str(m) for m in moving}
 
@@ -467,11 +515,25 @@ def _printer_model(row, printer_id, sid, loc_list, loc_info_map, printer_map):
     # The Printer Pool slot the spool already sits in is where it is now, never a
     # free choice for it either (Group 40.3 fix check, D8).
     mover_slot = logic._norm_slot(str(((mover or {}).get('extra') or {}).get('container_slot') or '').strip('"'))
+    pool_feed = {"kind": "pool", "printer": pid, "printer_name": name}
     for box, slot in pool:
         held = sorted(_slot_holders(box, slot), key=lambda i: bool(i.get('is_ghost')))
         current = bool(mover_slot) and model["spool_location"] == box and mover_slot == slot
-        model["pool"].append({"box": box, "slot": slot, "spool": _card(held[0]) if held else None,
-                              "free": not held, "current": current})
+        # Group 40.5: a Printer Pool slot is a box slot like any other: an
+        # occupied one asks Swap / Overwrite (Q2), and the engine's refusals grey
+        # it out (two spools claim it; its spool is loaded on a head; a stale
+        # record a store refuses), as in box mode.
+        occ = held[0] if held else None
+        occ_state = _occupant_state(occ, pool_feed, printer_map, loc_info_map)
+        claimants = [i.get('id') for i in held]
+        model["pool"].append({
+            "box": box, "slot": slot, "spool": _card(occ) if occ else None,
+            "free": not held, "current": current, "claimants": claimants, "feeds": dict(pool_feed),
+            "occupant_state": occ_state,
+            "blocked": _slot_block('printer', box, slot, claimants, not held, pool_feed, occ, occ_state),
+            "stores_only": False,
+            "swap_to": _swap_to(occ, box, slot, raw_by_id, spools, loc_info_map) if occ_state == 'stored' else None,
+        })
         if not held and not current:
             free_options.append({"kind": "pool", "box": box, "slot": slot})
     if len(free_options) == 1:

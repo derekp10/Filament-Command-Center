@@ -76,6 +76,22 @@ const isScannerBurst = () => {
 };
 window.isScannerBurst = isScannerBurst;
 
+// --- WHOSE ENTER IS IT? (Group 40 review, BD-2) ---
+// For a dialog that answers its focused button on Enter yet must leave a scan's
+// Enter to the accumulator (scripts.html), which hands the payload to the open
+// question: two or more characters in the scan buffer (a slower scanner's label
+// still arriving), one in flight (under 500 ms), a scanner-speed burst, or a
+// buffer that looks like a scan payload. A person's Enter on a focused button
+// finds the buffer empty. The slot picker's rule (slot_picker.js, D1).
+const enterIsAScan = () => {
+    const st = (typeof state !== 'undefined') ? state : window.state;
+    const buf = st && typeof st.scanBuffer === 'string' ? st.scanBuffer : '';
+    if (buf.length >= 2) return true;
+    if (isScanInFlight() || isScannerBurst()) return true;
+    return !!(buf && window.looksLikeScanPayload && window.looksLikeScanPayload(buf));
+};
+window.enterIsAScan = enterIsAScan;
+
 // --- SCAN BUFFER RESET (now, and again after this tick) ---
 // For a key handler that consumes a key the accumulator (scripts.html) would
 // otherwise collect or submit. The deferred second clear doesn't depend on
@@ -159,7 +175,7 @@ const _openMoveConfirms = {};
 window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', host = null,
                                ids = {}, onConfirm = null, onCancel = null,
                                title = '', onStore = null, storeLabel = '', loadLabel = '',
-                               printing = null, noLoad = false } = {}) => {
+                               printing = null, noLoad = false, hint = '' } = {}) => {
     const esc = (s) => String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -323,8 +339,14 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         // it is answered (a second slot label used to start a second move
         // behind the dialog). The status line says why a scan did nothing:
         // the toast layer (z 11000) sits under this dialog.
+        // What a held-off scan is told (processScan): the buttons on screen
+        // (Group 40 review, BD-6: a question with no store said "Just store it").
+        const said = [hasLoad ? (loadLabel || 'Load it instead') : '', hasStore ? 'Just store it' : '', 'Cancel']
+            .filter(Boolean);
         question = {
             title,
+            hint: hint || `Answer the question on screen first: ${said.slice(0, -1).join(', ')}`
+                + `${said.length > 2 ? ',' : ''} or ${said[said.length - 1]}`,
             // processScan drops a hold-off whose dialog is no longer on the page.
             element: ov,
             cancel: () => no(),
@@ -471,9 +493,11 @@ window.storeToastTail = (prior) => {
 // --- THE SAME-SLOT SWAP'S OLD SPOOL (Group 40; Derek, 2026-10-15) ---
 // A move that filled a box slot whose own spool was running on the slot's head
 // took that spool off the head into the scan buffer: it is in your hand (Derek
-// swaps a slot once its spool has run out, so it usually needs zeroing). The
-// server put it at the END of its buffer replica, Unassigned in Spoolman, and
-// names it in the answer's `to_buffer` (a slot scan's own `smart_move` too). This
+// swaps a slot once its spool has run out, so it usually needs zeroing). So does
+// a slot's stored spool the user chose to Swap out (Swap option C). The server
+// put it at the END of its buffer replica, filed back in Spoolman where it sat
+// before that slot (else Unassigned), and names it in the answer's `to_buffer`
+// (a slot scan's own `smart_move` too). This
 // page adds it to its buffer as well, behind the spools already waiting (its
 // next save replaces the replica whole, so the server's copy alone would be
 // lost), and toasts it in short arrows. Every door that can complete a move
@@ -482,10 +506,16 @@ window.storeToastTail = (prior) => {
 // reach the server out of order, and the one without this spool would win.
 // {toast: false} leaves the toast to window.toastIntoBuffer(items). Returns the
 // entries it was told about.
+// Swap option C (Derek, 2026-10-15): a spool swapped out of a slot is also filed
+// back where it sat before that slot (`filed_to`: "CR-CT-2-R1", "LR-MDB-2 slot 1";
+// none when FCC had no record, so it is Unassigned), and the toast says where.
 window.toastIntoBuffer = (items) => {
     (items || []).forEach(i => {
-        const off = i && i.off_head ? ` (taken off ${i.off_head})` : '';
-        if (i && typeof showToast === 'function') showToast(`✋ #${i.id} → your buffer${off}`, 'info', 5000);
+        const notes = [];
+        if (i && i.off_head) notes.push(`taken off ${i.off_head}`);
+        if (i && i.filed_to) notes.push(`filed back in ${i.filed_to}`);
+        const tail = notes.length ? ` (${notes.join('; ')})` : '';
+        if (i && typeof showToast === 'function') showToast(`✋ #${i.id} → your buffer${tail}`, 'info', 5000);
     });
 };
 window.takeIntoBuffer = (answer, { render = true, toast = true } = {}) => {
@@ -500,6 +530,7 @@ window.takeIntoBuffer = (answer, { render = true, toast = true } = {}) => {
         if (!st.heldSpools.some(s => String(s.id) === String(i.id))) {
             const entry = Object.assign({}, i);
             delete entry.off_head;
+            delete entry.filed_to;
             st.heldSpools.push(entry);
             added = true;
         }
@@ -895,6 +926,33 @@ window.printerNameForHead = (locId) => {
         }
     }
     return null;
+};
+
+// --- WHICH PICKER A LOCATION NEEDS (Group 40.4 / 40.5) ---
+// The browser's copy of locations_db.is_printer_row_not_head, the one
+// classifier the engine's refusal (40.0a) and Eject All's (41.1) use: a Printer
+// row that isn't itself one of its printer's toolheads (XL, RCOI, or a printer
+// whose heads aren't set up yet). A Printer row is its own head only when some
+// Printer row's toolheads[] lists it (the old dual-role Core One). `rows`: the
+// location rows to read (default state.allLocations).
+window.isPrinterRowNotHead = (row, rows = null) => {
+    if (!row || String(row.Type || '').trim().toLowerCase() !== 'printer') return false;
+    const id = String(row.LocationID || '').trim().toUpperCase();
+    const all = Array.isArray(rows) ? rows
+        : ((typeof state !== 'undefined' && state && Array.isArray(state.allLocations)) ? state.allLocations : []);
+    return !all.some(r => r && String(r.Type || '').trim().toLowerCase() === 'printer'
+        && (Array.isArray(r.toolheads) ? r.toolheads : [])
+            .some(t => String((t && t.location_id) || '').trim().toUpperCase() === id));
+};
+// A multi-slot Dryer Box (the box picker's rows); and a single-slot one,
+// locations_db._is_single_slot_dryer_box's rule (Max Spools "1" or "0"; a blank
+// isn't managed).
+window.isMultiSlotBox = (row) => !!row && row.Type === 'Dryer Box' && (parseInt(row['Max Spools'], 10) || 0) > 1;
+window.isSingleSlotBox = (row) => {
+    if (!row || row.Type !== 'Dryer Box') return false;
+    const raw = String(row['Max Spools'] == null ? '' : row['Max Spools']).trim();
+    const n = parseInt(raw, 10);
+    return raw !== '' && !isNaN(n) && n <= 1;
 };
 
 // A client probe of a head, with the pill and the timeout race (every client

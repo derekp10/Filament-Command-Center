@@ -308,6 +308,54 @@ _Run finished at ~04:45 on 2026-10-14. Started from `dev` @ `4203ffe` (= `origin
     scan won't put back the spool the swap just took out of that slot for 2 minutes (Undo is the way back).
 - **Next:** 40.4 (Force Location → the picker) → 40.5 → 40.6 → 40.7.
 
+### Group 40, final leg (overnight 2026-10-19 → 20): Swap option C, 40.4 → 40.7 — IN PROGRESS
+
+Derek's ask (2026-10-19, going to bed): Swap option C, then 40.4 → 40.7, with one review and one sweep at
+the end. Budget at the start: 5-hour window 0 %, weekly 0 % (resets in 6 days). Prod still waits for the end of
+Group 40 (no release before 40.7; `main` needs his OK).
+
+**Plan (the resume point if the run stops):**
+1. Two background builders in their own worktrees, branched from `feature/group-40-slot-picker` `9803f10`
+   (they can't run browser tests; they write them, and the main checkout runs them after the merge):
+   - `feature/g40-6-return-picker`: 40.6 (Return dry run / slot choice / `expected_spool`, the return-mode picker,
+     the toast, DEPLOYED ↩️ through the canonical Return; Derek's answer 6: one tap when exactly one free slot
+     feeds the head, the chooser otherwise).
+   - `feature/g40-7-wizard-server`: 40.7's server half (wizard create / edit through the engine,
+     `/api/spool/update`'s location path, the wizard's save handling of `location_result`, Claude's calls 28 / 29).
+2. The main checkout, in order: **Swap option C** (engine + the grid's and the picker's Swap + the same-slot
+   swap) → **40.4** (Force Location → the box picker, then the printer picker) → **40.5** (the printer picker
+   door, `record_source`, item F, the `inv_core.js` classifier mirror, the slot read before the question) →
+   merge both builder branches → **40.7's browser half** (the wizard opens the pickers).
+3. One review workflow (lenses + one batched skeptic) over the whole leg; fix; one full `RUN_INTEGRATION`
+   sweep; merge to `dev`; push; docs, buglist (PENDING DEREK checks), memory, `/finish-group 40`.
+
+Progress is recorded below as each step lands (commit ids), and every branch is pushed at each stopping point.
+
+**Progress (2026-10-19, overnight):**
+- 01:12 plan `0b0eeb7`; resume cron (session-only, hourly at :17) set; both builders launched.
+- `73b3f88` **Swap option C** (engine + grid / picker Swap + the same-slot swap; Undo `displaced`; the picker's
+  `swap_to`; a PolyDryer's taken noted slot → the plain place, a Claude's call). Offline 2710 passed; 86 browser passed.
+- `44ffbd2` **40.4 + 40.5** (one placement flow `window.placeOneWithPicker`; Force Location → pickers; LOC:XL /
+  DEPOSIT → the Printer picker with the head-load and "came from" questions; `record_source`; the slot read before a
+  question; item F; the classifier mirror). Offline 2759 passed; 91 browser passed.
+- `070291e` merge of **40.7's server half** (builder, `c239e16`); `8561dcd` **40.7's browser half** (the wizard's
+  Location opens the pickers; held for Save; the per-spool loop for a create).
+- `45de89d` merge of **40.6** (builder, `e8683f0`: Return dry run / chooser / `expected_spool`, the DEPLOYED ↩️).
+  Offline 2850 passed. Worktrees removed.
+- `7976b72` the builders' browser tests run in the main checkout (the wizard close test now waits for the fade).
+- **The one review** `wf_bd637c78-057` (5 agents, 2.31M tokens, ~48 min): 27 findings, none red, 4 orange
+  (R1 stale-trail DEPLOYED ↩️ = an unasked Overwrite of the viewed location, in a Room view across every LR-* box;
+  three wizard ones), the rest yellow / notes, all confirmed. Findings: this session's scratchpad
+  `review_result.json`.
+- Fixers (background, worktrees from `7976b72`): Return R1–R6 on `fix/g40-6-review`, wizard on `fix/g40-7-review`.
+- `1a480cf` **the engine and browser-door fixes** (engine-1..4, R1's engine part, BD-1..BD-6, the `opts.origin` /
+  `pickedSlot` contracts the fixers use); offline 2882 passed. `9fb9aaf` buglist (the PENDING DEREK checks).
+- `90815ba` merge of the **Return fixes** (builder, `79784b0` server R2–R5 + `0ce7b22` browser R1; 22 tests, 17 red on
+  `7976b72`); `12d769d` the stale-trail refusal wording + the open view repaints + the ghost-filter pin; Return browser
+  tests 96 passed. `5b4b591` merge of the **wizard fixes** (builder, `a675212` server + `f3216df` browser; 45 tests,
+  36 red on `7976b72`). CLAUDE.md rows for all of it.
+- Next: offline, the wizard browser files, commit, the one sweep, `dev`, docs.
+
 ## Questions for Derek
 
 Asked before Derek went to bed, from the pre-flight reconcile (`wf_1a1ff135-1c6`, read-only). Recorded as

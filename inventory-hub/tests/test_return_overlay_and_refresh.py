@@ -43,6 +43,15 @@ def test_return_overlay_names_specific_toolhead_on_virtual_printer(page: Page, o
     open_manage_modal(VIRTUAL_PRINTER)
     page.locator("#quickswap-return-btn").click()
     overlay = page.locator("#fcc-quickswap-confirm-overlay")
+    # Group 40.6: a spool with no obvious slot (dev data decides) opens the slot
+    # picker before the confirm. Enter takes its highlight (the ⭐, else the
+    # first slot it can take, else No slot); nothing is written until the
+    # confirm's Yes, which this test never clicks.
+    page.wait_for_function(
+        "!!document.getElementById('fcc-quickswap-confirm-overlay')"
+        " || !!document.querySelector('#fcc-slot-picker [data-sp-state=\"ready\"]')", timeout=8000)
+    if page.evaluate("!!document.querySelector('#fcc-slot-picker [data-sp-state=\"ready\"]')"):
+        page.keyboard.press("Enter")
     # Group 38.5: same ~3s active-print probe floor as the other confirm-overlay
     # waits (inv_quickswap.js:340/368, mountOverlay at :468). These two sites
     # were latent siblings of the 38.5 flake — identical exposure, never yet
@@ -174,6 +183,17 @@ def test_quickswap_refreshes_manage_view_after_yes(page: Page, open_manage_modal
         timeout=15,
     )
     body = r.json()
+    if body.get("action") == "return_choose_slot":
+        # Group 40.6: no obvious slot (its own was taken meanwhile): the server
+        # asks instead of picking one. Take its ⭐, else no slot, as Enter would.
+        rec = body.get("recommended") or {}
+        r = requests.post(
+            f"{api_base_url}/api/quickswap/return",
+            json={"toolhead": toolhead, "box": body.get("box"), "expected_spool": spool_id,
+                  "slot": rec.get("slot") if rec.get("kind") == "slot" else "none"},
+            timeout=15,
+        )
+        body = r.json()
     if body.get("action") == "return_requires_confirm":
         printer = (body.get("active_print") or {}).get("printer_name") or toolhead
         pytest.fail(f"{printer} is printing, so the restore Return needs a confirm, and a test never "

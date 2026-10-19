@@ -1043,6 +1043,18 @@ const _buildDepositCard = (locId) => {
     depositCard.onclick = () => {
         const top = state.heldSpools[0];
         if (!top) { showToast('Buffer is empty — scan a spool first', 'warning', 3500); return; }
+        // Group 40.5 (and D2.4): the card's QR is this location's label, so a
+        // click does what scanning it does: a multi-slot box, or a Printer row
+        // that isn't its own toolhead (XL, RCOI), opens its picker for this spool
+        // (a slot; a head or a Printer Pool slot). It used to file the spool on
+        // the printer row itself, which the engine refuses since 40.0a.
+        const row = (state.allLocations || []).find(l => String(l.LocationID) === String(locId));
+        if (window._placeBufferWithPicker && window.openSlotPicker && row
+                && ((window.isMultiSlotBox && window.isMultiSlotBox(row))
+                    || (window.isPrinterRowNotHead && window.isPrinterRowNotHead(row)))) {
+            window._placeBufferWithPicker(locId, [top.id]);
+            return;
+        }
         doAssign(locId, top.id, null);
     };
 
@@ -1330,11 +1342,56 @@ window.handleSlotInteraction = (slot) => {
             const esc = window.escHtml || ((s) => s);
             const top = state.heldSpools[0];
             const what = `#${top.id}${top.display ? ` (${esc(String(top.display))})` : ''}`;
-            promptAction("Slot Occupied", `Put ${what} into Slot ${slot}: swap or overwrite?`, [
+            const old = `#${esc(String(item.id))}`;
+            // Word the choice from the slot's spool, as the slot picker does
+            // (Group 40 review, BD-4). A DEPLOYED card's spool loaded on the head
+            // the slot feeds comes off into the buffer either way (the same-slot
+            // swap); one loaded on any other head is refused by the server, so
+            // nothing is offered; a stale record isn't moved.
+            const headTypes = ['Tool Head', 'MMU Slot', 'No MMU Direct Load', 'Printer'];
+            const rowOf = (id) => (state.allLocations || []).find(l => String(l.LocationID || '').toUpperCase() === id);
+            const boxRow = rowOf(String(locId).toUpperCase()) || {};
+            const feed = String((((boxRow.extra || {}).slot_targets) || {})[String(slot)] || '').trim().toUpperCase();
+            const on = String(item.deployed_to || '').trim().toUpperCase();
+            const onHead = !!(item.is_ghost && on && headTypes.includes((rowOf(on) || {}).Type));
+            if (onHead && on === feed) {
+                promptAction("Slot Occupied", `Put ${what} into Slot ${slot}?<br>`
+                    + `<small>Slot ${slot}'s spool ${old} is loaded on ${esc(on)}: it comes off into your scan buffer, `
+                    + `and ${what} goes in slot ${slot} and onto ${esc(on)}.</small>`, [
+                    { label: "Swap it out", action: () => { doAssign(locId, newId, slot, true); } },
+                    { label: "Cancel", action: () => { closeModal('actionModal'); } }
+                ]);
+                return;
+            }
+            if (onHead) {
+                promptAction("Slot Occupied", `Slot ${slot}'s spool ${old} is loaded on ${esc(on)}`
+                    + `${feed && !feed.includes(':') ? `, while the slot feeds ${esc(feed)}` : ''}.<br>`
+                    + `<small>Take ${old} off ${esc(on)} first; nothing was moved.</small>`, [
+                    { label: "OK", action: () => { closeModal('actionModal'); } }
+                ]);
+                return;
+            }
+            if (item.is_ghost) {
+                promptAction("Slot Occupied", `Put ${what} into Slot ${slot}?<br>`
+                    + `<small>${old}'s record still names slot ${slot}, though it is `
+                    + `${on ? `on ${esc(on)}` : 'in Unassigned'}; ${old} isn't moved.</small>`, [
+                    { label: `Put it in slot ${slot}`, action: () => { doAssign(locId, newId, slot, true); } },
+                    { label: "Cancel", action: () => { closeModal('actionModal'); } }
+                ]);
+                return;
+            }
+            // Swap option C (Derek, 2026-10-15): Swap hands the slot's old spool to
+            // your buffer AND files it back where it sat before this slot, when
+            // FCC has that record (a spool slotted before Swap option C has none).
+            promptAction("Slot Occupied", `Put ${what} into Slot ${slot}: swap or overwrite?<br>`
+                + `<small>Swap: ${old} goes to your buffer, filed back where it sat before this slot `
+                + `(Unassigned if FCC has no record of that). `
+                + `Overwrite: ${old} stays in ${esc(String(locId))} without a slot.</small>`, [
                 {
                     label: "Swap", action: () => {
-                        // Pass the displaced item so doAssign can push it
-                        // into the buffer ONLY on success — never before.
+                        // The server files the slot's old spool back where it sat
+                        // before and names it in `to_buffer` once the move lands
+                        // (never before), which _doAssignFinalize adds to the buffer.
                         doAssign(locId, newId, slot, true, {
                             swapDisplaced: { id: item.id, display: item.display, color: item.color },
                         });
@@ -1521,6 +1578,14 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedH
         confirmed_fed_heads: [],
     };
     if (options.autoDeploy === false) original.auto_deploy = false;
+    // `options.pickedSlot` (Group 40 review, R1): a slot the engine fills only
+    // while it is free (`picked_slot`), never an Overwrite that unseats its
+    // spool. Sent with no `slot`: the DEPLOYED card's ↩️ for a stale trail.
+    if (options.pickedSlot != null && options.pickedSlot !== '') original.picked_slot = String(options.pickedSlot);
+    // Swap option C: the grid's Swap. The server files the slot's old spool back
+    // where it sat before this slot and names it in `to_buffer`. On `original`,
+    // so every replay of a question is still a Swap.
+    if (options.swapDisplaced) original.swap = true;
     // The heads whose warning the user confirmed (Group 39.1), so the backend's
     // safety net doesn't re-prompt for them.
     const first = Object.assign({}, original, {
@@ -1603,28 +1668,43 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedH
                 // landed.
                 const bufIdx = state.heldSpools.findIndex(s => String(s.id) === spoolIdStr);
                 if (bufIdx > -1) state.heldSpools.splice(bufIdx, 1);
-                // Swap path: push the displaced item into the buffer too.
-                // Skipped if the displaced item is somehow already there
-                // (e.g. user opened multiple manage modals).
-                if (options.swapDisplaced && options.swapDisplaced.id) {
-                    const dispId = String(options.swapDisplaced.id);
-                    if (!state.heldSpools.some(s => String(s.id) === dispId)) {
-                        state.heldSpools.push(options.swapDisplaced);
-                    }
-                }
-                // Group 40, the same-slot swap: a slot whose own spool ran on its
-                // head handed that spool back into the scan buffer. One render,
-                // one save.
+                // The spools the move handed to the scan buffer: the slot's old
+                // spool a Swap took out (Swap option C: filed back where it sat
+                // before), and a same-slot swap's spool off the head (Group 40).
+                // The server names them in `to_buffer`; it used to be this page
+                // that pushed the Swap's old spool, while the server left it in
+                // the box with no slot. One render, one save.
                 window.takeIntoBuffer(res, { render: false });
                 if (window.renderBuffer) window.renderBuffer();
                 if (typeof renderManagerNav === 'function') renderManagerNav();
 
                 if (window.fetchLocations) window.fetchLocations();
-                refreshManageView(loc);
+                // The view on screen (Group 40 review): a DEPLOYED card's ↩️ in a
+                // Room view moves the spool into a box of that Room, and only the
+                // open view repaints (_renderManagePayload ignores any other id).
+                const openId = (document.getElementById('manage-loc-id') || {}).value;
+                refreshManageView(openId || loc);
             }
-            else showToast(failedWhy
-                ? `❌ #${spoolIdStr} was NOT assigned to ${loc}: ${failedWhy}`
-                : (res.msg || 'Assign failed'), 'error', 7000);
+            else {
+                // The DEPLOYED card's stale-trail ↩️ (Group 40 review): the slot its
+                // record names holds another spool now (or is gone). Nobody was
+                // "deciding", and trying again fails the same way until it moves.
+                const trailTaken = options.pickedSlot != null && res.blocked_reason === 'picked_slot_taken';
+                const why = trailTaken
+                    ? `#${spoolIdStr} wasn't put back in ${loc} slot ${options.pickedSlot}, the slot its record names: `
+                      + `another spool holds it now (or the box has no such slot). Scan #${spoolIdStr}, then the label `
+                      + `of where it really is, to fix its record`
+                    : null;
+                if (why && window.logClientEvent) window.logClientEvent(`⚠️ ${why}.`, 'WARNING');
+                showToast(why ? `❌ ${why}`
+                    : failedWhy
+                    ? `❌ #${spoolIdStr} was NOT assigned to ${loc}: ${failedWhy}`
+                    : (res.msg || 'Assign failed'), 'error', 7000);
+                // A spool the move had already handed to the buffer before this
+                // one's write failed (a Swap's old spool, a swapped-out head
+                // spool) is in the user's hand all the same.
+                window.takeIntoBuffer(res);
+            }
         })
         .catch((e) => { setProcessing(false); console.error(e); });
     _postManageAdd(first, { heads: first.confirmed_toolheads });
