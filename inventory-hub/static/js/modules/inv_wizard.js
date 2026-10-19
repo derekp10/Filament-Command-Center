@@ -10,7 +10,22 @@ let wizardState = {
     returnToSpoolId: null, // Track which spool detail modal to re-open after wizard closes
     returnToFilamentId: null, // Track which filament detail modal to re-open after wizard closes
     isDirty: false,    // true when the user has modified any form field or chip
-    forceClose: false  // set true to bypass the dirty guard when we want to programmatically close
+    forceClose: false, // set true to bypass the dirty guard when we want to programmatically close
+    // Group 40.7 — where Save places the spool when a picker chose it (the
+    // Location combobox's box / printer pickers fill it); null when the user
+    // typed a plain location, which is then sent as a plain move (the engine
+    // picks a free slot of a box itself). Shape:
+    //   { location: 'LR-MDB-1',  // the LocationID the pick belongs to: used only
+    //                            // while it is still the Location field's value
+    //     slot: null,            // an explicit slot: the picker's Swap / Overwrite
+    //     picked_slot: '2',      // a free slot the picker chose (kept only while free)
+    //     expected_feed: 'XL-2', // what that slot fed when chosen ('' = no toolhead)
+    //     auto_deploy: true }    // false: "stored here, not loaded back"
+    // window.wizardPlacementFor / wizardCreatePlacements turn it into the request.
+    pendingPlacement: null,
+    // Group 40.7: every /api/locations row, toolheads and printers included (the
+    // Location list hides those), for Clone's "starts blank on a head" rule.
+    allLocationRows: [],
 };
 
 // Empty-spool-weight inheritance helper (resolveEmptySpoolWeight) lives in
@@ -798,10 +813,17 @@ const wizardReset = () => {
         // programmatic reset (matches wizardComboboxSet's policy).
         vSel.dispatchEvent(new Event('change', { bubbles: false }));
     }
-    // Reset location combobox too — its hidden id field is cleared by the select
-    // loop above but the visible search text needs its own clear.
+    // Reset location combobox too. Its hidden id field is an <input type="hidden">,
+    // which neither the text-input nor the select loop above clears (it was a
+    // <select> once), so an Add opened after an Edit used to send the edited
+    // spool's Location while the field showed "Unassigned". Since Group 40.7 a
+    // create places the spool there through the move engine (a toolhead's spool
+    // unloaded), so clear both halves.
     const lSearch = document.getElementById('wiz-spool-location-search');
     if (lSearch) lSearch.value = '';
+    const lHidden = document.getElementById('wiz-spool-location');
+    if (lHidden) lHidden.value = '';
+    wizardState.pendingPlacement = null;
     wizardSetContextLabel();
     wizardState.isDirty = false;
 };
@@ -1502,6 +1524,7 @@ const wizardFetchLocations = () => {
         .then(r => r.json())
         .then(d => {
             if (!Array.isArray(d)) return;
+            wizardState.allLocationRows = d.filter(loc => loc && typeof loc === 'object');
             // Same filter the select used to apply: hide MMU/toolhead/direct-load
             // targets and the virtual "Unassigned" row (that's the empty-string default).
             const valid = d.filter(loc => {
@@ -2918,6 +2941,275 @@ window.wizardRenderPostSaveQueueActions = (mode, createdSpoolsArg, editSpoolId) 
     }
 };
 
+// --- Group 40.7: the wizard's Location goes through the move engine ---
+// Derek, 2026-10-19 (answer 7): a Location change behaves like Force Location.
+// Save saves the other edits, then the server moves the spool through the
+// engine, which may ask first (a printing head, a head already fed from
+// elsewhere): those questions are shown here through window.askMoveConfirm and
+// answered on /api/smart_move, the existing door. A refused move says why, and
+// the other edits stay saved.
+
+// A Location in the one form the server compares ('' = Unassigned).
+const _wizLocKey = (v) => {
+    const s = String(v == null ? '' : v).trim().replace(/^"+|"+$/g, '').trim().toUpperCase();
+    return s === 'UNASSIGNED' ? '' : s;
+};
+const _wizEsc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+}[c]));
+
+// The pending placement's request fields ({slot | picked_slot, expected_feed,
+// auto_deploy}) for a Save to `location`, or {} when none applies: no pick, or
+// the user typed another place after picking.
+window.wizardPlacementFor = (location, placement = wizardState.pendingPlacement) => {
+    const p = placement || null;
+    const loc = _wizLocKey(location);
+    if (!p || !loc || _wizLocKey(p.location) !== loc) return {};
+    const out = {};
+    const has = (v) => v != null && String(v).trim() !== '';
+    if (has(p.slot)) out.slot = String(p.slot).trim();
+    else if (has(p.picked_slot)) out.picked_slot = String(p.picked_slot).trim();
+    if (p.expected_feed != null) out.expected_feed = String(p.expected_feed).trim().toUpperCase();
+    if (p.auto_deploy === false) out.auto_deploy = false;
+    return out;
+};
+
+// The create's `placements`, one entry per new spool (null = left Unassigned). A
+// picked box slot places only the first: the rest are the per-spool picker
+// loop's (Claude's call 29). A typed place (or a picked toolhead) takes every
+// spool, one engine move each; the server refuses several onto a place that
+// holds one. A blank Location places none.
+window.wizardCreatePlacements = (count, location, placement = wizardState.pendingPlacement) => {
+    const n = Math.max(0, parseInt(count, 10) || 0);
+    const loc = _wizLocKey(location);
+    if (!loc) return Array.from({ length: n }, () => null);
+    const fields = window.wizardPlacementFor(location, placement);
+    const slotted = fields.slot != null || fields.picked_slot != null;
+    return Array.from({ length: n }, (_, i) =>
+        (slotted && i > 0) ? null : Object.assign({ location: loc }, fields));
+};
+
+// Group 40.7 (Claude's call 28): a clone of a spool loaded on a toolhead, or
+// filed on a Printer row, starts with a blank Location (Unassigned), so its
+// Save never unloads the original or files the copy on the printer; a clone of
+// a spool on a shelf, cart or box keeps the original's Location. `rows`: every
+// /api/locations row (the wizard's own list hides toolheads).
+window.wizardIsHeadOrPrinterRow = (locId, rows) => {
+    const id = _wizLocKey(locId);
+    if (!id) return false;
+    const heads = ['tool head', 'mmu slot', 'no mmu direct load'];
+    return (Array.isArray(rows) ? rows : []).some(r => {
+        if (!r) return false;
+        const type = String(r.Type || '').trim().toLowerCase();
+        if (_wizLocKey(r.LocationID) === id && (type === 'printer' || heads.includes(type))) return true;
+        return type === 'printer' && Array.isArray(r.toolheads)
+            && r.toolheads.some(h => _wizLocKey(h && h.location_id) === id);
+    });
+};
+window.wizardCloneStartsBlank = (spool, rows) => {
+    const loc = _wizLocKey(spool && spool.location);
+    if (!loc) return false;
+    if (Array.isArray(rows) && rows.length) return window.wizardIsHeadOrPrinterRow(loc, rows);
+    // No location list to check: a record whose trail names another place is
+    // deployed on a head, so start blank rather than risk it.
+    const src = _wizLocKey(spool && spool.extra && spool.extra.physical_source);
+    return !!src && src !== loc;
+};
+
+// A Location move the server asked about (an edit's `location_result`, or one new
+// spool's placement), shown through the one move dispatcher and replayed on
+// /api/smart_move, whose bodies window.buildMoveReplay builds. ctx: {spoolId,
+// location, fields: {slot, picked_slot, expected_feed, auto_deploy}, origin,
+// host, onDone(outcome, res)}, outcome 'moved' | 'cancelled' | 'failed'.
+const _wizardMoveQuestion = (answer, ctx) => {
+    const f = ctx.fields || {};
+    const sid = ctx.spoolId;
+    const loc = ctx.location;
+    // The /api/smart_move request this move would have been. `confirmed_fed_heads`:
+    // this page can show the "already running another spool" question.
+    const original = {
+        location: loc, spools: [sid], slot: (f.slot != null && f.slot !== '') ? String(f.slot) : null,
+        origin: ctx.origin || 'wizard_edit', confirmed_toolheads: [], confirmed_fed_heads: [],
+    };
+    if (f.auto_deploy === false) original.auto_deploy = false;
+    let ended = false;
+    const end = (how, res = null) => {
+        if (ended) return;
+        ended = true;
+        if (typeof ctx.onDone === 'function') {
+            try { ctx.onDone(how, res); } catch (e) { console.error(e); }
+        }
+    };
+    // A replaced question, or one this page can't show, moved nothing either.
+    const cancelled = (info) => end(info && (info.superseded || info.unknown) ? 'failed' : 'cancelled');
+    let post = null;
+    const ask = (res, prior) => window.askMoveConfirm(res, {
+        door: 'smart_move', original, prior, host: ctx.host, box: loc, slot: original.slot,
+        send: (body, next) => post(body, next), onCancel: cancelled,
+    });
+    post = (payload, prior) => {
+        const filling = (payload.slot != null && payload.slot !== '') ? payload.slot : payload.picked_slot;
+        if (typeof setProcessing === 'function') setProcessing(true, {
+            label: window.printerLabelForTarget ? window.printerLabelForTarget(loc, filling) : null });
+        window.fetchT('/api/smart_move', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        })
+            .then(r => r.json())
+            .then(res => {
+                if (typeof setProcessing === 'function') setProcessing(false);
+                const a = res || {};
+                if (a.status === 'requires_confirm') { ask(a, prior); return; }
+                // The same-slot swap's old spool came off its head into the buffer.
+                window.takeIntoBuffer(a);
+                const why = a.status === 'success' ? (a.failures || {})[String(sid)] : (a.msg || 'not moved');
+                if (why) {
+                    showToast(`❌ #${sid} was NOT moved to ${loc}: ${why}`, 'error', 7000);
+                    end('failed', a);
+                    return;
+                }
+                const slotTxt = (filling != null && filling !== '') ? ` slot ${filling}` : '';
+                if ((prior && prior.store) || payload.auto_deploy === false) {
+                    showToast(`📦 #${sid} stored in ${loc}${slotTxt}${prior && prior.store ? window.storeToastTail(prior) : ''}`,
+                        'success', 4000);
+                } else {
+                    showToast(`✅ #${sid} → ${loc}${slotTxt}${a.auto_deployed_to ? ` → ${a.auto_deployed_to}` : ''}`,
+                        'success', 4000);
+                }
+                Object.entries(a.auto_deploy_skipped || {}).forEach(([id, w]) => showToast(
+                    `⚠️ #${id} is in ${loc} but was NOT deployed to ${a.auto_deploy_target || 'its toolhead'}: ${w}`,
+                    'warning', 7000));
+                document.dispatchEvent(new CustomEvent('inventory:locations-changed'));
+                end('moved', a);
+            })
+            .catch((e) => {
+                if (typeof setProcessing === 'function') setProcessing(false);
+                showToast(`❌ #${sid} was NOT moved to ${loc}: ${(e && e.message) || 'network error'}`, 'error', 7000);
+                end('failed');
+            });
+    };
+    ask(answer, {
+        heads: [],
+        pickedSlot: (f.picked_slot != null && f.picked_slot !== '') ? String(f.picked_slot) : null,
+        expectedFeed: f.expected_feed != null ? String(f.expected_feed).toUpperCase() : null,
+    });
+};
+
+// The wizard's Location → Unassigned asked first (the spool is on a printing
+// head): Force Location's own yes / no, and its replay, the force_unassign
+// action with its boolean confirm (39.1). ctx as _wizardMoveQuestion's.
+const _wizardUnassignQuestion = (answer, ctx) => {
+    const sid = ctx.spoolId;
+    let ended = false;
+    const end = (how, res = null) => {
+        if (ended) return;
+        ended = true;
+        if (typeof ctx.onDone === 'function') {
+            try { ctx.onDone(how, res); } catch (e) { console.error(e); }
+        }
+    };
+    window.confirmActivePrint({
+        activePrint: answer.active_print, activePrints: answer.active_prints || [], msg: answer.msg,
+        host: ctx.host,
+        onConfirm: () => {
+            if (typeof setProcessing === 'function') setProcessing(true);
+            window.fetchT('/api/manage_contents', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'force_unassign', location: '', spool_id: sid,
+                                       origin: ctx.origin || 'wizard_edit', confirm_active_print: true }),
+            })
+                .then(r => r.json())
+                .then(res => {
+                    if (typeof setProcessing === 'function') setProcessing(false);
+                    if (res && res.success) {
+                        showToast(`✅ #${sid} → Unassigned`, 'success', 4000);
+                        document.dispatchEvent(new CustomEvent('inventory:locations-changed'));
+                        end('moved', res);
+                    } else {
+                        showToast(`❌ #${sid} was NOT unassigned: ${(res && res.msg) || 'Spoolman refused it'}`, 'error', 7000);
+                        end('failed', res);
+                    }
+                })
+                .catch((e) => {
+                    if (typeof setProcessing === 'function') setProcessing(false);
+                    showToast(`❌ #${sid} was NOT unassigned: ${(e && e.message) || 'network error'}`, 'error', 7000);
+                    end('failed');
+                });
+        },
+        onCancel: (info) => {
+            if (!(info && info.superseded)) showToast('Cancelled — nothing moved', 'info', 4000);
+            end(info && info.superseded ? 'failed' : 'cancelled');
+        },
+    });
+};
+
+// An edit whose other changes saved but whose Location didn't move yet: the
+// server's question (asked here, then replayed on its door) or its refusal
+// (a 7 s error). `ctx`: {spoolId, location, fields, host, onDone(outcome)}:
+// 'moved' | 'cancelled' | 'failed' (the replay didn't land) | 'refused'.
+window.wizardEditLocationNotMoved = (data, ctx) => {
+    const lr = data && data.location_result;
+    const asks = lr && typeof lr === 'object' && lr.status === 'requires_confirm' && !data.stale_page;
+    if (asks) {
+        const q = Object.assign({ origin: 'wizard_edit' }, ctx);
+        if (_wizLocKey(ctx.location) === '') _wizardUnassignQuestion(lr, q);
+        else _wizardMoveQuestion(lr, q);
+        return 'asking';
+    }
+    showToast(`❌ ${(data && data.msg) || `#${ctx.spoolId} was not moved`}`, 'error', 7000);
+    if (window.logClientEvent) window.logClientEvent(`❌ Wizard edit: ${(data && data.msg) || 'not moved'}`, 'ERROR');
+    if (typeof ctx.onDone === 'function') ctx.onDone('refused', data);
+    return 'refused';
+};
+
+// A create's placements: a toast per new spool placed, a 7 s error per one
+// refused, and the questions one at a time (a dialog replaces an open one on
+// the same overlay, so they can't be shown together). `onDone(remaining)` runs
+// once every question is settled, with the new spools that had no placement
+// (the per-spool picker loop's, Claude's call 29). Returns the questions asked.
+window.wizardSettleCreatePlacements = (data, { host = null, onDone = null } = {}) => {
+    const d = data || {};
+    const results = d.location_results || {};
+    const tried = d.placement_requests || {};
+    const placed = d.placed || {};
+    window.takeIntoBuffer(d);
+    const questions = [];
+    (d.created_spools || []).forEach(id => {
+        const key = String(id);
+        if (!(key in results)) return;
+        const res = results[key] || {};
+        const where = (tried[key] || {}).location || 'its location';
+        if (key in placed) {
+            showToast(`✅ New spool #${id} → ${placed[key]}`, 'success', 4000);
+            const skipped = (res.auto_deploy_skipped || {})[key];
+            if (skipped) showToast(`⚠️ #${id} is in ${where} but was NOT deployed to ${res.auto_deploy_target || 'its toolhead'}: ${skipped}`, 'warning', 7000);
+            return;
+        }
+        if (res.status === 'requires_confirm') { questions.push(id); return; }
+        const why = (res.failures || {})[key] || res.msg || 'not placed';
+        showToast(`❌ New spool #${id} was not placed in ${where}, so it is Unassigned: ${why}`, 'error', 7000);
+    });
+    const remaining = (d.unplaced || []).filter(id => !(String(id) in results));
+    const asked = questions.slice();
+    const next = () => {
+        const id = questions.shift();
+        if (id == null) {
+            if (typeof onDone === 'function') onDone(remaining);
+            return;
+        }
+        const key = String(id);
+        const want = tried[key] || {};
+        _wizardMoveQuestion(results[key], {
+            spoolId: id, location: want.location, fields: want, origin: 'wizard_create', host,
+            onDone: () => next(),
+        });
+    };
+    next();
+    return asked;
+};
+
 window.wizardSubmit = async () => {
     document.getElementById('btn-wiz-submit').disabled = true;
     const msg = document.getElementById('wiz-status-msg');
@@ -3124,9 +3416,24 @@ window.wizardSubmit = async () => {
             filament_id: target_fid,
             filament_data: f_payload,
             spool_data: sp_payload,
-            quantity: qty
+            quantity: qty,
+            // Group 40.7: a Location is a move through the engine, which may ask
+            // first; this page answers its questions (window.askMoveConfirm), so
+            // every save carries the move doors' contract.
+            confirmed_toolheads: [],
+            confirmed_fed_heads: [],
         };
         if (spool_overrides) payload.spool_overrides = spool_overrides;
+        // The picker's choice for the Location (wizardState.pendingPlacement): an
+        // edit sends its fields; a create sends one placement per new spool.
+        const placement = wizardState.pendingPlacement;
+        const editFields = isWizardEdit ? window.wizardPlacementFor(sp_payload.location, placement) : {};
+        if (isWizardEdit) {
+            Object.assign(payload, editFields);
+        } else {
+            payload.placements = window.wizardCreatePlacements(
+                spool_overrides ? spool_overrides.length : qty, sp_payload.location, placement);
+        }
 
         const endpoint = wizardState.mode === 'edit_spool' ? '/api/edit_spool_wizard' : '/api/create_inventory_wizard';
 
@@ -3136,13 +3443,38 @@ window.wizardSubmit = async () => {
             body: JSON.stringify(payload)
         });
         const data = await res.json();
+        // Group 40.7: an edit whose other changes saved but whose Location didn't
+        // move (the server asks first, or refused it) is a partial save: the
+        // post-save steps below still run for what was saved.
+        const partial = isWizardEdit && !data.success && data.spool_saved === true
+            && Object.prototype.hasOwnProperty.call(data, 'location_result');
+        const wizModal = document.getElementById('wizardModal');
+        const editSid = wizardState.editSpoolId;
+        const savedLoc = _wizLocKey(sp_payload.location);
 
-        if (data.success) {
-            wizardState.isDirty = false;
-            msg.innerHTML = `<span class="text-success fw-bold">Success! ${wizardState.mode === 'edit_spool' ? 'Spool Updated' : 'Spool(s) Generated'}.</span>`;
+        if (data.success || partial) {
+            // A partial save leaves the Location unsaved, so closing still warns.
+            wizardState.isDirty = partial;
+            msg.innerHTML = partial
+                ? `<span class="text-warning fw-bold">Saved your other changes. #${_wizEsc(editSid)} was not moved yet.</span>`
+                : `<span class="text-success fw-bold">Success! ${wizardState.mode === 'edit_spool' ? 'Spool Updated' : 'Spool(s) Generated'}.</span>`;
             // Group 42.3c: see inv_weigh_out.js (a weight fix that brought an
             // archived spool back, but its old toolhead holds another one now).
-            if (data.warning && typeof showToast === 'function') showToast(data.warning, 'warning', 7000);
+            // Group 40.7: a create's placements are reported spool by spool below
+            // (`warning` sums them up for a page from before 40.7).
+            const placementsReported = !isWizardEdit && data.location_results;
+            if (data.warning && !placementsReported && typeof showToast === 'function') showToast(data.warning, 'warning', 7000);
+            if (isWizardEdit && data.location_moved) {
+                // Group 40.7: where the Location move put it, in short arrows.
+                const lr = data.location_result;
+                const rec = (lr && typeof lr === 'object' && lr.recorded_source)
+                    ? String(lr.recorded_source).split(':') : null;
+                showToast(`✅ #${editSid} → ${data.location_where || savedLoc || 'Unassigned'}`
+                    + `${rec && rec.length === 2 ? ` (recorded as from ${rec[0]} slot ${rec[1]})` : ''}`, 'success', 4000);
+                window.takeIntoBuffer(data);
+                document.dispatchEvent(new CustomEvent('inventory:locations-changed'));
+            }
+            if (!partial) wizardState.pendingPlacement = null;
             // 17.3 follow-up: render queue-label chips into the dedicated
             // `wiz-postcreate-actions` row in the modal footer (alongside
             // Cancel + Create Inventory) so subsequent status-message
@@ -3217,6 +3549,48 @@ window.wizardSubmit = async () => {
                 }, 3000);
                 // Submit stays disabled. The dirty-listener below re-enables it when
                 // the user edits any field in the wizard.
+                // Group 40.7: what each new spool's placement did, questions one at
+                // a time; then the spools a picked box slot left Unassigned go to
+                // the per-spool picker loop (Claude's call 29) when one is installed.
+                if (data.location_results) {
+                    window.wizardSettleCreatePlacements(data, {
+                        host: wizModal,
+                        onDone: (remaining) => {
+                            if (!remaining.length) return;
+                            if (typeof window.wizardPlaceRemaining === 'function') {
+                                window.wizardPlaceRemaining({ spoolIds: remaining, location: savedLoc, placement, data });
+                            } else {
+                                showToast(`${remaining.length} new spool${remaining.length === 1 ? ' is' : 's are'} `
+                                    + `Unassigned (${remaining.map(id => '#' + id).join(', ')}): scan or Force Location `
+                                    + `${remaining.length === 1 ? 'it' : 'them'} into place.`, 'info', 7000);
+                            }
+                        },
+                    });
+                }
+            } else if (partial) {
+                // Group 40.7: the other edits are saved; the Location needs an answer,
+                // or was refused (7 s error). Submit stays usable to try again.
+                const btn = document.getElementById('btn-wiz-submit');
+                window.wizardEditLocationNotMoved(data, {
+                    spoolId: editSid, location: savedLoc, fields: editFields, host: wizModal,
+                    onDone: (outcome) => {
+                        if (outcome === 'moved') {
+                            wizardState.isDirty = false;
+                            wizardState.pendingPlacement = null;
+                            msg.innerHTML = `<span class="text-success fw-bold">Success! Spool Updated.</span>`;
+                            document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
+                            setTimeout(() => { msg.innerHTML = ""; if (btn) btn.disabled = false; }, 3000);
+                        } else {
+                            const why = outcome === 'refused'
+                                ? (data.msg || `Saved your other changes, but #${editSid} was not moved.`)
+                                : outcome === 'cancelled'
+                                    ? `Saved your other changes. #${editSid} was not moved: Save again to move it.`
+                                    : `Saved your other changes, but #${editSid} was not moved (see the error). Save again to retry.`;
+                            msg.innerHTML = `<span class="text-${outcome === 'cancelled' ? 'warning' : 'danger'}">${_wizEsc(why)}</span>`;
+                            if (btn) btn.disabled = false;
+                        }
+                    },
+                });
             } else {
                 setTimeout(() => {
                     msg.innerHTML = "";
@@ -3287,9 +3661,19 @@ window.openCloneWizard = async (spoolId) => {
             sel.innerHTML = `<option value="${f.id}" selected>${name} (ID: ${f.id})</option>`;
             wizardExistingSelected();
 
-            // Pre-fill Spool parameters that usually carry over when cloning
+            // Pre-fill Spool parameters that usually carry over when cloning.
+            // Group 40.7 (Claude's call 28): not the Location of a spool loaded on a
+            // toolhead or filed on a Printer row. Save now moves the copy through
+            // the engine, which would unload the original to load the copy (or
+            // refuse a printer row); the copy starts Unassigned instead.
+            let cloneLocBlanked = '';
             {
-                const locId = d.location || "";
+                const rows = (wizardState.allLocationRows && wizardState.allLocationRows.length)
+                    ? wizardState.allLocationRows
+                    : ((typeof state !== 'undefined' && state && Array.isArray(state.allLocations)) ? state.allLocations : []);
+                const blank = window.wizardCloneStartsBlank(d, rows);
+                if (blank) cloneLocBlanked = String(d.location || '');
+                const locId = blank ? "" : (d.location || "");
                 const locRec = (wizardState.locations || []).find(l => l.LocationID === locId);
                 window.wizardComboboxSet(
                     'wiz-spool-location-search', 'wiz-spool-location', locId,
@@ -3321,7 +3705,10 @@ window.openCloneWizard = async (spoolId) => {
             }
             window.wizardCalcRemainingFromUsed();
 
-            document.getElementById('wiz-status-msg').innerHTML = `<span class="text-success">Wizard successfully pre-filled from Spool #${spoolId}.</span>`;
+            document.getElementById('wiz-status-msg').innerHTML = `<span class="text-success">Wizard successfully pre-filled from Spool #${spoolId}.</span>`
+                + (cloneLocBlanked
+                    ? ` <span class="text-info">Location left blank: #${_wizEsc(spoolId)} is on ${_wizEsc(cloneLocBlanked)}, so pick where the copy goes.</span>`
+                    : '');
             if (window.wizardApplyCollapseDefaults) window.wizardApplyCollapseDefaults('edit');
         })
         .catch(err => {
