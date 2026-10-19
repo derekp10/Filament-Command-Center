@@ -1679,10 +1679,25 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedH
                 if (typeof renderManagerNav === 'function') renderManagerNav();
 
                 if (window.fetchLocations) window.fetchLocations();
-                refreshManageView(loc);
+                // The view on screen (Group 40 review): a DEPLOYED card's ↩️ in a
+                // Room view moves the spool into a box of that Room, and only the
+                // open view repaints (_renderManagePayload ignores any other id).
+                const openId = (document.getElementById('manage-loc-id') || {}).value;
+                refreshManageView(openId || loc);
             }
             else {
-                showToast(failedWhy
+                // The DEPLOYED card's stale-trail ↩️ (Group 40 review): the slot its
+                // record names holds another spool now (or is gone). Nobody was
+                // "deciding", and trying again fails the same way until it moves.
+                const trailTaken = options.pickedSlot != null && res.blocked_reason === 'picked_slot_taken';
+                const why = trailTaken
+                    ? `#${spoolIdStr} wasn't put back in ${loc} slot ${options.pickedSlot}, the slot its record names: `
+                      + `another spool holds it now (or the box has no such slot). Scan #${spoolIdStr}, then the label `
+                      + `of where it really is, to fix its record`
+                    : null;
+                if (why && window.logClientEvent) window.logClientEvent(`⚠️ ${why}.`, 'WARNING');
+                showToast(why ? `❌ ${why}`
+                    : failedWhy
                     ? `❌ #${spoolIdStr} was NOT assigned to ${loc}: ${failedWhy}`
                     : (res.msg || 'Assign failed'), 'error', 7000);
                 // A spool the move had already handed to the buffer before this

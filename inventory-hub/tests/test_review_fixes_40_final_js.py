@@ -389,3 +389,60 @@ return {{ calls: window.__pickerCalls.map(c => [c.location, c.spool]), posts: po
     [post] = res["posts"]
     assert post["location"] == "XL-2" and post["spools"] == [57], post
     assert res["assigns"] == [] and res["held"] == [58], res
+
+
+# --- the Return fixer's integration notes 2 and 3 --------------------------------------
+
+def test_a_stale_trails_return_into_a_taken_slot_says_what_happened(tmp_path):
+    """The DEPLOYED card's stale-trail ↩️ (R1's fallback) sends its slot as
+    `pickedSlot`; when another spool holds it, the engine's "taken while you were
+    deciding … try again" is wrong (nobody was deciding, and a retry fails the
+    same way), so the toast says what happened and how to fix the record."""
+    taken = {"status": "error", "blocked_reason": "picked_slot_taken",
+             "msg": "Not moved: LR-MDB-1 slot 1 was taken by #57 while you were deciding, so nothing moved — try again.",
+             "failures": {"60": "LR-MDB-1 slot 1 was taken by #57"}}
+    res = _grid(tmp_path, f"""
+answerWith('/api/manage_contents', [{_js(taken)}]);
+window.doAssign('LR-MDB-1', 60, null, null, {{ autoDeploy: false, pickedSlot: '1' }});
+await __settle(200);
+return {{ toasts: toasts() }};
+""")
+    msgs = [t["msg"] for t in res["toasts"]]
+    assert any(m.startswith("❌ #60 wasn't put back in LR-MDB-1 slot 1, the slot its record names") for m in msgs), msgs
+    assert not any("while you were deciding" in m for m in msgs), msgs
+
+
+def test_after_a_move_the_view_on_screen_repaints(tmp_path):
+    """A DEPLOYED card's ↩️ in a Room view puts the spool back into a box of that
+    Room; the Room is the view to repaint (a refresh of the box was ignored)."""
+    res = _grid(tmp_path, r"""
+const refreshed = [];
+window.refreshManageView = (id) => { refreshed.push(id); return true; };
+document.getElementById('manage-loc-id').value = 'LR';
+window.doAssign('LR-MDB-1', 60, null, null, { autoDeploy: false, pickedSlot: '1' });
+await __settle(250);
+return { refreshed };
+""")
+    assert res["refreshed"] == ["LR"], res
+
+
+# --- the move-pipeline follow-ups' last E2E debt (item 6): Return's printer-view target ---
+
+def test_return_from_a_printer_view_skips_a_head_that_only_lists_a_ghost(tmp_path):
+    """↩️ Return on a Printer row's view (XL) acts on the first head that holds a
+    spool ON it (`_resolveReturnTarget`); a head whose contents list only a ghost
+    (a spool deployed elsewhere) is skipped. Unpinned since the 2026-09-12 diff
+    review (the move-pipeline follow-ups, item 6)."""
+    from test_return_slot_choice_js import PRELUDE as RETURN_PRELUDE, QS, _plan
+    plan = _plan(toolhead="XL-2", active_toolhead="XL-2", requested="XL-2", box="LR-MDB-1", slot="2")
+    res = run_js(tmp_path, QS, RETURN_PRELUDE + f"""
+window.__contents = {{
+  'XL-1': [{{ id: 99, is_ghost: true, deployed_to: 'XL-3', location: 'LR-MDB-1' }}],
+  'XL-2': [{{ id: 77, location: 'XL-2' }}],
+}};
+window.__plan = {{ body: {_js(plan)} }};
+await openHead('XL');
+return out();
+""")
+    assert res["unhandled"] == [], res["unhandled"]
+    assert res["posts"] and res["posts"][0]["toolhead"] == "XL-2" and res["posts"][0]["dry_run"] is True, res["posts"]
