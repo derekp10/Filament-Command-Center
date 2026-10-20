@@ -15,20 +15,46 @@ def client():
     with app.test_client() as client:
         yield client
 
+def _spoolman_lists(spools, filaments):
+    """A requests.get that answers like the real Spoolman 0.27: its list endpoints
+    IGNORE an `extra=` query filter and return every record."""
+    def _get(url, **kw):
+        resp = MagicMock()
+        resp.ok = True
+        path = url.split('?', 1)[0]
+        resp.json.return_value = [dict(x) for x in (spools if path.endswith('/spool') else filaments)]
+        return resp
+    return _get
+
+
 def test_get_pending_queue(client):
-    """Test fetching the print queue backlog and filtering"""
-    with patch('requests.get') as mock_get, patch('config_loader.get_api_urls', return_value=('http://mock', 'http://mock')):
-        mock_resp = MagicMock()
-        mock_resp.ok = True
-        mock_resp.json.return_value = [{"id": 1, "registered": "2023-01-01"}]
-        mock_get.return_value = mock_resp
+    """The backlog lists only records whose needs_label_print is set. Spoolman
+    ignores an extra= filter, so the route must filter itself (2026-10-19: a
+    swatch label scanned and verified never left the backlog, which listed every
+    spool and filament)."""
+    spools = [
+        {"id": 1, "registered": "2023-01-01", "extra": {"needs_label_print": "true"}},
+        {"id": 2, "registered": "2023-01-02", "extra": {"needs_label_print": "false"}},
+        {"id": 3, "registered": "2023-01-03", "extra": {}},
+        {"id": 4, "registered": "2023-01-04"},
+    ]
+    filaments = [
+        {"id": 7, "registered": "2023-01-05", "extra": {"needs_label_print": "true"}},
+        {"id": 8, "registered": "2023-01-06", "extra": {"needs_label_print": "false"}},
+        {"id": 9, "registered": "2023-01-07", "extra": {}},
+    ]
+    with patch('requests.get', side_effect=_spoolman_lists(spools, filaments)), \
+            patch('config_loader.get_api_urls', return_value=('http://mock', 'http://mock')):
         
         res = client.get('/api/print_queue/pending?filter=spool&sort=id_asc')
         assert res.status_code == 200
         data = res.get_json()
         assert data['success'] is True
-        assert len(data['items']) == 1
-        assert data['items'][0]['type'] == 'spool'
+        assert [(i['type'], i['id']) for i in data['items']] == [('spool', 1)], data['items']
+
+        res = client.get('/api/print_queue/pending?filter=all&sort=id_asc')
+        data = res.get_json()
+        assert sorted((i['type'], i['id']) for i in data['items']) == [('filament', 7), ('spool', 1)], data['items']
 
 def test_mark_printed_rejects_legacy(client):
     """Test that manual mark printed rejects non-numeric legacy IDs"""
