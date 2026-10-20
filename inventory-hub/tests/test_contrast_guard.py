@@ -148,3 +148,55 @@ def test_printer_status_widget_collapsed_has_no_gray_on_gray_text(
         timeout=2000
     )
     assert_contrast(page.locator("#printer-status-widget"))
+
+
+# ---------------------------------------------------------------------------
+# Group 52.1b: "Spoolman didn't answer" notices (Location Manager + backlog)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.usefixtures("require_server")
+def test_manage_read_notice_has_no_gray_on_gray_text(page: Page, open_manage_modal, assert_contrast):
+    """Shown only when a contents read fails: the strict reads of TEST_BOX
+    answer 502 here, as the server does when Spoolman times out. Read-only."""
+    def _down(route):
+        if "strict=1" in route.request.url:
+            route.fulfill(status=502, content_type="application/json",
+                          body='{"error": "Couldn\'t read PM-DB-1 from Spoolman (Read timed out.)."}')
+        else:
+            route.continue_()
+
+    page.route(lambda url: f"/api/get_contents?id={TEST_BOX}&" in url, _down)
+    # The heartbeat's manage section would read dev's real contents and clear
+    # the notice before the check (conftest.quiet_heartbeat's move).
+    page.route("**/api/dashboard_pulse*", lambda route: route.abort())
+    open_manage_modal(TEST_BOX)
+    notice = page.locator("#manage-read-notice")
+    expect(notice).to_be_visible(timeout=8000)
+    assert_contrast(notice)
+
+
+@pytest.mark.usefixtures("require_server")
+def test_backlog_read_notice_has_no_gray_on_gray_text(page: Page, base_url: str, assert_contrast):
+    """Shown when a backlog refresh fails while the window lists rows: the
+    first answer lists one (fake) row, every later one fails. Read-only."""
+    import json   # local: keeps this file's header out of other branches' merges
+    answers = {"n": 0}
+    row = {"id": 999531, "type": "spool", "registered": "2026-10-19T00:00:00",
+           "filament": {"material": "PLA", "name": "Contrast Red", "color_hex": "c0392b",
+                        "vendor": {"name": "FCC Test"}}}
+
+    def _pending(route):
+        answers["n"] += 1
+        body = ({"success": True, "items": [row]} if answers["n"] == 1
+                else {"success": False, "msg": "Spoolman didn't answer the spool list (HTTP 503)"})
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
+
+    page.route("**/api/print_queue/pending*", _pending)
+    page.goto(base_url)
+    page.wait_for_selector("#btn-backlog-count", timeout=10000)
+    page.evaluate("window.openBacklogModal()")
+    expect(page.locator(".backlog-row").first).to_be_visible(timeout=8000)
+    page.evaluate("window.fetchBacklog()")
+    notice = page.locator("#backlog-read-notice")
+    expect(notice).to_be_visible(timeout=8000)
+    assert_contrast(notice)
