@@ -506,6 +506,15 @@ Resume cron: session-only, hourly; deleted once this section says DONE. Every br
 - Found while building 48.2 (a follow-up, not fixed): Enter on a focused button in a Bootstrap window (the spool
   window's buttons, the new "(from the filament)") does nothing, app-wide: the scan accumulator in `scripts.html`
   `preventDefault`s every Enter outside a text field so a scanner's Enter never presses a button. Space works.
+- **Group 52 merged** from its builder (`244639b`, 7 commits; 31 offline tests + 5 browser) into the integration
+  branch **`bundle/2026-10-19`** (`c37b8c9`; one conflict, `test_contrast_guard.py`, both sides kept; `git rerere` on,
+  so the `dev` merges replay it). `f169cdf` Group 52's CLAUDE.md rules + the `?` overlay baseline recaptured (175 px
+  taller: Group 49's "Low Stock List" keys; checked by eye). Integration offline: 3163 passed, 0 failed; Group 52's
+  browser tests pass against dev (1 visual baseline recaptured).
+- **The one review** `wf_ee3ec73c-b42` launched ~21:20 (4 lenses + 1 batched skeptic) on a frozen worktree of
+  `f169cdf` (scratchpad `review/tree`; brief `review/brief.md`). An early full `RUN_INTEGRATION` sweep runs on the main
+  checkout meanwhile (signal only; the official one comes after the fixes): **4151 passed, 16 skipped, 0 failed in
+  26:31** (load 1.18×, with the reviewers' offline runs alongside).
 
 ## Questions for Derek
 
