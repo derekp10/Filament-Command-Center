@@ -33,6 +33,7 @@ import spoolman_api  # type: ignore
 import logic  # type: ignore
 import locations_db  # type: ignore  # Group 40.7: Printer-row / one-spool checks before a create
 import attr_migration  # type: ignore  # Group 36: hidden filament-attribute choices
+import stock_report  # type: ignore  # Group 49.2: the Low-stock list + the low-stock warning
 
 from app_core import app
 
@@ -969,6 +970,10 @@ def _log_manual_weight_change(spool_id, pre, post):
     0.0g "before" values. Callers gate on a weight field actually being dirty
     so non-weight edits never reach here. The L200 Prusament correction has its
     own dedicated log and does NOT route through this.
+
+    Group 49.2b: it also hands the write to stock_report's low-stock check (one
+    WARNING when the spool's filament just went under `low_stock_g`, or out of
+    stock), which runs off the request thread and can't fail the caller.
     """
     if not pre:
         return
@@ -989,6 +994,13 @@ def _log_manual_weight_change(spool_id, pre, post):
             "INFO", color)
     except Exception as _log_e:
         state.logger.warning(f"24.F weight-log skipped for spool {spool_id}: {_log_e}")
+    # Group 49.2b: one Activity Log warning when this write took the spool's
+    # filament under the low-stock line (or out of stock). The write has landed;
+    # the check runs on its own thread and never raises into the caller.
+    try:
+        stock_report.check_after_weight_change(spool_id, pre, post)
+    except Exception as _stock_e:
+        state.logger.debug(f"49.2b low-stock check skipped for spool {spool_id}: {_stock_e}")
 
 
 def _take_archived_off(sid, original, written, dirty):
@@ -1498,6 +1510,29 @@ def api_search_inventory():
     except Exception as e:
         state.logger.error(f"API Search Error: {e}")
         return jsonify({"success": False, "msg": str(e)})
+
+
+@app.route('/api/stock_report', methods=['GET'])
+def api_stock_report():
+    """Group 49.2a: the ⚠️ Low-stock list behind the search panel's button.
+
+    Per filament, across its in-stock spools: `low` (under the `low_stock_g`
+    setting, fewest grams first) then `out` (spools on record, none in stock;
+    a One-off filament stays off it). One strict Spoolman read, made only when
+    the panel opens. A read that fails answers an error (502), NEVER an empty or
+    "all out" list: an empty list must mean nothing is low."""
+    try:
+        return jsonify(stock_report.build_report())
+    except stock_report.StockReadError as e:
+        state.logger.warning(f"Low-stock list: Spoolman didn't answer: {e}")
+        return jsonify({
+            "success": False, "error": "spoolman_unreachable",
+            "msg": "Spoolman didn't answer, so FCC can't tell what is low right now. Try again in a moment.",
+        }), 502
+    except Exception as e:
+        state.logger.error(f"Low-stock list failed: {e}")
+        return jsonify({"success": False, "error": "report_failed",
+                        "msg": f"FCC couldn't build the Low-stock list: {e}"}), 500
 
 # ... (Imports same as before) ...
 

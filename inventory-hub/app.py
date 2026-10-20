@@ -223,6 +223,8 @@ from routes_inventory import (  # noqa: E402,F401
     _log_manual_weight_change, api_edit_spool_wizard, api_spool_update,
     api_external_search, api_search_inventory,
 )
+# Group 49.2a: the Low-stock list's route (re-exported like the rest above).
+from routes_inventory import api_stock_report  # noqa: E402,F401
 
 # L316 step 6: the scan pipeline (identify_scan dispatcher, buffer/clear,
 # manage_contents, update_filament + edit-log formatter) and the Prusament
