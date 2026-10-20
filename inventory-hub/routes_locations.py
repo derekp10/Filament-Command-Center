@@ -1018,6 +1018,10 @@ def api_undo():
 
 @app.route('/api/get_contents', methods=['GET'])
 def api_get_contents_route():
+    # Group 52.1c: `ids` (repeatable: ?ids=A&ids=B) reads several locations from
+    # ONE spool-list read, for the Quick-Swap grid's feeding boxes.
+    if 'ids' in request.args:
+        return jsonify(contents_batch(request.args.getlist('ids')))
     loc = request.args.get('id', '').strip().upper()
     # Group 41.9: a blank id is no location, not "every spool with no location"
     # (the matcher reads '' that way). Every caller expects a list.
@@ -1031,6 +1035,35 @@ def api_get_contents_route():
         except Exception as e:
             return jsonify({"error": f"Couldn't read {loc} from Spoolman ({e})."}), 502
     return jsonify(spoolman_api.get_spools_at_location_detailed(loc))
+
+
+def contents_batch(ids, spools=None):
+    """What /api/get_contents?ids=… answers (Group 52.1c): every location's
+    contents from ONE spool-list read, each list byte-identical to
+    /api/get_contents?id=<that id> (both match through
+    spoolman_api._build_location_match).
+
+      {"read_ok": True, "read_error": None, "contents": {"<id as sent>": [...]}}
+      {"read_ok": False, "read_error": "...", "contents": {}}   (200, like the
+          slot picker's read_ok: false)
+
+    The read is strict for every id at once: a Spoolman blip never answers an
+    empty box, so a single-slot box (whose Unbind used to trust an empty read)
+    stays strict inside the batch. Blank ids are skipped. `spools` is a
+    spoolman_api.SpoolListRead to share; None reads here."""
+    wanted = []
+    for raw in ids or []:
+        lid = str(raw or '').strip()
+        if lid and lid not in wanted:
+            wanted.append(lid)
+    reader = spools if spools is not None else spoolman_api.SpoolListRead()
+    listed = reader.get() if wanted else []
+    if listed is None:
+        state.logger.warning(f"get_contents ids={wanted}: {reader.error}")
+        return {"read_ok": False, "read_error": f"couldn't read Spoolman ({reader.error})", "contents": {}}
+    buckets = spoolman_api.bucket_spools_by_location(wanted, spools=listed)
+    return {"read_ok": True, "read_error": None,
+            "contents": {lid: buckets.get(lid.upper(), []) for lid in wanted}}
 
 @app.route('/api/spool_details', methods=['GET'])
 def api_spool_details():
