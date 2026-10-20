@@ -324,6 +324,24 @@ def _pulse_section_manage(loc_id, spools=None):
     }
 
 
+def _pulse_spool_read(reader):
+    """What the tick's one spool-list read came to (Group 52 review, reads-1),
+    carried beside the sections as `spool_read`: {'ok': True, 'error': None},
+    or {'ok': False, 'error': why} when Spoolman didn't answer.
+
+    The locations and printer_status sections keep their usual shape either
+    way: a failed read counts every box 0/N and leaves every head empty, which
+    a page that doesn't read this key draws as before. A page that reads it
+    keeps the counts and tiles it drew and says Spoolman didn't answer. It is a
+    sibling key, never one inside printer_status, because the widget and
+    _notePrinterStatesForFastPoll read every printer_status key as a printer's
+    name. Call it only after a section has read (`reader.reads`): get() then
+    answers the list it already has and reads nothing."""
+    ok = reader.get() is not None
+    return {'ok': ok,
+            'error': None if ok else (reader.error or "Spoolman's spool list couldn't be read")}
+
+
 def _pulse_section_label_backlog(spools=None):
     """The 🏷️ Backlog button's count (Group 52.1a), from the tick's shared spool
     list plus one filament read: the page used to poll
@@ -392,7 +410,9 @@ def _pulse_section_printer_status(spools=None):
         # Group 52.1a: the tick's shared list. A failed read buckets nothing,
         # every head empty, as the fail-open read did before; answering
         # {'error'} instead would send the widget to its per-toolhead fan-out
-        # (one more whole-list read per head) just when Spoolman is slow.
+        # (one more whole-list read per head) just when Spoolman is slow. The
+        # pulse says the read failed in its sibling `spool_read` key (reads-1),
+        # so the widget keeps the tiles it drew instead of drawing these empties.
         spools_by_tid = spoolman_api.bucket_spools_by_location(all_tids, spools=spools.get() or [])
 
     def fetch_for_printer(item):
@@ -463,7 +483,10 @@ def api_dashboard_pulse():
     Returns: {section_name: payload, ...}. Sections that error
     individually return {"error": "..."} in their slot; the response
     as a whole stays 200 so a partial failure doesn't blank the
-    dashboard.
+    dashboard. When a section read the spool list, `spool_read`
+    ({ok, error}) says whether that one read worked (reads-1): on a
+    failed read the locations counts and the printer_status heads are
+    zero / empty because nothing was read, not because nothing is there.
     """
     raw_include = (request.args.get('include') or '').strip()
     requested = set(s.strip().lower() for s in raw_include.split(',') if s.strip())
@@ -547,5 +570,10 @@ def api_dashboard_pulse():
             out['spools_refresh'] = logic.get_live_spools_data(refresh_spool_ids)
         except Exception as e:
             out['spools_refresh'] = {'error': str(e)}
+
+    # reads-1: say what the shared read came to, once, for every section that
+    # used it. A tick whose sections read nothing carries no `spool_read`.
+    if tick_spools.reads:
+        out['spool_read'] = _pulse_spool_read(tick_spools)
 
     return jsonify(out)

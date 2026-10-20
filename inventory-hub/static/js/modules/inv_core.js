@@ -1416,7 +1416,99 @@ window.buildLocationTree = function buildLocationTree(rows, opts) {
 // L206: split fetch + render so the bulk-pulse dispatcher can hand
 // pre-fetched data into _renderLocationsPayload without another round-trip.
 let _fetchLocationsInflight = false;
-const _renderLocationsPayload = (d) => {
+
+// --- reads-1 (Group 52 review): "Spoolman didn't answer" instead of 0/N ------
+// The table's counts come from Spoolman's spool list. When that read fails the
+// server still answers every row, each counted 0 (it read nothing), and says so
+// beside them: the heartbeat's `spool_read` ({ok, error}) or /api/locations'
+// X-FCC-Spool-Read header. A failed read keeps the counts each row showed after
+// the last read that worked, marks a row with none as "?" (never a confident
+// 0/N "empty"), and shows #loc-read-notice; the next good read redraws the
+// counts and hides it. An answer that says nothing either way (a test, an older
+// server) draws as before. Same look as #manage-read-notice (Group 52.1b).
+let _locLastCounts = null;   // Map(upper-cased LocationID -> {Occupancy, OccupancyRaw}), or null
+const _locKey = (r) => String(r && r.LocationID != null ? r.LocationID : '').toUpperCase();
+const _rememberLocCounts = (rows) => {
+    const m = new Map();
+    rows.forEach(r => {
+        if (!r || typeof r !== 'object') return;
+        m.set(_locKey(r), { Occupancy: r.Occupancy, OccupancyRaw: r.OccupancyRaw });
+    });
+    _locLastCounts = m;
+};
+// Copies of `rows` carrying the last counts read; `kept` / `unread` count the
+// rows that had one / had none. Keys are assigned in place (never deleted and
+// re-added), so a row kept unchanged serializes exactly as it did and the
+// table's no-wiggle hash skips the redraw.
+const _keepLastLocCounts = (rows) => {
+    let kept = 0, unread = 0;
+    const out = rows.map(r => {
+        if (!r || typeof r !== 'object') return r;
+        const last = _locLastCounts && _locLastCounts.get(_locKey(r));
+        const row = { ...r };
+        if (last) {
+            kept++;
+            row.Occupancy = last.Occupancy;
+            if (last.OccupancyRaw === undefined) delete row.OccupancyRaw;
+            else row.OccupancyRaw = last.OccupancyRaw;
+        } else {
+            // '--' to every other reader (the Location Manager's title shows no
+            // count for it); the table draws it as "?".
+            unread++;
+            row.Occupancy = '--';
+            if ('OccupancyRaw' in row) row.OccupancyRaw = null;
+            row._countUnread = true;
+        }
+        return row;
+    });
+    return { rows: out, kept, unread };
+};
+const _locReadNoticeEl = () => {
+    let el = document.getElementById('loc-read-notice');
+    if (el) return el;
+    const table = document.getElementById('location-table');
+    const wrap = (table && table.closest) ? (table.closest('.table-responsive') || table.closest('table')) : null;
+    if (!wrap || !wrap.parentNode) return null;
+    el = document.createElement('div');
+    el.id = 'loc-read-notice';
+    el.setAttribute('role', 'status');
+    el.setAttribute('aria-live', 'polite');
+    el.style.cssText = 'display:none; background:#2b2200; color:#ffd54a; border:1px solid #ffd54a;'
+        + ' border-radius:6px; padding:8px 12px; margin:10px 16px; font-weight:bold;';
+    wrap.parentNode.insertBefore(el, wrap);
+    return el;
+};
+const _showLocReadFailure = (kept, unread, why) => {
+    const el = _locReadNoticeEl();
+    if (!el) return;
+    const text = "⚠️ Spoolman didn't answer, so FCC couldn't count the spools just now."
+        + (kept ? ' These counts are from its last answer.' : '')
+        + (unread ? " A ? is a count it couldn't read." : '')
+        + ' It tries again every few seconds.';
+    // Only on a change: an aria-live region re-announces a rewrite.
+    if (el.textContent !== text) el.textContent = text;
+    el.title = why ? String(why) : '';
+    el.style.display = 'block';
+};
+const _clearLocReadFailure = () => {
+    const el = document.getElementById('loc-read-notice');
+    if (!el) return;
+    el.style.display = 'none';
+    el.textContent = '';
+    el.title = '';
+};
+// What /api/locations' header says about its counts: {ok}, or undefined when
+// it says nothing.
+const _locationsReadFromHeaders = (r) => {
+    let h = null;
+    try { h = (r && r.headers && typeof r.headers.get === 'function') ? r.headers.get('X-FCC-Spool-Read') : null; }
+    catch (e) { h = null; }
+    if (h === 'failed') return { ok: false, error: null };
+    if (h === 'ok') return { ok: true, error: null };
+    return undefined;
+};
+
+const _renderLocationsPayload = (d, read) => {
     if (!d) return;
     // The bulk endpoint can pass {error: ...} when locations.json is
     // corrupt — surface to console and bail out (the locations table
@@ -1424,6 +1516,16 @@ const _renderLocationsPayload = (d) => {
     if (!Array.isArray(d)) {
         if (d && d.error) console.warn("locations payload error:", d.error);
         return;
+    }
+    // reads-1: a read that failed keeps the last counts; one that worked is
+    // remembered; one that says nothing draws as before.
+    if (read && read.ok === false) {
+        const kept = _keepLastLocCounts(d);
+        d = kept.rows;
+        _showLocReadFailure(kept.kept > 0, kept.unread > 0, read.error);
+    } else {
+        if (read && read.ok === true) _rememberLocCounts(d);
+        _clearLocReadFailure();
     }
     // The body below was previously the entire .then() callback of
     // fetchLocations. Pulled out as-is so the legacy fetch path and the
@@ -1586,7 +1688,11 @@ const _renderLocationsPayload = (d) => {
                     let statusHtml = '';
                     let occColor = '#fff'; // Default White (Under Capacity)
 
-                    if (l.Occupancy && l.Occupancy !== '--') {
+                    if (l._countUnread) {
+                        // reads-1: Spoolman didn't answer and this row has no
+                        // earlier count: unknown, never a confident 0/N.
+                        statusHtml = `<span class="text-pop loc-count-unread" style="font-weight:900; font-size:1.1rem; color:#ffd54a;" title="Not counted: Spoolman didn't answer">?</span>`;
+                    } else if (l.Occupancy && l.Occupancy !== '--') {
                         const parts = l.Occupancy.split('/');
                         if (parts.length === 2) {
                             const cur = parseInt(parts[0]);
@@ -1744,8 +1850,7 @@ const fetchLocations = () => {
     if (_fetchLocationsInflight) return;
     _fetchLocationsInflight = true;
     fetch('/api/locations')
-        .then(r => r.json())
-        .then(_renderLocationsPayload)
+        .then(r => r.json().then(d => _renderLocationsPayload(d, _locationsReadFromHeaders(r))))
         .catch(e => console.warn("fetchLocations failed:", e))
         .finally(() => { _fetchLocationsInflight = false; });
 };
@@ -2314,7 +2419,13 @@ const _dashboardPulseTick = () => {
                 // such a tab receives (updateLogState early-returns while paused).
                 _syncBulkMoveSignal(payload.status);
             }
-            if (payload.locations) _renderLocationsPayload(payload.locations);
+            // reads-1: `spool_read` says whether the tick's one spool-list read
+            // worked; on a failed read the locations counts and the printer
+            // heads are zero / empty only because nothing was read, so both
+            // renderers keep what they drew and say Spoolman didn't answer.
+            const spoolRead = (payload.spool_read && typeof payload.spool_read === 'object')
+                ? payload.spool_read : undefined;
+            if (payload.locations) _renderLocationsPayload(payload.locations, spoolRead);
             if (payload.manage) {
                 // Group 52.1b: only a list Spoolman really answered renders (an
                 // empty box is []); a section that couldn't read it (read_ok:
@@ -2335,7 +2446,7 @@ const _dashboardPulseTick = () => {
                 // (runs even if the widget renderer isn't mounted this tick).
                 _notePrinterStatesForFastPoll(payload.printer_status);
                 if (window.refreshPrinterStatusWidgetFromAggregate) {
-                    window.refreshPrinterStatusWidgetFromAggregate(payload.printer_status);
+                    window.refreshPrinterStatusWidgetFromAggregate(payload.printer_status, spoolRead);
                 }
             }
             if (payload.spools_refresh && window._renderSpoolsRefreshPayload) {

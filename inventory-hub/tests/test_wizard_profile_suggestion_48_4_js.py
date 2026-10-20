@@ -15,7 +15,10 @@ from __future__ import annotations
 
 import json
 
-from test_core1_return_ejectall_js import pytestmark, run_js  # noqa: F401  (pytestmark: skip without node)
+from test_core1_return_ejectall_js import pytestmark  # noqa: F401  (pytestmark: skip without node)
+# The node driver that also records document listeners, so a test can fire the
+# wizard's own 'change' listener as a browser would.
+from test_spoolman_read_load_52_js import run as run_js
 
 MODULES = ["inv_core.js", "inv_wizard.js"]
 CHOICES = ["Prusament PLA", "Prusament PLA Blend", "Sunlu PLA + 2.0", "Generic PLA"]
@@ -45,8 +48,14 @@ wizardState.extraFields = {{ filament: [
 ] }};
 wizardState.allFilaments = {json.dumps(filaments)};
 const sel = document.getElementById('wiz_fil_ef_slicer_profile');
+// The stub select keeps what it is given in `children`: list them as a real
+// select's `options`, and let an option's remove() take it out.
+Object.defineProperty(sel, 'options', {{ get: () => sel.children }});
+const __append = sel.appendChild.bind(sel);
+sel.appendChild = (c) => {{ c.remove = () => {{ sel.children = sel.children.filter(x => x !== c); }}; return __append(c); }};
 sel.value = {json.dumps(current)};
 const note = () => document.getElementById('wiz-fil-profile-note').textContent;
+const change = (el) => ((globalThis.__docListeners || {{}}).change || []).forEach(fn => fn({{ target: el }}));
 const field = (id, v) => {{ document.getElementById(id).value = v; }};
 {body}
 """)
@@ -204,3 +213,51 @@ const other = await window.wizardCommitSuggestedChoices({ extra: { slicer_profil
 return { known, other, posts: __rec.fetches.filter(f => f.method === 'POST').length };
 """)
     assert res["known"] is True and res["other"] is True and res["posts"] == 0, res
+
+
+# ---- review browser-3: a "(new, …)" option outlives its suggestion ---------------------------
+
+def test_a_new_profile_picked_again_by_hand_is_still_added_at_save(tmp_path):
+    """Picking another profile drops the suggestion (the user's own pick is
+    never replaced); picking the offered "(new, from prusament.com)" option
+    again sent a value Spoolman doesn't know, with nothing added first, and
+    every Save failed. RED on a5d8cb8."""
+    res = _run(tmp_path, """
+window.__respond = (url) => url === '/api/external/fields/add_choice' ? { body: { success: true } } : null;
+window.wizardSuggestSlicerProfile({ lookup: 'Prusament PETG', source: 'prusament.com' });
+sel.value = 'Generic PLA'; change(sel);
+sel.value = 'Prusament PETG'; change(sel);
+const ok = await window.wizardCommitSuggestedChoices({ extra: { slicer_profile: sel.value } });
+return { ok, suggestion: wizardState.profileSuggestion,
+         adds: __rec.fetches.filter(f => f.url === '/api/external/fields/add_choice').map(f => f.body),
+         choices: wizardState.extraFields.filament[0].choices, options: sel.children.map(o => o.textContent) };
+""")
+    assert res["suggestion"] is None, res          # the re-pick was the user's own
+    assert res["ok"] is True, res
+    assert res["adds"] == [{"entity_type": "filament", "key": "slicer_profile", "new_choice": "Prusament PETG"}], res
+    assert "Prusament PETG" in res["choices"], res
+    assert res["options"] == ["Prusament PETG"], res   # an ordinary choice now
+
+
+def test_a_suggestion_that_no_longer_applies_takes_its_new_option_along(tmp_path):
+    """A material change with nothing to suggest blanks the field it filled;
+    its "(new, …)" option used to stay in the list. RED on a5d8cb8."""
+    res = _run(tmp_path, """
+window.wizardSuggestSlicerProfile({ lookup: 'Prusament PETG', source: 'prusament.com' });
+const before = sel.children.map(o => o.textContent);
+field('wiz-fil-vendor-search', 'Nobody'); field('wiz-fil-material', 'ASA');
+change(document.getElementById('wiz-fil-material'));
+return { before, value: sel.value, after: sel.children.map(o => o.textContent) };
+""")
+    assert res["before"] == ["Prusament PETG (new, from prusament.com)"], res
+    assert res["value"] == "" and res["after"] == [], res
+
+
+def test_control_a_value_fcc_never_offered_is_left_to_spoolman(tmp_path):
+    """Control: only an option FCC offered as new is added; anything else that
+    isn't a choice goes to Spoolman as it is (no add_choice)."""
+    res = _run(tmp_path, """
+const ok = await window.wizardCommitSuggestedChoices({ extra: { slicer_profile: 'Someone Else PLA' } });
+return { ok, posts: __rec.fetches.filter(f => f.method === 'POST').length };
+""")
+    assert res["ok"] is True and res["posts"] == 0, res

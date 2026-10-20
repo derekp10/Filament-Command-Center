@@ -6,6 +6,20 @@
 const SpoolCardBuilder = {
 
     /**
+     * A value for an inline handler's JS, in a double-quoted HTML attribute
+     * (Group 51 review, integration-2). The browser decodes the attribute's
+     * entities BEFORE it compiles the handler, so an HTML escape alone (&#39;)
+     * let an apostrophe ("Robin's Egg Blue") end the JS string, and the 🖨️ did
+     * nothing. JSON.stringify makes the JS string; the HTML escape keeps the
+     * attribute whole.
+     */
+    jsArg(v) {
+        return JSON.stringify(String(v == null ? '' : v))
+            .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+            .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    },
+
+    /**
      * Reusable formatter for rich data extraction.
      */
     getRichInfo(item) {
@@ -36,7 +50,8 @@ const SpoolCardBuilder = {
         const locId = options.locId || '';
         const isFil = item.type === 'filament';
         const typeIcon = isFil ? '🧬' : '🧵';
-        const safeDisplay = item.display ? item.display.replace(/"/g, '&quot;').replace(/'/g, '&#39;') : '';
+        // The 🖨️ handlers' display, as a JS string (jsArg).
+        const queueDisplay = this.jsArg(item.display || '');
         // Group 40.6: the head a DEPLOYED card's spool is loaded on, for its ↩️
         // (a LocationID; anything that could break out of the onclick is dropped).
         const deployedId = String(item.deployed_to || '').replace(/[^A-Za-z0-9_.:\-]/g, '');
@@ -86,10 +101,11 @@ const SpoolCardBuilder = {
         // Group 48.3 (Derek's option B): the 📍 badge keeps opening the location,
         // and a separate ✏️ beside it moves the spool through Force Location,
         // the pair the spool window already has. A real button: Tab reaches it,
-        // Space or a click opens it (window.moveSpoolFromCard, inv_details.js).
-        const moveFrom = String(item.is_ghost ? '' : (item.location || '')).replace(/[^A-Za-z0-9_.:\-]/g, '');
+        // Space or a click opens it (window.moveSpoolFromCard, inv_details.js,
+        // which reads where the spool is: a loaded spool's card is a ghost filed
+        // at its box, so the card can't say; Group 51 review, browser-4).
         const moveBtnHTML = (from) => `<button type="button" class="btn btn-sm fcc-card-move-btn ms-1"
-            onclick="event.stopPropagation(); window.moveSpoolFromCard && window.moveSpoolFromCard(${item.id}, '${from}', '${moveFrom}')"
+            onclick="event.stopPropagation(); window.moveSpoolFromCard && window.moveSpoolFromCard(${item.id}, '${from}')"
             title="Move this spool (Force Location)" aria-label="Move spool #${item.id}">✏️</button>`;
 
 
@@ -118,7 +134,7 @@ const SpoolCardBuilder = {
                         ${!isFil && window.processScan ? `<div class="fcc-card-action-btn" onclick="event.stopPropagation(); processScan('ID:${item.id}', 'search')" title="Add to Buffer/Manage">📥</div>` : ''}
                         <div class="fcc-card-action-btn" onclick="event.stopPropagation(); ${isFil ? `openFilamentDetails(${item.id})` : `openSpoolDetails(${item.id})`}" title="View Details">🔍</div>
                         ${!isFil ? `<div class="fcc-card-action-btn" onclick="event.stopPropagation(); window.openEditWizard(${item.id});" title="Edit Spool">✏️</div>` : ''}
-                        ${window.addToQueue ? `<div class="fcc-card-action-btn" onclick="event.stopPropagation(); window.addToQueue({ id: ${item.id}, type: '${isFil ? 'filament' : 'spool'}', display: '${safeDisplay}' }); showToast('Added to Print Queue');" title="Add to Print Queue">🖨️</div>` : ''}
+                        ${window.addToQueue ? `<div class="fcc-card-action-btn" onclick="event.stopPropagation(); window.addToQueue({ id: ${item.id}, type: '${isFil ? 'filament' : 'spool'}', display: ${queueDisplay} }); showToast('Added to Print Queue');" title="Add to Print Queue">🖨️</div>` : ''}
                         ${labelStateIcon}
                     </div>
                 `;
@@ -153,7 +169,7 @@ const SpoolCardBuilder = {
             // Unslotted items: primary card-body click = Pick Up (adds to buffer). Details stays on the 🔍 button.
             actionTarget = `ejectSpool(${item.id}, '${locId}', true)`;
 
-            const printHoverClick = window.addToQueue ? `event.stopPropagation(); window.addToQueue({ id: ${item.id}, type: 'spool', display: '${safeDisplay}' }); showToast('Added to Print Queue');` : '';
+            const printHoverClick = window.addToQueue ? `event.stopPropagation(); window.addToQueue({ id: ${item.id}, type: 'spool', display: ${queueDisplay} }); showToast('Added to Print Queue');` : '';
             
             // Add top-right fast-actions (Always attached for both ghosts and slotted array)
             navActionsHTML = `
@@ -214,7 +230,7 @@ const SpoolCardBuilder = {
             outerClasses += 'slot-btn full ';
             actionTarget = `handleSlotInteraction(${options.slotNum})`;
             
-            const printHoverClick = typeof addToQueue !== 'undefined' ? `event.stopPropagation(); addToQueue({ id: ${item.id}, type: 'spool', display: '${safeDisplay}' }); showToast('Added to Print Queue');` : '';
+            const printHoverClick = typeof addToQueue !== 'undefined' ? `event.stopPropagation(); addToQueue({ id: ${item.id}, type: 'spool', display: ${queueDisplay} }); showToast('Added to Print Queue');` : '';
             
             if (item.is_ghost) {
                 // Small variant of deployed block (Return block)
@@ -376,7 +392,7 @@ const SpoolCardBuilder = {
                 ? `<div class="text-warning small text-end" style="font-size:0.8rem;">→ ${toolhead}</div>`
                 : '';
             const printHover = window.addToQueue
-                ? `event.stopPropagation(); window.addToQueue({ id: ${item.id}, type: 'spool', display: '${safeDisplay}' }); showToast('Added to Print Queue');`
+                ? `event.stopPropagation(); window.addToQueue({ id: ${item.id}, type: 'spool', display: ${queueDisplay} }); showToast('Added to Print Queue');`
                 : '';
             // Compact name: prefer color name, falling back to display minus #ID.
             const compactName = info.line3
@@ -424,7 +440,7 @@ const SpoolCardBuilder = {
             outerClasses += `buffer-item ${options.isFirst ? 'active-item' : ''} `;
             actionTarget = `openSpoolDetails(${item.id})`;
             
-            const printHoverClick = typeof addToQueue !== 'undefined' ? `event.stopPropagation(); addToQueue({ id: ${item.id}, type: 'spool', display: '${safeDisplay}' }); showToast('Added to Print Queue');` : '';
+            const printHoverClick = typeof addToQueue !== 'undefined' ? `event.stopPropagation(); addToQueue({ id: ${item.id}, type: 'spool', display: ${queueDisplay} }); showToast('Added to Print Queue');` : '';
             
             navActionsHTML = `
                 <div class="d-flex gap-3 align-items-center" style="z-index: 10; margin-right: 5px;">

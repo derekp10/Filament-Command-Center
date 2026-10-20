@@ -2109,6 +2109,17 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
                     });
                     return;
                 }
+                if (res.blocked_reason === 'residents_changed' || res.blocked_reason === 'occupant_changed') {
+                    // Group 51.6 / 51.7: the head or slot holds a spool the picker
+                    // never showed. Nothing moved; 'cancelled' opens the picker
+                    // again (window.placeOneWithPicker), drawn from fresh data.
+                    // Checked before 'success': step 6's occupant_changed answers
+                    // status 'success' with the spool in `failures` (review engine-2).
+                    showToast(`⚠️ ${res.msg || ((res.failures || {})[String((payload.spools || spoolIds)[0])])
+                        || 'That place changed since you picked it: pick again'}`, 'warning', 7000);
+                    end('cancelled', res);
+                    return;
+                }
                 if (res.status === 'success') {
                     // A rejected write still answers status 'success' and names the
                     // spool in res.failures. Every spool used to leave the buffer
@@ -2174,12 +2185,6 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
                     // the scan-assignment path above.
                     document.dispatchEvent(new CustomEvent('inventory:locations-changed'));
                     end(landed, res);
-                } else if (res.blocked_reason === 'residents_changed' || res.blocked_reason === 'occupant_changed') {
-                    // Group 51.6 / 51.7: the head or slot holds a spool the picker
-                    // never showed. Nothing moved; 'cancelled' opens the picker
-                    // again (window.placeOneWithPicker), drawn from fresh data.
-                    showToast(`⚠️ ${res.msg || 'That place changed since you picked it: pick again'}`, 'warning', 7000);
-                    end('cancelled', res);
                 } else {
                     showToast(res.msg || 'Assign failed', 'error', 7000);
                     // A spool the move had already handed to the buffer (a head's

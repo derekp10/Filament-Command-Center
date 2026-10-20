@@ -1370,12 +1370,21 @@ def api_identify_scan():
             }), 200
 
         spool_id = int(first_spool['id'])
+        # Group 51 review (engine-3): a screen that showed this slot EMPTY (the
+        # Quick-Swap DEPOSIT tile) says so (`shown_empty: true`): a multi-slot
+        # box's slot then goes as `picked_slot`, filled only while it is still
+        # free, never unseating a spool filed there since the tile was drawn. A
+        # blind scan of a slot's label sends nothing: an explicit slot, as
+        # always. A single-slot box keeps its own slot-1 rule either way.
+        shown_empty = ((request.json or {}).get('shown_empty') is True
+                       and tgt_info.get('Type') == locations_db.DRYER_BOX_TYPE and max_slots > 1)
+        slot_kw = {'picked_slot': slot} if shown_empty else {'target_slot': slot}
         # Slot-QR scans pass the caller's confirm through: the heads whose
         # warning the user saw (Group 39.1). Frontend slot-QR paths pre-probe
         # too, but the backend check is the authoritative safety net — if the
         # printer went active between the probe and the scan, we still bail.
         move_result = logic.perform_smart_move(
-            target, [spool_id], target_slot=slot, origin='slot_qr_scan',
+            target, [spool_id], **slot_kw, origin='slot_qr_scan',
             # Group 40.0c: "Just store it" replays the scan with auto_deploy
             # false, and "Load it instead" with the head in confirmed_fed_heads.
             auto_deploy=logic.auto_deploy_requested(request.json),
@@ -1430,10 +1439,13 @@ def api_identify_scan():
         # answered assignment_done although the spool never moved.
         move_failed = logic.smart_move_failure(move_result, spool_id)
         if move_failed:
-            state.add_log_entry(
-                f"❌ Spool #{spool_id} was NOT loaded into <b>{target}:SLOT:{slot}</b> — {move_failed}",
-                "ERROR", "ff4444"
-            )
+            # A slot shown empty and filled meanwhile (engine-3) is a race, not an
+            # error: the engine already wrote its WARNING line.
+            if not (isinstance(move_result, dict) and move_result.get('blocked_reason') == 'picked_slot_taken'):
+                state.add_log_entry(
+                    f"❌ Spool #{spool_id} was NOT loaded into <b>{target}:SLOT:{slot}</b> — {move_failed}",
+                    "ERROR", "ff4444"
+                )
             return jsonify({
                 "type": "assignment",
                 "action": "assignment_failed",

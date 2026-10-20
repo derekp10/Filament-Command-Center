@@ -1,5 +1,82 @@
 # **Done**
 
+* **[2026-10-19 — 🔒 Group 51 Move & Archive Integrity DONE → `feature/group-51-move-archive-integrity` (merged to `dev` with the bundle)]** — A move does what the screen showed, and nothing else; built in the 2026-10-19 bundle run with Groups 48, 49 and 52 ([plan](docs/agent_docs/tasks/bundle-2026-10-19.md); [handoff](docs/agent_docs/tasks/session-handoff-2026-10-14.md), "Bundle run"); one review over the bundle (`wf_ee3ec73c-b42`: 17 findings, 14 confirmed, none red, all fixed), offline and browser runs green, then the one full sweep before `dev` ([task file](docs/agent_docs/tasks/51-move-archive-integrity.md)).
+
+  * ✅ **51.1 — only a weight write is a refill.** A move, an `ID:` label scan or any location- or extra-only write leaves a spool archived by hand archived, where the write put it (Derek's 43.2 rule). Review follow-ups: an archived spool is never loaded onto a head (`blocked_reason: archived`), and a `remaining_weight` weigh-back counts as a weight write again.
+  * ✅ **51.2–51.4 — Return's "Stored only" tiles; `blocked_reason: slot_claimed` at both ghost-guard refusals; one slot form in the 13.6 free-feed compare.**
+    > 1. **Moving a hand-archived spool unarchives it.** `spoolman_api.update_spool`'s refill edge treats any write
+    >    without `archived: True` as a refill, so an engine move (Force Location, a scan, the wizard) of a spool archived
+    >    by hand that still has weight left un-archives it. The wizard re-archives after its own direct move; a move
+    >    answered later on `/api/smart_move` doesn't. Fix in `logic._move_write` (send `archived: True` for an archived
+    >    spool) or in `update_spool` (a location-only write is not a refill). Found by Group 40's wizard review fixer;
+    >    it predates Group 40.
+    > 2. **"Stored only" on Return's slot chooser.** A slot that feeds a different head shows that head and its spool,
+    >    but Return only stores there; the tile could say so (a small `slot_picker.js` change). _(40.6 builder's question 3;
+    >    Claude can do it.)_
+    > 3. **The ghost-guard refusal has no `blocked_reason`.** The wizard's `_pick_refused` recognises "<box> slot <n> still
+    >    holds #…" by its wording (pinned by `test_a_named_slot_whose_own_spool_runs_on_a_head_is_a_refused_pick`); a
+    >    `blocked_reason: slot_claimed` at both refusal sites in `logic.py` (the question path and step 6) would be cleaner.
+  * ✅ **51.5–51.7 — the Quick-Swap tap, the Printer picker's head pick and every Swap / Overwrite send what they showed** (`expected_spool`, `expected_residents`, `expected_occupant`; only a spool nobody was shown is protected). Review follow-ups: a slot drawn empty (the grid's empty tile, the Quick-Swap deposit) is filled only while still free, and a doubled slot names both spools.
+    > * **🟡 Multi-user awareness: a confirm should re-ask when what it showed changed.** _(Derek, 2026-10-14.)_ "One user
+    >   might not be aware" that another changed something while a dialog was open: e.g. you confirm loading via
+    >   LR-MDB-1 slot 1 onto XL-1, but meanwhile someone re-points slot 1 to XL-2 in the Feeds editor. You put a spool in
+    >   slot 1 because a slicer file depends on it, so you want to know. The first case is built into Group 40.3 (the Yes
+    >   carries the head it was about; the server asks again if the slot now feeds another head, even an empty idle one).
+    >   Audit the other doors for the same pattern (Quick-Swap, Return, Bulk Move commit, the wizard). _(→ **Group 51**
+    >   (51.5–51.7): the Quick-Swap tap, the Printer picker's head pick and the grid's Swap send only part of what they
+    >   showed; Return and the wizard already send it. The Bulk Move commit waits for Bulk Moves (the 🔀 Bulk Move polish
+    >   item).)_
+
+* **[2026-10-19 — 🃏 Group 48 Spool Cards & Label Queue DONE → `feature/groups-48-49-cards-restock` (merged to `dev` with the bundle)]** — Derek's own asks, frontend only, no new write path; built in the 2026-10-19 bundle run with Groups 48, 49 and 52 ([plan](docs/agent_docs/tasks/bundle-2026-10-19.md); [handoff](docs/agent_docs/tasks/session-handoff-2026-10-14.md), "Bundle run"); one review over the bundle (`wf_ee3ec73c-b42`: 17 findings, 14 confirmed, none red, all fixed), offline and browser runs green, then the one full sweep before `dev` ([task file](docs/agent_docs/tasks/48-spool-cards-label-queue.md)).
+
+  * ✅ **48.1 — every label-queue row is drawn like the backlog's** (colour swatch, Brand - Material - Color), read live when the queue opens.
+    > * We should standardize the data shown in the label Queue. SOme items added by button, show minimum amout of data. (Spools on the id, not much else, samples show more.) anything added to the queue from the lable backlog is added using better identifying text/info. We should standardize all print lable functions to try and match the backlog's queue text/info setup, so its easier to read what is what. (just listing a spool id doesn't tell me what color it is, so it's hard to tell at a glance if what I added and am looking at was what I was just working with.) _(→ **Group 48.1**: every queued row drawn like the backlog's, from live data when the queue opens.)_
+  * ✅ **48.2 — the spool window shows the filament's slicer profile**, read-only, "(from the filament)".
+    > * **Show the filament's slicer profile on the spool details card.** _(Derek, 2026-10-19; → **Group 48.2**: read-only,
+    >   and it says it comes from the filament, so you know to edit it there (his answer).)_ *"I've had a few instances
+    >   where I wanted to see what spool profile I should use with some filaments, only to find that I have to open the spool,
+    >   click the swatch button, then find the profile suggestion there. If we could just have that data on the spool (sourced
+    >   from the filament data) then that would save a step."* Today the profile is the filament's `slicer_profile` extra, shown
+    >   (and editable with the ✏️) only on the filament fact card (`inv_details.js`).
+  * ✅ **48.3 — a ✏️ beside a search or buffer card's 📍 badge moves the spool through Force Location** (the badge keeps opening the location). Review follow-up: it reads where the spool is first, so a loaded spool's card opens on its head, never on Unassigned.
+    > * **Click a spool card's location to move the spool.** _(Derek, 2026-10-19.)_ *"Allow you to click on the location
+    >   portion of the buffer label (or any label that uses the code base) to allow you to move the spool. Currently you have
+    >   to open the spool display, and then click the pencil button to change its location (if doing it manually) and
+    >   sometimes I just want to click the location part of the info card to edit it. Like how updating weight works from the
+    >   buffer/display card."* Today a card's weight opens Quick Weigh (`window.openQuickWeigh`, `ui_builder.js`); its location
+    >   part does nothing. The natural target is Force Location's flow, which opens the box / printer pickers since Group 40.4.
+    >   _(→ **Group 48.3**. Derek, 2026-10-19: the 📍 badge keeps opening the location; **a separate ✏️ beside it moves the
+    >   spool** (the pair the spool window already has). Correction: the badge isn't dead, it opens that location in the
+    >   Location Manager.)_
+  * ✅ **48.4 — a blank Slicer Profile is filled in while a filament is made**: prusament.com's product line ("Prusament PLA Blend"), his own spelling when it is already a choice, else a new choice added at Save; otherwise the profile his own filaments of that brand + material use (Derek's 19:45 answer). The later steps are a standalone item ("Slicer profiles: the next steps after Group 48.4").
+    > * **Fill in the slicer profile for well-documented filaments (a Prusament spool scan, for a start).** _(Derek,
+    >   2026-10-19, while updating profile data on the swatches of some Prusament.)_ _(→ **Group 48.4**: suggested from brand
+    >   + material, PrusaSlicer names only for now.)_ *"If possible, we should try and
+    >   determine what profile should be used, at least with well documented spool/filament creations based on things like
+    >   prusament spool barcodes. It gets everything (or at least everything I have noticed) but we miss out on that aspect of
+    >   data, that we might just be able to do for the user."* Today a Prusament scan (`external_parsers.py`, the
+    >   `prusament.com/spool/…` parser) fills material, color, weights, length and manufacture date, but never
+    >   `slicer_profile`; the wizard's "auto-assign" (Group 10.5) only selects a profile you just added as a new choice.
+    >   Ideas, none decided: suggest the profile your other filaments of the same brand and material already use, or a small
+    >   brand + material → profile table you can edit. Goes with the item above (the profile on the spool card).
+    >   **Caveat (Derek, same day):** the profile names are PrusaSlicer's (its default profiles, or a custom one he makes
+    >   when needed), because he runs Prusa printers; they don't line up with other printer brands and their slicers. A
+    >   future thing for anyone not all-in on one brand, or using a slicer other than PrusaSlicer: build the Prusa case
+    >   first, but don't assume one profile name fits every slicer (a later version might keep a profile per slicer).
+
+* **[2026-10-19 — 🔍 Group 49 Find & Restock DONE → `feature/group-49-find-and-restock` via `feature/groups-48-49-cards-restock` (merged to `dev` with the bundle)]** — Built by a background builder and merged into Group 48's branch; built in the 2026-10-19 bundle run with Groups 48, 49 and 52 ([plan](docs/agent_docs/tasks/bundle-2026-10-19.md); [handoff](docs/agent_docs/tasks/session-handoff-2026-10-14.md), "Bundle run"); one review over the bundle (`wf_ee3ec73c-b42`: 17 findings, 14 confirmed, none red, all fixed), offline and browser runs green, then the one full sweep before `dev` ([task file](docs/agent_docs/tasks/49-find-and-restock.md)).
+
+  * ✅ **49.1 — filament attributes are searchable text**: "infill" finds his For Infill filaments (no dropdown for now).
+    > * Adding attributes in search to help find certain types would be useful. I was trying to find the "For Infill" filaments, but couldn't seem to find them using the search text box. so either a dropdown, or being able to use them in the search text. _(→ **Group 49.1**: attribute words become searchable text; no dropdown for now.)_
+  * ✅ **49.2 — a ⚠️ Low stock list per filament and one Activity Log warning.** Settings threshold `low_stock_g` (default 250 g); Low, Out (had spools, none in stock), One-off (an attribute keeps a filament off Out), Buy More links; `GET /api/stock_report`. One WARNING when a print, a 🛑 Review Apply or a weigh-out takes a filament under the line or out.
+    > * Perhaps a warning system, or report system for low or out filaments? _(→ **Group 49.2**. Derek, 2026-10-19: a ⚠️ Low-stock list per filament (a Settings threshold, default 250 g; "out" = no stock left; Buy More links) **plus one Activity Log warning** when a print or a weigh-out drops a filament under the threshold. The print-start check, "#99 has ~34 g, this print needs ~61 g", comes later with Project Color Loadout, estimated from the `.3mf`.)_
+
+* **[2026-10-19 — 🐢 Group 52 Spoolman Read Load & Honest Empties DONE → `feature/group-52-spoolman-read-load` (merged to `dev` with the bundle)]** — Built by a background builder; built in the 2026-10-19 bundle run with Groups 48, 49 and 52 ([plan](docs/agent_docs/tasks/bundle-2026-10-19.md); [handoff](docs/agent_docs/tasks/session-handoff-2026-10-14.md), "Bundle run"); one review over the bundle (`wf_ee3ec73c-b42`: 17 findings, 14 confirmed, none red, all fixed), offline and browser runs green, then the one full sweep before `dev` ([task file](docs/agent_docs/tasks/52-spoolman-read-load.md)).
+
+  * ✅ **52.1 — one spool-list read per heartbeat** (4 spool reads + 1 filament read per busy tick → 1 + 1 on dev), **"Spoolman didn't answer" instead of an empty box** (the Location Manager, the Quick-Swap grid; since the review, reads-1, the Printer Status band and the Location List keep what they drew), one batched read for the Quick-Swap grid (`/api/get_contents?ids=`), and the 🏷️ Backlog count rides the heartbeat.
+    > * **🐢 FCC re-reads Spoolman's whole spool list for every Location Manager open, Quick-Swap grid box and dashboard-pulse section.** _(Found 2026-10-13 by the Group 45 reconcile, from `hub.log`.)_ There are 43 call sites of `spoolman_api.get_spools_at_location*`, each a full `GET /api/v1/spool` (~213 KB, 60–80 ms when quiet). Under load they pile up: the 2026-10-13 test sweeps logged 8,577 five-second read timeouts. After a timeout the read silently fails open to an empty list, so in daily use a slow Spoolman shows an empty box or toolhead instead of an error. Ideas: a short shared cache with single-flight for display-only reads (never the strict reads that moves rely on), and a visible "Spoolman didn't answer" state where a list came back empty because of a timeout. **2026-10-14:** the worst repeat reader is gone: the Printer Status widget re-read the list once per toolhead on every 5 s heartbeat and every page load (13 reads per tick on 13 heads, prod included); it now uses the heartbeat's own section (Group 45.8). Still per tick: one read for the pulse's printer_status and, while the dashboard is open, `/api/print_queue/pending`. _(→ **Group 52.1**, 2026-10-19: one spool-list read per heartbeat, "Spoolman didn't answer" instead of an empty box, and one batched read for the Quick-Swap grid.)_ Group 45.8 handled the test side.
+  * ✅ **52.2 — the pre-merge extras read gets a second try** 0.5 s later (a timeout, a 5xx or a garbled answer; a 4xx refuses at once), inside the `spoolman_api.requests` seam. (Group 36 follow-up (1); (2) and (3) stay with Group 54.)
+
 * **[2026-10-19 — 🧹 `/refresh-groups`: three old items closed on Derek's answers (docs only)]** — The 2026-10-19 refresh ([decisions](docs/agent_docs/tasks/refresh-2026-10-19.md); its dated note in [working-groups.md](docs/agent_docs/working-groups.md)) asked Derek about eight old open-ended items. He closed one and turned two into standing orders in CLAUDE.md's Project Conventions. The other five stay in `Feature-Buglist.md`: the Prusa metrics exporter shelved in place; help per dialog moved into Group 55 (in-app help); field propagation kept, parked; custom location Types kept open; INDX heads without labels kept until his F2 check and the holders setup. The same refresh filed Groups 48–55.
 
   * ✅ **Pair legacy-ID spools with their Spoolman IDs: closed (Derek, 2026-10-19: the duplicate picker does it).** A legacy ID is a filament's `external_id`, so every spool of a bulk-imported filament shares it. A legacy scan (`LEG:` / `LEGACY:` / `OLD:`, a URL, or a bare number) with 2+ matches answers `ambiguous` (`logic.py:912-953`, `:1020-1033`; `routes_scan.py:1122-1132`), and the duplicate picker lists each spool with its weight and location and offers ✓ Use selected, 🖨️ Print new label (queues an `ID:` label so that physical spool gets its own id, `duplicate_picker.js:105-128`) and ➕ Add new spool (`:56-67`; Item 3.6 + Group 17.4). Its working-groups NOT-Grouped row ("Legacy ID assignment tool") was pruned with it.

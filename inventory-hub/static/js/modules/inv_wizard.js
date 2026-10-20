@@ -2820,7 +2820,16 @@ const _setProfileNote = (text) => {
     note.style.display = text ? '' : 'none';
 };
 
+// Drops the options FCC added for earlier suggestions ("… (new, from …)"),
+// except `keep`'s: a suggestion that no longer applies takes its option along.
+const _dropNewChoiceOptions = (sel, keep = null) => {
+    Array.from((sel && sel.options) || []).forEach(o => {
+        if (o.dataset && o.dataset.fccNewChoice === '1' && o.value !== keep) o.remove();
+    });
+};
+
 const _selectProfile = (sel, value, isNew, source) => {
+    _dropNewChoiceOptions(sel, isNew ? value : null);
     if (isNew && !Array.from(sel.options || []).some(o => o.value === value)) {
         const opt = document.createElement('option');
         opt.value = value;
@@ -2895,6 +2904,7 @@ window.wizardSuggestSlicerProfile = ({ lookup = '', source = '' } = {}) => {
         _settingProfile = true;
         try { sel.value = ''; } finally { _settingProfile = false; }
         delete sel.dataset.fccSuggested;
+        _dropNewChoiceOptions(sel);
     }
     wizardState.profileSuggestion = null;
     _setProfileNote(own && own.tie
@@ -2905,23 +2915,35 @@ window.wizardSuggestSlicerProfile = ({ lookup = '', source = '' } = {}) => {
 // Save's step before it writes (Group 48.4): a suggested profile that isn't one
 // of the choices yet is added to Spoolman's list first (a choice field refuses
 // an unknown value). False when that failed: the save stops and says why.
+// Decided from what Save SENDS (Group 51 review, browser-3): the value is one
+// FCC offered as new (its option says "(new, from …)") and still isn't a
+// choice. Keyed on the suggestion, a "(new, …)" option picked again by hand
+// after the user had picked another (which drops the suggestion) was sent
+// without being added, and Spoolman refused every Save.
 window.wizardCommitSuggestedChoices = async (fPayload) => {
-    const s = wizardState.profileSuggestion;
     const sent = fPayload && fPayload.extra ? _unquoteProfile(fPayload.extra[_PROFILE_KEY]) : '';
-    if (!s || !s.isNew || !sent || sent !== s.value) return true;
+    if (!sent || _profileChoices().some(c => c.toLowerCase() === sent.toLowerCase())) return true;
+    const sel = _profileSelect();
+    const offered = Array.from((sel && sel.options) || [])
+        .find(o => o.value === sent && o.dataset && o.dataset.fccNewChoice === '1');
+    if (!offered) return true;
     try {
         const r = await fetch('/api/external/fields/add_choice', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ entity_type: 'filament', key: _PROFILE_KEY, new_choice: s.value }),
+            body: JSON.stringify({ entity_type: 'filament', key: _PROFILE_KEY, new_choice: sent }),
         });
         const d = await r.json();
         if (!r.ok || !d || d.success === false) throw new Error((d && (d.msg || d.error)) || `HTTP ${r.status}`);
         const field = _profileField();
-        if (field && Array.isArray(field.choices) && !field.choices.includes(s.value)) field.choices.push(s.value);
-        s.isNew = false;
+        if (field && Array.isArray(field.choices) && !field.choices.includes(sent)) field.choices.push(sent);
+        // A choice now: its option is an ordinary one.
+        delete offered.dataset.fccNewChoice;
+        offered.textContent = sent;
+        const s = wizardState.profileSuggestion;
+        if (s && s.value === sent) s.isNew = false;
         return true;
     } catch (e) {
-        const msg = `Couldn't add the slicer profile "${s.value}" to Spoolman's list (${(e && e.message) || e}), `
+        const msg = `Couldn't add the slicer profile "${sent}" to Spoolman's list (${(e && e.message) || e}), `
             + `so nothing was saved. Pick a profile from the list, or Save again.`;
         if (typeof showToast === 'function') showToast(`❌ ${msg}`, 'error', 7000);
         const status = document.getElementById('wiz-status-msg');
@@ -3571,6 +3593,25 @@ const _wizardUnassignQuestion = (answer, ctx) => {
     });
 };
 
+// Group 40.7 review (wizard-refused-pick-resent): a refusal of the held picker
+// choice itself (the slot was taken meanwhile, …) would come back on every
+// Save, so the choice is dropped and the field shows its place again; the next
+// Save opens that place's picker (window.wizardSaveNeedsPicker). Returns the
+// status line's tail, or '' when no choice was held and sent.
+const _wizDropRefusedPick = (ctx) => {
+    const held = ctx.placement || null;
+    const sent = !!(ctx.fields && Object.keys(ctx.fields).length);
+    if (!held || !sent) return '';
+    const place = held.via || held.location;
+    if (wizardState.pendingPlacement === held) {
+        wizardState.pendingPlacement = null;
+        window.wizardShowLocation(place);
+    }
+    // A box's slot, or a printer's toolhead (a head's choice is held via its printer).
+    const what = _wizLocKey(held.location) === _wizLocKey(place) ? 'a slot' : 'a toolhead';
+    return ` Pick ${what} again: Save opens the picker for ${place}.`;
+};
+
 // An edit whose other changes saved but whose Location didn't move yet: the
 // server's question (asked here, then replayed on its door) or its refusal
 // (a 7 s error). `ctx`: {spoolId, location, fields, placement, host,
@@ -3587,27 +3628,28 @@ window.wizardEditLocationNotMoved = (data, ctx) => {
     if (asks) {
         const q = Object.assign({ origin: 'wizard_edit' }, ctx);
         if (_wizLocKey(ctx.location) === '') _wizardUnassignQuestion(lr, q);
-        else _wizardMoveQuestion(lr, q);
+        else {
+            // Group 51 review (browser-6): the answered question's replay refused
+            // over the held choice itself (a head or slot that changed since the
+            // pick) drops it too, or the next Save is refused the same way.
+            q.onDone = (outcome, res, info) => {
+                if (outcome === 'failed' && res && window.wizardPickRefused({ location_result: res })) {
+                    const why = res.status === 'success' ? (res.failures || {})[String(ctx.spoolId)] : res.msg;
+                    const tail = _wizDropRefusedPick(ctx);
+                    if (typeof ctx.onDone === 'function') ctx.onDone('refused', {
+                        msg: `Saved your other changes, but #${ctx.spoolId} was not moved: `
+                            + `${String(why || 'refused').replace(/\.\s*$/, '')}.`,
+                    }, { repick: !!tail, tail });
+                    return;
+                }
+                if (typeof ctx.onDone === 'function') ctx.onDone(outcome, res, info);
+            };
+            _wizardMoveQuestion(lr, q);
+        }
         return 'asking';
     }
-    // Group 40.7 review (wizard-refused-pick-resent): a refusal of the held
-    // choice itself (the slot was taken meanwhile, …) would come back on every
-    // Save, so the choice is dropped and the field shows its place again; the
-    // next Save opens that place's picker (window.wizardSaveNeedsPicker).
-    const held = ctx.placement || null;
-    const sent = !!(ctx.fields && Object.keys(ctx.fields).length);
-    const repick = !!(held && sent && window.wizardPickRefused(data));
-    let tail = '';
-    if (repick) {
-        const place = held.via || held.location;
-        if (wizardState.pendingPlacement === held) {
-            wizardState.pendingPlacement = null;
-            window.wizardShowLocation(place);
-        }
-        // A box's slot, or a printer's toolhead (a head's choice is held via its printer).
-        const what = _wizLocKey(held.location) === _wizLocKey(place) ? 'a slot' : 'a toolhead';
-        tail = ` Pick ${what} again: Save opens the picker for ${place}.`;
-    }
+    const tail = window.wizardPickRefused(data) ? _wizDropRefusedPick(ctx) : '';
+    const repick = !!tail;
     showToast(`❌ ${(data && data.msg) || `#${ctx.spoolId} was not moved`}${tail}`, 'error', 7000);
     if (window.logClientEvent) window.logClientEvent(`❌ Wizard edit: ${(data && data.msg) || 'not moved'}`, 'ERROR');
     if (typeof ctx.onDone === 'function') ctx.onDone('refused', data, { repick, tail });
@@ -4118,7 +4160,7 @@ window.wizardSubmit = async () => {
                             setTimeout(() => { msg.innerHTML = ""; if (btn) btn.disabled = false; }, 3000);
                         } else {
                             const why = outcome === 'refused'
-                                ? (data.msg || `Saved your other changes, but #${editSid} was not moved.`)
+                                ? ((res && res.msg) || data.msg || `Saved your other changes, but #${editSid} was not moved.`)
                                     + ((info && info.tail) || '')
                                 : outcome === 'cancelled'
                                     ? `Saved your other changes. #${editSid} was not moved: Save again to move it.`

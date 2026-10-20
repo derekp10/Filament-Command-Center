@@ -141,19 +141,22 @@ def test_an_emptied_spool_moved_off_a_printing_head_is_taken_off_it_first(client
     assert not spool["extra"].get("fcc_pre_archive_location"), spool
 
 
-def test_an_emptied_spool_whose_move_asks_waits_archived_and_unassigned(client):
-    """The destination asks (XL-2 is a printing head): #57 is off XL-1 already,
-    archived and Unassigned, while the question waits, and the answer says so in
-    `msg` (an older page shows it) and `warning` (a 40.7 page shows the question)."""
+def test_an_emptied_spool_sent_to_a_head_is_refused_archived_and_unassigned(client):
+    """The destination is a head (XL-2, printing). It used to ask about the
+    print, and its Yes loaded the archived spool onto XL-2, where no reader of a
+    head sees it. An archived spool is never loaded onto a head now (Group 51
+    review, engine-1): refused before any question. #57 is off XL-1 already,
+    archived and Unassigned, and `msg` says both."""
     sm = _on_xl1({"physical_source": "LR-MDB-1", "physical_source_slot": "1", "container_slot": ""})
     body = _edit(client, sm, {"location": "XL-2", "used_weight": 1000}, probe=_probe_for({"XL"}), **DOOR)
-    assert body["location_result"]["status"] == "requires_confirm", body
+    assert body["location_result"]["status"] == "error", body
+    assert body["location_result"]["blocked_reason"] == "archived", body
     assert body["success"] is False and body["location_moved"] is False, body
     spool = sm.spools[57]
     assert spool["archived"] is True and spool["location"] == "", spool
     assert spool["extra"]["physical_source"] == "", spool
-    note = "#57 is archived (used up), so it was taken off XL-1: it is Unassigned."
-    assert note in body["msg"] and note in body["warning"], body
+    assert "#57 is archived, so it was not loaded onto XL-2" in body["msg"], body
+    assert "#57 is archived (used up), so it was taken off XL-1: it is Unassigned." in body["msg"], body
 
 
 def test_an_archived_ticked_spool_stays_archived_where_its_move_lands(client):

@@ -9,7 +9,9 @@ tests/test_l316_charact_record_deletes.py.
 
 Preserved quirks (do not 'fix' in a move — see the carve plan):
 - api_get_locations' bare except-pass around the Spoolman occupancy probe
-  (Spoolman down -> counts read zero, page still renders).
+  (Spoolman down -> counts read zero, page still renders). Since the Group 52
+  review (reads-1) the answer says so in its X-FCC-Spool-Read header, and the
+  page keeps the counts it showed instead of drawing those zeros.
 - api_delete_location relies on logic.perform_toolhead_delete_cascade
   MUTATING the passed-in list in place before the single save.
 - api_merge_filament calls Spoolman via the module-level requests import
@@ -31,6 +33,10 @@ import spoolman_api  # type: ignore
 import logic  # type: ignore
 
 from app_core import app
+
+# reads-1: the /api/locations response header that says whether its counts
+# were read ('ok') or Spoolman didn't answer ('failed').
+SPOOL_READ_HEADER = 'X-FCC-Spool-Read'
 
 # --- EXISTING ROUTES ---
 
@@ -327,7 +333,14 @@ def build_locations_response(spools=None):
     for _row in final_list:
         if isinstance(_row, dict):
             _row.pop(locations_db.PRINTER_CREDS_KEY, None)
-    return jsonify(final_list)
+    resp = jsonify(final_list)
+    # reads-1 (Group 52 review): whether the counts above were read. The answer
+    # stays the bare list every caller iterates, so the outcome rides a header:
+    # 'failed' means the spool list couldn't be read and every count is 0 for
+    # that reason alone. The page then keeps the counts it showed and says
+    # Spoolman didn't answer. (The heartbeat says the same in `spool_read`.)
+    resp.headers[SPOOL_READ_HEADER] = 'ok' if spools_read_ok else 'failed'
+    return resp
 
 @app.route('/api/locations', methods=['POST'])
 def api_save_location():

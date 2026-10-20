@@ -1,7 +1,5 @@
 # **New and Unsorted Features/Bugs**
 
-* Perhaps a warning system, or report system for low or out filaments? _(→ **Group 49.2**. Derek, 2026-10-19: a ⚠️ Low-stock list per filament (a Settings threshold, default 250 g; "out" = no stock left; Buy More links) **plus one Activity Log warning** when a print or a weigh-out drops a filament under the threshold. The print-start check, "#99 has ~34 g, this print needs ~61 g", comes later with Project Color Loadout, estimated from the `.3mf`.)_
-
 * **🧪 The E2E suite is LOAD-SENSITIVE: a busy machine turns a 2-red sweep into a 13–16-red one, with a different set each time.** _(→ **Group 45.1**)_ _(Quantified 2026-10-08. Derek: "Not sure I can make the machine quiet… If it's a re-occurring issue, we may need to dig further.")_ Two full `RUN_INTEGRATION` sweeps of near-identical code, back to back: **13 failed** then **16 failed**, but only **5 tests failed in BOTH** — 8 were unique to the first, 11 unique to the second, so **19 of 24 distinct failures did not reproduce**. Of the 5 common ones, 2 are the standing Group 37.1 pair and the other 3 all passed when re-run in isolation. Both runs took **33:40** against **26:17** for the same suite on a quiet machine — a ~30% slowdown, with ambient load from ordinary desktop use (118 Chrome processes, which are Derek's browser, NOT orphaned Playwright chromium — those live under `ms-playwright`). **Signature:** almost every failure is a `wait_for_function` / `expect` hitting a hard **3000 ms** timeout, so a 30% slower machine trips proportionally more of them. Note the suite is SERIAL (no xdist/randomly), so test-vs-test contention is impossible — the pressure is external. **What this costs:** a sweep can no longer be read at a glance; "is this red real?" needs an isolation re-run every time, which is ~30 extra minutes per release. **Directions, cheapest first:** (a) raise the 3 s waits to ~8–10 s — they are not asserting on latency, so the tight bound buys nothing; (b) add a conftest-level default timeout so individual tests stop hardcoding one; (c) have the harness print total wall-clock and warn when a run exceeds the quiet-machine baseline, so a noisy run is self-labelling; (d) auto-retry a failed browser test once and report it as flaky rather than failed. **Do NOT "fix" this by running sweeps only on a quiet machine** — Derek has said he can't guarantee one, so the suite has to tolerate a working desktop. **Progress 2026-10-13/14 (Group 45, overnight run):** (b) shipped: Playwright's `expect` waits 10 s by default. (c) shipped: every run ends `⏱️ M:SS for N tests` with a load factor against this PC's own recent times, saying BUSY RUN at 1.25× or more, and a failed browser test's report lists its slow requests and the dev-Spoolman timeouts during it. The biggest load turned out to be FCC's own (45.8): the Printer Status widget re-read the whole spool list once per toolhead on every heartbeat. With that gone, full sweeps take ~21 min (was 33–38) and the second one had 1 red, a latent race since fixed. (d) hasn't been needed. **Left:** (a) triage a 3 s wait only where a red keeps coming back, and see a sweep on a genuinely busy desktop, which the load line now labels. **Standalone.**
 
 ## ⏸️ PENDING DEREK — deferred hands-on work (grep `PENDING DEREK`)
@@ -137,6 +135,18 @@
   Status drops its "🔗 no bound slot" placeholder on those heads. A proper "Spool Holder" type is Group 37's
   question. **Done when** the holders (and the box, if used) have rows, feeds and printed slot labels; that also
   lets his "INDX heads without labels" item close, once his F2 check passes.
+* **⏸️ PENDING DEREK — two small calls from the 2026-10-19 bundle (neither blocks a release; a default is built).**
+  1. **Tag the filaments you won't rebuy "One-off".** The new ⚠️ Low stock list (🔍 Search panel → ⚠️ Low stock) has an
+     **Out** section: every filament that has had spools and has none in stock. The first time you open it on prod it
+     lists every filament you ever used up. Add a "One-off" choice in ⚙️ Filament Attributes and tag those filaments: a
+     One-off filament never shows as Out and never gets the "is out" warning (it still gets "running low" while it has
+     stock). Untagged, the list just stays long.
+  2. **An archived spool scanned onto a toolhead.** Example: you archive #57 by hand with 300 g left to set it aside,
+     then later scan it onto XL-1. **Built:** FCC refuses ("Not loaded: #57 is archived, so it was not loaded onto
+     XL-1: weigh it back into stock (or untick Archived in Edit) first"), nothing moves; into a bound box slot it is
+     stored in the slot and not loaded. **The other way:** loading it onto a head un-archives it. Recommendation: keep
+     the refusal. An archived spool on a head is invisible to Smart Load, the print charge and Printer Status, which is
+     the bug this closed. Say if you want the other way; otherwise nothing to do.
 
 ## 🗒️ Notes and standalone items
 
@@ -213,7 +223,7 @@ This should have an option to select a different loaded spool, or any spool. Cur
   **(1) A malformed payload still gets a generic answer.** A body without `data` (the old `_restore` shape, `{id, field, value}`) still returns `{"success": false, "msg": "No fields to update."}` (`routes_scan.py:175-178`). That generic message is what hid the `_restore` no-op for months. Reject an unrecognized payload shape loudly instead, naming the missing `data` key.
   **(2) Max-attribute coverage stops short of the UI.** Derek: *"Highly unlikely in reality, but we should make sure that having that many attributes doesn't break things like it might be doing right now, so we should probably put in some tests for this kind of thing, so that it's supported, even though it might not currently be possible."* Nothing pins the wizard/details chip renderers with every choice applied (28 chips: layout and overflow). Search and filtering get the same case once the "Adding attributes in search" item ships.
 
-* **🟡 Group 36 follow-ups: three low-priority hardening items (all dormant on current data).** _(Recorded only in the Group 36 task file since 2026-08-06; filed 2026-10-12 by Group 47 at Derek's call. Group 36 itself is archived.)_ (1) **The pre-merge extras read has no retry.** Since Group 36, `_get_raw_extras` (`spoolman_api.py:442`) returns `None` on a read failure and its callers refuse the write rather than wipe siblings. That is correct, but a Spoolman blip now produces a false refusal. A retry would cut those, but it has to stay inside the `spoolman_api.requests` seam that eleven test files patch: routing it through `http_retry` was tried and reverted for exactly that reason. (2) **`_parse_filament_attrs_value` collapses a non-JSON string** such as `"Silk, Matte"` into one pseudo-tag, so real tags can read as zero-usage and therefore sweepable. (3) **`setup-and-rebuild/setup_fields.py:244-247` still sends a partial-`extra` spool PATCH** (`{"extra": {"container_slot": value}}`), the replace-the-whole-`extra` landmine, inside `migrate_container_slot_to_text`, the function CLAUDE.md names as the template for type migrations (dormant, guarded). Source: [docs/agent_docs/tasks/36-attribute-force-reset-data-loss.md](docs/agent_docs/tasks/36-attribute-force-reset-data-loss.md), "Follow-ups". _(→ (1) **Group 52.2**; (2) **Group 54.3**; (3) **Group 54.4**; grouped 2026-10-19.)_
+* **🟡 Group 36 follow-ups: three low-priority hardening items (all dormant on current data).** _(Recorded only in the Group 36 task file since 2026-08-06; filed 2026-10-12 by Group 47 at Derek's call. Group 36 itself is archived.)_ (1) **The pre-merge extras read has no retry.** Since Group 36, `_get_raw_extras` (`spoolman_api.py:442`) returns `None` on a read failure and its callers refuse the write rather than wipe siblings. That is correct, but a Spoolman blip now produces a false refusal. A retry would cut those, but it has to stay inside the `spoolman_api.requests` seam that eleven test files patch: routing it through `http_retry` was tried and reverted for exactly that reason. (2) **`_parse_filament_attrs_value` collapses a non-JSON string** such as `"Silk, Matte"` into one pseudo-tag, so real tags can read as zero-usage and therefore sweepable. (3) **`setup-and-rebuild/setup_fields.py:244-247` still sends a partial-`extra` spool PATCH** (`{"extra": {"container_slot": value}}`), the replace-the-whole-`extra` landmine, inside `migrate_container_slot_to_text`, the function CLAUDE.md names as the template for type migrations (dormant, guarded). Source: [docs/agent_docs/tasks/36-attribute-force-reset-data-loss.md](docs/agent_docs/tasks/36-attribute-force-reset-data-loss.md), "Follow-ups". _(→ (1) ✅ built by **Group 52.2** (2026-10-19: one more try 0.5 s later on a timeout, a 5xx or a garbled answer; archived); (2) **Group 54.3**; (3) **Group 54.4**; grouped 2026-10-19.)_
 
 * Part of Group 34, I noticed that the auto id generate is a bit finicky. If you + on a base location (say room) and then decide you want to change it in the location section, it doesn't auto update the id to match the new location id breadcrum (CR-CT1-R1, vs just CR-XXN). Also the system isn't very aware of the numbering conventions, and looks like it would over write existing location types with R1 always, instead of being aware of the current location topology. If there was an R1, and I was trying to make another row, R2 should auto populate. This all might be part of the other half of 34 that is currently on hold. We need to look into this a bit more to try and make it either easier, or clearer to the user.
 
@@ -260,7 +270,10 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
 # **Active Backlog (Organized by Feature Area)**
 
 ## 📋 Activity Log
-*(No open items — resolved entries archived in `completed-archive.md`.)*
+* **Older Activity Log lines put a print's filename into the page unescaped.** _(Found 2026-10-19 by the Group 49
+  builder.)_ The deduct and review lines put the job's filename into the log's HTML as it is, so a filename with `<` or
+  `&` draws wrong. Group 49's own warnings escape their names with `html.escape`; do the same where those older lines
+  are built.
 
 ## 🎨 UI & Theming
 * Refactor the longer "strip" cards used in the Location Manager window. Merge the horizontal layout with modern grid card features without cramping the text or making the button layout look weird. _(2026-10-19 refresh: still standalone. It needs Derek to pick from a mock-up, which Claude can build on a real cart, e.g. `CR-CT-2-R1`, whenever he wants to look: two variants, one row per spool with all three QR badges or with one, both keeping Group 40.6's ↩️ RETURN footer. Its double LABEL handler is tidied in Group 48.1.)_
@@ -278,33 +291,31 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
 
 ## ⌨️ Keyboard Navigation
 * ✅ **Keyboard navigation everywhere** — now a CLAUDE.md standing order (Derek, 2026-10-19): keyboard navigation in everything new, where it makes sense, following the existing idiom. Archived 2026-10-19 (see `completed-archive.md`). Its one concrete gap, the Printer Status tiles, is **Group 50.3**.
+* **Enter on a focused button inside a window does nothing (app-wide).** _(Found 2026-10-19 while building Group
+  48.2.)_ Tab to a button in the spool window (its ✏️ or 🖨️, or the new "(from the filament)" link) and press Enter:
+  nothing happens; Space works. The scan accumulator in `templates/components/scripts.html` calls `preventDefault` on
+  every Enter outside a text field, so a scanner's Enter never presses whatever has focus. Fix idea: let Enter through on
+  a focused button or link unless `window.enterIsAScan()` says a scan is arriving (the rule the dialogs already use).
 
 ## 🗂️ Modals & Add Inventory Wizard
 * Help button to provide information on how to use a modal, and to try and store information about how things work in the code. _(→ **Group 55.3**, as in-app help, not folded into the README. Derek, 2026-10-19: *"no one really reads documentation… keeping the information available at a quick click is important"*; part of an eventual documentation overhaul.)_
 * ✅ **Pair legacy-ID spools with their Spoolman IDs** — closed 2026-10-19 (Derek): scanning a legacy label that several spools share opens the duplicate picker (✓ Use selected, 🖨️ Print new label, ➕ Add new spool). Archived (see `completed-archive.md`).
-* **Show the filament's slicer profile on the spool details card.** _(Derek, 2026-10-19; → **Group 48.2**: read-only,
-  and it says it comes from the filament, so you know to edit it there (his answer).)_ *"I've had a few instances
-  where I wanted to see what spool profile I should use with some filaments, only to find that I have to open the spool,
-  click the swatch button, then find the profile suggestion there. If we could just have that data on the spool (sourced
-  from the filament data) then that would save a step."* Today the profile is the filament's `slicer_profile` extra, shown
-  (and editable with the ✏️) only on the filament fact card (`inv_details.js`).
-* **Fill in the slicer profile for well-documented filaments (a Prusament spool scan, for a start).** _(Derek,
-  2026-10-19, while updating profile data on the swatches of some Prusament.)_ _(→ **Group 48.4**: suggested from brand
-  + material, PrusaSlicer names only for now.)_ *"If possible, we should try and
-  determine what profile should be used, at least with well documented spool/filament creations based on things like
-  prusament spool barcodes. It gets everything (or at least everything I have noticed) but we miss out on that aspect of
-  data, that we might just be able to do for the user."* Today a Prusament scan (`external_parsers.py`, the
-  `prusament.com/spool/…` parser) fills material, color, weights, length and manufacture date, but never
-  `slicer_profile`; the wizard's "auto-assign" (Group 10.5) only selects a profile you just added as a new choice.
-  Ideas, none decided: suggest the profile your other filaments of the same brand and material already use, or a small
-  brand + material → profile table you can edit. Goes with the item above (the profile on the spool card).
-  **Caveat (Derek, same day):** the profile names are PrusaSlicer's (its default profiles, or a custom one he makes
-  when needed), because he runs Prusa printers; they don't line up with other printer brands and their slicers. A
-  future thing for anyone not all-in on one brand, or using a slicer other than PrusaSlicer: build the Prusa case
+* **Slicer profiles: the next steps after Group 48.4.** _(Derek, 2026-10-19: "being able to determin this, would
+  help later on if they decide to add more variants, and we could just have the system add and update based on what it
+  finds … I'd ove for this to carry over for other look ups if we ever implement them.")_ Group 48.4 fills a blank
+  Slicer Profile while a filament is made: prusament.com's product line ("Prusament PLA Blend"), else the profile his
+  own filaments of that brand + material use. Still open: (a) update existing filaments when Prusa adds or renames a
+  variant (a pass over his Prusament filaments that asks first); (b) read the product page when a spool page doesn't
+  name the variant; (c) other lookups returning `slicer_profile` (the wizard already takes it from any parser).
+  **Derek's caveat (2026-10-19):** the names are PrusaSlicer's (its default profiles, or a custom one he makes when
+  needed), because he runs Prusa printers; they don't line up with other brands and slicers. Build the Prusa case
   first, but don't assume one profile name fits every slicer (a later version might keep a profile per slicer).
+* **A Buy More link template with `&` breaks in the spool and filament windows.** _(Found 2026-10-19 by the Group 49
+  builder.)_ The details windows read the `buy_more_url_template` setting through Jinja's auto-escaping inside a
+  `<script>` tag, so an `&` in it arrives as `&amp;` in the links they build. The ⚠️ Low stock panel builds its links on
+  the server and is fine. Pass the setting with `|tojson` instead.
 
 ## 🔍 Search, Display & Filtering
-* Adding attributes in search to help find certain types would be useful. I was trying to find the "For Infill" filaments, but couldn't seem to find them using the search text box. so either a dropdown, or being able to use them in the search text. _(→ **Group 49.1**: attribute words become searchable text; no dropdown for now.)_
 
 ## ⚡ Quick-Swap Enhancements
 *(No open items — resolved entries archived in `completed-archive.md`.)*
@@ -335,63 +346,42 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
   end and no "Load now" that locks him in (*"I may have a few prints I'm trying to do before I might have a chance
   to load it"*); instead the head's tile quietly shows a spool is stored for it but not loaded, with a way to
   confirm "I loaded it". Open to other ideas, since the collapsed strip has little room.)_
-* **🟡 Multi-user awareness: a confirm should re-ask when what it showed changed.** _(Derek, 2026-10-14.)_ "One user
-  might not be aware" that another changed something while a dialog was open: e.g. you confirm loading via
-  LR-MDB-1 slot 1 onto XL-1, but meanwhile someone re-points slot 1 to XL-2 in the Feeds editor. You put a spool in
-  slot 1 because a slicer file depends on it, so you want to know. The first case is built into Group 40.3 (the Yes
-  carries the head it was about; the server asks again if the slot now feeds another head, even an empty idle one).
-  Audit the other doors for the same pattern (Quick-Swap, Return, Bulk Move commit, the wizard). _(→ **Group 51**
-  (51.5–51.7): the Quick-Swap tap, the Printer picker's head pick and the grid's Swap send only part of what they
-  showed; Return and the wizard already send it. The Bulk Move commit waits for Bulk Moves (the 🔀 Bulk Move polish
-  item).)_
 * **🟡 Assigning spools to INDX heads (and printer spool holders) without printed labels is clunky.** _(Derek,
   2026-10-14.)_ Force Location is meant as a last resort, but without a label per INDX head it's often the easy way.
   Group 40.4 / 40.5's pickers (Force Location or `LOC:RCOI` → pick a head) cover part of it (built 2026-10-19:
   Force Location → `RCOI` opens the Printer picker; ⏸️ PENDING DEREK check F2); the spool holders on the printer are
   still being thought through (Derek). _(**Kept open (Derek, 2026-10-19)** until his F2 check and the holders setup
   (the ⏸️ PENDING DEREK INDX-holders item); the Printer picker half is built.)_
-* **Click a spool card's location to move the spool.** _(Derek, 2026-10-19.)_ *"Allow you to click on the location
-  portion of the buffer label (or any label that uses the code base) to allow you to move the spool. Currently you have
-  to open the spool display, and then click the pencil button to change its location (if doing it manually) and
-  sometimes I just want to click the location part of the info card to edit it. Like how updating weight works from the
-  buffer/display card."* Today a card's weight opens Quick Weigh (`window.openQuickWeigh`, `ui_builder.js`); its location
-  part does nothing. The natural target is Force Location's flow, which opens the box / printer pickers since Group 40.4.
-  _(→ **Group 48.3**. Derek, 2026-10-19: the 📍 badge keeps opening the location; **a separate ✏️ beside it moves the
-  spool** (the pair the spool window already has). Correction: the badge isn't dead, it opens that location in the
-  Location Manager.)_
-* **🟡 Group 40 leftovers (filed 2026-10-19 at Group 40's finish; none urgent).** _(Group 40 is archived. → **Group 51**:
-  1 is 51.1, 2 is 51.2, 3 is 51.3, and 5's 40.0d slot compare is 51.4; 4 → **Group 37.7**; 5's extra spool-list read per
-  bound-slot scan → a **Group 52** note; the rest of 5 stays parked.)_
-  1. **Moving a hand-archived spool unarchives it.** `spoolman_api.update_spool`'s refill edge treats any write
-     without `archived: True` as a refill, so an engine move (Force Location, a scan, the wizard) of a spool archived
-     by hand that still has weight left un-archives it. The wizard re-archives after its own direct move; a move
-     answered later on `/api/smart_move` doesn't. Fix in `logic._move_write` (send `archived: True` for an archived
-     spool) or in `update_spool` (a location-only write is not a refill). Found by Group 40's wizard review fixer;
-     it predates Group 40.
-  2. **"Stored only" on Return's slot chooser.** A slot that feeds a different head shows that head and its spool,
-     but Return only stores there; the tile could say so (a small `slot_picker.js` change). _(40.6 builder's question 3;
-     Claude can do it.)_
-  3. **The ghost-guard refusal has no `blocked_reason`.** The wizard's `_pick_refused` recognises "<box> slot <n> still
-     holds #…" by its wording (pinned by `test_a_named_slot_whose_own_spool_runs_on_a_head_is_a_refused_pick`); a
-     `blocked_reason: slot_claimed` at both refusal sites in `logic.py` (the question path and step 6) would be cleaner.
+* **🟡 Group 40 leftovers (filed 2026-10-19 at Group 40's finish; none urgent).** _(Group 40 is archived. Items 1–3
+  and 5's 40.0d slot compare were built by **Group 51** (51.1–51.4; archived 2026-10-19). 5's extra spool-list read per
+  bound-slot scan was measured by **Group 52**: a scan that loads its head makes four strict whole-list reads, each
+  guarding a different moment; the one possible saving is the standalone "chained deploy" item under ⚙️. 4 →
+  **Group 37.7**; the rest of 5 stays parked.)_
   4. **A Return chooser spanning two boxes that feed one head** (the 40.6 builder's question 2) → Group 37.
   5. **Deferred notes from Group 40's first engine review** (`docs/agent_docs/tasks/40-slot-picker.md`, "Engine review
      (2026-10-14) … deferred notes", the ones without ✅): Bulk Move's skip of a spool filed on a head-less one-slot
-     Printer row; the MMU Slot grid's 0-based first slot vs `'0'` meaning no slot; 40.0d's raw slot compare; the extra
-     full spool-list read per bound-slot scan; and the open test-hygiene notes listed there.
+     Printer row; the MMU Slot grid's 0-based first slot vs `'0'` meaning no slot; and the open test-hygiene notes
+     listed there.
 
 ## 🎟️ Print Queue, Labels & Filament Usage
-* We should standardize the data shown in the label Queue. SOme items added by button, show minimum amout of data. (Spools on the id, not much else, samples show more.) anything added to the queue from the lable backlog is added using better identifying text/info. We should standardize all print lable functions to try and match the backlog's queue text/info setup, so its easier to read what is what. (just listing a spool id doesn't tell me what color it is, so it's hard to tell at a glance if what I added and am looking at was what I was just working with.) _(→ **Group 48.1**: every queued row drawn like the backlog's, from live data when the queue opens.)_
 
 ## 🧪 Testing
 * **🧪 The recurring sweep reds, filed from the logs (2026-10-08 to 10-13).** _(→ **Group 45.8**; filed 2026-10-13 by the Group 45 reconcile, `wf_1a1ff135-1c6`)_ Five full `RUN_INTEGRATION` sweeps are on disk with tracebacks (13, 16, 28, 13 and 17 reds). With the TestCart pair gone (46.5) the same families recur, and only 17 of the 87 reds failed at a 3 s limit. The main mechanism is the sweep itself saturating dev Spoolman through FCC: `hub.log` has 8,577 five-second `get_all_spools` read timeouts on 2026-10-13, packed into the E2E windows, against 16–81 ms quiet reads. `/api/get_contents` re-reads the whole spool list and fails open to `[]`; `/api/filament_details` gives up after 3 s and returns null, so its window never opens. Families: **(A)** windows that open only after Spoolman answers (filament details, the add-spool wizard's pre-filled weight, Prusament onboarding, the spool modal): feed made-up data to every read those tests make; **(B)** the Location Manager open (`#manageModal` only after `/api/get_contents`): readiness waits and `open_manage_modal`, and capture the request log for `test_bind_picker_opens_from_quickswap_header` (red 5 of 5) before changing it; **(C)** the slot-scan error toast (`test_ui_slot_scan_bad_target_shows_error_toast`, red 5 of 5 even after Group 33 raised its limit): capture first, it may be a real product bug (a leaked audit or bulk-move session swallowing scans, or a modal gate); **(D)** `test_doassign_buffer_safety` races FCC's own 2 s buffer poll: make the injected buffer authoritative (today it can also persist its fake spools #42/#44/#99 to dev's server buffer). Done when three consecutive full sweeps on a normal desktop show none of these families, each labelled by 45.1(c)'s load line. **Progress 2026-10-13/14 (overnight run):** the request log showed the mechanism on a QUIET machine: every dashboard load and every 5 s heartbeat fired 13 parallel `/api/get_contents` (one per toolhead, each a full spool-list read, 2–3.4 s apiece), and each test's own requests queued behind them. The widget now renders from the heartbeat's own section (95 → 35 requests per idle 21 s, 52 → 0 `get_contents`). Families A and B's isolated reds then passed 5 of 5; C passes; D's tests own their buffer endpoint (and no longer write made-up spools into dev's buffer). The faster page exposed latent test races that had leaned on the slowness (wizard closes inside Bootstrap's show transition, Location Manager opens before the locations load, injected state overwritten by a real poll), fixed with shared helpers (`conftest.close_wizard` / `wait_modal_settled` / `quiet_heartbeat` / `own_the_buffer`), plus one product gap (an early tile click was dropped; `openManage` now waits for the first load). Sweeps: 15 reds in 21:44 (the races), then 1 red in 20:46 (the same race, fixed), then **0 reds: 3004 passed in 21:01**. **Left:** the done criterion, three consecutive clean full sweeps (1 of 3 so far).
 * **🧪 Host-side test imports run FCC's startup migrations against whichever `data/locations.json` the working directory resolves to.** _(Found 2026-10-13 by Group 45, while triaging a sweep red; filed, not changed.)_ `locations_db.JSON_FILE` is the relative `data/locations.json` and `state.py` opens a relative `hub.log`; 90 test files `import app` on the host, which runs `startup_migrations` at import. From `inventory-hub/` (the canonical run) that is dev's REAL `inventory-hub/data/locations.json`, migrated by the host process while the container uses it (idempotent and usually a no-op, but it can write backups and migrations). From the repo root it is a stray, git-ignored repo-root `data/locations.json` left by a 2026-06-05 run (two rows, `CORE1` + `XL`, plus a `.pre-toolheads-migration` backup), which `test_printers_are_first_class_on_disk` read on 2026-10-13 (fixed: it now reads the container's file by absolute path). The host's hold on `hub.log` is already gone (Group 45 review: it blocked the container's log rotation on Windows and dropped its records). Options: point `JSON_FILE` / `hub.log` at module-relative paths (the container's WORKDIR is `/app`, so prod resolves the same), or give host test runs their own data dir; and delete the stray repo-root `data/`. _(→ **Group 45.9**, 2026-10-19: a host-only data dir that conftest points at a temp copy, `RotatingFileHandler(..., delay=True)`, and the stray repo-root `data/` and `hub.log` deleted.)_
+* **`test_baseline_spool_details_modal` skips when dev's buffer is empty.** _(Seen 2026-10-19 in the bundle run:
+  "No spool cards visible after closing offcanvas".)_ The visual test opens the spool window from a buffer card, so on
+  an empty buffer it never runs. Give it its own card (`conftest.own_the_buffer`) so it always judges the window.
+* **Group 52's two read-notice contrast checks judge nothing.** _(Found 2026-10-19 by the reads-1 fixer.)_
+  `assert_contrast(root)` / `contrast_offenders(root)` score the root's descendants only, and
+  `test_manage_read_notice_has_no_gray_on_gray_text` / `test_backlog_read_notice_has_no_gray_on_gray_text` pass the
+  notice itself, which has no children. Its colours pass by eye (about 11:1). Re-root both on the notice's parent and
+  prove the notice is scored with `contrast_offenders(parent, min_ratio=100)`, as reads-1's own checks do, or make the
+  guard score the root too.
 
 ## ⚙️ App Flow, Architecture & Database
 * **MOBILE** Make the entire app mobile friendly so NFC/Scanning works on phones. (Perhaps a desktop mode to utalize barcode scanners, and a mobile mode of mostly touch interface and scanning barcodes/QR codes and NFC tags). The main difference being that mobile mode won't relye on all the inlaid barcode/qr codes we currently have in the interface currently for interacting with the UI elements.
 * **Frontend file-size pass (optional, low priority).** _(Narrowed 2026-10-12, Group 47.32, from "Refactor dashboard to be more modular if possible, and reduce token size/context requirements." The backend half shipped as L316 and is archived. Derek kept a frontend pass on the list, just in case.)_ The frontend is already split into 24 modules under `static/js/modules/`, but four files are big enough that changing one feature means loading a lot of unrelated code: `inv_wizard.js` (4,472 lines), `inv_details.js` (3,721), `inv_loc_mgr.js` (2,325) and `inv_cmd.js` (2,203), as of 2026-10-12. Split them along natural feature seams (e.g. the Bulk Move panel out of `inv_cmd.js`) so an agent can load one feature without the whole file. No bug behind it. **Standalone.** _(2026-10-19, Claude's call, offered for veto; none: split only when a group already rewrites that part, lowest risk first (the ~700-line Bulk Move panel out of `inv_cmd.js`), not `inv_loc_mgr.js` before the Group 37/44 sit-down, and only after Group 53's load-order canary.)_
 * **🧹 One source for the frontend's toolhead-Type lists.** _(Left as "a separate DRY item" when the backend duplicate was collapsed, 2026-06-15 `19a4a5e`; filed 2026-10-12 by Group 47.)_ The backend has one canonical `locations_db.TOOLHEAD_TYPES` frozenset (`locations_db.py:73`), but the frontend hard-codes the Types itself: `TOOLHEAD_TYPES` at `inv_quickswap.js:17`, plus two lists in `inv_loc_mgr.js` that add `Printer` (`SINGLE_OCC` at `:81`, which hides "Move all →" where it would be a no-op, and `_isPrinterTopologyType` at `:2300`). They agree today, so nothing has drifted, but a new toolhead Type would have to be added in every copy. Fix: serve the toolhead set from the backend (e.g. in the dashboard bootstrap or alongside `/api/printer_map`), read it from one `window.` constant, and derive the with-`Printer` list from it. _(→ **Group 53.1**, 2026-10-19: the copies have grown to 8; one list in `inv_core.js`, pinned against the backend's.)_
-* **🐢 FCC re-reads Spoolman's whole spool list for every Location Manager open, Quick-Swap grid box and dashboard-pulse section.** _(Found 2026-10-13 by the Group 45 reconcile, from `hub.log`.)_ There are 43 call sites of `spoolman_api.get_spools_at_location*`, each a full `GET /api/v1/spool` (~213 KB, 60–80 ms when quiet). Under load they pile up: the 2026-10-13 test sweeps logged 8,577 five-second read timeouts. After a timeout the read silently fails open to an empty list, so in daily use a slow Spoolman shows an empty box or toolhead instead of an error. Ideas: a short shared cache with single-flight for display-only reads (never the strict reads that moves rely on), and a visible "Spoolman didn't answer" state where a list came back empty because of a timeout. **2026-10-14:** the worst repeat reader is gone: the Printer Status widget re-read the list once per toolhead on every 5 s heartbeat and every page load (13 reads per tick on 13 heads, prod included); it now uses the heartbeat's own section (Group 45.8). Still per tick: one read for the pulse's printer_status and, while the dashboard is open, `/api/print_queue/pending`. _(→ **Group 52.1**, 2026-10-19: one spool-list read per heartbeat, "Spoolman didn't answer" instead of an empty box, and one batched read for the Quick-Swap grid.)_ Group 45.8 handled the test side.
 * Make as much of Command Center user configurable as possible, using UI elements and a config import/export feature. _[→ **Group 35** for what's left. ✅ The Config system shipped 2026-06-01 (L18 Phases 1–4, main `6bd1f76`): the ⚙️ Admin / Config button opens a schema-driven Settings card, `GET`/`PUT /api/config`, a guarded toolhead editor, and import/export with redacted secrets and a dry-run diff. Adding a setting is now one `Field` in `config_schema.py`. Group 35 owns the tail: per-printer settings (the "Per-printer settings section in the Config tool" item) and L18 Phase 5 action-tool co-location. The "Config button … NEEDS DESIGN SESSION" item was archived 2026-10-12 (Group 47.20).]_
 * Continue to support Spoolman's "Import from External" feature for filaments... _[Status of existing parsers + a gap list of unimplemented sources lives in the module docstring at the top of `inventory-hub/external_parsers.py` as of 2026-05-13 (Group 11). The audit + dropdown cleanup landed; the items below are the still-unimplemented sources.]_
     - open-filament-database
@@ -411,6 +401,18 @@ I think we've inadvertently created 3 levels of logic/complexity here:
 2. A UI layer, for debugging, but should only really need to be looked at to confirm things
 3. A full on interface that is easier to move spools around than having to use Spoolman's lackluster interface.
 All 3 of these things are important and have value. We should table for now, and come back to once we've gotten more of the functionality in place.
+* **🐢 The buffer cards' live refresh reads Spoolman once per buffered spool on every heartbeat.** _(Group 52 builder's
+  note, 2026-10-19.)_ `spools_refresh` (`logic.get_live_spools_data`) makes one GET per spool in the buffer each tick:
+  ten buffered spools are ten reads every 5 s. It could use the tick's one spool-list read (`SpoolListRead`), as the
+  other heartbeat sections do since Group 52.
+* **🐢 A bound-slot scan that loads its head lists the head's spools twice in the chained deploy.** _(Measured 2026-10-19
+  by the Group 52 builder.)_ Such a scan makes four strict whole-list reads, each guarding a different moment; the
+  chained deploy's step-4 resident list and its step-6 re-list of the same head could be one read when no printer probe
+  ran between them. A move-engine change (`logic.py`), for an engine session.
+* **The archive edge doesn't read `remaining_weight`.** _(Group 51 review note, 2026-10-19.)_ Since the review, a
+  `remaining_weight` write (the weigh-out row's fallback when the spool's details can't be read) un-archives a spool
+  weighed back into stock, but weighing one to 0 g that way still doesn't archive it (it never did). Rare path: make
+  `spoolman_api._auto_archive_on_empty` read it too.
 
 ## Stuff to watch ##
 

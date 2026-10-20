@@ -15,6 +15,7 @@ Base proof (52741e6): the cards have no ✏️, so every test fails.
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 from playwright.sync_api import Page, expect
@@ -61,6 +62,10 @@ def _setup(page: Page, base_url: str, buffer=(SPOOL,)):
     page.route("**/api/printer_state/**", lambda route: _json(
         route, {"known": True, "is_active": False, "state": "IDLE", "printer_name": "FCC Test XL"}))
     page.route("**/api/search*", lambda route: _json(route, {"success": True, "results": [SPOOL]}))
+    # The ✏️ reads where the spool is before Force Location opens (Group 51
+    # review, browser-4).
+    page.route("**/api/spool_details*", lambda route: _json(route, {
+        "id": SID, "location": SPOOL["location"], "archived": False, "extra": {}}))
     page.goto(base_url)
     page.wait_for_function("typeof window.moveSpoolFromCard === 'function'", timeout=10000)
     expect(page.locator(CARD_BTN)).to_have_count(1 if buffer else 0, timeout=10000)
@@ -136,5 +141,7 @@ def test_a_search_cards_pencil_closes_the_search_panel_first(page: Page, base_ur
     expect(pencil).to_have_count(1, timeout=8000)
     pencil.click()
     expect(page.locator(POPUP)).to_be_visible(timeout=5000)
-    expect(page.locator("#offcanvasSearch")).not_to_have_class("offcanvas show", timeout=5000)
+    # A string matches the WHOLE class attribute, which is never exactly
+    # "offcanvas show" (review integration-3): the word itself.
+    expect(page.locator("#offcanvasSearch")).not_to_have_class(re.compile(r"(^|\s)show(\s|$)"), timeout=5000)
     expect(page.locator(f"{POPUP} #swal-override-search")).to_be_focused()
