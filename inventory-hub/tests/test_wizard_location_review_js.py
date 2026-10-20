@@ -378,7 +378,8 @@ return { calls: window.__pickerCalls.map(c => c.location), sent: posts('/api/cre
     assert res["calls"] == ["XL"], res
     [sent] = res["sent"]
     assert sent["spool_data"]["location"] == "XL-2", sent
-    assert sent["placements"] == [{"location": "XL-2", "record_source": ""}], sent
+    # Group 51.6: the head was shown empty, so a spool loaded there before Save is refused.
+    assert sent["placements"] == [{"location": "XL-2", "record_source": "", "expected_residents": []}], sent
     assert res["shown"]["value"] == "XL", "the used head pick leaves the printer in the field for the next create"
 
 

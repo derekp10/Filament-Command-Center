@@ -544,6 +544,10 @@ def _wizard_move(sid, new_loc, data, placement=None, current_loc='', origin='wiz
             record_source=logic.record_source_from(p),
             # Swap option C: the slot picker's Swap of a slot's stored spool.
             swap_out=logic.swap_requested(p),
+            # Group 51.6 / 51.7: what the picker showed on the head, and in the
+            # slot chosen for Swap / Overwrite (a held choice can be old by Save).
+            expected_residents=logic.expected_residents_from(p),
+            expected_occupant=logic.expected_occupant_from(p),
         )
     stale = None
     if isinstance(result, dict):
@@ -625,15 +629,19 @@ def _pick_refused(data, new_loc, result, sid):
     refused over the picker's own choice, which the page holds and would send
     again on every Save, only to be refused again: the slot it picked was taken
     meanwhile (`picked_slot_taken`), the head's "came from" slot can't be
-    recorded (`record_source`), or the slot it named is still claimed by a
+    recorded (`record_source`), the slot it named is still claimed by a
     spool deployed from it (`slot_claimed`, the engine's ghost guard,
-    logic._ghost_claim_refusal; Group 51.3: it used to be told by its words).
-    The page then drops the pick, so its next Save opens the picker again. A
-    refusal about anything else (Spoolman rejecting the write, a read that
-    failed) keeps the pick: saving again may work."""
+    logic._ghost_claim_refusal; Group 51.3: it used to be told by its words),
+    or what the picker showed has changed since (`residents_changed`: another
+    spool on the head; `occupant_changed`: another spool in the Swap /
+    Overwrite slot; Group 51.6 / 51.7). The page then drops the pick, so its
+    next Save opens the picker again. A refusal about anything else (Spoolman
+    rejecting the write, a read that failed) keeps the pick: saving again may
+    work."""
     if not isinstance(result, dict):
         return False
-    return result.get('blocked_reason') in ('picked_slot_taken', 'record_source', 'slot_claimed')
+    return result.get('blocked_reason') in ('picked_slot_taken', 'record_source', 'slot_claimed',
+                                            'residents_changed', 'occupant_changed')
 
 
 def _deploy_skipped_note(sid, target, result):
@@ -649,7 +657,9 @@ def _deploy_skipped_note(sid, target, result):
 
 _PLACEMENT_KEYS = ('location', 'slot', 'picked_slot', 'expected_feed', 'auto_deploy',
                    # Group 40.5 / Swap option C: the picker's answers ride along.
-                   'record_source', 'swap')
+                   'record_source', 'swap',
+                   # Group 51.6 / 51.7: what the picker showed.
+                   'expected_residents', 'expected_occupant')
 
 
 def _create_wants(data, spool_data, spool_iter):

@@ -2038,6 +2038,10 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
     // Group 40.5: the Printer picker's "came from" answer ('' = No box), on
     // `original` so a replay of the server's printing question keeps it.
     if (opts && opts.recordSource !== undefined) original.record_source = opts.recordSource;
+    // Group 51.6 / 51.7: what the picker showed on the head picked, and in the
+    // slot chosen for Swap / Overwrite; on `original`, so every replay checks it.
+    if (opts && Array.isArray(opts.expectedResidents)) original.expected_residents = opts.expectedResidents.slice();
+    if (opts && opts.expectedOccupant != null) original.expected_occupant = opts.expectedOccupant;
     const first = Object.assign({}, original, {
         confirmed_toolheads: Array.isArray(confirmedHeads) ? confirmedHeads : [],
     });
@@ -2170,6 +2174,12 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
                     // the scan-assignment path above.
                     document.dispatchEvent(new CustomEvent('inventory:locations-changed'));
                     end(landed, res);
+                } else if (res.blocked_reason === 'residents_changed' || res.blocked_reason === 'occupant_changed') {
+                    // Group 51.6 / 51.7: the head or slot holds a spool the picker
+                    // never showed. Nothing moved; 'cancelled' opens the picker
+                    // again (window.placeOneWithPicker), drawn from fresh data.
+                    showToast(`⚠️ ${res.msg || 'That place changed since you picked it: pick again'}`, 'warning', 7000);
+                    end('cancelled', res);
                 } else {
                     showToast(res.msg || 'Assign failed', 'error', 7000);
                     // A spool the move had already handed to the buffer (a head's
@@ -2208,10 +2218,14 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
 // create (Group 40.7: the spool doesn't exist yet when its picker opens).
 const _spoolWord = (sid) => (sid != null && String(sid) !== '' ? `#${sid}` : 'the new spool');
 
+// The spools the Printer picker showed on a picked head: what its question names
+// and, as `expected_residents`, what the move sends (Group 51.6).
+const _headResidents = (pick) => ((Array.isArray(pick.residents) && pick.residents.length) ? pick.residents
+    : (pick.resident ? [pick.resident] : []));
+
 const _confirmHeadPick = (pick, sid, host) => {
     const who = _spoolWord(sid);
-    const residents = (Array.isArray(pick.residents) && pick.residents.length) ? pick.residents
-        : (pick.resident ? [pick.resident] : []);
+    const residents = _headResidents(pick);
     if (!residents.length) return Promise.resolve(true);
     const and = (list) => (list.length < 2 ? list.join('') : `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`);
     const runs = and(residents.map(r => `#${r.id}` + (r.from ? ` (from ${r.from})` : '')));
@@ -2402,6 +2416,11 @@ const _placementFor = async (pick, sid, host, loc) => {
         if (send.auto_deploy === false) p.auto_deploy = false;
         if (pick.swap) { p.swap = true; p.displaced = pick.displaced || null; }
         if (pick.store_ok === false) p.noStore = true;
+        // Group 51.7: Swap / Overwrite named the slot's stored spool; another one
+        // there by the time the move lands is refused, never unseated unseen.
+        if ((pick.choice === 'swap' || pick.choice === 'overwrite') && pick.occupant && pick.occupant.id != null) {
+            p.expected_occupant = pick.occupant.id;
+        }
         return p;
     }
     if (pick.kind === 'head') {
@@ -2411,6 +2430,9 @@ const _placementFor = async (pick, sid, host, loc) => {
         if (rec === false) return false;
         const p = { location: pick.head, label: pick.head, short: pick.head };
         if (rec !== undefined) p.record_source = rec;
+        // Group 51.6: what the picker showed on the head ([] = empty). A spool
+        // loaded there meanwhile is refused, not unloaded unasked.
+        p.expected_residents = _headResidents(pick).map(r => r.id);
         return p;
     }
     return false;   // a pick these doors can't place (a return-mode "No slot"): stop
@@ -2479,6 +2501,9 @@ const _placeBufferWithPicker = async (box, ids = null) => {
                       noStore: !!pl.noStore,
                       // Group 40.5: where a spool put on a head came from.
                       recordSource: pl.record_source,
+                      // Group 51.6 / 51.7: what the picker showed.
+                      expectedResidents: pl.expected_residents,
+                      expectedOccupant: pl.expected_occupant,
                       onOutcome: done }),
             });
             if (out.outcome === 'moved') { loop.placed.push({ id: sid, short: out.placement.short }); continue; }

@@ -280,6 +280,10 @@ def api_smart_move():
         # Group 40.5: the Printer picker names where a spool put on a head came
         # from ("No box" = ''); absent, the engine's silent 13.6 rule.
         record_source=logic.record_source_from(payload),
+        # Group 51.6 / 51.7: what the picker showed on the head picked, and in
+        # the slot chosen for Swap / Overwrite.
+        expected_residents=logic.expected_residents_from(payload),
+        expected_occupant=logic.expected_occupant_from(payload),
     )
     stale = logic.stale_fed_refusal(payload, result) or logic.stale_confirm_refusal(payload, result)
     if stale:

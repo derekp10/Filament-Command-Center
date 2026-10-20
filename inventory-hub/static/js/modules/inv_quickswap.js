@@ -770,8 +770,15 @@
                     _reaskFromServer(body, sent, {
                         ...opts, title: `Load ${opts.box} slot ${opts.slot} into ${opts.toolhead}?`,
                     }, (heads) => performSwap(opts, null, heads));
+                } else if (body.action === 'quickswap_spool_mismatch') {
+                    // Group 51.5: the slot holds another spool than the card
+                    // showed. Nothing moved; redraw the slots so the user sees it.
+                    showToast(`⚠️ ${body.error || `${opts.box} slot ${opts.slot} holds another spool now`}`,
+                        'warning', 7000);
+                    _refreshAfterMove();
                 } else if (body.action === 'quickswap_empty_slot') {
                     showToast(`⚠️ ${opts.box} slot ${opts.slot} is empty — nothing to swap`, 'warning', 4000);
+                    _refreshAfterMove();
                 } else if (body.action === 'quickswap_not_bound') {
                     showToast(`❌ Binding is stale — refresh and try again`, 'error', 7000);
                 } else {
@@ -1101,6 +1108,10 @@
             box: btn.dataset.box,
             slot: btn.dataset.slot,
         };
+        // Group 51.5: the spool the card shows. If another spool is in the slot
+        // by the time the Yes lands, the server refuses (quickswap_spool_mismatch)
+        // instead of loading a spool the user wasn't shown, and the grid refreshes.
+        if (btn.dataset.spoolId) opts.expected_spool = btn.dataset.spoolId;
         // Pull the display label from the button so the confirm overlay names
         // the specific spool. Ask-before-you-commit matters more when the
         // button text tells you what you're committing to.

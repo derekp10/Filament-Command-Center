@@ -1337,6 +1337,16 @@ window.promptEditLocation = (spoolId, currentLoc) => {
                                     });
                                     return;
                                 }
+                                if (ctx.outcome && (res.blocked_reason === 'residents_changed'
+                                                    || res.blocked_reason === 'occupant_changed')) {
+                                    // Group 51.6 / 51.7: the head or slot holds a spool the
+                                    // picker never showed. Nothing moved; the picker opens
+                                    // again, drawn from fresh data.
+                                    showToast(`⚠️ ${res.msg || 'That place changed since you picked it: pick again'}`,
+                                        'warning', 7000);
+                                    ctx.outcome({ outcome: 'cancelled', res });
+                                    return;
+                                }
                                 const moved = done(res, prior, ctx.placement || null);
                                 if (ctx.outcome) ctx.outcome({ outcome: moved ? 'moved' : 'failed', res });
                             });
@@ -1365,6 +1375,10 @@ window.promptEditLocation = (spoolId, currentLoc) => {
                                     if (pl.auto_deploy === false) original.auto_deploy = false;
                                     if (pl.swap) original.swap = true;
                                     if (pl.record_source !== undefined) original.record_source = pl.record_source;
+                                    // Group 51.6 / 51.7: what the picker showed on the head,
+                                    // and in the slot chosen for Swap / Overwrite.
+                                    if (Array.isArray(pl.expected_residents)) original.expected_residents = pl.expected_residents.slice();
+                                    if (pl.expected_occupant != null) original.expected_occupant = pl.expected_occupant;
                                     const first = Object.assign({}, original);
                                     if (pl.picked_slot != null) first.picked_slot = pl.picked_slot;
                                     const feed = pl.expected_feed != null ? String(pl.expected_feed).toUpperCase() : null;

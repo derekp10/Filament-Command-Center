@@ -520,6 +520,10 @@ def test_add_returns_perform_smart_move_result_verbatim(client):
         # Group 40.5: the Printer picker's "came from" answer (none here: the
         # engine's silent 13.6 rule).
         "record_source": None,
+        # Group 51.6 / 51.7: what the screen showed on the head and in the
+        # Swap / Overwrite slot (None: no check).
+        "expected_residents": None,
+        "expected_occupant": None,
     }
 
 
