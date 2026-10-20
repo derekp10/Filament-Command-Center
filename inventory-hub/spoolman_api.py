@@ -301,9 +301,20 @@ def _auto_unarchive_on_refill(data, existing):
     `archived` or `location`, we leave those keys alone. A payload that sets
     `archived: True` keeps the spool archived, so it gets no location restore
     either (a deduct charging an archived spool is not a refill; Group 43 review).
+
+    Group 51.1: only a WEIGHT write is a refill. A write that carries neither
+    `used_weight` nor `initial_weight` (a move's location and trail, the `ID:`
+    label-verify scan's flag, a label-queue flag) used to read the record's own
+    weight, so it un-archived a spool archived by hand with weight left, and an
+    extra-only write also sent it back to its pre-archive place. Now such a spool
+    stays archived wherever the write put it (Derek's 43.2 rule: an archived spool
+    stays archived). An explicit `archived: False` is the caller un-archiving it,
+    and still gets its place back.
     """
     if not existing or not existing.get('archived') or data.get('archived') is True:
         return
+    if 'used_weight' not in data and 'initial_weight' not in data and data.get('archived') is not False:
+        return None
     new_used = data.get('used_weight', existing.get('used_weight'))
     new_initial = data.get('initial_weight', existing.get('initial_weight'))
     # 31.2 — same inherit-weight fallback as _auto_archive_on_empty. Without it,

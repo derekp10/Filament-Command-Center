@@ -37,13 +37,13 @@ control, with the origin the fixed page sends).
 from __future__ import annotations
 
 import copy
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 import spoolman_api  # noqa: E402
 import state  # noqa: E402
-from move_engine_harness import IDLE, FakeSpoolman, LocationsStore, WireSpoolman, _probe_for, _unwire, run_move  # noqa: E402
+from move_engine_harness import IDLE, FakeSpoolman, LocationsStore, WeighedWireSpoolman, _probe_for, run_move  # noqa: E402
 from test_wizard_location_through_engine import DOOR, FROM_POLYDRYER, PRINTER_MAP, ROWS, _Maker  # noqa: E402
 
 
@@ -108,23 +108,7 @@ def test_a_landed_move_answers_location_now_and_saving_that_moves_nothing(client
 
 # ---- wizard-archive-before-asked-move ----------------------------------------------------
 
-class _WeighedSpoolman(WireSpoolman):
-    """WireSpoolman that also keeps the weights and `archived` a PATCH sends and
-    answers them on every read and in the PATCH's own answer, as Spoolman does:
-    the REAL update_spool's archive and refill edges read them."""
-
-    def _http_patch(self, url, json=None, **k):
-        sid = int(str(url).rstrip("/").rsplit("/", 1)[-1])
-        body = copy.deepcopy(json)
-        self.patch_bodies.append((sid, body))
-        rec = self.spools.setdefault(sid, {"location": "", "extra": {}})
-        for key in ("location", "used_weight", "initial_weight", "archived"):
-            if key in body:
-                rec[key] = body[key]
-        if "extra" in body:
-            rec["extra"] = {key: _unwire(val) for key, val in body["extra"].items()}
-        return MagicMock(ok=True, status_code=200,
-                         json=MagicMock(return_value={"id": sid, **copy.deepcopy(rec)}))
+_WeighedSpoolman = WeighedWireSpoolman   # moved to the shared harness (Group 51.1)
 
 
 def _on_xl1(trail, used=100):
@@ -174,9 +158,10 @@ def test_an_emptied_spool_whose_move_asks_waits_archived_and_unassigned(client):
 
 def test_an_archived_ticked_spool_stays_archived_where_its_move_lands(client):
     """Archived ticked (weight left) and the Location changed, the XL idle. The
-    move's own write unarchived it (update_spool reads a write to an archived
-    spool with weight left as a refill), so it landed on the cart row active.
-    It is archived again where it landed."""
+    move's own write used to unarchive it (update_spool read any write to an
+    archived spool with weight left as a refill), so it landed on the cart row
+    active and the wizard archived it again. Since Group 51.1 a move's write is
+    no refill: it lands archived, with no second write."""
     sm = _on_xl1({"physical_source": "LR-MDB-1", "physical_source_slot": "1", "container_slot": ""})
     body = _edit(client, sm, {"location": "CR-CT-2-R1", "archived": True}, **DOOR)
     spool = sm.spools[57]

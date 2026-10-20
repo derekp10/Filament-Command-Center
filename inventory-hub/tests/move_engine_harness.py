@@ -186,6 +186,26 @@ class WireSpoolman(FakeSpoolman):
             return REAL_UPDATE_SPOOL(sid, copy.deepcopy(data))
 
 
+class WeighedWireSpoolman(WireSpoolman):
+    """WireSpoolman that also keeps the weights and `archived` a PATCH sends and
+    answers them on every read and in the PATCH's own answer, as Spoolman does:
+    the REAL update_spool's archive and refill edges read them (Group 40.7
+    review; shared since Group 51.1)."""
+
+    def _http_patch(self, url, json=None, **k):
+        sid = int(str(url).rstrip("/").rsplit("/", 1)[-1])
+        body = copy.deepcopy(json)
+        self.patch_bodies.append((sid, body))
+        rec = self.spools.setdefault(sid, {"location": "", "extra": {}})
+        for key in ("location", "used_weight", "initial_weight", "archived"):
+            if key in body:
+                rec[key] = body[key]
+        if "extra" in body:
+            rec["extra"] = {key: _unwire(val) for key, val in body["extra"].items()}
+        return MagicMock(ok=True, status_code=200,
+                         json=MagicMock(return_value={"id": sid, **copy.deepcopy(rec)}))
+
+
 def _probe_for(printing):
     """PrusaLink HTTP probe stub: printers named in `printing` are PRINTING."""
     def probe(_url, printer_name):

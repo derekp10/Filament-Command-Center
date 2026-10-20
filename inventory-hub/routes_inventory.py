@@ -1002,8 +1002,8 @@ def _take_archived_off(sid, original, written, dirty):
     and the trail cleared (`_TRAIL_KEYS`, as _direct_location_write blanks them)
     and the spool's own single-slot box released, unasked even mid-print, as the
     archive edge has always taken a used-up spool off its head. `archived: True`
-    rides along, because update_spool reads any write to an archived spool with
-    weight left (a ticked Archived) as a refill and unarchives it. No
+    rides along (belt and braces since Group 51.1, when a write without a weight
+    stopped counting as a refill). No
     `fcc_pre_archive_location` note: the user asked for the spool elsewhere, so a
     later refill must not put it back here. The move then starts from Unassigned
     (it asks about nothing it leaves) and stores the spool, never loading the
@@ -1047,20 +1047,6 @@ def _archived_off_note(sid, was):
     return f"#{sid} is archived (used up), so it was taken off {was}: it is Unassigned."
 
 
-def _keep_archived(sid):
-    """After the move of a spool the edit archived (_take_archived_off): the
-    move's own write carries no `archived`, and update_spool reads a write to an
-    archived spool with weight left (a ticked Archived) as a refill, so the move
-    unarchived it. Archive it again where it landed. A spool weighed out to
-    empty has no weight left and stays archived: nothing is written then."""
-    rec = spoolman_api.get_spool(sid)
-    if not isinstance(rec, dict) or rec.get('id') is None or rec.get('archived'):
-        return
-    if not spoolman_api.update_spool(sid, {'archived': True}):
-        err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the update"
-        state.add_log_entry(f"❌ #{sid} was moved but not archived again: {err}", "ERROR", "ff4444")
-
-
 @app.route('/api/edit_spool_wizard', methods=['POST'])
 def api_edit_spool_wizard():
     """Endpoint to handle natively editing Filaments and Spools from the Wizard Edit UI.
@@ -1094,7 +1080,8 @@ def api_edit_spool_wizard():
     Group 40.7 review: an edit that archives the spool and changes its Location
     takes it off where it is first (_take_archived_off), so a move that is asked
     about or refused never leaves an archived spool on a head; the move then
-    stores it (`auto_deploy: false`) and it stays archived (_keep_archived)."""
+    stores it (`auto_deploy: false`) and it stays archived (Group 51.1: a move's
+    write is no refill, so it no longer needs archiving again where it lands)."""
     data = request.json
     spool_id = data.get('spool_id')
     filament_id = data.get('filament_id')
@@ -1278,8 +1265,6 @@ def api_edit_spool_wizard():
                     state.add_log_entry(f"❌ Wizard edit: #{spool_id} was not moved to "
                                         f"{new_location or 'Unassigned'}: {e}", "ERROR", "ff4444")
                     moved, result, stale = False, {"status": "error", "msg": f"the move crashed ({e})"}, None
-                if moved and archived_off:
-                    _keep_archived(spool_id)
             out.update(spool_saved=True, location_moved=moved, location_result=result)
             if isinstance(result, dict) and result.get('to_buffer'):
                 out["to_buffer"] = result['to_buffer']
