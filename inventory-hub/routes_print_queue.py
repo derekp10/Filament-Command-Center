@@ -29,6 +29,28 @@ def _needs_label(item):
     return str(v).strip().strip('"').lower() == 'true'
 
 
+def backlog_count(spools, spools_error=None):
+    """The 🏷️ Backlog button's count for the dashboard heartbeat (Group 52.1a).
+    `spools` is the heartbeat's own non-archived spool list (the records
+    /api/print_queue/pending reads), or None when that read failed. Reads the
+    filament list once and counts the records whose `needs_label_print` is set,
+    with the same `_needs_label` test the backlog list uses (works on raw and
+    parsed extras alike: "true" or True).
+
+    Answers {'read_ok': True, 'count', 'spools', 'filaments'}, or
+    {'read_ok': False, 'read_error'} when either list couldn't be read, so the
+    page keeps the count it shows instead of a false number."""
+    if spools is None:
+        return {'read_ok': False, 'read_error': f"couldn't read Spoolman's spools ({spools_error})"}
+    filaments, err = spoolman_api.read_filament_list()
+    if filaments is None:
+        return {'read_ok': False, 'read_error': f"couldn't read Spoolman's filaments ({err})"}
+    n_spools = sum(1 for s in spools if isinstance(s, dict) and _needs_label(s))
+    n_filaments = sum(1 for f in filaments if isinstance(f, dict) and _needs_label(f))
+    return {'read_ok': True, 'count': n_spools + n_filaments,
+            'spools': n_spools, 'filaments': n_filaments}
+
+
 @app.route('/api/print_queue/pending', methods=['GET'])
 def api_print_queue_pending():
     filter_type = request.args.get('filter', 'all')
@@ -41,27 +63,35 @@ def api_print_queue_pending():
         # Spoolman's list endpoints IGNORE an `extra=` query filter (they return every
         # record: 2026-10-19, dev's backlog listed 414 items, 53 of which needed a
         # label, so a scanned label never left it). Filter here instead.
+        # Group 52.1a: a list that couldn't be read is an error, not a shorter
+        # backlog. It used to be skipped silently, so a blip on the spool read
+        # answered the filaments alone, and the open backlog showed that as the
+        # whole list (and its count on the 🏷️ button).
         # Fetch Spools
         if filter_type in ['all', 'spool']:
             r_spools = requests.get(f"{sm_url}/api/v1/spool", timeout=2)
-            if r_spools.ok:
-                for s in r_spools.json():
-                    if not _needs_label(s):
-                        continue
-                    s['type'] = 'spool'
-                    if 'vendor' in s.get('filament', {}): s['brand'] = s['filament']['vendor'].get('name', 'Unknown')
-                    items.append(s)
-        
+            if not r_spools.ok:
+                return jsonify({"success": False,
+                                "msg": f"Spoolman didn't answer the spool list (HTTP {r_spools.status_code})"})
+            for s in r_spools.json():
+                if not _needs_label(s):
+                    continue
+                s['type'] = 'spool'
+                if 'vendor' in s.get('filament', {}): s['brand'] = s['filament']['vendor'].get('name', 'Unknown')
+                items.append(s)
+
         # Fetch Filaments
         if filter_type in ['all', 'filament']:
             r_fils = requests.get(f"{sm_url}/api/v1/filament", timeout=2)
-            if r_fils.ok:
-                for f in r_fils.json():
-                    if not _needs_label(f):
-                        continue
-                    f['type'] = 'filament'
-                    if 'vendor' in f: f['brand'] = f['vendor'].get('name', 'Unknown')
-                    items.append(f)
+            if not r_fils.ok:
+                return jsonify({"success": False,
+                                "msg": f"Spoolman didn't answer the filament list (HTTP {r_fils.status_code})"})
+            for f in r_fils.json():
+                if not _needs_label(f):
+                    continue
+                f['type'] = 'filament'
+                if 'vendor' in f: f['brand'] = f['vendor'].get('name', 'Unknown')
+                items.append(f)
         
         # Sorting
         if sort_type == 'created_newest':

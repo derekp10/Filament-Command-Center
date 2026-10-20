@@ -121,6 +121,69 @@ def get_all_spools_strict(allow_archived=False):
     return parse_inbound_data(resp.json())
 
 
+def _read_list(path, timeout):
+    """GET one of Spoolman's list endpoints and SAY whether it worked:
+    (records, None) with the parsed list, or (None, why) when Spoolman didn't
+    answer, answered an error, or answered something that isn't a list."""
+    try:
+        sm_url, _ = config_loader.get_api_urls()
+        r = requests.get(f"{sm_url}{path}", timeout=timeout)
+    except Exception as e:
+        state.logger.warning(f"Spoolman read {path} failed: {e}")
+        return None, f"Spoolman didn't answer ({e})"
+    if not getattr(r, 'ok', False):
+        return None, f"Spoolman answered HTTP {getattr(r, 'status_code', '?')}"
+    try:
+        records = r.json()
+    except Exception as e:
+        return None, f"Spoolman's answer couldn't be read ({e})"
+    if not isinstance(records, list):
+        return None, "Spoolman's answer wasn't a list"
+    return parse_inbound_data(records), None
+
+
+def read_spool_list(allow_archived=False):
+    """The spool list (default: the non-archived one every location reader uses)
+    as (spools, None), or (None, why) when it couldn't be read (Group 52.1).
+    get_all_spools answers [] for both, so a slow Spoolman painted an empty box;
+    a display reader that must tell "couldn't read" from "empty" uses this.
+    Checks `.ok` rather than raise_for_status, like the readers it replaces."""
+    return _read_list("/api/v1/spool" + ("?allow_archived=true" if allow_archived else ""), 5)
+
+
+def read_filament_list():
+    """Every filament as (filaments, None), or (None, why) (Group 52.1a: the
+    dashboard heartbeat counts the label backlog's flagged filaments)."""
+    return _read_list("/api/v1/filament", 3)
+
+
+class SpoolListRead:
+    """The spool list for ONE request, read at most once, on first use, and
+    shared by the readers in that request (Group 52.1a: the dashboard
+    heartbeat's locations, manage, printer_status and label_backlog sections
+    used to read the whole list once each).
+
+    Never kept past the request, by design: FCC has no cross-request cache, so a
+    read right after a move always sees the move ("I scanned it and it didn't
+    show up" is the bug a cache would cause). Display readers only: the move
+    engine's strict reads never come from here.
+
+    `get()` answers the parsed list, or None when the read failed; `error` then
+    says why. `reads` counts the HTTP reads (0 or 1)."""
+
+    def __init__(self, allow_archived=False):
+        self.allow_archived = allow_archived
+        self.reads = 0
+        self.error = None
+        self._spools = None
+
+    def get(self):
+        if not self.reads:
+            self.reads = 1
+            self._spools, self.error = read_spool_list(self.allow_archived)
+        return self._spools
+
+
 def get_all_locations():
     """Fetches all locations from Spoolman."""
     sm_url, _ = config_loader.get_api_urls()
