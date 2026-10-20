@@ -945,6 +945,10 @@
             confirmed_toolheads: [],
             confirmed_fed_heads: [],
             spool_id: buffered.id,
+            // Group 51 review (engine-3): this tile showed the slot empty, so the
+            // server fills it only while it still is (never unseating a spool
+            // filed there meanwhile); on `original`, so every replay says so too.
+            shown_empty: true,
         };
         if (btn.dataset.singleSlot !== '1') original.expected_feed = notLoaded ? '' : String(toolhead).toUpperCase();
         const postDeposit = (payload, prior) => {
@@ -1020,6 +1024,11 @@
                                         Object.assign({}, prior || {}, { heads }));
                                 }
                             });
+                    } else if (body.smart_move && body.smart_move.blocked_reason === 'picked_slot_taken') {
+                        // Group 51 review (engine-3): the slot this tile showed empty
+                        // was filled meanwhile. Nothing moved; the tiles are redrawn.
+                        showToast(`⚠️ ${body.msg || `${box} slot ${slot} was filled meanwhile, so nothing moved`}`, 'warning', 7000);
+                        _refreshAfterMove();
                     } else {
                         // Includes assignment_failed: the spool stays in the buffer.
                         showToast(`❌ Deposit failed: ${body.msg || body.error || body.action || 'unknown'}`, 'error', 7000);

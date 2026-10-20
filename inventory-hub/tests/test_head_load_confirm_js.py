@@ -530,7 +530,7 @@ return {{ shown, posts: posts('/api/identify_scan') }};
     assert "fcc-quickswap-confirm" not in res["shown"][0]
     first, load = res["posts"]
     assert first == {"text": "LOC:LR-MDB-1:SLOT:1", "source": "quickswap_deposit", "confirmed_toolheads": [],
-                     "confirmed_fed_heads": [], "spool_id": 57, "expected_feed": "XL-1"}, first
+                     "confirmed_fed_heads": [], "spool_id": 57, "expected_feed": "XL-1", "shown_empty": True}, first
     assert load["confirmed_fed_heads"] == ["XL-1#99"] and load["spool_id"] == 57 and load["expected_feed"] == "XL-1"
 
 
@@ -547,7 +547,8 @@ return {{ shown, posts: posts('/api/identify_scan') }};
 """)
     assert len(res["shown"]) == 1 and "fcc-quickswap-confirm-title" in res["shown"][0]
     assert res["posts"] == [{"text": "LOC:LR-MDB-1:SLOT:1", "source": "quickswap_deposit", "confirmed_toolheads": [],
-                             "confirmed_fed_heads": [], "spool_id": 57, "expected_feed": "XL-1"}], res["posts"]
+                             "confirmed_fed_heads": [], "spool_id": 57, "expected_feed": "XL-1",
+                             "shown_empty": True}], res["posts"]
 
 
 def test_a_typed_slot_label_in_the_manager_goes_through_the_scan_path(tmp_path):

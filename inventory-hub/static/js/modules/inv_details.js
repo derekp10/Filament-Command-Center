@@ -546,7 +546,7 @@ const openFilamentDetails = (fid, silent = false) => {
                                     📥
                                 </button>
                                 <button class="btn btn-sm btn-outline-info py-0 px-2" 
-                                    onclick="window.addToQueue({ id: ${s.id}, type: 'spool', display: '${d.name} (ID:${s.id})' }); showToast('Added to Queue');" 
+                                    onclick="window.addToQueue({ id: ${s.id}, type: 'spool', display: ${window.SpoolCardBuilder.jsArg(`${d.name} (ID:${s.id})`)} }); showToast('Added to Queue');" 
                                     title="Send to Print Queue">
                                     🖨️
                                 </button>
@@ -948,21 +948,38 @@ window.promptEditSampleStatus = (filamentId, currentValue) => {
 // the dialog's input); a buffer card's spool leaves the buffer once its move
 // has landed, as a location scan's does. No new write path: Force Location's
 // own doors (manage_contents add, the box and Printer pickers).
-window.moveSpoolFromCard = (spoolId, from, currentLoc = '') => {
+// Where the spool IS comes from its own record, read first (Group 51 review,
+// browser-4), as the spool window's ✏️ passes Spoolman's location. A card can't
+// say: a loaded spool's card is a ghost filed at its box, so the dialog opened
+// on Unassigned and a Force Move with no pick took the spool off its head. A
+// read that fails opens nothing.
+window.moveSpoolFromCard = (spoolId, from) => {
     const sid = String(spoolId);
-    if (from === 'search' && window.SearchEngine && window.SearchEngine.offcanvas) {
-        try { window.SearchEngine.offcanvas.hide(); } catch (_) { /* noop */ }
-    }
-    window.promptEditLocation(sid, currentLoc || '', {
-        fromCard: true,
-        onDone: () => {
-            if (from !== 'buffer' || !Array.isArray(state.heldSpools)) return;
-            if (!state.heldSpools.some(s => String(s.id) === sid)) return;
-            state.heldSpools = state.heldSpools.filter(s => String(s.id) !== sid);
-            if (window._recentlyAssignedOut) window._recentlyAssignedOut.set(sid, Date.now());
-            if (typeof renderBuffer === 'function') renderBuffer();
-        },
-    });
+    const unread = (why) => {
+        const msg = `Couldn't read #${sid} from Spoolman, so FCC can't show where it is: nothing was opened. `
+            + `Try again in a few seconds`;
+        showToast(`⚠️ ${msg}`, 'warning', 7000);
+        if (window.logClientEvent) window.logClientEvent(`⚠️ ✏️ on #${sid}: ${msg}${why ? ` (${why})` : ''}.`, 'WARNING');
+    };
+    (window.fetchT || fetch)(`/api/spool_details?id=${encodeURIComponent(sid)}`)
+        .then(r => (r.ok ? r.json() : null))
+        .then(d => {
+            if (!d || String(d.id) !== sid) { unread(); return; }
+            if (from === 'search' && window.SearchEngine && window.SearchEngine.offcanvas) {
+                try { window.SearchEngine.offcanvas.hide(); } catch (_) { /* noop */ }
+            }
+            window.promptEditLocation(sid, String(d.location || '').trim(), {
+                fromCard: true,
+                onDone: () => {
+                    if (from !== 'buffer' || !Array.isArray(state.heldSpools)) return;
+                    if (!state.heldSpools.some(s => String(s.id) === sid)) return;
+                    state.heldSpools = state.heldSpools.filter(s => String(s.id) !== sid);
+                    if (window._recentlyAssignedOut) window._recentlyAssignedOut.set(sid, Date.now());
+                    if (typeof renderBuffer === 'function') renderBuffer();
+                },
+            });
+        })
+        .catch(e => unread(e && e.message));
 };
 
 // --- MANUAL LOCATION OVERRIDE ---

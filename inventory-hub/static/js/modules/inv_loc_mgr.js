@@ -252,6 +252,10 @@ window.openManage = (id) => {
     document.getElementById('manage-list-view').style.display = 'none';
     _clearManageReadFailure();
     _manageShownFor = null;
+    // Group 51 review (browser-5): the last box's slots must not answer a
+    // CMD:SLOT scan for this one (a failed read draws no grid to replace them).
+    state.currentGrid = {};
+    state.currentGridClaims = {};
 
     const isGrid = _isGridLoc(loc);
 
@@ -1032,6 +1036,9 @@ const renderGrid = (data, max) => {
     const grid = document.getElementById('slot-grid-container');
     const un = document.getElementById('unslotted-container');
     grid.innerHTML = ""; un.innerHTML = ""; state.currentGrid = {};
+    // Group 51 review (browser-2): every STORED spool claiming each slot, so a
+    // doubled slot's Swap / Overwrite names them all (and sorts the slot out).
+    state.currentGridClaims = {};
     const unslotted = [];
 
     // 13.3 — items with slot > max (overflow) used to go into state.currentGrid
@@ -1041,6 +1048,9 @@ const renderGrid = (data, max) => {
     // one would render; route earlier collisions into Unslotted too (13.2).
     data.forEach(i => {
         const n = parseInt(i.slot);
+        if (n > 0 && n <= max && !i.is_ghost) {
+            (state.currentGridClaims[n] = state.currentGridClaims[n] || []).push(i);
+        }
         if (n > 0 && n <= max && !state.currentGrid[n]) {
             state.currentGrid[n] = i;
         } else {
@@ -1395,6 +1405,17 @@ window.handleSlotInteraction = (slot) => {
             'WARNING');
         return;
     }
+    // Group 51 review (browser-5): FCC couldn't read this box's contents just now
+    // (Group 52's notice is up and no cards of it are on screen), so it can't
+    // tell what slot N holds.
+    const notice = document.getElementById('manage-read-notice');
+    if (notice && notice.style.display === 'block' && _manageShownFor !== String(locId).trim().toUpperCase()) {
+        const why = `Spoolman didn't answer for ${locId}, so FCC can't tell what's in slot ${slot}: `
+            + `nothing was moved. Try again in a few seconds`;
+        showToast(`⚠️ ${why}`, 'warning', 7000);
+        if (window.logClientEvent) window.logClientEvent(`⚠️ Slot ${slot} of ${locId} ignored: ${why}`, 'WARNING');
+        return;
+    }
     if (state.heldSpools.length > 0) {
         const newId = state.heldSpools[0].id;
         // IMPORTANT: don't shift the buffer here. _doAssignFinalize's success
@@ -1446,34 +1467,51 @@ window.handleSlotInteraction = (slot) => {
                 ]);
                 return;
             }
+            // Group 51 review (browser-2): a slot two stored spools claim (the
+            // others are drawn under Unslotted) names them all, and sends no
+            // expected_occupant: the engine would refuse every try over the other
+            // one, and Overwrite is how the doubled slot gets sorted out.
+            const claimants = ((state.currentGridClaims || {})[slot] || []).map(c => c.id);
+            const doubled = claimants.length > 1;
+            const olds = doubled ? claimants.map(c => `#${esc(String(c))}`).join(' and ') : old;
+            const verb = doubled ? 'go' : 'goes';
             // Swap option C (Derek, 2026-10-15): Swap hands the slot's old spool to
             // your buffer AND files it back where it sat before this slot, when
             // FCC has that record (a spool slotted before Swap option C has none).
             promptAction("Slot Occupied", `Put ${what} into Slot ${slot}: swap or overwrite?<br>`
-                + `<small>Swap: ${old} goes to your buffer, filed back where it sat before this slot `
+                + (doubled ? `<small>${olds} both claim slot ${slot}.</small><br>` : '')
+                + `<small>Swap: ${olds} ${verb} to your buffer, filed back where ${doubled ? 'they' : 'it'} sat before this slot `
                 + `(Unassigned if FCC has no record of that). `
-                + `Overwrite: ${old} stays in ${esc(String(locId))} without a slot.</small>`, [
+                + `Overwrite: ${olds} ${doubled ? 'stay' : 'stays'} in ${esc(String(locId))} without a slot.</small>`, [
                 {
                     label: "Swap", action: () => {
                         // The server files the slot's old spool back where it sat
                         // before and names it in `to_buffer` once the move lands
                         // (never before), which _doAssignFinalize adds to the buffer.
-                        doAssign(locId, newId, slot, true, {
+                        doAssign(locId, newId, slot, true, Object.assign({
                             swapDisplaced: { id: item.id, display: item.display, color: item.color },
+                        }, doubled ? {} : {
                             // Group 51.7: the spool this prompt named.
                             expectedOccupant: item.id,
-                        });
+                        }));
                     }
                 },
                 {
                     label: "Overwrite", action: () => {
-                        doAssign(locId, newId, slot, true, { expectedOccupant: item.id });
+                        doAssign(locId, newId, slot, true, doubled ? {} : { expectedOccupant: item.id });
                     }
                 },
                 { label: "Cancel", action: () => { closeModal('actionModal'); } }
             ]);
         } else {
-            doAssign(locId, newId, slot, true);
+            // Group 51 review (engine-3): the tile was drawn EMPTY, so the slot goes
+            // as `picked_slot`, which the engine fills only while it is still free
+            // and never unseats a spool filed there since the grid was drawn (an
+            // explicit slot is an Overwrite). An MMU Slot row keeps its 0-based
+            // explicit slot (dormant: no such rows exist).
+            const row = (state.allLocations || []).find(l => l.LocationID === locId) || {};
+            if (row.Type === 'MMU Slot') doAssign(locId, newId, slot, true);
+            else doAssign(locId, newId, null, true, { pickedSlot: slot, shownEmpty: true });
         }
     } else if (item) {
         // Filled slot + empty buffer: direct Pick Up. Eject/Details/Edit/Queue
@@ -1760,19 +1798,28 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedH
                 // The DEPLOYED card's stale-trail ↩️ (Group 40 review): the slot its
                 // record names holds another spool now (or is gone). Nobody was
                 // "deciding", and trying again fails the same way until it moves.
-                const trailTaken = options.pickedSlot != null && res.blocked_reason === 'picked_slot_taken';
+                const trailTaken = options.pickedSlot != null && !options.shownEmpty
+                    && res.blocked_reason === 'picked_slot_taken';
+                // Group 51 review (engine-3): a tile drawn empty that holds a spool
+                // now: nothing moved; redraw so the user sees what is there.
+                const filledMeanwhile = !!options.shownEmpty && res.blocked_reason === 'picked_slot_taken';
                 const why = trailTaken
                     ? `#${spoolIdStr} wasn't put back in ${loc} slot ${options.pickedSlot}, the slot its record names: `
                       + `another spool holds it now (or the box has no such slot). Scan #${spoolIdStr}, then the label `
                       + `of where it really is, to fix its record`
                     : null;
                 if (why && window.logClientEvent) window.logClientEvent(`⚠️ ${why}.`, 'WARNING');
-                if (res.blocked_reason === 'occupant_changed') {
+                if (res.blocked_reason === 'occupant_changed' || filledMeanwhile) {
                     // Group 51.7: the slot holds another spool than the Swap /
-                    // Overwrite prompt named. Nothing moved; redraw the grid so the
-                    // user sees what is there now (the spool stays in the buffer).
-                    showToast(`⚠️ ${failedWhy || res.msg || `${loc} slot ${finalSlot} holds another spool now`}`,
-                        'warning', 7000);
+                    // Overwrite prompt named (or than the empty tile showed: none).
+                    // Nothing moved; redraw the grid so the user sees what is there
+                    // now (the spool stays in the buffer).
+                    const msg = filledMeanwhile
+                        ? `${loc} slot ${options.pickedSlot} was empty on screen but holds a spool now, so nothing `
+                          + `moved: the slots have been redrawn`
+                        : (failedWhy || res.msg || `${loc} slot ${finalSlot} holds another spool now`);
+                    showToast(`⚠️ ${msg}`, 'warning', 7000);
+                    if (filledMeanwhile && window.logClientEvent) window.logClientEvent(`⚠️ ${msg}.`, 'WARNING');
                     refreshManageView((document.getElementById('manage-loc-id') || {}).value || loc);
                 } else {
                     showToast(why ? `❌ ${why}`
