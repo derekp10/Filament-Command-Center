@@ -21,6 +21,14 @@ import spoolman_api  # type: ignore
 
 from app_core import app
 
+def _needs_label(item):
+    """True when a spool's or filament's `needs_label_print` extra is set. Spoolman
+    stores extras as JSON text ("true"); None (never set) and "false" (verified, e.g.
+    by scanning its label) are not in the backlog."""
+    v = ((item or {}).get('extra') or {}).get('needs_label_print')
+    return str(v).strip().strip('"').lower() == 'true'
+
+
 @app.route('/api/print_queue/pending', methods=['GET'])
 def api_print_queue_pending():
     filter_type = request.args.get('filter', 'all')
@@ -30,20 +38,27 @@ def api_print_queue_pending():
     items = []
     
     try:
+        # Spoolman's list endpoints IGNORE an `extra=` query filter (they return every
+        # record: 2026-10-19, dev's backlog listed 414 items, 53 of which needed a
+        # label, so a scanned label never left it). Filter here instead.
         # Fetch Spools
         if filter_type in ['all', 'spool']:
-            r_spools = requests.get(f"{sm_url}/api/v1/spool?extra=%7B%22needs_label_print%22%3Atrue%7D", timeout=2)
+            r_spools = requests.get(f"{sm_url}/api/v1/spool", timeout=2)
             if r_spools.ok:
                 for s in r_spools.json():
+                    if not _needs_label(s):
+                        continue
                     s['type'] = 'spool'
                     if 'vendor' in s.get('filament', {}): s['brand'] = s['filament']['vendor'].get('name', 'Unknown')
                     items.append(s)
         
         # Fetch Filaments
         if filter_type in ['all', 'filament']:
-            r_fils = requests.get(f"{sm_url}/api/v1/filament?extra=%7B%22needs_label_print%22%3Atrue%7D", timeout=2)
+            r_fils = requests.get(f"{sm_url}/api/v1/filament", timeout=2)
             if r_fils.ok:
                 for f in r_fils.json():
+                    if not _needs_label(f):
+                        continue
                     f['type'] = 'filament'
                     if 'vendor' in f: f['brand'] = f['vendor'].get('name', 'Unknown')
                     items.append(f)
