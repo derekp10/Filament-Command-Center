@@ -1213,13 +1213,8 @@ const renderList = (data, locId) => {
                 const tempDiv = document.createElement('div');
                 tempDiv.innerHTML = renderBadgeHTML(s, flatIndex, locId);
                 const el = tempDiv.firstElementChild;
-                const btnLabel = el.querySelector('.js-btn-label');
-                if (btnLabel) {
-                    btnLabel.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        window.addToQueue({ id: s.id, type: 'spool', display: s.display });
-                    });
-                }
+                // The card's 🖨️ LABEL carries its own onclick (ui_builder.js);
+                // a second listener here queued every click twice (Group 48.1).
                 itemsContainer.appendChild(el);
                 flatIndex++;
             });
@@ -1268,13 +1263,8 @@ const renderUnslotted = (items) => {
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = renderBadgeHTML(s, i, document.getElementById('manage-loc-id').value);
         const el = tempDiv.firstElementChild;
-        const btnLabel = el.querySelector('.js-btn-label');
-        if (btnLabel) {
-            btnLabel.addEventListener('click', (e) => {
-                e.stopPropagation();
-                window.addToQueue({ id: s.id, type: 'spool', display: s.display });
-            });
-        }
+        // The card's 🖨️ LABEL carries its own onclick (ui_builder.js); a
+        // second listener here queued every click twice (Group 48.1).
         itemContainer.appendChild(el);
     });
 

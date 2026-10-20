@@ -160,6 +160,17 @@ const openSpoolDetails = (id, silent = false) => {
             writeSpoolTemp('spool-detail-temp-nozzle-max', unquoteExtra(filExtra.nozzle_temp_max));
             writeSpoolTemp('spool-detail-temp-bed',        fil.settings_bed_temp);
             writeSpoolTemp('spool-detail-temp-bed-max',    unquoteExtra(filExtra.bed_temp_max));
+            // Group 48.2: the filament's slicer profile, read-only here (Derek:
+            // "(from the filament)", so he knows to edit it there); the note
+            // opens the filament window, as the 🧬 Swatch button does.
+            const spSlicer = unquoteExtra(filExtra.slicer_profile);
+            const spSlicerEl = document.getElementById('spool-detail-slicer-profile');
+            if (spSlicerEl) spSlicerEl.innerText = spSlicer || "--";
+            const spSlicerSrc = document.getElementById('spool-detail-slicer-profile-src');
+            if (spSlicerSrc) {
+                spSlicerSrc.onclick = (d.filament && fil.id != null)
+                    ? () => { modals.spoolModal.hide(); openFilamentDetails(fil.id); } : null;
+            }
 
             document.getElementById('detail-weight').innerText = (fil.weight || 0) + "g";
 
@@ -631,15 +642,6 @@ const openFilamentDetails = (fid, silent = false) => {
         .catch(e => { if (!silent) setProcessing(false); console.error(e); showToast("Connection/Data Error", "error"); });
 };
 
-const quickQueue = (id) => {
-    fetch(`/api/spool_details?id=${id}`)
-        .then(r => r.json())
-        .then(d => {
-            if (!d.id) return;
-            addToQueue({ id: d.id, type: 'spool', display: d.filament?.name || "Unknown" });
-        });
-};
-
 // --- SMART SYNC LISTENER ---
 document.addEventListener('inventory:sync-pulse', () => {
     // 1. Sync Spool Modal
@@ -938,8 +940,39 @@ window.promptEditSampleStatus = (filamentId, currentValue) => {
     });
 };
 
+// --- MOVE FROM A CARD (Group 48.3) ---
+// The ✏️ beside a search or buffer card's 📍 badge: Force Location for that
+// spool with the spool window closed (Derek's option B, 2026-10-19: the badge
+// keeps opening the location; this is the pair the spool window already has).
+// From a search card the search panel closes first (its focus trap would take
+// the dialog's input); a buffer card's spool leaves the buffer once its move
+// has landed, as a location scan's does. No new write path: Force Location's
+// own doors (manage_contents add, the box and Printer pickers).
+window.moveSpoolFromCard = (spoolId, from, currentLoc = '') => {
+    const sid = String(spoolId);
+    if (from === 'search' && window.SearchEngine && window.SearchEngine.offcanvas) {
+        try { window.SearchEngine.offcanvas.hide(); } catch (_) { /* noop */ }
+    }
+    window.promptEditLocation(sid, currentLoc || '', {
+        fromCard: true,
+        onDone: () => {
+            if (from !== 'buffer' || !Array.isArray(state.heldSpools)) return;
+            if (!state.heldSpools.some(s => String(s.id) === sid)) return;
+            state.heldSpools = state.heldSpools.filter(s => String(s.id) !== sid);
+            if (window._recentlyAssignedOut) window._recentlyAssignedOut.set(sid, Date.now());
+            if (typeof renderBuffer === 'function') renderBuffer();
+        },
+    });
+};
+
 // --- MANUAL LOCATION OVERRIDE ---
-window.promptEditLocation = (spoolId, currentLoc) => {
+// `opts` (Group 48.3): {fromCard, onDone(res)}. From a search or buffer card's
+// ✏️ the spool window is closed, so the dialog mounts on the page body and its
+// questions have no host window (on `#spoolModal` they drew inside a hidden
+// window: invisible), the hidden spool window isn't refreshed, and `onDone`
+// hears a move that landed. Without it: the spool window's ✏️, as before.
+window.promptEditLocation = (spoolId, currentLoc, opts = {}) => {
+    const fromCard = !!(opts && opts.fromCard);
     let defaultLoc = currentLoc || "Unassigned";
     if (defaultLoc.startsWith("Deployed: ")) defaultLoc = defaultLoc.replace("Deployed: ", "");
     if (defaultLoc === "Unassigned") defaultLoc = "";
@@ -966,7 +999,7 @@ window.promptEditLocation = (spoolId, currentLoc) => {
             `).join('');
 
             Swal.fire({
-                target: document.getElementById('spoolModal') || document.body,
+                target: fromCard ? document.body : (document.getElementById('spoolModal') || document.body),
                 title: 'Force Location Override',
                 html: `
                     <div class="text-start">
@@ -1217,7 +1250,8 @@ window.promptEditLocation = (spoolId, currentLoc) => {
                     // back as `picked_slot` so the Yes lands where the question said;
                     // the server keeps it only while it is still free. The first
                     // request sends no slot.
-                    const spoolModalEl = document.getElementById('spoolModal');
+                    // The questions' host: the spool window, or none from a card (48.3).
+                    const spoolModalEl = fromCard ? null : document.getElementById('spoolModal');
                     // What the move did, once the server stopped asking. A rejected
                     // write still answers status 'success' and names the spool in
                     // res.failures (2026-09-12).
@@ -1250,7 +1284,10 @@ window.promptEditLocation = (spoolId, currentLoc) => {
                             // off its head into the scan buffer.
                             window.takeIntoBuffer(res);
                             document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
-                            openSpoolDetails(spoolId, true);
+                            if (!fromCard) openSpoolDetails(spoolId, true);
+                            if (opts && typeof opts.onDone === 'function') {
+                                try { opts.onDone(res); } catch (e) { console.error(e); }
+                            }
                             return true;
                         }
                         showToast(failedWhy ? `❌ #${spoolId} was NOT moved: ${failedWhy}` : (res.msg || 'Override failed'), 'error', 7000);

@@ -722,6 +722,18 @@ const wizardReset = () => {
     wizardState.selectedFilamentId = null;
     wizardState.externalMetaData = null;
     wizardState.lockedAfterSuccess = false;
+    // Group 48.4: the last session's profile suggestion (its note, its pending
+    // new choice, and who set the field) doesn't carry over.
+    wizardState.profileSuggestion = null;
+    const _profileSel = document.getElementById('wiz_fil_ef_slicer_profile');
+    if (_profileSel) {
+        if (_profileSel.dataset) { delete _profileSel.dataset.fccSuggested; delete _profileSel.dataset.fccUserSet; }
+        if (typeof _profileSel.querySelectorAll === 'function') {
+            _profileSel.querySelectorAll('option[data-fcc-new-choice]').forEach(o => o.remove());
+        }
+    }
+    const _profileNoteEl = document.getElementById('wiz-fil-profile-note');
+    if (_profileNoteEl) { _profileNoteEl.textContent = ''; _profileNoteEl.style.display = 'none'; }
 
     // 17.3 follow-up: clear stale queue-label chips from the prior
     // success so a fresh wizard open doesn't show last-run's spool IDs.
@@ -2756,7 +2768,181 @@ window.applyFilamentFieldsFromTemplate = (temp) => {
             }
         }
     }
+
+    // Group 48.4: a blank Slicer Profile takes the one this source names (the
+    // Prusament spool page's product line), else his own filaments' choice.
+    window.wizardSuggestSlicerProfile({ lookup: temp.slicer_profile, source: temp.slicer_profile_source });
 };
+
+// --- Group 48.4: fill a blank Slicer Profile --------------------------------------------
+// Derek, 2026-10-19: "this stuff is hard to fill out for manual adds", and for
+// Prusament "it be perfered if we could just source that from the site". Only
+// ever into a BLANK Slicer Profile while a NEW filament is being made (the
+// 'manual' and 'external' modes): a profile the user picked, or one an
+// existing filament has, is never replaced, and nothing is written before the
+// wizard's own Save. Two sources, in order:
+//   1. a lookup that names one (an external parser's `slicer_profile`: the
+//      Prusament page's product line, "Prusament PLA Blend"): his own spelling
+//      when it is one of his profiles already; otherwise a new choice, which
+//      Save adds to Spoolman's list first (wizardCommitSuggestedChoices). Any
+//      later lookup that returns `slicer_profile` works the same way;
+//   2. else his own filaments: the profile most of his filaments with the same
+//      brand and base material use (a Jayo PLA gets the Sunlu profile his Jayo
+//      filaments have); a tie fills nothing and names both.
+// A note under the field says where it came from. Re-run when the brand or
+// material changes, it may replace only its own earlier suggestion.
+const _PROFILE_KEY = 'slicer_profile';
+let _settingProfile = false;
+const _profileSelect = () => document.getElementById(`wiz_fil_ef_${_PROFILE_KEY}`);
+const _profileField = () => ((wizardState.extraFields || {}).filament || []).find(f => f && f.key === _PROFILE_KEY) || null;
+const _profileChoices = () => {
+    const raw = (_profileField() || {}).choices;
+    if (Array.isArray(raw)) return raw.map(String);
+    if (typeof raw === 'string') {
+        try { const p = JSON.parse(raw); return Array.isArray(p) ? p.map(String) : []; } catch (_) { return []; }
+    }
+    return [];
+};
+const _unquoteProfile = (v) => String(v == null ? '' : v).trim().replace(/^"(.*)"$/, '$1').trim();
+
+const _setProfileNote = (text) => {
+    let note = document.getElementById('wiz-fil-profile-note');
+    if (!note) {
+        const sel = _profileSelect();
+        const wrap = sel && typeof sel.closest === 'function' ? sel.closest('[data-extra-key]') : null;
+        if (!wrap) return;
+        note = document.createElement('div');
+        note.id = 'wiz-fil-profile-note';
+        note.className = 'small mt-1 fcc-wiz-profile-note';
+        wrap.appendChild(note);
+    }
+    note.textContent = text || '';
+    note.style.display = text ? '' : 'none';
+};
+
+const _selectProfile = (sel, value, isNew, source) => {
+    if (isNew && !Array.from(sel.options || []).some(o => o.value === value)) {
+        const opt = document.createElement('option');
+        opt.value = value;
+        opt.textContent = `${value} (new, from ${source})`;
+        opt.dataset.fccNewChoice = '1';
+        sel.appendChild(opt);
+    }
+    _settingProfile = true;
+    try { sel.value = value; } finally { _settingProfile = false; }
+    sel.dataset.fccSuggested = value;
+};
+
+// The profile most of his filaments with this brand + base material use:
+// {profile, count}, {tie: [a, b], count} or null.
+window.wizardOwnProfileSuggestion = (vendorName, material) => {
+    const vendor = String(vendorName || '').trim().toLowerCase();
+    const known = (typeof _knownFilamentAttributes === 'function') ? _knownFilamentAttributes() : [];
+    const base = (m) => {
+        const raw = String(m || '').trim();
+        const split = window.splitMaterialAndAttributes ? window.splitMaterialAndAttributes(raw, known) : null;
+        return String((split && split.base) || raw).trim().toLowerCase();
+    };
+    const mat = base(material);
+    if (!vendor || !mat) return null;
+    const counts = new Map();
+    (wizardState.allFilaments || []).forEach(f => {
+        if (!f || String((f.vendor && f.vendor.name) || '').trim().toLowerCase() !== vendor) return;
+        if (base(f.material) !== mat) return;
+        const p = _unquoteProfile((f.extra || {})[_PROFILE_KEY]);
+        if (p) counts.set(p, (counts.get(p) || 0) + 1);
+    });
+    if (!counts.size) return null;
+    const ranked = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+    const top = ranked.filter(([, n]) => n === ranked[0][1]).map(([p]) => p);
+    return top.length > 1 ? { tie: top, count: ranked[0][1] } : { profile: top[0], count: ranked[0][1] };
+};
+
+// Returns what it suggested ({value, isNew, from}) or null.
+window.wizardSuggestSlicerProfile = ({ lookup = '', source = '' } = {}) => {
+    const sel = _profileSelect();
+    if (!sel || !['manual', 'external'].includes(wizardState.mode)) return null;
+    const ds = sel.dataset || {};
+    const current = String(sel.value || '').trim();
+    if (ds.fccUserSet === '1' || (current && current !== ds.fccSuggested)) return null;
+    const choices = _profileChoices();
+    const known = (v) => choices.find(c => c.toLowerCase() === String(v).toLowerCase()) || null;
+    const want = _unquoteProfile(lookup);
+    if (want) {
+        const from = String(source || '').trim() || 'the lookup';
+        const match = known(want);
+        _selectProfile(sel, match || want, !match, from);
+        _setProfileNote(match ? `🎚️ From ${from}: ${match}.`
+            : `🎚️ ${from} names this ${want}, which isn't in your profile list yet: Save adds it.`);
+        wizardState.profileSuggestion = { value: match || want, isNew: !match, from };
+        return wizardState.profileSuggestion;
+    }
+    const vendor = String((document.getElementById('wiz-fil-vendor-search') || {}).value || '').trim();
+    const material = String((document.getElementById('wiz-fil-material') || {}).value || '').trim();
+    const own = window.wizardOwnProfileSuggestion(vendor, material);
+    const what = `${vendor} ${material}`.trim();
+    if (own && own.profile) {
+        const match = known(own.profile);
+        _selectProfile(sel, match || own.profile, !match, 'your filaments');
+        _setProfileNote(`🎚️ Suggested: ${match || own.profile} (${own.count} of your ${what} filament${own.count === 1 ? '' : 's'} `
+            + `use${own.count === 1 ? 's' : ''} it).`);
+        wizardState.profileSuggestion = { value: match || own.profile, isNew: !match, from: 'your filaments' };
+        return wizardState.profileSuggestion;
+    }
+    // Nothing (or a tie) for this brand + material: an earlier suggestion of ours
+    // no longer applies, so the field goes back to blank.
+    if (current && current === ds.fccSuggested) {
+        _settingProfile = true;
+        try { sel.value = ''; } finally { _settingProfile = false; }
+        delete sel.dataset.fccSuggested;
+    }
+    wizardState.profileSuggestion = null;
+    _setProfileNote(own && own.tie
+        ? `🎚️ Your ${what} filaments use ${own.tie.join(' and ')} equally: pick one.` : '');
+    return null;
+};
+
+// Save's step before it writes (Group 48.4): a suggested profile that isn't one
+// of the choices yet is added to Spoolman's list first (a choice field refuses
+// an unknown value). False when that failed: the save stops and says why.
+window.wizardCommitSuggestedChoices = async (fPayload) => {
+    const s = wizardState.profileSuggestion;
+    const sent = fPayload && fPayload.extra ? _unquoteProfile(fPayload.extra[_PROFILE_KEY]) : '';
+    if (!s || !s.isNew || !sent || sent !== s.value) return true;
+    try {
+        const r = await fetch('/api/external/fields/add_choice', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ entity_type: 'filament', key: _PROFILE_KEY, new_choice: s.value }),
+        });
+        const d = await r.json();
+        if (!r.ok || !d || d.success === false) throw new Error((d && (d.msg || d.error)) || `HTTP ${r.status}`);
+        const field = _profileField();
+        if (field && Array.isArray(field.choices) && !field.choices.includes(s.value)) field.choices.push(s.value);
+        s.isNew = false;
+        return true;
+    } catch (e) {
+        const msg = `Couldn't add the slicer profile "${s.value}" to Spoolman's list (${(e && e.message) || e}), `
+            + `so nothing was saved. Pick a profile from the list, or Save again.`;
+        if (typeof showToast === 'function') showToast(`❌ ${msg}`, 'error', 7000);
+        const status = document.getElementById('wiz-status-msg');
+        if (status) status.innerText = msg;
+        return false;
+    }
+};
+
+// The user's own pick is never replaced; a brand or material change re-suggests.
+document.addEventListener('change', (e) => {
+    const t = e && e.target;
+    if (!t || !t.id) return;
+    if (t.id === `wiz_fil_ef_${_PROFILE_KEY}`) {
+        if (_settingProfile) return;
+        if (t.dataset) t.dataset.fccUserSet = '1';
+        wizardState.profileSuggestion = null;
+        _setProfileNote('');
+    } else if (t.id === 'wiz-fil-vendor-sel' || t.id === 'wiz-fil-material') {
+        window.wizardSuggestSlicerProfile({});
+    }
+}, true);
 
 // Spool-level extract — returns the per-spool override dict the wizard
 // will merge onto each created spool. Does NOT touch the DOM.
@@ -2920,6 +3106,14 @@ window.wizardRenderPostSaveQueueActions = (mode, createdSpoolsArg, editSpoolId) 
     if (!actionRow) return;
     actionRow.innerHTML = '';
 
+    // Group 48.1: the queue row's text, "Brand - Material - Color" from the
+    // filament the wizard holds (the backlog's look), so a queued label reads
+    // like one before the queue window reads it live; "Spool #N" without one.
+    const fieldVal = (id) => { const el = document.getElementById(id); return el ? String(el.value || '').trim() : ''; };
+    const filamentText = [fieldVal('wiz-fil-vendor-search'), fieldVal('wiz-fil-material'), fieldVal('wiz-fil-color_name')]
+        .filter(Boolean).join(' - ');
+    const queueText = (sid) => filamentText || `Spool #${sid}`;
+
     const makeQueueChip = (sid) => {
         const btn = document.createElement('button');
         btn.type = 'button';
@@ -2940,7 +3134,7 @@ window.wizardRenderPostSaveQueueActions = (mode, createdSpoolsArg, editSpoolId) 
                 markQueued();
                 return;
             }
-            window.addToQueue({ id: sid, type: 'spool', display: `Spool #${sid}` });
+            window.addToQueue({ id: sid, type: 'spool', display: queueText(sid) });
             if (typeof showToast === 'function') showToast(`Queued label for Spool #${sid}`, 'success', 2500);
             markQueued();
         });
@@ -2988,7 +3182,7 @@ window.wizardRenderPostSaveQueueActions = (mode, createdSpoolsArg, editSpoolId) 
                     already++;
                     return;
                 }
-                window.addToQueue({ id: sid, type: 'spool', display: `Spool #${sid}` });
+                window.addToQueue({ id: sid, type: 'spool', display: queueText(sid) });
                 added++;
             });
             chips.forEach(c => c.markQueued());
@@ -3736,6 +3930,14 @@ window.wizardSubmit = async () => {
         } else {
             payload.placements = window.wizardCreatePlacements(
                 spool_overrides ? spool_overrides.length : qty, sp_payload.location, placement);
+        }
+
+        // Group 48.4: a suggested slicer profile that isn't a choice yet (a new
+        // variant a Prusament page names) joins Spoolman's list before the
+        // filament that uses it; if that fails, nothing is saved.
+        if (!(await window.wizardCommitSuggestedChoices(f_payload))) {
+            document.getElementById('btn-wiz-submit').disabled = false;
+            return;
         }
 
         const endpoint = wizardState.mode === 'edit_spool' ? '/api/edit_spool_wizard' : '/api/create_inventory_wizard';

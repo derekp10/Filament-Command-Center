@@ -1953,6 +1953,33 @@ def get_best_color_distance(target_hex, compare_hex_csv):
         return float('inf')
     return min(distances)
 
+
+def filament_attribute_list(fil):
+    """Group 49.1: a filament's attribute tags ("For Infill", "Silk", "One-off"),
+    cleaned the way the cards print them (format_spool_display): each one
+    trimmed of spaces and stray quotes, blanks dropped, case kept.
+
+    One parse, the shared _parse_filament_attrs_value, so a change there (Group
+    54.3's comma split of a non-JSON "Silk, Matte") reaches search and the
+    Low-stock list too. A non-dict filament or extra, or a value the parse can't
+    read, gives []: an odd attribute value never breaks a search."""
+    if not isinstance(fil, dict):
+        return []
+    extra = fil.get('extra')
+    if not isinstance(extra, dict):
+        return []
+    try:
+        raw = _parse_filament_attrs_value(extra.get('filament_attributes'))
+    except Exception:
+        return []
+    out = []
+    for a in raw:
+        s = str(a).strip().strip('"').strip("'").strip()
+        if s:
+            out.append(s)
+    return out
+
+
 def search_inventory(query="", material="", vendor="", color_hex="", only_in_stock=False, empty=False, target_type="spool", min_weight="", max_weight="", deployed_state="", sort=""):
     """
     Searches Spoolman inventory objects (spools or filaments) based on fuzzy attributes and color closeness.
@@ -2074,7 +2101,12 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
             if query_tokens:
                 # Build a single robust string representing all the item's metadata
                 item_id = str(item.get('id', ''))
-                matchable = f"{item_id} {str(fil.get('name', '')).lower()} {str(fil.get('material', '')).lower()} {str(vid.get('name', '')).lower()} {color_name}"
+                # Group 49.1: the filament's attribute tags are searchable text
+                # too (spool and filament mode alike), so "infill" finds the For
+                # Infill filaments and their spools, and a multi-word tag works
+                # through the every-token rule below ("for infill", "matte pla").
+                attr_text = " ".join(a.lower() for a in filament_attribute_list(fil))
+                matchable = f"{item_id} {str(fil.get('name', '')).lower()} {str(fil.get('material', '')).lower()} {str(vid.get('name', '')).lower()} {color_name} {attr_text}"
                 
                 # ALL tokens must be present somewhere in the matchable string
                 token_match_failed = False

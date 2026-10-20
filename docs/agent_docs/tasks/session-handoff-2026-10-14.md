@@ -495,6 +495,17 @@ Resume cron: session-only, hourly; deleted once this section says DONE. Every br
   browser files 99 passed (load 1.02×).
 - Group 48 starts on `feature/groups-48-49-cards-restock`, branched from Group 51's tip (both edit Force Location
   and the Location Manager), so it merges to `dev` after 51.
+- **Group 48 built** on that branch: `d1e0275` 48.2 (the profile on the spool window, "(from the filament)"),
+  `49dc458` 48.1 (queue rows like the backlog; 5 of 6 tests red on the base, the failed-read one is a control),
+  `00a50ec` 48.4 (the profile fill-in: prusament.com's product line, else his own filaments; Derek's 19:45 answer),
+  `0c01056` 48.3 (the ✏️ beside a card's 📍 badge → Force Location). Offline 3044 passed.
+- **Group 49 merged** from its builder (`c74ddc7`, 6 commits; 86 tests) as `9da2b4d`; `329a129` the merge
+  follow-ups: a 🛑 Review Apply now warns too (`_low_stock_after_review`, `was_archived` per charge; the builder's
+  open gap), the panel test waited for the search panel's slide (it measured mid-slide), CLAUDE.md rows. Group 49's
+  9 browser tests pass against dev (3 runs).
+- Found while building 48.2 (a follow-up, not fixed): Enter on a focused button in a Bootstrap window (the spool
+  window's buttons, the new "(from the filament)") does nothing, app-wide: the scan accumulator in `scripts.html`
+  `preventDefault`s every Enter outside a text field so a scanner's Enter never presses a button. Space works.
 
 ## Questions for Derek
 
