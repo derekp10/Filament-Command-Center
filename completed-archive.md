@@ -1,5 +1,9 @@
 # **Done**
 
+* **[2026-10-19 — 🧰 Standalone fix: the Missing Labels backlog lists only what needs a label (dev `afdd509`, prod `73e456d`)]** — Derek's report the same morning: a scanned swatch label said "Label & Sample Verified" but never left the backlog.
+
+  * ✅ **🟡 The backlog listed every spool and filament.** `/api/print_queue/pending` relied on Spoolman's `?extra={"needs_label_print":true}` filter, which Spoolman 0.27 IGNORES (dev: 414 listed, 53 needed a label), so its list and the 🏷️ Backlog count had included verified and never-flagged records since 2026-02. The route now filters on the flag itself (`_needs_label`). Pin: `tests/test_print_queue.py::test_get_pending_queue`, whose Spoolman fake returns every record like the real one (red on the old route). Live check on dev: `FIL:83` scanned → verified and gone from the backlog (its flag set back afterwards).
+
 * **[2026-10-19 — 🎯 Group 40 Slot Picker DONE → `feature/group-40-slot-picker` (merged to `dev` `8d0ff64`)]** — Built over five sessions between 2026-10-13 and 2026-10-19 and reviewed five times ([task file](docs/agent_docs/tasks/40-slot-picker.md), with an as-built note per sub-task; [handoff](docs/agent_docs/tasks/session-handoff-2026-10-14.md), its "Group 40, …" sections). Derek's hands-on checks stay in the buglist's ⏸️ PENDING DEREK section (S1–S7, and "the pickers and Swap option C"); his open questions are in the handoff's "Group 40, final leg". Leftovers: the buglist's standalone "🟡 Group 40 leftovers".
 
   * ✅ **40.0a / item H — nothing is filed on a Printer row that isn't a head, and Bulk Move says so in printer words.** `locations_db.is_printer_row_not_head` + `logic.printer_row_refusal` (`blocked_reason: printer_row`); a printer with no heads yet refuses too; a printer that is its own head stays loadable.
