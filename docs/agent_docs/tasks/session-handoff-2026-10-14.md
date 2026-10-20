@@ -437,7 +437,7 @@ _I decided (listed in case you object):_
 
 Follow-ups filed (standalone in the buglist, none urgent): moving a hand-archived spool un-archives it (it predates Group 40); a "stored only" note on Return's chooser tiles; a `blocked_reason` for the slot-still-claimed refusal; a Return chooser spanning two boxes (→ Group 37); and the first engine review's open notes. All in the buglist's "🟡 Group 40 leftovers".
 
-### Bundle run (evening 2026-10-19 → 20): Groups 51, 48, 49, 52 — IN PROGRESS
+### Bundle run (evening 2026-10-19 → 20): Groups 51, 48, 49, 52 — DONE (`dev` `2ec9f46`; `main` waits for Derek's OK)
 
 Derek's ask (19:40): "Read docs/agent_docs/tasks/bundle-2026-10-19.md and run it" ([the plan](bundle-2026-10-19.md)).
 Budget at the start: 5-hour window 9 % (resets ~23:45), weekly 16 % (resets in 6 days). His words: "I'd like to get
@@ -541,6 +541,41 @@ Resume cron: session-only, hourly; deleted once this section says DONE. Every br
 - **Paperwork** (before the sweep, so it covers the final tree): 8 buglist items archived (4 blocks at the top of
   `completed-archive.md`), the Group 40 and Group 36 leftovers trimmed, 9 standalone follow-ups filed, one ⏸️ PENDING
   DEREK item (One-off tagging; an archived spool at a head), rows 48 / 49 / 51 / 52 and the task files → `DONE`.
+- **The final full `RUN_INTEGRATION` sweep** on the paperwork commit `c12b6ec`: **4203 passed, 1 failed, 15 skipped in
+  23:49** (load 1.04×). The red, `test_return_overlay_and_refresh.py::test_quickswap_refreshes_manage_view_after_yes`,
+  is its teardown guard, not the product: the test's own checks passed (the manage view re-rendered, the spool reached
+  XL-3), then its restore Return needed a confirm because the real XL ("🦝 XL") was printing, and a test never confirms
+  a real print (Group 39.2). It left dev #134 on XL-3; Claude put it back in LR-MDB-1 slot 3 (a dev-only Return with
+  the print confirmed). It passed in the early sweep, with the XL idle.
+- **Merged to `dev` (`--no-ff`)** in the planned order: `61c91a6` (51), `6b3efee` (48 + 49), `eaf2978` (52; `git
+  rerere` replayed the `test_contrast_guard.py` resolution) and **`2ec9f46`** (the bundle: the review fixes, reads-1 and the
+  paperwork; the same file conflicted again from the criss-cross base and took the bundle's copy, checked first to be
+  dev's plus reads-1's own commit). `dev`'s tree is the swept tree. **Pushed `origin/dev` `2ec9f46`; `main` untouched
+  (`73e456d`).**
+- The session hit the 5-hour usage limit once, after the merge; resumed 2026-10-20 for these docs, the cron and memory.
+- Branches kept for Derek's branch-cleanup pass (added to that ⏸️ PENDING DEREK item):
+  `feature/group-51-move-archive-integrity`, `feature/groups-48-49-cards-restock`, `feature/group-49-find-and-restock`,
+  `feature/group-52-spoolman-read-load`, `fix/bundle-reads-1`, `bundle/2026-10-19` (all on `origin`). Only Claude's own
+  leftover `worktree-agent-*` pointers (at `main`'s tip, no work on them) were deleted.
+
+**For Derek, cold (nothing here blocks anything):**
+1. **Release `dev` → `main`?** (needs your OK) What ships: Groups 51, 48, 49 and 52 plus the review's 14 fixes and
+   reads-1, on top of the Group 40 release. Nothing in ⏸️ PENDING DEREK gates it. Recommendation: yes, when it suits
+   you; you then run the TrueNAS update as usual.
+2. **An archived spool scanned onto a toolhead** (your call; a default is built). Example: you archive #57 by hand with
+   300 g left, then scan it onto XL-1. Built (A): refused, "weigh it back into stock (or untick Archived in Edit)
+   first"; into a bound slot it is stored, not loaded. Other way (B): loading it un-archives it. Recommendation: A. In
+   ⏸️ PENDING DEREK.
+3. **Tag the filaments you won't rebuy "One-off"** (your data, whenever): otherwise the ⚠️ Low stock list's Out section
+   lists every filament you ever used up. In ⏸️ PENDING DEREK.
+4. **Calls Claude made, for your eyes only (already built; say if one is wrong):** the 🏷️ Backlog count updates on the
+   next heartbeat (up to 5 s while you use the page, 15 s idle); a filament already under the line still gets "is out"
+   when its last spool empties (two warnings per run-down: "running low", then "is out"); during a Spoolman blip the
+   Quick-Swap grid says "⚠️ couldn't read LR-MDB-1" instead of empty or Deposit tiles, a Location Manager opened then
+   shows the notice and no slots, the Printer Status band and the Location List keep what they showed (a head or row
+   never read says "? not read" / "?"); a spool FCC still has on a head, put into the empty slot that feeds that same
+   head from the grid's empty tile or the Quick-Swap deposit, is stored in the slot, not loaded straight back (the
+   engine's rule for a slot it picks, now that those two doors send the slot they showed as `picked_slot`).
 
 ## Questions for Derek
 
@@ -660,3 +695,6 @@ harness's 1% tolerance let stale CORE1 text pass).
 | builders (Agent, worktrees) 2026-10-19 | 40.6 Return / 40.7 wizard server | 2 | 780,466 + 629,973 subagent | 54 / 46 min, 225 / 212 tool calls; merged `45de89d` / `070291e` |
 | `wf_bd637c78-057` g40-final-leg-review | Swap option C + 40.4–40.7 | 5 (4 lenses + 1 batched skeptic) | 2,311,583 subagent | ~48 min; 27 findings, all confirmed (none red, 4 orange, the rest yellow / notes); fixed in `1a480cf`, `12d769d` and by the two fixers |
 | fixers (Agent, worktrees) 2026-10-19 | the review's Return / wizard findings | 2 | 437,535 + 545,086 subagent | 34 / 42 min; merged `90815ba` / `5b4b591` |
+| builders (Agent, worktrees) 2026-10-19 evening | Groups 52 / 49 | 2 | 581,470 + 593,882 subagent | 41 / 60 min, 241 / 237 tool calls; merged into the bundle `c37b8c9` (52) / into 48's branch `9da2b4d` (49) |
+| `wf_ee3ec73c-b42` bundle-review-2026-10-19 | Groups 51 + 48 + 49 + 52 | 5 (4 lenses + 1 batched skeptic) | 2,253,123 subagent | ~45 min, 635 tool calls; 17 findings → 14 confirmed (1 orange, 7 yellow, 6 notes), 3 duplicates, none refuted; all fixed (`f190884`, `9e5db92`, `3b2196a`; reads-1 by the fixer below) |
+| fixer (Agent, worktree) 2026-10-19 | the review's reads-1 | 1 | 397,787 subagent | 30 min, 124 tool calls; merged `5e90f4d` |

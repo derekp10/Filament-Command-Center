@@ -4,7 +4,7 @@
 **Estimated effort:** MEDIUM (~6–10 h, 1–1.5 sessions). 51.1 ~1–2 h · 51.2 under 1 h · 51.3 ~1 h · 51.4 minutes · 51.5–51.7 ~3–5 h · tests throughout.
 **Risk:** **MEDIUM.** `update_spool` is the hottest write path (every move, deduct and weigh-out passes through it), and 51.5–51.7 extend the move engine's pre-write contract: extend a step, never reorder it (the comment block in `_perform_smart_move_impl`; CLAUDE.md "Move confirms name their heads").
 
-> **Status: `DONE` 2026-10-19 (the bundle run; merged to `dev` with the bundle; archived in `completed-archive.md`). Was: `TODO` — filed 2026-10-19 (`/refresh-groups`) from the "🟡 Group 40 leftovers" and Derek's multi-user item. No Derek decision needed.** Planned FIRST in the bundle run with Groups 48, 49 and 52 ([bundle-2026-10-19.md](bundle-2026-10-19.md)): 51.1 is a real bug on the hot write path, so it gets the engine-lens review.
+> **Status: `DONE` 2026-10-19 (the bundle run; merged to `dev` `2ec9f46` with the bundle; archived in `completed-archive.md`). Was: `TODO` — filed 2026-10-19 (`/refresh-groups`) from the "🟡 Group 40 leftovers" and Derek's multi-user item. No Derek decision needed.** Planned FIRST in the bundle run with Groups 48, 49 and 52 ([bundle-2026-10-19.md](bundle-2026-10-19.md)): 51.1 is a real bug on the hot write path, so it gets the engine-lens review.
 > **Theme: a move does what the screen showed, and nothing else.** Every decision: [refresh-2026-10-19.md](refresh-2026-10-19.md).
 > Code anchors were read on `dev` @ `c5c5aa6` (the refresh's grounding) and spot-checked at `08c4b10`. Line numbers drift, so re-grep before editing.
 

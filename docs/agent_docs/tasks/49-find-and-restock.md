@@ -4,7 +4,7 @@
 **Estimated effort:** MEDIUM (~6–10 h, 1 session). 49.1 ~1–2 h · the Low-stock list ~4–6 h · the Activity Log warning ~1–2 h.
 **Risk:** **LOW–MEDIUM.** Search and the list are read-only. The Activity Log warning hooks in after the print deduct's ledger write and after a manual weight change, both hot paths, so it must never fail, refuse or noticeably delay either.
 
-> **Status: `DONE` 2026-10-19 (the bundle run; merged to `dev` with the bundle; archived in `completed-archive.md`). Was: `TODO` — filed 2026-10-19 (`/refresh-groups`). Derek's decision is in (2026-10-19: the list plus one Activity Log warning); nothing waits on him.** Planned for the bundle run with Groups 48, 51 and 52 ([bundle-2026-10-19.md](bundle-2026-10-19.md)).
+> **Status: `DONE` 2026-10-19 (the bundle run; merged to `dev` `2ec9f46` with the bundle; archived in `completed-archive.md`). Was: `TODO` — filed 2026-10-19 (`/refresh-groups`). Derek's decision is in (2026-10-19: the list plus one Activity Log warning); nothing waits on him.** Planned for the bundle run with Groups 48, 51 and 52 ([bundle-2026-10-19.md](bundle-2026-10-19.md)).
 > Finding what you have and knowing what to rebuy. Every decision and his exact answers: [refresh-2026-10-19.md](refresh-2026-10-19.md).
 > Code anchors were read on `dev` @ `c5c5aa6` (the refresh's grounding) and spot-checked at `08c4b10`. Line numbers drift, so re-grep before editing.
 

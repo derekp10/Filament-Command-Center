@@ -4,7 +4,7 @@
 **Estimated effort:** MEDIUM (~5–9 h, 1 session). One read per heartbeat ~2–3 h · honest empties ~1–2 h · the Quick-Swap batch ~1–2 h · the extras-read retry ~1 h · tests throughout.
 **Risk:** **MEDIUM.** The heartbeat feeds every open page, and the extras read guards every extras write (`update_spool`, `update_filament`, `update_vendor`).
 
-> **Status: `DONE` 2026-10-19 (the bundle run; merged to `dev` with the bundle; archived in `completed-archive.md`). Was: `TODO` — filed 2026-10-19 (`/refresh-groups`) from the 🐢 spool-list item and Group 36's follow-up (1). No Derek decision needed.** Planned LAST in the bundle run with Groups 48, 49 and 51 ([bundle-2026-10-19.md](bundle-2026-10-19.md)), or as a background builder.
+> **Status: `DONE` 2026-10-19 (the bundle run; merged to `dev` `2ec9f46` with the bundle; archived in `completed-archive.md`). Was: `TODO` — filed 2026-10-19 (`/refresh-groups`) from the 🐢 spool-list item and Group 36's follow-up (1). No Derek decision needed.** Planned LAST in the bundle run with Groups 48, 49 and 51 ([bundle-2026-10-19.md](bundle-2026-10-19.md)), or as a background builder.
 > How FCC reads Spoolman when Spoolman is slow: fewer whole-list reads, and "Spoolman didn't answer" instead of an empty box. Every decision: [refresh-2026-10-19.md](refresh-2026-10-19.md).
 > Code anchors were read on `dev` @ `c5c5aa6` (the refresh's grounding) and spot-checked at `08c4b10`. Line numbers drift, so re-grep before editing.
 

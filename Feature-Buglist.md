@@ -117,6 +117,10 @@
   **Added 2026-10-19 (Group 40, merged into `dev` `8d0ff64`):** `feature/group-40-slot-picker`,
   `feature/group-40-engine-403`, `feature/g40-6-return-picker`, `feature/g40-7-wizard-server`, `fix/g40-6-review`,
   `fix/g40-7-review` (all on `origin`).
+  **Added 2026-10-20 (the 2026-10-19 bundle, merged into `dev` `2ec9f46`):**
+  `feature/group-51-move-archive-integrity`, `feature/groups-48-49-cards-restock`,
+  `feature/group-49-find-and-restock`, `feature/group-52-spoolman-read-load`, `fix/bundle-reads-1`,
+  `bundle/2026-10-19` (all on `origin`).
 * **⏸️ PENDING DEREK — lay out and label the INDX spool holders (and the 8-spool box; maybe the XL's holders).**
   _(Derek, 2026-10-19, answering the refresh's holder question.)_ Setting them up in FCC as a box with one slot per
   holder (no code) is *"possibly the way to go"*, but it is his grunt work and design first:

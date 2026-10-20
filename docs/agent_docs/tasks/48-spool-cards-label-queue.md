@@ -4,7 +4,7 @@
 **Estimated effort:** MEDIUM (~8–14 h, 1.5–2 sessions). 48.2 ~1 h · 48.1 ~2–4 h · 48.4 ~2–4 h · 48.3 ~3–5 h · tests and visual baselines throughout.
 **Risk:** **LOW.** Frontend only, with no new write path: 48.3 reuses Force Location's doors, and 48.4 only pre-fills a field that the wizard's own Save writes. The real hazards are an invisible Force Location (its dialog is tied to the spool window today) and visual-baseline churn.
 
-> **Status: `DONE` 2026-10-19 (the bundle run; merged to `dev` with the bundle; archived in `completed-archive.md`). Was: `TODO` — filed 2026-10-19 (`/refresh-groups`). Derek's decisions are in (2026-10-19); nothing waits on him.** Planned for the bundle run with Groups 49, 51 and 52 ([bundle-2026-10-19.md](bundle-2026-10-19.md)).
+> **Status: `DONE` 2026-10-19 (the bundle run; merged to `dev` `2ec9f46` with the bundle; archived in `completed-archive.md`). Was: `TODO` — filed 2026-10-19 (`/refresh-groups`). Derek's decisions are in (2026-10-19); nothing waits on him.** Planned for the bundle run with Groups 49, 51 and 52 ([bundle-2026-10-19.md](bundle-2026-10-19.md)).
 > Three of Derek's own asks about what a spool card or window shows and does, plus his same-day idea of filling in the slicer profile. Every decision and his exact answers: [refresh-2026-10-19.md](refresh-2026-10-19.md).
 > Code anchors were read on `dev` @ `c5c5aa6` (the refresh's grounding) and spot-checked at `08c4b10`. Line numbers drift, so re-grep before editing.
 > Suggested order: 48.2 (about an hour, no risk) → 48.1 → 48.4 → 48.3.
