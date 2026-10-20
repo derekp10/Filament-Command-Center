@@ -142,6 +142,66 @@ window.updateManageTitle = (loc, itemArray = null) => {
 window._fccManageOpenSeq = window._fccManageOpenSeq || 0;
 window._fccManageDismissSeq = window._fccManageDismissSeq || 0;
 
+// --- Group 52.1b: "Spoolman didn't answer" instead of an empty box ----------
+// The open, refreshManageView and the heartbeat's manage section read the open
+// location's contents from Spoolman. A read that fails keeps the cards already
+// on screen (a fresh open has none, and draws none) and says so in this notice;
+// a box that really is empty still draws EMPTY. A slow Spoolman used to answer
+// [] here, which drew as an empty box. The notice sits above the contents and
+// is made on first use (the modal's template has no slot for it); its look is
+// the doubled-head banner's (Group 42.4), Derek's approved warning style.
+let _manageShownFor = null;   // the location (upper-cased) whose cards are on screen
+const _manageReadNoticeEl = () => {
+    let el = document.getElementById('manage-read-notice');
+    if (el) return el;
+    const anchor = document.getElementById('manage-grid-view');
+    if (!anchor || !anchor.parentNode) return null;
+    el = document.createElement('div');
+    el.id = 'manage-read-notice';
+    el.setAttribute('role', 'status');
+    el.setAttribute('aria-live', 'polite');
+    el.style.cssText = 'display:none; background:#2b2200; color:#ffd54a; border:1px solid #ffd54a;'
+        + ' border-radius:6px; padding:8px 12px; margin-bottom:10px; font-weight:bold;';
+    anchor.parentNode.insertBefore(el, anchor);
+    return el;
+};
+// Shows the notice for the OPEN location only (a late answer about the previous
+// one is ignored, like _renderManagePayload). Returns whether it showed.
+const _showManageReadFailure = (id, why) => {
+    const openId = String((document.getElementById('manage-loc-id') || {}).value || '');
+    if (!id || String(id).toUpperCase() !== openId.toUpperCase()) return false;
+    const el = _manageReadNoticeEl();
+    if (!el) return false;
+    const kept = _manageShownFor === openId.toUpperCase();
+    el.textContent = `⚠️ Spoolman didn't answer, so FCC couldn't check what's in ${openId} just now.`
+        + (kept ? ' These cards are from its last answer.' : '')
+        + ' It tries again every few seconds.';
+    el.title = why ? String(why) : '';
+    el.style.display = 'block';
+    return true;
+};
+const _clearManageReadFailure = () => {
+    const el = document.getElementById('manage-read-notice');
+    if (!el) return;
+    el.style.display = 'none';
+    el.textContent = '';
+    el.title = '';
+};
+window._showManageReadFailure = _showManageReadFailure;
+// The grid (a multi-slot Dryer Box / MMU Slot) or the list, whichever `loc` uses.
+const _isGridLoc = (loc) => (loc.Type === 'Dryer Box' || loc.Type === 'MMU Slot') && parseInt(loc['Max Spools']) > 1;
+const _showManageView = (isGrid) => {
+    document.getElementById('manage-grid-view').style.display = isGrid ? 'block' : 'none';
+    document.getElementById('manage-list-view').style.display = isGrid ? 'none' : 'block';
+};
+// A strict contents read: the list, or null when Spoolman didn't answer (the
+// route's 502) or the answer wasn't a list. `why` carries the server's words.
+const _readContentsStrict = (id) => fetch(`/api/get_contents?id=${encodeURIComponent(id)}&strict=1`)
+    .then(r => r.json().then(body => ({ ok: r.ok, body }), () => ({ ok: false, body: null })))
+    .then(({ ok, body }) => (ok && Array.isArray(body))
+        ? { list: body, why: null }
+        : { list: null, why: (body && body.error) || "Spoolman didn't answer" });
+
 // --- PRE-FLIGHT PROTOCOL ---
 window.openManage = (id) => {
     setProcessing(true);
@@ -190,28 +250,30 @@ window.openManage = (id) => {
 
     document.getElementById('manage-grid-view').style.display = 'none';
     document.getElementById('manage-list-view').style.display = 'none';
+    _clearManageReadFailure();
+    _manageShownFor = null;
 
+    const isGrid = _isGridLoc(loc);
 
-
-    const isGrid = (loc.Type === 'Dryer Box' || loc.Type === 'MMU Slot') && parseInt(loc['Max Spools']) > 1;
-
-    fetch(`/api/get_contents?id=${id}`)
-        .then(r => r.json())
-        .then(d => {
+    // Group 52.1b: a STRICT read, so a Spoolman blip is "couldn't read" (the
+    // route's 502), never [] drawn as an empty box. The modal still opens, with
+    // the notice and no cards; the heartbeat's manage section fills them in
+    // once Spoolman answers.
+    _readContentsStrict(id)
+        .then(({ list: d, why }) => {
             // Group 38.1 — a NEWER openManage superseded this one; it will do
             // the rendering. Rendering stale content here would clobber it.
             if (seq !== window._fccManageOpenSeq) {
                 setProcessing(false);
                 return;
             }
-            if (isGrid) {
-                document.getElementById('manage-grid-view').style.display = 'block';
-                document.getElementById('manage-list-view').style.display = 'none';
-                renderGrid(d, parseInt(loc['Max Spools']));
+            if (d) {
+                _showManageView(isGrid);
+                if (isGrid) renderGrid(d, parseInt(loc['Max Spools']));
+                else renderList(d, id);
+                _manageShownFor = String(id).toUpperCase();
             } else {
-                document.getElementById('manage-grid-view').style.display = 'none';
-                document.getElementById('manage-list-view').style.display = 'block';
-                renderList(d, id);
+                _showManageReadFailure(id, why);
             }
 
             renderManagerNav();
@@ -224,9 +286,10 @@ window.openManage = (id) => {
             generateSafeQR('manage-loc-qr-mini', 'LOC:' + safeId, 45);
             generateSafeQR('qr-modal-done', 'CMD:DONE', 58);
 
-            // Prime the Hash to prevent "First Pulse Wiggle"
+            // Prime the Hash to prevent "First Pulse Wiggle". Nothing drawn (a
+            // read that failed): no hash, so the first answer renders.
             const bufHash = state.heldSpools.map(s => s.id).join(',');
-            state.lastLocRenderHash = `${JSON.stringify(d)}|${bufHash}`;
+            state.lastLocRenderHash = d ? `${JSON.stringify(d)}|${bufHash}` : null;
 
             setProcessing(false);
             // Group 38.1 — the modal was dismissed while this fetch was in
@@ -844,6 +907,12 @@ const _renderManagePayload = (id, d) => {
     if (String(id).toUpperCase() !== String(openId).toUpperCase()) return false;
     const loc = state.allLocations.find(l => l.LocationID == id);
     if (!loc) return false;
+    // Group 52.1b: a real answer (an empty box too) ends "Spoolman didn't
+    // answer", and shows the contents view an open whose read failed left hidden.
+    _clearManageReadFailure();
+    const isGrid = _isGridLoc(loc);
+    _showManageView(isGrid);
+    _manageShownFor = String(openId).toUpperCase();
     // --- NO WIGGLE CHECK ---
     const bufHash = state.heldSpools.map(s => s.id).join(',');
     const contentHash = JSON.stringify(d);
@@ -858,7 +927,6 @@ const _renderManagePayload = (id, d) => {
     // -----------------------
     window.updateManageTitle(loc, d);
     renderManagerNav();
-    const isGrid = (loc.Type === 'Dryer Box' || loc.Type === 'MMU Slot') && parseInt(loc['Max Spools']) > 1;
     if (isGrid) renderGrid(d, parseInt(loc['Max Spools']));
     else renderList(d, id);
     return true;
@@ -871,9 +939,14 @@ window.refreshManageView = (id) => {
     if (_refreshManageViewInflight) return true;
     _refreshManageViewInflight = true;
 
-    fetch(`/api/get_contents?id=${id}`)
-        .then(r => r.json())
-        .then(d => _renderManagePayload(id, d))
+    // Group 52.1b: strict, like the open. A read that fails keeps the cards on
+    // screen and says Spoolman didn't answer; it no longer redraws them empty.
+    fetch(`/api/get_contents?id=${encodeURIComponent(id)}&strict=1`)
+        .then(r => r.json().then(body => ({ ok: r.ok, body }), () => ({ ok: false, body: null })))
+        .then(({ ok, body }) => {
+            if (ok && Array.isArray(body)) _renderManagePayload(id, body);
+            else _showManageReadFailure(id, (body && body.error) || "Spoolman didn't answer");
+        })
         .catch(e => console.warn("refreshManageView failed:", e))
         .finally(() => { _refreshManageViewInflight = false; });
     return true;

@@ -2232,8 +2232,19 @@ const _computePulseInclude = () => {
     // lives server-side (parallelized) so the network cost is one section
     // in the bulk payload, not N separate fetches.
     sections.push('printer_status');
+    // Group 52.1a: the 🏷️ Backlog button's count rides the heartbeat, counted
+    // from the tick's own spool-list read (the server reads the list once for
+    // every section), so inv_backlog.js no longer polls
+    // /api/print_queue/pending on every tick. While the backlog window is
+    // open its own list fetch sets the count, so the tick leaves it alone.
+    const backlogModal = document.getElementById('backlogModal');
+    if (document.getElementById('btn-backlog-count')
+            && !(backlogModal && backlogModal.classList.contains('show'))) {
+        sections.push('label_backlog');
+    }
     return { sections, manageId };
 };
+window._computePulseInclude = _computePulseInclude;   // for the node tests
 
 let _pulseInflight = false;
 let _pulseNextTimer = null;
@@ -2304,8 +2315,20 @@ const _dashboardPulseTick = () => {
                 _syncBulkMoveSignal(payload.status);
             }
             if (payload.locations) _renderLocationsPayload(payload.locations);
-            if (payload.manage && payload.manage.contents && window._renderManagePayload) {
-                window._renderManagePayload(payload.manage.id, payload.manage.contents);
+            if (payload.manage) {
+                // Group 52.1b: only a list Spoolman really answered renders (an
+                // empty box is []); a section that couldn't read it (read_ok:
+                // false, no contents) keeps the cards on screen and says so,
+                // instead of drawing a slow Spoolman as an empty box.
+                if (Array.isArray(payload.manage.contents)) {
+                    if (window._renderManagePayload) window._renderManagePayload(payload.manage.id, payload.manage.contents);
+                } else if (window._showManageReadFailure) {
+                    window._showManageReadFailure(payload.manage.id,
+                        payload.manage.read_error || payload.manage.error);
+                }
+            }
+            if (payload.label_backlog && window._renderBacklogCount) {
+                window._renderBacklogCount(payload.label_backlog);
             }
             if (payload.printer_status) {
                 // L25 — note finish/cancel edges to arm the fast-poll burst
@@ -2320,7 +2343,8 @@ const _dashboardPulseTick = () => {
             }
 
             // Broadcast for listeners that still poll independently
-            // (inv_backlog, inv_details modal sync, inv_search results).
+            // (inv_details modal sync, inv_search results, the backlog window
+            // while it is open; its button count came in label_backlog above).
             // These do NOT include liveRefreshBuffer — that's now driven
             // directly by the spools_refresh payload above.
             document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'dashboard_pulse' } }));
