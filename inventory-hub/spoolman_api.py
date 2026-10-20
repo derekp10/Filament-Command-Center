@@ -135,11 +135,11 @@ def _read_list(path, timeout):
         return None, f"Spoolman answered HTTP {getattr(r, 'status_code', '?')}"
     try:
         records = r.json()
+        if not isinstance(records, list):
+            return None, "Spoolman's answer wasn't a list"
+        return parse_inbound_data(records), None
     except Exception as e:
         return None, f"Spoolman's answer couldn't be read ({e})"
-    if not isinstance(records, list):
-        return None, "Spoolman's answer wasn't a list"
-    return parse_inbound_data(records), None
 
 
 def read_spool_list(allow_archived=False):

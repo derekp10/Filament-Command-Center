@@ -274,6 +274,9 @@ window.openManage = (id) => {
                 _manageShownFor = String(id).toUpperCase();
             } else {
                 _showManageReadFailure(id, why);
+                // The title's count came from the locations table, which reads
+                // zero when Spoolman is down: no "⚠️ EMPTY" beside the notice.
+                window.updateManageTitle({ ...loc, Occupancy: '--' });
             }
 
             renderManagerNav();

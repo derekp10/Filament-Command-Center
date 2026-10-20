@@ -207,7 +207,8 @@ def test_the_page_load_fetches_the_backlog_only_if_no_heartbeat_counted_it(tmp_p
 # the strict read answers 502, the plain one [] (what the base read, and drew).
 LM = """
 window.SpoolCardBuilder = { buildCard: (it) => `CARD#${it.id}` };
-state.allLocations = [{ LocationID: 'LR-MDB-1', Type: 'Dryer Box', 'Max Spools': '4' }];
+// The table's count reads 0 while Spoolman is down (its read fails to zero).
+state.allLocations = [{ LocationID: 'LR-MDB-1', Type: 'Dryer Box', 'Max Spools': '4', Occupancy: '0/4' }];
 state.locationsLoaded = true;
 window.renderFeedsSection = () => {};
 window.renderQuickSwapSection = () => {};
@@ -224,6 +225,7 @@ const snap = () => {
   const n = document.getElementById('manage-read-notice');
   return { grid: document.getElementById('slot-grid-container').innerHTML,
            view: document.getElementById('manage-grid-view').style.display,
+           title: document.getElementById('manageTitle').innerHTML,
            notice: n.style.display || '', text: n.textContent || '' };
 };
 window.openManage('LR-MDB-1');
@@ -264,6 +266,9 @@ def test_an_open_that_cant_read_draws_no_empty_box(tmp_path):
     assert res["opened"]["grid"] == "" and res["opened"]["view"] == "none", res
     assert res["opened"]["notice"] == "block" and "Spoolman didn't answer" in res["opened"]["text"], res
     assert "These cards" not in res["opened"]["text"], res
+    # The table's zero (a read that failed too) isn't shown as "⚠️ EMPTY".
+    assert "EMPTY" not in res["opened"]["title"] and "0/4" not in res["opened"]["title"], res["opened"]["title"]
+    assert "1/4 Spools" in res["refreshed"]["title"], res["refreshed"]["title"]
     assert "CARD#57" in res["refreshed"]["grid"] and res["refreshed"]["view"] == "block", res
     assert res["refreshed"]["notice"] == "none" and res["refreshed"]["text"] == "", res
     assert res["toasts"] == [], res
