@@ -492,6 +492,25 @@ body {
     text-decoration: underline dotted;
 }
 
+/* Group 48.3: the ✏️ beside a card's 📍 badge (moves the spool). Light on the
+   dark card, with a visible keyboard focus ring. */
+.fcc-card-move-btn {
+    color: #fff;
+    background: rgba(0, 0, 0, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    padding: 0 6px;
+    line-height: 1.5;
+    font-size: 0.95rem;
+}
+.fcc-card-move-btn:hover,
+.fcc-card-move-btn:focus-visible {
+    color: #fff;
+    background: rgba(255, 170, 0, 0.35);
+    border-color: #ffaa00;
+    outline: 2px solid #ffaa00;
+    outline-offset: 1px;
+}
+
 /* Group 48.4: where the wizard's Slicer Profile suggestion came from. */
 .fcc-wiz-profile-note {
     color: #9fd8ff;

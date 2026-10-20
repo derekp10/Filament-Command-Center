@@ -83,6 +83,15 @@ const SpoolCardBuilder = {
         let locBadgeHTML = '';
         let row4FooterHTML = '';
 
+        // Group 48.3 (Derek's option B): the 📍 badge keeps opening the location,
+        // and a separate ✏️ beside it moves the spool through Force Location,
+        // the pair the spool window already has. A real button: Tab reaches it,
+        // Space or a click opens it (window.moveSpoolFromCard, inv_details.js).
+        const moveFrom = String(item.is_ghost ? '' : (item.location || '')).replace(/[^A-Za-z0-9_.:\-]/g, '');
+        const moveBtnHTML = (from) => `<button type="button" class="btn btn-sm fcc-card-move-btn ms-1"
+            onclick="event.stopPropagation(); window.moveSpoolFromCard && window.moveSpoolFromCard(${item.id}, '${from}', '${moveFrom}')"
+            title="Move this spool (Force Location)" aria-label="Move spool #${item.id}">✏️</button>`;
+
 
 
         if (mode === 'search') {
@@ -135,7 +144,9 @@ const SpoolCardBuilder = {
             } else {
                 locBadgeHTML = `<span class="badge bg-secondary"><i class="bi bi-question-circle"></i> Unassigned</span>`;
             }
-        } 
+            // Not on a filament, nor when the search picks a spool for a caller.
+            if (!isFil && !options.callbackFn) locBadgeHTML += moveBtnHTML('search');
+        }
         else if (mode === 'loc_list') {
             outerClasses += 'manage-list-item js-spool-card'; // Add classes needed by Location Manager tests/logic
             wrapperStyle += ` margin-bottom: 10px;`;
@@ -441,6 +452,7 @@ const SpoolCardBuilder = {
             } else {
                 locBadgeHTML = `<span class="badge bg-secondary"><i class="bi bi-question-circle"></i> Unassigned</span>`;
             }
+            locBadgeHTML += moveBtnHTML('buffer');   // Group 48.3
             // Simplified Buffer Row Layout (mostly standard 3-row but compressed)
         }
         else if (mode === 'buffer_nav') {
