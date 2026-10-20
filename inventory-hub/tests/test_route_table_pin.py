@@ -93,6 +93,7 @@ EXPECTED_ROUTES = [
     ("/api/spools/<int:spool_id>", "GET", "api_get_spool"),
     ("/api/spools/refresh", "POST", "api_spools_refresh"),
     ("/api/spools_by_filament", "GET", "api_get_spools_by_filament"),
+    ("/api/stock_report", "GET", "api_stock_report"),  # Group 49.2a Low-stock list
     ("/api/state/buffer", "GET,POST", "api_state_buffer"),
     ("/api/state/queue", "GET,POST", "api_state_queue"),
     ("/api/undo", "POST", "api_undo"),
