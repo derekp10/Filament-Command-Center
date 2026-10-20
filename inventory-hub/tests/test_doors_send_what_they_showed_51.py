@@ -248,6 +248,55 @@ def test_control_an_overwrite_without_the_field_unseats_whatever_is_there(client
     assert sm.spools[77]["extra"]["container_slot"] == "", sm.spools[77]
 
 
+# ---- review engine-3: the Quick-Swap deposit tile showed the slot EMPTY ----------------------------
+
+def _deposit(client, sm, box="LR-MDB-2", slot="1", **extra):
+    state.GLOBAL_BUFFER = [{"id": 57, "display": "#57"}]
+    return _post(client, sm, "/api/identify_scan", dict({
+        "text": f"LOC:{box}:SLOT:{slot}", "source": "quickswap_deposit", "spool_id": 57,
+        "expected_feed": "", "shown_empty": True, **DOOR}, **extra))
+
+
+def test_a_deposit_into_a_slot_filled_meanwhile_unseats_no_one(client):
+    """The tile showed LR-MDB-2 slot 1 empty; #77 was filed there since. HEAD:
+    the deposit named the slot outright, so #57 took it and #77 was unseated
+    (left in the box with no slot) unseen."""
+    sm = FakeSpoolman({57: {"location": "CR-CT-2-R1", "extra": {}}, 77: _in_slot("LR-MDB-2", 1)})
+    status, body = _deposit(client, sm)
+    assert status == 200 and body["action"] == "assignment_failed", body
+    assert body["smart_move"]["blocked_reason"] == "picked_slot_taken", body
+    assert "LR-MDB-2 slot 1 was taken by #77" in body["msg"], body
+    assert sm.writes == [], sm.writes
+    assert [i["id"] for i in state.GLOBAL_BUFFER] == [57]
+    # A race, not an error: the engine's WARNING is the Activity Log line.
+    assert not [e for e in state.RECENT_LOGS if e["type"] == "ERROR"], state.RECENT_LOGS
+    assert any(e["type"] == "WARNING" and "was taken by #77" in e["msg"] for e in state.RECENT_LOGS)
+
+
+def test_control_a_deposit_into_a_bound_slot_still_empty_loads_its_head(client):
+    """Control (green on the base too): the slot is still empty, so the deposit
+    lands in it and the chain loads the slot's head, as before."""
+    sm = FakeSpoolman({57: {"location": "CR-CT-2-R1", "extra": {}}})
+    status, body = _deposit(client, sm, box="LR-MDB-1", slot="2", expected_feed="XL-2")
+    assert status == 200 and body["action"] == "assignment_done", body
+    assert body["auto_deployed_to"] == "XL-2", body
+    assert sm.direct_at("XL-2") == [57]
+    extra = sm.spools[57]["extra"]
+    assert extra["physical_source"] == "LR-MDB-1" and str(extra["physical_source_slot"]).strip('"') == "2", extra
+
+
+def test_control_a_blind_slot_scan_still_names_the_slot_outright(client):
+    """Control: a scan of the slot's label sends no shown_empty, so it is the
+    explicit slot it always was, and the spool filed there is unseated."""
+    sm = FakeSpoolman({57: {"location": "CR-CT-2-R1", "extra": {}}, 77: _in_slot("LR-MDB-2", 1)})
+    state.GLOBAL_BUFFER = [{"id": 57, "display": "#57"}]
+    status, body = _post(client, sm, "/api/identify_scan",
+                         {"text": "LOC:LR-MDB-2:SLOT:1", "source": "barcode", **DOOR})
+    assert status == 200 and body["action"] == "assignment_done", body
+    assert sm.spools[57]["extra"]["container_slot"] == "1", sm.spools[57]
+    assert sm.spools[77]["extra"]["container_slot"] == "", sm.spools[77]
+
+
 # ---- the request readers ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("raw, expected", [

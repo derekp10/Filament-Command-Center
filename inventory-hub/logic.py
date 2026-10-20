@@ -1951,7 +1951,10 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     #      pick is a named slot from then on (its head is probed and checked);
     #      a single-slot box's spool takes slot 1 (42.2).
     #   4. Strict reads, failing closed (status error, nothing written): the
-    #      moving spools' own records (39.4), the target head's residents (39.7),
+    #      moving spools' own records (39.4; at a head, an archived one is
+    #      refused, `blocked_reason: archived`, Group 51 review), the target
+    #      head's residents (39.7; with `expected_residents`, a spool that arrived
+    #      unseen refuses the move, 51.6),
     #      the bound head's residents and their records (40.0c; step 3's pick
     #      read them already, once per head). A replay's `expected_feed` (40.3)
     #      is compared here with no I/O against what the slot feeds now; when it
@@ -2195,6 +2198,7 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     # about (39.4), unless Smart Load would unload another resident.
     all_here = False
     every_head_covered = _confirm_scope(confirm_active_print)[0]
+    moving_records: typing.Dict[str, typing.Any] = {}
     if not every_head_covered:
         unreadable = []
         here_count = 0
@@ -2203,6 +2207,7 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
             if not rec:
                 unreadable.append(str(sid))
                 continue
+            moving_records[str(sid)] = rec
             here = str(rec.get('location') or '').strip().upper()
             if here == target:
                 here_count += 1
@@ -2218,6 +2223,33 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                 f"❌ Not moved to <b>{target}</b>: could not read {names} from Spoolman, so FCC "
                 f"can't tell whether it is leaving a printing head", "ERROR", "ff4444")
             return {"status": "error", "msg": f"Not moved: could not read {names} from Spoolman.",
+                    "failures": failures}
+
+    # Step 4 (Group 51 review, engine-1): an archived spool is never loaded onto a
+    # head. A move's write no longer un-archives one (51.1: an archived spool stays
+    # archived), and every reader of a head (Smart Load, the print deduct, Printer
+    # Status) lists only spools in stock, so an archived spool on a head was
+    # invisible there: the next print charged nothing and a second spool was
+    # loaded on top of it. Refused with nothing written. Into a bound slot the
+    # box write stores it, and the chained deploy (this same check) says why it
+    # wasn't loaded. Read for every head move, the True path included (the chain
+    # may run under it); an unreadable record is left to the write loop's read.
+    if is_printer or is_toolhead:
+        archived_ids = []
+        for sid in spools:
+            rec = moving_records.get(str(sid)) or spoolman_api.get_spool(sid)
+            if isinstance(rec, dict) and str(rec.get('archived')).strip().lower() == 'true':
+                archived_ids.append(sid)
+        if archived_ids:
+            names = _and_list('#' + str(s) for s in archived_ids)
+            why = (f"{names} {'is' if len(archived_ids) == 1 else 'are'} archived, so "
+                   f"{'it was' if len(archived_ids) == 1 else 'they were'} not loaded onto {target}: "
+                   f"weigh {'it' if len(archived_ids) == 1 else 'them'} back into stock (or untick Archived "
+                   f"in Edit) first")
+            for sid in spools:
+                failures[str(sid)] = why
+            state.add_log_entry(f"⚠️ Not loading onto {target}: {why}.", "WARNING", "ffaa00")
+            return {"status": "error", "blocked_reason": "archived", "msg": f"Not loaded: {why}.",
                     "failures": failures}
 
     # Step 4 (Group 39.7, R1-03): the target head's residents, read strictly.

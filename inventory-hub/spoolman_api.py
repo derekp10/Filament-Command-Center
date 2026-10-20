@@ -373,25 +373,34 @@ def _auto_unarchive_on_refill(data, existing):
     extra-only write also sent it back to its pre-archive place. Now such a spool
     stays archived wherever the write put it (Derek's 43.2 rule: an archived spool
     stays archived). An explicit `archived: False` is the caller un-archiving it,
-    and still gets its place back.
+    and still gets its place back. A `remaining_weight` write is a weight write
+    too (Group 51 review, engine-5): the weigh-out row's fallback sends the
+    weight left, and Spoolman works out `used_weight` from it.
     """
     if not existing or not existing.get('archived') or data.get('archived') is True:
         return
-    if 'used_weight' not in data and 'initial_weight' not in data and data.get('archived') is not False:
+    weighed = any(k in data for k in ('used_weight', 'initial_weight', 'remaining_weight'))
+    if not weighed and data.get('archived') is not False:
         return None
-    new_used = data.get('used_weight', existing.get('used_weight'))
-    new_initial = data.get('initial_weight', existing.get('initial_weight'))
-    # 31.2 — same inherit-weight fallback as _auto_archive_on_empty. Without it,
-    # a refill on an inherit-weight spool wouldn't auto-unarchive, stranding a
-    # mis-typed spool locked in archived status (the exact failure Derek flagged).
-    if new_initial is None:
-        new_initial = (existing.get('filament') or {}).get('weight')
-    if new_used is None or new_initial is None:
-        return
-    try:
-        remaining = float(new_initial) - float(new_used)
-    except (TypeError, ValueError):
-        return
+    if 'remaining_weight' in data and 'used_weight' not in data:
+        try:
+            remaining = float(data['remaining_weight'])
+        except (TypeError, ValueError):
+            return
+    else:
+        new_used = data.get('used_weight', existing.get('used_weight'))
+        new_initial = data.get('initial_weight', existing.get('initial_weight'))
+        # 31.2 — same inherit-weight fallback as _auto_archive_on_empty. Without it,
+        # a refill on an inherit-weight spool wouldn't auto-unarchive, stranding a
+        # mis-typed spool locked in archived status (the exact failure Derek flagged).
+        if new_initial is None:
+            new_initial = (existing.get('filament') or {}).get('weight')
+        if new_used is None or new_initial is None:
+            return
+        try:
+            remaining = float(new_initial) - float(new_used)
+        except (TypeError, ValueError):
+            return
     if remaining <= 0:
         return  # still empty, leave the auto-archive in place
     if 'archived' not in data:

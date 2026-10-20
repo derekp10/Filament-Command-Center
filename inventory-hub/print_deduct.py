@@ -466,6 +466,9 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label="",
                             "sid": sid, "toolhead": str(loc_id).upper(), "position": toolhead_idx,
                             "grams": round(actual_g, 2),
                             "attempt_used_before": round(used, 2), "attempt_used_after": round(new_used, 2),
+                            # Group 51 review (engine-4): whether the spool was
+                            # stock before the attempt (the write archives it at 0 g).
+                            "attempt_was_archived": bool(spool_data.get('archived')),
                             "remaining_before": None if remaining is None else round(remaining, 1),
                             "remaining_after": None if new_remaining is None else round(new_remaining, 1),
                             "display": disp.get('text', f"#{sid}"), "color": disp.get('color', '888888'),
@@ -697,8 +700,8 @@ def _stash_shortfall_review(printer_name, job_id, *, filename, scale, uncharged,
     for f in failed or []:
         line = str(_norm_pos(f.get('position')))
         row = {k: f.get(k) for k in ("sid", "toolhead", "position", "grams", "attempt_used_before",
-                                     "attempt_used_after", "remaining_before", "remaining_after",
-                                     "display", "color")}
+                                     "attempt_used_after", "attempt_was_archived", "remaining_before",
+                                     "remaining_after", "display", "color")}
         row.update(ambiguous=False, unconfirmed_write=True)
         rows.append(row)
         unconfirmed[line] = f
@@ -2082,7 +2085,7 @@ def _rows_from_charges(rec, kind, charges):
                "remaining_before": before,
                "remaining_after": None if before is None else round(max(0.0, before - grams), 1)}
         if kept and stamped:
-            for key in ("attempt_used_before", "attempt_used_after"):
+            for key in ("attempt_used_before", "attempt_used_after", "attempt_was_archived"):
                 if key in original:
                     row[key] = original[key]
         rows[sid] = row
@@ -2391,9 +2394,13 @@ def api_cancel_deduct_confirm():
                     f"✔️ {where}: cancel-deduct {done_g:.2f}g on Spool #{sid} was already applied "
                     f"by the earlier attempt (it is at {used:.1f}g used) — not charged again.",
                     "SUCCESS", info.get('color', '888888'))
+                # Group 51 review (engine-4): stock or not BEFORE the attempt. The
+                # landed attempt archived a spool it emptied, so the record read
+                # now says archived, and its filament's "is out" was never said.
+                was = rec_rows[sid].get('attempt_was_archived')
                 applied.append({"sid": sid, "grams": done_g,
                                 "remaining": None if remaining is None else round(remaining, 1),
-                                "was_archived": bool(spool.get('archived'))})
+                                "was_archived": bool(spool.get('archived') if was is None else was)})
                 continue
             if abs(used - float(before)) > eps:
                 msg = (f"Spool #{sid}'s weight changed since the earlier attempt (it was weighed, or "
@@ -2442,7 +2449,7 @@ def api_cancel_deduct_confirm():
                 failed_sids.add(sid)
                 # Stamped even when the re-read shows the old weight: the retry
                 # then also catches a weigh-out made before it ("changed" below).
-                attempts[sid] = (used, new_used)
+                attempts[sid] = (used, new_used, bool(spool.get('archived')))
                 state.add_log_entry(
                     f"❌ {where}: cancel-deduct failed for Spool #{sid}: {err}", "ERROR", "ff4444")
                 continue
@@ -2484,12 +2491,14 @@ def api_cancel_deduct_confirm():
                 if sid_ in attempts:
                     row.pop('attempt_used_before', None)
                     row.pop('attempt_used_after', None)
+                    row.pop('attempt_was_archived', None)
                     if attempts[sid_] is not None:
                         # 43.6 — the attempt the retry judges by, and the grams it
                         # was for (so the card shows what was really confirmed).
-                        before_, after_ = attempts[sid_]
+                        before_, after_, was_ = attempts[sid_]
                         row['attempt_used_before'] = round(before_, 2)
                         row['attempt_used_after'] = round(after_, 2)
+                        row['attempt_was_archived'] = was_
                         row['grams'] = round(after_ - before_, 2)
                 retry_rows.append(row)
             retry_rec = dict(rec)

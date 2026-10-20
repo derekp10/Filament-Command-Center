@@ -195,3 +195,20 @@ def test_control_a_weight_write_with_weight_left_is_a_refill(write):
     data = dict(write)
     sm_api._auto_unarchive_on_refill(data, dict(_ARCHIVED_WITH_WEIGHT, location=""))
     assert data["archived"] is False, data
+
+
+def test_a_weigh_back_sent_as_remaining_weight_is_a_refill():
+    """Review engine-5: the weigh-out row's fallback (no spool details) sends
+    `remaining_weight`; 51.1 counted only used / initial weight as a weight
+    write, so weighing a spool archived by hand back to 250 g left it archived.
+    RED on a5d8cb8."""
+    data = {"remaining_weight": 250.0}
+    sm_api._auto_unarchive_on_refill(data, dict(_ARCHIVED_WITH_WEIGHT, location=""))
+    assert data["archived"] is False and data["location"] == "XL-1", data
+
+
+@pytest.mark.parametrize("left", [0, -5, "x"], ids=["empty", "below-empty", "not-a-number"])
+def test_control_a_remaining_weight_with_nothing_left_stays_archived(left):
+    data = {"remaining_weight": left}
+    sm_api._auto_unarchive_on_refill(data, dict(_ARCHIVED_WITH_WEIGHT, location=""))
+    assert "archived" not in data and "location" not in data, data
