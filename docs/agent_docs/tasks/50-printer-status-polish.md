@@ -90,3 +90,7 @@
 - **50.4, derived mark vs a record:** show the mark for every stored-but-not-loaded slot (derived, the default above), or only after a mid-print "Just store it" (a small record)? Decide from how it looks with his real data; ask Derek with a screenshot if the derived mark shows on slots he prepped on purpose.
 - **50.4 on the collapsed strip:** what the small mark looks like (Derek: "open to other ideas, since the collapsed strip has little room").
 - **50.2:** the gesture (right-click / long-press, a small spool button, or both); still in the oven.
+- **The rest of the redesign:** what else Derek wants from Printer Status. The refresh asked (for example print progress
+  or time left); no answer is recorded yet. FCC reads only `printer.state` and the job's file, id and progress today
+  (`prusalink_api.py:466-473`, `:509-528`); whether his firmware's `/api/v1/status` also gives time left and
+  temperatures is unverified.

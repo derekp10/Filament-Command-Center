@@ -106,7 +106,7 @@
 - **Card ✏️ with the spool window closed:** the Force Location list is visible and focused over the dashboard, and from a search card; a plain location lands and the badge updates; `LR-MDB-1` opens the slot picker; Escape moves nothing; a buffer card's spool leaves the buffer after the move; the badge itself still jumps; the spool window's own badge still jumps (`tests/test_ui_details_modal_e2e.py:55-68` unchanged); `tests/test_door_fed_heads_canary.py` and `tests/test_door_to_buffer_canary.py` stay green.
 - **48.4** (node-vm on the helper, plus one routed Playwright run of the wizard): picks the most-used profile for the same vendor + base material; "PC Blend Carbon Fiber" matches base "PC Blend"; no match leaves it blank; a profile already set is never replaced; the wizard shows the "suggested" note and nothing is written before Save.
 - Contrast guard on any new row or button (`tests/test_contrast_guard.py`), per the standing order.
-- Full E2E sweep before merging (frontend change; it writes dev data, so ask Derek first).
+- Full E2E sweep before merging (a frontend change). It writes dev data, which is fine: dev spools are agent fixtures (the bundle's rule); never `--reset-dev` without asking Derek.
 
 ## Risks
 
