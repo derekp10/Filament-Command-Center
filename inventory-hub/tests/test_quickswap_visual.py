@@ -78,7 +78,13 @@ def grid_stub_response(method: str, url: str) -> typing.Optional[typing.Tuple[in
     if re.fullmatch(r"/api/machine/.+/toolhead_slots", path):
         return 200, GRID_TOOLHEAD_SLOTS     # whatever printer name XL-1 resolved to
     if path == "/api/get_contents":
-        box = (parse_qs(parts.query).get("id") or [""])[0]
+        query = parse_qs(parts.query)
+        # Group 52.1c: the grid reads every box in ONE ?ids=A&ids=B request.
+        boxes = query.get("ids") or []
+        if boxes and all(b in GRID_CONTENTS for b in boxes):
+            return 200, {"read_ok": True, "read_error": None,
+                         "contents": {b: GRID_CONTENTS[b] for b in boxes}}
+        box = (query.get("id") or [""])[0]
         if box in GRID_CONTENTS:
             return 200, GRID_CONTENTS[box]
     if path == "/api/state/buffer":
@@ -183,6 +189,9 @@ def test_grid_stub_pins_the_buffer_and_swallows_every_write():
     # Real boxes pass through (the XL-1 modal's own reads render outside the section).
     assert grid_stub_response("GET", f"{base}/api/get_contents?id=XL-1") is None
     assert grid_stub_response("GET", f"{base}/api/locations") is None
+    # Group 52.1c: the grid's one batched read answers the whole loadout.
+    status, body = grid_stub_response("GET", f"{base}/api/get_contents?ids={_MDB}&ids={_PDB}&ids={_POOL}")
+    assert status == 200 and body["read_ok"] is True and body["contents"] == GRID_CONTENTS, body
 
 
 def test_grid_loadout_covers_loaded_and_empty_slots_in_both_sections():

@@ -51,8 +51,8 @@ def _capture_logs(monkeypatch):
 
 
 def _patch_all_pulse_sections_forbidden(monkeypatch):
-    """Patch all four section helpers to explode if invoked — used by tests
-    that pin which sections do NOT fire."""
+    """Patch every section helper to explode if invoked — used by tests
+    that pin which sections do NOT fire. (Group 52.1a added label_backlog.)"""
     monkeypatch.setattr(routes_state_pulse, "_pulse_section_logs",
                         _fail_if_called("_pulse_section_logs"))
     monkeypatch.setattr(routes_state_pulse, "_pulse_section_locations",
@@ -61,6 +61,8 @@ def _patch_all_pulse_sections_forbidden(monkeypatch):
                         _fail_if_called("_pulse_section_manage"))
     monkeypatch.setattr(routes_state_pulse, "_pulse_section_printer_status",
                         _fail_if_called("_pulse_section_printer_status"))
+    monkeypatch.setattr(routes_state_pulse, "_pulse_section_label_backlog",
+                        _fail_if_called("_pulse_section_label_backlog"))
 
 
 # ---------------------------------------------------------------------------
@@ -408,23 +410,28 @@ def test_pulse_status_section_carries_error_when_logs_helper_raises(monkeypatch)
 
 def test_pulse_locations_dispatch_passthrough(monkeypatch):
     """include=locations invokes _pulse_section_locations once and returns
-    its value verbatim in the 'locations' slot."""
+    its value verbatim in the 'locations' slot.
+
+    PIN UPDATED DELIBERATELY (Group 52.1a, 2026-10-19): every spool-reading
+    section now receives the tick's shared spool list as `spools=` (one
+    Spoolman read per heartbeat), so the stand-ins accept it."""
     sentinel = [{"LocationID": "Unassigned"}, {"LocationID": "XL-1"}]
     calls = []
     monkeypatch.setattr(routes_state_pulse, "_pulse_section_locations",
-                        lambda: calls.append(1) or sentinel)
+                        lambda **kw: calls.append(kw) or sentinel)
     client = _client()
 
     r = client.get("/api/dashboard_pulse?include=locations")
     assert r.get_json() == {"locations": sentinel}
     assert len(calls) == 1
+    assert isinstance(calls[0].get("spools"), app_module.spoolman_api.SpoolListRead)
 
 
 def test_pulse_locations_error_is_isolated(monkeypatch):
     """A raising locations section lands as {'error': str(e)} in its slot
     while the rest of the pulse (buffer here) still returns 200 — a partial
     failure must not blank the dashboard."""
-    def _boom():
+    def _boom(**kw):
         raise RuntimeError("locations corrupt")
 
     monkeypatch.setattr(routes_state_pulse, "_pulse_section_locations", _boom)
@@ -473,7 +480,7 @@ def test_pulse_manage_id_uppercased_and_payload_passthrough(monkeypatch):
     seen = []
     sentinel = {"id": "PM-DB-XL-L", "contents": [{"id": 1}]}
 
-    def fake_manage(loc_id):
+    def fake_manage(loc_id, spools=None):   # 52.1a: the tick's shared list
         seen.append(loc_id)
         return sentinel
 
@@ -489,7 +496,7 @@ def test_pulse_manage_id_uppercased_and_payload_passthrough(monkeypatch):
 def test_pulse_manage_error_slot_carries_id(monkeypatch):
     """A raising manage section returns {'error': str(e), 'id': <manage_id>}
     so the frontend can match the failure to the open modal."""
-    def _boom(loc_id):
+    def _boom(loc_id, spools=None):
         raise RuntimeError("spoolman down")
 
     monkeypatch.setattr(routes_state_pulse, "_pulse_section_manage", _boom)
@@ -507,14 +514,14 @@ def test_pulse_printer_status_dispatch_and_error_isolation(monkeypatch):
     sentinel = {"XL": {"toolheads": [], "state": None}}
     calls = []
     monkeypatch.setattr(routes_state_pulse, "_pulse_section_printer_status",
-                        lambda: calls.append(1) or sentinel)
+                        lambda **kw: calls.append(1) or sentinel)
     client = _client()
 
     r = client.get("/api/dashboard_pulse?include=printer_status")
     assert r.get_json() == {"printer_status": sentinel}
     assert len(calls) == 1
 
-    def _boom():
+    def _boom(**kw):
         raise RuntimeError("probe failed")
 
     monkeypatch.setattr(routes_state_pulse, "_pulse_section_printer_status", _boom)

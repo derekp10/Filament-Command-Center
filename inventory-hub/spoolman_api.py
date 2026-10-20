@@ -4,6 +4,7 @@ import config_loader # type: ignore
 import locations_db # type: ignore  # L271 Phase 2: single hierarchy resolver
 import attr_migration # type: ignore  # Group 36: shared force_reset safety layer
 import json
+import time
 
 def parse_inbound_data(data):
     """Recursively intercepts data incoming from Spoolman and deserializes JSON strings safely."""
@@ -118,6 +119,69 @@ def get_all_spools_strict(allow_archived=False):
     resp = requests.get(f"{sm_url}/api/v1/spool{q}", timeout=5)
     resp.raise_for_status()  # raise on 4xx/5xx so the caller can fail closed
     return parse_inbound_data(resp.json())
+
+
+def _read_list(path, timeout):
+    """GET one of Spoolman's list endpoints and SAY whether it worked:
+    (records, None) with the parsed list, or (None, why) when Spoolman didn't
+    answer, answered an error, or answered something that isn't a list."""
+    try:
+        sm_url, _ = config_loader.get_api_urls()
+        r = requests.get(f"{sm_url}{path}", timeout=timeout)
+    except Exception as e:
+        state.logger.warning(f"Spoolman read {path} failed: {e}")
+        return None, f"Spoolman didn't answer ({e})"
+    if not getattr(r, 'ok', False):
+        return None, f"Spoolman answered HTTP {getattr(r, 'status_code', '?')}"
+    try:
+        records = r.json()
+        if not isinstance(records, list):
+            return None, "Spoolman's answer wasn't a list"
+        return parse_inbound_data(records), None
+    except Exception as e:
+        return None, f"Spoolman's answer couldn't be read ({e})"
+
+
+def read_spool_list(allow_archived=False):
+    """The spool list (default: the non-archived one every location reader uses)
+    as (spools, None), or (None, why) when it couldn't be read (Group 52.1).
+    get_all_spools answers [] for both, so a slow Spoolman painted an empty box;
+    a display reader that must tell "couldn't read" from "empty" uses this.
+    Checks `.ok` rather than raise_for_status, like the readers it replaces."""
+    return _read_list("/api/v1/spool" + ("?allow_archived=true" if allow_archived else ""), 5)
+
+
+def read_filament_list():
+    """Every filament as (filaments, None), or (None, why) (Group 52.1a: the
+    dashboard heartbeat counts the label backlog's flagged filaments)."""
+    return _read_list("/api/v1/filament", 3)
+
+
+class SpoolListRead:
+    """The spool list for ONE request, read at most once, on first use, and
+    shared by the readers in that request (Group 52.1a: the dashboard
+    heartbeat's locations, manage, printer_status and label_backlog sections
+    used to read the whole list once each).
+
+    Never kept past the request, by design: FCC has no cross-request cache, so a
+    read right after a move always sees the move ("I scanned it and it didn't
+    show up" is the bug a cache would cause). Display readers only: the move
+    engine's strict reads never come from here.
+
+    `get()` answers the parsed list, or None when the read failed; `error` then
+    says why. `reads` counts the HTTP reads (0 or 1)."""
+
+    def __init__(self, allow_archived=False):
+        self.allow_archived = allow_archived
+        self.reads = 0
+        self.error = None
+        self._spools = None
+
+    def get(self):
+        if not self.reads:
+            self.reads = 1
+            self._spools, self.error = read_spool_list(self.allow_archived)
+        return self._spools
 
 
 def get_all_locations():
@@ -616,6 +680,12 @@ def create_spool(data):
         state.logger.error(f"API Error creating spool: {e}")
     return None
 
+# Group 52.2: the pre-merge extras read gets a second try after a short pause.
+# Module constants so a test can set the pause to 0.
+_RAW_EXTRAS_ATTEMPTS = 2
+_RAW_EXTRAS_RETRY_DELAY_S = 0.5
+
+
 def _get_raw_extras(entity, eid):
     """Fetch existing extras WITHOUT parse_inbound_data unwrapping.
     Spoolman stores text-type extras as JSON-encoded strings — `"225"`
@@ -635,22 +705,40 @@ def _get_raw_extras(entity, eid):
     hypothetical — the read is a bare 3s request against the same NAS Spoolman
     whose timeouts caused the losses this module now retries around.
 
-    Deliberately calls `requests.get` DIRECTLY rather than routing through
-    `http_retry`. A retry here would be nice — this refusal is the only thing
-    standing between a read blip and a refused write — but `http_retry`
-    resolves `requests` from its OWN module namespace, while eleven test files
-    patch the seam as `spoolman_api.requests`. Routing through the helper
-    silently escapes that seam on the app's hottest write path, which is
-    exactly the "patch a collaborator on its defining module" rule in
-    CLAUDE.md. Resilience here is a separate change with its own seam work;
-    correctness is not worth trading for it."""
+    Group 52.2: TWO attempts, `_RAW_EXTRAS_RETRY_DELAY_S` apart, because a
+    single Spoolman blip used to refuse the write (update_spool, update_filament
+    and update_vendor all refuse on None). Only "no answer" is retried: a
+    transport error or timeout, a 5xx, or a body that isn't JSON. A 4xx is an
+    answer (a deleted record stays deleted), so it refuses at once. After two
+    failures the answer is None and the write is refused exactly as before, up
+    to ~3.5 s later than it used to be.
+
+    Deliberately calls `requests.get` DIRECTLY (resolved from THIS module)
+    rather than routing through `http_retry`: `http_retry` resolves `requests`
+    from its OWN module namespace, while the tests patch the seam as
+    `spoolman_api.requests`. Routing through the helper would silently escape
+    that seam on the app's hottest write path, which is exactly the "patch a
+    collaborator on its defining module" rule in CLAUDE.md. The retry loop lives
+    here for that reason."""
     try:
         sm_url, _ = config_loader.get_api_urls()
-        r = requests.get(f"{sm_url}/api/v1/{entity}/{eid}", timeout=3)
-        if r.ok:
-            return (r.json() or {}).get('extra') or {}
     except Exception:
-        pass
+        return None
+    for attempt in range(_RAW_EXTRAS_ATTEMPTS):
+        if attempt:
+            time.sleep(_RAW_EXTRAS_RETRY_DELAY_S)
+        try:
+            r = requests.get(f"{sm_url}/api/v1/{entity}/{eid}", timeout=3)
+        except Exception:
+            continue                      # no answer: try again
+        if r.ok:
+            try:
+                return (r.json() or {}).get('extra') or {}
+            except Exception:
+                continue                  # a garbled answer: try again
+        status = getattr(r, 'status_code', None)
+        if isinstance(status, int) and 400 <= status < 500:
+            return None                   # an answer; asking again won't change it
     return None
 
 

@@ -30,10 +30,28 @@ window.SpoolCardBuilder = { buildCard: (it) => `CARD#${it.id}` };
 window.makeSwatchHtml = () => '';
 const answers = __ANSWERS__;
 let machineReads = 0;
+const perBox = (id) => {
+  for (const [prefix, a] of Object.entries(answers)) if (('/api/get_contents?id=' + id).startsWith(prefix)) return a;
+  return null;
+};
 window.__respond = (url, method, body) => {
   if (url.startsWith('/api/machine/')) {
     machineReads += 1;
     return { body: { toolheads: { 'XL-2': __ENTRIES__ }, printer_pool: [] } };
+  }
+  // Group 52.1c: the grid reads every box in ONE ?ids= request, answered here
+  // from the per-box answers (one read serves them all: a box answering >= 400
+  // fails the whole read, as a Spoolman blip does).
+  const batch = url.match(/^\\/api\\/get_contents\\?(ids=.*)$/);
+  if (batch) {
+    const contents = {};
+    for (const part of batch[1].split('&')) {
+      const id = decodeURIComponent(part.slice(4));
+      const a = perBox(id);
+      if (a && (a.status || 200) >= 400) return { body: { read_ok: false, read_error: 'unreachable', contents: {} } };
+      contents[id] = (a && a.body) || [];
+    }
+    return { body: { read_ok: true, read_error: null, contents } };
   }
   for (const [prefix, a] of Object.entries(answers)) if (url.startsWith(prefix)) return a;
   return { body: [] };
@@ -75,7 +93,8 @@ def test_an_unreadable_polydryer_is_not_offered_an_unbind(tmp_path):
     then detached the box while its spool ran on the head."""
     res = _grid(tmp_path, {"/api/get_contents?id=PM-DB-2": {"status": 502, "body": {"error": "unreachable"}}},
                 buffer=[88])
-    assert "/api/get_contents?id=PM-DB-2&strict=1" in res["gets"], res["gets"]
+    # Group 52.1c (deliberate): one batched read, strict for every box in it.
+    assert [u for u in res["gets"] if u.startswith("/api/get_contents")] == ["/api/get_contents?ids=PM-DB-2"], res["gets"]
     assert "couldn't read PM-DB-2 from Spoolman" in res["html"], res["html"]
     assert "fcc-qs-unbind" not in res["html"] and "isn't on XL-2" not in res["html"], res["html"]
     assert "quickSwapDeposit" not in res["html"], "a deposit tile on a box FCC couldn't read"

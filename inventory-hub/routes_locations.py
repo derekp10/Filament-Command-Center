@@ -12,9 +12,12 @@ Preserved quirks (do not 'fix' in a move — see the carve plan):
   (Spoolman down -> counts read zero, page still renders).
 - api_delete_location relies on logic.perform_toolhead_delete_cascade
   MUTATING the passed-in list in place before the single save.
-- api_get_locations / api_merge_filament call Spoolman via the module-level
-  requests import directly (tests patch 'app.requests.get', which mutates
-  the shared requests module — keep the bare-module call style).
+- api_merge_filament calls Spoolman via the module-level requests import
+  directly (tests patch 'app.requests.get', which mutates the shared requests
+  module — keep the bare-module call style). api_get_locations reads the spool
+  list through spoolman_api.SpoolListRead since Group 52.1a (one read per
+  heartbeat); that resolves the same shared requests module, so a patched
+  'app.requests.get' still answers it.
 
 Python 3.9 runtime (the container image) — keep syntax 3.9-safe.
 """
@@ -33,6 +36,15 @@ from app_core import app
 
 @app.route('/api/locations', methods=['GET'])
 def api_get_locations():
+    return build_locations_response()
+
+
+def build_locations_response(spools=None):
+    """The /api/locations answer. `spools` is a spoolman_api.SpoolListRead the
+    caller shares with its other readers (Group 52.1a: the dashboard heartbeat
+    reads the spool list once for all its sections); None reads it here.
+    Spoolman is read only after locations.json loads, so a corrupt file answers
+    its 500 without touching Spoolman."""
     try:
         local_rows = locations_db.load_locations_list()
     except locations_db.LocationsCorruptError as e:
@@ -82,12 +94,15 @@ def api_get_locations():
     unassigned_count: int = 0
     unknown_count: int = 0  # 18.1 — spools sitting at the virtual UNKNOWN bucket
 
-    sm_url, _ = config_loader.get_api_urls()
     spools_read_ok = False  # hotfix 2026-09-29 — gates the stale-native hide below
+    # Group 52.1a: through the shared reader (one whole-list read per heartbeat).
+    # It parses extras (parse_inbound_data), which the loop below reads the same
+    # way: `physical_source` loses its JSON quotes either way.
+    reader = spools if spools is not None else spoolman_api.SpoolListRead()
     try:
-        resp = requests.get(f"{sm_url}/api/v1/spool", timeout=5)
-        if resp.ok:
-            for s in resp.json():
+        listed = reader.get()
+        if listed is not None:
+            for s in listed:
                 if not isinstance(s, dict): continue
                 loc = str(s.get('location', '')).upper().strip()
                 if loc == 'UNASSIGNED': loc = "" # Coerce to true blank
@@ -1003,6 +1018,10 @@ def api_undo():
 
 @app.route('/api/get_contents', methods=['GET'])
 def api_get_contents_route():
+    # Group 52.1c: `ids` (repeatable: ?ids=A&ids=B) reads several locations from
+    # ONE spool-list read, for the Quick-Swap grid's feeding boxes.
+    if 'ids' in request.args:
+        return jsonify(contents_batch(request.args.getlist('ids')))
     loc = request.args.get('id', '').strip().upper()
     # Group 41.9: a blank id is no location, not "every spool with no location"
     # (the matcher reads '' that way). Every caller expects a list.
@@ -1016,6 +1035,35 @@ def api_get_contents_route():
         except Exception as e:
             return jsonify({"error": f"Couldn't read {loc} from Spoolman ({e})."}), 502
     return jsonify(spoolman_api.get_spools_at_location_detailed(loc))
+
+
+def contents_batch(ids, spools=None):
+    """What /api/get_contents?ids=… answers (Group 52.1c): every location's
+    contents from ONE spool-list read, each list byte-identical to
+    /api/get_contents?id=<that id> (both match through
+    spoolman_api._build_location_match).
+
+      {"read_ok": True, "read_error": None, "contents": {"<id as sent>": [...]}}
+      {"read_ok": False, "read_error": "...", "contents": {}}   (200, like the
+          slot picker's read_ok: false)
+
+    The read is strict for every id at once: a Spoolman blip never answers an
+    empty box, so a single-slot box (whose Unbind used to trust an empty read)
+    stays strict inside the batch. Blank ids are skipped. `spools` is a
+    spoolman_api.SpoolListRead to share; None reads here."""
+    wanted = []
+    for raw in ids or []:
+        lid = str(raw or '').strip()
+        if lid and lid not in wanted:
+            wanted.append(lid)
+    reader = spools if spools is not None else spoolman_api.SpoolListRead()
+    listed = reader.get() if wanted else []
+    if listed is None:
+        state.logger.warning(f"get_contents ids={wanted}: {reader.error}")
+        return {"read_ok": False, "read_error": f"couldn't read Spoolman ({reader.error})", "contents": {}}
+    buckets = spoolman_api.bucket_spools_by_location(wanted, spools=listed)
+    return {"read_ok": True, "read_error": None,
+            "contents": {lid: buckets.get(lid.upper(), []) for lid in wanted}}
 
 @app.route('/api/spool_details', methods=['GET'])
 def api_spool_details():
