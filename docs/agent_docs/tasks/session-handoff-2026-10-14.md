@@ -515,6 +515,32 @@ Resume cron: session-only, hourly; deleted once this section says DONE. Every br
   `f169cdf` (scratchpad `review/tree`; brief `review/brief.md`). An early full `RUN_INTEGRATION` sweep runs on the main
   checkout meanwhile (signal only; the official one comes after the fixes): **4151 passed, 16 skipped, 0 failed in
   26:31** (load 1.18×, with the reviewers' offline runs alongside).
+- **Review result** (~45 min, 5 agents, 2.25M tokens): 17 findings, the skeptic refuted none, 3 duplicates → **14
+  confirmed: 1 orange, 7 yellow, 6 notes, none red** (scratchpad `review_result.json`, `review/table.txt`). All 14 fixed:
+  - engine-1 (orange): a hand-archived spool loaded onto a head stayed archived ON it, invisible to Smart Load, the
+    deduct and Printer Status (51.1's consequence). **Option A built**: step 4 refuses an archived spool at a head
+    (`blocked_reason: archived`, nothing written); into a bound slot it is stored and the chain says why. Option B (a
+    head load un-archives it) is Derek's call, in ⏸️ PENDING DEREK with the recommendation to keep A.
+  - engine-2: step 6's `occupant_changed` answers status `success`, so the picker loop ended with an error instead of
+    reopening. engine-3: the grid's empty tile and the Quick-Swap deposit sent an explicit slot (an Overwrite): now
+    `picked_slot` / `shown_empty`, filled only while still free. engine-4: a Review Apply retry lost "is out"
+    (`attempt_was_archived`). engine-5: a `remaining_weight` weigh-back un-archives again.
+  - browser-2 (doubled slot names both spools, no `expected_occupant`), browser-3 (a re-picked "(new, …)" slicer
+    profile is added at Save), browser-4 (the card ✏️ reads where the spool is: a loaded spool's card opened Force
+    Location on Unassigned), browser-5 (a CMD:SLOT scan while the box's read failed moves nothing), browser-6 (a
+    question's refused replay drops the held pick), integration-2 (🖨️ handlers JS-safe for an apostrophe:
+    `SpoolCardBuilder.jsArg`), integration-3 (the E2E's class check), integration-5 (CLAUDE.md wording).
+  - reads-1 (yellow) by a background fixer on `fix/bundle-reads-1` (`9d7de39`, `9834ee5`; ~398K tokens): the pulse's
+    sibling `spool_read`, `/api/locations`' `X-FCC-Spool-Read`; Printer Status and the Location List keep what they drew
+    ("? not read" / "?" with no earlier answer) under a yellow notice. Merged as `5e90f4d`.
+  - Commits `f190884` (engine), `9e5db92` (ui), `3b2196a` (CLAUDE.md), `5e90f4d` (reads-1 merge). 23 new or changed
+    tests, all red on `a5d8cb8` (a throwaway worktree with only the tests copied in); the controls green there.
+- **Checks after the fixes:** offline **3213 passed, 0 failed**; the touched screens' browser files (20 files: the card
+  pencil, deposit, Quick-Swap, slot picker, grid, wizard, contrast, Printer Status, print queue, the location tree,
+  reads-1's page tests) **221 passed, 0 failed** (load 1.04×).
+- **Paperwork** (before the sweep, so it covers the final tree): 8 buglist items archived (4 blocks at the top of
+  `completed-archive.md`), the Group 40 and Group 36 leftovers trimmed, 9 standalone follow-ups filed, one ⏸️ PENDING
+  DEREK item (One-off tagging; an archived spool at a head), rows 48 / 49 / 51 / 52 and the task files → `DONE`.
 
 ## Questions for Derek
 
