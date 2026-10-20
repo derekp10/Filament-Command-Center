@@ -273,6 +273,10 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
   `slicer_profile`; the wizard's "auto-assign" (Group 10.5) only selects a profile you just added as a new choice.
   Ideas, none decided: suggest the profile your other filaments of the same brand and material already use, or a small
   brand + material → profile table you can edit. Goes with the item above (the profile on the spool card).
+  **Caveat (Derek, same day):** the profile names are PrusaSlicer's (its default profiles, or a custom one he makes
+  when needed), because he runs Prusa printers; they don't line up with other printer brands and their slicers. A
+  future thing for anyone not all-in on one brand, or using a slicer other than PrusaSlicer: build the Prusa case
+  first, but don't assume one profile name fits every slicer (a later version might keep a profile per slicer).
 
 ## 🔍 Search, Display & Filtering
 *(No open items — resolved entries archived in `completed-archive.md`.)*
