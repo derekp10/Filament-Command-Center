@@ -264,6 +264,15 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
   click the swatch button, then find the profile suggestion there. If we could just have that data on the spool (sourced
   from the filament data) then that would save a step."* Today the profile is the filament's `slicer_profile` extra, shown
   (and editable with the ✏️) only on the filament fact card (`inv_details.js`).
+* **Fill in the slicer profile for well-documented filaments (a Prusament spool scan, for a start).** _(Derek,
+  2026-10-19, while updating profile data on the swatches of some Prusament.)_ *"If possible, we should try and
+  determine what profile should be used, at least with well documented spool/filament creations based on things like
+  prusament spool barcodes. It gets everything (or at least everything I have noticed) but we miss out on that aspect of
+  data, that we might just be able to do for the user."* Today a Prusament scan (`external_parsers.py`, the
+  `prusament.com/spool/…` parser) fills material, color, weights, length and manufacture date, but never
+  `slicer_profile`; the wizard's "auto-assign" (Group 10.5) only selects a profile you just added as a new choice.
+  Ideas, none decided: suggest the profile your other filaments of the same brand and material already use, or a small
+  brand + material → profile table you can edit. Goes with the item above (the profile on the spool card).
 
 ## 🔍 Search, Display & Filtering
 *(No open items — resolved entries archived in `completed-archive.md`.)*
