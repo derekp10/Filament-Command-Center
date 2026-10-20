@@ -245,21 +245,28 @@
                     // header offers Unbind when its spool isn't on the head, and
                     // a Spoolman blip (the plain read answers []) looked just like
                     // that, so Unbind detached a box whose spool was loaded.
+                    // Group 52.1c: ONE contents request for every box (it was one
+                    // per box, each a whole spool-list read, again on every
+                    // heartbeat while the view is open). That one read is strict
+                    // for all of them: when Spoolman doesn't answer, no box is
+                    // drawn empty. A single-slot box keeps its "couldn't read"
+                    // header; every other slot says it couldn't be read.
                     const unreadable = new Set();
-                    Promise.all(uniqueBoxes.map(b => {
-                        const strict = singleBoxes.has(b);
-                        const read = strict
-                            ? fetch(`/api/get_contents?id=${encodeURIComponent(b)}&strict=1`)
-                            : fetch(`/api/get_contents?id=${encodeURIComponent(b)}`);
-                        return read
-                            .then(r => {
-                                if (r.ok) return r.json();
-                                if (strict) unreadable.add(b);
-                                return [];
-                            })
-                            .then(items => [b, items])
-                            .catch(() => { if (strict) unreadable.add(b); return [b, []]; });
-                    })).then(boxContents => {
+                    const idsQuery = uniqueBoxes.map(b => encodeURIComponent(b)).join('&ids=');
+                    fetch(`/api/get_contents?ids=${idsQuery}`)
+                        .then(r => (r.ok ? r.json() : null))
+                        .catch(() => null)
+                        .then(body => {
+                            const readOk = !!(body && body.read_ok === true
+                                && body.contents && typeof body.contents === 'object');
+                            // A heartbeat refresh that couldn't read keeps the
+                            // tiles it drew last instead of flipping them all.
+                            if (!readOk && silent && _lastQsHtml) return null;
+                            if (!readOk) uniqueBoxes.forEach(b => unreadable.add(b));
+                            return uniqueBoxes.map(b => [b, readOk ? (body.contents[b] || []) : []]);
+                        })
+                    .then(boxContents => {
+                        if (!boxContents) return;
                         const slotMap = {};
                         // Every item claiming a slot (Group 42 review): two claims
                         // showed the last card while /api/quickswap moved the first.
@@ -416,7 +423,21 @@
                                 .sort((a, b) => (a.box + a.slot).localeCompare(b.box + b.slot))
                                 .forEach(p => {
                                     const item = slotMap[`${p.box}|${p.slot}`];
-                                    if (item) {
+                                    if (unreadable.has(p.box)) {
+                                        // Group 52.1c: Spoolman didn't answer, so
+                                        // FCC can't tell this slot is empty.
+                                        html += `
+                                            <button type="button" class="fcc-qs-slot fcc-qs-pool btn btn-outline-warning fw-bold d-flex flex-column align-items-start"
+                                                data-box="${p.box}" data-slot="${p.slot}"
+                                                data-toolhead=""
+                                                data-pool="1"
+                                                style="min-width:240px; font-size:1.05rem; padding:10px 14px;"
+                                                disabled
+                                                title="FCC couldn't read ${p.box} from Spoolman just now — reopen the view to try again">
+                                                <div class="text-warning fw-bold" style="font-size:1rem;">Slot ${p.slot}</div>
+                                                <div class="text-warning fw-bold" style="font-size:0.9rem;">⚠️ couldn't read ${p.box}</div>
+                                            </button>`;
+                                    } else if (item) {
                                         // Filled pool slot — show the spool
                                         // card. Tap opens the spool's details
                                         // (no toolhead to swap into).

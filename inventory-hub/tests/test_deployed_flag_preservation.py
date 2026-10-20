@@ -437,9 +437,24 @@ def _pin_box_contents(page: Page, box: str, items: list) -> None:
     """
     def _handler(route):
         try:
-            if parse_qs(urlsplit(route.request.url).query).get("id", [""])[0] == box:
+            query = parse_qs(urlsplit(route.request.url).query)
+            ids = query.get("ids") or []
+            if query.get("id", [""])[0] == box:
                 route.fulfill(status=200, content_type="application/json",
                               body=json.dumps(items))
+            elif box in ids:
+                # Group 52.1c: the Quick-Swap grid reads every feeding box in ONE
+                # ?ids= request. The other boxes keep their real contents; this
+                # one is pinned, as the per-box read was.
+                try:
+                    data = route.fetch().json()
+                except Exception:
+                    data = None
+                if not (isinstance(data, dict) and data.get("read_ok")
+                        and isinstance(data.get("contents"), dict)):
+                    data = {"read_ok": True, "read_error": None, "contents": {b: [] for b in ids}}
+                data["contents"][box] = items
+                route.fulfill(status=200, content_type="application/json", body=json.dumps(data))
             else:
                 route.continue_()
         except PlaywrightError as e:
