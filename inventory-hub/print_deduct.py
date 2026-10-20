@@ -36,6 +36,7 @@ import prusalink_api  # type: ignore
 import print_deduct_ledger  # type: ignore
 import cancel_review_store  # type: ignore
 import cancel_fetch_store  # type: ignore
+import stock_report  # type: ignore  # Group 49.2b: the low-stock warning after a deduct
 
 from app_core import app
 
@@ -568,6 +569,14 @@ def _record_applied_deduct(printer_name, job_id, *, filename, scale, details,
             f"⚠️ {printer_name}: {shortfall:.2f}g of '{filename}' wasn't deducted "
             f"(no bound spool, a failed write, or a near-empty spool) — weigh that "
             f"spool to true up.", "WARNING", "ffaa00")
+    # Group 49.2b: one Activity Log warning per filament this print took under
+    # the low-stock line (or out of stock). Only after the ledger write, so a
+    # crash here can never re-run the deduct; off-thread and wrapped, so it can
+    # never raise into, delay or change the deduct.
+    try:
+        stock_report.check_after_deduct(details)
+    except Exception as e:
+        state.logger.debug(f"49.2b low-stock check skipped for {printer_name} job {job_id}: {e}")
     return applied, shortfall
 
 
