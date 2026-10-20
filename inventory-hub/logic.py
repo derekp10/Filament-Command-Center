@@ -887,8 +887,10 @@ def _free_feed_slots(toolhead_id, loc_list, sid):
             except Exception as e:
                 return [], f"couldn't read {box} from Spoolman ({e})"
         items = held[box]
-        if not any(locations_db.effective_slot(rows.get(box), o.get('slot', ''), occupants=len(items))
-                   == slot for o in items):
+        # One slot form on both sides (Group 51.4): a slot stored as "02" or
+        # '"2"' is slot 2, so it isn't free.
+        if not any(_norm_slot(locations_db.effective_slot(rows.get(box), o.get('slot', ''), occupants=len(items)))
+                   == _norm_slot(slot) for o in items):
             free.append((box, slot))
     return free, ""
 
@@ -1944,6 +1946,10 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     # and Smart Load, which can refuse the whole move; see the L298 Phase 3 note
     # at the write loop.
     failures: typing.Dict[str, str] = {}
+    # Group 51.3: the spools step 6's ghost guard refused (a slot its own spool
+    # still claims). When that refused every spool, the answer says
+    # `blocked_reason: slot_claimed`, as the question path's refusal does.
+    claimed_refused: typing.Set[str] = set()
     # sid(str) -> "BOX:slot" the 13.6 reverse-binding recorded as its home (40.0d).
     recorded_sources: typing.Dict[str, str] = {}
 
@@ -2390,7 +2396,8 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                 failures[str(sid)] = why
             state.add_log_entry(f"❌ Not moving {_and_list('#' + str(s) for s in spools)}: {why}",
                                 "ERROR", "ff4444")
-            return {"status": "error", "msg": f"Not moved: {why}.", "failures": failures}
+            return {"status": "error", "blocked_reason": "slot_claimed", "msg": f"Not moved: {why}.",
+                    "failures": failures}
     no_store = bool(slot_ghosts)
     if feed_changed:
         answer = _feed_changed_answer(
@@ -2691,6 +2698,7 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                     else:
                         failures[str(sid)] = _ghost_claim_refusal(target, target_slot, _ghosts[0], slot_feed,
                                                                   bound_th, loads_head, printer_map, loc_info_map)
+                        claimed_refused.add(str(sid))
                         state.add_log_entry(f"❌ Not moving Spool #{sid}: {failures[str(sid)]}",
                                             "ERROR", "ff4444")
                         continue
@@ -3117,6 +3125,9 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         # this is what lets a batch caller do better).
         "failures": failures,
     }
+    if claimed_refused and claimed_refused >= {str(s) for s in spools}:
+        # Group 51.3: refused only over a slot its own spool still claims.
+        result["blocked_reason"] = "slot_claimed"
     if recorded_sources:
         # Group 40.0d: the feed slot the reverse-binding recorded as the spool's
         # home ("LR-MDB-1:1"), so the scan toast can name it. A head takes one

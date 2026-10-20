@@ -198,13 +198,15 @@ def test_a_picked_slot_taken_meanwhile_is_a_refused_pick(client):
 def test_a_named_slot_whose_own_spool_runs_on_a_head_is_a_refused_pick(client):
     """The picker's slot 2 of CR-MDB-1 (Overwrite / Swap: an explicit `slot`) is
     claimed by #60, which was deployed from it to XL-3 meanwhile: the engine's
-    ghost guard refuses it, with no blocked_reason, so the server classifies it."""
+    ghost guard refuses it with `blocked_reason: slot_claimed` (Group 51.3; the
+    server used to tell it by its words), and the page drops the pick."""
     sm = FakeSpoolman({57: {"location": "CR-CT-2-R1", "extra": {}},
                        60: {"location": "XL-3", "extra": {"physical_source": "CR-MDB-1",
                                                           "physical_source_slot": "2", "container_slot": ""}}})
     body = _edit(client, sm, {"location": "CR-MDB-1"}, slot="2", expected_feed="", **DOOR)
     assert body["location_moved"] is False, body
     assert "CR-MDB-1 slot 2 still holds #60, loaded on XL-3" in body["msg"], body
+    assert body["location_result"]["blocked_reason"] == "slot_claimed", body
     assert body.get("pick_refused") is True, body
 
 

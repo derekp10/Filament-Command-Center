@@ -129,6 +129,7 @@ def test_a_slot_whose_own_spool_runs_on_another_head_takes_no_new_spool(auto_dep
     sm = _other_head()
     res, _ = _move(sm, auto_deploy=auto_deploy)
     assert logic.smart_move_failure(res, 42) == why, res
+    assert res.get("blocked_reason") == "slot_claimed", res   # Group 51.3 (step 6's refusal)
     assert sm.writes == [], sm.writes
     assert sm.spools[42]["location"] == "CR-CT-2-R1" and sm.direct_at("XL-3") == [60]
     assert "auto_deployed_to" not in res, res
@@ -177,6 +178,7 @@ def test_the_ghost_refusal_offers_a_load_only_where_one_swaps_it_out(target, ext
     sm = _sm({42: {"location": "CR-CT-2-R1", "extra": {}}, **extra})
     res, _ = _move(sm, target=target, auto_deploy=auto_deploy)
     assert logic.smart_move_failure(res, 42) == why, res
+    assert res.get("blocked_reason") == "slot_claimed", res   # Group 51.3
     assert sm.writes == []
 
 

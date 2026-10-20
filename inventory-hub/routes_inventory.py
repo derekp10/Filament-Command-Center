@@ -626,21 +626,14 @@ def _pick_refused(data, new_loc, result, sid):
     again on every Save, only to be refused again: the slot it picked was taken
     meanwhile (`picked_slot_taken`), the head's "came from" slot can't be
     recorded (`record_source`), or the slot it named is still claimed by a
-    spool deployed from it (the engine's ghost guard, logic._ghost_claim_refusal,
-    which carries no blocked_reason: its words name "<box> slot <n>"). The page
-    then drops the pick, so its next Save opens the picker again. A refusal
-    about anything else (Spoolman rejecting the write, a read that failed)
-    keeps the pick: saving again may work."""
+    spool deployed from it (`slot_claimed`, the engine's ghost guard,
+    logic._ghost_claim_refusal; Group 51.3: it used to be told by its words).
+    The page then drops the pick, so its next Save opens the picker again. A
+    refusal about anything else (Spoolman rejecting the write, a read that
+    failed) keeps the pick: saving again may work."""
     if not isinstance(result, dict):
         return False
-    if result.get('blocked_reason') in ('picked_slot_taken', 'record_source'):
-        return True
-    slot = logic._norm_slot((data or {}).get('slot'))
-    if not slot:
-        return False
-    why = str((result.get('failures') or {}).get(str(sid)) or '')
-    lead = f"{new_loc} slot {slot} "
-    return why.startswith(lead + "still holds #") or why.startswith(lead + "is still claimed by #")
+    return result.get('blocked_reason') in ('picked_slot_taken', 'record_source', 'slot_claimed')
 
 
 def _deploy_skipped_note(sid, target, result):
