@@ -145,6 +145,22 @@ def test_escape_closes_the_list_and_leaves_the_search_panel_open(page: Page, bas
 
 
 @pytest.mark.usefixtures("require_server")
+def test_the_threshold_setting_renders_in_settings(page: Page, base_url: str, reset_dom_state_js: str):
+    """`low_stock_g` is a plain schema Field: Settings draws it as a number input
+    with no UI code of its own. Read-only: nothing is saved."""
+    page.goto(base_url)
+    page.wait_for_selector("#command-buffer, #buffer-zone", timeout=10000)
+    page.evaluate(reset_dom_state_js)
+    page.wait_for_function("typeof window.openConfigModal === 'function'", timeout=10000)
+    page.evaluate("window.openConfigModal()")
+    expect(page.locator("#configModal")).to_be_visible(timeout=5000)
+    field = page.locator('.cfgset-input[data-key="low_stock_g"]')
+    expect(field).to_be_visible()
+    assert field.evaluate("el => el.type") == "number"
+    assert float(field.input_value()) >= 0
+
+
+@pytest.mark.usefixtures("require_server")
 def test_the_dashboard_never_asks_for_the_list_on_its_own(page: Page, base_url: str, reset_dom_state_js: str):
     """Not at load, not on the 5 s heartbeat: only when the panel opens (Group
     45.8's lesson: nothing heavy on the heartbeat)."""

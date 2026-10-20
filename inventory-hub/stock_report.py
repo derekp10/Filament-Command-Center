@@ -34,9 +34,11 @@ Activity Log WARNING per filament when a write takes it across a line:
     auto-archive): "⚠️ ... is out: #99 was its last spool in stock". Not for a
     One-off filament.
 A filament already under the line stays quiet until it runs out, so a print on
-a low filament doesn't log every time. "Before" is the written spool's own
-grams before and after the write plus the filament's other in-stock spools, from
-one strict read of that filament's spools after the write.
+a low filament doesn't log every time, and the same warning for one filament is
+logged once a minute at most (two writes landing together can each see the
+crossing). "Before" is the written spool's own grams before and after the write
+plus the filament's other in-stock spools, from one strict read of that
+filament's spools after the write.
 
 It never gets in the way of the write that called it: it is called only after
 the write landed (for a print, after the exactly-once ledger write, so a crash
@@ -50,6 +52,7 @@ Python 3.9 runtime (the container image): keep syntax 3.9-safe.
 import html
 import math
 import threading
+import time
 from urllib.parse import quote
 
 import requests  # type: ignore
@@ -74,6 +77,14 @@ _READ_TIMEOUT = 5
 # The warning check runs on its own short-lived thread so it never delays the
 # deduct or the weight write. Tests set this False to run it inline.
 _RUN_ASYNC = True
+
+# One warning per crossing: two writes to one filament landing together (a
+# print's deduct and a weigh-out) each read the other's write too, and both
+# could see the same crossing. The same warning for the same filament within
+# _REPEAT_S is logged once. {(filament id, "low" | "out"): time.monotonic()}.
+_REPEAT_S = 60.0
+_RECENT = {}
+_RECENT_LOCK = threading.Lock()
 
 
 class StockReadError(Exception):
@@ -335,7 +346,13 @@ def _filament_spools_strict(fid):
 def _changes_from_details(details):
     """A print deduct's charges ({sid, grams, remaining}: what it took and what
     it left) as changes. A charge with no known remaining, or no grams, can't
-    move a filament across a line. Two charges of one spool count as one."""
+    move a filament across a line. Two charges of one spool count as one.
+
+    A charge may say `was_archived` (the spool's archived flag before it): a
+    review Apply can charge a spool archived by hand (Group 43.2), and that
+    spool was no stock before the charge. Without it, the spool's record after
+    the charge tells (`_crossing`); on the automatic deduct a charged spool was
+    always in stock, since a head's spools are read from the non-archived list."""
     merged = {}
     for d in details or []:
         if not isinstance(d, dict):
@@ -347,14 +364,21 @@ def _changes_from_details(details):
         grams, after = _num(d.get('grams')), _num(d.get('remaining'))
         if grams is None or after is None or grams <= 0 or after < 0:
             continue
+        was_archived = d.get('was_archived')
         c = merged.get(sid)
         if c is None:
-            merged[sid] = {"sid": sid, "fid": None, "grams": grams, "after_g": after}
+            merged[sid] = {"sid": sid, "fid": None, "grams": grams, "after_g": after,
+                           "was_archived": was_archived}
         else:
             c["grams"] += grams
             c["after_g"] = min(c["after_g"], after)
-    return [dict(c, before_g=c["after_g"] + c["grams"], before_in=None, after_in=None)
-            for c in merged.values()]
+    out = []
+    for c in merged.values():
+        before_g = c["after_g"] + c["grams"]
+        before_in = None if c["was_archived"] is None else (not c["was_archived"] and before_g > 0)
+        out.append({"sid": c["sid"], "fid": None, "before_g": before_g, "after_g": c["after_g"],
+                    "before_in": before_in, "after_in": None})
+    return out
 
 
 def _change_from_records(sid, pre, post):
@@ -385,8 +409,20 @@ def _log_colour(fil):
     return clean.strip(',') or "ffaa00"
 
 
+def _first_in_a_while(fid, kind):
+    """True unless this filament logged this kind of warning in the last
+    _REPEAT_S seconds (and then records it)."""
+    now = time.monotonic()
+    with _RECENT_LOCK:
+        last = _RECENT.get((fid, kind))
+        if last is not None and now - last < _REPEAT_S:
+            return False
+        _RECENT[(fid, kind)] = now
+        return True
+
+
 def _crossing(group, spools, threshold):
-    """(message, swatch colour) for the line one filament's write took it
+    """(message, swatch colour, kind) for the line one filament's write took it
     across, or None. `group`: the changes on this filament; `spools`: its
     spools as read after the write."""
     by_id = {str(s.get('id')): s for s in spools or []
@@ -436,11 +472,11 @@ def _crossing(group, spools, threshold):
             return None
         ids = ", ".join(f"#{s}" for s in sorted(emptied, key=lambda s: (_num(s) is None, _num(s) or 0)))
         tail = "was its last spool" if len(emptied) == 1 else "were its last spools"
-        return f"⚠️ {name} is out: {ids} {tail} in stock", _log_colour(fil)
+        return f"⚠️ {name} is out: {ids} {tail} in stock", _log_colour(fil), "out"
     if after_count > 0 and before_total >= threshold > after_total:
         noun = "spool" if after_count == 1 else "spools"
         return (f"⚠️ {name} is running low: {after_total:.0f} g left in {after_count} {noun}",
-                _log_colour(fil))
+                _log_colour(fil), "low")
     return None
 
 
@@ -468,7 +504,7 @@ def _check(changes):
             except Exception as e:
                 _debug(f"filament {fid}: {e}")
                 continue
-            if found:
+            if found and _first_in_a_while(fid, found[2]):
                 state.add_log_entry(found[0], "WARNING", found[1])
     except Exception as e:
         _debug(f"skipped: {e}")

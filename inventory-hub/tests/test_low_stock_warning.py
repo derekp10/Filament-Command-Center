@@ -150,6 +150,7 @@ def env(monkeypatch, tmp_path):
     logs = []
     monkeypatch.setattr(state, "add_log_entry", lambda msg, *a, **k: logs.append((msg, a, k)))
     monkeypatch.setattr(stock_report, "_RUN_ASYNC", False)
+    monkeypatch.setattr(stock_report, "_RECENT", {})      # each test starts with no recent warnings
     return {"fake": fake, "cfg": cfg, "logs": logs, "monkeypatch": monkeypatch}
 
 
@@ -445,14 +446,45 @@ def test_a_spool_archived_with_grams_left_was_never_stock_for_a_charge(env):
     assert stock_report._crossing(change, spools, 250.0) is None
 
 
+def test_a_charge_that_says_it_was_archived_moves_no_stock(env):
+    """A review Apply may charge a spool archived by hand (Group 43.2). A charge
+    that says so (`was_archived`) emptying it is not the filament running out;
+    one that says it wasn't, or (the automatic deduct) says nothing, is."""
+    spools = [_rec(1, 10, 0.0, archived=True)]
+    hand = stock_report._changes_from_details([{"sid": 1, "grams": 30.0, "remaining": 0.0, "was_archived": True}])
+    assert stock_report._crossing(hand, spools, 250.0) is None
+    for detail in ({"sid": 1, "grams": 30.0, "remaining": 0.0, "was_archived": False},
+                   {"sid": 1, "grams": 30.0, "remaining": 0.0}):
+        found = stock_report._crossing(stock_report._changes_from_details([detail]), spools, 250.0)
+        assert found[0] == "⚠️ Prusament PLA Galaxy Black is out: #1 was its last spool in stock"
+
+
 def test_the_filament_name_is_escaped_for_the_activity_log(env):
     """The Activity Log renders a message as HTML; vendor and colour names are
     free text."""
     change = {"sid": 1, "fid": 10, "before_g": 300.0, "after_g": 220.0, "before_in": True, "after_in": True}
-    msg, colour = stock_report._crossing(
+    msg, colour, kind = stock_report._crossing(
         [change], [_rec(1, 10, 220.0, vendor="<img src=x onerror=alert(1)>")], 250.0)
     assert "<img" not in msg and "&lt;img src=x onerror=alert(1)&gt;" in msg
-    assert colour == "222222"
+    assert colour == "222222" and kind == "low"
+
+
+def test_the_same_crossing_reported_twice_is_logged_once(env):
+    """Two writes to one filament landing together can each see the same
+    crossing (each reads the other's write): the warning is logged once. A
+    different crossing of the same filament (it then runs out) still logs."""
+    fake = _galaxy(env, (1, 80, ""), (2, 140, "SHELF-A"))
+    low = {"sid": 1, "fid": 10, "before_g": 160.0, "after_g": 80.0, "before_in": True, "after_in": True}
+    stock_report._check([dict(low)])
+    stock_report._check([dict(low)])
+    assert [m for m, _ in _stock_warnings(env["logs"])] == \
+        ["⚠️ Prusament PLA Galaxy Black is running low: 220 g left in 2 spools"]
+    fake.spools[1].update(used_weight=1000.0, archived=True)
+    fake.spools[2].update(used_weight=1000.0, archived=True)
+    out = {"sid": 2, "fid": 10, "before_g": 140.0, "after_g": 0.0, "before_in": True, "after_in": False}
+    stock_report._check([out])
+    assert len(_stock_warnings(env["logs"])) == 2
+    assert _stock_warnings(env["logs"])[1][0].endswith("is out: #2 was its last spool in stock")
 
 
 def test_the_filament_read_is_filtered_in_fcc_too(env):
