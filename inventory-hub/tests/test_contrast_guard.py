@@ -261,3 +261,87 @@ def test_backlog_read_notice_has_no_gray_on_gray_text(page: Page, base_url: str,
     notice = page.locator("#backlog-read-notice")
     expect(notice).to_be_visible(timeout=8000)
     assert_contrast(notice)
+
+
+# ---------------------------------------------------------------------------
+# Group 52 review, reads-1: "Spoolman didn't answer" in the Printer Status
+# widget and the Locations table (hermetic twin: test_pulse_spool_read_reads1_page.py)
+# ---------------------------------------------------------------------------
+
+_READS1_DOWN = {"ok": False, "error": "Spoolman didn't answer (Read timed out. (read timeout=5))"}
+
+
+def _reads1_scored(root, element_id):
+    """The guard walks a root's DESCENDANTS, never the root itself, so a
+    text-only notice passed as its own root is never scored. Check it through
+    its parent, and prove it is scored: at an impossible ratio it is reported."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    return any(o["id"] == element_id for o in conftest.contrast_offenders(root, min_ratio=100))
+
+
+@pytest.mark.usefixtures("require_server")
+def test_printer_status_read_notice_has_no_gray_on_gray_text(page: Page, base_url: str, assert_contrast):
+    """Shown when the heartbeat's spool read fails: every heartbeat here answers
+    a failed read for one made-up printer, whose head is then "? not read".
+    Routed answers only: no dev data is read or written. Expanded and collapsed
+    (the notice sits outside the body the collapsed view hides)."""
+    import json
+    pulse = {"printer_status": {"ZZ Read Printer": {"state": None, "toolheads": [
+                 {"id": "ZR-1", "position": 0, "item": None, "unbound": False, "loaded_count": 0}]}},
+             "spool_read": _READS1_DOWN}
+    page.route("**/api/dashboard_pulse*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=json.dumps(pulse)))
+    page.goto(base_url)
+    notice = page.locator("#printer-status-read-notice")
+    expect(notice).to_be_visible(timeout=10000)
+    expect(page.locator("#printer-status-widget .fcc-ps-th-unread").first).to_be_visible(timeout=5000)
+    widget = page.locator("#printer-status-widget")
+    assert _reads1_scored(widget, "printer-status-read-notice")
+    assert_contrast(widget)
+    page.locator("#printer-status-widget .fcc-ps-header-bar").click()
+    expect(page.locator("#printer-status-widget .fcc-ps-header-chips")).to_be_visible(timeout=2000)
+    expect(notice).to_be_visible()
+    assert_contrast(widget)
+
+
+@pytest.mark.usefixtures("require_server")
+def test_location_table_read_notice_has_no_gray_on_gray_text(page: Page, base_url: str, assert_contrast):
+    """Shown when the table's spool read fails: /api/locations answers its
+    'failed' header and every heartbeat a failed read, with made-up rows FCC
+    has no earlier count for (each then shows "?"). Routed answers only: no dev
+    data is read or written. Only the notice and the "?" cells are judged
+    here; the rest of the table is the same as ever."""
+    import json
+    import conftest
+    rows = [{"LocationID": "Unassigned", "Name": "Workbench / Unsorted", "Type": "Virtual",
+             "Occupancy": "0 items", "Max Spools": 0, "parent_id": None, "Synthesized": True},
+            {"LocationID": "ZZ-RD-1", "Name": "Read Test Box", "Type": "Dryer Box", "Max Spools": "4",
+             "Occupancy": "0/4", "OccupancyRaw": 0, "parent_id": None},
+            {"LocationID": "UNKNOWN", "Name": "Unknown (Physically Lost)", "Type": "Unknown",
+             "Occupancy": "0 items", "Max Spools": 0, "parent_id": None, "Synthesized": True}]
+
+    def _locations(route):
+        if route.request.method != "GET":
+            route.continue_()
+            return
+        route.fulfill(status=200, content_type="application/json",
+                      headers={"X-FCC-Spool-Read": "failed"}, body=json.dumps(rows))
+
+    page.route("**/api/locations", _locations)
+    page.route("**/api/dashboard_pulse*", lambda route: route.fulfill(
+        status=200, content_type="application/json",
+        body=json.dumps({"locations": rows, "spool_read": _READS1_DOWN})))
+    page.goto(base_url)
+    page.wait_for_selector(".deck-btn, #command-buffer", timeout=10000)
+    page.evaluate("window.openLocationsModal && window.openLocationsModal()")
+    conftest.wait_modal_settled(page, "locMgrModal")
+    notice = page.locator("#loc-read-notice")
+    expect(notice).to_be_visible(timeout=10000)
+    expect(page.locator("#location-table .loc-count-unread").first).to_be_visible(timeout=5000)
+    body = page.locator("#locMgrModal .modal-body")
+    assert _reads1_scored(body, "loc-read-notice")
+    offenders = [o for o in conftest.contrast_offenders(body)
+                 if o["id"] == "loc-read-notice" or "loc-count-unread" in str(o.get("className") or "")]
+    assert offenders == [], offenders
+    for cell in page.locator("#location-table td.col-status").all():
+        assert_contrast(cell)

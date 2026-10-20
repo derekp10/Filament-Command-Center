@@ -235,7 +235,13 @@ def test_a_failed_read_is_tried_once_per_heartbeat_and_no_section_draws_it_as_em
     empty box, the backlog count says so too (the page keeps the count it
     shows), the locations table keeps its rows (zero counts, the old quirk) and
     the printer heads stay empty, as the fail-open read left them. RED on
-    52741e6: three attempts and `contents: []`."""
+    52741e6: three attempts and `contents: []`.
+
+    PIN UPDATED DELIBERATELY (Group 52 review, reads-1, 2026-10-19): those
+    zero counts and empty heads mean "nothing was read", and the tick now says
+    so beside them in `spool_read` (never inside printer_status), so the page
+    keeps the counts and tiles it drew. The sections themselves are unchanged
+    (test_pulse_spool_read_reads1.py pins the rest)."""
     sm = HttpSpoolman(down={SPOOL_LIST})
     body = _pulse(client, sm, ALL_SPOOL_SECTIONS, manage_id="TST-DB-1")
 
@@ -249,6 +255,8 @@ def test_a_failed_read_is_tried_once_per_heartbeat_and_no_section_draws_it_as_em
     assert set(rows) >= {"TST-DB-1", "TSTP-1", "Unassigned", "UNKNOWN"}, rows
     heads = body["printer_status"]["Test Printer"]["toolheads"]
     assert [h["item"] for h in heads] == [None], heads
+    assert body["spool_read"]["ok"] is False and "Spoolman" in body["spool_read"]["error"], body
+    assert "spool_read" not in body["printer_status"], body["printer_status"]
 
 
 def test_the_manage_section_tells_an_empty_box_from_a_failed_read(client):

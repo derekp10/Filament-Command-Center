@@ -123,18 +123,27 @@
                 const unbound = !((bindings.toolheads[th.id] || []).length > 0);
                 let item = null;
                 let loaded = [];
+                let unread = false;
                 try {
-                    const r = await fetch(`/api/get_contents?id=${encodeURIComponent(th.id)}`);
-                    const items = (r.ok ? await r.json() : []) || [];
-                    // Group 42.4 (mirrors the pulse): the loaded spool, never a
-                    // ghost while one exists; a doubled head carries both ids.
-                    loaded = items.filter(i => !i.is_ghost);
-                    item = loaded[0] || items[0] || null;
+                    // reads-1: a STRICT read, so a Spoolman blip is the route's
+                    // 502, never [] drawn as an empty head: the head is marked
+                    // `unread` and keeps its last tile (_keepLastTiles).
+                    const r = await fetch(`/api/get_contents?id=${encodeURIComponent(th.id)}&strict=1`);
+                    const items = r.ok ? await r.json() : null;
+                    if (Array.isArray(items)) {
+                        // Group 42.4 (mirrors the pulse): the loaded spool, never a
+                        // ghost while one exists; a doubled head carries both ids.
+                        loaded = items.filter(i => !i.is_ghost);
+                        item = loaded[0] || items[0] || null;
+                    } else {
+                        unread = true;
+                    }
                 } catch (e) {
-                    item = null;
+                    unread = true;
                 }
                 const out = { ...th, item, unbound, loaded_count: loaded.length };
                 if (loaded.length > 1) out.loaded_ids = loaded.map(i => i.id);
+                if (unread) out.unread = true;
                 return out;
             }));
             // Re-sort by position so the visual order matches printer layout.
@@ -184,7 +193,8 @@
                 // material correction, or a same-color/same-weight swap) still
                 // repaints the new material line.
                 // 42.4: a second loaded spool appearing or leaving repaints the chip.
-                return th.id + (th.unbound ? '!u' : '') + ((th.loaded_count || 0) > 1 ? `!n${th.loaded_count}` : '') + ':' + (it ? `${it.id}:${it.color || ''}:${(it.details && it.details.material) || ''}:${Math.round(it.remaining_weight || 0)}/${Math.round(it.initial_weight || 0)}` : 'empty');
+                // reads-1: "? not read" and "empty" are different tiles.
+                return th.id + (th.unbound ? '!u' : '') + (th.unread ? '!r' : '') + ((th.loaded_count || 0) > 1 ? `!n${th.loaded_count}` : '') + ':' + (it ? `${it.id}:${it.color || ''}:${(it.details && it.details.material) || ''}:${Math.round(it.remaining_weight || 0)}/${Math.round(it.initial_weight || 0)}` : 'empty');
             }).join(','));
         });
         return parts.join('||');
@@ -217,6 +227,22 @@
     const _renderToolheadBlock = (th) => {
         const it = th.item;
         const positionAttr = `data-toolhead="${th.id}"`;
+        if (th.unread && !it) {
+            // reads-1: Spoolman didn't answer and FCC has no earlier answer for
+            // this head, so it doesn't know what is loaded: "? not read", never
+            // "empty" (and never the unbound placeholder, which reads as empty).
+            return `
+                <div class="fcc-ps-th fcc-ps-th-unread" ${positionAttr}
+                     style="cursor:pointer;"
+                     title="${th.id} — Spoolman didn't answer, so FCC couldn't check what is loaded here. It tries again every few seconds.">
+                    <div class="fcc-ps-th-bar"><div class="fcc-ps-th-bar-fill" style="width:0%;"></div></div>
+                    <div class="fcc-ps-th-body fcc-ps-th-body-empty">
+                        <div class="fcc-ps-th-id text-truncate">${_thLabel(th)}</div>
+                    </div>
+                    <div class="fcc-ps-th-chip" style="font-size:0.78rem; color:#ffd54a;">? not read</div>
+                </div>
+            `;
+        }
         // L140 fix — unbound toolheads (no dryer-box slot_targets points
         // at them) render with a distinct "no bound slots" placeholder
         // instead of being hidden, so the printer is visible on the
@@ -314,6 +340,16 @@
     // gray fallback) and contrast is consistent with all other chips.
     const _renderToolheadCompact = (th) => {
         const it = th.item;
+        if (th.unread && !it) {
+            // reads-1: the collapsed form of "? not read" (see _renderToolheadBlock).
+            return `<span class="fcc-ps-mini fcc-ps-mini-empty fcc-ps-mini-unread"
+                          data-toolhead="${th.id}"
+                          title="${th.id} — Spoolman didn't answer, so FCC couldn't check what is loaded here">
+                <span class="fcc-ps-mini-swatch fcc-ps-mini-swatch-empty"></span>
+                <span class="fcc-ps-mini-id">${th.id}</span>
+                <span class="fcc-ps-mini-weight" style="color:#ffd54a;">? not read</span>
+            </span>`;
+        }
         if (th.unbound && !it) {
             // L140 companion — collapsed-mode placeholder for unbound AND empty
             // toolheads. An unbound toolhead that holds a spool falls through to
@@ -518,11 +554,101 @@
         });
     };
 
+    // --- reads-1 (Group 52 review): "Spoolman didn't answer", never "empty" ---
+    // A head's tile comes from Spoolman's spool list. When the heartbeat's one
+    // read of it fails, its `spool_read` says ok: false and every head in its
+    // printer_status is empty only because nothing was read; when the fan-out's
+    // strict read of one head fails, that head comes back `unread`. Either way a
+    // head keeps the spool its tile showed after the last read that worked, a
+    // head with no earlier answer is drawn "? not read", and
+    // #printer-status-read-notice says Spoolman didn't answer. Everything that
+    // isn't read from Spoolman (the printer's state badge, the 🔗 binding hint)
+    // still updates. The next good read redraws the tiles and hides the notice;
+    // a heartbeat that says nothing either way draws as before.
+    //
+    // `everyHead`: the heartbeat's read failed, so every head is unread;
+    // otherwise only the heads marked `unread`. `last` is what was drawn.
+    const _keepLastTiles = (rows, last, everyHead) => {
+        let kept = 0, unread = 0;
+        const out = {};
+        Object.keys(rows).forEach(name => {
+            const info = rows[name];
+            if (!info || typeof info !== 'object' || !Array.isArray(info.toolheads)) {
+                out[name] = info;
+                return;
+            }
+            const prev = new Map();
+            ((last && last[name] && last[name].toolheads) || []).forEach(p => {
+                if (p && p.id) prev.set(p.id, p);
+            });
+            out[name] = {
+                ...info,
+                toolheads: info.toolheads.map(th => {
+                    if (!th || !(everyHead || th.unread)) return th;
+                    const p = prev.get(th.id);
+                    const head = { ...th };
+                    delete head.loaded_ids;
+                    if (p && !p.unread) {
+                        kept++;
+                        head.item = p.item || null;
+                        head.loaded_count = p.loaded_count || 0;
+                        if (p.loaded_ids) head.loaded_ids = p.loaded_ids;
+                        delete head.unread;
+                    } else {
+                        unread++;
+                        head.item = null;
+                        head.loaded_count = 0;
+                        head.unread = true;
+                    }
+                    return head;
+                }),
+            };
+        });
+        return { rows: out, kept, unread };
+    };
+    const _readNoticeEl = () => {
+        let el = document.getElementById('printer-status-read-notice');
+        if (el) return el;
+        const widget = document.getElementById('printer-status-widget');
+        const body = widget && widget.querySelector('.fcc-ps-body');
+        if (!body || !body.parentNode) return null;
+        // Above the body, not in it: _render rewrites the body, and the notice
+        // must show in the collapsed view too (which hides the body). Same look
+        // as #manage-read-notice (Group 52.1b), a little smaller for the band.
+        el = document.createElement('div');
+        el.id = 'printer-status-read-notice';
+        el.className = 'fcc-ps-read-notice';
+        el.setAttribute('role', 'status');
+        el.setAttribute('aria-live', 'polite');
+        el.style.cssText = 'display:none; background:#2b2200; color:#ffd54a; border:1px solid #ffd54a;'
+            + ' border-radius:6px; padding:4px 10px; margin:4px 0; font-weight:bold; font-size:0.85rem;';
+        body.parentNode.insertBefore(el, body);
+        return el;
+    };
+    const _showReadFailure = (kept, why) => {
+        const el = _readNoticeEl();
+        if (!el) return;
+        const text = "⚠️ Spoolman didn't answer, so FCC couldn't check what's loaded on the toolheads just now."
+            + (kept ? ' These tiles are from its last answer.' : '')
+            + ' It tries again every few seconds.';
+        // Only on a change: an aria-live region re-announces a rewrite.
+        if (el.textContent !== text) el.textContent = text;
+        el.title = why ? String(why) : '';
+        el.style.display = 'block';
+    };
+    const _clearReadFailure = () => {
+        const el = document.getElementById('printer-status-read-notice');
+        if (!el) return;
+        el.style.display = 'none';
+        el.textContent = '';
+        el.title = '';
+    };
+
     const refresh = async () => {
         if (_state.inFlight) return;
         _state.inFlight = true;
         try {
-            const rows = await _aggregate();
+            let rows = await _aggregate();
             // L56 — preserve printer `state` from the last bulk-pulse render
             // (refreshFromAggregate), since the per-printer fan-out here
             // doesn't include it. Without this merge, every sync-pulse
@@ -534,6 +660,18 @@
                     rows[name].state = cached.state;
                 }
             });
+            // reads-1: a head whose strict read failed keeps its last tile.
+            const anyUnread = Object.keys(rows).some(name => {
+                const heads = rows[name] && rows[name].toolheads;
+                return Array.isArray(heads) && heads.some(th => th && th.unread);
+            });
+            if (anyUnread) {
+                const kept = _keepLastTiles(rows, _state.rowsByPrinter, false);
+                rows = kept.rows;
+                _showReadFailure(kept.kept > 0, null);
+            } else {
+                _clearReadFailure();
+            }
             _state.rowsByPrinter = rows;
             const fp = _fingerprint(rows);
             if (fp === _state.lastFingerprint) return;  // unchanged, skip render
@@ -613,16 +751,27 @@
     // L206 bulk-pulse hook: render from a pre-fetched aggregate without
     // hitting the per-printer fan-out. Same fingerprint/wiggle protection
     // as refresh(). Called by startSmartSync's dashboard_pulse dispatcher
-    // when the response includes a printer_status section.
-    const refreshFromAggregate = (rows) => {
+    // when the response includes a printer_status section; `read` is the
+    // heartbeat's `spool_read` ({ok, error}), or undefined when it has none.
+    const refreshFromAggregate = (rows, read) => {
         if (!rows || typeof rows !== 'object') return;
         // A section the server couldn't build arrives as {error: "..."}
         // (routes_state_pulse.py). Treat it as missing so the tick's event takes
         // the fan-out fallback; rendering it threw in _fingerprint and aborted
         // the rest of the tick (review widget-2).
         if (typeof rows.error === 'string') return;
-        // The tick's inventory:sync-pulse, fired right after this, needs no fan-out.
+        // The tick's inventory:sync-pulse, fired right after this, needs no
+        // fan-out: not even when Spoolman didn't answer (one more whole-list
+        // read per head, just when it is slow).
         _state.pulseFed = true;
+        // reads-1: the read failed, so every head keeps its last tile.
+        if (read && read.ok === false) {
+            const kept = _keepLastTiles(rows, _state.rowsByPrinter, true);
+            rows = kept.rows;
+            _showReadFailure(kept.kept > 0, read.error);
+        } else {
+            _clearReadFailure();
+        }
         _state.rowsByPrinter = rows;
         const fp = _fingerprint(rows);
         if (fp === _state.lastFingerprint) return;
