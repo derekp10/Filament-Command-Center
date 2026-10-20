@@ -507,7 +507,7 @@ def _not_moved_msg(sid, new_loc, why, saved_other):
     return text if text.endswith(('.', '?', '!')) else text + '.'
 
 
-def _wizard_move(sid, new_loc, data, placement=None, current_loc='', origin='wizard_edit'):
+def _wizard_move(sid, new_loc, data, placement=None, current_loc='', origin='wizard_edit', keep_archived=False):
     """Group 40.7 — apply one wizard Location, one spool per call: Unassigned
     through perform_force_unassign (Force Location's own path), anything else
     through perform_smart_move. Returns (moved, result, stale): `result` is the
@@ -521,7 +521,9 @@ def _wizard_move(sid, new_loc, data, placement=None, current_loc='', origin='wiz
     Swap option C): the edit request itself, or one `placements` entry of a
     create. `data`: the door contract (`confirmed_toolheads`,
     `confirmed_fed_heads`, `seen_printing`). `current_loc`: where the spool is,
-    so an unassign's confirm covers only the head the user was asked about."""
+    so an unassign's confirm covers only the head the user was asked about.
+    `keep_archived`: the edit archived the spool (its Archived box is ticked), so
+    a head refuses it instead of un-archiving it to load it (Derek, 2026-10-20)."""
     p = placement if isinstance(placement, dict) else {}
     if not new_loc:
         # Force-unassign keeps its boolean confirm (39.1): covered only when the
@@ -549,6 +551,7 @@ def _wizard_move(sid, new_loc, data, placement=None, current_loc='', origin='wiz
             # slot chosen for Swap / Overwrite (a held choice can be old by Save).
             expected_residents=logic.expected_residents_from(p),
             expected_occupant=logic.expected_occupant_from(p),
+            keep_archived=keep_archived,
         )
     stale = None
     if isinstance(result, dict):
@@ -1275,7 +1278,8 @@ def api_edit_spool_wizard():
                     moved, result, stale = _wizard_move(
                         spool_id, new_location, data,
                         placement=dict(data, auto_deploy=False) if archived_off else data,
-                        current_loc='' if archived_off else (original_spool or {}).get('location'))
+                        current_loc='' if archived_off else (original_spool or {}).get('location'),
+                        keep_archived=archived_off is not None)
                 except Exception as e:   # the other edits are saved: say so
                     state.add_log_entry(f"❌ Wizard edit: #{spool_id} was not moved to "
                                         f"{new_location or 'Unassigned'}: {e}", "ERROR", "ff4444")

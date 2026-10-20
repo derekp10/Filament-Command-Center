@@ -139,18 +139,23 @@
   Status drops its "🔗 no bound slot" placeholder on those heads. A proper "Spool Holder" type is Group 37's
   question. **Done when** the holders (and the box, if used) have rows, feeds and printed slot labels; that also
   lets his "INDX heads without labels" item close, once his F2 check passes.
-* **⏸️ PENDING DEREK — two small calls from the 2026-10-19 bundle (neither blocks a release; a default is built).**
-  1. **Tag the filaments you won't rebuy "One-off".** The new ⚠️ Low stock list (🔍 Search panel → ⚠️ Low stock) has an
-     **Out** section: every filament that has had spools and has none in stock. The first time you open it on prod it
-     lists every filament you ever used up. Add a "One-off" choice in ⚙️ Filament Attributes and tag those filaments: a
-     One-off filament never shows as Out and never gets the "is out" warning (it still gets "running low" while it has
-     stock). Untagged, the list just stays long.
-  2. **An archived spool scanned onto a toolhead.** Example: you archive #57 by hand with 300 g left to set it aside,
-     then later scan it onto XL-1. **Built:** FCC refuses ("Not loaded: #57 is archived, so it was not loaded onto
-     XL-1: weigh it back into stock (or untick Archived in Edit) first"), nothing moves; into a bound box slot it is
-     stored in the slot and not loaded. **The other way:** loading it onto a head un-archives it. Recommendation: keep
-     the refusal. An archived spool on a head is invisible to Smart Load, the print charge and Printer Status, which is
-     the bug this closed. Say if you want the other way; otherwise nothing to do.
+* **⏸️ PENDING DEREK — the ⚠️ Low stock list's Out section (from the 2026-10-19 bundle; nothing here blocks a release).**
+  1. **Tag the filaments you won't rebuy "One-off".** The ⚠️ Low stock list (🔍 Search panel → ⚠️ Low stock) has an
+     **Out** section: every filament that has had spools and has none in stock (on prod, 2026-10-20: Creality PETG
+     Black and Kingroon PETG White). Add a "One-off" choice in ⚙️ → 🏷️ Filament Attributes and give it to those
+     filaments (✏️ Edit Filament → Attributes): a One-off filament never shows as Out and never gets the "is out"
+     warning (it still gets "running low" while it has stock). The window itself says this under Out (Derek: "needs to
+     be documented somewhere that I can run into it again").
+  2. **Should the 11 filaments with no spool records at all show under Out?** Prod (read 2026-10-20, read-only): 191
+     filaments, and these 11 have never had a spool record, all created 2026-02-11 (the first import): Anycubic PLA Red
+     (Matte), Anycubic PLA Violet, Creator PETG Black (Carbon Fiber), Elegoo PC Black, IEMAI TPU Green, Jayo PA6 Black
+     (Glass Fiber), Overture PC Black, Polymaker PC Clear (sample printed), Sunlu PETG Black, Sunlu PLA Clear, Sunlu
+     TPU Green. Derek: "every filament should have had a spool at one point, with the exceptions of filaments (samples)
+     where I used up the spool well before I was tracking", which these fit. **Today:** left off Out (a filament with
+     no spool record counts as never stocked). **Option:** list them under Out with their own heading ("No spool on
+     record"), where One-off still hides one. Recommendation: list them, under the heading.
+  _(The other call this item held, an archived spool scanned onto a toolhead, was answered 2026-10-20: un-archived and
+  loaded when its record still has filament, refused at 0 g; built.)_
 
 ## 🗒️ Notes and standalone items
 
@@ -307,19 +312,34 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
 * **Slicer profiles: the next steps after Group 48.4.** _(Derek, 2026-10-19: "being able to determin this, would
   help later on if they decide to add more variants, and we could just have the system add and update based on what it
   finds … I'd ove for this to carry over for other look ups if we ever implement them.")_ Group 48.4 fills a blank
-  Slicer Profile while a filament is made: prusament.com's product line ("Prusament PLA Blend"), else the profile his
-  own filaments of that brand + material use. Still open: (a) update existing filaments when Prusa adds or renames a
+  Slicer Profile while a filament is made, from prusament.com's product line ("Prusament PLA Blend") only. Still open: (a) update existing filaments when Prusa adds or renames a
   variant (a pass over his Prusament filaments that asks first); (b) read the product page when a spool page doesn't
   name the variant; (c) other lookups returning `slicer_profile` (the wizard already takes it from any parser).
   **Derek's caveat (2026-10-19):** the names are PrusaSlicer's (its default profiles, or a custom one he makes when
   needed), because he runs Prusa printers; they don't line up with other brands and slicers. Build the Prusa case
   first, but don't assume one profile name fits every slicer (a later version might keep a profile per slicer).
+  **Derek, 2026-10-20: "Don't guess."** The guess from his own filaments (brand + material) was removed the same day:
+  "we can confirm with prusa because of the spool link, we have a confirmed name documented. I can't nessessarly
+  garentee that the attributes for a spool are also present in its profile name in prusa slicer." What the field is
+  for: a profile he confirmed prints well, a brand's own (Prusament, Sunlu) or one he researched with some
+  confirmation (Jayo → the Sunlu profiles, as Jayo is Sunlu's off-brand; TPU, where Generic prints unreliably), else
+  the slicer's Generic one; "This is why I write these things down in the filament information, so I don't have to
+  remember it all." (d) **Parked idea he likes for later:** an attribute counts as part of a variant when one of his
+  profile names contains it (Blend, Carbon Fiber, High Speed, "+"), so a PLA Blend would learn only from his PLA
+  Blends. Not now: there is no concrete list of Prusa's profiles, and it varies by printer (the XL has custom profiles
+  for more brands than the INDX).
 * **A Buy More link template with `&` breaks in the spool and filament windows.** _(Found 2026-10-19 by the Group 49
   builder.)_ The details windows read the `buy_more_url_template` setting through Jinja's auto-escaping inside a
   `<script>` tag, so an `&` in it arrives as `&amp;` in the links they build. The ⚠️ Low stock panel builds its links on
   the server and is fine. Pass the setting with `|tojson` instead.
 
 ## 🔍 Search, Display & Filtering
+* **Where the ⚠️ Low stock button should live.** _(Derek, 2026-10-20: "Low stock button location works for now, but
+  it's a bit fiddily if I click on it to get more info … I don't have a good suggestion on where to put it yet.")_
+  Today it sits in the 🔍 Search panel, and the list is an overlay on top of it. Done the same day: the list comes back
+  on the same row once a window opened from it (the filament, or a spool or edit opened from that) is closed, so it no
+  longer has to be reopened from Search each time. Still open: a better home for the button. Ideas, none decided: a
+  dashboard button with a count like 🏷️ Backlog's, or a Settings / tools menu entry.
 
 ## ⚡ Quick-Swap Enhancements
 *(No open items — resolved entries archived in `completed-archive.md`.)*

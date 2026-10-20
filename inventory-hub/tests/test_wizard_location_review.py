@@ -155,8 +155,24 @@ def test_an_emptied_spool_sent_to_a_head_is_refused_archived_and_unassigned(clie
     spool = sm.spools[57]
     assert spool["archived"] is True and spool["location"] == "", spool
     assert spool["extra"]["physical_source"] == "", spool
-    assert "#57 is archived, so it was not loaded onto XL-2" in body["msg"], body
+    assert ("#57 is archived with no filament left on its record (0 g), so it was not loaded onto XL-2"
+            in body["msg"]), body
     assert "#57 is archived (used up), so it was taken off XL-1: it is Unassigned." in body["msg"], body
+
+
+def test_an_archived_ticked_spool_sent_to_a_head_stays_archived(client):
+    """Archived ticked (300 g left) and the Location set to XL-2 in one Save.
+    A head un-archives a spool with filament on its record to load it (Derek,
+    2026-10-20), but not this one: the same Save archived it, so the move keeps
+    it archived (`keep_archived`) and the answer says to untick Archived."""
+    sm = _on_xl1({"physical_source": "LR-MDB-1", "physical_source_slot": "1", "container_slot": ""}, used=700)
+    body = _edit(client, sm, {"location": "XL-2", "archived": True}, **DOOR)
+    assert body["location_result"]["blocked_reason"] == "archived", body
+    assert body["success"] is False and body["location_moved"] is False, body
+    spool = sm.spools[57]
+    assert spool["archived"] is True and spool["location"] == "", spool
+    assert sm.direct_at("XL-2") == [], sm.spools
+    assert "#57 is archived, so it was not loaded onto XL-2: untick Archived to load it" in body["msg"], body
 
 
 def test_an_archived_ticked_spool_stays_archived_where_its_move_lands(client):

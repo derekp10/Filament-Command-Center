@@ -91,7 +91,7 @@ def test_force_location_moves_a_hand_archived_spool_and_it_stays_archived(client
     spool = sm.spools[57]
     assert spool["location"] == "CR-CT-2-R1" and spool["archived"] is True, spool
     assert not _unarchived_by(sm), sm.patch_bodies
-    assert not _logs("Auto-unarchived"), state.RECENT_LOGS
+    assert not _logs("Auto-unarchived") and not _logs("Un-archived"), state.RECENT_LOGS
 
 
 def test_a_slot_label_scan_stores_it_and_it_stays_archived(client):
