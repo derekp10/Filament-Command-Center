@@ -1394,12 +1394,14 @@ window.handleSlotInteraction = (slot) => {
                         // (never before), which _doAssignFinalize adds to the buffer.
                         doAssign(locId, newId, slot, true, {
                             swapDisplaced: { id: item.id, display: item.display, color: item.color },
+                            // Group 51.7: the spool this prompt named.
+                            expectedOccupant: item.id,
                         });
                     }
                 },
                 {
                     label: "Overwrite", action: () => {
-                        doAssign(locId, newId, slot, true);
+                        doAssign(locId, newId, slot, true, { expectedOccupant: item.id });
                     }
                 },
                 { label: "Cancel", action: () => { closeModal('actionModal'); } }
@@ -1586,6 +1588,9 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedH
     // where it sat before this slot and names it in `to_buffer`. On `original`,
     // so every replay of a question is still a Swap.
     if (options.swapDisplaced) original.swap = true;
+    // Group 51.7: the stored spool the Swap / Overwrite prompt named. Another one
+    // in the slot by the time the move lands is refused (`occupant_changed`).
+    if (options.expectedOccupant != null) original.expected_occupant = options.expectedOccupant;
     // The heads whose warning the user confirmed (Group 39.1), so the backend's
     // safety net doesn't re-prompt for them.
     const first = Object.assign({}, original, {
@@ -1696,10 +1701,19 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedH
                       + `of where it really is, to fix its record`
                     : null;
                 if (why && window.logClientEvent) window.logClientEvent(`⚠️ ${why}.`, 'WARNING');
-                showToast(why ? `❌ ${why}`
-                    : failedWhy
-                    ? `❌ #${spoolIdStr} was NOT assigned to ${loc}: ${failedWhy}`
-                    : (res.msg || 'Assign failed'), 'error', 7000);
+                if (res.blocked_reason === 'occupant_changed') {
+                    // Group 51.7: the slot holds another spool than the Swap /
+                    // Overwrite prompt named. Nothing moved; redraw the grid so the
+                    // user sees what is there now (the spool stays in the buffer).
+                    showToast(`⚠️ ${failedWhy || res.msg || `${loc} slot ${finalSlot} holds another spool now`}`,
+                        'warning', 7000);
+                    refreshManageView((document.getElementById('manage-loc-id') || {}).value || loc);
+                } else {
+                    showToast(why ? `❌ ${why}`
+                        : failedWhy
+                        ? `❌ #${spoolIdStr} was NOT assigned to ${loc}: ${failedWhy}`
+                        : (res.msg || 'Assign failed'), 'error', 7000);
+                }
                 // A spool the move had already handed to the buffer before this
                 // one's write failed (a Swap's old spool, a swapped-out head
                 // spool) is in the user's hand all the same.

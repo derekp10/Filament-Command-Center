@@ -544,6 +544,10 @@ def _wizard_move(sid, new_loc, data, placement=None, current_loc='', origin='wiz
             record_source=logic.record_source_from(p),
             # Swap option C: the slot picker's Swap of a slot's stored spool.
             swap_out=logic.swap_requested(p),
+            # Group 51.6 / 51.7: what the picker showed on the head, and in the
+            # slot chosen for Swap / Overwrite (a held choice can be old by Save).
+            expected_residents=logic.expected_residents_from(p),
+            expected_occupant=logic.expected_occupant_from(p),
         )
     stale = None
     if isinstance(result, dict):
@@ -625,22 +629,19 @@ def _pick_refused(data, new_loc, result, sid):
     refused over the picker's own choice, which the page holds and would send
     again on every Save, only to be refused again: the slot it picked was taken
     meanwhile (`picked_slot_taken`), the head's "came from" slot can't be
-    recorded (`record_source`), or the slot it named is still claimed by a
-    spool deployed from it (the engine's ghost guard, logic._ghost_claim_refusal,
-    which carries no blocked_reason: its words name "<box> slot <n>"). The page
-    then drops the pick, so its next Save opens the picker again. A refusal
-    about anything else (Spoolman rejecting the write, a read that failed)
-    keeps the pick: saving again may work."""
+    recorded (`record_source`), the slot it named is still claimed by a
+    spool deployed from it (`slot_claimed`, the engine's ghost guard,
+    logic._ghost_claim_refusal; Group 51.3: it used to be told by its words),
+    or what the picker showed has changed since (`residents_changed`: another
+    spool on the head; `occupant_changed`: another spool in the Swap /
+    Overwrite slot; Group 51.6 / 51.7). The page then drops the pick, so its
+    next Save opens the picker again. A refusal about anything else (Spoolman
+    rejecting the write, a read that failed) keeps the pick: saving again may
+    work."""
     if not isinstance(result, dict):
         return False
-    if result.get('blocked_reason') in ('picked_slot_taken', 'record_source'):
-        return True
-    slot = logic._norm_slot((data or {}).get('slot'))
-    if not slot:
-        return False
-    why = str((result.get('failures') or {}).get(str(sid)) or '')
-    lead = f"{new_loc} slot {slot} "
-    return why.startswith(lead + "still holds #") or why.startswith(lead + "is still claimed by #")
+    return result.get('blocked_reason') in ('picked_slot_taken', 'record_source', 'slot_claimed',
+                                            'residents_changed', 'occupant_changed')
 
 
 def _deploy_skipped_note(sid, target, result):
@@ -656,7 +657,9 @@ def _deploy_skipped_note(sid, target, result):
 
 _PLACEMENT_KEYS = ('location', 'slot', 'picked_slot', 'expected_feed', 'auto_deploy',
                    # Group 40.5 / Swap option C: the picker's answers ride along.
-                   'record_source', 'swap')
+                   'record_source', 'swap',
+                   # Group 51.6 / 51.7: what the picker showed.
+                   'expected_residents', 'expected_occupant')
 
 
 def _create_wants(data, spool_data, spool_iter):
@@ -1002,8 +1005,8 @@ def _take_archived_off(sid, original, written, dirty):
     and the trail cleared (`_TRAIL_KEYS`, as _direct_location_write blanks them)
     and the spool's own single-slot box released, unasked even mid-print, as the
     archive edge has always taken a used-up spool off its head. `archived: True`
-    rides along, because update_spool reads any write to an archived spool with
-    weight left (a ticked Archived) as a refill and unarchives it. No
+    rides along (belt and braces since Group 51.1, when a write without a weight
+    stopped counting as a refill). No
     `fcc_pre_archive_location` note: the user asked for the spool elsewhere, so a
     later refill must not put it back here. The move then starts from Unassigned
     (it asks about nothing it leaves) and stores the spool, never loading the
@@ -1047,20 +1050,6 @@ def _archived_off_note(sid, was):
     return f"#{sid} is archived (used up), so it was taken off {was}: it is Unassigned."
 
 
-def _keep_archived(sid):
-    """After the move of a spool the edit archived (_take_archived_off): the
-    move's own write carries no `archived`, and update_spool reads a write to an
-    archived spool with weight left (a ticked Archived) as a refill, so the move
-    unarchived it. Archive it again where it landed. A spool weighed out to
-    empty has no weight left and stays archived: nothing is written then."""
-    rec = spoolman_api.get_spool(sid)
-    if not isinstance(rec, dict) or rec.get('id') is None or rec.get('archived'):
-        return
-    if not spoolman_api.update_spool(sid, {'archived': True}):
-        err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the update"
-        state.add_log_entry(f"❌ #{sid} was moved but not archived again: {err}", "ERROR", "ff4444")
-
-
 @app.route('/api/edit_spool_wizard', methods=['POST'])
 def api_edit_spool_wizard():
     """Endpoint to handle natively editing Filaments and Spools from the Wizard Edit UI.
@@ -1094,7 +1083,8 @@ def api_edit_spool_wizard():
     Group 40.7 review: an edit that archives the spool and changes its Location
     takes it off where it is first (_take_archived_off), so a move that is asked
     about or refused never leaves an archived spool on a head; the move then
-    stores it (`auto_deploy: false`) and it stays archived (_keep_archived)."""
+    stores it (`auto_deploy: false`) and it stays archived (Group 51.1: a move's
+    write is no refill, so it no longer needs archiving again where it lands)."""
     data = request.json
     spool_id = data.get('spool_id')
     filament_id = data.get('filament_id')
@@ -1278,8 +1268,6 @@ def api_edit_spool_wizard():
                     state.add_log_entry(f"❌ Wizard edit: #{spool_id} was not moved to "
                                         f"{new_location or 'Unassigned'}: {e}", "ERROR", "ff4444")
                     moved, result, stale = False, {"status": "error", "msg": f"the move crashed ({e})"}, None
-                if moved and archived_off:
-                    _keep_archived(spool_id)
             out.update(spool_saved=True, location_moved=moved, location_result=result)
             if isinstance(result, dict) and result.get('to_buffer'):
                 out["to_buffer"] = result['to_buffer']

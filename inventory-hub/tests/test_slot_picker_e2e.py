@@ -469,6 +469,24 @@ def test_return_mode_offers_no_slot_and_names_the_overcount(picker_page):
     assert _pick(page) == {"kind": "none", "recommended": True, "via": "key", "box": "FCC-TEST-BOX"}
 
 
+def test_return_mode_says_a_slot_feeding_another_head_only_stores(picker_page):
+    """Group 51.2: Return never loads, so a free slot that feeds another head
+    says "Stored only" on its tile (it read "→ FCCX-1 · FCCX-1 runs #999299"
+    with no note, as if Return loaded it). The slot the spool came from keeps
+    its own line; a greyed-out tile says only why it is out.
+    Base proof (52741e6): no "Stored only" on slot 1."""
+    page, setup, open_ = picker_page
+    spools = SPOOLS + [_sp(999206, "FCCX-3", src="FCC-TEST-BOX", src_slot=3)]
+    model = build_model("FCC-TEST-BOX", spools=spools, spool=999206, toolhead="FCCX-3", mode="return")
+    setup({("FCC-TEST-BOX", "return"): model})
+    open_({"location": "FCC-TEST-BOX", "spool": 999206, "toolhead": "FCCX-3", "mode": "return"})
+    tile = lambda n: page.locator(f"#fcc-slot-picker .fcc-sp-tile[data-sp-slot='{n}']")  # noqa: E731
+    expect(tile(1)).to_contain_text("Stored only: Return puts #999206 here without loading it onto FCCX-1")
+    expect(tile(3)).to_contain_text("#999206 is on FCCX-3 now: it is stored here, not loaded back")
+    expect(tile(2)).to_contain_text("Holds #999202: Return takes a free slot, or No slot")
+    expect(tile(2)).not_to_contain_text("Stored only")
+
+
 def test_an_rtl_box_draws_right_to_left(picker_page):
     page, setup, open_ = picker_page
     setup({"FCC-TEST-RTL": build_model("FCC-TEST-RTL", spool=999201)})

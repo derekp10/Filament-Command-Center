@@ -339,13 +339,21 @@
         if (f && f.kind === 'toolhead') {
             // The engine's store_only rule (placement's stores_only; Group 40.2
             // review): the slot feeds the head the spool is leaving, or it is the
-            // slot the spool was deployed from. Either way it is not loaded.
+            // slot the spool was deployed from. Either way it is not loaded. In
+            // return mode every slot only stores (Group 51.2: Return never loads).
             const storesOnly = d.stores_only != null ? !!d.stores_only : !!f.is_source;
             feed = `<div class="fcc-sp-feed">→ ${_esc(f.id)} · ${_pstate(f.printer)}</div>`;
-            if (storesOnly) {
-                feed += f.is_source
-                    ? `<div class="fcc-sp-note">#${_esc(m.spool)} is on ${_esc(f.id)} now: it is stored here, not loaded back</div>`
-                    : `<div class="fcc-sp-note">#${_esc(m.spool)} came from this slot: it goes back in, stored, not loaded onto ${_esc(f.id)}</div>`;
+            // A greyed-out Return tile (it holds a spool) says only why it is out.
+            if (storesOnly && !(m.mode === 'return' && d.blocked)) {
+                let why;
+                if (f.is_source) {
+                    why = `#${_esc(m.spool)} is on ${_esc(f.id)} now: it is stored here, not loaded back`;
+                } else if (d.current || m.mode !== 'return') {
+                    why = `#${_esc(m.spool)} came from this slot: it goes back in, stored, not loaded onto ${_esc(f.id)}`;
+                } else {
+                    why = `Stored only: Return puts #${_esc(m.spool)} here without loading it onto ${_esc(f.id)}`;
+                }
+                feed += `<div class="fcc-sp-note">${why}</div>`;
             }
             extra = _runsLine(f.id, f.residents);
         } else if (f && f.kind === 'pool') {

@@ -353,6 +353,39 @@ def swap_requested(data):
     return value is True or str(value).strip().lower() == 'true'
 
 
+def expected_residents_from(data):
+    """Group 51.6 — the spools the page showed on the target head when the user
+    picked it (the Printer picker's "XL-3 holds #99", or [] for a head it showed
+    empty), as ids; None when the request names none (an older page, an internal
+    caller): no check. A malformed value reads as None. Read by the move doors
+    (manage_contents add, /api/smart_move, the wizard's edit and create)."""
+    d = data if isinstance(data, dict) else {}
+    raw = d.get('expected_residents')
+    if not isinstance(raw, (list, tuple)):
+        return None
+    out = []
+    for x in raw:
+        try:
+            out.append(int(str(x).strip().strip('"')))
+        except (TypeError, ValueError):
+            return None
+    return out
+
+
+def expected_occupant_from(data):
+    """Group 51.7 — the stored spool the page showed in the target slot when the
+    user chose Swap or Overwrite (the Location Manager grid's prompt, the slot
+    picker's), as an id; None when the request names none: no check. Read by the
+    same doors as expected_residents_from."""
+    raw = (data or {}).get('expected_occupant') if isinstance(data, dict) else None
+    if raw in (None, ''):
+        return None
+    try:
+        return int(str(raw).strip().strip('"'))
+    except (TypeError, ValueError):
+        return None
+
+
 def _feed_token(value):
     """Group 40.3 — "what a box slot feeds" in one form: an upper-cased head id,
     or '' for none (unbound, a PRINTER:<id> Printer Pool slot, no slot). The form
@@ -887,8 +920,10 @@ def _free_feed_slots(toolhead_id, loc_list, sid):
             except Exception as e:
                 return [], f"couldn't read {box} from Spoolman ({e})"
         items = held[box]
-        if not any(locations_db.effective_slot(rows.get(box), o.get('slot', ''), occupants=len(items))
-                   == slot for o in items):
+        # One slot form on both sides (Group 51.4): a slot stored as "02" or
+        # '"2"' is slot 2, so it isn't free.
+        if not any(_norm_slot(locations_db.effective_slot(rows.get(box), o.get('slot', ''), occupants=len(items)))
+                   == _norm_slot(slot) for o in items):
             free.append((box, slot))
     return free, ""
 
@@ -1736,7 +1771,8 @@ _smart_move_depth = threading.local()
 
 def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_deploy=True, confirm_active_print=False,
                        confirmed_fed_heads=(), fed_check_from=None, picked_slot=None, expected_feed=None,
-                       seen_printing=(), swap_slot=None, swap_out=False, record_source=None, unslotted=False):
+                       seen_printing=(), swap_slot=None, swap_out=False, record_source=None, unslotted=False,
+                       expected_residents=None, expected_occupant=None):
     """Entry point for the slot-move pipeline.
 
     Owns the per-move printer-state probe cache (L3 fix A) so the auto-deploy
@@ -1782,6 +1818,17 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
     trail and the answer says `record_source_ignored`.
     `unslotted` (Group 40.6): the spool goes into the box with no slot on
     purpose (Return's "No slot"), so step 3 picks none for it.
+    `expected_residents` (Group 51.6; head targets): the spools the page showed on
+    the head when the user picked it (the Printer picker's "XL-3 holds #99"). A
+    spool on the head that wasn't among them, at step 4's strict read or step 6's
+    re-list, refuses the move with nothing written (`blocked_reason:
+    residents_changed`), instead of unloading a spool nobody was shown. None: no
+    check. `expected_occupant` (Group 51.7; an explicit box slot): the stored
+    spool the page showed in the slot when the user chose Swap or Overwrite; a
+    different spool filed there now refuses that spool's move at step 6's strict
+    slot read (`blocked_reason: occupant_changed` when every spool was refused).
+    A head that emptied, or a slot whose spool left, meanwhile is filled as
+    asked. The auto-deploy chain never passes either.
     """
     depth = getattr(_smart_move_depth, "n", 0)
     owns_move = depth == 0
@@ -1814,6 +1861,8 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
             swap_out=swap_out,
             record_source=record_source,
             unslotted=unslotted,
+            expected_residents=expected_residents,
+            expected_occupant=expected_occupant,
         )
     finally:
         _smart_move_depth.n = getattr(_smart_move_depth, "n", 1) - 1
@@ -1828,7 +1877,8 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
 
 def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', auto_deploy=True, confirm_active_print=False,
                              confirmed_fed_heads=(), fed_check_from=None, picked_slot=None, expected_feed=None,
-                             swap_slot=None, swap_out=False, record_source=None, unslotted=False):
+                             swap_slot=None, swap_out=False, record_source=None, unslotted=False,
+                             expected_residents=None, expected_occupant=None):
     """Move spool(s) to `target`, optionally into `target_slot` of that location.
 
     `auto_deploy` (default True): when the target is a Dryer Box AND the
@@ -1944,6 +1994,12 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     # and Smart Load, which can refuse the whole move; see the L298 Phase 3 note
     # at the write loop.
     failures: typing.Dict[str, str] = {}
+    # Groups 51.3 / 51.7: sid(str) -> why step 6 refused it over what the slot
+    # holds: `slot_claimed` (its own spool, deployed, still claims it; the
+    # question path refuses the same way) or `occupant_changed` (another spool
+    # than the one shown for Swap / Overwrite). When one reason refused every
+    # spool, the answer carries it as `blocked_reason`.
+    step6_refused: typing.Dict[str, str] = {}
     # sid(str) -> "BOX:slot" the 13.6 reverse-binding recorded as its home (40.0d).
     recorded_sources: typing.Dict[str, str] = {}
 
@@ -2186,9 +2242,35 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
             return None, {"status": "error", "msg": f"Not loaded: {why}.", "failures": failures}
         return residents_now, None
 
+    def _residents_changed(residents_now):
+        """Group 51.6: the page named the spools it showed on this head when the
+        user picked it (the Printer picker's "XL-3 holds #99"). A spool on it now
+        that wasn't among them was never shown, so it is not unloaded unasked:
+        the answer refuses the move, nothing written, and the picker opens
+        again. One that left meanwhile is fine (the head is filled as asked)."""
+        if expected_residents is None or not (is_printer or is_toolhead):
+            return None
+        shown = {str(x) for x in expected_residents}
+        arrived = [r for r in (residents_now or []) if str(r) not in shown]
+        if not arrived:
+            return None
+        was = (f"it held {_and_list('#' + str(x) for x in expected_residents)}" if expected_residents
+               else "it was empty")
+        why = (f"{target} now holds {_and_list('#' + str(r) for r in arrived)}, which wasn't on it when you "
+               f"picked {target} ({was}), so {_and_list('#' + str(s) for s in spools)} was not loaded: "
+               f"pick again")
+        for sid in spools:
+            failures[str(sid)] = why
+        state.add_log_entry(f"⚠️ Not loading onto {target}: {why}.", "WARNING", "ffaa00")
+        return {"status": "error", "blocked_reason": "residents_changed", "msg": f"Not loaded: {why}.",
+                "failures": failures}
+
     residents: typing.List[typing.Any] = []
     if is_printer or is_toolhead:
         residents, refused = _strict_residents()
+        if refused:
+            return refused
+        refused = _residents_changed(residents)
         if refused:
             return refused
 
@@ -2390,7 +2472,8 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                 failures[str(sid)] = why
             state.add_log_entry(f"❌ Not moving {_and_list('#' + str(s) for s in spools)}: {why}",
                                 "ERROR", "ff4444")
-            return {"status": "error", "msg": f"Not moved: {why}.", "failures": failures}
+            return {"status": "error", "blocked_reason": "slot_claimed", "msg": f"Not moved: {why}.",
+                    "failures": failures}
     no_store = bool(slot_ghosts)
     if feed_changed:
         answer = _feed_changed_answer(
@@ -2449,6 +2532,11 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     # two. The True path has no probe and no source reads, so it keeps one read.
     if (is_printer or is_toolhead) and not every_head_covered:
         residents, refused = _strict_residents()
+        if refused:
+            return refused
+        # Group 51.6: a spool loaded onto the head during the probe was never
+        # shown to a user who named what the head held.
+        refused = _residents_changed(residents)
         if refused:
             return refused
 
@@ -2643,6 +2731,26 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                     f"❌ Not moving Spool #{sid} into {target} slot {target_slot}: couldn't read "
                     f"{target} from Spoolman ({_slot_err})", "ERROR", "ff4444")
                 continue
+            if expected_occupant is not None and not slot_was_picked:
+                # Group 51.7: the user chose Swap / Overwrite for the spool the
+                # screen showed in this slot (the grid's prompt, the slot picker).
+                # Another spool filed there now was never shown, so it is not
+                # swapped out or unseated: this spool is refused, nothing written.
+                # A slot its spool left meanwhile is filled as asked.
+                _moving = {str(s) for s in spools}
+                _stored = [e for e in existing_items if not e.get('is_ghost') and str(e.get('id')) not in _moving
+                           and str(e.get('location') or '').strip().strip('"').upper() == target]
+                _now = [e.get('id') for e in _stored
+                        if str(e.get('id')) != str(expected_occupant)
+                        and _norm_slot(locations_db.effective_slot(tgt_info, e.get('slot', ''),
+                                                                   occupants=len(_stored))) == target_slot]
+                if _now:
+                    failures[str(sid)] = (f"{target} slot {target_slot} holds "
+                                          f"{_and_list('#' + str(t) for t in _now)} now, not #{expected_occupant} "
+                                          f"as when you chose, so nothing moved: look at the slot again")
+                    step6_refused[str(sid)] = 'occupant_changed'
+                    state.add_log_entry(f"⚠️ Not moving Spool #{sid}: {failures[str(sid)]}", "WARNING", "ffaa00")
+                    continue
             if slot_was_picked:
                 # Group 40.0e: the engine chose this slot before the printer probe,
                 # which can take seconds. A pick never unseats a spool that took
@@ -2691,6 +2799,7 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                     else:
                         failures[str(sid)] = _ghost_claim_refusal(target, target_slot, _ghosts[0], slot_feed,
                                                                   bound_th, loads_head, printer_map, loc_info_map)
+                        step6_refused[str(sid)] = 'slot_claimed'
                         state.add_log_entry(f"❌ Not moving Spool #{sid}: {failures[str(sid)]}",
                                             "ERROR", "ff4444")
                         continue
@@ -3117,6 +3226,10 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         # this is what lets a batch caller do better).
         "failures": failures,
     }
+    _step6_why = {step6_refused.get(str(s)) for s in spools}
+    if len(_step6_why) == 1 and None not in _step6_why:
+        # Groups 51.3 / 51.7: every spool was refused over what the slot holds.
+        result["blocked_reason"] = _step6_why.pop()
     if recorded_sources:
         # Group 40.0d: the feed slot the reverse-binding recorded as the spool's
         # home ("LR-MDB-1:1"), so the scan toast can name it. A head takes one

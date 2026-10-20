@@ -341,7 +341,9 @@ def _box_model(row, box, sid, toolhead, mode, loc_list, loc_info_map, printer_ma
         free = s not in claims
         claimants = [i.get('id') for i in shown]
         occ_state = _occupant_state(shown[0] if shown else None, feed, printer_map, loc_info_map)
-        stores_only = _stores_only(row, s, moving_from, ghost_slot)
+        # Group 51.2: Return never loads (it sends auto_deploy false), so in return
+        # mode every slot only stores, also one feeding a head the spool isn't on.
+        stores_only = mode == 'return' or _stores_only(row, s, moving_from, ghost_slot)
         blocked = _slot_block(mode, box, s, claimants, free, feed, shown[0] if shown else None, occ_state,
                               stores_only=stores_only)
         model["slots"].append({

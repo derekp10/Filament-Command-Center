@@ -493,6 +493,10 @@ def api_manage_contents():
             # Group 40.5: Force Location's Printer picker names where a spool put
             # on a head came from ("No box" = '').
             record_source=logic.record_source_from(data),
+            # Group 51.6 / 51.7: what the screen showed on the head the user
+            # picked, and in the slot they chose Swap / Overwrite for.
+            expected_residents=logic.expected_residents_from(data),
+            expected_occupant=logic.expected_occupant_from(data),
         )
         stale = logic.stale_fed_refusal(data, result) or logic.stale_confirm_refusal(data, result)
         if stale:

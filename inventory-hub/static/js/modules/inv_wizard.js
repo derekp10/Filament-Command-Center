@@ -3038,6 +3038,11 @@ window.wizardPlacementFor = (location, placement = wizardState.pendingPlacement)
     // "came from" answer, '' = No box) and for an occupied slot (Swap).
     if (p.record_source !== undefined && p.record_source !== null) out.record_source = p.record_source;
     if (p.swap === true) out.swap = true;
+    // Group 51.6 / 51.7: what the picker showed on the head picked, and in the
+    // slot chosen for Swap / Overwrite. A choice held until Save can be old by
+    // then: the server refuses it if another spool is there now.
+    if (Array.isArray(p.expected_residents)) out.expected_residents = p.expected_residents.slice();
+    if (p.expected_occupant != null) out.expected_occupant = p.expected_occupant;
     return out;
 };
 
@@ -3100,7 +3105,10 @@ window.wizardPickRefused = (data) => {
     const d = data || {};
     if (d.pick_refused === true) return true;
     const lr = d.location_result;
-    return !!(lr && typeof lr === 'object' && ['picked_slot_taken', 'record_source'].includes(lr.blocked_reason));
+    // Groups 51.3 / 51.6 / 51.7: a slot still claimed, or a head or slot that
+    // holds a spool the picker never showed, refuses the held choice too.
+    return !!(lr && typeof lr === 'object' && ['picked_slot_taken', 'record_source', 'slot_claimed',
+        'residents_changed', 'occupant_changed'].includes(lr.blocked_reason));
 };
 
 // Group 40.7 (Derek's answer 7: the wizard's Location behaves like Force
@@ -3138,6 +3146,7 @@ window.wizardLocationPicked = (value, before = null, { quiet = false } = {}) => 
                 location: pl.location, slot: pl.slot, picked_slot: pl.picked_slot,
                 expected_feed: pl.expected_feed, auto_deploy: pl.auto_deploy, swap: pl.swap === true,
                 record_source: pl.record_source, noStore: !!pl.noStore,
+                expected_residents: pl.expected_residents, expected_occupant: pl.expected_occupant,
                 label: pl.label, via: row.LocationID,
             };
             if (hidden) hidden.value = pl.location;
@@ -3187,7 +3196,10 @@ window.wizardPlaceRemaining = async ({ spoolIds = [], location = '', placement =
                 pl.picked_slot != null ? pl.picked_slot : null,
                 { expectedFeed: pl.expected_feed, swapDisplaced: pl.swap ? (pl.displaced || { id: null }) : null,
                   autoDeploy: pl.auto_deploy === false ? false : undefined, noStore: !!pl.noStore,
-                  recordSource: pl.record_source, origin: 'wizard_create', onOutcome: done }),
+                  recordSource: pl.record_source, origin: 'wizard_create',
+                  // Group 51.6 / 51.7: what the picker showed.
+                  expectedResidents: pl.expected_residents, expectedOccupant: pl.expected_occupant,
+                  onOutcome: done }),
         });
         if (!out || out.outcome !== 'moved') {
             left.push(...spoolIds.slice(i));
@@ -3247,6 +3259,9 @@ const _wizardMoveQuestion = (answer, ctx) => {
     // Group 40.7: the picker's "came from" answer and Swap, kept by every replay.
     if (f.record_source !== undefined && f.record_source !== null) original.record_source = f.record_source;
     if (f.swap === true) original.swap = true;
+    // Group 51.6 / 51.7: every replay still checks what the picker showed.
+    if (Array.isArray(f.expected_residents)) original.expected_residents = f.expected_residents.slice();
+    if (f.expected_occupant != null) original.expected_occupant = f.expected_occupant;
     let ended = false;
     const end = (how, res = null) => {
         if (ended) return;

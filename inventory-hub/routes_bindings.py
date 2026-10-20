@@ -1399,11 +1399,25 @@ def api_quickswap():
     function already handles auto-eject of any occupant, container_slot
     cleanup, physical_source tracking, and the Filabridge map_toolhead
     notification.
+
+    Group 51.5: `expected_spool` (optional), the spool the tapped card showed.
+    Another spool in the slot now answers `quickswap_spool_mismatch` (409,
+    nothing written; the grid refreshes), as Return's `return_spool_mismatch`
+    does, instead of loading a spool the user wasn't shown. Absent: no check.
     """
     data = request.get_json(silent=True) or {}
     toolhead = str(data.get('toolhead', '')).strip().upper()
     box = str(data.get('box', '')).strip().upper()
     slot = str(data.get('slot', '')).strip()
+    expected_spool = None
+    if data.get('expected_spool') not in (None, ''):
+        try:
+            expected_spool = int(str(data.get('expected_spool')).strip().strip('"'))
+        except (TypeError, ValueError):
+            return jsonify({
+                "action": "quickswap_bad_request",
+                "error": f"expected_spool must be a spool number (got {data.get('expected_spool')!r})",
+            }), 400
 
     if not toolhead or not box or not slot:
         state.add_log_entry(
@@ -1465,6 +1479,15 @@ def api_quickswap():
             "action": "quickswap_empty_slot",
             "box": box, "slot": slot, "toolhead": toolhead,
         }), 404
+    if expected_spool is not None and int(spool_id) != expected_spool:
+        msg = (f"{box} slot {slot} holds #{spool_id} now, not #{expected_spool}, so nothing was loaded "
+               f"onto {toolhead}. The slots have been refreshed: tap again if you still want it.")
+        state.add_log_entry(f"⚠️ Quick-swap refused: {msg}", "WARNING", "ffaa00")
+        return jsonify({
+            "action": "quickswap_spool_mismatch",
+            "box": box, "slot": slot, "toolhead": toolhead,
+            "spool": spool_id, "expected_spool": expected_spool, "error": msg,
+        }), 409
 
     # Group 39.2: the server re-checks. The overlay's probe shows the banner on
     # the usual path and the browser sends the heads whose warning the user saw
