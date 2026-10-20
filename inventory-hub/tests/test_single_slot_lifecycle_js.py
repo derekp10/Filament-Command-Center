@@ -249,6 +249,10 @@ window.__respond = (url, method, body) => {
   if (url.startsWith('/api/machine/')) return { body: { toolheads: { 'XL-2': [
       { box: 'PM-DB-2', slot: '1', single_slot: true }, { box: 'LR-MDB-1', slot: '2' } ] }, printer_pool: [] } };
   if (url.startsWith('/api/get_contents?id=PM-DB-2')) return { body: pm };
+  // Group 52.1c: the grid reads both boxes in one ?ids= request.
+  if (url.startsWith('/api/get_contents?ids=')) {
+    return { body: { read_ok: true, read_error: null, contents: { 'PM-DB-2': pm, 'LR-MDB-1': [] } } };
+  }
   if (method === 'PUT') return { body: { success: true } };
   return { body: [] };
 };

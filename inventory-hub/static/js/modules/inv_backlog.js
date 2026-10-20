@@ -7,6 +7,55 @@ window.openBacklogModal = () => {
 };
 
 let lastBacklogHash = "";
+// Group 52.1a: set once a heartbeat has delivered the count (label_backlog).
+let _backlogCountFed = false;
+
+// Group 52.1a: the dashboard heartbeat counts the backlog in its label_backlog
+// section (from the tick's own spool-list read plus one filament read), so the
+// button no longer re-reads Spoolman's whole spool and filament lists every 5 s.
+// A section that couldn't read Spoolman (read_ok false) keeps the count shown.
+window._renderBacklogCount = (sec) => {
+    if (!sec || sec.read_ok !== true || typeof sec.count !== 'number') return false;
+    _backlogCountFed = true;
+    const btn = document.getElementById('btn-backlog-count');
+    if (btn) btn.innerHTML = `🏷️ Backlog (${sec.count})`;
+    return true;
+};
+
+// Group 52.1a: a refresh that fails while the list shows rows keeps them and
+// says so above the list. Replacing the rows with the error left it stuck: the
+// next good answer matched lastBacklogHash and never redrew the list. Same look
+// as the Location Manager's "Spoolman didn't answer" notice.
+const _backlogNotice = (msg) => {
+    const list = document.getElementById('backlog-list');
+    let el = document.getElementById('backlog-read-notice');
+    if (!el && msg && list && list.parentNode) {
+        el = document.createElement('div');
+        el.id = 'backlog-read-notice';
+        el.setAttribute('role', 'status');
+        el.setAttribute('aria-live', 'polite');
+        el.style.cssText = 'background:#2b2200; color:#ffd54a; border:1px solid #ffd54a;'
+            + ' border-radius:6px; padding:8px 12px; margin-bottom:10px; font-weight:bold;';
+        list.parentNode.insertBefore(el, list);
+    }
+    if (!el) return;
+    el.textContent = msg ? `⚠️ ${msg}` : '';
+    el.style.display = msg ? 'block' : 'none';
+};
+const _backlogReadFailed = (msg) => {
+    if (lastBacklogHash) {
+        _backlogNotice(`${msg} Showing the last list; it tries again every few seconds.`);
+        return;
+    }
+    const list = document.getElementById('backlog-list');
+    if (!list) return;
+    // Text, not HTML: the message carries Spoolman's own words.
+    const div = document.createElement('div');
+    div.className = 'text-danger p-3';
+    div.textContent = msg;
+    list.innerHTML = '';
+    list.appendChild(div);
+};
 
 // Helper to safely stack from the Backlog modal to a Detail modal
 window.openBacklogDetail = (id, isSpool) => {
@@ -28,9 +77,10 @@ window.fetchBacklog = () => {
         .then(r => r.json())
         .then(data => {
             if (!data.success) {
-                list.innerHTML = `<div class="text-danger p-3">Error loading backlog: ${data.msg}</div>`;
+                _backlogReadFailed(`Error loading backlog: ${data.msg}`);
                 return;
             }
+            _backlogNotice('');
             const items = data.items;
             document.getElementById('btn-backlog-count').innerHTML = `🏷️ Backlog (${items.length})`;
 
@@ -123,7 +173,7 @@ window.fetchBacklog = () => {
         })
         .catch(e => {
             console.error(e);
-            list.innerHTML = `<div class="text-danger p-3">Connection error fetching backlog.</div>`;
+            _backlogReadFailed('Connection error fetching backlog.');
         });
 };
 
@@ -208,26 +258,24 @@ window.markPrinted = (id, type) => {
         });
 };
 
-// Initial count fetch on load
+// Initial count: the first heartbeat (100 ms after load) brings it. Fetch it here
+// only if no heartbeat has by then (Group 52.1a; it used to fetch the whole
+// backlog 1.5 s after every load, two more whole-list reads).
+const BACKLOG_COUNT_FALLBACK_MS = 10000;
 document.addEventListener('DOMContentLoaded', () => {
-    setTimeout(window.fetchBacklog, 1500);
+    setTimeout(() => { if (!_backlogCountFed) window.fetchBacklog(); }, BACKLOG_COUNT_FALLBACK_MS);
 });
-// Refresh when a new pulse comes through
+// Refresh the open backlog when a new pulse comes through.
 document.addEventListener('inventory:sync-pulse', () => {
     // We do NOT call window.fetchBacklog() here blindly, to prevent wiping out UI selections.
-    // Instead, we just refresh the data in the background if the modal isn't open, 
-    // or rely on the smart logic in fetchBacklog to abort if checkboxes are active.
+    // The open window refreshes its list (fetchBacklog keeps checked boxes).
     const modal = document.getElementById('backlogModal');
     if (modal && modal.classList.contains('show')) {
         window.fetchBacklog();
-    } else {
-        // Just update count in the background without refreshing whole list fetching all unfiltered
-        fetch(`/api/print_queue/pending?filter=all&sort=created_newest`)
-            .then(r => r.json())
-            .then(data => {
-                if (data.success && data.items) {
-                    document.getElementById('btn-backlog-count').innerHTML = `🏷️ Backlog (${data.items.length})`;
-                }
-            }).catch(() => { });
     }
+    // Group 52.1a: with the window closed there is nothing to fetch. The count
+    // comes with the heartbeat (window._renderBacklogCount); a pulse from
+    // anything else (a scan, an eject, a save) is answered by the next tick, at
+    // most 5 s later while you're active, instead of re-reading Spoolman's whole
+    // spool and filament lists for every one of them.
 });
