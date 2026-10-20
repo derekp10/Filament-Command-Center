@@ -492,6 +492,11 @@ body {
     text-decoration: underline dotted;
 }
 
+/* Group 48.4: where the wizard's Slicer Profile suggestion came from. */
+.fcc-wiz-profile-note {
+    color: #9fd8ff;
+}
+
 .text-purple {
     color: #d633ff !important;
 }

@@ -84,7 +84,12 @@ class BaseParser:
             "density": float,
             "color_hex": str,
             "color_name": str,
-            "external_link": str
+            "external_link": str,
+            "slicer_profile": str,          # optional (Group 48.4): the slicer profile
+                                            # the source names; the wizard fills a
+                                            # blank Slicer Profile with it
+            "slicer_profile_source": str    # optional: where it came from, for the
+                                            # wizard's note ("prusament.com")
         }
         """
         raise NotImplementedError()
@@ -124,6 +129,29 @@ class SpoolmanParser(BaseParser):
         except Exception as e:
             state.logger.error(f"SpoolmanParser Error: {e}")
             return []
+
+def prusament_profile(fil):
+    """Group 48.4 (Derek, 2026-10-19: "source that from the site"): the
+    PrusaSlicer filament profile for a Prusament spool, read off its spool
+    page's `filament` object. PrusaSlicer names Prusa's profiles after the
+    product line ("Prusament PLA", "Prusament PLA Blend", "Prusament PETG
+    Carbon Fiber"), and the page's product name is that line followed by the
+    colour and the size ("Prusament PLA Blend Oh My Gold 1kg", "Prusament PETG
+    Prusa Orange 1kg - v1"). So the profile is the name up to the colour; when
+    the colour isn't in it, "Prusament " + the page's material ("PLA Blend").
+    A new variant gets its own new name, which is what Derek asked for. ''
+    when the page names neither."""
+    fil = fil if isinstance(fil, dict) else {}
+    name = " ".join(str(fil.get("name") or "").split())
+    color = " ".join(str(fil.get("color_name") or "").split())
+    material = " ".join(str(fil.get("material") or "").split())
+    if name.lower().startswith("prusament ") and color:
+        cut = name.lower().find(" " + color.lower(), len("prusament"))
+        line = name[:cut].strip() if cut > 0 else ""
+        if len(line) > len("prusament"):
+            return line
+    return f"Prusament {material}" if material else ""
+
 
 class PrusamentParser(BaseParser):
     @staticmethod
@@ -202,6 +230,11 @@ class PrusamentParser(BaseParser):
                 "color_name": fil.get("color_name", ""),
                 "external_link": query,
                 "purchase_link": store_url,
+                # Group 48.4: the PrusaSlicer profile the page's product line
+                # names. Any parser may return `slicer_profile` (+ where it came
+                # from): the wizard fills a blank Slicer Profile with it.
+                "slicer_profile": prusament_profile(fil),
+                "slicer_profile_source": "prusament.com",
                 "settings_extruder_temp": fil.get("he_min") if fil.get("he_min") else None,
                 "settings_bed_temp": fil.get("hb_min") if fil.get("hb_min") else None,
                 "extra": {
