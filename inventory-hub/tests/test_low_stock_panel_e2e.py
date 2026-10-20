@@ -57,6 +57,10 @@ def _open_search(page, base_url, reset_dom_state_js):
     page.wait_for_function("() => window.SearchEngine && typeof window.openLowStockPanel === 'function'")
     page.evaluate("SearchEngine.open()")
     expect(page.locator("#offcanvasSearch")).to_be_visible()
+    # Visible already while it slides in (Bootstrap's `showing`): measuring two
+    # buttons mid-slide read them ~1 px apart in the wrong order (bundle run).
+    page.wait_for_function("() => { const o = document.getElementById('offcanvasSearch');"
+                           " return !!o && o.classList.contains('show') && !o.classList.contains('showing'); }")
     expect(page.locator("#global-search-low-stock")).to_be_visible()
 
 
