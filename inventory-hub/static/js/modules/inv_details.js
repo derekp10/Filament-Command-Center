@@ -160,6 +160,17 @@ const openSpoolDetails = (id, silent = false) => {
             writeSpoolTemp('spool-detail-temp-nozzle-max', unquoteExtra(filExtra.nozzle_temp_max));
             writeSpoolTemp('spool-detail-temp-bed',        fil.settings_bed_temp);
             writeSpoolTemp('spool-detail-temp-bed-max',    unquoteExtra(filExtra.bed_temp_max));
+            // Group 48.2: the filament's slicer profile, read-only here (Derek:
+            // "(from the filament)", so he knows to edit it there); the note
+            // opens the filament window, as the 🧬 Swatch button does.
+            const spSlicer = unquoteExtra(filExtra.slicer_profile);
+            const spSlicerEl = document.getElementById('spool-detail-slicer-profile');
+            if (spSlicerEl) spSlicerEl.innerText = spSlicer || "--";
+            const spSlicerSrc = document.getElementById('spool-detail-slicer-profile-src');
+            if (spSlicerSrc) {
+                spSlicerSrc.onclick = (d.filament && fil.id != null)
+                    ? () => { modals.spoolModal.hide(); openFilamentDetails(fil.id); } : null;
+            }
 
             document.getElementById('detail-weight').innerText = (fil.weight || 0) + "g";
 

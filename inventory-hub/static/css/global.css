@@ -481,6 +481,17 @@ body {
     color: #ff9900 !important;
 }
 
+/* Group 48.2: "(from the filament)" beside a value the spool window shows from
+   its filament. A link-style button in a light blue that reads on the dark
+   modal (Bootstrap's link blue fails WCAG AA there); keyboard-reachable. */
+.fcc-from-filament-link,
+.fcc-from-filament-link:hover,
+.fcc-from-filament-link:focus {
+    color: #9fd8ff;
+    font-size: 0.85rem;
+    text-decoration: underline dotted;
+}
+
 .text-purple {
     color: #d633ff !important;
 }

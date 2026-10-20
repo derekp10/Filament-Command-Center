@@ -148,3 +148,26 @@ def test_printer_status_widget_collapsed_has_no_gray_on_gray_text(
         timeout=2000
     )
     assert_contrast(page.locator("#printer-status-widget"))
+
+
+# ---------------------------------------------------------------------------
+# Spool window — the slicer profile row (Group 48.2)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.usefixtures("require_server")
+def test_spool_window_slicer_profile_row_is_readable(page: Page, base_url: str, assert_contrast):
+    """Stubbed spool, so dev data can't change what is drawn."""
+    import json as _json
+    payload = {"id": 999001, "archived": False, "location": "Room LR", "comment": "", "used_weight": 100.0,
+               "remaining_weight": 900.0, "extra": {},
+               "filament": {"id": 555001, "name": "Test Color", "material": "PLA", "color_hex": "ff8800",
+                            "weight": 1000, "vendor": {"name": "TestVendor"},
+                            "extra": {"slicer_profile": '"Prusament PLA"'}}}
+    page.route("**/api/spool_details*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=_json.dumps(payload)))
+    page.goto(base_url)
+    page.wait_for_function("typeof openSpoolDetails === 'function' && modals && modals.spoolModal", timeout=10000)
+    page.evaluate("openSpoolDetails(999001)")
+    row = page.locator("#spool-detail-slicer-profile-row")
+    expect(row).to_contain_text("Prusament PLA", timeout=5000)
+    assert_contrast(row)
