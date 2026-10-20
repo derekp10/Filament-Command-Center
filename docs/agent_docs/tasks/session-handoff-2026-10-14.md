@@ -437,6 +437,58 @@ _I decided (listed in case you object):_
 
 Follow-ups filed (standalone in the buglist, none urgent): moving a hand-archived spool un-archives it (it predates Group 40); a "stored only" note on Return's chooser tiles; a `blocked_reason` for the slot-still-claimed refusal; a Return chooser spanning two boxes (→ Group 37); and the first engine review's open notes. All in the buglist's "🟡 Group 40 leftovers".
 
+### Bundle run (evening 2026-10-19 → 20): Groups 51, 48, 49, 52 — IN PROGRESS
+
+Derek's ask (19:40): "Read docs/agent_docs/tasks/bundle-2026-10-19.md and run it" ([the plan](bundle-2026-10-19.md)).
+Budget at the start: 5-hour window 9 % (resets ~23:45), weekly 16 % (resets in 6 days). His words: "I'd like to get
+this section done and off the list. if we can get it done in under 35% weekly, that be good, but I'm ok if we go
+over." `main` needs his OK.
+
+**His answer on the slicer-profile fill-in (48.4), 19:45**, asked "your own filaments, a table, or skip?":
+> "So for prusament, there is a pla, and like 3 or 4 variants (Blend, high speed, lightweight) with others to come,
+> It be perfered if we could just source that from the site somehow. A lot of these are cases where I find a profile
+> that fits, because the brand doesn't exist in prusa. Jayo, I think I read is technically a variant/offbrand of Sunlu
+> so I added that the profile to use there is the sunlu variant. This stuff is hard to fill out for manual adds. And I
+> was hoping that we could reliably figure out the type based on the custom spool site, and possibly the product page
+> or something attached to it? For prusament, this was just one of those things I thought we could source easily and
+> have one less thing to remember to fill out. (Usually prusa is pretty easy to do manually, but I sill sometimes have
+> to look directly at the product page to just confirm if its a weird off type.) Also being able to determin this,
+> would help later on if they decide to add more variants, and we could just have the system add and update based on
+> what it finds. I'm probably pie in the sky asks at this point though. And I'd ove for this to carry over for other
+> look ups if we ever implement them."
+
+→ **48.4 as built (replaces the task file's design):**
+- **Prusament, from the site:** the parser reads the product line off the spool page (the product name minus its
+  colour: "Prusament PLA Blend Jet Black" → "Prusament PLA Blend", which is PrusaSlicer's own name for Prusa's
+  profiles) and returns it as `slicer_profile`. The wizard fills a blank Slicer Profile with it: his own spelling when
+  the name is already one of his profiles, otherwise a new choice (added at Save through the existing new-choice path)
+  with a note saying it came from prusament.com. Any later lookup that returns `slicer_profile` works the same way
+  (his "carry over" ask).
+- **Everything else** (a Spoolman-DB import, a manual add, an off-brand such as Jayo → his Sunlu profile): the profile
+  most of his own filaments with the same brand + base material use, with a note naming the count; a tie fills nothing
+  and names both.
+- Never replaces a profile already set; nothing is written before the wizard's own Save.
+- **Later (a follow-up in the buglist):** updating existing filaments when Prusa adds or renames a variant, and
+  reading the product page (the spool page already names the variant).
+
+**Plan (the resume point if the run stops):**
+1. Two background builders in their own worktrees, branched from `dev` (they can't run browser tests; they write
+   them, and the main checkout runs them after the merge):
+   - `feature/group-52-spoolman-read-load`: Group 52 (one spool-list read per heartbeat, honest empties, one batched
+     Quick-Swap read, the extras-read retry, the bound-slot scan measured).
+   - `feature/group-49-find-and-restock`: Group 49 (attributes as search text; the ⚠️ Low-stock list; one Activity
+     Log warning when a print or a weigh-out takes a filament under the threshold).
+2. The main checkout: **Group 51** on `feature/group-51-move-archive-integrity` (51.1 first: only a weight write is a
+   refill), then **Group 48** on `feature/groups-48-49-cards-restock` (49's branch merged in).
+3. An integration branch `bundle/2026-10-19` (51 + 48/49 + 52); the one review workflow (4 lenses + 1 batched
+   skeptic); fixes on each group's branch; the one full `RUN_INTEGRATION` sweep on the integration branch; merge each
+   branch to `dev` `--no-ff` (51 → 48+49 → 52); push; `/finish-group` each; buglist; memory.
+
+Resume cron: session-only, hourly; deleted once this section says DONE. Every branch is pushed at each stopping point.
+
+**Progress (2026-10-19, evening):**
+- 19:50 plan committed; resume cron set; both builders launched.
+
 ## Questions for Derek
 
 Asked before Derek went to bed, from the pre-flight reconcile (`wf_1a1ff135-1c6`, read-only). Recorded as
