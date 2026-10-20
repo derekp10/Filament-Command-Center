@@ -130,6 +130,44 @@ def test_printer_status_widget_expanded_has_no_gray_on_gray_text(
     assert_contrast(page.locator("#printer-status-widget"))
 
 
+@pytest.mark.usefixtures("require_server")
+def test_low_stock_panel_has_no_gray_on_gray_text(page: Page, base_url: str, assert_contrast):
+    """Group 49.2a — the ⚠️ Low-stock list over the real dashboard: its rows (one
+    highlighted), tags and Buy More links, its error state, and the search
+    panel's button that opens it. /api/stock_report is stubbed, so no dev data
+    is read. (Hermetic twin: test_low_stock_panel.py.)"""
+    import json as _json
+    answers = [
+        (200, {
+            "success": True, "threshold_g": 250.0, "filaments": 2, "spools": 3,
+            "low": [{"filament_id": 88, "display": "Overture - PETG - Red Blue", "color": "BA0C2F,0047BB",
+                     "color_direction": "coaxial", "grams": 220.4, "spools": 2, "spools_total": 2,
+                     "attributes": ["Silk", "One-off"], "one_off": True,
+                     "buy_url": "https://shop.example/s?q=Overture"}],
+            "out": [{"filament_id": 20, "display": "Generic - PLA - Lipstick Red", "color": "ff0000",
+                     "color_direction": "longitudinal", "grams": 0, "spools": 0, "spools_total": 1,
+                     "attributes": [], "one_off": False, "buy_url": None}]}),
+        (502, {"success": False, "error": "spoolman_unreachable", "msg": "x"}),
+    ]
+
+    def _answer(route):
+        status, body = answers.pop(0) if len(answers) > 1 else answers[0]
+        route.fulfill(status=status, content_type="application/json", body=_json.dumps(body))
+    page.route("**/api/stock_report", _answer)
+    page.goto(base_url)
+    page.wait_for_function("() => window.SearchEngine && typeof window.openLowStockPanel === 'function'")
+    page.evaluate("SearchEngine.open()")
+    expect(page.locator("#global-search-low-stock")).to_be_visible()
+    assert_contrast(page.locator("#global-search-low-stock"))
+    page.locator("#global-search-low-stock").click()
+    panel = page.locator("#fcc-low-stock-overlay .fcc-stock-panel")
+    expect(panel.locator(".fcc-stock-row.kb-active")).to_have_count(1)
+    assert_contrast(panel)
+    page.evaluate("window.openLowStockPanel()")      # the error state
+    expect(panel.locator("[role=alert]")).to_be_visible()
+    assert_contrast(panel)
+
+
 @pytest.mark.usefixtures("require_server", "bound_slot")
 def test_printer_status_widget_collapsed_has_no_gray_on_gray_text(
     page: Page, base_url: str, assert_contrast
