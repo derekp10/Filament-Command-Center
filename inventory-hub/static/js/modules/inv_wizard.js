@@ -2920,6 +2920,14 @@ window.wizardRenderPostSaveQueueActions = (mode, createdSpoolsArg, editSpoolId) 
     if (!actionRow) return;
     actionRow.innerHTML = '';
 
+    // Group 48.1: the queue row's text, "Brand - Material - Color" from the
+    // filament the wizard holds (the backlog's look), so a queued label reads
+    // like one before the queue window reads it live; "Spool #N" without one.
+    const fieldVal = (id) => { const el = document.getElementById(id); return el ? String(el.value || '').trim() : ''; };
+    const filamentText = [fieldVal('wiz-fil-vendor-search'), fieldVal('wiz-fil-material'), fieldVal('wiz-fil-color_name')]
+        .filter(Boolean).join(' - ');
+    const queueText = (sid) => filamentText || `Spool #${sid}`;
+
     const makeQueueChip = (sid) => {
         const btn = document.createElement('button');
         btn.type = 'button';
@@ -2940,7 +2948,7 @@ window.wizardRenderPostSaveQueueActions = (mode, createdSpoolsArg, editSpoolId) 
                 markQueued();
                 return;
             }
-            window.addToQueue({ id: sid, type: 'spool', display: `Spool #${sid}` });
+            window.addToQueue({ id: sid, type: 'spool', display: queueText(sid) });
             if (typeof showToast === 'function') showToast(`Queued label for Spool #${sid}`, 'success', 2500);
             markQueued();
         });
@@ -2988,7 +2996,7 @@ window.wizardRenderPostSaveQueueActions = (mode, createdSpoolsArg, editSpoolId) 
                     already++;
                     return;
                 }
-                window.addToQueue({ id: sid, type: 'spool', display: `Spool #${sid}` });
+                window.addToQueue({ id: sid, type: 'spool', display: queueText(sid) });
                 added++;
             });
             chips.forEach(c => c.markQueued());

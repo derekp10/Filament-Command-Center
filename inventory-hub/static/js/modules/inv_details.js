@@ -642,15 +642,6 @@ const openFilamentDetails = (fid, silent = false) => {
         .catch(e => { if (!silent) setProcessing(false); console.error(e); showToast("Connection/Data Error", "error"); });
 };
 
-const quickQueue = (id) => {
-    fetch(`/api/spool_details?id=${id}`)
-        .then(r => r.json())
-        .then(d => {
-            if (!d.id) return;
-            addToQueue({ id: d.id, type: 'spool', display: d.filament?.name || "Unknown" });
-        });
-};
-
 // --- SMART SYNC LISTENER ---
 document.addEventListener('inventory:sync-pulse', () => {
     // 1. Sync Spool Modal
