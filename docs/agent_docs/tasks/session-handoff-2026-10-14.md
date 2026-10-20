@@ -487,7 +487,14 @@ over." `main` needs his OK.
 Resume cron: session-only, hourly; deleted once this section says DONE. Every branch is pushed at each stopping point.
 
 **Progress (2026-10-19, evening):**
-- 19:50 plan committed; resume cron set; both builders launched.
+- 19:50 plan `52741e6`; resume cron set; both builders launched.
+- **Group 51 built** on `feature/group-51-move-archive-integrity` (pushed): `acf0acd` 51.1 (only a weight write is a
+  refill; `_keep_archived` gone; 9 tests red on the base), `96c5ba7` 51.2–51.4 (Return's "Stored only" tiles,
+  `blocked_reason: slot_claimed`, the one slot form), `5d2c3bc` 51.5–51.7 (`expected_spool` /
+  `expected_residents` / `expected_occupant`; 32 real-engine + 9 node-vm tests). Offline 3012 passed; the door
+  browser files 99 passed (load 1.02×).
+- Group 48 starts on `feature/groups-48-49-cards-restock`, branched from Group 51's tip (both edit Force Location
+  and the Location Manager), so it merges to `dev` after 51.
 
 ## Questions for Derek
 
