@@ -50,6 +50,9 @@ JSON_STRING_FIELDS = [
     "website",
     # Group 42.6: a location id is text even when it looks like a number.
     "fcc_pre_box_location",
+    # "Not buying again" (stock_report.py): a note such as "123" or "true"
+    # must stay text.
+    "fcc_no_rebuy", "fcc_no_rebuy_note", "fcc_no_rebuy_at",
 ]
 
 # Captures the last Spoolman non-ok response body so callers like
@@ -1220,6 +1223,12 @@ def ensure_extra_field(entity_type, key, name, field_type="text", choices=None, 
 REQUIRED_FILAMENT_EXTRAS = [
     ("nozzle_temp_max", "Nozzle Temp Max", "text"),
     ("bed_temp_max", "Bed Temp Max", "text"),
+    # "Not buying again" (Derek, 2026-10-20; stock_report.py): the reason (its
+    # label), a note, and the day it was marked. Written by the ⚠️ Low stock
+    # list's 🚫; Spoolman rejects a write carrying an unregistered extra.
+    ("fcc_no_rebuy", "Not Buying Again", "text"),
+    ("fcc_no_rebuy_note", "Not Buying Again: Note", "text"),
+    ("fcc_no_rebuy_at", "Not Buying Again: Since", "text"),
 ]
 
 # Spool extras the per-spool Prusament scan flow writes when a row is scanned.

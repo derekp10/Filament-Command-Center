@@ -390,6 +390,12 @@ filament_standards = [
     # Multi-color filaments need to know the gradient direction.
     # Values: 'longitudinal' (length-wise) | 'coaxial' (radial).
     ("multi_color_direction", "Multi-Color Direction", "text"),
+    # "Not buying again" (2026-10-20): set from the ⚠️ Low stock list's 🚫
+    # (stock_report.py). App startup self-heals them too
+    # (spoolman_api.REQUIRED_FILAMENT_EXTRAS).
+    ("fcc_no_rebuy", "Not Buying Again", "text"),
+    ("fcc_no_rebuy_note", "Not Buying Again: Note", "text"),
+    ("fcc_no_rebuy_at", "Not Buying Again: Since", "text"),
 ]
 
 for key, name, ftype in filament_standards:

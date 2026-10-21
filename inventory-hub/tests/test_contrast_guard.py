@@ -132,21 +132,27 @@ def test_printer_status_widget_expanded_has_no_gray_on_gray_text(
 
 @pytest.mark.usefixtures("require_server")
 def test_low_stock_panel_has_no_gray_on_gray_text(page: Page, base_url: str, assert_contrast):
-    """Group 49.2a — the ⚠️ Low-stock list over the real dashboard: its rows (one
-    highlighted), tags and Buy More links, its error state, and the search
-    panel's button that opens it. /api/stock_report is stubbed, so no dev data
-    is read. (Hermetic twin: test_low_stock_panel.py.)"""
+    """Group 49.2a — the ⚠️ Low-stock list over the real dashboard: its tabs and
+    filter, its rows on every list (one highlighted), tags and Buy links, the
+    "not buying again" dialog, its error state, and the search panel's button
+    that opens it. /api/stock_report is stubbed, so no dev data is read, and
+    nothing is saved. (Hermetic twin: test_low_stock_panel.py.)"""
     import json as _json
     answers = [
         (200, {
             "success": True, "threshold_g": 250.0, "filaments": 2, "spools": 3,
             "low": [{"filament_id": 88, "display": "Overture - PETG - Red Blue", "color": "BA0C2F,0047BB",
                      "color_direction": "coaxial", "grams": 220.4, "spools": 2, "spools_total": 2,
-                     "attributes": ["Silk", "One-off"], "one_off": True,
+                     "attributes": ["Silk"], "not_rebuying": None,
                      "buy_url": "https://shop.example/s?q=Overture"}],
             "out": [{"filament_id": 20, "display": "Generic - PLA - Lipstick Red", "color": "ff0000",
                      "color_direction": "longitudinal", "grams": 0, "spools": 0, "spools_total": 1,
-                     "attributes": [], "one_off": False, "buy_url": None}]}),
+                     "attributes": [], "not_rebuying": None, "buy_url": None}],
+            "not_rebuying": [{"filament_id": 41, "display": "Sunlu - PLA - Glow Green", "color": "55ff55",
+                              "color_direction": "longitudinal", "grams": 120.0, "spools": 2, "spools_total": 3,
+                              "attributes": [], "buy_url": None,
+                              "not_rebuying": {"reason": "Discontinued", "code": "discontinued",
+                                               "note": "Prusa stopped making it", "at": "2026-10-20"}}]}),
         (502, {"success": False, "error": "spoolman_unreachable", "msg": "x"}),
     ]
 
@@ -163,6 +169,18 @@ def test_low_stock_panel_has_no_gray_on_gray_text(page: Page, base_url: str, ass
     panel = page.locator("#fcc-low-stock-overlay .fcc-stock-panel")
     expect(panel.locator(".fcc-stock-row.kb-active")).to_have_count(1)
     assert_contrast(panel)
+    for key in ("out", "not"):                       # every list, the not-buying one with its note
+        panel.locator(f"[data-stock-tab='{key}']").click()
+        expect(panel.locator(".fcc-stock-row.kb-active")).to_have_count(1)
+        assert_contrast(panel)
+    panel.locator("[data-stock-filter]").fill("glow")
+    assert_contrast(panel)
+    page.keyboard.press("ArrowDown")                  # out of the filter, into the list
+    page.keyboard.press("Delete")                     # the reason dialog (editing), over the real page
+    dialog = page.locator("#fcc-low-stock-reason [data-stock-dialog]")
+    expect(dialog).to_be_visible()
+    assert_contrast(dialog)
+    page.keyboard.press("Escape")
     page.evaluate("window.openLowStockPanel()")      # the error state
     expect(panel.locator("[role=alert]")).to_be_visible()
     assert_contrast(panel)
