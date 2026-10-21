@@ -558,6 +558,31 @@ Resume cron: session-only, hourly; deleted once this section says DONE. Every br
   `feature/group-52-spoolman-read-load`, `fix/bundle-reads-1`, `bundle/2026-10-19` (all on `origin`). Only Claude's own
   leftover `worktree-agent-*` pointers (at `main`'s tip, no work on them) were deleted.
 
+**Follow-ups, 2026-10-20 (Derek's answers to the questions below; branch `fix/bundle-followups-2026-10-20`):**
+- **Label queue rows:** "Leave it as is, its better than what it was." (The queue's spool wording differs slightly from
+  the backlog's: the cards' "Gradient PETG" / "Prusa Orange" against the filament's "PETG" / "Orange (Prusa Orange)";
+  left as it is.)
+- **Slicer profile:** "Don't guess." Only a lookup's confirmed name (prusament.com's product line) fills it; the guess
+  from his own filaments is gone, and a brand or material change after a lookup clears its name. The "variant words"
+  idea (an attribute counts when one of his profile names contains it) is parked in the buglist for later, with his
+  reasons (no concrete Prusa profile list; the XL has profiles for more brands than the INDX).
+- **An archived spool at a toolhead:** un-archived and loaded when its record still has filament (at least 1 g;
+  "spools are mostly auto archived because they hit 0, and rarely archived by hand"), refused at 0 g or an unknown
+  weight. In the wizard the form's Archived box decides (refused, "untick Archived to load it"), and a Save that
+  archives a spool on a head takes it off the head first.
+- **Low stock:** the button's place is fine for now (filed: "Where the ⚠️ Low stock button should live"); the list now
+  comes back on the same row after a window opened from it closes; the Out section says how a filament leaves it (a
+  One-off tag), as he asked ("needs to be documented somewhere that I can run into it again").
+- **The Out list on prod** (he asked to check prod; read-only GETs to prod Spoolman 7912, 2026-10-20): Out shows 2
+  (Creality PETG Black, Kingroon PETG White), Low 1 (Overture PETG Gold, 120 g). 11 filaments have no spool record at
+  all, all created 2026-02-11 (the first import): his "samples / used up before tracking" exception. Whether to list
+  them under Out is his call (⏸️ PENDING DEREK; recommendation: under their own heading). Dev's copy showed none Out
+  only because it is older.
+- `b779b84` the follow-ups, `c22ac1c` the review's fixes. Review `wf_2f994a96-2c5` (2 lenses + 1 batched skeptic,
+  1,065,766 tokens, ~44 min): 9 findings, 7 confirmed (2 orange: a second wizard Save re-archived the spool ON its
+  head; the Low stock list came back over a window reopening in the filament's place), 2 duplicates, none refuted;
+  all fixed. Offline 3245 passed, 0 failed; the touched screens' browser tests 126 and 75 passed, 0 failed.
+
 **For Derek, cold (nothing here blocks anything):**
 1. **Release `dev` → `main`?** (needs your OK) What ships: Groups 51, 48, 49 and 52 plus the review's 14 fixes and
    reads-1, on top of the Group 40 release. Nothing in ⏸️ PENDING DEREK gates it. Recommendation: yes, when it suits
@@ -698,3 +723,4 @@ harness's 1% tolerance let stale CORE1 text pass).
 | builders (Agent, worktrees) 2026-10-19 evening | Groups 52 / 49 | 2 | 581,470 + 593,882 subagent | 41 / 60 min, 241 / 237 tool calls; merged into the bundle `c37b8c9` (52) / into 48's branch `9da2b4d` (49) |
 | `wf_ee3ec73c-b42` bundle-review-2026-10-19 | Groups 51 + 48 + 49 + 52 | 5 (4 lenses + 1 batched skeptic) | 2,253,123 subagent | ~45 min, 635 tool calls; 17 findings → 14 confirmed (1 orange, 7 yellow, 6 notes), 3 duplicates, none refuted; all fixed (`f190884`, `9e5db92`, `3b2196a`; reads-1 by the fixer below) |
 | fixer (Agent, worktree) 2026-10-19 | the review's reads-1 | 1 | 397,787 subagent | 30 min, 124 tool calls; merged `5e90f4d` |
+| `wf_2f994a96-2c5` review-bundle-followups-2026-10-20 | Derek's answers (archived at a head, no profile guess, the Low stock list) | 3 (2 lenses + 1 batched skeptic) | 1,065,766 subagent | ~44 min, 255 tool calls; 9 findings → 7 confirmed (2 orange), 2 duplicates; all fixed (`c22ac1c`) |
