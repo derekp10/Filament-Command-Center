@@ -363,3 +363,45 @@ def test_location_table_read_notice_has_no_gray_on_gray_text(page: Page, base_ur
     assert offenders == [], offenders
     for cell in page.locator("#location-table td.col-status").all():
         assert_contrast(cell)
+
+
+@pytest.mark.usefixtures("require_server")
+def test_qr_questions_are_readable(page: Page, base_url: str, assert_contrast):
+    """Each "📷 Scan to …" QR wears its button's colour (Derek, 2026-10-21):
+    amber, cyan, grey, light and dark captions on the dark dialogs, and the
+    captions are now label size. The move question in its three shapes and
+    "Record it as coming from…" are opened with no-op answers and closed with
+    Escape: nothing is moved or recorded."""
+    import conftest
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.confirmActivePrint === 'function'"
+                           " && typeof _askRecordSource === 'function'")
+    questions = (
+        "{ title: 'Load #57 onto XL-1?', msg: 'A test question.', printing: false,"
+        "  onConfirm() {}, onCancel() {}, onStore() {}, ids: { overlay: 'fcc-cg-question' } }",
+        "{ title: 'Load #57 onto XL-1?', msg: 'A test question.', printing: true,"
+        "  onConfirm() {}, onCancel() {}, onStore() {}, ids: { overlay: 'fcc-cg-question' } }",
+        "{ activePrint: { printer_name: 'XL', state: 'PRINTING', toolhead: 'XL-1' }, msg: 'A test question.',"
+        "  onConfirm() {}, onCancel() {}, ids: { overlay: 'fcc-cg-question' } }",
+    )
+    for opts in questions:
+        page.evaluate("() => window.confirmActivePrint(" + opts + ")")
+        overlay = page.locator("#fcc-cg-question")
+        expect(overlay.locator(".fcc-confirm-qr-row")).to_be_visible()
+        assert_contrast(overlay)
+        # The captions are judged (the walker skips only the root).
+        scored = [o["text"] for o in conftest.contrast_offenders(overlay, min_ratio=100)]
+        assert sum("SCAN" in t.upper() for t in scored) >= 2, scored
+        page.keyboard.press("Escape")
+        expect(overlay).to_have_count(0)
+    page.evaluate("""() => { window.__cgRs = _askRecordSource({ head: 'XL-1', spool_location: '', feeds: [
+        { box: 'LR-MDB-1', slot: '1', free: true }, { box: 'LR-MDB-1', slot: '2', free: false, claimed_by: 99 }] }, 57, null); }""")
+    # Its QR row only: the dialog's disabled slot button ("holds #99", Bootstrap's
+    # btn-outline-secondary) is 3.56:1 and was before this change (a disabled
+    # control; reported separately, colours untouched here).
+    row = page.locator("#fcc-record-source .fcc-confirm-qr-row")
+    expect(row).to_be_visible()
+    assert_contrast(row)
+    scored = [o["text"] for o in conftest.contrast_offenders(row, min_ratio=100)]
+    assert sum("SCAN" in t.upper() for t in scored) == 3, scored
+    page.keyboard.press("Escape")

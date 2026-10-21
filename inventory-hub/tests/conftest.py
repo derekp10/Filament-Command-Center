@@ -1696,6 +1696,116 @@ def assert_contrast():
 
 
 # ---------------------------------------------------------------------------
+# Text size guard (readability rule, Derek 2026-10-21)
+# ---------------------------------------------------------------------------
+# Text you read is never under 13.6 px; a label inside a pill or box never under
+# 12.8 px (DESIGN.md "Typography"). An element counts as a LABEL when it, or an
+# ancestor, is sized with the label name: an inline style that uses
+# `--fcc-fs-label`, or a same-origin CSS rule whose font-size (or Bootstrap's
+# --bs-badge-font-size) uses it — read from the page's own stylesheets, so a new
+# label style needs no list here. Unlike the contrast walker, the ROOT itself is
+# judged too. Measured at the browser's default size (16 px root): the floors are
+# the Standard text size.
+TEXT_FLOOR_PX = 13.6
+LABEL_FLOOR_PX = 12.8
+
+TEXT_SIZE_GUARD_JS = r"""
+(root, args) => {
+    if (!root) return { error: 'root_not_found' };
+    const labelSels = ['[style*="--fcc-fs-label"]'];
+    const visit = (rules) => {
+        for (const r of Array.from(rules || [])) {
+            if (r.cssRules && !r.selectorText) { visit(r.cssRules); continue; }   // @media, @supports
+            if (!r.style || !r.selectorText) continue;
+            const v = (r.style.getPropertyValue('font-size') || '') + ' '
+                + (r.style.getPropertyValue('--bs-badge-font-size') || '');
+            if (v.indexOf('--fcc-fs-label') !== -1) labelSels.push(r.selectorText);
+        }
+    };
+    for (const sh of Array.from(document.styleSheets)) {
+        try { visit(sh.cssRules); } catch (e) { /* a cross-origin sheet (Bootstrap's CDN) */ }
+    }
+    const usable = labelSels.filter((s) => { try { document.documentElement.matches(s); return true; } catch (e) { return false; } });
+    const isLabel = (el) => usable.some((s) => { try { return !!el.closest(s); } catch (e) { return false; } });
+    const vis = (el) => {
+        try { return el.checkVisibility({ opacityProperty: true, visibilityProperty: true }); }
+        catch (e) { return true; }
+    };
+    const where = (el) => {
+        const out = [];
+        for (let a = el; a && a.nodeType === 1 && out.length < 4; a = a.parentElement) {
+            out.push(a.tagName.toLowerCase() + (a.id ? '#' + a.id : '')
+                + ((typeof a.className === 'string' && a.className.trim())
+                    ? '.' + a.className.trim().split(/\s+/).slice(0, 2).join('.') : ''));
+            if (a.id) break;
+        }
+        return out.reverse().join(' > ');
+    };
+    const offenders = [];
+    let checked = 0;
+    let smallest = null;
+    for (const el of [root, ...root.querySelectorAll('*')]) {
+        if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE'].includes(el.tagName)) continue;
+        const own = Array.from(el.childNodes).some((n) => n.nodeType === 3 && n.textContent.trim());
+        if (!own || !el.getClientRects().length || !vis(el)) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width * r.height < 4) continue;                    // .visually-hidden and friends
+        let op = 1;
+        for (let a = el; a && a.nodeType === 1; a = a.parentElement) op *= parseFloat(getComputedStyle(a).opacity || '1');
+        if (op < 0.05) continue;                                 // a faded-out layer is not on screen
+        const px = parseFloat(getComputedStyle(el).fontSize);
+        checked += 1;
+        if (smallest === null || px < smallest) smallest = px;
+        const label = isLabel(el);
+        const floor = label ? args.labelFloor : args.textFloor;
+        if (px < floor - 0.05) {
+            const text = Array.from(el.childNodes).filter((n) => n.nodeType === 3)
+                .map((n) => n.textContent).join(' ').replace(/\s+/g, ' ').trim();
+            offenders.push({ px: Math.round(px * 100) / 100, floor, label, text: text.slice(0, 60), where: where(el) });
+        }
+    }
+    return { offenders, checked, smallest };
+}
+"""
+
+
+def text_size_offenders(root_locator, text_floor: float = TEXT_FLOOR_PX,
+                        label_floor: float = LABEL_FLOOR_PX) -> list:
+    """Every visible text element under (and including) `root_locator` whose
+    font size is under its floor: 13.6 px for text you read, 12.8 px for a
+    label sized with --fcc-fs-label. Dicts: px, floor, label, text, where.
+    Raises when the root isn't on the page or no text was checked at all (a
+    guard that checked nothing must not pass)."""
+    result = root_locator.evaluate(TEXT_SIZE_GUARD_JS, {"textFloor": text_floor, "labelFloor": label_floor})
+    if not isinstance(result, dict) or result.get("error"):
+        raise AssertionError(f"assert_text_size: could not evaluate on locator {root_locator!r}")
+    if not result.get("checked"):
+        raise AssertionError(f"assert_text_size: no visible text under {root_locator!r}")
+    return result.get("offenders") or []
+
+
+def check_text_size(root_locator, text_floor: float = TEXT_FLOOR_PX,
+                    label_floor: float = LABEL_FLOOR_PX) -> None:
+    """Raise AssertionError naming every element under its floor."""
+    offenders = text_size_offenders(root_locator, text_floor, label_floor)
+    if offenders:
+        lines = [f"Text under the size floor ({text_floor} px text, {label_floor} px labels) "
+                 f"in {len(offenders)} element(s):"]
+        for o in offenders:
+            kind = "label" if o["label"] else "text"
+            lines.append(f"  {o['px']} px < {o['floor']} ({kind})  {o['where']}  text={o['text']!r}")
+        raise AssertionError("\n".join(lines))
+
+
+@pytest.fixture
+def assert_text_size():
+    """Playwright-driven text-size check (DESIGN.md "Typography"): every
+    visible text under the root is at least 13.6 px, or 12.8 px when it is a
+    label sized with --fcc-fs-label. The AssertionError names each offender."""
+    return check_text_size
+
+
+# ---------------------------------------------------------------------------
 # A browser that cannot reach anything (for hermetic, --offline browser tests)
 # ---------------------------------------------------------------------------
 

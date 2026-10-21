@@ -45,6 +45,12 @@ typography:
     fontFamily: "'Segoe UI', monospace"
     fontSize: "0.85rem"
     fontWeight: "700"
+  row:
+    fontSize: "var(--fcc-fs-row)"        # 0.9rem = 14.4 px: list rows and tile data
+  small:
+    fontSize: "var(--fcc-fs-small)"      # 0.85rem = 13.6 px: the floor for text you read
+  label:
+    fontSize: "var(--fcc-fs-label)"      # 0.8rem = 12.8 px: labels in a pill or box
   code:
     fontFamily: "'Consolas', monospace"
     fontSize: "1.1rem"
@@ -105,6 +111,11 @@ The system employs a dual-font strategy: standard sans-serif for UI elements and
 
 - **Primary UI:** 'Segoe UI' (falling back to monospace) is used for its legible, straightforward geometric characteristics. Font weights are pushed high (700-900) to ensure readability on small kiosk screens.
 - **Technical Data:** 'Consolas' is used for logs, spool IDs, and exact metrics where character alignment is crucial.
+- **Small text has a floor (Derek, 2026-10-21).** Text you read is never under **13.6 px**; a label inside a pill or box (badges, tags, chips, IDLE / PRINTING, counts, the "📷 Scan to …" captions under QR codes, short ALL-CAPS labels) never under **12.8 px**; list rows and tile data are **14.4 px**, as in the Low stock window. Text already big enough, headings, buttons, spacing, colours and layouts are left alone.
+  - **Use the named sizes, never a hand-typed one under the floor.** They live on `:root` in `global.css`: `--fcc-fs-label` (0.8rem, 12.8 px), `--fcc-fs-small` (0.85rem, 13.6 px) and `--fcc-fs-row` (0.9rem, 14.4 px). The per-browser Text size setting gives them other values, so a size typed by hand would not follow it. Sizes are in `rem`, never `px`, so they follow the browser's zoom and the root size.
+  - **Bootstrap's own sizes are held to it app-wide:** a `.badge` is `max(var(--fcc-fs-label), 0.75em)` (a badge in a heading keeps its bigger size) and `.small` / `small` / `code` / `kbd` are `max(var(--fcc-fs-small), 0.875em)`, so small text inside small text no longer drops to 12.25 px.
+  - **Kept by two tests:** `tests/test_text_size_floor.py` (offline: fails on a hand-typed size under 13.6 px in any `.css`, `.js` module or template, except a short allowlist with reasons) and `tests/test_text_size_guard.py` (opens the screens in a browser and fails on any text under its floor). A new label style that should get the 12.8 px floor uses `--fcc-fs-label`, which is how the guard knows it is a label.
+- **QR codes take their button's colour.** In a question with "📷 Scan to …" QR codes, each QR card's border and caption are the colour of the button it stands for (amber for a `btn-warning` like "Load it instead", cyan for `btn-info`, grey for `btn-secondary`), so it is clear at a glance which code matches which button. Pass the button's tone to `window.attachConfirmQRs` (`confirmTone` / `storeTone` / `cancelTone`).
 - **The "Text Pop":** A signature element of the design system is the heavy text-shadow applied to critical data points (like slot numbers and spool metrics). This shadow (`2px 2px 4px rgba(0, 0, 0, 0.9), -1px -1px 2px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.8)`) ensures text remains legible even if the background contains complex imagery (like QR codes or active visual elements).
 
 ## Layout & Spacing
