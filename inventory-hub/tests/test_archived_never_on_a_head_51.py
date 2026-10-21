@@ -206,3 +206,18 @@ def test_control_a_spool_in_stock_still_loads_and_names_nothing(client):
 ], ids=["spoolman-remaining", "own-capacity", "filament-capacity", "unknown", "bad-remaining", "no-record"])
 def test_filament_left_on_a_record(rec, left):
     assert logic._filament_left_g(rec) == left
+
+
+def test_a_tool_head_no_printer_lists_unarchives_it_too(client):
+    """2026-10-20 review (engine-3): XL-9 is a Tool Head row that XL's
+    toolheads[] doesn't list (an ambiguous tool number on create, or one removed
+    in Settings), so its write takes the GENERIC branch, which left #57 archived
+    ON XL-9 with a plain success. RED on b779b84."""
+    sm = _sm()
+    store = LocationsStore(ROWS + [{"LocationID": "XL-9", "Type": "Tool Head", "Max Spools": "1", "parent_id": "XL"}])
+    res = run_move(sm, probe=IDLE, store=store, printer_map=PRINTER_MAP,
+                   call=lambda: client.post("/api/smart_move", json=dict(DOOR, location="XL-9", spools=[57],
+                                                                          origin="buffer"))).get_json()
+    assert res["status"] == "success" and not res.get("failures"), res
+    assert res["unarchived"] == [{"id": 57, "left_g": 300.0, "head": "XL-9"}], res
+    assert sm.spools[57]["location"] == "XL-9" and sm.spools[57]["archived"] is False, sm.spools[57]

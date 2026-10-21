@@ -3976,6 +3976,13 @@ window.wizardSubmit = async () => {
         if (data.success || partial) {
             // A partial save leaves the Location unsaved, so closing still warns.
             wizardState.isDirty = partial;
+            // 2026-10-20 review (engine-1): the Archived box follows the server. A box
+            // still ticked after the spool came back into stock (a weight fix with a
+            // move) sent archived: true on the next Save and archived it ON its head.
+            if (isWizardEdit && Object.prototype.hasOwnProperty.call(data, 'archived_now')) {
+                const box = document.getElementById('wiz-spool-archived');
+                if (box) box.checked = !!data.archived_now;
+            }
             msg.innerHTML = partial
                 ? `<span class="text-warning fw-bold">Saved your other changes. #${_wizEsc(editSid)} was not moved yet.</span>`
                 : `<span class="text-success fw-bold">Success! ${wizardState.mode === 'edit_spool' ? 'Spool Updated' : 'Spool(s) Generated'}.</span>`;

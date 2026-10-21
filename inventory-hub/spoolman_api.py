@@ -553,7 +553,10 @@ def update_spool(sid, data):
         unarchive_warning = _auto_unarchive_on_refill(data, existing)
         if pre_archived and data.get('archived') is False:
             try:
-                restored_to = data.get('location') or 'UNASSIGNED'
+                # Where it is now: the place this write names, else where it already
+                # was (an untick names none; 2026-10-20 review, engine-4).
+                restored_to = (data['location'] if 'location' in data
+                               else (existing.get('location') or '')) or 'UNASSIGNED'
                 # A weight write refilled it; otherwise the caller un-archived it
                 # itself (the move engine loading it onto a head, an untick).
                 weighed = any(k in data for k in ('used_weight', 'initial_weight', 'remaining_weight'))

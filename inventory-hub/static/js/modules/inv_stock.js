@@ -260,6 +260,11 @@ ${P} .fcc-stock-foot { color:#ccc; font-size:.78em; margin-top:8px; border-top:1
             document.removeEventListener('keydown', handle._stockKeys, true);
             handle._stockKeys = null;
         }
+        if (handle && handle._stockShows) {
+            document.removeEventListener('show.bs.modal', handle._stockShows.modal);
+            document.removeEventListener('show.bs.offcanvas', handle._stockShows.offcanvas);
+            handle._stockShows = null;
+        }
         if (_current === handle) _current = null;
     }
 
@@ -269,46 +274,86 @@ ${P} .fcc-stock-foot { color:#ccc; font-size:.78em; margin-top:8px; border-top:1
     }
 
     // --- the list comes back (Derek, 2026-10-20) ---
-    // Armed when a filament is opened from the list: once the window it opened
-    // (or one opened from that, a spool, an edit) closes and nothing else is up,
-    // no window, no panel, no overlay, the list reopens on the same row and
-    // scroll, reading Spoolman again (an edit or a One-off tag shows). Disarmed
-    // once it has come back, when the list is opened another way, or after
-    // RETURN_TTL_MS (a later window closing much later is something else).
+    // Armed once the filament window opened from the list really shows (a read
+    // that fails opens none, and must not leave an arm for some later, unrelated
+    // window: 2026-10-20 review, browser-4). Then, once the window it opened (or
+    // one opened from that: a spool, an edit, the wizard and its return to the
+    // filament) closes and nothing else is up or on its way (no window, panel or
+    // overlay, no read in progress, no window shown since that close: browser-2),
+    // the list reopens on the same row and scroll, reading Spoolman again (an
+    // edit or a One-off tag shows). Disarmed once it has come back, when the list
+    // is opened another way, or after RETURN_TTL_MS (a window closing much later
+    // is something else). A list that came back has no host, so a window opened
+    // over it closes it and arms the come-back again (browser-3: it used to sit
+    // over that window).
     const RETURN_TTL_MS = 10 * 60 * 1000;
-    let _return = null;    // {fid, scrollTop, at, onHidden}
+    const OPEN_WAIT_MS = 15000;     // a filament read's ceiling (fetchT)
+    const SETTLE_MS = 400;          // past Bootstrap's own hide and a window opened in its place
+    let _return = null;    // {fid, scrollTop, at, lastShowAt, onHidden, onShow}
+    let _pending = null;   // {onShow, timer}: armed once the filament window shows
 
     function _disarmReturn() {
-        if (_return && _return.onHidden) document.removeEventListener('hidden.bs.modal', _return.onHidden);
+        if (_return) {
+            document.removeEventListener('hidden.bs.modal', _return.onHidden);
+            document.removeEventListener('show.bs.modal', _return.onShow);
+        }
         _return = null;
+        if (_pending) {
+            document.removeEventListener('show.bs.modal', _pending.onShow);
+            clearTimeout(_pending.timer);
+        }
+        _pending = null;
     }
 
     function _nothingElseUp() {
-        return !document.querySelector('.modal.show, .offcanvas.show, [data-overlay-mount="1"]');
+        // A window still reading what it will show (openFilamentDetails,
+        // openSpoolDetails and openManage hold the processing dim meanwhile).
+        if (typeof state !== 'undefined' && state && state.processing) return false;
+        return !document.querySelector('.modal.show, .modal-backdrop, .offcanvas.show, .offcanvas.showing, '
+            + '[data-overlay-mount="1"]');
     }
 
     function _armReturn(fid, scrollTop) {
         _disarmReturn();
-        const ret = { fid: String(fid), scrollTop: scrollTop || 0, at: Date.now(), onHidden: null };
+        const ret = { fid: fid == null ? null : String(fid), scrollTop: scrollTop || 0, at: Date.now(), lastShowAt: 0 };
+        ret.onShow = () => { ret.lastShowAt = Date.now(); };
         ret.onHidden = () => {
             if (_return !== ret) return;
             if (Date.now() - ret.at > RETURN_TTL_MS) { _disarmReturn(); return; }
-            // After Bootstrap's own hide and any window opened in its place.
+            const hiddenAt = Date.now();
             setTimeout(() => {
-                if (_return !== ret || _current || !_nothingElseUp()) return;
+                if (_return !== ret || _current) return;
+                // A window shown since that close, or one still opening: stay armed.
+                if (ret.lastShowAt >= hiddenAt || !_nothingElseUp()) return;
                 _disarmReturn();
                 window.openLowStockPanel({ restore: { fid: ret.fid, scrollTop: ret.scrollTop } });
-            }, 250);
+            }, SETTLE_MS);
         };
         document.addEventListener('hidden.bs.modal', ret.onHidden);
+        document.addEventListener('show.bs.modal', ret.onShow);
         _return = ret;
+    }
+
+    // Arms the come-back once #filamentModal shows (now, if it is up already).
+    function _armWhenShown(fid, scrollTop) {
+        _disarmReturn();
+        const modal = document.getElementById('filamentModal');
+        if (modal && modal.classList.contains('show')) { _armReturn(fid, scrollTop); return; }
+        const pend = {};
+        pend.onShow = (e) => {
+            if (_pending !== pend || !e || !e.target || e.target.id !== 'filamentModal') return;
+            _armReturn(fid, scrollTop);
+        };
+        pend.timer = setTimeout(() => { if (_pending === pend) _disarmReturn(); }, OPEN_WAIT_MS);
+        document.addEventListener('show.bs.modal', pend.onShow);
+        _pending = pend;
     }
 
     function _openFilament(handle, fid) {
         const id = parseInt(fid, 10);
         if (!Number.isFinite(id)) return;
         const body = _body(handle);
-        _armReturn(id, body ? body.scrollTop : 0);
+        _armWhenShown(id, body ? body.scrollTop : 0);
         _close(handle);
         // A details window is a Bootstrap modal: this panel (z 20000) would hide
         // it, so the panel closes first; showing the modal also closes the search
@@ -373,6 +418,24 @@ ${P} .fcc-stock-foot { color:#ccc; font-size:.78em; margin-top:8px; border-top:1
         });
         handle._stockKeys = (e) => _onKey(handle, e);
         document.addEventListener('keydown', handle._stockKeys, true);
+        if (!hostOpen) {
+            // No search panel to close it with (a list that came back): a window
+            // opened over it closes it (2026-10-20 review, browser-3), and a modal
+            // arms the come-back, so it returns where it was once that one closes.
+            const shows = {
+                modal: () => {
+                    const active = handle.panel.querySelector('.fcc-stock-row.kb-active');
+                    const b = _body(handle);
+                    const at = [active ? active.dataset.fid : null, b ? b.scrollTop : 0];
+                    _close(handle);
+                    _armReturn(at[0], at[1]);
+                },
+                offcanvas: () => _close(handle),
+            };
+            handle._stockShows = shows;
+            document.addEventListener('show.bs.modal', shows.modal);
+            document.addEventListener('show.bs.offcanvas', shows.offcanvas);
+        }
         _load(handle, restore);
         return handle;
     };

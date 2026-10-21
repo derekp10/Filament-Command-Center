@@ -2977,6 +2977,23 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         if _new_note is not None:
             new_extra[PRE_BOX_KEY] = _new_note
 
+        # Step 4's rule (Derek, 2026-10-20): an archived spool with filament on its
+        # record is un-archived by the PATCH that puts it on the head, whichever
+        # branch writes it (the PRINTER branch, or the GENERIC one for a Tool Head
+        # row no printer's toolheads[] lists: 2026-10-20 review, engine-3). Its
+        # pre-archive note is used up once it is back in stock (Claude's call 22);
+        # "" because the extras merge keeps an omitted key.
+        _unarchive = str(sid) in unarchive_on_load
+        if _unarchive:
+            new_extra['fcc_pre_archive_location'] = ''
+
+        def _note_unarchived():
+            _left = unarchive_on_load[str(sid)]
+            unarchived.append({"id": sid, "left_g": round(_left, 1), "head": target})
+            state.add_log_entry(
+                f"📤 #{sid} was archived with {_left:.0f} g left on its record: FCC un-archived it to "
+                f"load it onto {target}. Weigh it if that's off.", "WARNING", "ffaa00")
+
         # PRINTER MOVE
         if target in printer_map:
             # Preserve ghost trail when the spool is already deployed to
@@ -3085,19 +3102,10 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                 elif _why_none:
                     state.logger.info(f"🔗 Reverse-binding skipped for #{sid}: {_why_none}.")
 
-            _unarchive = str(sid) in unarchive_on_load
-            if _unarchive:
-                # The pre-archive note is used up once the spool is back in stock
-                # (Claude's call 22); "" because the extras merge keeps an omitted key.
-                new_extra['fcc_pre_archive_location'] = ''
             if _move_write(sid, target, new_extra, unarchive=_unarchive):
                 state.add_log_entry(f"🖨️ {info['text']} -> {target}", "INFO", info['color'])
                 if _unarchive:
-                    _left = unarchive_on_load[str(sid)]
-                    unarchived.append({"id": sid, "left_g": round(_left, 1), "head": target})
-                    state.add_log_entry(
-                        f"📤 #{sid} was archived with {_left:.0f} g left on its record: FCC un-archived it to "
-                        f"load it onto {target}. Weigh it if that's off.", "WARNING", "ffaa00")
+                    _note_unarchived()
                 if _recorded_here:
                     recorded_sources[str(sid)] = _recorded_here
                 # Group 20.2: a spool deployed FROM a single-slot dryer box
@@ -3158,8 +3166,10 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                 new_extra['physical_source'] = ""
                 new_extra['physical_source_slot'] = ""
 
-            if _move_write(sid, target, new_extra):
+            if _move_write(sid, target, new_extra, unarchive=_unarchive):
                 state.add_log_entry(f"🚚 {info['text']} -> {target}", "INFO", info['color'])
+                if _unarchive:
+                    _note_unarchived()
             else:
                 err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
                 failures[str(sid)] = err
@@ -3272,6 +3282,9 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                     # The slot whose own spool, if it runs on the head, comes off
                     # into the scan buffer (the same-slot swap; Derek, 2026-10-15).
                     swap_slot=(target, target_slot),
+                    # A caller that keeps the spool archived keeps it so on the head
+                    # the slot loads too (step 4 refuses it there).
+                    keep_archived=keep_archived,
                 )
             except Exception as _ad_err:
                 state.logger.error(f"Auto-deploy failed for {target}:SLOT:{target_slot}: {_ad_err}")

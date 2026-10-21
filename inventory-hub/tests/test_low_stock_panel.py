@@ -55,19 +55,28 @@ window.fetch = function (url, opts) {
     };
     return a && a.delay ? new Promise((r) => setTimeout(r, a.delay)).then(go) : go();
 };
-function openFilamentDetails(fid) {
-    window.__opened.push(fid);
-    const m = document.getElementById('filamentModal');
-    if (m) m.classList.add('show');
-    const o = document.getElementById('offcanvasSearch');
-    if (o) o.classList.remove('show');
-}
-// Close a Bootstrap window the way Bootstrap does: class off, then hidden.bs.modal.
+// Open / close a Bootstrap window the way Bootstrap does: show.bs.modal, then the
+// class; class off, then hidden.bs.modal.
+window.__showModal = function (id) {
+    const m = document.getElementById(id);
+    m.dispatchEvent(new Event('show.bs.modal', { bubbles: true }));
+    m.classList.add('show');
+};
 window.__closeModal = function (id) {
     const m = document.getElementById(id);
     m.classList.remove('show');
     m.dispatchEvent(new Event('hidden.bs.modal', { bubbles: true }));
 };
+// The filament window opens (and closes the search panel, as inv_core.js does),
+// unless a test makes its read fail (window.__failOpen: no window, as
+// openFilamentDetails' "Filament Data Missing!" path).
+function openFilamentDetails(fid) {
+    window.__opened.push(fid);
+    if (window.__failOpen) return;
+    const o = document.getElementById('offcanvasSearch');
+    if (o) o.classList.remove('show');
+    window.__showModal('filamentModal');
+}
 """
 
 PAGE = """<!doctype html><html><head><meta charset="utf-8"><style>{css}</style></head><body>
@@ -79,6 +88,7 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><style>{css}</style><
 </div>
 <div id="filamentModal" class="modal"></div>
 <div id="spoolModal" class="modal"></div>
+<div id="wizardModal" class="modal"></div>
 </body></html>"""
 
 
@@ -464,8 +474,8 @@ def test_the_list_comes_back_on_the_same_row_after_the_filament_window_closes(pa
     assert _back(page, "88", 2) == "88"                       # read afresh, on the row it left
     # Once: a later window closing doesn't bring it back again.
     page.locator(PANEL + " [data-stock-close]").click()
-    page.evaluate("document.getElementById('spoolModal').classList.add('show'); window.__closeModal('spoolModal')")
-    page.wait_for_timeout(500)
+    page.evaluate("window.__showModal('spoolModal'); window.__closeModal('spoolModal')")
+    page.wait_for_timeout(700)
     assert page.locator("#fcc-low-stock-overlay").count() == 0
     assert page.evaluate("window.__errors") == []
 
@@ -480,8 +490,65 @@ def test_it_waits_while_another_window_is_up(panel):
     page.keyboard.press("ArrowDown")
     page.keyboard.press("Enter")                              # opens #20 (the Out row)
     assert page.evaluate("window.__opened") == [20]
-    page.evaluate("document.getElementById('spoolModal').classList.add('show'); window.__closeModal('filamentModal')")
-    page.wait_for_timeout(500)
+    page.evaluate("window.__showModal('spoolModal'); window.__closeModal('filamentModal')")
+    page.wait_for_timeout(700)
     assert page.locator("#fcc-low-stock-overlay").count() == 0   # the spool window is up
     page.evaluate("window.__closeModal('spoolModal')")
     assert _back(page, "20", 2) == "20"
+
+
+# --- the 2026-10-20 review's three cases ----------------------------------------------
+
+def test_a_filament_window_that_never_opens_leaves_no_arm(panel):
+    """browser-4: the read failed, so no window opened; a later, unrelated window
+    closing must not pop the list up."""
+    page, open_ = panel
+    open_(_answer(REPORT))
+    _wait_state(page, "ready")
+    page.evaluate("window.__failOpen = true")
+    page.locator(PANEL + " .fcc-stock-row[data-fid='88'] .fcc-stock-name").click()
+    assert page.evaluate("window.__opened") == [88]
+    page.evaluate("document.getElementById('offcanvasSearch').classList.remove('show');"
+                  "window.__showModal('spoolModal'); window.__closeModal('spoolModal')")
+    page.wait_for_timeout(700)
+    assert page.locator("#fcc-low-stock-overlay").count() == 0
+    assert page.evaluate("window.__fetches.length") == 1
+
+
+def test_it_waits_for_a_window_still_opening_in_the_filaments_place(panel):
+    """browser-2: the wizard opened from the filament window closes, and its own
+    close handler reopens the filament window 200 ms later, after a read. The
+    list stays away until that window closes."""
+    page, open_ = panel
+    open_(_answer(REPORT))
+    _wait_state(page, "ready")
+    page.locator(PANEL + " .fcc-stock-row[data-fid='164'] .fcc-stock-name").click()
+    page.evaluate("window.__showModal('wizardModal'); window.__closeModal('filamentModal')")
+    page.wait_for_timeout(600)
+    assert page.locator("#fcc-low-stock-overlay").count() == 0          # the wizard is up
+    page.evaluate("""() => {
+        window.__closeModal('wizardModal');
+        setTimeout(() => { state.processing = true; }, 200);              // openFilamentDetails reads...
+        setTimeout(() => { window.__showModal('filamentModal'); state.processing = false; }, 650);
+    }""")
+    page.wait_for_timeout(1200)
+    assert page.locator("#fcc-low-stock-overlay").count() == 0          # never over the returning window
+    page.evaluate("window.__closeModal('filamentModal')")
+    assert _back(page, "164", 2) == "164"
+
+
+def test_a_list_that_came_back_closes_under_a_new_window_and_returns_after(panel):
+    """browser-3: with no search panel to close it with, a window opened over the
+    restored list used to sit under it."""
+    page, open_ = panel
+    open_(_answer(REPORT))
+    _wait_state(page, "ready")
+    page.locator(PANEL + " .fcc-stock-row[data-fid='20'] .fcc-stock-name").click()
+    page.evaluate("window.__closeModal('filamentModal')")
+    assert _back(page, "20", 2) == "20"
+    page.evaluate("window.__showModal('spoolModal')")                   # a scan opens a window
+    page.wait_for_timeout(200)
+    assert page.locator("#fcc-low-stock-overlay").count() == 0
+    page.evaluate("window.__closeModal('spoolModal')")
+    assert _back(page, "20", 3) == "20"
+    assert page.evaluate("window.__errors") == []

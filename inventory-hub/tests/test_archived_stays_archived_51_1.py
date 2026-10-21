@@ -212,3 +212,13 @@ def test_control_a_remaining_weight_with_nothing_left_stays_archived(left):
     data = {"remaining_weight": left}
     sm_api._auto_unarchive_on_refill(data, dict(_ARCHIVED_WITH_WEIGHT, location=""))
     assert "archived" not in data and "location" not in data, data
+
+
+def test_an_untick_logs_where_the_spool_is(client):
+    """2026-10-20 review (engine-4): an untick names no location, and the line
+    said "now at UNASSIGNED" while the spool stayed on its shelf. RED on b779b84."""
+    sm = WeighedWireSpoolman(_hand_archived())
+    res = _call(sm, lambda: client.post("/api/spool/update", json={"id": 57, "updates": {"archived": False}}))
+    assert res.get_json().get("status") == "success", res.get_json()
+    assert sm.spools[57]["location"] == "CR-SHELF" and sm.spools[57]["archived"] is False, sm.spools[57]
+    assert _logs("📤 Un-archived Spool #57 (back in stock) — now at CR-SHELF"), state.RECENT_LOGS
