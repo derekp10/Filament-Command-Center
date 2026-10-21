@@ -917,6 +917,8 @@ _FCC_EXTRA_FIELD_TYPES = {
         'original_color': 'text', 'drying_temp': 'text', 'drying_time': 'text',
         'flush_multiplier': 'text', 'nozzle_temp_max': 'text', 'bed_temp_max': 'text',
         'multi_color_direction': 'text',
+        # The Low stock list's Excluded mark (stock_report.py, 2026-10-20).
+        'fcc_stock_excluded': 'text', 'fcc_stock_excluded_note': 'text', 'fcc_stock_excluded_at': 'text',
     },
     'vendor': {'website': 'text'},
 }

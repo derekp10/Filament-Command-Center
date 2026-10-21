@@ -28,9 +28,9 @@ empty, and a filament holding one is never judged low.
        /api/filament/<id>/stock_exclusion (the list's 🔕 and ✏️). Any reason
        text counts, one typed in Spoolman by hand too; a blank one is no mark.
        It replaced the "One-off" attribute rule, which only ever ran on dev.
-       Clearing writes blanks, never leaves a key out: Spoolman 0.27 (dev's)
-       keeps an extra a PATCH leaves out (checked on dev 2026-10-20), where
-       0.23 dropped it, so FCC's delete sentinel clears nothing there.
+       Clearing sends FCC's delete sentinel, which spoolman_api turns into the
+       field's clear (a JSON null on Spoolman 0.26+, which drops the key; a
+       blank on an older one): Spoolman 0.27 keeps a key a PATCH leaves out.
 
 The list (`build_report`, behind GET /api/stock_report, routes_inventory.py)
 reads Spoolman ONCE and strictly, every spool with the archived ones
@@ -492,11 +492,12 @@ def exclude_filament(fid, reason, note='', today=None):
     marked = {"reason": label, "code": code, "note": note, "at": at}
     # Pre-wrapped as JSON strings (the keys are JSON_STRING_FIELDS too), so a
     # note such as "true" or "123" stays text; a blank note clears an old one
-    # (a blank, not the delete sentinel: see the module docstring).
+    # (the delete sentinel: see the module docstring).
     extra = {EXCLUDE_KEY: json.dumps(label), EXCLUDE_AT_KEY: json.dumps(at),
-             EXCLUDE_NOTE_KEY: json.dumps(note)}
+             EXCLUDE_NOTE_KEY: json.dumps(note) if note else spoolman_api.DELETE_EXTRA_SENTINEL}
     name = html.escape(" ".join(filament_names(fil)), quote=False)
-    if spoolman_api.update_filament(int(fid), {"extra": extra}) is None:
+    res = spoolman_api.update_filament(int(fid), {"extra": extra})
+    if res is None:
         err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the change"
         if _exclusion_now(fid) != marked:
             state.add_log_entry(f"❌ Couldn't exclude {name} from Low and Out: "
@@ -505,14 +506,19 @@ def exclude_filament(fid, reason, note='', today=None):
         state.logger.warning(f"Exclude: filament {fid}'s write reported {err!r} but landed")
     why = f"{label}: {html.escape(note, quote=False)}" if note else label
     state.add_log_entry(f"🔕 Excluded {name} from Low and Out ({why})", "INFO", _log_colour(fil))
-    return {"filament_id": int(fid), "display": _display(fil), "excluded": marked, "was": was}
+    out = {"filament_id": int(fid), "display": _display(fil), "excluded": marked, "was": was}
+    # An old note Spoolman kept (spoolman_api logged it): said, not a failure.
+    if isinstance(res, dict) and res.get('fcc_uncleared_note'):
+        out["warning"] = res['fcc_uncleared_note']
+    return out
 
 
 def include_again(fid):
     """Undoes the exclusion: filament `fid` is listed on Low and Out again when
-    it is low or out, and its reason, note and day are cleared (written blank,
-    one write: Spoolman 0.27 keeps a key a write leaves out). Nothing is
-    written when it wasn't excluded. Returns {filament_id, display, excluded:
+    it is low or out, and its reason, note and day are cleared (one write
+    through the delete sentinel: a JSON null each on Spoolman 0.26+). Nothing is
+    written when it wasn't excluded. A reason Spoolman kept is a failure (the
+    filament would stay excluded). Returns {filament_id, display, excluded:
     None, was, changed}; raises ExclusionError."""
     fil = _filament_for_change(fid)
     was = exclusion_of(fil)
@@ -521,14 +527,19 @@ def include_again(fid):
         return {"filament_id": int(fid), "display": _display(fil), "excluded": None,
                 "was": None, "changed": False}
     name = html.escape(" ".join(filament_names(fil)), quote=False)
-    extra = {k: json.dumps("") for k in EXCLUDE_KEYS}
-    if spoolman_api.update_filament(int(fid), {"extra": extra}) is None:
+    extra = {k: spoolman_api.DELETE_EXTRA_SENTINEL for k in EXCLUDE_KEYS}
+    res = spoolman_api.update_filament(int(fid), {"extra": extra})
+    if res is None:
         err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the change"
         if _exclusion_now(fid) is not None:
             state.add_log_entry(f"❌ Couldn't include {name} again: {html.escape(str(err), quote=False)}",
                                 "ERROR", "ff4444")
             raise ExclusionError(502, "write_failed", f"Spoolman didn't save it: {err}")
         state.logger.warning(f"Include again: filament {fid}'s write reported {err!r} but landed")
+    elif EXCLUDE_KEY in (res.get('fcc_uncleared_extras') or []):
+        # spoolman_api logged the WARNING; the filament is still excluded.
+        raise ExclusionError(502, "not_cleared",
+                             res.get('fcc_uncleared_note') or "Spoolman kept the exclusion: try again.")
     it_was = f" (it was excluded: {html.escape(was['reason'], quote=False)})" if was else ''
     state.add_log_entry(f"↩️ {name} is included in Low and Out again{it_was}", "INFO", _log_colour(fil))
     return {"filament_id": int(fid), "display": _display(fil), "excluded": None,

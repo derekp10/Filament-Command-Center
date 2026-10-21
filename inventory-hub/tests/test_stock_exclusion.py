@@ -6,13 +6,14 @@ Marking a filament stores three text extras: `fcc_stock_excluded` (the reason, a
 label), `fcc_stock_excluded_note` and `fcc_stock_excluded_at` (the day it was first marked).
 Including it again clears all three. Both read the filament strictly first and
 write once through the REAL spoolman_api.update_filament (read-merge: every other
-extra is kept), here against a fake Spoolman HTTP layer that behaves like the
-real one where it matters, in both of its ways of taking a PATCH's `extra`:
-Spoolman 0.23 replaces the whole sub-document (a key left out is gone) and 0.27
-(dev's, checked 2026-10-20) merges it (a key left out is KEPT, so a key is
-cleared only by writing it blank: the delete sentinel clears nothing there). An
-unregistered extra or a text extra that isn't a JSON string is refused (400), and
-a filament that doesn't exist is a 404.
+extra is kept), here against tests/spoolman_extra_fake.SpoolmanHTTPFake, which
+stores a PATCH's `extra` as each Spoolman version does and checks every value by
+its field type: 0.27.0 (dev and prod) merges key by key and drops a key sent as
+JSON null, so a clear (FCC's delete sentinel) removes the keys; 0.23.1 replaces a
+filament's `extra` and refuses a null, so the same clear writes text blanks. An
+unregistered extra is refused (400), and a filament that doesn't exist is a 404.
+A reason Spoolman keeps after a clear is a failure (still excluded); an old note
+it keeps is answered as a `warning`.
 
 What the list does with the mark is pinned by test_stock_report.py; the page by
 test_low_stock_panel.py. Hermetic: runs under --offline.
@@ -22,10 +23,8 @@ from __future__ import annotations
 import copy
 import json
 import os
-import re
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 import requests
@@ -37,89 +36,78 @@ import config_loader  # noqa: E402
 import spoolman_api  # noqa: E402
 import state  # noqa: E402
 import stock_report  # noqa: E402
+from spoolman_extra_fake import SpoolmanHTTPFake, _Resp, unwire  # noqa: E402
 
 HUB = Path(__file__).resolve().parent.parent
 KEYS = ("fcc_stock_excluded", "fcc_stock_excluded_note", "fcc_stock_excluded_at")
 # What this fake Spoolman knows as filament extras: the three new ones are
 # registered (startup does it: REQUIRED_FILAMENT_EXTRAS), plus a few siblings.
-REGISTERED = {"original_color", "product_url", "filament_attributes", "nozzle_temp_max"} | set(KEYS)
-TEXT = {"original_color", "product_url", "nozzle_temp_max"} | set(KEYS)
+FIELDS = [{"key": k, "name": k, "field_type": "text"}
+          for k in ("original_color", "product_url", "nozzle_temp_max") + KEYS] + [
+    {"key": "filament_attributes", "name": "Filament Attributes", "field_type": "choice",
+     "multi_choice": True, "choices": ["Silk", "Matte"]}]
 
 
-class FakeSpoolman:
-    def __init__(self, mode="merge"):
-        self.mode = mode           # "merge" (Spoolman 0.27) or "replace" (0.23)
-        self.filaments = {}
+class FakeSpoolman(SpoolmanHTTPFake):
+    """The shared faithful fake, plus this file's levers: `fail_get` (an exception
+    every GET raises), `patch_answer` ((status, body) refusing every PATCH),
+    `patch_lands_then_times_out`, and `ignore_clears` (a Spoolman that keeps a key
+    sent as null or blank: the stored value is put back in the PATCH it applies)."""
+
+    def __init__(self, version):
+        super().__init__(version=version, fields={"filament": copy.deepcopy(FIELDS)})
         self.calls = []            # (method, path)
-        self.fail_get = None       # an exception to raise on a GET
-        self.patch_answer = None   # (status, body) to refuse a PATCH with
+        self.fail_get = None
+        self.patch_answer = None
         self.patch_lands_then_times_out = False
-        self.registered = set(REGISTERED)
+        self.ignore_clears = False
+        self.filaments = self.records["filament"]
 
-    def add(self, fid, name="Galaxy Black", vendor="Prusament", extra=None):
+    def add(self, fid, name="Galaxy Black", vendor="Prusament", extra=None):  # noqa: D401
         ex = {"original_color": json.dumps(name), "product_url": json.dumps("https://example.com/p"),
               "filament_attributes": json.dumps(["Silk"]), "nozzle_temp_max": json.dumps("230")}
         ex.update(extra or {})
-        self.filaments[fid] = {"id": fid, "name": name, "material": "PLA", "color_hex": "222222",
-                               "vendor": {"id": 1, "name": vendor}, "weight": 1000, "extra": ex}
+        return super().add("filament", fid, extra=ex, name=name, material="PLA", color_hex="222222",
+                           vendor={"id": 1, "name": vendor}, weight=1000)
 
-    def _resp(self, status, body):
-        r = MagicMock()
-        r.status_code, r.ok = status, 200 <= status < 300
-        r.json.return_value = copy.deepcopy(body)
-        r.text = json.dumps(body)
-        if not r.ok:
-            r.raise_for_status.side_effect = requests.exceptions.HTTPError(f"{status} error")
-        return r
+    def unregister(self, key):
+        self.fields["filament"] = [f for f in self.fields["filament"] if f["key"] != key]
 
     def get(self, url, timeout=None, **kw):
-        path = url.split("spoolman.test:7000", 1)[-1]
-        self.calls.append(("GET", path))
+        self.calls.append(("GET", str(url).split("spoolman.test:7000", 1)[-1]))
         if self.fail_get:
             raise self.fail_get
-        m = re.fullmatch(r"/api/v1/filament/(\d+)", path)
-        if not m:
-            raise AssertionError(f"unexpected GET {path}")
-        fil = self.filaments.get(int(m.group(1)))
-        return self._resp(200, fil) if fil else self._resp(404, {"message": "Item not found"})
+        return super().get(url, timeout=timeout, **kw)
 
     def patch(self, url, json=None, timeout=None, **kw):     # noqa: A002  (requests' own name)
-        path = url.split("spoolman.test:7000", 1)[-1]
-        self.calls.append(("PATCH", path))
+        self.calls.append(("PATCH", str(url).split("spoolman.test:7000", 1)[-1]))
         if self.patch_answer:
-            return self._resp(*self.patch_answer)
-        fid = int(re.fullmatch(r"/api/v1/filament/(\d+)", path).group(1))
-        extra = (json or {}).get("extra")
-        for k, v in (extra or {}).items():
-            if k not in self.registered:
-                return self._resp(400, {"message": f"Unknown extra field {k}"})
-            if k in TEXT and not isinstance(_loads(v), str):
-                return self._resp(400, {"message": f"Value is not a string: {k}"})
-        if self.mode == "replace":
-            self.filaments[fid]["extra"] = dict(extra)       # 0.23: the sub-document is replaced
-        else:
-            self.filaments[fid]["extra"].update(extra)       # 0.27: key by key; a key left out stays
+            return _Resp(*self.patch_answer)
+        body = copy.deepcopy(json)
+        if self.ignore_clears and isinstance((body or {}).get("extra"), dict):
+            # Whatever FCC sent to clear a key, the stored value goes back in.
+            stored = self.filaments.get(int(str(url).rstrip("/").rsplit("/", 1)[-1]), {}).get("extra", {})
+            for k, v in list(body["extra"].items()):
+                if (v is None or unwire(v) in ("", [])) and k in stored:
+                    body["extra"][k] = stored[k]
+        r = super().patch(url, json=body, timeout=timeout, **kw)
         if self.patch_lands_then_times_out:
             raise requests.exceptions.ReadTimeout("read timed out")
-        return self._resp(200, self.filaments[fid])
+        return r
 
     def decoded(self, fid):
-        return {k: _loads(v) for k, v in self.filaments[fid]["extra"].items()}
+        return {k: unwire(v) for k, v in self.filaments[fid]["extra"].items()}
 
 
-def _loads(v):
-    try:
-        return json.loads(v)
-    except (TypeError, ValueError):
-        return None
-
-
-@pytest.fixture(params=["merge", "replace"])
+@pytest.fixture(params=["0.27.0", "0.23.1"])
 def env(monkeypatch, request):
-    fake = FakeSpoolman(mode=request.param)
+    fake = FakeSpoolman(request.param)
     monkeypatch.setattr(spoolman_api.requests, "get", fake.get)
     monkeypatch.setattr(spoolman_api.requests, "patch", fake.patch)
     monkeypatch.setattr(spoolman_api, "_RAW_EXTRAS_RETRY_DELAY_S", 0)
+    # The clear's version and field-list reads are cached per Spoolman url.
+    monkeypatch.setattr(spoolman_api, "_FIELD_SCHEMA_CACHE", {})
+    monkeypatch.setattr(spoolman_api, "_SPOOLMAN_VERSION_CACHE", {})
     monkeypatch.setattr(config_loader, "load_config",
                         lambda: {"server_ip": "spoolman.test", "spoolman_port": 7000})
     monkeypatch.setattr(stock_report, "_server_day", lambda: "2026-10-20")
@@ -269,7 +257,7 @@ def test_spoolman_not_answering_is_a_502_with_nothing_written(env):
 def test_a_refused_write_says_why_and_logs_it(env):
     """Spoolman's own words reach the page and the Activity Log (an ERROR line)."""
     env["fake"].add(7)
-    env["fake"].registered -= {"fcc_stock_excluded"}         # a Spoolman that missed the startup registration
+    env["fake"].unregister("fcc_stock_excluded")             # a Spoolman that missed the startup registration
     r = _post(env, 7, {"reason": "discontinued"})
     assert r.status_code == 502
     body = r.get_json()
@@ -307,6 +295,8 @@ def test_include_again_clears_all_three_and_keeps_every_other(env):
     ex = env["fake"].decoded(7)
     assert {k: ex[k] for k in SIBLINGS} == SIBLINGS
     assert _mark_keys(env, 7) == {k: "" for k in KEYS}    # cleared in either Spoolman
+    if env["fake"].nulls_ok():
+        assert not set(KEYS) & set(ex), ex                 # 0.27: gone, not blank
     fil = spoolman_api.parse_inbound_data(copy.deepcopy(env["fake"].filaments[7]))
     assert stock_report.exclusion_of(fil) is None
     # A second Include again finds nothing to clear.
@@ -330,6 +320,32 @@ def test_a_refused_include_again_says_why(env):
     assert r.status_code == 502 and "database is locked" in r.get_json()["msg"]
     assert env["logs"][0][1] == "ERROR" and "Couldn't include" in env["logs"][0][0]
     assert env["fake"].decoded(7)["fcc_stock_excluded"] == "Discontinued"
+
+
+def test_a_reason_spoolman_keeps_is_a_failure(env):
+    """Include again that Spoolman doesn't apply: the filament would stay
+    excluded, so the answer is a failure (spoolman_api logs the WARNING)."""
+    env["fake"].add(7, extra={"fcc_stock_excluded": json.dumps("Discontinued"),
+                              "fcc_stock_excluded_at": json.dumps("2026-01-02")})
+    env["fake"].ignore_clears = True
+    r = _delete(env, 7)
+    assert r.status_code == 502, r.get_json()
+    assert r.get_json()["error"] == "not_cleared"
+    assert "not cleared" in r.get_json()["msg"]
+    assert [c for _, c, _ in env["logs"]] == ["WARNING"]
+    assert env["fake"].decoded(7)["fcc_stock_excluded"] == "Discontinued"
+
+
+def test_an_old_note_spoolman_keeps_is_said(env):
+    """Excluding again with the note emptied: the exclusion lands; an old note
+    Spoolman keeps is answered as a `warning` (the page toasts it)."""
+    env["fake"].add(7, extra={"fcc_stock_excluded": json.dumps("Discontinued"),
+                              "fcc_stock_excluded_note": json.dumps("old note")})
+    env["fake"].ignore_clears = True
+    r = _post(env, 7, {"reason": "one_off", "note": ""})
+    assert r.status_code == 200, r.get_json()
+    assert "not cleared" in r.get_json()["warning"]
+    assert env["fake"].decoded(7)["fcc_stock_excluded"] == "One-off"
 
 
 def test_the_log_lines_are_escaped(env):

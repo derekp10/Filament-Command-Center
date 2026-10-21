@@ -171,13 +171,24 @@
   a key left out was gone; dev's Spoolman 0.27.0 merges key by key and KEEPS it (checked on dev filament 91,
   2026-10-20: left out, kept; sent as `""`, cleared; put back after). So on 0.27 every "blank it to clear it" edit
   quietly keeps the old value. **Prod runs 0.27.0 too** (same build as dev, read 2026-10-21 with Derek's OK), so this
-  is live there. **To do:** have the merge write the field type's clear value instead of popping the key (Spoolman's
-  0.26.0 notes: "Extra field values can be cleared again"; check per type on dev), test it against a fake that merges
-  like 0.27 (the Low stock exclusion tests have one: `FakeSpoolman(mode="merge")` in `tests/test_stock_exclusion.py`),
-  and re-check the 23.4 tests, which use a fake that replaces. Users today: inv_wizard.js (purchase_url, product_url,
-  the generic extras, nozzle and bed temp max), inv_details.js (Edit Filament), the vendor website. The Low stock
-  exclusion already clears with blanks. Being built 2026-10-21 on `fix/extras-clear-spoolman-027-2026-10-21`.
-  **Standalone.**
+  is live there. **✅ Fixed 2026-10-21** (`fix/extras-clear-spoolman-027-2026-10-21` `95457a7`, in
+  `bundle/2026-10-21`; on `dev` once its review and full test run pass): a clear is the delete sentinel, which
+  `update_spool` / `update_filament` / `update_vendor` now write as a JSON null (Spoolman 0.26+: "Extra field values
+  can be cleared again"), checked per field type on dev with throwaway records (deleted after); anything Spoolman
+  keeps is a 7 s warning. Also fixed on the way: the wizard's spool links re-sending an old link over an emptied one,
+  the chip field whose last chip was removed, the slicer-profile "(none)" and Swatch "Unknown / clear", reset_dev's
+  drifted extras, and `_ghost_trail_from`'s None slot. Spools had merged key by key since Spoolman 0.22, so a cleared
+  SPOOL extra never cleared, even before 0.27. **Standalone.**
+* **Emptying a plain field in the wizard doesn't clear it (found 2026-10-21 by the extras-clear fix).** The wizard
+  drops a native field it reads as empty from its payload (`settings_extruder_temp`, `settings_bed_temp`, price, the
+  spool's and the filament's empty weight), so erasing one and saving keeps the old value. Not an extra, so the
+  sentinel doesn't cover it: an edit-mode clear would send `null` for these (Spoolman takes null for its own optional
+  fields; check each on dev first). **Standalone.**
+* **Partial PATCHes once Spoolman 0.26 is the minimum (Derek's call; noted 2026-10-21).** Dev and prod run 0.27.0,
+  which merges a PATCH's `extra` key by key, so `update_spool` / `update_filament` / `update_vendor` could send only the
+  keys they change. Today they still read the record's whole extras and re-send them (and refuse a write when that
+  read fails, Group 36), the guard a Spoolman that replaces `extra` needs. Dropping it saves a read per write and
+  removes a refusal, but only while no older Spoolman is ever pointed at FCC. **Standalone.**
 
 * "[03:00:52] ⚠️ 🦝 Core One INDX: 27.12g of '/usb/MAIN-B~1.BGC' wasn't deducted (no bound spool, a failed write, or a near-empty spool) — weigh that spool to true up.
 [03:00:52] ✅ Completed-print deduct on 🦝 Core One INDX: 34.2g across 1 spool(s) ('/usb/MAIN-B~1.BGC').

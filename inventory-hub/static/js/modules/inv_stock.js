@@ -631,6 +631,7 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         const nr = res.data.excluded || {};
         toast(`🔕 ${res.data.display || d.name} is excluded from Low and Out (${nr.reason || picked.value}).`,
             'success', 4000);
+        if (res.data.warning) toast(res.data.warning, 'warning', 7000);   // an old note Spoolman kept
         _reloadAfterChange(handle, d.fid);
     }
 
