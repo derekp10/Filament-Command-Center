@@ -173,10 +173,16 @@
   before it goes to `dev`. **His idea, not on a roadmap:** the QR codes could sit with their buttons in a redesign of the
   question dialogs; and accessibility options in general (the Text size setting is the first).
 * **📐 Plan docs: named sizes and colors as the base for themes; alternative views (phone, wall tablet, printer pictures,
-  the Location Manager) (Derek, 2026-10-21; being written).** "Themes" in his sense are whole alternative designs a user
+  the Location Manager) (Derek, 2026-10-21; written).** "Themes" in his sense are whole alternative designs a user
   can choose ("what we have now, or future ones, possibly ones that focus on using images of the printers themselves"),
   with the classic look kept, as stepping stones toward the MOBILE item and the Project Color Loadout's screens. To go
-  through with him one decision at a time, not to read cold.
+  through with him one decision at a time, not to read cold:
+  [step 2, named sizes and colors](docs/agent_docs/tasks/design-step2-named-sizes-colors-and-themes.md) (today 1,222
+  hand-typed colors and 364 text sizes in 33 files; about 8 sessions to put them on names with nothing changing on
+  screen, the first one session; 6 decisions) and
+  [step 3, other views](docs/agent_docs/tasks/design-step3-alternative-views.md) (a wall-tablet station view first, as
+  one mockup before any build; then the shared core, printer pictures, a phone view, the Location Manager; 10
+  decisions). Its phone and tablet screenshots are in `review-samples/2026-10-21-views/` on Derek's machine.
 
 ## 🗒️ Notes and standalone items
 
