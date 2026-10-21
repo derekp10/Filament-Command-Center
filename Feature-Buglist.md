@@ -142,16 +142,8 @@
   Status drops its "🔗 no bound slot" placeholder on those heads. A proper "Spool Holder" type is Group 37's
   question. **Done when** the holders (and the box, if used) have rows, feeds and printed slot labels; that also
   lets his "INDX heads without labels" item close, once his F2 check passes.
-* **⏸️ PENDING DEREK — the ⚠️ Low stock list: the bigger text, then exclude what you can't get (nothing here blocks a release).**
-  1. **Is the bigger text right?** (🔍 Search → ⚠️ Low stock on dev; on `dev` `e7699c4`, not yet on `main`; we'll look
-     at it with the app-wide text-size proposal, one item at a time, pictures in `review-samples/2026-10-21-text-size/`.)
-     On 2026-10-21 the window's small text went up
-     (the line under the title, the caption above the list and the key legend from about 12 px to 13.6–14.4 px; the
-     rows' grams a little), same layout. It is its own commit (`ce35d21`), so the old compact look is one revert away.
-     Dev's threshold is still 925 g for the long list (27 rows; back to 250 when you're done looking), and two dev
-     filaments carry sample exclusions (Anycubic PLA Interstellar Violet, Creator PETG Black CF): Include again clears
-     them.
-  2. **After it ships, exclude the ones you can't get or won't restock.** On prod (read 2026-10-20), Out had Creality
+* **⏸️ PENDING DEREK — the ⚠️ Low stock list: exclude what you can't get (nothing here blocks a release).**
+  1. **After it ships, exclude the ones you can't get or won't restock.** On prod (read 2026-10-20), Out had Creality
      PETG Black and Kingroon PETG White, and now also lists the 11 filaments with no spool record (all from the
      2026-02-11 import): Anycubic PLA Red (Matte), Anycubic PLA Violet, Creator PETG Black (Carbon Fiber), Elegoo PC
      Black, IEMAI TPU Green, Jayo PA6 Black (Glass Fiber), Overture PC Black, Polymaker PC Clear (sample printed),
@@ -162,8 +154,29 @@
   named **Excluded**, not "Not buying again" ("just because it's discontinued, or I can't find it from the
   manufacturer, doesn't mean I didn't like it"; built, `38dbdd2`, with a "Can't find it" reason); the tabs, filter and
   one-line rows are liked as they are ("I love the design"); "shippable once we have addressed the other two things"
-  (the name and the text size); and an archived spool scanned onto a toolhead is un-archived and loaded when its record
-  still has filament, refused at 0 g; built.)_
+  (the name and the text size); the bigger text is kept ("looks good, so I'd say its a keeper for now", 2026-10-21
+  walkthrough); and an archived spool scanned onto a toolhead is un-archived and loaded when its record still has
+  filament, refused at 0 g; built.)_ **Dev still holds the long-list scenario:** `low_stock_g` 925 (was 250) and two
+  sample exclusions (filaments 91 and 96): Claude puts them back.
+* **🔠 Readability: the text-size rule app-wide, and a Text size setting (Derek's 2026-10-21 walkthrough; being built).**
+  He went through the audit's samples one at a time (`review-samples/2026-10-21-text-size/`) and approved each: the
+  dashboard ("this is better as well"), Printer Status, the slot picker as sampled (the long maker line wraps; the
+  "⭐ Recommended" tag trimmed so "SLOT 1" stays on one line), the QR questions, and badges at 12.8 px everywhere ("will
+  need to be mindful of how this effects things globally ... any other place might also be effected": every badge
+  screen is checked before and after). The rule: text you read never under 13.6 px, labels in a pill or box never under
+  12.8 px, held by named sizes and a test. **Also:** the Load QR's border and caption match its amber button (Store and
+  Cancel already match; "it's clear at a glance what QR code matches the button"); and a per-browser **Text size**
+  setting: "Small" = today's compact look, "Standard" = the rule (default), "Large" and "Extra Large" scale everything
+  together ("being able to maintain consistent look and proportions but being able to make the text big with a button
+  is better than having to zoom in and out all the time"), with the title bar fixed so its buttons don't wrap at the
+  bigger sizes, and the slot picker checked there. He sees pictures of each size, and of anything that changes shape,
+  before it goes to `dev`. **His idea, not on a roadmap:** the QR codes could sit with their buttons in a redesign of the
+  question dialogs; and accessibility options in general (the Text size setting is the first).
+* **📐 Plan docs: named sizes and colors as the base for themes; alternative views (phone, wall tablet, printer pictures,
+  the Location Manager) (Derek, 2026-10-21; being written).** "Themes" in his sense are whole alternative designs a user
+  can choose ("what we have now, or future ones, possibly ones that focus on using images of the printers themselves"),
+  with the classic look kept, as stepping stones toward the MOBILE item and the Project Color Loadout's screens. To go
+  through with him one decision at a time, not to read cold.
 
 ## 🗒️ Notes and standalone items
 
