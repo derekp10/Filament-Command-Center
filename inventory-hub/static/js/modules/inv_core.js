@@ -325,14 +325,20 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         // Inside the dialog PANEL, so the QR row stacks below the buttons.
         // A three-way with no Load (it can only store) scans its store as the
         // CONFIRM QR, so there are never two cancel codes.
+        // Each QR takes the colour of the button it stands for (Derek,
+        // 2026-10-21): Continue Anyway / Load it instead are amber
+        // (btn-warning), Just store it cyan (btn-info), Cancel grey.
         const theme = isPrinting ? 'warning' : 'info';
         qrSession = window.attachConfirmQRs(!threeWay
-            ? { host: handle.panel, onConfirm: yes, onCancel: no, theme: 'warning' }
+            ? { host: handle.panel, onConfirm: yes, onCancel: no, theme: 'warning',
+                confirmTone: 'warning', cancelTone: 'secondary' }
             : hasLoad
                 ? { host: handle.panel, onConfirm: yes, onCancel: no, onStore: hasStore ? store : undefined,
-                    confirmLabel: 'Scan to Load', storeLabel: 'Scan to Store', cancelLabel: 'Scan to Cancel', theme }
+                    confirmLabel: 'Scan to Load', storeLabel: 'Scan to Store', cancelLabel: 'Scan to Cancel', theme,
+                    confirmTone: 'warning', storeTone: 'info', cancelTone: 'secondary' }
                 : { host: handle.panel, onConfirm: store, onCancel: no,
-                    confirmLabel: 'Scan to Store', cancelLabel: 'Scan to Cancel', theme });
+                    confirmLabel: 'Scan to Store', cancelLabel: 'Scan to Cancel', theme,
+                    confirmTone: 'info', cancelTone: 'secondary' });
     }
     if (threeWay) {
         // The question on screen: processScan holds off every other scan until
@@ -1132,49 +1138,63 @@ let _fccConfirmSeq = 0;
  *   onStore: () => void — optional (Group 40.3): a third QR between the two,
  *     encoding CMD:STORE:<sid>, for the "Just store it" answer.
  *   storeLabel: string, default "Scan to Store"
- *   theme: 'warning' | 'info' | 'danger' — drives the QR card border tint.
+ *   theme: 'warning' | 'info' | 'danger' — the CONFIRM QR's tone when
+ *     `confirmTone` isn't given.
+ *   confirmTone / storeTone / cancelTone: the colour of each QR card (border)
+ *     and its caption, named after the Bootstrap button the QR stands for, so
+ *     it is clear at a glance which code matches which button (Derek,
+ *     2026-10-21): 'warning' (amber, btn-warning), 'info' (cyan, btn-info),
+ *     'secondary' (grey, btn-secondary), 'light' (btn-outline-light), 'dark'
+ *     (btn-dark), 'danger'. Defaults: confirm = theme, store 'info', cancel
+ *     'secondary'. Pass the tone of the button each QR mirrors.
  *
  * @returns {{sessionId: string, cleanup: function}} cleanup() removes the QR
  *   row from the DOM and unregisters the session. Call from your dialog's
  *   close handler so a late scan can't re-fire after the user dismissed.
  */
+// The QR tones (attachConfirmQRs). `border` is the button's own colour where
+// that reads on the dark dialogs (amber is Bootstrap's #ffc107, the Load it
+// instead / Continue Anyway button); `caption` is the readable text colour
+// for the "📷 Scan to …" line under the card.
+const QR_TONES = {
+    warning:   { border: '#ffc107', caption: '#ffc107', bg: '#1a1608' },
+    info:      { border: '#4fa2c9', caption: '#8fd3f0', bg: '#0d1a20' },
+    secondary: { border: '#6c757d', caption: '#adb5bd', bg: '#0f1014' },
+    light:     { border: '#dee2e6', caption: '#dee2e6', bg: '#0f1014' },
+    dark:      { border: '#495057', caption: '#f8f9fa', bg: '#0f1014' },
+    danger:    { border: '#dc3545', caption: '#ff8a95', bg: '#1c0c0e' },
+};
+window.FCC_QR_TONES = QR_TONES;
 window.attachConfirmQRs = (opts) => {
     if (!opts || !opts.host) return { sessionId: '', cleanup: () => {} };
     const host = opts.host;
     const sid = `fcc-cqr-${++_fccConfirmSeq}-${Date.now().toString(36)}`;
-    const theme = opts.theme || 'warning';
-    const palette = {
-        warning: { border: '#ff8800', tint: 'rgba(255,136,0,0.12)', confirmBg: '#1a1208', cancelBg: '#0f1014' },
-        info:    { border: '#4fa2c9', tint: 'rgba(79,162,201,0.12)', confirmBg: '#0d1a20', cancelBg: '#0f1014' },
-        danger:  { border: '#dc3545', tint: 'rgba(220,53,69,0.12)', confirmBg: '#1c0c0e', cancelBg: '#0f1014' },
-    }[theme] || { border: '#ff8800', tint: 'rgba(255,136,0,0.12)', confirmBg: '#1a1208', cancelBg: '#0f1014' };
+    const tone = (name, dflt) => (QR_TONES[name] ? name : dflt);
+    const tones = {
+        confirm: tone(opts.confirmTone, tone(opts.theme, 'warning')),
+        store: tone(opts.storeTone, 'info'),
+        cancel: tone(opts.cancelTone, 'secondary'),
+    };
 
     const hasStore = typeof opts.onStore === 'function';
     const row = document.createElement('div');
     row.id = `${sid}-row`;
     row.className = 'fcc-confirm-qr-row';
     row.style.cssText = 'display:flex; gap:14px; justify-content:center; margin-top:14px; padding-top:12px; border-top:1px dashed #444;';
-    const storeCell = hasStore ? `
-        <div style="display:flex; flex-direction:column; align-items:center; gap:4px;">
-            <div style="background:#0d1a20; border:2px solid #4fa2c9; border-radius:6px; padding:6px;">
-                <div id="${sid}-store-qr" style="background:#fff; padding:4px; border-radius:3px; line-height:0;"></div>
+    // One QR card + its caption, in the tone of the button it stands for.
+    const cell = (role, qrId, label) => {
+        const t = QR_TONES[tones[role]];
+        return `
+        <div class="fcc-confirm-qr-cell" data-qr="${role}" data-qr-tone="${tones[role]}" style="display:flex; flex-direction:column; align-items:center; gap:4px;">
+            <div class="fcc-qr-card" style="background:${t.bg}; border:2px solid ${t.border}; border-radius:6px; padding:6px;">
+                <div id="${qrId}" style="background:#fff; padding:4px; border-radius:3px; line-height:0;"></div>
             </div>
-            <div style="font-size:0.72rem; color:#8fd3f0; font-weight:700; letter-spacing:0.5px; text-transform:uppercase;">📷 ${opts.storeLabel || 'Scan to Store'}</div>
-        </div>` : '';
-    row.innerHTML = `
-        <div style="display:flex; flex-direction:column; align-items:center; gap:4px;">
-            <div style="background:${palette.confirmBg}; border:2px solid ${palette.border}; border-radius:6px; padding:6px;">
-                <div id="${sid}-yes-qr" style="background:#fff; padding:4px; border-radius:3px; line-height:0;"></div>
-            </div>
-            <div style="font-size:0.72rem; color:${palette.border}; font-weight:700; letter-spacing:0.5px; text-transform:uppercase;">📷 ${opts.confirmLabel || 'Scan to Confirm'}</div>
-        </div>${storeCell}
-        <div style="display:flex; flex-direction:column; align-items:center; gap:4px;">
-            <div style="background:${palette.cancelBg}; border:2px solid #6c757d; border-radius:6px; padding:6px;">
-                <div id="${sid}-no-qr" style="background:#fff; padding:4px; border-radius:3px; line-height:0;"></div>
-            </div>
-            <div style="font-size:0.72rem; color:#adb5bd; font-weight:700; letter-spacing:0.5px; text-transform:uppercase;">📷 ${opts.cancelLabel || 'Scan to Cancel'}</div>
-        </div>
-    `;
+            <div class="fcc-qr-caption" style="font-size:var(--fcc-fs-label); color:${t.caption}; font-weight:700; letter-spacing:0.5px; text-transform:uppercase;">📷 ${label}</div>
+        </div>`;
+    };
+    row.innerHTML = cell('confirm', `${sid}-yes-qr`, opts.confirmLabel || 'Scan to Confirm')
+        + (hasStore ? cell('store', `${sid}-store-qr`, opts.storeLabel || 'Scan to Store') : '')
+        + cell('cancel', `${sid}-no-qr`, opts.cancelLabel || 'Scan to Cancel');
     host.appendChild(row);
 
     // Generate the QR codes themselves (uses the same lib generateSafeQR uses).

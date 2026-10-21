@@ -640,8 +640,11 @@
         s.view = 'choice';
         s.choice = { tile: t, via, actions };
         const occ = (t.data && t.data.spool) || null;
+        // One tone per action, for its button AND its QR (attachConfirmQRs'
+        // tones are named after the Bootstrap button variants).
+        const toneOf = (a, i) => (a.key === 'back' ? 'secondary' : (i === 0 ? 'warning' : 'info'));
         const btns = actions.map((a, i) => `
-            <button type="button" class="btn btn-sm ${a.key === 'back' ? 'btn-secondary' : (i === 0 ? 'btn-warning' : 'btn-info')} fcc-sp-choice-btn"
+            <button type="button" class="btn btn-sm btn-${toneOf(a, i)} fcc-sp-choice-btn"
                     data-sp-choice="${_esc(a.key)}">${_esc(a.label)}<small>${_esc(a.sub || '')}</small></button>`).join('');
         _setContent(s, `
             <div class="card bg-dark text-light shadow-lg fcc-sp-panel" data-sp-state="choice" data-sp-slot="${_esc(t.slot)}" tabindex="-1">
@@ -672,6 +675,9 @@
                 onCancel: () => _choose(s, 'back'),
                 confirmLabel: first.qr, storeLabel: over ? over.qr : undefined, cancelLabel: 'Scan to go Back',
                 theme: 'info',
+                confirmTone: toneOf(first, 0),
+                storeTone: over ? toneOf(over, actions.indexOf(over)) : undefined,
+                cancelTone: 'secondary',
             });
         }
         const btn = s.handle.element.querySelector('[data-sp-choice]');

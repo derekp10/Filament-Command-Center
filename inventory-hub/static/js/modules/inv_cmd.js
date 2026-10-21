@@ -2380,6 +2380,7 @@ const _askRecordSource = (pick, sid, host) => {
                 confirmLabel: pre ? `Scan: ${pre.box} slot ${pre.slot}` : 'Scan: No box',
                 storeLabel: 'Scan: No box',
                 cancelLabel: 'Scan to go Back', theme: 'info',
+                confirmTone: pre ? 'info' : 'secondary', storeTone: 'secondary', cancelTone: 'dark',
             });
         }
         // Scans are held off while it is open (processScan); a feed slot's label

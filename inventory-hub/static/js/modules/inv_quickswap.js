@@ -589,16 +589,17 @@
                 <!-- Buttons mirror the QR row's flex layout exactly (gap:14px;
                      justify-content:center; from attachConfirmQRs in
                      inv_core.js). The CONFIRM QR's "📷 SCAN TO CONFIRM"
-                     label is ~10px wider than CANCEL's, making the QR
-                     columns asymmetric. Measured widths: CONFIRM ≈ 133px,
-                     CANCEL ≈ 123px. We mirror those exactly so each
-                     button center lands under its QR center. -->
+                     label is wider than CANCEL's, making the QR columns
+                     asymmetric, so when the QR row is shown each button
+                     column takes its QR column's measured width (below):
+                     each button centre lands under its QR centre at any
+                     text size. 133 / 123 px are the widths with no QRs. -->
                 <div style="display:flex; gap:14px; justify-content:center; margin-top:14px;">
-                    <div style="width:133px; display:flex; justify-content:center;">
+                    <div class="fcc-qs-btncol" style="width:133px; display:flex; justify-content:center;">
                         <button type="button" id="fcc-quickswap-yes"
                             class="btn btn-info fw-bold w-100">Yes, swap</button>
                     </div>
-                    <div style="width:123px; display:flex; justify-content:center;">
+                    <div class="fcc-qs-btncol" style="width:123px; display:flex; justify-content:center;">
                         <button type="button" id="fcc-quickswap-no"
                             class="btn btn-outline-light fw-bold w-100">No, cancel</button>
                     </div>
@@ -692,12 +693,26 @@
         // one that benefits from "scan to confirm I really meant to
         // disrupt my print."
         if (stateInfo && warningBanner && window.attachConfirmQRs) {
+            // Each QR takes its button's colour (Derek, 2026-10-21): Yes, swap
+            // is cyan (btn-info), No, cancel a light outline.
             qrSession = window.attachConfirmQRs({
                 host: body,
                 onConfirm: doConfirm,
                 onCancel: () => { close(); },
                 theme: 'warning',
+                confirmTone: 'info',
+                cancelTone: 'light',
             });
+            // The button under each QR takes that QR column's width, so it
+            // stays centred under it whatever the caption's size.
+            const cells = body.querySelectorAll('.fcc-confirm-qr-row > .fcc-confirm-qr-cell');
+            const cols = ov.querySelectorAll('.fcc-qs-btncol');
+            if (cells.length === 2 && cols.length === 2) {
+                cols.forEach((col, i) => {
+                    const w = Math.ceil(cells[i].getBoundingClientRect().width);
+                    if (w > 0) col.style.width = `${w}px`;
+                });
+            }
         }
 
         yes.onclick = doConfirm;
