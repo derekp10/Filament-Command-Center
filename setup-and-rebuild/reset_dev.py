@@ -60,6 +60,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -81,8 +82,11 @@ CONTAINER = os.environ.get("INVENTORY_HUB_CONTAINER", "inventory_hub")
 TIMEOUT = 15
 
 # Fields restored per entity when they drift from the seed. `extra` is handled
-# specially (whole-dict compare + full overwrite — Spoolman replaces the entire
-# extra dict on PATCH, which for a *reset* is exactly what we want).
+# specially (whole-dict compare, then the seed's whole dict is sent back). Up to
+# Spoolman 0.25 a filament's and a vendor's PATCH REPLACED the entire extra dict,
+# which for a *reset* is exactly what we want; a spool's has merged key by key
+# since 0.22, and every entity's since 0.26, so a key a sweep ADDED is also sent
+# as null, which drops it (_drifted_payload; 2026-10-21).
 RESTORE_FIELDS = {
     # The big contamination targets. location/archived/extra cover
     # quickswap/locmgr/returns/buffer drift + the volatile extras
@@ -105,6 +109,14 @@ RESTORE_ORDER = ["vendor", "filament", "spool"]
 PRUNE_ORDER = ["spool", "filament", "vendor"]
 
 _FLOAT_EPS = 1e-4
+
+# Whether this Spoolman takes a JSON null for an extra (0.26 or newer), which is
+# how a key the seed doesn't have is dropped from a record whose PATCH merges
+# `extra` key by key. Dev runs 0.27; _check_spoolman_reachable sets it from the
+# version Spoolman reports (an older one is a 422 for the whole PATCH on a null,
+# and replaces a filament's / vendor's extra anyway).
+NULL_CLEARS = True
+_NULL_CLEARS_FROM = (0, 26, 0)
 
 
 # --------------------------------------------------------------------------
@@ -130,7 +142,17 @@ def _values_equal(a, b) -> bool:
     return a == b
 
 
+def _null_clears_for(version) -> bool:
+    """True for a Spoolman version (e.g. "0.27.0") that takes a JSON null for an
+    extra; an unreadable version is taken as one that does (dev runs 0.27)."""
+    nums = [int(n) for n in re.findall(r"\d+", str(version or ""))][:3]
+    if len(nums) < 2:
+        return True
+    return tuple(nums + [0] * (3 - len(nums))) >= _NULL_CLEARS_FROM
+
+
 def _check_spoolman_reachable() -> None:
+    global NULL_CLEARS
     try:
         info = _get("/api/v1/info")
         _log(f"  Spoolman {info.get('version', '?')} @ {SPOOLMAN_URL} ({info.get('db_type', '?')})")
@@ -138,6 +160,10 @@ def _check_spoolman_reachable() -> None:
         _log(f"!! Cannot reach dev Spoolman at {SPOOLMAN_URL}: {e}")
         _log("   Set DEV_SPOOLMAN_URL or check the NAS is up. Aborting.")
         sys.exit(2)
+    NULL_CLEARS = _null_clears_for(info.get("version"))
+    if not NULL_CLEARS:
+        _log("  (a Spoolman older than 0.26: extras a sweep added are left out of the "
+             "restore, which drops them from a filament or vendor but not from a spool)")
 
 
 # --------------------------------------------------------------------------
@@ -267,14 +293,25 @@ def _delete(entity: str, eid) -> tuple[bool, str]:
 
 
 def _drifted_payload(entity: str, seed_rec: dict, live_rec: dict) -> dict:
-    """Return only the fields whose live value differs from the seed."""
+    """Return only the fields whose live value differs from the seed.
+
+    A drifted `extra` goes back as the seed's whole dict, plus null for every key
+    the live record has and the seed doesn't (NULL_CLEARS): Spoolman 0.26+ merges
+    a PATCH's extra key by key, so a key left out of it is KEPT, and a stray
+    container_slot / physical_source(_slot) / fcc_pre_box_location a sweep left
+    kept claiming a slot (and the next run found the same drift again)."""
     payload = {}
     for field in RESTORE_FIELDS[entity]:
         seed_val = seed_rec.get(field)
         live_val = live_rec.get(field)
         if field == "extra":
             if (seed_val or {}) != (live_val or {}):
-                payload["extra"] = seed_val or {}
+                restored = dict(seed_val or {})
+                if NULL_CLEARS:
+                    for key in (live_val or {}):
+                        if key not in restored:
+                            restored[key] = None
+                payload["extra"] = restored
             continue
         if not _values_equal(seed_val, live_val):
             payload[field] = seed_val

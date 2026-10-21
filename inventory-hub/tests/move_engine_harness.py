@@ -8,16 +8,20 @@ sees the same cached printer state production does. FakeSpoolman's location
 readers mirror spoolman_api._build_location_match (first-segment prefix and
 ghost matches), and WireSpoolman runs the REAL update_spool merge with only its
 HTTP calls faked ([[mocked engine hides chain bugs]]: never mock the engine).
+A PATCH's `extra` is stored as Spoolman stores it (spoolman_extra_fake: merged
+key by key, as dev and prod's 0.27 do; FCC_FAKE_SPOOLMAN_EXTRA=replace for the
+old way), and FakeSpoolman.update_spool keeps what update_spool's own merge keeps
+(2026-10-21: both used to REPLACE extra, which hid any clear by omission).
 Flat module, like tests/source_family.py.
 """
 from __future__ import annotations
 
 import copy
-import json
 from contextlib import ExitStack
 from unittest.mock import MagicMock, patch
 
 import logic
+import spoolman_extra_fake
 
 REAL_UPDATE_SPOOL = logic.spoolman_api.update_spool
 
@@ -67,7 +71,9 @@ class FakeSpoolman:
         if "location" in data:
             rec["location"] = data["location"]
         if "extra" in data:
-            rec["extra"] = copy.deepcopy(data["extra"])
+            # update_spool merges the caller's keys into the record's whole
+            # extras: a key left out, or sent as None, is kept.
+            rec["extra"] = spoolman_extra_fake.fcc_update_spool_extra(rec.get("extra"), data["extra"])
         if int(sid) in self.landed_but_failed:
             logic.spoolman_api.LAST_SPOOLMAN_ERROR = "Read timed out. (read timeout=15) (test)"
             return None
@@ -135,17 +141,18 @@ class FakeSpoolman:
         return items
 
 
-def _wire(value):
-    return ("true" if value else "false") if isinstance(value, bool) else json.dumps(value)
+_wire = spoolman_extra_fake.wire
+_unwire = spoolman_extra_fake.unwire
 
 
-def _unwire(value):
-    if isinstance(value, str):
-        try:
-            return json.loads(value)
-        except ValueError:
-            return value
-    return value
+def _patched_extra(rec, body):
+    """`rec`'s extras after a PATCH carrying `body`, as Spoolman stores them, or
+    an error answer when Spoolman would refuse the PATCH (nothing stored)."""
+    try:
+        return spoolman_extra_fake.apply_parsed(rec.get("extra"), body["extra"]), None
+    except spoolman_extra_fake.ExtraRejected as e:
+        return None, MagicMock(ok=False, status_code=e.status, text=e.message,
+                               json=MagicMock(return_value={"message": e.message}))
 
 
 class WireSpoolman(FakeSpoolman):
@@ -172,10 +179,13 @@ class WireSpoolman(FakeSpoolman):
         body = copy.deepcopy(json)
         self.patch_bodies.append((sid, body))
         rec = self.spools.setdefault(sid, {"location": "", "extra": {}})
+        if "extra" in body:
+            extra, refused = _patched_extra(rec, body)
+            if refused is not None:
+                return refused
+            rec["extra"] = extra
         if "location" in body:
             rec["location"] = body["location"]
-        if "extra" in body:
-            rec["extra"] = {key: _unwire(val) for key, val in body["extra"].items()}
         return MagicMock(ok=True, status_code=200,
                          json=MagicMock(return_value={"id": sid, **copy.deepcopy(rec)}))
 
@@ -197,11 +207,14 @@ class WeighedWireSpoolman(WireSpoolman):
         body = copy.deepcopy(json)
         self.patch_bodies.append((sid, body))
         rec = self.spools.setdefault(sid, {"location": "", "extra": {}})
+        if "extra" in body:
+            extra, refused = _patched_extra(rec, body)
+            if refused is not None:
+                return refused
+            rec["extra"] = extra
         for key in ("location", "used_weight", "initial_weight", "archived"):
             if key in body:
                 rec[key] = body[key]
-        if "extra" in body:
-            rec["extra"] = {key: _unwire(val) for key, val in body["extra"].items()}
         return MagicMock(ok=True, status_code=200,
                          json=MagicMock(return_value={"id": sid, **copy.deepcopy(rec)}))
 

@@ -104,7 +104,7 @@ def api_prusament_apply_weights():
         return jsonify({"status": "error", "msg": str(e)})
 
 
-def _format_filament_edit_log(fid, before, requested):
+def _format_filament_edit_log(fid, before, requested, uncleared=()):
     """Build a Filament-edit activity-log line that shows actual before→after
     values per field — both native and extras — so the user has a real
     audit trail rather than just a list of keys.
@@ -112,7 +112,9 @@ def _format_filament_edit_log(fid, before, requested):
     `before` is the pre-patch full filament dict (from get_filament).
     `requested` is the partial-update payload the wizard/edit form sent —
     the authoritative source for the "new value" since Spoolman's PATCH
-    response doesn't always echo every field.
+    response doesn't always echo every field. `uncleared` names the extras
+    sent as cleared that Spoolman still holds (update_filament's
+    `fcc_uncleared_extras`): those say "(not cleared)", never "(cleared)".
 
     Always emits an `old → new` entry for each requested field even when
     they appear equal — the user explicitly asked for these to be visible
@@ -139,7 +141,8 @@ def _format_filament_edit_log(fid, before, requested):
                 if spoolman_api._is_delete_sentinel(new):
                     # 23.4 — render a blank-to-clear as a real deletion rather
                     # than leaking the internal delete-sentinel token.
-                    parts.append(f"extra.{ek}: {_short(old)} → (cleared)")
+                    parts.append(f"extra.{ek}: {_short(old)} → "
+                                 f"{'(not cleared)' if ek in uncleared else '(cleared)'}")
                 elif old == new:
                     parts.append(f"extra.{ek}: {_short(old)} (unchanged)")
                 else:
@@ -201,15 +204,21 @@ def api_update_filament():
     # block, OUTSIDE the success-determining try: a formatter/logger crash must
     # NOT invert a committed write into success:false (which made the user retry
     # and double-write). Log the log-failure and still report success.
+    uncleared = (updated.get('fcc_uncleared_extras') or ()) if isinstance(updated, dict) else ()
     try:
         state.add_log_entry(
-            _format_filament_edit_log(fid, before, data),
+            _format_filament_edit_log(fid, before, data, uncleared=uncleared),
             "SUCCESS", "00ff00",
         )
     except Exception as e:
         state.logger.error(
             f"Filament #{fid} updated OK but activity-log write failed: {e}")
-    return jsonify({"success": True, "filament": updated})
+    out = {"success": True, "filament": updated}
+    # 2026-10-21: an extra the edit cleared that Spoolman still holds (the
+    # modal toasts `warning` at 7 s; update_filament logged it already).
+    if isinstance(updated, dict) and updated.get('fcc_uncleared_note'):
+        out["warning"] = updated['fcc_uncleared_note']
+    return jsonify(out)
 
 def _no_home_unassign_msg(spool_id):
     """Group 39.6 — the unassign prompt names the spool and where it is: "#88 is

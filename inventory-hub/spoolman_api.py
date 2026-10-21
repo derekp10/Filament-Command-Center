@@ -3,7 +3,9 @@ import state # type: ignore
 import config_loader # type: ignore
 import locations_db # type: ignore  # L271 Phase 2: single hierarchy resolver
 import attr_migration # type: ignore  # Group 36: shared force_reset safety layer
+import html
 import json
+import re
 import time
 
 def parse_inbound_data(data):
@@ -50,6 +52,9 @@ JSON_STRING_FIELDS = [
     "website",
     # Group 42.6: a location id is text even when it looks like a number.
     "fcc_pre_box_location",
+    # Excluded from Low and Out (stock_report.py): a note such as "123" or "true"
+    # must stay text.
+    "fcc_stock_excluded", "fcc_stock_excluded_note", "fcc_stock_excluded_at",
 ]
 
 # Captures the last Spoolman non-ok response body so callers like
@@ -213,15 +218,15 @@ def sanitize_outbound_data(data):
             clean_extra[key] = json.dumps(value)
         elif isinstance(value, str):
             val_str = value.strip()
-            if val_str.lower() == 'true':
-                clean_extra[key] = "true"
-            elif val_str.lower() == 'false':
-                clean_extra[key] = "false"
-            elif key in JSON_STRING_FIELDS:
+            if key in JSON_STRING_FIELDS:
                 # Text-type extras MUST arrive as JSON-encoded strings on the
-                # wire. Idempotent: if val_str already parses as a JSON string
-                # (e.g. JS pre-wrapped it as `"225"`), keep that form so we
-                # don't double-wrap and leak literal quote chars on read-back.
+                # wire, "true" and "false" too: checked BEFORE the boolean
+                # shortcut below, which sent a text note of "true" (read back
+                # parsed and re-sent by a full-extras edit) as a JSON boolean,
+                # and Spoolman refused the whole PATCH (2026-10-21 review).
+                # Idempotent: if val_str already parses as a JSON string (e.g.
+                # JS pre-wrapped it as `"225"`), keep that form so we don't
+                # double-wrap and leak literal quote chars on read-back.
                 # Otherwise wrap the raw value once via json.dumps.
                 try:
                     decoded = json.loads(val_str)
@@ -231,6 +236,10 @@ def sanitize_outbound_data(data):
                         clean_extra[key] = json.dumps(val_str)
                 except ValueError:
                     clean_extra[key] = json.dumps(val_str)
+            elif val_str.lower() == 'true':
+                clean_extra[key] = "true"
+            elif val_str.lower() == 'false':
+                clean_extra[key] = "false"
             else:
                 # [ALEX FIX] Spoolman strictly requires that *all* custom Extra fields, even plain strings, 
                 # be sent as valid JSON strings. This means they must include the literal double-quotes.
@@ -511,6 +520,7 @@ def update_spool(sid, data):
     global LAST_SPOOLMAN_ERROR
     sm_url, _ = config_loader.get_api_urls()
     existing, pre_archived = {}, False   # read by the except branch's archive-edge check
+    clears = {}   # how the extras this write clears are written (_plan_extra_clears)
     try:
         # [ALEX FIX] Intercept "UNASSIGNED" and coerce into empty string for Spoolman API
         if 'location' in data and isinstance(data['location'], str):
@@ -569,11 +579,12 @@ def update_spool(sid, data):
             except Exception:
                 pass
 
-        # Merge extras with the existing record so Spoolman's REPLACE-on-PATCH
-        # semantics don't wipe siblings. Use the RAW (still-wrapped) form
-        # via _get_raw_extras + pre-sanitize the caller's extras, so the
+        # Merge extras with the existing record so a PATCH that replaces `extra`
+        # (a Spoolman that does) can't wipe siblings. Use the RAW (still-wrapped)
+        # form via _get_raw_extras + pre-sanitize the caller's extras, so the
         # merged dict is fully wire-form. Skipping the late sanitize on
         # the merged dict avoids double-wrapping already-wrapped values.
+        data = _without_null_extra(data)
         if isinstance(data.get('extra'), dict):
             existing_extras = _get_raw_extras('spool', sid)
             if existing_extras is None:
@@ -592,8 +603,9 @@ def update_spool(sid, data):
                 )
                 return None
             caller_sanitized = sanitize_outbound_data({'extra': data['extra']}).get('extra', {})
+            clears = _plan_extra_clears('spool', existing_extras, caller_sanitized)
             data = dict(data)  # don't mutate caller
-            data['extra'] = _merge_extras_with_existing(existing_extras, caller_sanitized)
+            data['extra'] = _merge_extras_with_existing(existing_extras, caller_sanitized, clears)
             clean_data = data
         else:
             clean_data = sanitize_outbound_data(data)
@@ -622,6 +634,7 @@ def update_spool(sid, data):
             LAST_SPOOLMAN_ERROR = None
             _release_box_on_archive(sid, data, existing, pre_archived)
             out = r.json()
+            _note_uncleared_extras('spool', sid, clears, out)
             if unarchive_warning:
                 # Every surface logs it; the weight screens also toast it at 7 s
                 # (/api/spool/update and the wizard pass `fcc_warning` on).
@@ -812,11 +825,14 @@ def compute_dirty_extras(existing_extras, requested_extras, *, system_managed=fr
             continue
         if _is_delete_sentinel(v):
             # 23.4 — a delete-sentinel for a key that's already absent/blank is
-            # a no-op (the merge would just pop a missing key). Don't let it
+            # a no-op (the merge leaves an empty key as it is). Don't let it
             # manufacture a dirty set — and a spurious no-change PATCH — on an
             # otherwise unchanged save (the wizard re-emits a sentinel for every
-            # blank shown extra on edit, many of which were never set).
-            if str(existing.get(k) or '').strip():
+            # blank shown extra on edit, many of which were never set). Blank
+            # in any form, raw or parsed (2026-10-21): absent (a clear on
+            # Spoolman 0.26+ drops the key), or a stored '""', '[]' or
+            # '[null, null]' (an older Spoolman's clear, or FCC's own '' writes).
+            if not _extra_is_blank(existing.get(k)):
                 dirty[k] = v
             continue
         if str(v) != str(existing.get(k)):
@@ -828,11 +844,12 @@ def compute_dirty_extras(existing_extras, requested_extras, *, system_managed=fr
 # starts from the FULL existing extras and only overlays keys the caller SENT, an
 # OMITTED key means "keep" — so a blanked field could never be deleted (the
 # omit-means-keep guard that protects siblings also blocked deletions). A caller
-# that wants to DELETE a key sends this sentinel as the value; the merge pops the
-# key instead of setting it. Omitting a key still means "keep" (siblings safe);
-# only an explicit sentinel deletes. Existing callers never send it, so this is
-# backward-compatible. MUST stay in sync with the frontend constant
-# `window.FCC_DELETE_EXTRA` (inv_core.js).
+# that wants to CLEAR a key sends this sentinel as the value; the merge turns it
+# into the write that clears that field (below), and the sentinel itself never
+# reaches Spoolman. Omitting a key still means "keep" (siblings safe), and so
+# does None (sanitize_outbound_data drops it); only an explicit sentinel clears.
+# MUST stay in sync with the frontend constant `window.FCC_DELETE_EXTRA`
+# (inv_core.js).
 DELETE_EXTRA_SENTINEL = "__FCC_DELETE_EXTRA__"
 
 
@@ -846,38 +863,323 @@ def _is_delete_sentinel(v):
     return str(v).strip().strip('"').strip() == DELETE_EXTRA_SENTINEL
 
 
-def _merge_extras_with_existing(existing_extras, requested_extras):
-    """Spoolman's PATCH on `extra` REPLACES the entire dict instead of merging.
-    A partial update like `{extra: {nozzle_temp_max: '"225"'}}` therefore wipes
-    every other extra (product_url, purchase_url, original_color, ...). Merge
-    on our side so partial PATCHes preserve siblings. Requested values win on
-    conflict; existing-only keys ride along untouched.
+# --- How a clear is written (2026-10-21) ------------------------------------
+#
+# The merge used to POP a sentinel'd key, so the PATCH left it out. That cleared
+# it only where Spoolman REPLACES `extra` on a PATCH: a filament's and a vendor's,
+# up to Spoolman 0.25. A spool's `extra` has merged key by key since 0.22 (so a
+# spool extra never cleared), and since 0.26 every entity merges: a key the PATCH
+# leaves out is KEPT, and only a JSON null drops one (0.26 takes null for every
+# field type; before it, a null was a 422 for the whole PATCH). Dev and prod run
+# 0.27.0, where emptying a Product Link, a max temperature or a vendor's website
+# kept the old value. So a clear is now a WRITE of the value that clears the field:
+#   - on a Spoolman known to take it (0.26 or newer, from GET /api/v1/info): JSON
+#     null, for every field type. The row is dropped, so the key is gone from
+#     every read, as Spoolman's own form clears a field.
+#   - else (an older Spoolman, or its version can't be read) the type's own empty
+#     value where every version has one: text or datetime '""' (a JSON empty
+#     string; FCC reads it back as blank), an integer or float range
+#     '[null, null]', a multi-choice '[]', a single choice whose choices include
+#     ""; else (an integer, float, boolean or single choice, or a type only
+#     guessed from a string value) the key is left out, which clears it where the
+#     PATCH replaces `extra`. A null is never sent to an older Spoolman (a 422 for
+#     the whole PATCH), and no value the field's type refuses is ever sent: one
+#     bad key gets the whole PATCH refused.
+# Whatever Spoolman still holds after the write is said in the Activity Log and
+# on the answer (_note_uncleared_extras). The type comes from Spoolman's field
+# list (GET /api/v1/field/<entity>, read only when a write clears a key that holds
+# a value, kept _FIELD_SCHEMA_TTL_S), else FCC's own registry below, else the
+# stored value's shape (a string reads as text, guessed).
 
-    A requested value equal to DELETE_EXTRA_SENTINEL DELETES that key (pops it
-    from the merged result) — the only way to clear an extra, since an omitted
-    key means "keep" (23.4). The sentinel itself is never forwarded to Spoolman.
+_TEXT_CLEAR = '""'
+# A plan entry: leave the key out of the PATCH, because no value this Spoolman
+# takes would clear it. Never sent; the merge drops the key.
+_LEAVE_OUT = object()
+# Spoolman takes a JSON null for an extra (and drops the row) from this version.
+_NULL_CLEARS_FROM = (0, 26, 0)
+_FIELD_SCHEMA_TTL_S = 60.0
+_SPOOLMAN_VERSION_TTL_S = 600.0
+_FIELD_SCHEMA_CACHE = {}        # (Spoolman url, entity) -> (monotonic time, {key: field definition})
+_SPOOLMAN_VERSION_CACHE = {}    # Spoolman url -> (monotonic time, version tuple)
+
+# FCC's own extra fields and their types: what setup-and-rebuild/setup_fields.py
+# registers (app startup self-heals the REQUIRED_*_EXTRAS below). Read for a
+# clear only when Spoolman's field list can't be read; tests/test_extras_clear_027.py
+# keeps it in step with setup_fields.py.
+_FCC_EXTRA_FIELD_TYPES = {
+    'spool': {
+        'physical_source': 'text', 'physical_source_slot': 'text', 'container_slot': 'text',
+        'fcc_pre_archive_location': 'text', 'fcc_pre_audit_location': 'text',
+        'fcc_pre_box_location': 'text', 'needs_label_print': 'boolean', 'is_refill': 'boolean',
+        'spool_temp': 'text', 'product_url': 'text', 'purchase_url': 'text', 'spool_type': 'choice',
+        'prusament_manufacturing_date': 'text', 'prusament_length_m': 'text',
+    },
+    'filament': {
+        'filament_attributes': 'choice', 'shore_hardness': 'choice', 'slicer_profile': 'choice',
+        'needs_label_print': 'boolean', 'sample_printed': 'boolean', 'product_url': 'text',
+        'purchase_url': 'text', 'sheet_link': 'text', 'price_total': 'text',
+        'original_color': 'text', 'drying_temp': 'text', 'drying_time': 'text',
+        'flush_multiplier': 'text', 'nozzle_temp_max': 'text', 'bed_temp_max': 'text',
+        'multi_color_direction': 'text',
+        # The Low stock list's Excluded mark (stock_report.py, 2026-10-20).
+        'fcc_stock_excluded': 'text', 'fcc_stock_excluded_note': 'text', 'fcc_stock_excluded_at': 'text',
+    },
+    'vendor': {'website': 'text'},
+}
+_FCC_MULTI_CHOICE_EXTRAS = frozenset({('filament', 'filament_attributes')})
+
+
+def _extra_is_blank(value):
+    """True when an extra holds no value, read in Spoolman's raw wire form or in
+    FCC's parsed form: absent (None), an empty or blank string ('""' raw), an empty
+    list ('[]') or an open range ('[null, null]'). False, 0 and every other value
+    are values."""
+    if value is None:
+        return True
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return True
+        try:
+            value = json.loads(text)
+        except ValueError:
+            return False              # a parsed string with something in it
+        if value is None:
+            return True
+        if isinstance(value, str):
+            return not value.strip()
+    if isinstance(value, list):
+        return all(item is None for item in value)
+    return False
+
+
+def _without_null_extra(data):
+    """`data` without an `"extra": null`, which Spoolman 0.27 answers with a 500
+    (its merge iterates the map). None never meant "clear every extra" in FCC."""
+    if isinstance(data, dict) and 'extra' in data and data['extra'] is None:
+        return {k: v for k, v in data.items() if k != 'extra'}
+    return data
+
+
+def _spoolman_version():
+    """Spoolman's version as a tuple of three ints, e.g. (0, 27, 0), from
+    GET /api/v1/info, kept _SPOOLMAN_VERSION_TTL_S; None when it can't be read."""
+    try:
+        sm_url, _ = config_loader.get_api_urls()
+    except Exception:
+        return None
+    now = time.monotonic()
+    hit = _SPOOLMAN_VERSION_CACHE.get(sm_url)
+    if hit and now - hit[0] < _SPOOLMAN_VERSION_TTL_S:
+        return hit[1]
+    try:
+        r = requests.get(f"{sm_url}/api/v1/info", timeout=3)
+        body = r.json() if getattr(r, 'ok', False) else None
+    except Exception as e:
+        state.logger.warning(f"Spoolman version read failed: {e}")
+        return None
+    nums = re.findall(r'\d+', str(body.get('version') or '')) if isinstance(body, dict) else []
+    if len(nums) < 2:
+        return None
+    version = tuple(int(n) for n in (nums + ['0'])[:3])
+    _SPOOLMAN_VERSION_CACHE[sm_url] = (now, version)
+    return version
+
+
+def _spoolman_takes_null():
+    """True when Spoolman is known to take a JSON null for an extra (0.26 or
+    newer); False when it is older or its version can't be read."""
+    version = _spoolman_version()
+    return version is not None and version >= _NULL_CLEARS_FROM
+
+
+def _extra_field_schema(entity):
+    """{key: field definition} for one entity's extra fields, as Spoolman lists
+    them (GET /api/v1/field/<entity>), kept _FIELD_SCHEMA_TTL_S; None when the
+    list can't be read (a failed read isn't kept)."""
+    try:
+        sm_url, _ = config_loader.get_api_urls()
+    except Exception:
+        return None
+    now = time.monotonic()
+    hit = _FIELD_SCHEMA_CACHE.get((sm_url, entity))
+    if hit and now - hit[0] < _FIELD_SCHEMA_TTL_S:
+        return hit[1]
+    try:
+        r = requests.get(f"{sm_url}/api/v1/field/{entity}", timeout=3)
+        rows = r.json() if getattr(r, 'ok', False) else None
+    except Exception as e:
+        state.logger.warning(f"Spoolman {entity} field list read failed: {e}")
+        return None
+    if not isinstance(rows, list):
+        return None
+    schema = {str(f['key']): f for f in rows if isinstance(f, dict) and f.get('key')}
+    _FIELD_SCHEMA_CACHE[(sm_url, entity)] = (now, schema)
+    return schema
+
+
+def _field_def_from_value(raw_value):
+    """A field definition read from a stored value's shape, for a key whose type
+    neither Spoolman nor FCC's registry could say: a string reads as text, marked
+    `type_guessed` (it may as well be a single choice, which refuses '""')."""
+    try:
+        data = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
+    except ValueError:
+        data = raw_value
+    if isinstance(data, bool):
+        return {'field_type': 'boolean'}
+    if isinstance(data, (int, float)):
+        return {'field_type': 'float'}            # integer or float: neither has an empty value
+    if isinstance(data, list):
+        if all(isinstance(item, str) for item in data):
+            return {'field_type': 'choice', 'multi_choice': True}
+        return {'field_type': 'float_range'}
+    return {'field_type': 'text', 'type_guessed': True}
+
+
+def _clear_field_def(entity, key, raw_value, schema):
+    """The field definition a clear of `key` goes by: Spoolman's (`schema`), else
+    FCC's own registry, else the stored value's shape. None when Spoolman's list
+    was read and has no such field: there is nothing it would keep."""
+    if schema is not None:
+        field = schema.get(key)
+        return field if isinstance(field, dict) else None
+    ftype = _FCC_EXTRA_FIELD_TYPES.get(entity, {}).get(key)
+    if ftype:
+        return {'field_type': ftype, 'multi_choice': (entity, key) in _FCC_MULTI_CHOICE_EXTRAS}
+    return _field_def_from_value(raw_value)
+
+
+def _clear_value(field, null_ok):
+    """The wire value that clears an extra of this field definition (None is a
+    JSON null), or _LEAVE_OUT when no value this Spoolman takes would clear it."""
+    if null_ok:
+        return None                   # 0.26+: valid for every type; the row is dropped
+    field = field or {}
+    if field.get('type_guessed'):
+        # Only a string value said "text": a single choice refuses '""', and
+        # with it the whole PATCH.
+        return _LEAVE_OUT
+    ftype = str(field.get('field_type') or 'text')
+    if ftype in ('text', 'datetime'):
+        return _TEXT_CLEAR
+    if ftype in ('integer_range', 'float_range'):
+        return '[null, null]'
+    if ftype == 'choice':
+        if field.get('multi_choice'):
+            return '[]'
+        if '' in (field.get('choices') or ()):
+            return _TEXT_CLEAR
+    return _LEAVE_OUT
+
+
+def _plan_extra_clears(entity, existing_extras, requested_extras):
+    """How each extra the caller clears is written: {key: wire value, or
+    _LEAVE_OUT}. Only keys sent as the delete sentinel that hold a value now: a
+    clear of an absent or already-blank key changes nothing and reads nothing. A
+    system-managed key is never cleared this way (_merge_extras_with_existing)."""
+    existing = existing_extras or {}
+    keys = [k for k, v in (requested_extras or {}).items()
+            if _is_delete_sentinel(v) and k not in SYSTEM_MANAGED_EXTRAS
+            and not _extra_is_blank(existing.get(k))]
+    if not keys:
+        return {}
+    schema = _extra_field_schema(entity)
+    plan, null_ok = {}, None
+    for key in keys:
+        field = _clear_field_def(entity, key, existing.get(key), schema)
+        if field is None:
+            plan[key] = _LEAVE_OUT
+            continue
+        if null_ok is None:
+            null_ok = _spoolman_takes_null()      # kept _SPOOLMAN_VERSION_TTL_S
+        plan[key] = _clear_value(field, null_ok)
+    return plan
+
+
+def _note_uncleared_extras(entity, eid, clears, out):
+    """After a write that cleared extras: say which ones Spoolman still holds (its
+    PATCH answer is the whole record). A WARNING in the Activity Log, and on the
+    answer as `fcc_uncleared_extras` (the keys) and `fcc_uncleared_note` (the
+    sentence the doors pass on as their `warning`). Never raises."""
+    try:
+        if not clears or not isinstance(out, dict):
+            return
+        extra = out.get('extra') if isinstance(out.get('extra'), dict) else {}
+        kept = sorted(k for k in clears if not _extra_is_blank(extra.get(k)))
+        if not kept:
+            return
+        label = {'spool': 'Spool', 'filament': 'Filament', 'vendor': 'Manufacturer'}.get(entity, str(entity))
+        # Each field by the name Spoolman shows (the field list the plan read is
+        # still kept), else by its key.
+        schema = _extra_field_schema(entity) or {}
+        names = [str((schema.get(k) or {}).get('name') or k) for k in kept]
+        what = f"{', '.join(names)} {'was' if len(kept) == 1 else 'were'} not cleared"
+        if any(clears[k] is _LEAVE_OUT for k in kept):
+            version = _spoolman_version()
+            if version is None:
+                why = ("FCC couldn't read Spoolman's version to pick how to clear that kind of field: "
+                       "try again in a moment")
+            else:
+                why = (f"Spoolman {'.'.join(str(n) for n in version)} can't clear that kind of field; "
+                       f"0.26 or newer can")
+        else:
+            why = "Spoolman kept the old value"
+        note = f"{label} #{eid}: {what} ({why})."
+        state.add_log_entry(f"⚠️ {html.escape(note, quote=False)}", "WARNING", "ffaa00")
+        out['fcc_uncleared_extras'] = kept
+        out['fcc_uncleared_note'] = note
+    except Exception as e:
+        state.logger.warning(f"uncleared-extras check for {entity} #{eid} skipped: {e}")
+
+
+def _merge_extras_with_existing(existing_extras, requested_extras, clears=None):
+    """Overlay the caller's extras on the record's existing ones, so a partial
+    update keeps every sibling whether Spoolman merges a PATCH's `extra` key by
+    key (0.26 and newer) or replaces it (a filament's and a vendor's up to 0.25,
+    where `{extra: {nozzle_temp_max: '"225"'}}` alone wiped product_url,
+    purchase_url, original_color, ...). Requested values win on conflict;
+    existing-only keys ride along untouched.
+
+    A requested value equal to DELETE_EXTRA_SENTINEL CLEARS that key: `clears`
+    (from _plan_extra_clears) says with which value, and a key it maps to
+    _LEAVE_OUT is dropped from the PATCH instead. Without a plan (a direct
+    caller), a key that holds a value is cleared as a text extra ('""'). A key
+    with nothing in it now is left as it is, and a system-managed key is never
+    cleared this way. The sentinel itself is never forwarded to Spoolman.
 
     Existing extras must be the RAW Spoolman form (still-wrapped JSON-encoded
-    strings) — see `_get_raw_extras`. Caller's extras can be either form;
-    sanitize_outbound_data downstream normalizes both."""
+    strings) — see `_get_raw_extras`; the caller's are sanitized first
+    (sanitize_outbound_data), so the merged dict goes out as it is."""
     merged = dict(existing_extras or {})
     for k, v in (requested_extras or {}).items():
-        if _is_delete_sentinel(v):
-            if k in SYSTEM_MANAGED_EXTRAS:
-                # 23.4 defense-in-depth: the clear-sentinel must NEVER unseat a
-                # slotted spool. container_slot / physical_source(_slot) and the
-                # auto-archive/audit breadcrumbs are owned solely by
-                # perform_smart_move / perform_smart_eject; any user-edit surface
-                # forwarding the sentinel for one is a bug. Keep the existing
-                # value (compute_dirty_extras also strips these, this is the
-                # primitive-level backstop for direct callers).
-                state.logger.warning(
-                    f"Ignored delete-sentinel on system-managed extra '{k}' (slot-binding protection)"
-                )
-                continue
+        if not _is_delete_sentinel(v):
+            merged[k] = v
+            continue
+        if k in SYSTEM_MANAGED_EXTRAS:
+            # 23.4 defense-in-depth: the clear-sentinel must NEVER unseat a
+            # slotted spool. container_slot / physical_source(_slot) and the
+            # auto-archive/audit breadcrumbs are owned solely by
+            # perform_smart_move / perform_smart_eject; any user-edit surface
+            # forwarding the sentinel for one is a bug. Keep the existing
+            # value (compute_dirty_extras also strips these, this is the
+            # primitive-level backstop for direct callers).
+            state.logger.warning(
+                f"Ignored delete-sentinel on system-managed extra '{k}' (slot-binding protection)"
+            )
+            continue
+        if clears is not None:
+            if k not in clears:
+                continue              # nothing in it now: keep it as it is
+            value = clears[k]
+        elif _extra_is_blank(merged.get(k)):
+            continue
+        else:
+            value = _TEXT_CLEAR
+        if value is _LEAVE_OUT:
             merged.pop(k, None)
         else:
-            merged[k] = v
+            merged[k] = value
     return merged
 
 
@@ -888,14 +1190,18 @@ def update_filament(fid, data):
     rejection reason to the UI (see api_update_filament).
 
     When `data['extra']` is a partial dict, we fetch the existing record and
-    merge so Spoolman's REPLACE semantics don't silently nuke unrelated
-    extras. Without this, every partial PATCH was wiping fields the user
-    cared about (the bug behind the spools-252/253 + filament 157 incident
-    where product_url / purchase_url / original_color all disappeared after
-    a single 'Use Scanned' click)."""
+    merge so a Spoolman that REPLACES `extra` on PATCH (up to 0.25) doesn't
+    silently nuke unrelated extras. Without this, every partial PATCH was
+    wiping fields the user cared about (the bug behind the spools-252/253 +
+    filament 157 incident where product_url / purchase_url / original_color all
+    disappeared after a single 'Use Scanned' click). An extra sent as the
+    delete sentinel is cleared (_plan_extra_clears); one Spoolman still holds
+    afterwards is named on the answer (`fcc_uncleared_note`)."""
     global LAST_SPOOLMAN_ERROR
     sm_url, _ = config_loader.get_api_urls()
 
+    data = _without_null_extra(data)
+    clears = {}
     if isinstance(data.get('extra'), dict):
         # Sanitize ONLY the caller's extras up-front (canonical wire form).
         # Then merge against the RAW existing extras which are already in
@@ -919,8 +1225,9 @@ def update_filament(fid, data):
             )
             return None
         caller_sanitized = sanitize_outbound_data({'extra': data['extra']}).get('extra', {})
+        clears = _plan_extra_clears('filament', existing_extras, caller_sanitized)
         data = dict(data)  # don't mutate caller's payload
-        data['extra'] = _merge_extras_with_existing(existing_extras, caller_sanitized)
+        data['extra'] = _merge_extras_with_existing(existing_extras, caller_sanitized, clears)
         sanitized = data
     else:
         sanitized = sanitize_outbound_data(data)
@@ -928,7 +1235,9 @@ def update_filament(fid, data):
         r = requests.patch(f"{sm_url}/api/v1/filament/{fid}", json=sanitized, timeout=2)
         if r.ok:
             LAST_SPOOLMAN_ERROR = None
-            return r.json()
+            out = r.json()
+            _note_uncleared_extras('filament', fid, clears, out)
+            return out
         err_body = r.text
         state.logger.error(f"Failed to update filament {fid}: {r.status_code} - {err_body}")
         LAST_SPOOLMAN_ERROR = f"HTTP {r.status_code}: {err_body[:400]}"
@@ -1086,9 +1395,10 @@ def get_vendor(vid):
 def update_vendor(vid, data):
     """Returns the updated vendor dict on success, or None on failure.
     Mirrors update_filament: stashes Spoolman's rejection body in
-    LAST_SPOOLMAN_ERROR so callers can surface it to the UI, and merges
-    partial `extra` payloads against the existing record so Spoolman's
-    REPLACE-on-PATCH semantics don't wipe sibling extras.
+    LAST_SPOOLMAN_ERROR so callers can surface it to the UI, merges
+    partial `extra` payloads against the existing record so a Spoolman that
+    REPLACES `extra` on PATCH (up to 0.25) doesn't wipe sibling extras, and
+    clears an extra sent as the delete sentinel (_plan_extra_clears).
 
     Backs the Manufacturer/Vendor Edit modal V1 (Group 6 — Edit Modal new
     panels). Vendor has no system-managed extras today (SYSTEM_MANAGED_EXTRAS
@@ -1098,6 +1408,8 @@ def update_vendor(vid, data):
     global LAST_SPOOLMAN_ERROR
     sm_url, _ = config_loader.get_api_urls()
 
+    data = _without_null_extra(data)
+    clears = {}
     if isinstance(data.get('extra'), dict):
         existing_extras = _get_raw_extras('vendor', vid)
         if existing_extras is None:
@@ -1116,8 +1428,9 @@ def update_vendor(vid, data):
             )
             return None
         caller_sanitized = sanitize_outbound_data({'extra': data['extra']}).get('extra', {})
+        clears = _plan_extra_clears('vendor', existing_extras, caller_sanitized)
         data = dict(data)  # don't mutate caller's payload
-        data['extra'] = _merge_extras_with_existing(existing_extras, caller_sanitized)
+        data['extra'] = _merge_extras_with_existing(existing_extras, caller_sanitized, clears)
         sanitized = data
     else:
         sanitized = sanitize_outbound_data(data)
@@ -1125,7 +1438,9 @@ def update_vendor(vid, data):
         r = requests.patch(f"{sm_url}/api/v1/vendor/{vid}", json=sanitized, timeout=2)
         if r.ok:
             LAST_SPOOLMAN_ERROR = None
-            return r.json()
+            out = r.json()
+            _note_uncleared_extras('vendor', vid, clears, out)
+            return out
         err_body = r.text
         state.logger.error(f"Failed to update vendor {vid}: {r.status_code} - {err_body}")
         LAST_SPOOLMAN_ERROR = f"HTTP {r.status_code}: {err_body[:400]}"
@@ -1220,6 +1535,12 @@ def ensure_extra_field(entity_type, key, name, field_type="text", choices=None, 
 REQUIRED_FILAMENT_EXTRAS = [
     ("nozzle_temp_max", "Nozzle Temp Max", "text"),
     ("bed_temp_max", "Bed Temp Max", "text"),
+    # Excluded from Low and Out (Derek, 2026-10-20; stock_report.py): the reason (its
+    # label), a note, and the day it was marked. Written by the ⚠️ Low stock
+    # list's 🔕; Spoolman rejects a write carrying an unregistered extra.
+    ("fcc_stock_excluded", "Excluded From Low Stock", "text"),
+    ("fcc_stock_excluded_note", "Excluded From Low Stock: Note", "text"),
+    ("fcc_stock_excluded_at", "Excluded From Low Stock: Since", "text"),
 ]
 
 # Spool extras the per-spool Prusament scan flow writes when a row is scanned.

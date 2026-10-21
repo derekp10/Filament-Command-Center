@@ -33,6 +33,7 @@ import app as app_module
 import print_deduct  # L316: patch targets / live seams for moved symbols
 import print_monitor  # L316: patch targets for moved symbols  # noqa: E402
 import spoolman_api  # noqa: E402
+import spoolman_extra_fake  # noqa: E402
 import print_deduct_ledger  # noqa: E402
 import cancel_review_store  # noqa: E402
 import cancel_fetch_store  # noqa: E402
@@ -72,7 +73,13 @@ class _Spools:
 
     def update(self, sid, data):
         self.updates.append((int(sid), dict(data)))
-        self.d[int(sid)].update(data)
+        rec = self.d[int(sid)]
+        for key, value in data.items():
+            if key == "extra":
+                # update_spool keeps every extra the caller leaves out.
+                rec["extra"] = spoolman_extra_fake.fcc_update_spool_extra(rec.get("extra"), value)
+            else:
+                rec[key] = value
         return {"id": int(sid), **data}
 
 

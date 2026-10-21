@@ -121,11 +121,12 @@ def api_create_vendor():
         return jsonify({"success": False, "msg": str(e)}), 500
 
 
-def _format_vendor_edit_log(vid, before, data):
+def _format_vendor_edit_log(vid, before, data, uncleared=()):
     """Build a per-field before→after activity log line for a vendor edit.
     Mirrors `_format_filament_edit_log` so the Vendor Edit modal save path
     leaves the same kind of audit trail (user can see what value the field
-    actually changed from/to, not just which keys were dirty)."""
+    actually changed from/to, not just which keys were dirty). `uncleared`:
+    the extras sent as cleared that Spoolman still holds ("(not cleared)")."""
     parts = []
     before = before or {}
     before_extra = before.get('extra') or {}
@@ -135,7 +136,8 @@ def _format_vendor_edit_log(vid, before, data):
                 old = before_extra.get(ek, '')
                 if spoolman_api._is_delete_sentinel(ev):
                     # 23.4 — blank-to-clear, not a literal sentinel write.
-                    parts.append(f"extra.{ek}: {old or '(empty)'} → (cleared)")
+                    parts.append(f"extra.{ek}: {old or '(empty)'} → "
+                                 f"{'(not cleared)' if ek in uncleared else '(cleared)'}")
                 elif str(old) != str(ev):
                     parts.append(f"extra.{ek}: {old or '(empty)'} → {ev or '(empty)'}")
             continue
@@ -169,11 +171,16 @@ def api_update_vendor(vid):
     before = spoolman_api.get_vendor(vid) or {}
     try:
         updated = spoolman_api.update_vendor_or_raise(vid, data)
+        uncleared = (updated.get('fcc_uncleared_extras') or ()) if isinstance(updated, dict) else ()
         state.add_log_entry(
-            _format_vendor_edit_log(vid, before, data),
+            _format_vendor_edit_log(vid, before, data, uncleared=uncleared),
             "SUCCESS", "00ff00",
         )
-        return jsonify({"success": True, "vendor": updated})
+        out = {"success": True, "vendor": updated}
+        # 2026-10-21: a field the edit cleared that Spoolman still holds.
+        if isinstance(updated, dict) and updated.get('fcc_uncleared_note'):
+            out["warning"] = updated['fcc_uncleared_note']
+        return jsonify(out)
     except spoolman_api.SpoolmanRejection as e:
         err = str(e) or "Spoolman rejected the vendor edit."
         state.add_log_entry(
@@ -1144,6 +1151,7 @@ def api_edit_spool_wizard():
     new_location = None
     original_spool = None
     spool_res = None
+    fil_res = None
     # Group 40.7 review: where an archived spool was taken off before its move.
     archived_off = None
     try:
@@ -1318,6 +1326,11 @@ def api_edit_spool_wizard():
         # Group 42.3c: see /api/spool/update.
         if spool_data and isinstance(spool_res, dict) and spool_res.get('fcc_warning'):
             warnings.append(spool_res['fcc_warning'])
+        # 2026-10-21: a field the Save cleared that Spoolman still holds (its
+        # write logged it; the page toasts `warning` at 7 s).
+        for written in (spool_res if spool_data else None, fil_res if fil_committed else None):
+            if isinstance(written, dict) and written.get('fcc_uncleared_note'):
+                warnings.append(written['fcc_uncleared_note'])
         if new_location is not None:
             # Group 40.7: the Location, last, through the engine.
             if unassigned_by_archive:
@@ -1577,9 +1590,10 @@ def api_stock_report():
     """Group 49.2a: the ⚠️ Low-stock list behind the search panel's button.
 
     Per filament, across its in-stock spools: `low` (under the `low_stock_g`
-    setting, fewest grams first) then `out` (spools on record, none in stock;
-    a One-off filament stays off it). One strict Spoolman read, made only when
-    the panel opens. A read that fails answers an error (502), NEVER an empty or
+    setting, fewest grams first), `out` (none in stock, a filament with no spool
+    on record included) and `excluded` (left off both from the list, with
+    why: never low or out). Two strict Spoolman reads (spools, filaments), made only when the
+    panel opens. A read that fails answers an error (502), NEVER an empty or
     "all out" list: an empty list must mean nothing is low."""
     try:
         return jsonify(stock_report.build_report())
@@ -1593,6 +1607,43 @@ def api_stock_report():
         state.logger.error(f"Low-stock list failed: {e}")
         return jsonify({"success": False, "error": "report_failed",
                         "msg": f"FCC couldn't build the Low-stock list: {e}"}), 500
+
+
+@app.route('/api/filament/<int:fid>/stock_exclusion', methods=['POST', 'DELETE'])
+def api_filament_stock_exclusion(fid):
+    """Excluded from Low and Out (Derek, 2026-10-20 / 21), from the ⚠️ Low stock list.
+
+    POST {reason, note, today}: marks the filament (reason: discontinued |
+    one_off | didnt_like | other; the note is optional, up to 500 characters, and
+    needed for other; `today` is the page's own date, used for a new mark when
+    it is a real date near the server's). Marking it again changes the reason
+    and note and keeps the day.
+    DELETE: tracks it again (the three extras cleared). Both read the filament
+    strictly first and write once, read-merge (stock_report.exclude_filament /
+    include_again); the Activity Log says what happened.
+
+    Answers {success, filament_id, display, excluded, was[, changed], msg};
+    on a refusal or a failure {success: false, error, msg} with 400 (a bad
+    reason or note), 404 (no such filament) or 502 (Spoolman didn't answer, or
+    didn't save it: its own error in `msg`)."""
+    try:
+        if request.method == 'DELETE':
+            res = stock_report.include_again(fid)
+            res["msg"] = (f"{res['display']} is included again." if res.get("changed")
+                          else f"{res['display']} wasn't excluded.")
+        else:
+            body = request.get_json(silent=True)
+            body = body if isinstance(body, dict) else {}
+            res = stock_report.exclude_filament(fid, body.get('reason'), body.get('note'), body.get('today'))
+            res["msg"] = f"Excluded {res['display']} from Low and Out ({res['excluded']['reason']})."
+    except stock_report.ExclusionError as e:
+        return jsonify({"success": False, "error": e.error, "msg": e.msg}), e.status
+    except Exception as e:
+        state.logger.error(f"Low stock exclusion, filament {fid}: {e}")
+        return jsonify({"success": False, "error": "failed",
+                        "msg": f"FCC couldn't change it: {e}"}), 500
+    res["success"] = True
+    return jsonify(res)
 
 # ... (Imports same as before) ...
 

@@ -4,7 +4,8 @@ low-stock line (`low_stock_g`, default 250 g), or out of stock.
   - "⚠️ Prusament PLA Galaxy Black is running low: 220 g left in 2 spools" when a
     print or a weigh-out takes the filament from at or above the line to under it;
   - "⚠️ ... is out: #1 was its last spool in stock" when its last in-stock spool
-    empties (the 0 g auto-archive); never for a One-off filament;
+    empties (the 0 g auto-archive);
+  - neither for a filament excluded from the Low stock list (Derek, 2026-10-20);
   - quiet when the filament was already under the line (220 g -> 150 g).
 
 The hook points are the print deduct's `_record_applied_deduct` (after its
@@ -42,6 +43,7 @@ import config_loader  # noqa: E402
 import print_deduct  # noqa: E402
 import print_deduct_ledger  # noqa: E402
 import spoolman_api  # noqa: E402
+import spoolman_extra_fake  # noqa: E402
 import state  # noqa: E402
 import stock_report  # noqa: E402
 
@@ -126,11 +128,15 @@ class FakeSpoolman:
         self.calls.append(("PATCH", url, copy.deepcopy(body)))
         sid = int(re.fullmatch(r"/api/v1/spool/(\d+)", urlsplit(url).path).group(1))
         s = self.spools[sid]
+        if isinstance(body.get("extra"), dict):
+            # Stored as Spoolman stores it (merged key by key, as 0.27 does).
+            try:
+                s["extra"] = spoolman_extra_fake.apply_extra_patch(s.get("extra"), body["extra"])
+            except spoolman_extra_fake.ExtraRejected as e:
+                return _Resp(e.status, {"message": e.message})
         for k in ("used_weight", "initial_weight", "archived", "location"):
             if k in body:
                 s[k] = body[k]
-        if isinstance(body.get("extra"), dict):
-            s["extra"] = dict(body["extra"])
         return _Resp(200, self.record(sid))
 
 
@@ -235,16 +241,30 @@ def test_crossing_the_line_and_running_out_in_one_write_is_one_out_warning(env):
         ["⚠️ Prusament PLA Galaxy Black is out: #1 was its last spool in stock"]
 
 
-def test_a_one_off_filament_running_out_is_quiet_but_can_still_go_low(env):
-    _galaxy(env, (1, 60, "XL-1"), attrs=["One-off"])
+def test_an_excluded_filament_is_quiet_both_ways(env):
+    """Excluded from Low and Out: running out and going low are no news. RED on
+    68a9b9d for the low one (only a One-off attribute silenced "out")."""
+    fake = _galaxy(env, (1, 60, "XL-1"))
+    fake.filaments[10]["extra"]["fcc_stock_excluded"] = _json.dumps("Discontinued")
     _deduct(env, {0: 60}, job="J-out")
+    assert fake.spools[1]["archived"] is True
     assert _stock_warnings(env["logs"]) == []
 
-    env["fake"].add_filament(11, name="Tiny", attrs=["one off"])
-    env["fake"].add_spool(5, 11, 300, location="XL-1")
+    fake.add_filament(11, name="Tiny")
+    fake.filaments[11]["extra"]["fcc_stock_excluded"] = _json.dumps("One-off")
+    fake.add_spool(5, 11, 300, location="XL-1")
     _deduct(env, {0: 80}, job="J-low")
+    assert fake.remaining(5) == 220
+    assert _stock_warnings(env["logs"]) == []
+
+
+def test_the_one_off_attribute_no_longer_silences_anything(env):
+    """The One-off attribute rule (dev only) is gone: such a filament running out
+    is logged like any other."""
+    _galaxy(env, (1, 60, "XL-1"), attrs=["One-off"])
+    _deduct(env, {0: 60}, job="J-out")
     assert [m for m, _ in _stock_warnings(env["logs"])] == \
-        ["⚠️ Prusament PLA Tiny is running low: 220 g left in 1 spool"]
+        ["⚠️ Prusament PLA Galaxy Black is out: #1 was its last spool in stock"]
 
 
 def test_two_heads_on_one_filament_give_one_warning(env):

@@ -1352,9 +1352,10 @@ def test_edit_modal_slicer_profile_clear(page: Page):
     # Group 23.4: blanking an extra in EDIT mode no longer omits the key
     # (omit == "keep", per the sibling-wipe guard). The edit surface now sends
     # the delete-sentinel (window.FCC_DELETE_EXTRA) so the backend explicitly
-    # clears it — _merge_extras_with_existing pops the sentinel before it ever
-    # reaches Spoolman. So the outbound payload carries the sentinel, not a
-    # missing key.
+    # clears it — _merge_extras_with_existing turns the sentinel into the write
+    # that clears the field (a JSON null for this choice field on Spoolman
+    # 0.26+) before it ever reaches Spoolman. So the outbound payload carries the
+    # sentinel, not a missing key.
     assert extra["slicer_profile"] == "__FCC_DELETE_EXTRA__"
 
 
@@ -1519,7 +1520,9 @@ def test_filament_details_slicer_pencil_add_new(page: Page):
 
 
 def test_filament_details_slicer_pencil_clear(page: Page):
-    """Pick (none) on a filament that had a profile → slicer_profile removed from extras."""
+    """Pick (none) on a filament that had a profile → slicer_profile sent as the
+    clear sentinel (2026-10-21: removing the key changed nothing, because the
+    server merges against the live record and keeps a key left out)."""
     page.goto("http://localhost:8000")
     page.wait_for_selector("#buffer-zone")
     page.wait_for_function("typeof openFilamentDetails === 'function'")
@@ -1538,5 +1541,5 @@ def test_filament_details_slicer_pencil_clear(page: Page):
 
     payload = page.evaluate("() => window.__sliceUpdatePayload")
     extra = payload["data"]["extra"]
-    assert "slicer_profile" not in extra
+    assert extra["slicer_profile"] == "__FCC_DELETE_EXTRA__"
     assert extra["sheet_link"] == '"https://x"'  # sibling preserved
