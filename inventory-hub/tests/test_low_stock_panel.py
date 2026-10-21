@@ -954,6 +954,54 @@ def test_the_dialog_is_readable(panel, assert_contrast):
     assert_contrast(page.locator(DIALOG))
 
 
+_SIZES_JS = r"""(sel) => {
+    const root = document.querySelector(sel);
+    const out = [];
+    const walk = (el) => {
+        for (const c of el.children) walk(c);
+        const own = Array.from(el.childNodes).some((n) => n.nodeType === 3 && n.textContent.trim());
+        if (own && el.getClientRects().length) {
+            out.push([String(el.className || el.tagName), parseFloat(getComputedStyle(el).fontSize),
+                      el.textContent.trim().slice(0, 40)]);
+        }
+    };
+    if (root) walk(root);
+    return out;
+}"""
+
+
+def _too_small(page, sel):
+    """Text in `sel` under 13.6 px (12.8 for a tag or a count badge) at the
+    browser's default font size."""
+    small = []
+    for cls, px, text in page.evaluate(_SIZES_JS, sel):
+        floor = 12.8 if ("fcc-stock-tag" in cls or "fcc-stock-count" in cls) else 13.6
+        if px < floor - 0.05:
+            small.append((cls, px, text))
+    return small
+
+
+def test_no_text_is_too_small_to_read(panel):
+    """Derek, 2026-10-21: the line under the title, the caption above the list
+    and the key legend were "really small", the rest "a little on the small
+    side", a worry on other screens and zoom levels. Nothing read in the window
+    or its dialog is under 13.6 px at the browser's default font size (tags and
+    count badges 12.8). RED on 38dbdd2 (11.9 px legend, 12.5 px caption)."""
+    page, open_ = panel
+    open_(_answer(REPORT))
+    _wait_state(page, "ready")
+    assert page.evaluate("parseFloat(getComputedStyle(document.documentElement).fontSize)") == 16
+    seen = []
+    for key in ("low", "out", "excluded"):
+        _tab(page, key)
+        seen += _too_small(page, PANEL)
+    page.keyboard.press("Delete")                            # the dialog, editing (Excluded list)
+    seen += _too_small(page, DIALOG)
+    page.locator(DIALOG + " [data-stock-dlg-save]").click()  # with its message line
+    seen += _too_small(page, DIALOG)
+    assert seen == [], seen
+
+
 def test_the_empty_and_error_states_are_readable(panel, assert_contrast):
     page, open_ = panel
     open_(_answer(EMPTY))

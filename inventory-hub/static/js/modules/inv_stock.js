@@ -65,34 +65,38 @@ console.log("🚀 Loaded Module: LOW STOCK");
 
     // Own, overlay-scoped styles (never Bootstrap's colours): light text on the
     // dark panel, checked by the contrast guard (tests/test_contrast_guard.py).
+    // Text sizes (Derek, 2026-10-21: readable on other screens and zoom levels):
+    // the window is 1rem; nothing that is read is under .85 of it (13.6 px at
+    // the browser's default), tags .8 (12.8 px), the rows' data .9. All em, so
+    // browser zoom and a larger default font scale it.
     const P = `#${OVERLAY_ID}`;
     const D = `#${DIALOG_ID}`;
     const CSS = `
 ${P} .fcc-stock-panel { background:#1e1e1e; color:#fff; border:2px solid #ffaa00; border-radius:8px;
-    padding:14px 16px 10px; width:min(760px, 94vw); max-height:86vh; display:flex; flex-direction:column;
-    box-shadow:0 10px 40px rgba(0,0,0,.6); font-size:.95rem; outline:none; text-align:left; }
+    padding:14px 16px 10px; width:min(800px, 94vw); max-height:86vh; display:flex; flex-direction:column;
+    box-shadow:0 10px 40px rgba(0,0,0,.6); font-size:1rem; outline:none; text-align:left; }
 ${P} .fcc-stock-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 ${P} .fcc-stock-title { font-size:1.2em; font-weight:700; color:#fff; }
 ${P} .fcc-stock-close { background:transparent; border:1px solid #777; color:#fff; border-radius:6px;
     padding:2px 10px; font-size:1em; line-height:1.4; cursor:pointer; }
 ${P} .fcc-stock-close:hover, ${P} .fcc-stock-close:focus-visible { border-color:#0dcaf0; outline:none; }
-${P} .fcc-stock-sub { color:#ddd; font-size:.85em; margin:4px 0 6px; }
+${P} .fcc-stock-sub { color:#ddd; font-size:.9em; margin:4px 0 6px; }
 ${P} .fcc-stock-tools { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:2px 0 8px; }
 ${P} .fcc-stock-tools[hidden] { display:none; }
 ${P} .fcc-stock-tabs { display:flex; flex-wrap:wrap; gap:4px; }
 ${P} .fcc-stock-tab { background:#2a2a2a; color:#fff; border:1px solid #555; border-radius:6px; padding:3px 10px;
-    font-size:.9em; line-height:1.5; cursor:pointer; }
+    font-size:.92em; line-height:1.5; cursor:pointer; }
 ${P} .fcc-stock-tab:hover { border-color:#999; }
 ${P} .fcc-stock-tab[aria-selected="true"] { background:#3d3000; border-color:#ffaa00; font-weight:600; }
 ${P} .fcc-stock-tab:focus-visible { outline:2px solid #0dcaf0; outline-offset:1px; }
 ${P} .fcc-stock-count { display:inline-block; min-width:1.6em; margin-left:5px; padding:0 6px; border-radius:9px;
-    background:#444; color:#fff; font-size:.85em; text-align:center; font-weight:600; }
+    background:#444; color:#fff; font-size:.9em; text-align:center; font-weight:600; }
 ${P} .fcc-stock-filter { flex:1 1 180px; min-width:140px; background:#111; color:#fff; border:1px solid #666;
-    border-radius:6px; padding:4px 8px; font-size:.9em; }
+    border-radius:6px; padding:4px 8px; font-size:.92em; }
 ${P} .fcc-stock-filter::placeholder { color:#aaa; }
 ${P} .fcc-stock-filter:focus { border-color:#0dcaf0; outline:none; box-shadow:0 0 0 2px rgba(13,202,240,.35); }
 ${P} .fcc-stock-body { overflow:auto; flex:1 1 auto; min-height:70px; padding-right:4px; }
-${P} .fcc-stock-cap { color:#ddd; font-size:.82em; margin:0 0 6px; }
+${P} .fcc-stock-cap { color:#ddd; font-size:.9em; margin:0 0 6px; }
 ${P} .fcc-stock-row { box-sizing:border-box; display:flex; flex-wrap:wrap; align-items:center; column-gap:8px;
     row-gap:2px; padding:4px 8px; min-height:34px; border:1px solid #3a3a3a; border-radius:6px; margin-bottom:4px; cursor:pointer;
     background:#262626; color:#fff; outline:none; }
@@ -103,52 +107,52 @@ ${P} .fcc-stock-swatch { display:inline-block; width:18px; height:18px; border-r
 ${P} .fcc-stock-name { flex:1 1 200px; min-width:0; font-weight:600; color:#fff; white-space:nowrap; overflow:hidden;
     text-overflow:ellipsis; }
 ${P} .fcc-stock-tag { display:inline-block; background:#3a3a3a; border:1px solid #666; color:#f1f1f1;
-    border-radius:10px; padding:0 7px; margin-left:4px; font-size:.75em; font-weight:500; vertical-align:middle; }
-${P} .fcc-stock-meta { flex:0 0 auto; color:#ddd; font-size:.85em; white-space:nowrap; }
+    border-radius:10px; padding:0 7px; margin-left:4px; font-size:.8em; font-weight:500; vertical-align:middle; }
+${P} .fcc-stock-meta { flex:0 0 auto; color:#ddd; font-size:.9em; white-space:nowrap; }
 ${P} .fcc-stock-why { flex:0 0 auto; background:#3a2323; border:1px solid #ff8a8a; color:#fff; border-radius:10px;
-    padding:0 8px; font-size:.8em; white-space:nowrap; }
-${P} .fcc-stock-note { flex:1 0 100%; color:#ddd; font-size:.82em; padding-left:26px; white-space:normal;
+    padding:0 8px; font-size:.85em; white-space:nowrap; }
+${P} .fcc-stock-note { flex:1 0 100%; color:#ddd; font-size:.88em; padding-left:26px; white-space:normal;
     overflow-wrap:anywhere; }
 ${P} .fcc-stock-buy { flex:0 0 auto; color:#ffc107; border:1px solid #ffc107; border-radius:6px; padding:0 8px;
-    font-size:.85em; line-height:1.6; text-decoration:none; white-space:nowrap; background:transparent; }
+    font-size:.88em; line-height:1.6; text-decoration:none; white-space:nowrap; background:transparent; }
 ${P} .fcc-stock-buy:hover, ${P} .fcc-stock-buy:focus-visible { background:#ffc107; color:#111; outline:none; }
 ${P} .fcc-stock-act { flex:0 0 auto; background:transparent; border:1px solid #777; color:#fff; border-radius:6px;
-    padding:0 7px; font-size:.9em; line-height:1.6; cursor:pointer; }
+    padding:0 7px; font-size:.92em; line-height:1.6; cursor:pointer; }
 ${P} .fcc-stock-act:hover, ${P} .fcc-stock-act:focus-visible { border-color:#ff8a8a; background:#3a2323; outline:none; }
 ${P} .fcc-stock-none { color:#ddd; font-style:italic; padding:0 4px 6px; }
 ${P} .fcc-stock-state { color:#fff; text-align:center; padding:22px 8px; }
-${P} .fcc-stock-state-sub { color:#ddd; font-size:.88em; margin-top:4px; }
+${P} .fcc-stock-state-sub { color:#ddd; font-size:.9em; margin-top:4px; }
 ${P} .fcc-stock-error-title { color:#ff8a8a; font-weight:700; font-size:1.05em; margin-bottom:6px; }
 ${P} .fcc-stock-retry { margin-top:12px; background:transparent; color:#fff; border:1px solid #0dcaf0;
     border-radius:6px; padding:4px 12px; cursor:pointer; }
 ${P} .fcc-stock-retry:hover, ${P} .fcc-stock-retry:focus-visible { background:#0dcaf0; color:#111; outline:none; }
-${P} .fcc-stock-foot { color:#ccc; font-size:.78em; margin-top:8px; border-top:1px solid #333; padding-top:6px; }
+${P} .fcc-stock-foot { color:#ccc; font-size:.85em; margin-top:8px; border-top:1px solid #333; padding-top:6px; }
 @media (max-width: 520px) {
     ${P} .fcc-stock-name { flex-basis:calc(100% - 30px); white-space:normal; }
 }
 ${D} .fcc-stock-dlg { background:#1e1e1e; color:#fff; border:2px solid #ff8a8a; border-radius:8px; padding:14px 16px;
     width:min(460px, 92vw); max-height:90vh; overflow:auto; box-shadow:0 10px 40px rgba(0,0,0,.6);
-    font-size:.95rem; text-align:left; outline:none; }
+    font-size:1rem; text-align:left; outline:none; }
 ${D} .fcc-stock-dlg-title { font-weight:700; font-size:1.1em; color:#fff; }
 ${D} .fcc-stock-dlg-name { color:#fff; font-weight:600; margin:2px 0 10px; overflow-wrap:anywhere; }
-${D} .fcc-stock-dlg-was { color:#ddd; font-size:.85em; margin:-6px 0 10px; }
+${D} .fcc-stock-dlg-was { color:#ddd; font-size:.9em; margin:-6px 0 10px; }
 ${D} fieldset { border:0; padding:0; margin:0 0 8px; min-width:0; }
 ${D} legend { float:none; width:auto; padding:0; margin:0 0 4px; font-size:.95em; color:#fff; }
 ${D} .fcc-stock-reason { display:flex; align-items:baseline; gap:8px; padding:4px 6px; border-radius:6px;
     cursor:pointer; color:#fff; margin:0; }
 ${D} .fcc-stock-reason:hover { background:#2a2a2a; }
 ${D} .fcc-stock-reason input { accent-color:#ff8a8a; margin:0; }
-${D} .fcc-stock-reason-hint { color:#ddd; font-size:.85em; }
-${D} .fcc-stock-note-label { display:block; color:#fff; font-size:.9em; margin:4px 0 3px; }
+${D} .fcc-stock-reason-hint { color:#ddd; font-size:.88em; }
+${D} .fcc-stock-note-label { display:block; color:#fff; font-size:1em; margin:4px 0 3px; }
 ${D} .fcc-stock-note-input { width:100%; background:#111; color:#fff; border:1px solid #666; border-radius:6px;
-    padding:6px 8px; font-size:.9em; resize:vertical; }
+    padding:6px 8px; font-size:.95em; resize:vertical; }
 ${D} .fcc-stock-note-input::placeholder { color:#aaa; }
 ${D} .fcc-stock-note-input:focus { border-color:#0dcaf0; outline:none; }
-${D} .fcc-stock-dlg-msg { color:#ff8a8a; min-height:1.2em; font-size:.88em; margin:6px 0 2px; }
-${D} .fcc-stock-dlg-help { color:#ddd; font-size:.8em; margin-bottom:10px; }
+${D} .fcc-stock-dlg-msg { color:#ff8a8a; min-height:1.2em; font-size:.9em; margin:6px 0 2px; }
+${D} .fcc-stock-dlg-help { color:#ddd; font-size:.88em; margin-bottom:10px; }
 ${D} .fcc-stock-dlg-buttons { display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end; }
 ${D} .fcc-stock-dlg-btn { border:1px solid #777; background:transparent; color:#fff; border-radius:6px; padding:5px 12px;
-    font-size:.9em; cursor:pointer; }
+    font-size:.92em; cursor:pointer; }
 ${D} .fcc-stock-dlg-btn:hover { border-color:#bbb; }
 ${D} .fcc-stock-dlg-btn:focus-visible { outline:2px solid #0dcaf0; outline-offset:2px; }
 ${D} .fcc-stock-dlg-save { background:#ff8a8a; border-color:#ff8a8a; color:#111; font-weight:700; }
