@@ -121,6 +121,9 @@
   `feature/group-51-move-archive-integrity`, `feature/groups-48-49-cards-restock`,
   `feature/group-49-find-and-restock`, `feature/group-52-spoolman-read-load`, `fix/bundle-reads-1`,
   `bundle/2026-10-19` (all on `origin`); and `fix/bundle-followups-2026-10-20` (merged `0bd0293`, on `origin`).
+  **Added 2026-10-21 (merged into `dev` `e7699c4`):** `fix/low-stock-out-list-2026-10-20`,
+  `feat/not-buying-again-2026-10-20`, `fix/extras-clear-spoolman-027-2026-10-21`, `bundle/2026-10-21` (all on
+  `origin`).
 * **⏸️ PENDING DEREK — lay out and label the INDX spool holders (and the 8-spool box; maybe the XL's holders).**
   _(Derek, 2026-10-19, answering the refresh's holder question.)_ Setting them up in FCC as a box with one slot per
   holder (no code) is *"possibly the way to go"*, but it is his grunt work and design first:
@@ -140,7 +143,9 @@
   question. **Done when** the holders (and the box, if used) have rows, feeds and printed slot labels; that also
   lets his "INDX heads without labels" item close, once his F2 check passes.
 * **⏸️ PENDING DEREK — the ⚠️ Low stock list: the bigger text, then exclude what you can't get (nothing here blocks a release).**
-  1. **Is the bigger text right?** (🔍 Search → ⚠️ Low stock on dev.) On 2026-10-21 the window's small text went up
+  1. **Is the bigger text right?** (🔍 Search → ⚠️ Low stock on dev; on `dev` `e7699c4`, not yet on `main`; we'll look
+     at it with the app-wide text-size proposal, one item at a time, pictures in `review-samples/2026-10-21-text-size/`.)
+     On 2026-10-21 the window's small text went up
      (the line under the title, the caption above the list and the key legend from about 12 px to 13.6–14.4 px; the
      rows' grams a little), same layout. It is its own commit (`ce35d21`), so the old compact look is one revert away.
      Dev's threshold is still 925 g for the long list (27 rows; back to 250 when you're done looking), and two dev
@@ -165,20 +170,6 @@
 > Ordinary backlog items, not hands-on work; most name the group that owns them. This heading was added on
 > 2026-10-19 so they stop reading as part of ⏸️ PENDING DEREK above, which had no closing heading.
 
-* **🐞 The delete sentinel clears nothing on Spoolman 0.27 (found 2026-10-20 on dev).** FCC clears an extra (a field
-  blanked in the wizard's edit mode or the Edit Filament modal, a vendor's website) by sending `__FCC_DELETE_EXTRA__`,
-  which the read-merge pops, so the PATCH leaves the key out. Spoolman 0.23 replaced the whole `extra` on a PATCH, so
-  a key left out was gone; dev's Spoolman 0.27.0 merges key by key and KEEPS it (checked on dev filament 91,
-  2026-10-20: left out, kept; sent as `""`, cleared; put back after). So on 0.27 every "blank it to clear it" edit
-  quietly keeps the old value. **Prod runs 0.27.0 too** (same build as dev, read 2026-10-21 with Derek's OK), so this
-  is live there. **✅ Fixed 2026-10-21** (`fix/extras-clear-spoolman-027-2026-10-21` `95457a7`, in
-  `bundle/2026-10-21`; on `dev` once its review and full test run pass): a clear is the delete sentinel, which
-  `update_spool` / `update_filament` / `update_vendor` now write as a JSON null (Spoolman 0.26+: "Extra field values
-  can be cleared again"), checked per field type on dev with throwaway records (deleted after); anything Spoolman
-  keeps is a 7 s warning. Also fixed on the way: the wizard's spool links re-sending an old link over an emptied one,
-  the chip field whose last chip was removed, the slicer-profile "(none)" and Swatch "Unknown / clear", reset_dev's
-  drifted extras, and `_ghost_trail_from`'s None slot. Spools had merged key by key since Spoolman 0.22, so a cleared
-  SPOOL extra never cleared, even before 0.27. **Standalone.**
 * **Emptying a plain field in the wizard doesn't clear it (found 2026-10-21 by the extras-clear fix).** The wizard
   drops a native field it reads as empty from its payload (`settings_extruder_temp`, `settings_bed_temp`, price, the
   spool's and the filament's empty weight), so erasing one and saving keeps the old value. Not an extra, so the

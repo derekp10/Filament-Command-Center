@@ -1,5 +1,25 @@
 # **Done**
 
+* **[2026-10-21 — 🧹 Spoolman 0.27 clears + the ⚠️ Low stock list's Excluded tab → `bundle/2026-10-21` (merged to `dev` `e7699c4`)]** — Derek's 2026-10-20/21 answers on the Low stock list, and the clear bug found while building it ([handoff](docs/agent_docs/tasks/session-handoff-2026-10-14.md), "Low stock Excluded + the Spoolman 0.27 clear fix"); one review over both (`wf_c3a8f622-d61`: 8 confirmed, 0 refuted, all fixed in `71e2d17`), offline 3513/0 with the test fake in both Spoolman modes, full sweep 4500 passed / 2 failed (both the bundle's own expected changes, fixed in `ff0b780`).
+
+  * ✅ **The delete sentinel clears nothing on Spoolman 0.27 (found 2026-10-20 on dev; prod runs 0.27.0 too).** FCC
+    cleared an extra by sending `__FCC_DELETE_EXTRA__`, which the read-merge popped, so the PATCH left the key out;
+    Spoolman 0.26+ merges a PATCH's `extra` key by key and KEEPS a key left out (spools had merged since 0.22, so a
+    spool extra never cleared at all). Fixed: the sentinel is written as the field type's clear, a JSON null on 0.26+
+    (checked per type on dev with throwaway records, deleted after), with fallbacks for an older Spoolman; anything
+    Spoolman keeps is a 7 s warning. Also fixed on the way: the wizard's spool links re-sending an old link over an
+    emptied one, the chip field whose last chip was removed, the slicer-profile "(none)" and Swatch "Unknown / clear",
+    reset_dev's drifted extras, `_ghost_trail_from`'s None slot, a text extra holding "true" sent as a boolean. The
+    review found the one that mattered most: the wizard's single-choice ➕ redrew every extra blank, which a Save would
+    now have ERASED; the ➕ adds its option in place and edit mode clears only fields the user changed.
+  * ✅ **The ⚠️ Low stock list's Out section and "won't rebuy" (Derek, 2026-10-20/21).** Out lists the filaments with no
+    spool record (last, "no spool on record"); a filament can be **Excluded** from Low and Out with a reason
+    (Discontinued, Can't find it, One-off, Didn't like it, Other + a note; "just because it's discontinued, or I can't
+    find it from the manufacturer, doesn't mean I didn't like it"), listed on its own tab, Include again undoes it; the
+    list is Low / Out / Excluded tabs with counts, a filter and one line per filament ("I love the design"), with the
+    small text raised to a 13.6 px floor. Replaced the dev-only "One-off" attribute idea. Still his: whether the bigger
+    text is right (⏸️ PENDING DEREK), and excluding the prod filaments he can't get.
+
 * **[2026-10-19 — 🔒 Group 51 Move & Archive Integrity DONE → `feature/group-51-move-archive-integrity` (merged to `dev` `2ec9f46` with the bundle)]** — A move does what the screen showed, and nothing else; built in the 2026-10-19 bundle run with Groups 48, 49 and 52 ([plan](docs/agent_docs/tasks/bundle-2026-10-19.md); [handoff](docs/agent_docs/tasks/session-handoff-2026-10-14.md), "Bundle run"); one review over the bundle (`wf_ee3ec73c-b42`: 17 findings, 14 confirmed, none red, all fixed), offline and browser runs green, then the one full sweep before `dev` ([task file](docs/agent_docs/tasks/51-move-archive-integrity.md)).
 
   * ✅ **51.1 — only a weight write is a refill.** A move, an `ID:` label scan or any location- or extra-only write leaves a spool archived by hand archived, where the write put it (Derek's 43.2 rule). Review follow-ups: an archived spool is never loaded onto a head (`blocked_reason: archived`), and a `remaining_weight` weigh-back counts as a weight write again.

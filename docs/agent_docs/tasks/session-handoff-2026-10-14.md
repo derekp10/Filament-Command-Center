@@ -602,6 +602,45 @@ Resume cron: session-only, hourly; deleted once this section says DONE. Every br
    head from the grid's empty tile or the Quick-Swap deposit, is stored in the slot, not loaded straight back (the
    engine's rule for a slot it picks, now that those two doors send the slot they showed as `picked_slot`).
 
+### Low stock Excluded + the Spoolman 0.27 clear fix (2026-10-20 → 21) — DONE (`dev` `e7699c4`; `main` waits for Derek's OK)
+
+**Derek's asks, 2026-10-20 evening:** pivot the Low stock "One-off" tag to "not available any more / don't rebuy",
+include the 11 never-stocked filaments under Out ("they are technically out"), a dev scenario with 20+ rows to judge
+the layout ("we may want to re-design the UI"), and a way "to document why I'm not buying anymore of it". His picks:
+**mark from the list, with a reason**, and **tabs + filter + short rows**, as a sample on dev first.
+**2026-10-21:** "perhaps a better term … would be ignore or something else (exclude?) … just because it's
+discontinued, or I can't find it from the manufacture, doesn't mean I didn't like it"; OK to read prod's Spoolman
+version; the small text "really small … I'm torn because I like the look … on the fence"; "Otherwise I love the
+design … shippable once we have addressed the other two things". Then, on the app-wide text-size proposal: "just so
+much text … can we look at it together later, going over each thing one at a time, with an easy way for me to open the
+images".
+
+**What shipped to `dev` (`e7699c4`, via `bundle/2026-10-21`):**
+- `68a9b9d` Out includes filaments with no spool record (a second strict read, of every filament).
+- `97eb885` + `38dbdd2` the Excluded list: three filament extras `fcc_stock_excluded` / `_note` / `_at` (labelled
+  "Excluded From Low Stock…" in Spoolman, registered at startup and in setup_fields.py), `POST` / `DELETE
+  /api/filament/<id>/stock_exclusion`, the `excluded` report list, the tabbed window (🔕 / ✏️ / Del, a reason dialog,
+  Include again), the day from the page's own clock (dev's container is UTC). Dev's old `fcc_no_rebuy*` fields were
+  deleted (only Claude's two sample marks had them).
+- `ce35d21` text sizes: nothing read under 13.6 px (the legend was 11.9), same layout, its own commit.
+- `95457a7` the 0.27 clear fix (built by a workflow; the builder died on an auth drop with its work uncommitted, and a
+  finisher agent completed it), `87533d7` the exclusion clears through the sentinel, `71e2d17` the review's 8 fixes,
+  `ff0b780` the sweep's two expected reds.
+- Prod's Spoolman read 2026-10-21 (his OK): 0.27.0, the same build as dev (`bed3f14`), so the clear bug was live on prod.
+
+**Left for Derek:** the text-size walkthrough (one item at a time; `review-samples/2026-10-21-text-size/`, numbered;
+the long write-up is `scratchpad/readability/proposal.md`, Claude's reference only: the rule A/B/C/D, rec. A = 13.6 px
+text and 12.8 px labels everywhere; badges 12 → 12.8, rec. yes; a per-browser Text size setting, rec. not now); the
+Low stock window's bigger text (same session); the `main` release (Groups 51/48/49/52 + this); excluding the prod
+filaments he can't get. **Dev state to undo after his look:** `low_stock_g` is 925 (was 250), and filaments 91 and 96
+carry sample exclusions (Include again clears them).
+
+**Follow-ups filed:** emptying a plain (non-extra) wizard field doesn't clear it; partial PATCHes once Spoolman 0.26
+is the minimum (his call).
+
+**Lesson:** a fix that makes a long-dead write path work turns old UI quirks into data loss: when a clear starts
+clearing, review every page that sends one (the ➕ redraw had been harmless only because clears did nothing).
+
 ## Questions for Derek
 
 Asked before Derek went to bed, from the pre-flight reconcile (`wf_1a1ff135-1c6`, read-only). Recorded as
@@ -724,3 +763,7 @@ harness's 1% tolerance let stale CORE1 text pass).
 | `wf_ee3ec73c-b42` bundle-review-2026-10-19 | Groups 51 + 48 + 49 + 52 | 5 (4 lenses + 1 batched skeptic) | 2,253,123 subagent | ~45 min, 635 tool calls; 17 findings → 14 confirmed (1 orange, 7 yellow, 6 notes), 3 duplicates, none refuted; all fixed (`f190884`, `9e5db92`, `3b2196a`; reads-1 by the fixer below) |
 | fixer (Agent, worktree) 2026-10-19 | the review's reads-1 | 1 | 397,787 subagent | 30 min, 124 tool calls; merged `5e90f4d` |
 | `wf_2f994a96-2c5` review-bundle-followups-2026-10-20 | Derek's answers (archived at a head, no profile guess, the Low stock list) | 3 (2 lenses + 1 batched skeptic) | 1,065,766 subagent | ~44 min, 255 tool calls; 9 findings → 7 confirmed (2 orange), 2 duplicates; all fixed (`c22ac1c`) |
+| `wf_56be9ee6-846` extras-clear-spoolman-027 | the 0.27 clear: research + build | 4 (Spoolman source, a dev probe, FCC's omission sites, a builder) | 1,360,807 subagent | ~61 min; the builder died on an OAuth drop with its work uncommitted |
+| `wf_3b443524-31f` readability-audit | app-wide small text | 3 (2 measurers + a proposal writer) | 978,494 subagent | ~46 min, read-only on dev; the writer died on the same drop after writing proposal.md |
+| `wf_a90dfa8b-6e4` extras-clear-finish | the builder's uncommitted fix | 1 | 477,163 subagent | ~34 min; reviewed the diff against the research, fixed 2 gaps, both fake modes, base proof, `95457a7` |
+| `wf_c3a8f622-d61` review-low-stock-and-extras-clear | bundle/2026-10-21 | 4 (3 lenses + 1 batched verifier) | 1,479,629 subagent | ~41 min; 10 findings → 8 confirmed (2 red, 1 orange, 5 yellow), 2 duplicates, none refuted; all fixed (`71e2d17`) |
