@@ -107,8 +107,11 @@ ${P} .fcc-stock-foot { color:#ccc; font-size:.78em; margin-top:8px; border-top:1
         const grams = Math.round(Number(row.grams) || 0);
         const inStock = Number(row.spools) || 0;
         const total = Number(row.spools_total) || 0;
+        // A filament with no spool on record at all (Derek, 2026-10-20: "they are
+        // technically out") says so; the server lists it after the used-up ones.
         const meta = kind === 'out'
-            ? `0 g · none in stock (${_plural(total, 'spool', 'spools')} archived or empty)`
+            ? (row.no_spools ? '0 g · no spool on record'
+                : `0 g · none in stock (${_plural(total, 'spool', 'spools')} archived or empty)`)
             : `${grams} g left in ${_plural(inStock, 'spool', 'spools')}`;
         const tags = (Array.isArray(row.attributes) ? row.attributes : [])
             .map((a) => `<span class="fcc-stock-tag">${esc(a)}</span>`).join('');

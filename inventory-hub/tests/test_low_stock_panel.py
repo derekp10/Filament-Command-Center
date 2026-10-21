@@ -552,3 +552,18 @@ def test_a_list_that_came_back_closes_under_a_new_window_and_returns_after(panel
     page.evaluate("window.__closeModal('spoolModal')")
     assert _back(page, "20", 3) == "20"
     assert page.evaluate("window.__errors") == []
+
+
+def test_a_filament_with_no_spool_on_record_says_so(panel):
+    """Derek, 2026-10-20: they are listed under Out too, after the used-up ones,
+    and read as never having had a spool. RED on 74d780a."""
+    page, open_ = panel
+    report = copy.deepcopy(REPORT)
+    never = _row(29, "Polymaker - PC - Clear", 0, 0, 0, color="eeeeee")
+    never["no_spools"] = True
+    report["out"].append(never)
+    open_(_answer(report))
+    _wait_state(page, "ready")
+    rows = {r["fid"]: r for r in _row_texts(page)}
+    assert rows["29"]["kind"] == "out" and rows["29"]["meta"] == "0 g · no spool on record", rows["29"]
+    assert rows["20"]["meta"] == "0 g · none in stock (2 spools archived or empty)", rows["20"]

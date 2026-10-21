@@ -9,11 +9,14 @@ empty, and a filament holding one is never judged low.
 
   low  a filament with stock whose in-stock spools add up to less than
        `low_stock_g` grams (config, ⚙️ Behavior, default 250);
-  out  a filament with spools on record but none in stock. A filament with no
-       spools at all was never stocked and is never listed. A filament tagged
-       with a "One-off" attribute (any case, with or without the dash or a
-       space) is one Derek won't rebuy: it stays off "out" (it can still be
-       low, with its tag showing, so he can see why it won't be on "out").
+  out  a filament with no spool in stock: its spools are all archived or
+       empty, or it has no spool on record at all (Derek, 2026-10-20: "they are
+       technically out"; on prod those are the first import's samples and
+       filaments used up before he tracked them), listed after the others with
+       `no_spools`. A filament tagged with a "One-off" attribute (any case, with
+       or without the dash or a space) is one Derek won't rebuy: it stays off
+       "out" (it can still be low, with its tag showing, so he can see why it
+       won't be on "out").
 
 The list (`build_report`, behind GET /api/stock_report, routes_inventory.py)
 reads Spoolman ONCE and strictly, every spool with the archived ones
@@ -22,9 +25,9 @@ reads Spoolman ONCE and strictly, every spool with the archived ones
 A read that fails raises StockReadError, and the route answers an error, never
 an empty list. Each spool carries its full filament record (Spoolman nests the
 same record /api/v1/filament returns: all 257 spools on dev matched on
-2026-10-19), and a filament with no spools is never listed, so the filament
-list needs no second read. It runs only when the panel opens, never on the
-dashboard heartbeat.
+2026-10-19); a second strict read, of every filament, finds the ones with no
+spool on record. It runs only when the panel opens, never on the dashboard
+heartbeat.
 
 The warning (`check_after_deduct`, `check_after_weight_change`) logs ONE
 Activity Log WARNING per filament when a write takes it across a line:
@@ -277,10 +280,13 @@ def build_report():
     template = cfg.get('buy_more_url_template') or ''
     try:
         spools = spoolman_api.get_all_spools_strict(allow_archived=True)
+        filaments = _all_filaments_strict()
     except Exception as e:
         raise StockReadError(str(e) or e.__class__.__name__)
     if not isinstance(spools, list):
         raise StockReadError("Spoolman's answer wasn't a spool list")
+    if not isinstance(filaments, list):
+        raise StockReadError("Spoolman's answer wasn't a filament list")
 
     by_fid = {}
     for s in spools:
@@ -299,10 +305,23 @@ def build_report():
                 out.append(row)
         elif not unknown and grams < threshold:
             low.append(_row(fid, entry["fil"], grams, count, len(entry["spools"]), template))
+    # A filament with no spool on record at all is out too, after the others.
+    for fil in filaments:
+        try:
+            fid = int((fil or {}).get('id'))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if fid in by_fid:
+            continue
+        row = _row(fid, fil, 0.0, 0, 0, template)
+        row["no_spools"] = True
+        if not row["one_off"]:
+            out.append(row)
     low.sort(key=lambda r: (r["grams"], r["display"].lower(), r["filament_id"]))
-    out.sort(key=lambda r: (r["display"].lower(), r["filament_id"]))
+    out.sort(key=lambda r: (bool(r.get("no_spools")), r["display"].lower(), r["filament_id"]))
     return {"success": True, "threshold_g": threshold, "low": low, "out": out,
-            "filaments": len(by_fid), "spools": len(spools)}
+            "filaments": len(set(by_fid) | {f.get('id') for f in filaments if isinstance(f, dict)}),
+            "spools": len(spools)}
 
 
 # --- the warning ------------------------------------------------------------------
@@ -319,6 +338,11 @@ def _get_json(path):
     resp = requests.get(f"{sm_url}{path}", timeout=_READ_TIMEOUT)
     resp.raise_for_status()
     return spoolman_api.parse_inbound_data(resp.json())
+
+
+def _all_filaments_strict():
+    """Every filament, one strict read: raises when Spoolman doesn't answer."""
+    return _get_json("/api/v1/filament")
 
 
 def _spool_strict(sid):

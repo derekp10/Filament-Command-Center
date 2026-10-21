@@ -2,10 +2,11 @@
 and its `low_stock_g` setting.
 
 Stock is counted per FILAMENT across its in-stock spools (not archived, grams
-left). Low = under `low_stock_g` (default 250 g). Out = spools on record, none in
-stock; a filament with no spools at all is never listed, and a "One-off" filament
-stays off "out". The list reads Spoolman once, strictly: a failed read answers an
-error, never an empty or "all out" list.
+left). Low = under `low_stock_g` (default 250 g). Out = none in stock, a filament
+with no spool on record at all included (after the others, `no_spools`; Derek,
+2026-10-20), and a "One-off" filament stays off "out". The list reads Spoolman's
+spools and filaments, strictly: a failed read answers an error, never an empty
+or "all out" list.
 
 Hermetic: Spoolman is a fake (the strict read or `requests.get` is patched), the
 config is patched. Runs under --offline.
@@ -60,13 +61,24 @@ def cfg(monkeypatch):
 
 @pytest.fixture
 def spoolman(monkeypatch):
-    """The strict all-spools read, answering whatever the test puts in it."""
-    holder = {"spools": [], "calls": []}
+    """The strict all-spools read, answering whatever the test puts in it, and the
+    strict all-filaments read: `filaments` when a test sets it, else the
+    filaments the spools carry (so no filament is without a spool)."""
+    holder = {"spools": [], "calls": [], "filaments": None}
 
     def _read(allow_archived=False):
         holder["calls"].append(allow_archived)
         return copy.deepcopy(holder["spools"])
+
+    def _filaments():
+        if holder["filaments"] is not None:
+            return copy.deepcopy(holder["filaments"])
+        seen = {}
+        for sp in holder["spools"]:
+            seen.setdefault(sp["filament"]["id"], copy.deepcopy(sp["filament"]))
+        return list(seen.values())
     monkeypatch.setattr(spoolman_api, "get_all_spools_strict", _read)
+    monkeypatch.setattr(stock_report, "_all_filaments_strict", _filaments)
     return holder
 
 
@@ -143,14 +155,37 @@ def test_a_one_off_filament_is_never_out_but_can_be_low(cfg, spoolman):
     assert rep["low"][0]["attributes"] == ["ONEOFF"]
 
 
-def test_a_filament_with_no_spools_is_never_listed(cfg, spoolman):
-    """Only filaments with spools on record are seen at all (the spool list is
-    the only read), so a filament that was never stocked can't be "out"."""
-    f = _fil(60)
-    spoolman["spools"] = [_spool(1, f, 800)]
+def test_a_filament_with_no_spool_on_record_is_out_after_the_others(cfg, spoolman):
+    """Derek, 2026-10-20: "please include those, they are technically out" (on
+    prod, 11 filaments from the first import never had a spool record). Listed
+    after the used-up ones, marked `no_spools`; a One-off one stays off. RED on
+    74d780a (never listed)."""
+    used_up, stocked = _fil(60, name="Zebra"), _fil(61, name="Mint")
+    never_a, never_b = _fil(70, name="Apple"), _fil(71, name="Kiwi")
+    never_rebuy = _fil(72, name="Plum", attrs=["One-off"])
+    spoolman["spools"] = [_spool(1, used_up, 0, archived=True), _spool(2, stocked, 800)]
+    spoolman["filaments"] = [used_up, stocked, never_a, never_b, never_rebuy]
     rep = stock_report.build_report()
-    assert rep["low"] == [] and rep["out"] == []
-    assert rep["filaments"] == 1
+    assert _ids(rep["out"]) == [60, 70, 71], rep["out"]
+    assert [r.get("no_spools", False) for r in rep["out"]] == [False, True, True], rep["out"]
+    apple = rep["out"][1]
+    assert (apple["grams"], apple["spools"], apple["spools_total"]) == (0.0, 0, 0), apple
+    assert apple["display"] == "Prusament - PLA - Apple", apple
+    assert rep["filaments"] == 5
+
+
+def test_a_failed_filament_read_is_a_failed_read(cfg, spoolman, monkeypatch):
+    """The spools read, the filaments didn't: an error, never a list missing them."""
+    spoolman["spools"] = [_spool(1, _fil(60), 0, archived=True)]
+
+    def _boom():
+        raise requests.exceptions.ReadTimeout("read timed out")
+    monkeypatch.setattr(stock_report, "_all_filaments_strict", _boom)
+    with pytest.raises(stock_report.StockReadError):
+        stock_report.build_report()
+    monkeypatch.setattr(stock_report, "_all_filaments_strict", lambda: {"detail": "x"})
+    with pytest.raises(stock_report.StockReadError):
+        stock_report.build_report()
 
 
 def test_a_spool_of_unknown_weight_keeps_its_filament_off_both_lists(cfg, spoolman):
@@ -281,7 +316,9 @@ def test_the_real_strict_read_is_asked_for_archived_spools_and_fails_closed(cfg,
         seen.append(url)
         r = MagicMock()
         r.ok, r.status_code = True, 200
-        r.json.return_value = json.loads(json.dumps(wire))
+        # The filament list (every filament here has a spool), else the spools.
+        body = [f, _fil(96)] if url.split("?")[0].endswith("/api/v1/filament") else wire
+        r.json.return_value = json.loads(json.dumps(body))
         r.raise_for_status.return_value = None
         return r
     monkeypatch.setattr(spoolman_api.requests, "get", _get)
