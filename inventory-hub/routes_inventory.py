@@ -1578,8 +1578,8 @@ def api_stock_report():
 
     Per filament, across its in-stock spools: `low` (under the `low_stock_g`
     setting, fewest grams first), `out` (none in stock, a filament with no spool
-    on record included) and `not_rebuying` (marked "not buying again": never low
-    or out). Two strict Spoolman reads (spools, filaments), made only when the
+    on record included) and `excluded` (left off both from the list, with
+    why: never low or out). Two strict Spoolman reads (spools, filaments), made only when the
     panel opens. A read that fails answers an error (502), NEVER an empty or
     "all out" list: an empty list must mean nothing is low."""
     try:
@@ -1596,9 +1596,9 @@ def api_stock_report():
                         "msg": f"FCC couldn't build the Low-stock list: {e}"}), 500
 
 
-@app.route('/api/filament/<int:fid>/no_rebuy', methods=['POST', 'DELETE'])
-def api_filament_no_rebuy(fid):
-    """"Not buying again" (Derek, 2026-10-20), from the ⚠️ Low stock list.
+@app.route('/api/filament/<int:fid>/stock_exclusion', methods=['POST', 'DELETE'])
+def api_filament_stock_exclusion(fid):
+    """Excluded from Low and Out (Derek, 2026-10-20 / 21), from the ⚠️ Low stock list.
 
     POST {reason, note, today}: marks the filament (reason: discontinued |
     one_off | didnt_like | other; the note is optional, up to 500 characters, and
@@ -1606,27 +1606,27 @@ def api_filament_no_rebuy(fid):
     it is a real date near the server's). Marking it again changes the reason
     and note and keeps the day.
     DELETE: tracks it again (the three extras cleared). Both read the filament
-    strictly first and write once, read-merge (stock_report.mark_not_rebuying /
-    track_again); the Activity Log says what happened.
+    strictly first and write once, read-merge (stock_report.exclude_filament /
+    include_again); the Activity Log says what happened.
 
-    Answers {success, filament_id, display, not_rebuying, was[, changed], msg};
+    Answers {success, filament_id, display, excluded, was[, changed], msg};
     on a refusal or a failure {success: false, error, msg} with 400 (a bad
     reason or note), 404 (no such filament) or 502 (Spoolman didn't answer, or
     didn't save it: its own error in `msg`)."""
     try:
         if request.method == 'DELETE':
-            res = stock_report.track_again(fid)
-            res["msg"] = (f"{res['display']} is tracked again." if res.get("changed")
-                          else f"{res['display']} wasn't marked.")
+            res = stock_report.include_again(fid)
+            res["msg"] = (f"{res['display']} is included again." if res.get("changed")
+                          else f"{res['display']} wasn't excluded.")
         else:
             body = request.get_json(silent=True)
             body = body if isinstance(body, dict) else {}
-            res = stock_report.mark_not_rebuying(fid, body.get('reason'), body.get('note'), body.get('today'))
-            res["msg"] = f"Not buying {res['display']} again ({res['not_rebuying']['reason']})."
-    except stock_report.NoRebuyError as e:
+            res = stock_report.exclude_filament(fid, body.get('reason'), body.get('note'), body.get('today'))
+            res["msg"] = f"Excluded {res['display']} from Low and Out ({res['excluded']['reason']})."
+    except stock_report.ExclusionError as e:
         return jsonify({"success": False, "error": e.error, "msg": e.msg}), e.status
     except Exception as e:
-        state.logger.error(f"Not buying again, filament {fid}: {e}")
+        state.logger.error(f"Low stock exclusion, filament {fid}: {e}")
         return jsonify({"success": False, "error": "failed",
                         "msg": f"FCC couldn't change it: {e}"}), 500
     res["success"] = True

@@ -1,22 +1,21 @@
 """Group 49.2a: the ⚠️ Low-stock panel (static/js/modules/inv_stock.js), hermetic,
-with Derek's 2026-10-20 sample: three lists (Low / Out / Not buying again) as
-tabs with counts, a filter, one line per filament, and "not buying again" with a
-reason, from the list.
+with Derek's 2026-10-20 sample: three lists (Low / Out / Excluded) as tabs with
+counts, a filter, one line per filament, and excluding a filament from Low and Out
+with a reason, from the list ("Excluded", not "Not buying again", since
+2026-10-21).
 
 Runs the REAL overlay_mount.js, inv_core.js and inv_stock.js with the real
 static/css/global.css in `isolated_page` (a chromium with no route to any
 network), so it RUNS under --offline. `fetch` is stubbed in the page:
-/api/stock_report answers from window.__answers, and the "not buying again"
-writes (POST / DELETE /api/filament/<id>/no_rebuy) from window.__writeAnswers,
+/api/stock_report answers from window.__answers, and the exclusion writes (POST / DELETE /api/filament/<id>/stock_exclusion) from window.__writeAnswers,
 each recorded in window.__sent. openFilamentDetails, showToast and processScan
 are recorders.
 
 Pinned: the tabs (counts, the list it opens on, ← / → and clicks), the rows (one
-line, names, grams, spools, tags, swatch, the no-spool and not-buying-again
-wording), the Buy link only when a web link resolves, the filter (/, words in any
+line, names, grams, spools, tags, swatch, the no-spool and excluded wording), the Buy link only when a web link resolves, the filter (/, words in any
 order across names, tags, reasons and notes, the counts it shows, ↓ into the
 list, Enter from it, a scan typed into it going to the scan path), the reason
-dialog (🚫 and Del, a reason needed and a note for Other, Save and Track again,
+dialog (🔕 and Del, a reason needed and a note for Other, Save and Include again,
 its keys, a scan never answering it, a failure kept on screen, closing with its
 search panel), the empty and error states, keyboard navigation, escaping of
 every piece of text, the contrast guard on every state, one request per opening
@@ -44,7 +43,7 @@ FILTER = "#fcc-low-stock-overlay [data-stock-filter]"
 
 # Set up before the modules load: the registerShortcut queue (scripts.html's
 # shim), a fetch that answers /api/stock_report from window.__answers and the
-# no_rebuy writes from window.__writeAnswers (one per request; the last repeats;
+# stock_exclusion writes from window.__writeAnswers (one per request; the last repeats;
 # {network:true} rejects like a dropped connection, {delay:ms} holds the
 # answer), and recorders for openFilamentDetails (inv_details.js's global) and
 # processScan (inv_cmd.js's).
@@ -63,7 +62,7 @@ window.addEventListener('error', (e) => window.__errors.push(String(e.message)))
 window.fetch = function (url, opts) {
     url = String(url);
     let queue;
-    if (url.indexOf('/no_rebuy') >= 0) {
+    if (url.indexOf('/stock_exclusion') >= 0) {
         window.__sent.push({ url, method: (opts && opts.method) || 'GET',
                              body: opts && opts.body ? JSON.parse(opts.body) : null });
         queue = window.__writeAnswers;
@@ -136,7 +135,7 @@ def _row(fid, display, grams, spools, total, color="222222", direction="longitud
     r = {"filament_id": fid, "brand": brand, "material": material, "color_name": colour,
          "display": display, "color": color, "color_direction": direction,
          "grams": grams, "spools": spools, "spools_total": total,
-         "attributes": list(attrs), "not_rebuying": marked, "buy_url": buy}
+         "attributes": list(attrs), "excluded": marked, "buy_url": buy}
     r.update(more)
     return r
 
@@ -156,7 +155,7 @@ REPORT = {
              buy="https://shop.example/s?q=Generic+PLA+Lipstick%20Red"),
         _row(29, "Polymaker - PC - Clear", 0, 0, 0, color="eeeeee", no_spools=True),
     ],
-    "not_rebuying": [
+    "excluded": [
         _row(41, "Sunlu - PLA - Glow Green", 120.0, 2, 3, color="55ff55", marked=MARK, stock_unknown=True),
     ],
 }
@@ -166,19 +165,19 @@ DOWN = {"success": False, "error": "spoolman_unreachable",
 
 
 def _after_marking(report, fid, mark=None):
-    """The report after `fid` was marked not buying again (or, mark=False,
-    tracked again into Low)."""
+    """The report after `fid` was excluded (or, mark=False, included again into
+    Low)."""
     rep = copy.deepcopy(report)
-    for key in ("low", "out", "not_rebuying"):
+    for key in ("low", "out", "excluded"):
         for r in list(rep[key]):
             if r["filament_id"] == fid:
                 rep[key].remove(r)
                 if mark is False:
-                    r["not_rebuying"] = None
+                    r["excluded"] = None
                     rep["low"].append(r)
                 else:
-                    r["not_rebuying"] = mark or MARK
-                    rep["not_rebuying"].append(r)
+                    r["excluded"] = mark or MARK
+                    rep["excluded"].append(r)
     return rep
 
 
@@ -189,7 +188,7 @@ def _answer(body, status=200, **kw):
 
 
 def _ok(display, mark=MARK):
-    return _answer({"success": True, "filament_id": 1, "display": display, "not_rebuying": mark,
+    return _answer({"success": True, "filament_id": 1, "display": display, "excluded": mark,
                     "msg": "ok"})
 
 
@@ -245,7 +244,7 @@ def _row_texts(page):
                      // One line: every part but the note starts within a few px of the others.
                      tops: Array.from(r.children).filter((c) => !c.hasAttribute('data-stock-note'))
                          .map((c) => c.getBoundingClientRect().top),
-                     mark: !!r.querySelector('[data-stock-mark]'),
+                     mark: !!r.querySelector('[data-stock-exclude]'),
                      edit: !!r.querySelector('[data-stock-edit]'),
                      height: r.getBoundingClientRect().height,
                      active: r.classList.contains('kb-active')}};
@@ -293,7 +292,7 @@ def test_it_opens_on_low_with_tabs_counts_and_one_line_rows(panel):
     page, open_ = panel
     open_(_answer(REPORT))
     _wait_state(page, "ready")
-    assert _tabs(page) == [["low", "2", True], ["out", "2", False], ["not", "1", False]]
+    assert _tabs(page) == [["low", "2", True], ["out", "2", False], ["excluded", "1", False]]
     rows = _row_texts(page)
     assert [(r["fid"], r["kind"]) for r in rows] == [("164", "low"), ("88", "low")]
     assert rows[0]["name"] == "Prusament - PLA - Galaxy Black" and rows[0]["tags"] == []
@@ -306,7 +305,7 @@ def test_it_opens_on_low_with_tabs_counts_and_one_line_rows(panel):
     assert _cap(page) == "Under 250 g in stock, fewest grams first."
     assert "low is under 250 g" in page.locator(PANEL + " [data-stock-sub]").text_content()
     assert page.locator(PANEL + " [data-stock-foot]").text_content() == (
-        "↑ ↓ move · ← → lists · / filter · Enter opens the filament · Del not buying again… · Esc closes")
+        "↑ ↓ move · ← → lists · / filter · Enter opens the filament · Del exclude… · Esc closes")
     # Each row has its filament's swatch (getFilamentStyle: a gradient for multi-colour).
     bgs = page.evaluate(f"""() => Array.from(document.querySelectorAll({json.dumps(BODY)} + ' .fcc-stock-swatch'))
         .map((s) => getComputedStyle(s).backgroundImage + '|' + getComputedStyle(s).backgroundColor)""")
@@ -336,7 +335,7 @@ def test_the_out_list_says_which_never_had_a_spool(panel):
     open_(_answer(REPORT))
     _wait_state(page, "ready")
     _tab(page, "out")
-    assert _tabs(page) == [["low", "2", False], ["out", "2", True], ["not", "1", False]]
+    assert _tabs(page) == [["low", "2", False], ["out", "2", True], ["excluded", "1", False]]
     rows = _row_texts(page)
     assert [(r["fid"], r["kind"], r["meta"]) for r in rows] == [
         ("20", "out", "0 g · 2 spools archived or empty"),
@@ -346,21 +345,21 @@ def test_the_out_list_says_which_never_had_a_spool(panel):
     assert _active_fid(page) == "20"
 
 
-def test_the_not_buying_again_list_shows_why(panel):
+def test_the_excluded_list_shows_why(panel):
     page, open_ = panel
     open_(_answer(REPORT))
     _wait_state(page, "ready")
-    _tab(page, "not")
+    _tab(page, "excluded")
     rows = _row_texts(page)
     assert len(rows) == 1
     r = rows[0]
-    assert (r["fid"], r["kind"], r["why"]) == ("41", "not", "Discontinued")
+    assert (r["fid"], r["kind"], r["why"]) == ("41", "excluded", "Discontinued")
     assert r["meta"] == "≥ 120 g · 2 spools"                 # a spool of unknown weight: a floor
     assert r["note"] == "since 2026-10-20 · “Prusa stopped making it”"
     assert not r["buy"] and not r["mark"] and r["edit"]
-    assert _cap(page).startswith("You won't buy these again: they stay off Low and Out.")
+    assert _cap(page) == "Left off Low and Out: ones you can't get or won't restock. ✏️ changes why, or includes one again."
     assert page.locator(PANEL + " [data-stock-foot]").text_content().endswith(
-        "Del change why or track again · Esc closes")
+        "Del change why or include again · Esc closes")
 
 
 def test_a_buy_link_only_when_a_web_link_resolves(panel):
@@ -389,12 +388,12 @@ def test_it_opens_on_the_first_list_with_something_in_it(panel):
     report["out"] = []
     open_(_answer(report), click=False)
     _wait_state(page, "ready")
-    page.wait_for_function(f"() => document.querySelector({json.dumps(BODY)} + ' .fcc-stock-row[data-kind=not]')")
+    page.wait_for_function(f"() => document.querySelector({json.dumps(BODY)} + ' .fcc-stock-row[data-kind=excluded]')")
     assert [t[2] for t in _tabs(page)] == [False, False, True]
 
 
 def test_nothing_at_all_is_its_own_state(panel):
-    """An answer without `not_rebuying` (a server from before the sample) reads as none."""
+    """An answer without `excluded` (a server from before the sample) reads as none."""
     page, open_ = panel
     open_(_answer(EMPTY))
     _wait_state(page, "empty")
@@ -407,15 +406,15 @@ def test_nothing_at_all_is_its_own_state(panel):
 def test_an_empty_list_says_so(panel):
     page, open_ = panel
     report = copy.deepcopy(REPORT)
-    report["out"], report["not_rebuying"] = [], []
+    report["out"], report["excluded"] = [], []
     open_(_answer(report))
     _wait_state(page, "ready")
     _tab(page, "out")
     assert page.locator(BODY + " .fcc-stock-none").text_content().strip() == "Nothing is out."
-    _tab(page, "not")
+    _tab(page, "excluded")
     assert page.locator(BODY + " .fcc-stock-none").text_content().strip() == (
-        "None yet. 🚫 on a Low or Out row (or Del) takes a filament you won't buy again off those lists, "
-        "with your reason.")
+        "None yet. 🔕 on a Low or Out row (or Del) leaves a filament you can't get or won't restock off "
+        "those lists, with your reason.")
 
 
 @pytest.mark.parametrize("answer", [
@@ -497,7 +496,7 @@ def test_slash_filters_every_list_and_the_counts_say_what_matches(panel):
     assert _focused(page)["filter"] is True
     assert page.locator(FILTER).input_value() == ""          # the '/' itself isn't typed
     page.keyboard.type("red")
-    assert _tabs(page) == [["low", "1/2", True], ["out", "1/2", False], ["not", "0/1", False]]
+    assert _tabs(page) == [["low", "1/2", True], ["out", "1/2", False], ["excluded", "0/1", False]]
     assert [r["fid"] for r in _row_texts(page)] == ["88"] and _active_fid(page) == "88"
     assert _focused(page)["filter"] is True                  # still typing
     page.keyboard.type(" blue")                               # every word, in any order
@@ -570,8 +569,8 @@ def test_a_scanners_enter_is_left_to_the_scan_accumulator(panel):
     page.keyboard.press("Enter")
     assert page.evaluate("window.__opened") == []
     assert page.locator("#fcc-low-stock-overlay").count() == 1
-    # Nor does it press a focused button: the row's 🚫 stays unpressed.
-    page.locator(BODY + " .fcc-stock-row[data-fid='164'] [data-stock-mark]").focus()
+    # Nor does it press a focused button: the row's 🔕 stays unpressed.
+    page.locator(BODY + " .fcc-stock-row[data-fid='164'] [data-stock-exclude]").focus()
     page.evaluate("state.scanBuffer = 'ID:42'; state.scanStartTime = Date.now();")
     page.keyboard.press("Enter")
     assert page.locator("#fcc-low-stock-reason").count() == 0
@@ -630,25 +629,26 @@ def test_a_click_outside_the_panel_closes_it(panel):
     assert page.locator("#fcc-low-stock-overlay").count() == 0
 
 
-# --- not buying again: the reason dialog -------------------------------------------------
+# --- excluded: the reason dialog --------------------------------------------------------
 
 def test_the_mark_button_asks_why_and_needs_a_reason(panel):
     """RED on 68a9b9d: no such button (a One-off attribute was the only way)."""
     page, open_ = panel
     open_(_answer(REPORT))
     _wait_state(page, "ready")
-    page.locator(BODY + " .fcc-stock-row[data-fid='164'] [data-stock-mark]").click()
+    page.locator(BODY + " .fcc-stock-row[data-fid='164'] [data-stock-exclude]").click()
     assert _dialog_open(page)
     dlg = page.locator(DIALOG)
-    assert dlg.locator(".fcc-stock-dlg-title").text_content() == "🚫 Not buying again"
+    assert dlg.locator(".fcc-stock-dlg-title").text_content() == "🔕 Exclude from Low and Out"
     assert dlg.locator(".fcc-stock-dlg-name").text_content() == "Prusament - PLA - Galaxy Black"
     radios = dlg.locator("input[name='fcc-stock-reason']")
-    assert [radios.nth(i).get_attribute("value") for i in range(4)] == ["discontinued", "one_off", "didnt_like", "other"]
+    assert [radios.nth(i).get_attribute("value") for i in range(radios.count())] == [
+        "discontinued", "cant_find", "one_off", "didnt_like", "other"]
     assert " ".join(dlg.locator("fieldset").inner_text().split()) == (
-        "Why? Discontinued — it isn't sold any more One-off — bought once, on purpose Didn't like it "
-        "Other — say why in the note")
+        "Why? Discontinued — the maker stopped making it Can't find it — the maker or your usual sellers "
+        "don't have it One-off — bought once, on purpose Didn't like it Other — say why in the note")
     assert dlg.locator("input[name='fcc-stock-reason']:checked").count() == 0
-    assert [b.strip() for b in dlg.locator("button").all_text_contents()] == ["🚫 Not buying again", "Cancel"]
+    assert [b.strip() for b in dlg.locator("button").all_text_contents()] == ["🔕 Exclude", "Cancel"]
     assert _focused(page)["value"] == "discontinued"          # the first reason has the focus
     dlg.locator("[data-stock-dlg-save]").click()
     assert _dialog_msg(page) == "Pick why first."
@@ -665,7 +665,7 @@ def test_saving_marks_it_and_reads_the_list_again_in_place(panel):
     open_(_answer(REPORT), _answer(_after_marking(REPORT, 164)),
           writes=[_ok("Prusament - PLA - Galaxy Black")])
     _wait_state(page, "ready")
-    page.locator(BODY + " .fcc-stock-row[data-fid='164'] [data-stock-mark]").click()
+    page.locator(BODY + " .fcc-stock-row[data-fid='164'] [data-stock-exclude]").click()
     page.locator(DIALOG + " input[value='discontinued']").check()
     page.locator(DIALOG + " [data-stock-note-input]").fill("  Prusa stopped making it  ")
     page.locator(DIALOG + " [data-stock-dlg-save]").click()
@@ -673,12 +673,13 @@ def test_saving_marks_it_and_reads_the_list_again_in_place(panel):
     page.wait_for_function(f"() => document.querySelectorAll({json.dumps(BODY)} + ' .fcc-stock-row').length === 1")
     today = page.evaluate("(() => { const d = new Date(), p = (n) => String(n).padStart(2, '0');"
                           " return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; })()")
-    assert page.evaluate("window.__sent") == [{"url": "/api/filament/164/no_rebuy", "method": "POST",
+    assert page.evaluate("window.__sent") == [{"url": "/api/filament/164/stock_exclusion", "method": "POST",
                                                "body": {"reason": "discontinued", "note": "Prusa stopped making it",
                                                         "today": today}}]   # the page's own day
     assert page.evaluate("window.__toasts") == [
-        {"msg": "🚫 Not buying Prusament - PLA - Galaxy Black again (Discontinued).", "type": "success", "ms": 4000}]
-    assert _tabs(page) == [["low", "1", True], ["out", "2", False], ["not", "2", False]]
+        {"msg": "🔕 Prusament - PLA - Galaxy Black is excluded from Low and Out (Discontinued).", "type": "success",
+         "ms": 4000}]
+    assert _tabs(page) == [["low", "1", True], ["out", "2", False], ["excluded", "2", False]]
     assert _active_fid(page) == "88"                          # the next row took its place
     assert _focused(page)["fid"] == "88"
 
@@ -698,12 +699,12 @@ def test_the_dialog_by_keyboard(panel):
     assert page.locator("#fcc-low-stock-overlay").count() == 1
     assert _focused(page)["fid"] == "88"
     page.keyboard.press("Delete")
-    page.keyboard.press("ArrowDown")                          # Discontinued -> One-off
-    assert page.locator(DIALOG + " input:checked").get_attribute("value") == "one_off"
+    page.keyboard.press("ArrowDown")                          # Discontinued -> Can't find it
+    assert page.locator(DIALOG + " input:checked").get_attribute("value") == "cant_find"
     page.keyboard.press("Enter")
     page.wait_for_function("() => window.__sent.length === 1")
     body = page.evaluate("window.__sent[0].body")
-    assert (body["reason"], body["note"]) == ("one_off", "")
+    assert (body["reason"], body["note"]) == ("cant_find", "")
 
 
 def test_delete_in_the_filter_is_the_filters_own_key(panel):
@@ -762,16 +763,16 @@ def test_a_scan_never_answers_the_dialog(panel):
 def test_a_failed_save_keeps_the_dialog_and_says_why(panel):
     page, open_ = panel
     refused = _answer({"success": False, "error": "write_failed",
-                       "msg": "Spoolman didn't save it: HTTP 400: Unknown extra field fcc_no_rebuy"}, status=502)
+                       "msg": "Spoolman didn't save it: HTTP 400: Unknown extra field fcc_stock_excluded"}, status=502)
     open_(_answer(REPORT), writes=[refused, _answer(None, network=True)])
     _wait_state(page, "ready")
     page.keyboard.press("Delete")
     page.locator(DIALOG + " input[value='discontinued']").check()
     page.locator(DIALOG + " [data-stock-dlg-save]").click()
     page.wait_for_function(f"() => document.querySelector({json.dumps(DIALOG)} + ' [data-stock-dlg-msg]').textContent.includes('Unknown')")
-    assert _dialog_msg(page) == "Spoolman didn't save it: HTTP 400: Unknown extra field fcc_no_rebuy"
+    assert _dialog_msg(page) == "Spoolman didn't save it: HTTP 400: Unknown extra field fcc_stock_excluded"
     assert page.evaluate("window.__toasts") == [
-        {"msg": "Spoolman didn't save it: HTTP 400: Unknown extra field fcc_no_rebuy", "type": "error", "ms": 7000}]
+        {"msg": "Spoolman didn't save it: HTTP 400: Unknown extra field fcc_stock_excluded", "type": "error", "ms": 7000}]
     assert page.locator(DIALOG + " [data-stock-dlg-save]").is_enabled()
     page.locator(DIALOG + " [data-stock-dlg-save]").click()
     page.wait_for_function("() => window.__toasts.length === 2")
@@ -794,55 +795,55 @@ def test_escape_while_saving_keeps_the_dialog_until_the_answer(panel):
     assert page.locator("#fcc-low-stock-overlay").count() == 1
 
 
-def test_editing_a_mark_changes_why_or_tracks_it_again(panel):
+def test_editing_an_exclusion_changes_why_or_includes_it_again(panel):
     page, open_ = panel
     open_(_answer(REPORT), _answer(_after_marking(REPORT, 41, mark=False)),
-          writes=[_answer({"success": True, "display": "Sunlu - PLA - Glow Green", "not_rebuying": None,
+          writes=[_answer({"success": True, "display": "Sunlu - PLA - Glow Green", "excluded": None,
                            "changed": True, "msg": "ok"})])
     _wait_state(page, "ready")
-    _tab(page, "not")
+    _tab(page, "excluded")
     page.locator(BODY + " .fcc-stock-row[data-fid='41'] [data-stock-edit]").click()
     dlg = page.locator(DIALOG)
     assert dlg.locator("input:checked").get_attribute("value") == "discontinued"
     assert _focused(page)["value"] == "discontinued"
     assert dlg.locator("[data-stock-note-input]").input_value() == "Prusa stopped making it"
-    assert dlg.locator(".fcc-stock-dlg-was").text_content() == "Marked on 2026-10-20: Discontinued."
-    assert [b.strip() for b in dlg.locator("button").all_text_contents()] == ["Save", "↩️ Track again", "Cancel"]
-    dlg.locator("[data-stock-dlg-track]").click()
+    assert dlg.locator(".fcc-stock-dlg-was").text_content() == "Excluded on 2026-10-20: Discontinued."
+    assert [b.strip() for b in dlg.locator("button").all_text_contents()] == ["Save", "↩️ Include again", "Cancel"]
+    dlg.locator("[data-stock-dlg-include]").click()
     page.wait_for_function("() => window.__fetches.length === 2 && !document.querySelector('#fcc-low-stock-reason')")
-    assert page.evaluate("window.__sent") == [{"url": "/api/filament/41/no_rebuy", "method": "DELETE", "body": None}]
+    assert page.evaluate("window.__sent") == [{"url": "/api/filament/41/stock_exclusion", "method": "DELETE", "body": None}]
     assert page.evaluate("window.__toasts")[0] == {
-        "msg": "↩️ Sunlu - PLA - Glow Green is tracked again: it shows on Low or Out when it is low or out.",
+        "msg": "↩️ Sunlu - PLA - Glow Green is included again: it shows on Low or Out when it is low or out.",
         "type": "success", "ms": 4000}
     page.wait_for_function(f"() => !document.querySelector({json.dumps(BODY)} + ' .fcc-stock-row')")
-    assert _tabs(page) == [["low", "3", False], ["out", "2", False], ["not", "0", True]]   # stays on its list
+    assert _tabs(page) == [["low", "3", False], ["out", "2", False], ["excluded", "0", True]]   # stays on its list
 
 
-def test_delete_on_the_not_buying_list_opens_its_reason(panel):
+def test_delete_on_the_excluded_list_opens_its_reason(panel):
     page, open_ = panel
     open_(_answer(REPORT))
     _wait_state(page, "ready")
-    page.keyboard.press("ArrowLeft")                          # wraps to Not buying again
+    page.keyboard.press("ArrowLeft")                          # wraps to Excluded
     page.keyboard.press("Delete")
     assert page.locator(DIALOG).get_attribute("data-fid") == "41"
-    assert page.locator(DIALOG + " [data-stock-dlg-track]").count() == 1
+    assert page.locator(DIALOG + " [data-stock-dlg-include]").count() == 1
 
 
 def test_a_reason_typed_in_spoolman_by_hand_goes_into_the_note(panel):
     """It reads as Other (the server's rule), and a Save keeps its words."""
     page, open_ = panel
     report = copy.deepcopy(REPORT)
-    report["not_rebuying"][0]["not_rebuying"] = {"reason": "too brittle", "code": "other", "note": "snaps", "at": ""}
+    report["excluded"][0]["excluded"] = {"reason": "too brittle", "code": "other", "note": "snaps", "at": ""}
     open_(_answer(report))
     _wait_state(page, "ready")
-    _tab(page, "not")
+    _tab(page, "excluded")
     assert _row_texts(page)[0]["why"] == "too brittle"
     assert _row_texts(page)[0]["note"] == "“snaps”"
     page.keyboard.press("Delete")
     dlg = page.locator(DIALOG)
     assert dlg.locator("input:checked").get_attribute("value") == "other"
     assert dlg.locator("[data-stock-note-input]").input_value() == "too brittle — snaps"
-    assert dlg.locator(".fcc-stock-dlg-was").text_content() == "Marked already: too brittle."
+    assert dlg.locator(".fcc-stock-dlg-was").text_content() == "Excluded: too brittle."
 
 
 def test_the_dialog_closes_with_the_search_panel(panel):
@@ -867,7 +868,7 @@ def test_every_piece_of_text_is_escaped(panel):
     report["low"][0]["display"] = 'Evil - PLA - <img src=x onerror="window.__xss=1">'
     report["low"][0]["attributes"] = ["<b>Bold</b>"]
     report["out"][0]["filament_id"] = '20"><script>window.__xss=2</script>'
-    report["not_rebuying"][0]["not_rebuying"] = {"reason": '<img src=x onerror="window.__xss=3">', "code": "other",
+    report["excluded"][0]["excluded"] = {"reason": '<img src=x onerror="window.__xss=3">', "code": "other",
                                                  "note": "</textarea><img src=x onerror=\"window.__xss=4\">",
                                                  "at": "<i>x</i>"}
     open_(_answer(report))
@@ -875,7 +876,7 @@ def test_every_piece_of_text_is_escaped(panel):
     page.keyboard.press("Delete")                             # the dialog draws the name too
     page.keyboard.press("Escape")
     _tab(page, "out")
-    _tab(page, "not")
+    _tab(page, "excluded")
     page.keyboard.press("Delete")
     page.wait_for_timeout(100)
     assert page.evaluate("window.__xss") is None
@@ -897,7 +898,7 @@ def test_a_stale_answer_never_paints_over_a_newer_one(panel):
     page, open_ = panel
     slow = copy.deepcopy(REPORT)
     slow["low"] = slow["low"][:1]
-    slow["out"], slow["not_rebuying"] = [], []
+    slow["out"], slow["excluded"] = [], []
     open_(_answer(slow, delay=500), _answer(EMPTY))
     page.evaluate("window.openLowStockPanel()")             # re-opened before the first answer
     _wait_state(page, "empty")
@@ -932,7 +933,7 @@ def test_every_list_is_readable(panel, assert_contrast):
     assert_contrast(page.locator(PANEL))
     page.keyboard.press("ArrowDown")                        # a highlighted row too
     assert_contrast(page.locator(PANEL))
-    for key in ("out", "not"):
+    for key in ("out", "excluded"):
         _tab(page, key)
         assert_contrast(page.locator(PANEL))
     page.locator(FILTER).fill("nothing matches this")
@@ -948,8 +949,8 @@ def test_the_dialog_is_readable(panel, assert_contrast):
     page.locator(DIALOG + " [data-stock-dlg-save]").click()   # with its message
     assert_contrast(page.locator(DIALOG))
     page.keyboard.press("Escape")
-    _tab(page, "not")
-    page.keyboard.press("Delete")                             # editing: Save / Track again / Cancel
+    _tab(page, "excluded")
+    page.keyboard.press("Delete")                             # editing: Save / Include again / Cancel
     assert_contrast(page.locator(DIALOG))
 
 

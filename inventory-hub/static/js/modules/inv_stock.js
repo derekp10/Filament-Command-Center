@@ -7,25 +7,27 @@ console.log("🚀 Loaded Module: LOW STOCK");
 // One mountOverlay panel, per filament across its in-stock spools, from GET
 // /api/stock_report (stock_report.py), in three lists: Low (under the
 // `low_stock_g` setting, fewest grams first), Out (none in stock; the ones with
-// no spool on record come last) and Not buying again (marked from this list,
+// no spool on record come last) and Excluded (left off both from this list,
 // with why). It asks the server only when it opens or after a change made here,
 // never on the dashboard heartbeat (Group 45.8's lesson), and a failed read
 // shows an error that says Spoolman didn't answer, never "Nothing is low".
 //
 // Derek, 2026-10-20: a long list needed to be easier to read (tabs, a filter,
-// one line per filament: a sample he tries before it ships), a filament he
-// won't buy again (discontinued, a one-off, didn't like it) leaves Low and Out
-// with the reason written down (🚫 on its row: POST /api/filament/<id>/no_rebuy;
-// ✏️ on the Not buying again list changes why or tracks it again: DELETE), and
-// the list comes back where it was once the window opened from it is closed.
+// one line per filament: a sample he tried, and liked, before it ships), a
+// filament he can't get or won't buy again leaves Low and Out with the reason
+// written down (🔕 on its row: POST /api/filament/<id>/stock_exclusion; ✏️ on
+// the Excluded list changes why or includes it again: DELETE), and the list
+// comes back where it was once the window opened from it is closed. 2026-10-21:
+// "Excluded", not "Not buying again" ("just because it's discontinued, or I
+// can't find it from the manufacturer, doesn't mean I didn't like it").
 //
 // Each row: swatch (getFilamentStyle), Brand - Material - Color with the
 // filament's attribute tags, its stock, a 🛒 Buy link when one resolves (the
-// server applies the filament window's rule; not on the Not buying again list),
+// server applies the filament window's rule; not on the Excluded list),
 // and a click / Enter that opens the filament window. Keyboard (standing
 // order): ↑ / ↓ move the .kb-active row (wrapping; from the filter, into the
 // list), ← / → switch lists, / filters, Enter opens the row (from the filter
-// too), Del asks why (or, on the Not buying again list, opens its reason),
+// too), Del asks why (or, on the Excluded list, opens its reason),
 // Escape closes the reason dialog, else the list (mountOverlay owns Escape).
 // Scanner safety: an Enter that is a scanner's is left to the scan
 // accumulator, and a scan typed into the filter or the reason dialog's fields
@@ -40,16 +42,17 @@ console.log("🚀 Loaded Module: LOW STOCK");
     const TABS = [
         { key: 'low', label: 'Low' },
         { key: 'out', label: 'Out' },
-        { key: 'not', label: 'Not buying again' },
+        { key: 'excluded', label: 'Excluded' },
     ];
-    // stock_report.NO_REBUY_REASONS, with a hint each.
+    // stock_report.EXCLUDE_REASONS, with a hint each.
     const REASONS = [
-        { code: 'discontinued', label: 'Discontinued', hint: "it isn't sold any more" },
+        { code: 'discontinued', label: 'Discontinued', hint: 'the maker stopped making it' },
+        { code: 'cant_find', label: "Can't find it", hint: "the maker or your usual sellers don't have it" },
         { code: 'one_off', label: 'One-off', hint: 'bought once, on purpose' },
         { code: 'didnt_like', label: "Didn't like it", hint: '' },
         { code: 'other', label: 'Other', hint: 'say why in the note' },
     ];
-    const NOTE_MAX = 500;      // stock_report.NO_REBUY_NOTE_MAX
+    const NOTE_MAX = 500;      // stock_report.EXCLUDE_NOTE_MAX
     let _seq = 0;              // a newer load wins; an older answer never paints
     let _current = null;       // the open panel's handle
 
@@ -149,7 +152,7 @@ ${D} .fcc-stock-dlg-btn { border:1px solid #777; background:transparent; color:#
 ${D} .fcc-stock-dlg-btn:hover { border-color:#bbb; }
 ${D} .fcc-stock-dlg-btn:focus-visible { outline:2px solid #0dcaf0; outline-offset:2px; }
 ${D} .fcc-stock-dlg-save { background:#ff8a8a; border-color:#ff8a8a; color:#111; font-weight:700; }
-${D} .fcc-stock-dlg-track { border-color:#0dcaf0; }
+${D} .fcc-stock-dlg-include { border-color:#0dcaf0; }
 ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
 `;
 
@@ -186,7 +189,7 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         return {
             low: Array.isArray(d.low) ? d.low : [],
             out: Array.isArray(d.out) ? d.out : [],
-            not: Array.isArray(d.not_rebuying) ? d.not_rebuying : [],
+            excluded: Array.isArray(d.excluded) ? d.excluded : [],
         };
     }
 
@@ -206,7 +209,7 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
     // reason or note.
     function _matches(row, tokens) {
         if (!tokens.length) return true;
-        const nr = row.not_rebuying || {};
+        const nr = row.excluded || {};
         const hay = [row.display, ...(Array.isArray(row.attributes) ? row.attributes : []), nr.reason, nr.note]
             .filter((v) => v != null).join(' ').toLowerCase();
         return tokens.every((t) => hay.includes(t));
@@ -234,9 +237,9 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         let tail = '';
         let note = '';
         let title = name;
-        if (kind === 'not') {
-            const nr = row.not_rebuying || {};
-            const reason = String(nr.reason || 'Not buying again');
+        if (kind === 'excluded') {
+            const nr = row.excluded || {};
+            const reason = String(nr.reason || 'Excluded');
             middle = `<span class="fcc-stock-why" data-stock-why>${esc(reason)}</span>`;
             const since = nr.at ? `since ${nr.at}` : '';
             const said = nr.note ? `“${nr.note}”` : '';
@@ -244,17 +247,17 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
             if (line) note = `<div class="fcc-stock-note" data-stock-note>${esc(line)}</div>`;
             title = [name, reason, nr.note].filter(Boolean).join(' — ');
             tail = `<button type="button" class="fcc-stock-act" data-stock-edit
-                        aria-label="${esc(`Change why, or track ${name} again`)}"
-                        title="Change why, or track it again (Del)">✏️</button>`;
+                        aria-label="${esc(`Change why, or include ${name} again`)}"
+                        title="Change why, or include it again (Del)">✏️</button>`;
         } else {
             const link = _webLink(row.buy_url);
             if (link) {
                 tail += `<a class="fcc-stock-buy" href="${esc(link)}" target="_blank" rel="noopener noreferrer"
                             title="${esc(`Buy more ${name}`)}">🛒 Buy</a>`;
             }
-            tail += `<button type="button" class="fcc-stock-act" data-stock-mark
-                        aria-label="${esc(`Not buying ${name} again…`)}"
-                        title="Not buying it again… (Del)">🚫</button>`;
+            tail += `<button type="button" class="fcc-stock-act" data-stock-exclude
+                        aria-label="${esc(`Exclude ${name} from Low and Out…`)}"
+                        title="Exclude it from Low and Out… (Del)">🔕</button>`;
         }
         return `<div class="fcc-stock-row" role="button" tabindex="-1" data-fid="${esc(row.filament_id)}"
                     data-kind="${kind}" title="${esc(title)}">
@@ -356,18 +359,18 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
     function _caption(handle, tab) {
         if (tab === 'low') return `Under ${Math.round(handle._threshold)} g in stock, fewest grams first.`;
         if (tab === 'out') return 'None left in stock. The ones with no spool on record come last.';
-        return "You won't buy these again: they stay off Low and Out. ✏️ changes why, or tracks one again.";
+        return "Left off Low and Out: ones you can't get or won't restock. ✏️ changes why, or includes one again.";
     }
 
     function _noneText(tab) {
         if (tab === 'low') return 'Nothing is low.';
         if (tab === 'out') return 'Nothing is out.';
-        return "None yet. 🚫 on a Low or Out row (or Del) takes a filament you won't buy again off those "
-            + 'lists, with your reason.';
+        return "None yet. 🔕 on a Low or Out row (or Del) leaves a filament you can't get or won't restock off "
+            + 'those lists, with your reason.';
     }
 
     function _footText(tab) {
-        const del = tab === 'not' ? 'Del change why or track again' : 'Del not buying again…';
+        const del = tab === 'excluded' ? 'Del change why or include again' : 'Del exclude…';
         return `↑ ↓ move · ← → lists · / filter · Enter opens the filament · ${del} · Esc closes`;
     }
 
@@ -429,7 +432,7 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
             sub.textContent = `Per filament, across its in-stock spools: low is under ${Math.round(threshold)} g `
                 + '(⚙️ Settings → Behavior).';
         }
-        if (!all.low.length && !all.out.length && !all.not.length) {
+        if (!all.low.length && !all.out.length && !all.excluded.length) {
             _setBody(handle, `<div class="fcc-stock-state">
                     <div>✅ Nothing is low.</div>
                     <div class="fcc-stock-state-sub">No filament is under ${esc(Math.round(threshold))} g,
@@ -441,7 +444,7 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         // The list it opens on: the one it was on (coming back, or after a
         // change made here), else the first with something in it.
         const wanted = restore && TABS.some((t) => t.key === restore.tab) ? restore.tab : null;
-        handle._tab = wanted || (all.low.length ? 'low' : all.out.length ? 'out' : 'not');
+        handle._tab = wanted || (all.low.length ? 'low' : all.out.length ? 'out' : 'excluded');
         handle._filter = restore && typeof restore.filter === 'string' ? restore.filter : (handle._filter || '');
         const filter = _filterEl(handle);
         if (filter) filter.value = handle._filter;
@@ -487,18 +490,18 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         };
     }
 
-    // --- not buying again: the reason dialog ----------------------------------------------
+    // --- excluded: the reason dialog ----------------------------------------------------
 
     function _dialogHtml(row) {
         const name = String(row.display == null ? '' : row.display);
-        const cur = row.not_rebuying || null;
+        const cur = row.excluded || null;
         const curCode = cur ? (REASONS.some((r) => r.code === cur.code) ? cur.code : 'other') : '';
         const radios = REASONS.map((r) => `<label class="fcc-stock-reason">
                 <input type="radio" name="fcc-stock-reason" value="${r.code}" data-stock-reason-field
                     ${r.code === curCode ? 'checked' : ''}>
                 <span>${esc(r.label)}${r.hint ? ` <span class="fcc-stock-reason-hint">— ${esc(r.hint)}</span>` : ''}</span>
             </label>`).join('');
-        const was = cur ? `<div class="fcc-stock-dlg-was">Marked ${esc(cur.at ? `on ${cur.at}` : 'already')}: ${esc(cur.reason)}.</div>` : '';
+        const was = cur ? `<div class="fcc-stock-dlg-was">${esc(cur.at ? `Excluded on ${cur.at}` : 'Excluded')}: ${esc(cur.reason)}.</div>` : '';
         // A reason typed in Spoolman by hand that matches none reads as Other
         // (stock_report._reason_code): its words go into the note, so a Save
         // keeps them.
@@ -506,20 +509,21 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         const note = !cur ? '' : (handTyped ? [cur.reason, cur.note].filter(Boolean).join(' — ') : (cur.note || ''));
         const buttons = cur
             ? `<button type="button" class="fcc-stock-dlg-btn fcc-stock-dlg-save" data-stock-dlg-save>Save</button>
-               <button type="button" class="fcc-stock-dlg-btn fcc-stock-dlg-track" data-stock-dlg-track>↩️ Track again</button>`
-            : `<button type="button" class="fcc-stock-dlg-btn fcc-stock-dlg-save" data-stock-dlg-save>🚫 Not buying again</button>`;
+               <button type="button" class="fcc-stock-dlg-btn fcc-stock-dlg-include" data-stock-dlg-include>↩️ Include again</button>`
+            : `<button type="button" class="fcc-stock-dlg-btn fcc-stock-dlg-save" data-stock-dlg-save>🔕 Exclude</button>`;
         const help = cur
-            ? 'Track again puts it back on Low and Out when it is low or out, and clears the reason.'
-            : 'It leaves Low and Out and goes on the Not buying again list, with your reason. Track again there undoes it.';
+            ? 'Include again puts it back on Low and Out when it is low or out, and clears the reason.'
+            : 'It leaves Low and Out, and their warnings, and goes on the Excluded list with your reason. '
+              + 'Include again there undoes it.';
         return `<div class="fcc-stock-dlg" role="dialog" aria-modal="true" aria-labelledby="fcc-stock-dlg-title"
                     data-stock-dialog data-fid="${esc(row.filament_id)}" tabindex="-1">
-                <div class="fcc-stock-dlg-title" id="fcc-stock-dlg-title">🚫 Not buying again</div>
+                <div class="fcc-stock-dlg-title" id="fcc-stock-dlg-title">🔕 Exclude from Low and Out</div>
                 <div class="fcc-stock-dlg-name">${esc(name)}</div>
                 ${was}
                 <fieldset><legend>Why?</legend>${radios}</fieldset>
                 <label class="fcc-stock-note-label" for="fcc-stock-note">Note <span class="fcc-stock-reason-hint">(needed for Other)</span></label>
                 <textarea id="fcc-stock-note" class="fcc-stock-note-input" data-stock-note-input data-stock-reason-field
-                    rows="3" maxlength="${NOTE_MAX}" placeholder="e.g. Not sold any more; the PETG one prints better">${esc(note)}</textarea>
+                    rows="3" maxlength="${NOTE_MAX}" placeholder="e.g. Discontinued in 2025; the PETG one is close">${esc(note)}</textarea>
                 <div class="fcc-stock-dlg-msg" role="alert" data-stock-dlg-msg></div>
                 <div class="fcc-stock-dlg-help">${esc(help)}</div>
                 <div class="fcc-stock-dlg-buttons">
@@ -562,7 +566,7 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
 
     async function _send(method, fid, body) {
         try {
-            const res = await fetch(`/api/filament/${encodeURIComponent(fid)}/no_rebuy`, {
+            const res = await fetch(`/api/filament/${encodeURIComponent(fid)}/stock_exclusion`, {
                 method,
                 headers: { 'Content-Type': 'application/json' },
                 body: body ? JSON.stringify(body) : undefined,
@@ -620,12 +624,13 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
             return;
         }
         if (still) _closeDialog(handle);
-        const nr = res.data.not_rebuying || {};
-        toast(`🚫 Not buying ${res.data.display || d.name} again (${nr.reason || picked.value}).`, 'success', 4000);
+        const nr = res.data.excluded || {};
+        toast(`🔕 ${res.data.display || d.name} is excluded from Low and Out (${nr.reason || picked.value}).`,
+            'success', 4000);
         _reloadAfterChange(handle, d.fid);
     }
 
-    async function _trackAgain(handle) {
+    async function _includeAgain(handle) {
         const d = handle._dialog;
         if (!d || d.busy) return;
         _busy(d, true);
@@ -633,12 +638,12 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         const res = await _send('DELETE', d.fid, null);
         const still = handle._dialog === d;
         if (!res.ok) {
-            if (still) { _busy(d, false); _dialogMsg(d, res.msg, d.overlay.panel.querySelector('[data-stock-dlg-track]')); }
+            if (still) { _busy(d, false); _dialogMsg(d, res.msg, d.overlay.panel.querySelector('[data-stock-dlg-include]')); }
             toast(res.msg, 'error', 7000);
             return;
         }
         if (still) _closeDialog(handle);
-        toast(`↩️ ${res.data.display || d.name} is tracked again: it shows on Low or Out when it is low or out.`,
+        toast(`↩️ ${res.data.display || d.name} is included again: it shows on Low or Out when it is low or out.`,
             'success', 4000);
         _reloadAfterChange(handle, d.fid);
     }
@@ -673,8 +678,8 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         _closeDialog(handle);
         // The reason it has (editing), else the first. (A selector list would
         // answer the first radio in the page's order, not the checked one.)
-        const cur = row.not_rebuying && REASONS.some((r) => r.code === row.not_rebuying.code)
-            ? row.not_rebuying.code : (row.not_rebuying ? 'other' : '');
+        const cur = row.excluded && REASONS.some((r) => r.code === row.excluded.code)
+            ? row.excluded.code : (row.excluded ? 'other' : '');
         const overlay = window.mountOverlay({
             id: DIALOG_ID,
             tier: 'confirm',
@@ -695,7 +700,7 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         if (first) { try { first.focus(); } catch (_) { /* noop */ } }
         overlay.panel.addEventListener('click', (e) => {
             if (e.target.closest('[data-stock-dlg-cancel]')) { if (!d.busy) _closeDialog(handle); return; }
-            if (e.target.closest('[data-stock-dlg-track]')) { _trackAgain(handle); return; }
+            if (e.target.closest('[data-stock-dlg-include]')) { _includeAgain(handle); return; }
             if (e.target.closest('[data-stock-dlg-save]')) _saveDialog(handle);
         });
         overlay.panel.addEventListener('change', () => _dialogMsg(d, ''));
@@ -941,7 +946,7 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
             if (e.target.closest('a')) return;          // Buy opens its own tab
             const row = e.target.closest('.fcc-stock-row');
             if (!row) return;
-            if (e.target.closest('[data-stock-mark], [data-stock-edit]')) {
+            if (e.target.closest('[data-stock-exclude], [data-stock-edit]')) {
                 _highlight(handle, _rows(handle).indexOf(row));
                 _openDialog(handle, row.dataset.fid);
                 return;
@@ -996,7 +1001,7 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         });
         window.registerShortcut({
             id: 'low-stock-tabs', scope: 'Low Stock List', keys: ['←', '→'],
-            description: 'Switch lists: Low, Out, Not buying again.'
+            description: 'Switch lists: Low, Out, Excluded.'
         });
         window.registerShortcut({
             id: 'low-stock-filter', scope: 'Low Stock List', keys: ['/'],
@@ -1008,8 +1013,8 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         });
         window.registerShortcut({
             id: 'low-stock-delete', scope: 'Low Stock List', keys: ['Del'],
-            description: 'Not buying the highlighted filament again: asks why first. On the Not buying again '
-                + 'list: change why, or track it again.'
+            description: 'Exclude the highlighted filament from Low and Out: asks why first. On the Excluded '
+                + 'list: change why, or include it again.'
         });
         window.registerShortcut({
             id: 'low-stock-reason-save', scope: 'Low Stock List', keys: ['Ctrl', 'Enter'],

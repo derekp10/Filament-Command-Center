@@ -4,9 +4,9 @@ and its `low_stock_g` setting.
 Stock is counted per FILAMENT across its in-stock spools (not archived, grams
 left). Low = under `low_stock_g` (default 250 g). Out = none in stock, a filament
 with no spool on record at all included (after the others, `no_spools`; Derek,
-2026-10-20). A filament marked "not buying again" is neither: it is listed under
-`not_rebuying` with its reason and stock (Derek, 2026-10-20; the mark and its
-route are pinned by test_not_buying_again.py). The list reads Spoolman's spools
+2026-10-20). A filament excluded from the list is neither: it is listed under
+`excluded` with its reason and stock (Derek, 2026-10-20; the mark and its
+route are pinned by test_stock_exclusion.py). The list reads Spoolman's spools
 and filaments, strictly: a failed read answers an error, never an empty or "all
 out" list.
 
@@ -142,22 +142,22 @@ def test_an_empty_unarchived_spool_is_not_stock(cfg, spoolman):
     assert _ids(rep["out"]) == [40] and rep["low"] == []
 
 
-def _not_rebuying(reason="Discontinued", note=None, at="2026-10-20"):
-    """The three "not buying again" extras, decoded (as the strict read gives them)."""
-    ex = {"fcc_no_rebuy": reason, "fcc_no_rebuy_at": at}
+def _excluded(reason="Discontinued", note=None, at="2026-10-20"):
+    """The three exclusion extras, decoded (as the strict read gives them)."""
+    ex = {"fcc_stock_excluded": reason, "fcc_stock_excluded_at": at}
     if note is not None:
-        ex["fcc_no_rebuy_note"] = note
+        ex["fcc_stock_excluded_note"] = note
     return ex
 
 
-def test_a_filament_not_bought_again_is_never_low_or_out_and_is_listed_with_why(cfg, spoolman):
+def test_an_excluded_filament_is_never_low_or_out_and_is_listed_with_why(cfg, spoolman):
     """Derek, 2026-10-20: marked from the list, with a reason. Low stock, used up
-    or never stocked, it leaves Low and Out and is listed under `not_rebuying`
+    or never stocked, it leaves Low and Out and is listed under `excluded`
     (by name) with its stock, reason, note and day. RED on 68a9b9d (no such
     list: they stayed on Low and Out)."""
-    low_one = _fil(50, name="Tiny", extra=_not_rebuying("One-off", note="A gift"))
-    used_up = _fil(51, name="Sparkle", extra=_not_rebuying("Discontinued", note='Prusa said "no more"'))
-    never = _fil(52, name="Aqua", extra=_not_rebuying("Didn't like it", at="2026-01-02"))
+    low_one = _fil(50, name="Tiny", extra=_excluded("One-off", note="A gift"))
+    used_up = _fil(51, name="Sparkle", extra=_excluded("Discontinued", note='Prusa said "no more"'))
+    never = _fil(52, name="Aqua", extra=_excluded("Didn't like it", at="2026-01-02"))
     plain_low, plain_out = _fil(53, name="Mint"), _fil(54, name="Zinc")
     spoolman["spools"] = [_spool(1, low_one, 90), _spool(2, low_one, 0, archived=True),
                           _spool(3, used_up, 0, archived=True),
@@ -165,17 +165,17 @@ def test_a_filament_not_bought_again_is_never_low_or_out_and_is_listed_with_why(
     spoolman["filaments"] = [low_one, used_up, never, plain_low, plain_out]
     rep = stock_report.build_report()
     assert _ids(rep["low"]) == [53] and _ids(rep["out"]) == [54]
-    assert _ids(rep["not_rebuying"]) == [52, 51, 50]          # Aqua, Sparkle, Tiny
-    aqua, sparkle, tiny = rep["not_rebuying"]
-    assert tiny["not_rebuying"] == {"reason": "One-off", "code": "one_off", "note": "A gift", "at": "2026-10-20"}
+    assert _ids(rep["excluded"]) == [52, 51, 50]          # Aqua, Sparkle, Tiny
+    aqua, sparkle, tiny = rep["excluded"]
+    assert tiny["excluded"] == {"reason": "One-off", "code": "one_off", "note": "A gift", "at": "2026-10-20"}
     assert (tiny["grams"], tiny["spools"], tiny["spools_total"]) == (90.0, 1, 2)
     assert tiny["stock_unknown"] is False and "no_spools" not in tiny
-    assert sparkle["not_rebuying"]["note"] == 'Prusa said "no more"', sparkle   # quotes kept
-    assert sparkle["not_rebuying"]["code"] == "discontinued" and sparkle["spools"] == 0
-    assert aqua["no_spools"] is True and aqua["not_rebuying"]["code"] == "didnt_like"
-    assert aqua["not_rebuying"]["at"] == "2026-01-02" and aqua["not_rebuying"]["note"] == ""
+    assert sparkle["excluded"]["note"] == 'Prusa said "no more"', sparkle   # quotes kept
+    assert sparkle["excluded"]["code"] == "discontinued" and sparkle["spools"] == 0
+    assert aqua["no_spools"] is True and aqua["excluded"]["code"] == "didnt_like"
+    assert aqua["excluded"]["at"] == "2026-01-02" and aqua["excluded"]["note"] == ""
     # Every row says whether it is marked.
-    assert rep["low"][0]["not_rebuying"] is None and rep["out"][0]["not_rebuying"] is None
+    assert rep["low"][0]["excluded"] is None and rep["out"][0]["excluded"] is None
     assert rep["filaments"] == 5
 
 
@@ -183,15 +183,18 @@ def test_a_reason_typed_in_spoolman_by_hand_counts(cfg, spoolman):
     """Any reason that isn't blank marks it; one matching a label (any case or
     punctuation) gets its code, any other reads as "other". A blank one doesn't
     mark anything."""
-    a = _fil(60, name="A", extra=_not_rebuying("too brittle"))
-    b = _fil(61, name="B", extra=_not_rebuying("didnt like it"))
-    c = _fil(62, name="C", extra=_not_rebuying("ONE OFF"))
-    blank = _fil(63, name="D", extra=_not_rebuying("   "))
-    spoolman["spools"] = [_spool(1, a, 10), _spool(2, b, 10), _spool(3, c, 10), _spool(4, blank, 10)]
+    a = _fil(60, name="A", extra=_excluded("too brittle"))
+    b = _fil(61, name="B", extra=_excluded("didnt like it"))
+    c = _fil(62, name="C", extra=_excluded("ONE OFF"))
+    blank = _fil(63, name="D", extra=_excluded("   "))
+    e = _fil(64, name="E", extra=_excluded("can't find"))
+    spoolman["spools"] = [_spool(1, a, 10), _spool(2, b, 10), _spool(3, c, 10), _spool(4, blank, 10),
+                          _spool(5, e, 10)]
     rep = stock_report.build_report()
     assert _ids(rep["low"]) == [63]
-    codes = {r["filament_id"]: (r["not_rebuying"]["reason"], r["not_rebuying"]["code"]) for r in rep["not_rebuying"]}
-    assert codes == {60: ("too brittle", "other"), 61: ("didnt like it", "didnt_like"), 62: ("ONE OFF", "one_off")}
+    codes = {r["filament_id"]: (r["excluded"]["reason"], r["excluded"]["code"]) for r in rep["excluded"]}
+    assert codes == {60: ("too brittle", "other"), 61: ("didnt like it", "didnt_like"), 62: ("ONE OFF", "one_off"),
+                     64: ("can't find", "cant_find")}
 
 
 def test_the_one_off_attribute_no_longer_hides_a_filament(cfg, spoolman):
@@ -203,36 +206,36 @@ def test_the_one_off_attribute_no_longer_hides_a_filament(cfg, spoolman):
     rep = stock_report.build_report()
     assert _ids(rep["out"]) == [50] and _ids(rep["low"]) == [52]
     assert rep["low"][0]["attributes"] == ["ONEOFF"] and "one_off" not in rep["low"][0]
-    assert rep["not_rebuying"] == []
+    assert rep["excluded"] == []
 
 
 def test_a_marked_filament_with_a_spool_of_unknown_weight_says_so(cfg, spoolman):
     """Its grams are then a floor (`stock_unknown`); it is listed all the same."""
-    f = _fil(70, weight=None, extra=_not_rebuying())
+    f = _fil(70, weight=None, extra=_excluded())
     s = {"id": 1, "filament": f, "initial_weight": None, "used_weight": 12,
          "archived": False, "location": "", "extra": {}}
-    spoolman["spools"] = [s, _spool(2, _fil(70, extra=_not_rebuying()), 40)]
-    row = stock_report.build_report()["not_rebuying"][0]
+    spoolman["spools"] = [s, _spool(2, _fil(70, extra=_excluded()), 40)]
+    row = stock_report.build_report()["excluded"][0]
     assert row["stock_unknown"] is True and row["spools"] == 2 and row["grams"] == 40.0
 
 
 def test_a_filament_with_no_spool_on_record_is_out_after_the_others(cfg, spoolman):
     """Derek, 2026-10-20: "please include those, they are technically out" (on
     prod, 11 filaments from the first import never had a spool record). Listed
-    after the used-up ones, marked `no_spools`; one marked not buying again
-    stays off. RED on 74d780a (never listed)."""
+    after the used-up ones, marked `no_spools`; an excluded one stays off. RED
+    on 74d780a (never listed)."""
     used_up, stocked = _fil(60, name="Zebra"), _fil(61, name="Mint")
     never_a, never_b = _fil(70, name="Apple"), _fil(71, name="Kiwi")
-    never_rebuy = _fil(72, name="Plum", extra=_not_rebuying())
+    never_restock = _fil(72, name="Plum", extra=_excluded())
     spoolman["spools"] = [_spool(1, used_up, 0, archived=True), _spool(2, stocked, 800)]
-    spoolman["filaments"] = [used_up, stocked, never_a, never_b, never_rebuy]
+    spoolman["filaments"] = [used_up, stocked, never_a, never_b, never_restock]
     rep = stock_report.build_report()
     assert _ids(rep["out"]) == [60, 70, 71], rep["out"]
     assert [r.get("no_spools", False) for r in rep["out"]] == [False, True, True], rep["out"]
     apple = rep["out"][1]
     assert (apple["grams"], apple["spools"], apple["spools_total"]) == (0.0, 0, 0), apple
     assert apple["display"] == "Prusament - PLA - Apple", apple
-    assert _ids(rep["not_rebuying"]) == [72] and rep["not_rebuying"][0]["no_spools"] is True
+    assert _ids(rep["excluded"]) == [72] and rep["excluded"][0]["no_spools"] is True
     assert rep["filaments"] == 5
 
 
@@ -367,10 +370,10 @@ def test_an_answer_that_isnt_a_spool_list_is_a_failed_read(cfg, monkeypatch):
 
 def test_the_real_strict_read_is_asked_for_archived_spools_and_fails_closed(cfg, monkeypatch):
     """Through the real spoolman_api.get_all_spools_strict: the request asks for
-    archived spools, the wire-form extras are decoded (a "not buying again" mark
+    archived spools, the wire-form extras are decoded (an exclusion mark
     on the wire is seen), and an HTTP 500 is a failed read, not [] (which the
     fail-open get_all_spools would answer)."""
-    f = _fil(95, attrs=None, extra={"fcc_no_rebuy": '"Discontinued"', "fcc_no_rebuy_note": '"say \\"no\\""',
+    f = _fil(95, attrs=None, extra={"fcc_stock_excluded": '"Discontinued"', "fcc_stock_excluded_note": '"say \\"no\\""',
                                     "original_color": '"Blue"'})
     wire = [_spool(1, f, 0, archived=True), _spool(2, _fil(96), 40)]
     seen = []
@@ -388,8 +391,8 @@ def test_the_real_strict_read_is_asked_for_archived_spools_and_fails_closed(cfg,
     rep = stock_report.build_report()
     assert seen and seen[0].endswith("/api/v1/spool?allow_archived=true")
     assert rep["out"] == [] and _ids(rep["low"]) == [96]
-    assert _ids(rep["not_rebuying"]) == [95]
-    assert rep["not_rebuying"][0]["not_rebuying"]["note"] == 'say "no"'
+    assert _ids(rep["excluded"]) == [95]
+    assert rep["excluded"][0]["excluded"]["note"] == 'say "no"'
 
     def _get500(url, timeout=None, **kw):
         r = MagicMock()

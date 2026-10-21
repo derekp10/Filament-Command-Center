@@ -7,7 +7,7 @@ Nothing here writes anything. The panel's own behaviour in depth is pinned
 hermetically by test_low_stock_panel.py; this file checks it is wired into the
 real page: the search panel's button, the real filament window, the real
 heartbeat (which must never ask for the list), Escape leaving the search panel
-open, and the "not buying again" dialog over the real page (its writes are
+open, and the exclusion dialog over the real page (its writes are
 stubbed too: nothing reaches dev Spoolman).
 """
 from __future__ import annotations
@@ -25,24 +25,24 @@ REPORT = {
     "low": [
         {"filament_id": 164, "brand": "Prusament", "material": "PLA", "color_name": "Galaxy Black",
          "display": "Prusament - PLA - Galaxy Black", "color": "222222", "color_direction": "longitudinal",
-         "grams": 151.0, "spools": 1, "spools_total": 3, "attributes": [], "not_rebuying": None,
+         "grams": 151.0, "spools": 1, "spools_total": 3, "attributes": [], "excluded": None,
          "buy_url": "https://www.prusa3d.com/product/prusament-pla-galaxy-black/"},
         {"filament_id": 88, "brand": "Overture", "material": "PETG", "color_name": "Red Blue",
          "display": "Overture - PETG - Red Blue", "color": "BA0C2F,0047BB", "color_direction": "coaxial",
-         "grams": 220.4, "spools": 2, "spools_total": 2, "attributes": ["Silk"], "not_rebuying": None,
+         "grams": 220.4, "spools": 2, "spools_total": 2, "attributes": ["Silk"], "excluded": None,
          "buy_url": None},
     ],
     "out": [
         {"filament_id": 20, "brand": "Generic", "material": "PLA", "color_name": "Lipstick Red",
          "display": "Generic - PLA - Lipstick Red", "color": "ff0000", "color_direction": "longitudinal",
-         "grams": 0, "spools": 0, "spools_total": 2, "attributes": ["For Infill"], "not_rebuying": None,
+         "grams": 0, "spools": 0, "spools_total": 2, "attributes": ["For Infill"], "excluded": None,
          "buy_url": "https://shop.example/s?q=Generic+PLA+Lipstick%20Red"},
     ],
-    "not_rebuying": [
+    "excluded": [
         {"filament_id": 41, "brand": "Sunlu", "material": "PLA", "color_name": "Glow Green",
          "display": "Sunlu - PLA - Glow Green", "color": "55ff55", "color_direction": "longitudinal",
          "grams": 120.0, "spools": 2, "spools_total": 3, "attributes": [], "buy_url": None,
-         "not_rebuying": {"reason": "Discontinued", "code": "discontinued", "note": "Prusa stopped making it",
+         "excluded": {"reason": "Discontinued", "code": "discontinued", "note": "Prusa stopped making it",
                           "at": "2026-10-20"}},
     ],
 }
@@ -62,13 +62,13 @@ def _stub_report(page, body, status=200, seen=None, then=None):
     page.route("**/api/stock_report", handle)
 
 
-def _stub_no_rebuy(page, sent, answer):
-    """Stubs the "not buying again" writes: recorded in `sent`, never sent on."""
+def _stub_exclusion(page, sent, answer):
+    """Stubs the exclusion writes: recorded in `sent`, never sent on."""
     def handle(route):
         req = route.request
         sent.append((req.method, req.url.split("/api/", 1)[1], req.post_data_json if req.post_data else None))
         route.fulfill(status=200, content_type="application/json", body=json.dumps(answer))
-    page.route("**/api/filament/*/no_rebuy", handle)
+    page.route("**/api/filament/*/stock_exclusion", handle)
 
 
 def _open_search(page, base_url, reset_dom_state_js):
@@ -176,18 +176,18 @@ def test_escape_closes_the_list_and_leaves_the_search_panel_open(page: Page, bas
 
 
 @pytest.mark.usefixtures("require_server")
-def test_not_buying_again_over_the_real_page(page: Page, base_url: str, reset_dom_state_js: str):
+def test_excluding_over_the_real_page(page: Page, base_url: str, reset_dom_state_js: str):
     """The reason dialog sits above the list and the search panel (the confirm
     tier), Escape closes only it, and a save posts the reason and reads the list
     again. Both requests are stubbed: nothing reaches dev Spoolman."""
     after = json.loads(json.dumps(REPORT))
     moved = after["low"].pop(0)
-    moved["not_rebuying"] = {"reason": "One-off", "code": "one_off", "note": "", "at": "2026-10-20"}
-    after["not_rebuying"].insert(0, moved)
+    moved["excluded"] = {"reason": "One-off", "code": "one_off", "note": "", "at": "2026-10-20"}
+    after["excluded"].insert(0, moved)
     seen, sent = [], []
     _stub_report(page, REPORT, seen=seen, then=after)
-    _stub_no_rebuy(page, sent, {"success": True, "filament_id": 164, "display": "Prusament - PLA - Galaxy Black",
-                                "not_rebuying": moved["not_rebuying"], "was": None, "msg": "ok"})
+    _stub_exclusion(page, sent, {"success": True, "filament_id": 164, "display": "Prusament - PLA - Galaxy Black",
+                                "excluded": moved["excluded"], "was": None, "msg": "ok"})
     _open_search(page, base_url, reset_dom_state_js)
     page.locator("#global-search-low-stock").click()
     _wait_state(page, "ready")
@@ -204,11 +204,11 @@ def test_not_buying_again_over_the_real_page(page: Page, base_url: str, reset_do
     expect(page.locator(PANEL)).to_be_visible()
     expect(page.locator("#offcanvasSearch")).to_be_visible()
     page.keyboard.press("Delete")
-    page.keyboard.press("ArrowDown")                          # Discontinued -> One-off
+    page.keyboard.press("ArrowDown")                          # Discontinued -> Can't find it
     page.keyboard.press("Enter")
     expect(page.locator(PANEL + " .fcc-stock-row")).to_have_count(1)
     assert [(m, u, {k: v for k, v in b.items() if k != "today"}) for m, u, b in sent] == \
-        [("POST", "filament/164/no_rebuy", {"reason": "one_off", "note": ""})]
+        [("POST", "filament/164/stock_exclusion", {"reason": "cant_find", "note": ""})]
     assert len(seen) == 2
     expect(page.locator(PANEL + " [data-stock-count]")).to_have_text(["1", "1", "2"])
 

@@ -5,7 +5,7 @@ low-stock line (`low_stock_g`, default 250 g), or out of stock.
     print or a weigh-out takes the filament from at or above the line to under it;
   - "⚠️ ... is out: #1 was its last spool in stock" when its last in-stock spool
     empties (the 0 g auto-archive);
-  - neither for a filament marked "not buying again" (Derek, 2026-10-20);
+  - neither for a filament excluded from the Low stock list (Derek, 2026-10-20);
   - quiet when the filament was already under the line (220 g -> 150 g).
 
 The hook points are the print deduct's `_record_applied_deduct` (after its
@@ -236,17 +236,17 @@ def test_crossing_the_line_and_running_out_in_one_write_is_one_out_warning(env):
         ["⚠️ Prusament PLA Galaxy Black is out: #1 was its last spool in stock"]
 
 
-def test_a_filament_not_bought_again_is_quiet_both_ways(env):
-    """Marked "not buying again": running out and going low are no news. RED on
+def test_an_excluded_filament_is_quiet_both_ways(env):
+    """Excluded from Low and Out: running out and going low are no news. RED on
     68a9b9d for the low one (only a One-off attribute silenced "out")."""
     fake = _galaxy(env, (1, 60, "XL-1"))
-    fake.filaments[10]["extra"]["fcc_no_rebuy"] = _json.dumps("Discontinued")
+    fake.filaments[10]["extra"]["fcc_stock_excluded"] = _json.dumps("Discontinued")
     _deduct(env, {0: 60}, job="J-out")
     assert fake.spools[1]["archived"] is True
     assert _stock_warnings(env["logs"]) == []
 
     fake.add_filament(11, name="Tiny")
-    fake.filaments[11]["extra"]["fcc_no_rebuy"] = _json.dumps("One-off")
+    fake.filaments[11]["extra"]["fcc_stock_excluded"] = _json.dumps("One-off")
     fake.add_spool(5, 11, 300, location="XL-1")
     _deduct(env, {0: 80}, job="J-low")
     assert fake.remaining(5) == 220

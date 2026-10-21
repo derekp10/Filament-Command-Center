@@ -14,17 +14,20 @@ empty, and a filament holding one is never judged low.
        technically out"; on prod those are the first import's samples and
        filaments used up before he tracked them), listed after the others with
        `no_spools`;
-  not_rebuying  a filament marked "not buying again" (Derek, 2026-10-20: it
-       may be discontinued, a one-off, or one he didn't like, and he wants to
-       write down why). It is never low or out, whatever its stock; it is
-       listed here with its reason, its note, the day it was marked and its
-       stock. The mark is three text extras on the filament (`fcc_no_rebuy`:
-       the reason, stored as its label so Spoolman's own page reads "Not Buying
-       Again: Discontinued"; `fcc_no_rebuy_note`; `fcc_no_rebuy_at`), written
-       only by `mark_not_rebuying` / `track_again` below, behind POST / DELETE
-       /api/filament/<id>/no_rebuy (the list's 🚫 and ✏️). Any reason text
-       counts, one typed in Spoolman by hand too; a blank one is no mark. It
-       replaced the "One-off" attribute rule, which only ever ran on dev.
+  excluded  a filament left off Low and Out from the list, with why
+       (Derek, 2026-10-20: it may be discontinued, a one-off, or one he didn't
+       like, and he wants to write down why; 2026-10-21: called "Excluded", not
+       "Not buying again", since one he can't get any more may be one he
+       liked). It is never low or out, whatever its stock; it is listed here
+       with its reason, its note, the day it was excluded and its stock. The
+       mark is three text extras on the filament (`fcc_stock_excluded`: the
+       reason, stored as its label so Spoolman's own page reads "Excluded From
+       Low Stock: Discontinued"; `fcc_stock_excluded_note`;
+       `fcc_stock_excluded_at`), written only by `exclude_filament` /
+       `include_again` below, behind POST / DELETE
+       /api/filament/<id>/stock_exclusion (the list's 🔕 and ✏️). Any reason
+       text counts, one typed in Spoolman by hand too; a blank one is no mark.
+       It replaced the "One-off" attribute rule, which only ever ran on dev.
        Clearing writes blanks, never leaves a key out: Spoolman 0.27 (dev's)
        keeps an extra a PATCH leaves out (checked on dev 2026-10-20), where
        0.23 dropped it, so FCC's delete sentinel clears nothing there.
@@ -46,7 +49,7 @@ Activity Log WARNING per filament when a write takes it across a line:
     "⚠️ Prusament PLA Galaxy Black is running low: 220 g left in 2 spools";
   - from in stock to none in stock (its last spool emptied: the 0 g
     auto-archive): "⚠️ ... is out: #99 was its last spool in stock".
-Neither for a filament marked not buying again: no news there.
+Neither for an excluded filament: no news there.
 A filament already under the line stays quiet until it runs out, so a print on
 a low filament doesn't log every time, and the same warning for one filament is
 logged once a minute at most (two writes landing together can each see the
@@ -79,20 +82,21 @@ import spoolman_api  # type: ignore
 
 DEFAULT_LOW_STOCK_G = 250.0
 
-# "Not buying again": the filament extras (registered at startup through
+# Excluded from Low and Out: the filament extras (registered at startup through
 # spoolman_api.REQUIRED_FILAMENT_EXTRAS, and in setup_fields.py) and the reasons
 # the list offers, (code, label). The label is what is stored.
-NO_REBUY_KEY = "fcc_no_rebuy"
-NO_REBUY_NOTE_KEY = "fcc_no_rebuy_note"
-NO_REBUY_AT_KEY = "fcc_no_rebuy_at"
-NO_REBUY_KEYS = (NO_REBUY_KEY, NO_REBUY_NOTE_KEY, NO_REBUY_AT_KEY)
-NO_REBUY_REASONS = (
+EXCLUDE_KEY = "fcc_stock_excluded"
+EXCLUDE_NOTE_KEY = "fcc_stock_excluded_note"
+EXCLUDE_AT_KEY = "fcc_stock_excluded_at"
+EXCLUDE_KEYS = (EXCLUDE_KEY, EXCLUDE_NOTE_KEY, EXCLUDE_AT_KEY)
+EXCLUDE_REASONS = (
     ("discontinued", "Discontinued"),
+    ("cant_find", "Can't find it"),
     ("one_off", "One-off"),
     ("didnt_like", "Didn't like it"),
     ("other", "Other"),
 )
-NO_REBUY_NOTE_MAX = 500
+EXCLUDE_NOTE_MAX = 500
 
 # How far (grams) the fresh read of a just-written spool may sit from where the
 # write left it before the warning gives up: further means something else wrote
@@ -119,10 +123,10 @@ class StockReadError(Exception):
     a spool list. The Low-stock list answers an error, never an empty list."""
 
 
-class NoRebuyError(Exception):
-    """A "not buying again" change that was refused or failed, with nothing
-    changed unless it says so: `status` is the HTTP status the route answers,
-    `error` its code, `msg` the sentence for the page."""
+class ExclusionError(Exception):
+    """An exclusion change that was refused or failed, with nothing changed
+    unless it says so: `status` is the HTTP status the route answers, `error`
+    its code, `msg` the sentence for the page."""
 
     def __init__(self, status, error, msg):
         super().__init__(msg)
@@ -240,7 +244,7 @@ def _reason_code(label):
     """The code of a stored reason ("Didn't like it" -> didnt_like). A reason
     typed in Spoolman by hand that matches none reads as "other"."""
     key = _squash(label)
-    for code, lab in NO_REBUY_REASONS:
+    for code, lab in EXCLUDE_REASONS:
         if key in (_squash(code), _squash(lab)):
             return code
     return "other"
@@ -254,16 +258,16 @@ def _plain(v):
     return str(v).strip()
 
 
-def no_rebuy_of(fil):
-    """{reason, code, note, at} when the filament is marked "not buying again",
-    else None. Any reason that isn't blank counts."""
+def exclusion_of(fil):
+    """{reason, code, note, at} when the filament is excluded from Low and
+    Out, else None. Any reason that isn't blank counts."""
     extra = _dict(_dict(fil).get('extra'))
-    reason = _plain(extra.get(NO_REBUY_KEY))
+    reason = _plain(extra.get(EXCLUDE_KEY))
     if not reason:
         return None
     return {"reason": reason, "code": _reason_code(reason),
-            "note": _plain(extra.get(NO_REBUY_NOTE_KEY)),
-            "at": _plain(extra.get(NO_REBUY_AT_KEY))}
+            "note": _plain(extra.get(EXCLUDE_NOTE_KEY)),
+            "at": _plain(extra.get(EXCLUDE_AT_KEY))}
 
 
 def _colours(fil):
@@ -323,15 +327,15 @@ def _row(fid, fil, grams, count, total, template):
         "spools": count,            # in stock
         "spools_total": total,      # every spool on record, archived ones too
         "attributes": attrs,
-        "not_rebuying": no_rebuy_of(fil),   # {reason, code, note, at}, or None
+        "excluded": exclusion_of(fil),   # {reason, code, note, at}, or None
         "buy_url": buy_url(fil, template),
     }
 
 
 def build_report():
-    """The ⚠️ Low-stock list: {success, threshold_g, low, out, not_rebuying,
+    """The ⚠️ Low-stock list: {success, threshold_g, low, out, excluded,
     filaments, spools}. `low` runs from the fewest grams up; `out` and
-    `not_rebuying` are by name. Raises StockReadError when Spoolman can't be
+    `excluded` are by name. Raises StockReadError when Spoolman can't be
     read."""
     try:
         cfg = config_loader.load_config() or {}
@@ -366,14 +370,14 @@ def build_report():
         entry = by_fid.setdefault(fid, {"fil": fil_by_id.get(fid) or s.get('filament'), "spools": []})
         entry["spools"].append(s)
 
-    low, out, not_rebuying = [], [], []
+    low, out, excluded = [], [], []
     for fid, entry in by_fid.items():
         grams, count, unknown = stock_of(entry["spools"])
         total = len(entry["spools"])
-        if no_rebuy_of(entry["fil"]):
+        if exclusion_of(entry["fil"]):
             row = _row(fid, entry["fil"], grams, count, total, template)
             row["stock_unknown"] = unknown > 0   # a spool of unknown weight: grams is a floor
-            not_rebuying.append(row)
+            excluded.append(row)
         elif count == 0:
             out.append(_row(fid, entry["fil"], 0.0, 0, total, template))
         elif not unknown and grams < threshold:
@@ -384,51 +388,51 @@ def build_report():
             continue
         row = _row(fid, fil, 0.0, 0, 0, template)
         row["no_spools"] = True
-        (not_rebuying if row["not_rebuying"] else out).append(row)
+        (excluded if row["excluded"] else out).append(row)
     low.sort(key=lambda r: (r["grams"], r["display"].lower(), r["filament_id"]))
     out.sort(key=lambda r: (bool(r.get("no_spools")), r["display"].lower(), r["filament_id"]))
-    not_rebuying.sort(key=lambda r: (r["display"].lower(), r["filament_id"]))
+    excluded.sort(key=lambda r: (r["display"].lower(), r["filament_id"]))
     return {"success": True, "threshold_g": threshold, "low": low, "out": out,
-            "not_rebuying": not_rebuying,
+            "excluded": excluded,
             "filaments": len(set(by_fid) | set(fil_by_id)),
             "spools": len(spools)}
 
 
-# --- not buying again: the mark and its undo --------------------------------------
+# --- excluded: the mark and its undo -----------------------------------------------
 
 def _filament_for_change(fid):
-    """The filament, read strictly before a change: NoRebuyError when it doesn't
+    """The filament, read strictly before a change: ExclusionError when it doesn't
     exist (404) or Spoolman doesn't answer (502), so nothing is written blind."""
     sm_url, _ = config_loader.get_api_urls()
     try:
         resp = requests.get(f"{sm_url}/api/v1/filament/{int(fid)}", timeout=_READ_TIMEOUT)
     except Exception as e:
-        raise NoRebuyError(502, "spoolman_unreachable",
-                           f"Spoolman didn't answer ({e.__class__.__name__}), so nothing was changed. "
-                           "Try again in a moment.")
+        raise ExclusionError(502, "spoolman_unreachable",
+                             f"Spoolman didn't answer ({e.__class__.__name__}), so nothing was changed. "
+                             "Try again in a moment.")
     if resp.status_code == 404:
-        raise NoRebuyError(404, "no_filament", f"There is no filament #{fid} in Spoolman.")
+        raise ExclusionError(404, "no_filament", f"There is no filament #{fid} in Spoolman.")
     if not resp.ok:
-        raise NoRebuyError(502, "spoolman_unreachable",
-                           f"Spoolman answered HTTP {resp.status_code}, so nothing was changed. "
-                           "Try again in a moment.")
+        raise ExclusionError(502, "spoolman_unreachable",
+                             f"Spoolman answered HTTP {resp.status_code}, so nothing was changed. "
+                             "Try again in a moment.")
     try:
         fil = spoolman_api.parse_inbound_data(resp.json())
     except ValueError:
         fil = None
     if not isinstance(fil, dict) or str(fil.get('id')) != str(fid):
-        raise NoRebuyError(502, "spoolman_unreachable",
-                           "Spoolman's answer wasn't that filament, so nothing was changed.")
+        raise ExclusionError(502, "spoolman_unreachable",
+                             "Spoolman's answer wasn't that filament, so nothing was changed.")
     return fil
 
 
-def _mark_now(fid):
+def _exclusion_now(fid):
     """The filament's mark as Spoolman has it now, read again after a write that
     reported failure (its PATCH has a 2 s read timeout, and may have landed).
     "unknown" when it can't be read."""
     try:
-        return no_rebuy_of(_filament_for_change(fid))
-    except NoRebuyError:
+        return exclusion_of(_filament_for_change(fid))
+    except ExclusionError:
         return "unknown"
 
 
@@ -441,7 +445,7 @@ def _server_day():
     return time.strftime("%Y-%m-%d")
 
 
-def _mark_day(today):
+def _exclusion_day(today):
     """The day a mark is made: the page's own date (`today`, YYYY-MM-DD) when
     it is a real date within two days of the server's, else the server's. The
     container's clock is often UTC (dev's is), so an evening mark in California
@@ -456,77 +460,78 @@ def _mark_day(today):
     return day.isoformat()
 
 
-def mark_not_rebuying(fid, reason, note='', today=None):
-    """Marks filament `fid` "not buying again" with a reason code (one of
-    NO_REBUY_REASONS) and an optional note (needed for "other"). Marking it
-    again changes the reason and note and keeps the day it was first marked;
-    a new mark takes the page's `today` (see _mark_day).
+def exclude_filament(fid, reason, note='', today=None):
+    """Excludes filament `fid` from Low and Out with a reason code (one of
+    EXCLUDE_REASONS) and an optional note (needed for "other"). Excluding it
+    again changes the reason and note and keeps the day it was first excluded;
+    a new mark takes the page's `today` (see _exclusion_day).
     One read-merge write of the three extras (siblings kept); the Activity Log
-    says what happened. Returns {filament_id, display, not_rebuying, was};
-    raises NoRebuyError (nothing written unless a write was reported failed
+    says what happened. Returns {filament_id, display, excluded, was};
+    raises ExclusionError (nothing written unless a write was reported failed
     and couldn't be read back)."""
-    labels = dict(NO_REBUY_REASONS)
+    labels = dict(EXCLUDE_REASONS)
     code = str(reason or '').strip().lower()
     if code not in labels:
-        raise NoRebuyError(400, "bad_reason", "Pick why: Discontinued, One-off, Didn't like it or Other.")
+        raise ExclusionError(400, "bad_reason",
+                             "Pick why: Discontinued, Can't find it, One-off, Didn't like it or Other.")
     if note is None:
         note = ''
     if not isinstance(note, str):
-        raise NoRebuyError(400, "bad_note", "The note must be text.")
+        raise ExclusionError(400, "bad_note", "The note must be text.")
     note = note.strip()
-    if len(note) > NO_REBUY_NOTE_MAX:
-        raise NoRebuyError(400, "note_too_long",
-                           f"The note is {len(note)} characters long; keep it to {NO_REBUY_NOTE_MAX}.")
+    if len(note) > EXCLUDE_NOTE_MAX:
+        raise ExclusionError(400, "note_too_long",
+                             f"The note is {len(note)} characters long; keep it to {EXCLUDE_NOTE_MAX}.")
     if code == "other" and not note:
-        raise NoRebuyError(400, "note_needed", "Say why in the note: Other needs one.")
+        raise ExclusionError(400, "note_needed", "Say why in the note: Other needs one.")
 
     fil = _filament_for_change(fid)
-    was = no_rebuy_of(fil)
-    at = (was or {}).get("at") or _mark_day(today)
+    was = exclusion_of(fil)
+    at = (was or {}).get("at") or _exclusion_day(today)
     label = labels[code]
     marked = {"reason": label, "code": code, "note": note, "at": at}
     # Pre-wrapped as JSON strings (the keys are JSON_STRING_FIELDS too), so a
     # note such as "true" or "123" stays text; a blank note clears an old one
     # (a blank, not the delete sentinel: see the module docstring).
-    extra = {NO_REBUY_KEY: json.dumps(label), NO_REBUY_AT_KEY: json.dumps(at),
-             NO_REBUY_NOTE_KEY: json.dumps(note)}
+    extra = {EXCLUDE_KEY: json.dumps(label), EXCLUDE_AT_KEY: json.dumps(at),
+             EXCLUDE_NOTE_KEY: json.dumps(note)}
     name = html.escape(" ".join(filament_names(fil)), quote=False)
     if spoolman_api.update_filament(int(fid), {"extra": extra}) is None:
         err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the change"
-        if _mark_now(fid) != marked:
-            state.add_log_entry(f"❌ Couldn't mark {name} as not buying again: "
+        if _exclusion_now(fid) != marked:
+            state.add_log_entry(f"❌ Couldn't exclude {name} from Low and Out: "
                                 f"{html.escape(str(err), quote=False)}", "ERROR", "ff4444")
-            raise NoRebuyError(502, "write_failed", f"Spoolman didn't save it: {err}")
-        state.logger.warning(f"Not buying again: filament {fid}'s write reported {err!r} but landed")
+            raise ExclusionError(502, "write_failed", f"Spoolman didn't save it: {err}")
+        state.logger.warning(f"Exclude: filament {fid}'s write reported {err!r} but landed")
     why = f"{label}: {html.escape(note, quote=False)}" if note else label
-    state.add_log_entry(f"🚫 Not buying {name} again ({why})", "INFO", _log_colour(fil))
-    return {"filament_id": int(fid), "display": _display(fil), "not_rebuying": marked, "was": was}
+    state.add_log_entry(f"🔕 Excluded {name} from Low and Out ({why})", "INFO", _log_colour(fil))
+    return {"filament_id": int(fid), "display": _display(fil), "excluded": marked, "was": was}
 
 
-def track_again(fid):
-    """Undoes the mark: filament `fid` is listed on Low and Out again when it
-    is low or out, and its reason, note and day are cleared (written blank, one
-    write: Spoolman 0.27 keeps a key a write leaves out). Nothing is written
-    when it wasn't marked. Returns {filament_id, display, not_rebuying: None,
-    was, changed}; raises NoRebuyError."""
+def include_again(fid):
+    """Undoes the exclusion: filament `fid` is listed on Low and Out again when
+    it is low or out, and its reason, note and day are cleared (written blank,
+    one write: Spoolman 0.27 keeps a key a write leaves out). Nothing is
+    written when it wasn't excluded. Returns {filament_id, display, excluded:
+    None, was, changed}; raises ExclusionError."""
     fil = _filament_for_change(fid)
-    was = no_rebuy_of(fil)
+    was = exclusion_of(fil)
     extra_now = _dict(fil.get('extra'))
-    if not any(_plain(extra_now.get(k)) for k in NO_REBUY_KEYS):
-        return {"filament_id": int(fid), "display": _display(fil), "not_rebuying": None,
+    if not any(_plain(extra_now.get(k)) for k in EXCLUDE_KEYS):
+        return {"filament_id": int(fid), "display": _display(fil), "excluded": None,
                 "was": None, "changed": False}
     name = html.escape(" ".join(filament_names(fil)), quote=False)
-    extra = {k: json.dumps("") for k in NO_REBUY_KEYS}
+    extra = {k: json.dumps("") for k in EXCLUDE_KEYS}
     if spoolman_api.update_filament(int(fid), {"extra": extra}) is None:
         err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the change"
-        if _mark_now(fid) is not None:
-            state.add_log_entry(f"❌ Couldn't track {name} again: {html.escape(str(err), quote=False)}",
+        if _exclusion_now(fid) is not None:
+            state.add_log_entry(f"❌ Couldn't include {name} again: {html.escape(str(err), quote=False)}",
                                 "ERROR", "ff4444")
-            raise NoRebuyError(502, "write_failed", f"Spoolman didn't save it: {err}")
-        state.logger.warning(f"Track again: filament {fid}'s write reported {err!r} but landed")
-    it_was = f" (marked not buying again: {html.escape(was['reason'], quote=False)})" if was else ''
-    state.add_log_entry(f"↩️ Tracking {name} again{it_was}", "INFO", _log_colour(fil))
-    return {"filament_id": int(fid), "display": _display(fil), "not_rebuying": None,
+            raise ExclusionError(502, "write_failed", f"Spoolman didn't save it: {err}")
+        state.logger.warning(f"Include again: filament {fid}'s write reported {err!r} but landed")
+    it_was = f" (it was excluded: {html.escape(was['reason'], quote=False)})" if was else ''
+    state.add_log_entry(f"↩️ {name} is included in Low and Out again{it_was}", "INFO", _log_colour(fil))
+    return {"filament_id": int(fid), "display": _display(fil), "excluded": None,
             "was": was, "changed": True}
 
 
@@ -695,8 +700,8 @@ def _crossing(group, spools, threshold):
         return None   # a spool of unknown weight: neither low nor out can be told
     before_total, after_total = other_g + before_g, other_g + after_g
     before_count, after_count = other_n + before_n, other_n + after_n
-    if no_rebuy_of(fil):
-        return None   # not buying it again: neither low nor out is news
+    if exclusion_of(fil):
+        return None   # excluded: neither low nor out is news
     # The Activity Log renders a message as HTML, and these names are free text.
     name = html.escape(" ".join(filament_names(fil)), quote=False)
     if before_count > 0 and after_count == 0:

@@ -1,9 +1,10 @@
-""""Not buying again" (Derek, 2026-10-20): POST / DELETE /api/filament/<id>/no_rebuy
-(stock_report.mark_not_rebuying / track_again), from the ⚠️ Low stock list.
+"""Excluded from Low and Out (Derek, 2026-10-20; called "Excluded", not "Not buying
+again", since 2026-10-21): POST / DELETE /api/filament/<id>/stock_exclusion
+(stock_report.exclude_filament / include_again), from the ⚠️ Low stock list.
 
-Marking a filament stores three text extras: `fcc_no_rebuy` (the reason, as its
-label), `fcc_no_rebuy_note` and `fcc_no_rebuy_at` (the day it was first marked).
-Tracking it again clears all three. Both read the filament strictly first and
+Marking a filament stores three text extras: `fcc_stock_excluded` (the reason, as its
+label), `fcc_stock_excluded_note` and `fcc_stock_excluded_at` (the day it was first marked).
+Including it again clears all three. Both read the filament strictly first and
 write once through the REAL spoolman_api.update_filament (read-merge: every other
 extra is kept), here against a fake Spoolman HTTP layer that behaves like the
 real one where it matters, in both of its ways of taking a PATCH's `extra`:
@@ -38,7 +39,7 @@ import state  # noqa: E402
 import stock_report  # noqa: E402
 
 HUB = Path(__file__).resolve().parent.parent
-KEYS = ("fcc_no_rebuy", "fcc_no_rebuy_note", "fcc_no_rebuy_at")
+KEYS = ("fcc_stock_excluded", "fcc_stock_excluded_note", "fcc_stock_excluded_at")
 # What this fake Spoolman knows as filament extras: the three new ones are
 # registered (startup does it: REQUIRED_FILAMENT_EXTRAS), plus a few siblings.
 REGISTERED = {"original_color", "product_url", "filament_attributes", "nozzle_temp_max"} | set(KEYS)
@@ -131,11 +132,11 @@ def env(monkeypatch, request):
 
 
 def _post(env, fid, body):
-    return env["client"].post(f"/api/filament/{fid}/no_rebuy", json=body)
+    return env["client"].post(f"/api/filament/{fid}/stock_exclusion", json=body)
 
 
 def _delete(env, fid):
-    return env["client"].delete(f"/api/filament/{fid}/no_rebuy")
+    return env["client"].delete(f"/api/filament/{fid}/stock_exclusion")
 
 
 def _writes(env):
@@ -161,15 +162,15 @@ def test_marking_writes_the_three_extras_and_keeps_every_other(env):
     body = r.get_json()
     assert body["success"] is True and body["filament_id"] == 7
     assert body["display"] == "Prusament - PLA - Galaxy Black"
-    assert body["not_rebuying"] == {"reason": "Discontinued", "code": "discontinued",
+    assert body["excluded"] == {"reason": "Discontinued", "code": "discontinued",
                                     "note": "Prusa stopped making it", "at": "2026-10-20"}
     assert body["was"] is None
-    assert body["msg"] == "Not buying Prusament - PLA - Galaxy Black again (Discontinued)."
-    assert env["fake"].decoded(7) == dict(SIBLINGS, fcc_no_rebuy="Discontinued",
-                                          fcc_no_rebuy_note="Prusa stopped making it",
-                                          fcc_no_rebuy_at="2026-10-20")
+    assert body["msg"] == "Excluded Prusament - PLA - Galaxy Black from Low and Out (Discontinued)."
+    assert env["fake"].decoded(7) == dict(SIBLINGS, fcc_stock_excluded="Discontinued",
+                                          fcc_stock_excluded_note="Prusa stopped making it",
+                                          fcc_stock_excluded_at="2026-10-20")
     assert len(_writes(env)) == 1
-    assert env["logs"] == [("🚫 Not buying Prusament PLA Galaxy Black again (Discontinued: Prusa stopped making it)",
+    assert env["logs"] == [("🔕 Excluded Prusament PLA Galaxy Black from Low and Out (Discontinued: Prusa stopped making it)",
                             "INFO", "222222")]
 
 
@@ -187,21 +188,21 @@ def test_a_new_mark_takes_the_pages_own_day_when_it_is_believable(env, today, da
     if today is not None:
         body["today"] = today
     assert _post(env, 7, body).status_code == 200
-    assert env["fake"].decoded(7)["fcc_no_rebuy_at"] == day
+    assert env["fake"].decoded(7)["fcc_stock_excluded_at"] == day
 
 
 def test_marking_again_changes_why_and_keeps_the_day(env):
-    env["fake"].add(7, extra={"fcc_no_rebuy": json.dumps("Discontinued"),
-                              "fcc_no_rebuy_note": json.dumps("old note"),
-                              "fcc_no_rebuy_at": json.dumps("2026-01-02")})
+    env["fake"].add(7, extra={"fcc_stock_excluded": json.dumps("Discontinued"),
+                              "fcc_stock_excluded_note": json.dumps("old note"),
+                              "fcc_stock_excluded_at": json.dumps("2026-01-02")})
     r = _post(env, 7, {"reason": "one_off", "note": "", "today": "2026-10-21"})
     assert r.status_code == 200, r.get_json()
     assert r.get_json()["was"]["reason"] == "Discontinued"
     ex = env["fake"].decoded(7)
-    assert ex["fcc_no_rebuy"] == "One-off" and ex["fcc_no_rebuy_at"] == "2026-01-02"
-    assert _mark_keys(env, 7)["fcc_no_rebuy_note"] == ""   # a blank note clears the old one
+    assert ex["fcc_stock_excluded"] == "One-off" and ex["fcc_stock_excluded_at"] == "2026-01-02"
+    assert _mark_keys(env, 7)["fcc_stock_excluded_note"] == ""   # a blank note clears the old one
     assert {k: ex[k] for k in SIBLINGS} == SIBLINGS
-    assert env["logs"][-1][0] == "🚫 Not buying Prusament PLA Galaxy Black again (One-off)"
+    assert env["logs"][-1][0] == "🔕 Excluded Prusament PLA Galaxy Black from Low and Out (One-off)"
 
 
 @pytest.mark.parametrize("note", ["123", "true", "[1, 2]", '"quoted"', "  spaced  "])
@@ -211,9 +212,9 @@ def test_a_note_that_looks_like_json_stays_text(env, note):
     env["fake"].add(7)
     r = _post(env, 7, {"reason": "other", "note": note})
     assert r.status_code == 200, r.get_json()
-    assert env["fake"].decoded(7)["fcc_no_rebuy_note"] == note.strip()
+    assert env["fake"].decoded(7)["fcc_stock_excluded_note"] == note.strip()
     fil = spoolman_api.parse_inbound_data(copy.deepcopy(env["fake"].filaments[7]))
-    assert stock_report.no_rebuy_of(fil)["note"] == note.strip()
+    assert stock_report.exclusion_of(fil)["note"] == note.strip()
 
 
 @pytest.mark.parametrize("body, error", [
@@ -233,10 +234,19 @@ def test_a_bad_request_is_refused_before_anything_is_read_or_written(env, body, 
     assert env["fake"].calls == [] and env["logs"] == []
 
 
+def test_cant_find_it_is_a_reason_of_its_own(env):
+    """Derek, 2026-10-21: one he can't get any more may be one he liked."""
+    env["fake"].add(7)
+    r = _post(env, 7, {"reason": "cant_find", "note": "Not on Amazon or the maker's store"})
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()["excluded"]["reason"] == "Can't find it"
+    assert env["fake"].decoded(7)["fcc_stock_excluded"] == "Can't find it"
+
+
 def test_a_note_of_500_characters_is_fine(env):
     env["fake"].add(7)
     assert _post(env, 7, {"reason": "didnt_like", "note": "x" * 500}).status_code == 200
-    assert env["fake"].decoded(7)["fcc_no_rebuy"] == "Didn't like it"
+    assert env["fake"].decoded(7)["fcc_stock_excluded"] == "Didn't like it"
 
 
 def test_a_filament_that_doesnt_exist_is_a_404_with_nothing_written(env):
@@ -259,15 +269,15 @@ def test_spoolman_not_answering_is_a_502_with_nothing_written(env):
 def test_a_refused_write_says_why_and_logs_it(env):
     """Spoolman's own words reach the page and the Activity Log (an ERROR line)."""
     env["fake"].add(7)
-    env["fake"].registered -= {"fcc_no_rebuy"}         # a Spoolman that missed the startup registration
+    env["fake"].registered -= {"fcc_stock_excluded"}         # a Spoolman that missed the startup registration
     r = _post(env, 7, {"reason": "discontinued"})
     assert r.status_code == 502
     body = r.get_json()
-    assert body["error"] == "write_failed" and "Unknown extra field fcc_no_rebuy" in body["msg"]
-    assert [(m[:45], c) for m, c, _ in env["logs"]] == \
-        [("❌ Couldn't mark Prusament PLA Galaxy Black as", "ERROR")]
-    assert "Unknown extra field fcc_no_rebuy" in env["logs"][0][0]
-    assert "fcc_no_rebuy" not in env["fake"].decoded(7)
+    assert body["error"] == "write_failed" and "Unknown extra field fcc_stock_excluded" in body["msg"]
+    assert [c for _, c, _ in env["logs"]] == ["ERROR"]
+    assert env["logs"][0][0].startswith("❌ Couldn't exclude Prusament PLA Galaxy Black from Low and Out: ")
+    assert "Unknown extra field fcc_stock_excluded" in env["logs"][0][0]
+    assert "fcc_stock_excluded" not in env["fake"].decoded(7)
 
 
 def test_a_write_reported_failed_that_landed_counts(env):
@@ -277,49 +287,49 @@ def test_a_write_reported_failed_that_landed_counts(env):
     env["fake"].patch_lands_then_times_out = True
     r = _post(env, 7, {"reason": "one_off", "note": "gift"})
     assert r.status_code == 200, r.get_json()
-    assert env["fake"].decoded(7)["fcc_no_rebuy"] == "One-off"
+    assert env["fake"].decoded(7)["fcc_stock_excluded"] == "One-off"
     assert len(_writes(env)) == 1
     assert [c for _, c, _ in env["logs"]] == ["INFO"]
 
 
-# --- tracking again ---------------------------------------------------------------------
+# --- including again --------------------------------------------------------------------
 
-def test_track_again_clears_all_three_and_keeps_every_other(env):
-    env["fake"].add(7, extra={"fcc_no_rebuy": json.dumps("Discontinued"),
-                              "fcc_no_rebuy_note": json.dumps("n"),
-                              "fcc_no_rebuy_at": json.dumps("2026-01-02")})
+def test_include_again_clears_all_three_and_keeps_every_other(env):
+    env["fake"].add(7, extra={"fcc_stock_excluded": json.dumps("Discontinued"),
+                              "fcc_stock_excluded_note": json.dumps("n"),
+                              "fcc_stock_excluded_at": json.dumps("2026-01-02")})
     r = _delete(env, 7)
     assert r.status_code == 200, r.get_json()
     body = r.get_json()
-    assert body["success"] is True and body["changed"] is True and body["not_rebuying"] is None
+    assert body["success"] is True and body["changed"] is True and body["excluded"] is None
     assert body["was"]["reason"] == "Discontinued"
-    assert body["msg"] == "Prusament - PLA - Galaxy Black is tracked again."
+    assert body["msg"] == "Prusament - PLA - Galaxy Black is included again."
     ex = env["fake"].decoded(7)
     assert {k: ex[k] for k in SIBLINGS} == SIBLINGS
     assert _mark_keys(env, 7) == {k: "" for k in KEYS}    # cleared in either Spoolman
     fil = spoolman_api.parse_inbound_data(copy.deepcopy(env["fake"].filaments[7]))
-    assert stock_report.no_rebuy_of(fil) is None
-    # A second Track again finds nothing to clear.
+    assert stock_report.exclusion_of(fil) is None
+    # A second Include again finds nothing to clear.
     assert _delete(env, 7).get_json()["changed"] is False and len(_writes(env)) == 1
-    assert env["logs"] == [("↩️ Tracking Prusament PLA Galaxy Black again (marked not buying again: Discontinued)",
+    assert env["logs"] == [("↩️ Prusament PLA Galaxy Black is included in Low and Out again (it was excluded: Discontinued)",
                             "INFO", "222222")]
 
 
-def test_track_again_on_a_filament_not_marked_writes_nothing(env):
-    env["fake"].add(7, extra={k: json.dumps("") for k in KEYS})      # blank: as one tracked again
+def test_include_again_on_a_filament_not_marked_writes_nothing(env):
+    env["fake"].add(7, extra={k: json.dumps("") for k in KEYS})      # blank: as one included again
     r = _delete(env, 7)
     assert r.status_code == 200 and r.get_json()["changed"] is False
-    assert r.get_json()["msg"] == "Prusament - PLA - Galaxy Black wasn't marked."
+    assert r.get_json()["msg"] == "Prusament - PLA - Galaxy Black wasn't excluded."
     assert _writes(env) == [] and env["logs"] == []
 
 
-def test_a_refused_track_again_says_why(env):
-    env["fake"].add(7, extra={"fcc_no_rebuy": json.dumps("Discontinued")})
+def test_a_refused_include_again_says_why(env):
+    env["fake"].add(7, extra={"fcc_stock_excluded": json.dumps("Discontinued")})
     env["fake"].patch_answer = (500, {"message": "database is locked"})
     r = _delete(env, 7)
     assert r.status_code == 502 and "database is locked" in r.get_json()["msg"]
-    assert env["logs"][0][1] == "ERROR" and "Couldn't track" in env["logs"][0][0]
-    assert env["fake"].decoded(7)["fcc_no_rebuy"] == "Discontinued"
+    assert env["logs"][0][1] == "ERROR" and "Couldn't include" in env["logs"][0][0]
+    assert env["fake"].decoded(7)["fcc_stock_excluded"] == "Discontinued"
 
 
 def test_the_log_lines_are_escaped(env):
@@ -338,15 +348,16 @@ def test_the_fields_are_registered_at_startup_and_in_setup_fields():
     them (REQUIRED_FILAMENT_EXTRAS) and setup_fields.py does on a rebuild. They
     are text kept as JSON strings (JSON_STRING_FIELDS)."""
     req = {k: (n, t) for k, n, t in spoolman_api.REQUIRED_FILAMENT_EXTRAS}
-    assert req["fcc_no_rebuy"] == ("Not Buying Again", "text")
-    assert req["fcc_no_rebuy_note"] == ("Not Buying Again: Note", "text")
-    assert req["fcc_no_rebuy_at"] == ("Not Buying Again: Since", "text")
+    assert req["fcc_stock_excluded"] == ("Excluded From Low Stock", "text")
+    assert req["fcc_stock_excluded_note"] == ("Excluded From Low Stock: Note", "text")
+    assert req["fcc_stock_excluded_at"] == ("Excluded From Low Stock: Since", "text")
     assert set(KEYS) <= set(spoolman_api.JSON_STRING_FIELDS)
     setup = (HUB.parent / "setup-and-rebuild" / "setup_fields.py").read_text(encoding="utf-8")
-    for key, name in (("fcc_no_rebuy", "Not Buying Again"), ("fcc_no_rebuy_note", "Not Buying Again: Note"),
-                      ("fcc_no_rebuy_at", "Not Buying Again: Since")):
+    for key, name in (("fcc_stock_excluded", "Excluded From Low Stock"),
+                      ("fcc_stock_excluded_note", "Excluded From Low Stock: Note"),
+                      ("fcc_stock_excluded_at", "Excluded From Low Stock: Since")):
         assert f'("{key}", "{name}", "text")' in setup
-    assert stock_report.NO_REBUY_KEYS == KEYS
+    assert stock_report.EXCLUDE_KEYS == KEYS
 
 
 def test_the_wizard_never_draws_them_as_plain_fields():
