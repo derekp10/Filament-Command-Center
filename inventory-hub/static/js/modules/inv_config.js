@@ -123,11 +123,11 @@ console.log("🚀 Loaded Module: CONFIG");
                 <span class="fw-bold" style="text-decoration:line-through;">${_esc(c)}</span>
                 <button type="button" class="btn btn-sm config-attrs-unhide-choice ms-2 py-0 px-1"
                         data-choice="${_esc(c)}" title="Show this tag again"
-                        style="font-size:0.75rem; line-height:1.4; background:#198754; color:#fff; border:none; border-radius:3px;">↩ unhide</button>
+                        style="font-size:var(--fcc-fs-label); line-height:1.4; background:#198754; color:#fff; border:none; border-radius:3px;">↩ unhide</button>
                 <button type="button" class="btn btn-sm config-attrs-purge-choice ms-1 py-0 px-1"
                         data-choice="${_esc(c)}"
                         title="Permanently delete from Spoolman's schema — rewrites every filament that has attributes"
-                        style="font-size:0.75rem; line-height:1.4; background:#6c757d; color:#fff; border:none; border-radius:3px;">🗑 purge</button>
+                        style="font-size:var(--fcc-fs-label); line-height:1.4; background:#6c757d; color:#fff; border:none; border-radius:3px;">🗑 purge</button>
             </span>`).join('');
         const choiceOpts = choices.map(c => `<option value="${_esc(c)}">${_esc(c)}</option>`).join('');
         const selVisible = filteredFilaments.filter(f => _attrs.selected.has(f.id)).length;
@@ -377,7 +377,7 @@ console.log("🚀 Loaded Module: CONFIG");
             const changesHtml = changes.length
                 ? `
                     <div class="small mt-1" style="color: rgba(255,255,255,0.85);">
-                        <table class="table table-dark table-sm table-bordered mb-0" style="font-size:0.82rem;">
+                        <table class="table table-dark table-sm table-bordered mb-0" style="font-size:var(--fcc-fs-small);">
                             <thead>
                                 <tr>
                                     <th>Field</th>

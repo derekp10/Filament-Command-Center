@@ -676,9 +676,9 @@ window.commitBulkMove = () => {
                 <div style="flex:1; min-width:0;">
                     <div class="text-truncate" style="color:#fff; font-weight:600; font-size:0.9rem;"
                          title="${_esc(label)}">${idPrefix}${_esc(label)}</div>
-                    <div style="font-size:0.75rem; color:rgba(255,255,255,0.75);">${_esc(meta)}</div>
+                    <div style="font-size:var(--fcc-fs-small); color:rgba(255,255,255,0.75);">${_esc(meta)}</div>
                 </div>
-                <div style="font-size:0.8rem;">${badge}</div>
+                <div style="font-size:var(--fcc-fs-label);">${badge}</div>
             </div>`;
     };
 
@@ -1001,9 +1001,9 @@ window.commitBulkMove = () => {
                 <div style="flex:1; min-width:0;">
                     <div class="text-truncate" style="color:#fff; font-weight:600; font-size:0.9rem;"
                          title="${_escapeHtml(row.display)}">#${row.id} ${_escapeHtml(row.display)}</div>
-                    <div style="font-size:0.75rem; color:rgba(255,255,255,0.75);">${_escapeHtml(weight)}${_escapeHtml(slot)}</div>
+                    <div style="font-size:var(--fcc-fs-small); color:rgba(255,255,255,0.75);">${_escapeHtml(weight)}${_escapeHtml(slot)}</div>
                 </div>
-                <div style="font-size:0.8rem;">${badge}</div>
+                <div style="font-size:var(--fcc-fs-label);">${badge}</div>
             </div>
         `;
     };
@@ -2310,7 +2310,7 @@ const _askRecordSource = (pick, sid, host) => {
                         <button type="button" class="btn btn-sm btn-secondary fcc-rs-none">No box</button>
                         <button type="button" class="btn btn-sm btn-dark fcc-rs-cancel">Cancel</button>
                     </div>
-                    <div class="fcc-rs-hint" style="font-size:0.8rem; color:#ccc; margin-top:8px;">←/→ move · Enter chooses · scan a slot's label to choose it · Esc goes back</div>
+                    <div class="fcc-rs-hint" style="font-size:var(--fcc-fs-small); color:#ccc; margin-top:8px;">←/→ move · Enter chooses · scan a slot's label to choose it · Esc goes back</div>
                 </div>`,
             initialFocus: pre ? `.fcc-rs-opt[data-rs-i="${feeds.indexOf(pre)}"]` : '.fcc-rs-none',
         });
@@ -2370,6 +2370,8 @@ const _askRecordSource = (pick, sid, host) => {
             const panel = ov.querySelector('.fcc-rs-panel') || handle.panel;
             // With a slot pre-selected, No box gets its own code (Group 40
             // review, BD-6): a scan-only user could pick only that slot or Back.
+            // Each code takes its button's colour (2026-10-21): the slot is
+            // cyan (btn-info), No box grey (btn-secondary), Cancel dark (btn-dark).
             qr = window.attachConfirmQRs({
                 host: panel,
                 onConfirm: pre ? () => choose(pre) : () => finish(''),

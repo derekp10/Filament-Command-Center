@@ -170,7 +170,7 @@
                     <div id="fcc-we-meta" style="color:#bbb;font-size:0.88rem;margin-bottom:12px;line-height:1.5;">
                         <span>Empty spool tare: <strong id="fcc-we-tare-val" style="color:#eee;">${currentEmpty !== null ? fmtG(currentEmpty) : 'unknown'}</strong>
                             <span id="fcc-we-tare-badge" style="display:${(currentSource === 'filament' || currentSource === 'vendor') ? '' : 'none'};
-                                margin-left:6px;font-size:0.78rem;
+                                margin-left:6px;font-size:var(--fcc-fs-label);
                                 background:#264b5d;color:#9fd6e6;border-radius:4px;padding:1px 6px;"
                                 title="Inherited via Spool > Filament > Vendor cascade.">
                                 ↩ from <span id="fcc-we-tare-source">${escapeHtml(currentSource || '')}</span>
@@ -180,10 +180,10 @@
                               &nbsp;·&nbsp; Currently used: <strong style="color:#eee;">${fmtG(currentUsed)}</strong></span>
                     </div>
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                        <span style="color:#bbb;font-size:0.82rem;">Mode</span>
+                        <span style="color:#bbb;font-size:var(--fcc-fs-small);">Mode</span>
                         <button type="button" id="fcc-we-set-default"
                                 class="btn btn-link btn-sm p-0"
-                                style="color:#9fd6e6;font-size:0.78rem;text-decoration:none;"
+                                style="color:#9fd6e6;font-size:var(--fcc-fs-small);text-decoration:none;"
                                 title="Use the current mode as the default the next time this overlay opens. Shortcut: D">
                             Set as default
                         </button>
@@ -198,14 +198,14 @@
                                autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
                         <span class="input-group-text bg-dark text-light border-secondary">g</span>
                     </div>
-                    <div id="fcc-we-hint" style="color:#888;font-size:0.78rem;margin-bottom:12px;
+                    <div id="fcc-we-hint" style="color:#888;font-size:var(--fcc-fs-small);margin-bottom:12px;
                                                   font-family:'JetBrains Mono','Cascadia Code','Consolas',monospace;"></div>
 
                     <div id="fcc-we-preview"
                          style="background:#0f1014;border:1px solid #333;border-radius:6px;
                                 padding:8px 12px;font-size:0.92rem;color:#cfd;
                                 margin-bottom:6px;">Enter a value to preview…</div>
-                    <div id="fcc-we-warn" style="color:#f5b342;font-size:0.82rem;min-height:1em;"></div>
+                    <div id="fcc-we-warn" style="color:#f5b342;font-size:var(--fcc-fs-small);min-height:1em;"></div>
                     ${autoArchiveHtml}
                 </div>
                 <div style="display:flex;justify-content:space-between;gap:8px;

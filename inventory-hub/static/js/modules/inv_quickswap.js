@@ -462,7 +462,7 @@
                                                 style="min-width:240px; font-size:1.05rem; padding:10px 14px;"
                                                 onclick="window.quickSwapDeposit(this)"
                                                 title="Drop the buffered spool into ${p.box} slot ${p.slot} (printer pool — no toolhead auto-deploy)">
-                                                <div class="text-warning fw-bold" style="font-size:1rem;">Slot ${p.slot} <span class="text-secondary small ms-1" style="font-size:0.75rem;">${p.box}</span></div>
+                                                <div class="text-warning fw-bold" style="font-size:1rem;">Slot ${p.slot} <span class="text-secondary small ms-1" style="font-size:var(--fcc-fs-small);">${p.box}</span></div>
                                                 <div class="text-success fw-bold" style="font-size:0.9rem;">⬇️ Deposit from buffer:</div>
                                                 <div class="text-light" style="font-size:0.9rem; max-width:220px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
                                                     ${bsSwatch}${bsDisplay}
@@ -478,7 +478,7 @@
                                                 style="min-width:240px; font-size:1.05rem; padding:10px 14px; opacity:0.7;"
                                                 disabled
                                                 title="${p.box} slot ${p.slot} is empty — scan a spool into the buffer to deposit here">
-                                                <div class="text-warning fw-bold" style="font-size:1rem;">Slot ${p.slot} <span class="text-secondary small ms-1" style="font-size:0.75rem;">${p.box}</span></div>
+                                                <div class="text-warning fw-bold" style="font-size:1rem;">Slot ${p.slot} <span class="text-secondary small ms-1" style="font-size:var(--fcc-fs-small);">${p.box}</span></div>
                                                 <div class="text-muted small fw-bold" style="font-size:0.9rem;">◦ empty staging slot</div>
                                             </button>`;
                                     }

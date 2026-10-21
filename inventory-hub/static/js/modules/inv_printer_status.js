@@ -220,7 +220,7 @@
         return `${th.id} holds ${who} — a toolhead holds one spool. Open ${th.id} and eject the one that isn't loaded.`;
     };
     const _doubledChip = (th) => ((th.loaded_count || 0) > 1
-        ? `<div class="fcc-ps-th-chip fcc-ps-th-doubled" style="font-size:0.72rem; color:#ffd54a; background:#2b2200; border-radius:4px; padding:0 4px;" title="${_doubledText(th).replace(/"/g, '&quot;')}">⚠️ ${th.loaded_count} spools</div>`
+        ? `<div class="fcc-ps-th-chip fcc-ps-th-doubled" style="color:#ffd54a; background:#2b2200; border-radius:4px; padding:0 4px;" title="${_doubledText(th).replace(/"/g, '&quot;')}">⚠️ ${th.loaded_count} spools</div>`
         : '');
     window.fccDoubledHeadText = _doubledText;
 
@@ -239,7 +239,7 @@
                     <div class="fcc-ps-th-body fcc-ps-th-body-empty">
                         <div class="fcc-ps-th-id text-truncate">${_thLabel(th)}</div>
                     </div>
-                    <div class="fcc-ps-th-chip" style="font-size:0.78rem; color:#ffd54a;">? not read</div>
+                    <div class="fcc-ps-th-chip" style="color:#ffd54a;">? not read</div>
                 </div>
             `;
         }
@@ -262,7 +262,7 @@
                     <div class="fcc-ps-th-body fcc-ps-th-body-empty">
                         <div class="fcc-ps-th-id text-truncate">${_thLabel(th)}</div>
                     </div>
-                    <div class="fcc-ps-th-chip" style="font-size:0.72rem; color:#ffd54a;">🔗 no bound slot</div>
+                    <div class="fcc-ps-th-chip" style="color:#ffd54a;">🔗 no bound slot</div>
                 </div>
             `;
         }
@@ -278,7 +278,7 @@
                     <div class="fcc-ps-th-body fcc-ps-th-body-empty">
                         <div class="fcc-ps-th-id text-truncate">${_thLabel(th)}</div>
                     </div>
-                    <div class="fcc-ps-th-chip" style="font-size:0.78rem; color: rgba(255,255,255,0.65);">empty</div>
+                    <div class="fcc-ps-th-chip" style="color: rgba(255,255,255,0.65);">empty</div>
                 </div>
             `;
         }
@@ -313,7 +313,7 @@
         const unboundCls = th.unbound ? ' fcc-ps-th-unbound' : '';
         const unboundBorder = th.unbound ? ' border:1px dashed #ffd54a;' : '';
         const unboundHint = th.unbound
-            ? `<div class="fcc-ps-th-chip" style="font-size:0.72rem; color:#ffd54a;" title="No dryer-box slot is bound to this toolhead. Auto-deduct still works (it follows the toolhead); bind a slot in the Location Manager → Feeds editor to also track it as box-fed.">🔗 no bound slot</div>`
+            ? `<div class="fcc-ps-th-chip" style="color:#ffd54a;" title="No dryer-box slot is bound to this toolhead. Auto-deduct still works (it follows the toolhead); bind a slot in the Location Manager → Feeds editor to also track it as box-fed.">🔗 no bound slot</div>`
             : '';
         return `
             <div class="fcc-ps-th${unboundCls}" ${positionAttr}

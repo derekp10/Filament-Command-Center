@@ -1552,7 +1552,7 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
                 <strong>#${esc(fil.id)}</strong> (<em>${esc(vendorName)} ${esc(material)}, ${esc(colorName)}</em>)
                 has no recorded <strong>empty spool weight</strong>.
             </p>
-            <p style="color:#bbb; font-size:0.82em; margin-bottom:12px;">
+            <p style="color:#bbb; font-size:var(--fcc-fs-small); margin-bottom:12px;">
                 Put the now-empty spool on your scale and enter the measured weight. It's saved to the
                 filament so every future spool of it inherits the value.
             </p>
@@ -2928,7 +2928,7 @@ const _renderDeleteOverlay = (overlay, { title, body, requireText, confirmLabel,
                 </label>
                 <input id="${inputId}" type="text" autocomplete="off"
                     style="font-family:monospace; padding:6px 10px; min-width:240px; text-align:center; border:1px solid #555; border-radius:4px; background:#222; color:#fff;" />
-                <div id="${errId}" style="color:#ff5555; font-size:0.8em; min-height:1em;"></div>
+                <div id="${errId}" style="color:#ff5555; font-size:var(--fcc-fs-small); min-height:1em;"></div>
             </div>
         ` : ''}
         <div style="display:flex; gap:10px; margin-top:6px;">

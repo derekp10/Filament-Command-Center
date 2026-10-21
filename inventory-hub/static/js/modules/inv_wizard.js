@@ -1948,7 +1948,7 @@ const wizardGenerateFieldHTML = (field, entityType) => {
                             data-linked-fil-key="${field.key}"
                             onclick="window.wizardToggleFieldSync('${field.key}')" 
                             title="Synced with Filament's ${field.name}. Click to unlink."
-                            style="font-size: 0.8rem; line-height: 1;">🔗</button>`;
+                            style="font-size: var(--fcc-fs-label); line-height: 1;">🔗</button>`;
         } else {
             // Unsynced state, user can click to map it manually
             syncHtml = `<button type="button" class="btn btn-sm btn-outline-secondary p-0 ms-2 border-0 wizard-sync-btn" 
@@ -1956,7 +1956,7 @@ const wizardGenerateFieldHTML = (field, entityType) => {
                             data-linked-fil-key=""
                             onclick="window.wizardToggleFieldSync('${field.key}')" 
                             title="Click to link this field to a Filament field."
-                            style="font-size: 0.8rem; line-height: 1; opacity: 0.5;">🔗</button>`;
+                            style="font-size: var(--fcc-fs-label); line-height: 1; opacity: 0.5;">🔗</button>`;
         }
     }
 

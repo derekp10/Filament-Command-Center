@@ -398,7 +398,7 @@
         // 4 cells to match grid-template-columns; the action cell holds the
         // badge + Save + status so the count stays 4.)
         return `<div class="pc-row" data-location-id="${id}" data-printer="${_esc(p.name || '')}" data-key-set="${p.keySet ? '1' : '0'}" style="display:contents;">
-            <span class="small text-white" title="${nm}${id ? ` (${id})` : ''}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${nm}${id ? ` <span style="color:rgba(255,255,255,0.45); font-size:.8em;">${id}</span>` : ''}</span>
+            <span class="small text-white" title="${nm}${id ? ` (${id})` : ''}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${nm}${id ? ` <span style="color:rgba(255,255,255,0.45); font-size:var(--fcc-fs-small);">${id}</span>` : ''}</span>
             <input class="form-control form-control-sm pc-ip bg-dark text-white border-secondary" type="text" value="${ip}" data-initial="${ip}" placeholder="192.168.1.50" autocomplete="off" style="min-width:0;">
             <input class="form-control form-control-sm pc-key bg-dark text-white border-secondary" type="text" value="" placeholder="${p.keySet ? '•••••• blank keeps it' : 'API key'}" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" style="min-width:0; -webkit-text-security:disc;">
             <span class="d-flex align-items-center gap-2">

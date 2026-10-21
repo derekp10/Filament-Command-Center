@@ -107,7 +107,7 @@ ${P} .fcc-stock-swatch { display:inline-block; width:18px; height:18px; border-r
 ${P} .fcc-stock-name { flex:1 1 200px; min-width:0; font-weight:600; color:#fff; white-space:nowrap; overflow:hidden;
     text-overflow:ellipsis; }
 ${P} .fcc-stock-tag { display:inline-block; background:#3a3a3a; border:1px solid #666; color:#f1f1f1;
-    border-radius:10px; padding:0 7px; margin-left:4px; font-size:.8em; font-weight:500; vertical-align:middle; }
+    border-radius:10px; padding:0 7px; margin-left:4px; font-size:var(--fcc-fs-label); font-weight:500; vertical-align:middle; }
 ${P} .fcc-stock-meta { flex:0 0 auto; color:#ddd; font-size:.9em; white-space:nowrap; }
 ${P} .fcc-stock-why { flex:0 0 auto; background:#3a2323; border:1px solid #ff8a8a; color:#fff; border-radius:10px;
     padding:0 8px; font-size:.85em; white-space:nowrap; }

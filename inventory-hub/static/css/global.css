@@ -3,6 +3,39 @@
 /* Dark Mode Kiosk Theme & Semantic Classes  */
 /* ========================================= */
 
+/* --- NAMED TEXT SIZES (readability rule, Derek 2026-10-21) ---
+   Text you read is never under 13.6 px; a label inside a pill or box never
+   under 12.8 px. Small text uses one of these names, never a hand-typed size
+   (tests/test_text_size_floor.py fails on a hand-typed size under 13.6 px):
+     --fcc-fs-label  12.8 px  labels in a pill or box: badges, tags, chips,
+                              IDLE / PRINTING, counts, the "📷 Scan to …" QR
+                              captions, short ALL-CAPS labels
+     --fcc-fs-small  13.6 px  the floor for text you read: names, ids, notes,
+                              hints, help lines, key legends, the line under
+                              a spool
+     --fcc-fs-row    14.4 px  list rows and tile data (the Low stock window)
+   The per-browser Text size setting gives them other values. DESIGN.md
+   "Typography" has the rule. */
+:root {
+    --fcc-fs-label: 0.8rem;
+    --fcc-fs-small: 0.85rem;
+    --fcc-fs-row: 0.9rem;
+}
+
+/* Bootstrap's own small sizes, held to the rule app-wide. A badge is 0.75em
+   (12 px, 10.5 px inside small text) and small text 0.875em (12.25 px inside
+   other small text). max() keeps one in a heading as big as it was. */
+.badge {
+    --bs-badge-font-size: max(var(--fcc-fs-label), 0.75em);
+}
+.small,
+small,
+code,
+kbd,
+samp {
+    font-size: max(var(--fcc-fs-small), 0.875em);
+}
+
 /* Fix Offcanvas Backdrop Z-Index to remain above Modals */
 .offcanvas-backdrop {
     z-index: 1085 !important;
@@ -378,7 +411,7 @@ body {
     background: none;
     border: none;
     font-weight: bold;
-    font-size: 0.8rem;
+    font-size: var(--fcc-fs-label);
     text-transform: uppercase;
     color: #fff;
 }
@@ -920,7 +953,7 @@ body {
 }
 
 .fcc-archived-badge {
-    font-size: 0.8rem !important;
+    font-size: var(--fcc-fs-label) !important;
     letter-spacing: 0.02em !important;
     padding: 0.25rem 0.5rem !important;
 }
@@ -1079,7 +1112,7 @@ body {
     font-size: 0.85rem !important;
 }
 .fcc-wiz-hint {
-    font-size: 0.8rem !important;
+    font-size: var(--fcc-fs-small) !important;
 }
 
 /* ========================================= */
@@ -1185,7 +1218,7 @@ body {
 
 /* GOLD STANDARD: High Contrast Nav Labels */
 #loc-mgr-nav-deck .nav-label {
-    font-size: 0.8rem;
+    font-size: var(--fcc-fs-label);
     font-weight: 900;
     letter-spacing: 2px;
     text-transform: uppercase;
@@ -1500,7 +1533,7 @@ body {
 .fcc-ps-hint {
     /* Explicit color, not text-muted — Bootstrap text-muted (#6c757d) at
        opacity 0.6 dropped to ~1.4:1 contrast against the dark widget bg. */
-    font-size: 0.78rem;
+    font-size: var(--fcc-fs-small);
     margin-left: 0.5rem;
     color: rgba(255,255,255,0.55);
 }
@@ -1549,7 +1582,7 @@ body {
 .fcc-ps-state {
     display: inline-block;
     align-self: flex-start;
-    font-size: 0.65rem;
+    font-size: var(--fcc-fs-label);
     font-weight: 700;
     letter-spacing: 0.04em;
     padding: 0.05rem 0.4rem;
@@ -1565,7 +1598,7 @@ body {
 .fcc-ps-state-chip {
     align-self: center;
     flex-shrink: 0;
-    font-size: 0.6rem;
+    font-size: var(--fcc-fs-label);
 }
 .fcc-ps-state-printing { background: rgba(16,185,129,0.18); color: #4ade80; border-color: rgba(74,222,128,0.4); }
 .fcc-ps-state-paused   { background: rgba(245,158,11,0.18); color: #ffc107; border-color: rgba(255,193,7,0.4); }
@@ -1584,7 +1617,7 @@ body {
     padding: 0;
     width: 18px;
     height: 16px;
-    font-size: 0.65rem;
+    font-size: var(--fcc-fs-label);
     line-height: 1;
     cursor: pointer;
     margin-bottom: 2px;
@@ -1669,25 +1702,25 @@ body {
     text-shadow: 1px 1px 2px rgba(0,0,0,0.7);
 }
 .fcc-ps-th-id {
-    font-size: 0.72rem;
+    font-size: var(--fcc-fs-small);
     color: rgba(255,255,255,0.85);
     font-weight: bold;
     max-width: 96px;
     text-shadow: 1px 1px 2px rgba(0,0,0,0.7);
 }
 .fcc-ps-th-chip {
-    font-size: 0.78rem;
+    font-size: var(--fcc-fs-label);
     color: rgba(255,255,255,0.6);
     text-align: center;
 }
 .fcc-ps-chip {
-    font-size: 0.82rem;
+    font-size: var(--fcc-fs-small);
 }
 /* 30.4 — compact material line under the color name on the expanded
    printer-status panel. Indented past the 12px swatch + gap so it aligns
    under the color name; muted but dark-theme readable. */
 .fcc-ps-chip-mat {
-    font-size: 0.7rem;
+    font-size: var(--fcc-fs-small);
     line-height: 1.1;
     color: rgba(255,255,255,0.6);
     margin-top: 1px;
@@ -1765,7 +1798,7 @@ body {
 .fcc-ps-mini-id {
     color: rgba(255,255,255,0.9);
     font-weight: bold;
-    font-size: 0.8rem;
+    font-size: var(--fcc-fs-label);
 }
 .fcc-ps-mini-weight {
     font-weight: bold;
