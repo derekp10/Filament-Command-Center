@@ -139,23 +139,26 @@
   Status drops its "🔗 no bound slot" placeholder on those heads. A proper "Spool Holder" type is Group 37's
   question. **Done when** the holders (and the box, if used) have rows, feeds and printed slot labels; that also
   lets his "INDX heads without labels" item close, once his F2 check passes.
-* **⏸️ PENDING DEREK — the ⚠️ Low stock list: try the sample, then mark what you won't rebuy (nothing here blocks a release).**
-  1. **Try the sample on dev** (branch `feat/not-buying-again-2026-10-20`, live at http://localhost:8000: 🔍 Search →
-     ⚠️ Low stock). Low, Out and Not buying again are tabs with counts, `/` filters (brand, material, colour, tag,
-     reason, note), and each filament is one line. 🚫 on a row (or Del) asks why (Discontinued, One-off, Didn't like
-     it, Other, plus a note) and moves it to Not buying again, where ✏️ (or Del) changes why or tracks it again. Dev's
-     threshold is 925 g for this (27 rows; back to 250 after), and two dev filaments carry sample marks (Anycubic PLA
-     Interstellar Violet, Creator PETG Black CF): Track again clears them. Say "ship it" or what to change; it gets
-     its review and sweep after that, before `dev`.
-  2. **After it ships, mark the ones you won't rebuy.** On prod (read 2026-10-20), Out had Creality PETG Black and
-     Kingroon PETG White, and now also lists the 11 filaments with no spool record (all from the 2026-02-11 import):
-     Anycubic PLA Red (Matte), Anycubic PLA Violet, Creator PETG Black (Carbon Fiber), Elegoo PC Black, IEMAI TPU
-     Green, Jayo PA6 Black (Glass Fiber), Overture PC Black, Polymaker PC Clear (sample printed), Sunlu PETG Black,
-     Sunlu PLA Clear, Sunlu TPU Green. Any you won't buy again: 🚫, with why.
-  _(Answered 2026-10-20: the never-stocked filaments are listed under Out, last, as "no spool on record" ("they are
-  technically out"; built, `68a9b9d`); the One-off attribute idea gave way to "Not buying again" with a reason, from the
-  list ("it might be possible that a filament isn't available anymore… I might want to document why"); and an archived
-  spool scanned onto a toolhead is un-archived and loaded when its record still has filament, refused at 0 g; built.)_
+* **⏸️ PENDING DEREK — the ⚠️ Low stock list: the bigger text, then exclude what you can't get (nothing here blocks a release).**
+  1. **Is the bigger text right?** (🔍 Search → ⚠️ Low stock on dev.) On 2026-10-21 the window's small text went up
+     (the line under the title, the caption above the list and the key legend from about 12 px to 13.6–14.4 px; the
+     rows' grams a little), same layout. It is its own commit (`ce35d21`), so the old compact look is one revert away.
+     Dev's threshold is still 925 g for the long list (27 rows; back to 250 when you're done looking), and two dev
+     filaments carry sample exclusions (Anycubic PLA Interstellar Violet, Creator PETG Black CF): Include again clears
+     them.
+  2. **After it ships, exclude the ones you can't get or won't restock.** On prod (read 2026-10-20), Out had Creality
+     PETG Black and Kingroon PETG White, and now also lists the 11 filaments with no spool record (all from the
+     2026-02-11 import): Anycubic PLA Red (Matte), Anycubic PLA Violet, Creator PETG Black (Carbon Fiber), Elegoo PC
+     Black, IEMAI TPU Green, Jayo PA6 Black (Glass Fiber), Overture PC Black, Polymaker PC Clear (sample printed),
+     Sunlu PETG Black, Sunlu PLA Clear, Sunlu TPU Green. 🔕 on a row (or Del), with why: Discontinued, Can't find it,
+     One-off, Didn't like it, Other.
+  _(Answered 2026-10-20/21: the never-stocked filaments are listed under Out, last, as "no spool on record" ("they are
+  technically out"; built, `68a9b9d`); the One-off attribute idea gave way to marking from the list with a reason, then
+  named **Excluded**, not "Not buying again" ("just because it's discontinued, or I can't find it from the
+  manufacturer, doesn't mean I didn't like it"; built, `38dbdd2`, with a "Can't find it" reason); the tabs, filter and
+  one-line rows are liked as they are ("I love the design"); "shippable once we have addressed the other two things"
+  (the name and the text size); and an archived spool scanned onto a toolhead is un-archived and loaded when its record
+  still has filament, refused at 0 g; built.)_
 
 ## 🗒️ Notes and standalone items
 
@@ -167,13 +170,14 @@
   which the read-merge pops, so the PATCH leaves the key out. Spoolman 0.23 replaced the whole `extra` on a PATCH, so
   a key left out was gone; dev's Spoolman 0.27.0 merges key by key and KEEPS it (checked on dev filament 91,
   2026-10-20: left out, kept; sent as `""`, cleared; put back after). So on 0.27 every "blank it to clear it" edit
-  quietly keeps the old value. **To do:** (1) find which Spoolman prod runs (`/api/v1/info`, with Derek's OK to read
-  prod); (2) have the merge write a blank for a text extra instead of popping it (a boolean or choice extra needs its
-  own answer: Spoolman may refuse `""` there), test it against a fake that merges like 0.27 (the "not buying again"
-  tests have one: `FakeSpoolman(mode="merge")` in `tests/test_not_buying_again.py`), and re-check the 23.4 tests,
-  which use a fake that replaces. Users today: inv_wizard.js (purchase_url, product_url, the generic extras, nozzle and
-  bed temp max), inv_details.js (Edit Filament), the vendor website. The "not buying again" mark already clears with
-  blanks. **Standalone.**
+  quietly keeps the old value. **Prod runs 0.27.0 too** (same build as dev, read 2026-10-21 with Derek's OK), so this
+  is live there. **To do:** have the merge write the field type's clear value instead of popping the key (Spoolman's
+  0.26.0 notes: "Extra field values can be cleared again"; check per type on dev), test it against a fake that merges
+  like 0.27 (the Low stock exclusion tests have one: `FakeSpoolman(mode="merge")` in `tests/test_stock_exclusion.py`),
+  and re-check the 23.4 tests, which use a fake that replaces. Users today: inv_wizard.js (purchase_url, product_url,
+  the generic extras, nozzle and bed temp max), inv_details.js (Edit Filament), the vendor website. The Low stock
+  exclusion already clears with blanks. Being built 2026-10-21 on `fix/extras-clear-spoolman-027-2026-10-21`.
+  **Standalone.**
 
 * "[03:00:52] ⚠️ 🦝 Core One INDX: 27.12g of '/usb/MAIN-B~1.BGC' wasn't deducted (no bound spool, a failed write, or a near-empty spool) — weigh that spool to true up.
 [03:00:52] ✅ Completed-print deduct on 🦝 Core One INDX: 34.2g across 1 spool(s) ('/usb/MAIN-B~1.BGC').
