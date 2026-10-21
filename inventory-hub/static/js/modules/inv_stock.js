@@ -410,11 +410,14 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         const foot = handle.panel.querySelector('[data-stock-foot]');
         if (foot) foot.textContent = _footText(tab);
         let at = keep && keep.fid != null ? rows.findIndex((r) => String(r.filament_id) === String(keep.fid)) : -1;
+        // Its row is gone: the old scroll would hide the row taking its place
+        // (review browser-6), so that one is scrolled into view instead.
+        const gone = !!(keep && keep.fid != null && at < 0);
         if (at < 0 && keep && Number.isFinite(Number(keep.index))) at = Math.min(Number(keep.index), rows.length - 1);
         if (at < 0) at = 0;
         if (rows.length) _highlight(handle, at, focusRow);
         else if (focusRow !== false) { try { handle.panel.focus({ preventScroll: true }); } catch (_) { /* noop */ } }
-        if (body && keep && Number.isFinite(Number(keep.scrollTop))) body.scrollTop = Number(keep.scrollTop);
+        if (body && keep && !gone && Number.isFinite(Number(keep.scrollTop))) body.scrollTop = Number(keep.scrollTop);
     }
 
     function _setTab(handle, key) {
@@ -428,7 +431,7 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         _setTab(handle, TABS[(i + delta + TABS.length) % TABS.length].key);
     }
 
-    function _render(handle, restore) {
+    function _render(handle, restore, quiet) {
         const all = _lists(handle);
         const threshold = handle._threshold;
         const sub = handle.panel.querySelector('[data-stock-sub]');
@@ -436,13 +439,20 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
             sub.textContent = `Per filament, across its in-stock spools: low is under ${Math.round(threshold)} g `
                 + '(⚙️ Settings → Behavior).';
         }
+        // A re-read never takes the focus from an open reason dialog, and a
+        // quiet one (after a change made here) not from wherever the user went
+        // meanwhile either (2026-10-21 review, browser-4: it moved the focus out
+        // of a note being typed onto a row behind the dialog).
+        const active = document.activeElement;
+        const away = !!handle._dialog || (!!quiet && !!active && active !== document.body
+            && !handle.panel.contains(active));
         if (!all.low.length && !all.out.length && !all.excluded.length) {
             _setBody(handle, `<div class="fcc-stock-state">
                     <div>✅ Nothing is low.</div>
                     <div class="fcc-stock-state-sub">No filament is under ${esc(Math.round(threshold))} g,
                         and none has run out.</div>
                 </div>`, 'empty');
-            try { handle.panel.focus({ preventScroll: true }); } catch (_) { /* noop */ }
+            if (!away) { try { handle.panel.focus({ preventScroll: true }); } catch (_) { /* noop */ } }
             return;
         }
         // The list it opens on: the one it was on (coming back, or after a
@@ -453,11 +463,13 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         const filter = _filterEl(handle);
         if (filter) filter.value = handle._filter;
         const typing = filter && document.activeElement === filter;
-        _paint(handle, restore || { index: 0 }, !typing);
+        _paint(handle, restore || { index: 0 }, !typing && !away);
     }
 
     async function _load(handle, restore, quiet) {
         const token = ++_seq;
+        // Try again after a failed read restores the same place (review browser-5).
+        if (restore) handle._lastRestore = restore;
         if (!quiet) _setBody(handle, '<div class="fcc-stock-state">Reading your spools from Spoolman…</div>', 'loading');
         let res = null;
         let data = null;
@@ -479,7 +491,12 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         }
         handle._data = data;
         handle._threshold = Number.isFinite(Number(data.threshold_g)) ? Number(data.threshold_g) : 250;
-        _render(handle, restore);
+        // A quiet re-read keeps the list, filter and row the user moved to while
+        // it was on its way, not the ones it set out with (review browser-5).
+        if (quiet && restore && (handle._tab !== restore.tab || (handle._filter || '') !== (restore.filter || ''))) {
+            restore = _snapshot(handle);
+        }
+        _render(handle, restore, quiet);
     }
 
     // Where the list is: the tab, the filter, the highlighted row and the scroll.
@@ -488,6 +505,9 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         const body = _body(handle);
         return {
             fid: fid != null ? String(fid) : (active ? active.dataset.fid : null),
+            // Where that row sat: if it is gone when the list is drawn again (it
+            // was excluded, or stocked up), the next one takes its place.
+            index: active ? Math.max(0, _rows(handle).indexOf(active)) : 0,
             tab: handle._tab || null,
             filter: handle._filter || '',
             scrollTop: body ? body.scrollTop : 0,
@@ -681,6 +701,7 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         const row = _findRow(handle, fid);
         if (!row || typeof window.mountOverlay !== 'function') return;
         _closeDialog(handle);
+        const openedAt = Date.now();
         // The reason it has (editing), else the first. (A selector list would
         // answer the first radio in the page's order, not the checked one.)
         const cur = row.excluded && REASONS.some((r) => r.code === row.excluded.code)
@@ -691,7 +712,12 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
             content: _dialogHtml(row),
             host: handle._host || undefined,     // closes with the search panel, as the list does
             initialFocus: cur ? `input[name="fcc-stock-reason"][value="${cur}"]` : 'input[name="fcc-stock-reason"]',
-            onBackdropClick: () => { if (!handle._dialog || !handle._dialog.busy) _closeDialog(handle); },
+            // Not the second click of a double click on 🔕, which lands on this
+            // dialog's backdrop (review browser-8).
+            onBackdropClick: () => {
+                if (Date.now() - openedAt < 400) return;
+                if (!handle._dialog || !handle._dialog.busy) _closeDialog(handle);
+            },
             onEscape: () => { if (!handle._dialog || !handle._dialog.busy) _closeDialog(handle); },
         });
         const d = { overlay, fid: String(row.filament_id), name: String(row.display || ''), busy: false };
@@ -831,6 +857,15 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         const filter = _filterEl(handle);
         const inFilter = !!filter && e.target === filter;
         const ready = !!(_body(handle) && _body(handle).dataset.stockState === 'ready');
+        // Tab onto a row's 🛒 / 🔕 / ✏️ moves the focus, not the highlight: Del
+        // and the arrows act on the row the focus is in (review browser-7: Del
+        // opened the highlighted row's dialog while Enter pressed the focused
+        // button of another).
+        if (!inFilter && ['ArrowDown', 'ArrowUp', 'Delete'].includes(e.key)) {
+            const a = document.activeElement;
+            const inRow = a && a !== handle.panel && handle.panel.contains(a) && a.closest ? a.closest('.fcc-stock-row') : null;
+            if (inRow && !inRow.classList.contains('kb-active')) _highlight(handle, _rows(handle).indexOf(inRow), false);
+        }
         if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
             if (!_rows(handle).length) return;
             e.preventDefault();
@@ -900,7 +935,10 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         if (_scanCaptureOn || typeof window.installFieldScanCapture !== 'function') return;
         _scanCaptureOn = true;
         window.installFieldScanCapture({
-            match: (el) => !!(el && el.matches && el.matches('[data-stock-filter], [data-stock-reason-field]')),
+            // The filter and the note. A reason radio has its own guard (below):
+            // it takes every scan typed onto a radio, Enter included, and this
+            // capture's one buffer must not hold a radio's keys after it.
+            match: (el) => !!(el && el.matches && el.matches('[data-stock-filter], [data-stock-note-input]')),
             isScanPayload: (txt) => (typeof window.looksLikeScanPayload === 'function'
                 ? window.looksLikeScanPayload(txt) : /[:/]/.test(txt)),
             onScan: (txt, el) => {
@@ -945,7 +983,7 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         handle._dialog = null;
         handle.panel.addEventListener('click', (e) => {
             if (e.target.closest('[data-stock-close]')) { _close(handle); return; }
-            if (e.target.closest('[data-stock-retry]')) { _load(handle); return; }
+            if (e.target.closest('[data-stock-retry]')) { _load(handle, handle._lastRestore || null); return; }
             const tab = e.target.closest('[data-stock-tab]');
             if (tab) { _setTab(handle, tab.dataset.stockTab); return; }
             if (e.target.closest('a')) return;          // Buy opens its own tab
@@ -996,6 +1034,36 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
     }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _wireButton);
     else _wireButton();
+
+    // A scan typed onto a reason radio (2026-10-21 review, browser-2): a radio is
+    // an INPUT, so the scan accumulator ignores its keys, and a short label ("57")
+    // or a slower scanner passes installFieldScanCapture's speed test, so its
+    // Enter saved the dialog and the scan was lost. A person never types
+    // characters onto a radio (Space and the arrows are the radios' own keys), so
+    // characters typed onto one and then Enter are a scan: they go to the scan
+    // path and the dialog stays. Registered before the field scan capture, so it
+    // sees that Enter first.
+    const _radioKeys = { buf: '', first: 0, last: 0 };
+    document.addEventListener('keydown', (e) => {
+        const t = e.target;
+        if (!(t && t.matches && t.matches(`#${DIALOG_ID} input[type="radio"]`))) { _radioKeys.buf = ''; return; }
+        if (e.ctrlKey || e.altKey || e.metaKey) return;
+        const now = Date.now();
+        if (e.key === 'Enter') {
+            const buf = _radioKeys.buf;
+            const elapsed = now - _radioKeys.first;
+            _radioKeys.buf = '';
+            if (!buf) return;                      // a person's Enter: the dialog saves
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            if (typeof window.processScan === 'function') window.processScan(buf, elapsed < 150 ? 'barcode' : 'keyboard');
+            return;
+        }
+        if (e.key.length !== 1 || e.key === ' ') return;
+        if (!_radioKeys.buf || now - _radioKeys.last > 2000) { _radioKeys.buf = ''; _radioKeys.first = now; }
+        _radioKeys.buf += e.key;
+        _radioKeys.last = now;
+    }, true);
     _installScanCapture();
 
     if (typeof window.registerShortcut === 'function') {

@@ -384,3 +384,30 @@ def test_the_wizard_never_draws_them_as_plain_fields():
     hide = hide[:hide.index("].includes(field.key)) return;")]
     for key in KEYS:
         assert f"'{key}'" in hide, key
+
+
+# --- the 2026-10-21 review of the bundle ------------------------------------------------
+
+@pytest.mark.parametrize("note", ["true", "False"])
+def test_a_note_of_true_or_false_survives_a_later_full_extras_edit(env, note):
+    """Review backend-1: read back parsed ("true") and re-sent by an edit that
+    sends the whole extras (the slicer pencil, Edit Filament), the note went out
+    as a JSON boolean and Spoolman refused the whole PATCH. RED on 87533d7."""
+    env["fake"].add(7)
+    assert _post(env, 7, {"reason": "other", "note": note}).status_code == 200
+    fil = spoolman_api.get_filament(7)                        # parsed, as the pages read it
+    extra = dict(fil["extra"])
+    extra["original_color"] = "Blue"
+    assert spoolman_api.update_filament(7, {"extra": extra}) is not None, spoolman_api.LAST_SPOOLMAN_ERROR
+    assert env["fake"].decoded(7)["fcc_stock_excluded_note"] == note
+    assert env["fake"].decoded(7)["original_color"] == "Blue"
+
+
+def test_a_text_extra_holding_true_or_false_is_sent_as_text():
+    """Only a text extra (JSON_STRING_FIELDS) is kept text; a boolean one keeps
+    the shortcut."""
+    out = spoolman_api.sanitize_outbound_data({"extra": {
+        "fcc_stock_excluded_note": "true", "original_color": "False", "needs_label_print": "true",
+        "fcc_stock_excluded": '"Other"'}})["extra"]
+    assert out == {"fcc_stock_excluded_note": '"true"', "original_color": '"False"',
+                   "needs_label_print": "true", "fcc_stock_excluded": '"Other"'}

@@ -15,6 +15,11 @@ the server turns into the write that clears that field:
   - the wizard's Edit Spool: a chip field whose last chip was removed (Filament
     Attributes) is sent as cleared; it was left out, so the old list stayed (and
     the label-reprint nudge still fired for it);
+  - but only a field the user changed (wizardState.touchedExtras, filled by the
+    wizard's input / change / chip-click listener): a field the page drew blank
+    is never sent as cleared (2026-10-21 review: a ➕ redrew every extra blank,
+    and Save then erased them all; tests/test_wizard_extras_touched.py drives
+    the listener and the ➕ in a browser);
   - the Filament Details slicer-profile pencil's "(none)" and the Swatch Printed
     editor's "Unknown / clear" send the sentinel; both deleted the key client-side;
   - each of them, and the Edit Filament modal, shows the server's `warning` (a
@@ -60,6 +65,7 @@ def test_an_emptied_or_retyped_spool_link_is_sent_as_the_user_left_it(tmp_path):
     newly typed one."""
     res = _run(tmp_path, WIZ_MODULES, WIZARD + DYNAMIC + f"""
 editing(57, '');
+(wizardState.touchedExtras || new Set()).add('spool:spool_type');          // the user emptied it
 document.getElementById('wiz-spool-product_url').value = '';
 document.getElementById('wiz-spool-purchase_url').value = 'https://new.example/buy';
 serve({{ '.dynamic-extra-spool-field': [el('product_url', 'https://old.example/p'), el('purchase_url', ''),
@@ -100,6 +106,7 @@ def test_removing_the_last_chip_clears_the_field_on_edit(tmp_path):
     """RED on the base: the field was left out, so the old list stayed."""
     res = _run(tmp_path, WIZ_MODULES, WIZARD + DYNAMIC + CHIP_FIELDS + f"""
 editing(57, '');
+(wizardState.touchedExtras || new Set()).add('fil:filament_attributes');   // the user removed its last chip
 answerFor({{ '/api/edit_spool_wizard': [{_js({"success": True, "spool_id": 57})}] }});
 await window.wizardSubmit();
 await __settle(100);
@@ -108,6 +115,29 @@ return {{ body: posts('/api/edit_spool_wizard')[0] }};
     extra = res["body"]["filament_data"]["extra"]
     assert extra.get("filament_attributes") == SENTINEL, extra
     assert "slicer_profile" not in extra, extra        # single choice: its own select sends it
+
+
+def test_a_field_the_page_drew_blank_is_never_cleared(tmp_path):
+    """Review browser-3 (red): a blank the user didn't make (the page drew the
+    field again, blank) is left out, so the record keeps its value; only the
+    fields the user emptied are sent as cleared. RED on 87533d7 (every blank
+    extra and the empty chip box were sent as cleared)."""
+    res = _run(tmp_path, WIZ_MODULES, WIZARD + DYNAMIC + CHIP_FIELDS + f"""
+editing(57, '');
+(wizardState.touchedExtras || new Set()).add('fil:original_color');        // the one the user emptied
+serve({{ '.dynamic-extra-field': [el('drying_temp', ''), el('original_color', ''), el('slicer_profile', 'Basic PLA')],
+         '.dynamic-extra-spool-field': [el('spool_temp', ''), el('spool_type', 'Refill')] }});
+answerFor({{ '/api/edit_spool_wizard': [{_js({"success": True, "spool_id": 57})}] }});
+await window.wizardSubmit();
+await __settle(100);
+return {{ body: posts('/api/edit_spool_wizard')[0] }};
+""")
+    fil = res["body"]["filament_data"]["extra"]
+    spool = res["body"]["spool_data"]["extra"]
+    assert fil.get("original_color") == SENTINEL, fil
+    assert "drying_temp" not in fil and "filament_attributes" not in fil, fil
+    assert fil["slicer_profile"] == "Basic PLA", fil
+    assert "spool_temp" not in spool and spool["spool_type"] == "Refill", spool
 
 
 def test_chips_left_on_edit_are_sent_as_a_list(tmp_path):

@@ -218,15 +218,15 @@ def sanitize_outbound_data(data):
             clean_extra[key] = json.dumps(value)
         elif isinstance(value, str):
             val_str = value.strip()
-            if val_str.lower() == 'true':
-                clean_extra[key] = "true"
-            elif val_str.lower() == 'false':
-                clean_extra[key] = "false"
-            elif key in JSON_STRING_FIELDS:
+            if key in JSON_STRING_FIELDS:
                 # Text-type extras MUST arrive as JSON-encoded strings on the
-                # wire. Idempotent: if val_str already parses as a JSON string
-                # (e.g. JS pre-wrapped it as `"225"`), keep that form so we
-                # don't double-wrap and leak literal quote chars on read-back.
+                # wire, "true" and "false" too: checked BEFORE the boolean
+                # shortcut below, which sent a text note of "true" (read back
+                # parsed and re-sent by a full-extras edit) as a JSON boolean,
+                # and Spoolman refused the whole PATCH (2026-10-21 review).
+                # Idempotent: if val_str already parses as a JSON string (e.g.
+                # JS pre-wrapped it as `"225"`), keep that form so we don't
+                # double-wrap and leak literal quote chars on read-back.
                 # Otherwise wrap the raw value once via json.dumps.
                 try:
                     decoded = json.loads(val_str)
@@ -236,6 +236,10 @@ def sanitize_outbound_data(data):
                         clean_extra[key] = json.dumps(val_str)
                 except ValueError:
                     clean_extra[key] = json.dumps(val_str)
+            elif val_str.lower() == 'true':
+                clean_extra[key] = "true"
+            elif val_str.lower() == 'false':
+                clean_extra[key] = "false"
             else:
                 # [ALEX FIX] Spoolman strictly requires that *all* custom Extra fields, even plain strings, 
                 # be sent as valid JSON strings. This means they must include the literal double-quotes.

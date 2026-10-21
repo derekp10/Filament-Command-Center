@@ -1138,3 +1138,131 @@ def test_a_list_that_came_back_closes_under_a_new_window_and_returns_after(panel
     assert _back(page, 3) == "29"
     assert [t[2] for t in _tabs(page)] == [False, True, False]
     assert page.evaluate("window.__errors") == []
+
+
+# --- the 2026-10-21 review of the bundle ------------------------------------------------
+
+def test_a_scan_typed_onto_a_reason_radio_never_saves_the_dialog(panel):
+    """browser-2 (red): a radio is an INPUT, so the scan accumulator ignores its
+    keys, and a short label or a slower scanner passed the field capture's
+    speed test: its Enter saved the dialog and the scan was lost. RED on
+    87533d7."""
+    page, open_ = panel
+    open_(_answer(REPORT))
+    _wait_state(page, "ready")
+    page.keyboard.press("Delete")
+    assert _focused(page)["value"] == "discontinued"
+    page.keyboard.type("57")                                  # a digits-only label
+    page.keyboard.press("Enter")
+    page.keyboard.type("LOC:LR-MDB-1", delay=25)              # a slower scanner
+    page.keyboard.press("Enter")
+    assert page.evaluate("window.__sent") == []
+    assert [s[0] for s in page.evaluate("window.__scans")] == ["57", "LOC:LR-MDB-1"]
+    assert _dialog_open(page)
+    # A person's keys still work: Space picks a reason, Enter saves.
+    page.keyboard.press("ArrowDown")
+    page.keyboard.press("Enter")
+    page.wait_for_function("() => window.__sent.length === 1")
+
+
+def test_a_quiet_re_read_never_takes_the_focus_from_an_open_dialog(panel):
+    """browser-4 (orange): the re-read after a change landed while the next
+    dialog's note was being typed and moved the focus onto a row behind it.
+    RED on 87533d7."""
+    page, open_ = panel
+    open_(_answer(REPORT), _answer(_after_marking(REPORT, 164), delay=900),
+          writes=[_ok("Prusament - PLA - Galaxy Black")])
+    _wait_state(page, "ready")
+    page.keyboard.press("Delete")
+    page.locator(DIALOG + " input[value='discontinued']").check()
+    page.locator(DIALOG + " [data-stock-dlg-save]").click()
+    page.wait_for_function("() => !document.querySelector('#fcc-low-stock-reason') && window.__fetches.length === 2")
+    page.keyboard.press("Delete")                             # the next row's dialog, while the re-read is out
+    page.locator(DIALOG + " input[value='other']").check()
+    note = page.locator(DIALOG + " [data-stock-note-input]")
+    note.focus()
+    page.keyboard.type("Only sold in")
+    page.wait_for_function(f"() => document.querySelectorAll({json.dumps(BODY)} + ' .fcc-stock-row').length === 1")
+    assert _focused(page)["note"] is True
+    page.keyboard.type(" Europe")
+    assert note.input_value() == "Only sold in Europe"
+
+
+def test_a_quiet_re_read_keeps_the_list_and_filter_moved_to_meanwhile(panel):
+    """browser-5: it used to put back the list and filter it set out with.
+    RED on 87533d7."""
+    page, open_ = panel
+    open_(_answer(REPORT), _answer(_after_marking(REPORT, 164), delay=900),
+          writes=[_ok("Prusament - PLA - Galaxy Black")])
+    _wait_state(page, "ready")
+    page.keyboard.press("Delete")
+    page.locator(DIALOG + " input[value='discontinued']").check()
+    page.locator(DIALOG + " [data-stock-dlg-save]").click()
+    page.wait_for_function("() => !document.querySelector('#fcc-low-stock-reason') && window.__fetches.length === 2")
+    page.keyboard.press("ArrowRight")                         # Out, while the re-read is out
+    page.wait_for_function(f"() => document.querySelector({json.dumps(PANEL)} + ' [data-stock-tab=excluded] [data-stock-count]').textContent === '2'")
+    assert [t[2] for t in _tabs(page)] == [False, True, False]
+    assert _active_fid(page) == "20"
+
+
+def test_try_again_after_a_failed_re_read_comes_back_to_the_same_list(panel):
+    """browser-5: Try again used to open on the first list, row 0."""
+    page, open_ = panel
+    open_(_answer(REPORT), _answer(DOWN, status=502), _answer(_after_marking(REPORT, 20)),
+          writes=[_ok("Generic - PLA - Lipstick Red")])
+    _wait_state(page, "ready")
+    page.keyboard.press("ArrowRight")                         # Out
+    page.keyboard.press("Delete")                             # #20
+    page.locator(DIALOG + " input[value='discontinued']").check()
+    page.locator(DIALOG + " [data-stock-dlg-save]").click()
+    _wait_state(page, "error")
+    page.locator(PANEL + " [data-stock-retry]").click()
+    _wait_state(page, "ready")
+    assert [t[2] for t in _tabs(page)] == [False, True, False]
+    assert _active_fid(page) == "29"                          # the next row took #20's place
+
+
+def test_coming_back_to_a_row_that_is_gone_shows_the_row_in_its_place(panel):
+    """browser-6: the highlight went to row 0 and the old scroll hid it."""
+    page, open_ = panel
+    many = copy.deepcopy(REPORT)
+    many["low"] = [_row(1000 + i, f"Maker - PLA - Colour {i:02d}", 10.0 + i, 1, 1) for i in range(30)]
+    gone = copy.deepcopy(many)
+    gone["low"] = [r for r in gone["low"] if r["filament_id"] != 1025]
+    open_(_answer(many), _answer(gone))
+    _wait_state(page, "ready")
+    for _ in range(25):
+        page.keyboard.press("ArrowDown")
+    assert _active_fid(page) == "1025"
+    page.keyboard.press("Enter")
+    page.evaluate("window.__closeModal('filamentModal')")
+    assert _back(page, 2) == "1026"                           # the next one, in #1025's place
+    in_view = page.evaluate(f"""() => {{ const b = document.querySelector({json.dumps(BODY)});
+        const r = b.querySelector('.fcc-stock-row.kb-active').getBoundingClientRect(), v = b.getBoundingClientRect();
+        return r.top >= v.top - 1 && r.bottom <= v.bottom + 1; }}""")
+    assert in_view is True
+
+
+def test_del_acts_on_the_row_whose_button_has_the_focus(panel):
+    """browser-7: Tab onto another row's 🔕 moved the focus, not the highlight,
+    and Del opened the highlighted row's dialog."""
+    page, open_ = panel
+    open_(_answer(REPORT))
+    _wait_state(page, "ready")
+    assert _active_fid(page) == "164"
+    page.locator(BODY + " .fcc-stock-row[data-fid='88'] [data-stock-exclude]").focus()
+    page.keyboard.press("Delete")
+    assert page.locator(DIALOG).get_attribute("data-fid") == "88"
+
+
+def test_a_double_click_on_the_button_leaves_its_dialog_open(panel):
+    """browser-8: the second click landed on the new dialog's backdrop."""
+    page, open_ = panel
+    open_(_answer(REPORT))
+    _wait_state(page, "ready")
+    page.locator(BODY + " .fcc-stock-row[data-fid='164'] [data-stock-exclude]").dblclick()
+    page.wait_for_timeout(100)
+    assert _dialog_open(page)
+    page.wait_for_timeout(450)
+    page.mouse.click(5, 5)                                    # a real click outside still closes it
+    assert not _dialog_open(page)
