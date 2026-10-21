@@ -35,7 +35,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 import logic  # noqa: E402
 import state  # noqa: E402
-from move_engine_harness import IDLE, LocationsStore, WireSpoolman, _unwire, run_move  # noqa: E402
+from move_engine_harness import IDLE, LocationsStore, WireSpoolman, _patched_extra, run_move  # noqa: E402
 
 PRINTER_MAP = {f"XL-{n}": {"printer_name": "XL", "position": n - 1} for n in (1, 2, 3)}
 ROWS = [
@@ -64,11 +64,15 @@ class ArchivedHidingSpoolman(WireSpoolman):
         body = copy.deepcopy(json)
         self.patch_bodies.append((sid, body))
         rec = self.spools.setdefault(sid, {"location": "", "extra": {}})
+        if "extra" in body:
+            # Stored as Spoolman stores it (merged key by key, as 0.27 does).
+            extra, refused = _patched_extra(rec, body)
+            if refused is not None:
+                return refused
+            rec["extra"] = extra
         for key in ("location", "used_weight", "initial_weight", "archived"):
             if key in body:
                 rec[key] = body[key]
-        if "extra" in body:
-            rec["extra"] = {key: _unwire(val) for key, val in body["extra"].items()}
         return MagicMock(ok=True, status_code=200, json=MagicMock(return_value={"id": sid, **copy.deepcopy(rec)}))
 
     def _match(self, rec, loc):

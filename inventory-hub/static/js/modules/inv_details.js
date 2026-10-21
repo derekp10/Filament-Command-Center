@@ -768,7 +768,10 @@ window.promptEditSlicerProfile = (filamentId, currentProfile) => {
                         const filament = res && res.data ? res.data : null;
                         const merged = { ...((filament && filament.extra) || {}) };
                         if (newProfile) merged.slicer_profile = `"${newProfile}"`;
-                        else delete merged.slicer_profile;
+                        // (none): the clear sentinel. A deleted key is KEPT (the
+                        // server merges against the live record), so "(none)"
+                        // used to change nothing (2026-10-21).
+                        else merged.slicer_profile = window.FCC_DELETE_EXTRA;
                         return fetch('/api/update_filament', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
@@ -793,7 +796,11 @@ window.promptEditSlicerProfile = (filamentId, currentProfile) => {
                                 body: JSON.stringify({ entity_type: 'filament', key: 'slicer_profile', new_choice: newProfile }),
                             }).catch(() => {});
                         }
-                        if (typeof showToast === 'function') showToast('Slicer profile updated', 'success', 4000);
+                        if (typeof showToast === 'function') {
+                            showToast('Slicer profile updated', 'success', 4000);
+                            // A clear Spoolman didn't take (the server says which).
+                            if (saveRes.warning) showToast(saveRes.warning, 'warning', 7000);
+                        }
                         openFilamentDetails(filamentId, true);
                     })
                     .catch(err => {
@@ -903,11 +910,13 @@ window.promptEditSampleStatus = (filamentId, currentValue) => {
                 const merged = { ...((filament && filament.extra) || {}) };
                 // Send a raw JS boolean — spoolman_api.update_filament normalizes
                 // bools to the stored "true"/"false" form, matching the
-                // label-confirm write path. Deleting the key clears it to the
-                // "unknown" tri-state.
+                // label-confirm write path. The clear sentinel takes it back to
+                // the "unknown" tri-state; a deleted key is KEPT (the server
+                // merges against the live record), so "Unknown / clear" used to
+                // leave it as it was (2026-10-21).
                 if (choice === 'true') merged.sample_printed = true;
                 else if (choice === 'false') merged.sample_printed = false;
-                else delete merged.sample_printed;
+                else merged.sample_printed = window.FCC_DELETE_EXTRA;
                 return fetch('/api/update_filament', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -925,7 +934,10 @@ window.promptEditSampleStatus = (filamentId, currentValue) => {
                     });
                     return;
                 }
-                if (typeof showToast === 'function') showToast('Swatch status updated', 'success', 4000);
+                if (typeof showToast === 'function') {
+                    showToast('Swatch status updated', 'success', 4000);
+                    if (saveRes.warning) showToast(saveRes.warning, 'warning', 7000);
+                }
                 openFilamentDetails(filamentId, true);
             })
             .catch(err => {
@@ -2543,8 +2555,9 @@ const _editfilOpenModal = (fil) => {
                     if (k === 'filament_attributes') {
                         mergedExtra[k] = JSON.stringify(v);
                     } else if (v === '' || v == null) {
-                        // 23.4 — send the delete-sentinel so the backend merge
-                        // POPS the key. A client-side `delete` was lost: the
+                        // 23.4 — send the delete-sentinel so the backend
+                        // CLEARS the key (it writes the value that clears that
+                        // field type). A client-side `delete` was lost: the
                         // backend re-merges against the live record, so an
                         // omitted key means "keep" and blanking silently no-op'd.
                         mergedExtra[k] = window.FCC_DELETE_EXTRA;
@@ -2610,6 +2623,8 @@ const _editfilOpenModal = (fil) => {
             if (d && d.success) {
                 const newId = (d.filament && d.filament.id) || (isCreate ? '?' : fil.id);
                 showToast(isCreate ? `Filament #${newId} created.` : `Filament #${fil.id} updated.`, 'success');
+                // A field the edit cleared that Spoolman still holds (2026-10-21).
+                if (d.warning) showToast(d.warning, 'warning', 7000);
                 if (window.refreshFilamentSpools) window.refreshFilamentSpools();
                 if (isCreate && window.fetchLocations) window.fetchLocations();
                 bsModal.hide();
@@ -3548,9 +3563,9 @@ window.vendorEditSave = () => {
         empty_spool_weight: emptyWt,
     };
     // 23.4 — on EDIT (PATCH) a blanked website sends the delete-sentinel so the
-    // backend merge POPS it; an empty string would persist a literal '""'
-    // instead of clearing. On CREATE there's nothing to delete, so a blank
-    // stays an empty string.
+    // backend clears it (a JSON null on Spoolman 0.26+, which drops the key; a
+    // JSON empty string on an older one; a left-out key is kept since 0.26).
+    // On CREATE there's nothing to clear, so a blank stays an empty string.
     data.extra = { website: website ? `"${website}"` : (isCreate ? '' : window.FCC_DELETE_EXTRA) };
 
     const url = isCreate ? '/api/vendors' : `/api/vendors/${encodeURIComponent(vid)}`;
@@ -3573,6 +3588,8 @@ window.vendorEditSave = () => {
                 }));
             } else {
                 showToast(`Manufacturer updated.`, 'success', 4000);
+                // A field the edit cleared that Spoolman still holds (2026-10-21).
+                if (body.warning) showToast(body.warning, 'warning', 7000);
                 document.dispatchEvent(new CustomEvent('vendor:updated', {
                     detail: { id: vid, vendor: v },
                 }));

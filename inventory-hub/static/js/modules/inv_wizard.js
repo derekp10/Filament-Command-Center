@@ -1634,6 +1634,34 @@ window.wizardWatchLocationPick = () => {
     });
 };
 
+// Spool extras the wizard edits through inputs of its own: the Purchase and
+// Product Link fields in Metadata (#wiz-spool-purchase_url / -product_url).
+// Never rendered as a dynamic Spool Extras field as well, and never collected
+// from one: the collector read the dynamic copy AFTER the dedicated input, so a
+// link the user emptied (or a new one typed) was overwritten by the copy's old
+// value, and the save changed nothing (2026-10-21).
+const WIZ_SPOOL_EXTRAS_OWN_INPUT = ['purchase_url', 'product_url'];
+// Spool extras the dynamic Spool Extras section never shows: the ones above,
+// plus the label flag and the move engine's own slot / trail keys.
+const WIZ_SPOOL_EXTRAS_HIDDEN = ['needs_label_print', 'physical_source', 'physical_source_slot',
+    'container_slot', ...WIZ_SPOOL_EXTRAS_OWN_INPUT];
+window.wizardSpoolExtraShown = (key) => !WIZ_SPOOL_EXTRAS_HIDDEN.includes(key);
+
+// Edit mode: every multi-choice (chip) Filament Extras field the form shows
+// that ended with no chip is sent as cleared (window.FCC_DELETE_EXTRA). The
+// chip collector sends only fields that still have chips, and a key left out
+// keeps its old list, so removing the last chip changed nothing (2026-10-21).
+// A field the form doesn't show (no chip box) is left alone.
+window.wizardClearEmptyChipFields = (extra) => {
+    (wizardState.extraFields?.filament || []).forEach(f => {
+        if (!f || f.field_type !== 'choice' || !f.multi_choice) return;
+        if (Object.prototype.hasOwnProperty.call(extra, f.key)) return;
+        if (!document.getElementById(`chip-container-fil-${f.key}`)) return;
+        extra[f.key] = window.FCC_DELETE_EXTRA;
+    });
+    return extra;
+};
+
 const wizardFetchExtraFields = () => {
     return fetch('/api/external/fields')
         .then(r => r.json())
@@ -1683,7 +1711,7 @@ const wizardFetchExtraFields = () => {
                     sContainer.innerHTML = '';
                     d.fields.spool.sort((a, b) => (a.order || 0) - (b.order || 0));
                     d.fields.spool.forEach(field => {
-                        if (['needs_label_print', 'physical_source', 'physical_source_slot', 'container_slot'].includes(field.key)) return;
+                        if (!window.wizardSpoolExtraShown(field.key)) return;
 
                         // If Temp Resistance is still 'text' in Spoolman, hide it so they can change it to Choice later
                         if (field.key === 'spool_temp' && field.field_type === 'text') return;
@@ -3067,7 +3095,8 @@ window.wizardBuildFilamentLabelDiff = (orig, fPayload) => {
     const newExtra = fPayload.extra || {};
     const attrKey = (a) => {
         let arr = a;
-        if (typeof a === 'string') { try { arr = JSON.parse(a); } catch (_) { arr = a ? [a] : []; } }
+        if (a === window.FCC_DELETE_EXTRA) arr = [];   // every chip removed (cleared)
+        else if (typeof a === 'string') { try { arr = JSON.parse(a); } catch (_) { arr = a ? [a] : []; } }
         if (!Array.isArray(arr)) arr = (arr == null || arr === '') ? [] : [arr];
         return arr.map(x => String(x).trim().toLowerCase()).filter(Boolean).sort().join('|');
     };
@@ -3747,10 +3776,11 @@ window.wizardSubmit = async () => {
         if (productUrl) sp_payload.extra.product_url = productUrl;
         else if (isWizardEdit) sp_payload.extra.product_url = window.FCC_DELETE_EXTRA;
 
-        // Extract Dynamic Spool Fields
+        // Extract Dynamic Spool Fields (never a key with its own input above:
+        // its copy would overwrite what the user typed there).
         document.querySelectorAll('.dynamic-extra-spool-field').forEach(el => {
             const key = el.getAttribute('data-key');
-            if (!key) return;
+            if (!key || WIZ_SPOOL_EXTRAS_OWN_INPUT.includes(key)) return;
             if (el.type === 'checkbox') {
                 sp_payload.extra[key] = el.checked;
             } else if (el.value) {
@@ -3856,6 +3886,9 @@ window.wizardSubmit = async () => {
                 if (!f_payload.extra[key]) f_payload.extra[key] = [];
                 f_payload.extra[key].push(val);
             });
+            // A chip field whose chips were all removed sent nothing above, and a
+            // key left out keeps its old list (2026-10-21): on edit, clear it.
+            if (isWizardEdit) window.wizardClearEmptyChipFields(f_payload.extra);
 
             // Vendor selection. The ➕ button now opens the Vendor Edit modal
             // in create mode and auto-selects the new vendor on save, so by the

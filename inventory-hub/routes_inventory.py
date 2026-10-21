@@ -121,11 +121,12 @@ def api_create_vendor():
         return jsonify({"success": False, "msg": str(e)}), 500
 
 
-def _format_vendor_edit_log(vid, before, data):
+def _format_vendor_edit_log(vid, before, data, uncleared=()):
     """Build a per-field before→after activity log line for a vendor edit.
     Mirrors `_format_filament_edit_log` so the Vendor Edit modal save path
     leaves the same kind of audit trail (user can see what value the field
-    actually changed from/to, not just which keys were dirty)."""
+    actually changed from/to, not just which keys were dirty). `uncleared`:
+    the extras sent as cleared that Spoolman still holds ("(not cleared)")."""
     parts = []
     before = before or {}
     before_extra = before.get('extra') or {}
@@ -135,7 +136,8 @@ def _format_vendor_edit_log(vid, before, data):
                 old = before_extra.get(ek, '')
                 if spoolman_api._is_delete_sentinel(ev):
                     # 23.4 — blank-to-clear, not a literal sentinel write.
-                    parts.append(f"extra.{ek}: {old or '(empty)'} → (cleared)")
+                    parts.append(f"extra.{ek}: {old or '(empty)'} → "
+                                 f"{'(not cleared)' if ek in uncleared else '(cleared)'}")
                 elif str(old) != str(ev):
                     parts.append(f"extra.{ek}: {old or '(empty)'} → {ev or '(empty)'}")
             continue
@@ -169,11 +171,16 @@ def api_update_vendor(vid):
     before = spoolman_api.get_vendor(vid) or {}
     try:
         updated = spoolman_api.update_vendor_or_raise(vid, data)
+        uncleared = (updated.get('fcc_uncleared_extras') or ()) if isinstance(updated, dict) else ()
         state.add_log_entry(
-            _format_vendor_edit_log(vid, before, data),
+            _format_vendor_edit_log(vid, before, data, uncleared=uncleared),
             "SUCCESS", "00ff00",
         )
-        return jsonify({"success": True, "vendor": updated})
+        out = {"success": True, "vendor": updated}
+        # 2026-10-21: a field the edit cleared that Spoolman still holds.
+        if isinstance(updated, dict) and updated.get('fcc_uncleared_note'):
+            out["warning"] = updated['fcc_uncleared_note']
+        return jsonify(out)
     except spoolman_api.SpoolmanRejection as e:
         err = str(e) or "Spoolman rejected the vendor edit."
         state.add_log_entry(
@@ -1144,6 +1151,7 @@ def api_edit_spool_wizard():
     new_location = None
     original_spool = None
     spool_res = None
+    fil_res = None
     # Group 40.7 review: where an archived spool was taken off before its move.
     archived_off = None
     try:
@@ -1318,6 +1326,11 @@ def api_edit_spool_wizard():
         # Group 42.3c: see /api/spool/update.
         if spool_data and isinstance(spool_res, dict) and spool_res.get('fcc_warning'):
             warnings.append(spool_res['fcc_warning'])
+        # 2026-10-21: a field the Save cleared that Spoolman still holds (its
+        # write logged it; the page toasts `warning` at 7 s).
+        for written in (spool_res if spool_data else None, fil_res if fil_committed else None):
+            if isinstance(written, dict) and written.get('fcc_uncleared_note'):
+                warnings.append(written['fcc_uncleared_note'])
         if new_location is not None:
             # Group 40.7: the Location, last, through the engine.
             if unassigned_by_archive:
