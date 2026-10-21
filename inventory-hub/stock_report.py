@@ -9,11 +9,28 @@ empty, and a filament holding one is never judged low.
 
   low  a filament with stock whose in-stock spools add up to less than
        `low_stock_g` grams (config, ⚙️ Behavior, default 250);
-  out  a filament with spools on record but none in stock. A filament with no
-       spools at all was never stocked and is never listed. A filament tagged
-       with a "One-off" attribute (any case, with or without the dash or a
-       space) is one Derek won't rebuy: it stays off "out" (it can still be
-       low, with its tag showing, so he can see why it won't be on "out").
+  out  a filament with no spool in stock: its spools are all archived or
+       empty, or it has no spool on record at all (Derek, 2026-10-20: "they are
+       technically out"; on prod those are the first import's samples and
+       filaments used up before he tracked them), listed after the others with
+       `no_spools`;
+  excluded  a filament left off Low and Out from the list, with why
+       (Derek, 2026-10-20: it may be discontinued, a one-off, or one he didn't
+       like, and he wants to write down why; 2026-10-21: called "Excluded", not
+       "Not buying again", since one he can't get any more may be one he
+       liked). It is never low or out, whatever its stock; it is listed here
+       with its reason, its note, the day it was excluded and its stock. The
+       mark is three text extras on the filament (`fcc_stock_excluded`: the
+       reason, stored as its label so Spoolman's own page reads "Excluded From
+       Low Stock: Discontinued"; `fcc_stock_excluded_note`;
+       `fcc_stock_excluded_at`), written only by `exclude_filament` /
+       `include_again` below, behind POST / DELETE
+       /api/filament/<id>/stock_exclusion (the list's 🔕 and ✏️). Any reason
+       text counts, one typed in Spoolman by hand too; a blank one is no mark.
+       It replaced the "One-off" attribute rule, which only ever ran on dev.
+       Clearing writes blanks, never leaves a key out: Spoolman 0.27 (dev's)
+       keeps an extra a PATCH leaves out (checked on dev 2026-10-20), where
+       0.23 dropped it, so FCC's delete sentinel clears nothing there.
 
 The list (`build_report`, behind GET /api/stock_report, routes_inventory.py)
 reads Spoolman ONCE and strictly, every spool with the archived ones
@@ -22,17 +39,17 @@ reads Spoolman ONCE and strictly, every spool with the archived ones
 A read that fails raises StockReadError, and the route answers an error, never
 an empty list. Each spool carries its full filament record (Spoolman nests the
 same record /api/v1/filament returns: all 257 spools on dev matched on
-2026-10-19), and a filament with no spools is never listed, so the filament
-list needs no second read. It runs only when the panel opens, never on the
-dashboard heartbeat.
+2026-10-19); a second strict read, of every filament, finds the ones with no
+spool on record. It runs only when the panel opens, never on the dashboard
+heartbeat.
 
 The warning (`check_after_deduct`, `check_after_weight_change`) logs ONE
 Activity Log WARNING per filament when a write takes it across a line:
   - from at or above `low_stock_g` to under it, with stock left:
     "⚠️ Prusament PLA Galaxy Black is running low: 220 g left in 2 spools";
   - from in stock to none in stock (its last spool emptied: the 0 g
-    auto-archive): "⚠️ ... is out: #99 was its last spool in stock". Not for a
-    One-off filament.
+    auto-archive): "⚠️ ... is out: #99 was its last spool in stock".
+Neither for an excluded filament: no news there.
 A filament already under the line stays quiet until it runs out, so a print on
 a low filament doesn't log every time, and the same warning for one filament is
 logged once a minute at most (two writes landing together can each see the
@@ -49,7 +66,9 @@ nothing when the fresh read doesn't show the spool where the write left it
 
 Python 3.9 runtime (the container image): keep syntax 3.9-safe.
 """
+import datetime
 import html
+import json
 import math
 import threading
 import time
@@ -63,9 +82,21 @@ import spoolman_api  # type: ignore
 
 DEFAULT_LOW_STOCK_G = 250.0
 
-# An attribute that marks a filament Derek won't rebuy, compared on its letters
-# and digits only, lower-cased: "One-off", "One Off" and "oneoff" all match.
-NO_REBUY_TAGS = frozenset({"oneoff"})
+# Excluded from Low and Out: the filament extras (registered at startup through
+# spoolman_api.REQUIRED_FILAMENT_EXTRAS, and in setup_fields.py) and the reasons
+# the list offers, (code, label). The label is what is stored.
+EXCLUDE_KEY = "fcc_stock_excluded"
+EXCLUDE_NOTE_KEY = "fcc_stock_excluded_note"
+EXCLUDE_AT_KEY = "fcc_stock_excluded_at"
+EXCLUDE_KEYS = (EXCLUDE_KEY, EXCLUDE_NOTE_KEY, EXCLUDE_AT_KEY)
+EXCLUDE_REASONS = (
+    ("discontinued", "Discontinued"),
+    ("cant_find", "Can't find it"),
+    ("one_off", "One-off"),
+    ("didnt_like", "Didn't like it"),
+    ("other", "Other"),
+)
+EXCLUDE_NOTE_MAX = 500
 
 # How far (grams) the fresh read of a just-written spool may sit from where the
 # write left it before the warning gives up: further means something else wrote
@@ -90,6 +121,16 @@ _RECENT_LOCK = threading.Lock()
 class StockReadError(Exception):
     """Spoolman couldn't be read: a blip, an HTTP error, or an answer that isn't
     a spool list. The Low-stock list answers an error, never an empty list."""
+
+
+class ExclusionError(Exception):
+    """An exclusion change that was refused or failed, with nothing changed
+    unless it says so: `status` is the HTTP status the route answers, `error`
+    its code, `msg` the sentence for the page."""
+
+    def __init__(self, status, error, msg):
+        super().__init__(msg)
+        self.status, self.error, self.msg = status, error, msg
 
 
 # --- settings ----------------------------------------------------------------
@@ -195,12 +236,38 @@ def filament_names(fil):
     return brand, material, colour.title()
 
 
-def is_one_off(attrs):
-    """True when one of a filament's attributes marks it as never rebought."""
-    for a in attrs or []:
-        if ''.join(ch for ch in str(a).lower() if ch.isalnum()) in NO_REBUY_TAGS:
-            return True
-    return False
+def _squash(text):
+    return ''.join(ch for ch in str(text).lower() if ch.isalnum())
+
+
+def _reason_code(label):
+    """The code of a stored reason ("Didn't like it" -> didnt_like). A reason
+    typed in Spoolman by hand that matches none reads as "other"."""
+    key = _squash(label)
+    for code, lab in EXCLUDE_REASONS:
+        if key in (_squash(code), _squash(lab)):
+            return code
+    return "other"
+
+
+def _plain(v):
+    """A decoded text extra as it was written: quotes inside a note are kept
+    (`_text` strips them, which suits a name, not a note)."""
+    if v is None or isinstance(v, (dict, list, bool)):
+        return ''
+    return str(v).strip()
+
+
+def exclusion_of(fil):
+    """{reason, code, note, at} when the filament is excluded from Low and
+    Out, else None. Any reason that isn't blank counts."""
+    extra = _dict(_dict(fil).get('extra'))
+    reason = _plain(extra.get(EXCLUDE_KEY))
+    if not reason:
+        return None
+    return {"reason": reason, "code": _reason_code(reason),
+            "note": _plain(extra.get(EXCLUDE_NOTE_KEY)),
+            "at": _plain(extra.get(EXCLUDE_AT_KEY))}
 
 
 def _colours(fil):
@@ -260,15 +327,16 @@ def _row(fid, fil, grams, count, total, template):
         "spools": count,            # in stock
         "spools_total": total,      # every spool on record, archived ones too
         "attributes": attrs,
-        "one_off": is_one_off(attrs),
+        "excluded": exclusion_of(fil),   # {reason, code, note, at}, or None
         "buy_url": buy_url(fil, template),
     }
 
 
 def build_report():
-    """The ⚠️ Low-stock list: {success, threshold_g, low, out, filaments,
-    spools}. `low` runs from the fewest grams up; `out` is by name. Raises
-    StockReadError when Spoolman can't be read."""
+    """The ⚠️ Low-stock list: {success, threshold_g, low, out, excluded,
+    filaments, spools}. `low` runs from the fewest grams up; `out` and
+    `excluded` are by name. Raises StockReadError when Spoolman can't be
+    read."""
     try:
         cfg = config_loader.load_config() or {}
     except Exception:
@@ -277,32 +345,194 @@ def build_report():
     template = cfg.get('buy_more_url_template') or ''
     try:
         spools = spoolman_api.get_all_spools_strict(allow_archived=True)
+        filaments = _all_filaments_strict()
     except Exception as e:
         raise StockReadError(str(e) or e.__class__.__name__)
     if not isinstance(spools, list):
         raise StockReadError("Spoolman's answer wasn't a spool list")
+    if not isinstance(filaments, list):
+        raise StockReadError("Spoolman's answer wasn't a filament list")
+
+    # The filament list's own record wins over the copy nested in a spool (the
+    # same record, read a moment apart).
+    fil_by_id = {}
+    for fil in filaments:
+        try:
+            fil_by_id[int((fil or {}).get('id'))] = fil
+        except (TypeError, ValueError, AttributeError):
+            continue
 
     by_fid = {}
     for s in spools:
         fid = _fid_of(s)
         if fid is None:
             continue
-        entry = by_fid.setdefault(fid, {"fil": s.get('filament'), "spools": []})
+        entry = by_fid.setdefault(fid, {"fil": fil_by_id.get(fid) or s.get('filament'), "spools": []})
         entry["spools"].append(s)
 
-    low, out = [], []
+    low, out, excluded = [], [], []
     for fid, entry in by_fid.items():
         grams, count, unknown = stock_of(entry["spools"])
-        if count == 0:
-            row = _row(fid, entry["fil"], 0.0, 0, len(entry["spools"]), template)
-            if not row["one_off"]:
-                out.append(row)
+        total = len(entry["spools"])
+        if exclusion_of(entry["fil"]):
+            row = _row(fid, entry["fil"], grams, count, total, template)
+            row["stock_unknown"] = unknown > 0   # a spool of unknown weight: grams is a floor
+            excluded.append(row)
+        elif count == 0:
+            out.append(_row(fid, entry["fil"], 0.0, 0, total, template))
         elif not unknown and grams < threshold:
-            low.append(_row(fid, entry["fil"], grams, count, len(entry["spools"]), template))
+            low.append(_row(fid, entry["fil"], grams, count, total, template))
+    # A filament with no spool on record at all is out too, after the others.
+    for fid, fil in fil_by_id.items():
+        if fid in by_fid:
+            continue
+        row = _row(fid, fil, 0.0, 0, 0, template)
+        row["no_spools"] = True
+        (excluded if row["excluded"] else out).append(row)
     low.sort(key=lambda r: (r["grams"], r["display"].lower(), r["filament_id"]))
-    out.sort(key=lambda r: (r["display"].lower(), r["filament_id"]))
+    out.sort(key=lambda r: (bool(r.get("no_spools")), r["display"].lower(), r["filament_id"]))
+    excluded.sort(key=lambda r: (r["display"].lower(), r["filament_id"]))
     return {"success": True, "threshold_g": threshold, "low": low, "out": out,
-            "filaments": len(by_fid), "spools": len(spools)}
+            "excluded": excluded,
+            "filaments": len(set(by_fid) | set(fil_by_id)),
+            "spools": len(spools)}
+
+
+# --- excluded: the mark and its undo -----------------------------------------------
+
+def _filament_for_change(fid):
+    """The filament, read strictly before a change: ExclusionError when it doesn't
+    exist (404) or Spoolman doesn't answer (502), so nothing is written blind."""
+    sm_url, _ = config_loader.get_api_urls()
+    try:
+        resp = requests.get(f"{sm_url}/api/v1/filament/{int(fid)}", timeout=_READ_TIMEOUT)
+    except Exception as e:
+        raise ExclusionError(502, "spoolman_unreachable",
+                             f"Spoolman didn't answer ({e.__class__.__name__}), so nothing was changed. "
+                             "Try again in a moment.")
+    if resp.status_code == 404:
+        raise ExclusionError(404, "no_filament", f"There is no filament #{fid} in Spoolman.")
+    if not resp.ok:
+        raise ExclusionError(502, "spoolman_unreachable",
+                             f"Spoolman answered HTTP {resp.status_code}, so nothing was changed. "
+                             "Try again in a moment.")
+    try:
+        fil = spoolman_api.parse_inbound_data(resp.json())
+    except ValueError:
+        fil = None
+    if not isinstance(fil, dict) or str(fil.get('id')) != str(fid):
+        raise ExclusionError(502, "spoolman_unreachable",
+                             "Spoolman's answer wasn't that filament, so nothing was changed.")
+    return fil
+
+
+def _exclusion_now(fid):
+    """The filament's mark as Spoolman has it now, read again after a write that
+    reported failure (its PATCH has a 2 s read timeout, and may have landed).
+    "unknown" when it can't be read."""
+    try:
+        return exclusion_of(_filament_for_change(fid))
+    except ExclusionError:
+        return "unknown"
+
+
+def _display(fil):
+    brand, material, colour = filament_names(fil)
+    return f"{brand} - {material} - {colour}"
+
+
+def _server_day():
+    return time.strftime("%Y-%m-%d")
+
+
+def _exclusion_day(today):
+    """The day a mark is made: the page's own date (`today`, YYYY-MM-DD) when
+    it is a real date within two days of the server's, else the server's. The
+    container's clock is often UTC (dev's is), so an evening mark in California
+    would otherwise read as the next day."""
+    server = datetime.date.fromisoformat(_server_day())
+    try:
+        day = datetime.date.fromisoformat(str(today).strip()) if today else None
+    except ValueError:
+        day = None
+    if day is None or abs((day - server).days) > 2:
+        day = server
+    return day.isoformat()
+
+
+def exclude_filament(fid, reason, note='', today=None):
+    """Excludes filament `fid` from Low and Out with a reason code (one of
+    EXCLUDE_REASONS) and an optional note (needed for "other"). Excluding it
+    again changes the reason and note and keeps the day it was first excluded;
+    a new mark takes the page's `today` (see _exclusion_day).
+    One read-merge write of the three extras (siblings kept); the Activity Log
+    says what happened. Returns {filament_id, display, excluded, was};
+    raises ExclusionError (nothing written unless a write was reported failed
+    and couldn't be read back)."""
+    labels = dict(EXCLUDE_REASONS)
+    code = str(reason or '').strip().lower()
+    if code not in labels:
+        raise ExclusionError(400, "bad_reason",
+                             "Pick why: Discontinued, Can't find it, One-off, Didn't like it or Other.")
+    if note is None:
+        note = ''
+    if not isinstance(note, str):
+        raise ExclusionError(400, "bad_note", "The note must be text.")
+    note = note.strip()
+    if len(note) > EXCLUDE_NOTE_MAX:
+        raise ExclusionError(400, "note_too_long",
+                             f"The note is {len(note)} characters long; keep it to {EXCLUDE_NOTE_MAX}.")
+    if code == "other" and not note:
+        raise ExclusionError(400, "note_needed", "Say why in the note: Other needs one.")
+
+    fil = _filament_for_change(fid)
+    was = exclusion_of(fil)
+    at = (was or {}).get("at") or _exclusion_day(today)
+    label = labels[code]
+    marked = {"reason": label, "code": code, "note": note, "at": at}
+    # Pre-wrapped as JSON strings (the keys are JSON_STRING_FIELDS too), so a
+    # note such as "true" or "123" stays text; a blank note clears an old one
+    # (a blank, not the delete sentinel: see the module docstring).
+    extra = {EXCLUDE_KEY: json.dumps(label), EXCLUDE_AT_KEY: json.dumps(at),
+             EXCLUDE_NOTE_KEY: json.dumps(note)}
+    name = html.escape(" ".join(filament_names(fil)), quote=False)
+    if spoolman_api.update_filament(int(fid), {"extra": extra}) is None:
+        err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the change"
+        if _exclusion_now(fid) != marked:
+            state.add_log_entry(f"❌ Couldn't exclude {name} from Low and Out: "
+                                f"{html.escape(str(err), quote=False)}", "ERROR", "ff4444")
+            raise ExclusionError(502, "write_failed", f"Spoolman didn't save it: {err}")
+        state.logger.warning(f"Exclude: filament {fid}'s write reported {err!r} but landed")
+    why = f"{label}: {html.escape(note, quote=False)}" if note else label
+    state.add_log_entry(f"🔕 Excluded {name} from Low and Out ({why})", "INFO", _log_colour(fil))
+    return {"filament_id": int(fid), "display": _display(fil), "excluded": marked, "was": was}
+
+
+def include_again(fid):
+    """Undoes the exclusion: filament `fid` is listed on Low and Out again when
+    it is low or out, and its reason, note and day are cleared (written blank,
+    one write: Spoolman 0.27 keeps a key a write leaves out). Nothing is
+    written when it wasn't excluded. Returns {filament_id, display, excluded:
+    None, was, changed}; raises ExclusionError."""
+    fil = _filament_for_change(fid)
+    was = exclusion_of(fil)
+    extra_now = _dict(fil.get('extra'))
+    if not any(_plain(extra_now.get(k)) for k in EXCLUDE_KEYS):
+        return {"filament_id": int(fid), "display": _display(fil), "excluded": None,
+                "was": None, "changed": False}
+    name = html.escape(" ".join(filament_names(fil)), quote=False)
+    extra = {k: json.dumps("") for k in EXCLUDE_KEYS}
+    if spoolman_api.update_filament(int(fid), {"extra": extra}) is None:
+        err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the change"
+        if _exclusion_now(fid) is not None:
+            state.add_log_entry(f"❌ Couldn't include {name} again: {html.escape(str(err), quote=False)}",
+                                "ERROR", "ff4444")
+            raise ExclusionError(502, "write_failed", f"Spoolman didn't save it: {err}")
+        state.logger.warning(f"Include again: filament {fid}'s write reported {err!r} but landed")
+    it_was = f" (it was excluded: {html.escape(was['reason'], quote=False)})" if was else ''
+    state.add_log_entry(f"↩️ {name} is included in Low and Out again{it_was}", "INFO", _log_colour(fil))
+    return {"filament_id": int(fid), "display": _display(fil), "excluded": None,
+            "was": was, "changed": True}
 
 
 # --- the warning ------------------------------------------------------------------
@@ -319,6 +549,11 @@ def _get_json(path):
     resp = requests.get(f"{sm_url}{path}", timeout=_READ_TIMEOUT)
     resp.raise_for_status()
     return spoolman_api.parse_inbound_data(resp.json())
+
+
+def _all_filaments_strict():
+    """Every filament, one strict read: raises when Spoolman doesn't answer."""
+    return _get_json("/api/v1/filament")
 
 
 def _spool_strict(sid):
@@ -465,11 +700,11 @@ def _crossing(group, spools, threshold):
         return None   # a spool of unknown weight: neither low nor out can be told
     before_total, after_total = other_g + before_g, other_g + after_g
     before_count, after_count = other_n + before_n, other_n + after_n
+    if exclusion_of(fil):
+        return None   # excluded: neither low nor out is news
     # The Activity Log renders a message as HTML, and these names are free text.
     name = html.escape(" ".join(filament_names(fil)), quote=False)
     if before_count > 0 and after_count == 0:
-        if is_one_off(spoolman_api.filament_attribute_list(fil)):
-            return None
         ids = ", ".join(f"#{s}" for s in sorted(emptied, key=lambda s: (_num(s) is None, _num(s) or 0)))
         tail = "was its last spool" if len(emptied) == 1 else "were its last spools"
         return f"⚠️ {name} is out: {ids} {tail} in stock", _log_colour(fil), "out"

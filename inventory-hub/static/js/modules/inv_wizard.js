@@ -1669,8 +1669,11 @@ const wizardFetchExtraFields = () => {
                         // side (badges on Filament Details modal) shipped in
                         // 17.1 round 1. `label_printed` (the legacy retired key)
                         // stays hidden — it's gone in M7+ data.
+                        // "Excluded" (2026-10-20) is set from the ⚠️ Low
+                        // stock list, which checks the reason and keeps the day.
                         if (['sheet_link', 'price_total', 'spoolman_reprint', 'label_printed',
-                             'nozzle_temp_max', 'bed_temp_max', 'purchase_url'].includes(field.key)) return;
+                             'nozzle_temp_max', 'bed_temp_max', 'purchase_url',
+                             'fcc_stock_excluded', 'fcc_stock_excluded_note', 'fcc_stock_excluded_at'].includes(field.key)) return;
 
                         let html = wizardGenerateFieldHTML(field, 'fil');
                         if (html) fContainer.innerHTML += html;
