@@ -518,8 +518,34 @@ window.toastIntoBuffer = (items) => {
         if (i && typeof showToast === 'function') showToast(`✋ #${i.id} → your buffer${tail}`, 'info', 5000);
     });
 };
+// --- A SPOOL UN-ARCHIVED TO LOAD IT (Derek, 2026-10-20) ---
+// Spools are archived when they hit 0 g, rarely by hand, so one whose record
+// still has filament on it and is being loaded onto a head physically has
+// filament: the move engine un-archives it in the head write and names it in
+// the answer's `unarchived` ([{id, left_g, head}]; on `smart_move` for a slot
+// scan and Quick-Swap, on `location_result` for the wizard). One at 0 g is
+// refused instead. One 7 s warning per spool, once per answer: takeIntoBuffer
+// calls this, so every door that completes a move warns (the Quick-Swap tap,
+// which takes nothing into the buffer, calls it itself). Returns the list.
+window.noteUnarchived = (answer) => {
+    const a = answer || {};
+    if (a.__fccUnarchivedNoted) return [];
+    const list = [a.unarchived, (a.smart_move || {}).unarchived, (a.location_result || {}).unarchived]
+        .find(Array.isArray) || [];
+    if (!list.length) return [];
+    try { a.__fccUnarchivedNoted = true; } catch (e) { /* a frozen answer */ }
+    list.forEach(u => {
+        if (!u || u.id == null || typeof showToast !== 'function') return;
+        const left = Number(u.left_g);
+        const grams = Number.isFinite(left) ? ` with ${Math.round(left)} g left on its record` : '';
+        showToast(`⚠️ #${u.id} was archived${grams}: FCC un-archived it to load it onto ${u.head || 'the toolhead'}. `
+            + `Weigh it if that's off.`, 'warning', 7000);
+    });
+    return list;
+};
 window.takeIntoBuffer = (answer, { render = true, toast = true } = {}) => {
     const a = answer || {};
+    window.noteUnarchived(a);
     const list = Array.isArray(a.to_buffer) ? a.to_buffer
         : ((a.smart_move && Array.isArray(a.smart_move.to_buffer)) ? a.smart_move.to_buffer : []);
     const items = list.filter(i => i && i.id != null);

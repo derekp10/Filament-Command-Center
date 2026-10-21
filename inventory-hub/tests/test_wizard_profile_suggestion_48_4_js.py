@@ -1,15 +1,17 @@
 """Group 48.4 — the wizard fills a blank Slicer Profile, under node's `vm`: the
 REAL inv_core.js + inv_wizard.js with a stub page.
 
-Derek, 2026-10-19: for Prusament, "source that from the site"; for the rest,
-"this stuff is hard to fill out for manual adds" (his Jayo filaments use the
-Sunlu profile). So: a lookup's `slicer_profile` first (his own spelling when it
-is already a choice, else a new choice that Save adds first), else the profile
-most of his own filaments with the same brand + base material use (a tie fills
-nothing and names both). Only ever into a blank field while a NEW filament is
-made; never over a profile someone set; nothing written before Save.
+Derek, 2026-10-19: for Prusament, "source that from the site". So a lookup's
+`slicer_profile` (the Prusament spool page's product line) fills a blank field
+while a NEW filament is made: his own spelling when it is already a choice, else
+a new choice that Save adds first; never over a profile someone set; nothing
+written before Save. Derek, 2026-10-20: "Don't guess" — the first build also
+suggested the profile most of his own filaments with the same brand + material
+use; that is gone (a confirmed name only), and a brand or material change after
+a lookup clears the name it gave.
 
-Base proof (52741e6): none of these functions exist there, so every test fails.
+Base proof (52741e6): none of these functions exist there, so every test fails;
+the no-guess tests fail on 2ec9f46 (it guessed there).
 """
 from __future__ import annotations
 
@@ -97,56 +99,57 @@ return { value: sel.value, note: note() };
     assert res["value"] == "Prusament PLA Blend" and "prusament.com" in res["note"], res
 
 
-# ---- 2. his own filaments ----------------------------------------------------------------------
+# ---- 2. never a guess (Derek, 2026-10-20) ------------------------------------------------------
 
-def test_his_own_filaments_suggest_their_most_used_profile(tmp_path):
+def test_with_no_lookup_nothing_is_guessed_from_his_filaments(tmp_path):
+    """Two of his Jayo PLA filaments use the Sunlu profile: the first build put
+    it in a new Jayo PLA's field. RED on 2ec9f46."""
     res = _run(tmp_path, """
 field('wiz-fil-vendor-search', 'Jayo'); field('wiz-fil-material', 'PLA');
 const s = window.wizardSuggestSlicerProfile({});
+change(document.getElementById('wiz-fil-material'));
 return { s, value: sel.value, note: note() };
-""", mode="manual")
-    assert res["value"] == "Sunlu PLA + 2.0" and res["s"]["isNew"] is False, res
-    assert res["note"] == "🎚️ Suggested: Sunlu PLA + 2.0 (2 of your Jayo PLA filaments use it).", res["note"]
-
-
-def test_a_tie_fills_nothing_and_names_both(tmp_path):
-    tie = [_fil("Jayo", "PLA", "Sunlu PLA + 2.0"), _fil("Jayo", "PLA", "Generic PLA")]
-    res = _run(tmp_path, """
-field('wiz-fil-vendor-search', 'Jayo'); field('wiz-fil-material', 'PLA');
-const s = window.wizardSuggestSlicerProfile({});
-return { s, value: sel.value, note: note() };
-""", mode="manual", filaments=tie)
-    assert res["s"] is None and res["value"] == "", res
-    assert res["note"] == "🎚️ Your Jayo PLA filaments use Sunlu PLA + 2.0 and Generic PLA equally: pick one.", res
-
-
-def test_attributes_dont_split_the_base_material(tmp_path):
-    """A typed "Matte PLA" counts his "PLA" filaments (Matte is an attribute)."""
-    res = _run(tmp_path, """
-field('wiz-fil-vendor-search', 'jayo'); field('wiz-fil-material', 'Matte PLA');
-return { s: window.wizardSuggestSlicerProfile({}), value: sel.value };
-""", mode="manual")
-    assert res["value"] == "Sunlu PLA + 2.0", res
-
-
-def test_no_match_fills_nothing(tmp_path):
-    res = _run(tmp_path, """
-field('wiz-fil-vendor-search', 'Elegoo'); field('wiz-fil-material', 'PLA');
-return { s: window.wizardSuggestSlicerProfile({}), value: sel.value, note: note() };
 """, mode="manual")
     assert res["s"] is None and res["value"] == "" and res["note"] == "", res
 
 
-def test_a_brand_change_replaces_only_its_own_suggestion(tmp_path):
+def test_a_brand_or_material_change_clears_the_lookups_name(tmp_path):
+    """The name was confirmed for the lookup's filament; on another material it
+    is cleared, with a note. RED on 2ec9f46 (it guessed again instead)."""
     res = _run(tmp_path, """
-field('wiz-fil-vendor-search', 'Jayo'); field('wiz-fil-material', 'PLA');
-window.wizardSuggestSlicerProfile({});
+field('wiz-fil-vendor-search', 'Prusament'); field('wiz-fil-material', 'PLA');
+window.wizardSuggestSlicerProfile({ lookup: 'Prusament PLA Blend', source: 'prusament.com' });
 const first = sel.value;
-field('wiz-fil-vendor-search', 'Elegoo');
-window.wizardSuggestSlicerProfile({});
-return { first, after: sel.value };
-""", mode="manual")
-    assert res == {"first": "Sunlu PLA + 2.0", "after": "", "unhandled": []}, res
+field('wiz-fil-material', 'PETG');
+change(document.getElementById('wiz-fil-material'));
+return { first, after: sel.value, note: note(), suggestion: wizardState.profileSuggestion };
+""")
+    assert res["first"] == "Prusament PLA Blend" and res["after"] == "" and res["suggestion"] is None, res
+    assert res["note"] == ("🎚️ The brand or material changed after prusament.com named Prusament PLA Blend, "
+                           "so FCC cleared it: pick a profile."), res["note"]
+
+
+def test_a_change_event_that_changes_nothing_keeps_the_lookups_name(tmp_path):
+    res = _run(tmp_path, """
+field('wiz-fil-vendor-search', 'Prusament'); field('wiz-fil-material', 'PLA');
+window.wizardSuggestSlicerProfile({ lookup: 'Prusament PLA Blend', source: 'prusament.com' });
+change(document.getElementById('wiz-fil-vendor-sel'));
+return { value: sel.value, note: note() };
+""")
+    assert res["value"] == "Prusament PLA Blend", res
+    assert res["note"] == "🎚️ From prusament.com: Prusament PLA Blend.", res
+
+
+def test_a_profile_the_user_picked_is_kept_through_a_material_change(tmp_path):
+    res = _run(tmp_path, """
+field('wiz-fil-vendor-search', 'Prusament'); field('wiz-fil-material', 'PLA');
+window.wizardSuggestSlicerProfile({ lookup: 'Prusament PLA Blend', source: 'prusament.com' });
+sel.value = 'Generic PLA'; change(sel);
+field('wiz-fil-material', 'PETG');
+change(document.getElementById('wiz-fil-material'));
+return { value: sel.value };
+""")
+    assert res["value"] == "Generic PLA", res
 
 
 # ---- never over a profile someone set ----------------------------------------------------------

@@ -1245,6 +1245,34 @@ def _ghost_trail_from(current_loc, current_extra, printer_map, loc_info_map):
     return current_loc, current_extra.get('container_slot')
 
 
+# Step 4's rule for an archived spool going onto a head (Derek, 2026-10-20):
+# with at least this much filament left on its record it is un-archived by the
+# load; below it (an auto-archive at 0 g, or a rounding crumb) it is refused.
+UNARCHIVE_ON_LOAD_MIN_G = 1.0
+
+
+def _filament_left_g(rec):
+    """The filament left on a spool record, in grams: Spoolman's
+    `remaining_weight`, else its effective capacity (its own initial weight,
+    else its filament's) minus what it used. None when unknown (the stock
+    report's reading, stock_report.remaining_g)."""
+    if not isinstance(rec, dict):
+        return None
+    try:
+        rem = rec.get('remaining_weight')
+        if rem is not None and str(rem).strip() != '':
+            return float(rem)
+    except (TypeError, ValueError):
+        pass
+    cap = spoolman_api.effective_initial_weight(rec)
+    if cap is None:
+        return None
+    try:
+        return cap - float(rec.get('used_weight') or 0)
+    except (TypeError, ValueError):
+        return None
+
+
 # Group 42.6 — the "before the box" note (Derek's Q-A caveat: "we shouldn't
 # overwrite the spool location before the box load. Say it was on a cart or
 # something, so that if we unload it from the box, we know where it was before
@@ -1648,7 +1676,7 @@ def _push_undo(record):
         sink.append(record)
 
 
-def _move_write(sid, target, new_extra):
+def _move_write(sid, target, new_extra, unarchive=False):
     """The move engine's spool write: True when it landed.
 
     update_spool's timeout is a READ timeout, so a PATCH Spoolman committed but
@@ -1656,14 +1684,21 @@ def _move_write(sid, target, new_extra):
     reported the spool as failed, left it out of the undo record and tallied it
     as failed in a bulk move, although it had moved (Group 41 review). So a
     failed write is re-read, and counts as landed when the spool now sits at
-    `target` with exactly the slot and trail this write set."""
-    if spoolman_api.update_spool(sid, {"location": target, "extra": new_extra}):
+    `target` with exactly the slot and trail this write set. `unarchive`: the
+    same PATCH takes the spool out of the archive (step 4's rule for a spool
+    loaded onto a head with filament left on its record)."""
+    payload = {"location": target, "extra": new_extra}
+    if unarchive:
+        payload["archived"] = False
+    if spoolman_api.update_spool(sid, payload):
         return True
     err = spoolman_api.LAST_SPOOLMAN_ERROR
     rec = spoolman_api.get_spool(sid)
     if not isinstance(rec, dict) or rec.get('id') is None:
         return False
     if str(rec.get('location') or '').strip().upper() != str(target).strip().upper():
+        return False
+    if unarchive and str(rec.get('archived')).strip().lower() == 'true':
         return False
     have = rec.get('extra') or {}
     for k in spoolman_api.SYSTEM_MANAGED_EXTRAS:
@@ -1772,7 +1807,7 @@ _smart_move_depth = threading.local()
 def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_deploy=True, confirm_active_print=False,
                        confirmed_fed_heads=(), fed_check_from=None, picked_slot=None, expected_feed=None,
                        seen_printing=(), swap_slot=None, swap_out=False, record_source=None, unslotted=False,
-                       expected_residents=None, expected_occupant=None):
+                       expected_residents=None, expected_occupant=None, keep_archived=False):
     """Entry point for the slot-move pipeline.
 
     Owns the per-move printer-state probe cache (L3 fix A) so the auto-deploy
@@ -1863,6 +1898,7 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
             unslotted=unslotted,
             expected_residents=expected_residents,
             expected_occupant=expected_occupant,
+            keep_archived=keep_archived,
         )
     finally:
         _smart_move_depth.n = getattr(_smart_move_depth, "n", 1) - 1
@@ -1878,7 +1914,7 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
 def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', auto_deploy=True, confirm_active_print=False,
                              confirmed_fed_heads=(), fed_check_from=None, picked_slot=None, expected_feed=None,
                              swap_slot=None, swap_out=False, record_source=None, unslotted=False,
-                             expected_residents=None, expected_occupant=None):
+                             expected_residents=None, expected_occupant=None, keep_archived=False):
     """Move spool(s) to `target`, optionally into `target_slot` of that location.
 
     `auto_deploy` (default True): when the target is a Dryer Box AND the
@@ -2225,27 +2261,46 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
             return {"status": "error", "msg": f"Not moved: could not read {names} from Spoolman.",
                     "failures": failures}
 
-    # Step 4 (Group 51 review, engine-1): an archived spool is never loaded onto a
-    # head. A move's write no longer un-archives one (51.1: an archived spool stays
-    # archived), and every reader of a head (Smart Load, the print deduct, Printer
-    # Status) lists only spools in stock, so an archived spool on a head was
-    # invisible there: the next print charged nothing and a second spool was
-    # loaded on top of it. Refused with nothing written. Into a bound slot the
-    # box write stores it, and the chained deploy (this same check) says why it
-    # wasn't loaded. Read for every head move, the True path included (the chain
-    # may run under it); an unreadable record is left to the write loop's read.
+    # Step 4 (Group 51 review, engine-1; Derek, 2026-10-20): an archived spool is
+    # never left archived on a head. A move's write doesn't un-archive one (51.1),
+    # and every reader of a head (Smart Load, the print deduct, Printer Status)
+    # lists only spools in stock, so an archived spool on a head was invisible
+    # there: the next print charged nothing and a second spool was loaded on top
+    # of it. Derek's rule: spools are archived because they hit 0 g, rarely by
+    # hand, so one whose record still has filament on it (at least
+    # UNARCHIVE_ON_LOAD_MIN_G) and is being loaded physically has filament: the
+    # head write un-archives it (`unarchived` in the answer, a WARNING line). One
+    # at 0 g, or with no known weight, is refused with nothing written
+    # (`blocked_reason: archived`), and so is any archived spool when the caller
+    # keeps it archived (`keep_archived`: a wizard Save that ticks Archived). Into
+    # a bound slot the box write stores it, and the chained deploy (this same
+    # check) loads it or says why not. Read for every head move, the True path
+    # included (the chain may run under it); an unreadable record is left to the
+    # write loop's read. Undo puts the spool back but leaves it in stock.
+    unarchive_on_load: typing.Dict[str, float] = {}
     if is_printer or is_toolhead:
-        archived_ids = []
+        refused_archived = []
         for sid in spools:
             rec = moving_records.get(str(sid)) or spoolman_api.get_spool(sid)
-            if isinstance(rec, dict) and str(rec.get('archived')).strip().lower() == 'true':
-                archived_ids.append(sid)
-        if archived_ids:
-            names = _and_list('#' + str(s) for s in archived_ids)
-            why = (f"{names} {'is' if len(archived_ids) == 1 else 'are'} archived, so "
-                   f"{'it was' if len(archived_ids) == 1 else 'they were'} not loaded onto {target}: "
-                   f"weigh {'it' if len(archived_ids) == 1 else 'them'} back into stock (or untick Archived "
-                   f"in Edit) first")
+            if not (isinstance(rec, dict) and str(rec.get('archived')).strip().lower() == 'true'):
+                continue
+            left = _filament_left_g(rec)
+            if not keep_archived and left is not None and left >= UNARCHIVE_ON_LOAD_MIN_G:
+                unarchive_on_load[str(sid)] = left
+            else:
+                refused_archived.append((sid, left))
+        if refused_archived:
+            whys = []
+            for sid, left in refused_archived:
+                if left is None:
+                    whys.append(f"#{sid} is archived and its record doesn't say how much filament is left, so it "
+                                f"was not loaded onto {target}: weigh it back into stock first")
+                elif left < UNARCHIVE_ON_LOAD_MIN_G:
+                    whys.append(f"#{sid} is archived with no filament left on its record ({max(left, 0.0):.0f} g), "
+                                f"so it was not loaded onto {target}: weigh it back into stock first")
+                else:
+                    whys.append(f"#{sid} is archived, so it was not loaded onto {target}: untick Archived to load it")
+            why = "; ".join(whys)
             for sid in spools:
                 failures[str(sid)] = why
             state.add_log_entry(f"⚠️ Not loading onto {target}: {why}.", "WARNING", "ffaa00")
@@ -2615,6 +2670,8 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     # Where each swapped-out spool was filed (Swap option C), for its toast.
     swapped_filed: typing.Dict[str, str] = {}
     to_buffer: typing.List[typing.Dict[str, typing.Any]] = []
+    # The archived spools the head write un-archived (step 4's rule), for the answer.
+    unarchived: typing.List[typing.Dict[str, typing.Any]] = []
     # The stored spools a Swap (`swap_out`) took out of the slot, in order.
     displaced_out: typing.List[typing.Any] = []
 
@@ -2920,6 +2977,23 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         if _new_note is not None:
             new_extra[PRE_BOX_KEY] = _new_note
 
+        # Step 4's rule (Derek, 2026-10-20): an archived spool with filament on its
+        # record is un-archived by the PATCH that puts it on the head, whichever
+        # branch writes it (the PRINTER branch, or the GENERIC one for a Tool Head
+        # row no printer's toolheads[] lists: 2026-10-20 review, engine-3). Its
+        # pre-archive note is used up once it is back in stock (Claude's call 22);
+        # "" because the extras merge keeps an omitted key.
+        _unarchive = str(sid) in unarchive_on_load
+        if _unarchive:
+            new_extra['fcc_pre_archive_location'] = ''
+
+        def _note_unarchived():
+            _left = unarchive_on_load[str(sid)]
+            unarchived.append({"id": sid, "left_g": round(_left, 1), "head": target})
+            state.add_log_entry(
+                f"📤 #{sid} was archived with {_left:.0f} g left on its record: FCC un-archived it to "
+                f"load it onto {target}. Weigh it if that's off.", "WARNING", "ffaa00")
+
         # PRINTER MOVE
         if target in printer_map:
             # Preserve ghost trail when the spool is already deployed to
@@ -3028,8 +3102,10 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                 elif _why_none:
                     state.logger.info(f"🔗 Reverse-binding skipped for #{sid}: {_why_none}.")
 
-            if _move_write(sid, target, new_extra):
+            if _move_write(sid, target, new_extra, unarchive=_unarchive):
                 state.add_log_entry(f"🖨️ {info['text']} -> {target}", "INFO", info['color'])
+                if _unarchive:
+                    _note_unarchived()
                 if _recorded_here:
                     recorded_sources[str(sid)] = _recorded_here
                 # Group 20.2: a spool deployed FROM a single-slot dryer box
@@ -3090,8 +3166,10 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                 new_extra['physical_source'] = ""
                 new_extra['physical_source_slot'] = ""
 
-            if _move_write(sid, target, new_extra):
+            if _move_write(sid, target, new_extra, unarchive=_unarchive):
                 state.add_log_entry(f"🚚 {info['text']} -> {target}", "INFO", info['color'])
+                if _unarchive:
+                    _note_unarchived()
             else:
                 err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
                 failures[str(sid)] = err
@@ -3204,6 +3282,9 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                     # The slot whose own spool, if it runs on the head, comes off
                     # into the scan buffer (the same-slot swap; Derek, 2026-10-15).
                     swap_slot=(target, target_slot),
+                    # A caller that keeps the spool archived keeps it so on the head
+                    # the slot loads too (step 4 refuses it there).
+                    keep_archived=keep_archived,
                 )
             except Exception as _ad_err:
                 state.logger.error(f"Auto-deploy failed for {target}:SLOT:{target_slot}: {_ad_err}")
@@ -3231,6 +3312,8 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                     undo_record['buffered'] = list(undo_record.get('buffered') or []) + list(chained_undo['buffered'])
             # The slot's own spool the chain swapped out into the scan buffer.
             to_buffer = to_buffer + [i for i in (chained.get('to_buffer') or []) if isinstance(i, dict)]
+            # An archived spool the chained load un-archived (step 4's rule).
+            unarchived = unarchived + [u for u in (chained.get('unarchived') or []) if isinstance(u, dict)]
             chained_failures = chained.get('failures') or {}
             for sid in to_deploy:
                 if chained.get('status') == 'success' and str(sid) not in chained_failures:
@@ -3278,6 +3361,11 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         # Group 40, the same-slot swap: the spools taken off a head into the scan
         # buffer (Unassigned in Spoolman). The page adds them to its buffer.
         result["to_buffer"] = to_buffer
+    if unarchived:
+        # Step 4's rule (Derek, 2026-10-20): the archived spools this move (or its
+        # chained deploy) un-archived to load them, [{id, left_g, head}]; every
+        # door warns about them (window.noteUnarchived).
+        result["unarchived"] = unarchived
     if auto_deploy_skipped:
         # sid(str) -> why it stayed in the box. The box placement itself stands.
         result["auto_deploy_skipped"] = auto_deploy_skipped

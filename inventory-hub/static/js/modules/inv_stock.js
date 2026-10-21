@@ -18,6 +18,11 @@ console.log("🚀 Loaded Module: LOW STOCK");
 // .kb-active row (wrapping), Enter opens it, Escape closes (mountOverlay owns
 // Escape); an Enter that is a scanner's is left to the scan accumulator. Every
 // piece of text is escaped: colour and vendor names are free text.
+//
+// Derek, 2026-10-20: the Out section says how a filament leaves it (a One-off
+// tag), where he will see it when the list is long; and the list comes back
+// where it was once the window opened from it is closed (it used to stay
+// closed, to be reopened from the search panel).
 
 (function () {
     const OVERLAY_ID = 'fcc-low-stock-overlay';
@@ -62,6 +67,7 @@ ${P} .fcc-stock-buy { flex:0 0 auto; color:#ffc107; border:1px solid #ffc107; bo
     font-size:.85em; text-decoration:none; white-space:nowrap; background:transparent; }
 ${P} .fcc-stock-buy:hover, ${P} .fcc-stock-buy:focus-visible { background:#ffc107; color:#111; outline:none; }
 ${P} .fcc-stock-none { color:#ddd; font-style:italic; padding:0 4px 6px; }
+${P} .fcc-stock-hint { color:#ddd; font-size:.82em; margin:-2px 0 8px; }
 ${P} .fcc-stock-state { color:#fff; text-align:center; padding:22px 8px; }
 ${P} .fcc-stock-state-sub { color:#ddd; font-size:.88em; margin-top:4px; }
 ${P} .fcc-stock-error-title { color:#ff8a8a; font-weight:700; font-size:1.05em; margin-bottom:6px; }
@@ -166,8 +172,15 @@ ${P} .fcc-stock-foot { color:#ccc; font-size:.78em; margin-top:8px; border-top:1
             ? `Low: under ${esc(Math.round(threshold))} g (${rows.length})`
             : `Out: none left in stock (${rows.length})`;
         const none = kind === 'low' ? 'Nothing is low.' : 'Nothing is out.';
+        // How a filament he won't buy again leaves Out (stock_report.is_one_off).
+        const hint = kind === 'out'
+            ? `<div class="fcc-stock-hint" data-stock-hint>Won't buy one again? Tag it <strong>One-off</strong> and it leaves
+                this list: add "One-off" in ⚙️ → 🏷️ Filament Attributes, then give it to the filament
+                (✏️ Edit Filament → Attributes).</div>`
+            : '';
         return `<div class="fcc-stock-section" data-stock-section="${kind}">
                 <div class="fcc-stock-h fcc-stock-h-${kind}">${head}</div>
+                ${hint}
                 ${rows.length ? rows.map((r) => _rowHtml(r, kind)).join('') : `<div class="fcc-stock-none">${none}</div>`}
             </div>`;
     }
@@ -195,7 +208,7 @@ ${P} .fcc-stock-foot { color:#ccc; font-size:.78em; margin-top:8px; border-top:1
         _highlight(handle, next);
     }
 
-    function _render(handle, data) {
+    function _render(handle, data, restore) {
         const low = data.low, out = data.out;
         const threshold = Number.isFinite(Number(data.threshold_g)) ? Number(data.threshold_g) : 250;
         const sub = handle.panel.querySelector('[data-stock-sub]');
@@ -212,11 +225,14 @@ ${P} .fcc-stock-foot { color:#ccc; font-size:.78em; margin-top:8px; border-top:1
             try { handle.panel.focus({ preventScroll: true }); } catch (_) { /* noop */ }
             return;
         }
-        _setBody(handle, _section('low', low, threshold) + _section('out', out, threshold), 'ready');
-        _highlight(handle, 0);
+        const body = _setBody(handle, _section('low', low, threshold) + _section('out', out, threshold), 'ready');
+        // Coming back after a window opened from the list: the same row, the same scroll.
+        const at = restore ? _rows(handle).findIndex((r) => r.dataset.fid === String(restore.fid)) : -1;
+        _highlight(handle, at >= 0 ? at : 0);
+        if (restore && body && Number.isFinite(Number(restore.scrollTop))) body.scrollTop = Number(restore.scrollTop);
     }
 
-    async function _load(handle) {
+    async function _load(handle, restore) {
         const token = ++_seq;
         _setBody(handle, '<div class="fcc-stock-state">Reading your spools from Spoolman…</div>', 'loading');
         let res = null;
@@ -236,13 +252,18 @@ ${P} .fcc-stock-foot { color:#ccc; font-size:.78em; margin-top:8px; border-top:1
             if (retry) { try { retry.focus({ preventScroll: true }); } catch (_) { /* noop */ } }
             return;
         }
-        _render(handle, data);
+        _render(handle, data, restore);
     }
 
     function _unlisten(handle) {
         if (handle && handle._stockKeys) {
             document.removeEventListener('keydown', handle._stockKeys, true);
             handle._stockKeys = null;
+        }
+        if (handle && handle._stockShows) {
+            document.removeEventListener('show.bs.modal', handle._stockShows.modal);
+            document.removeEventListener('show.bs.offcanvas', handle._stockShows.offcanvas);
+            handle._stockShows = null;
         }
         if (_current === handle) _current = null;
     }
@@ -252,9 +273,87 @@ ${P} .fcc-stock-foot { color:#ccc; font-size:.78em; margin-top:8px; border-top:1
         try { handle.cleanup(); } catch (_) { /* noop */ }
     }
 
+    // --- the list comes back (Derek, 2026-10-20) ---
+    // Armed once the filament window opened from the list really shows (a read
+    // that fails opens none, and must not leave an arm for some later, unrelated
+    // window: 2026-10-20 review, browser-4). Then, once the window it opened (or
+    // one opened from that: a spool, an edit, the wizard and its return to the
+    // filament) closes and nothing else is up or on its way (no window, panel or
+    // overlay, no read in progress, no window shown since that close: browser-2),
+    // the list reopens on the same row and scroll, reading Spoolman again (an
+    // edit or a One-off tag shows). Disarmed once it has come back, when the list
+    // is opened another way, or after RETURN_TTL_MS (a window closing much later
+    // is something else). A list that came back has no host, so a window opened
+    // over it closes it and arms the come-back again (browser-3: it used to sit
+    // over that window).
+    const RETURN_TTL_MS = 10 * 60 * 1000;
+    const OPEN_WAIT_MS = 15000;     // a filament read's ceiling (fetchT)
+    const SETTLE_MS = 400;          // past Bootstrap's own hide and a window opened in its place
+    let _return = null;    // {fid, scrollTop, at, lastShowAt, onHidden, onShow}
+    let _pending = null;   // {onShow, timer}: armed once the filament window shows
+
+    function _disarmReturn() {
+        if (_return) {
+            document.removeEventListener('hidden.bs.modal', _return.onHidden);
+            document.removeEventListener('show.bs.modal', _return.onShow);
+        }
+        _return = null;
+        if (_pending) {
+            document.removeEventListener('show.bs.modal', _pending.onShow);
+            clearTimeout(_pending.timer);
+        }
+        _pending = null;
+    }
+
+    function _nothingElseUp() {
+        // A window still reading what it will show (openFilamentDetails,
+        // openSpoolDetails and openManage hold the processing dim meanwhile).
+        if (typeof state !== 'undefined' && state && state.processing) return false;
+        return !document.querySelector('.modal.show, .modal-backdrop, .offcanvas.show, .offcanvas.showing, '
+            + '[data-overlay-mount="1"]');
+    }
+
+    function _armReturn(fid, scrollTop) {
+        _disarmReturn();
+        const ret = { fid: fid == null ? null : String(fid), scrollTop: scrollTop || 0, at: Date.now(), lastShowAt: 0 };
+        ret.onShow = () => { ret.lastShowAt = Date.now(); };
+        ret.onHidden = () => {
+            if (_return !== ret) return;
+            if (Date.now() - ret.at > RETURN_TTL_MS) { _disarmReturn(); return; }
+            const hiddenAt = Date.now();
+            setTimeout(() => {
+                if (_return !== ret || _current) return;
+                // A window shown since that close, or one still opening: stay armed.
+                if (ret.lastShowAt >= hiddenAt || !_nothingElseUp()) return;
+                _disarmReturn();
+                window.openLowStockPanel({ restore: { fid: ret.fid, scrollTop: ret.scrollTop } });
+            }, SETTLE_MS);
+        };
+        document.addEventListener('hidden.bs.modal', ret.onHidden);
+        document.addEventListener('show.bs.modal', ret.onShow);
+        _return = ret;
+    }
+
+    // Arms the come-back once #filamentModal shows (now, if it is up already).
+    function _armWhenShown(fid, scrollTop) {
+        _disarmReturn();
+        const modal = document.getElementById('filamentModal');
+        if (modal && modal.classList.contains('show')) { _armReturn(fid, scrollTop); return; }
+        const pend = {};
+        pend.onShow = (e) => {
+            if (_pending !== pend || !e || !e.target || e.target.id !== 'filamentModal') return;
+            _armReturn(fid, scrollTop);
+        };
+        pend.timer = setTimeout(() => { if (_pending === pend) _disarmReturn(); }, OPEN_WAIT_MS);
+        document.addEventListener('show.bs.modal', pend.onShow);
+        _pending = pend;
+    }
+
     function _openFilament(handle, fid) {
         const id = parseInt(fid, 10);
         if (!Number.isFinite(id)) return;
+        const body = _body(handle);
+        _armWhenShown(id, body ? body.scrollTop : 0);
         _close(handle);
         // A details window is a Bootstrap modal: this panel (z 20000) would hide
         // it, so the panel closes first; showing the modal also closes the search
@@ -292,8 +391,10 @@ ${P} .fcc-stock-foot { color:#ccc; font-size:.78em; margin-top:8px; border-top:1
         else _openFilament(handle, row.dataset.fid);
     }
 
-    window.openLowStockPanel = function () {
+    window.openLowStockPanel = function (opts) {
         if (typeof window.mountOverlay !== 'function') return null;
+        const restore = opts && opts.restore ? opts.restore : null;
+        if (!restore) _disarmReturn();
         _ensureStyle();
         if (_current) _unlisten(_current);     // re-opening replaces the panel
         const host = document.getElementById('offcanvasSearch');
@@ -317,7 +418,25 @@ ${P} .fcc-stock-foot { color:#ccc; font-size:.78em; margin-top:8px; border-top:1
         });
         handle._stockKeys = (e) => _onKey(handle, e);
         document.addEventListener('keydown', handle._stockKeys, true);
-        _load(handle);
+        if (!hostOpen) {
+            // No search panel to close it with (a list that came back): a window
+            // opened over it closes it (2026-10-20 review, browser-3), and a modal
+            // arms the come-back, so it returns where it was once that one closes.
+            const shows = {
+                modal: () => {
+                    const active = handle.panel.querySelector('.fcc-stock-row.kb-active');
+                    const b = _body(handle);
+                    const at = [active ? active.dataset.fid : null, b ? b.scrollTop : 0];
+                    _close(handle);
+                    _armReturn(at[0], at[1]);
+                },
+                offcanvas: () => _close(handle),
+            };
+            handle._stockShows = shows;
+            document.addEventListener('show.bs.modal', shows.modal);
+            document.addEventListener('show.bs.offcanvas', shows.offcanvas);
+        }
+        _load(handle, restore);
         return handle;
     };
 
@@ -325,7 +444,7 @@ ${P} .fcc-stock-foot { color:#ccc; font-size:.78em; margin-top:8px; border-top:1
         const btn = document.getElementById('global-search-low-stock');
         if (btn && !btn.dataset.lowStockWired) {
             btn.dataset.lowStockWired = '1';
-            btn.addEventListener('click', () => window.openLowStockPanel());
+            btn.addEventListener('click', () => window.openLowStockPanel());   // no event as opts
         }
     }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _wireButton);

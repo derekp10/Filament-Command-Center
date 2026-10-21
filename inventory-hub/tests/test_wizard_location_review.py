@@ -101,7 +101,8 @@ def test_a_landed_move_answers_location_now_and_saving_that_moves_nothing(client
     writes = len(sm.writes)
 
     second = _edit(client, sm, {"location": first["location_now"], "comment": "b"}, store=store, **DOOR)
-    assert second == {"success": True, "spool_id": 57}, second
+    # `archived_now`: the page sets its Archived box from it (2026-10-20 review).
+    assert second == {"success": True, "spool_id": 57, "archived_now": False}, second
     assert sm.writes[writes:] == [(57, {"comment": "b"})], sm.writes[writes:]
     assert sm.spools[57]["location"] == now, sm.spools
 
@@ -155,8 +156,24 @@ def test_an_emptied_spool_sent_to_a_head_is_refused_archived_and_unassigned(clie
     spool = sm.spools[57]
     assert spool["archived"] is True and spool["location"] == "", spool
     assert spool["extra"]["physical_source"] == "", spool
-    assert "#57 is archived, so it was not loaded onto XL-2" in body["msg"], body
+    assert ("#57 is archived with no filament left on its record (0 g), so it was not loaded onto XL-2"
+            in body["msg"]), body
     assert "#57 is archived (used up), so it was taken off XL-1: it is Unassigned." in body["msg"], body
+
+
+def test_an_archived_ticked_spool_sent_to_a_head_stays_archived(client):
+    """Archived ticked (300 g left) and the Location set to XL-2 in one Save.
+    A head un-archives a spool with filament on its record to load it (Derek,
+    2026-10-20), but not this one: the same Save archived it, so the move keeps
+    it archived (`keep_archived`) and the answer says to untick Archived."""
+    sm = _on_xl1({"physical_source": "LR-MDB-1", "physical_source_slot": "1", "container_slot": ""}, used=700)
+    body = _edit(client, sm, {"location": "XL-2", "archived": True}, **DOOR)
+    assert body["location_result"]["blocked_reason"] == "archived", body
+    assert body["success"] is False and body["location_moved"] is False, body
+    spool = sm.spools[57]
+    assert spool["archived"] is True and spool["location"] == "", spool
+    assert sm.direct_at("XL-2") == [], sm.spools
+    assert "#57 is archived, so it was not loaded onto XL-2: untick Archived to load it" in body["msg"], body
 
 
 def test_an_archived_ticked_spool_stays_archived_where_its_move_lands(client):
@@ -312,3 +329,97 @@ def test_undo_of_a_wizard_create_move_leaves_the_buffer_as_it_was(client):
                                     "confirmed_toolheads": []}, store=store)
     assert sm.spools[502]["location"] == "", sm.spools
     assert [b["id"] for b in state.GLOBAL_BUFFER] == [57], state.GLOBAL_BUFFER
+
+
+# ---- 2026-10-20 review: in the wizard the form's Archived box decides -----------------------
+
+class _ArchivingMaker(_Maker):
+    """_Maker that keeps what Spoolman would: the weights and `archived`."""
+
+    def create_spool(self, data):
+        res = super().create_spool(data)
+        rec = self.sm.spools[res["id"]]
+        for key in ("initial_weight", "used_weight", "archived"):
+            if key in data:
+                rec[key] = data[key]
+        return res
+
+
+def _hand_archived(location="CR-CT-2-R1"):
+    """#57 archived by hand with 300 g left on its record."""
+    return _WeighedSpoolman({57: {"location": location, "initial_weight": 1000, "used_weight": 700,
+                                  "archived": True, "extra": {}}})
+
+
+def test_a_ticked_archived_box_keeps_the_spool_off_a_head(client):
+    """engine-1: the box is still ticked (the prefill, not dirty) and the
+    Location set to XL-2. RED on b779b84: the move un-archived and loaded it, and
+    the next Save of the same page (the box still ticked) archived it ON XL-2."""
+    sm = _hand_archived()
+    body = _edit(client, sm, {"location": "XL-2", "archived": True}, **DOOR)
+    assert body["location_result"]["blocked_reason"] == "archived", body
+    assert "#57 is archived, so it was not loaded onto XL-2: untick Archived to load it" in body["msg"], body
+    assert body["archived_now"] is True, body
+    assert sm.spools[57]["location"] == "CR-CT-2-R1" and sm.spools[57]["archived"] is True, sm.spools[57]
+    assert sm.direct_at("XL-2") == []
+
+
+def test_unticking_archived_with_a_head_loads_it_in_stock(client):
+    """The way to load it from the wizard: untick Archived. (On b779b84 it fails
+    only on the answer's new `archived_now`.)"""
+    sm = _hand_archived()
+    body = _edit(client, sm, {"location": "XL-2", "archived": False}, **DOOR)
+    assert body["success"] is True and body["location_now"] == "XL-2", body
+    assert body["archived_now"] is False, body
+    assert sm.spools[57]["archived"] is False and sm.direct_at("XL-2") == [57], sm.spools[57]
+
+
+def test_ticking_archived_on_an_unassigned_spool_sent_to_a_head_is_refused(client):
+    """engine-2 (a): nothing to take it off (it was Unassigned), so keep_archived
+    used to be False and the same Save un-archived it onto XL-2. RED on b779b84."""
+    sm = _WeighedSpoolman({57: {"location": "", "initial_weight": 1000, "used_weight": 700,
+                                "archived": False, "extra": {}}})
+    body = _edit(client, sm, {"location": "XL-2", "archived": True}, **DOOR)
+    assert body["location_result"]["blocked_reason"] == "archived", body
+    assert body["archived_now"] is True, body
+    assert sm.spools[57]["archived"] is True and sm.direct_at("XL-2") == [], sm.spools[57]
+
+
+def test_a_save_that_archives_a_spool_on_a_head_takes_it_off(client):
+    """engine-1's belt: ticking Archived on #57 on XL-1 with no Location change
+    used to archive it ON XL-1, invisible to Smart Load and the print charge.
+    Now it is taken off, as an archive-and-move is. RED on b779b84."""
+    sm = _on_xl1({"physical_source": "LR-MDB-1", "physical_source_slot": "1", "container_slot": ""}, used=700)
+    body = _edit(client, sm, {"location": "XL-1", "archived": True}, **DOOR)
+    spool = sm.spools[57]
+    assert spool["archived"] is True and spool["location"] == "", spool
+    assert spool["extra"]["physical_source"] == "", spool
+    assert body["success"] is True and body["location_now"] == "" and body["archived_now"] is True, body
+    assert "#57 is archived (Archived is ticked), so it was taken off XL-1: it is Unassigned." in body["warning"], body
+
+
+def test_control_ticking_archived_on_a_shelf_leaves_it_filed_there(client):
+    """Control: off a head, a Save that archives a spool leaves it where it is.
+    (On b779b84 it fails only on the answer's new `archived_now`.)"""
+    sm = _WeighedSpoolman({57: {"location": "CR-CT-2-R1", "initial_weight": 1000, "used_weight": 700,
+                                "archived": False, "extra": {}}})
+    body = _edit(client, sm, {"location": "CR-CT-2-R1", "archived": True}, **DOOR)
+    assert body["success"] is True and "location_now" not in body and body["archived_now"] is True, body
+    assert sm.spools[57]["location"] == "CR-CT-2-R1" and sm.spools[57]["archived"] is True
+
+
+def test_a_create_ticked_archived_onto_a_head_stays_archived_and_unassigned(client):
+    """engine-2 (c): the create door passed no keep_archived, so a new spool made
+    archived and placed on XL-2 was un-archived onto it. RED on b779b84."""
+    sm = _WeighedSpoolman({})
+    maker = _ArchivingMaker(sm)
+    body = dict({"filament_id": 7, "quantity": 1,
+                 "spool_data": {"location": "XL-2", "archived": True, "initial_weight": 1000, "used_weight": 0,
+                                "extra": {}},
+                 "placements": [{"location": "XL-2"}]}, **DOOR)
+    with patch.object(spoolman_api, "create_spool", side_effect=maker.create_spool), \
+         patch.object(spoolman_api, "create_filament", side_effect=maker.create_filament):
+        out = _post(client, sm, "/api/create_inventory_wizard", body)
+    assert out["unplaced"] == [501], out
+    assert out["location_results"]["501"]["blocked_reason"] == "archived", out
+    assert sm.spools[501]["archived"] is True and sm.direct_at("XL-2") == [], sm.spools[501]

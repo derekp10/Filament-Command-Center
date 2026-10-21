@@ -786,6 +786,8 @@
             .then(({ ok, body }) => {
                 if (ok && body.action === 'quickswap_done') {
                     showToast(`⚡ Spool #${body.moved} → ${opts.toolhead}`, 'success', 2500);
+                    // An archived spool with filament on its record was un-archived to load it.
+                    if (window.noteUnarchived) window.noteUnarchived(body);
                     _refreshAfterMove();
                 } else if (body.action === 'quickswap_requires_confirm') {
                     _reaskFromServer(body, sent, {

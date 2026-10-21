@@ -2770,27 +2770,28 @@ window.applyFilamentFieldsFromTemplate = (temp) => {
     }
 
     // Group 48.4: a blank Slicer Profile takes the one this source names (the
-    // Prusament spool page's product line), else his own filaments' choice.
+    // Prusament spool page's product line); nothing else fills it.
     window.wizardSuggestSlicerProfile({ lookup: temp.slicer_profile, source: temp.slicer_profile_source });
 };
 
 // --- Group 48.4: fill a blank Slicer Profile --------------------------------------------
-// Derek, 2026-10-19: "this stuff is hard to fill out for manual adds", and for
-// Prusament "it be perfered if we could just source that from the site". Only
-// ever into a BLANK Slicer Profile while a NEW filament is being made (the
-// 'manual' and 'external' modes): a profile the user picked, or one an
-// existing filament has, is never replaced, and nothing is written before the
-// wizard's own Save. Two sources, in order:
-//   1. a lookup that names one (an external parser's `slicer_profile`: the
-//      Prusament page's product line, "Prusament PLA Blend"): his own spelling
-//      when it is one of his profiles already; otherwise a new choice, which
-//      Save adds to Spoolman's list first (wizardCommitSuggestedChoices). Any
-//      later lookup that returns `slicer_profile` works the same way;
-//   2. else his own filaments: the profile most of his filaments with the same
-//      brand and base material use (a Jayo PLA gets the Sunlu profile his Jayo
-//      filaments have); a tie fills nothing and names both.
-// A note under the field says where it came from. Re-run when the brand or
-// material changes, it may replace only its own earlier suggestion.
+// Derek, 2026-10-19: for Prusament "it be perfered if we could just source that
+// from the site". Only ever into a BLANK Slicer Profile while a NEW filament is
+// being made (the 'manual' and 'external' modes): a profile the user picked, or
+// one an existing filament has, is never replaced, and nothing is written
+// before the wizard's own Save. The one source is a lookup that names a
+// profile (an external parser's `slicer_profile`: the Prusament page's product
+// line, "Prusament PLA Blend"): his own spelling when it is one of his profiles
+// already; otherwise a new choice, which Save adds to Spoolman's list first
+// (wizardCommitSuggestedChoices). Any later lookup that returns
+// `slicer_profile` works the same way. A note under the field says where it
+// came from.
+// Derek, 2026-10-20: never a guess from his own filaments. The profile he
+// records is one he confirmed prints well (a brand's own, a sister brand's like
+// Jayo → Sunlu, else a Generic one), and a variant's attributes needn't match
+// a profile name, so the brand + material guess the first build had is gone. A
+// brand or material change after a lookup clears the name it gave (it was
+// confirmed for the lookup's filament, not this one).
 const _PROFILE_KEY = 'slicer_profile';
 let _settingProfile = false;
 const _profileSelect = () => document.getElementById(`wiz_fil_ef_${_PROFILE_KEY}`);
@@ -2842,74 +2843,46 @@ const _selectProfile = (sel, value, isNew, source) => {
     sel.dataset.fccSuggested = value;
 };
 
-// The profile most of his filaments with this brand + base material use:
-// {profile, count}, {tie: [a, b], count} or null.
-window.wizardOwnProfileSuggestion = (vendorName, material) => {
-    const vendor = String(vendorName || '').trim().toLowerCase();
-    const known = (typeof _knownFilamentAttributes === 'function') ? _knownFilamentAttributes() : [];
-    const base = (m) => {
-        const raw = String(m || '').trim();
-        const split = window.splitMaterialAndAttributes ? window.splitMaterialAndAttributes(raw, known) : null;
-        return String((split && split.base) || raw).trim().toLowerCase();
-    };
-    const mat = base(material);
-    if (!vendor || !mat) return null;
-    const counts = new Map();
-    (wizardState.allFilaments || []).forEach(f => {
-        if (!f || String((f.vendor && f.vendor.name) || '').trim().toLowerCase() !== vendor) return;
-        if (base(f.material) !== mat) return;
-        const p = _unquoteProfile((f.extra || {})[_PROFILE_KEY]);
-        if (p) counts.set(p, (counts.get(p) || 0) + 1);
-    });
-    if (!counts.size) return null;
-    const ranked = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
-    const top = ranked.filter(([, n]) => n === ranked[0][1]).map(([p]) => p);
-    return top.length > 1 ? { tie: top, count: ranked[0][1] } : { profile: top[0], count: ranked[0][1] };
-};
-
-// Returns what it suggested ({value, isNew, from}) or null.
+// Returns what it suggested ({value, isNew, from, vendor, material}) or null.
 window.wizardSuggestSlicerProfile = ({ lookup = '', source = '' } = {}) => {
     const sel = _profileSelect();
     if (!sel || !['manual', 'external'].includes(wizardState.mode)) return null;
     const ds = sel.dataset || {};
     const current = String(sel.value || '').trim();
     if (ds.fccUserSet === '1' || (current && current !== ds.fccSuggested)) return null;
-    const choices = _profileChoices();
-    const known = (v) => choices.find(c => c.toLowerCase() === String(v).toLowerCase()) || null;
     const want = _unquoteProfile(lookup);
-    if (want) {
-        const from = String(source || '').trim() || 'the lookup';
-        const match = known(want);
-        _selectProfile(sel, match || want, !match, from);
-        _setProfileNote(match ? `🎚️ From ${from}: ${match}.`
-            : `🎚️ ${from} names this ${want}, which isn't in your profile list yet: Save adds it.`);
-        wizardState.profileSuggestion = { value: match || want, isNew: !match, from };
-        return wizardState.profileSuggestion;
-    }
-    const vendor = String((document.getElementById('wiz-fil-vendor-search') || {}).value || '').trim();
-    const material = String((document.getElementById('wiz-fil-material') || {}).value || '').trim();
-    const own = window.wizardOwnProfileSuggestion(vendor, material);
-    const what = `${vendor} ${material}`.trim();
-    if (own && own.profile) {
-        const match = known(own.profile);
-        _selectProfile(sel, match || own.profile, !match, 'your filaments');
-        _setProfileNote(`🎚️ Suggested: ${match || own.profile} (${own.count} of your ${what} filament${own.count === 1 ? '' : 's'} `
-            + `use${own.count === 1 ? 's' : ''} it).`);
-        wizardState.profileSuggestion = { value: match || own.profile, isNew: !match, from: 'your filaments' };
-        return wizardState.profileSuggestion;
-    }
-    // Nothing (or a tie) for this brand + material: an earlier suggestion of ours
-    // no longer applies, so the field goes back to blank.
-    if (current && current === ds.fccSuggested) {
-        _settingProfile = true;
-        try { sel.value = ''; } finally { _settingProfile = false; }
-        delete sel.dataset.fccSuggested;
-        _dropNewChoiceOptions(sel);
-    }
+    if (!want) return null;
+    const match = _profileChoices().find(c => c.toLowerCase() === want.toLowerCase()) || null;
+    const from = String(source || '').trim() || 'the lookup';
+    _selectProfile(sel, match || want, !match, from);
+    _setProfileNote(match ? `🎚️ From ${from}: ${match}.`
+        : `🎚️ ${from} names this ${want}, which isn't in your profile list yet: Save adds it.`);
+    wizardState.profileSuggestion = { value: match || want, isNew: !match, from,
+                                      vendor: _profileVendorNow(), material: _profileMaterialNow() };
+    return wizardState.profileSuggestion;
+};
+
+const _profileVendorNow = () => String((document.getElementById('wiz-fil-vendor-search') || {}).value || '').trim();
+const _profileMaterialNow = () => String((document.getElementById('wiz-fil-material') || {}).value || '').trim();
+
+// A brand or material change after a lookup named the profile: the name was
+// confirmed for the lookup's filament, so a different brand or material clears
+// it (only while it is still FCC's own suggestion), with a note saying why.
+const _dropStaleProfileSuggestion = () => {
+    const s = wizardState.profileSuggestion;
+    const sel = _profileSelect();
+    if (!s || !sel) return;
+    const ds = sel.dataset || {};
+    if (ds.fccUserSet === '1' || String(sel.value || '').trim() !== ds.fccSuggested) return;
+    const same = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+    if (same(_profileVendorNow(), s.vendor) && same(_profileMaterialNow(), s.material)) return;
+    _settingProfile = true;
+    try { sel.value = ''; } finally { _settingProfile = false; }
+    delete sel.dataset.fccSuggested;
+    _dropNewChoiceOptions(sel);
     wizardState.profileSuggestion = null;
-    _setProfileNote(own && own.tie
-        ? `🎚️ Your ${what} filaments use ${own.tie.join(' and ')} equally: pick one.` : '');
-    return null;
+    _setProfileNote(`🎚️ The brand or material changed after ${s.from} named ${s.value}, so FCC cleared it: `
+        + `pick a profile.`);
 };
 
 // Save's step before it writes (Group 48.4): a suggested profile that isn't one
@@ -2952,7 +2925,8 @@ window.wizardCommitSuggestedChoices = async (fPayload) => {
     }
 };
 
-// The user's own pick is never replaced; a brand or material change re-suggests.
+// The user's own pick is never replaced; a brand or material change clears a
+// lookup's name that no longer applies.
 document.addEventListener('change', (e) => {
     const t = e && e.target;
     if (!t || !t.id) return;
@@ -2962,7 +2936,7 @@ document.addEventListener('change', (e) => {
         wizardState.profileSuggestion = null;
         _setProfileNote('');
     } else if (t.id === 'wiz-fil-vendor-sel' || t.id === 'wiz-fil-material') {
-        window.wizardSuggestSlicerProfile({});
+        _dropStaleProfileSuggestion();
     }
 }, true);
 
@@ -4002,6 +3976,13 @@ window.wizardSubmit = async () => {
         if (data.success || partial) {
             // A partial save leaves the Location unsaved, so closing still warns.
             wizardState.isDirty = partial;
+            // 2026-10-20 review (engine-1): the Archived box follows the server. A box
+            // still ticked after the spool came back into stock (a weight fix with a
+            // move) sent archived: true on the next Save and archived it ON its head.
+            if (isWizardEdit && Object.prototype.hasOwnProperty.call(data, 'archived_now')) {
+                const box = document.getElementById('wiz-spool-archived');
+                if (box) box.checked = !!data.archived_now;
+            }
             msg.innerHTML = partial
                 ? `<span class="text-warning fw-bold">Saved your other changes. #${_wizEsc(editSid)} was not moved yet.</span>`
                 : `<span class="text-success fw-bold">Success! ${wizardState.mode === 'edit_spool' ? 'Spool Updated' : 'Spool(s) Generated'}.</span>`;
