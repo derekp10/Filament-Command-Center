@@ -88,18 +88,20 @@ def test_archived_and_extra_drift_restored_together(reset_dev):
     }
     payload = reset_dev._drifted_payload("spool", seed, live)
     assert payload["archived"] is False
-    # Whole-extra overwrite (Spoolman replaces the entire extra dict on PATCH).
+    # Whole-extra overwrite: the seed's whole dict goes back.
     assert payload["extra"] == seed["extra"]
     assert "location" not in payload  # unchanged → not sent
 
 
 def test_extra_overwrite_drops_sweep_added_keys(reset_dev):
-    """If a sweep ADDED an extra key, the seed's (smaller) extra must fully
-    replace it — not merge — so the stray key is gone after restore."""
+    """If a sweep ADDED an extra key, the stray key must be gone after the restore.
+    Spoolman 0.26+ merges a PATCH's extra key by key, so leaving it out of the
+    seed's (smaller) dict KEPT it: it is sent as null, which drops it (2026-10-21;
+    an older Spoolman replaced a vendor's whole extra, and gets no null)."""
     seed = {"id": 9, "extra": {"website": '""'}}
     live = {"id": 9, "extra": {"website": '""', "junk_key": '"oops"'}}
     payload = reset_dev._drifted_payload("vendor", seed, live)
-    assert payload == {"extra": {"website": '""'}}
+    assert payload == {"extra": {"website": '""', "junk_key": None}}
 
 
 def test_filament_attributes_extra_restored(reset_dev):

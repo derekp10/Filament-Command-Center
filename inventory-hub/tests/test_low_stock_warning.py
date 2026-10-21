@@ -43,6 +43,7 @@ import config_loader  # noqa: E402
 import print_deduct  # noqa: E402
 import print_deduct_ledger  # noqa: E402
 import spoolman_api  # noqa: E402
+import spoolman_extra_fake  # noqa: E402
 import state  # noqa: E402
 import stock_report  # noqa: E402
 
@@ -127,11 +128,15 @@ class FakeSpoolman:
         self.calls.append(("PATCH", url, copy.deepcopy(body)))
         sid = int(re.fullmatch(r"/api/v1/spool/(\d+)", urlsplit(url).path).group(1))
         s = self.spools[sid]
+        if isinstance(body.get("extra"), dict):
+            # Stored as Spoolman stores it (merged key by key, as 0.27 does).
+            try:
+                s["extra"] = spoolman_extra_fake.apply_extra_patch(s.get("extra"), body["extra"])
+            except spoolman_extra_fake.ExtraRejected as e:
+                return _Resp(e.status, {"message": e.message})
         for k in ("used_weight", "initial_weight", "archived", "location"):
             if k in body:
                 s[k] = body[k]
-        if isinstance(body.get("extra"), dict):
-            s["extra"] = dict(body["extra"])
         return _Resp(200, self.record(sid))
 
 

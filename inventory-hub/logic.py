@@ -1239,10 +1239,14 @@ def _ghost_trail_from(current_loc, current_extra, printer_map, loc_info_map):
     investigation). Such a move now starts with no trail; the 13.6
     reverse-binding in the PRINTER MOVE branch fills in the new head's bound
     box when it has one, which is where Return should take it.
+
+    The slot is '' for a spool with no `container_slot`, never None: update_spool
+    drops a None (it means "keep"), so a stale `physical_source_slot` from an
+    earlier trail survived under the new place (2026-10-21).
     """
     if _is_single_occupancy(current_loc, printer_map, loc_info_map):
         return "", ""
-    return current_loc, current_extra.get('container_slot')
+    return current_loc, current_extra.get('container_slot') or ""
 
 
 # Step 4's rule for an archived spool going onto a head (Derek, 2026-10-20):
