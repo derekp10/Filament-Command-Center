@@ -11,7 +11,8 @@ runs under --offline. It checks:
   - text_size.js, which changes the size LIVE from Settings: a pick (by mouse
     or keyboard, both fire `change`) shows the size and stores it, Save then
     has nothing left to do for it, a junk value is ignored, and a browser that
-    refuses to store it still shows the size and says it won't last;
+    refuses to store it still shows the size and says it won't last; a typed
+    character (a scan into the focused select) never picks a size;
   - config_schema.py's Field, the <head> script, text_size.js and global.css
     agree on the four names and what each one does.
 The browser proof (applied before paint on the real page, the Settings control
@@ -23,6 +24,8 @@ throwaway worktree with only this file copied in): all 14 RED (5 failed, and
 9 errors where the node run itself has no <head> script to run). There was no
 #fcc-text-size-boot script, no text_size.js, no 'fcc.textSize' Field and no
 size rules in global.css.
+Review proof (4729579's text_size.js in this driver): the typed-character
+test RED, with no keydown listener at all; the rest pass there too.
 """
 from __future__ import annotations
 
@@ -172,6 +175,31 @@ function loaded(stored, opts) {
                  storedAfterApply: e.store.get('fcc.textSize') };
 }
 {
+  // A scan typed while the select has the focus (readability review,
+  // 2026-10-21): each printable character's keydown is cancelled, so the
+  // select's type-ahead can't pick a size, and never stopped, so the scan
+  // accumulator still reads it. The arrows, Home / End, Page Up / Down,
+  // Enter and modified keys pass; other selects are left alone.
+  const e = loaded('Standard');
+  const el = select('Standard', 'Standard');
+  const other = select('additive', 'additive', 'fcc.weighEntry.defaultMode');
+  const press = (target, key, mods) => {
+    const ev = Object.assign({ target, key, prevented: false, stopped: false,
+      preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; },
+      stopImmediatePropagation() { this.stopped = true; } }, mods || {});
+    (e.listeners.keydown || []).forEach((fn) => fn(ev));
+    return [ev.prevented, ev.stopped];
+  };
+  out.keys = {
+    listeners: (e.listeners.keydown || []).length,
+    L: press(el, 'L'), colon: press(el, ':'), digit: press(el, '7'), space: press(el, ' '), dash: press(el, '-'),
+    enter: press(el, 'Enter'), down: press(el, 'ArrowDown'), home: press(el, 'Home'), pageDown: press(el, 'PageDown'),
+    ctrlL: press(el, 'l', { ctrlKey: true }), altDown: press(el, 'ArrowDown', { altKey: true }),
+    metaE: press(el, 'e', { metaKey: true }), otherSelect: press(other, 'L'), noTarget: press(null, 'L'),
+    attr: e.attrs['data-fcc-text-size'], stored: e.store.get('fcc.textSize'), events: e.events.length,
+  };
+}
+{
   // A page built without the <head> script: the module applies the stored size.
   const e = env('Extra Large');
   vm.runInContext(MODULE, e.ctx);
@@ -272,6 +300,23 @@ def test_a_browser_that_will_not_store_it_still_shows_it_and_says_so(run):
     msg, kind, ms = r["toasts"][0]
     assert kind == "warning" and ms >= 7000, r["toasts"]
     assert "could not keep it" in msg and "Small" in msg, msg
+
+
+def test_a_typed_character_never_picks_a_size(run):
+    """A scanner types into whatever has the focus, and the select keeps it
+    after a pick: its type-ahead took "LOC:…" as Large, "SPOOL" as Small, and
+    the change applied and stored it at once (readability review, 2026-10-21).
+    A printable character's keydown is cancelled (no type-ahead) but not
+    stopped (the scan accumulator in scripts.html still reads the scan); the
+    keys that pick a size on purpose pass. The browser proof is
+    test_text_size_setting_e2e.py::test_a_scan_into_the_text_size_select_changes_nothing."""
+    k = run["keys"]
+    assert k["listeners"] == 1, k
+    for key in ("L", "colon", "digit", "space", "dash"):
+        assert k[key] == [True, False], (key, k[key])
+    for key in ("enter", "down", "home", "pageDown", "ctrlL", "altDown", "metaE", "otherSelect", "noTarget"):
+        assert k[key] == [False, False], (key, k[key])
+    assert (k["attr"], k["stored"], k["events"]) == ("standard", "Standard", 0), k
 
 
 def test_set_apply_and_get(run):

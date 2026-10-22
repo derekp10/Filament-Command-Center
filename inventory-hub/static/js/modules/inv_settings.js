@@ -100,7 +100,18 @@
                 html += `<div class="small mb-2" style="color:rgba(255,255,255,0.55);">${_esc(sec.help)}</div>`;
             }
             fields.forEach((f) => {
-                const value = (f.scope === 'client') ? readClient(f.key, values[f.key]) : values[f.key];
+                let value = (f.scope === 'client') ? readClient(f.key, values[f.key]) : values[f.key];
+                // A browser value its select doesn't offer (typed by hand, or a
+                // choice a later build renamed) shows as the field's default.
+                // Drawn raw, the select showed its FIRST choice with that value
+                // as data-initial, so Save settings, for anything else, stored
+                // the first choice: a junk Text size became Small (readability
+                // review, 2026-10-21). Shown as the default, data-initial
+                // matches what is shown and Save stores nothing for it.
+                if (f.scope === 'client' && f.type === 'select' && Array.isArray(f.choices)
+                        && !f.choices.map(String).includes(String(value))) {
+                    value = f.default;
+                }
                 // The help line is the section help's grey (0.55): at 0.45 it was
                 // 4.4:1 on the black card, under the contrast guard's 4.5:1
                 // (readability, 2026-10-21).

@@ -9,18 +9,57 @@ First run:  pytest inventory-hub/tests/test_visual_baseline.py --update-snapshot
 Later:      pytest inventory-hub/tests/test_visual_baseline.py
 
 Each view is its own test so one flaky surface doesn't block the others.
+
+Since the readability review (2026-10-21) the comparator compares colours
+(conftest.compare_screenshot); before, any two captures of the same size
+"matched", and these baselines, from April 2026, showed a dashboard with no
+Printer Status. A full-page capture of the live dashboard can't match from
+one run to the next (the Activity Log, the buffer, dev's printers and their
+grams, the counts), so each page gets fixed answers for its live feeds:
+_steady_page() (the heartbeat carries only a made-up printer fleet,
+conftest.stub_printer_fleet; no log lines; an empty buffer, queue and label
+backlog, kept in this page), and LIVE_MASK blanks what is still live (the
+version badge, the Locations list and its count).
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 from playwright.sync_api import Page, expect
+
+from conftest import own_the_buffer, stub_printer_fleet
 
 
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
 
+def _steady_page(page: Page) -> None:
+    """Fixed answers for the dashboard's live feeds (install before goto):
+    the made-up printer fleet in the heartbeat, no Activity Log lines, and an
+    empty buffer, print queue and label backlog, each kept in this page (a
+    write to them never reaches dev)."""
+    own_the_buffer(page, [])
+
+    def queue(route):
+        body = "[]" if route.request.method == "GET" else '{"success": true}'
+        route.fulfill(status=200, content_type="application/json", body=body)
+    page.route("**/api/state/queue", queue)
+    page.route("**/api/print_queue/pending*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=json.dumps({"success": True, "items": []})))
+    page.route("**/api/logs*", lambda route: route.abort())
+    stub_printer_fleet(page)
+
+
+def _live_mask(page: Page) -> list:
+    """What still changes from run to run: the version badge (the commit),
+    and the Locations list and its count (dev's locations)."""
+    return [page.locator("#fcc-build-version"), page.locator("#location-table"), page.locator("#loc-count")]
+
+
 def _goto_dashboard(page: Page, base_url: str, reset_js: str = "") -> None:
+    _steady_page(page)
     page.goto(base_url)
     # Dashboard deck is the earliest stable anchor.
     page.wait_for_selector(".deck-btn, #live-activity, #command-buffer", timeout=10000)
@@ -59,7 +98,7 @@ def _dismiss_any_open_modal(page: Page) -> None:
 def test_baseline_dashboard(page: Page, base_url: str, snapshot, require_server, reset_dom_state_js: str):
     """Dashboard with empty buffer — the default landing surface."""
     _goto_dashboard(page, base_url, reset_dom_state_js)
-    snapshot(page, "dashboard-default")
+    snapshot(page, "dashboard-default", mask=_live_mask(page))
 
 
 def test_baseline_search_offcanvas(page: Page, base_url: str, snapshot, require_server, reset_dom_state_js: str):
@@ -70,7 +109,7 @@ def test_baseline_search_offcanvas(page: Page, base_url: str, snapshot, require_
     btn.first.click()
     page.wait_for_selector("#global-search-query", timeout=5000)
     page.wait_for_timeout(500)
-    snapshot(page, "search-offcanvas-empty")
+    snapshot(page, "search-offcanvas-empty", mask=_live_mask(page))
 
 
 def test_baseline_locations_modal(page: Page, base_url: str, snapshot, require_server, reset_dom_state_js: str):
@@ -81,7 +120,7 @@ def test_baseline_locations_modal(page: Page, base_url: str, snapshot, require_s
     except Exception:
         pytest.skip("Locations modal did not open — selector changed")
     page.wait_for_timeout(500)
-    snapshot(page, "locations-modal-default")
+    snapshot(page, "locations-modal-default", mask=_live_mask(page))
 
 
 def test_baseline_queue_modal(page: Page, base_url: str, snapshot, require_server, reset_dom_state_js: str):
@@ -92,7 +131,7 @@ def test_baseline_queue_modal(page: Page, base_url: str, snapshot, require_serve
     except Exception:
         pytest.skip("Queue modal did not open — selector changed")
     page.wait_for_timeout(500)
-    snapshot(page, "queue-modal-default")
+    snapshot(page, "queue-modal-default", mask=_live_mask(page))
 
 
 def test_baseline_wizard_modal(page: Page, base_url: str, snapshot, require_server, reset_dom_state_js: str):
@@ -103,7 +142,7 @@ def test_baseline_wizard_modal(page: Page, base_url: str, snapshot, require_serv
     except Exception:
         pytest.skip("Wizard modal did not open — selector changed")
     page.wait_for_timeout(500)
-    snapshot(page, "wizard-modal-step1")
+    snapshot(page, "wizard-modal-step1", mask=_live_mask(page))
 
 
 def test_baseline_backlog_modal(page: Page, base_url: str, snapshot, require_server, reset_dom_state_js: str):
@@ -114,7 +153,7 @@ def test_baseline_backlog_modal(page: Page, base_url: str, snapshot, require_ser
     except Exception:
         pytest.skip("Backlog modal did not open — selector changed")
     page.wait_for_timeout(500)
-    snapshot(page, "backlog-modal-default")
+    snapshot(page, "backlog-modal-default", mask=_live_mask(page))
 
 
 def test_baseline_weigh_out_modal(page: Page, base_url: str, snapshot, require_server, reset_dom_state_js: str):
@@ -127,7 +166,7 @@ def test_baseline_weigh_out_modal(page: Page, base_url: str, snapshot, require_s
     except Exception:
         pytest.skip("Weigh-out modal did not open (no eligible spool, or selector changed)")
     page.wait_for_timeout(500)
-    snapshot(page, "weigh-out-modal-default")
+    snapshot(page, "weigh-out-modal-default", mask=_live_mask(page))
 
 
 def test_baseline_spool_details_modal(page: Page, base_url: str, snapshot, require_server, reset_dom_state_js: str):
@@ -163,4 +202,4 @@ def test_baseline_spool_details_modal(page: Page, base_url: str, snapshot, requi
     except Exception:
         pytest.skip("Spool details modal did not open")
     page.wait_for_timeout(500)
-    snapshot(page, "spool-details-modal-default")
+    snapshot(page, "spool-details-modal-default", mask=_live_mask(page))

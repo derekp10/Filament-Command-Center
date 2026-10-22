@@ -581,7 +581,7 @@
 
         const panelHtml = `
             <div class="bg-dark border border-info rounded p-4 shadow-lg"
-                 style="min-width:26.25rem; max-width:33.75rem;">
+                 style="min-width:min(26.25rem,94vw); max-width:33.75rem;">
                 <div class="text-info fw-bold mb-3" style="font-size:1.25rem;"
                      id="fcc-quickswap-confirm-title">${_escapeHtml(titleText)}</div>
                 <div class="text-light mb-3" style="font-size:1.05rem;"

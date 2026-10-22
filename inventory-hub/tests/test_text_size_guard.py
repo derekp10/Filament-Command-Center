@@ -26,6 +26,16 @@ Locations window and search (12 px badges), 14 in the slot picker (10.6 px
 captions), 140 in Settings (12 px tags, 12.25 px small-in-small help lines,
 11.2 px printer ids); no named sizes; and 10 QR codes whose colour wasn't their
 button's (the idle Load QR blue, the printing one orange, under an amber button).
+
+The readability review (2026-10-21) widened it: the walker now judges every
+visible input, select and textarea by its own size (hermetic proof:
+test_text_size_guard_walker.py); the search check waits for its own new
+results and skips, saying why, when they hold no card (an error line or "No
+matching…" used to pass for a measured search); and it opens the screens the
+build changed that no check opened: "Record it as coming from…", a Room and a
+Printer row in the Location Manager, and the review window, the audit panel
+and the bulk-move panel, each drawn from a sample this browser alone is
+served. Nothing there is under its floor today.
 """
 from __future__ import annotations
 
@@ -137,6 +147,11 @@ def dev_ids(api_base_url):
         pytest.skip("dev has no multi-slot Dryer Box with a stored spool in a slot bound to a toolhead")
     printer = next((str(r["LocationID"]) for r in rows if r.get("Type") == "Printer"
                     and any(str(t.get("location_id")) == found["head"] for t in (r.get("toolheads") or []))), None)
+    # The Room the box stands in (its DEPLOYED cards), else any Room.
+    rooms = [str(r["LocationID"]) for r in rows if r.get("Type") == "Room"]
+    box_row = next((r for r in rows if str(r.get("LocationID")) == found["box"]), {})
+    parent = str(box_row.get("parent_id") or "")
+    found["room"] = parent if parent in rooms else (rooms[0] if rooms else None)
     details = get("/api/spool_details?id=%d" % found["spool"])
     found["filament"] = int((details.get("filament") or {}).get("id") or 0) or None
     others = [s for s in get("/api/get_contents?id=Unassigned") if s.get("id") is not None]
@@ -174,17 +189,36 @@ def test_locations_and_search_text_is_readable(page: Page, base_url: str, assert
     page.wait_for_function("() => document.getElementById('offcanvasSearch').classList.contains('show')")
     page.wait_for_timeout(500)
     assert_text_size(page.locator("#offcanvasSearch"))
-    page.fill("#global-search-query", "PLA")
-    done = ("() => { const r = document.getElementById('global-search-results'); return r && !r.querySelector('.spinner-border')"
-            " && (r.querySelector('.fcc-spool-card') || /No matching|error/i.test(r.textContent)); }")
-    page.wait_for_function(done, timeout=30_000)
-    page.wait_for_timeout(600)
+    _search_cards(page, "spool", lambda: page.fill("#global-search-query", "PLA"))
     assert_text_size(page.locator("#offcanvasSearch"))
-    page.click("label[for=searchTypeFilaments]")
-    page.wait_for_timeout(400)
-    page.wait_for_function(done, timeout=30_000)
-    page.wait_for_timeout(600)
+    _search_cards(page, "filament", lambda: page.click("label[for=searchTypeFilaments]"))
     assert_text_size(page.locator("#offcanvasSearch"))
+
+
+# The search shows cards, or a line saying why not ("No matching…", an error).
+SEARCH_DONE_JS = ("() => { const r = document.getElementById('global-search-results');"
+                  " return !!r && !r.querySelector('[data-tsg-stale]') && !r.querySelector('.spinner-border')"
+                  " && (!!r.querySelector('.fcc-spool-card') || /No matching|error/i.test(r.textContent)); }")
+
+
+def _search_cards(page: Page, kind: str, start):
+    """Run `start` (what sets the search off), wait for the search to finish
+    drawing its new results, and skip unless it drew cards: a check that
+    measured only "No matching spools found" or a connection error proves
+    nothing about the cards (readability review, 2026-10-21). The results on
+    screen are marked first, so the old spool cards can't pass for the
+    filament search's answer."""
+    page.evaluate("() => { const r = document.getElementById('global-search-results');"
+                  " Array.from((r && r.children) || []).forEach((c) => { c.dataset.tsgStale = '1'; }); }")
+    start()
+    page.wait_for_function(SEARCH_DONE_JS, timeout=30_000)
+    page.wait_for_timeout(600)
+    cards = page.evaluate("(kind) => Array.from(document.querySelectorAll('#global-search-results .fcc-spool-card'))"
+                          ".filter((c) => kind !== 'filament' || /openFilamentDetails/.test(c.getAttribute('onclick') || '')).length",
+                          kind)
+    if not cards:
+        text = page.evaluate("() => document.getElementById('global-search-results').innerText.trim()")
+        pytest.skip(f"the {kind} search drew no cards to measure: {text[:120]!r}")
 
 
 def test_spool_and_filament_windows_text_is_readable(page: Page, base_url: str, dev_ids, assert_text_size):
@@ -272,6 +306,86 @@ def test_location_manager_text_is_readable(page: Page, base_url: str, dev_ids, a
     page.keyboard.press("Escape")
 
 
+def test_location_manager_room_and_printer_views_text_is_readable(page: Page, base_url: str, dev_ids,
+                                                                  assert_text_size):
+    """A Room (the cards of its boxes' spools, DEPLOYED badges included) and
+    a Printer row, the views the build changed and no guard opened
+    (readability review, 2026-10-21)."""
+    _read_only(page)
+    _ready(page, base_url)
+    views = [v for v in (dev_ids["room"], dev_ids["printer"]) if v]
+    if not views:
+        pytest.skip("dev has no Room and no Printer row")
+    for loc in views:
+        _open_manage(page, loc)
+        page.wait_for_timeout(2500)   # the contents and the printer probes settle
+        assert_text_size(page.locator("#manageModal .modal-content"))
+        page.evaluate("() => { window.manageNavStack = []; closeManage(); }")
+        page.wait_for_function("() => !document.getElementById('manageModal').classList.contains('show')",
+                               timeout=10_000)
+        page.wait_for_timeout(400)
+
+
+# Samples served to one test browser only (GET answers), so the review window,
+# the audit panel and the bulk-move panel draw real rows; builder 1's measure
+# harness used the same. Their writes are answered in the page.
+SAMPLE_REVIEW = {"pending": [{
+    "kind": "partial", "printer_name": "\U0001F99D XL", "job_id": "tsg-sample-1", "progress": 0.42,
+    "filename": "/usb/SAMPLE~1.BGC",
+    "spools": [{"sid": 57, "display": "#57 Prusament PLA (Purple (Galaxy Purple))", "toolhead": "XL-1", "grams": 12.3,
+                "remaining_before": 900, "ambiguous": True, "unconfirmed_write": True, "runout": True, "color": "453A72"},
+               {"sid": 99, "display": "#99 Tecbears PETG (Clear)", "toolhead": "XL-2", "grams": 4.1,
+                "remaining_before": 19, "color": "C4C2C8"}]}]}
+SAMPLE_AUDIT = {"active": True, "location_id": "LR-MDB-1", "idle_timeout_min": 30,
+                "stats": {"total_expected": 2, "found": 1, "missing": 1, "rogue": 1},
+                "expected": [{"id": 57, "display": "Prusament PLA (Purple (Galaxy Purple))", "color": "453A72",
+                              "remaining_weight": 922, "slot": "", "found": True},
+                             {"id": 99, "display": "Tecbears PETG (Clear)", "color": "C4C2C8",
+                              "remaining_weight": 19, "slot": "4", "found": False}],
+                "rogue": [{"id": 134, "display": "Prusament PLA (Pearl White)", "color": "F0F0F0",
+                           "remaining_weight": 924, "slot": "3"}]}
+SAMPLE_BULK = {"active": True, "stage": "preview", "source_id": "LR-MDB-1", "dest_id": "CR-CT-1-R1",
+               "preview": {"ok": True, "msg": "", "stats": {"movable": 2, "skipped": 1}, "source_feeds": ["XL-1"],
+                           "movable": [{"id": 57, "display": "#57 Prusament PLA (Purple (Galaxy Purple))",
+                                        "color": "453A72", "remaining_weight": 922, "slot": ""},
+                                       {"id": 134, "display": "#134 Prusament PLA (Pearl White)", "color": "F0F0F0",
+                                        "remaining_weight": 924, "slot": "3"}],
+                           "skipped": [{"id": 99, "display": "#99 Tecbears PETG (Clear)", "color": "C4C2C8",
+                                        "remaining_weight": 19, "slot": "4", "reason": "loaded on a toolhead"}]}}
+
+
+def test_review_audit_and_bulk_move_panels_text_is_readable(page: Page, base_url: str, assert_text_size):
+    """The print-review window (and its badge), the audit panel and the
+    bulk-move panel, each drawn from a sample this browser alone is served.
+    Nothing is applied, audited or moved (readability review, 2026-10-21:
+    the build changed all three and no guard opened them)."""
+    _read_only(page, extra_get={"/api/cancel_deduct/pending": SAMPLE_REVIEW, "/api/audit_session": SAMPLE_AUDIT,
+                                "/api/bulk_move_session": SAMPLE_BULK})
+    _ready(page, base_url)
+    page.evaluate("() => { if (window.refreshCancelReviewBadge) window.refreshCancelReviewBadge(); }")
+    page.wait_for_timeout(1200)
+    page.evaluate("() => window.openCancelReview()")
+    page.wait_for_function("() => !!document.getElementById('fcc-cr-title')", timeout=10_000)
+    page.wait_for_timeout(1000)
+    assert_text_size(page.locator("[aria-labelledby='fcc-cr-title']"))
+    page.keyboard.press("Escape")
+    page.wait_for_function("() => !document.getElementById('fcc-cr-title')", timeout=5000)
+    page.evaluate("() => window.openAuditPanel()")
+    page.wait_for_function("() => { const b = document.getElementById('fcc-audit-panel-body');"
+                           " return !!b && /Auditing/.test(b.innerText); }", timeout=10_000)
+    page.wait_for_timeout(800)
+    assert_text_size(page.locator("#fcc-audit-panel-body"))
+    page.evaluate("() => window.closeAuditPanel()")
+    page.wait_for_timeout(400)
+    if not page.evaluate("() => window.FCC_BULK_MOVE_ENABLED === true && typeof window.openBulkMovePanel === 'function'"):
+        pytest.skip("Bulk Moves is off in this install: the review window and the audit panel were checked")
+    page.evaluate("() => window.openBulkMovePanel({ user: true })")
+    page.wait_for_function("() => document.querySelectorAll('#fcc-bulkmove-body .fcc-bulk-tile').length > 0",
+                           timeout=10_000)
+    page.wait_for_timeout(800)
+    assert_text_size(page.locator("#fcc-bulkmove-body"))
+
+
 def _open_picker(page: Page, loc: str, spool: int):
     page.evaluate("([loc, sid]) => { window.openSlotPicker({ location: loc, spool: sid }); }", [loc, spool])
     page.wait_for_function("() => document.querySelectorAll('#fcc-slot-picker .fcc-sp-tile').length > 0", timeout=20_000)
@@ -342,6 +456,15 @@ def test_questions_text_is_readable(page: Page, base_url: str, dev_ids, assert_t
         assert_text_size(page.locator("#fcc-tsg-question"))
         page.keyboard.press("Escape")
         page.wait_for_function("() => !document.getElementById('fcc-tsg-question')", timeout=5000)
+    # "Record it as coming from…", the Printer picker's question (sample feeds;
+    # Escape answers it, nothing is sent). The build changed its text too.
+    page.evaluate("""() => { window.__tsgRs = _askRecordSource({ head: 'XL-1', spool_location: '', feeds: [
+        { box: 'LR-MDB-1', slot: '1', free: true }, { box: 'LR-MDB-1', slot: '2', free: false, claimed_by: 99 }] }, 57, null); }""")
+    page.wait_for_function("() => !!document.querySelector('#fcc-record-source .fcc-confirm-qr-row')", timeout=5000)
+    page.wait_for_timeout(300)
+    assert_text_size(page.locator("#fcc-record-source"))
+    page.keyboard.press("Escape")
+    page.wait_for_function("() => !document.getElementById('fcc-record-source')", timeout=5000)
     _shown(page, "confirmModal", "() => requestConfirmation('A test question: nothing happens either way.', () => {})")
     assert_text_size(page.locator("#confirmModal .modal-content"))
     page.evaluate("() => confirmAction(false)")

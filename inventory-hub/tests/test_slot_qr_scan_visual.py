@@ -30,6 +30,11 @@ def test_visual_toast_bad_target(page: Page, base_url: str, snapshot):
 
 @pytest.mark.usefixtures("clean_buffer", "require_server")
 def test_visual_toast_bad_slot(page: Page, base_url: str, snapshot):
+    # The made-up #999 goes into this page's own buffer, never dev's shared
+    # one (it stayed there and showed up in later tests' captures; readability
+    # review, 2026-10-21).
+    from conftest import own_the_buffer
+    own_the_buffer(page, [])
     _goto(page, base_url)
     page.evaluate("state.heldSpools = [{id: 999, display: 'Test', color: 'ff0000'}]; renderBuffer();")
     page.wait_for_timeout(400)

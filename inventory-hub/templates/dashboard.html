@@ -25,13 +25,15 @@
 </head>
 
 <body>
-    <!-- The title bar never wraps its buttons (readability, 2026-10-21): at a
-         bigger Text size or in a narrow window it tightens its spacing, then
-         shortens ADD INVENTORY to ADD (global.css "Title bar"). -->
+    <!-- No title-bar button's label wraps (readability, 2026-10-21): at a
+         bigger Text size or in a narrow window the bar tightens its spacing,
+         then shortens ADD INVENTORY to ADD, drops the version badge and
+         shortens the title with "…"; below 992 px wide the buttons move onto
+         another line rather than leave the screen (global.css "Title bar"). -->
     <nav class="navbar navbar-expand-lg">
         <div class="container-fluid fcc-titlebar">
             <div class="navbar-brand-group">
-                <span class="navbar-brand">Filament Command Center</span>
+                <span class="navbar-brand" title="Filament Command Center">Filament Command Center</span>
                 <span class="version-tag badge bg-dark border border-info"
                       id="fcc-build-version"
                       data-build-mtime="{{ build_mtime|default(0) }}"

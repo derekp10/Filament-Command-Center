@@ -123,6 +123,9 @@ The layout is optimized for a full-screen, unscrollable kiosk experience (`100vh
 
 - **Flex & Grid Layouts:** The UI relies heavily on vertical stacking (`flex-direction: column`) with defined "zones" (e.g., Top Navigation, Main Content Row, Bottom Command Deck).
 - **The Command Deck:** Anchored to the bottom (`height: 160px`), this acts as the primary interaction zone, featuring large, easily tappable buttons.
+- **Nothing pushes the deck off the screen.** Because the page never scrolls, the open Printer Status takes at most 40 % of the window, and less on a short one, so the whole deck (its QR codes are scanned from the screen) and a 7rem strip of Live Activity and the Buffer Zone stay on screen; past that the widget scrolls inside itself. On a tall window (1600 × 1300) it never reaches the limit.
+- **The title bar gives way in steps; no button's label ever wraps.** From 992 px up it is one line: as room runs out its spacing tightens, ADD INVENTORY reads ADD, the version badge goes, and last the title shortens with "…". Below 992 px Bootstrap puts the buttons on a line of their own, and a row too wide for the window moves its last buttons onto another line rather than off the screen; the bar grows to hold its lines. The steps are container queries in `rem`, so they come at the same point at every Text size.
+- **Bigger text, same fit.** At Large and Extra Large a width in `rem` grows too, so a `min-width` of 20rem or more is capped by the screen (`min(26.25rem, 94vw)`), or a dialog is wider than a phone and cut on both sides (`tests/test_text_size_floor.py` checks it).
 - **Dense Data Cards:** Spools and filaments are displayed in tightly packed grids (`repeat(auto-fill, minmax(170px, 1fr))`) to maximize the number of items visible simultaneously.
 
 ## Elevation & Depth

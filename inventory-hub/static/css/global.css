@@ -150,16 +150,25 @@ body {
     height: 100%;
 }
 
-/* Title bar: its buttons never wrap onto two lines (readability, Derek
+/* Title bar: no button's label ever wraps onto two lines (readability, Derek
    2026-10-21). At Large / Extra Large, or in a narrow window, the bar runs
-   out of room, so it is a size container that tightens in steps. The
+   out of room, so it is a size container that gives way in steps. The
    thresholds are in rem, which grows with the Text size, so each step comes
    at the same point in every size; at Small and Standard on a 1600 px window
-   the bar is unchanged (it needs about 93rem). The version badge is the last
-   to give: it shortens with "…" (its full text is its tooltip). */
+   the bar is unchanged (it needs about 93rem).
+   From 992 px up the bar is one line (Bootstrap's navbar-expand-lg): the
+   spacing tightens, ADD INVENTORY reads ADD, the version badge goes, and
+   last the title shortens with "…" (its full text is its tooltip), so it
+   never runs under the Spoolman light and SEARCH.
+   Below 992 px Bootstrap puts the buttons on a line of their own under the
+   title (this bar's flex-wrap comes from .navbar there, so it is not set
+   here); a row too wide for the window wraps its buttons onto another line
+   instead of running off the screen, so ⚙️ Settings, the way back to a
+   smaller Text size, is always on screen, and the bar grows to hold its
+   lines instead of drawing them over Printer Status (readability review,
+   2026-10-21). */
 .fcc-titlebar {
     container: fcc-titlebar / inline-size;
-    flex-wrap: nowrap;
 }
 .fcc-titlebar .btn,
 .fcc-titlebar .status-label {
@@ -168,6 +177,15 @@ body {
 .fcc-titlebar .navbar-brand-group {
     flex: 0 1 auto;
     min-width: 0;
+}
+.fcc-titlebar .navbar-brand {
+    min-width: 0;
+    overflow: hidden;
+    /* clip + a margin: the title's soft glow is drawn past its box, and
+       `hidden` would cut it off even when the title has room. */
+    overflow: clip;
+    overflow-clip-margin: 0.75rem;
+    text-overflow: ellipsis;
 }
 .fcc-titlebar-actions {
     flex: 0 0 auto;
@@ -185,6 +203,29 @@ body {
 /* Step 2: ADD INVENTORY reads ADD (the button's tooltip says "Add inventory"). */
 @container fcc-titlebar (max-width: 85.5rem) {
     .fcc-titlebar-more { display: none; }
+}
+/* Step 3, one-line bar only: the version badge goes where it would start to
+   shrink (about 78rem at every size). Squeezed further it was an empty
+   bordered box over the Spoolman light. Its text is its tooltip, and
+   Settings -> Build Info has the commit. Below this the title is the one
+   thing left to give. (Below 992 px the title has a line of its own, and the
+   badge keeps its place beside it.) */
+@media (min-width: 992px) {
+    @container fcc-titlebar (max-width: 78rem) {
+        #fcc-build-version { display: none; }
+    }
+}
+@media (max-width: 991.98px) {
+    .navbar {
+        height: auto;
+        min-height: 70px;
+    }
+    .fcc-titlebar-actions {
+        flex: 0 1 auto;
+        min-width: 0;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+    }
 }
 
 /* Main Layout */
@@ -859,15 +900,24 @@ body {
     box-shadow: inset 0 0 0 2px #00d4ff, 0 0 8px rgba(0, 212, 255, 0.4);
     outline: none;
 }
+/* The title gives way (with "…") only when the row has no room left at all,
+   so the "optional" badge and the ▾ always stay inside the toggle (a phone
+   at Large / Extra Large pushed them out; readability review, 2026-10-21).
+   The summary takes only the room left over (flex-basis 0), as it always
+   did, so a long summary still never shortens the title. */
 .fcc-wiz-section-title {
-    flex: 0 0 auto;
+    flex: 0 1 auto;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+.fcc-wiz-section-chevron,
+.fcc-wiz-section-toggle > .badge {
+    flex-shrink: 0;
+}
 .fcc-wiz-section-summary {
-    flex: 1 1 auto;
+    flex: 1 1 0;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1155,17 +1205,22 @@ body {
 .max-h-150px {
     max-height: 150px !important;
 }
+/* The search panel's material filter and #Hex group: 100 / 155 px at
+   Standard, in rem so they grow with the Text size, like the text inside
+   them. In px they cut a typed or picked value short at Large and Extra
+   Large ("Any Mat" read "Any M", #1A2B3C read #1A2B3; readability review,
+   2026-10-21). That filter row is their only user. */
 .w-100px {
-    width: 100px !important;
-    min-width: 100px !important;
-    max-width: 100px !important;
-    flex: 0 0 100px !important;
+    width: 6.25rem !important;
+    min-width: 6.25rem !important;
+    max-width: 6.25rem !important;
+    flex: 0 0 6.25rem !important;
 }
 .w-155px {
-    width: 155px !important;
-    min-width: 155px !important;
-    max-width: 155px !important;
-    flex: 0 0 155px !important;
+    width: 9.6875rem !important;
+    min-width: 9.6875rem !important;
+    max-width: 9.6875rem !important;
+    flex: 0 0 9.6875rem !important;
 }
 .fcc-color-swatch-sm {
     width: 24px !important;
@@ -1258,7 +1313,10 @@ body {
     gap: 10px;
     width: 100%;
     align-items: stretch;
-    height: 200px;
+    /* 200 px at Standard; in rem so the deck grows with the Text size like
+       the text in its cards (at Extra Large an archived buffered spool's card
+       held 197 px of content in 190: readability review, 2026-10-21). */
+    height: 12.5rem;
 }
 
 #loc-mgr-nav-deck .nav-card {
@@ -1620,6 +1678,22 @@ body {
     flex-direction: column;
     gap: 0.5rem;
     padding-top: 0.4rem;
+}
+/* Printer Status never pushes the command deck off the screen (readability
+   review, 2026-10-21). The dashboard doesn't scroll, so every pixel the open
+   widget grows comes out of the main area: at Extra Large on a short laptop
+   window it cut the deck's QR codes (scanned from the screen) and left Live
+   Activity and the Buffer Zone 2 px tall. The open body takes at most 40 % of
+   the window, and less on a short one, so the deck and a 7rem strip of the
+   log and the buffer stay on screen; past that it scrolls inside itself.
+   260px = the title bar (70) + the deck (160) + the main area's padding and
+   gap (30); 10.5rem = the widget's own header and padding (about 3.5rem) +
+   the 7rem strip; 5rem is the least it keeps (a printer's name and the top
+   of its tiles). On a tall window (1600 x 1300) it changes nothing at any
+   size. Collapsing the widget gives everything back, as before. */
+.fcc-ps-widget:not(.collapsed) .fcc-ps-body {
+    max-height: min(40vh, max(5rem, calc(100vh - 260px - 10.5rem)));
+    overflow-y: auto;
 }
 .fcc-ps-row {
     display: flex;

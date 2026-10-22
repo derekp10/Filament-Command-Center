@@ -2013,7 +2013,7 @@ window.openLogPillOverlay = () => {
         ).join('') || '<div class="small p-3" style="color: rgba(255,255,255,0.7);">Activity Log is empty.</div>';
         const html = `
             <div style="background:#1e1e1e; color:#fff; border:2px solid #0ff;
-                        border-radius:8px; padding:14px 16px; min-width:26.25rem; max-width:90vw;
+                        border-radius:8px; padding:14px 16px; min-width:min(26.25rem,90vw); max-width:90vw;
                         max-height:80vh; display:flex; flex-direction:column;">
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <div style="font-weight:bold; font-size:1.1em; color:#0ff;">📡 Activity Log</div>

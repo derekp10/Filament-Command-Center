@@ -13,7 +13,9 @@
  *    every rem size grows together.
  *  - This module changes it LIVE: picking a size in Settings applies it at
  *    once and stores it, with no Save needed (the generic settings renderer,
- *    inv_settings.js, draws the select from config_schema.py's Field).
+ *    inv_settings.js, draws the select from config_schema.py's Field). Only
+ *    a pick changes it: typed characters (a scan, while the select has the
+ *    focus) never pick a size.
  *
  * A change fires `fcc:text-size` on document ({detail: {name, size}}) for
  * anything that measures text and wants to measure again.
@@ -63,13 +65,16 @@
         catch (e) { return false; }
     }
 
+    const SELECT_SEL = '.cfgset-input[data-key="' + KEY + '"]';
+    const _isSizeSelect = (el) => !!el && typeof el.matches === 'function' && el.matches(SELECT_SEL);
+
     // Settings: the select the renderer draws for the 'fcc.textSize' field.
     // Delegated, so it works on every redraw of the Settings card; a mouse
     // pick and the keyboard (arrow keys on the focused select) both fire
     // `change`.
     document.addEventListener('change', (e) => {
         const el = e.target;
-        if (!el || typeof el.matches !== 'function' || !el.matches('.cfgset-input[data-key="' + KEY + '"]')) return;
+        if (!_isSizeSelect(el)) return;
         const name = el.value;
         if (!_known(name)) return;
         const stored = set(name);
@@ -80,6 +85,21 @@
                 + 'blocked): it goes back to ' + get() + ' when the page reloads.', 'warning', 7000);
         }
     });
+
+    // A scan never changes the size (readability review, 2026-10-21). A
+    // scanner types into whatever has the focus, and this select keeps it
+    // after a pick. The scan accumulator (scripts.html) reads every key, but
+    // the select also took each character as type-ahead: "LOC:…" picked
+    // Large and "SPOOL" Small, and the change above applied and stored it at
+    // once. So a printable character does nothing to this select. It is not
+    // stopped (no stopPropagation), so the accumulator still reads the whole
+    // scan; the arrow keys, Home / End and Page Up / Down still pick a size,
+    // and Alt+Down opens the list.
+    document.addEventListener('keydown', (e) => {
+        if (!_isSizeSelect(e.target)) return;
+        if (e.ctrlKey || e.altKey || e.metaKey) return;
+        if (typeof e.key === 'string' && e.key.length === 1) e.preventDefault();
+    }, true);
 
     // The <head> script normally did this already; this covers a page that
     // was built without it.

@@ -3118,7 +3118,7 @@ const _showMergeFilamentFlow = async (sourceFilamentId) => {
 
     const pickerHtml = `
         <div style="background:#222; color:#fff; border:1px solid #555; border-radius:8px;
-                    padding:20px 22px; min-width:26.25rem; max-width:35rem;
+                    padding:20px 22px; min-width:min(26.25rem,94vw); max-width:35rem;
                     box-shadow:0 8px 32px rgba(0,0,0,0.55);">
             <h5 style="margin:0 0 8px; color:#5dd0ff;">🔗 Merge filament</h5>
             <div style="color:#ccc; font-size:0.9em; margin-bottom:12px;">
@@ -3214,7 +3214,7 @@ const _showMergeConfirmStep = (srcId, srcLabel, target, spoolCount, hostModalEl)
 
     const html = `
         <div style="background:#222; color:#fff; border:1px solid #ff9955; border-radius:8px;
-                    padding:20px 22px; min-width:26.25rem; max-width:35rem;
+                    padding:20px 22px; min-width:min(26.25rem,94vw); max-width:35rem;
                     box-shadow:0 8px 32px rgba(0,0,0,0.55);">
             <h5 style="margin:0 0 8px; color:#ffaa55;">⚠️ Confirm merge</h5>
             <div style="color:#ddd; font-size:0.92em; margin-bottom:10px;">

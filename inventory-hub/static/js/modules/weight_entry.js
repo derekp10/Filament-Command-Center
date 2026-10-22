@@ -155,7 +155,7 @@
         const panelHtml = `
             <div role="dialog" aria-modal="true" aria-labelledby="fcc-we-title"
                  style="background:#1f2024;color:#eee;border:1px solid #555;
-                        border-radius:8px;padding:0;min-width:23.75rem;
+                        border-radius:8px;padding:0;min-width:min(23.75rem,92vw);
                         max-width:32.5rem;width:92vw;
                         box-shadow:0 8px 32px rgba(0,0,0,0.6);">
                 <div style="display:flex;justify-content:space-between;align-items:center;
