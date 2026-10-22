@@ -405,3 +405,28 @@ def test_qr_questions_are_readable(page: Page, base_url: str, assert_contrast):
     scored = [o["text"] for o in conftest.contrast_offenders(row, min_ratio=100)]
     assert sum("SCAN" in t.upper() for t in scored) == 3, scored
     page.keyboard.press("Escape")
+
+
+@pytest.mark.usefixtures("require_server")
+def test_settings_this_browser_section_is_readable(page: Page, base_url: str, assert_contrast):
+    """Settings -> 🖥️ This Browser, with the per-browser Text size control
+    (readability, 2026-10-21): its label, the help lines under each setting
+    (now the section help's 0.55 grey: at 0.45 they were 4.4:1 on the black
+    card) and the selects. Read-only: Settings is opened and closed, nothing
+    is saved."""
+    import conftest
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openConfigModal === 'function'")
+    page.evaluate("() => window.openConfigModal()")
+    select = page.locator('.cfgset-input[data-key="fcc.textSize"]')
+    expect(select).to_be_visible(timeout=15000)
+    section = page.locator("#config-generated-settings > div.mb-3", has=select)
+    assert "This Browser" in section.inner_text()
+    assert_contrast(section)
+    # The help lines and the labels are judged (the walker skips only the root).
+    scored = [o["text"] for o in conftest.contrast_offenders(section, min_ratio=100)]
+    assert any(t.startswith("Text size") for t in scored), scored
+    assert any(t.startswith("How big FCC's text is") for t in scored), scored
+    # The select itself: light text on its dark field.
+    colours = select.evaluate("(el) => { const s = getComputedStyle(el); return [s.color, s.backgroundColor]; }")
+    assert colours == ["rgb(255, 255, 255)", "rgb(33, 37, 41)"], colours

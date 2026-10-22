@@ -115,7 +115,13 @@ def test_the_named_sizes_are_defined_once_in_global_css():
     assert root, "global.css has no :root block"
     names = dict(re.findall(r"(--fcc-fs-[a-z]+)\s*:\s*([^;]+);", root.group(1)))
     assert names == {"--fcc-fs-label": "0.8rem", "--fcc-fs-small": "0.85rem", "--fcc-fs-row": "0.9rem"}, names
-    assert len(re.findall(r"--fcc-fs-label\s*:", css)) == 1, "--fcc-fs-label is set in more than one place"
+    # Set twice: on :root (Standard) and for the Small text size, nowhere else
+    # (Large and Extra Large grow the root instead; test_text_size_setting_js.py
+    # pins the values).
+    small = re.search(r':root\[data-fcc-text-size="small"\]\s*\{([^}]*)\}', css)
+    for name in ("--fcc-fs-label", "--fcc-fs-small", "--fcc-fs-row"):
+        assert len(re.findall(re.escape(name) + r"\s*:", css)) == 2 and small and name in small.group(1), (
+            f"{name} is set somewhere other than :root and the Small text size")
     assert re.search(r"\.badge\s*\{\s*--bs-badge-font-size:\s*max\(var\(--fcc-fs-label\),\s*0\.75em\);", css)
     assert re.search(r"\.small,\s*small,[^{]*\{\s*font-size:\s*max\(var\(--fcc-fs-small\),\s*0\.875em\);", css)
 
