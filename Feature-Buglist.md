@@ -158,7 +158,7 @@
   walkthrough); and an archived spool scanned onto a toolhead is un-archived and loaded when its record still has
   filament, refused at 0 g; built.)_ **Dev still holds the long-list scenario:** `low_stock_g` 925 (was 250) and two
   sample exclusions (filaments 91 and 96): Claude puts them back.
-* **🔠 Readability: the text-size rule app-wide, and a Text size setting (Derek's 2026-10-21 walkthrough; being built).**
+* **🔠 Readability: the text-size rule app-wide, and a Text size setting (Derek's 2026-10-21 walkthrough; BUILT, his picture walk 2026-10-22).**
   He went through the audit's samples one at a time (`review-samples/2026-10-21-text-size/`) and approved each: the
   dashboard ("this is better as well"), Printer Status, the slot picker as sampled (the long maker line wraps; the
   "⭐ Recommended" tag trimmed so "SLOT 1" stays on one line), the QR questions, and badges at 12.8 px everywhere ("will
@@ -172,17 +172,83 @@
   bigger sizes, and the slot picker checked there. He sees pictures of each size, and of anything that changes shape,
   before it goes to `dev`. **His idea, not on a roadmap:** the QR codes could sit with their buttons in a redesign of the
   question dialogs; and accessibility options in general (the Text size setting is the first).
+  **Built 2026-10-21** on `feat/readability-2026-10-21` (`d211841`, pushed, not merged): the rule, the QR tones, the
+  Text size setting (Settings → 🖥️ This Browser: Small / Standard / Large / Extra Large) and 13 fixes from its review
+  (the 2 reds: an open Printer Status pushed the command deck off short screens, and the search filters cut their values
+  at the bigger sizes). Offline 3607 passed in both Spoolman fake modes; full sweep 4646 passed, 1 red from a real print
+  on the XL, not the build. **Next: Derek's picture walk** (`review-samples/2026-10-21-readability-build/`, folders
+  `walkthrough` and `review-fixes`), with three questions: keep the INDX row wrapping 7 + 1 at Large / Extra Large;
+  the Settings help lines' lighter grey (a contrast fix); Printer Status's material line height (1.1 → 1.2). Then the
+  merge to `dev`, with the CLAUDE.md entries.
 * **📐 Plan docs: named sizes and colors as the base for themes; alternative views (phone, wall tablet, printer pictures,
-  the Location Manager) (Derek, 2026-10-21; being written).** "Themes" in his sense are whole alternative designs a user
+  the Location Manager) (Derek, 2026-10-21; written, `dev` `c7dafaa`).** "Themes" in his sense are whole alternative designs a user
   can choose ("what we have now, or future ones, possibly ones that focus on using images of the printers themselves"),
   with the classic look kept, as stepping stones toward the MOBILE item and the Project Color Loadout's screens. To go
   through with him one decision at a time, not to read cold.
+  **Phone first** (decided 2026-10-21; see "📱 Phone view first" under 🗒️ Notes): step 3's milestone order is rewritten
+  after the readability merge.
+* **⏸️ PENDING DEREK — tap a tagged Bambu spool with Chrome's NFC test page (2026-10-21).** On the Pixel, open
+  https://googlechrome.github.io/samples/web-nfc/, press **Scan** only (never Write or Make Read-Only), and hold the
+  phone flat on the side of a Bambu spool near the hub. A "Serial Number" line means the phone can link Bambu spools by
+  their tag ID; "Cannot read data" every time means Bambu reading comes from the scale. Waiting on a spool with a tag:
+  prod's #76 (Bambu PLA Green Matte, DR-CT-1) has none, #75 (Beige) isn't where FCC says, and a Bambu support spool may
+  be in the to-be-labelled pile. (A Prusament OpenPrintTag spool passed this test on 2026-10-21: `Serial Number:
+  6f:c4:ed:18:09:01:04:e0`, `Records: (2)`.)
 
 ## 🗒️ Notes and standalone items
 
 > Ordinary backlog items, not hands-on work; most name the group that owns them. This heading was added on
 > 2026-10-19 so they stop reading as part of ⏸️ PENDING DEREK above, which had no closing heading.
 
+* **📱 Phone view first, with spool tags (Derek, 2026-10-21).** The phone ("pocket") view comes before the tablet one:
+  Android (a Pixel 11 Pro XL), Chrome, a web page (no app for now). Testing over plain http uses Chrome's "Insecure
+  origins treated as secure" flag on the phone; real HTTPS comes later from a reverse-proxy container with a
+  DNS-challenge certificate, on his network with no open ports. FCC itself stays plain http and platform-agnostic
+  (Docker, TrueNAS or anything else). Tags: Prusa's OpenPrintTag first (Chrome on his Pixel read a factory Prusament
+  tag); read-only first, then "tap a tag, FCC sees its weight is newer than the tag's and offers to rewrite it"; tag
+  links in Spoolman 0.27's own tag table; an unknown Prusament spool opens the Add wizard filled from its tag (as the QR
+  scan does); FCC's values stay and the tag fills blanks; Bambu next; OpenPrintTag for untagged spools too (he has ~40
+  blank tags). Research: `review-samples/2026-10-21-phone-tags/`. Next: rewrite the step 3 plan doc's order.
+  **Standalone.**
+* **⚖️ SpoolmanScale that reads every tag and talks to FCC (Derek, 2026-10-21).** His NFC scale project
+  (github.com/Niko11111/SpoolmanScale; every part bought, case not printed): "set a spool on a scale, have it read out,
+  and then put it away". Its PN532 can't read OpenPrintTag (ISO 15693), so Derek **ordered a PN5180** (Amazon
+  B09G2KXPRL; no licence lock-in). Plan: our own copy of the scale's firmware with the new reader (its update check
+  off), a hand test before printing the case, and an FCC "stand-in" for the scale's published server spec, so
+  weigh-ins go through FCC's rules. Under study: two readers (the PN532 for Bambu-style tags with the stock code, the
+  PN5180 for OpenPrintTag) and every brand's tags (research running). Research: `review-samples/2026-10-21-scale/`
+  (`corrections.md` first). **Standalone.**
+* **🎨 Filament colours aren't the most accurate available (Derek, 2026-10-21).** The hex FCC stores feeds PrusaSlicer,
+  on-screen colour picking and the printed swatch labels, so it should match the printed colour, and FCC should record
+  where each colour came from. For one real Galaxy Red spool three sources disagree: its tag #bf1d2d, Prusament's spool
+  page (what FCC's QR import takes) #8d2129, SpoolmanDB #d94a5a. Research `wf_43831b5c-daf`: each import path's
+  source, which source is closest to the printed colour, recording the source, and fixing stored colours. A colour edit
+  already asks to reprint the swatch label (when a sample was printed or its label confirmed). **Standalone.**
+* **🏷️ 123 of prod's 267 spools have no label status at all (found 2026-10-21).** `needs_label_print` is missing
+  (neither "needs printing" nor "confirmed") on 123 in-stock prod spools, 96 of them from the first import
+  (2026-02-11), so the 🏷️ Backlog can't see them; prod's #76 is one, with no label on it. Derek: "the check flag for
+  needing a label might not have been applied, or it might have been lost". A scanner-speed `ID:` scan outside an
+  audit already turns a missing status into confirmed (`routes_scan.py`), so a scanning pass sorts out the labelled
+  ones and the rest could go to the backlog. Also: search cards show the green "label confirmed" tick for a missing
+  status (`spoolman_api` reads a missing flag as False); check whether an old bulk-loss path wiped the flag, and
+  whether Spoolman's automatic backups still hold older values. **Standalone.**
+* **🔍 Audit: Done moves unscanned spools with no confirm and no undo, and unlabelled spools read as lost (traced
+  2026-10-21, read-only, `wf_88cad35d-ac5`).** Derek's once-over relies on Audit. `CMD:DONE` (the panel's Done &
+  Auto-Park, the FINISH tile's QR, the Location Manager's Done QR) parks every expected-but-unscanned spool at UNKNOWN
+  with no confirm, no undo and no check of where it is now, including a spool loaded on a printer that is expected at
+  its home box (the head then reads empty). Audit has no notion of "no label": typing an id + Enter marks one found,
+  but nothing says so, and there is no "needs a label" action; a label scan during an audit skips the label check.
+  One audit covers one place, and a cart expects only spools filed at the cart itself (the rollup is Group 37.6).
+  Smaller traps: audit mode takes every device's scans; Hide is one-way; a printed CMD:AUDIT label cancels it; a hidden
+  "Clear entire Buffer?" blocks scans; refusal toasts render under the panel; a rogue scan answers 500 on a Spoolman
+  timeout; a second Done re-parks; auditing UNKNOWN / UNASSIGNED is destructive; a Spoolman blip at the location scan
+  reads as 0 expected. **Until fixed: end audits with Cancel** (full report, nothing moves). Also wanted for the
+  once-over: a list of spools filed only at a cart or room (each place's Location Manager shows its own under
+  "Loose / Floating"). Trace: `review-samples/2026-10-21-audit/`. **Standalone; a candidate group.**
+* **🧪 `test_fab_no_overlap_with_cmd_deck.py` writes 7 spools into dev's shared buffer (found 2026-10-21 by the
+  readability review).** It doesn't call `conftest.own_the_buffer`, so a run leaves dev's buffer changed (the reviewer
+  put it back to []). Also: `test_baseline_spool_details_modal` always skips (no buffer cards after search closes), so
+  its April baseline is never compared. **Standalone.**
 * **Emptying a plain field in the wizard doesn't clear it (found 2026-10-21 by the extras-clear fix).** The wizard
   drops a native field it reads as empty from its payload (`settings_extruder_temp`, `settings_bed_temp`, price, the
   spool's and the filament's empty weight), so erasing one and saving keeps the old value. Not an extra, so the
@@ -388,7 +454,7 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
   - **Natural home = the Config system (L9)** — custom location types are exactly the kind of pref/registry that should migrate into Config (a small "Manage location types" panel), alongside the other `localStorage` prefs flagged in CLAUDE.md. The current add-only design is forward-compatible, so deferring costs nothing — a future manage panel reads the same two sources.
 
 * ✅ **Bulk Moves** (L298) — built (all 5 phases merged 2026-08-03) and released dark behind `fcc.bulkMove.enabled` (default off; `71a1be9`, `main e5b3a82` 2026-10-08); archived 2026-10-12 (Group 47.19, see `completed-archive.md`). The hands-on pass is the ⏸️ PENDING DEREK item; open bulk-move work has its own items (the "🔀 Bulk Move polish" and Bulk Moves flag-gate items, and Group 41.5–41.7).
-* Audit parent/child rollup — scanning all of a cart's shelves (or a printer's toolheads) should count toward auditing the parent location itself. Future enhancement on top of the completed L154 Audit-mode work; would need the audit session to span multiple locations. _[deferred 2026-05-16; re-homed here 2026-06-05 during the buglist cleanup — full L154 context in `completed-archive.md`.]_ _(→ **Group 37.6** (2026-10-19): built on 37.4's transitive contents; ask Derek then whether it is one audit for the whole cart, or one per row with a history.)_
+* Audit parent/child rollup — scanning all of a cart's shelves (or a printer's toolheads) should count toward auditing the parent location itself. Future enhancement on top of the completed L154 Audit-mode work; would need the audit session to span multiple locations. _[deferred 2026-05-16; re-homed here 2026-06-05 during the buglist cleanup — full L154 context in `completed-archive.md`.]_ _(→ **Group 37.6** (2026-10-19): built on 37.4's transitive contents; ask Derek then whether it is one audit for the whole cart, or one per row with a history.)_ _(2026-10-21: see "🔍 Audit: Done moves unscanned spools" under 🗒️ Notes.)_
 
 * Location Manager not syncing status across browser instances? _[ON HOLD — requires a real-time transport (SSE / WebSocket) on the backend. Current architecture is pull-only via `/api/locations` polling. Non-trivial; revisit after mobile mode since that work will establish the multi-client baseline anyway.]_
 
@@ -435,7 +501,7 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
   guard score the root too.
 
 ## ⚙️ App Flow, Architecture & Database
-* **MOBILE** Make the entire app mobile friendly so NFC/Scanning works on phones. (Perhaps a desktop mode to utalize barcode scanners, and a mobile mode of mostly touch interface and scanning barcodes/QR codes and NFC tags). The main difference being that mobile mode won't relye on all the inlaid barcode/qr codes we currently have in the interface currently for interacting with the UI elements.
+* **MOBILE** Make the entire app mobile friendly so NFC/Scanning works on phones. (Perhaps a desktop mode to utalize barcode scanners, and a mobile mode of mostly touch interface and scanning barcodes/QR codes and NFC tags). The main difference being that mobile mode won't relye on all the inlaid barcode/qr codes we currently have in the interface currently for interacting with the UI elements. _(2026-10-21: phone first, Android + Chrome; see "📱 Phone view first" under 🗒️ Notes, and `docs/agent_docs/tasks/design-step3-alternative-views.md`.)_
 * **Frontend file-size pass (optional, low priority).** _(Narrowed 2026-10-12, Group 47.32, from "Refactor dashboard to be more modular if possible, and reduce token size/context requirements." The backend half shipped as L316 and is archived. Derek kept a frontend pass on the list, just in case.)_ The frontend is already split into 24 modules under `static/js/modules/`, but four files are big enough that changing one feature means loading a lot of unrelated code: `inv_wizard.js` (4,472 lines), `inv_details.js` (3,721), `inv_loc_mgr.js` (2,325) and `inv_cmd.js` (2,203), as of 2026-10-12. Split them along natural feature seams (e.g. the Bulk Move panel out of `inv_cmd.js`) so an agent can load one feature without the whole file. No bug behind it. **Standalone.** _(2026-10-19, Claude's call, offered for veto; none: split only when a group already rewrites that part, lowest risk first (the ~700-line Bulk Move panel out of `inv_cmd.js`), not `inv_loc_mgr.js` before the Group 37/44 sit-down, and only after Group 53's load-order canary.)_
 * **🧹 One source for the frontend's toolhead-Type lists.** _(Left as "a separate DRY item" when the backend duplicate was collapsed, 2026-06-15 `19a4a5e`; filed 2026-10-12 by Group 47.)_ The backend has one canonical `locations_db.TOOLHEAD_TYPES` frozenset (`locations_db.py:73`), but the frontend hard-codes the Types itself: `TOOLHEAD_TYPES` at `inv_quickswap.js:17`, plus two lists in `inv_loc_mgr.js` that add `Printer` (`SINGLE_OCC` at `:81`, which hides "Move all →" where it would be a no-op, and `_isPrinterTopologyType` at `:2300`). They agree today, so nothing has drifted, but a new toolhead Type would have to be added in every copy. Fix: serve the toolhead set from the backend (e.g. in the dashboard bootstrap or alongside `/api/printer_map`), read it from one `window.` constant, and derive the with-`Printer` list from it. _(→ **Group 53.1**, 2026-10-19: the copies have grown to 8; one list in `inv_core.js`, pinned against the backend's.)_
 * Make as much of Command Center user configurable as possible, using UI elements and a config import/export feature. _[→ **Group 35** for what's left. ✅ The Config system shipped 2026-06-01 (L18 Phases 1–4, main `6bd1f76`): the ⚙️ Admin / Config button opens a schema-driven Settings card, `GET`/`PUT /api/config`, a guarded toolhead editor, and import/export with redacted secrets and a dry-run diff. Adding a setting is now one `Field` in `config_schema.py`. Group 35 owns the tail: per-printer settings (the "Per-printer settings section in the Config tool" item) and L18 Phase 5 action-tool co-location. The "Config button … NEEDS DESIGN SESSION" item was archived 2026-10-12 (Group 47.20).]_
