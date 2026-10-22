@@ -683,7 +683,7 @@ window.commitBulkMove = () => {
     };
 
     const _grid = (html) => `
-        <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr));
+        <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(16.25rem,1fr));
                     gap:6px;">${html}</div>`;
 
     // Group the skipped rows by reason, first-seen order (which follows
@@ -909,8 +909,8 @@ window.commitBulkMove = () => {
         _lastRenderHash = null;
         const content = `
             <div style="background:#1e1e1e; color:#fff; border:2px solid #00d4ff;
-                        border-radius:8px; padding:14px 16px;
-                        width:min(820px,94vw); max-height:80vh; display:flex; flex-direction:column;">
+                        border-radius:8px; padding:0.875rem 1rem;
+                        width:min(51.25rem,94vw); max-height:80vh; display:flex; flex-direction:column;">
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <div style="font-weight:bold; font-size:1.15em; color:#7fe8ff;">🔀 Bulk Move</div>
                     <button id="fcc-bulkmove-close" class="btn btn-sm btn-outline-light"
@@ -1032,7 +1032,7 @@ window.commitBulkMove = () => {
             </div>
             ${data.expected && data.expected.length ? `
                 <div style="font-weight:bold; color:#0ff; margin-bottom:6px;">Expected here</div>
-                <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:6px; margin-bottom:12px;">
+                <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(16.25rem,1fr)); gap:6px; margin-bottom:12px;">
                     ${expectedTiles}
                 </div>
             ` : `<div class="small" style="color:rgba(255,255,255,0.7);">Scan a location's QR to populate the expected list.</div>`}
@@ -1043,7 +1043,7 @@ window.commitBulkMove = () => {
                 </div>` : ''}
             ${data.rogue && data.rogue.length ? `
                 <div style="font-weight:bold; color:#fc0; margin-bottom:6px;">Rogue (scanned but expected elsewhere)</div>
-                <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:6px;">
+                <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(16.25rem,1fr)); gap:6px;">
                     ${rogueTiles}
                 </div>
             ` : ''}
@@ -1103,8 +1103,8 @@ window.commitBulkMove = () => {
         _lastRenderHash = null;  // force first render after open
         const content = `
             <div style="background:#1e1e1e; color:#fff; border:2px solid #ff00ff;
-                        border-radius:8px; padding:14px 16px;
-                        width:min(820px,94vw); max-height:80vh; display:flex; flex-direction:column;">
+                        border-radius:8px; padding:0.875rem 1rem;
+                        width:min(51.25rem,94vw); max-height:80vh; display:flex; flex-direction:column;">
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <div style="font-weight:bold; font-size:1.15em; color:#ff7eff;">
                         🕵️‍♀️ Audit in Progress
@@ -1208,7 +1208,7 @@ window.promptPrusamentMatched = (res) => {
     }
 
     const content = `
-        <div class="p-3" style="max-width:420px; background:#1e1e1e; color:#fff; border:1px solid #444; border-radius:8px;">
+        <div class="p-3" style="max-width:26.25rem; background:#1e1e1e; color:#fff; border:1px solid #444; border-radius:8px;">
             <h6 class="text-info mb-1">🎯 Matched Prusament spool</h6>
             <div class="mb-2"><strong>${esc(name)}</strong> <span class="text-muted">— Spool #${esc(sid)}</span></div>
             ${filledHtml}
@@ -2301,7 +2301,7 @@ const _askRecordSource = (pick, sid, host) => {
             host: host || undefined,
             onEscape: () => finish(null),
             content: `
-                <div class="fcc-rs-panel" style="background:#1e1e1e; color:#fff; border:2px solid #0dcaf0; border-radius:8px; padding:18px 22px; max-width:620px; text-align:center;">
+                <div class="fcc-rs-panel" style="background:#1e1e1e; color:#fff; border:2px solid #0dcaf0; border-radius:8px; padding:18px 22px; max-width:38.75rem; text-align:center;">
                     <div class="fcc-rs-title" style="font-size:1.15em; font-weight:bold; margin-bottom:6px;">🔗 Record ${esc(who)} as coming from…</div>
                     <div class="fcc-rs-msg" style="color:#ffc; margin-bottom:12px; text-align:left;">${esc(Who)} isn't coming from a box. Which slot feeding ${esc(head)} is its home? Return and eject send it back there.</div>
                     <div class="fcc-rs-status" role="alert" style="display:none; margin-bottom:10px; padding:6px 10px; border-radius:6px; background:#4a3200; color:#ffd27a; border:1px solid #ffb74d; font-weight:bold; text-align:left;"></div>

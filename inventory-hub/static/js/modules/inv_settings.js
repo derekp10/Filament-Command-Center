@@ -101,10 +101,13 @@
             }
             fields.forEach((f) => {
                 const value = (f.scope === 'client') ? readClient(f.key, values[f.key]) : values[f.key];
+                // The help line is the section help's grey (0.55): at 0.45 it was
+                // 4.4:1 on the black card, under the contrast guard's 4.5:1
+                // (readability, 2026-10-21).
                 html += `<div class="d-flex justify-content-between align-items-center py-1 gap-3">
                     <label class="text-light small mb-0" for="${_domId(f.key)}" style="flex:1;">
                         ${_esc(f.label)}
-                        ${f.help ? `<div class="small" style="color:rgba(255,255,255,0.45);">${_esc(f.help)}</div>` : ''}
+                        ${f.help ? `<div class="small" style="color:rgba(255,255,255,0.55);">${_esc(f.help)}</div>` : ''}
                     </label>
                     <div>${inputFor(f, value)}</div>
                 </div>`;
@@ -372,7 +375,7 @@
         // length (the long "Core One Upgraded" no longer shoves the inputs
         // out of alignment). Each .pc-row is display:contents so its cells
         // become items of this grid. Header row labels the columns.
-        const pcGrid = 'display:grid;grid-template-columns:minmax(110px,160px) minmax(0,1fr) minmax(0,1fr) auto;column-gap:8px;row-gap:6px;align-items:center;';
+        const pcGrid = 'display:grid;grid-template-columns:minmax(6.875rem,10rem) minmax(0,1fr) minmax(0,1fr) auto;column-gap:8px;row-gap:6px;align-items:center;';
         return `<hr class="my-3" style="border-color:rgba(255,255,255,0.15);">`
             + `<div class="small mb-2" style="color:rgba(255,255,255,0.55);">
                 🔌 <b>Printer Connections</b> — the PrusaLink IP + API key FCC uses to read each printer's
@@ -651,7 +654,7 @@
             ? `<div class="small mt-2" style="color:rgba(255,255,255,0.5);">Ignored ${ignored.length} non-setting key(s) (printer_map / paths / etc. keep their own editors): ${_esc(ignored.join(', '))}</div>`
             : '';
         const body = `
-            <div style="background:#1a1a1a; border:1px solid #333; border-radius:8px; max-width:560px; width:92vw; max-height:80vh; display:flex; flex-direction:column;">
+            <div style="background:#1a1a1a; border:1px solid #333; border-radius:8px; max-width:35rem; width:92vw; max-height:80vh; display:flex; flex-direction:column;">
                 <div class="px-3 py-2 fw-bold text-info" style="background:#1f1f1f;">⬆ Import settings — review changes</div>
                 <div class="px-3 py-2" style="flex:1 1 auto; overflow-y:auto;">${rows}${ignoredHtml}</div>
                 <div class="d-flex justify-content-end gap-2 px-3 py-2" style="background:#1a1a1a; border-top:1px solid #333;">

@@ -474,7 +474,7 @@
         return `
             <div role="dialog" aria-modal="true" aria-labelledby="fcc-cr-title"
                  style="background:#1f2024;color:#eee;border:1px solid #555;border-radius:8px;
-                        min-width:440px;max-width:680px;width:94vw;font-size:1rem;
+                        min-width:min(27.5rem,94vw);max-width:42.5rem;width:94vw;font-size:1rem;
                         box-shadow:0 8px 32px rgba(0,0,0,0.6);">
                 <div style="display:flex;justify-content:space-between;align-items:center;
                             padding:14px 18px;border-bottom:1px solid #444;">

@@ -22,6 +22,47 @@
     --fcc-fs-row: 0.9rem;
 }
 
+/* --- TEXT SIZE (per browser: Settings -> 🖥️ This Browser, text_size.js) ---
+   A tiny script in dashboard.html's <head> sets data-fcc-text-size on <html>
+   before the first paint (no attribute, or an unknown value, is Standard):
+     small     the compact look FCC had before the rule: the names take its
+               typical small sizes (a badge 12 px, a note 12.8 px); root 16 px
+     standard  the rule: the :root values above; root 16 px
+     large     the root grows (18 px, 20 px), so every rem size and Bootstrap's
+     xlarge    own scale grow together and keep their proportions
+   The root is a percentage, so a browser set to a bigger default keeps it. */
+:root[data-fcc-text-size="small"] {
+    --fcc-fs-label: 0.75rem;
+    --fcc-fs-small: 0.8rem;
+    --fcc-fs-row: 0.85rem;
+}
+:root[data-fcc-text-size="large"] {
+    font-size: 112.5%;
+}
+:root[data-fcc-text-size="xlarge"] {
+    font-size: 125%;
+}
+
+/* Windows grow with the text. Bootstrap sizes its dialogs in px (500 / 300 /
+   800 / 1140); in rem they are the same at Standard and grow at Large and
+   Extra Large, so a window keeps its proportions instead of wrapping and
+   cutting its own text short. FCC's own panels (overlays, the slot picker,
+   Printer Status tiles) are in rem for the same reason. Each still fits the
+   window: a dialog never gets wider than the screen. */
+.modal {
+    --bs-modal-width: 31.25rem;
+}
+@media (min-width: 576px) {
+    .modal-sm { --bs-modal-width: 18.75rem; }
+}
+@media (min-width: 992px) {
+    .modal-lg,
+    .modal-xl { --bs-modal-width: 50rem; }
+}
+@media (min-width: 1200px) {
+    .modal-xl { --bs-modal-width: 71.25rem; }
+}
+
 /* Bootstrap's own small sizes, held to the rule app-wide. A badge is 0.75em
    (12 px, 10.5 px inside small text) and small text 0.875em (12.25 px inside
    other small text). max() keeps one in a heading as big as it was. */
@@ -107,6 +148,43 @@ body {
     align-items: center;
     gap: 0.5rem;
     height: 100%;
+}
+
+/* Title bar: its buttons never wrap onto two lines (readability, Derek
+   2026-10-21). At Large / Extra Large, or in a narrow window, the bar runs
+   out of room, so it is a size container that tightens in steps. The
+   thresholds are in rem, which grows with the Text size, so each step comes
+   at the same point in every size; at Small and Standard on a 1600 px window
+   the bar is unchanged (it needs about 93rem). The version badge is the last
+   to give: it shortens with "…" (its full text is its tooltip). */
+.fcc-titlebar {
+    container: fcc-titlebar / inline-size;
+    flex-wrap: nowrap;
+}
+.fcc-titlebar .btn,
+.fcc-titlebar .status-label {
+    white-space: nowrap;
+}
+.fcc-titlebar .navbar-brand-group {
+    flex: 0 1 auto;
+    min-width: 0;
+}
+.fcc-titlebar-actions {
+    flex: 0 0 auto;
+}
+#fcc-build-version {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+/* Step 1: no extra space between the items, beyond the bar's own gap. */
+@container fcc-titlebar (max-width: 94rem) {
+    .fcc-titlebar-actions { gap: 0.5rem !important; }
+    .fcc-titlebar-actions > * { margin-left: 0 !important; }
+}
+/* Step 2: ADD INVENTORY reads ADD (the button's tooltip says "Add inventory"). */
+@container fcc-titlebar (max-width: 85.5rem) {
+    .fcc-titlebar-more { display: none; }
 }
 
 /* Main Layout */
@@ -625,7 +703,7 @@ body {
     z-index: 11000;
     text-align: center;
     width: 80%;
-    max-width: 600px;
+    max-width: 37.5rem;
     pointer-events: none;
 }
 
@@ -1067,7 +1145,7 @@ body {
     z-index: 2000 !important;
 }
 .fcc-offcanvas-search {
-    width: 500px !important;
+    width: 31.25rem !important;
     max-width: 100vw !important;
     z-index: 1090 !important;
 }
@@ -1121,7 +1199,7 @@ body {
 
 /* --- MODAL SIZING & THEME --- */
 #manageModal .modal-dialog {
-    max-width: 1000px;
+    max-width: 62.5rem;
 }
 #manageModal .modal-body {
     background: #121212 !important;
@@ -1564,8 +1642,8 @@ body {
     /* Fixed width on the whole left column (reorder arrows + name) keeps
        every printer's toolhead row aligned vertically. Long names wrap
        within the column instead of pushing the row right. */
-    flex: 0 0 200px;
-    width: 200px;
+    flex: 0 0 12.5rem;   /* 200 px at Standard; grows with the Text size */
+    width: 12.5rem;
 }
 .fcc-ps-name {
     font-size: 1rem;
@@ -1606,8 +1684,8 @@ body {
 .fcc-ps-state-attention{ background: rgba(239,68,68,0.18); color: #ff6b6b; border-color: rgba(255,107,107,0.4); }
 .fcc-ps-state-offline  { background: rgba(0,0,0,0.35); color: rgba(255,255,255,0.50); border-color: rgba(255,255,255,0.15); }
 .fcc-ps-reorder-stack {
-    width: 18px;
-    flex: 0 0 18px;
+    width: 1.125rem;     /* 18 px at Standard; the arrows grow with the Text size */
+    flex: 0 0 1.125rem;
 }
 .fcc-ps-reorder {
     background: transparent;
@@ -1615,8 +1693,8 @@ body {
     color: rgba(13,202,240,0.7);
     border-radius: 3px;
     padding: 0;
-    width: 18px;
-    height: 16px;
+    width: 1.125rem;
+    height: 1rem;
     font-size: var(--fcc-fs-label);
     line-height: 1;
     cursor: pointer;
@@ -1632,8 +1710,8 @@ body {
     border-color: rgba(13,202,240,0.7);
 }
 .fcc-ps-reorder-placeholder {
-    width: 18px;
-    height: 16px;
+    width: 1.125rem;
+    height: 1rem;
     margin-bottom: 2px;
     display: block;
 }
@@ -1644,7 +1722,7 @@ body {
 .fcc-ps-th {
     display: flex;
     flex-direction: column;
-    width: 168px;
+    width: 10.5rem;      /* 168 px at Standard; a tile grows with its text */
     /* No outer fill — let the colored body inside dominate the block.
        The dark gray frame this used to have wasn't carrying any meaning
        and just shrank the visible color area. Border alone defines edges. */
@@ -1705,7 +1783,7 @@ body {
     font-size: var(--fcc-fs-small);
     color: rgba(255,255,255,0.85);
     font-weight: bold;
-    max-width: 96px;
+    max-width: 6rem;
     text-shadow: 1px 1px 2px rgba(0,0,0,0.7);
 }
 .fcc-ps-th-chip {

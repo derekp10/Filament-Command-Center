@@ -83,6 +83,10 @@
 <script src="{{ url_for('static', filename='js/modules/fab_drag.js') }}?v=1.2"></script>
 <script src="{{ url_for('static', filename='js/modules/inv_config.js') }}?v=1.5"></script>
 <script src="{{ url_for('static', filename='js/modules/inv_settings.js') }}?v=1.8"></script>
+<!-- Readability (2026-10-21): the per-browser Text size, changed live from
+     Settings -> 🖥️ This Browser. dashboard.html's <head> applies the stored size
+     before the first paint; this module only handles a change. -->
+<script src="{{ url_for('static', filename='js/modules/text_size.js') }}?v=1.0"></script>
 
 <script>
     // Module Initialization

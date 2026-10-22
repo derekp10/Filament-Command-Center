@@ -108,7 +108,7 @@ console.log("🚀 Loaded Module: CONFIG");
                 <button type="button" class="btn btn-sm config-attrs-rm-choice ms-2 p-0 d-inline-flex align-items-center justify-content-center"
                         data-choice="${_esc(c)}" data-usage="${n}"
                         title="Remove this tag (strips it from every filament and hides it — reversible)"
-                        style="width:18px; height:18px; line-height:1; background:#dc3545; color:#fff; border:none; border-radius:3px; font-weight:bold;">✕</button>
+                        style="width:1.125rem; height:1.125rem; line-height:1; background:#dc3545; color:#fff; border:none; border-radius:3px; font-weight:bold;">✕</button>
             </span>`;
         }).join('');
         // Hidden strip — the escape hatch back out of a hide, and the ONLY
@@ -608,7 +608,7 @@ console.log("🚀 Loaded Module: CONFIG");
 
         const body = `
             <div style="background:#181818; color:#fff; border:2px solid #ffc107; border-radius:6px;
-                        width:520px; max-width:92vw; max-height:80vh; display:flex; flex-direction:column;
+                        width:32.5rem; max-width:92vw; max-height:80vh; display:flex; flex-direction:column;
                         box-shadow:0 0 24px rgba(255,193,7,0.35);">
                 <div class="d-flex justify-content-between align-items-center px-3 py-2"
                      style="background:#1a1a1a; border-bottom:1px solid #ffc107;">

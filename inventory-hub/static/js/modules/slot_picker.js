@@ -92,12 +92,14 @@
         if (document.getElementById('fcc-slot-picker-style')) return;
         const css = document.createElement('style');
         css.id = 'fcc-slot-picker-style';
+        // Widths that hold text are in rem (62.5rem = 1000 px at Standard), so the
+        // picker grows with the per-browser Text size and keeps its layout.
         css.textContent = `
-#${OVERLAY_ID} .fcc-sp-panel { width:min(1000px,96vw); max-height:90vh; display:flex; flex-direction:column; border:1px solid #0dcaf0; }
+#${OVERLAY_ID} .fcc-sp-panel { width:min(62.5rem,96vw); max-height:90vh; display:flex; flex-direction:column; border:1px solid #0dcaf0; }
 #${OVERLAY_ID} .fcc-sp-scroll { overflow:auto; }
 #${OVERLAY_ID} .fcc-sp-grid { display:flex; flex-wrap:wrap; gap:10px; justify-content:center; padding:12px; }
 #${OVERLAY_ID} .fcc-sp-section { width:100%; color:#9fe8ff; font-weight:800; font-size:0.85rem; letter-spacing:0.4px; margin:2px 4px -4px; }
-#${OVERLAY_ID} .fcc-sp-tile { width:205px; min-height:210px; display:flex; flex-direction:column; gap:6px; align-items:stretch; text-align:left;
+#${OVERLAY_ID} .fcc-sp-tile { width:12.8125rem; min-height:13.125rem; display:flex; flex-direction:column; gap:6px; align-items:stretch; text-align:left;
     background:#1b1b1b; color:#eee; border:2px solid #4a4a4a; border-radius:8px; padding:8px; cursor:pointer; }
 #${OVERLAY_ID} .fcc-sp-tile:hover { border-color:#8a939b; }
 #${OVERLAY_ID} .fcc-sp-tile.is-star { border-color:#ffc107; }
@@ -130,10 +132,10 @@
 #${OVERLAY_ID} .fcc-sp-status { display:none; margin:10px 12px 0; padding:6px 10px; border-radius:6px; background:#4a3200; color:#ffd27a; border:1px solid #ffb74d; font-weight:bold; }
 #${OVERLAY_ID} .fcc-sp-step { font-size:var(--fcc-fs-label); font-weight:800; color:#111; background:#9fe8ff; border-radius:10px; padding:1px 8px; margin-left:8px; white-space:nowrap; }
 #${OVERLAY_ID} .fcc-sp-choice { display:flex; gap:16px; padding:14px 18px; align-items:flex-start; flex-wrap:wrap; }
-#${OVERLAY_ID} .fcc-sp-choice-card { width:205px; }
-#${OVERLAY_ID} .fcc-sp-choice-text { flex:1; min-width:240px; font-size:1rem; color:#f1f1f1; }
+#${OVERLAY_ID} .fcc-sp-choice-card { width:12.8125rem; }
+#${OVERLAY_ID} .fcc-sp-choice-text { flex:1; min-width:15rem; font-size:1rem; color:#f1f1f1; }
 #${OVERLAY_ID} .fcc-sp-choice-btns { display:flex; gap:10px; flex-wrap:wrap; margin-top:12px; }
-#${OVERLAY_ID} .fcc-sp-choice-btn { display:flex; flex-direction:column; align-items:flex-start; min-width:150px; text-align:left; }
+#${OVERLAY_ID} .fcc-sp-choice-btn { display:flex; flex-direction:column; align-items:flex-start; min-width:9.375rem; text-align:left; }
 #${OVERLAY_ID} .fcc-sp-choice-btn small { font-weight:400; font-size:var(--fcc-fs-small); }
 #${OVERLAY_ID} .fcc-sp-choice-btn:focus { box-shadow:0 0 0 3px rgba(13,202,240,0.6); }
 `;

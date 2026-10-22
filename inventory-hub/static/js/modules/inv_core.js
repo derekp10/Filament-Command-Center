@@ -206,7 +206,7 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         ? `<div class="fcc-apc-status" role="alert" style="display:none; margin-bottom:10px; padding:6px 10px; border-radius:6px; background:#4a3200; color:#ffd27a; border:1px solid #ffb74d; font-weight:bold; text-align:left;"></div>`
         : '';
     const content = `
-        <div class="fcc-apc-panel" style="background:#1e1e1e; color:#fff; border:2px solid ${border}; border-radius:8px; padding:20px 24px; max-width:${threeWay ? 560 : 480}px; text-align:center;">
+        <div class="fcc-apc-panel" style="background:#1e1e1e; color:#fff; border:2px solid ${border}; border-radius:8px; padding:20px 24px; max-width:${threeWay ? 35 : 30}rem; text-align:center;">
             <div class="fcc-apc-title" style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">${header}</div>
             <div class="fcc-apc-msg" style="color:#ffc; margin-bottom:14px;${threeWay ? ' text-align:left;' : ''}">${esc(bodyText)}</div>
             ${status}
@@ -2013,7 +2013,7 @@ window.openLogPillOverlay = () => {
         ).join('') || '<div class="small p-3" style="color: rgba(255,255,255,0.7);">Activity Log is empty.</div>';
         const html = `
             <div style="background:#1e1e1e; color:#fff; border:2px solid #0ff;
-                        border-radius:8px; padding:14px 16px; min-width:420px; max-width:90vw;
+                        border-radius:8px; padding:14px 16px; min-width:26.25rem; max-width:90vw;
                         max-height:80vh; display:flex; flex-direction:column;">
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <div style="font-weight:bold; font-size:1.1em; color:#0ff;">📡 Activity Log</div>

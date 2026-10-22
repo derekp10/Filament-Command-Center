@@ -328,7 +328,7 @@ const SpoolCardBuilder = {
                 <div class="fcc-ps-chip" style="font-size:0.85rem; line-height:1.2;">
                     <div class="d-flex align-items-center gap-2">
                         ${swatch}
-                        <span class="text-light fw-bold text-truncate" style="max-width:140px;">${compactName}</span>
+                        <span class="text-light fw-bold text-truncate" style="max-width:8.75rem;">${compactName}</span>
                         <span class="ms-auto fw-bold" style="color:${weightColor};">${weightStr}</span>
                     </div>
                     ${matLine}
@@ -359,7 +359,7 @@ const SpoolCardBuilder = {
                             <span class="fw-bold">${weightStr ? '⚖️ ' + esc(weightStr) : ''}</span>
                         </div>
                         <div class="d-flex align-items-center gap-1" style="font-size:0.92rem; color:#fff;">
-                            ${swatch}<span class="fw-bold text-truncate" style="max-width:150px;">${esc(name)}</span>
+                            ${swatch}<span class="fw-bold text-truncate" style="max-width:9.375rem;">${esc(name)}</span>
                         </div>
                         <div style="font-size:var(--fcc-fs-small); color:#ddd; opacity:0.9;">${esc(info.line2)}</div>
                         ${deployed}
@@ -406,7 +406,7 @@ const SpoolCardBuilder = {
                      data-box="${box}" data-slot="${slot}" data-toolhead="${toolhead}"
                      data-spool-id="${item.id}" data-spool-label="${safeLabel}"
                      tabindex="0" role="button"
-                     style="min-width:240px; max-width:260px; padding:0; cursor:pointer; background: ${styles.frame}; border-radius:6px; border: 1px solid rgba(13,202,240,0.55);"
+                     style="min-width:15rem; max-width:16.25rem; padding:0; cursor:pointer; background: ${styles.frame}; border-radius:6px; border: 1px solid rgba(13,202,240,0.55);"
                      onclick="${handler}"
                      title="${titleAttr}">
                     <div style="${innerBg}">
@@ -417,7 +417,7 @@ const SpoolCardBuilder = {
                             </div>
                             <div class="d-flex align-items-center" style="font-size:0.95rem;">
                                 ${swatch}
-                                <span class="text-light fw-bold text-truncate" style="max-width:200px;">${compactName}</span>
+                                <span class="text-light fw-bold text-truncate" style="max-width:12.5rem;">${compactName}</span>
                             </div>
                             <div class="text-light" style="font-size:var(--fcc-fs-small); opacity:0.8;">${info.line2}</div>
                             <div class="d-flex justify-content-between align-items-center mt-1" style="font-size:0.9rem;">
