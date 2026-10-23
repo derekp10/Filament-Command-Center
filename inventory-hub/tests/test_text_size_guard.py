@@ -36,6 +36,13 @@ build changed that no check opened: "Record it as coming from…", a Room and a
 Printer row in the Location Manager, and the review window, the audit panel
 and the bulk-move panel, each drawn from a sample this browser alone is
 served. Nothing there is under its floor today.
+
+Derek's 2026-10-22 walk put each "📷 Scan to …" QR under its own button: the QR
+colour check now also wants each QR's centre within 1 px of its button's
+(except the slot picker's Swap / Overwrite panel, which gets its own redesign),
+reads a QR's role from its cell, and opens "Record it as coming from…" with two
+free slots too (its slots on a line above No box and Cancel). Every size and a
+phone: test_qr_under_buttons_e2e.py.
 """
 from __future__ import annotations
 
@@ -465,6 +472,15 @@ def test_questions_text_is_readable(page: Page, base_url: str, dev_ids, assert_t
     assert_text_size(page.locator("#fcc-record-source"))
     page.keyboard.press("Escape")
     page.wait_for_function("() => !document.getElementById('fcc-record-source')", timeout=5000)
+    # Two free slots (2026-10-22): they sit on a line of their own above No box
+    # and Cancel, which share the grid with their QRs.
+    page.evaluate("""() => { window.__tsgRs = _askRecordSource({ head: 'XL-1', spool_location: '', feeds: [
+        { box: 'LR-MDB-1', slot: '1', free: true }, { box: 'PM-DB-XL-L', slot: '1', free: true }] }, 57, null); }""")
+    page.wait_for_function("() => !!document.querySelector('#fcc-record-source .fcc-rs-slots')", timeout=5000)
+    page.wait_for_timeout(300)
+    assert_text_size(page.locator("#fcc-record-source"))
+    page.keyboard.press("Escape")
+    page.wait_for_function("() => !document.getElementById('fcc-record-source')", timeout=5000)
     _shown(page, "confirmModal", "() => requestConfirmation('A test question: nothing happens either way.', () => {})")
     assert_text_size(page.locator("#confirmModal .modal-content"))
     page.evaluate("() => confirmAction(false)")
@@ -526,7 +542,8 @@ QR_TONE_RGB = {
 
 # The QR row's cells in order (confirm, [store], cancel), read by structure so
 # the check runs on any version of the row: the card is a cell's first child,
-# the caption its last.
+# the caption its last; a cell's role is its data-qr (else its place). `x`:
+# the card's centre, for the check that it sits under its button.
 QR_CELLS_JS = r"""(root) => {
     const rgb = (c) => { const m = String(c).match(/\d+(\.\d+)?/g); return m ? m.slice(0, 3).map(Number).join(',') : String(c); };
     const row = root.querySelector('.fcc-confirm-qr-row');
@@ -537,9 +554,21 @@ QR_CELLS_JS = r"""(root) => {
         const kids = Array.from(cell.children);
         const card = kids[0];
         const cap = kids[kids.length - 1];
-        return { qr: roles[i], caption: (cap && cap.innerText) || '',
+        const r = card ? card.getBoundingClientRect() : null;
+        return { qr: cell.dataset.qr || roles[i], caption: (cap && cap.innerText) || '',
                  border: card ? rgb(getComputedStyle(card).borderTopColor) : null,
-                 captionColor: cap ? rgb(getComputedStyle(cap).color) : null };
+                 captionColor: cap ? rgb(getComputedStyle(cap).color) : null,
+                 x: r ? r.left + r.width / 2 : null };
+    });
+}"""
+
+# Each QR's card centre and its button's centre (Derek, 2026-10-22: "align
+# under the button they correspond to"), as [caption, qr x, button x].
+QR_CENTRES_JS = r"""(root, map) => {
+    const c = (el) => { const r = el.getBoundingClientRect(); return r.left + r.width / 2; };
+    return Array.from(root.querySelectorAll('.fcc-confirm-qr-row > .fcc-confirm-qr-cell')).map((cell) => {
+        const b = root.querySelector(map[cell.dataset.qr]);
+        return [cell.innerText.replace(/\s+/g, ' ').trim(), c(cell.querySelector('.fcc-qr-card')), b ? c(b) : null];
     });
 }"""
 
@@ -551,10 +580,12 @@ BUTTON_VARIANTS_JS = r"""(root, sels) => sels.map((sel) => {
 })"""
 
 
-def _qr_mismatches(page: Page, root_sel: str, buttons: dict, where: str) -> list:
+def _qr_mismatches(page: Page, root_sel: str, buttons: dict, where: str, centred: bool = True) -> list:
     """Each QR's border and caption must be the colour of the button it stands
-    for (`buttons`: QR role -> that button's selector). Returns what doesn't
-    match, as sentences."""
+    for (`buttons`: QR role -> that button's selector), and (`centred`) its
+    card's centre within 1 px of that button's (2026-10-22; not the slot
+    picker's Swap / Overwrite panel, which gets its own redesign). Returns what
+    doesn't match, as sentences."""
     root = page.locator(root_sel)
     cells = root.evaluate(QR_CELLS_JS)
     if not cells:
@@ -566,6 +597,10 @@ def _qr_mismatches(page: Page, root_sel: str, buttons: dict, where: str) -> list
         if not want or (cell["border"], cell["captionColor"]) != want:
             wrong.append(f"{where}: the {cell['qr']} QR ({cell['caption']!r}) is border {cell['border']} / caption "
                          f"{cell['captionColor']}, its button is btn-{variant} {want}")
+    if centred:
+        for caption, qr_x, btn_x in root.evaluate(QR_CENTRES_JS, buttons):
+            if btn_x is None or abs(qr_x - btn_x) > 1:
+                wrong.append(f"{where}: the {caption!r} QR is centred at x={qr_x:.1f}, its button at x={btn_x}")
     return wrong
 
 
@@ -603,7 +638,11 @@ def test_qr_codes_take_their_buttons_colour(page: Page, base_url: str, dev_ids):
     theirs, "so it's clear at a glance what QR code matches the button"; and
     every other QR question the same way. Every mismatch is collected, so one
     run names them all. The hermetic proof of the shared helper is
-    test_qr_button_tones_js.py; this reads the computed colours on the page."""
+    test_qr_button_tones_js.py; this reads the computed colours on the page.
+    Since 2026-10-22 each QR also sits under its own button, within 1 px (Derek:
+    "align under the button they correspond to"; every size and a phone:
+    test_qr_under_buttons_e2e.py), except in the slot picker's Swap / Overwrite
+    panel, which gets its own redesign."""
     _read_only(page)
     _ready(page, base_url)
     wrong = []
@@ -627,7 +666,7 @@ def test_qr_codes_take_their_buttons_colour(page: Page, base_url: str, dev_ids):
     wrong += _qr_mismatches(page, "#fcc-slot-picker",
                             {"confirm": ".fcc-sp-choice-btns > .fcc-sp-choice-btn:first-child",
                              "store": "[data-sp-choice=overwrite]", "cancel": "[data-sp-choice=back]"},
-                            "slot picker choice")
+                            "slot picker choice", centred=False)
     _close_picker(page)
     # "Record it as coming from…" (one free slot: slot / No box / Cancel).
     page.evaluate("""() => { window.__tsgRs = _askRecordSource({ head: 'XL-1', spool_location: '', feeds: [
@@ -638,9 +677,17 @@ def test_qr_codes_take_their_buttons_colour(page: Page, base_url: str, dev_ids):
                             "record source")
     page.keyboard.press("Escape")
     page.wait_for_function("() => !document.getElementById('fcc-record-source')", timeout=5000)
+    # Two free slots: no slot is pre-selected, so No box is the first QR.
+    page.evaluate("""() => { window.__tsgRs = _askRecordSource({ head: 'XL-1', spool_location: '', feeds: [
+        { box: 'LR-MDB-1', slot: '1', free: true }, { box: 'PM-DB-XL-L', slot: '1', free: true }] }, 57, null); }""")
+    page.wait_for_function("() => !!document.querySelector('#fcc-record-source .fcc-confirm-qr-row')", timeout=5000)
+    wrong += _qr_mismatches(page, "#fcc-record-source", {"confirm": ".fcc-rs-none", "cancel": ".fcc-rs-cancel"},
+                            "record source, two free slots")
+    page.keyboard.press("Escape")
+    page.wait_for_function("() => !document.getElementById('fcc-record-source')", timeout=5000)
     # The Quick-Swap confirm while the head's printer answers PRINTING (this
     # page only, from here on): Yes, swap is cyan, No, cancel a light outline,
-    # and each button sits under its QR.
+    # and each button sits under its QR (its QRs are above its buttons).
     page.route("**/api/printer_state/" + dev_ids["head"], lambda route: route.fulfill(
         status=200, content_type="application/json",
         body='{"is_active": true, "known": true, "printer_name": "XL", "state": "PRINTING"}'))
@@ -653,14 +700,5 @@ def test_qr_codes_take_their_buttons_colour(page: Page, base_url: str, dev_ids):
     page.wait_for_timeout(300)
     wrong += _qr_mismatches(page, "#fcc-quickswap-confirm-overlay",
                             {"confirm": "#fcc-quickswap-yes", "cancel": "#fcc-quickswap-no"}, "Quick-Swap")
-    centres = page.evaluate("""() => {
-        const c = (el) => { const r = el.getBoundingClientRect(); return Math.round(r.left + r.width / 2); };
-        const cards = Array.from(document.querySelectorAll('#fcc-quickswap-confirm-overlay .fcc-confirm-qr-row > div'))
-            .map((cell) => cell.firstElementChild);
-        return [[c(cards[0]), c(document.getElementById('fcc-quickswap-yes'))],
-                [c(cards[1]), c(document.getElementById('fcc-quickswap-no'))]]; }""")
-    for (qr_x, btn_x), name in zip(centres, ("Yes, swap", "No, cancel")):
-        if abs(qr_x - btn_x) > 3:
-            wrong.append(f"Quick-Swap: {name} is centred at x={btn_x}, its QR at x={qr_x}")
     page.keyboard.press("Escape")
     assert not wrong, "QR codes that don't match their buttons:\n  " + "\n  ".join(wrong)

@@ -389,6 +389,30 @@ BIG_FLEET = {"ZZ Big %s" % p: {"state": {"state": "IDLE", "is_active": False},
              for p in "ABC"}
 
 
+# Each printer row's tiles (Derek, 2026-10-22: even rows beside the name): the
+# count on each line of tiles, and whether every tile sits right of the name.
+PS_ROWS_JS = r"""() => Array.from(document.querySelectorAll('#printer-status-widget .fcc-ps-row')).map((row) => {
+    const nameR = row.querySelector('.fcc-ps-name-col').getBoundingClientRect();
+    const tiles = Array.from(row.querySelectorAll('.fcc-ps-th')).map((t) => t.getBoundingClientRect());
+    const lines = [];
+    tiles.forEach((r) => { const l = lines.find((x) => Math.abs(x.top - r.top) < 2); if (l) l.n++; else lines.push({ top: r.top, n: 1 }); });
+    lines.sort((a, b) => a.top - b.top);
+    return { printer: row.dataset.printer, rows: lines.map((l) => l.n),
+             beside: tiles.every((r) => r.left >= nameR.right - 0.5) }; })"""
+
+
+def _uneven(rows: list) -> list:
+    """The printer rows whose tiles aren't in even rows beside the name: the
+    lines differ by more than one, a longer line follows a shorter one, or one
+    tile sits alone under fuller lines."""
+    bad = []
+    for r in rows:
+        n = r["rows"]
+        if not r["beside"] or max(n) - min(n) > 1 or n != sorted(n, reverse=True) or (len(n) > 1 and n[-1] == 1):
+            bad.append(r)
+    return bad
+
+
 @pytest.mark.parametrize("window", ((1366, 657), (1280, 689)))
 @pytest.mark.parametrize("name", ("Standard", "Large", "Extra Large"))
 def test_printer_status_leaves_the_deck_and_the_buffer_on_screen(page: Page, base_url: str, name, window):
@@ -399,7 +423,9 @@ def test_printer_status_leaves_the_deck_and_the_buffer_on_screen(page: Page, bas
     Live Activity and the Buffer Zone 2-23 px tall (HEAD, on dev's fleet). Now
     the open widget scrolls inside itself, so the whole deck and a 7rem strip
     of the log and the buffer stay on screen. Checked on a fleet bigger than
-    the window (BIG_FLEET), so the limit is always in play."""
+    the window (BIG_FLEET), so the limit is always in play. Since 2026-10-22
+    each printer's 8 heads are 4 + 4 beside its name (they were 7 + 1, or a
+    line of 8, under it)."""
     from conftest import stub_printer_fleet
     _read_only(page)
     stub_printer_fleet(page, BIG_FLEET)
@@ -415,17 +441,24 @@ def test_printer_status_leaves_the_deck_and_the_buffer_on_screen(page: Page, bas
     assert d["bufferHeader"] <= top, d
     assert d["body"]["sh"] > d["body"]["ch"] + 1 and d["body"]["oy"] in ("auto", "scroll"), (
         f"{name} {window}: Printer Status should scroll inside itself here: {d}")
+    rows = page.evaluate(PS_ROWS_JS)
+    assert len(rows) == 3 and all(r["rows"] == [4, 4] and r["beside"] for r in rows), (
+        f"{name} {window}: the 8 heads should be 4 + 4 beside each name: {rows}")
 
 
 @pytest.mark.parametrize("name", SIZES)
 def test_on_a_tall_window_printer_status_keeps_its_room(page: Page, base_url: str, name):
     """Derek's 1600 x 1300 window: the limit is 40 % of the window (520 px),
-    more than the open widget needs at any size, so nothing changes there."""
+    more than the open widget needs at any size, so nothing changes there.
+    And dev's own fleet sits in even rows beside each name (2026-10-22: the
+    INDX's 8 heads 4 + 4, never 7 + 1)."""
     _read_only(page)
     _store(page, name)
     _load_with_printers(page, base_url)
     d = page.evaluate(DECK_JS)
     assert d["body"]["maxH"] == "520px", d
+    rows = page.evaluate(PS_ROWS_JS)
+    assert rows and not _uneven(rows), f"{name}: printers whose tiles aren't even rows beside the name: {_uneven(rows)}"
 
 
 FIELDS_JS = """() => {
@@ -537,12 +570,40 @@ def test_dialogs_fit_a_phone_at_the_bigger_sizes(page: Page, base_url: str, dev_
     """412 px wide: rem min-widths with no cap made Quick Weigh 475 px wide
     at Extra Large, the Activity Log 525 px and the Quick-Swap confirm 525 px,
     cut on both sides where nothing scrolls (HEAD). Each is capped by the
-    screen now. Nothing is saved or swapped: each is closed with Escape."""
+    screen now. Nothing is saved or swapped: each is closed with Escape.
+    Since 2026-10-22 the move question and "Record it as coming from…" lay
+    their buttons over their QRs in shared columns: they fit too, every button
+    and QR inside the dialog (each QR under its button:
+    test_qr_under_buttons_e2e.py)."""
     _read_only(page)
     _store(page, name)
     page.set_viewport_size({"width": 412, "height": 915})
     _load(page, base_url)
     out = {}
+    for label, opener, sel in (
+            ("Move question", "() => { window.confirmHeadLoad({ answer: { status: 'requires_confirm',"
+             " confirm_type: 'head_fed', can_store: true, spools: [57], title: 'Load #57 onto XL-1?',"
+             " body: 'LR-MDB-1 slot 1 feeds XL-1, and XL-1 is running #1.', fed_heads: [{ toolhead: 'XL-1',"
+             " box: 'LR-MDB-1', slot: '1', confirm_key: 'XL-1#1' }], active_prints: [] }, box: 'LR-MDB-1',"
+             " onLoad() {}, onStore() {}, onCancel() {} }); }", "#fcc-active-print-confirm-overlay .fcc-apc-panel"),
+            ("Record it as coming from", "() => { window.__tsRs = _askRecordSource({ head: 'XL-1', spool_location: '',"
+             " feeds: [{ box: 'LR-MDB-1', slot: '1', free: true }, { box: 'LR-MDB-1', slot: '2', free: false,"
+             " claimed_by: 99 }] }, 57, null); }", "#fcc-record-source .fcc-rs-panel")):
+        page.evaluate(opener)
+        page.wait_for_selector(sel + " .fcc-confirm-qr-row", timeout=10_000)
+        page.wait_for_timeout(400)
+        box = page.evaluate(PANEL_JS, sel)
+        if box:
+            box["inside"] = page.evaluate("""(sel) => { const p = document.querySelector(sel).getBoundingClientRect();
+                return Array.from(document.querySelectorAll(sel + ' button, ' + sel + ' .fcc-qr-card')).every((el) => {
+                    const r = el.getBoundingClientRect(); return r.left >= p.left - 0.5 && r.right <= p.right + 0.5; }); }""",
+                                          sel)
+            box["sideways"] = page.evaluate("() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1")
+        out[label] = box
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(400)
+    cut = {k: v for k, v in out.items() if not v or not v["inside"] or v["sideways"]}
+    assert not cut, f"{name} at 412 px: questions whose buttons or QRs stick out: {cut}"
     page.evaluate("""() => window.WeightEntry.openModal({ title: 'Quick Weigh', spool: { id: 57, display: 'A test spool',
         initial_weight: 1000, used_weight: 100, color_hex: 'ff0000' }, empty_spool_weight: 200, empty_source: 'spool' })""")
     page.wait_for_selector('[role=dialog][aria-labelledby="fcc-we-title"]', timeout=10_000)
