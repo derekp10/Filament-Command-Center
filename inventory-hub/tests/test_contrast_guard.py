@@ -415,7 +415,9 @@ def test_qr_questions_are_readable(page: Page, base_url: str, assert_contrast, s
     assert_contrast(row)
     scored = [o["text"] for o in conftest.contrast_offenders(row, min_ratio=100)]
     assert sum("SCAN" in t.upper() for t in scored) == 3, scored
-    assert any(t.startswith("No box") for t in scored) and any(t.startswith("LR-MDB-1 slot 1") for t in scored), scored
+    # The slot's box id and "slot 1" are each kept whole in a span
+    # (2026-10-22 review), so each is judged as its own text.
+    assert any(t.startswith("No box") for t in scored) and "LR-MDB-1" in scored and "slot 1" in scored, scored
     page.keyboard.press("Escape")
     expect(page.locator("#fcc-record-source")).to_have_count(0)
     # Two free slots: they sit on the line above (cyan, enabled), No box and
@@ -426,7 +428,7 @@ def test_qr_questions_are_readable(page: Page, base_url: str, assert_contrast, s
     expect(panel.locator(".fcc-confirm-qr-row")).to_be_visible()
     assert_contrast(panel)
     scored = [o["text"] for o in conftest.contrast_offenders(panel, min_ratio=100)]
-    assert any(t.startswith("PM-DB-XL-L slot 1") for t in scored), scored
+    assert "PM-DB-XL-L" in scored and "slot 1" in scored, scored
     page.keyboard.press("Escape")
 
 

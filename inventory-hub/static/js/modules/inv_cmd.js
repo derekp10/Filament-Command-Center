@@ -2292,9 +2292,12 @@ const _askRecordSource = (pick, sid, host) => {
             clearTimeout(statusTimer);
             resolve(value);
         };
+        // The box id and "slot N" kept whole on a phone (window.fccKeepWhole,
+        // review 2026-10-22: "LR-MDB- / 1 slot 1" at Extra Large).
+        const whole = window.fccKeepWhole || String;
         const optBtn = (f, i) => (f.free
-            ? `<button type="button" class="btn btn-sm btn-info fcc-rs-opt" data-rs-i="${i}">${esc(`${f.box} slot ${f.slot}`)}<small style="display:block;font-weight:400;">free</small></button>`
-            : `<button type="button" class="btn btn-sm btn-outline-secondary fcc-rs-opt" data-rs-i="${i}" disabled aria-disabled="true">${esc(`${f.box} slot ${f.slot}`)}<small style="display:block;font-weight:400;">holds #${esc(f.claimed_by)}</small></button>`);
+            ? `<button type="button" class="btn btn-sm btn-info fcc-rs-opt" data-rs-i="${i}">${whole(esc(`${f.box} slot ${f.slot}`))}<small style="display:block;font-weight:400;">free</small></button>`
+            : `<button type="button" class="btn btn-sm btn-outline-secondary fcc-rs-opt" data-rs-i="${i}" disabled aria-disabled="true">${whole(esc(`${f.box} slot ${f.slot}`))}<small style="display:block;font-weight:400;">holds #${esc(f.claimed_by)}</small></button>`);
         // QR codes under their buttons (Derek, 2026-10-22): the buttons a QR
         // stands for (the pre-selected slot, No box, Cancel) share a row with
         // their QRs, each QR under its own button. The slots with no QR (held
@@ -2307,7 +2310,7 @@ const _askRecordSource = (pick, sid, host) => {
             host: host || undefined,
             onEscape: () => finish(null),
             content: `
-                <div class="fcc-rs-panel" style="background:#1e1e1e; color:#fff; border:2px solid #0dcaf0; border-radius:8px; padding:18px 22px; max-width:38.75rem; text-align:center;">
+                <div class="fcc-rs-panel" style="background:#1e1e1e; color:#fff; border:2px solid #0dcaf0; border-radius:8px; padding:18px min(22px, 4vw); max-width:38.75rem; text-align:center;">
                     <div class="fcc-rs-title" style="font-size:1.15em; font-weight:bold; margin-bottom:6px;">🔗 Record ${esc(who)} as coming from…</div>
                     <div class="fcc-rs-msg" style="color:#ffc; margin-bottom:12px; text-align:left;">${esc(Who)} isn't coming from a box. Which slot feeding ${esc(head)} is its home? Return and eject send it back there.</div>
                     <div class="fcc-rs-status" role="alert" style="display:none; margin-bottom:10px; padding:6px 10px; border-radius:6px; background:#4a3200; color:#ffd27a; border:1px solid #ffb74d; font-weight:bold; text-align:left;"></div>
@@ -2388,6 +2391,9 @@ const _askRecordSource = (pick, sid, host) => {
                 confirmTone: pre ? 'info' : 'secondary', storeTone: 'secondary', cancelTone: 'dark',
             });
         }
+        // Fitted to the screen (window.fccFitQuestion): box ids whole where they
+        // fit, and taller than the window it scrolls inside itself.
+        if (window.fccFitQuestion) window.fccFitQuestion(ov.querySelector('.fcc-rs-panel') || handle.panel);
         // Scans are held off while it is open (processScan); a feed slot's label
         // picks that slot.
         question = {

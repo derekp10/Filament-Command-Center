@@ -19,7 +19,14 @@ test_core1_return_ejectall_js.py), no browser, no container, so it runs under
     QR order;
   - "Record it as coming from…" puts the buttons with a QR (the one free slot,
     No box, Cancel) in that row and the slots without one on a line above,
-    in feed order.
+    in feed order;
+  - (review, 2026-10-22) the store button and the record source's slots keep
+    each box id and "slot N" whole (window.fccKeepWhole: a span that doesn't
+    break; the label's text unchanged), and fccFitQuestion lets them break
+    again only where they can't fit the screen, and makes a question taller
+    than the window scroll inside itself (only then: a scroller loses the
+    screen's sub-pixel text smoothing). RED on c5c9d1f (no spans, no
+    helper).
 The geometry (each QR's centre under its button's, at every Text size and on
 a 412 px phone, nothing sticking out) is test_qr_under_buttons_e2e.py, in a
 real browser.
@@ -219,3 +226,92 @@ return out;
     one = res["one free"]
     assert names(_buttons_in(one["content"], "fcc-rs-btns")) == ["opt", "none", "cancel"]
     assert "fcc-rs-slots" not in one["content"]
+
+
+# --- a box id kept whole (review, 2026-10-22) ----------------------------------
+# On a phone the aligned buttons wrap, and a line may break after any hyphen:
+# "Just store it in LR-MDB-1 slot 1" read "in LR- / MDB-1 slot / 1", and the
+# record source's slot "LR-MDB- / 1 slot 1" (360 px, Extra Large).
+
+def _keep_whole_spans(html: str) -> list:
+    return re.findall(r'<span class="fcc-keep-whole">([^<]*)</span>', html)
+
+
+def _text(html: str) -> str:
+    return re.sub(r"<[^>]+>", "", html)
+
+
+def test_box_ids_and_slots_stay_whole_on_the_buttons(tmp_path):
+    """The store button and the record source's slots wrap each box id and
+    "slot N" in a span that doesn't break (global.css .fcc-keep-whole); the
+    label's text is the same. Ids the escaping touched stay escaped."""
+    res = _run(tmp_path, ["inv_core.js", "ui_builder.js", "inv_cmd.js"], """
+const out = {};
+window.confirmHeadLoad({ answer: { status: 'requires_confirm', confirm_type: 'head_fed', can_store: true,
+    spools: [57], title: 'Load #57 onto XL-1?', body: 'b', fed_heads: [{ toolhead: 'XL-1', box: 'PM-DB-XL-L',
+    slot: '2', confirm_key: 'XL-1#99' }], active_prints: [] }, box: 'PM-DB-XL-L', onLoad() {}, onStore() {}, onCancel() {} });
+out.threeWay = lastMount().opts.content;
+state.allLocations = [];
+_askRecordSource({ head: 'XL-1', spool_location: '', feeds: [{ box: 'LR-MDB-1', slot: '1', free: true },
+    { box: 'LR-MDB-1', slot: '2', free: false, claimed_by: 99 }] }, 57, null);
+out.recordSource = lastMount().opts.content;
+out.escaped = window.fccKeepWhole ? window.fccKeepWhole("Tom&#39;s A-B &amp; <b> slot 12 x-") : null;
+return out;
+""")
+    store = re.search(r'<button[^>]*fcc-apc-store[^>]*>(.*?)</button>', res["threeWay"], re.S).group(1)
+    assert _keep_whole_spans(store) == ["PM-DB-XL-L", "slot 2"], store
+    assert _text(store) == "Just store it in PM-DB-XL-L slot 2", store
+    load = re.search(r'<button[^>]*fcc-apc-yes[^>]*>(.*?)</button>', res["threeWay"], re.S).group(1)
+    assert _text(load) == "Load it instead", load
+    opts = re.findall(r'<button[^>]*fcc-rs-opt[^>]*>(.*?)</button>', res["recordSource"], re.S)
+    assert [_keep_whole_spans(o) for o in opts] == [["LR-MDB-1", "slot 2"], ["LR-MDB-1", "slot 1"]], opts
+    assert [_text(o) for o in opts] == ["LR-MDB-1 slot 2holds #99", "LR-MDB-1 slot 1free"], opts
+    # Escaped text in, escaped text out: an entity is never split or wrapped.
+    assert res["escaped"] == ('Tom&#39;s <span class="fcc-keep-whole">A-B</span> &amp; <b> '
+                              '<span class="fcc-keep-whole">slot 12</span> x-'), res["escaped"]
+
+
+def test_a_question_is_fitted_to_the_screen(tmp_path):
+    """fccFitQuestion: box ids stay whole unless that pushes the question past
+    the screen's sides (then they break at their hyphens again,
+    .fcc-keep-whole-off); a question taller than the window less 16 px scrolls
+    inside itself (.fcc-question-scroll), and only then: a scroller draws its
+    text without the screen's sub-pixel smoothing, so a question that fits
+    must not be one. A question that fits loses both classes again."""
+    res = _run(tmp_path, ["inv_core.js"], """
+// A panel whose box answers by its classes: ids whole or broken, scrolling or not.
+const panel = ({ wide, wideOff, tall, spans = true, classes = [] }) => {
+  const el = document.createElement('div');
+  classes.forEach((c) => el.classList.add(c));
+  const w = () => (el.classList.contains('fcc-keep-whole-off') ? wideOff : wide);
+  const scrolls = () => el.classList.contains('fcc-question-scroll');
+  el.querySelector = (sel) => (sel === '.fcc-keep-whole' && spans ? {} : null);
+  el.getBoundingClientRect = () => ({ width: scrolls() ? Math.min(w(), innerWidth) : w(),
+                                      height: scrolls() ? Math.min(tall, innerHeight - 16) : tall });
+  Object.defineProperty(el, 'scrollWidth', { get: () => w() });
+  Object.defineProperty(el, 'clientWidth', { get: () => (scrolls() ? Math.min(w(), innerWidth) : w()) });
+  return el;
+};
+const out = {};
+for (const [key, vw, vh, spec] of [
+    ['fits', 360, 640, { wide: 340, wideOff: 330, tall: 500 }],
+    ['a very long id', 360, 640, { wide: 377, wideOff: 356, tall: 560 }],
+    ['too tall', 360, 640, { wide: 356, wideOff: 340, tall: 667 }],
+    ['a px of rounding', 360, 640, { wide: 360.4, wideOff: 340, tall: 624.4 }],
+    ['no ids to break', 360, 640, { wide: 377, wideOff: 300, tall: 500, spans: false }],
+    ["Derek's window, after a phone", 1600, 1300,
+     { wide: 560, wideOff: 540, tall: 350, classes: ['fcc-keep-whole-off', 'fcc-question-scroll'] }]]) {
+  window.innerWidth = vw; window.innerHeight = vh;
+  const p = panel(spec);
+  const said = window.fccFitQuestion ? window.fccFitQuestion(p) : null;
+  out[key] = { said, off: p.classList.contains('fcc-keep-whole-off'), scroll: p.classList.contains('fcc-question-scroll') };
+}
+return out;
+""")
+    got = {k: v for k, v in res.items() if k != "unhandled"}
+    want = {"fits": (False, False), "a very long id": (True, False), "too tall": (False, True),
+            "a px of rounding": (False, False), "no ids to break": (False, False),
+            "Derek's window, after a phone": (False, False)}
+    assert {k: (v["off"], v["scroll"]) for k, v in got.items()} == want, got
+    # It says what it did.
+    assert all(got[k]["said"] == {"off": w[0], "scroll": w[1]} for k, w in want.items()), got

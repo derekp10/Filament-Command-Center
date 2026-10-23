@@ -1325,12 +1325,36 @@ body {
     row-gap: 0 !important;
 }
 .fcc-qr-align > .btn {
-    min-width: 0 !important;
+    /* Its longest word, not the row's inline min-width: a box id kept whole
+       (.fcc-keep-whole) is one word, so its column is at least as wide. */
+    min-width: auto !important;
 }
 .fcc-qr-align > .fcc-confirm-qr-row {
     grid-column: 1 / -1;
     display: grid;
     grid-template-columns: subgrid;
+}
+/* A box id ("LR-MDB-1") and "slot 3" on a button that wraps (review,
+   2026-10-22): a line may break after any hyphen, which read "LR-MDB- / 1" on
+   a phone at Extra Large. inv_core.js fccKeepWhole wraps them in this. */
+.fcc-keep-whole {
+    white-space: nowrap;
+}
+/* ... unless an id that long can't fit the screen at all (fccFitQuestion). */
+.fcc-keep-whole-off .fcc-keep-whole {
+    white-space: normal;
+}
+/* A question taller than the window scrolls inside itself (review, 2026-10-22:
+   "Record it as coming from…" was 667 px high on a 360 x 640 phone at Extra
+   Large, cut at the top and the bottom where nothing scrolls). The mountOverlay
+   root centres it; 8 px stay clear above and below. inv_core.js fccFitQuestion
+   adds this only to a question that doesn't fit: a scroller draws its text
+   without the screen's sub-pixel smoothing, even when it has nothing to
+   scroll. */
+.fcc-question-scroll {
+    max-height: calc(100vh - 16px);
+    max-height: calc(100dvh - 16px);
+    overflow-y: auto;
 }
 
 /* --- RED ZONE: NAV DECK --- */

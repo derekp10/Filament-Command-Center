@@ -20,7 +20,14 @@ Extra Large:
   - nothing sticks out sideways: the page doesn't scroll sideways, the dialog
     is inside the window, and every button and QR card is inside the dialog;
   - "Record it as coming from…" still starts on the slot it pre-selects (else
-    No box) and its arrow keys still go slots, No box, Cancel, as drawn.
+    No box) and its arrow keys still go slots, No box, Cancel, as drawn;
+  - (review, 2026-10-22) on a 360 x 640 phone at Standard, Large and Extra
+    Large every question is inside the window, a tall one scrolling inside
+    itself to its last line, nothing sticks out sideways, each QR is still
+    under its button, and no button breaks a box id or "slot N" over a line.
+    RED on c5c9d1f: at Extra Large both record-source dialogs were cut by the
+    window (y -13 to 653 of 640 px), and at every size the store buttons and
+    the record source's slot split "LR-MDB- / 1" (or "slot / 1").
 The hermetic proof of the wiring is test_qr_under_buttons_js.py.
 
 READ-ONLY, like test_text_size_guard.py: every request that isn't a read is
@@ -267,3 +274,99 @@ def test_every_qr_sits_under_its_own_button(page: Page, base_url: str, api_base_
     if head:
         wrong += _quickswap(page, head, f"{size} @ {width} px, Quick-Swap confirm ({head})")
     assert not wrong, "QR codes not under their buttons:\n  " + "\n  ".join(wrong)
+
+
+# --- a short phone (review, 2026-10-22) -----------------------------------------
+# On a 360 x 640 phone at Extra Large "Record it as coming from…" was 667 px
+# high, centred, so its top and bottom were cut where nothing scrolls; and
+# button labels broke box ids at a hyphen ("LR-MDB- / 1 slot 1").
+
+# The panel on screen, whether its content can be scrolled to, and where it
+# sticks out; and every box id or "slot N" in a button that a line break splits.
+PHONE_JS = r"""([id, words]) => {
+    const root = document.getElementById(id);
+    const panel = root.firstElementChild;
+    const r = panel.getBoundingClientRect();
+    const out = { top: r.top, bottom: r.bottom, vh: innerHeight, sh: panel.scrollHeight, ch: panel.clientHeight,
+                  sw: panel.scrollWidth, cw: panel.clientWidth, split: [] };
+    // Scrolled to the end, the last thing in the panel is inside it.
+    panel.scrollTop = panel.scrollHeight;
+    const last = Array.from(panel.querySelectorAll('*')).filter((el) => el.getClientRects().length)
+        .reduce((m, el) => Math.max(m, el.getBoundingClientRect().bottom), 0);
+    out.lastInside = last <= panel.getBoundingClientRect().bottom + 0.5;
+    panel.scrollTop = 0;
+    // Each character's line (its top), per button.
+    root.querySelectorAll('button').forEach((b) => {
+        const chars = [];
+        const walker = document.createTreeWalker(b, NodeFilter.SHOW_TEXT);
+        const range = document.createRange();
+        let n;
+        while ((n = walker.nextNode())) for (let i = 0; i < n.length; i++) {
+            range.setStart(n, i); range.setEnd(n, i + 1);
+            const rr = range.getClientRects()[0];
+            chars.push({ c: n.data[i], top: rr ? Math.round(rr.top) : null });
+        }
+        const text = chars.map((x) => x.c).join('');
+        words.forEach((w) => {
+            for (let at = text.indexOf(w); at >= 0; at = text.indexOf(w, at + 1)) {
+                const tops = new Set(chars.slice(at, at + w.length).map((x) => x.top));
+                if (tops.size > 1) out.split.push(w + ' in "' + b.innerText.replace(/\s+/g, ' ').trim() + '"');
+            }
+        });
+    });
+    return out;
+}"""
+WORDS = ["LR-MDB-1", "PM-DB-XL-L", "slot 1", "slot 2"]
+
+
+@pytest.mark.parametrize("size", ["Standard", "Large", "Extra Large"])
+def test_a_short_phone_keeps_each_question_on_screen_and_box_ids_whole(page: Page, base_url: str, size):
+    """360 x 640: every question is inside the window (a tall one scrolls inside
+    itself, its last line reachable), nothing sticks out sideways, each QR is
+    still under its button, and no button breaks a box id or "slot N"."""
+    _read_only(page)
+    _store(page, size)
+    page.set_viewport_size({"width": 360, "height": 640})
+    _load(page, base_url)
+    wrong = []
+    for name, (opener, answer, oid, buttons) in DIALOGS.items():
+        where = f"{size} @ 360 x 640, {name}"
+        page.evaluate(opener, answer)
+        _qrs_drawn(page, oid)
+        wrong += _check(page.evaluate(MEASURE_JS, [oid, buttons]), where)
+        got = page.evaluate(PHONE_JS, [oid, WORDS])
+        if got["top"] < -0.5 or got["bottom"] > got["vh"] + 0.5:
+            wrong.append(f"{where}: cut by the window (y {got['top']:.1f} to {got['bottom']:.1f} of {got['vh']} px)")
+        if not got["lastInside"]:
+            wrong.append(f"{where}: its last line can't be scrolled to ({got['sh']} px of content in {got['ch']})")
+        if got["sw"] > got["cw"] + 1:
+            wrong.append(f"{where}: {got['sw']} px wide inside a {got['cw']} px dialog")
+        wrong += [f"{where}: a line break splits {s}" for s in got["split"]]
+        page.keyboard.press("Escape")
+        page.wait_for_function("(id) => !document.getElementById(id)", arg=oid, timeout=5000)
+    assert not wrong, "on a short phone:\n  " + "\n  ".join(wrong)
+
+
+@pytest.mark.parametrize("size", ["Standard", "Extra Large"])
+def test_a_question_that_fits_is_no_scroller(page: Page, base_url: str, size):
+    """A scroller draws its text without the screen's sub-pixel smoothing
+    (greyscale, not ClearType), even with nothing to scroll: the first version
+    of the short-phone fix made every question one, and the move question's
+    text lost its colour fringes on Derek's 1600 x 1300 window
+    (head-load-confirm-fed.png). Only a question taller than the window
+    scrolls (fccFitQuestion), so here none does."""
+    _read_only(page)
+    _store(page, size)
+    _load(page, base_url)
+    scrollers = []
+    for name, (opener, answer, oid, _buttons) in DIALOGS.items():
+        page.evaluate(opener, answer)
+        _qrs_drawn(page, oid)
+        page.wait_for_timeout(100)   # the fit's own check after the QRs are in
+        got = page.evaluate("""(id) => { const p = document.getElementById(id).firstElementChild;
+            return { oy: getComputedStyle(p).overflowY, cls: p.classList.contains('fcc-question-scroll') }; }""", oid)
+        if got["oy"] != "visible" or got["cls"]:
+            scrollers.append(f"{name}: {got}")
+        page.keyboard.press("Escape")
+        page.wait_for_function("(id) => !document.getElementById(id)", arg=oid, timeout=5000)
+    assert not scrollers, f"{size} @ 1600 x 1300: questions drawn as scrollers: {scrollers}"

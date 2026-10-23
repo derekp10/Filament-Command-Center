@@ -172,6 +172,62 @@ window.unionConfirmFedHeads = unionConfirmFedHeads;
 // is settled as superseded (`onCancel({superseded: true})`), so its host
 // listener, QR session and scan hold-off never outlive its DOM.
 const _openMoveConfirms = {};
+
+// --- KEEP A BOX ID WHOLE (review, 2026-10-22) ---
+// A button label that wraps on a phone may break a line after any hyphen:
+// "Just store it in LR-MDB-1 slot 1" read "in LR- / MDB-1 slot / 1" at Extra
+// Large. Takes HTML whose text is already escaped (no tags) and wraps each
+// hyphenated word ("LR-MDB-1", "PM-DB-XL-L") and each "slot N" in a span that
+// doesn't break (global.css .fcc-keep-whole); the label's text is unchanged.
+const fccKeepWhole = (html) => String(html == null ? '' : html)
+    .replace(/\w+(?:-\w+)+|\bslot \d+/g, (m) => `<span class="fcc-keep-whole">${m}</span>`);
+window.fccKeepWhole = fccKeepWhole;
+// --- FIT A QUESTION TO THE SCREEN (review, 2026-10-22) ---
+// fccFitQuestion(panel): called once a question is drawn, again when its QR
+// codes are in (generateSafeQR draws them two frames later, and a QR's column
+// is as wide as its card), and on a resize while it is open:
+//  - box ids stay whole unless that pushes the question past the screen's
+//    sides (a very long id on a 360 px phone at Extra Large): then they break
+//    at their hyphens again (.fcc-keep-whole-off);
+//  - a question taller than the window scrolls inside itself
+//    (.fcc-question-scroll), so its top and bottom are never cut ("Record it as
+//    coming from…" was 667 px high on a 360 x 640 phone at Extra Large). Only
+//    then: a scroller draws its text without the screen's sub-pixel smoothing
+//    (greyscale, not ClearType), so a question that fits keeps it.
+const _fitQuestionNow = (panel) => {
+    if (!panel || !panel.classList || typeof panel.getBoundingClientRect !== 'function') return null;
+    const vw = (document.documentElement && document.documentElement.clientWidth) || window.innerWidth || 0;
+    const vh = window.innerHeight || 0;
+    if (!(vw > 0) || !(vh > 0)) return null;
+    let off = false;
+    if (typeof panel.querySelector === 'function' && panel.querySelector('.fcc-keep-whole')) {
+        panel.classList.remove('fcc-keep-whole-off');
+        off = panel.getBoundingClientRect().width > vw + 0.5 || panel.scrollWidth > panel.clientWidth + 1;
+        if (off) panel.classList.add('fcc-keep-whole-off');
+    }
+    panel.classList.remove('fcc-question-scroll');
+    const scroll = panel.getBoundingClientRect().height > vh - 16 + 0.5;
+    if (scroll) panel.classList.add('fcc-question-scroll');
+    return { off, scroll };
+};
+const fccFitQuestion = (panel) => {
+    const now = _fitQuestionNow(panel);
+    if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => _fitQuestionNow(panel))));
+    }
+    if (panel && !panel._fccFitOnResize && typeof window.addEventListener === 'function') {
+        // Until the question is gone (it leaves with its overlay).
+        const onResize = () => {
+            if (!panel.isConnected) { window.removeEventListener('resize', onResize); return; }
+            _fitQuestionNow(panel);
+        };
+        panel._fccFitOnResize = onResize;
+        window.addEventListener('resize', onResize);
+    }
+    return now;
+};
+window.fccFitQuestion = fccFitQuestion;
+
 window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', host = null,
                                ids = {}, onConfirm = null, onCancel = null,
                                title = '', onStore = null, storeLabel = '', loadLabel = '',
@@ -194,8 +250,8 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         : `⚠️ ${esc(first.printer_name || 'A printer')} is ${esc(first.state || 'PRINTING')}`;
     const bodyText = threeWay ? msg : (msg || 'Moving a spool now will disrupt the print. Continue?');
     const buttons = threeWay
-        ? (hasLoad ? `<button type="button" ${idAttr(ids.yes)}class="btn btn-warning btn-sm fcc-apc-yes" style="min-width:120px;">${esc(loadLabel || 'Load it instead')}</button>` : '')
-          + (hasStore ? `<button type="button" ${idAttr(ids.store)}class="btn btn-info btn-sm fcc-apc-store" style="min-width:120px;">${esc(storeLabel || 'Just store it')}</button>` : '')
+        ? (hasLoad ? `<button type="button" ${idAttr(ids.yes)}class="btn btn-warning btn-sm fcc-apc-yes" style="min-width:120px;">${fccKeepWhole(esc(loadLabel || 'Load it instead'))}</button>` : '')
+          + (hasStore ? `<button type="button" ${idAttr(ids.store)}class="btn btn-info btn-sm fcc-apc-store" style="min-width:120px;">${fccKeepWhole(esc(storeLabel || 'Just store it'))}</button>` : '')
           + `<button type="button" ${idAttr(ids.no)}class="btn btn-secondary btn-sm fcc-apc-no" style="min-width:100px;">Cancel</button>`
         : `<button type="button" ${idAttr(ids.yes)}class="btn btn-warning btn-sm fcc-apc-yes" style="min-width:120px;">Continue Anyway</button>
                 <button type="button" ${idAttr(ids.no)}class="btn btn-secondary btn-sm fcc-apc-no" style="min-width:120px;">Cancel</button>`;
@@ -206,7 +262,7 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         ? `<div class="fcc-apc-status" role="alert" style="display:none; margin-bottom:10px; padding:6px 10px; border-radius:6px; background:#4a3200; color:#ffd27a; border:1px solid #ffb74d; font-weight:bold; text-align:left;"></div>`
         : '';
     const content = `
-        <div class="fcc-apc-panel" style="background:#1e1e1e; color:#fff; border:2px solid ${border}; border-radius:8px; padding:20px 24px; max-width:${threeWay ? 35 : 30}rem; text-align:center;">
+        <div class="fcc-apc-panel" style="background:#1e1e1e; color:#fff; border:2px solid ${border}; border-radius:8px; padding:20px min(24px, 4vw); max-width:${threeWay ? 35 : 30}rem; text-align:center;">
             <div class="fcc-apc-title" style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">${header}</div>
             <div class="fcc-apc-msg" style="color:#ffc; margin-bottom:14px;${threeWay ? ' text-align:left;' : ''}">${esc(bodyText)}</div>
             ${status}
@@ -341,6 +397,9 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
                     confirmLabel: 'Scan to Store', cancelLabel: 'Scan to Cancel', theme,
                     confirmTone: 'info', cancelTone: 'secondary' });
     }
+    // Fitted to the screen: box ids whole where they fit, and a question
+    // taller than the window scrolls inside itself.
+    fccFitQuestion(handle.panel);
     if (threeWay) {
         // The question on screen: processScan holds off every other scan until
         // it is answered (a second slot label used to start a second move
