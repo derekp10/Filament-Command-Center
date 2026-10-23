@@ -1827,7 +1827,8 @@ body {
    equal counts (8 -> 4 + 4, 7 -> 4 + 3, 10 -> 5 + 5), beside the name column
    like the XL row. --fcc-ps-cols is the longest row's count; each row's first
    tile starts in column 1 (so 7 in three rows reads 3 + 2 + 2). Where fewer
-   than three fit beside the name (a phone), the tiles go under it. */
+   than three fit beside the name (a phone, or a narrow window at a big Text
+   size), the tiles go under it when that takes fewer rows of tiles. */
 .fcc-ps-toolheads.fcc-ps-balanced {
     display: grid;
     grid-template-columns: repeat(var(--fcc-ps-cols, 1), max-content);

@@ -502,12 +502,15 @@
     // they don't all fit on one line there, they split into the FEWEST rows
     // with EQUAL counts: 8 -> 4 + 4, 7 -> 4 + 3, 10 -> 5 + 5, never 7 + 1
     // (the INDX's 8 heads used to drop under the name, then wrap 7 + 1 at
-    // Large and Extra Large). Where fewer than three tiles fit beside the name
-    // (a phone, a narrow window at a big Text size), the tiles go under the
-    // name and use the row's whole width, split the same way. Rows as equal
-    // as they can be, the longer ones first (7 in three rows is 3 + 2 + 2).
-    // A row of one tile is left only where at most two fit across the whole
-    // row and the count is odd (a phone: 2 + 2 + 1).
+    // Large and Extra Large). Rows as equal as they can be, the longer ones
+    // first (7 in three rows is 3 + 2 + 2). Where fewer than three tiles fit
+    // beside the name (a phone, or a narrow window at a big Text size), the
+    // tiles go under the name and use the row's whole width, split the same
+    // way, but only when that takes fewer rows of tiles (or none fit beside
+    // the name): 4 heads with room for two beside it stay there as 2 + 2,
+    // where under it they were 2 + 2 as well, plus a line for the name
+    // (review, 2026-10-22). A row of one tile is left only where at most two
+    // fit across the whole row and the count is odd (a phone: 2 + 2 + 1).
     //
     // tileRows(n, side, full) -> {below, cols, rows, sizes}: `side` is how
     // many tiles fit beside the name, `full` how many fit across the row.
@@ -518,7 +521,8 @@
         if (!count) return { below: false, cols: 0, rows: 0, sizes: [] };
         const s = Math.max(0, Math.floor(Number(side) || 0));
         const f = Math.max(s, Math.floor(Number(full) || 0));
-        const below = !(s >= count || s >= MIN_BESIDE);
+        const below = !(s >= count || s >= MIN_BESIDE)
+            && (s === 0 || Math.ceil(count / Math.max(1, f)) < Math.ceil(count / s));
         const per = Math.max(1, below ? f : s);
         const rows = Math.ceil(count / per);
         const big = count % rows;            // rows that get one tile more
@@ -536,44 +540,86 @@
     // size change and when the body's width changes; does nothing while the
     // widget is collapsed (the body has no width), and the body's width
     // changing on expand runs it again.
+    //
+    // Widths are read to the fraction of a px (review, 2026-10-22): at a
+    // display scale of 110 % a row 1439.83 px wide read as 1440 (clientWidth
+    // is a whole px), one tile more than fits was counted beside the name,
+    // and the tiles wrapped under it while the layout said beside. Then what
+    // the browser drew is checked, all reads and then all writes again: a row
+    // planned beside the name that went under it, or a line of tiles wider
+    // than its row, is laid out again with one tile fewer per line, so a
+    // rounding the sums don't see (a gap at another scale) can't leave it
+    // wrong either.
     const _balanceRows = () => {
         const widget = document.getElementById('printer-status-widget');
         const body = widget && widget.querySelector('.fcc-ps-body');
         if (!body || typeof body.querySelectorAll !== 'function') return;
         const px = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
-        const plans = [];
+        // The row's content box, to the fraction of a px.
+        const contentBox = (row) => {
+            const r = row.getBoundingClientRect();
+            const rs = getComputedStyle(row);
+            const left = r.left + px(rs.borderLeftWidth) + px(rs.paddingLeft);
+            const right = r.right - px(rs.borderRightWidth) - px(rs.paddingRight);
+            return { left, right, width: right - left, gap: px(rs.columnGap) };
+        };
+        const rows = [];
         body.querySelectorAll('.fcc-ps-row').forEach((row) => {
             const heads = row.querySelector('.fcc-ps-toolheads');
             const nameCol = row.querySelector('.fcc-ps-name-col');
             const tiles = heads ? Array.from(heads.children).filter(el => el.classList && el.classList.contains('fcc-ps-th')) : [];
             if (!heads || !nameCol || !tiles.length) return;
-            const rs = getComputedStyle(row);
-            const rowW = row.clientWidth - px(rs.paddingLeft) - px(rs.paddingRight);
+            const box = contentBox(row);
             const tileW = tiles[0].getBoundingClientRect().width;
-            if (!(rowW > 0) || !(tileW > 0)) return;
+            if (!(box.width > 0) || !(tileW > 0)) return;
             const gap = px(getComputedStyle(heads).columnGap);
-            const nameW = nameCol.getBoundingClientRect().width + px(rs.columnGap);
-            // Half a px of slack: k tiles and k - 1 gaps that fit exactly
-            // must not lose a tile to rounding.
-            const fit = (w) => Math.max(0, Math.floor((w + gap + 0.5) / (tileW + gap)));
-            plans.push({ heads, tiles, plan: tileRows(tiles.length, fit(rowW - nameW), fit(rowW)) });
+            const nameW = nameCol.getBoundingClientRect().width + box.gap;
+            // A twentieth of a px of slack, so k tiles and k - 1 gaps that fit
+            // exactly don't lose a tile to a gap's rounding; the check below
+            // catches the rare line it lets through.
+            const fit = (w) => Math.max(0, Math.floor((w + gap + 0.05) / (tileW + gap)));
+            rows.push({ row, heads, nameCol, tiles, side: fit(box.width - nameW), full: fit(box.width), plan: null });
         });
-        plans.forEach(({ heads, tiles, plan }) => {
-            heads.classList.add('fcc-ps-balanced');
-            heads.classList.toggle('fcc-ps-below', plan.below);
-            heads.style.setProperty('--fcc-ps-cols', String(plan.cols));
-            heads.dataset.rows = plan.sizes.join('+');
-            heads.dataset.place = plan.below ? 'below' : 'beside';
+        const lay = (r) => {
+            const plan = tileRows(r.tiles.length, r.side, r.full);
+            r.plan = plan;
+            r.heads.classList.add('fcc-ps-balanced');
+            r.heads.classList.toggle('fcc-ps-below', plan.below);
+            r.heads.style.setProperty('--fcc-ps-cols', String(plan.cols));
+            r.heads.dataset.rows = plan.sizes.join('+');
+            r.heads.dataset.place = plan.below ? 'below' : 'beside';
             let start = 0;
             const starts = new Set(plan.sizes.map((size) => { const at = start; start += size; return at; }));
-            tiles.forEach((tile, i) => { tile.style.gridColumnStart = (i > 0 && starts.has(i)) ? '1' : ''; });
-        });
+            r.tiles.forEach((tile, i) => { tile.style.gridColumnStart = (i > 0 && starts.has(i)) ? '1' : ''; });
+        };
+        rows.forEach(lay);
+        // Drawn as planned? Beside the name means right of its column (a row
+        // that wrapped starts under it); and the first, longest, line of
+        // tiles ends inside the row.
+        const drawnWrong = (r) => {
+            const { plan } = r;
+            if (!plan.cols) return false;
+            if (!plan.below && r.heads.getBoundingClientRect().left < r.nameCol.getBoundingClientRect().right - 0.5) return true;
+            return r.tiles[plan.cols - 1].getBoundingClientRect().right > contentBox(r.row).right + 0.01;
+        };
+        for (let pass = 0; pass < 3; pass++) {
+            const wrong = rows.filter(drawnWrong);
+            if (!wrong.length) break;
+            wrong.forEach((r) => {
+                const fewer = Math.max(0, r.plan.cols - 1);
+                if (r.plan.below) r.full = fewer; else r.side = fewer;
+                r.side = Math.min(r.side, r.full);
+                lay(r);
+            });
+        }
     };
     window.balancePrinterStatusRows = _balanceRows;
 
     // The body's width: the window, a scrollbar coming or going, the widget
     // opening. Only a change of width lays the rows out again (their height
-    // changes when they do, and must not start it over).
+    // changes when they do, and must not start it over). Compared to the
+    // fraction of a px: at a display scale such as 110 % a window one device
+    // px narrower is 0.91 px narrower, which rounding could hide.
     let _bodyWidth = -1;
     let _widthFrame = 0;
     const _watchBodyWidth = (body) => {
@@ -581,7 +627,7 @@
         body._fccPsWidthWatched = true;
         new ResizeObserver((entries) => {
             const entry = entries && entries[entries.length - 1];
-            const w = entry ? Math.round(entry.contentRect.width) : -1;
+            const w = entry ? entry.contentRect.width : -1;
             if (w === _bodyWidth) return;
             _bodyWidth = w;
             // Out of the observer's callback: the layout it changes would

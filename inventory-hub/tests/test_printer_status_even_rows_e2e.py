@@ -22,7 +22,13 @@ XL-like one with 5, as dev has. Pinned:
   - collapsing and opening the widget, the ▲▼ reorder and a heartbeat that
     repaints keep the rows even;
   - the material line is 1.2 high at Large (the box text-truncate clips its
-    "g" and "y" to), inside its tile.
+    "g" and "y" to), inside its tile;
+  - every check holds the lines drawn to the ones the layout recorded
+    (data-rows, data-place), and 7 and 10 heads at 1024 px Extra Large are
+    3 + 2 + 2 and 3 + 3 + 2 + 2, each row starting in the first column (review,
+    2026-10-22: with that line of the layout deleted, the 8 and 5 heads came
+    out the same and every check passed; now that test is RED there, drawn
+    3 + 3 + 1 and 3 + 3 + 3 + 1).
 The rule itself and the narrow widths are test_printer_status_even_rows.py
 (hermetic, under --offline).
 
@@ -80,32 +86,45 @@ LAYOUT_JS = r"""() => {
         lines.sort((a, b) => a.top - b.top);
         const beside = tiles.every((r) => r.left >= nameR.right - 0.5);
         const below = tiles.every((r) => r.top >= nameR.bottom - 0.5);
+        const heads = row.querySelector('.fcc-ps-toolheads');
         out[row.dataset.printer] = { rows: lines.map((l) => l.n).join('+'),
             place: beside ? 'beside' : (below ? 'below' : 'mixed'),
-            out: tiles.filter((r) => r.right > rowR.right + 0.5 || r.left < rowR.left - 0.5).length };
+            out: tiles.filter((r) => r.right > rowR.right + 0.5 || r.left < rowR.left - 0.5).length,
+            data: heads.dataset.rows || null, dataPlace: heads.dataset.place || null };
     });
     return out;
 }"""
+
+
+def _drawn_as_recorded(got: dict) -> dict:
+    """Every printer's tiles as the layout recorded them (review, 2026-10-22):
+    the lines drawn are data-rows, where data-place says. Checks of fixed
+    strings alone passed a layout whose CSS drew 3 + 3 + 1 for a planned
+    3 + 2 + 2, or tiles that wrapped under the name while it said beside."""
+    wrong = {k: v for k, v in got.items() if (v["rows"], v["place"]) != (v["data"], v["dataPlace"])}
+    assert not wrong, f"drawn differently from what the layout recorded: {wrong}"
+    return {k: {"rows": v["rows"], "place": v["place"], "out": v["out"]} for k, v in got.items()}
 
 
 def _store(page: Page, name: str):
     page.add_init_script("(() => { try { localStorage.setItem(%r, %r); } catch (e) {} })();" % (KEY, name))
 
 
-def _open(page: Page, base_url: str, size: str = "Standard", width: int = 1600, height: int = 1300):
+def _open(page: Page, base_url: str, size: str = "Standard", width: int = 1600, height: int = 1300, fleet=None):
+    fleet = fleet or FLEET
     _read_only(page)
-    stub_printer_fleet(page, FLEET)
+    stub_printer_fleet(page, fleet)
     _store(page, size)
     page.set_viewport_size({"width": width, "height": height})
     page.goto(base_url, wait_until="domcontentloaded")
-    page.wait_for_function("() => typeof state !== 'undefined' && state.locationsLoaded"
-                           " && document.querySelectorAll('#printer-status-widget .fcc-ps-row').length === 2",
-                           timeout=45_000)
+    page.wait_for_function("(n) => typeof state !== 'undefined' && state.locationsLoaded"
+                           " && document.querySelectorAll('#printer-status-widget .fcc-ps-row').length === n",
+                           arg=len(fleet), timeout=45_000)
     page.wait_for_timeout(800)
 
 
 def _layout(page: Page):
-    return page.evaluate(LAYOUT_JS)
+    return _drawn_as_recorded(page.evaluate(LAYOUT_JS))
 
 
 def _settled(page: Page, want: dict):
@@ -179,7 +198,27 @@ def test_collapse_reorder_and_a_repaint_keep_the_rows_even(page: Page, base_url:
         return { repainted: !!document.querySelector("#printer-status-widget .fcc-ps-th[data-spool-id='9402']"),
                  layout: (eval(js))() }; }""", [INDX, XL, LAYOUT_JS])
     assert got["repainted"], got
+    _drawn_as_recorded(got["layout"])
     assert (got["layout"][INDX]["rows"], got["layout"][XL]["rows"]) == ("4+4", "3+2"), got
+
+
+# Counts a plain grid fill draws unevenly (3 + 3 + 1, 3 + 3 + 3 + 1) where three
+# tiles fit beside the name: only each row's first tile starting in column 1
+# draws the rule's 3 + 2 + 2 (review, 2026-10-22: the 8 and 5 heads above come
+# out the same either way).
+UNEVEN = {
+    "ZZ Seven": {"state": {"state": "IDLE", "is_active": False},
+                 "heads": [(f"ZS-{i}", True, _item(9320 + i, "PETG") if i == 1 else None) for i in range(1, 8)]},
+    "ZZ Ten": {"state": {"state": "IDLE", "is_active": False},
+               "heads": [(f"ZT-{i}", True, None) for i in range(1, 11)]},
+}
+
+
+def test_seven_and_ten_heads_start_each_row_in_the_first_column(page: Page, base_url: str):
+    _open(page, base_url, "Extra Large", 1024, 900, fleet=UNEVEN)
+    got = _layout(page)
+    assert got == {"ZZ Seven": {"rows": "3+2+2", "place": "beside", "out": 0},
+                   "ZZ Ten": {"rows": "3+3+2+2", "place": "beside", "out": 0}}, got
 
 
 def test_the_material_line_is_1_2_high_at_large(page: Page, base_url: str):

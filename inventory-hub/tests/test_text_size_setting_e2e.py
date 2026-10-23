@@ -390,27 +390,31 @@ BIG_FLEET = {"ZZ Big %s" % p: {"state": {"state": "IDLE", "is_active": False},
 
 
 # Each printer row's tiles (Derek, 2026-10-22: even rows beside the name): the
-# count on each line of tiles, and whether every tile sits right of the name.
+# count on each line of tiles, whether every tile sits right of the name, and
+# what the layout recorded (data-rows, data-place).
 PS_ROWS_JS = r"""() => Array.from(document.querySelectorAll('#printer-status-widget .fcc-ps-row')).map((row) => {
     const nameR = row.querySelector('.fcc-ps-name-col').getBoundingClientRect();
     const tiles = Array.from(row.querySelectorAll('.fcc-ps-th')).map((t) => t.getBoundingClientRect());
     const lines = [];
     tiles.forEach((r) => { const l = lines.find((x) => Math.abs(x.top - r.top) < 2); if (l) l.n++; else lines.push({ top: r.top, n: 1 }); });
     lines.sort((a, b) => a.top - b.top);
+    const heads = row.querySelector('.fcc-ps-toolheads');
     return { printer: row.dataset.printer, rows: lines.map((l) => l.n),
-             beside: tiles.every((r) => r.left >= nameR.right - 0.5) }; })"""
+             beside: tiles.every((r) => r.left >= nameR.right - 0.5),
+             data: heads ? (heads.dataset.rows || null) : null, dataPlace: heads ? (heads.dataset.place || null) : null }; })"""
 
 
 def _uneven(rows: list) -> list:
     """The printer rows whose tiles aren't in even rows beside the name: the
-    lines differ by more than one, a longer line follows a shorter one, or one
-    tile sits alone under fuller lines."""
+    lines differ by more than one, a longer line follows a shorter one, one
+    tile sits alone under fuller lines, or the lines drawn aren't the ones the
+    layout recorded (review, 2026-10-22)."""
     bad = []
     for r in rows:
         n = r["rows"]
         if not n:
             continue   # a printer with no heads draws no tiles
-        if not r["beside"] or max(n) - min(n) > 1 or n != sorted(n, reverse=True) or (len(n) > 1 and n[-1] == 1):
+        if not r["beside"] or max(n) - min(n) > 1 or n != sorted(n, reverse=True) or (len(n) > 1 and n[-1] == 1)                 or r["data"] != "+".join(map(str, n)) or r["dataPlace"] != "beside":
             bad.append(r)
     return bad
 
@@ -444,8 +448,8 @@ def test_printer_status_leaves_the_deck_and_the_buffer_on_screen(page: Page, bas
     assert d["body"]["sh"] > d["body"]["ch"] + 1 and d["body"]["oy"] in ("auto", "scroll"), (
         f"{name} {window}: Printer Status should scroll inside itself here: {d}")
     rows = page.evaluate(PS_ROWS_JS)
-    assert len(rows) == 3 and all(r["rows"] == [4, 4] and r["beside"] for r in rows), (
-        f"{name} {window}: the 8 heads should be 4 + 4 beside each name: {rows}")
+    assert len(rows) == 3 and all(r["rows"] == [4, 4] for r in rows) and not _uneven(rows), (
+        f"{name} {window}: the 8 heads should be 4 + 4 beside each name, as recorded: {rows}")
 
 
 @pytest.mark.parametrize("name", SIZES)
