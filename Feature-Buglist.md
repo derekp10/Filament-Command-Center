@@ -158,7 +158,7 @@
   walkthrough); and an archived spool scanned onto a toolhead is un-archived and loaded when its record still has
   filament, refused at 0 g; built.)_ **Dev still holds the long-list scenario:** `low_stock_g` 925 (was 250) and two
   sample exclusions (filaments 91 and 96): Claude puts them back.
-* **🔠 Readability: the text-size rule app-wide, and a Text size setting (Derek's 2026-10-21 walkthrough; BUILT, his picture walk 2026-10-22).**
+* **🔠 Readability: the text-size rule app-wide, and a Text size setting (Derek's 2026-10-21 walkthrough; BUILT; his picture walk 2026-10-22 approved it, with three changes before the merge).**
   He went through the audit's samples one at a time (`review-samples/2026-10-21-text-size/`) and approved each: the
   dashboard ("this is better as well"), Printer Status, the slot picker as sampled (the long maker line wraps; the
   "⭐ Recommended" tag trimmed so "SLOT 1" stays on one line), the QR questions, and badges at 12.8 px everywhere ("will
@@ -180,6 +180,14 @@
   `walkthrough` and `review-fixes`), with three questions: keep the INDX row wrapping 7 + 1 at Large / Extra Large;
   the Settings help lines' lighter grey (a contrast fix); Printer Status's material line height (1.1 → 1.2). Then the
   merge to `dev`, with the CLAUDE.md entries.
+  **Walk, 2026-10-22:** all five items approved (the four sizes; the Load QR's amber; the slot picker at Extra Large;
+  Settings → This Browser and its lighter help lines; the title bar's squeeze at Extra Large accepted: "I don't think
+  there's a good way around that"). **Three changes before the merge:** (1) each "📷 Scan to …" QR sits directly under
+  its own button in the question dialogs ("otherwise they are slightly skewed"); (2) Printer Status, when a printer's
+  heads don't fit on one row beside its name, splits them into even rows (the INDX's 8 → 4 + 4, never 7 + 1), and the
+  filament line gets 1 px more height so a "g" or "y" never clips; (3) then pictures of both printers in each spacing
+  style (name on the left with the column's gap, as the XL is now; a narrower name column; the name above the tiles, as
+  the INDX is now), and Derek picks ("Both have merits"). Design follow-ups from the walk are filed under 🗒️ Notes.
 * **📐 Plan docs: named sizes and colors as the base for themes; alternative views (phone, wall tablet, printer pictures,
   the Location Manager) (Derek, 2026-10-21; written, `dev` `c7dafaa`).** "Themes" in his sense are whole alternative designs a user
   can choose ("what we have now, or future ones, possibly ones that focus on using images of the printers themselves"),
@@ -200,6 +208,16 @@
 > Ordinary backlog items, not hands-on work; most name the group that owns them. This heading was added on
 > 2026-10-19 so they stop reading as part of ⏸️ PENDING DEREK above, which had no closing heading.
 
+* **🎨 Design follow-ups from the 2026-10-22 text-size walk (each one: a sample to Derek before any restyle).**
+  (a) **The slot picker in printer mode:** "it just looks scattered, and it's hard to tell what is what"; its slots
+  break onto a second row and leave a lot of empty space after the head list. Rethink the layout (his idea: a 3×3 grid
+  for the heads). (b) **The slot picker's Swap / Overwrite / Back panel:** "the buttons are all over the place", their
+  two-line labels make it hard to tell which QR does what ("Yellow to Yellow, but what does yellow button do again"):
+  use the move questions' pattern, three short buttons each with its QR under it, and the details as one line of text.
+  (c) **Settings as a side panel:** section names (This Browser, Connection, Behavior, …) on the left, the open
+  section's settings on the right. (d) **Grey help text on black** "might need a re-think later" (the 2026-10-22 build
+  only lifted it to pass the contrast guard): with step 2's named colours. (e) **The title bar at Extra Large:** if the
+  squeeze ever bothers him, Backlog and Queue could shrink to their icon and count at that size. **Standalone.**
 * **📱 Phone view first, with spool tags (Derek, 2026-10-21).** The phone ("pocket") view comes before the tablet one:
   Android (a Pixel 11 Pro XL), Chrome, a web page (no app for now). Testing over plain http uses Chrome's "Insecure
   origins treated as secure" flag on the phone; real HTTPS comes later from a reverse-proxy container with a
