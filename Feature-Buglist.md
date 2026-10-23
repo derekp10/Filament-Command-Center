@@ -208,6 +208,35 @@
 > Ordinary backlog items, not hands-on work; most name the group that owns them. This heading was added on
 > 2026-10-19 so they stop reading as part of ⏸️ PENDING DEREK above, which had no closing heading.
 
+* **🐞 Cancelled prints are under-charged because the cancel parser skips arc moves (found 2026-10-23).** FCC's
+  prefix parser (the cancel / M73 path) walks the G-code's extrusion but ignores G2 / G3 arcs. Counting them takes
+  Derek's raccoon INDX print (whole file) from 48.43 g to 52.26 g against the slicer footer's 52.27 g, so the "~7%
+  under the footer" on cancelled multi-tool prints is FCC's own bug, not missing printer data; a raccoon print
+  cancelled at 50% was 1.96 g short. Fix: count arcs; log a warning when a whole-file parse and the footer differ by
+  more than 2% for any head (FCC's Core One fixture parses ~1.3% OVER its footer for another reason, so keep scaling /
+  clamping to the footer too); a completed print whose footer can't be read opens a review instead of recording 0 g.
+  The same extrusion walk feeds the planned M600 colour split (Group 22.3b), and the fix shrinks the PENDING DEREK
+  "capture one raw multi-slot .bgcode" item to its weigh-before-and-after check. Needs no printer (file fixtures).
+  Past cancels: leave them (weigh any doubtful spool), or list them with what each missed (Derek's call).
+  **Standalone.**
+* **🐞 A print re-mapped to another head on the printer is charged to the wrong spool (found 2026-10-23).** FCC charges
+  the file's tool N to head N (`print_deduct.py`, "the tool index IS the toolhead position"). Derek re-maps at print
+  start (job 1104 was sliced for head 1 and run on head 2, Group 43.3), and firmware 7.0's sticky and Smart mapping
+  make that more common; a SpoolJoin run-out switch is invisible too. The printer's metrics stream (`M334`, UDP) sends
+  `active_extruder` every second, the PHYSICAL head on the INDX and XL, which could show both. Facts: metrics are OFF
+  in production firmware; changing them asks "Allow the changes?" on the printer's screen; the setting survives a
+  restart; a parked INDX reports no tool; plain UDP, so prod would need a UDP port on FCC's TrueNAS app. Next step when
+  Derek wants it: a small listener on dev, then one short re-mapped print with metrics on (needs a printer and a real
+  print). **Standalone.**
+* **⚠️ After a printer moves to firmware 8.0, check FCC's first completed and first cancelled deduct (noted
+  2026-10-23).** 8.0.0 (2026-10-22) also brings 7.0's changes to a printer that skipped it (the INDX was on 6.9.2 in
+  October): PrusaLink file downloads keep long file names (FCC downloads each job's file by the path PrusaLink reports,
+  and prod's ledger holds 8.3 names like `/usb/MAIN-B~1.BGC`), a Runout Reaction setting (FCC's run-out split keys off
+  the pause) and tool-mapping changes. PrusaLink's own status looks unchanged in 8.0 (likely, not checked live); 8.0's
+  new per-head usage data goes only to Prusa's cloud service, which has no public API. 8.0's OpenPrintTag reader is
+  CORE One / L only for now; it adds to a tag's `consumed_weight` every 5 minutes and at print end (cancels too) and
+  unload, so once a reader printer writes a tag, FCC's own tag writes must add deltas, never overwrite (an absolute
+  write is fine while none of Derek's printers write tags). **Standalone.**
 * **🎨 Design follow-ups from the 2026-10-22 text-size walk (each one: a sample to Derek before any restyle).**
   (a) **The slot picker in printer mode:** "it just looks scattered, and it's hard to tell what is what"; its slots
   break onto a second row and leave a lot of empty space after the head list. Rethink the layout (his idea: a 3×3 grid
