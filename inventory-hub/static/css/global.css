@@ -1003,6 +1003,27 @@ body {
     border-color: #ff4444;
 }
 
+/* A purple button: "No box" in "Record it as coming from…" (Derek, 2026-10-23:
+   grey, it and its QR were too close to Cancel's dark grey). Bootstrap's own
+   purple, which Bootstrap 5.3 has no button for, built as its btn-* variants
+   are (hover and active 15 % / 20 % darker); white text 6.5:1. Its QR wears
+   the same purple (inv_core.js QR_TONES.purple). */
+.btn-purple {
+    --bs-btn-color: #fff;
+    --bs-btn-bg: #6f42c1;
+    --bs-btn-border-color: #6f42c1;
+    --bs-btn-hover-color: #fff;
+    --bs-btn-hover-bg: #5e38a4;
+    --bs-btn-hover-border-color: #59359a;
+    --bs-btn-focus-shadow-rgb: 133, 94, 202;
+    --bs-btn-active-color: #fff;
+    --bs-btn-active-bg: #59359a;
+    --bs-btn-active-border-color: #533291;
+    --bs-btn-disabled-color: #fff;
+    --bs-btn-disabled-bg: #6f42c1;
+    --bs-btn-disabled-border-color: #6f42c1;
+}
+
 
 /* ========================================= */
 /* FCC SEMANTIC CLASSES - THE GOLD STANDARD  */

@@ -2304,6 +2304,15 @@ const _askRecordSource = (pick, sid, host) => {
         // ones; every slot when several are free) sit on a line above them,
         // in feed order, so the keys still go slots, No box, Cancel.
         const slotsAbove = feeds.map((f, i) => (f === pre ? '' : optBtn(f, i))).join('');
+        // What each answer does later (Derek, 2026-10-23: "Return and eject
+        // send it back there" read "back where?"; the spool was never in the
+        // slot). A slot: ↩️ Return and ⏏️ Eject put the spool in it. No box:
+        // Return asks for a slot unless only one free slot feeds the head
+        // (routes_bindings._return_plan), and Eject leaves it Unassigned
+        // after its own question (logic._eject_destination, Group 41.8).
+        const msg = `${esc(Who)} isn't coming from a box, so pick a slot feeding ${esc(head)}: ↩️ Return and ⏏️ Eject`
+            + ' will put it in that slot later. With No box, Return will ask which slot (or use the only free one),'
+            + ' and Eject will leave it Unassigned.';
         handle = window.mountOverlay({
             id: 'fcc-record-source',
             tier: 'confirm',
@@ -2312,10 +2321,10 @@ const _askRecordSource = (pick, sid, host) => {
             content: `
                 <div class="fcc-rs-panel" style="background:#1e1e1e; color:#fff; border:2px solid #0dcaf0; border-radius:8px; padding:18px min(22px, 4vw); max-width:38.75rem; text-align:center;">
                     <div class="fcc-rs-title" style="font-size:1.15em; font-weight:bold; margin-bottom:6px;">🔗 Record ${esc(who)} as coming from…</div>
-                    <div class="fcc-rs-msg" style="color:#ffc; margin-bottom:12px; text-align:left;">${esc(Who)} isn't coming from a box. Which slot feeding ${esc(head)} is its home? Return and eject send it back there.</div>
+                    <div class="fcc-rs-msg" style="color:#ffc; margin-bottom:12px; text-align:left;">${msg}</div>
                     <div class="fcc-rs-status" role="alert" style="display:none; margin-bottom:10px; padding:6px 10px; border-radius:6px; background:#4a3200; color:#ffd27a; border:1px solid #ffb74d; font-weight:bold; text-align:left;"></div>
                     ${slotsAbove ? `<div class="fcc-rs-slots" style="display:flex; gap:10px; justify-content:center; flex-wrap:wrap; margin-bottom:10px;">${slotsAbove}</div>` : ''}
-                    <div class="fcc-rs-btns" style="display:flex; gap:10px; justify-content:center; flex-wrap:wrap;">${pre ? optBtn(pre, feeds.indexOf(pre)) : ''}<button type="button" class="btn btn-sm btn-secondary fcc-rs-none">No box</button><button type="button" class="btn btn-sm btn-dark fcc-rs-cancel">Cancel</button></div>
+                    <div class="fcc-rs-btns" style="display:flex; gap:10px; justify-content:center; flex-wrap:wrap;">${pre ? optBtn(pre, feeds.indexOf(pre)) : ''}<button type="button" class="btn btn-sm btn-purple fcc-rs-none">No box</button><button type="button" class="btn btn-sm btn-dark fcc-rs-cancel">Cancel</button></div>
                     <div class="fcc-rs-hint" style="font-size:var(--fcc-fs-small); color:#ccc; margin-top:8px;">←/→ move · Enter chooses · scan a slot's label to choose it · Esc goes back</div>
                 </div>`,
             initialFocus: pre ? `.fcc-rs-opt[data-rs-i="${feeds.indexOf(pre)}"]` : '.fcc-rs-none',
@@ -2377,7 +2386,8 @@ const _askRecordSource = (pick, sid, host) => {
             // With a slot pre-selected, No box gets its own code (Group 40
             // review, BD-6): a scan-only user could pick only that slot or Back.
             // Each code takes its button's colour (2026-10-21): the slot is
-            // cyan (btn-info), No box grey (btn-secondary), Cancel dark (btn-dark).
+            // cyan (btn-info), No box purple (btn-purple: its own colour since
+            // 2026-10-23, grey was too close to Cancel's), Cancel dark (btn-dark).
             qr = window.attachConfirmQRs({
                 host: panel,
                 // Each QR under its own button (2026-10-22).
@@ -2388,7 +2398,7 @@ const _askRecordSource = (pick, sid, host) => {
                 confirmLabel: pre ? `Scan: ${pre.box} slot ${pre.slot}` : 'Scan: No box',
                 storeLabel: 'Scan: No box',
                 cancelLabel: 'Scan to go Back', theme: 'info',
-                confirmTone: pre ? 'info' : 'secondary', storeTone: 'secondary', cancelTone: 'dark',
+                confirmTone: pre ? 'info' : 'purple', storeTone: 'purple', cancelTone: 'dark',
             });
         }
         // Fitted to the screen (window.fccFitQuestion): box ids whole where they

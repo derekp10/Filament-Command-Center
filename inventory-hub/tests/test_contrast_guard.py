@@ -369,15 +369,20 @@ def test_location_table_read_notice_has_no_gray_on_gray_text(page: Page, base_ur
 @pytest.mark.parametrize("size", ["Standard", "Extra Large"])
 def test_qr_questions_are_readable(page: Page, base_url: str, assert_contrast, size):
     """Each "📷 Scan to …" QR wears its button's colour (Derek, 2026-10-21):
-    amber, cyan, grey, light and dark captions on the dark dialogs, and the
-    captions are now label size. The move question in its four shapes and
-    "Record it as coming from…" are opened with no-op answers and closed with
-    Escape: nothing is moved or recorded.
+    amber, cyan, grey, light, dark and purple captions on the dark dialogs,
+    and the captions are now label size. The move question in its four shapes
+    and "Record it as coming from…" are opened with no-op answers and closed
+    with Escape: nothing is moved or recorded.
 
     Since 2026-10-22 each QR sits under its own button, the buttons spread to
     match (test_qr_under_buttons_e2e.py): the buttons and their QRs share one
     grid, the record-source's slots without a QR sit on a line above it. Both
-    are judged here, at Standard and Extra Large."""
+    are judged here, at Standard and Extra Large.
+
+    Since 2026-10-23 "No box" is purple (btn-purple: white on #6f42c1, 6.5:1;
+    hovered #5e38a4) and so is its QR caption (#a98eda): Derek found the grey
+    too close to Cancel's. RED on 15ce8f4 (product files at 15ce8f4 under
+    this test): No box was white on grey rgb(108, 117, 125)."""
     import conftest
     page.add_init_script("(() => { try { localStorage.setItem('fcc.textSize', %r); } catch (e) {} })();" % size)
     page.goto(base_url)
@@ -418,6 +423,25 @@ def test_qr_questions_are_readable(page: Page, base_url: str, assert_contrast, s
     # The slot's box id and "slot 1" are each kept whole in a span
     # (2026-10-22 review), so each is judged as its own text.
     assert any(t.startswith("No box") for t in scored) and "LR-MDB-1" in scored and "slot 1" in scored, scored
+    # No box has its own purple (Derek, 2026-10-23: grey, it and its QR were
+    # too close to Cancel's): white on Bootstrap's purple, hovered too, and its
+    # QR caption the lighter purple, each judged above.
+    def no_box_and_its_caption():
+        by_text = {o["text"]: o for o in conftest.contrast_offenders(row, min_ratio=100)}
+        caption = next((o for t, o in by_text.items() if "SCAN: NO BOX" in t.upper()), None)
+        return by_text.get("No box"), caption, by_text
+    no_box_settled = """() => { const b = document.querySelector('#fcc-record-source .fcc-rs-none');
+        return !!b && b.getAnimations().length === 0; }"""   # Bootstrap's 0.15 s colour transition
+    page.wait_for_function(no_box_settled, timeout=5000)
+    nobox, caption, seen = no_box_and_its_caption()
+    assert nobox and (nobox["fg"], nobox["bg"]) == ("rgb(255, 255, 255)", "rgb(111, 66, 193)"), seen
+    assert caption and caption["fg"] == "rgb(169, 142, 218)", seen
+    page.hover("#fcc-record-source .fcc-rs-none")
+    page.wait_for_timeout(50)
+    page.wait_for_function(no_box_settled, timeout=5000)
+    assert_contrast(row)
+    nobox, _caption, seen = no_box_and_its_caption()
+    assert nobox and (nobox["fg"], nobox["bg"]) == ("rgb(255, 255, 255)", "rgb(94, 56, 164)"), seen
     page.keyboard.press("Escape")
     expect(page.locator("#fcc-record-source")).to_have_count(0)
     # Two free slots: they sit on the line above (cyan, enabled), No box and
@@ -429,6 +453,13 @@ def test_qr_questions_are_readable(page: Page, base_url: str, assert_contrast, s
     assert_contrast(panel)
     scored = [o["text"] for o in conftest.contrast_offenders(panel, min_ratio=100)]
     assert "PM-DB-XL-L" in scored and "slot 1" in scored, scored
+    # No box (it has the focus here) and its QR, the first, are purple too:
+    # with the focus Bootstrap draws it in its hover purple.
+    page.wait_for_function(no_box_settled, timeout=5000)
+    by_text = {o["text"]: o for o in conftest.contrast_offenders(panel, min_ratio=100)}
+    nobox = by_text.get("No box")
+    assert nobox and nobox["bg"] in ("rgb(111, 66, 193)", "rgb(94, 56, 164)"), by_text
+    assert any("SCAN: NO BOX" in t.upper() and o["fg"] == "rgb(169, 142, 218)" for t, o in by_text.items()), by_text
     page.keyboard.press("Escape")
 
 

@@ -531,13 +531,15 @@ def test_settings_and_list_windows_text_is_readable(page: Page, base_url: str, a
 # The colour each QR wears, by the Bootstrap variant of the button it stands
 # for: (card border, caption), as rgb. Amber is btn-warning's own #ffc107 (the
 # Load it instead / Continue Anyway button); Derek approved Store's cyan pair
-# and Cancel's grey pair as they were (2026-10-21).
+# and Cancel's grey pair as they were (2026-10-21). Purple is btn-purple's
+# #6f42c1 (global.css), "No box"'s own colour since 2026-10-23.
 QR_TONE_RGB = {
     "warning": ("255,193,7", "255,193,7"),
     "info": ("79,162,201", "143,211,240"),
     "secondary": ("108,117,125", "173,181,189"),
     "light": ("222,226,230", "222,226,230"),
     "dark": ("73,80,87", "248,249,250"),
+    "purple": ("111,66,193", "169,142,218"),
 }
 
 # The QR row's cells in order (confirm, [store], cancel), read by structure so
@@ -575,7 +577,7 @@ QR_CENTRES_JS = r"""(root, map) => {
 BUTTON_VARIANTS_JS = r"""(root, sels) => sels.map((sel) => {
     const b = root.querySelector(sel);
     if (!b) return null;
-    const m = String(b.className).match(/\bbtn-(?:outline-)?(warning|info|secondary|light|dark|danger|success|primary)\b/);
+    const m = String(b.className).match(/\bbtn-(?:outline-)?(warning|info|secondary|light|dark|danger|success|primary|purple)\b/);
     return m ? m[1] : null;
 })"""
 

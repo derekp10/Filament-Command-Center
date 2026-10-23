@@ -1205,8 +1205,9 @@ let _fccConfirmSeq = 0;
  *     it is clear at a glance which code matches which button (Derek,
  *     2026-10-21): 'warning' (amber, btn-warning), 'info' (cyan, btn-info),
  *     'secondary' (grey, btn-secondary), 'light' (btn-outline-light), 'dark'
- *     (btn-dark), 'danger'. Defaults: confirm = theme, store 'info', cancel
- *     'secondary'. Pass the tone of the button each QR mirrors.
+ *     (btn-dark), 'danger', 'purple' (btn-purple, global.css: "No box" in
+ *     "Record it as coming from…"). Defaults: confirm = theme, store 'info',
+ *     cancel 'secondary'. Pass the tone of the button each QR mirrors.
  *   alignTo: optional (Derek, 2026-10-22: "align under the button they
  *     correspond to"): the element holding the buttons the QRs stand for,
  *     exactly one <button> per QR, in QR order (confirm, [store], cancel).
@@ -1225,7 +1226,10 @@ let _fccConfirmSeq = 0;
 // The QR tones (attachConfirmQRs). `border` is the button's own colour where
 // that reads on the dark dialogs (amber is Bootstrap's #ffc107, the Load it
 // instead / Continue Anyway button); `caption` is the readable text colour
-// for the "📷 Scan to …" line under the card.
+// for the "📷 Scan to …" line under the card. Purple is "No box"'s own colour
+// (Derek, 2026-10-23: its grey QR was too close to Cancel's): the button's
+// Bootstrap purple #6f42c1, its caption a lighter purple of the same family
+// (#a98eda, 6:1 on the dialog).
 const QR_TONES = {
     warning:   { border: '#ffc107', caption: '#ffc107', bg: '#1a1608' },
     info:      { border: '#4fa2c9', caption: '#8fd3f0', bg: '#0d1a20' },
@@ -1233,6 +1237,7 @@ const QR_TONES = {
     light:     { border: '#dee2e6', caption: '#dee2e6', bg: '#0f1014' },
     dark:      { border: '#495057', caption: '#f8f9fa', bg: '#0f1014' },
     danger:    { border: '#dc3545', caption: '#ff8a95', bg: '#1c0c0e' },
+    purple:    { border: '#6f42c1', caption: '#a98eda', bg: '#150f22' },
 };
 window.FCC_QR_TONES = QR_TONES;
 window.attachConfirmQRs = (opts) => {
