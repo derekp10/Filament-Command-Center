@@ -69,10 +69,12 @@ def _qr_cells(row_html: str) -> list:
     return cells
 
 
-def _variant(html: str, cls: str) -> str:
-    """The Bootstrap variant of the button carrying class `cls` in `html`."""
-    m = re.search(r'class="([^"]*\b' + re.escape(cls) + r'\b[^"]*)"', html)
-    assert m, f"no button .{cls}"
+def _variant(html: str, cls: str, attr: str = "") -> str:
+    """The Bootstrap variant of the button carrying class `cls` in `html` (the
+    first one; with `attr`, the one whose tag also carries that attribute
+    text, e.g. 'data-rs-i="0"')."""
+    m = re.search(r'class="([^"]*\b' + re.escape(cls) + r'\b[^"]*)"[^>]*' + re.escape(attr), html)
+    assert m, f"no button .{cls} {attr}".strip()
     v = re.search(r"\bbtn-(?:outline-)?(warning|info|secondary|light|dark|danger|success|primary)\b", m.group(1))
     return v.group(1) if v else ""
 
@@ -173,7 +175,10 @@ for (const [key, feeds] of [
 return out;
 """)
     one, two = res["one"], res["two"]
-    assert _variant(one["content"], "fcc-rs-opt") == "info"
+    # The free slot (feed 0): since 2026-10-22 the held slot is drawn first, on
+    # the line above the buttons that have QRs.
+    assert _variant(one["content"], "fcc-rs-opt", 'data-rs-i="0"') == "info"
+    assert _variant(one["content"], "fcc-rs-opt", 'data-rs-i="1"') == "secondary"
     assert _variant(one["content"], "fcc-rs-none") == "secondary" and _variant(one["content"], "fcc-rs-cancel") == "dark"
     _check(_qr_cells(one["rows"][0]), [("Scan: LR-MDB-1 slot 1", "info"), ("Scan: No box", "secondary"),
                                        ("Scan to go Back", "dark")])

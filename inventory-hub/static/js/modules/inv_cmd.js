@@ -2292,9 +2292,15 @@ const _askRecordSource = (pick, sid, host) => {
             clearTimeout(statusTimer);
             resolve(value);
         };
-        const optBtns = feeds.map((f, i) => f.free
+        const optBtn = (f, i) => (f.free
             ? `<button type="button" class="btn btn-sm btn-info fcc-rs-opt" data-rs-i="${i}">${esc(`${f.box} slot ${f.slot}`)}<small style="display:block;font-weight:400;">free</small></button>`
-            : `<button type="button" class="btn btn-sm btn-outline-secondary fcc-rs-opt" data-rs-i="${i}" disabled aria-disabled="true">${esc(`${f.box} slot ${f.slot}`)}<small style="display:block;font-weight:400;">holds #${esc(f.claimed_by)}</small></button>`).join('');
+            : `<button type="button" class="btn btn-sm btn-outline-secondary fcc-rs-opt" data-rs-i="${i}" disabled aria-disabled="true">${esc(`${f.box} slot ${f.slot}`)}<small style="display:block;font-weight:400;">holds #${esc(f.claimed_by)}</small></button>`);
+        // QR codes under their buttons (Derek, 2026-10-22): the buttons a QR
+        // stands for (the pre-selected slot, No box, Cancel) share a row with
+        // their QRs, each QR under its own button. The slots with no QR (held
+        // ones; every slot when several are free) sit on a line above them,
+        // in feed order, so the keys still go slots, No box, Cancel.
+        const slotsAbove = feeds.map((f, i) => (f === pre ? '' : optBtn(f, i))).join('');
         handle = window.mountOverlay({
             id: 'fcc-record-source',
             tier: 'confirm',
@@ -2305,11 +2311,8 @@ const _askRecordSource = (pick, sid, host) => {
                     <div class="fcc-rs-title" style="font-size:1.15em; font-weight:bold; margin-bottom:6px;">🔗 Record ${esc(who)} as coming from…</div>
                     <div class="fcc-rs-msg" style="color:#ffc; margin-bottom:12px; text-align:left;">${esc(Who)} isn't coming from a box. Which slot feeding ${esc(head)} is its home? Return and eject send it back there.</div>
                     <div class="fcc-rs-status" role="alert" style="display:none; margin-bottom:10px; padding:6px 10px; border-radius:6px; background:#4a3200; color:#ffd27a; border:1px solid #ffb74d; font-weight:bold; text-align:left;"></div>
-                    <div style="display:flex; gap:10px; justify-content:center; flex-wrap:wrap;">
-                        ${optBtns}
-                        <button type="button" class="btn btn-sm btn-secondary fcc-rs-none">No box</button>
-                        <button type="button" class="btn btn-sm btn-dark fcc-rs-cancel">Cancel</button>
-                    </div>
+                    ${slotsAbove ? `<div class="fcc-rs-slots" style="display:flex; gap:10px; justify-content:center; flex-wrap:wrap; margin-bottom:10px;">${slotsAbove}</div>` : ''}
+                    <div class="fcc-rs-btns" style="display:flex; gap:10px; justify-content:center; flex-wrap:wrap;">${pre ? optBtn(pre, feeds.indexOf(pre)) : ''}<button type="button" class="btn btn-sm btn-secondary fcc-rs-none">No box</button><button type="button" class="btn btn-sm btn-dark fcc-rs-cancel">Cancel</button></div>
                     <div class="fcc-rs-hint" style="font-size:var(--fcc-fs-small); color:#ccc; margin-top:8px;">←/→ move · Enter chooses · scan a slot's label to choose it · Esc goes back</div>
                 </div>`,
             initialFocus: pre ? `.fcc-rs-opt[data-rs-i="${feeds.indexOf(pre)}"]` : '.fcc-rs-none',
@@ -2374,6 +2377,8 @@ const _askRecordSource = (pick, sid, host) => {
             // cyan (btn-info), No box grey (btn-secondary), Cancel dark (btn-dark).
             qr = window.attachConfirmQRs({
                 host: panel,
+                // Each QR under its own button (2026-10-22).
+                alignTo: ov.querySelector('.fcc-rs-btns'),
                 onConfirm: pre ? () => choose(pre) : () => finish(''),
                 onStore: pre ? () => finish('') : undefined,
                 onCancel: () => finish(null),

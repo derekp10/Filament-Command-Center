@@ -210,9 +210,7 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
             <div class="fcc-apc-title" style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">${header}</div>
             <div class="fcc-apc-msg" style="color:#ffc; margin-bottom:14px;${threeWay ? ' text-align:left;' : ''}">${esc(bodyText)}</div>
             ${status}
-            <div style="display:flex; gap:10px; justify-content:center;${threeWay ? ' flex-wrap:wrap;' : ''}">
-                ${buttons}
-            </div>
+            <div class="fcc-apc-btns" style="display:flex; gap:10px; justify-content:center;${threeWay ? ' flex-wrap:wrap;' : ''}">${buttons}</div>
             ${extras}
         </div>`;
     const overlayId = ids.overlay || 'fcc-active-print-confirm-overlay';
@@ -322,21 +320,24 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         }
     }, true);
     if (window.attachConfirmQRs) {
-        // Inside the dialog PANEL, so the QR row stacks below the buttons.
+        // Under the buttons, each QR centred under its own button (Derek,
+        // 2026-10-22; `alignTo`, the buttons' row, else the dialog PANEL as
+        // before, which stacks the row below them).
         // A three-way with no Load (it can only store) scans its store as the
         // CONFIRM QR, so there are never two cancel codes.
         // Each QR takes the colour of the button it stands for (Derek,
         // 2026-10-21): Continue Anyway / Load it instead are amber
         // (btn-warning), Just store it cyan (btn-info), Cancel grey.
         const theme = isPrinting ? 'warning' : 'info';
+        const alignTo = ov.querySelector('.fcc-apc-btns');
         qrSession = window.attachConfirmQRs(!threeWay
-            ? { host: handle.panel, onConfirm: yes, onCancel: no, theme: 'warning',
+            ? { host: handle.panel, alignTo, onConfirm: yes, onCancel: no, theme: 'warning',
                 confirmTone: 'warning', cancelTone: 'secondary' }
             : hasLoad
-                ? { host: handle.panel, onConfirm: yes, onCancel: no, onStore: hasStore ? store : undefined,
+                ? { host: handle.panel, alignTo, onConfirm: yes, onCancel: no, onStore: hasStore ? store : undefined,
                     confirmLabel: 'Scan to Load', storeLabel: 'Scan to Store', cancelLabel: 'Scan to Cancel', theme,
                     confirmTone: 'warning', storeTone: 'info', cancelTone: 'secondary' }
-                : { host: handle.panel, onConfirm: store, onCancel: no,
+                : { host: handle.panel, alignTo, onConfirm: store, onCancel: no,
                     confirmLabel: 'Scan to Store', cancelLabel: 'Scan to Cancel', theme,
                     confirmTone: 'info', cancelTone: 'secondary' });
     }
@@ -1147,6 +1148,16 @@ let _fccConfirmSeq = 0;
  *     'secondary' (grey, btn-secondary), 'light' (btn-outline-light), 'dark'
  *     (btn-dark), 'danger'. Defaults: confirm = theme, store 'info', cancel
  *     'secondary'. Pass the tone of the button each QR mirrors.
+ *   alignTo: optional (Derek, 2026-10-22: "align under the button they
+ *     correspond to"): the element holding the buttons the QRs stand for,
+ *     exactly one <button> per QR, in QR order (confirm, [store], cancel).
+ *     The QR row joins it as its last row and shares its columns (a CSS
+ *     subgrid, global.css .fcc-qr-align): each column is as wide as its
+ *     button or its QR, whichever is wider, the button fills it and the QR is
+ *     centred in it, so every QR sits centred under its own button at any
+ *     Text size and window width, the buttons spaced to match. With anything
+ *     else in it, or a browser without subgrid, the row goes into `host` as
+ *     before.
  *
  * @returns {{sessionId: string, cleanup: function}} cleanup() removes the QR
  *   row from the DOM and unregisters the session. Call from your dialog's
@@ -1180,7 +1191,22 @@ window.attachConfirmQRs = (opts) => {
     const row = document.createElement('div');
     row.id = `${sid}-row`;
     row.className = 'fcc-confirm-qr-row';
-    row.style.cssText = 'display:flex; gap:14px; justify-content:center; margin-top:14px; padding-top:12px; border-top:1px dashed #444;';
+    // Under its buttons (opts.alignTo): one <button> per QR, and a browser
+    // that lays out a subgrid; anything else keeps the row in `host`.
+    const qrCount = hasStore ? 3 : 2;
+    const alignTo = opts.alignTo || null;
+    const alignKids = alignTo ? Array.from(alignTo.children || []) : [];
+    const aligned = !!(alignTo && typeof CSS !== 'undefined' && CSS && typeof CSS.supports === 'function'
+        && CSS.supports('grid-template-columns', 'subgrid')
+        && alignKids.length === qrCount && alignKids.every((el) => el && el.tagName === 'BUTTON'));
+    if (aligned) {
+        alignTo.classList.add('fcc-qr-align');
+        alignTo.style.setProperty('--fcc-qr-cols', String(qrCount));
+        row.classList.add('fcc-qr-aligned');
+        row.style.cssText = 'margin-top:14px; padding-top:12px; border-top:1px dashed #444;';
+    } else {
+        row.style.cssText = 'display:flex; gap:14px; justify-content:center; margin-top:14px; padding-top:12px; border-top:1px dashed #444;';
+    }
     // One QR card + its caption, in the tone of the button it stands for.
     const cell = (role, qrId, label) => {
         const t = QR_TONES[tones[role]];
@@ -1195,7 +1221,7 @@ window.attachConfirmQRs = (opts) => {
     row.innerHTML = cell('confirm', `${sid}-yes-qr`, opts.confirmLabel || 'Scan to Confirm')
         + (hasStore ? cell('store', `${sid}-store-qr`, opts.storeLabel || 'Scan to Store') : '')
         + cell('cancel', `${sid}-no-qr`, opts.cancelLabel || 'Scan to Cancel');
-    host.appendChild(row);
+    (aligned ? alignTo : host).appendChild(row);
 
     // Generate the QR codes themselves (uses the same lib generateSafeQR uses).
     generateSafeQR(`${sid}-yes-qr`, `CMD:CONFIRM:${sid}`, 70);
@@ -1230,6 +1256,13 @@ window.attachConfirmQRs = (opts) => {
         cleanup: () => {
             delete window._fccActiveConfirms[sid];
             try { row.remove(); } catch (_) { /* noop */ }
+            // The buttons go back to their own row (a dialog that stays open).
+            if (aligned) {
+                try {
+                    alignTo.classList.remove('fcc-qr-align');
+                    alignTo.style.removeProperty('--fcc-qr-cols');
+                } catch (_) { /* noop */ }
+            }
         },
     };
 };

@@ -1307,6 +1307,32 @@ body {
     pointer-events: none;
 }
 
+/* --- QR CODES UNDER THEIR BUTTONS (Derek, 2026-10-22) ---
+   "Align under the button they correspond to." A question's buttons row
+   (inv_core.js attachConfirmQRs, `alignTo`) becomes a grid of one column per
+   button, and its "📷 Scan to …" QR row joins it as a subgrid: each column is
+   as wide as its button or its QR, whichever is wider, the button fills it
+   (its text stays centred) and the QR is centred in it, so every QR sits
+   centred under its own button, at any Text size and window width. The
+   columns shrink toward the QR card (94 px) on a phone, the button labels
+   wrapping, before anything sticks out. Only added where the browser lays
+   out a subgrid; the !important ones beat the row's own inline flex. */
+.fcc-qr-align {
+    display: grid !important;
+    grid-template-columns: repeat(var(--fcc-qr-cols, 2), auto);
+    justify-content: center !important;
+    column-gap: min(14px, 3.4vw) !important;
+    row-gap: 0 !important;
+}
+.fcc-qr-align > .btn {
+    min-width: 0 !important;
+}
+.fcc-qr-align > .fcc-confirm-qr-row {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: subgrid;
+}
+
 /* --- RED ZONE: NAV DECK --- */
 #loc-mgr-nav-deck {
     display: flex;
