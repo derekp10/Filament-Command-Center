@@ -476,6 +476,8 @@
         // Per-printer expanded row. The collapsed view is now a single
         // chip strip in the widget header (rendered separately in _render),
         // not per-row, so we don't include compact chips here anymore.
+        // The tiles' rows are laid out by _balanceRows after the render (no
+        // Bootstrap d-flex here: its !important display would beat the grid).
         return `
             <div class="fcc-ps-row" data-printer="${safeName}">
                 <div class="fcc-ps-name-col d-flex align-items-center">
@@ -488,12 +490,108 @@
                         ${stateBadge}
                     </div>
                 </div>
-                <div class="fcc-ps-toolheads d-flex gap-2 flex-wrap">
+                <div class="fcc-ps-toolheads">
                     ${info.toolheads.map(_renderToolheadBlock).join('')}
                 </div>
             </div>
         `;
     };
+
+    // --- EVEN ROWS OF TILES (Derek, 2026-10-22) ---
+    // A printer's tiles stay beside its name column, like the XL row. When
+    // they don't all fit on one line there, they split into the FEWEST rows
+    // with EQUAL counts: 8 -> 4 + 4, 7 -> 4 + 3, 10 -> 5 + 5, never 7 + 1
+    // (the INDX's 8 heads used to drop under the name, then wrap 7 + 1 at
+    // Large and Extra Large). Where fewer than three tiles fit beside the name
+    // (a phone, a narrow window at a big Text size), the tiles go under the
+    // name and use the row's whole width, split the same way. Rows as equal
+    // as they can be, the longer ones first (7 in three rows is 3 + 2 + 2).
+    // A row of one tile is left only where at most two fit across the whole
+    // row and the count is odd (a phone: 2 + 2 + 1).
+    //
+    // tileRows(n, side, full) -> {below, cols, rows, sizes}: `side` is how
+    // many tiles fit beside the name, `full` how many fit across the row.
+    // Pure (pinned by tests/test_printer_status_even_rows.py).
+    const MIN_BESIDE = 3;
+    const tileRows = (n, side, full) => {
+        const count = Math.max(0, Math.floor(Number(n) || 0));
+        if (!count) return { below: false, cols: 0, rows: 0, sizes: [] };
+        const s = Math.max(0, Math.floor(Number(side) || 0));
+        const f = Math.max(s, Math.floor(Number(full) || 0));
+        const below = !(s >= count || s >= MIN_BESIDE);
+        const per = Math.max(1, below ? f : s);
+        const rows = Math.ceil(count / per);
+        const big = count % rows;            // rows that get one tile more
+        const base = Math.floor(count / rows);
+        const sizes = [];
+        for (let i = 0; i < rows; i++) sizes.push(base + (i < big ? 1 : 0));
+        return { below, cols: sizes[0], rows, sizes };
+    };
+    window.fccPrinterStatusTileRows = tileRows;
+
+    // Measures every printer row and lays its tiles out by tileRows: a grid
+    // of `cols` columns (--fcc-ps-cols) whose rows each start in column 1, so
+    // 7 in three rows reads 3 + 2 + 2 (a plain grid would fill 3 + 3 + 1).
+    // All reads first, then all writes. Runs after every render, on a Text
+    // size change and when the body's width changes; does nothing while the
+    // widget is collapsed (the body has no width), and the body's width
+    // changing on expand runs it again.
+    const _balanceRows = () => {
+        const widget = document.getElementById('printer-status-widget');
+        const body = widget && widget.querySelector('.fcc-ps-body');
+        if (!body || typeof body.querySelectorAll !== 'function') return;
+        const px = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
+        const plans = [];
+        body.querySelectorAll('.fcc-ps-row').forEach((row) => {
+            const heads = row.querySelector('.fcc-ps-toolheads');
+            const nameCol = row.querySelector('.fcc-ps-name-col');
+            const tiles = heads ? Array.from(heads.children).filter(el => el.classList && el.classList.contains('fcc-ps-th')) : [];
+            if (!heads || !nameCol || !tiles.length) return;
+            const rs = getComputedStyle(row);
+            const rowW = row.clientWidth - px(rs.paddingLeft) - px(rs.paddingRight);
+            const tileW = tiles[0].getBoundingClientRect().width;
+            if (!(rowW > 0) || !(tileW > 0)) return;
+            const gap = px(getComputedStyle(heads).columnGap);
+            const nameW = nameCol.getBoundingClientRect().width + px(rs.columnGap);
+            // Half a px of slack: k tiles and k - 1 gaps that fit exactly
+            // must not lose a tile to rounding.
+            const fit = (w) => Math.max(0, Math.floor((w + gap + 0.5) / (tileW + gap)));
+            plans.push({ heads, tiles, plan: tileRows(tiles.length, fit(rowW - nameW), fit(rowW)) });
+        });
+        plans.forEach(({ heads, tiles, plan }) => {
+            heads.classList.add('fcc-ps-balanced');
+            heads.classList.toggle('fcc-ps-below', plan.below);
+            heads.style.setProperty('--fcc-ps-cols', String(plan.cols));
+            heads.dataset.rows = plan.sizes.join('+');
+            heads.dataset.place = plan.below ? 'below' : 'beside';
+            let start = 0;
+            const starts = new Set(plan.sizes.map((size) => { const at = start; start += size; return at; }));
+            tiles.forEach((tile, i) => { tile.style.gridColumnStart = (i > 0 && starts.has(i)) ? '1' : ''; });
+        });
+    };
+    window.balancePrinterStatusRows = _balanceRows;
+
+    // The body's width: the window, a scrollbar coming or going, the widget
+    // opening. Only a change of width lays the rows out again (their height
+    // changes when they do, and must not start it over).
+    let _bodyWidth = -1;
+    let _widthFrame = 0;
+    const _watchBodyWidth = (body) => {
+        if (!body || body._fccPsWidthWatched || typeof ResizeObserver !== 'function') return;
+        body._fccPsWidthWatched = true;
+        new ResizeObserver((entries) => {
+            const entry = entries && entries[entries.length - 1];
+            const w = entry ? Math.round(entry.contentRect.width) : -1;
+            if (w === _bodyWidth) return;
+            _bodyWidth = w;
+            // Out of the observer's callback: the layout it changes would
+            // otherwise be reported again in the same frame.
+            if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(_widthFrame);
+            _widthFrame = requestAnimationFrame(() => _balanceRows());
+        }).observe(body);
+    };
+    // A Text size change grows or shrinks every tile (rem), not the window.
+    document.addEventListener('fcc:text-size', () => _balanceRows());
 
     const _render = (rows) => {
         const widget = document.getElementById('printer-status-widget');
@@ -515,6 +613,10 @@
         body.innerHTML = printerNames
             .map((name, idx) => _renderRow(name, rows[name], idx, printerNames.length))
             .join('');
+        // Even rows of tiles beside each name (Derek, 2026-10-22), laid out
+        // before the browser paints the new rows.
+        _balanceRows();
+        _watchBodyWidth(body);
         // Header chip strip — every toolhead from every printer in the
         // user's printer order. Each printer's chips are wrapped in a
         // group div so CSS can add a vertical divider between groups,
@@ -708,6 +810,9 @@
     window.togglePrinterStatusWidget = () => {
         _setCollapsed(!_isCollapsed());
         _renderShell();
+        // Opened: the rows are measured again (the window may have changed
+        // size, or the Text size, while the body had no width).
+        if (!_isCollapsed()) _balanceRows();
     };
 
     // Group 45.8: every heartbeat tick renders this widget from its

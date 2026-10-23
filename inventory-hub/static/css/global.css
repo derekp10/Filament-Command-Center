@@ -1818,6 +1818,23 @@ body {
 .fcc-ps-reorder-placeholder:last-child { margin-bottom: 0; }
 .fcc-ps-toolheads {
     flex-grow: 1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+/* Even rows of tiles (Derek, 2026-10-22): inv_printer_status.js _balanceRows
+   measures each printer row and splits its tiles into the fewest rows with
+   equal counts (8 -> 4 + 4, 7 -> 4 + 3, 10 -> 5 + 5), beside the name column
+   like the XL row. --fcc-ps-cols is the longest row's count; each row's first
+   tile starts in column 1 (so 7 in three rows reads 3 + 2 + 2). Where fewer
+   than three fit beside the name (a phone), the tiles go under it. */
+.fcc-ps-toolheads.fcc-ps-balanced {
+    display: grid;
+    grid-template-columns: repeat(var(--fcc-ps-cols, 1), max-content);
+    justify-content: start;
+}
+.fcc-ps-toolheads.fcc-ps-below {
+    flex-basis: 100%;
 }
 .fcc-ps-th {
     display: flex;
@@ -1896,10 +1913,12 @@ body {
 }
 /* 30.4 — compact material line under the color name on the expanded
    printer-status panel. Indented past the 12px swatch + gap so it aligns
-   under the color name; muted but dark-theme readable. */
+   under the color name; muted but dark-theme readable. Line height 1.2
+   (2026-10-22): at 1.1 the line's own box (text-truncate clips to it) cut a
+   descender ("g", "y") at Large. */
 .fcc-ps-chip-mat {
     font-size: var(--fcc-fs-small);
-    line-height: 1.1;
+    line-height: 1.2;
     color: rgba(255,255,255,0.6);
     margin-top: 1px;
     padding-left: 20px;
