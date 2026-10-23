@@ -408,6 +408,8 @@ def _uneven(rows: list) -> list:
     bad = []
     for r in rows:
         n = r["rows"]
+        if not n:
+            continue   # a printer with no heads draws no tiles
         if not r["beside"] or max(n) - min(n) > 1 or n != sorted(n, reverse=True) or (len(n) > 1 and n[-1] == 1):
             bad.append(r)
     return bad

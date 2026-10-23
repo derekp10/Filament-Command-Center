@@ -166,16 +166,20 @@ def test_collapse_reorder_and_a_repaint_keep_the_rows_even(page: Page, base_url:
     assert page.locator("#printer-status-widget .fcc-ps-row").first.get_attribute("data-printer") != first
     assert (_layout(page)[INDX]["rows"], _layout(page)[XL]["rows"]) == ("4+4", "3+2")
     # A heartbeat with a change (another spool on the INDX) repaints the rows.
-    page.evaluate("""([indx, xl]) => {
+    # The repaint and the read in one turn of the page's JS: the next real
+    # tick answers the stub fleet again and would repaint it back.
+    got = page.evaluate("""([indx, xl, js]) => {
         const heads = (prefix, n, loaded) => Array.from({ length: n }, (_, i) => ({ id: prefix + '-' + (i + 1),
             position: i, unbound: false, loaded_count: loaded.includes(i) ? 1 : 0,
             item: loaded.includes(i) ? { id: 9400 + i, color: '7B2CBF', remaining_weight: 300, initial_weight: 1000,
                                           display: '#' + (9400 + i), details: { material: 'PLA' } } : null }));
         const rows = {}; rows[indx] = { state: { state: 'IDLE', is_active: false }, toolheads: heads('ZE', 8, [0, 1, 2]) };
         rows[xl] = { state: { state: 'IDLE', is_active: false }, toolheads: heads('ZX', 5, [4]) };
-        window.refreshPrinterStatusWidgetFromAggregate(rows); }""", [INDX, XL])
-    assert page.locator("#printer-status-widget .fcc-ps-th[data-spool-id='9402']").count() == 1
-    assert (_layout(page)[INDX]["rows"], _layout(page)[XL]["rows"]) == ("4+4", "3+2")
+        window.refreshPrinterStatusWidgetFromAggregate(rows);
+        return { repainted: !!document.querySelector("#printer-status-widget .fcc-ps-th[data-spool-id='9402']"),
+                 layout: (eval(js))() }; }""", [INDX, XL, LAYOUT_JS])
+    assert got["repainted"], got
+    assert (got["layout"][INDX]["rows"], got["layout"][XL]["rows"]) == ("4+4", "3+2"), got
 
 
 def test_the_material_line_is_1_2_high_at_large(page: Page, base_url: str):

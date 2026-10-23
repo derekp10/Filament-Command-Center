@@ -33,8 +33,9 @@ container, restored after): all 4 RED. On 1600 px at Standard the three-way's
 Load QR sat 19.8 px right of its button's centre, Store's 17.6 px left and
 Cancel's 37.5 px left; "Record it as coming from…"'s No box QR was 76 px off
 (180 px with two free slots); at Extra Large up to 221 px; and on a 412 px
-phone the three buttons stood on three lines over one row of three QRs (the
-Cancel QR 121 px off). The Quick-Swap confirm was already aligned and stays so.
+phone the three buttons wrapped onto two or three lines over one row of three
+QRs (the Cancel QR up to 121 px off). The Quick-Swap confirm was already
+aligned and stays so.
 """
 from __future__ import annotations
 
