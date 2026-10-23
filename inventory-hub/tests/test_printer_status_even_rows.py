@@ -1,68 +1,69 @@
-"""Printer Status: a printer's tiles in even rows beside its name (Derek,
-2026-10-22).
+"""Printer Status: each printer's name on a header line, its tiles under the
+name in even rows (Derek, 2026-10-22 and 2026-10-23).
 
-The INDX's 8 heads used to drop under the printer's name whenever they didn't
-fit beside it, and at Large and Extra Large wrap 7 + 1. Derek's call: when the
-heads don't fit on one row beside the name, split them into the fewest rows
-with EQUAL counts (8 -> 4 + 4, 7 -> 4 + 3, 10 -> 5 + 5; never a lone tile),
-the tiles staying beside the name column like the XL row. Also: the tile's
-material line goes from line-height 1.1 to 1.2, so a descender never clips.
+2026-10-22: when a printer's heads don't fit on one line, split them into the
+fewest rows with EQUAL counts (8 -> 4 + 4, 7 -> 4 + 3, 10 -> 5 + 5; never a
+lone tile). The tiles then sat beside a 12.5rem name column (style "S1").
+2026-10-23, after seeing S1, a narrower column (S2) and the name above the
+tiles (S3): "name on top of tool heads, probably reads better, especially if
+we indent in the toolheads more so that they read as a sub thing of the
+printer name. We also avoid the word wrap effect on the red notification dot
+about pending reviews ... Also, this way, if printer names go ungodly long for
+some reason, they don't clash or break the toolhead display." So each printer
+is now a header line (the ▲▼ arrows, the name, its state badge, the 🛑 N
+review count) with the tiles under it, starting under the name's first letter,
+in even rows across the row's width minus that step.
 
 Hermetic, and it RUNS under --offline: `isolated_page` (a chromium with no
 route to any network) with the real static/css/global.css, text_size.js,
-ui_builder.js, inv_core.js and inv_printer_status.js, and a few lines standing
-in for the Bootstrap classes the widget uses (Bootstrap comes from a CDN).
-The widget is fed made-up fleets through refreshPrinterStatusWidgetFromAggregate,
-as the heartbeat feeds it. Pinned:
-  - the rule itself (window.fccPrinterStatusTileRows): fewest rows, counts as
-    equal as they can be, the longer rows first, beside the name when three or
-    more fit there (or all of them); under it only when fewer fit and that
-    takes fewer rows of tiles (or none fit beside it); a row of one tile only
-    where at most two fit across the row and the count is odd;
-  - the layout: on Derek's 1600 x 1300 window the 8 heads are 4 + 4 and the 5
-    stay one row, beside the name, at every Text size; narrower windows split
-    as the rule says (1024: 4 + 4 and 3 + 2, or 3 + 3 + 2 at Extra Large; 800
-    at Extra Large and a 412 px phone: under the name); every row's tiles fit
-    the row (nothing sticks out);
-  - every layout check also holds what was drawn to what the layout recorded
-    (data-rows, data-place), so CSS that draws other lines can't pass;
-  - 7, 10 and 13 heads where three fit beside the name are 3 + 2 + 2,
-    3 + 3 + 2 + 2 and 3 + 3 + 3 + 2 + 2: each row starts in the first column
-    (a plain grid fill is 3 + 3 + 1);
-  - 4 heads with room for two beside the name stay beside it as 2 + 2 (600 px
-    at Small and Standard, 800 px at Large and Extra Large), while 8 and 5 take
-    fewer rows under it;
+ui_builder.js, inv_core.js, inv_printer_status.js and cancel_review.js, and a
+few lines standing in for the Bootstrap classes the widget uses (Bootstrap
+comes from a CDN). The widget is fed made-up fleets through
+refreshPrinterStatusWidgetFromAggregate, as the heartbeat feeds it, and the
+review count comes from cancel_review.js's own poll, answered in the page.
+Pinned:
+  - the rule (window.fccPrinterStatusTileRows(n, fit)): the fewest rows for
+    what fits on a line, counts as equal as they can be, the longer first, a
+    row of one tile only where at most two fit on a line;
+  - the header is ONE line: the arrows, the name, the badge and the review
+    count share a centre line, the count's 🛑 and its number never part, the
+    badge follows the name and the count follows the badge, all inside the
+    row, at 412 and 1600 px at Standard and Extra Large (and the count is put
+    back after a repaint and a reorder);
+  - every tile sits under the header, every line of tiles starts under the
+    name's first letter, a step in from the arrows (the arrows' width and the
+    grid's gap: 1.625rem), and nothing sticks out of the row;
+  - even rows at every Text size at 412, 1024, 1366 and 1600 px: the INDX's 8
+    heads are one row on Derek's 1600 px window at Small and Standard and
+    4 + 4 at Large and Extra Large; the rows are the fewest that fit and are
+    drawn as the layout recorded them (data-rows);
+  - a 60-character printer name keeps the header on one line (it ends in "…"
+    where the line is short, its full text in its title), and the tiles sit
+    exactly where they sit under a short name;
+  - 7, 10 and 13 heads where three fit on a line are 3 + 2 + 2, 3 + 3 + 2 + 2
+    and 3 + 3 + 3 + 2 + 2, each line starting under the name (a plain grid
+    fill is 3 + 3 + 1);
   - what the browser drew is checked: with a margin the sums don't count, a
-    row planned beside the name that wrapped under it, or a line of tiles
-    wider than its row, is laid out again with one tile fewer per line;
-  - at a 110 % display scale (a real device scale factor: the row is 911.65 or
-    1439.83 px, which clientWidth calls 912 or 1440), the tiles counted beside
-    the name are the ones that fit (its own private chromium, as cut off as
-    `isolated_page`'s);
+    line of tiles wider than its area is laid out again with one tile fewer;
+  - at a 110 % display scale (a real device scale factor: the tile area is
+    695.65 or 1223.84 px, which clientWidth calls 696 or 1224, exactly what 4
+    or 7 tiles need), the tiles counted are the ones that fit;
   - it lays out again after a Text size change and a resize, after a repaint
-    and the ▲▼ reorder, and after the widget is collapsed and opened again;
+    and the ▲▼ reorder (by mouse and by keyboard), and after the widget is
+    collapsed and opened again;
   - the material line's line height is 1.2 at every size.
 The same on the real page (Bootstrap, the heartbeat, dev's container) is
 test_printer_status_even_rows_e2e.py.
 
-HEAD proof (0c965c7, this file alone in a throwaway worktree at HEAD): all 32
-RED. HEAD has no rule (fccPrinterStatusTileRows) and no layout beyond
-flex-wrap: on 1600 x 1300 the 8 heads under the name in one line of 8 at Small
-and Standard, 7 + 1 at Large and Extra Large; 6 + 2 at 1366 px Extra Large,
-5 + 3 at 1024 px, the 5 heads 4 + 1 at 1024 px Extra Large and 800 px (where
-plain wrapping happens to draw what the rule draws, the layout's own record of
-its split, data-rows, is missing); and a 1.1 material line.
-
-Review proof (2026-10-22, c5c9d1f, this file alone in a copy of that commit):
-11 RED: the rule for 4 heads with two beside (2 + 2 under the name) and 5
-with two across, the rule sweep, the 4 heads drawn under the name at all four
-widths, both drawn-checks (7 wrapped under the name while the layout said
-beside; two tiles sticking out of the row), and at 110 % the 4, 7, 8 and 10 heads
-drawn under the name while the layout said beside (and the 7 at 1471 px). And
-with the line that starts each row in column 1 deleted from today's code: 3
-RED (the 7 / 10 / 13 heads drawn 3 + 3 + 1, 3 + 3 + 3 + 1, 3 + 3 + 3 + 3 + 1
-against a recorded 3 + 2 + 2 ...); every other check passed there, as it
-did for the review.
+RED on 234f41a (this file alone in a throwaway worktree at 234f41a): 54 of
+59. There the 🛑 N count sat inside the name (and the badge under it), the
+tiles beside a 12.5rem name column (or, on a phone, under it from the row's
+left edge, not under the name), a 60-character name wrapped down the column
+and pushed the tiles 57.6 px lower at 412 px, the name had no title, the rule
+answered `below` (the beside / under mode), and the 110 % windows found here
+land elsewhere in the old layout. The 5 that hold there: the rule's sizes for
+every count and room (unchanged since 2026-10-22) and the 1.2 material line
+at the four sizes.
 """
 from __future__ import annotations
 
@@ -75,7 +76,7 @@ MODULES = HUB / "static" / "js" / "modules"
 GLOBAL_CSS = HUB / "static" / "css" / "global.css"
 
 # The Bootstrap rules the widget's markup leans on, so the layout here is the
-# page's (box-sizing, and the utility classes on the name column and the chip).
+# page's (box-sizing, and the utility classes on the arrows and the chip).
 BOOTSTRAP_STANDIN = """
 *, *::before, *::after { box-sizing: border-box; }
 body { margin: 0; font-family: "Segoe UI", system-ui, sans-serif; line-height: 1.5; }
@@ -111,12 +112,17 @@ PAGE = """<!doctype html><html data-fcc-text-size="standard"><head><meta charset
 </div>
 </body></html>"""
 
+# fetch answers cancel_review.js's poll from window.__pending (the reviews the
+# 🛑 count shows) and leaves every other request pending forever.
 PRELUDE = r"""
 window.__pendingShortcuts = [];
 window.registerShortcut = function (s) { window.__pendingShortcuts.push(s); };
 window.__errors = [];
 window.addEventListener('error', (e) => window.__errors.push(String(e.message)));
-window.fetch = () => new Promise(() => {});
+window.__pending = [];
+window.fetch = (url) => (String(url).indexOf('/api/cancel_deduct/pending') !== -1
+    ? Promise.resolve({ ok: true, json: () => Promise.resolve({ pending: window.__pending }) })
+    : new Promise(() => {}));
 // This page has no origin, so the browser refuses it localStorage; the
 // widget keeps its collapsed state there, so it gets one of its own.
 (() => {
@@ -129,6 +135,11 @@ window.fetch = () => new Promise(() => {});
 
 INDX = "ZZ Even INDX"
 XL = "ZZ Even XL"
+SIZES = ("Small", "Standard", "Large", "Extra Large")
+ROOT_PX = {"Small": 16, "Standard": 16, "Large": 18, "Extra Large": 20}
+# 60 characters: longer than any header line on a phone, shorter than one on 1600 px.
+LONG_NAME = "ZZ A Printer Whose Name Goes On And On Past Any Sensible End"
+assert len(LONG_NAME) == 60
 
 
 def _item(sid, colour, material, grams=640):
@@ -149,29 +160,78 @@ def _printer(prefix, n, state="IDLE", loaded=()):
 
 FLEET = {INDX: _printer("ZE", 8, loaded=(0, 3)), XL: _printer("ZX", 5, "PRINTING", loaded=(1, 2))}
 
-# Per printer: the counts of each row of tiles, where they sit (beside / below
-# the name), whether any tile or row sticks out of the printer's row, and what
-# the layout recorded (data-rows, data-place).
+# Per printer: the count on each line of tiles, what the layout recorded
+# (data-rows), whether every tile is under the header line, whether every line
+# of tiles starts under the name's first letter, the name's step in from the
+# row's left edge, how many tiles stick out (past the row's right edge, or left
+# of the name), and how many tiles fit on a line by measure, with no slack:
+# the fewest rows are ceil(n / fits).
 LAYOUT_JS = r"""() => {
     const out = {};
     document.querySelectorAll('#printer-status-widget .fcc-ps-row').forEach((row) => {
-        const name = row.dataset.printer;
-        const nameR = row.querySelector('.fcc-ps-name-col').getBoundingClientRect();
+        const rs = getComputedStyle(row);
         const rowR = row.getBoundingClientRect();
+        const left = rowR.left + parseFloat(rs.paddingLeft) + parseFloat(rs.borderLeftWidth);
+        const right = rowR.right - parseFloat(rs.paddingRight) - parseFloat(rs.borderRightWidth);
+        const name = row.querySelector('.fcc-ps-name').getBoundingClientRect();
+        const header = Array.from(row.querySelectorAll('.fcc-ps-reorder, .fcc-ps-name, .fcc-ps-state, .fcc-cr-chip'))
+            .map((el) => el.getBoundingClientRect()).filter((r) => r.height > 0);
+        const headerBottom = Math.max(...header.map((r) => r.bottom));
         const tiles = Array.from(row.querySelectorAll('.fcc-ps-th')).map((t) => t.getBoundingClientRect());
         const lines = [];
         tiles.forEach((r) => {
             const line = lines.find((l) => Math.abs(l.top - r.top) < 2);
-            if (line) line.n++; else lines.push({ top: r.top, n: 1 });
+            if (line) { line.n++; line.left = Math.min(line.left, r.left); } else lines.push({ top: r.top, n: 1, left: r.left });
         });
         lines.sort((a, b) => a.top - b.top);
-        // Beside: every tile right of the name column; below: every tile under it.
-        const beside = tiles.every((r) => r.left >= nameR.right - 0.5);
-        const below = tiles.every((r) => r.top >= nameR.bottom - 0.5);
         const heads = row.querySelector('.fcc-ps-toolheads');
-        out[name] = { rows: lines.map((l) => l.n).join('+'), place: beside ? 'beside' : (below ? 'below' : 'mixed'),
-                      out: tiles.filter((r) => r.right > rowR.right + 0.5 || r.left < rowR.left - 0.5).length,
-                      data: (heads.dataset.rows || null), dataPlace: (heads.dataset.place || null) };
+        const gap = parseFloat(getComputedStyle(heads).columnGap);
+        const tileW = tiles.length ? tiles[0].width : 0;
+        out[row.dataset.printer] = {
+            rows: lines.map((l) => l.n).join('+'), data: heads.dataset.rows || null,
+            below: tiles.every((r) => r.top >= headerBottom - 0.5),
+            under: lines.every((l) => Math.abs(l.left - name.left) < 0.5),
+            indent: Math.round((name.left - left) * 100) / 100,
+            out: tiles.filter((r) => r.right > right + 0.5 || r.left < name.left - 0.5).length,
+            fits: tileW ? Math.floor((right - name.left + gap) / (tileW + gap)) : 0,
+        };
+    });
+    return out;
+}"""
+
+# Per printer, the header line: the centre line of each of its parts (the
+# arrows' pair, the name, the badge, the review count), their left and right
+# edges, how many lines the name's and the count's text take (a Range's
+# boxes), the count's text, the row's content edges, and the name's title and
+# whether it is cut short with "…".
+HEADER_JS = r"""() => {
+    const out = {};
+    const lineTops = (el) => {
+        const range = document.createRange(); range.selectNodeContents(el);
+        const tops = [];
+        Array.from(range.getClientRects()).filter((r) => r.width > 0).forEach((r) => {
+            if (!tops.some((t) => Math.abs(t - r.top) < 3)) tops.push(r.top); });
+        return tops.length;
+    };
+    const box = (el) => { if (!el) return null; const r = el.getBoundingClientRect();
+        return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, mid: (r.top + r.bottom) / 2 }; };
+    document.querySelectorAll('#printer-status-widget .fcc-ps-row').forEach((row) => {
+        const rs = getComputedStyle(row);
+        const rowR = row.getBoundingClientRect();
+        const name = row.querySelector('.fcc-ps-name');
+        const chip = row.querySelector('.fcc-cr-chip');
+        const arrows = Array.from(row.querySelectorAll('.fcc-ps-reorder')).map(box);
+        out[row.dataset.printer] = {
+            arrows: arrows.length ? { left: Math.min(...arrows.map((a) => a.left)), right: Math.max(...arrows.map((a) => a.right)),
+                                      mid: (Math.min(...arrows.map((a) => a.top)) + Math.max(...arrows.map((a) => a.bottom))) / 2 } : null,
+            name: box(name), badge: box(row.querySelector('.fcc-ps-state')), chip: box(chip),
+            chipInHead: !!chip && !!chip.closest('.fcc-ps-head') && !name.contains(chip),
+            chipText: chip ? chip.textContent : null,
+            nameLines: lineTops(name), chipLines: chip ? lineTops(chip) : 0,
+            rowLeft: rowR.left + parseFloat(rs.paddingLeft), rowRight: rowR.right - parseFloat(rs.paddingRight),
+            title: name.getAttribute('title'), text: name.textContent,
+            cut: name.scrollWidth > name.clientWidth + 0.5 && getComputedStyle(name).textOverflow === 'ellipsis',
+        };
     });
     return out;
 }"""
@@ -179,11 +239,10 @@ LAYOUT_JS = r"""() => {
 
 def _drawn_as_recorded(got):
     """Every printer's tiles as the layout recorded them (review, 2026-10-22):
-    the lines drawn are data-rows and they sit where data-place says. A layout
-    whose CSS drew something else (rows not started in column 1, so 3 + 3 + 1
-    for a planned 3 + 2 + 2, or tiles that wrapped under the name while the
-    plan said beside) passed every check that only compared fixed strings."""
-    wrong = {k: v for k, v in got.items() if (v["rows"], v["place"]) != (v["data"], v["dataPlace"])}
+    the lines drawn are data-rows. A layout whose CSS drew something else
+    (rows not started in column 1, so 3 + 3 + 1 for a planned 3 + 2 + 2)
+    passed every check that only compared fixed strings."""
+    wrong = {k: v for k, v in got.items() if v["rows"] != v["data"]}
     assert not wrong, f"drawn differently from what the layout recorded: {wrong}"
     return got
 
@@ -192,7 +251,7 @@ def _build(page):
     """The widget's page: the real CSS and modules, a Bootstrap stand-in."""
     page.set_content(PAGE.format(standin=BOOTSTRAP_STANDIN, css=GLOBAL_CSS.read_text(encoding="utf-8")))
     page.add_script_tag(content=PRELUDE)
-    for name in ("inv_core.js", "ui_builder.js", "inv_printer_status.js", "text_size.js"):
+    for name in ("inv_core.js", "ui_builder.js", "inv_printer_status.js", "text_size.js", "cancel_review.js"):
         page.add_script_tag(content=(MODULES / name).read_text(encoding="utf-8"))
 
 
@@ -214,6 +273,15 @@ def _size(page, name):
     page.evaluate("(n) => window.fccTextSize.apply(n)", name)
 
 
+def _reviews(page, counts):
+    """`counts` pending reviews per printer ({name: n}), as cancel_review.js's
+    poll reads them; waits for the 🛑 N counts on the open widget."""
+    pending = [{"printer_name": name, "job_id": f"{name}#{i}"} for name, n in counts.items() for i in range(n)]
+    page.evaluate("(p) => { window.__pending = p; return window.refreshCancelReviewBadge(); }", pending)
+    page.wait_for_function("(n) => document.querySelectorAll('#printer-status-widget .fcc-ps-body .fcc-cr-chip').length === n",
+                           arg=sum(1 for n in counts.values() if n), timeout=3000)
+
+
 def _layout(page):
     return _drawn_as_recorded(page.evaluate(LAYOUT_JS))
 
@@ -226,53 +294,72 @@ def _settled(page, want):
                            arg=[LAYOUT_JS, want], timeout=5000)
 
 
+def _one_header_line(h, name, size):
+    """The header line of one printer, as Derek chose it (2026-10-23)."""
+    where = (name, size, h)
+    # The name on one line; the badge after it, the 🛑 N count after the badge,
+    # in the header (never inside the name, which ends in "…"), every part on
+    # one centre line, inside the row.
+    assert h["nameLines"] == 1, where
+    assert h["badge"] and h["name"]["right"] <= h["badge"]["left"] + 0.5, where
+    assert abs(h["badge"]["mid"] - h["name"]["mid"]) <= 1.5, where
+    if h["arrows"]:
+        assert h["arrows"]["right"] <= h["name"]["left"] - 0.5, where
+        assert abs(h["arrows"]["mid"] - h["name"]["mid"]) <= 1.5, where
+    if h["chip"]:
+        assert h["chipInHead"], where
+        assert h["chipLines"] == 1, f"the 🛑 and its count split across lines: {where}"
+        assert h["badge"]["right"] <= h["chip"]["left"] + 0.5, where
+        assert abs(h["chip"]["mid"] - h["name"]["mid"]) <= 1.5, where
+        assert h["chip"]["right"] <= h["rowRight"] + 0.5, where
+    assert h["badge"]["right"] <= h["rowRight"] + 0.5, where
+    # Its full name is its title, whether or not it is cut short.
+    assert h["title"] == name, where
+
+
 # --- the rule ------------------------------------------------------------------
 
-@pytest.mark.parametrize("n, side, full, want", [
-    (8, 7, 8, ("beside", [4, 4])),       # the INDX on 1600 px: 7 fit beside the name
-    (8, 5, 7, ("beside", [4, 4])),       # ... at Extra Large: 5 fit
-    (7, 5, 6, ("beside", [4, 3])),
-    (10, 7, 8, ("beside", [5, 5])),
-    (5, 7, 8, ("beside", [5])),          # the XL: one row
-    (5, 4, 5, ("beside", [3, 2])),
-    (8, 3, 4, ("beside", [3, 3, 2])),
-    (7, 3, 4, ("beside", [3, 2, 2])),    # never 3 + 3 + 1
-    (13, 4, 5, ("beside", [4, 3, 3, 3])),
-    (2, 2, 3, ("beside", [2])),          # all of them fit, however few
-    (8, 2, 3, ("below", [3, 3, 2])),     # under three beside: under the name, when that saves rows
-    (5, 2, 3, ("below", [3, 2])),
-    (7, 2, 3, ("below", [3, 2, 2])),
-    (3, 2, 3, ("below", [3])),
-    (4, 2, 3, ("beside", [2, 2])),       # 2 + 2 either way: beside, no line for the name alone
-    (4, 2, 4, ("below", [4])),           # one row under the name beats two beside it
-    (5, 2, 2, ("beside", [2, 2, 1])),    # 2 + 2 + 1 either way
-    (4, 1, 3, ("below", [2, 2])),
-    (5, 0, 2, ("below", [2, 2, 1])),     # a phone: the one lone tile left
-    (8, 0, 1, ("below", [1] * 8)),
-    (1, 0, 1, ("below", [1])),
+@pytest.mark.parametrize("n, fit, sizes", [
+    (8, 8, [8]),                 # the INDX on Derek's 1600 px window at Standard: one row
+    (8, 7, [4, 4]),              # ... at Large: 7 fit
+    (8, 6, [4, 4]),              # ... at Extra Large: 6 fit
+    (8, 5, [4, 4]),
+    (8, 3, [3, 3, 2]),
+    (8, 2, [2, 2, 2, 2]),        # a phone at Standard
+    (8, 1, [1] * 8),             # a phone at Large / Extra Large
+    (7, 5, [4, 3]),
+    (7, 3, [3, 2, 2]),           # never 3 + 3 + 1
+    (10, 8, [5, 5]),
+    (10, 3, [3, 3, 2, 2]),
+    (13, 4, [4, 3, 3, 3]),
+    (5, 8, [5]),                 # the XL: one row
+    (5, 4, [3, 2]),
+    (5, 2, [2, 2, 1]),           # a phone: the one lone tile left
+    (4, 3, [2, 2]),
+    (1, 1, [1]),
+    (3, 0, [1, 1, 1]),           # none fit by measure: one a line
+    (0, 5, []),
 ])
-def test_the_rule(widget, n, side, full, want):
-    got = widget.evaluate("([n, s, f]) => window.fccPrinterStatusTileRows(n, s, f)", [n, side, full])
-    place, sizes = want
-    assert ("below" if got["below"] else "beside", got["sizes"]) == (place, sizes), got
-    assert got["rows"] == len(sizes) and got["cols"] == sizes[0], got
+def test_the_rule(widget, n, fit, sizes):
+    got = widget.evaluate("([n, f]) => window.fccPrinterStatusTileRows(n, f)", [n, fit])
+    assert got["sizes"] == sizes, got
+    assert got["rows"] == len(sizes) and got["cols"] == (sizes[0] if sizes else 0), got
+    assert "below" not in got, f"the beside / under-the-name mode is gone: {got}"
 
 
-def test_the_rule_never_leaves_a_lone_tile_where_three_fit(widget):
-    """Every count up to 16 heads, every room from 3 tiles: the rows differ by
-    at most one, the longer first, as few as fit, and none holds a lone tile.
-    The tiles go under the name only when fewer than three fit beside it, and
-    then only when that takes fewer rows (or none fit beside it)."""
+def test_the_rule_is_the_fewest_even_rows_for_every_count_and_room(widget):
+    """Every count up to 16 heads, room for 1 to 14 on a line: the rows add up,
+    are as few as fit, differ by at most one with the longer first, and hold a
+    lone tile only where at most two fit on a line."""
     bad = widget.evaluate("""() => {
         const bad = [];
-        for (let n = 1; n <= 16; n++) for (let side = 0; side <= 12; side++) for (let full = Math.max(side, 3); full <= 14; full++) {
-            const r = window.fccPrinterStatusTileRows(n, side, full);
-            const per = r.below ? full : side;
-            const under = !(side >= n || side >= 3) && (side === 0 || Math.ceil(n / full) < Math.ceil(n / side));
-            const ok = r.sizes.reduce((a, b) => a + b, 0) === n && r.rows === Math.ceil(n / per)
+        for (let n = 1; n <= 16; n++) for (let fit = 1; fit <= 14; fit++) {
+            const r = window.fccPrinterStatusTileRows(n, fit);
+            const ok = r.sizes.reduce((a, b) => a + b, 0) === n && r.rows === Math.ceil(n / fit)
+                && r.sizes[0] <= fit && r.cols === r.sizes[0]
                 && r.sizes.every((s, i) => i === 0 || (s <= r.sizes[i - 1] && r.sizes[0] - s <= 1))
-                && !(r.rows > 1 && r.sizes.includes(1)) && r.below === under;
-            if (!ok) bad.push([n, side, full, r]);
+                && !(fit >= 3 && r.rows > 1 && r.sizes.includes(1));
+            if (!ok) bad.push([n, fit, r]);
         }
         return bad.slice(0, 10); }""")
     assert bad == [], bad
@@ -280,128 +367,185 @@ def test_the_rule_never_leaves_a_lone_tile_where_three_fit(widget):
 
 # --- the layout ------------------------------------------------------------------
 
-@pytest.mark.parametrize("size", ["Small", "Standard", "Large", "Extra Large"])
-def test_on_derek_s_window_the_8_heads_are_4_and_4_beside_the_name(widget, size):
+# (width, size) -> (the INDX's 8 heads, the XL's 5): one row where all fit
+# (the INDX on Derek's 1600 px window at Small and Standard), else the fewest
+# even rows; two to a line on a 412 px phone at Small and Standard, one at
+# Large and Extra Large.
+WIDTHS = {
+    (412, "Small"): ("2+2+2+2", "2+2+1"), (412, "Standard"): ("2+2+2+2", "2+2+1"),
+    (412, "Large"): ("1+1+1+1+1+1+1+1", "1+1+1+1+1"), (412, "Extra Large"): ("1+1+1+1+1+1+1+1", "1+1+1+1+1"),
+    (1024, "Small"): ("4+4", "5"), (1024, "Standard"): ("4+4", "5"),
+    (1024, "Large"): ("4+4", "3+2"), (1024, "Extra Large"): ("4+4", "3+2"),
+    (1366, "Small"): ("4+4", "5"), (1366, "Standard"): ("4+4", "5"),
+    (1366, "Large"): ("4+4", "5"), (1366, "Extra Large"): ("4+4", "5"),
+    (1600, "Small"): ("8", "5"), (1600, "Standard"): ("8", "5"),
+    (1600, "Large"): ("4+4", "5"), (1600, "Extra Large"): ("4+4", "5"),
+}
+
+
+@pytest.mark.parametrize("width, size", list(WIDTHS))
+def test_even_rows_under_the_name_at_each_size_and_width(widget, width, size):
     page = widget
+    page.set_viewport_size({"width": width, "height": 1300})
     _size(page, size)
     _feed(page)
     got = _layout(page)
-    assert got[INDX] == {"rows": "4+4", "place": "beside", "out": 0, "data": "4+4", "dataPlace": "beside"}, (size, got)
-    assert got[XL] == {"rows": "5", "place": "beside", "out": 0, "data": "5", "dataPlace": "beside"}, (size, got)
+    indx, xl = WIDTHS[(width, size)]
+    assert (got[INDX]["rows"], got[XL]["rows"]) == (indx, xl), (width, size, got)
+    for name, n in ((INDX, 8), (XL, 5)):
+        g = got[name]
+        # Under the header line, each line starting under the name's first
+        # letter, a step in from the arrows (their 1.125rem and the 0.5rem gap).
+        assert g["below"] and g["under"], (width, size, name, g)
+        assert g["indent"] == pytest.approx(1.625 * ROOT_PX[size], abs=0.05), (width, size, name, g)
+        # Nothing sticks out, and the rows are the fewest that fit.
+        assert g["out"] == 0, (width, size, name, g)
+        assert len(g["rows"].split("+")) == -(-n // max(1, g["fits"])), (width, size, name, g)
 
 
-@pytest.mark.parametrize("width, size, indx, xl", [
-    (1366, "Extra Large", ("4+4", "beside"), ("3+2", "beside")),
-    (1024, "Standard", ("4+4", "beside"), ("3+2", "beside")),
-    (1024, "Extra Large", ("3+3+2", "beside"), ("3+2", "beside")),
-    (800, "Standard", ("3+3+2", "beside"), ("3+2", "beside")),
-    (800, "Extra Large", ("3+3+2", "below"), ("3+2", "below")),
-    (412, "Standard", ("2+2+2+2", "below"), ("2+2+1", "below")),
-    (412, "Extra Large", ("1+1+1+1+1+1+1+1", "below"), ("1+1+1+1+1", "below")),
-])
-def test_narrower_windows_split_by_the_rule(widget, width, size, indx, xl):
+@pytest.mark.parametrize("width, size", [(412, "Standard"), (412, "Extra Large"), (1600, "Standard"),
+                                         (1600, "Extra Large"), (1024, "Large")])
+def test_the_header_is_one_line_with_the_dot_and_its_count_together(widget, width, size):
+    """The ▲▼ arrows, the name, the state badge and the 🛑 N count on one
+    line, the count after the badge, its dot and number never parted (Derek:
+    "avoid the word wrap effect on the red notification dot"). 12 reviews for
+    the INDX at its widest (PRINTING) on a phone at Extra Large is the
+    tightest line: the name gives way, never the count."""
     page = widget
-    page.set_viewport_size({"width": width, "height": 900})
+    page.set_viewport_size({"width": width, "height": 1300})
     _size(page, size)
-    _feed(page)
+    fleet = {INDX: _printer("ZE", 8, "PRINTING", loaded=(0, 3)), XL: _printer("ZX", 5, loaded=(1, 2))}
+    _feed(page, fleet)
+    _reviews(page, {INDX: 12, XL: 1})
+    head = page.evaluate(HEADER_JS)
+    for name in (INDX, XL):
+        _one_header_line(head[name], name, size)
+    assert (head[INDX]["chipText"], head[XL]["chipText"]) == ("🛑 12", "🛑 1"), head
+    # The first printer has only ▼ and the last only ▲: each on the name's line.
+    assert head[INDX]["arrows"] and head[XL]["arrows"], head
     got = _layout(page)
-    # As drawn, and as the layout recorded it (data-rows: where the tiles go
-    # under the name anyway, plain wrapping can draw the same lines).
-    assert (got[INDX]["rows"], got[INDX]["place"], got[INDX]["data"]) == indx + (indx[0],), (width, size, got)
-    assert (got[XL]["rows"], got[XL]["place"], got[XL]["data"]) == xl + (xl[0],), (width, size, got)
-    assert got[INDX]["out"] == 0 and got[XL]["out"] == 0, f"tiles sticking out of their row: {got}"
+    assert all(v["below"] and v["under"] and v["out"] == 0 for v in got.values()), got
 
 
-# Counts where a plain grid fill is uneven: at a width where three tiles fit
-# beside the name it draws 3 + 3 + 1 and 3 + 3 + 3 + 1. Only each row's first
-# tile starting in column 1 draws what the rule says (review, 2026-10-22: the
-# 8, 5, 3 and 2 heads every other check uses come out the same either way).
+def test_the_count_comes_back_on_the_header_after_a_repaint_and_a_reorder(widget):
+    page = widget
+    _feed(page)
+    _reviews(page, {INDX: 3})
+    # A heartbeat that changes a tile repaints the rows; the widget puts the
+    # count back (window.cancelReviewDecorate) on the header line.
+    _feed(page, {INDX: _printer("ZE", 8, loaded=(0, 3, 5)), XL: FLEET[XL]})
+    head = page.evaluate(HEADER_JS)
+    _one_header_line(head[INDX], INDX, "Standard")
+    assert head[INDX]["chipText"] == "🛑 3" and head[XL]["chip"] is None, head
+    page.evaluate("(n) => window.movePrinterStatusRow(n, 1)", INDX)
+    assert page.locator(".fcc-ps-row").first.get_attribute("data-printer") == XL
+    head = page.evaluate(HEADER_JS)
+    _one_header_line(head[INDX], INDX, "Standard")
+    assert head[INDX]["chipText"] == "🛑 3", head
+
+
+@pytest.mark.parametrize("width, size", [(412, "Standard"), (412, "Extra Large"), (1024, "Standard"),
+                                         (1600, "Standard"), (1600, "Extra Large")])
+def test_a_60_character_name_neither_overlaps_nor_shifts_the_tiles(widget, width, size):
+    """Derek: "if printer names go ungodly long for some reason, they don't
+    clash or break the toolhead display". The header stays one line (the name
+    ends in "…" where the line is too short for it, its full text in its
+    title; the badge and the count stay on the line), and every tile sits
+    exactly where it sits under a short name."""
+    page = widget
+    page.set_viewport_size({"width": width, "height": 1300})
+    _size(page, size)
+    tiles_js = """() => { const row = document.querySelector('#printer-status-widget .fcc-ps-row');
+        const r0 = row.getBoundingClientRect();
+        return Array.from(row.querySelectorAll('.fcc-ps-th')).map((t) => { const r = t.getBoundingClientRect();
+            return [Math.round((r.left - r0.left) * 100) / 100, Math.round((r.top - r0.top) * 100) / 100,
+                    Math.round(r.width * 100) / 100]; }); }"""
+    short = {INDX: _printer("ZE", 8, "PRINTING", loaded=(0, 3)), XL: FLEET[XL]}
+    _feed(page, short)
+    _reviews(page, {INDX: 12})
+    before = page.evaluate(tiles_js)
+    # The same 8 heads under the long name (it sorts first, as the INDX did).
+    long_fleet = {LONG_NAME: short[INDX], XL: FLEET[XL]}
+    _feed(page, long_fleet)
+    _reviews(page, {LONG_NAME: 12})
+    assert page.locator(".fcc-ps-row").first.get_attribute("data-printer") == LONG_NAME
+    after = page.evaluate(tiles_js)
+    assert after == before, f"the long name moved the tiles: {before} -> {after}"
+    head = page.evaluate(HEADER_JS)[LONG_NAME]
+    _one_header_line(head, LONG_NAME, size)
+    assert head["text"] == LONG_NAME and head["chipText"] == "🛑 12", head
+    assert head["name"]["right"] <= head["badge"]["left"] + 0.5, head
+    # Where the line is short the name is cut, never the badge or the count.
+    if width == 412:
+        assert head["cut"], f"the name should end in … on a phone: {head}"
+    got = _layout(page)
+    assert got[LONG_NAME]["below"] and got[LONG_NAME]["under"] and got[LONG_NAME]["out"] == 0, got
+
+
+# Counts where a plain grid fill is uneven: where three tiles fit on a line it
+# draws 3 + 3 + 1 and 3 + 3 + 3 + 1. Only each row's first tile starting in
+# column 1 draws what the rule says (review, 2026-10-22: the 8, 5, 3 and 2
+# heads every other check uses come out the same either way).
 UNEVEN = {"ZZ Seven": _printer("ZS", 7, loaded=(0,)), "ZZ Ten": _printer("ZT", 10, loaded=(1,)),
           "ZZ Thirteen": _printer("ZH", 13)}
 
 
-@pytest.mark.parametrize("width, size", [(800, "Standard"), (1024, "Extra Large")])
-def test_each_row_of_tiles_starts_in_the_first_column(widget, width, size):
+@pytest.mark.parametrize("width, size", [(700, "Standard"), (800, "Extra Large")])
+def test_each_row_of_tiles_starts_under_the_name(widget, width, size):
     page = widget
     page.set_viewport_size({"width": width, "height": 900})
     _size(page, size)
     _feed(page, UNEVEN)
     got = _layout(page)
-    assert {k: (v["rows"], v["place"], v["out"]) for k, v in got.items()} == {
-        "ZZ Seven": ("3+2+2", "beside", 0), "ZZ Ten": ("3+3+2+2", "beside", 0),
-        "ZZ Thirteen": ("3+3+3+2+2", "beside", 0)}, (width, size, got)
-    # Every line starts under the first tile.
-    starts = page.evaluate("""() => Array.from(document.querySelectorAll('#printer-status-widget .fcc-ps-row')).map((row) => {
-        const tiles = Array.from(row.querySelectorAll('.fcc-ps-th')).map((t) => t.getBoundingClientRect());
-        return tiles.filter((r, i) => i === 0 || Math.abs(r.top - tiles[i - 1].top) >= 2).map((r) => Math.round(r.left)); })""")
-    assert all(len(set(s)) == 1 for s in starts), starts
-
-
-# Derek's rule puts the tiles under the name only where that takes fewer rows
-# (review, 2026-10-22): 4 heads with room for two beside the name were drawn
-# 2 + 2 under it, the same 2 + 2 plus a line for the name.
-FOURS = {"ZZ Four": _printer("ZF", 4, loaded=(0,)), INDX: _printer("ZE", 8, loaded=(0, 3)),
-         "ZZ Five": _printer("ZV", 5)}
-
-
-@pytest.mark.parametrize("width, size", [(600, "Small"), (600, "Standard"), (800, "Large"), (800, "Extra Large")])
-def test_four_heads_with_room_for_two_beside_the_name_stay_beside_it(widget, width, size):
-    page = widget
-    page.set_viewport_size({"width": width, "height": 900})
-    _size(page, size)
-    _feed(page, FOURS)
-    got = _layout(page)
-    # Two fit beside the name and three across the row: 4 stays beside it as
-    # 2 + 2; 8 and 5 take fewer rows under it (3 + 3 + 2 and 3 + 2).
-    assert {k: (v["rows"], v["place"], v["out"]) for k, v in got.items()} == {
-        "ZZ Four": ("2+2", "beside", 0), INDX: ("3+3+2", "below", 0), "ZZ Five": ("3+2", "below", 0)}, (width, size, got)
+    assert {k: (v["rows"], v["under"], v["out"]) for k, v in got.items()} == {
+        "ZZ Seven": ("3+2+2", True, 0), "ZZ Ten": ("3+3+2+2", True, 0),
+        "ZZ Thirteen": ("3+3+3+2+2", True, 0)}, (width, size, got)
 
 
 SEVEN = {"ZZ Seven": _printer("ZS", 7)}
 FOUR = {"ZZ Four": _printer("ZF", 4)}
 
 
-@pytest.mark.parametrize("style, width, fleet, want", [
-    # 1472 px: seven tiles fill the row beside the name to the px; with a
-    # margin the sums don't count, the seventh doesn't fit.
-    (".fcc-ps-name-col { margin-right: 2px; }", 1472, SEVEN, {"ZZ Seven": ("4+3", "beside")}),
-    # 412 px: two tiles fit across the row under the name, but not with a
+@pytest.mark.parametrize("style, width, fleet, plain, want", [
+    # 1282 px: seven tiles fill the area under the name to the px (1224 px);
+    # with a margin the sums don't count, the seventh doesn't fit.
+    (".fcc-ps-th { margin-right: 2px; }", 1282, SEVEN, "7", "4+3"),
+    # 412 px: two tiles fit on a line under the name (354 px), but not with a
     # 40 px margin each.
-    (".fcc-ps-th { margin-right: 40px; }", 412, FOUR, {"ZZ Four": ("1+1+1+1", "below")}),
+    (".fcc-ps-th { margin-right: 40px; }", 412, FOUR, "2+2", "1+1+1+1"),
 ])
-def test_what_the_browser_drew_is_checked(widget, style, width, fleet, want):
+def test_what_the_browser_drew_is_checked(widget, style, width, fleet, plain, want):
     """The sums can't know every style (or every rounding: the 110 % display
-    scale below), so the layout checks what the browser drew: tiles planned
-    beside the name that wrapped under it, or a line of tiles wider than its
-    row, are laid out again with one tile fewer per line."""
+    scale below), so the layout checks what the browser drew: a line of tiles
+    wider than its area is laid out again with one tile fewer per line."""
     page = widget
     page.set_viewport_size({"width": width, "height": 900})
-    page.add_style_tag(content=style)
     _feed(page, fleet)
-    got = _layout(page)
-    assert {k: (v["rows"], v["place"], v["out"]) for k, v in got.items()} == \
-        {k: v + (0,) for k, v in want.items()}, got
+    (name,) = fleet
+    assert _layout(page)[name]["rows"] == plain        # without the margin
+    page.add_style_tag(content=style)
+    page.evaluate("() => window.balancePrinterStatusRows()")
+    got = _layout(page)[name]
+    assert (got["rows"], got["out"]) == (want, 0), got
 
 
 # --- a display scale of 110 % (Windows' display scaling, or a browser zoom) -----
 # A CSS px is 1.1 device px, so the page's widths are fractions of a px: at a
-# 943 px window the row is 911.65 px wide and clientWidth says 912, exactly
-# what four tiles need beside the name (at 1471 px: 1439.83, and seven need
-# 1440). Whole px counted one tile more than fits, so the tiles wrapped under
-# the name while the layout said beside (review, 2026-10-22).
+# 753 px window the tile area is 695.65 px wide and clientWidth says 696,
+# exactly what four tiles need (at 1281 px: 1223.84, and seven need 1224).
+# Whole px count one tile more than fits (review, 2026-10-22).
 TRAP_FLEET = {f"ZZ {n:02d} heads": _printer(f"Z{n}", n) for n in (4, 5, 7, 8, 10)}
 
-# What whole px and the fraction count beside the name, for the row of `n`.
+# What whole px and the fraction count on a line, for the row of `n`.
 TRAP_JS = r"""(n) => {
     const row = Array.from(document.querySelectorAll('#printer-status-widget .fcc-ps-row'))
         .find((r) => r.querySelectorAll('.fcc-ps-th').length === n);
-    const rs = getComputedStyle(row);
-    const gap = parseFloat(getComputedStyle(row.querySelector('.fcc-ps-toolheads')).columnGap);
+    const heads = row.querySelector('.fcc-ps-toolheads');
+    const gap = parseFloat(getComputedStyle(heads).columnGap);
     const tileW = row.querySelector('.fcc-ps-th').getBoundingClientRect().width;
-    const nameW = row.querySelector('.fcc-ps-name-col').getBoundingClientRect().width + parseFloat(rs.columnGap);
-    const count = (w, slack) => Math.floor((w - nameW + gap + slack) / (tileW + gap));
-    const rect = row.getBoundingClientRect().width;
-    return { clientWidth: row.clientWidth, width: rect, whole: count(row.clientWidth, 0.5), fraction: count(rect, 0) };
+    const count = (w, slack) => Math.floor((w + gap + slack) / (tileW + gap));
+    const rect = heads.getBoundingClientRect().width;
+    return { clientWidth: heads.clientWidth, width: rect, whole: count(heads.clientWidth, 0.5), fraction: count(rect, 0) };
 }"""
 
 
@@ -423,11 +567,11 @@ def scaled_chromium(playwright):
     browser.close()
 
 
-@pytest.mark.parametrize("window, want", [
-    (943, {4: "2+2", 5: "3+2", 7: "3+2+2", 8: "3+3+2", 10: "3+3+2+2"}),
-    (1471, {4: "4", 5: "5", 7: "4+3", 8: "4+4", 10: "5+5"}),
+@pytest.mark.parametrize("window, trap, want", [
+    (753, 4, {4: "2+2", 5: "3+2", 7: "3+2+2", 8: "3+3+2", 10: "3+3+2+2"}),
+    (1281, 7, {4: "4", 5: "5", 7: "4+3", 8: "4+4", 10: "5+5"}),
 ])
-def test_at_a_110_percent_display_scale_it_counts_what_really_fits(scaled_chromium, window, want):
+def test_at_a_110_percent_display_scale_it_counts_what_really_fits(scaled_chromium, window, trap, want):
     context = scaled_chromium.new_context(no_viewport=True)
     context.route("**/*", lambda route: route.abort())
     page = context.new_page()
@@ -439,13 +583,13 @@ def test_at_a_110_percent_display_scale_it_counts_what_really_fits(scaled_chromi
         page.wait_for_function("(w) => Math.abs(innerWidth - w) <= 2", arg=window, timeout=5000)
         _feed(page, TRAP_FLEET)
         page.evaluate("() => new Promise((ok) => requestAnimationFrame(() => requestAnimationFrame(ok)))")
-        # The trap is set: whole px count one tile more beside the name than fits.
-        trap = page.evaluate(TRAP_JS, 4 if window == 943 else 7)
-        assert trap["whole"] == trap["fraction"] + 1 and trap["width"] < trap["clientWidth"], (
-            f"a {window} px window no longer lands where whole px count a tile too many; pick another: {trap}")
+        # The trap is set: whole px count one tile more on a line than fits.
+        got_trap = page.evaluate(TRAP_JS, trap)
+        assert got_trap["whole"] == got_trap["fraction"] + 1 and got_trap["width"] < got_trap["clientWidth"], (
+            f"a {window} px window no longer lands where whole px count a tile too many; pick another: {got_trap}")
         got = _layout(page)
-        assert {k: (v["rows"], v["place"], v["out"]) for k, v in got.items()} == \
-            {f"ZZ {n:02d} heads": (rows, "beside", 0) for n, rows in want.items()}, (window, got)
+        assert {k: (v["rows"], v["under"], v["out"]) for k, v in got.items()} == \
+            {f"ZZ {n:02d} heads": (rows, True, 0) for n, rows in want.items()}, (window, got)
         assert page.evaluate("window.__errors") == []
     finally:
         context.close()
@@ -455,17 +599,19 @@ def test_it_lays_out_again_after_a_text_size_change_and_a_resize(widget):
     page = widget
     page.set_viewport_size({"width": 1024, "height": 900})
     _feed(page)
-    assert _layout(page)[INDX]["rows"] == "4+4"
-    _size(page, "Extra Large")              # the tiles grow: 3 fit beside the name
-    assert (_layout(page)[INDX]["rows"], _layout(page)[XL]["rows"]) == ("3+3+2", "3+2")
+    assert (_layout(page)[INDX]["rows"], _layout(page)[XL]["rows"]) == ("4+4", "5")
+    _size(page, "Extra Large")              # the tiles grow: 4 fit on a line
+    assert (_layout(page)[INDX]["rows"], _layout(page)[XL]["rows"]) == ("4+4", "3+2")
     page.set_viewport_size({"width": 1600, "height": 1300})
     _settled(page, {INDX: "4+4", XL: "5"})
     page.set_viewport_size({"width": 800, "height": 900})
     _settled(page, {INDX: "3+3+2", XL: "3+2"})
-    assert _layout(page)[INDX]["place"] == "below"
     _size(page, "Standard")
     got = _layout(page)
-    assert (got[INDX]["rows"], got[INDX]["place"]) == ("3+3+2", "beside"), got
+    assert (got[INDX]["rows"], got[XL]["rows"]) == ("4+4", "3+2"), got
+    page.set_viewport_size({"width": 1600, "height": 1300})
+    _settled(page, {INDX: "8", XL: "5"})
+    assert all(v["below"] and v["under"] for v in _layout(page).values())
 
 
 def test_a_repaint_a_reorder_and_collapsing_keep_the_rows_even(widget):
@@ -474,21 +620,26 @@ def test_a_repaint_a_reorder_and_collapsing_keep_the_rows_even(widget):
     # A heartbeat with a change (a spool loaded on the INDX): a new paint.
     changed = {INDX: _printer("ZE", 8, loaded=(0, 3, 5)), XL: FLEET[XL]}
     _feed(page, changed)
-    assert _layout(page)[INDX]["rows"] == "4+4"
+    assert _layout(page)[INDX]["rows"] == "8"
     assert page.locator(".fcc-ps-row").first.get_attribute("data-printer") == INDX
     page.evaluate("(n) => window.movePrinterStatusRow(n, 1)", INDX)
     assert page.locator(".fcc-ps-row").first.get_attribute("data-printer") == XL
-    assert (_layout(page)[INDX]["rows"], _layout(page)[XL]["rows"]) == ("4+4", "5")
+    assert (_layout(page)[INDX]["rows"], _layout(page)[XL]["rows"]) == ("8", "5")
+    # By keyboard too: the first printer's ▼ (its only arrow), Enter.
+    page.locator(".fcc-ps-row").first.locator("button.fcc-ps-reorder").focus()
+    page.keyboard.press("Enter")
+    assert page.locator(".fcc-ps-row").first.get_attribute("data-printer") == INDX
     # Collapsed, the window and the size change; opened again, it measures again.
     page.evaluate("() => window.togglePrinterStatusWidget()")
     assert page.evaluate("() => document.getElementById('printer-status-widget').classList.contains('collapsed')")
     page.set_viewport_size({"width": 1024, "height": 900})
     _size(page, "Extra Large")
     page.evaluate("() => window.togglePrinterStatusWidget()")
-    _settled(page, {INDX: "3+3+2", XL: "3+2"})
+    _settled(page, {INDX: "4+4", XL: "3+2"})
+    assert all(v["below"] and v["under"] and v["out"] == 0 for v in _layout(page).values())
 
 
-@pytest.mark.parametrize("size", ["Small", "Standard", "Large", "Extra Large"])
+@pytest.mark.parametrize("size", SIZES)
 def test_the_material_line_is_1_2_high(widget, size):
     page = widget
     _size(page, size)

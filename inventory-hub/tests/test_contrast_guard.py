@@ -464,7 +464,8 @@ def test_qr_questions_are_readable(page: Page, base_url: str, assert_contrast, s
 
 
 # Two printers as the INDX and the XL are (8 heads and 5), with spools and
-# their material lines, for the even rows (Derek, 2026-10-22).
+# their material lines, for the even rows under each name (Derek, 2026-10-22
+# and 2026-10-23).
 EVEN_ROWS_FLEET = {
     "ZZ Contrast INDX": {"state": {"state": "IDLE", "is_active": False}, "heads": [
         (f"ZC-{i}", i in (1, 4), {"id": 9500 + i, "color": "E0A030" if i == 1 else "1B1B1B",
@@ -481,21 +482,29 @@ EVEN_ROWS_FLEET = {
 
 @pytest.mark.usefixtures("require_server")
 def test_printer_status_even_rows_are_readable(page: Page, base_url: str, assert_contrast):
-    """Printer Status with its tiles in even rows beside each name (Derek,
-    2026-10-22: the 8 heads 4 + 4), at Extra Large, the material lines 1.2
-    high: every tile, name and badge readable. A made-up fleet in this page
-    only (conftest.stub_printer_fleet); nothing is written."""
+    """Printer Status with each printer's name on its header line and its
+    tiles under the name in even rows (Derek, 2026-10-22 / 2026-10-23: the 8
+    heads 4 + 4), at Extra Large, the material lines 1.2 high: every tile,
+    name, badge and 🛑 review count readable. A made-up fleet and made-up
+    reviews in this page only (conftest.stub_printer_fleet); nothing is
+    written."""
+    import json as _json
     import conftest
     conftest.stub_printer_fleet(page, EVEN_ROWS_FLEET)
+    pending = [{"printer_name": "ZZ Contrast INDX", "job_id": f"c{i}", "kind": "cancel"} for i in range(3)]
+    page.route("**/api/cancel_deduct/pending*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=_json.dumps({"pending": pending})))
     page.add_init_script("(() => { try { localStorage.setItem('fcc.textSize', 'Extra Large'); } catch (e) {} })();")
     page.goto(base_url)
     page.wait_for_function("() => document.querySelectorAll('#printer-status-widget .fcc-ps-row').length === 2"
-                           " && document.querySelector('#printer-status-widget .fcc-ps-toolheads[data-rows=\"4+4\"]')",
+                           " && document.querySelector('#printer-status-widget .fcc-ps-toolheads[data-rows=\"4+4\"]')"
+                           " && document.querySelector('#printer-status-widget .fcc-ps-head .fcc-cr-chip')",
                            timeout=45_000)
     widget = page.locator("#printer-status-widget")
     assert_contrast(widget)
     scored = [o["text"] for o in conftest.contrast_offenders(widget, min_ratio=100)]
     assert any(t == "Polycarbonate" for t in scored) and any(t.startswith("ZC-8") for t in scored), scored
+    assert "ZZ Contrast INDX" in scored and "🛑 3" in scored, scored
 
 
 @pytest.mark.usefixtures("require_server")

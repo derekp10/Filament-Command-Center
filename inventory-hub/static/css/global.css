@@ -1766,13 +1766,21 @@ body {
     max-height: min(40vh, max(5rem, calc(100vh - 260px - 10.5rem)));
     overflow-y: auto;
 }
+/* A printer (Derek, 2026-10-23: the name on top, the tiles under it): a
+   header line, then the tiles, in a two-column grid. Column 1 holds the ▲▼
+   arrows; column 2 the name, its state badge and the 🛑 review count (the
+   header line, .fcc-ps-head), and under them the tiles, so the tiles start
+   under the name's first letter, a step in from the arrows, and read as the
+   printer's own. minmax(0, 1fr): neither a long name nor a line of tiles can
+   widen the column past the row. */
 .fcc-ps-row {
-    display: flex;
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    column-gap: 0.5rem;
+    row-gap: 0.35rem;
     align-items: center;
-    gap: 1rem;
-    flex-wrap: wrap;
-    /* Horizontal divider between printer rows so the eye can quickly
-       trace which toolheads belong to which printer name on the left. */
+    /* Horizontal divider between printers so the eye can quickly trace
+       which toolheads belong to which printer name above them. */
     padding: 0.5rem 0;
     border-top: 1px solid rgba(255,255,255,0.35);
 }
@@ -1783,25 +1791,47 @@ body {
 .fcc-ps-row:last-child {
     padding-bottom: 0;
 }
-.fcc-ps-name-col {
-    /* Fixed width on the whole left column (reorder arrows + name) keeps
-       every printer's toolhead row aligned vertically. Long names wrap
-       within the column instead of pushing the row right. */
-    flex: 0 0 12.5rem;   /* 200 px at Standard; grows with the Text size */
-    width: 12.5rem;
+/* The header line: the name, then the state badge, then the 🛑 N count
+   (cancel_review.js appends it here). One line at every width: the name
+   gives way and ends in "…" (its full text is its title), the badge and the
+   count never shrink or wrap, so they stay on the name's line and the dot
+   never parts from its number. */
+.fcc-ps-head {
+    grid-column: 2;
+    grid-row: 1;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: 0;
 }
 .fcc-ps-name {
     font-size: 1rem;
-    word-wrap: break-word;
-    overflow-wrap: break-word;
-    line-height: 1.2;
-    flex: 1 1 auto;
+    /* 1.3, not 1.2: overflow is hidden for the "…", and at 1.2 the line's
+       own box can cut a descender ("g", "y") or the top of an emoji. */
+    line-height: 1.3;
+    flex: 0 1 auto;
     min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
-/* L56 — printer-state badge sits under the printer name. Colors mirror
+.fcc-ps-head .fcc-ps-state {
+    flex: none;
+    align-self: center;
+}
+/* The cancelled-print review count, "🛑 N" (cancel_review.js): never split
+   between its dot and its number, on the header line and in the collapsed
+   strip (where it keeps the 6 px it always had from the printer's chips). */
+.fcc-cr-chip {
+    white-space: nowrap;
+    flex: none;
+}
+.fcc-ps-printer-group .fcc-cr-chip {
+    margin-left: 6px;
+}
+/* L56 — printer-state badge sits after the printer name. Colors mirror
    the dashboard status-light convention: green=active, amber=paused,
    muted=idle, red=attention, dark-gray=offline. */
-.fcc-ps-name-stack { min-width: 0; flex: 1 1 auto; gap: 0.15rem; }
 .fcc-ps-state {
     display: inline-block;
     align-self: flex-start;
@@ -1828,9 +1858,12 @@ body {
 .fcc-ps-state-idle     { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.6); border-color: rgba(255,255,255,0.18); }
 .fcc-ps-state-attention{ background: rgba(239,68,68,0.18); color: #ff6b6b; border-color: rgba(255,107,107,0.4); }
 .fcc-ps-state-offline  { background: rgba(0,0,0,0.35); color: rgba(255,255,255,0.50); border-color: rgba(255,255,255,0.15); }
+/* The ▲▼ pair, ▲ over ▼, at the start of the header line, centred on it. */
 .fcc-ps-reorder-stack {
+    grid-column: 1;
+    grid-row: 1;
     width: 1.125rem;     /* 18 px at Standard; the arrows grow with the Text size */
-    flex: 0 0 1.125rem;
+    gap: 2px;
 }
 .fcc-ps-reorder {
     background: transparent;
@@ -1843,44 +1876,39 @@ body {
     font-size: var(--fcc-fs-label);
     line-height: 1;
     cursor: pointer;
-    margin-bottom: 2px;
     display: flex;
     align-items: center;
     justify-content: center;
 }
-.fcc-ps-reorder:last-child { margin-bottom: 0; }
 .fcc-ps-reorder:hover {
     background: rgba(13,202,240,0.2);
     color: #fff;
     border-color: rgba(13,202,240,0.7);
 }
+/* The first printer has no ▲ and the last no ▼. The empty place takes no
+   room, so a lone arrow sits on the name's line instead of above or below it
+   (the stack keeps its width, so every printer's name and tiles start at the
+   same place). */
 .fcc-ps-reorder-placeholder {
-    width: 1.125rem;
-    height: 1rem;
-    margin-bottom: 2px;
-    display: block;
+    display: none;
 }
-.fcc-ps-reorder-placeholder:last-child { margin-bottom: 0; }
+/* The tile area: under the header line, in the name's column. */
 .fcc-ps-toolheads {
-    flex-grow: 1;
+    grid-column: 2;
+    grid-row: 2;
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
 }
 /* Even rows of tiles (Derek, 2026-10-22): inv_printer_status.js _balanceRows
-   measures each printer row and splits its tiles into the fewest rows with
-   equal counts (8 -> 4 + 4, 7 -> 4 + 3, 10 -> 5 + 5), beside the name column
-   like the XL row. --fcc-ps-cols is the longest row's count; each row's first
-   tile starts in column 1 (so 7 in three rows reads 3 + 2 + 2). Where fewer
-   than three fit beside the name (a phone, or a narrow window at a big Text
-   size), the tiles go under it when that takes fewer rows of tiles. */
+   measures each printer's tile area and splits its tiles into the fewest rows
+   with equal counts (8 -> 4 + 4, 7 -> 4 + 3, 10 -> 5 + 5), one row when they
+   all fit. --fcc-ps-cols is the longest row's count; each row's first tile
+   starts in column 1 (so 7 in three rows reads 3 + 2 + 2). */
 .fcc-ps-toolheads.fcc-ps-balanced {
     display: grid;
     grid-template-columns: repeat(var(--fcc-ps-cols, 1), max-content);
     justify-content: start;
-}
-.fcc-ps-toolheads.fcc-ps-below {
-    flex-basis: 100%;
 }
 .fcc-ps-th {
     display: flex;

@@ -444,8 +444,8 @@
         return { cls, label: safe, title: `PrusaLink reports: ${safe}` };
     };
 
-    // Expanded-row badge — sits under the printer name (always visible in the
-    // expanded view).
+    // Expanded-row badge — sits after the printer name on its header line
+    // (always visible in the expanded view).
     const _renderStateBadge = (state) => {
         const m = _stateMeta(state);
         if (!m) return '';
@@ -462,6 +462,28 @@
         return `<span class="fcc-ps-state fcc-ps-state-chip ${m.cls}" title="${m.title}">${m.label}</span>`;
     };
 
+    // A printer's name, escaped for the text and for its title attribute.
+    const _esc = (v) => (typeof window.escHtml === 'function'
+        ? window.escHtml(v)
+        : String(v == null ? '' : v).replace(/[&<>"']/g, (c) => (
+            { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])));
+
+    // --- A PRINTER: ITS HEADER LINE, THEN ITS TILES UNDER THE NAME ----------
+    // Derek, 2026-10-23 (picture 13 / 14 of 2026-10-22, style S3): "name on top
+    // of tool heads, probably reads better, especially if we indent in the
+    // toolheads more so that they read as a sub thing of the printer name".
+    // Each printer is a two-column grid (global.css .fcc-ps-row):
+    //   [▲▼] [name · state badge · 🛑 N]      <- the header line
+    //        [tile] [tile] [tile] ...          <- the tiles, under the name
+    // The tiles share the name's column, so they start under the name's first
+    // letter, a step in from the arrows, and take the row's width minus that
+    // step. The name keeps to one line: when the line is too short it ends in
+    // "…" (its full text is its title), and the badge and the review count
+    // never shrink or wrap, so they stay on the name's line and a long name
+    // can't reach the tiles. cancel_review.js puts the 🛑 N count at the end of
+    // the header line (.fcc-ps-head), after the badge. The arrows stay a pair,
+    // ▲ over ▼: side by side they would push the tiles in by 46 px instead of
+    // 26, and a 412 px phone would fit one tile on a line instead of two.
     const _renderRow = (name, info, idx, total) => {
         const safeName = name.replace(/"/g, '&quot;').replace(/'/g, "\\'");
         const upBtn = idx > 0
@@ -480,15 +502,13 @@
         // Bootstrap d-flex here: its !important display would beat the grid).
         return `
             <div class="fcc-ps-row" data-printer="${safeName}">
-                <div class="fcc-ps-name-col d-flex align-items-center">
-                    <div class="fcc-ps-reorder-stack d-flex flex-column">
-                        ${upBtn}
-                        ${downBtn}
-                    </div>
-                    <div class="fcc-ps-name-stack d-flex flex-column ms-2">
-                        <div class="fcc-ps-name text-info fw-bold">${(window.escHtml || String)(name)}</div>
-                        ${stateBadge}
-                    </div>
+                <div class="fcc-ps-reorder-stack d-flex flex-column">
+                    ${upBtn}
+                    ${downBtn}
+                </div>
+                <div class="fcc-ps-head">
+                    <div class="fcc-ps-name text-info fw-bold" title="${_esc(name)}">${_esc(name)}</div>
+                    ${stateBadge}
                 </div>
                 <div class="fcc-ps-toolheads">
                     ${info.toolheads.map(_renderToolheadBlock).join('')}
@@ -497,120 +517,95 @@
         `;
     };
 
-    // --- EVEN ROWS OF TILES (Derek, 2026-10-22) ---
-    // A printer's tiles stay beside its name column, like the XL row. When
-    // they don't all fit on one line there, they split into the FEWEST rows
-    // with EQUAL counts: 8 -> 4 + 4, 7 -> 4 + 3, 10 -> 5 + 5, never 7 + 1
-    // (the INDX's 8 heads used to drop under the name, then wrap 7 + 1 at
-    // Large and Extra Large). Rows as equal as they can be, the longer ones
-    // first (7 in three rows is 3 + 2 + 2). Where fewer than three tiles fit
-    // beside the name (a phone, or a narrow window at a big Text size), the
-    // tiles go under the name and use the row's whole width, split the same
-    // way, but only when that takes fewer rows of tiles (or none fit beside
-    // the name): 4 heads with room for two beside it stay there as 2 + 2,
-    // where under it they were 2 + 2 as well, plus a line for the name
-    // (review, 2026-10-22). A row of one tile is left only where at most two
-    // fit across the whole row and the count is odd (a phone: 2 + 2 + 1).
+    // --- EVEN ROWS OF TILES (Derek, 2026-10-22; under the name since 2026-10-23) ---
+    // A printer's tiles sit under its name. When they don't all fit on one
+    // line there, they split into the FEWEST rows with EQUAL counts: 8 -> 4 + 4,
+    // 7 -> 4 + 3, 10 -> 5 + 5, never 7 + 1. Rows as equal as they can be, the
+    // longer ones first (7 in three rows is 3 + 2 + 2). A row of one tile is
+    // left only where at most two fit on a line and the count is odd (a phone:
+    // 2 + 2 + 1). Until 2026-10-23 the tiles sat beside a 12.5rem name column
+    // and went under the name only on a phone; that "beside" mode is gone.
     //
-    // tileRows(n, side, full) -> {below, cols, rows, sizes}: `side` is how
-    // many tiles fit beside the name, `full` how many fit across the row.
-    // Pure (pinned by tests/test_printer_status_even_rows.py).
-    const MIN_BESIDE = 3;
-    const tileRows = (n, side, full) => {
+    // tileRows(n, fit) -> {cols, rows, sizes}: `fit` is how many tiles fit on
+    // a line under the name (0 counts as 1). Pure (pinned by
+    // tests/test_printer_status_even_rows.py).
+    const tileRows = (n, fit) => {
         const count = Math.max(0, Math.floor(Number(n) || 0));
-        if (!count) return { below: false, cols: 0, rows: 0, sizes: [] };
-        const s = Math.max(0, Math.floor(Number(side) || 0));
-        const f = Math.max(s, Math.floor(Number(full) || 0));
-        const below = !(s >= count || s >= MIN_BESIDE)
-            && (s === 0 || Math.ceil(count / Math.max(1, f)) < Math.ceil(count / s));
-        const per = Math.max(1, below ? f : s);
+        if (!count) return { cols: 0, rows: 0, sizes: [] };
+        const per = Math.max(1, Math.floor(Number(fit) || 0));
         const rows = Math.ceil(count / per);
         const big = count % rows;            // rows that get one tile more
         const base = Math.floor(count / rows);
         const sizes = [];
         for (let i = 0; i < rows; i++) sizes.push(base + (i < big ? 1 : 0));
-        return { below, cols: sizes[0], rows, sizes };
+        return { cols: sizes[0], rows, sizes };
     };
     window.fccPrinterStatusTileRows = tileRows;
 
-    // Measures every printer row and lays its tiles out by tileRows: a grid
-    // of `cols` columns (--fcc-ps-cols) whose rows each start in column 1, so
-    // 7 in three rows reads 3 + 2 + 2 (a plain grid would fill 3 + 3 + 1).
-    // All reads first, then all writes. Runs after every render, on a Text
-    // size change and when the body's width changes; does nothing while the
-    // widget is collapsed (the body has no width), and the body's width
-    // changing on expand runs it again.
+    // Measures every printer's tile area (the row's width minus the step in
+    // from the arrows) and lays its tiles out by tileRows: a grid of `cols`
+    // columns (--fcc-ps-cols) whose rows each start in column 1, so 7 in
+    // three rows reads 3 + 2 + 2 (a plain grid would fill 3 + 3 + 1). All
+    // reads first, then all writes. Runs after every render, on a Text size
+    // change and when the body's width changes; does nothing while the widget
+    // is collapsed (the body has no width), and the body's width changing on
+    // expand runs it again.
     //
     // Widths are read to the fraction of a px (review, 2026-10-22): at a
-    // display scale of 110 % a row 1439.83 px wide read as 1440 (clientWidth
-    // is a whole px), one tile more than fits was counted beside the name,
-    // and the tiles wrapped under it while the layout said beside. Then what
-    // the browser drew is checked, all reads and then all writes again: a row
-    // planned beside the name that went under it, or a line of tiles wider
-    // than its row, is laid out again with one tile fewer per line, so a
-    // rounding the sums don't see (a gap at another scale) can't leave it
-    // wrong either.
+    // display scale of 110 % a width of 1439.83 px reads as 1440 in
+    // clientWidth (a whole px), and one tile more than fits was counted. Then
+    // what the browser drew is checked, all reads and then all writes again:
+    // a line of tiles wider than its area is laid out again with one tile
+    // fewer per line, so a rounding the sums don't see (a gap at another
+    // scale, a margin) can't leave it wrong either.
     const _balanceRows = () => {
         const widget = document.getElementById('printer-status-widget');
         const body = widget && widget.querySelector('.fcc-ps-body');
         if (!body || typeof body.querySelectorAll !== 'function') return;
         const px = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
-        // The row's content box, to the fraction of a px.
-        const contentBox = (row) => {
-            const r = row.getBoundingClientRect();
-            const rs = getComputedStyle(row);
-            const left = r.left + px(rs.borderLeftWidth) + px(rs.paddingLeft);
-            const right = r.right - px(rs.borderRightWidth) - px(rs.paddingRight);
-            return { left, right, width: right - left, gap: px(rs.columnGap) };
+        // The tile area's content box, to the fraction of a px. It is the
+        // grid's second column (minmax(0, 1fr)), so its width never follows
+        // the tiles.
+        const contentBox = (el) => {
+            const r = el.getBoundingClientRect();
+            const cs = getComputedStyle(el);
+            const left = r.left + px(cs.borderLeftWidth) + px(cs.paddingLeft);
+            const right = r.right - px(cs.borderRightWidth) - px(cs.paddingRight);
+            return { left, right, width: right - left, gap: px(cs.columnGap) };
         };
         const rows = [];
         body.querySelectorAll('.fcc-ps-row').forEach((row) => {
             const heads = row.querySelector('.fcc-ps-toolheads');
-            const nameCol = row.querySelector('.fcc-ps-name-col');
             const tiles = heads ? Array.from(heads.children).filter(el => el.classList && el.classList.contains('fcc-ps-th')) : [];
-            if (!heads || !nameCol || !tiles.length) return;
-            const box = contentBox(row);
+            if (!heads || !tiles.length) return;
+            const box = contentBox(heads);
             const tileW = tiles[0].getBoundingClientRect().width;
             if (!(box.width > 0) || !(tileW > 0)) return;
-            const gap = px(getComputedStyle(heads).columnGap);
-            const nameW = nameCol.getBoundingClientRect().width + box.gap;
             // A twentieth of a px of slack, so k tiles and k - 1 gaps that fit
             // exactly don't lose a tile to a gap's rounding; the check below
             // catches the rare line it lets through.
-            const fit = (w) => Math.max(0, Math.floor((w + gap + 0.05) / (tileW + gap)));
-            rows.push({ row, heads, nameCol, tiles, side: fit(box.width - nameW), full: fit(box.width), plan: null });
+            const fit = Math.max(0, Math.floor((box.width + box.gap + 0.05) / (tileW + box.gap)));
+            rows.push({ heads, tiles, fit, plan: null });
         });
         const lay = (r) => {
-            const plan = tileRows(r.tiles.length, r.side, r.full);
+            const plan = tileRows(r.tiles.length, r.fit);
             r.plan = plan;
             r.heads.classList.add('fcc-ps-balanced');
-            r.heads.classList.toggle('fcc-ps-below', plan.below);
             r.heads.style.setProperty('--fcc-ps-cols', String(plan.cols));
             r.heads.dataset.rows = plan.sizes.join('+');
-            r.heads.dataset.place = plan.below ? 'below' : 'beside';
             let start = 0;
             const starts = new Set(plan.sizes.map((size) => { const at = start; start += size; return at; }));
             r.tiles.forEach((tile, i) => { tile.style.gridColumnStart = (i > 0 && starts.has(i)) ? '1' : ''; });
         };
         rows.forEach(lay);
-        // Drawn as planned? Beside the name means right of its column (a row
-        // that wrapped starts under it); and the first, longest, line of
-        // tiles ends inside the row.
-        const drawnWrong = (r) => {
-            const { plan } = r;
-            if (!plan.cols) return false;
-            if (!plan.below && r.heads.getBoundingClientRect().left < r.nameCol.getBoundingClientRect().right - 0.5) return true;
-            return r.tiles[plan.cols - 1].getBoundingClientRect().right > contentBox(r.row).right + 0.01;
-        };
+        // Drawn as planned? The first, longest, line of tiles ends inside
+        // the tile area.
+        const drawnWrong = (r) => r.plan.cols > 0
+            && r.tiles[r.plan.cols - 1].getBoundingClientRect().right > contentBox(r.heads).right + 0.01;
         for (let pass = 0; pass < 3; pass++) {
             const wrong = rows.filter(drawnWrong);
             if (!wrong.length) break;
-            wrong.forEach((r) => {
-                const fewer = Math.max(0, r.plan.cols - 1);
-                if (r.plan.below) r.full = fewer; else r.side = fewer;
-                r.side = Math.min(r.side, r.full);
-                lay(r);
-            });
+            wrong.forEach((r) => { r.fit = Math.max(1, r.plan.cols - 1); lay(r); });
         }
     };
     window.balancePrinterStatusRows = _balanceRows;
@@ -659,8 +654,8 @@
         body.innerHTML = printerNames
             .map((name, idx) => _renderRow(name, rows[name], idx, printerNames.length))
             .join('');
-        // Even rows of tiles beside each name (Derek, 2026-10-22), laid out
-        // before the browser paints the new rows.
+        // Even rows of tiles under each name (Derek, 2026-10-22 / 2026-10-23),
+        // laid out before the browser paints the new rows.
         _balanceRows();
         _watchBodyWidth(body);
         // Header chip strip — every toolhead from every printer in the

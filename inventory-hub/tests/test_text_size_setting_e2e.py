@@ -389,32 +389,40 @@ BIG_FLEET = {"ZZ Big %s" % p: {"state": {"state": "IDLE", "is_active": False},
              for p in "ABC"}
 
 
-# Each printer row's tiles (Derek, 2026-10-22: even rows beside the name): the
-# count on each line of tiles, whether every tile sits right of the name, and
-# what the layout recorded (data-rows, data-place).
+# Each printer row's tiles (Derek, 2026-10-22: even rows; 2026-10-23: under
+# the name, the name on a header line): the count on each line of tiles,
+# whether every tile sits under the header line and every line starts under
+# the name's first letter, and what the layout recorded (data-rows).
 PS_ROWS_JS = r"""() => Array.from(document.querySelectorAll('#printer-status-widget .fcc-ps-row')).map((row) => {
-    const nameR = row.querySelector('.fcc-ps-name-col').getBoundingClientRect();
+    const nameR = row.querySelector('.fcc-ps-name').getBoundingClientRect();
+    const header = Array.from(row.querySelectorAll('.fcc-ps-reorder, .fcc-ps-name, .fcc-ps-state, .fcc-cr-chip'))
+        .map((el) => el.getBoundingClientRect()).filter((r) => r.height > 0);
+    const headerBottom = Math.max(...header.map((r) => r.bottom));
     const tiles = Array.from(row.querySelectorAll('.fcc-ps-th')).map((t) => t.getBoundingClientRect());
     const lines = [];
-    tiles.forEach((r) => { const l = lines.find((x) => Math.abs(x.top - r.top) < 2); if (l) l.n++; else lines.push({ top: r.top, n: 1 }); });
+    tiles.forEach((r) => { const l = lines.find((x) => Math.abs(x.top - r.top) < 2);
+        if (l) { l.n++; l.left = Math.min(l.left, r.left); } else lines.push({ top: r.top, n: 1, left: r.left }); });
     lines.sort((a, b) => a.top - b.top);
     const heads = row.querySelector('.fcc-ps-toolheads');
     return { printer: row.dataset.printer, rows: lines.map((l) => l.n),
-             beside: tiles.every((r) => r.left >= nameR.right - 0.5),
-             data: heads ? (heads.dataset.rows || null) : null, dataPlace: heads ? (heads.dataset.place || null) : null }; })"""
+             below: tiles.every((r) => r.top >= headerBottom - 0.5),
+             under: lines.every((l) => Math.abs(l.left - nameR.left) < 0.5),
+             data: heads ? (heads.dataset.rows || null) : null }; })"""
 
 
 def _uneven(rows: list) -> list:
-    """The printer rows whose tiles aren't in even rows beside the name: the
+    """The printer rows whose tiles aren't in even rows under the name: the
     lines differ by more than one, a longer line follows a shorter one, one
-    tile sits alone under fuller lines, or the lines drawn aren't the ones the
+    tile sits alone under fuller lines, a tile isn't under the header line or
+    a line doesn't start under the name, or the lines drawn aren't the ones the
     layout recorded (review, 2026-10-22)."""
     bad = []
     for r in rows:
         n = r["rows"]
         if not n:
             continue   # a printer with no heads draws no tiles
-        if not r["beside"] or max(n) - min(n) > 1 or n != sorted(n, reverse=True) or (len(n) > 1 and n[-1] == 1)                 or r["data"] != "+".join(map(str, n)) or r["dataPlace"] != "beside":
+        if not (r["below"] and r["under"]) or max(n) - min(n) > 1 or n != sorted(n, reverse=True) \
+                or (len(n) > 1 and n[-1] == 1) or r["data"] != "+".join(map(str, n)):
             bad.append(r)
     return bad
 
@@ -430,8 +438,8 @@ def test_printer_status_leaves_the_deck_and_the_buffer_on_screen(page: Page, bas
     the open widget scrolls inside itself, so the whole deck and a 7rem strip
     of the log and the buffer stay on screen. Checked on a fleet bigger than
     the window (BIG_FLEET), so the limit is always in play. Since 2026-10-22
-    each printer's 8 heads are 4 + 4 beside its name (they were 7 + 1, or a
-    line of 8, under it)."""
+    each printer's 8 heads are 4 + 4 (they were 7 + 1, or a line of 8), and
+    since 2026-10-23 under the name, on its header line."""
     from conftest import stub_printer_fleet
     _read_only(page)
     stub_printer_fleet(page, BIG_FLEET)
@@ -449,22 +457,23 @@ def test_printer_status_leaves_the_deck_and_the_buffer_on_screen(page: Page, bas
         f"{name} {window}: Printer Status should scroll inside itself here: {d}")
     rows = page.evaluate(PS_ROWS_JS)
     assert len(rows) == 3 and all(r["rows"] == [4, 4] for r in rows) and not _uneven(rows), (
-        f"{name} {window}: the 8 heads should be 4 + 4 beside each name, as recorded: {rows}")
+        f"{name} {window}: the 8 heads should be 4 + 4 under each name, as recorded: {rows}")
 
 
 @pytest.mark.parametrize("name", SIZES)
 def test_on_a_tall_window_printer_status_keeps_its_room(page: Page, base_url: str, name):
     """Derek's 1600 x 1300 window: the limit is 40 % of the window (520 px),
     more than the open widget needs at any size, so nothing changes there.
-    And dev's own fleet sits in even rows beside each name (2026-10-22: the
-    INDX's 8 heads 4 + 4, never 7 + 1)."""
+    And dev's own fleet sits in even rows under each name (2026-10-22: the
+    INDX's 8 heads never 7 + 1; 2026-10-23: one row at Small and Standard,
+    4 + 4 at Large and Extra Large, under the name on its header line)."""
     _read_only(page)
     _store(page, name)
     _load_with_printers(page, base_url)
     d = page.evaluate(DECK_JS)
     assert d["body"]["maxH"] == "520px", d
     rows = page.evaluate(PS_ROWS_JS)
-    assert rows and not _uneven(rows), f"{name}: printers whose tiles aren't even rows beside the name: {_uneven(rows)}"
+    assert rows and not _uneven(rows), f"{name}: printers whose tiles aren't even rows under the name: {_uneven(rows)}"
 
 
 FIELDS_JS = """() => {

@@ -38,8 +38,9 @@ from conftest import own_the_buffer, stub_printer_fleet
 def _steady_page(page: Page) -> None:
     """Fixed answers for the dashboard's live feeds (install before goto):
     the made-up printer fleet in the heartbeat, no Activity Log lines, and an
-    empty buffer, print queue and label backlog, each kept in this page (a
-    write to them never reaches dev)."""
+    empty buffer, print queue, label backlog and list of print reviews (the
+    "🛑 N reviews" badge; dev's own reviews come and go), each kept in this
+    page (a write to them never reaches dev)."""
     own_the_buffer(page, [])
 
     def queue(route):
@@ -50,6 +51,8 @@ def _steady_page(page: Page) -> None:
         status=200, content_type="application/json", body=json.dumps({"success": True, "items": []})))
     page.route("**/api/logs*", lambda route: route.abort())
     stub_printer_fleet(page)
+    page.route("**/api/cancel_deduct/pending*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=json.dumps({"pending": []})))
 
 
 def _live_mask(page: Page) -> list:

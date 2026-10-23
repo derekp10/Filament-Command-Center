@@ -533,7 +533,9 @@
                 if (!chip) {
                     chip = document.createElement('span');
                     chip.className = 'fcc-cr-chip';
-                    chip.style.cssText = 'cursor:pointer;margin-left:6px;font-size:var(--fcc-fs-label);font-weight:bold;color:#ffae42;';
+                    // Spacing and "never splits" are global.css's .fcc-cr-chip
+                    // (the 🛑 and its count on one line, on both surfaces).
+                    chip.style.cssText = 'cursor:pointer;font-size:var(--fcc-fs-label);font-weight:bold;color:#ffae42;';
                     chip.title = 'Cancelled-print partial deduct waiting for review — click to review';
                     chip.addEventListener('click', (ev) => { ev.stopPropagation(); openCancelReview(); });
                     host.appendChild(chip);
@@ -543,11 +545,15 @@
                 chip.remove();
             }
         };
-        // Expanded view: next to the printer name. (`data-printer` entity-decodes
-        // to the real name in the DOM, matching the record's printer_name.)
+        // Expanded view: at the end of the printer's header line, after its
+        // name and state badge (Derek, 2026-10-23). Not inside the name, which
+        // ends in "…" when the line is short and would cut the count off, and
+        // whose wrapping used to leave the 🛑 on one line and its count on the
+        // next. (`data-printer` entity-decodes to the real name in the DOM,
+        // matching the record's printer_name.)
         document.querySelectorAll('.fcc-ps-row[data-printer]').forEach((row) => {
-            const nameEl = row.querySelector('.fcc-ps-name');
-            if (nameEl) apply(nameEl, row.getAttribute('data-printer'));
+            const host = row.querySelector('.fcc-ps-head') || row.querySelector('.fcc-ps-name');
+            if (host) apply(host, row.getAttribute('data-printer'));
         });
         // Minimized/collapsed view: onto each printer's group in the header chip
         // strip — the only thing visible when the widget is minimized (Derek
