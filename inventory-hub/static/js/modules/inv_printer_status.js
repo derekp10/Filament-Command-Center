@@ -444,8 +444,8 @@
         return { cls, label: safe, title: `PrusaLink reports: ${safe}` };
     };
 
-    // Expanded-row badge — sits after the printer name on its header line
-    // (always visible in the expanded view).
+    // Expanded-row badge — first on the printer's header line, before the
+    // review count and the name (Derek, 2026-10-24), in its slot (_renderRow).
     const _renderStateBadge = (state) => {
         const m = _stateMeta(state);
         if (!m) return '';
@@ -462,40 +462,54 @@
         return `<span class="fcc-ps-state fcc-ps-state-chip ${m.cls}" title="${m.title}">${m.label}</span>`;
     };
 
-    // A printer's name, escaped for the text and for its title attribute.
+    // A printer's name, escaped for the text and for an attribute (its title,
+    // data-printer): the attribute then reads back as the plain name.
     const _esc = (v) => (typeof window.escHtml === 'function'
         ? window.escHtml(v)
         : String(v == null ? '' : v).replace(/[&<>"']/g, (c) => (
             { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])));
+    // A value for an inline handler: a JS string first, then escaped for the
+    // attribute (CLAUDE.md, SpoolCardBuilder.jsArg). The browser decodes the
+    // attribute's entities before it compiles the handler, so an apostrophe
+    // ("Derek's XL") ends up inside the string, never ending it.
+    const _jsArg = (v) => ((window.SpoolCardBuilder && typeof window.SpoolCardBuilder.jsArg === 'function')
+        ? window.SpoolCardBuilder.jsArg(v)
+        : _esc(JSON.stringify(String(v == null ? '' : v))));
 
     // --- A PRINTER: ITS HEADER LINE, THEN ITS TILES UNDER THE NAME ----------
     // Derek, 2026-10-23 (picture 13 / 14 of 2026-10-22, style S3): "name on top
     // of tool heads, probably reads better, especially if we indent in the
     // toolheads more so that they read as a sub thing of the printer name".
-    // Each printer is a two-column grid (global.css .fcc-ps-row):
-    //   [▲▼] [name · state badge · 🛑 N]      <- the header line
-    //        [tile] [tile] [tile] ...          <- the tiles, under the name
-    // The tiles share the name's column, so they start under the name's first
-    // letter, a step in from the arrows, and take the row's width minus that
-    // step. The name keeps to one line: when the line is too short it ends in
-    // "…" (its full text is its title), and the badge and the review count
-    // never shrink or wrap, so they stay on the name's line and a long name
-    // can't reach the tiles. cancel_review.js puts the 🛑 N count at the end of
-    // the header line (.fcc-ps-head), after the badge. The arrows stay a pair,
-    // ▲ over ▼, centred on the name's line and never making it taller (a
-    // middle printer has both): side by side they would push the tiles in by
-    // 46 px instead of 26. A phone too narrow for two tiles under the name
-    // that has room for two from the row's edge starts them there
-    // (_balanceRows, .fcc-ps-edge).
+    // Derek, 2026-10-24: "move the individual printer state and review buttons
+    // before the name of the printer, that way it's more of an easy glance at
+    // what's going on with each printer, and all that data lines up". Each
+    // printer is a grid of four columns (global.css .fcc-ps-row):
+    //   [▲▼] [STATE] [🛑 N] [name]                 <- the header line
+    //                       [tile] [tile] ...      <- the tiles, under the name
+    // The state and the count each have a slot of the same width on every
+    // printer (the count's is there with no reviews too: cancel_review.js
+    // puts the 🛑 N in it), so the states line up down the left and the names
+    // line up. The tiles share the name's column: they start under the name's
+    // first letter. The name keeps to one line: when the line is too short it
+    // ends in "…" (its full text is its title), and the slots never shrink, so
+    // the badge and the count stay on the name's line and a long name can't
+    // reach the tiles. The arrows stay a pair, ▲ over ▼, centred on the name's
+    // line and never making it taller (a middle printer has both). Where
+    // fewer than two tiles fit under the name (a phone) and more fit from the
+    // row's edge, they start there (_balanceRows, .fcc-ps-edge).
+    // data-printer holds the plain name (attribute-escaped), which
+    // cancel_review.js matches to a review's printer_name; until 2026-10-24 it
+    // held the handler's JS escape (Derek\'s XL), so a printer with an
+    // apostrophe in its name never showed its count.
     const _renderRow = (name, info, idx, total) => {
-        const safeName = name.replace(/"/g, '&quot;').replace(/'/g, "\\'");
+        const nameArg = _jsArg(name);
         const upBtn = idx > 0
             ? `<button type="button" class="fcc-ps-reorder" data-dir="-1" title="Move up"
-                    onclick="event.stopPropagation(); window.movePrinterStatusRow('${safeName}', -1)">▲</button>`
+                    onclick="event.stopPropagation(); window.movePrinterStatusRow(${nameArg}, -1)">▲</button>`
             : `<span class="fcc-ps-reorder-placeholder"></span>`;
         const downBtn = idx < total - 1
             ? `<button type="button" class="fcc-ps-reorder" data-dir="1" title="Move down"
-                    onclick="event.stopPropagation(); window.movePrinterStatusRow('${safeName}', 1)">▼</button>`
+                    onclick="event.stopPropagation(); window.movePrinterStatusRow(${nameArg}, 1)">▼</button>`
             : `<span class="fcc-ps-reorder-placeholder"></span>`;
         const stateBadge = _renderStateBadge(info.state);
         // Per-printer expanded row. The collapsed view is now a single
@@ -505,14 +519,15 @@
         // Bootstrap d-flex here: its !important display would beat the grid;
         // the arrows' pair is laid out by global.css too).
         return `
-            <div class="fcc-ps-row" data-printer="${safeName}">
+            <div class="fcc-ps-row" data-printer="${_esc(name)}">
                 <div class="fcc-ps-reorder-stack">
                     ${upBtn}
                     ${downBtn}
                 </div>
                 <div class="fcc-ps-head">
+                    <span class="fcc-ps-state-slot">${stateBadge}</span>
+                    <span class="fcc-ps-count"></span>
                     <div class="fcc-ps-name text-info fw-bold" title="${_esc(name)}">${_esc(name)}</div>
-                    ${stateBadge}
                 </div>
                 <div class="fcc-ps-toolheads">
                     ${info.toolheads.map(_renderToolheadBlock).join('')}
@@ -546,20 +561,26 @@
     };
     window.fccPrinterStatusTileRows = tileRows;
 
-    // Measures every printer's tile area (the row's width minus the step in
-    // from the arrows) and lays its tiles out by tileRows: a grid of `cols`
-    // columns (--fcc-ps-cols) whose rows each start in column 1, so 7 in
-    // three rows reads 3 + 2 + 2 (a plain grid would fill 3 + 3 + 1). All
-    // reads first, then all writes. Runs after every render, on a Text size
-    // change and when the body's width changes; does nothing while the widget
-    // is collapsed (the body has no width), and the body's width changing on
-    // expand runs it again.
+    // Measures every printer's tile area (the row's width from the name's
+    // first letter: past the arrows, the state and the review count) and lays
+    // its tiles out by tileRows: a grid of `cols` columns (--fcc-ps-cols)
+    // whose rows each start in column 1, so 7 in three rows reads 3 + 2 + 2 (a
+    // plain grid would fill 3 + 3 + 1). All reads first, then all writes. Runs
+    // after every render, on a Text size change and when the body's width
+    // changes; does nothing while the widget is collapsed (the body has no
+    // width), and the body's width changing on expand runs it again.
     //
-    // A phone (review, 2026-10-23): where the step in leaves room for only one
-    // tile on a line and the row's whole width has room for two, the tiles
-    // start at the row's edge instead (the row gets .fcc-ps-edge), two to a
-    // line, not one. At Standard that is a window 376 to 401 px wide (an
-    // iPhone 12 to 16 at 390 or 393 px); from 402 px two fit under the name.
+    // A phone (review, 2026-10-23; the state and the count before the name
+    // since 2026-10-24): where fewer than two tiles fit on a line under the
+    // name and more fit across the row's whole width, the tiles start at the
+    // row's edge instead (the row gets .fcc-ps-edge), under the arrows: two to
+    // a line from 376 px at Standard (an iPhone 12 to 16 is 390 or 393 px, a
+    // Pixel or a Galaxy 412) up to 568 px; from 569 px two fit under the name.
+    // Where not even one fits under the name (below 369 px at Standard) the
+    // one a line starts at the edge too. The state, the count and their gaps
+    // are narrower than a tile, so the edge has room for one tile more than
+    // under the name, never two; it takes at most two a line anyway, so a
+    // wider state (OPERATIONAL) can't make a wider window show fewer.
     //
     // Widths are read to the fraction of a px (review, 2026-10-22): at a
     // display scale of 110 % a width of 1439.83 px reads as 1440 in
@@ -588,25 +609,26 @@
         const rows = [];
         body.querySelectorAll('.fcc-ps-row').forEach((row) => {
             const heads = row.querySelector('.fcc-ps-toolheads');
-            const head = row.querySelector('.fcc-ps-head');
+            const name = row.querySelector('.fcc-ps-name');
             const tiles = heads ? Array.from(heads.children).filter(el => el.classList && el.classList.contains('fcc-ps-th')) : [];
-            if (!heads || !head || !tiles.length) return;
+            if (!heads || !name || !tiles.length) return;
             // The row's own width, and the part of it under the name: from the
-            // name's column (the header line's left edge, which no mode moves)
-            // to the row's right edge.
+            // name's column (its left edge, which no mode moves: the slots
+            // before it are the same width whatever they hold) to the row's
+            // right edge.
             const whole = contentBox(row);
-            const under = whole.right - head.getBoundingClientRect().left;
+            const under = whole.right - name.getBoundingClientRect().left;
             const gap = px(getComputedStyle(heads).columnGap);
             const tileW = tiles[0].getBoundingClientRect().width;
-            if (!(under > 0) || !(tileW > 0)) return;
+            if (!(whole.width > 0) || !(tileW > 0)) return;
             // A twentieth of a px of slack, so k tiles and k - 1 gaps that fit
             // exactly don't lose a tile to a gap's rounding; the check below
             // catches the rare line it lets through.
             const count = (w) => Math.max(0, Math.floor((w + gap + 0.05) / (tileW + gap)));
             const fitUnder = count(under);
             const fitWhole = count(whole.width);
-            const edge = fitUnder < 2 && fitWhole >= 2;
-            rows.push({ row, heads, tiles, edge, fit: edge ? fitWhole : fitUnder, plan: null });
+            const edge = fitUnder < 2 && fitWhole > fitUnder;
+            rows.push({ row, heads, tiles, edge, fitUnder, fit: edge ? Math.min(fitWhole, 2) : fitUnder, plan: null });
         });
         const lay = (r) => {
             const plan = tileRows(r.tiles.length, r.fit);
@@ -621,8 +643,9 @@
         };
         rows.forEach((r) => { r.heads.dataset.fit = String(r.fit); lay(r); });
         // Drawn as planned? The first, longest, line of tiles ends inside
-        // the tile area. One tile a line goes back under the name: the edge
-        // is only for the second tile.
+        // the tile area. One tile a line goes back under the name where one
+        // fits there by measure: the edge is for the second tile, and for the
+        // first only where none fits under the name.
         const drawnWrong = (r) => r.plan.cols > 0
             && r.tiles[r.plan.cols - 1].getBoundingClientRect().right > contentBox(r.heads).right + 0.01;
         for (let pass = 0; pass < 3; pass++) {
@@ -630,7 +653,7 @@
             if (!wrong.length) break;
             wrong.forEach((r) => {
                 r.fit = Math.max(1, r.plan.cols - 1);
-                if (r.fit < 2) r.edge = false;
+                if (r.fit < 2 && r.fitUnder >= 1) r.edge = false;
                 lay(r);
             });
         }
@@ -705,6 +728,10 @@
         body.innerHTML = printerNames
             .map((name, idx) => _renderRow(name, rows[name], idx, printerNames.length))
             .join('');
+        // The 🛑 N counts first (the widget just overwrote body.innerHTML,
+        // dropping them): a count of 100 or more widens its slot, and so
+        // moves the name the tiles sit under.
+        if (window.cancelReviewDecorate) window.cancelReviewDecorate();
         // Even rows of tiles under each name (Derek, 2026-10-22 / 2026-10-23),
         // laid out before the browser paints the new rows.
         _balanceRows();
@@ -717,13 +744,12 @@
         const headerChips = widget.querySelector('.fcc-ps-header-chips');
         if (headerChips) {
             headerChips.innerHTML = printerNames.map(name => {
-                const safeName = name.replace(/"/g, '&quot;');
                 // Lead each group with a compact state badge so live printer
                 // state (PRINTING / IDLE / PAUSED / OFFLINE …) is visible in
                 // the collapsed strip without expanding the widget.
                 const stateChip = _renderStateChip(rows[name].state);
                 const chips = rows[name].toolheads.map(_renderToolheadCompact).join('');
-                return `<div class="fcc-ps-printer-group" data-printer="${safeName}">${stateChip}${chips}</div>`;
+                return `<div class="fcc-ps-printer-group" data-printer="${_esc(name)}">${stateChip}${chips}</div>`;
             }).join('');
         }
         // Delegated click handler — bound ONCE on the stable widget root
@@ -732,8 +758,7 @@
         // and click, especially during active PRINTING when state/weight
         // ticks invalidated the fingerprint frequently (L361).
         _wireDelegation(widget);
-        // Re-paint the cancelled-print "🛑 N" review chip onto each printer's
-        // name (the widget just overwrote body.innerHTML, dropping any chips).
+        // The collapsed strip's groups get their 🛑 N counts too.
         if (window.cancelReviewDecorate) window.cancelReviewDecorate();
     };
 

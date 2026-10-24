@@ -517,15 +517,20 @@
         // re-renders on each pulse, so we (re)inject after render keyed on the
         // printer name carried on each card. Hook is window.cancelReviewDecorate
         // — inv_printer_status.js calls it after it paints (and we also run it
-        // here for the badge-poll cadence).
-        decoratePrinterStatus();
+        // here for the badge-poll cadence). A count that changed on the open
+        // widget lays its tiles out again: 100 or more widens the count's slot
+        // and moves the name the tiles sit under (2026-10-24).
+        if (decoratePrinterStatus() && typeof window.balancePrinterStatusRows === 'function') {
+            window.balancePrinterStatusRows();
+        }
     }
+    // Returns whether a count on the open widget's header lines changed.
     function decoratePrinterStatus() {
         const counts = {};
         _lastPending.forEach((r) => { counts[r.printer_name] = (counts[r.printer_name] || 0) + 1; });
         // Add/update/remove one "🛑 N" chip inside `host` for printer `name`.
         // Used on BOTH Print-Status surfaces so a review shows whether the widget
-        // is expanded OR minimized.
+        // is expanded OR minimized. Returns whether it changed anything.
         const apply = (host, name) => {
             let chip = host.querySelector('.fcc-cr-chip');
             const n = counts[name] || 0;
@@ -540,26 +545,36 @@
                     chip.addEventListener('click', (ev) => { ev.stopPropagation(); openCancelReview(); });
                     host.appendChild(chip);
                 }
-                chip.textContent = `🛑 ${n}`;
-            } else if (chip) {
-                chip.remove();
+                const text = `🛑 ${n}`;
+                if (chip.textContent === text) return false;
+                chip.textContent = text;
+                return true;
             }
+            if (!chip) return false;
+            chip.remove();
+            return true;
         };
-        // Expanded view: at the end of the printer's header line, after its
-        // name and state badge (Derek, 2026-10-23). Not inside the name, which
-        // ends in "…" when the line is short and would cut the count off, and
-        // whose wrapping used to leave the 🛑 on one line and its count on the
-        // next. (`data-printer` entity-decodes to the real name in the DOM,
-        // matching the record's printer_name.)
+        // Expanded view: in the printer's count slot on its header line,
+        // after its state badge and before its name (Derek, 2026-10-24: "move
+        // the individual printer state and review buttons before the name").
+        // The slot keeps its width with no reviews, so the names line up.
+        // Not inside the name, which ends in "…" when the line is short and
+        // would cut the count off, and whose wrapping used to leave the 🛑 on
+        // one line and its count on the next. (`data-printer` holds the plain
+        // name, attribute-escaped, so it reads back as the record's
+        // printer_name, an apostrophe included.)
+        let changed = false;
         document.querySelectorAll('.fcc-ps-row[data-printer]').forEach((row) => {
-            const host = row.querySelector('.fcc-ps-head') || row.querySelector('.fcc-ps-name');
-            if (host) apply(host, row.getAttribute('data-printer'));
+            const host = row.querySelector('.fcc-ps-count') || row.querySelector('.fcc-ps-head')
+                || row.querySelector('.fcc-ps-name');
+            if (host && apply(host, row.getAttribute('data-printer'))) changed = true;
         });
         // Minimized/collapsed view: onto each printer's group in the header chip
         // strip — the only thing visible when the widget is minimized (Derek
         // 2026-06-12, "in case the activity log isn't always visible").
         document.querySelectorAll('.fcc-ps-header-chips .fcc-ps-printer-group[data-printer]')
             .forEach((grp) => apply(grp, grp.getAttribute('data-printer')));
+        return changed;
     }
     async function refreshBadge() {
         applyBadges(await fetchPending());

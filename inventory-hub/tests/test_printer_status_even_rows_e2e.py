@@ -1,5 +1,7 @@
-"""Printer Status on the real page: each printer's name on a header line, its
-tiles under the name in even rows (Derek, 2026-10-22 and 2026-10-23).
+"""Printer Status on the real page: each printer's header line (its arrows, its
+state, its 🛑 review count, its name), its tiles under the name in even rows,
+the printers a step in under the title (Derek, 2026-10-22, 2026-10-23 and
+2026-10-24).
 
 2026-10-22: split a printer's heads into the fewest rows with EQUAL counts
 (8 -> 4 + 4, 7 -> 4 + 3, 10 -> 5 + 5; never a lone tile), re-balanced on a
@@ -9,21 +11,34 @@ more so that they read as a sub thing of the printer name. We also avoid the
 word wrap effect on the red notification dot about pending reviews ... if
 printer names go ungodly long for some reason, they don't clash or break the
 toolhead display."
+2026-10-24, approving that with two tweaks: "indenting the rows in just a bit
+so it reads more like a sub set, and less like an ordered list", and "move
+the individual printer state and review buttons before the name of the
+printer ... and all that data lines up so your eyes don't have to dart all
+over the place to find out which printer is idle, printing, or has an error
+of some sort".
 
 The dev container's real page (Bootstrap, the heartbeat, cancel_review.js's
 own poll, the scan accumulator, the Settings path for the size) with a
 made-up fleet in every source the widget reads (conftest.stub_printer_fleet):
 an INDX-like printer with 8 heads and an XL-like one with 5, as dev has, and
 made-up pending reviews for them (the 🛑 N count). Pinned:
-  - on Derek's 1600 x 1300 window, at each Text size: the 8 heads are one row
-    at Small and Standard and 4 + 4 at Large and Extra Large, the 5 one row,
-    every tile under the header line and every line under the name's first
-    letter, nothing out of the row; the header (the ▲▼ arrow, the name, the
-    state badge, the 🛑 N count) on one line, the count after the badge, its
-    dot and number together;
+  - on Derek's 1600 x 1300 window, at each Text size: the 8 heads are 4 + 4
+    under the name (since 2026-10-24: the name starts past the state and the
+    count, 25 px short of one row at Standard), the 5 one row, every tile
+    under the header line and every line under the name's first letter,
+    nothing out of the row; the header on one line in Derek's order (the ▲▼
+    arrow, the state badge filling its slot, the 🛑 N count in its slot, the
+    name), its dot and number together; the states, the counts and the names
+    lined up across the printers; every printer a step in under the title;
   - 390, 412, 1024 and 1366 px at Standard and Extra Large, the same checks;
-    on a 390 px phone at Standard (an iPhone 12 to 16) the tiles start at the
-    row's edge, two to a line (review, 2026-10-23, F1: one a line before);
+    on a 390 and a 412 px phone the tiles start at the row's edge (two to a
+    line at Standard, one at Extra Large), and from 400 px at Standard the
+    printers step in under the title;
+  - IDLE, PRINTING, ATTENTION and ERROR printers, with and without reviews:
+    the states, the counts and the names line up down the left (2026-10-24);
+  - a printer named with an apostrophe ("Derek's XL") gets its 🛑 N count on
+    the header line and in the collapsed strip, and its arrows move it;
   - a Text size picked in Settings lays the rows out again at once, and a
     resize does too;
   - collapsing and opening the widget, the ▲▼ reorder and a heartbeat that
@@ -45,7 +60,7 @@ made-up pending reviews for them (the 🛑 N count). Pinned:
   - a printer between two others has the same header line as they do, its
     arrows clear of the divider and of the tiles (F6: 6.6 px taller);
   - 7 and 10 heads where three fit on a line are 3 + 2 + 2 and 3 + 3 + 2 + 2,
-    each line starting under the name;
+    each line starting under the name (Extra Large on a 1000 px window);
   - a 60-character printer name keeps the header on one line (ending in "…"
     on a phone, its full text in its title) and leaves every tile where it is
     under a short name, at 412 and 1600 px;
@@ -57,7 +72,18 @@ test_printer_status_even_rows.py (hermetic, under --offline).
 READ-ONLY: every request that isn't a read is answered in the browser, and
 the widget's sources answer the made-up fleet in this page only.
 
-RED before the fixes: with b49b263's global.css, inv_printer_status.js and
+RED before the 2026-10-24 tweaks: with 8f9213c's global.css,
+inv_printer_status.js and cancel_review.js on disk for one run (the container
+serves the checkout live; this checkout's files restored afterwards, their
+checksums checked), 25 of 41 here, and the contrast guard's
+test_printer_status_even_rows_are_readable: the header order and its slots,
+the lining up, the step in under the title, the rows under a name that now
+starts past the state and the count, and the apostrophe name's count (its
+page waited for a count that never came). The 16 that hold there: the
+collapsed strip (6), Enter, a scan and a click on an arrow (3), the short
+laptop windows (5), the material line, and no step on a 390 px phone.
+
+RED before the 2026-10-23 fixes: with b49b263's global.css, inv_printer_status.js and
 cancel_review.js served to this file's pages by a local pass-through proxy
 (INVENTORY_HUB_URL; nothing on disk changed), 15 of 34: the 390 px phone at
 one tile a line (F1), the 1280 x 800 and 1366 x 768 windows hiding the XL's
@@ -78,8 +104,8 @@ import pytest
 from playwright.sync_api import Page
 
 from conftest import stub_printer_fleet
-from test_printer_status_even_rows import (ARROWS_JS, FOCUS_JS, HEADER_JS, LAYOUT_JS, LONG_NAME, ROOT_PX, STRIP_JS,
-                                           _drawn_as_recorded, _one_header_line, _placed)
+from test_printer_status_even_rows import (APOS, ARROWS_JS, FOCUS_JS, HEADER_JS, LAYOUT_JS, LONG_NAME, STRIP_JS,
+                                           _drawn_as_recorded, _lined_up, _one_header_line, _placed, _stepped)
 from test_text_size_guard import _read_only
 
 pytestmark = pytest.mark.usefixtures("require_server")
@@ -161,12 +187,16 @@ def _settled(page: Page, want: dict):
                            arg=[LAYOUT_JS, want], timeout=5000)
 
 
-def _all_placed(got: dict, size: str, where):
+def _all_placed(page: Page, got: dict, where):
     """Every printer's tiles under the header line, under the name's first
-    letter (or, on a phone, from the row's edge), the name a step in."""
+    letter (or, on a phone, from the row's edge); every name starting at the
+    same place; every printer a step in under the title where the body has
+    room for it (2026-10-24)."""
     for name, g in got.items():
         _placed(g, (where, name))
-        assert g["indent"] == pytest.approx(1.625 * ROOT_PX[size], abs=0.05), (where, name, g)
+    lefts = [g["nameLeft"] for g in got.values()]
+    assert max(lefts) - min(lefts) <= 0.5, (where, got)
+    _stepped(page, where)
 
 
 def _headers(page: Page, size: str, counts: dict = REVIEWS):
@@ -174,6 +204,7 @@ def _headers(page: Page, size: str, counts: dict = REVIEWS):
     for name, h in head.items():
         _one_header_line(h, name, size)
         assert h["chipText"] == (f"🛑 {counts[name]}" if counts.get(name) else None), (name, h)
+    _lined_up(head, list(head), size)
     return head
 
 
@@ -185,48 +216,47 @@ def _order(page: Page):
 def test_on_derek_s_window_each_printer_s_tiles_sit_under_its_name(page: Page, base_url: str, size):
     _open(page, base_url, size)
     got = _layout(page)
-    one_row = size in ("Small", "Standard")
-    assert (got[INDX]["rows"], got[XL]["rows"]) == ("8" if one_row else "4+4", "5"), (size, got)
+    assert (got[INDX]["rows"], got[XL]["rows"]) == ("4+4", "5"), (size, got)
     assert not got[INDX]["edge"] and not got[XL]["edge"], got
-    _all_placed(got, size, size)
+    _all_placed(page, got, size)
     _headers(page, size)
 
 
 @pytest.mark.parametrize("width, size, indx, xl, edge", [
     (390, "Standard", "2+2+2+2", "2+2+1", True),
-    (390, "Extra Large", "1+1+1+1+1+1+1+1", "1+1+1+1+1", False),
-    (412, "Standard", "2+2+2+2", "2+2+1", False),
-    (412, "Extra Large", "1+1+1+1+1+1+1+1", "1+1+1+1+1", False),
-    (1024, "Standard", "4+4", "5", False),
-    (1024, "Extra Large", "4+4", "3+2", False),
+    (390, "Extra Large", "1+1+1+1+1+1+1+1", "1+1+1+1+1", True),
+    (412, "Standard", "2+2+2+2", "2+2+1", True),
+    (412, "Extra Large", "1+1+1+1+1+1+1+1", "1+1+1+1+1", True),
+    (1024, "Standard", "4+4", "3+2", False),
+    (1024, "Extra Large", "3+3+2", "3+2", False),
     (1366, "Standard", "4+4", "5", False),
-    (1366, "Extra Large", "4+4", "5", False),
+    (1366, "Extra Large", "4+4", "3+2", False),
 ])
 def test_narrower_windows_keep_the_header_and_even_rows(page: Page, base_url: str, width, size, indx, xl, edge):
     _open(page, base_url, size, width, 900)
     got = _layout(page)
     assert (got[INDX]["rows"], got[XL]["rows"], got[INDX]["edge"], got[XL]["edge"]) == (indx, xl, edge, edge), (
         width, size, got)
-    _all_placed(got, size, (width, size))
+    _all_placed(page, got, (width, size))
     _headers(page, size)
 
 
 def test_a_size_picked_in_settings_and_a_resize_lay_the_rows_out_again(page: Page, base_url: str):
     _open(page, base_url, "Standard", 1024, 900)
-    assert (_layout(page)[INDX]["rows"], _layout(page)[XL]["rows"]) == ("4+4", "5")
+    assert (_layout(page)[INDX]["rows"], _layout(page)[XL]["rows"]) == ("4+4", "3+2")
     page.evaluate("() => window.openConfigModal()")
     sel = page.locator('.cfgset-input[data-key="fcc.textSize"]')
     sel.wait_for(state="visible", timeout=15_000)
     sel.select_option("Extra Large")
     page.wait_for_function("() => document.documentElement.getAttribute('data-fcc-text-size') === 'xlarge'",
                            timeout=3000)
-    _settled(page, {INDX: "4+4", XL: "3+2"})
+    _settled(page, {INDX: "3+3+2", XL: "3+2"})
     page.keyboard.press("Escape")
     page.set_viewport_size({"width": 1600, "height": 1300})
     _settled(page, {INDX: "4+4", XL: "5"})
     page.set_viewport_size({"width": 800, "height": 1100})
-    _settled(page, {INDX: "3+3+2", XL: "3+2"})
-    _all_placed(_layout(page), "Extra Large", 800)
+    _settled(page, {INDX: "2+2+2+2", XL: "2+2+1"})
+    _all_placed(page, _layout(page), 800)
 
 
 COLLAPSED_JS = r"""() => Array.from(document.querySelectorAll('#printer-status-widget .fcc-ps-header-chips .fcc-ps-printer-group'))
@@ -249,11 +279,11 @@ def test_collapse_reorder_and_a_repaint_keep_the_rows_even(page: Page, base_url:
         (INDX, True, True, "🛑 3", "6px", 1), (XL, True, True, "🛑 1", "6px", 1)], strip
     page.set_viewport_size({"width": 1024, "height": 900})
     page.evaluate("() => window.togglePrinterStatusWidget()")
-    _settled(page, {INDX: "4+4", XL: "5"})
+    _settled(page, {INDX: "4+4", XL: "3+2"})
     first = page.locator("#printer-status-widget .fcc-ps-row").first.get_attribute("data-printer")
     page.evaluate("(n) => window.movePrinterStatusRow(n, 1)", first)
     assert page.locator("#printer-status-widget .fcc-ps-row").first.get_attribute("data-printer") != first
-    assert (_layout(page)[INDX]["rows"], _layout(page)[XL]["rows"]) == ("4+4", "5")
+    assert (_layout(page)[INDX]["rows"], _layout(page)[XL]["rows"]) == ("4+4", "3+2")
     _headers(page, "Standard")
     # A heartbeat with a change (another spool on the INDX) repaints the rows.
     # The repaint and the reads in one turn of the page's JS: the next real
@@ -270,10 +300,11 @@ def test_collapse_reorder_and_a_repaint_keep_the_rows_even(page: Page, base_url:
                  layout: (eval(js))(), header: (eval(hjs))() }; }""", [INDX, XL, LAYOUT_JS, HEADER_JS])
     assert got["repainted"], got
     _drawn_as_recorded(got["layout"])
-    assert (got["layout"][INDX]["rows"], got["layout"][XL]["rows"]) == ("4+4", "5"), got
+    assert (got["layout"][INDX]["rows"], got["layout"][XL]["rows"]) == ("4+4", "3+2"), got
     for name, h in got["header"].items():
         _one_header_line(h, name, "Standard")
         assert h["chipText"] == f"🛑 {REVIEWS[name]}", (name, h)
+    _lined_up(got["header"], list(got["header"]), "after a repaint")
 
 
 @pytest.mark.parametrize("width, size", [(1024, "Small"), (1024, "Standard"), (1024, "Large"), (1024, "Extra Large"),
@@ -390,6 +421,7 @@ def test_a_printer_between_two_others_has_the_same_header_line(page: Page, base_
                 assert (a["right"] <= t["left"] or t["right"] <= a["left"]
                         or a["bottom"] + 2 <= t["top"] or t["bottom"] + 2 <= a["top"]), where
     _headers(page, "Standard", {MIDDLE: 2})
+    _stepped(page, width)
 
 
 # Counts a plain grid fill draws unevenly (3 + 3 + 1, 3 + 3 + 3 + 1) where three
@@ -405,7 +437,7 @@ UNEVEN = {
 
 
 def test_seven_and_ten_heads_start_each_row_under_the_name(page: Page, base_url: str):
-    _open(page, base_url, "Extra Large", 800, 900, fleet=UNEVEN, reviews={})
+    _open(page, base_url, "Extra Large", 1000, 900, fleet=UNEVEN, reviews={})
     got = _layout(page)
     assert {k: (v["rows"], v["under"], v["below"], v["out"]) for k, v in got.items()} == {
         "ZZ Seven": ("3+2+2", True, True, 0), "ZZ Ten": ("3+3+2+2", True, True, 0)}, got
@@ -437,11 +469,71 @@ def test_a_60_character_name_neither_overlaps_nor_shifts_the_tiles(page: Page, b
           reviews={LONG_NAME: 12})
     after = page.evaluate(TILES_JS, LONG_NAME)
     assert after == before, f"the long name moved the tiles: {before} -> {after}"
-    head = page.evaluate(HEADER_JS)[LONG_NAME]
+    heads = page.evaluate(HEADER_JS)
+    head = heads[LONG_NAME]
     _one_header_line(head, LONG_NAME, "Standard")
+    _lined_up(heads, list(heads), width)
     assert head["text"] == LONG_NAME and head["chipText"] == "🛑 12", head
     assert head["cut"] == (width == 412), f"the name ends in … on a phone only: {head}"
-    _all_placed(_layout(page), "Standard", width)
+    _all_placed(page, _layout(page), width)
+
+
+# --- 2026-10-24: the states, the counts and the names line up; the step in ------
+
+STATES = {
+    "ZZ Align Idle": {"state": {"state": "IDLE", "is_active": False},
+                      "heads": [(f"ZA-{i}", True, _item(9340 + i, "PETG") if i == 1 else None) for i in range(1, 5)]},
+    "ZZ Align Printing": {"state": {"state": "PRINTING", "is_active": True},
+                          "heads": [(f"ZB-{i}", True, _item(9350 + i, "PLA") if i == 2 else None) for i in range(1, 6)]},
+    "ZZ Align Attention": {"state": {"state": "ATTENTION", "is_active": False},
+                           "heads": [(f"ZC-{i}", True, None) for i in range(1, 4)]},
+    "ZZ Align Error": {"state": {"state": "ERROR", "is_active": False},
+                       "heads": [(f"ZD-{i}", True, _item(9360 + i, "ASA") if i == 1 else None) for i in range(1, 3)]},
+}
+
+
+@pytest.mark.parametrize("width, size", [(1600, "Standard"), (1600, "Extra Large"), (412, "Standard")])
+def test_the_states_the_counts_and_the_names_line_up_down_the_left(page: Page, base_url: str, width, size):
+    """Derek, 2026-10-24: the state and the review count before the name, so a
+    glance down the left says which printer is idle, printing or has an
+    error. IDLE, PRINTING, ATTENTION and ERROR, two of them with reviews:
+    every badge the same width in one column, the counts in the next, the
+    names lined up after them, each printer's tiles under its name, every
+    printer a step in under the title."""
+    reviews = {"ZZ Align Printing": 2, "ZZ Align Attention": 12}
+    _open(page, base_url, size, width, 1100, fleet=STATES, reviews=reviews, order=list(STATES))
+    head = _headers(page, size, reviews)
+    assert [head[n]["badgeText"] for n in STATES] == ["IDLE", "PRINTING", "ATTENTION", "ERROR"], head
+    _all_placed(page, _layout(page), (width, size))
+
+
+@pytest.mark.parametrize("width, stepped", [(1600, True), (412, True), (390, False)])
+def test_the_printers_step_in_under_the_title(page: Page, base_url: str, width, stepped):
+    """Derek, 2026-10-24: "indenting the rows in just a bit so it reads more
+    like a sub set, and less like an ordered list". Each printer, its arrows
+    first, starts under the title's first letter; on a phone whose widget is
+    under 23rem wide (a 390 px iPhone at Standard) at the edge, as before."""
+    _open(page, base_url, "Standard", width, 1100)
+    assert _stepped(page, width) == stepped
+
+
+def test_a_printer_named_with_an_apostrophe_gets_its_count_and_moves(page: Page, base_url: str):
+    """data-printer held the arrows' JS escape (Derek\\'s XL), so the 🛑 N
+    count never reached the header line of a printer named like Derek's XL.
+    The plain name now: the count shows on the header line and in the
+    collapsed strip, and the arrows move the printer (the order kept under
+    its plain name)."""
+    fleet = {APOS: _xl(prefix="ZQ"), INDX: _indx()}
+    _open(page, base_url, "Standard", fleet=fleet, reviews={APOS: 2, INDX: 3}, order=[APOS, INDX])
+    _headers(page, "Standard", {APOS: 2, INDX: 3})
+    assert _order(page) == [APOS, INDX]
+    page.locator("#printer-status-widget .fcc-ps-row").first.locator("button.fcc-ps-reorder").click()
+    assert _order(page) == [INDX, APOS]
+    assert json.loads(page.evaluate("() => localStorage.getItem('fcc.printerStatus.order')")) == [INDX, APOS]
+    _headers(page, "Standard", {APOS: 2, INDX: 3})
+    page.evaluate("() => window.togglePrinterStatusWidget()")
+    strip = page.evaluate(STRIP_JS)
+    assert [(g["printer"], g["count"]) for g in strip["groups"]] == [(INDX, "🛑 3"), (APOS, "🛑 2")], strip
 
 
 def test_the_material_line_is_1_2_high_at_large(page: Page, base_url: str):

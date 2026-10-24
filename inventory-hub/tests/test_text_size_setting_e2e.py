@@ -467,8 +467,9 @@ def test_on_a_tall_window_printer_status_keeps_its_room(page: Page, base_url: st
     2026-10-23), more than the open widget needs at any size, so nothing
     changes there.
     And dev's own fleet sits in even rows under each name (2026-10-22: the
-    INDX's 8 heads never 7 + 1; 2026-10-23: one row at Small and Standard,
-    4 + 4 at Large and Extra Large, under the name on its header line)."""
+    INDX's 8 heads never 7 + 1; 2026-10-23: under the name on its header
+    line; 2026-10-24: 4 + 4 at every size, the name starting past the state
+    and the review count), the open widget still well inside the limit."""
     _read_only(page)
     _store(page, name)
     _load_with_printers(page, base_url)
