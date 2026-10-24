@@ -42,7 +42,7 @@ def _printer_status_widget_html() -> str:
     for s in STATES:
         rows.append(f"""
           <div class="fcc-ps-row" data-printer="FCC Test {s}">
-            <div class="fcc-ps-reorder-stack d-flex flex-column"></div>
+            <div class="fcc-ps-reorder-stack"></div>
             <div class="fcc-ps-head">
               <div class="fcc-ps-name text-info fw-bold" title="FCC Test {s}">FCC Test {s}</div>
               <span class="fcc-ps-state fcc-ps-state-{s}">{s.upper()}</span>

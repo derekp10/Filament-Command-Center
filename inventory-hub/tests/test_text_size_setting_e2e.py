@@ -462,8 +462,10 @@ def test_printer_status_leaves_the_deck_and_the_buffer_on_screen(page: Page, bas
 
 @pytest.mark.parametrize("name", SIZES)
 def test_on_a_tall_window_printer_status_keeps_its_room(page: Page, base_url: str, name):
-    """Derek's 1600 x 1300 window: the limit is 40 % of the window (520 px),
-    more than the open widget needs at any size, so nothing changes there.
+    """Derek's 1600 x 1300 window: the limit is 45 % of the window (585 px;
+    40 %, 520 px, until each printer's name got its own line, review
+    2026-10-23), more than the open widget needs at any size, so nothing
+    changes there.
     And dev's own fleet sits in even rows under each name (2026-10-22: the
     INDX's 8 heads never 7 + 1; 2026-10-23: one row at Small and Standard,
     4 + 4 at Large and Extra Large, under the name on its header line)."""
@@ -471,7 +473,8 @@ def test_on_a_tall_window_printer_status_keeps_its_room(page: Page, base_url: st
     _store(page, name)
     _load_with_printers(page, base_url)
     d = page.evaluate(DECK_JS)
-    assert d["body"]["maxH"] == "520px", d
+    assert d["body"]["maxH"] == "585px", d
+    assert d["body"]["sh"] <= d["body"]["ch"] + 1, f"{name}: the open widget should not need to scroll here: {d}"
     rows = page.evaluate(PS_ROWS_JS)
     assert rows and not _uneven(rows), f"{name}: printers whose tiles aren't even rows under the name: {_uneven(rows)}"
 

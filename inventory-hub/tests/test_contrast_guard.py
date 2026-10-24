@@ -508,6 +508,48 @@ def test_printer_status_even_rows_are_readable(page: Page, base_url: str, assert
 
 
 @pytest.mark.usefixtures("require_server")
+def test_printer_status_on_a_phone_and_its_wrapped_strip_are_readable(page: Page, base_url: str, assert_contrast):
+    """The 2026-10-23 review's layouts: on a 390 px phone the tiles start at
+    the row's edge, a printer between two others shows both arrows on its
+    header line, and the collapsed strip wraps a printer's chips onto a
+    second line. Every tile, name, arrow, badge, chip and 🛑 count readable
+    there. A made-up fleet and reviews in this page only; nothing written."""
+    import json as _json
+    import conftest
+    fleet = dict(EVEN_ROWS_FLEET)
+    fleet["ZZ Contrast Middle"] = {"state": {"state": "PAUSED", "is_active": False}, "heads": [
+        (f"ZM-{i}", True, None) for i in range(1, 4)]}
+    conftest.stub_printer_fleet(page, fleet)
+    pending = [{"printer_name": "ZZ Contrast Middle", "job_id": f"m{i}", "kind": "cancel"} for i in range(2)]
+    page.route("**/api/cancel_deduct/pending*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=_json.dumps({"pending": pending})))
+    page.add_init_script("(() => { try { localStorage.setItem('fcc.printerStatus.order', JSON.stringify("
+                         "['ZZ Contrast INDX', 'ZZ Contrast Middle', 'ZZ Contrast XL'])); } catch (e) {} })();")
+    page.set_viewport_size({"width": 390, "height": 900})
+    page.goto(base_url)
+    page.wait_for_function("() => document.querySelectorAll('#printer-status-widget .fcc-ps-row.fcc-ps-edge').length === 3"
+                           " && document.querySelector('#printer-status-widget .fcc-ps-head .fcc-cr-chip')",
+                           timeout=45_000)
+    widget = page.locator("#printer-status-widget")
+    assert_contrast(widget)
+    scored = [o["text"] for o in conftest.contrast_offenders(widget, min_ratio=100)]
+    assert "▲" in scored and "▼" in scored and "🛑 2" in scored and "PAUSED" in scored, scored
+    page.locator("#printer-status-widget .fcc-ps-header-bar").click()
+    expect(page.locator("#printer-status-widget .fcc-ps-header-chips")).to_be_visible(timeout=2000)
+    page.set_viewport_size({"width": 700, "height": 900})
+    # The INDX's group is wider than 700 px: its chips wrap onto a second line.
+    lines = page.evaluate("""() => { const g = document.querySelector('#printer-status-widget .fcc-ps-printer-group');
+        const lines = [];
+        Array.from(g.children).forEach((c) => { const r = c.getBoundingClientRect(); const mid = (r.top + r.bottom) / 2;
+            if (!lines.some((m) => Math.abs(m - mid) < 6)) lines.push(mid); });
+        return lines.length; }""")
+    assert lines >= 2, f"the INDX's chips should wrap at 700 px: {lines} line(s)"
+    assert_contrast(widget)
+    scored = [o["text"] for o in conftest.contrast_offenders(widget, min_ratio=100)]
+    assert any(t.startswith("ZC-8") for t in scored) and "🛑 2" in scored, scored
+
+
+@pytest.mark.usefixtures("require_server")
 def test_settings_this_browser_section_is_readable(page: Page, base_url: str, assert_contrast):
     """Settings -> 🖥️ This Browser, with the per-browser Text size control
     (readability, 2026-10-21): its label, the help lines under each setting

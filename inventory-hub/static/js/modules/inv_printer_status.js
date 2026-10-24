@@ -482,16 +482,19 @@
     // never shrink or wrap, so they stay on the name's line and a long name
     // can't reach the tiles. cancel_review.js puts the 🛑 N count at the end of
     // the header line (.fcc-ps-head), after the badge. The arrows stay a pair,
-    // ▲ over ▼: side by side they would push the tiles in by 46 px instead of
-    // 26, and a 412 px phone would fit one tile on a line instead of two.
+    // ▲ over ▼, centred on the name's line and never making it taller (a
+    // middle printer has both): side by side they would push the tiles in by
+    // 46 px instead of 26. A phone too narrow for two tiles under the name
+    // that has room for two from the row's edge starts them there
+    // (_balanceRows, .fcc-ps-edge).
     const _renderRow = (name, info, idx, total) => {
         const safeName = name.replace(/"/g, '&quot;').replace(/'/g, "\\'");
         const upBtn = idx > 0
-            ? `<button type="button" class="fcc-ps-reorder" title="Move up"
+            ? `<button type="button" class="fcc-ps-reorder" data-dir="-1" title="Move up"
                     onclick="event.stopPropagation(); window.movePrinterStatusRow('${safeName}', -1)">▲</button>`
             : `<span class="fcc-ps-reorder-placeholder"></span>`;
         const downBtn = idx < total - 1
-            ? `<button type="button" class="fcc-ps-reorder" title="Move down"
+            ? `<button type="button" class="fcc-ps-reorder" data-dir="1" title="Move down"
                     onclick="event.stopPropagation(); window.movePrinterStatusRow('${safeName}', 1)">▼</button>`
             : `<span class="fcc-ps-reorder-placeholder"></span>`;
         const stateBadge = _renderStateBadge(info.state);
@@ -499,10 +502,11 @@
         // chip strip in the widget header (rendered separately in _render),
         // not per-row, so we don't include compact chips here anymore.
         // The tiles' rows are laid out by _balanceRows after the render (no
-        // Bootstrap d-flex here: its !important display would beat the grid).
+        // Bootstrap d-flex here: its !important display would beat the grid;
+        // the arrows' pair is laid out by global.css too).
         return `
             <div class="fcc-ps-row" data-printer="${safeName}">
-                <div class="fcc-ps-reorder-stack d-flex flex-column">
+                <div class="fcc-ps-reorder-stack">
                     ${upBtn}
                     ${downBtn}
                 </div>
@@ -527,7 +531,7 @@
     // and went under the name only on a phone; that "beside" mode is gone.
     //
     // tileRows(n, fit) -> {cols, rows, sizes}: `fit` is how many tiles fit on
-    // a line under the name (0 counts as 1). Pure (pinned by
+    // a line (0 counts as 1). Pure (pinned by
     // tests/test_printer_status_even_rows.py).
     const tileRows = (n, fit) => {
         const count = Math.max(0, Math.floor(Number(n) || 0));
@@ -551,9 +555,17 @@
     // is collapsed (the body has no width), and the body's width changing on
     // expand runs it again.
     //
+    // A phone (review, 2026-10-23): where the step in leaves room for only one
+    // tile on a line and the row's whole width has room for two, the tiles
+    // start at the row's edge instead (the row gets .fcc-ps-edge), two to a
+    // line, not one. At Standard that is a window 376 to 401 px wide (an
+    // iPhone 12 to 16 at 390 or 393 px); from 402 px two fit under the name.
+    //
     // Widths are read to the fraction of a px (review, 2026-10-22): at a
     // display scale of 110 % a width of 1439.83 px reads as 1440 in
-    // clientWidth (a whole px), and one tile more than fits was counted. Then
+    // clientWidth (a whole px), and one tile more than fits was counted. The
+    // count the measure made is the tile area's data-fit, so a test can tell
+    // a measure that counted right from one the check below put right. Then
     // what the browser drew is checked, all reads and then all writes again:
     // a line of tiles wider than its area is laid out again with one tile
     // fewer per line, so a rounding the sums don't see (a gap at another
@@ -563,33 +575,43 @@
         const body = widget && widget.querySelector('.fcc-ps-body');
         if (!body || typeof body.querySelectorAll !== 'function') return;
         const px = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
-        // The tile area's content box, to the fraction of a px. It is the
-        // grid's second column (minmax(0, 1fr)), so its width never follows
-        // the tiles.
+        // An element's content box, to the fraction of a px. The tile area is
+        // the grid's second column (minmax(0, 1fr)), or both columns at the
+        // edge, so its width never follows the tiles.
         const contentBox = (el) => {
             const r = el.getBoundingClientRect();
             const cs = getComputedStyle(el);
             const left = r.left + px(cs.borderLeftWidth) + px(cs.paddingLeft);
             const right = r.right - px(cs.borderRightWidth) - px(cs.paddingRight);
-            return { left, right, width: right - left, gap: px(cs.columnGap) };
+            return { left, right, width: right - left };
         };
         const rows = [];
         body.querySelectorAll('.fcc-ps-row').forEach((row) => {
             const heads = row.querySelector('.fcc-ps-toolheads');
+            const head = row.querySelector('.fcc-ps-head');
             const tiles = heads ? Array.from(heads.children).filter(el => el.classList && el.classList.contains('fcc-ps-th')) : [];
-            if (!heads || !tiles.length) return;
-            const box = contentBox(heads);
+            if (!heads || !head || !tiles.length) return;
+            // The row's own width, and the part of it under the name: from the
+            // name's column (the header line's left edge, which no mode moves)
+            // to the row's right edge.
+            const whole = contentBox(row);
+            const under = whole.right - head.getBoundingClientRect().left;
+            const gap = px(getComputedStyle(heads).columnGap);
             const tileW = tiles[0].getBoundingClientRect().width;
-            if (!(box.width > 0) || !(tileW > 0)) return;
+            if (!(under > 0) || !(tileW > 0)) return;
             // A twentieth of a px of slack, so k tiles and k - 1 gaps that fit
             // exactly don't lose a tile to a gap's rounding; the check below
             // catches the rare line it lets through.
-            const fit = Math.max(0, Math.floor((box.width + box.gap + 0.05) / (tileW + box.gap)));
-            rows.push({ heads, tiles, fit, plan: null });
+            const count = (w) => Math.max(0, Math.floor((w + gap + 0.05) / (tileW + gap)));
+            const fitUnder = count(under);
+            const fitWhole = count(whole.width);
+            const edge = fitUnder < 2 && fitWhole >= 2;
+            rows.push({ row, heads, tiles, edge, fit: edge ? fitWhole : fitUnder, plan: null });
         });
         const lay = (r) => {
             const plan = tileRows(r.tiles.length, r.fit);
             r.plan = plan;
+            r.row.classList.toggle('fcc-ps-edge', r.edge);
             r.heads.classList.add('fcc-ps-balanced');
             r.heads.style.setProperty('--fcc-ps-cols', String(plan.cols));
             r.heads.dataset.rows = plan.sizes.join('+');
@@ -597,15 +619,20 @@
             const starts = new Set(plan.sizes.map((size) => { const at = start; start += size; return at; }));
             r.tiles.forEach((tile, i) => { tile.style.gridColumnStart = (i > 0 && starts.has(i)) ? '1' : ''; });
         };
-        rows.forEach(lay);
+        rows.forEach((r) => { r.heads.dataset.fit = String(r.fit); lay(r); });
         // Drawn as planned? The first, longest, line of tiles ends inside
-        // the tile area.
+        // the tile area. One tile a line goes back under the name: the edge
+        // is only for the second tile.
         const drawnWrong = (r) => r.plan.cols > 0
             && r.tiles[r.plan.cols - 1].getBoundingClientRect().right > contentBox(r.heads).right + 0.01;
         for (let pass = 0; pass < 3; pass++) {
             const wrong = rows.filter(drawnWrong);
             if (!wrong.length) break;
-            wrong.forEach((r) => { r.fit = Math.max(1, r.plan.cols - 1); lay(r); });
+            wrong.forEach((r) => {
+                r.fit = Math.max(1, r.plan.cols - 1);
+                if (r.fit < 2) r.edge = false;
+                lay(r);
+            });
         }
     };
     window.balancePrinterStatusRows = _balanceRows;
@@ -634,6 +661,29 @@
     // A Text size change grows or shrinks every tile (rem), not the window.
     document.addEventListener('fcc:text-size', () => _balanceRows());
 
+    // A ▲ / ▼ reached by keyboard keeps the focus through a repaint (the
+    // reorder draws the rows again, and so does a heartbeat that changed a
+    // tile): on the same printer's arrow, the same one when it still has it
+    // (▼ again moves the printer further down), else its other one. Without
+    // this the focus fell to the page after every move (review, 2026-10-23).
+    // An arrow clicked with the mouse lets it go, as before.
+    const _focusedArrow = (body) => {
+        const el = document.activeElement;
+        if (!el || typeof body.contains !== 'function' || !body.contains(el)
+            || !el.classList || !el.classList.contains('fcc-ps-reorder')) return null;
+        let byKeyboard = true;
+        try { byKeyboard = el.matches(':focus-visible'); } catch (e) { /* an old browser: keep it */ }
+        const row = byKeyboard ? el.closest('.fcc-ps-row') : null;
+        return row ? { printer: row.getAttribute('data-printer'), dir: el.getAttribute('data-dir') } : null;
+    };
+    const _refocusArrow = (body, kept) => {
+        const row = Array.from(body.querySelectorAll('.fcc-ps-row'))
+            .find((r) => r.getAttribute('data-printer') === kept.printer);
+        const arrows = row ? Array.from(row.querySelectorAll('button.fcc-ps-reorder')) : [];
+        const target = arrows.find((b) => b.getAttribute('data-dir') === kept.dir) || arrows[0];
+        if (target) target.focus();
+    };
+
     const _render = (rows) => {
         const widget = document.getElementById('printer-status-widget');
         if (!widget) return;
@@ -651,6 +701,7 @@
             return;
         }
         widget.style.display = '';
+        const kept = _focusedArrow(body);
         body.innerHTML = printerNames
             .map((name, idx) => _renderRow(name, rows[name], idx, printerNames.length))
             .join('');
@@ -658,6 +709,7 @@
         // laid out before the browser paints the new rows.
         _balanceRows();
         _watchBodyWidth(body);
+        if (kept) _refocusArrow(body, kept);
         // Header chip strip — every toolhead from every printer in the
         // user's printer order. Each printer's chips are wrapped in a
         // group div so CSS can add a vertical divider between groups,
@@ -694,6 +746,23 @@
             e.stopPropagation();
             const tid = el.dataset.toolhead;
             if (tid && window.openManage) window.openManage(tid);
+        });
+        // Enter on a focused ▲ / ▼ moves the printer, as a click does (review,
+        // 2026-10-23). The dashboard's scan accumulator (scripts.html) cancels
+        // every Enter outside a text field, a button's own press included, so
+        // Enter never reached the arrows there (Space did). A scan ends in
+        // Enter too: one still arriving (window.enterIsAScan) is left to the
+        // accumulator, and the press clears the scan buffer it consumed.
+        widget.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter' || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+            const btn = e.target && typeof e.target.closest === 'function'
+                ? e.target.closest('button.fcc-ps-reorder') : null;
+            if (!btn || !widget.contains(btn)) return;
+            if (typeof window.enterIsAScan === 'function' && window.enterIsAScan()) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            if (typeof window.clearScanBuffer === 'function') window.clearScanBuffer();
+            btn.click();
         });
     };
 

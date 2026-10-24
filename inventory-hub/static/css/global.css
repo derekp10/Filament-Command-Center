@@ -1744,26 +1744,34 @@ body {
     margin-left: 0.5rem;
     color: rgba(255,255,255,0.55);
 }
+/* No gap between printers: each row's own padding puts the divider between
+   two printers half way, 0.5rem from each (review, 2026-10-23: the gap had
+   put 1rem above it, and the height went to hiding tiles on a short window). */
 .fcc-ps-body {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    gap: 0;
     padding-top: 0.4rem;
 }
 /* Printer Status never pushes the command deck off the screen (readability
    review, 2026-10-21). The dashboard doesn't scroll, so every pixel the open
    widget grows comes out of the main area: at Extra Large on a short laptop
    window it cut the deck's QR codes (scanned from the screen) and left Live
-   Activity and the Buffer Zone 2 px tall. The open body takes at most 40 % of
+   Activity and the Buffer Zone 2 px tall. The open body takes at most 45 % of
    the window, and less on a short one, so the deck and a 7rem strip of the
    log and the buffer stay on screen; past that it scrolls inside itself.
+   45 %, not the 40 % it was until each printer's name got a line of its own
+   (2026-10-23): that line made the widget taller, and on a 1280 x 800 laptop
+   (a Framework 12 at 150 %) or a 1366 x 768 one, at Small and Standard, 40 %
+   left the second printer's tiles half under the fold. 45 % shows them all
+   there and still leaves the log and the buffer more than the 7rem strip.
    260px = the title bar (70) + the deck (160) + the main area's padding and
    gap (30); 10.5rem = the widget's own header and padding (about 3.5rem) +
    the 7rem strip; 5rem is the least it keeps (a printer's name and the top
    of its tiles). On a tall window (1600 x 1300) it changes nothing at any
    size. Collapsing the widget gives everything back, as before. */
 .fcc-ps-widget:not(.collapsed) .fcc-ps-body {
-    max-height: min(40vh, max(5rem, calc(100vh - 260px - 10.5rem)));
+    max-height: min(45vh, max(5rem, calc(100vh - 260px - 10.5rem)));
     overflow-y: auto;
 }
 /* A printer (Derek, 2026-10-23: the name on top, the tiles under it): a
@@ -1858,21 +1866,33 @@ body {
 .fcc-ps-state-idle     { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.6); border-color: rgba(255,255,255,0.18); }
 .fcc-ps-state-attention{ background: rgba(239,68,68,0.18); color: #ff6b6b; border-color: rgba(255,107,107,0.4); }
 .fcc-ps-state-offline  { background: rgba(0,0,0,0.35); color: rgba(255,255,255,0.50); border-color: rgba(255,255,255,0.15); }
-/* The ▲▼ pair, ▲ over ▼, at the start of the header line, centred on it. */
+/* The ▲▼ pair, ▲ over ▼, at the start of the header line, centred on it. The
+   pair never makes the line taller (review, 2026-10-23: a printer between two
+   others shows both arrows, and its header line grew to their height, so its
+   tiles sat 6.6 px lower under its name than the others'): the stack is 0
+   tall on the line's centre and the arrows stand out of it evenly, above into
+   the row's 0.5rem top padding and below into the gap over the tiles, which
+   both have room for them (0.875rem each, 1px apart: 4.1 px past the 20.8 px
+   line at Standard, 3.9 px clear of the divider above). */
 .fcc-ps-reorder-stack {
     grid-column: 1;
     grid-row: 1;
     width: 1.125rem;     /* 18 px at Standard; the arrows grow with the Text size */
-    gap: 2px;
+    height: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 1px;
 }
 .fcc-ps-reorder {
+    flex: none;
     background: transparent;
     border: 1px solid rgba(255,255,255,0.18);
     color: rgba(13,202,240,0.7);
     border-radius: 3px;
     padding: 0;
     width: 1.125rem;
-    height: 1rem;
+    height: 0.875rem;
     font-size: var(--fcc-fs-label);
     line-height: 1;
     cursor: pointer;
@@ -1899,6 +1919,18 @@ body {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
+}
+/* A phone where the step in leaves room for one tile on a line and the row's
+   whole width has room for two (review, 2026-10-23: at Standard a window 376
+   to 401 px wide, an iPhone 12 to 16): the tiles start at the row's edge,
+   under the arrows, two to a line instead of one. _balanceRows decides. The
+   gap over them is 0.5rem there, so a pair of arrows standing out under the
+   header line stays as clear of the tiles as it is of the divider above. */
+.fcc-ps-row.fcc-ps-edge {
+    row-gap: 0.5rem;
+}
+.fcc-ps-row.fcc-ps-edge > .fcc-ps-toolheads {
+    grid-column: 1 / -1;
 }
 /* Even rows of tiles (Derek, 2026-10-22): inv_printer_status.js _balanceRows
    measures each printer's tile area and splits its tiles into the fewest rows
@@ -2078,9 +2110,14 @@ body {
 .fcc-ps-mini-empty .fcc-ps-mini-weight { font-weight: normal; }
 /* Group each printer's chips together with a vertical divider between
    groups so the user can see at a glance which chips belong to which
-   printer in the collapsed strip. */
+   printer in the collapsed strip. A group wider than the window wraps its
+   own chips onto another line, its divider running down beside them
+   (review, 2026-10-23: the INDX's group ran off the right edge at 1024 px,
+   and at 1280 px at Extra Large, taking its last heads and its 🛑 count with
+   it; the strip is all a minimized widget shows). */
 .fcc-ps-printer-group {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 0.25rem;
     padding-left: 0.75rem;
