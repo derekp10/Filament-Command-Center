@@ -518,13 +518,15 @@
         // printer name carried on each card. Hook is window.cancelReviewDecorate
         // — inv_printer_status.js calls it after it paints (and we also run it
         // here for the badge-poll cadence). A count that changed on the open
-        // widget lays its tiles out again: 100 or more widens the count's slot
-        // and moves the name the tiles sit under (2026-10-24).
+        // widget lays its tiles out again. Since the count went onto the info
+        // line under the name (2026-10-24) its width moves no tile, so this
+        // finds the rows as they were; it costs one measure, and keeps them
+        // right whatever the info line comes to hold.
         if (decoratePrinterStatus() && typeof window.balancePrinterStatusRows === 'function') {
             window.balancePrinterStatusRows();
         }
     }
-    // Returns whether a count on the open widget's header lines changed.
+    // Returns whether a count on the open widget's info lines changed.
     function decoratePrinterStatus() {
         const counts = {};
         _lastPending.forEach((r) => { counts[r.printer_name] = (counts[r.printer_name] || 0) + 1; });
@@ -554,18 +556,18 @@
             chip.remove();
             return true;
         };
-        // Expanded view: in the printer's count slot on its header line,
-        // after its state badge and before its name (Derek, 2026-10-24: "move
-        // the individual printer state and review buttons before the name").
-        // The slot keeps its width with no reviews, so the names line up.
-        // Not inside the name, which ends in "…" when the line is short and
-        // would cut the count off, and whose wrapping used to leave the 🛑 on
-        // one line and its count on the next. (`data-printer` holds the plain
+        // Expanded view: in the printer's count slot on its info line, under
+        // its name and after its state badge (Derek, 2026-10-24: "the printer
+        // name, then under it, the status and review"). The slot keeps its
+        // width with no reviews, so the counts line up down the page. Not
+        // inside the name, which ends in "…" when the line is short and would
+        // cut the count off, and whose wrapping used to leave the 🛑 on one
+        // line and its count on the next. (`data-printer` holds the plain
         // name, attribute-escaped, so it reads back as the record's
         // printer_name, an apostrophe included.)
         let changed = false;
         document.querySelectorAll('.fcc-ps-row[data-printer]').forEach((row) => {
-            const host = row.querySelector('.fcc-ps-count') || row.querySelector('.fcc-ps-head')
+            const host = row.querySelector('.fcc-ps-count') || row.querySelector('.fcc-ps-info')
                 || row.querySelector('.fcc-ps-name');
             if (host && apply(host, row.getAttribute('data-printer'))) changed = true;
         });

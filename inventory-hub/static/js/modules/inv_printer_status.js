@@ -444,8 +444,8 @@
         return { cls, label: safe, title: `PrusaLink reports: ${safe}` };
     };
 
-    // Expanded-row badge — first on the printer's header line, before the
-    // review count and the name (Derek, 2026-10-24), in its slot (_renderRow).
+    // Expanded-row badge — first on the printer's info line, under its name
+    // and before the review count (Derek, 2026-10-24), in its slot (_renderRow).
     const _renderStateBadge = (state) => {
         const m = _stateMeta(state);
         if (!m) return '';
@@ -476,27 +476,31 @@
         ? window.SpoolCardBuilder.jsArg(v)
         : _esc(JSON.stringify(String(v == null ? '' : v))));
 
-    // --- A PRINTER: ITS HEADER LINE, THEN ITS TILES UNDER THE NAME ----------
+    // --- A PRINTER: ITS NAME, ITS INFO LINE, THEN ITS TILES ----------------
     // Derek, 2026-10-23 (picture 13 / 14 of 2026-10-22, style S3): "name on top
     // of tool heads, probably reads better, especially if we indent in the
     // toolheads more so that they read as a sub thing of the printer name".
-    // Derek, 2026-10-24: "move the individual printer state and review buttons
-    // before the name of the printer, that way it's more of an easy glance at
-    // what's going on with each printer, and all that data lines up". Each
-    // printer is a grid of four columns (global.css .fcc-ps-row):
-    //   [▲▼] [STATE] [🛑 N] [name]                 <- the header line
-    //                       [tile] [tile] ...      <- the tiles, under the name
-    // The state and the count each have a slot of the same width on every
-    // printer (the count's is there with no reviews too: cancel_review.js
-    // puts the 🛑 N in it), so the states line up down the left and the names
-    // line up. The tiles share the name's column: they start under the name's
-    // first letter. The name keeps to one line: when the line is too short it
-    // ends in "…" (its full text is its title), and the slots never shrink, so
-    // the badge and the count stay on the name's line and a long name can't
-    // reach the tiles. The arrows stay a pair, ▲ over ▼, centred on the name's
-    // line and never making it taller (a middle printer has both). Where
-    // fewer than two tiles fit under the name (a phone) and more fit from the
-    // row's edge, they start there (_balanceRows, .fcc-ps-edge).
+    // Derek, 2026-10-24, after the state and the count went before the name:
+    // "the printer name, then under it, the status and review, basically we
+    // could treat that section as an information area about state and
+    // issues, then the toolheads ... you now have to go hunting for the
+    // printer name to know what those statuses apply to". Each printer is a
+    // grid of two columns (global.css .fcc-ps-row):
+    //   [▲▼] [name]                     <- the name's line
+    //        [STATE] [🛑 N]             <- the info line (.fcc-ps-info)
+    //        [tile] [tile] [tile] ...   <- the tiles
+    // The name, the info line and the tiles start at the same place, a step
+    // in from the arrows. The state and the count each have a slot of the
+    // same width on every printer (the count's is there with no reviews too:
+    // cancel_review.js puts the 🛑 N in it), so the states and the counts line
+    // up down the page; more about a printer's state or its issues goes on
+    // the info line, after the count. The name keeps to one line: when the
+    // line is too short it ends in "…" (its full text is its title), so a long
+    // name can't reach the info line or the tiles. The arrows stay a pair, ▲
+    // over ▼, centred on the name's line and never making it taller (a
+    // middle printer has both). Where fewer than two tiles fit under the
+    // name (a phone) and more fit from the row's edge, they start there
+    // (_balanceRows, .fcc-ps-edge).
     // data-printer holds the plain name (attribute-escaped), which
     // cancel_review.js matches to a review's printer_name; until 2026-10-24 it
     // held the handler's JS escape (Derek\'s XL), so a printer with an
@@ -524,10 +528,10 @@
                     ${upBtn}
                     ${downBtn}
                 </div>
-                <div class="fcc-ps-head">
+                <div class="fcc-ps-name text-info fw-bold" title="${_esc(name)}">${_esc(name)}</div>
+                <div class="fcc-ps-info">
                     <span class="fcc-ps-state-slot">${stateBadge}</span>
                     <span class="fcc-ps-count"></span>
-                    <div class="fcc-ps-name text-info fw-bold" title="${_esc(name)}">${_esc(name)}</div>
                 </div>
                 <div class="fcc-ps-toolheads">
                     ${info.toolheads.map(_renderToolheadBlock).join('')}
@@ -562,7 +566,7 @@
     window.fccPrinterStatusTileRows = tileRows;
 
     // Measures every printer's tile area (the row's width from the name's
-    // first letter: past the arrows, the state and the review count) and lays
+    // first letter, a step in from the arrows) and lays
     // its tiles out by tileRows: a grid of `cols` columns (--fcc-ps-cols)
     // whose rows each start in column 1, so 7 in three rows reads 3 + 2 + 2 (a
     // plain grid would fill 3 + 3 + 1). All reads first, then all writes. Runs
@@ -613,9 +617,9 @@
             const tiles = heads ? Array.from(heads.children).filter(el => el.classList && el.classList.contains('fcc-ps-th')) : [];
             if (!heads || !name || !tiles.length) return;
             // The row's own width, and the part of it under the name: from the
-            // name's column (its left edge, which no mode moves: the slots
-            // before it are the same width whatever they hold) to the row's
-            // right edge.
+            // name's column (its left edge, which no mode moves: only the
+            // arrows' column is before it, the same width on every printer)
+            // to the row's right edge.
             const whole = contentBox(row);
             const under = whole.right - name.getBoundingClientRect().left;
             const gap = px(getComputedStyle(heads).columnGap);
@@ -729,8 +733,7 @@
             .map((name, idx) => _renderRow(name, rows[name], idx, printerNames.length))
             .join('');
         // The 🛑 N counts first (the widget just overwrote body.innerHTML,
-        // dropping them): a count of 100 or more widens its slot, and so
-        // moves the name the tiles sit under.
+        // dropping them), so the rows are measured as they will be drawn.
         if (window.cancelReviewDecorate) window.cancelReviewDecorate();
         // Even rows of tiles under each name (Derek, 2026-10-22 / 2026-10-23),
         // laid out before the browser paints the new rows.

@@ -482,13 +482,13 @@ EVEN_ROWS_FLEET = {
 
 @pytest.mark.usefixtures("require_server")
 def test_printer_status_even_rows_are_readable(page: Page, base_url: str, assert_contrast):
-    """Printer Status with each printer's header line (2026-10-24: the state
-    badge, the 🛑 review count, then the name) and its tiles under the name
-    in even rows (Derek, 2026-10-22 / 2026-10-23: the 8 heads 4 + 4), at
-    Extra Large, the material lines 1.2 high: every tile, name, badge and
-    🛑 review count readable, the red ATTENTION badge too. A made-up fleet and
-    made-up reviews in this page only (conftest.stub_printer_fleet); nothing
-    is written."""
+    """Printer Status with each printer's name, the info line under it
+    (2026-10-24: the state badge, then the 🛑 review count) and its tiles
+    under that in even rows (Derek, 2026-10-22 / 2026-10-23: the 8 heads
+    4 + 4 at this size), at Extra Large, the material lines 1.2 high: every
+    tile, name, badge and 🛑 review count readable, the red ATTENTION badge
+    too. A made-up fleet and made-up reviews in this page only
+    (conftest.stub_printer_fleet); nothing is written."""
     import json as _json
     import conftest
     fleet = dict(EVEN_ROWS_FLEET)
@@ -503,7 +503,7 @@ def test_printer_status_even_rows_are_readable(page: Page, base_url: str, assert
     page.goto(base_url)
     page.wait_for_function("() => document.querySelectorAll('#printer-status-widget .fcc-ps-row').length === 3"
                            " && document.querySelector('#printer-status-widget .fcc-ps-toolheads[data-rows=\"4+4\"]')"
-                           " && document.querySelectorAll('#printer-status-widget .fcc-ps-head .fcc-ps-count .fcc-cr-chip').length === 2",
+                           " && document.querySelectorAll('#printer-status-widget .fcc-ps-info .fcc-ps-count .fcc-cr-chip').length === 2",
                            timeout=45_000)
     widget = page.locator("#printer-status-widget")
     assert_contrast(widget)
@@ -516,8 +516,8 @@ def test_printer_status_even_rows_are_readable(page: Page, base_url: str, assert
 @pytest.mark.usefixtures("require_server")
 def test_printer_status_on_a_phone_and_its_wrapped_strip_are_readable(page: Page, base_url: str, assert_contrast):
     """The 2026-10-23 review's layouts: on a 390 px phone the tiles start at
-    the row's edge, a printer between two others shows both arrows on its
-    header line, and the collapsed strip wraps a printer's chips onto a
+    the row's edge, a printer between two others shows both arrows beside
+    its name, and the collapsed strip wraps a printer's chips onto a
     second line. Every tile, name, arrow, badge, chip and 🛑 count readable
     there. A made-up fleet and reviews in this page only; nothing written."""
     import json as _json
@@ -534,7 +534,7 @@ def test_printer_status_on_a_phone_and_its_wrapped_strip_are_readable(page: Page
     page.set_viewport_size({"width": 390, "height": 900})
     page.goto(base_url)
     page.wait_for_function("() => document.querySelectorAll('#printer-status-widget .fcc-ps-row.fcc-ps-edge').length === 3"
-                           " && document.querySelector('#printer-status-widget .fcc-ps-head .fcc-cr-chip')",
+                           " && document.querySelector('#printer-status-widget .fcc-ps-info .fcc-cr-chip')",
                            timeout=45_000)
     widget = page.locator("#printer-status-widget")
     assert_contrast(widget)
