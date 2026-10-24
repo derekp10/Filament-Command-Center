@@ -646,66 +646,6 @@ def quiet_heartbeat(page) -> None:
     page.route("**/api/logs*", lambda route: route.abort())
 
 
-# A made-up printer fleet for visual snapshots (readability review,
-# 2026-10-21). Once the snapshot comparator compared colours, a capture of the
-# live Printer Status (dev's printers, their states, the spools on their heads
-# and the grams left) could match its baseline only until the next print.
-# Every source the widget reads answers this fixed fleet instead: the
-# heartbeat's printer_status section (the heartbeat carries nothing else, so
-# the log, the counts and the rest of the page stay as loaded) and the
-# fan-out's printer map, slot bindings and head contents (which keeps the
-# heartbeat's states, as PrusaLink reports them). Each head: (id, bound to a
-# box slot, the spool on it).
-VISUAL_FLEET = {
-    "ZZ Visual XL": {"state": {"state": "PRINTING", "is_active": True}, "heads": [
-        ("ZV-1", True, {"id": 9101, "color": "E0A030", "color_direction": "longitudinal", "remaining_weight": 811,
-                        "initial_weight": 1000, "display": "#9101 Visual Gold PLA", "material": "PLA"}),
-        ("ZV-2", True, None),
-        ("ZV-3", True, {"id": 9103, "color": "7B2CBF", "color_direction": "longitudinal", "remaining_weight": 432,
-                        "initial_weight": 1000, "display": "#9103 Visual Purple PETG", "material": "PETG"}),
-    ]},
-    "ZZ Visual INDX": {"state": {"state": "IDLE", "is_active": False}, "heads": [("ZW-1", False, None), ("ZW-2", False, None)]},
-}
-
-
-def stub_printer_fleet(page, fleet=None) -> None:
-    """Answer every source of the Printer Status widget with `fleet`
-    (VISUAL_FLEET by default) for this page, so a snapshot that shows the
-    widget is the same on every run. Install before page.goto; GETs for
-    anything else fall through to earlier routes and the network."""
-    import json as _json
-    from urllib.parse import parse_qs, unquote, urlsplit
-    fleet = fleet or VISUAL_FLEET
-    rows, pmap, items, bound = {}, {}, {}, {}
-    for name, printer in fleet.items():
-        heads = printer["heads"]
-        rows[name] = {"state": printer["state"], "toolheads": [
-            {"id": hid, "position": i, "unbound": not is_bound, "item": item, "loaded_count": 1 if item else 0}
-            for i, (hid, is_bound, item) in enumerate(heads)]}
-        pmap[name] = [{"location_id": hid, "position": i} for i, (hid, _b, _item) in enumerate(heads)]
-        bound[name] = {hid: [{"box": "ZV-BOX", "slot": str(i + 1)}]
-                       for i, (hid, is_bound, _item) in enumerate(heads) if is_bound}
-        items.update({hid: item for (hid, _b, item) in heads})
-
-    def handle(route):
-        url = urlsplit(route.request.url)
-        if url.path.startswith("/api/dashboard_pulse"):
-            body = {"printer_status": rows}
-        elif url.path == "/api/printer_map":
-            body = {"printers": pmap}
-        elif url.path.startswith("/api/machine/") and url.path.endswith("/toolhead_slots"):
-            name = unquote(url.path[len("/api/machine/"):-len("/toolhead_slots")])
-            body = {"toolheads": bound.get(name, {}), "printer_pool": []}
-        elif url.path == "/api/get_contents" and (parse_qs(url.query).get("id") or [""])[0].upper() in items:
-            item = items[(parse_qs(url.query).get("id") or [""])[0].upper()]
-            body = [item] if item else []
-        else:
-            route.fallback()
-            return
-        route.fulfill(status=200, content_type="application/json", body=_json.dumps(body))
-    page.route("**/api/**", handle)
-
-
 @pytest.fixture
 def clean_buffer(api_base_url: str):
     """Ensure the buffer is empty before the test. Yields the base URL."""
@@ -1035,78 +975,6 @@ def real_toolhead(api_base_url):
 BASELINE_DIR = os.path.join(os.path.dirname(__file__), "__screenshots__", "chromium-1600x1300")
 _UPDATE_BASELINES = os.environ.get("UPDATE_VISUAL_BASELINES", "").lower() in ("1", "true", "yes")
 
-# Per-channel RGB delta a pixel may drift (sub-pixel AA, hinting) and still match.
-SNAPSHOT_PIXEL_THRESHOLD = 15
-
-
-def compare_screenshot(baseline_path: str, actual_bytes: bytes, *,
-                       max_diff_pixel_ratio: float = 0.01) -> typing.Optional[str]:
-    """Compare a screenshot with its baseline file: None if they match, else
-    a human-readable summary (and `<name>.actual.png` / `<name>.diff.png`
-    written next to the baseline).
-
-    The images are compared in RGB. Pillow's getbbox() on an RGBA image looks
-    at the alpha band only (its `alpha_only` default), and two opaque
-    screenshots differ in no alpha at all, so every pair of the same size
-    "matched" and only a size change could ever fail (readability review,
-    2026-10-21: a solid green image matched confirm-qr-row.png)."""
-    from PIL import Image, ImageChops
-    import io
-
-    baseline_img = Image.open(baseline_path).convert("RGB")
-    actual_img = Image.open(io.BytesIO(actual_bytes)).convert("RGB")
-
-    if baseline_img.size != actual_img.size:
-        # Sub-pixel rounding diffs (±1 px in either dimension) routinely
-        # appear between isolation runs and the full sweep depending on
-        # what else is in the DOM at capture time. Allow ±1 px and let
-        # the per-pixel comparison decide via its 1% tolerance. Group 14.4.
-        bw, bh = baseline_img.size
-        aw, ah = actual_img.size
-        if abs(bw - aw) > 1 or abs(bh - ah) > 1:
-            actual_path = baseline_path.replace(".png", ".actual.png")
-            actual_img.save(actual_path)
-            return (
-                f"size mismatch: baseline={baseline_img.size} actual={actual_img.size}. See {actual_path}"
-            )
-        # Resize the smaller image to the larger image's dimensions so the
-        # per-pixel diff has matching shapes. NEAREST avoids introducing
-        # interpolation artefacts that would themselves count as drift.
-        target_size = (max(bw, aw), max(bh, ah))
-        if baseline_img.size != target_size:
-            baseline_img = baseline_img.resize(target_size, Image.NEAREST)
-        if actual_img.size != target_size:
-            actual_img = actual_img.resize(target_size, Image.NEAREST)
-
-    diff = ImageChops.difference(baseline_img, actual_img)
-    if diff.getbbox() is None:
-        return None
-
-    # Count pixels that differ beyond a small per-channel threshold to
-    # tolerate font/hinting noise.
-    threshold = SNAPSHOT_PIXEL_THRESHOLD
-    total_pixels = baseline_img.size[0] * baseline_img.size[1]
-    worst = diff.point(lambda p: 255 if p > threshold else 0)
-    r, g, b = worst.split()
-    over = ImageChops.lighter(ImageChops.lighter(r, g), b)
-    diff_pixels = over.histogram()[255]
-    ratio = diff_pixels / total_pixels
-    if ratio <= max_diff_pixel_ratio:
-        return None
-
-    # Write diff artifacts for debugging.
-    actual_path = baseline_path.replace(".png", ".actual.png")
-    diff_path = baseline_path.replace(".png", ".diff.png")
-    actual_img.save(actual_path)
-    # Amplify diff so it's visible.
-    amplified = diff.point(lambda p: min(255, p * 10))
-    amplified.save(diff_path)
-    return (
-        f"{diff_pixels}/{total_pixels} pixels differ "
-        f"(ratio={ratio:.4f}, max allowed={max_diff_pixel_ratio}). "
-        f"See {actual_path} and {diff_path}"
-    )
-
 
 @pytest.fixture
 def snapshot(pytestconfig, request):
@@ -1135,6 +1003,64 @@ def snapshot(pytestconfig, request):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "wb") as f:
             f.write(screenshot_bytes)
+
+    def _compare(baseline_path: str, actual_bytes: bytes, *, max_diff_pixel_ratio: float) -> typing.Optional[str]:
+        """Return None if images match, else a human-readable diff summary."""
+        from PIL import Image, ImageChops
+        import io
+
+        baseline_img = Image.open(baseline_path).convert("RGBA")
+        actual_img = Image.open(io.BytesIO(actual_bytes)).convert("RGBA")
+
+        if baseline_img.size != actual_img.size:
+            # Sub-pixel rounding diffs (±1 px in either dimension) routinely
+            # appear between isolation runs and the full sweep depending on
+            # what else is in the DOM at capture time. Allow ±1 px and let
+            # the per-pixel comparison decide via its 1% tolerance. Group 14.4.
+            bw, bh = baseline_img.size
+            aw, ah = actual_img.size
+            if abs(bw - aw) > 1 or abs(bh - ah) > 1:
+                return (
+                    f"size mismatch: baseline={baseline_img.size} actual={actual_img.size}"
+                )
+            # Resize the smaller image to the larger image's dimensions so the
+            # per-pixel diff has matching shapes. NEAREST avoids introducing
+            # interpolation artefacts that would themselves count as drift.
+            target_size = (max(bw, aw), max(bh, ah))
+            if baseline_img.size != target_size:
+                baseline_img = baseline_img.resize(target_size, Image.NEAREST)
+            if actual_img.size != target_size:
+                actual_img = actual_img.resize(target_size, Image.NEAREST)
+
+        diff = ImageChops.difference(baseline_img, actual_img)
+        bbox = diff.getbbox()
+        if bbox is None:
+            return None
+
+        # Count pixels that differ beyond a small per-channel threshold to
+        # tolerate font/hinting noise.
+        threshold = 15  # per-channel RGB delta
+        diff_pixels = 0
+        total_pixels = baseline_img.size[0] * baseline_img.size[1]
+        for px in diff.getdata():
+            if max(px[:3]) > threshold:
+                diff_pixels += 1
+        ratio = diff_pixels / total_pixels
+        if ratio <= max_diff_pixel_ratio:
+            return None
+
+        # Write diff artifacts for debugging.
+        actual_path = baseline_path.replace(".png", ".actual.png")
+        diff_path = baseline_path.replace(".png", ".diff.png")
+        actual_img.save(actual_path)
+        # Amplify diff so it's visible.
+        amplified = diff.point(lambda p: min(255, p * 10))
+        amplified.save(diff_path)
+        return (
+            f"{diff_pixels}/{total_pixels} pixels differ "
+            f"(ratio={ratio:.4f}, max allowed={max_diff_pixel_ratio}). "
+            f"See {actual_path} and {diff_path}"
+        )
 
     def _capture_locator(locator, screenshot_kwargs=None) -> bytes:
         """Screenshot a locator, expanding the viewport first if the
@@ -1169,11 +1095,10 @@ def snapshot(pytestconfig, request):
         finally:
             page.set_viewport_size(BASELINE_VIEWPORT)
 
-    def _capture_page(page, screenshot_kwargs=None) -> bytes:
+    def _capture_page(page) -> bytes:
         """Full-page screenshot with the viewport expanded to the document
         height so Bootstrap fixed-position elements (navbar, modals) and
-        tall scrollable content both end up captured. ``screenshot_kwargs``
-        go to ``page.screenshot`` (``mask=[...]`` blanks live regions).
+        tall scrollable content both end up captured.
         """
         doc_h = page.evaluate(
             "() => Math.max(document.documentElement.scrollHeight, document.body.scrollHeight)"
@@ -1182,7 +1107,7 @@ def snapshot(pytestconfig, request):
                    "height": max(int(doc_h or 0), BASELINE_VIEWPORT["height"])}
         try:
             page.set_viewport_size(desired)
-            return page.screenshot(full_page=True, **(screenshot_kwargs or {}))
+            return page.screenshot(full_page=True)
         finally:
             page.set_viewport_size(BASELINE_VIEWPORT)
 
@@ -1200,7 +1125,7 @@ def snapshot(pytestconfig, request):
                 actual = page_or_locator.screenshot(**kwargs)
         else:
             try:
-                actual = _capture_page(page_or_locator, kwargs)
+                actual = _capture_page(page_or_locator)
             except Exception:
                 actual = page_or_locator.screenshot(full_page=full_page, **kwargs)
 
@@ -1213,7 +1138,7 @@ def snapshot(pytestconfig, request):
             request.node._visual_baselines_created.append(filename)
             return
 
-        diff_msg = compare_screenshot(baseline_path, actual, max_diff_pixel_ratio=max_diff_pixel_ratio)
+        diff_msg = _compare(baseline_path, actual, max_diff_pixel_ratio=max_diff_pixel_ratio)
         if diff_msg is not None:
             raise AssertionError(f"Visual regression for {filename}: {diff_msg}")
 
@@ -1768,127 +1693,6 @@ def assert_contrast():
     The AssertionError names exactly which elements violated and by how much.
     """
     return check_contrast
-
-
-# ---------------------------------------------------------------------------
-# Text size guard (readability rule, Derek 2026-10-21)
-# ---------------------------------------------------------------------------
-# Text you read is never under 13.6 px; a label inside a pill or box never under
-# 12.8 px (DESIGN.md "Typography"). An element counts as a LABEL when it, or an
-# ancestor, is sized with the label name: an inline style that uses
-# `--fcc-fs-label`, or a same-origin CSS rule whose font-size (or Bootstrap's
-# --bs-badge-font-size) uses it — read from the page's own stylesheets, so a new
-# label style needs no list here. Unlike the contrast walker, the ROOT itself is
-# judged too, and so is every visible input, select and textarea, by its own
-# font size (the text in a form control is no text node of its own). Measured at
-# the browser's default size (16 px root): the floors are the Standard text size.
-TEXT_FLOOR_PX = 13.6
-LABEL_FLOOR_PX = 12.8
-
-TEXT_SIZE_GUARD_JS = r"""
-(root, args) => {
-    if (!root) return { error: 'root_not_found' };
-    const labelSels = ['[style*="--fcc-fs-label"]'];
-    const visit = (rules) => {
-        for (const r of Array.from(rules || [])) {
-            if (r.cssRules && !r.selectorText) { visit(r.cssRules); continue; }   // @media, @supports
-            if (!r.style || !r.selectorText) continue;
-            const v = (r.style.getPropertyValue('font-size') || '') + ' '
-                + (r.style.getPropertyValue('--bs-badge-font-size') || '');
-            if (v.indexOf('--fcc-fs-label') !== -1) labelSels.push(r.selectorText);
-        }
-    };
-    for (const sh of Array.from(document.styleSheets)) {
-        try { visit(sh.cssRules); } catch (e) { /* a cross-origin sheet (Bootstrap's CDN) */ }
-    }
-    const usable = labelSels.filter((s) => { try { document.documentElement.matches(s); return true; } catch (e) { return false; } });
-    const isLabel = (el) => usable.some((s) => { try { return !!el.closest(s); } catch (e) { return false; } });
-    const vis = (el) => {
-        try { return el.checkVisibility({ opacityProperty: true, visibilityProperty: true }); }
-        catch (e) { return true; }
-    };
-    const where = (el) => {
-        const out = [];
-        for (let a = el; a && a.nodeType === 1 && out.length < 4; a = a.parentElement) {
-            out.push(a.tagName.toLowerCase() + (a.id ? '#' + a.id : '')
-                + ((typeof a.className === 'string' && a.className.trim())
-                    ? '.' + a.className.trim().split(/\s+/).slice(0, 2).join('.') : ''));
-            if (a.id) break;
-        }
-        return out.reverse().join(' > ');
-    };
-    // A form control's text (what was typed, its placeholder, a select's
-    // shown choice) is no text node of its own: it is judged by the control's
-    // own font size (readability review, 2026-10-21).
-    const NO_TEXT_INPUT = /^(checkbox|radio|color|range|hidden|file|image)$/i;
-    const isControl = (el) => (el.tagName === 'SELECT' || el.tagName === 'TEXTAREA'
-        || (el.tagName === 'INPUT' && !NO_TEXT_INPUT.test(el.type || '')));
-    const controlText = (el) => (el.tagName === 'SELECT'
-        ? ((el.options[el.selectedIndex] || {}).text || '') : (el.value || el.placeholder || ''));
-    const offenders = [];
-    let checked = 0;
-    let smallest = null;
-    for (const el of [root, ...root.querySelectorAll('*')]) {
-        if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE'].includes(el.tagName)) continue;
-        const control = isControl(el);
-        const own = control || Array.from(el.childNodes).some((n) => n.nodeType === 3 && n.textContent.trim());
-        if (!own || !el.getClientRects().length || !vis(el)) continue;
-        const r = el.getBoundingClientRect();
-        if (r.width * r.height < 4) continue;                    // .visually-hidden and friends
-        let op = 1;
-        for (let a = el; a && a.nodeType === 1; a = a.parentElement) op *= parseFloat(getComputedStyle(a).opacity || '1');
-        if (op < 0.05) continue;                                 // a faded-out layer is not on screen
-        const px = parseFloat(getComputedStyle(el).fontSize);
-        checked += 1;
-        if (smallest === null || px < smallest) smallest = px;
-        const label = isLabel(el);
-        const floor = label ? args.labelFloor : args.textFloor;
-        if (px < floor - 0.05) {
-            const text = control ? '[' + el.tagName.toLowerCase() + '] ' + controlText(el)
-                : Array.from(el.childNodes).filter((n) => n.nodeType === 3)
-                    .map((n) => n.textContent).join(' ').replace(/\s+/g, ' ').trim();
-            offenders.push({ px: Math.round(px * 100) / 100, floor, label, text: text.slice(0, 60), where: where(el) });
-        }
-    }
-    return { offenders, checked, smallest };
-}
-"""
-
-
-def text_size_offenders(root_locator, text_floor: float = TEXT_FLOOR_PX,
-                        label_floor: float = LABEL_FLOOR_PX) -> list:
-    """Every visible text element under (and including) `root_locator` whose
-    font size is under its floor: 13.6 px for text you read, 12.8 px for a
-    label sized with --fcc-fs-label. Dicts: px, floor, label, text, where.
-    Raises when the root isn't on the page or no text was checked at all (a
-    guard that checked nothing must not pass)."""
-    result = root_locator.evaluate(TEXT_SIZE_GUARD_JS, {"textFloor": text_floor, "labelFloor": label_floor})
-    if not isinstance(result, dict) or result.get("error"):
-        raise AssertionError(f"assert_text_size: could not evaluate on locator {root_locator!r}")
-    if not result.get("checked"):
-        raise AssertionError(f"assert_text_size: no visible text under {root_locator!r}")
-    return result.get("offenders") or []
-
-
-def check_text_size(root_locator, text_floor: float = TEXT_FLOOR_PX,
-                    label_floor: float = LABEL_FLOOR_PX) -> None:
-    """Raise AssertionError naming every element under its floor."""
-    offenders = text_size_offenders(root_locator, text_floor, label_floor)
-    if offenders:
-        lines = [f"Text under the size floor ({text_floor} px text, {label_floor} px labels) "
-                 f"in {len(offenders)} element(s):"]
-        for o in offenders:
-            kind = "label" if o["label"] else "text"
-            lines.append(f"  {o['px']} px < {o['floor']} ({kind})  {o['where']}  text={o['text']!r}")
-        raise AssertionError("\n".join(lines))
-
-
-@pytest.fixture
-def assert_text_size():
-    """Playwright-driven text-size check (DESIGN.md "Typography"): every
-    visible text under the root is at least 13.6 px, or 12.8 px when it is a
-    label sized with --fcc-fs-label. The AssertionError names each offender."""
-    return check_text_size
 
 
 # ---------------------------------------------------------------------------

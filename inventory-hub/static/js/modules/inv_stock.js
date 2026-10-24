@@ -73,7 +73,7 @@ console.log("🚀 Loaded Module: LOW STOCK");
     const D = `#${DIALOG_ID}`;
     const CSS = `
 ${P} .fcc-stock-panel { background:#1e1e1e; color:#fff; border:2px solid #ffaa00; border-radius:8px;
-    padding:14px 16px 10px; width:min(50rem, 94vw); max-height:86vh; display:flex; flex-direction:column;
+    padding:14px 16px 10px; width:min(800px, 94vw); max-height:86vh; display:flex; flex-direction:column;
     box-shadow:0 10px 40px rgba(0,0,0,.6); font-size:1rem; outline:none; text-align:left; }
 ${P} .fcc-stock-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 ${P} .fcc-stock-title { font-size:1.2em; font-weight:700; color:#fff; }
@@ -107,7 +107,7 @@ ${P} .fcc-stock-swatch { display:inline-block; width:18px; height:18px; border-r
 ${P} .fcc-stock-name { flex:1 1 200px; min-width:0; font-weight:600; color:#fff; white-space:nowrap; overflow:hidden;
     text-overflow:ellipsis; }
 ${P} .fcc-stock-tag { display:inline-block; background:#3a3a3a; border:1px solid #666; color:#f1f1f1;
-    border-radius:10px; padding:0 7px; margin-left:4px; font-size:var(--fcc-fs-label); font-weight:500; vertical-align:middle; }
+    border-radius:10px; padding:0 7px; margin-left:4px; font-size:.8em; font-weight:500; vertical-align:middle; }
 ${P} .fcc-stock-meta { flex:0 0 auto; color:#ddd; font-size:.9em; white-space:nowrap; }
 ${P} .fcc-stock-why { flex:0 0 auto; background:#3a2323; border:1px solid #ff8a8a; color:#fff; border-radius:10px;
     padding:0 8px; font-size:.85em; white-space:nowrap; }
@@ -131,7 +131,7 @@ ${P} .fcc-stock-foot { color:#ccc; font-size:.85em; margin-top:8px; border-top:1
     ${P} .fcc-stock-name { flex-basis:calc(100% - 30px); white-space:normal; }
 }
 ${D} .fcc-stock-dlg { background:#1e1e1e; color:#fff; border:2px solid #ff8a8a; border-radius:8px; padding:14px 16px;
-    width:min(28.75rem, 92vw); max-height:90vh; overflow:auto; box-shadow:0 10px 40px rgba(0,0,0,.6);
+    width:min(460px, 92vw); max-height:90vh; overflow:auto; box-shadow:0 10px 40px rgba(0,0,0,.6);
     font-size:1rem; text-align:left; outline:none; }
 ${D} .fcc-stock-dlg-title { font-weight:700; font-size:1.1em; color:#fff; }
 ${D} .fcc-stock-dlg-name { color:#fff; font-weight:600; margin:2px 0 10px; overflow-wrap:anywhere; }

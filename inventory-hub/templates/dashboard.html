@@ -5,18 +5,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Filament Command Center</title>
-    <!-- Text size (Settings -> 🖥️ This Browser; text_size.js changes it live).
-         Set on <html> before anything draws, so the page never paints at one
-         size and then jumps to another. Absent or unknown = Standard. -->
-    <script id="fcc-text-size-boot">
-        (function () {
-            var sizes = { 'Small': 'small', 'Standard': 'standard', 'Large': 'large', 'Extra Large': 'xlarge' };
-            var picked = null;
-            try { picked = window.localStorage.getItem('fcc.textSize'); } catch (e) { /* storage blocked */ }
-            var slug = Object.prototype.hasOwnProperty.call(sizes, picked) ? sizes[picked] : 'standard';
-            document.documentElement.setAttribute('data-fcc-text-size', slug);
-        })();
-    </script>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
@@ -25,15 +13,10 @@
 </head>
 
 <body>
-    <!-- No title-bar button's label wraps (readability, 2026-10-21): at a
-         bigger Text size or in a narrow window the bar tightens its spacing,
-         then shortens ADD INVENTORY to ADD, drops the version badge and
-         shortens the title with "…"; below 992 px wide the buttons move onto
-         another line rather than leave the screen (global.css "Title bar"). -->
     <nav class="navbar navbar-expand-lg">
-        <div class="container-fluid fcc-titlebar">
+        <div class="container-fluid">
             <div class="navbar-brand-group">
-                <span class="navbar-brand" title="Filament Command Center">Filament Command Center</span>
+                <span class="navbar-brand">Filament Command Center</span>
                 <span class="version-tag badge bg-dark border border-info"
                       id="fcc-build-version"
                       data-build-mtime="{{ build_mtime|default(0) }}"
@@ -42,7 +25,7 @@
                       title="{{ version }}">{{ version }}</span>
             </div>
 
-            <div class="d-flex align-items-center gap-3 fcc-titlebar-actions">
+            <div class="d-flex align-items-center gap-3">
                 <div class="status-label cursor-pointer" onclick="window.open(SPOOLMAN_URL, '_blank')">
                     <span id="st-spoolman" class="status-dot status-off"></span> Spoolman
                 </div>
@@ -53,8 +36,8 @@
                 </button>
 
                 <button class="btn btn-primary ms-3 fw-bold shadow-sm border border-light"
-                    onclick="window.openWizardModal()" title="Add inventory">
-                    ➕ ADD<span class="fcc-titlebar-more"> INVENTORY</span>
+                    onclick="window.openWizardModal()">
+                    ➕ ADD INVENTORY
                 </button>
 
                 <button class="btn btn-info ms-4" id="btn-backlog-count" onclick="window.openBacklogModal()">
@@ -67,7 +50,7 @@
                 <button class="btn btn-outline-light ms-2" id="btn-shortcuts-help"
                     onclick="window.toggleShortcutsOverlay()"
                     title="Keyboard shortcuts (?)"
-                    style="font-weight:bold; width:2.375rem;">?</button>
+                    style="font-weight:bold; width:38px;">?</button>
                 <!-- L324 Config / Admin entry point. First inhabitant is the
                      FilaBridge ↔ Spoolman Reconcile tool; future config
                      panels (user preferences, choice cleanup, etc.) will
@@ -81,7 +64,7 @@
                     id="btn-config"
                     onclick="window.openConfigModal && window.openConfigModal()"
                     title="Admin / Config tools"
-                    style="font-weight:bold; width:2.375rem; height:2.375rem; padding:0; font-size:1.1rem; line-height:1;">⚙️</button>
+                    style="font-weight:bold; width:38px; height:38px; padding:0; font-size:1.1rem; line-height:1;">⚙️</button>
             </div>
         </div>
     </nav>
@@ -97,7 +80,7 @@
         onclick="window.toggleShortcutsOverlay()"></div>
     <div id="fcc-shortcuts-overlay"
         class="position-fixed top-50 start-50 translate-middle bg-dark border border-info rounded p-4 shadow-lg"
-        style="display:none; z-index:10001; width:min(50rem, 95vw); max-height:85vh; overflow-y:auto;">
+        style="display:none; z-index:10001; min-width:640px; max-width:95vw; max-height:85vh; overflow-y:auto;">
         <div class="d-flex justify-content-between align-items-center mb-3 pb-2 border-bottom border-secondary">
             <h4 class="text-info mb-0 fw-bold">⌨️ Keyboard & Scan Shortcuts</h4>
             <button type="button" class="btn-close btn-close-white"
@@ -123,7 +106,7 @@
         title="New Activity Log entries — tap to view; drag to move">
         <span id="fcc-log-pill-icon">📡</span>
         <span id="fcc-log-pill-count" class="ms-1">0</span>
-        <span class="ms-1" style="font-weight:600; font-size:var(--fcc-fs-label);">new</span>
+        <span class="ms-1" style="font-weight:600; font-size:0.8rem;">new</span>
     </button>
 
     <!-- L298 follow-up — BULK MOVE armed pill (Derek 2026-08-03: "a hide button
@@ -170,7 +153,7 @@
             <div class="col-logs">
                 <div
                     class="p-2 border-bottom border-secondary text-info fw-bold d-flex justify-content-between align-items-center">
-                    <span>Live Activity 📡<span id="cancel-review-badge" onclick="window.openCancelReview && window.openCancelReview()" title="Cancelled-print partial deducts waiting for review — click to review" style="display:none;cursor:pointer;margin-left:8px;color:#ffae42;font-size:var(--fcc-fs-label);font-weight:bold;"></span></span><span id="log-status" class="small fw-bold" style="color:#0f0; cursor:pointer; user-select:none;" onclick="window.toggleLogsStickyPause && window.toggleLogsStickyPause()" title="Click to toggle sticky pause">Auto-Refresh ON (click to pause)</span>
+                    <span>Live Activity 📡<span id="cancel-review-badge" onclick="window.openCancelReview && window.openCancelReview()" title="Cancelled-print partial deducts waiting for review — click to review" style="display:none;cursor:pointer;margin-left:8px;color:#ffae42;font-size:0.8rem;font-weight:bold;"></span></span><span id="log-status" class="small fw-bold" style="color:#0f0; cursor:pointer; user-select:none;" onclick="window.toggleLogsStickyPause && window.toggleLogsStickyPause()" title="Click to toggle sticky pause">Auto-Refresh ON (click to pause)</span>
                 </div>
                 <!-- L286 follow-up: hover-pause removed (was the
                      bug, not the workaround). The indicator above is

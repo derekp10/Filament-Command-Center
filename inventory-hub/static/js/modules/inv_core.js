@@ -172,62 +172,6 @@ window.unionConfirmFedHeads = unionConfirmFedHeads;
 // is settled as superseded (`onCancel({superseded: true})`), so its host
 // listener, QR session and scan hold-off never outlive its DOM.
 const _openMoveConfirms = {};
-
-// --- KEEP A BOX ID WHOLE (review, 2026-10-22) ---
-// A button label that wraps on a phone may break a line after any hyphen:
-// "Just store it in LR-MDB-1 slot 1" read "in LR- / MDB-1 slot / 1" at Extra
-// Large. Takes HTML whose text is already escaped (no tags) and wraps each
-// hyphenated word ("LR-MDB-1", "PM-DB-XL-L") and each "slot N" in a span that
-// doesn't break (global.css .fcc-keep-whole); the label's text is unchanged.
-const fccKeepWhole = (html) => String(html == null ? '' : html)
-    .replace(/\w+(?:-\w+)+|\bslot \d+/g, (m) => `<span class="fcc-keep-whole">${m}</span>`);
-window.fccKeepWhole = fccKeepWhole;
-// --- FIT A QUESTION TO THE SCREEN (review, 2026-10-22) ---
-// fccFitQuestion(panel): called once a question is drawn, again when its QR
-// codes are in (generateSafeQR draws them two frames later, and a QR's column
-// is as wide as its card), and on a resize while it is open:
-//  - box ids stay whole unless that pushes the question past the screen's
-//    sides (a very long id on a 360 px phone at Extra Large): then they break
-//    at their hyphens again (.fcc-keep-whole-off);
-//  - a question taller than the window scrolls inside itself
-//    (.fcc-question-scroll), so its top and bottom are never cut ("Record it as
-//    coming from…" was 667 px high on a 360 x 640 phone at Extra Large). Only
-//    then: a scroller draws its text without the screen's sub-pixel smoothing
-//    (greyscale, not ClearType), so a question that fits keeps it.
-const _fitQuestionNow = (panel) => {
-    if (!panel || !panel.classList || typeof panel.getBoundingClientRect !== 'function') return null;
-    const vw = (document.documentElement && document.documentElement.clientWidth) || window.innerWidth || 0;
-    const vh = window.innerHeight || 0;
-    if (!(vw > 0) || !(vh > 0)) return null;
-    let off = false;
-    if (typeof panel.querySelector === 'function' && panel.querySelector('.fcc-keep-whole')) {
-        panel.classList.remove('fcc-keep-whole-off');
-        off = panel.getBoundingClientRect().width > vw + 0.5 || panel.scrollWidth > panel.clientWidth + 1;
-        if (off) panel.classList.add('fcc-keep-whole-off');
-    }
-    panel.classList.remove('fcc-question-scroll');
-    const scroll = panel.getBoundingClientRect().height > vh - 16 + 0.5;
-    if (scroll) panel.classList.add('fcc-question-scroll');
-    return { off, scroll };
-};
-const fccFitQuestion = (panel) => {
-    const now = _fitQuestionNow(panel);
-    if (typeof requestAnimationFrame === 'function') {
-        requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => _fitQuestionNow(panel))));
-    }
-    if (panel && !panel._fccFitOnResize && typeof window.addEventListener === 'function') {
-        // Until the question is gone (it leaves with its overlay).
-        const onResize = () => {
-            if (!panel.isConnected) { window.removeEventListener('resize', onResize); return; }
-            _fitQuestionNow(panel);
-        };
-        panel._fccFitOnResize = onResize;
-        window.addEventListener('resize', onResize);
-    }
-    return now;
-};
-window.fccFitQuestion = fccFitQuestion;
-
 window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', host = null,
                                ids = {}, onConfirm = null, onCancel = null,
                                title = '', onStore = null, storeLabel = '', loadLabel = '',
@@ -250,23 +194,25 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         : `⚠️ ${esc(first.printer_name || 'A printer')} is ${esc(first.state || 'PRINTING')}`;
     const bodyText = threeWay ? msg : (msg || 'Moving a spool now will disrupt the print. Continue?');
     const buttons = threeWay
-        ? (hasLoad ? `<button type="button" ${idAttr(ids.yes)}class="btn btn-warning btn-sm fcc-apc-yes" style="min-width:120px;">${fccKeepWhole(esc(loadLabel || 'Load it instead'))}</button>` : '')
-          + (hasStore ? `<button type="button" ${idAttr(ids.store)}class="btn btn-info btn-sm fcc-apc-store" style="min-width:120px;">${fccKeepWhole(esc(storeLabel || 'Just store it'))}</button>` : '')
+        ? (hasLoad ? `<button type="button" ${idAttr(ids.yes)}class="btn btn-warning btn-sm fcc-apc-yes" style="min-width:120px;">${esc(loadLabel || 'Load it instead')}</button>` : '')
+          + (hasStore ? `<button type="button" ${idAttr(ids.store)}class="btn btn-info btn-sm fcc-apc-store" style="min-width:120px;">${esc(storeLabel || 'Just store it')}</button>` : '')
           + `<button type="button" ${idAttr(ids.no)}class="btn btn-secondary btn-sm fcc-apc-no" style="min-width:100px;">Cancel</button>`
         : `<button type="button" ${idAttr(ids.yes)}class="btn btn-warning btn-sm fcc-apc-yes" style="min-width:120px;">Continue Anyway</button>
                 <button type="button" ${idAttr(ids.no)}class="btn btn-secondary btn-sm fcc-apc-no" style="min-width:120px;">Cancel</button>`;
     const extras = threeWay
-        ? `<div class="fcc-apc-hint" style="font-size:var(--fcc-fs-small); color:#ccc; margin-top:8px;">Enter ${hasStore ? 'stores it' : 'cancels'} · Esc cancels</div>`
+        ? `<div class="fcc-apc-hint" style="font-size:0.8rem; color:#ccc; margin-top:8px;">Enter ${hasStore ? 'stores it' : 'cancels'} · Esc cancels</div>`
         : '';
     const status = threeWay
         ? `<div class="fcc-apc-status" role="alert" style="display:none; margin-bottom:10px; padding:6px 10px; border-radius:6px; background:#4a3200; color:#ffd27a; border:1px solid #ffb74d; font-weight:bold; text-align:left;"></div>`
         : '';
     const content = `
-        <div class="fcc-apc-panel" style="background:#1e1e1e; color:#fff; border:2px solid ${border}; border-radius:8px; padding:20px min(24px, 4vw); max-width:${threeWay ? 35 : 30}rem; text-align:center;">
+        <div class="fcc-apc-panel" style="background:#1e1e1e; color:#fff; border:2px solid ${border}; border-radius:8px; padding:20px 24px; max-width:${threeWay ? 560 : 480}px; text-align:center;">
             <div class="fcc-apc-title" style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">${header}</div>
             <div class="fcc-apc-msg" style="color:#ffc; margin-bottom:14px;${threeWay ? ' text-align:left;' : ''}">${esc(bodyText)}</div>
             ${status}
-            <div class="fcc-apc-btns" style="display:flex; gap:10px; justify-content:center;${threeWay ? ' flex-wrap:wrap;' : ''}">${buttons}</div>
+            <div style="display:flex; gap:10px; justify-content:center;${threeWay ? ' flex-wrap:wrap;' : ''}">
+                ${buttons}
+            </div>
             ${extras}
         </div>`;
     const overlayId = ids.overlay || 'fcc-active-print-confirm-overlay';
@@ -376,30 +322,18 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         }
     }, true);
     if (window.attachConfirmQRs) {
-        // Under the buttons, each QR centred under its own button (Derek,
-        // 2026-10-22; `alignTo`, the buttons' row, else the dialog PANEL as
-        // before, which stacks the row below them).
+        // Inside the dialog PANEL, so the QR row stacks below the buttons.
         // A three-way with no Load (it can only store) scans its store as the
         // CONFIRM QR, so there are never two cancel codes.
-        // Each QR takes the colour of the button it stands for (Derek,
-        // 2026-10-21): Continue Anyway / Load it instead are amber
-        // (btn-warning), Just store it cyan (btn-info), Cancel grey.
         const theme = isPrinting ? 'warning' : 'info';
-        const alignTo = ov.querySelector('.fcc-apc-btns');
         qrSession = window.attachConfirmQRs(!threeWay
-            ? { host: handle.panel, alignTo, onConfirm: yes, onCancel: no, theme: 'warning',
-                confirmTone: 'warning', cancelTone: 'secondary' }
+            ? { host: handle.panel, onConfirm: yes, onCancel: no, theme: 'warning' }
             : hasLoad
-                ? { host: handle.panel, alignTo, onConfirm: yes, onCancel: no, onStore: hasStore ? store : undefined,
-                    confirmLabel: 'Scan to Load', storeLabel: 'Scan to Store', cancelLabel: 'Scan to Cancel', theme,
-                    confirmTone: 'warning', storeTone: 'info', cancelTone: 'secondary' }
-                : { host: handle.panel, alignTo, onConfirm: store, onCancel: no,
-                    confirmLabel: 'Scan to Store', cancelLabel: 'Scan to Cancel', theme,
-                    confirmTone: 'info', cancelTone: 'secondary' });
+                ? { host: handle.panel, onConfirm: yes, onCancel: no, onStore: hasStore ? store : undefined,
+                    confirmLabel: 'Scan to Load', storeLabel: 'Scan to Store', cancelLabel: 'Scan to Cancel', theme }
+                : { host: handle.panel, onConfirm: store, onCancel: no,
+                    confirmLabel: 'Scan to Store', cancelLabel: 'Scan to Cancel', theme });
     }
-    // Fitted to the screen: box ids whole where they fit, and a question
-    // taller than the window scrolls inside itself.
-    fccFitQuestion(handle.panel);
     if (threeWay) {
         // The question on screen: processScan holds off every other scan until
         // it is answered (a second slot label used to start a second move
@@ -1198,94 +1132,50 @@ let _fccConfirmSeq = 0;
  *   onStore: () => void — optional (Group 40.3): a third QR between the two,
  *     encoding CMD:STORE:<sid>, for the "Just store it" answer.
  *   storeLabel: string, default "Scan to Store"
- *   theme: 'warning' | 'info' | 'danger' — the CONFIRM QR's tone when
- *     `confirmTone` isn't given.
- *   confirmTone / storeTone / cancelTone: the colour of each QR card (border)
- *     and its caption, named after the Bootstrap button the QR stands for, so
- *     it is clear at a glance which code matches which button (Derek,
- *     2026-10-21): 'warning' (amber, btn-warning), 'info' (cyan, btn-info),
- *     'secondary' (grey, btn-secondary), 'light' (btn-outline-light), 'dark'
- *     (btn-dark), 'danger', 'purple' (btn-purple, global.css: "No box" in
- *     "Record it as coming from…"). Defaults: confirm = theme, store 'info',
- *     cancel 'secondary'. Pass the tone of the button each QR mirrors.
- *   alignTo: optional (Derek, 2026-10-22: "align under the button they
- *     correspond to"): the element holding the buttons the QRs stand for,
- *     exactly one <button> per QR, in QR order (confirm, [store], cancel).
- *     The QR row joins it as its last row and shares its columns (a CSS
- *     subgrid, global.css .fcc-qr-align): each column is as wide as its
- *     button or its QR, whichever is wider, the button fills it and the QR is
- *     centred in it, so every QR sits centred under its own button at any
- *     Text size and window width, the buttons spaced to match. With anything
- *     else in it, or a browser without subgrid, the row goes into `host` as
- *     before.
+ *   theme: 'warning' | 'info' | 'danger' — drives the QR card border tint.
  *
  * @returns {{sessionId: string, cleanup: function}} cleanup() removes the QR
  *   row from the DOM and unregisters the session. Call from your dialog's
  *   close handler so a late scan can't re-fire after the user dismissed.
  */
-// The QR tones (attachConfirmQRs). `border` is the button's own colour where
-// that reads on the dark dialogs (amber is Bootstrap's #ffc107, the Load it
-// instead / Continue Anyway button); `caption` is the readable text colour
-// for the "📷 Scan to …" line under the card. Purple is "No box"'s own colour
-// (Derek, 2026-10-23: its grey QR was too close to Cancel's): the button's
-// Bootstrap purple #6f42c1, its caption a lighter purple of the same family
-// (#a98eda, 6:1 on the dialog).
-const QR_TONES = {
-    warning:   { border: '#ffc107', caption: '#ffc107', bg: '#1a1608' },
-    info:      { border: '#4fa2c9', caption: '#8fd3f0', bg: '#0d1a20' },
-    secondary: { border: '#6c757d', caption: '#adb5bd', bg: '#0f1014' },
-    light:     { border: '#dee2e6', caption: '#dee2e6', bg: '#0f1014' },
-    dark:      { border: '#495057', caption: '#f8f9fa', bg: '#0f1014' },
-    danger:    { border: '#dc3545', caption: '#ff8a95', bg: '#1c0c0e' },
-    purple:    { border: '#6f42c1', caption: '#a98eda', bg: '#150f22' },
-};
-window.FCC_QR_TONES = QR_TONES;
 window.attachConfirmQRs = (opts) => {
     if (!opts || !opts.host) return { sessionId: '', cleanup: () => {} };
     const host = opts.host;
     const sid = `fcc-cqr-${++_fccConfirmSeq}-${Date.now().toString(36)}`;
-    const tone = (name, dflt) => (QR_TONES[name] ? name : dflt);
-    const tones = {
-        confirm: tone(opts.confirmTone, tone(opts.theme, 'warning')),
-        store: tone(opts.storeTone, 'info'),
-        cancel: tone(opts.cancelTone, 'secondary'),
-    };
+    const theme = opts.theme || 'warning';
+    const palette = {
+        warning: { border: '#ff8800', tint: 'rgba(255,136,0,0.12)', confirmBg: '#1a1208', cancelBg: '#0f1014' },
+        info:    { border: '#4fa2c9', tint: 'rgba(79,162,201,0.12)', confirmBg: '#0d1a20', cancelBg: '#0f1014' },
+        danger:  { border: '#dc3545', tint: 'rgba(220,53,69,0.12)', confirmBg: '#1c0c0e', cancelBg: '#0f1014' },
+    }[theme] || { border: '#ff8800', tint: 'rgba(255,136,0,0.12)', confirmBg: '#1a1208', cancelBg: '#0f1014' };
 
     const hasStore = typeof opts.onStore === 'function';
     const row = document.createElement('div');
     row.id = `${sid}-row`;
     row.className = 'fcc-confirm-qr-row';
-    // Under its buttons (opts.alignTo): one <button> per QR, and a browser
-    // that lays out a subgrid; anything else keeps the row in `host`.
-    const qrCount = hasStore ? 3 : 2;
-    const alignTo = opts.alignTo || null;
-    const alignKids = alignTo ? Array.from(alignTo.children || []) : [];
-    const aligned = !!(alignTo && typeof CSS !== 'undefined' && CSS && typeof CSS.supports === 'function'
-        && CSS.supports('grid-template-columns', 'subgrid')
-        && alignKids.length === qrCount && alignKids.every((el) => el && el.tagName === 'BUTTON'));
-    if (aligned) {
-        alignTo.classList.add('fcc-qr-align');
-        alignTo.style.setProperty('--fcc-qr-cols', String(qrCount));
-        row.classList.add('fcc-qr-aligned');
-        row.style.cssText = 'margin-top:14px; padding-top:12px; border-top:1px dashed #444;';
-    } else {
-        row.style.cssText = 'display:flex; gap:14px; justify-content:center; margin-top:14px; padding-top:12px; border-top:1px dashed #444;';
-    }
-    // One QR card + its caption, in the tone of the button it stands for.
-    const cell = (role, qrId, label) => {
-        const t = QR_TONES[tones[role]];
-        return `
-        <div class="fcc-confirm-qr-cell" data-qr="${role}" data-qr-tone="${tones[role]}" style="display:flex; flex-direction:column; align-items:center; gap:4px;">
-            <div class="fcc-qr-card" style="background:${t.bg}; border:2px solid ${t.border}; border-radius:6px; padding:6px;">
-                <div id="${qrId}" style="background:#fff; padding:4px; border-radius:3px; line-height:0;"></div>
+    row.style.cssText = 'display:flex; gap:14px; justify-content:center; margin-top:14px; padding-top:12px; border-top:1px dashed #444;';
+    const storeCell = hasStore ? `
+        <div style="display:flex; flex-direction:column; align-items:center; gap:4px;">
+            <div style="background:#0d1a20; border:2px solid #4fa2c9; border-radius:6px; padding:6px;">
+                <div id="${sid}-store-qr" style="background:#fff; padding:4px; border-radius:3px; line-height:0;"></div>
             </div>
-            <div class="fcc-qr-caption" style="font-size:var(--fcc-fs-label); color:${t.caption}; font-weight:700; letter-spacing:0.5px; text-transform:uppercase;">📷 ${label}</div>
-        </div>`;
-    };
-    row.innerHTML = cell('confirm', `${sid}-yes-qr`, opts.confirmLabel || 'Scan to Confirm')
-        + (hasStore ? cell('store', `${sid}-store-qr`, opts.storeLabel || 'Scan to Store') : '')
-        + cell('cancel', `${sid}-no-qr`, opts.cancelLabel || 'Scan to Cancel');
-    (aligned ? alignTo : host).appendChild(row);
+            <div style="font-size:0.72rem; color:#8fd3f0; font-weight:700; letter-spacing:0.5px; text-transform:uppercase;">📷 ${opts.storeLabel || 'Scan to Store'}</div>
+        </div>` : '';
+    row.innerHTML = `
+        <div style="display:flex; flex-direction:column; align-items:center; gap:4px;">
+            <div style="background:${palette.confirmBg}; border:2px solid ${palette.border}; border-radius:6px; padding:6px;">
+                <div id="${sid}-yes-qr" style="background:#fff; padding:4px; border-radius:3px; line-height:0;"></div>
+            </div>
+            <div style="font-size:0.72rem; color:${palette.border}; font-weight:700; letter-spacing:0.5px; text-transform:uppercase;">📷 ${opts.confirmLabel || 'Scan to Confirm'}</div>
+        </div>${storeCell}
+        <div style="display:flex; flex-direction:column; align-items:center; gap:4px;">
+            <div style="background:${palette.cancelBg}; border:2px solid #6c757d; border-radius:6px; padding:6px;">
+                <div id="${sid}-no-qr" style="background:#fff; padding:4px; border-radius:3px; line-height:0;"></div>
+            </div>
+            <div style="font-size:0.72rem; color:#adb5bd; font-weight:700; letter-spacing:0.5px; text-transform:uppercase;">📷 ${opts.cancelLabel || 'Scan to Cancel'}</div>
+        </div>
+    `;
+    host.appendChild(row);
 
     // Generate the QR codes themselves (uses the same lib generateSafeQR uses).
     generateSafeQR(`${sid}-yes-qr`, `CMD:CONFIRM:${sid}`, 70);
@@ -1320,13 +1210,6 @@ window.attachConfirmQRs = (opts) => {
         cleanup: () => {
             delete window._fccActiveConfirms[sid];
             try { row.remove(); } catch (_) { /* noop */ }
-            // The buttons go back to their own row (a dialog that stays open).
-            if (aligned) {
-                try {
-                    alignTo.classList.remove('fcc-qr-align');
-                    alignTo.style.removeProperty('--fcc-qr-cols');
-                } catch (_) { /* noop */ }
-            }
         },
     };
 };
@@ -1826,7 +1709,7 @@ const _renderLocationsPayload = (d, read) => {
             if (table) {
                 table.innerHTML = ordered.map(entry => {
                     if (entry.divider) {
-                        return `<tr class="loc-divider"><td colspan="5" style="background:#15151f; color:#9aa; font-weight:800; letter-spacing:1px; padding:6px 14px; border-top:2px solid #444; border-bottom:1px solid #2a2a3a; font-size:var(--fcc-fs-label); text-transform:uppercase;">${entry.divider}</td></tr>`;
+                        return `<tr class="loc-divider"><td colspan="5" style="background:#15151f; color:#9aa; font-weight:800; letter-spacing:1px; padding:6px 14px; border-top:2px solid #444; border-bottom:1px solid #2a2a3a; font-size:0.8rem; text-transform:uppercase;">${entry.divider}</td></tr>`;
                     }
                     const l = entry.row;
                     // 3. Status Pop Logic (Red/Green/White)
@@ -2110,7 +1993,7 @@ window.openLogPillOverlay = () => {
         ).join('') || '<div class="small p-3" style="color: rgba(255,255,255,0.7);">Activity Log is empty.</div>';
         const html = `
             <div style="background:#1e1e1e; color:#fff; border:2px solid #0ff;
-                        border-radius:8px; padding:14px 16px; min-width:min(26.25rem,90vw); max-width:90vw;
+                        border-radius:8px; padding:14px 16px; min-width:420px; max-width:90vw;
                         max-height:80vh; display:flex; flex-direction:column;">
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <div style="font-weight:bold; font-size:1.1em; color:#0ff;">📡 Activity Log</div>

@@ -2726,7 +2726,7 @@ const _renderParentTreePicker = (rows, selfIdUpper, sel, locModalEl) => {
 
     const panel = document.createElement('div');
     panel.className = 'card bg-dark text-light shadow-lg';
-    panel.style.cssText = 'width:min(35rem,92vw);max-height:80vh;display:flex;flex-direction:column;border:1px solid #0dcaf0;';
+    panel.style.cssText = 'width:min(560px,92vw);max-height:80vh;display:flex;flex-direction:column;border:1px solid #0dcaf0;';
     let html = `
       <div class="card-header d-flex align-items-center justify-content-between">
         <span class="fw-bold text-info">🌳 Pick a parent location</span>

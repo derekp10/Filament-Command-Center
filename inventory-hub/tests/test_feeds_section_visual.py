@@ -21,26 +21,14 @@ def box_at_baseline(borrow_box_bindings):
     borrow_box_bindings(TEST_BOX)
 
 
-def _own_buffer(page: Page):
-    """This page's own empty buffer. The Location Manager draws its nav deck
-    above the section when dev's shared buffer holds a spool, and with one an
-    earlier test left there the section's text came out a fraction of a pixel
-    off and failed one run in three (readability review, 2026-10-21, once the
-    comparator compared colours)."""
-    from conftest import own_the_buffer
-    own_the_buffer(page, [])
-
-
 @pytest.mark.usefixtures("require_server", "box_at_baseline")
 def test_visual_feeds_section_collapsed(page: Page, open_manage_modal, snapshot):
-    _own_buffer(page)
     open_manage_modal(TEST_BOX)
     snapshot(page.locator("#manage-feeds-section"), "feeds-section-collapsed")
 
 
 @pytest.mark.usefixtures("require_server", "box_at_baseline")
 def test_visual_feeds_section_expanded(page: Page, open_manage_modal, snapshot):
-    _own_buffer(page)
     open_manage_modal(TEST_BOX)
     page.locator("#feeds-toggle-btn").click()
     page.wait_for_timeout(400)

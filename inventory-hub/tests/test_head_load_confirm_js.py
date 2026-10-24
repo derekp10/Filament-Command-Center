@@ -34,7 +34,6 @@ the browser adds no prompt when the server asks nothing).
 from __future__ import annotations
 
 import json
-import re
 
 from test_core1_return_ejectall_js import pytestmark, run_js  # noqa: F401  (pytestmark: skip without node)
 
@@ -140,11 +139,6 @@ def _js(value):
     return json.dumps(value)
 
 
-def _text(html):
-    """`html` without its tags: a label's text, whatever spans it holds."""
-    return re.sub(r"<[^>]+>", "", html)
-
-
 # ---- the dialog ----------------------------------------------------------------------------------
 
 def test_an_idle_fed_answer_shows_the_servers_words_and_no_printing_banner(tmp_path):
@@ -156,8 +150,7 @@ return {{ html: html().pop(), opts: lastMount().opts }};
     assert "Load #57 onto XL-1?" in h and FED_BODY in h
     for banned in ("is PRINTING", "Continue Anyway", "Continue?"):
         assert banned not in h, banned
-    # The label's text (its box id and slot are kept whole in spans, 2026-10-22).
-    assert "Load it instead" in h and "Just store it in LR-MDB-1 slot 1" in _text(h) and ">Cancel<" in h
+    assert "Load it instead" in h and "Just store it in LR-MDB-1 slot 1" in h and ">Cancel<" in h
     assert "fcc-apc-yes" in h and "fcc-apc-store" in h and "fcc-apc-no" in h
     assert "Enter stores it" in h
     assert res["opts"]["tier"] == "confirm" and res["opts"]["initialFocus"] == ".fcc-apc-store"
@@ -201,7 +194,7 @@ window.confirmHeadLoad({{ answer: {_js(answer)}, box: 'LR-MDB-1', onLoad() {{}},
 return {{ html: html().pop() }};
 """)
     h = res["html"]
-    assert "Load #57 onto XL-2?" in h and "Just store it in LR-MDB-1 slot 2" in _text(h)
+    assert "Load #57 onto XL-2?" in h and "Just store it in LR-MDB-1 slot 2" in h
     assert "XL is PRINTING. LR-MDB-1 slot 1 feeds XL-1" in h      # the server's body
     assert "Continue?" not in h and "Continue Anyway" not in h
 
@@ -379,7 +372,7 @@ return {{ posts: posts('/api/identify_scan'), shown, toasts: toasts(), ids: last
     assert first == {"text": "LOC:LR-MDB-1:SLOT:1", "source": "barcode", "confirmed_fed_heads": []}, first
     assert "expected_feed" not in first     # a blind scan names no feed: S1 stays prompt-free
     assert "is PRINTING" not in res["shown"] and "Continue Anyway" not in res["shown"]
-    assert "Just store it in LR-MDB-1 slot 1" in _text(res["shown"]) and 'id="fcc-aps-store"' in res["shown"]
+    assert "Just store it in LR-MDB-1 slot 1" in res["shown"] and 'id="fcc-aps-store"' in res["shown"]
     assert res["ids"] == "fcc-active-print-scan-overlay"
     assert load == {"text": "LOC:LR-MDB-1:SLOT:1", "source": "barcode", "confirmed_toolheads": [],
                     "confirmed_fed_heads": ["XL-1#99"], "expected_feed": "XL-1", "spool_id": 57}, load
@@ -459,7 +452,7 @@ return {{ posts: posts('/api/smart_move'), shown: html().pop() }};
     assert load == {"location": "LR-MDB-1", "spools": [57], "slot": None, "origin": "buffer",
                     "confirmed_toolheads": [], "confirmed_fed_heads": ["XL-1#99"],
                     "picked_slot": "1", "expected_feed": "XL-1"}, load
-    assert "Just store it in LR-MDB-1 slot 1" in _text(res["shown"])
+    assert "Just store it in LR-MDB-1 slot 1" in res["shown"]
 
 
 def test_a_location_manager_tap_onto_a_fed_head_asks_over_the_manager(tmp_path):

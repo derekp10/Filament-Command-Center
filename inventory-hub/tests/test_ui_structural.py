@@ -105,12 +105,6 @@ def execute_global_scanner(page: Page, context_name: str):
             # gracefully is not a real layout bug. Previously masked by the
             # offcanvas text-truncate failure above.
             if "fcc-wiz-section-toggle" in v['node'].lower() and "OVERFLOW" in v['type']: continue
-            # 2026-10-23 (Printer Status, name on a header line): the ▲▼ pair
-            # sits in a box made zero-high on purpose (global.css
-            # `.fcc-ps-reorder-stack`: height 0, overflow visible), so the
-            # arrows centre on the name's line without setting its height.
-            # They overflow that box by design and nothing is clipped.
-            if "fcc-ps-reorder-stack" in v['node'].lower() and "OVERFLOW" in v['type']: continue
             filtered_violations.append(v)
             
         if filtered_violations:

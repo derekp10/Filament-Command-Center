@@ -142,7 +142,7 @@
                         <p class="mb-1 d-flex align-items-center">
                             <strong class="me-1">⚖️ Empty Spool:</strong>
                             <span id="fil-detail-empty-spool-weight" class="me-1"></span>
-                            <span id="fil-detail-empty-spool-source" class="badge bg-dark border border-secondary text-muted ms-1" style="font-size:var(--fcc-fs-label);"></span>
+                            <span id="fil-detail-empty-spool-source" class="badge bg-dark border border-secondary text-muted ms-1" style="font-size:0.7rem;"></span>
                         </p>
                         <p class="mb-1 d-flex align-items-center">
                             <strong class="me-1">🎨 Swatch Printed:</strong>
@@ -323,7 +323,7 @@
     color: #fff;
     padding: 1px 9px;
     border-radius: 999px;
-    font-size: var(--fcc-fs-label);
+    font-size: 0.78rem;
     line-height: 1.5;
     display: inline-flex;
     align-items: center;
@@ -392,7 +392,7 @@
                             <div class="col-6">
                                 <label class="form-label text-light small mb-1">
                                     Material
-                                    <span id="editfil-material-new-badge" class="badge bg-success ms-1" style="display:none; font-size:var(--fcc-fs-label);">+ NEW</span>
+                                    <span id="editfil-material-new-badge" class="badge bg-success ms-1" style="display:none; font-size:0.7rem;">+ NEW</span>
                                 </label>
                                 <div class="position-relative">
                                     <input type="text" id="editfil-material"
@@ -404,17 +404,17 @@
                             <div class="col-6">
                                 <label class="form-label text-light small mb-1">
                                     Vendor
-                                    <span id="editfil-vendor-new-badge" class="badge bg-success ms-1" style="display:none; font-size:var(--fcc-fs-label);">+ NEW</span>
+                                    <span id="editfil-vendor-new-badge" class="badge bg-success ms-1" style="display:none; font-size:0.7rem;">+ NEW</span>
                                     <!-- Tiny info pill surfaces when an existing vendor is
                                          selected — hover shows the vendor's default empty-
                                          spool weight and any extras Spoolman has on it. -->
-                                    <span id="editfil-vendor-info" class="badge bg-info text-dark ms-1" style="display:none; font-size:var(--fcc-fs-label); cursor:help;" title=""></span>
+                                    <span id="editfil-vendor-info" class="badge bg-info text-dark ms-1" style="display:none; font-size:0.7rem; cursor:help;" title=""></span>
                                     <!-- Pencil opens the Vendor Edit modal stacked over Edit Filament. Only shown
                                          when an EXISTING vendor is selected — hidden when the user is mid-typing
                                          a new vendor name (the +NEW badge handles that path). -->
                                     <button id="editfil-vendor-edit-btn" type="button"
                                         class="btn btn-sm btn-outline-secondary py-0 px-1 border-0 ms-1"
-                                        style="display:none; font-size:var(--fcc-fs-label);"
+                                        style="display:none; font-size:0.7rem;"
                                         onclick="openVendorEditModal(document.getElementById('editfil-vendor-id').value)"
                                         title="Edit Manufacturer">✏️</button>
                                 </label>
@@ -449,7 +449,7 @@
                                 </div>
                                 <div id="editfil-attr-dropdown" class="editfil-attr-dropdown"></div>
                             </div>
-                            <div class="form-text" style="font-size:var(--fcc-fs-small); color:#adb5bd;">Matches the Add/Edit wizard's chip picker. Typing a new tag + Enter adds it + registers in Spoolman.</div>
+                            <div class="form-text" style="font-size:0.8rem; color:#adb5bd;">Matches the Add/Edit wizard's chip picker. Typing a new tag + Enter adds it + registers in Spoolman.</div>
                         </div>
                         <div class="mt-2">
                             <label class="form-label text-light small mb-1">Notes</label>

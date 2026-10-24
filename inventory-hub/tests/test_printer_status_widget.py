@@ -137,21 +137,15 @@ def test_collapsed_strip_shows_printer_state(page: Page, base_url):
     assert chip.inner_text().strip(), "state chip must show the printer state text"
 
 
-@pytest.mark.usefixtures("require_server")
+@pytest.mark.usefixtures("require_server", "bound_xl1")
 def test_widget_visual_collapsed_baseline(page: Page, base_url, snapshot):
-    """Pin the collapsed-state header layout, on a made-up fleet
-    (conftest.stub_printer_fleet: a PRINTING printer with two loaded heads
-    and an empty one, an IDLE printer with two unbound heads). The capture of
-    dev's live printers matched only while the snapshot comparator ignored
-    colour: their states, spools and grams change with every print
-    (readability review, 2026-10-21). No dev binding is borrowed any more."""
-    from conftest import stub_printer_fleet
-    stub_printer_fleet(page)
+    """Pin the collapsed-state header layout. Expanded snapshot would be
+    too flaky against live spool weights/colors; collapsed shell stays
+    structurally stable."""
     page.goto(base_url)
     page.wait_for_selector("#buffer-zone", timeout=10000)
     page.wait_for_function(
-        "() => document.querySelector(\".fcc-ps-th[data-toolhead='ZV-1']\")"
-        " && document.querySelectorAll('#printer-status-widget .fcc-ps-header-chips .fcc-ps-state').length === 2",
+        "() => document.querySelector('.fcc-ps-th')",
         timeout=12000,
     )
     # Collapse via the toggle so only the header shell is visible.
