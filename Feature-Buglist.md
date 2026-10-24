@@ -158,36 +158,6 @@
   walkthrough); and an archived spool scanned onto a toolhead is un-archived and loaded when its record still has
   filament, refused at 0 g; built.)_ **Dev still holds the long-list scenario:** `low_stock_g` 925 (was 250) and two
   sample exclusions (filaments 91 and 96): Claude puts them back.
-* **🔠 Readability: the text-size rule app-wide, and a Text size setting (Derek's 2026-10-21 walkthrough; BUILT; his picture walk 2026-10-22 approved it, with three changes before the merge).**
-  He went through the audit's samples one at a time (`review-samples/2026-10-21-text-size/`) and approved each: the
-  dashboard ("this is better as well"), Printer Status, the slot picker as sampled (the long maker line wraps; the
-  "⭐ Recommended" tag trimmed so "SLOT 1" stays on one line), the QR questions, and badges at 12.8 px everywhere ("will
-  need to be mindful of how this effects things globally ... any other place might also be effected": every badge
-  screen is checked before and after). The rule: text you read never under 13.6 px, labels in a pill or box never under
-  12.8 px, held by named sizes and a test. **Also:** the Load QR's border and caption match its amber button (Store and
-  Cancel already match; "it's clear at a glance what QR code matches the button"); and a per-browser **Text size**
-  setting: "Small" = today's compact look, "Standard" = the rule (default), "Large" and "Extra Large" scale everything
-  together ("being able to maintain consistent look and proportions but being able to make the text big with a button
-  is better than having to zoom in and out all the time"), with the title bar fixed so its buttons don't wrap at the
-  bigger sizes, and the slot picker checked there. He sees pictures of each size, and of anything that changes shape,
-  before it goes to `dev`. **His idea, not on a roadmap:** the QR codes could sit with their buttons in a redesign of the
-  question dialogs; and accessibility options in general (the Text size setting is the first).
-  **Built 2026-10-21** on `feat/readability-2026-10-21` (`d211841`, pushed, not merged): the rule, the QR tones, the
-  Text size setting (Settings → 🖥️ This Browser: Small / Standard / Large / Extra Large) and 13 fixes from its review
-  (the 2 reds: an open Printer Status pushed the command deck off short screens, and the search filters cut their values
-  at the bigger sizes). Offline 3607 passed in both Spoolman fake modes; full sweep 4646 passed, 1 red from a real print
-  on the XL, not the build. **Next: Derek's picture walk** (`review-samples/2026-10-21-readability-build/`, folders
-  `walkthrough` and `review-fixes`), with three questions: keep the INDX row wrapping 7 + 1 at Large / Extra Large;
-  the Settings help lines' lighter grey (a contrast fix); Printer Status's material line height (1.1 → 1.2). Then the
-  merge to `dev`, with the CLAUDE.md entries.
-  **Walk, 2026-10-22:** all five items approved (the four sizes; the Load QR's amber; the slot picker at Extra Large;
-  Settings → This Browser and its lighter help lines; the title bar's squeeze at Extra Large accepted: "I don't think
-  there's a good way around that"). **Three changes before the merge:** (1) each "📷 Scan to …" QR sits directly under
-  its own button in the question dialogs ("otherwise they are slightly skewed"); (2) Printer Status, when a printer's
-  heads don't fit on one row beside its name, splits them into even rows (the INDX's 8 → 4 + 4, never 7 + 1), and the
-  filament line gets 1 px more height so a "g" or "y" never clips; (3) then pictures of both printers in each spacing
-  style (name on the left with the column's gap, as the XL is now; a narrower name column; the name above the tiles, as
-  the INDX is now), and Derek picks ("Both have merits"). Design follow-ups from the walk are filed under 🗒️ Notes.
 * **📐 Plan docs: named sizes and colors as the base for themes; alternative views (phone, wall tablet, printer pictures,
   the Location Manager) (Derek, 2026-10-21; written, `dev` `c7dafaa`).** "Themes" in his sense are whole alternative designs a user
   can choose ("what we have now, or future ones, possibly ones that focus on using images of the printers themselves"),
@@ -208,6 +178,16 @@
 > Ordinary backlog items, not hands-on work; most name the group that owns them. This heading was added on
 > 2026-10-19 so they stop reading as part of ⏸️ PENDING DEREK above, which had no closing heading.
 
+* **🖨️ Printer Status follow-ups (Derek, 2026-10-24, approving the name-on-top build).** (a) Indent the printers and
+  their ▲▼ a little under the "Printer Status" title, so they read "more like a sub set, and less like an ordered
+  list". (b) Put each printer's state badge and 🛑 review count BEFORE its name, so the states line up down the left:
+  "more of an easy glance at what's going on with each printer ... so your eyes don't have to dart all over the place
+  to find out which printer is idle, printing, or has an error". (c) Pre-existing, found by the build's review:
+  `_renderRow`'s `data-printer` holds the JS-escaped name, so a printer named with an apostrophe ("Derek's XL") never
+  gets its 🛑 count; the scan accumulator in `scripts.html` cancels Enter on every focused dashboard button except the
+  ▲▼ (fixed for those only); on short windows (1280×720, 1366×768 at Large) the open widget still scrolls. (d) Long
+  term: a customizable layout (tiles per row, style) for printers with many spools ("with AMS units on the bambu side,
+  things could get crazy"). **Standalone.**
 * **🐞 Cancelled prints are under-charged because the cancel parser skips arc moves (found 2026-10-23).** FCC's
   prefix parser (the cancel / M73 path) walks the G-code's extrusion but ignores G2 / G3 arcs. Counting them takes
   Derek's raccoon INDX print (whole file) from 48.43 g to 52.26 g against the slicer footer's 52.27 g, so the "~7%
