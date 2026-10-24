@@ -243,7 +243,7 @@ const SpoolCardBuilder = {
                         </div>
                         
                         <div class="text-center mb-1 w-100">
-                            <div style="font-size:0.8rem; color:#ccc; background: rgba(0,0,0,0.7); border-radius: 4px; display: inline-block; padding: 2px 6px;">CURRENTLY AT:</div>
+                            <div style="font-size:var(--fcc-fs-label); color:#ccc; background: rgba(0,0,0,0.7); border-radius: 4px; display: inline-block; padding: 2px 6px;">CURRENTLY AT:</div>
                             <div class="text-pop" style="font-size:1.1rem; font-weight:900; color:#fff;">${item.deployed_to || "Unknown"}</div>
                         </div>
                         
@@ -328,7 +328,7 @@ const SpoolCardBuilder = {
                 <div class="fcc-ps-chip" style="font-size:0.85rem; line-height:1.2;">
                     <div class="d-flex align-items-center gap-2">
                         ${swatch}
-                        <span class="text-light fw-bold text-truncate" style="max-width:140px;">${compactName}</span>
+                        <span class="text-light fw-bold text-truncate" style="max-width:8.75rem;">${compactName}</span>
                         <span class="ms-auto fw-bold" style="color:${weightColor};">${weightStr}</span>
                     </div>
                     ${matLine}
@@ -348,20 +348,20 @@ const SpoolCardBuilder = {
                 ? `${Math.round(item.remaining_weight)}g` : '';
             const name = info.line3 || (item.display || '').replace(/^#\d+\s*/, '');
             const deployed = item.is_ghost
-                ? `<div class="fcc-sp-deployed" style="font-size:0.78rem; font-weight:800; color:#111; background:#ffc107; border-radius:3px; padding:0 4px; display:inline-block; margin-top:3px;">DEPLOYED → ${esc(item.deployed_to || '?')}</div>`
+                ? `<div class="fcc-sp-deployed" style="font-size:var(--fcc-fs-label); font-weight:800; color:#111; background:#ffc107; border-radius:3px; padding:0 4px; display:inline-block; margin-top:3px;">DEPLOYED → ${esc(item.deployed_to || '?')}</div>`
                 : '';
             const inner = `background: linear-gradient(to bottom, rgba(30,30,30,0.95) 0%, rgba(5,5,5,0.25) 100%), ${styles.frame}; border-radius:5px; padding:5px 7px;`;
             return `
                 <div class="fcc-sp-spool-card" data-spool-id="${esc(item.id)}" style="background:${styles.frame}; border-radius:6px; padding:1px; text-align:left;">
                     <div style="${inner}">
-                        <div class="d-flex justify-content-between align-items-center" style="font-size:0.8rem; color:#ddd;">
+                        <div class="d-flex justify-content-between align-items-center" style="font-size:var(--fcc-fs-small); color:#ddd;">
                             <span class="fw-bold">#${esc(item.id)}</span>
                             <span class="fw-bold">${weightStr ? '⚖️ ' + esc(weightStr) : ''}</span>
                         </div>
                         <div class="d-flex align-items-center gap-1" style="font-size:0.92rem; color:#fff;">
-                            ${swatch}<span class="fw-bold text-truncate" style="max-width:150px;">${esc(name)}</span>
+                            ${swatch}<span class="fw-bold text-truncate" style="max-width:9.375rem;">${esc(name)}</span>
                         </div>
-                        <div style="font-size:0.78rem; color:#ddd; opacity:0.9;">${esc(info.line2)}</div>
+                        <div style="font-size:var(--fcc-fs-small); color:#ddd; opacity:0.9;">${esc(info.line2)}</div>
                         ${deployed}
                     </div>
                 </div>`;
@@ -389,7 +389,7 @@ const SpoolCardBuilder = {
                 ? `${Math.round(item.remaining_weight)}g`
                 : (item.remaining != null && item.remaining !== '---' ? `${Math.round(item.remaining)}g` : '---');
             const thLine = options.showToolhead && toolhead
-                ? `<div class="text-warning small text-end" style="font-size:0.8rem;">→ ${toolhead}</div>`
+                ? `<div class="text-warning small text-end" style="font-size:var(--fcc-fs-small);">→ ${toolhead}</div>`
                 : '';
             const printHover = window.addToQueue
                 ? `event.stopPropagation(); window.addToQueue({ id: ${item.id}, type: 'spool', display: ${queueDisplay} }); showToast('Added to Print Queue');`
@@ -406,20 +406,20 @@ const SpoolCardBuilder = {
                      data-box="${box}" data-slot="${slot}" data-toolhead="${toolhead}"
                      data-spool-id="${item.id}" data-spool-label="${safeLabel}"
                      tabindex="0" role="button"
-                     style="min-width:240px; max-width:260px; padding:0; cursor:pointer; background: ${styles.frame}; border-radius:6px; border: 1px solid rgba(13,202,240,0.55);"
+                     style="min-width:15rem; max-width:16.25rem; padding:0; cursor:pointer; background: ${styles.frame}; border-radius:6px; border: 1px solid rgba(13,202,240,0.55);"
                      onclick="${handler}"
                      title="${titleAttr}">
                     <div style="${innerBg}">
                         <div class="px-2 pt-2 pb-1">
                             <div class="d-flex justify-content-between align-items-center mb-1">
                                 <div class="text-warning fw-bold" style="font-size:0.95rem;">Slot ${slot}</div>
-                                <div class="text-light" style="font-size:0.78rem; opacity:0.75;">#${item.id}</div>
+                                <div class="text-light" style="font-size:var(--fcc-fs-small); opacity:0.75;">#${item.id}</div>
                             </div>
                             <div class="d-flex align-items-center" style="font-size:0.95rem;">
                                 ${swatch}
-                                <span class="text-light fw-bold text-truncate" style="max-width:200px;">${compactName}</span>
+                                <span class="text-light fw-bold text-truncate" style="max-width:12.5rem;">${compactName}</span>
                             </div>
-                            <div class="text-light" style="font-size:0.8rem; opacity:0.8;">${info.line2}</div>
+                            <div class="text-light" style="font-size:var(--fcc-fs-small); opacity:0.8;">${info.line2}</div>
                             <div class="d-flex justify-content-between align-items-center mt-1" style="font-size:0.9rem;">
                                 <div class="text-light fw-bold">⚖️ ${weightStr}</div>
                                 ${thLine}

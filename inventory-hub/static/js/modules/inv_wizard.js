@@ -119,7 +119,7 @@ window.wizardClearSpoolEmptyWeightBadge = () => {
                 // mountOverlay so the .cmd-deck scrollbar-comp shift goes away
                 // and the overlay survives Bootstrap's focus trap.
                 const panelHtml = `
-                    <div style="background:#1e1e1e; color:#fff; border:2px solid #dc3545; border-radius:8px; padding:20px 24px; max-width:460px; width:92%;">
+                    <div style="background:#1e1e1e; color:#fff; border:2px solid #dc3545; border-radius:8px; padding:20px 24px; max-width:28.75rem; width:92%;">
                         <div style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">⚠️ Unsaved Changes</div>
                         <div style="color:#ffc; margin-bottom:16px;">You have unsaved changes. Discard them and close?</div>
                         <div style="display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;">
@@ -1901,7 +1901,7 @@ window.wizardPromptFieldSync = (spoolKey) => {
         .map(([k, v]) => `<option value="${String(k).replace(/"/g, '&quot;')}">${String(v).replace(/</g, '&lt;')}</option>`)
         .join('');
     const panelHtml = `
-        <div style="background:#1e1e1e; color:#fff; border:2px solid #17a2b8; border-radius:8px; padding:20px 24px; max-width:520px; width:92%;">
+        <div style="background:#1e1e1e; color:#fff; border:2px solid #17a2b8; border-radius:8px; padding:20px 24px; max-width:32.5rem; width:92%;">
             <div style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">🔗 Link Field</div>
             <div style="color:#ffc; margin-bottom:12px;">Select a Filament field to synchronize with this Spool field:</div>
             <select id="fcc-wiz-fieldsync-sel" class="form-select form-select-sm bg-dark text-white border-secondary mb-3" style="width:100%;">
@@ -1948,7 +1948,7 @@ const wizardGenerateFieldHTML = (field, entityType) => {
                             data-linked-fil-key="${field.key}"
                             onclick="window.wizardToggleFieldSync('${field.key}')" 
                             title="Synced with Filament's ${field.name}. Click to unlink."
-                            style="font-size: 0.8rem; line-height: 1;">🔗</button>`;
+                            style="font-size: var(--fcc-fs-label); line-height: 1;">🔗</button>`;
         } else {
             // Unsynced state, user can click to map it manually
             syncHtml = `<button type="button" class="btn btn-sm btn-outline-secondary p-0 ms-2 border-0 wizard-sync-btn" 
@@ -1956,7 +1956,7 @@ const wizardGenerateFieldHTML = (field, entityType) => {
                             data-linked-fil-key=""
                             onclick="window.wizardToggleFieldSync('${field.key}')" 
                             title="Click to link this field to a Filament field."
-                            style="font-size: 0.8rem; line-height: 1; opacity: 0.5;">🔗</button>`;
+                            style="font-size: var(--fcc-fs-label); line-height: 1; opacity: 0.5;">🔗</button>`;
         }
     }
 
@@ -2146,7 +2146,7 @@ window.wizardSwapNewChoiceToSuggestion = (handle, suggestion, canonical, fieldLa
     const safeLabel = String(fieldLabel || 'value').replace(/</g, '&lt;');
     handle.element.dataset.stage = 'suggestion';
     handle.setContent(`
-        <div style="background:#1e1e1e; color:#fff; border:2px solid #ffaa00; border-radius:8px; padding:20px 24px; max-width:520px; width:92%;" data-stage-panel="suggestion">
+        <div style="background:#1e1e1e; color:#fff; border:2px solid #ffaa00; border-radius:8px; padding:20px 24px; max-width:32.5rem; width:92%;" data-stage-panel="suggestion">
             <div style="font-size:1.2em; font-weight:bold; margin-bottom:10px;">🤔 Did you mean <span style="color:#ffd700;">${safeSugg}</span>?</div>
             <div style="color:#ffc; margin-bottom:14px;">A similar ${safeLabel} already exists. Pick the existing one (recommended) or add "<strong>${safeCanon}</strong>" as a brand-new value.</div>
             <div style="display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;">
@@ -2170,7 +2170,7 @@ window.wizardSwapNewChoiceToConfirm = (handle, canonical, fieldLabel, onConfirm)
     const safeLabel = String(fieldLabel || 'value').replace(/</g, '&lt;');
     handle.element.dataset.stage = 'confirm';
     handle.setContent(`
-        <div style="background:#1e1e1e; color:#fff; border:2px solid #dc3545; border-radius:8px; padding:20px 24px; max-width:520px; width:92%;" data-stage-panel="confirm">
+        <div style="background:#1e1e1e; color:#fff; border:2px solid #dc3545; border-radius:8px; padding:20px 24px; max-width:32.5rem; width:92%;" data-stage-panel="confirm">
             <div style="font-size:1.2em; font-weight:bold; margin-bottom:10px;">⚠️ Add permanent new ${safeLabel}?</div>
             <div style="color:#ffc; margin-bottom:14px;">Add "<strong>${safeCanon}</strong>" as a permanent new ${safeLabel}? Spoolman doesn't expose UI to remove choices once added.</div>
             <div style="display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;">
@@ -2343,7 +2343,7 @@ window.wizardPromptNewChoice = (entityType, key) => {
     })();
 
     const panelHtml = `
-        <div style="background:#1e1e1e; color:#fff; border:2px solid #28a745; border-radius:8px; padding:20px 24px; max-width:520px; width:92%;">
+        <div style="background:#1e1e1e; color:#fff; border:2px solid #28a745; border-radius:8px; padding:20px 24px; max-width:32.5rem; width:92%;">
             <div style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">➕ Add New ${String(fieldLabel).replace(/</g, '&lt;')}</div>
             <div style="color:#ffc; margin-bottom:10px;">Enter the new value to permanently add it to the Spoolman database.</div>
             <input id="fcc-wiz-newchoice-input" type="text" class="form-control form-control-sm bg-dark text-white border-secondary mb-2" autocomplete="off" autocapitalize="off" spellcheck="false" />

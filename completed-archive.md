@@ -1,5 +1,22 @@
 # **Done**
 
+* **[2026-10-21 → 24 — 🔠 Readability: the text-size rule, a Text size setting, QR codes that match and sit under their buttons, Printer Status in rows → `feat/readability-2026-10-21` (merged to `dev` 2026-10-24)]** — Derek's 2026-10-21 text-size walkthrough, built by `wf_16904a49-dbb` (7 agents: the rule, the setting, a 3 + 1 review, a fixer; 13 review fixes), then the changes from his picture walks (2026-10-22: all five items approved with three changes; 2026-10-23/24) by `wf_35fd892d-f66`, `wf_71b589b9-90b` and `wf_8be49633-0d1`, each reviewed and fixed. Full sweeps: 4646 / 1 (a real print on the XL), 4731 / 0, 4806 / 2 (both the structural scan on a deliberately zero-high box, `a901b38`).
+
+  * ✅ Text you read never under 13.6 px, labels in a pill or box never under 12.8 px, held by named sizes
+    (`--fcc-fs-label` / `-small` / `-row`) and tests (`test_text_size_floor.py` offline, `test_text_size_guard.py`).
+  * ✅ Settings → 🖥️ This Browser → **Text size**: Small (the compact look from before), Standard (the default), Large,
+    Extra Large; applied before the first paint; windows grow with the text; the title bar tightens instead of
+    wrapping ("ADD INVENTORY" reads "ADD" at Extra Large: "I don't think there's a good way around that").
+  * ✅ Each "📷 Scan to …" QR wears its button's colour (the Load QR amber) and sits under its own button; "Record it as
+    coming from…" has a purple No box and says where Return and Eject will put the spool.
+  * ✅ Printer Status: a printer's heads in even rows (the INDX's 8 → 4 + 4 at the bigger sizes), the name on a header
+    line with the tiles under it (Derek's pick of three spacing styles), the filament line 1.2 high.
+  * ✅ Fixed on the way: the visual comparator looked only at alpha (only size changes failed) and now compares colour;
+    an open Printer Status no longer pushes the command deck off short windows; the search filters keep their values
+    at the bigger sizes; the question dialogs fit a phone.
+  * Follow-ups filed: the slot picker's printer mode and Swap panel, Settings as a side panel, the grey help text,
+    the title bar at Extra Large, and the Printer Status follow-ups (Derek, 2026-10-24).
+
 * **[2026-10-21 — 🧹 Spoolman 0.27 clears + the ⚠️ Low stock list's Excluded tab → `bundle/2026-10-21` (merged to `dev` `e7699c4`)]** — Derek's 2026-10-20/21 answers on the Low stock list, and the clear bug found while building it ([handoff](docs/agent_docs/tasks/session-handoff-2026-10-14.md), "Low stock Excluded + the Spoolman 0.27 clear fix"); one review over both (`wf_c3a8f622-d61`: 8 confirmed, 0 refuted, all fixed in `71e2d17`), offline 3513/0 with the test fake in both Spoolman modes, full sweep 4500 passed / 2 failed (both the bundle's own expected changes, fixed in `ff0b780`).
 
   * ✅ **The delete sentinel clears nothing on Spoolman 0.27 (found 2026-10-20 on dev; prod runs 0.27.0 too).** FCC

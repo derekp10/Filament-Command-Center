@@ -363,3 +363,212 @@ def test_location_table_read_notice_has_no_gray_on_gray_text(page: Page, base_ur
     assert offenders == [], offenders
     for cell in page.locator("#location-table td.col-status").all():
         assert_contrast(cell)
+
+
+@pytest.mark.usefixtures("require_server")
+@pytest.mark.parametrize("size", ["Standard", "Extra Large"])
+def test_qr_questions_are_readable(page: Page, base_url: str, assert_contrast, size):
+    """Each "📷 Scan to …" QR wears its button's colour (Derek, 2026-10-21):
+    amber, cyan, grey, light, dark and purple captions on the dark dialogs,
+    and the captions are now label size. The move question in its four shapes
+    and "Record it as coming from…" are opened with no-op answers and closed
+    with Escape: nothing is moved or recorded.
+
+    Since 2026-10-22 each QR sits under its own button, the buttons spread to
+    match (test_qr_under_buttons_e2e.py): the buttons and their QRs share one
+    grid, the record-source's slots without a QR sit on a line above it. Both
+    are judged here, at Standard and Extra Large.
+
+    Since 2026-10-23 "No box" is purple (btn-purple: white on #6f42c1, 6.5:1;
+    hovered #5e38a4) and so is its QR caption (#a98eda): Derek found the grey
+    too close to Cancel's. RED on 15ce8f4 (product files at 15ce8f4 under
+    this test): No box was white on grey rgb(108, 117, 125)."""
+    import conftest
+    page.add_init_script("(() => { try { localStorage.setItem('fcc.textSize', %r); } catch (e) {} })();" % size)
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.confirmActivePrint === 'function'"
+                           " && typeof _askRecordSource === 'function'")
+    questions = (
+        "{ title: 'Load #57 onto XL-1?', msg: 'A test question.', printing: false,"
+        "  onConfirm() {}, onCancel() {}, onStore() {}, ids: { overlay: 'fcc-cg-question' } }",
+        "{ title: 'Load #57 onto XL-1?', msg: 'A test question.', printing: true,"
+        "  onConfirm() {}, onCancel() {}, onStore() {}, ids: { overlay: 'fcc-cg-question' } }",
+        "{ title: 'Store #57 in LR-MDB-1 slot 1?', msg: 'A test question.', noLoad: true, printing: false,"
+        "  onConfirm() {}, onCancel() {}, onStore() {}, ids: { overlay: 'fcc-cg-question' } }",
+        "{ activePrint: { printer_name: 'XL', state: 'PRINTING', toolhead: 'XL-1' }, msg: 'A test question.',"
+        "  onConfirm() {}, onCancel() {}, ids: { overlay: 'fcc-cg-question' } }",
+    )
+    for opts in questions:
+        page.evaluate("() => window.confirmActivePrint(" + opts + ")")
+        overlay = page.locator("#fcc-cg-question")
+        expect(overlay.locator(".fcc-confirm-qr-row")).to_be_visible()
+        assert_contrast(overlay)
+        # The captions are judged (the walker skips only the root).
+        scored = [o["text"] for o in conftest.contrast_offenders(overlay, min_ratio=100)]
+        assert sum("SCAN" in t.upper() for t in scored) >= 2, scored
+        page.keyboard.press("Escape")
+        expect(overlay).to_have_count(0)
+    page.evaluate("""() => { window.__cgRs = _askRecordSource({ head: 'XL-1', spool_location: '', feeds: [
+        { box: 'LR-MDB-1', slot: '1', free: true }, { box: 'LR-MDB-1', slot: '2', free: false, claimed_by: 99 }] }, 57, null); }""")
+    # The buttons with QRs and the QRs themselves (one grid): the free slot,
+    # No box, Cancel. Not the line above them, which holds the disabled slot
+    # button ("holds #99", Bootstrap's btn-outline-secondary): 3.56:1, and was
+    # before these changes (a disabled control; reported separately, colours
+    # untouched here).
+    row = page.locator("#fcc-record-source .fcc-rs-btns")
+    expect(row.locator(".fcc-confirm-qr-row")).to_be_visible()
+    assert_contrast(row)
+    scored = [o["text"] for o in conftest.contrast_offenders(row, min_ratio=100)]
+    assert sum("SCAN" in t.upper() for t in scored) == 3, scored
+    # The slot's box id and "slot 1" are each kept whole in a span
+    # (2026-10-22 review), so each is judged as its own text.
+    assert any(t.startswith("No box") for t in scored) and "LR-MDB-1" in scored and "slot 1" in scored, scored
+    # No box has its own purple (Derek, 2026-10-23: grey, it and its QR were
+    # too close to Cancel's): white on Bootstrap's purple, hovered too, and its
+    # QR caption the lighter purple, each judged above.
+    def no_box_and_its_caption():
+        by_text = {o["text"]: o for o in conftest.contrast_offenders(row, min_ratio=100)}
+        caption = next((o for t, o in by_text.items() if "SCAN: NO BOX" in t.upper()), None)
+        return by_text.get("No box"), caption, by_text
+    no_box_settled = """() => { const b = document.querySelector('#fcc-record-source .fcc-rs-none');
+        return !!b && b.getAnimations().length === 0; }"""   # Bootstrap's 0.15 s colour transition
+    page.wait_for_function(no_box_settled, timeout=5000)
+    nobox, caption, seen = no_box_and_its_caption()
+    assert nobox and (nobox["fg"], nobox["bg"]) == ("rgb(255, 255, 255)", "rgb(111, 66, 193)"), seen
+    assert caption and caption["fg"] == "rgb(169, 142, 218)", seen
+    page.hover("#fcc-record-source .fcc-rs-none")
+    page.wait_for_timeout(50)
+    page.wait_for_function(no_box_settled, timeout=5000)
+    assert_contrast(row)
+    nobox, _caption, seen = no_box_and_its_caption()
+    assert nobox and (nobox["fg"], nobox["bg"]) == ("rgb(255, 255, 255)", "rgb(94, 56, 164)"), seen
+    page.keyboard.press("Escape")
+    expect(page.locator("#fcc-record-source")).to_have_count(0)
+    # Two free slots: they sit on the line above (cyan, enabled), No box and
+    # Cancel share the grid with their two QRs.
+    page.evaluate("""() => { window.__cgRs = _askRecordSource({ head: 'XL-1', spool_location: '', feeds: [
+        { box: 'LR-MDB-1', slot: '1', free: true }, { box: 'PM-DB-XL-L', slot: '1', free: true }] }, 57, null); }""")
+    panel = page.locator("#fcc-record-source .fcc-rs-panel")
+    expect(panel.locator(".fcc-confirm-qr-row")).to_be_visible()
+    assert_contrast(panel)
+    scored = [o["text"] for o in conftest.contrast_offenders(panel, min_ratio=100)]
+    assert "PM-DB-XL-L" in scored and "slot 1" in scored, scored
+    # No box (it has the focus here) and its QR, the first, are purple too:
+    # with the focus Bootstrap draws it in its hover purple.
+    page.wait_for_function(no_box_settled, timeout=5000)
+    by_text = {o["text"]: o for o in conftest.contrast_offenders(panel, min_ratio=100)}
+    nobox = by_text.get("No box")
+    assert nobox and nobox["bg"] in ("rgb(111, 66, 193)", "rgb(94, 56, 164)"), by_text
+    assert any("SCAN: NO BOX" in t.upper() and o["fg"] == "rgb(169, 142, 218)" for t, o in by_text.items()), by_text
+    page.keyboard.press("Escape")
+
+
+# Two printers as the INDX and the XL are (8 heads and 5), with spools and
+# their material lines, for the even rows under each name (Derek, 2026-10-22
+# and 2026-10-23).
+EVEN_ROWS_FLEET = {
+    "ZZ Contrast INDX": {"state": {"state": "IDLE", "is_active": False}, "heads": [
+        (f"ZC-{i}", i in (1, 4), {"id": 9500 + i, "color": "E0A030" if i == 1 else "1B1B1B",
+                                  "color_direction": "longitudinal", "remaining_weight": 64 if i == 4 else 811,
+                                  "initial_weight": 1000, "display": f"#{9500 + i} Contrast Spool",
+                                  "details": {"material": "Polycarbonate" if i == 1 else "PETG"}}
+         if i in (1, 4) else None) for i in range(1, 9)]},
+    "ZZ Contrast XL": {"state": {"state": "PRINTING", "is_active": True}, "heads": [
+        (f"ZD-{i}", True, {"id": 9510 + i, "color": "F0F0F0", "color_direction": "longitudinal",
+                           "remaining_weight": 432, "initial_weight": 1000, "display": f"#{9510 + i} Contrast White",
+                           "details": {"material": "PLA"}} if i == 2 else None) for i in range(1, 6)]},
+}
+
+
+@pytest.mark.usefixtures("require_server")
+def test_printer_status_even_rows_are_readable(page: Page, base_url: str, assert_contrast):
+    """Printer Status with each printer's name on its header line and its
+    tiles under the name in even rows (Derek, 2026-10-22 / 2026-10-23: the 8
+    heads 4 + 4), at Extra Large, the material lines 1.2 high: every tile,
+    name, badge and 🛑 review count readable. A made-up fleet and made-up
+    reviews in this page only (conftest.stub_printer_fleet); nothing is
+    written."""
+    import json as _json
+    import conftest
+    conftest.stub_printer_fleet(page, EVEN_ROWS_FLEET)
+    pending = [{"printer_name": "ZZ Contrast INDX", "job_id": f"c{i}", "kind": "cancel"} for i in range(3)]
+    page.route("**/api/cancel_deduct/pending*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=_json.dumps({"pending": pending})))
+    page.add_init_script("(() => { try { localStorage.setItem('fcc.textSize', 'Extra Large'); } catch (e) {} })();")
+    page.goto(base_url)
+    page.wait_for_function("() => document.querySelectorAll('#printer-status-widget .fcc-ps-row').length === 2"
+                           " && document.querySelector('#printer-status-widget .fcc-ps-toolheads[data-rows=\"4+4\"]')"
+                           " && document.querySelector('#printer-status-widget .fcc-ps-head .fcc-cr-chip')",
+                           timeout=45_000)
+    widget = page.locator("#printer-status-widget")
+    assert_contrast(widget)
+    scored = [o["text"] for o in conftest.contrast_offenders(widget, min_ratio=100)]
+    assert any(t == "Polycarbonate" for t in scored) and any(t.startswith("ZC-8") for t in scored), scored
+    assert "ZZ Contrast INDX" in scored and "🛑 3" in scored, scored
+
+
+@pytest.mark.usefixtures("require_server")
+def test_printer_status_on_a_phone_and_its_wrapped_strip_are_readable(page: Page, base_url: str, assert_contrast):
+    """The 2026-10-23 review's layouts: on a 390 px phone the tiles start at
+    the row's edge, a printer between two others shows both arrows on its
+    header line, and the collapsed strip wraps a printer's chips onto a
+    second line. Every tile, name, arrow, badge, chip and 🛑 count readable
+    there. A made-up fleet and reviews in this page only; nothing written."""
+    import json as _json
+    import conftest
+    fleet = dict(EVEN_ROWS_FLEET)
+    fleet["ZZ Contrast Middle"] = {"state": {"state": "PAUSED", "is_active": False}, "heads": [
+        (f"ZM-{i}", True, None) for i in range(1, 4)]}
+    conftest.stub_printer_fleet(page, fleet)
+    pending = [{"printer_name": "ZZ Contrast Middle", "job_id": f"m{i}", "kind": "cancel"} for i in range(2)]
+    page.route("**/api/cancel_deduct/pending*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=_json.dumps({"pending": pending})))
+    page.add_init_script("(() => { try { localStorage.setItem('fcc.printerStatus.order', JSON.stringify("
+                         "['ZZ Contrast INDX', 'ZZ Contrast Middle', 'ZZ Contrast XL'])); } catch (e) {} })();")
+    page.set_viewport_size({"width": 390, "height": 900})
+    page.goto(base_url)
+    page.wait_for_function("() => document.querySelectorAll('#printer-status-widget .fcc-ps-row.fcc-ps-edge').length === 3"
+                           " && document.querySelector('#printer-status-widget .fcc-ps-head .fcc-cr-chip')",
+                           timeout=45_000)
+    widget = page.locator("#printer-status-widget")
+    assert_contrast(widget)
+    scored = [o["text"] for o in conftest.contrast_offenders(widget, min_ratio=100)]
+    assert "▲" in scored and "▼" in scored and "🛑 2" in scored and "PAUSED" in scored, scored
+    page.locator("#printer-status-widget .fcc-ps-header-bar").click()
+    expect(page.locator("#printer-status-widget .fcc-ps-header-chips")).to_be_visible(timeout=2000)
+    page.set_viewport_size({"width": 700, "height": 900})
+    # The INDX's group is wider than 700 px: its chips wrap onto a second line.
+    lines = page.evaluate("""() => { const g = document.querySelector('#printer-status-widget .fcc-ps-printer-group');
+        const lines = [];
+        Array.from(g.children).forEach((c) => { const r = c.getBoundingClientRect(); const mid = (r.top + r.bottom) / 2;
+            if (!lines.some((m) => Math.abs(m - mid) < 6)) lines.push(mid); });
+        return lines.length; }""")
+    assert lines >= 2, f"the INDX's chips should wrap at 700 px: {lines} line(s)"
+    assert_contrast(widget)
+    scored = [o["text"] for o in conftest.contrast_offenders(widget, min_ratio=100)]
+    assert any(t.startswith("ZC-8") for t in scored) and "🛑 2" in scored, scored
+
+
+@pytest.mark.usefixtures("require_server")
+def test_settings_this_browser_section_is_readable(page: Page, base_url: str, assert_contrast):
+    """Settings -> 🖥️ This Browser, with the per-browser Text size control
+    (readability, 2026-10-21): its label, the help lines under each setting
+    (now the section help's 0.55 grey: at 0.45 they were 4.4:1 on the black
+    card) and the selects. Read-only: Settings is opened and closed, nothing
+    is saved."""
+    import conftest
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openConfigModal === 'function'")
+    page.evaluate("() => window.openConfigModal()")
+    select = page.locator('.cfgset-input[data-key="fcc.textSize"]')
+    expect(select).to_be_visible(timeout=15000)
+    section = page.locator("#config-generated-settings > div.mb-3", has=select)
+    assert "This Browser" in section.inner_text()
+    assert_contrast(section)
+    # The help lines and the labels are judged (the walker skips only the root).
+    scored = [o["text"] for o in conftest.contrast_offenders(section, min_ratio=100)]
+    assert any(t.startswith("Text size") for t in scored), scored
+    assert any(t.startswith("How big FCC's text is") for t in scored), scored
+    # The select itself: light text on its dark field.
+    colours = select.evaluate("(el) => { const s = getComputedStyle(el); return [s.color, s.backgroundColor]; }")
+    assert colours == ["rgb(255, 255, 255)", "rgb(33, 37, 41)"], colours

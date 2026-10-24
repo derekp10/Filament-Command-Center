@@ -36,18 +36,19 @@ STATES = ("printing", "paused", "idle", "attention", "offline")
 
 def _printer_status_widget_html() -> str:
     """The widget's expanded rows as inv_printer_status.js renders them
-    (_renderRow + _renderStateBadge), plus the collapsed-strip chip variant."""
+    (_renderRow + _renderStateBadge: the header line, 2026-10-23), plus the
+    collapsed-strip chip variant."""
     rows = []
     for s in STATES:
         rows.append(f"""
           <div class="fcc-ps-row" data-printer="FCC Test {s}">
-            <div class="fcc-ps-name-col d-flex align-items-center">
-              <div class="fcc-ps-name-stack d-flex flex-column ms-2">
-                <div class="fcc-ps-name text-info fw-bold">FCC Test {s}</div>
-                <span class="fcc-ps-state fcc-ps-state-{s}">{s.upper()}</span>
-                <span class="fcc-ps-state fcc-ps-state-chip fcc-ps-state-{s}">{s.upper()}</span>
-              </div>
+            <div class="fcc-ps-reorder-stack"></div>
+            <div class="fcc-ps-head">
+              <div class="fcc-ps-name text-info fw-bold" title="FCC Test {s}">FCC Test {s}</div>
+              <span class="fcc-ps-state fcc-ps-state-{s}">{s.upper()}</span>
+              <span class="fcc-ps-state fcc-ps-state-chip fcc-ps-state-{s}">{s.upper()}</span>
             </div>
+            <div class="fcc-ps-toolheads"></div>
           </div>""")
     return (f'<div id="printer-status-widget" class="fcc-ps-widget">'
             f'<div class="fcc-ps-body">{"".join(rows)}</div></div>')

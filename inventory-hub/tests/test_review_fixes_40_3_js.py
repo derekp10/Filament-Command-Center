@@ -32,7 +32,7 @@ an idle leave's store toast says "left as it was" (W4).
 from __future__ import annotations
 
 from test_core1_return_ejectall_js import pytestmark  # noqa: F401  (skip without node)
-from test_head_load_confirm_js import CORE, FED, QS, SCAN, SLOT_DONE, _js, _run, _slot
+from test_head_load_confirm_js import CORE, FED, QS, SCAN, SLOT_DONE, _js, _run, _slot, _text
 
 PRINTING_STATE = r"""
 const __respondIdle = window.__respond;
@@ -174,7 +174,7 @@ await key('Enter');
 return {{ shown, posts: posts('/api/identify_scan') }};
 """)
     h = res["shown"]
-    assert "Store #57 in LR-MDB-1 slot 1?" in h and "Just store it in LR-MDB-1 slot 1" in h, h
+    assert "Store #57 in LR-MDB-1 slot 1?" in h and "Just store it in LR-MDB-1 slot 1" in _text(h), h
     assert "Load it instead" not in h and "Enter stores it" in h
     store = res["posts"][1]
     assert store["auto_deploy"] is False and store["expected_feed"] == "" and store["spool_id"] == 57, store

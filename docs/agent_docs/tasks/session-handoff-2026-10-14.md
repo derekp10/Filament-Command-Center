@@ -641,6 +641,18 @@ is the minimum (his call).
 **Lesson:** a fix that makes a long-dead write path work turns old UI quirks into data loss: when a clear starts
 clearing, review every page that sends one (the ➕ redraw had been harmless only because clears did nothing).
 
+### Readability build + Derek's picture walks (2026-10-21 → 24) — DONE (merged to `dev` 2026-10-24; `main` waits for Derek)
+
+Derek approved the text-size rule item by item (2026-10-21), the build's pictures (2026-10-22: all five, with three
+changes) and the changes' pictures (2026-10-23/24); see completed-archive.md. Pictures, kept locally:
+`review-samples/2026-10-21-readability-build/`, `2026-10-22-qr-and-rows/`, `2026-10-23-printer-status/`.
+Research this session (no code; each folder's `corrections.md` first): the phone view + tags
+(`review-samples/2026-10-21-phone-tags/`), the scale (`2026-10-21-scale/`; Derek ordered a PN5180, it arrived
+2026-10-22), every brand's tags (`2026-10-21-tags/`), colour accuracy (`2026-10-21-colour/`), the Audit trace
+(`2026-10-21-audit/`). The firmware 8.0 findings are in the buglist (🗒️ Notes). Derek's weekly usage was at 78% on
+2026-10-23: next, after his reset, the Printer Status follow-ups, the arc-bug fix, the colour walk, the scale
+decisions.
+
 ## Questions for Derek
 
 Asked before Derek went to bed, from the pre-flight reconcile (`wf_1a1ff135-1c6`, read-only). Recorded as
@@ -767,3 +779,12 @@ harness's 1% tolerance let stale CORE1 text pass).
 | `wf_3b443524-31f` readability-audit | app-wide small text | 3 (2 measurers + a proposal writer) | 978,494 subagent | ~46 min, read-only on dev; the writer died on the same drop after writing proposal.md |
 | `wf_a90dfa8b-6e4` extras-clear-finish | the builder's uncommitted fix | 1 | 477,163 subagent | ~34 min; reviewed the diff against the research, fixed 2 gaps, both fake modes, base proof, `95457a7` |
 | `wf_c3a8f622-d61` review-low-stock-and-extras-clear | bundle/2026-10-21 | 4 (3 lenses + 1 batched verifier) | 1,479,629 subagent | ~41 min; 10 findings → 8 confirmed (2 red, 1 orange, 5 yellow), 2 duplicates, none refuted; all fixed (`71e2d17`) |
+| `wf_2432a503-21f` phone-tags-research | OpenPrintTag, Web NFC on Android, other tag systems | 4 | 1,328,516 subagent | ~43 min |
+| `wf_16904a49-dbb` readability-build | the text-size rule + the Text size setting | 7 (2 builders, 3 + 1 review, a fixer) | 3,511,272 subagent | ~4.7 h; 13 review fixes |
+| `wf_be7dc443-eef` scale-all-tags-research | SpoolmanScale, readers, an FCC stand-in | 5 | 2,204,977 subagent | ~98 min; its skeptic overturned the reader pick |
+| `wf_88cad35d-ac5` audit-behaviour-trace | Audit, read-only | 2 | 726,089 subagent | ~34 min |
+| `wf_43831b5c-daf` colour-accuracy-research | where colours come from, which is most accurate | 5 | stopped for credits, then resumed: 388,906 for the resume | the first run's figure wasn't reported |
+| `wf_fb86597c-1ad` spool-tag-landscape | every brand's tags, one reader or two | 5 | 2,156,592 subagent | ~79 min |
+| `wf_35fd892d-f66` readability-walk-changes | QRs under their buttons, even rows | 4 | 1,877,812 subagent | ~3.9 h; 5 review fixes |
+| `wf_71b589b9-90b` record-source + firmware 8.0 | a dialog tweak + research | 5 | 1,915,610 subagent | ~69 min |
+| `wf_8be49633-0d1` printer-status-name-on-top | the name on a header line | 3 | 1,493,102 subagent | ~3 h; 6 review fixes |

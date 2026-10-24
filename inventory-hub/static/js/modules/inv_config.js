@@ -108,7 +108,7 @@ console.log("🚀 Loaded Module: CONFIG");
                 <button type="button" class="btn btn-sm config-attrs-rm-choice ms-2 p-0 d-inline-flex align-items-center justify-content-center"
                         data-choice="${_esc(c)}" data-usage="${n}"
                         title="Remove this tag (strips it from every filament and hides it — reversible)"
-                        style="width:18px; height:18px; line-height:1; background:#dc3545; color:#fff; border:none; border-radius:3px; font-weight:bold;">✕</button>
+                        style="width:1.125rem; height:1.125rem; line-height:1; background:#dc3545; color:#fff; border:none; border-radius:3px; font-weight:bold;">✕</button>
             </span>`;
         }).join('');
         // Hidden strip — the escape hatch back out of a hide, and the ONLY
@@ -123,11 +123,11 @@ console.log("🚀 Loaded Module: CONFIG");
                 <span class="fw-bold" style="text-decoration:line-through;">${_esc(c)}</span>
                 <button type="button" class="btn btn-sm config-attrs-unhide-choice ms-2 py-0 px-1"
                         data-choice="${_esc(c)}" title="Show this tag again"
-                        style="font-size:0.75rem; line-height:1.4; background:#198754; color:#fff; border:none; border-radius:3px;">↩ unhide</button>
+                        style="font-size:var(--fcc-fs-label); line-height:1.4; background:#198754; color:#fff; border:none; border-radius:3px;">↩ unhide</button>
                 <button type="button" class="btn btn-sm config-attrs-purge-choice ms-1 py-0 px-1"
                         data-choice="${_esc(c)}"
                         title="Permanently delete from Spoolman's schema — rewrites every filament that has attributes"
-                        style="font-size:0.75rem; line-height:1.4; background:#6c757d; color:#fff; border:none; border-radius:3px;">🗑 purge</button>
+                        style="font-size:var(--fcc-fs-label); line-height:1.4; background:#6c757d; color:#fff; border:none; border-radius:3px;">🗑 purge</button>
             </span>`).join('');
         const choiceOpts = choices.map(c => `<option value="${_esc(c)}">${_esc(c)}</option>`).join('');
         const selVisible = filteredFilaments.filter(f => _attrs.selected.has(f.id)).length;
@@ -377,7 +377,7 @@ console.log("🚀 Loaded Module: CONFIG");
             const changesHtml = changes.length
                 ? `
                     <div class="small mt-1" style="color: rgba(255,255,255,0.85);">
-                        <table class="table table-dark table-sm table-bordered mb-0" style="font-size:0.82rem;">
+                        <table class="table table-dark table-sm table-bordered mb-0" style="font-size:var(--fcc-fs-small);">
                             <thead>
                                 <tr>
                                     <th>Field</th>
@@ -608,7 +608,7 @@ console.log("🚀 Loaded Module: CONFIG");
 
         const body = `
             <div style="background:#181818; color:#fff; border:2px solid #ffc107; border-radius:6px;
-                        width:520px; max-width:92vw; max-height:80vh; display:flex; flex-direction:column;
+                        width:32.5rem; max-width:92vw; max-height:80vh; display:flex; flex-direction:column;
                         box-shadow:0 0 24px rgba(255,193,7,0.35);">
                 <div class="d-flex justify-content-between align-items-center px-3 py-2"
                      style="background:#1a1a1a; border-bottom:1px solid #ffc107;">
