@@ -29,7 +29,7 @@ import sys
 import pytest
 
 from test_core1_return_ejectall_js import pytestmark, run_js  # noqa: F401  (pytestmark: skip without node)
-from test_head_load_confirm_js import PRELUDE, SCAN
+from test_head_load_confirm_js import PRELUDE, SCAN, _text
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -108,7 +108,7 @@ await click('.fcc-rs-opt[data-rs-i="0"]');
 await __settle(200);
 return {{ dialog, focus, posts: posts('/api/smart_move'), toasts: toasts() }};
 """)
-    assert "Record #57 as coming from" in res["dialog"] and "LR-MDB-1 slot 2" in res["dialog"], res["dialog"]
+    assert "Record #57 as coming from" in res["dialog"] and "LR-MDB-1 slot 2" in _text(res["dialog"]), res["dialog"]
     assert res["focus"] == '.fcc-rs-opt[data-rs-i="0"]', res["focus"]
     [post] = res["posts"]
     assert post["location"] == "XL-2" and post["record_source"] == {"box": "LR-MDB-1", "slot": "2"}, post

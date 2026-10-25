@@ -52,7 +52,7 @@ window.showLegacySpoolPicker = (payload, opts = {}) => {
     })();
 
     const panelHtml = `
-        <div style="background:#1e1e1e; color:#fff; border:2px solid #ffaa00; border-radius:8px; padding:20px 24px; max-width:600px; width:92%;">
+        <div style="background:#1e1e1e; color:#fff; border:2px solid #ffaa00; border-radius:8px; padding:20px 24px; max-width:37.5rem; width:92%;">
             <div style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">⚠️ Multiple spools share Legacy ID ${escapeHtml(legacy_id || '?')}</div>
             <div style="color:#ffc; margin-bottom:14px;">
                 ${candidates.length} spools are attached to the filament with this legacy ID. Pick the right one to continue, queue a fresh <code>ID:</code>-format label for the chosen spool, or add a new spool on this filament if none on the list is the right one.

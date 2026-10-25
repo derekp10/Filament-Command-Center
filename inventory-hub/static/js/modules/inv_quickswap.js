@@ -330,7 +330,7 @@
                                     const who = claims.map(c => `#${c.id}`);
                                     const whoTxt = who.length > 2
                                         ? `${who.slice(0, -1).join(', ')} and ${who[who.length - 1]}` : who.join(' and ');
-                                    contentLines = `<div class="text-warning fw-bold" style="font-size:0.9rem; white-space:normal; max-width:240px;">⚠️ ${whoTxt} ${who.length > 2 ? 'all' : 'both'} claim slot ${e.slot} — open ${e.box} to sort them</div>`;
+                                    contentLines = `<div class="text-warning fw-bold" style="font-size:0.9rem; white-space:normal; max-width:15rem;">⚠️ ${whoTxt} ${who.length > 2 ? 'all' : 'both'} claim slot ${e.slot} — open ${e.box} to sort them</div>`;
                                     borderCls = 'btn-outline-warning';
                                     handler = 'window.quickSwapTap(this)';
                                     titleAttr = `FCC's records put ${whoTxt} in ${e.box} slot ${e.slot}; move one of them, then swap`;
@@ -370,7 +370,7 @@
                                     const bsSwatch = window.makeSwatchHtml(bufferTopSpool.color, bufferTopSpool.color_direction, { size: 14, marginRight: 6 });
                                     contentLines = `
                                         <div class="text-success fw-bold" style="font-size:0.9rem;">⬇️ Deposit from buffer:</div>
-                                        <div class="text-light" style="font-size:0.9rem; max-width:220px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                                        <div class="text-light" style="font-size:0.9rem; max-width:13.75rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
                                             ${bsSwatch}${bsDisplay}
                                         </div>`;
                                     borderCls = 'btn-outline-success';
@@ -397,7 +397,7 @@
                                     <button type="button" class="fcc-qs-slot btn ${borderCls} fw-bold d-flex flex-column align-items-start"
                                         data-box="${e.box}" data-slot="${e.slot}"
                                         data-toolhead="${th}" ${singleAttr}
-                                        style="min-width:240px; font-size:1.05rem; padding:10px 14px;"
+                                        style="min-width:15rem; font-size:1.05rem; padding:10px 14px;"
                                         onclick="${handler}"
                                         ${disabledAttr}
                                         title="${titleAttr}">
@@ -431,7 +431,7 @@
                                                 data-box="${p.box}" data-slot="${p.slot}"
                                                 data-toolhead=""
                                                 data-pool="1"
-                                                style="min-width:240px; font-size:1.05rem; padding:10px 14px;"
+                                                style="min-width:15rem; font-size:1.05rem; padding:10px 14px;"
                                                 disabled
                                                 title="FCC couldn't read ${p.box} from Spoolman just now — reopen the view to try again">
                                                 <div class="text-warning fw-bold" style="font-size:1rem;">Slot ${p.slot}</div>
@@ -459,12 +459,12 @@
                                                 data-box="${p.box}" data-slot="${p.slot}"
                                                 data-toolhead=""
                                                 data-pool="1"
-                                                style="min-width:240px; font-size:1.05rem; padding:10px 14px;"
+                                                style="min-width:15rem; font-size:1.05rem; padding:10px 14px;"
                                                 onclick="window.quickSwapDeposit(this)"
                                                 title="Drop the buffered spool into ${p.box} slot ${p.slot} (printer pool — no toolhead auto-deploy)">
-                                                <div class="text-warning fw-bold" style="font-size:1rem;">Slot ${p.slot} <span class="text-secondary small ms-1" style="font-size:0.75rem;">${p.box}</span></div>
+                                                <div class="text-warning fw-bold" style="font-size:1rem;">Slot ${p.slot} <span class="text-secondary small ms-1" style="font-size:var(--fcc-fs-small);">${p.box}</span></div>
                                                 <div class="text-success fw-bold" style="font-size:0.9rem;">⬇️ Deposit from buffer:</div>
-                                                <div class="text-light" style="font-size:0.9rem; max-width:220px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                                                <div class="text-light" style="font-size:0.9rem; max-width:13.75rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
                                                     ${bsSwatch}${bsDisplay}
                                                 </div>
                                             </button>`;
@@ -475,10 +475,10 @@
                                                 data-box="${p.box}" data-slot="${p.slot}"
                                                 data-toolhead=""
                                                 data-pool="1"
-                                                style="min-width:240px; font-size:1.05rem; padding:10px 14px; opacity:0.7;"
+                                                style="min-width:15rem; font-size:1.05rem; padding:10px 14px; opacity:0.7;"
                                                 disabled
                                                 title="${p.box} slot ${p.slot} is empty — scan a spool into the buffer to deposit here">
-                                                <div class="text-warning fw-bold" style="font-size:1rem;">Slot ${p.slot} <span class="text-secondary small ms-1" style="font-size:0.75rem;">${p.box}</span></div>
+                                                <div class="text-warning fw-bold" style="font-size:1rem;">Slot ${p.slot} <span class="text-secondary small ms-1" style="font-size:var(--fcc-fs-small);">${p.box}</span></div>
                                                 <div class="text-muted small fw-bold" style="font-size:0.9rem;">◦ empty staging slot</div>
                                             </button>`;
                                     }
@@ -581,7 +581,7 @@
 
         const panelHtml = `
             <div class="bg-dark border border-info rounded p-4 shadow-lg"
-                 style="min-width:420px; max-width:540px;">
+                 style="min-width:min(26.25rem,94vw); max-width:33.75rem;">
                 <div class="text-info fw-bold mb-3" style="font-size:1.25rem;"
                      id="fcc-quickswap-confirm-title">${_escapeHtml(titleText)}</div>
                 <div class="text-light mb-3" style="font-size:1.05rem;"
@@ -589,16 +589,18 @@
                 <!-- Buttons mirror the QR row's flex layout exactly (gap:14px;
                      justify-content:center; from attachConfirmQRs in
                      inv_core.js). The CONFIRM QR's "📷 SCAN TO CONFIRM"
-                     label is ~10px wider than CANCEL's, making the QR
-                     columns asymmetric. Measured widths: CONFIRM ≈ 133px,
-                     CANCEL ≈ 123px. We mirror those exactly so each
-                     button center lands under its QR center. -->
+                     label is wider than CANCEL's, making the QR columns
+                     asymmetric, so when the QR row is shown each button
+                     column takes its QR column's measured width (below):
+                     each button centre lands under its QR centre at any
+                     text size. With no QRs they are 133 / 123 px at Standard (in rem, so
+                     they grow with the per-browser Text size). -->
                 <div style="display:flex; gap:14px; justify-content:center; margin-top:14px;">
-                    <div style="width:133px; display:flex; justify-content:center;">
+                    <div class="fcc-qs-btncol" style="width:8.3125rem; display:flex; justify-content:center;">
                         <button type="button" id="fcc-quickswap-yes"
                             class="btn btn-info fw-bold w-100">Yes, swap</button>
                     </div>
-                    <div style="width:123px; display:flex; justify-content:center;">
+                    <div class="fcc-qs-btncol" style="width:7.6875rem; display:flex; justify-content:center;">
                         <button type="button" id="fcc-quickswap-no"
                             class="btn btn-outline-light fw-bold w-100">No, cancel</button>
                     </div>
@@ -692,12 +694,26 @@
         // one that benefits from "scan to confirm I really meant to
         // disrupt my print."
         if (stateInfo && warningBanner && window.attachConfirmQRs) {
+            // Each QR takes its button's colour (Derek, 2026-10-21): Yes, swap
+            // is cyan (btn-info), No, cancel a light outline.
             qrSession = window.attachConfirmQRs({
                 host: body,
                 onConfirm: doConfirm,
                 onCancel: () => { close(); },
                 theme: 'warning',
+                confirmTone: 'info',
+                cancelTone: 'light',
             });
+            // The button under each QR takes that QR column's width, so it
+            // stays centred under it whatever the caption's size.
+            const cells = body.querySelectorAll('.fcc-confirm-qr-row > .fcc-confirm-qr-cell');
+            const cols = ov.querySelectorAll('.fcc-qs-btncol');
+            if (cells.length === 2 && cols.length === 2) {
+                cols.forEach((col, i) => {
+                    const w = Math.ceil(cells[i].getBoundingClientRect().width);
+                    if (w > 0) col.style.width = `${w}px`;
+                });
+            }
         }
 
         yes.onclick = doConfirm;

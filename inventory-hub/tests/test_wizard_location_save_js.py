@@ -31,7 +31,7 @@ from __future__ import annotations
 import json
 
 from test_core1_return_ejectall_js import pytestmark, run_js  # noqa: F401  (pytestmark: skip without node)
-from test_head_load_confirm_js import FED, PRELUDE
+from test_head_load_confirm_js import FED, PRELUDE, _text
 
 MODULES = ["inv_core.js", "inv_wizard.js"]
 
@@ -179,7 +179,7 @@ await __settle(80);
 return {{ before, replay: posts('/api/smart_move'), toasts: toasts(), status: status(),
           dirty: wizardState.isDirty, pending: wizardState.pendingPlacement }};
 """)
-    assert "Load #57 onto XL-1?" in res["before"]["html"] and "Just store it in LR-MDB-1 slot 1" in res["before"]["html"]
+    assert "Load #57 onto XL-1?" in res["before"]["html"] and "Just store it in LR-MDB-1 slot 1" in _text(res["before"]["html"])
     assert "Saved your other changes" in res["before"]["status"] and res["before"]["dirty"] is True, res["before"]
     assert len(res["replay"]) == 1, res["replay"]
     replay = res["replay"][0]

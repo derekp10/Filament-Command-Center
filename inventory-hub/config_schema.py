@@ -118,6 +118,16 @@ CONFIG_SCHEMA = [
           help="How each toolhead tile is labelled in Printer Status: its full id (XL-3), just "
                "its number (3), or Tool and its number, counting from 1 like the printer's "
                "own screen (Tool 3). The collapsed strip always shows the full id."),
+    # Readability (Derek, 2026-10-21). text_size.js keys on these exact
+    # strings, and so does the script in dashboard.html's <head> that applies
+    # the size before the first paint.
+    Field("fcc.textSize", "Text size", "select", "Standard",
+          section="client", scope="client",
+          choices=["Small", "Standard", "Large", "Extra Large"],
+          help="How big FCC's text is in this browser. Standard keeps small text readable (never "
+               "under 13.6 px); Small is the compact look FCC had before that; Large and Extra "
+               "Large make everything bigger together. It changes as soon as you pick it, with "
+               "no Save needed."),
     Field("fcc.bulkMove.enabled", "Enable Bulk Moves", "bool", False,
           section="behavior", scope="server",
           help="Show the 🔀 Bulk Move affordances and accept bulk-move scans. "

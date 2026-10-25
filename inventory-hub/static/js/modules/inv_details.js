@@ -1545,14 +1545,14 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
             </label>` : '';
 
     const content = `
-        <div style="background:#1e1e1e; color:#fff; border:2px solid #ffc107; border-radius:8px; padding:20px 24px; max-width:460px; text-align:left;">
+        <div style="background:#1e1e1e; color:#fff; border:2px solid #ffc107; border-radius:8px; padding:20px 24px; max-width:28.75rem; text-align:left;">
             <div style="font-size:1.2em; font-weight:bold; margin-bottom:10px;">📦 Spool archived — record the empty weight?</div>
             <p style="color:#ddd; margin-bottom:8px; font-size:0.95em;">
                 Spool <strong>#${esc(spoolId)}</strong> just hit 0g and was auto-archived. Its filament
                 <strong>#${esc(fil.id)}</strong> (<em>${esc(vendorName)} ${esc(material)}, ${esc(colorName)}</em>)
                 has no recorded <strong>empty spool weight</strong>.
             </p>
-            <p style="color:#bbb; font-size:0.82em; margin-bottom:12px;">
+            <p style="color:#bbb; font-size:var(--fcc-fs-small); margin-bottom:12px;">
                 Put the now-empty spool on your scale and enter the measured weight. It's saved to the
                 filament so every future spool of it inherits the value.
             </p>
@@ -2699,7 +2699,7 @@ const _editfilShowEscapeConfirm = (bsModal) => {
     ov.id = 'editfil-esc-confirm';
     ov.style.cssText = 'position:absolute; inset:0; z-index:20000; background:rgba(0,0,0,0.85); display:flex; align-items:center; justify-content:center;';
     ov.innerHTML = `
-        <div style="background:#1e1e1e; color:#fff; border:2px solid #ff8800; border-radius:8px; padding:20px 24px; max-width:420px; text-align:center;">
+        <div style="background:#1e1e1e; color:#fff; border:2px solid #ff8800; border-radius:8px; padding:20px 24px; max-width:26.25rem; text-align:center;">
             <div style="font-size:1.1em; font-weight:bold; margin-bottom:8px;">Close without saving?</div>
             <div style="color:#ffc; margin-bottom:14px;">You have unsaved changes to this filament. Leave anyway?</div>
             <div style="display:flex; gap:10px; justify-content:center;">
@@ -2846,7 +2846,7 @@ const _showLabelReprintPrompt = (filId, displayName, changedLabels) => {
     const changedTxt = changedLabels.join(', ');
     const panel = document.createElement('div');
     panel.style.cssText = 'background:#1e1e1e; color:#fff; border:2px solid #ffc107; '
-        + 'border-radius:10px; padding:22px 26px; max-width:460px; text-align:center; '
+        + 'border-radius:10px; padding:22px 26px; max-width:28.75rem; text-align:center; '
         + 'box-shadow:0 8px 32px rgba(0,0,0,0.6);';
     panel.innerHTML = `
         <div style="font-size:2em; line-height:1; margin-bottom:6px;">🏷️</div>
@@ -2920,7 +2920,7 @@ const _renderDeleteOverlay = (overlay, { title, body, requireText, confirmLabel,
     const errId = `${overlay.id}-err`;
     overlay.innerHTML = `
         <div style="font-size:1.3em; font-weight:bold; color:#ff8888;">${title}</div>
-        <div style="color:#ddd; font-size:0.95em; max-width:480px;">${body}</div>
+        <div style="color:#ddd; font-size:0.95em; max-width:30rem;">${body}</div>
         ${requireText ? `
             <div style="display:flex; flex-direction:column; gap:6px; align-items:center;">
                 <label for="${inputId}" style="color:#aaa; font-size:0.85em;">
@@ -2928,7 +2928,7 @@ const _renderDeleteOverlay = (overlay, { title, body, requireText, confirmLabel,
                 </label>
                 <input id="${inputId}" type="text" autocomplete="off"
                     style="font-family:monospace; padding:6px 10px; min-width:240px; text-align:center; border:1px solid #555; border-radius:4px; background:#222; color:#fff;" />
-                <div id="${errId}" style="color:#ff5555; font-size:0.8em; min-height:1em;"></div>
+                <div id="${errId}" style="color:#ff5555; font-size:var(--fcc-fs-small); min-height:1em;"></div>
             </div>
         ` : ''}
         <div style="display:flex; gap:10px; margin-top:6px;">
@@ -3118,7 +3118,7 @@ const _showMergeFilamentFlow = async (sourceFilamentId) => {
 
     const pickerHtml = `
         <div style="background:#222; color:#fff; border:1px solid #555; border-radius:8px;
-                    padding:20px 22px; min-width:420px; max-width:560px;
+                    padding:20px 22px; min-width:min(26.25rem,94vw); max-width:35rem;
                     box-shadow:0 8px 32px rgba(0,0,0,0.55);">
             <h5 style="margin:0 0 8px; color:#5dd0ff;">🔗 Merge filament</h5>
             <div style="color:#ccc; font-size:0.9em; margin-bottom:12px;">
@@ -3214,7 +3214,7 @@ const _showMergeConfirmStep = (srcId, srcLabel, target, spoolCount, hostModalEl)
 
     const html = `
         <div style="background:#222; color:#fff; border:1px solid #ff9955; border-radius:8px;
-                    padding:20px 22px; min-width:420px; max-width:560px;
+                    padding:20px 22px; min-width:min(26.25rem,94vw); max-width:35rem;
                     box-shadow:0 8px 32px rgba(0,0,0,0.55);">
             <h5 style="margin:0 0 8px; color:#ffaa55;">⚠️ Confirm merge</h5>
             <div style="color:#ddd; font-size:0.92em; margin-bottom:10px;">

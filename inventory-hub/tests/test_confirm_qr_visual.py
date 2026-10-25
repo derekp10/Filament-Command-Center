@@ -49,4 +49,10 @@ def test_confirm_qr_row_visual(page: Page, snapshot):
     )
     # Give the QR codes a moment to render (generateSafeQR uses two RAFs).
     page.wait_for_timeout(400)
-    snapshot(page.locator("#cqr-snapshot-stage"), "confirm-qr-row")
+    # The codes themselves are masked: their payload carries a per-question id,
+    # so they differ on every run. Their cards' colours, the captions and the
+    # layout are what the baseline pins (since the readability review,
+    # 2026-10-21, the comparator compares colours: the amber Load card).
+    snapshot(page.locator("#cqr-snapshot-stage"), "confirm-qr-row",
+             mask=[page.locator("#cqr-snapshot-stage .fcc-confirm-qr-row img, "
+                                "#cqr-snapshot-stage .fcc-confirm-qr-row canvas")])
