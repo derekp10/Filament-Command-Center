@@ -193,7 +193,13 @@
   it with the phone view, sample first; (b) the scan accumulator in `scripts.html` cancels Enter on every focused
   dashboard button except the ▲▼; (c) on short windows (1280×800 at Large, 1366×768 at Small / Standard) the open
   widget scrolls inside itself; (d) long term, a customizable layout (tiles per row, style) for printers with many
-  spools ("with AMS units on the bambu side, things could get crazy"). **Standalone.**
+  spools ("with AMS units on the bambu side, things could get crazy"). (e) **The collapsed strip needs the same clean-up
+  (Derek, 2026-10-25, on prod):** "I know what is what, but it kind of reads as just a mess of toolheads. Because I
+  follow a naming convention, I can tell what's what, but if anyone else doesn't, then it gets confusing fast." He
+  found it when the Settings → This Browser "Printer Status toolhead labels" choice (XL-3 / 3 / Tool 3) changed only
+  the expanded tiles: he expected the strip to follow it too (Group 46.3 kept the strip on the full id on purpose,
+  so that is a decision to revisit). Give the strip a clear per-printer grouping like the expanded view's (the name
+  first, its state and 🛑 count, then its heads), sample first. **Standalone.**
 * **🐞 Cancelled prints are under-charged because the cancel parser skips arc moves (found 2026-10-23).** FCC's
   prefix parser (the cancel / M73 path) walks the G-code's extrusion but ignores G2 / G3 arcs. Counting them takes
   Derek's raccoon INDX print (whole file) from 48.43 g to 52.26 g against the slicer footer's 52.27 g, so the "~7%
@@ -465,12 +471,19 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
   the server and is fine. Pass the setting with `|tojson` instead.
 
 ## 🔍 Search, Display & Filtering
-* **Where the ⚠️ Low stock button should live.** _(Derek, 2026-10-20: "Low stock button location works for now, but
-  it's a bit fiddily if I click on it to get more info … I don't have a good suggestion on where to put it yet.")_
-  Today it sits in the 🔍 Search panel, and the list is an overlay on top of it. Done the same day: the list comes back
-  on the same row once a window opened from it (the filament, or a spool or edit opened from that) is closed, so it no
-  longer has to be reopened from Search each time. Still open: a better home for the button. Ideas, none decided: a
-  dashboard button with a count like 🏷️ Backlog's, or a Settings / tools menu entry.
+* **⚠️ Low stock: a title-bar button with a count, and a window that keeps one size (Derek, 2026-10-25, on prod).**
+  (a) **Where the button lives: decided.** Today it sits in the 🔍 Search panel ("works, seems a bit odd. And doesn't
+  really tell you anything at a glance"; 2026-10-20: "a bit fiddly"). Move it to the title bar beside 🏷️ Backlog and
+  🛒 Queue, with a count, so it reads at a glance. Things to settle in the build: what the count shows (Low + Out, or
+  both separately; Excluded never counts); its cost (`build_report` reads every spool and every filament strictly, too
+  heavy for each heartbeat: compute it on a slower cadence or after a deduct, a weigh-in or an exclusion, and say
+  "couldn't read" rather than 0, Group 52); and room in the title bar at Large / Extra Large, where it already
+  tightens (the design follow-ups' "Backlog and Queue as icon + count" idea may be needed). (b) **One size for the
+  window:** "It jumps in size depending on its content's length, which makes everything move around in a weird way.
+  This is kind of contradictory to some of the other modal design decisions we've made in the past." Give it a fixed
+  height (in rem, so it follows the Text size) with the filament list scrolling inside it ("If that means adding a
+  scrollbar to the list of filaments, that's fine"), the tabs, filter and legend staying put whatever tab or filter
+  is chosen. The list's come-back behaviour (2026-10-20) stays. **Standalone.**
 
 ## ⚡ Quick-Swap Enhancements
 *(No open items — resolved entries archived in `completed-archive.md`.)*
