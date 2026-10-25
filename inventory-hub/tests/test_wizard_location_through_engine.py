@@ -300,10 +300,11 @@ def test_an_edit_that_empties_the_spool_and_moves_it_leaves_the_move_to_the_engi
 
 def test_an_edit_that_keeps_the_location_never_runs_the_engine(client):
     """Control: an unchanged Location (typed in another case) is no move, and the
-    answer is exactly what it was before 40.7."""
+    answer is what it was before 40.7, plus `archived_now` (the page sets its
+    Archived box from it; 2026-10-20 review)."""
     sm = FakeSpoolman({42: {"location": "CR-CT-2-R1", "extra": {}}})
     body = _edit(client, sm, {"location": "cr-ct-2-r1", "comment": "edited"}, **DOOR)
-    assert body == {"success": True, "spool_id": 42}, body
+    assert body == {"success": True, "spool_id": 42, "archived_now": False}, body
     assert sm.writes == [(42, {"comment": "edited"})], sm.writes
 
 

@@ -24,10 +24,11 @@ _Run finished at ~04:45 on 2026-10-14. Started from `dev` @ `4203ffe` (= `origin
   old spool in your scan buffer (and a double-read can't reverse it), a multi-slot box label opens the slot picker,
   and the picker's follow-ups D1–D4 are done. See "Group 40.2, day session" under Parked.
 - **Overnight 2026-10-19:** Group 40 is **DONE**: Swap option C and 40.4–40.7 built, one review (27 findings, none
-  red, all fixed), one full sweep (3910 passed, 0 failed), merged to `dev` `8d0ff64` and pushed. `main` untouched.
-  Ten questions for you (two are your call, the rest just need a glance) and the hands-on checks: see "Group 40,
-  final leg" under Parked.
-- **For you:** nothing blocks. `main` is held for you. The next release would carry everything on `dev` since the 2026-10-08 release: 9 merges, 107 commits (Group 47's docs, Group 46, the 2026-10-13 standalone fixes, Group 43, Group 39, then tonight's 43.2 + 46.3, Group 45, Group 41 and Group 42). **Derek, morning of 2026-10-14:** continue with Group 40 next; consider moving to `main` once the new group set is done. Optional hands-on checks are under "Manual checks for Derek". The buglist's ⏸️ PENDING DEREK section was left untouched (tonight's rule).
+  red, all fixed), one full sweep (3910 passed, 0 failed), merged to `dev` `8d0ff64` and pushed. **Derek, that
+  morning:** kept both Group 40 calls, no vetoes, and **released: `main` `0140edf`** (everything on `dev` since
+  2026-10-08, 173 commits; he runs the TrueNAS update). Answers and his deduct question are under "Group 40, final
+  leg"; the hands-on checks stay in the buglist's ⏸️ PENDING DEREK section.
+- **For you:** nothing blocks. (`main` was held for you until the 2026-10-19 release, `0140edf`.) The next release would carry everything on `dev` since the 2026-10-08 release: 9 merges, 107 commits (Group 47's docs, Group 46, the 2026-10-13 standalone fixes, Group 43, Group 39, then tonight's 43.2 + 46.3, Group 45, Group 41 and Group 42). **Derek, morning of 2026-10-14:** continue with Group 40 next; consider moving to `main` once the new group set is done. Optional hands-on checks are under "Manual checks for Derek". The buglist's ⏸️ PENDING DEREK section was left untouched (tonight's rule).
 - Evening prep done: Derek's go-ahead for all-night full test runs, a push after each merge, and read-only prod
   counts (taken ~18:25; table in the plan file).
 
@@ -382,6 +383,17 @@ doors here, Return and the wizard by two background fixers), one full sweep (`RU
 Hands-on checks (when you like; nothing waits on them): the buglist's ⏸️ PENDING DEREK item "the pickers and Swap
 option C" (C1–W2).
 
+**Derek's answers (2026-10-19, morning):** (1) one tap stays; (2) a wizard create into a box loads the slot's head
+(stays); no vetoes on 3–10. On 3 he asked whether a mid-print swap of an empty spool is charged right and the empty one
+zeroed. Answered from the code: a swap after a runout pause opens a review card proposing the split (the old spool
+gets what was printed before the swap), a swap without a pause or a spool moved or zeroed mid-print gets a "spool
+changed" / "no spool loaded" review, and uncharged grams get their own card, so nothing lands on the wrong spool
+silently. The one real gap: the split charges what was PRINTED, so an old spool whose record was a bit high keeps a few
+phantom grams. Weighing or zeroing the spool in hand fixes it, and Settings → Behavior → "Runout path filament (g)"
+(0 today; ~4 g XL, ~2 g Core One) adds the sensor-to-nozzle grams. He agreed: no slot queues, no new deduct machinery;
+he filed "runout path filament per printer, maybe per toolhead" (→ Group 35). **Released the same morning: `main`
+`0140edf`.**
+
 **Questions for you (nothing waits on them; each has a default):**
 
 _Your call:_
@@ -424,6 +436,225 @@ _I decided (listed in case you object):_
     offers nothing (FCC would refuse); a stale record offers "Put it in slot N".
 
 Follow-ups filed (standalone in the buglist, none urgent): moving a hand-archived spool un-archives it (it predates Group 40); a "stored only" note on Return's chooser tiles; a `blocked_reason` for the slot-still-claimed refusal; a Return chooser spanning two boxes (→ Group 37); and the first engine review's open notes. All in the buglist's "🟡 Group 40 leftovers".
+
+### Bundle run (evening 2026-10-19 → 20): Groups 51, 48, 49, 52 — DONE (`dev` `2ec9f46`; `main` waits for Derek's OK)
+
+Derek's ask (19:40): "Read docs/agent_docs/tasks/bundle-2026-10-19.md and run it" ([the plan](bundle-2026-10-19.md)).
+Budget at the start: 5-hour window 9 % (resets ~23:45), weekly 16 % (resets in 6 days). His words: "I'd like to get
+this section done and off the list. if we can get it done in under 35% weekly, that be good, but I'm ok if we go
+over." `main` needs his OK.
+
+**His answer on the slicer-profile fill-in (48.4), 19:45**, asked "your own filaments, a table, or skip?":
+> "So for prusament, there is a pla, and like 3 or 4 variants (Blend, high speed, lightweight) with others to come,
+> It be perfered if we could just source that from the site somehow. A lot of these are cases where I find a profile
+> that fits, because the brand doesn't exist in prusa. Jayo, I think I read is technically a variant/offbrand of Sunlu
+> so I added that the profile to use there is the sunlu variant. This stuff is hard to fill out for manual adds. And I
+> was hoping that we could reliably figure out the type based on the custom spool site, and possibly the product page
+> or something attached to it? For prusament, this was just one of those things I thought we could source easily and
+> have one less thing to remember to fill out. (Usually prusa is pretty easy to do manually, but I sill sometimes have
+> to look directly at the product page to just confirm if its a weird off type.) Also being able to determin this,
+> would help later on if they decide to add more variants, and we could just have the system add and update based on
+> what it finds. I'm probably pie in the sky asks at this point though. And I'd ove for this to carry over for other
+> look ups if we ever implement them."
+
+→ **48.4 as built (replaces the task file's design):**
+- **Prusament, from the site:** the parser reads the product line off the spool page (the product name minus its
+  colour: "Prusament PLA Blend Jet Black" → "Prusament PLA Blend", which is PrusaSlicer's own name for Prusa's
+  profiles) and returns it as `slicer_profile`. The wizard fills a blank Slicer Profile with it: his own spelling when
+  the name is already one of his profiles, otherwise a new choice (added at Save through the existing new-choice path)
+  with a note saying it came from prusament.com. Any later lookup that returns `slicer_profile` works the same way
+  (his "carry over" ask).
+- **Everything else** (a Spoolman-DB import, a manual add, an off-brand such as Jayo → his Sunlu profile): the profile
+  most of his own filaments with the same brand + base material use, with a note naming the count; a tie fills nothing
+  and names both.
+- Never replaces a profile already set; nothing is written before the wizard's own Save.
+- **Later (a follow-up in the buglist):** updating existing filaments when Prusa adds or renames a variant, and
+  reading the product page (the spool page already names the variant).
+
+**Plan (the resume point if the run stops):**
+1. Two background builders in their own worktrees, branched from `dev` (they can't run browser tests; they write
+   them, and the main checkout runs them after the merge):
+   - `feature/group-52-spoolman-read-load`: Group 52 (one spool-list read per heartbeat, honest empties, one batched
+     Quick-Swap read, the extras-read retry, the bound-slot scan measured).
+   - `feature/group-49-find-and-restock`: Group 49 (attributes as search text; the ⚠️ Low-stock list; one Activity
+     Log warning when a print or a weigh-out takes a filament under the threshold).
+2. The main checkout: **Group 51** on `feature/group-51-move-archive-integrity` (51.1 first: only a weight write is a
+   refill), then **Group 48** on `feature/groups-48-49-cards-restock` (49's branch merged in).
+3. An integration branch `bundle/2026-10-19` (51 + 48/49 + 52); the one review workflow (4 lenses + 1 batched
+   skeptic); fixes on each group's branch; the one full `RUN_INTEGRATION` sweep on the integration branch; merge each
+   branch to `dev` `--no-ff` (51 → 48+49 → 52); push; `/finish-group` each; buglist; memory.
+
+Resume cron: session-only, hourly; deleted once this section says DONE. Every branch is pushed at each stopping point.
+
+**Progress (2026-10-19, evening):**
+- 19:50 plan `52741e6`; resume cron set; both builders launched.
+- **Group 51 built** on `feature/group-51-move-archive-integrity` (pushed): `acf0acd` 51.1 (only a weight write is a
+  refill; `_keep_archived` gone; 9 tests red on the base), `96c5ba7` 51.2–51.4 (Return's "Stored only" tiles,
+  `blocked_reason: slot_claimed`, the one slot form), `5d2c3bc` 51.5–51.7 (`expected_spool` /
+  `expected_residents` / `expected_occupant`; 32 real-engine + 9 node-vm tests). Offline 3012 passed; the door
+  browser files 99 passed (load 1.02×).
+- Group 48 starts on `feature/groups-48-49-cards-restock`, branched from Group 51's tip (both edit Force Location
+  and the Location Manager), so it merges to `dev` after 51.
+- **Group 48 built** on that branch: `d1e0275` 48.2 (the profile on the spool window, "(from the filament)"),
+  `49dc458` 48.1 (queue rows like the backlog; 5 of 6 tests red on the base, the failed-read one is a control),
+  `00a50ec` 48.4 (the profile fill-in: prusament.com's product line, else his own filaments; Derek's 19:45 answer),
+  `0c01056` 48.3 (the ✏️ beside a card's 📍 badge → Force Location). Offline 3044 passed.
+- **Group 49 merged** from its builder (`c74ddc7`, 6 commits; 86 tests) as `9da2b4d`; `329a129` the merge
+  follow-ups: a 🛑 Review Apply now warns too (`_low_stock_after_review`, `was_archived` per charge; the builder's
+  open gap), the panel test waited for the search panel's slide (it measured mid-slide), CLAUDE.md rows. Group 49's
+  9 browser tests pass against dev (3 runs).
+- Found while building 48.2 (a follow-up, not fixed): Enter on a focused button in a Bootstrap window (the spool
+  window's buttons, the new "(from the filament)") does nothing, app-wide: the scan accumulator in `scripts.html`
+  `preventDefault`s every Enter outside a text field so a scanner's Enter never presses a button. Space works.
+- **Group 52 merged** from its builder (`244639b`, 7 commits; 31 offline tests + 5 browser) into the integration
+  branch **`bundle/2026-10-19`** (`c37b8c9`; one conflict, `test_contrast_guard.py`, both sides kept; `git rerere` on,
+  so the `dev` merges replay it). `f169cdf` Group 52's CLAUDE.md rules + the `?` overlay baseline recaptured (175 px
+  taller: Group 49's "Low Stock List" keys; checked by eye). Integration offline: 3163 passed, 0 failed; Group 52's
+  browser tests pass against dev (1 visual baseline recaptured).
+- **The one review** `wf_ee3ec73c-b42` launched ~21:20 (4 lenses + 1 batched skeptic) on a frozen worktree of
+  `f169cdf` (scratchpad `review/tree`; brief `review/brief.md`). An early full `RUN_INTEGRATION` sweep runs on the main
+  checkout meanwhile (signal only; the official one comes after the fixes): **4151 passed, 16 skipped, 0 failed in
+  26:31** (load 1.18×, with the reviewers' offline runs alongside).
+- **Review result** (~45 min, 5 agents, 2.25M tokens): 17 findings, the skeptic refuted none, 3 duplicates → **14
+  confirmed: 1 orange, 7 yellow, 6 notes, none red** (scratchpad `review_result.json`, `review/table.txt`). All 14 fixed:
+  - engine-1 (orange): a hand-archived spool loaded onto a head stayed archived ON it, invisible to Smart Load, the
+    deduct and Printer Status (51.1's consequence). **Option A built**: step 4 refuses an archived spool at a head
+    (`blocked_reason: archived`, nothing written); into a bound slot it is stored and the chain says why. Option B (a
+    head load un-archives it) is Derek's call, in ⏸️ PENDING DEREK with the recommendation to keep A.
+  - engine-2: step 6's `occupant_changed` answers status `success`, so the picker loop ended with an error instead of
+    reopening. engine-3: the grid's empty tile and the Quick-Swap deposit sent an explicit slot (an Overwrite): now
+    `picked_slot` / `shown_empty`, filled only while still free. engine-4: a Review Apply retry lost "is out"
+    (`attempt_was_archived`). engine-5: a `remaining_weight` weigh-back un-archives again.
+  - browser-2 (doubled slot names both spools, no `expected_occupant`), browser-3 (a re-picked "(new, …)" slicer
+    profile is added at Save), browser-4 (the card ✏️ reads where the spool is: a loaded spool's card opened Force
+    Location on Unassigned), browser-5 (a CMD:SLOT scan while the box's read failed moves nothing), browser-6 (a
+    question's refused replay drops the held pick), integration-2 (🖨️ handlers JS-safe for an apostrophe:
+    `SpoolCardBuilder.jsArg`), integration-3 (the E2E's class check), integration-5 (CLAUDE.md wording).
+  - reads-1 (yellow) by a background fixer on `fix/bundle-reads-1` (`9d7de39`, `9834ee5`; ~398K tokens): the pulse's
+    sibling `spool_read`, `/api/locations`' `X-FCC-Spool-Read`; Printer Status and the Location List keep what they drew
+    ("? not read" / "?" with no earlier answer) under a yellow notice. Merged as `5e90f4d`.
+  - Commits `f190884` (engine), `9e5db92` (ui), `3b2196a` (CLAUDE.md), `5e90f4d` (reads-1 merge). 23 new or changed
+    tests, all red on `a5d8cb8` (a throwaway worktree with only the tests copied in); the controls green there.
+- **Checks after the fixes:** offline **3213 passed, 0 failed**; the touched screens' browser files (20 files: the card
+  pencil, deposit, Quick-Swap, slot picker, grid, wizard, contrast, Printer Status, print queue, the location tree,
+  reads-1's page tests) **221 passed, 0 failed** (load 1.04×).
+- **Paperwork** (before the sweep, so it covers the final tree): 8 buglist items archived (4 blocks at the top of
+  `completed-archive.md`), the Group 40 and Group 36 leftovers trimmed, 9 standalone follow-ups filed, one ⏸️ PENDING
+  DEREK item (One-off tagging; an archived spool at a head), rows 48 / 49 / 51 / 52 and the task files → `DONE`.
+- **The final full `RUN_INTEGRATION` sweep** on the paperwork commit `c12b6ec`: **4203 passed, 1 failed, 15 skipped in
+  23:49** (load 1.04×). The red, `test_return_overlay_and_refresh.py::test_quickswap_refreshes_manage_view_after_yes`,
+  is its teardown guard, not the product: the test's own checks passed (the manage view re-rendered, the spool reached
+  XL-3), then its restore Return needed a confirm because the real XL ("🦝 XL") was printing, and a test never confirms
+  a real print (Group 39.2). It left dev #134 on XL-3; Claude put it back in LR-MDB-1 slot 3 (a dev-only Return with
+  the print confirmed). It passed in the early sweep, with the XL idle.
+- **Merged to `dev` (`--no-ff`)** in the planned order: `61c91a6` (51), `6b3efee` (48 + 49), `eaf2978` (52; `git
+  rerere` replayed the `test_contrast_guard.py` resolution) and **`2ec9f46`** (the bundle: the review fixes, reads-1 and the
+  paperwork; the same file conflicted again from the criss-cross base and took the bundle's copy, checked first to be
+  dev's plus reads-1's own commit). `dev`'s tree is the swept tree. **Pushed `origin/dev` `2ec9f46`; `main` untouched
+  (`73e456d`).**
+- The session hit the 5-hour usage limit once, after the merge; resumed 2026-10-20 for these docs, the cron and memory.
+- Branches kept for Derek's branch-cleanup pass (added to that ⏸️ PENDING DEREK item):
+  `feature/group-51-move-archive-integrity`, `feature/groups-48-49-cards-restock`, `feature/group-49-find-and-restock`,
+  `feature/group-52-spoolman-read-load`, `fix/bundle-reads-1`, `bundle/2026-10-19` (all on `origin`). Only Claude's own
+  leftover `worktree-agent-*` pointers (at `main`'s tip, no work on them) were deleted.
+
+**Follow-ups, 2026-10-20 (Derek's answers to the questions below; branch `fix/bundle-followups-2026-10-20`):**
+- **Label queue rows:** "Leave it as is, its better than what it was." (The queue's spool wording differs slightly from
+  the backlog's: the cards' "Gradient PETG" / "Prusa Orange" against the filament's "PETG" / "Orange (Prusa Orange)";
+  left as it is.)
+- **Slicer profile:** "Don't guess." Only a lookup's confirmed name (prusament.com's product line) fills it; the guess
+  from his own filaments is gone, and a brand or material change after a lookup clears its name. The "variant words"
+  idea (an attribute counts when one of his profile names contains it) is parked in the buglist for later, with his
+  reasons (no concrete Prusa profile list; the XL has profiles for more brands than the INDX).
+- **An archived spool at a toolhead:** un-archived and loaded when its record still has filament (at least 1 g;
+  "spools are mostly auto archived because they hit 0, and rarely archived by hand"), refused at 0 g or an unknown
+  weight. In the wizard the form's Archived box decides (refused, "untick Archived to load it"), and a Save that
+  archives a spool on a head takes it off the head first.
+- **Low stock:** the button's place is fine for now (filed: "Where the ⚠️ Low stock button should live"); the list now
+  comes back on the same row after a window opened from it closes; the Out section says how a filament leaves it (a
+  One-off tag), as he asked ("needs to be documented somewhere that I can run into it again").
+- **The Out list on prod** (he asked to check prod; read-only GETs to prod Spoolman 7912, 2026-10-20): Out shows 2
+  (Creality PETG Black, Kingroon PETG White), Low 1 (Overture PETG Gold, 120 g). 11 filaments have no spool record at
+  all, all created 2026-02-11 (the first import): his "samples / used up before tracking" exception. Whether to list
+  them under Out is his call (⏸️ PENDING DEREK; recommendation: under their own heading). Dev's copy showed none Out
+  only because it is older.
+- `b779b84` the follow-ups, `c22ac1c` the review's fixes. Review `wf_2f994a96-2c5` (2 lenses + 1 batched skeptic,
+  1,065,766 tokens, ~44 min): 9 findings, 7 confirmed (2 orange: a second wizard Save re-archived the spool ON its
+  head; the Low stock list came back over a window reopening in the filament's place), 2 duplicates, none refuted;
+  all fixed. Offline 3245 passed, 0 failed; the touched screens' browser tests 126 and 75 passed, 0 failed.
+
+**For Derek, cold (nothing here blocks anything):**
+1. **Release `dev` → `main`?** (needs your OK) What ships: Groups 51, 48, 49 and 52 plus the review's 14 fixes and
+   reads-1, on top of the Group 40 release. Nothing in ⏸️ PENDING DEREK gates it. Recommendation: yes, when it suits
+   you; you then run the TrueNAS update as usual.
+2. **An archived spool scanned onto a toolhead** (your call; a default is built). Example: you archive #57 by hand with
+   300 g left, then scan it onto XL-1. Built (A): refused, "weigh it back into stock (or untick Archived in Edit)
+   first"; into a bound slot it is stored, not loaded. Other way (B): loading it un-archives it. Recommendation: A. In
+   ⏸️ PENDING DEREK.
+3. **Tag the filaments you won't rebuy "One-off"** (your data, whenever): otherwise the ⚠️ Low stock list's Out section
+   lists every filament you ever used up. In ⏸️ PENDING DEREK.
+4. **Calls Claude made, for your eyes only (already built; say if one is wrong):** the 🏷️ Backlog count updates on the
+   next heartbeat (up to 5 s while you use the page, 15 s idle); a filament already under the line still gets "is out"
+   when its last spool empties (two warnings per run-down: "running low", then "is out"); during a Spoolman blip the
+   Quick-Swap grid says "⚠️ couldn't read LR-MDB-1" instead of empty or Deposit tiles, a Location Manager opened then
+   shows the notice and no slots, the Printer Status band and the Location List keep what they showed (a head or row
+   never read says "? not read" / "?"); a spool FCC still has on a head, put into the empty slot that feeds that same
+   head from the grid's empty tile or the Quick-Swap deposit, is stored in the slot, not loaded straight back (the
+   engine's rule for a slot it picks, now that those two doors send the slot they showed as `picked_slot`).
+
+### Low stock Excluded + the Spoolman 0.27 clear fix (2026-10-20 → 21) — DONE (`dev` `e7699c4`; `main` waits for Derek's OK)
+
+**Derek's asks, 2026-10-20 evening:** pivot the Low stock "One-off" tag to "not available any more / don't rebuy",
+include the 11 never-stocked filaments under Out ("they are technically out"), a dev scenario with 20+ rows to judge
+the layout ("we may want to re-design the UI"), and a way "to document why I'm not buying anymore of it". His picks:
+**mark from the list, with a reason**, and **tabs + filter + short rows**, as a sample on dev first.
+**2026-10-21:** "perhaps a better term … would be ignore or something else (exclude?) … just because it's
+discontinued, or I can't find it from the manufacture, doesn't mean I didn't like it"; OK to read prod's Spoolman
+version; the small text "really small … I'm torn because I like the look … on the fence"; "Otherwise I love the
+design … shippable once we have addressed the other two things". Then, on the app-wide text-size proposal: "just so
+much text … can we look at it together later, going over each thing one at a time, with an easy way for me to open the
+images".
+
+**What shipped to `dev` (`e7699c4`, via `bundle/2026-10-21`):**
+- `68a9b9d` Out includes filaments with no spool record (a second strict read, of every filament).
+- `97eb885` + `38dbdd2` the Excluded list: three filament extras `fcc_stock_excluded` / `_note` / `_at` (labelled
+  "Excluded From Low Stock…" in Spoolman, registered at startup and in setup_fields.py), `POST` / `DELETE
+  /api/filament/<id>/stock_exclusion`, the `excluded` report list, the tabbed window (🔕 / ✏️ / Del, a reason dialog,
+  Include again), the day from the page's own clock (dev's container is UTC). Dev's old `fcc_no_rebuy*` fields were
+  deleted (only Claude's two sample marks had them).
+- `ce35d21` text sizes: nothing read under 13.6 px (the legend was 11.9), same layout, its own commit.
+- `95457a7` the 0.27 clear fix (built by a workflow; the builder died on an auth drop with its work uncommitted, and a
+  finisher agent completed it), `87533d7` the exclusion clears through the sentinel, `71e2d17` the review's 8 fixes,
+  `ff0b780` the sweep's two expected reds.
+- Prod's Spoolman read 2026-10-21 (his OK): 0.27.0, the same build as dev (`bed3f14`), so the clear bug was live on prod.
+
+**Left for Derek:** the text-size walkthrough (one item at a time; `review-samples/2026-10-21-text-size/`, numbered;
+the long write-up is `scratchpad/readability/proposal.md`, Claude's reference only: the rule A/B/C/D, rec. A = 13.6 px
+text and 12.8 px labels everywhere; badges 12 → 12.8, rec. yes; a per-browser Text size setting, rec. not now); the
+Low stock window's bigger text (same session); the `main` release (Groups 51/48/49/52 + this); excluding the prod
+filaments he can't get. **Dev state to undo after his look:** `low_stock_g` is 925 (was 250), and filaments 91 and 96
+carry sample exclusions (Include again clears them).
+
+**Follow-ups filed:** emptying a plain (non-extra) wizard field doesn't clear it; partial PATCHes once Spoolman 0.26
+is the minimum (his call).
+
+**Lesson:** a fix that makes a long-dead write path work turns old UI quirks into data loss: when a clear starts
+clearing, review every page that sends one (the ➕ redraw had been harmless only because clears did nothing).
+
+### Readability build + Derek's picture walks (2026-10-21 → 24) — DONE (merged to `dev` 2026-10-24; `main` waits for Derek)
+
+Derek approved the text-size rule item by item (2026-10-21), the build's pictures (2026-10-22: all five, with three
+changes) and the changes' pictures (2026-10-23/24); see completed-archive.md. The first merge (`047ff4f`) ran ahead of his
+last tweaks ("I meant that the images looked ok, and offered changes before we did the merge"): reverted on `dev`
+(`4b0d510`, a revert rather than a force-push, which the permission system blocks), the tweaks built, then merged on
+his explicit word. Lesson: a picture OK that comes with new suggestions is not a merge OK; ask "merge now?". Pictures, kept locally:
+`review-samples/2026-10-21-readability-build/`, `2026-10-22-qr-and-rows/`, `2026-10-23-printer-status/`.
+Research this session (no code; each folder's `corrections.md` first): the phone view + tags
+(`review-samples/2026-10-21-phone-tags/`), the scale (`2026-10-21-scale/`; Derek ordered a PN5180, it arrived
+2026-10-22), every brand's tags (`2026-10-21-tags/`), colour accuracy (`2026-10-21-colour/`), the Audit trace
+(`2026-10-21-audit/`). The firmware 8.0 findings are in the buglist (🗒️ Notes). Derek's weekly usage was at 78% on
+2026-10-23: next, after his reset, the Printer Status follow-ups, the arc-bug fix, the colour walk, the scale
+decisions.
 
 ## Questions for Derek
 
@@ -543,3 +774,23 @@ harness's 1% tolerance let stale CORE1 text pass).
 | builders (Agent, worktrees) 2026-10-19 | 40.6 Return / 40.7 wizard server | 2 | 780,466 + 629,973 subagent | 54 / 46 min, 225 / 212 tool calls; merged `45de89d` / `070291e` |
 | `wf_bd637c78-057` g40-final-leg-review | Swap option C + 40.4–40.7 | 5 (4 lenses + 1 batched skeptic) | 2,311,583 subagent | ~48 min; 27 findings, all confirmed (none red, 4 orange, the rest yellow / notes); fixed in `1a480cf`, `12d769d` and by the two fixers |
 | fixers (Agent, worktrees) 2026-10-19 | the review's Return / wizard findings | 2 | 437,535 + 545,086 subagent | 34 / 42 min; merged `90815ba` / `5b4b591` |
+| builders (Agent, worktrees) 2026-10-19 evening | Groups 52 / 49 | 2 | 581,470 + 593,882 subagent | 41 / 60 min, 241 / 237 tool calls; merged into the bundle `c37b8c9` (52) / into 48's branch `9da2b4d` (49) |
+| `wf_ee3ec73c-b42` bundle-review-2026-10-19 | Groups 51 + 48 + 49 + 52 | 5 (4 lenses + 1 batched skeptic) | 2,253,123 subagent | ~45 min, 635 tool calls; 17 findings → 14 confirmed (1 orange, 7 yellow, 6 notes), 3 duplicates, none refuted; all fixed (`f190884`, `9e5db92`, `3b2196a`; reads-1 by the fixer below) |
+| fixer (Agent, worktree) 2026-10-19 | the review's reads-1 | 1 | 397,787 subagent | 30 min, 124 tool calls; merged `5e90f4d` |
+| `wf_2f994a96-2c5` review-bundle-followups-2026-10-20 | Derek's answers (archived at a head, no profile guess, the Low stock list) | 3 (2 lenses + 1 batched skeptic) | 1,065,766 subagent | ~44 min, 255 tool calls; 9 findings → 7 confirmed (2 orange), 2 duplicates; all fixed (`c22ac1c`) |
+| `wf_56be9ee6-846` extras-clear-spoolman-027 | the 0.27 clear: research + build | 4 (Spoolman source, a dev probe, FCC's omission sites, a builder) | 1,360,807 subagent | ~61 min; the builder died on an OAuth drop with its work uncommitted |
+| `wf_3b443524-31f` readability-audit | app-wide small text | 3 (2 measurers + a proposal writer) | 978,494 subagent | ~46 min, read-only on dev; the writer died on the same drop after writing proposal.md |
+| `wf_a90dfa8b-6e4` extras-clear-finish | the builder's uncommitted fix | 1 | 477,163 subagent | ~34 min; reviewed the diff against the research, fixed 2 gaps, both fake modes, base proof, `95457a7` |
+| `wf_c3a8f622-d61` review-low-stock-and-extras-clear | bundle/2026-10-21 | 4 (3 lenses + 1 batched verifier) | 1,479,629 subagent | ~41 min; 10 findings → 8 confirmed (2 red, 1 orange, 5 yellow), 2 duplicates, none refuted; all fixed (`71e2d17`) |
+| `wf_2432a503-21f` phone-tags-research | OpenPrintTag, Web NFC on Android, other tag systems | 4 | 1,328,516 subagent | ~43 min |
+| `wf_16904a49-dbb` readability-build | the text-size rule + the Text size setting | 7 (2 builders, 3 + 1 review, a fixer) | 3,511,272 subagent | ~4.7 h; 13 review fixes |
+| `wf_be7dc443-eef` scale-all-tags-research | SpoolmanScale, readers, an FCC stand-in | 5 | 2,204,977 subagent | ~98 min; its skeptic overturned the reader pick |
+| `wf_88cad35d-ac5` audit-behaviour-trace | Audit, read-only | 2 | 726,089 subagent | ~34 min |
+| `wf_43831b5c-daf` colour-accuracy-research | where colours come from, which is most accurate | 5 | stopped for credits, then resumed: 388,906 for the resume | the first run's figure wasn't reported |
+| `wf_fb86597c-1ad` spool-tag-landscape | every brand's tags, one reader or two | 5 | 2,156,592 subagent | ~79 min |
+| `wf_35fd892d-f66` readability-walk-changes | QRs under their buttons, even rows | 4 | 1,877,812 subagent | ~3.9 h; 5 review fixes |
+| `wf_71b589b9-90b` record-source + firmware 8.0 | a dialog tweak + research | 5 | 1,915,610 subagent | ~69 min |
+| `wf_8be49633-0d1` printer-status-name-on-top | the name on a header line | 3 | 1,493,102 subagent | ~3 h; 6 review fixes |
+| `wf_bd626399-e77` printer-status-tweaks | printers stepped in, state before the name | 1 | 574,360 subagent | ~80 min |
+| `wf_d267909a-678` printer-status-name-then-info | the name first, an info line under it | 1 | 471,407 subagent | ~64 min |
+| `wf_5a660b3c-9d7` printer-status-drop-tile-dot | no colour dot beside a tile's spool name | 1 | 328,371 subagent | ~45 min |

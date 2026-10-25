@@ -114,9 +114,12 @@ def test_a_slot_scan_with_no_location_open_moves_nothing(tmp_path, manager_open,
 
 @needs_node
 def test_a_slot_scan_with_a_box_open_still_assigns_into_it(tmp_path):
-    """Control, PASSES on HEAD too: LR-MDB-1 open, slot 3 empty, #57 buffered."""
+    """Control: LR-MDB-1 open, slot 3 empty, #57 buffered. The tile was drawn
+    empty, so the slot goes as `picked_slot` (Group 51 review, engine-3: filled
+    only while still free, never an Overwrite)."""
     res = _slot_scan(tmp_path, manager_open=True, loc="LR-MDB-1")
     adds = _adds(res)
-    assert len(adds) == 1 and adds[0]["location"] == "LR-MDB-1" and str(adds[0]["slot"]) == "3", res["fetches"]
+    assert len(adds) == 1 and adds[0]["location"] == "LR-MDB-1" and adds[0]["picked_slot"] == "3", res["fetches"]
+    assert adds[0].get("slot") in (None, ""), adds[0]
     assert not [t for t in res["toasts"] if "ignored" in t["msg"]], res["toasts"]
     assert res["unhandled"] == []

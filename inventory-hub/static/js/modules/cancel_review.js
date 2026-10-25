@@ -155,7 +155,7 @@
         const ambBorder = amb ? 'border-left:3px solid #ffae42;padding-left:6px;' : '';
         const ambBadge = amb
             ? `<span title="This toolhead has more than one spool assigned — FCC can't tell which is loaded, so these grams weren't auto-deducted. Pick the real amount per spool."
-                     style="margin-left:6px;font-size:0.74rem;font-weight:bold;color:#ffae42;
+                     style="margin-left:6px;font-size:var(--fcc-fs-label);font-weight:bold;color:#ffae42;
                             border:1px solid #ffae42;border-radius:4px;padding:0 4px;white-space:nowrap;">⚠️ ambiguous</span>`
             : '';
         // 43.1: a spool with no known capacity (neither it nor its filament has a
@@ -165,7 +165,7 @@
         // checks the spool's weight first, so it is never charged twice.
         const unconfirmed = s.unconfirmed_write
             ? `<span title="Spoolman reported this write as failed and FCC couldn't re-read the spool. Apply checks whether it landed first, so it is never charged twice."
-                     style="margin-left:6px;font-size:0.74rem;font-weight:bold;color:#ffae42;
+                     style="margin-left:6px;font-size:var(--fcc-fs-label);font-weight:bold;color:#ffae42;
                             border:1px solid #ffae42;border-radius:4px;padding:0 4px;white-space:nowrap;">⚠️ unconfirmed write</span>`
             : '';
         return `
@@ -175,7 +175,7 @@
                 <div style="min-width:0;flex:1;">
                     ${swatch}
                     <span style="color:#eee;">${esc(s.display)}</span>${ambBadge}${unconfirmed}${isRunout ? `<span title="Ran out mid-print (sensor tripped) — charged its own segment up to the swap, plus the sensor-to-nozzle remnant when a per-printer path value is configured."
-                     style="margin-left:6px;font-size:0.74rem;font-weight:bold;color:#ff8a65;
+                     style="margin-left:6px;font-size:var(--fcc-fs-label);font-weight:bold;color:#ff8a65;
                             border:1px solid #ff8a65;border-radius:4px;padding:0 4px;white-space:nowrap;">ran out</span>` : ''}
                     <span style="color:#9aa;font-size:0.92rem;">
                         (${esc(s.toolhead)} · ${known ? `${fmt(s.remaining_before)}g left` : 'capacity unknown'})
@@ -474,7 +474,7 @@
         return `
             <div role="dialog" aria-modal="true" aria-labelledby="fcc-cr-title"
                  style="background:#1f2024;color:#eee;border:1px solid #555;border-radius:8px;
-                        min-width:440px;max-width:680px;width:94vw;font-size:1rem;
+                        min-width:min(27.5rem,94vw);max-width:42.5rem;width:94vw;font-size:1rem;
                         box-shadow:0 8px 32px rgba(0,0,0,0.6);">
                 <div style="display:flex;justify-content:space-between;align-items:center;
                             padding:14px 18px;border-bottom:1px solid #444;">
@@ -517,15 +517,22 @@
         // re-renders on each pulse, so we (re)inject after render keyed on the
         // printer name carried on each card. Hook is window.cancelReviewDecorate
         // — inv_printer_status.js calls it after it paints (and we also run it
-        // here for the badge-poll cadence).
-        decoratePrinterStatus();
+        // here for the badge-poll cadence). A count that changed on the open
+        // widget lays its tiles out again. Since the count went onto the info
+        // line under the name (2026-10-24) its width moves no tile, so this
+        // finds the rows as they were; it costs one measure, and keeps them
+        // right whatever the info line comes to hold.
+        if (decoratePrinterStatus() && typeof window.balancePrinterStatusRows === 'function') {
+            window.balancePrinterStatusRows();
+        }
     }
+    // Returns whether a count on the open widget's info lines changed.
     function decoratePrinterStatus() {
         const counts = {};
         _lastPending.forEach((r) => { counts[r.printer_name] = (counts[r.printer_name] || 0) + 1; });
         // Add/update/remove one "🛑 N" chip inside `host` for printer `name`.
         // Used on BOTH Print-Status surfaces so a review shows whether the widget
-        // is expanded OR minimized.
+        // is expanded OR minimized. Returns whether it changed anything.
         const apply = (host, name) => {
             let chip = host.querySelector('.fcc-cr-chip');
             const n = counts[name] || 0;
@@ -533,27 +540,43 @@
                 if (!chip) {
                     chip = document.createElement('span');
                     chip.className = 'fcc-cr-chip';
-                    chip.style.cssText = 'cursor:pointer;margin-left:6px;font-size:0.78rem;font-weight:bold;color:#ffae42;';
+                    // Spacing and "never splits" are global.css's .fcc-cr-chip
+                    // (the 🛑 and its count on one line, on both surfaces).
+                    chip.style.cssText = 'cursor:pointer;font-size:var(--fcc-fs-label);font-weight:bold;color:#ffae42;';
                     chip.title = 'Cancelled-print partial deduct waiting for review — click to review';
                     chip.addEventListener('click', (ev) => { ev.stopPropagation(); openCancelReview(); });
                     host.appendChild(chip);
                 }
-                chip.textContent = `🛑 ${n}`;
-            } else if (chip) {
-                chip.remove();
+                const text = `🛑 ${n}`;
+                if (chip.textContent === text) return false;
+                chip.textContent = text;
+                return true;
             }
+            if (!chip) return false;
+            chip.remove();
+            return true;
         };
-        // Expanded view: next to the printer name. (`data-printer` entity-decodes
-        // to the real name in the DOM, matching the record's printer_name.)
+        // Expanded view: in the printer's count slot on its info line, under
+        // its name and after its state badge (Derek, 2026-10-24: "the printer
+        // name, then under it, the status and review"). The slot keeps its
+        // width with no reviews, so the counts line up down the page. Not
+        // inside the name, which ends in "…" when the line is short and would
+        // cut the count off, and whose wrapping used to leave the 🛑 on one
+        // line and its count on the next. (`data-printer` holds the plain
+        // name, attribute-escaped, so it reads back as the record's
+        // printer_name, an apostrophe included.)
+        let changed = false;
         document.querySelectorAll('.fcc-ps-row[data-printer]').forEach((row) => {
-            const nameEl = row.querySelector('.fcc-ps-name');
-            if (nameEl) apply(nameEl, row.getAttribute('data-printer'));
+            const host = row.querySelector('.fcc-ps-count') || row.querySelector('.fcc-ps-info')
+                || row.querySelector('.fcc-ps-name');
+            if (host && apply(host, row.getAttribute('data-printer'))) changed = true;
         });
         // Minimized/collapsed view: onto each printer's group in the header chip
         // strip — the only thing visible when the widget is minimized (Derek
         // 2026-06-12, "in case the activity log isn't always visible").
         document.querySelectorAll('.fcc-ps-header-chips .fcc-ps-printer-group[data-printer]')
             .forEach((grp) => apply(grp, grp.getAttribute('data-printer')));
+        return changed;
     }
     async function refreshBadge() {
         applyBadges(await fetchPending());

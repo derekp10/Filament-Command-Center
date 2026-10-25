@@ -353,6 +353,39 @@ def swap_requested(data):
     return value is True or str(value).strip().lower() == 'true'
 
 
+def expected_residents_from(data):
+    """Group 51.6 — the spools the page showed on the target head when the user
+    picked it (the Printer picker's "XL-3 holds #99", or [] for a head it showed
+    empty), as ids; None when the request names none (an older page, an internal
+    caller): no check. A malformed value reads as None. Read by the move doors
+    (manage_contents add, /api/smart_move, the wizard's edit and create)."""
+    d = data if isinstance(data, dict) else {}
+    raw = d.get('expected_residents')
+    if not isinstance(raw, (list, tuple)):
+        return None
+    out = []
+    for x in raw:
+        try:
+            out.append(int(str(x).strip().strip('"')))
+        except (TypeError, ValueError):
+            return None
+    return out
+
+
+def expected_occupant_from(data):
+    """Group 51.7 — the stored spool the page showed in the target slot when the
+    user chose Swap or Overwrite (the Location Manager grid's prompt, the slot
+    picker's), as an id; None when the request names none: no check. Read by the
+    same doors as expected_residents_from."""
+    raw = (data or {}).get('expected_occupant') if isinstance(data, dict) else None
+    if raw in (None, ''):
+        return None
+    try:
+        return int(str(raw).strip().strip('"'))
+    except (TypeError, ValueError):
+        return None
+
+
 def _feed_token(value):
     """Group 40.3 — "what a box slot feeds" in one form: an upper-cased head id,
     or '' for none (unbound, a PRINTER:<id> Printer Pool slot, no slot). The form
@@ -887,8 +920,10 @@ def _free_feed_slots(toolhead_id, loc_list, sid):
             except Exception as e:
                 return [], f"couldn't read {box} from Spoolman ({e})"
         items = held[box]
-        if not any(locations_db.effective_slot(rows.get(box), o.get('slot', ''), occupants=len(items))
-                   == slot for o in items):
+        # One slot form on both sides (Group 51.4): a slot stored as "02" or
+        # '"2"' is slot 2, so it isn't free.
+        if not any(_norm_slot(locations_db.effective_slot(rows.get(box), o.get('slot', ''), occupants=len(items)))
+                   == _norm_slot(slot) for o in items):
             free.append((box, slot))
     return free, ""
 
@@ -1204,10 +1239,42 @@ def _ghost_trail_from(current_loc, current_extra, printer_map, loc_info_map):
     investigation). Such a move now starts with no trail; the 13.6
     reverse-binding in the PRINTER MOVE branch fills in the new head's bound
     box when it has one, which is where Return should take it.
+
+    The slot is '' for a spool with no `container_slot`, never None: update_spool
+    drops a None (it means "keep"), so a stale `physical_source_slot` from an
+    earlier trail survived under the new place (2026-10-21).
     """
     if _is_single_occupancy(current_loc, printer_map, loc_info_map):
         return "", ""
-    return current_loc, current_extra.get('container_slot')
+    return current_loc, current_extra.get('container_slot') or ""
+
+
+# Step 4's rule for an archived spool going onto a head (Derek, 2026-10-20):
+# with at least this much filament left on its record it is un-archived by the
+# load; below it (an auto-archive at 0 g, or a rounding crumb) it is refused.
+UNARCHIVE_ON_LOAD_MIN_G = 1.0
+
+
+def _filament_left_g(rec):
+    """The filament left on a spool record, in grams: Spoolman's
+    `remaining_weight`, else its effective capacity (its own initial weight,
+    else its filament's) minus what it used. None when unknown (the stock
+    report's reading, stock_report.remaining_g)."""
+    if not isinstance(rec, dict):
+        return None
+    try:
+        rem = rec.get('remaining_weight')
+        if rem is not None and str(rem).strip() != '':
+            return float(rem)
+    except (TypeError, ValueError):
+        pass
+    cap = spoolman_api.effective_initial_weight(rec)
+    if cap is None:
+        return None
+    try:
+        return cap - float(rec.get('used_weight') or 0)
+    except (TypeError, ValueError):
+        return None
 
 
 # Group 42.6 — the "before the box" note (Derek's Q-A caveat: "we shouldn't
@@ -1613,7 +1680,7 @@ def _push_undo(record):
         sink.append(record)
 
 
-def _move_write(sid, target, new_extra):
+def _move_write(sid, target, new_extra, unarchive=False):
     """The move engine's spool write: True when it landed.
 
     update_spool's timeout is a READ timeout, so a PATCH Spoolman committed but
@@ -1621,14 +1688,21 @@ def _move_write(sid, target, new_extra):
     reported the spool as failed, left it out of the undo record and tallied it
     as failed in a bulk move, although it had moved (Group 41 review). So a
     failed write is re-read, and counts as landed when the spool now sits at
-    `target` with exactly the slot and trail this write set."""
-    if spoolman_api.update_spool(sid, {"location": target, "extra": new_extra}):
+    `target` with exactly the slot and trail this write set. `unarchive`: the
+    same PATCH takes the spool out of the archive (step 4's rule for a spool
+    loaded onto a head with filament left on its record)."""
+    payload = {"location": target, "extra": new_extra}
+    if unarchive:
+        payload["archived"] = False
+    if spoolman_api.update_spool(sid, payload):
         return True
     err = spoolman_api.LAST_SPOOLMAN_ERROR
     rec = spoolman_api.get_spool(sid)
     if not isinstance(rec, dict) or rec.get('id') is None:
         return False
     if str(rec.get('location') or '').strip().upper() != str(target).strip().upper():
+        return False
+    if unarchive and str(rec.get('archived')).strip().lower() == 'true':
         return False
     have = rec.get('extra') or {}
     for k in spoolman_api.SYSTEM_MANAGED_EXTRAS:
@@ -1736,7 +1810,8 @@ _smart_move_depth = threading.local()
 
 def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_deploy=True, confirm_active_print=False,
                        confirmed_fed_heads=(), fed_check_from=None, picked_slot=None, expected_feed=None,
-                       seen_printing=(), swap_slot=None, swap_out=False, record_source=None, unslotted=False):
+                       seen_printing=(), swap_slot=None, swap_out=False, record_source=None, unslotted=False,
+                       expected_residents=None, expected_occupant=None, keep_archived=False):
     """Entry point for the slot-move pipeline.
 
     Owns the per-move printer-state probe cache (L3 fix A) so the auto-deploy
@@ -1782,6 +1857,17 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
     trail and the answer says `record_source_ignored`.
     `unslotted` (Group 40.6): the spool goes into the box with no slot on
     purpose (Return's "No slot"), so step 3 picks none for it.
+    `expected_residents` (Group 51.6; head targets): the spools the page showed on
+    the head when the user picked it (the Printer picker's "XL-3 holds #99"). A
+    spool on the head that wasn't among them, at step 4's strict read or step 6's
+    re-list, refuses the move with nothing written (`blocked_reason:
+    residents_changed`), instead of unloading a spool nobody was shown. None: no
+    check. `expected_occupant` (Group 51.7; an explicit box slot): the stored
+    spool the page showed in the slot when the user chose Swap or Overwrite; a
+    different spool filed there now refuses that spool's move at step 6's strict
+    slot read (`blocked_reason: occupant_changed` when every spool was refused).
+    A head that emptied, or a slot whose spool left, meanwhile is filled as
+    asked. The auto-deploy chain never passes either.
     """
     depth = getattr(_smart_move_depth, "n", 0)
     owns_move = depth == 0
@@ -1814,6 +1900,9 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
             swap_out=swap_out,
             record_source=record_source,
             unslotted=unslotted,
+            expected_residents=expected_residents,
+            expected_occupant=expected_occupant,
+            keep_archived=keep_archived,
         )
     finally:
         _smart_move_depth.n = getattr(_smart_move_depth, "n", 1) - 1
@@ -1828,7 +1917,8 @@ def perform_smart_move(target, raw_spools, target_slot=None, origin='', auto_dep
 
 def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', auto_deploy=True, confirm_active_print=False,
                              confirmed_fed_heads=(), fed_check_from=None, picked_slot=None, expected_feed=None,
-                             swap_slot=None, swap_out=False, record_source=None, unslotted=False):
+                             swap_slot=None, swap_out=False, record_source=None, unslotted=False,
+                             expected_residents=None, expected_occupant=None, keep_archived=False):
     """Move spool(s) to `target`, optionally into `target_slot` of that location.
 
     `auto_deploy` (default True): when the target is a Dryer Box AND the
@@ -1901,7 +1991,10 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     #      pick is a named slot from then on (its head is probed and checked);
     #      a single-slot box's spool takes slot 1 (42.2).
     #   4. Strict reads, failing closed (status error, nothing written): the
-    #      moving spools' own records (39.4), the target head's residents (39.7),
+    #      moving spools' own records (39.4; at a head, an archived one is
+    #      refused, `blocked_reason: archived`, Group 51 review), the target
+    #      head's residents (39.7; with `expected_residents`, a spool that arrived
+    #      unseen refuses the move, 51.6),
     #      the bound head's residents and their records (40.0c; step 3's pick
     #      read them already, once per head). A replay's `expected_feed` (40.3)
     #      is compared here with no I/O against what the slot feeds now; when it
@@ -1944,6 +2037,12 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     # and Smart Load, which can refuse the whole move; see the L298 Phase 3 note
     # at the write loop.
     failures: typing.Dict[str, str] = {}
+    # Groups 51.3 / 51.7: sid(str) -> why step 6 refused it over what the slot
+    # holds: `slot_claimed` (its own spool, deployed, still claims it; the
+    # question path refuses the same way) or `occupant_changed` (another spool
+    # than the one shown for Swap / Overwrite). When one reason refused every
+    # spool, the answer carries it as `blocked_reason`.
+    step6_refused: typing.Dict[str, str] = {}
     # sid(str) -> "BOX:slot" the 13.6 reverse-binding recorded as its home (40.0d).
     recorded_sources: typing.Dict[str, str] = {}
 
@@ -2139,6 +2238,7 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     # about (39.4), unless Smart Load would unload another resident.
     all_here = False
     every_head_covered = _confirm_scope(confirm_active_print)[0]
+    moving_records: typing.Dict[str, typing.Any] = {}
     if not every_head_covered:
         unreadable = []
         here_count = 0
@@ -2147,6 +2247,7 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
             if not rec:
                 unreadable.append(str(sid))
                 continue
+            moving_records[str(sid)] = rec
             here = str(rec.get('location') or '').strip().upper()
             if here == target:
                 here_count += 1
@@ -2162,6 +2263,52 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                 f"❌ Not moved to <b>{target}</b>: could not read {names} from Spoolman, so FCC "
                 f"can't tell whether it is leaving a printing head", "ERROR", "ff4444")
             return {"status": "error", "msg": f"Not moved: could not read {names} from Spoolman.",
+                    "failures": failures}
+
+    # Step 4 (Group 51 review, engine-1; Derek, 2026-10-20): an archived spool is
+    # never left archived on a head. A move's write doesn't un-archive one (51.1),
+    # and every reader of a head (Smart Load, the print deduct, Printer Status)
+    # lists only spools in stock, so an archived spool on a head was invisible
+    # there: the next print charged nothing and a second spool was loaded on top
+    # of it. Derek's rule: spools are archived because they hit 0 g, rarely by
+    # hand, so one whose record still has filament on it (at least
+    # UNARCHIVE_ON_LOAD_MIN_G) and is being loaded physically has filament: the
+    # head write un-archives it (`unarchived` in the answer, a WARNING line). One
+    # at 0 g, or with no known weight, is refused with nothing written
+    # (`blocked_reason: archived`), and so is any archived spool when the caller
+    # keeps it archived (`keep_archived`: a wizard Save that ticks Archived). Into
+    # a bound slot the box write stores it, and the chained deploy (this same
+    # check) loads it or says why not. Read for every head move, the True path
+    # included (the chain may run under it); an unreadable record is left to the
+    # write loop's read. Undo puts the spool back but leaves it in stock.
+    unarchive_on_load: typing.Dict[str, float] = {}
+    if is_printer or is_toolhead:
+        refused_archived = []
+        for sid in spools:
+            rec = moving_records.get(str(sid)) or spoolman_api.get_spool(sid)
+            if not (isinstance(rec, dict) and str(rec.get('archived')).strip().lower() == 'true'):
+                continue
+            left = _filament_left_g(rec)
+            if not keep_archived and left is not None and left >= UNARCHIVE_ON_LOAD_MIN_G:
+                unarchive_on_load[str(sid)] = left
+            else:
+                refused_archived.append((sid, left))
+        if refused_archived:
+            whys = []
+            for sid, left in refused_archived:
+                if left is None:
+                    whys.append(f"#{sid} is archived and its record doesn't say how much filament is left, so it "
+                                f"was not loaded onto {target}: weigh it back into stock first")
+                elif left < UNARCHIVE_ON_LOAD_MIN_G:
+                    whys.append(f"#{sid} is archived with no filament left on its record ({max(left, 0.0):.0f} g), "
+                                f"so it was not loaded onto {target}: weigh it back into stock first")
+                else:
+                    whys.append(f"#{sid} is archived, so it was not loaded onto {target}: untick Archived to load it")
+            why = "; ".join(whys)
+            for sid in spools:
+                failures[str(sid)] = why
+            state.add_log_entry(f"⚠️ Not loading onto {target}: {why}.", "WARNING", "ffaa00")
+            return {"status": "error", "blocked_reason": "archived", "msg": f"Not loaded: {why}.",
                     "failures": failures}
 
     # Step 4 (Group 39.7, R1-03): the target head's residents, read strictly.
@@ -2186,9 +2333,35 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
             return None, {"status": "error", "msg": f"Not loaded: {why}.", "failures": failures}
         return residents_now, None
 
+    def _residents_changed(residents_now):
+        """Group 51.6: the page named the spools it showed on this head when the
+        user picked it (the Printer picker's "XL-3 holds #99"). A spool on it now
+        that wasn't among them was never shown, so it is not unloaded unasked:
+        the answer refuses the move, nothing written, and the picker opens
+        again. One that left meanwhile is fine (the head is filled as asked)."""
+        if expected_residents is None or not (is_printer or is_toolhead):
+            return None
+        shown = {str(x) for x in expected_residents}
+        arrived = [r for r in (residents_now or []) if str(r) not in shown]
+        if not arrived:
+            return None
+        was = (f"it held {_and_list('#' + str(x) for x in expected_residents)}" if expected_residents
+               else "it was empty")
+        why = (f"{target} now holds {_and_list('#' + str(r) for r in arrived)}, which wasn't on it when you "
+               f"picked {target} ({was}), so {_and_list('#' + str(s) for s in spools)} was not loaded: "
+               f"pick again")
+        for sid in spools:
+            failures[str(sid)] = why
+        state.add_log_entry(f"⚠️ Not loading onto {target}: {why}.", "WARNING", "ffaa00")
+        return {"status": "error", "blocked_reason": "residents_changed", "msg": f"Not loaded: {why}.",
+                "failures": failures}
+
     residents: typing.List[typing.Any] = []
     if is_printer or is_toolhead:
         residents, refused = _strict_residents()
+        if refused:
+            return refused
+        refused = _residents_changed(residents)
         if refused:
             return refused
 
@@ -2390,7 +2563,8 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                 failures[str(sid)] = why
             state.add_log_entry(f"❌ Not moving {_and_list('#' + str(s) for s in spools)}: {why}",
                                 "ERROR", "ff4444")
-            return {"status": "error", "msg": f"Not moved: {why}.", "failures": failures}
+            return {"status": "error", "blocked_reason": "slot_claimed", "msg": f"Not moved: {why}.",
+                    "failures": failures}
     no_store = bool(slot_ghosts)
     if feed_changed:
         answer = _feed_changed_answer(
@@ -2451,6 +2625,11 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         residents, refused = _strict_residents()
         if refused:
             return refused
+        # Group 51.6: a spool loaded onto the head during the probe was never
+        # shown to a user who named what the head held.
+        refused = _residents_changed(residents)
+        if refused:
+            return refused
 
     # Group 40.0c, the chained deploy's guard. The bound-slot move read this
     # head's spools before its printer probe, which can take seconds. A spool
@@ -2495,6 +2674,8 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
     # Where each swapped-out spool was filed (Swap option C), for its toast.
     swapped_filed: typing.Dict[str, str] = {}
     to_buffer: typing.List[typing.Dict[str, typing.Any]] = []
+    # The archived spools the head write un-archived (step 4's rule), for the answer.
+    unarchived: typing.List[typing.Dict[str, typing.Any]] = []
     # The stored spools a Swap (`swap_out`) took out of the slot, in order.
     displaced_out: typing.List[typing.Any] = []
 
@@ -2643,6 +2824,26 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                     f"❌ Not moving Spool #{sid} into {target} slot {target_slot}: couldn't read "
                     f"{target} from Spoolman ({_slot_err})", "ERROR", "ff4444")
                 continue
+            if expected_occupant is not None and not slot_was_picked:
+                # Group 51.7: the user chose Swap / Overwrite for the spool the
+                # screen showed in this slot (the grid's prompt, the slot picker).
+                # Another spool filed there now was never shown, so it is not
+                # swapped out or unseated: this spool is refused, nothing written.
+                # A slot its spool left meanwhile is filled as asked.
+                _moving = {str(s) for s in spools}
+                _stored = [e for e in existing_items if not e.get('is_ghost') and str(e.get('id')) not in _moving
+                           and str(e.get('location') or '').strip().strip('"').upper() == target]
+                _now = [e.get('id') for e in _stored
+                        if str(e.get('id')) != str(expected_occupant)
+                        and _norm_slot(locations_db.effective_slot(tgt_info, e.get('slot', ''),
+                                                                   occupants=len(_stored))) == target_slot]
+                if _now:
+                    failures[str(sid)] = (f"{target} slot {target_slot} holds "
+                                          f"{_and_list('#' + str(t) for t in _now)} now, not #{expected_occupant} "
+                                          f"as when you chose, so nothing moved: look at the slot again")
+                    step6_refused[str(sid)] = 'occupant_changed'
+                    state.add_log_entry(f"⚠️ Not moving Spool #{sid}: {failures[str(sid)]}", "WARNING", "ffaa00")
+                    continue
             if slot_was_picked:
                 # Group 40.0e: the engine chose this slot before the printer probe,
                 # which can take seconds. A pick never unseats a spool that took
@@ -2691,6 +2892,7 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                     else:
                         failures[str(sid)] = _ghost_claim_refusal(target, target_slot, _ghosts[0], slot_feed,
                                                                   bound_th, loads_head, printer_map, loc_info_map)
+                        step6_refused[str(sid)] = 'slot_claimed'
                         state.add_log_entry(f"❌ Not moving Spool #{sid}: {failures[str(sid)]}",
                                             "ERROR", "ff4444")
                         continue
@@ -2778,6 +2980,23 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                                      bool(is_printer or is_toolhead), printer_map, loc_info_map)
         if _new_note is not None:
             new_extra[PRE_BOX_KEY] = _new_note
+
+        # Step 4's rule (Derek, 2026-10-20): an archived spool with filament on its
+        # record is un-archived by the PATCH that puts it on the head, whichever
+        # branch writes it (the PRINTER branch, or the GENERIC one for a Tool Head
+        # row no printer's toolheads[] lists: 2026-10-20 review, engine-3). Its
+        # pre-archive note is used up once it is back in stock (Claude's call 22);
+        # "" because the extras merge keeps an omitted key.
+        _unarchive = str(sid) in unarchive_on_load
+        if _unarchive:
+            new_extra['fcc_pre_archive_location'] = ''
+
+        def _note_unarchived():
+            _left = unarchive_on_load[str(sid)]
+            unarchived.append({"id": sid, "left_g": round(_left, 1), "head": target})
+            state.add_log_entry(
+                f"📤 #{sid} was archived with {_left:.0f} g left on its record: FCC un-archived it to "
+                f"load it onto {target}. Weigh it if that's off.", "WARNING", "ffaa00")
 
         # PRINTER MOVE
         if target in printer_map:
@@ -2887,8 +3106,10 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                 elif _why_none:
                     state.logger.info(f"🔗 Reverse-binding skipped for #{sid}: {_why_none}.")
 
-            if _move_write(sid, target, new_extra):
+            if _move_write(sid, target, new_extra, unarchive=_unarchive):
                 state.add_log_entry(f"🖨️ {info['text']} -> {target}", "INFO", info['color'])
+                if _unarchive:
+                    _note_unarchived()
                 if _recorded_here:
                     recorded_sources[str(sid)] = _recorded_here
                 # Group 20.2: a spool deployed FROM a single-slot dryer box
@@ -2949,8 +3170,10 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                 new_extra['physical_source'] = ""
                 new_extra['physical_source_slot'] = ""
 
-            if _move_write(sid, target, new_extra):
+            if _move_write(sid, target, new_extra, unarchive=_unarchive):
                 state.add_log_entry(f"🚚 {info['text']} -> {target}", "INFO", info['color'])
+                if _unarchive:
+                    _note_unarchived()
             else:
                 err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
                 failures[str(sid)] = err
@@ -3063,6 +3286,9 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                     # The slot whose own spool, if it runs on the head, comes off
                     # into the scan buffer (the same-slot swap; Derek, 2026-10-15).
                     swap_slot=(target, target_slot),
+                    # A caller that keeps the spool archived keeps it so on the head
+                    # the slot loads too (step 4 refuses it there).
+                    keep_archived=keep_archived,
                 )
             except Exception as _ad_err:
                 state.logger.error(f"Auto-deploy failed for {target}:SLOT:{target_slot}: {_ad_err}")
@@ -3090,6 +3316,8 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
                     undo_record['buffered'] = list(undo_record.get('buffered') or []) + list(chained_undo['buffered'])
             # The slot's own spool the chain swapped out into the scan buffer.
             to_buffer = to_buffer + [i for i in (chained.get('to_buffer') or []) if isinstance(i, dict)]
+            # An archived spool the chained load un-archived (step 4's rule).
+            unarchived = unarchived + [u for u in (chained.get('unarchived') or []) if isinstance(u, dict)]
             chained_failures = chained.get('failures') or {}
             for sid in to_deploy:
                 if chained.get('status') == 'success' and str(sid) not in chained_failures:
@@ -3117,6 +3345,10 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         # this is what lets a batch caller do better).
         "failures": failures,
     }
+    _step6_why = {step6_refused.get(str(s)) for s in spools}
+    if len(_step6_why) == 1 and None not in _step6_why:
+        # Groups 51.3 / 51.7: every spool was refused over what the slot holds.
+        result["blocked_reason"] = _step6_why.pop()
     if recorded_sources:
         # Group 40.0d: the feed slot the reverse-binding recorded as the spool's
         # home ("LR-MDB-1:1"), so the scan toast can name it. A head takes one
@@ -3133,6 +3365,11 @@ def _perform_smart_move_impl(target, raw_spools, target_slot=None, origin='', au
         # Group 40, the same-slot swap: the spools taken off a head into the scan
         # buffer (Unassigned in Spoolman). The page adds them to its buffer.
         result["to_buffer"] = to_buffer
+    if unarchived:
+        # Step 4's rule (Derek, 2026-10-20): the archived spools this move (or its
+        # chained deploy) un-archived to load them, [{id, left_g, head}]; every
+        # door warns about them (window.noteUnarchived).
+        result["unarchived"] = unarchived
     if auto_deploy_skipped:
         # sid(str) -> why it stayed in the box. The box placement itself stands.
         result["auto_deploy_skipped"] = auto_deploy_skipped

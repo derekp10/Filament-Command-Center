@@ -60,36 +60,122 @@ window.addToQueueWithToast = (item) => {
     else showToast("Label already in queue", "info", 4000);
 }
 
-window.openQueueModal = () => {
+/* --- ONE ROW RENDERER (Group 48.1) ---
+ *
+ * Derek, 2026-10-08: every queued label should read like the backlog's ("Just
+ * listing a spool id doesn't tell me what color it is"). Each spool or filament
+ * row is a colour swatch + "Brand - Material - Color" + its #id, from live data
+ * read when the queue window opens: ONE /api/spools/refresh for the queued
+ * spools and one /api/filament_details per queued filament, never on a
+ * heartbeat. The stored `display` (whatever the adding button sent: "Spool
+ * #57", "#57 Brand MAT (Color)", a filament name…) is drawn first and stays
+ * the fallback when a read fails, with a leading "#id" stripped (the row shows
+ * the id itself). A location row is "📍 LOC-ID — Name". Printed labels are
+ * unaffected: they print by id. Every piece of text is escaped (colour names
+ * are free text).
+ */
+const _queueLive = new Map();   // 'spool:57' / 'filament:12' -> {brand, material, color, hex, direction} | {failed}
+const _queueKey = (item) => `${item.type || 'spool'}:${item.id}`;
+const _queueEsc = (s) => (window.escHtml ? window.escHtml(s) : String(s == null ? '' : s)
+    .replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])));
+const _unquote = (v) => String(v == null ? '' : v).trim().replace(/^"(.*)"$/, '$1');
+const _storedQueueText = (item) => String(item.display || '').replace(/^\s*#\d+\s*(?:[-–:]\s*)?/, '').trim();
+
+const _queueRowHtml = (item, index) => {
+    const type = item.type || 'spool';
+    let swatch = '';
+    let text;
+    if (type === 'location') {
+        const row = (typeof state !== 'undefined' && Array.isArray(state.allLocations) ? state.allLocations : [])
+            .find(l => String(l.LocationID || '').toUpperCase() === String(item.id).toUpperCase());
+        const name = row && row.Name && String(row.Name).toUpperCase() !== String(item.id).toUpperCase() ? row.Name : '';
+        text = `${item.id}${name ? ` — ${name}` : ''}`;
+    } else {
+        const live = _queueLive.get(_queueKey(item));
+        if (live && !live.failed) {
+            text = [live.brand, live.material, live.color].filter(Boolean).join(' - ') || _storedQueueText(item);
+            // The shared swatch helper (multi-colour filaments drawn as on the cards).
+            if (window.makeSwatchHtml) {
+                swatch = `<span class="fcc-queue-swatch d-inline-flex flex-shrink-0 me-2" aria-hidden="true">${window.makeSwatchHtml(
+                    live.hex || '333', live.direction || 'longitudinal',
+                    { size: 22, borderColor: 'rgba(255,255,255,0.35)', borderWidth: 2, marginRight: 0 })}</span>`;
+            }
+        } else {
+            text = _storedQueueText(item);
+        }
+    }
+    const icon = type === 'filament' ? '🧬' : (type === 'location' ? '📍' : '🧵');
+    const idTag = type === 'location' ? '' : `<span class="text-info fw-bold me-2">#${_queueEsc(item.id)}</span>`;
+    return `
+        <li class="list-group-item bg-dark text-white border-secondary d-flex justify-content-between align-items-center fcc-queue-row"
+            data-queue-key="${_queueEsc(_queueKey(item))}">
+            <span class="d-flex align-items-center text-truncate">${swatch}<span class="me-2">${icon}</span>${idTag}<span class="fcc-queue-text text-truncate">${_queueEsc(text)}</span></span>
+            <button class="btn btn-sm btn-outline-danger flex-shrink-0 ms-2" onclick="removeFromQueue(${index})" title="Remove from the queue">❌</button>
+        </li>`;
+};
+
+// Draws the list from what is known now (no reads).
+const _renderQueueList = () => {
     const list = document.getElementById('queue-list-items');
     const emptyMsg = document.getElementById('queue-empty-msg');
-
     if (!list) return;
-    list.innerHTML = "";
-
     if (labelQueue.length === 0) {
+        list.innerHTML = "";
         if (emptyMsg) emptyMsg.style.display = 'block';
-    } else {
-        if (emptyMsg) emptyMsg.style.display = 'none';
-
-        labelQueue.forEach((item, index) => {
-            let icon = '🧵';
-            if (item.type === 'filament') icon = '🧬';
-            if (item.type === 'location') icon = '📍';
-
-            list.innerHTML += `
-                <li class="list-group-item bg-dark text-white border-secondary d-flex justify-content-between align-items-center">
-                    <span>${icon} #${item.id} - ${item.display}</span>
-                    <button class="btn btn-sm btn-outline-danger" onclick="removeFromQueue(${index})">❌</button>
-                </li>`;
-        });
+        return;
     }
+    if (emptyMsg) emptyMsg.style.display = 'none';
+    list.innerHTML = labelQueue.map((item, index) => _queueRowHtml(item, index)).join('');
+};
+
+// Reads what the open queue doesn't know yet, then redraws once.
+const _fetchQueueLive = () => {
+    const missing = (type) => labelQueue.filter(i => (i.type || 'spool') === type && !_queueLive.has(_queueKey(i))).map(i => i.id);
+    const spoolIds = missing('spool');
+    const filamentIds = missing('filament');
+    const jobs = [];
+    if (spoolIds.length) {
+        jobs.push(fetch('/api/spools/refresh', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ spools: spoolIds }),
+        })
+            .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+            .then(data => spoolIds.forEach(id => {
+                const d = data && data[String(id)];
+                const det = (d && d.details) || null;
+                _queueLive.set(`spool:${id}`, det
+                    ? { brand: det.brand, material: det.material, color: det.color_name, hex: d.color, direction: d.color_direction }
+                    : { failed: true });
+            }))
+            .catch(() => spoolIds.forEach(id => _queueLive.set(`spool:${id}`, { failed: true }))));
+    }
+    filamentIds.forEach(id => jobs.push(fetch(`/api/filament_details?id=${encodeURIComponent(id)}`)
+        .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+        .then(f => {
+            const ex = (f && f.extra) || {};
+            _queueLive.set(`filament:${id}`, (f && f.id != null) ? {
+                brand: (f.vendor && f.vendor.name) || 'Unknown',
+                material: f.material || '',
+                color: f.name || _unquote(ex.original_color) || '',
+                hex: f.multi_color_hexes || f.color_hex || _unquote(ex.multi_color_hexes) || '333',
+                direction: f.multi_color_direction || _unquote(ex.multi_color_direction) || 'longitudinal',
+            } : { failed: true });
+        })
+        .catch(() => _queueLive.set(`filament:${id}`, { failed: true }))));
+    if (jobs.length) Promise.all(jobs).then(_renderQueueList);
+};
+
+window.openQueueModal = () => {
+    // Opening the window reads every queued label afresh (a colour edited since
+    // the last open shows); redraws while it is open read only what is new.
+    _queueLive.clear();
+    _renderQueueList();
+    _fetchQueueLive();
     if (modals.queueModal) modals.queueModal.show();
 };
 
 window.removeFromQueue = (index) => {
     labelQueue.splice(index, 1);
-    window.openQueueModal();
+    _renderQueueList();
     window.updateQueueUI();
 };
 
@@ -108,7 +194,7 @@ window.closeClearConfirm = () => {
 
 window.executeClearQueue = () => {
     labelQueue.length = 0;
-    window.openQueueModal();
+    _renderQueueList();
     window.updateQueueUI();
     showToast("Queue Cleared");
     if (clearConfirmModal) clearConfirmModal.hide();
@@ -148,7 +234,7 @@ window.printQueueCSV = () => {
     Promise.all(promises).then(results => {
         if (results.every(r => r === true)) {
             labelQueue.length = 0;
-            window.openQueueModal();
+            _renderQueueList();
             window.updateQueueUI();
             modals.queueModal.hide();
         }
@@ -270,7 +356,9 @@ const loadQueue = () => {
                         if (btn) btn.innerText = `🛒 Queue (${labelQueue.length})`;
 
                         if (modals.queueModal && document.getElementById('queueModal').classList.contains('show')) {
-                            window.openQueueModal();
+                            // Group 48.1: redraw, reading only labels new to the open window.
+                            _renderQueueList();
+                            _fetchQueueLive();
                         }
                     }
                 }

@@ -31,7 +31,7 @@ from __future__ import annotations
 import json
 
 from test_core1_return_ejectall_js import pytestmark, run_js  # noqa: F401  (pytestmark: skip without node)
-from test_head_load_confirm_js import FED, PRELUDE
+from test_head_load_confirm_js import FED, PRELUDE, _text
 
 MODULES = ["inv_core.js", "inv_wizard.js"]
 
@@ -179,7 +179,7 @@ await __settle(80);
 return {{ before, replay: posts('/api/smart_move'), toasts: toasts(), status: status(),
           dirty: wizardState.isDirty, pending: wizardState.pendingPlacement }};
 """)
-    assert "Load #57 onto XL-1?" in res["before"]["html"] and "Just store it in LR-MDB-1 slot 1" in res["before"]["html"]
+    assert "Load #57 onto XL-1?" in res["before"]["html"] and "Just store it in LR-MDB-1 slot 1" in _text(res["before"]["html"])
     assert "Saved your other changes" in res["before"]["status"] and res["before"]["dirty"] is True, res["before"]
     assert len(res["replay"]) == 1, res["replay"]
     replay = res["replay"][0]
@@ -384,3 +384,30 @@ return {{ loc: document.getElementById('wiz-spool-location').value, status: stat
 """)
     assert res["loc"] == "", res
     assert "Location left blank: #134 is on XL-3, so pick where the copy goes." in res["status"], res["status"]
+
+
+def test_the_archived_box_follows_the_server_after_an_edit_save(tmp_path):
+    """2026-10-20 review (engine-1): a box still ticked after the spool came back
+    into stock (a weight fix that refilled it, with a move) sent archived: true on
+    the next Save and archived it ON its head. The page now sets its box from the
+    answer's `archived_now`, both ways. RED on b779b84."""
+    res = _run(tmp_path, f"""
+editing(57, 'XL-2');
+const box = document.getElementById('wiz-spool-archived');
+box.checked = true;
+answerFor({{ '/api/edit_spool_wizard': [
+  {_js({"success": True, "spool_id": 57, "archived_now": False, "location_moved": True,
+        "location_where": "XL-2", "location_now": "XL-2", "location_result": {"status": "success", "failures": {}}})},
+  {_js({"success": True, "spool_id": 57, "archived_now": True})},
+  {_js({"success": True, "spool_id": 57})}] }});
+await window.wizardSubmit();
+await __settle(60);
+const afterRefill = box.checked;
+await window.wizardSubmit();
+await __settle(60);
+const afterTick = box.checked;
+await window.wizardSubmit();                 // an answer without the key leaves the box alone
+await __settle(60);
+return {{ afterRefill, afterTick, untouched: box.checked }};
+""")
+    assert res["afterRefill"] is False and res["afterTick"] is True and res["untouched"] is True, res

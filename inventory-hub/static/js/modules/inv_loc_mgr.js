@@ -142,6 +142,66 @@ window.updateManageTitle = (loc, itemArray = null) => {
 window._fccManageOpenSeq = window._fccManageOpenSeq || 0;
 window._fccManageDismissSeq = window._fccManageDismissSeq || 0;
 
+// --- Group 52.1b: "Spoolman didn't answer" instead of an empty box ----------
+// The open, refreshManageView and the heartbeat's manage section read the open
+// location's contents from Spoolman. A read that fails keeps the cards already
+// on screen (a fresh open has none, and draws none) and says so in this notice;
+// a box that really is empty still draws EMPTY. A slow Spoolman used to answer
+// [] here, which drew as an empty box. The notice sits above the contents and
+// is made on first use (the modal's template has no slot for it); its look is
+// the doubled-head banner's (Group 42.4), Derek's approved warning style.
+let _manageShownFor = null;   // the location (upper-cased) whose cards are on screen
+const _manageReadNoticeEl = () => {
+    let el = document.getElementById('manage-read-notice');
+    if (el) return el;
+    const anchor = document.getElementById('manage-grid-view');
+    if (!anchor || !anchor.parentNode) return null;
+    el = document.createElement('div');
+    el.id = 'manage-read-notice';
+    el.setAttribute('role', 'status');
+    el.setAttribute('aria-live', 'polite');
+    el.style.cssText = 'display:none; background:#2b2200; color:#ffd54a; border:1px solid #ffd54a;'
+        + ' border-radius:6px; padding:8px 12px; margin-bottom:10px; font-weight:bold;';
+    anchor.parentNode.insertBefore(el, anchor);
+    return el;
+};
+// Shows the notice for the OPEN location only (a late answer about the previous
+// one is ignored, like _renderManagePayload). Returns whether it showed.
+const _showManageReadFailure = (id, why) => {
+    const openId = String((document.getElementById('manage-loc-id') || {}).value || '');
+    if (!id || String(id).toUpperCase() !== openId.toUpperCase()) return false;
+    const el = _manageReadNoticeEl();
+    if (!el) return false;
+    const kept = _manageShownFor === openId.toUpperCase();
+    el.textContent = `⚠️ Spoolman didn't answer, so FCC couldn't check what's in ${openId} just now.`
+        + (kept ? ' These cards are from its last answer.' : '')
+        + ' It tries again every few seconds.';
+    el.title = why ? String(why) : '';
+    el.style.display = 'block';
+    return true;
+};
+const _clearManageReadFailure = () => {
+    const el = document.getElementById('manage-read-notice');
+    if (!el) return;
+    el.style.display = 'none';
+    el.textContent = '';
+    el.title = '';
+};
+window._showManageReadFailure = _showManageReadFailure;
+// The grid (a multi-slot Dryer Box / MMU Slot) or the list, whichever `loc` uses.
+const _isGridLoc = (loc) => (loc.Type === 'Dryer Box' || loc.Type === 'MMU Slot') && parseInt(loc['Max Spools']) > 1;
+const _showManageView = (isGrid) => {
+    document.getElementById('manage-grid-view').style.display = isGrid ? 'block' : 'none';
+    document.getElementById('manage-list-view').style.display = isGrid ? 'none' : 'block';
+};
+// A strict contents read: the list, or null when Spoolman didn't answer (the
+// route's 502) or the answer wasn't a list. `why` carries the server's words.
+const _readContentsStrict = (id) => fetch(`/api/get_contents?id=${encodeURIComponent(id)}&strict=1`)
+    .then(r => r.json().then(body => ({ ok: r.ok, body }), () => ({ ok: false, body: null })))
+    .then(({ ok, body }) => (ok && Array.isArray(body))
+        ? { list: body, why: null }
+        : { list: null, why: (body && body.error) || "Spoolman didn't answer" });
+
 // --- PRE-FLIGHT PROTOCOL ---
 window.openManage = (id) => {
     setProcessing(true);
@@ -190,28 +250,37 @@ window.openManage = (id) => {
 
     document.getElementById('manage-grid-view').style.display = 'none';
     document.getElementById('manage-list-view').style.display = 'none';
+    _clearManageReadFailure();
+    _manageShownFor = null;
+    // Group 51 review (browser-5): the last box's slots must not answer a
+    // CMD:SLOT scan for this one (a failed read draws no grid to replace them).
+    state.currentGrid = {};
+    state.currentGridClaims = {};
 
+    const isGrid = _isGridLoc(loc);
 
-
-    const isGrid = (loc.Type === 'Dryer Box' || loc.Type === 'MMU Slot') && parseInt(loc['Max Spools']) > 1;
-
-    fetch(`/api/get_contents?id=${id}`)
-        .then(r => r.json())
-        .then(d => {
+    // Group 52.1b: a STRICT read, so a Spoolman blip is "couldn't read" (the
+    // route's 502), never [] drawn as an empty box. The modal still opens, with
+    // the notice and no cards; the heartbeat's manage section fills them in
+    // once Spoolman answers.
+    _readContentsStrict(id)
+        .then(({ list: d, why }) => {
             // Group 38.1 — a NEWER openManage superseded this one; it will do
             // the rendering. Rendering stale content here would clobber it.
             if (seq !== window._fccManageOpenSeq) {
                 setProcessing(false);
                 return;
             }
-            if (isGrid) {
-                document.getElementById('manage-grid-view').style.display = 'block';
-                document.getElementById('manage-list-view').style.display = 'none';
-                renderGrid(d, parseInt(loc['Max Spools']));
+            if (d) {
+                _showManageView(isGrid);
+                if (isGrid) renderGrid(d, parseInt(loc['Max Spools']));
+                else renderList(d, id);
+                _manageShownFor = String(id).toUpperCase();
             } else {
-                document.getElementById('manage-grid-view').style.display = 'none';
-                document.getElementById('manage-list-view').style.display = 'block';
-                renderList(d, id);
+                _showManageReadFailure(id, why);
+                // The title's count came from the locations table, which reads
+                // zero when Spoolman is down: no "⚠️ EMPTY" beside the notice.
+                window.updateManageTitle({ ...loc, Occupancy: '--' });
             }
 
             renderManagerNav();
@@ -224,9 +293,10 @@ window.openManage = (id) => {
             generateSafeQR('manage-loc-qr-mini', 'LOC:' + safeId, 45);
             generateSafeQR('qr-modal-done', 'CMD:DONE', 58);
 
-            // Prime the Hash to prevent "First Pulse Wiggle"
+            // Prime the Hash to prevent "First Pulse Wiggle". Nothing drawn (a
+            // read that failed): no hash, so the first answer renders.
             const bufHash = state.heldSpools.map(s => s.id).join(',');
-            state.lastLocRenderHash = `${JSON.stringify(d)}|${bufHash}`;
+            state.lastLocRenderHash = d ? `${JSON.stringify(d)}|${bufHash}` : null;
 
             setProcessing(false);
             // Group 38.1 — the modal was dismissed while this fetch was in
@@ -844,6 +914,12 @@ const _renderManagePayload = (id, d) => {
     if (String(id).toUpperCase() !== String(openId).toUpperCase()) return false;
     const loc = state.allLocations.find(l => l.LocationID == id);
     if (!loc) return false;
+    // Group 52.1b: a real answer (an empty box too) ends "Spoolman didn't
+    // answer", and shows the contents view an open whose read failed left hidden.
+    _clearManageReadFailure();
+    const isGrid = _isGridLoc(loc);
+    _showManageView(isGrid);
+    _manageShownFor = String(openId).toUpperCase();
     // --- NO WIGGLE CHECK ---
     const bufHash = state.heldSpools.map(s => s.id).join(',');
     const contentHash = JSON.stringify(d);
@@ -858,7 +934,6 @@ const _renderManagePayload = (id, d) => {
     // -----------------------
     window.updateManageTitle(loc, d);
     renderManagerNav();
-    const isGrid = (loc.Type === 'Dryer Box' || loc.Type === 'MMU Slot') && parseInt(loc['Max Spools']) > 1;
     if (isGrid) renderGrid(d, parseInt(loc['Max Spools']));
     else renderList(d, id);
     return true;
@@ -871,9 +946,14 @@ window.refreshManageView = (id) => {
     if (_refreshManageViewInflight) return true;
     _refreshManageViewInflight = true;
 
-    fetch(`/api/get_contents?id=${id}`)
-        .then(r => r.json())
-        .then(d => _renderManagePayload(id, d))
+    // Group 52.1b: strict, like the open. A read that fails keeps the cards on
+    // screen and says Spoolman didn't answer; it no longer redraws them empty.
+    fetch(`/api/get_contents?id=${encodeURIComponent(id)}&strict=1`)
+        .then(r => r.json().then(body => ({ ok: r.ok, body }), () => ({ ok: false, body: null })))
+        .then(({ ok, body }) => {
+            if (ok && Array.isArray(body)) _renderManagePayload(id, body);
+            else _showManageReadFailure(id, (body && body.error) || "Spoolman didn't answer");
+        })
         .catch(e => console.warn("refreshManageView failed:", e))
         .finally(() => { _refreshManageViewInflight = false; });
     return true;
@@ -956,6 +1036,9 @@ const renderGrid = (data, max) => {
     const grid = document.getElementById('slot-grid-container');
     const un = document.getElementById('unslotted-container');
     grid.innerHTML = ""; un.innerHTML = ""; state.currentGrid = {};
+    // Group 51 review (browser-2): every STORED spool claiming each slot, so a
+    // doubled slot's Swap / Overwrite names them all (and sorts the slot out).
+    state.currentGridClaims = {};
     const unslotted = [];
 
     // 13.3 — items with slot > max (overflow) used to go into state.currentGrid
@@ -965,6 +1048,9 @@ const renderGrid = (data, max) => {
     // one would render; route earlier collisions into Unslotted too (13.2).
     data.forEach(i => {
         const n = parseInt(i.slot);
+        if (n > 0 && n <= max && !i.is_ghost) {
+            (state.currentGridClaims[n] = state.currentGridClaims[n] || []).push(i);
+        }
         if (n > 0 && n <= max && !state.currentGrid[n]) {
             state.currentGrid[n] = i;
         } else {
@@ -1213,13 +1299,8 @@ const renderList = (data, locId) => {
                 const tempDiv = document.createElement('div');
                 tempDiv.innerHTML = renderBadgeHTML(s, flatIndex, locId);
                 const el = tempDiv.firstElementChild;
-                const btnLabel = el.querySelector('.js-btn-label');
-                if (btnLabel) {
-                    btnLabel.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        window.addToQueue({ id: s.id, type: 'spool', display: s.display });
-                    });
-                }
+                // The card's 🖨️ LABEL carries its own onclick (ui_builder.js);
+                // a second listener here queued every click twice (Group 48.1).
                 itemsContainer.appendChild(el);
                 flatIndex++;
             });
@@ -1268,13 +1349,8 @@ const renderUnslotted = (items) => {
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = renderBadgeHTML(s, i, document.getElementById('manage-loc-id').value);
         const el = tempDiv.firstElementChild;
-        const btnLabel = el.querySelector('.js-btn-label');
-        if (btnLabel) {
-            btnLabel.addEventListener('click', (e) => {
-                e.stopPropagation();
-                window.addToQueue({ id: s.id, type: 'spool', display: s.display });
-            });
-        }
+        // The card's 🖨️ LABEL carries its own onclick (ui_builder.js); a
+        // second listener here queued every click twice (Group 48.1).
         itemContainer.appendChild(el);
     });
 
@@ -1329,6 +1405,17 @@ window.handleSlotInteraction = (slot) => {
             'WARNING');
         return;
     }
+    // Group 51 review (browser-5): FCC couldn't read this box's contents just now
+    // (Group 52's notice is up and no cards of it are on screen), so it can't
+    // tell what slot N holds.
+    const notice = document.getElementById('manage-read-notice');
+    if (notice && notice.style.display === 'block' && _manageShownFor !== String(locId).trim().toUpperCase()) {
+        const why = `Spoolman didn't answer for ${locId}, so FCC can't tell what's in slot ${slot}: `
+            + `nothing was moved. Try again in a few seconds`;
+        showToast(`⚠️ ${why}`, 'warning', 7000);
+        if (window.logClientEvent) window.logClientEvent(`⚠️ Slot ${slot} of ${locId} ignored: ${why}`, 'WARNING');
+        return;
+    }
     if (state.heldSpools.length > 0) {
         const newId = state.heldSpools[0].id;
         // IMPORTANT: don't shift the buffer here. _doAssignFinalize's success
@@ -1380,32 +1467,51 @@ window.handleSlotInteraction = (slot) => {
                 ]);
                 return;
             }
+            // Group 51 review (browser-2): a slot two stored spools claim (the
+            // others are drawn under Unslotted) names them all, and sends no
+            // expected_occupant: the engine would refuse every try over the other
+            // one, and Overwrite is how the doubled slot gets sorted out.
+            const claimants = ((state.currentGridClaims || {})[slot] || []).map(c => c.id);
+            const doubled = claimants.length > 1;
+            const olds = doubled ? claimants.map(c => `#${esc(String(c))}`).join(' and ') : old;
+            const verb = doubled ? 'go' : 'goes';
             // Swap option C (Derek, 2026-10-15): Swap hands the slot's old spool to
             // your buffer AND files it back where it sat before this slot, when
             // FCC has that record (a spool slotted before Swap option C has none).
             promptAction("Slot Occupied", `Put ${what} into Slot ${slot}: swap or overwrite?<br>`
-                + `<small>Swap: ${old} goes to your buffer, filed back where it sat before this slot `
+                + (doubled ? `<small>${olds} both claim slot ${slot}.</small><br>` : '')
+                + `<small>Swap: ${olds} ${verb} to your buffer, filed back where ${doubled ? 'they' : 'it'} sat before this slot `
                 + `(Unassigned if FCC has no record of that). `
-                + `Overwrite: ${old} stays in ${esc(String(locId))} without a slot.</small>`, [
+                + `Overwrite: ${olds} ${doubled ? 'stay' : 'stays'} in ${esc(String(locId))} without a slot.</small>`, [
                 {
                     label: "Swap", action: () => {
                         // The server files the slot's old spool back where it sat
                         // before and names it in `to_buffer` once the move lands
                         // (never before), which _doAssignFinalize adds to the buffer.
-                        doAssign(locId, newId, slot, true, {
+                        doAssign(locId, newId, slot, true, Object.assign({
                             swapDisplaced: { id: item.id, display: item.display, color: item.color },
-                        });
+                        }, doubled ? {} : {
+                            // Group 51.7: the spool this prompt named.
+                            expectedOccupant: item.id,
+                        }));
                     }
                 },
                 {
                     label: "Overwrite", action: () => {
-                        doAssign(locId, newId, slot, true);
+                        doAssign(locId, newId, slot, true, doubled ? {} : { expectedOccupant: item.id });
                     }
                 },
                 { label: "Cancel", action: () => { closeModal('actionModal'); } }
             ]);
         } else {
-            doAssign(locId, newId, slot, true);
+            // Group 51 review (engine-3): the tile was drawn EMPTY, so the slot goes
+            // as `picked_slot`, which the engine fills only while it is still free
+            // and never unseats a spool filed there since the grid was drawn (an
+            // explicit slot is an Overwrite). An MMU Slot row keeps its 0-based
+            // explicit slot (dormant: no such rows exist).
+            const row = (state.allLocations || []).find(l => l.LocationID === locId) || {};
+            if (row.Type === 'MMU Slot') doAssign(locId, newId, slot, true);
+            else doAssign(locId, newId, null, true, { pickedSlot: slot, shownEmpty: true });
         }
     } else if (item) {
         // Filled slot + empty buffer: direct Pick Up. Eject/Details/Edit/Queue
@@ -1586,6 +1692,9 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedH
     // where it sat before this slot and names it in `to_buffer`. On `original`,
     // so every replay of a question is still a Swap.
     if (options.swapDisplaced) original.swap = true;
+    // Group 51.7: the stored spool the Swap / Overwrite prompt named. Another one
+    // in the slot by the time the move lands is refused (`occupant_changed`).
+    if (options.expectedOccupant != null) original.expected_occupant = options.expectedOccupant;
     // The heads whose warning the user confirmed (Group 39.1), so the backend's
     // safety net doesn't re-prompt for them.
     const first = Object.assign({}, original, {
@@ -1689,17 +1798,35 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedH
                 // The DEPLOYED card's stale-trail ↩️ (Group 40 review): the slot its
                 // record names holds another spool now (or is gone). Nobody was
                 // "deciding", and trying again fails the same way until it moves.
-                const trailTaken = options.pickedSlot != null && res.blocked_reason === 'picked_slot_taken';
+                const trailTaken = options.pickedSlot != null && !options.shownEmpty
+                    && res.blocked_reason === 'picked_slot_taken';
+                // Group 51 review (engine-3): a tile drawn empty that holds a spool
+                // now: nothing moved; redraw so the user sees what is there.
+                const filledMeanwhile = !!options.shownEmpty && res.blocked_reason === 'picked_slot_taken';
                 const why = trailTaken
                     ? `#${spoolIdStr} wasn't put back in ${loc} slot ${options.pickedSlot}, the slot its record names: `
                       + `another spool holds it now (or the box has no such slot). Scan #${spoolIdStr}, then the label `
                       + `of where it really is, to fix its record`
                     : null;
                 if (why && window.logClientEvent) window.logClientEvent(`⚠️ ${why}.`, 'WARNING');
-                showToast(why ? `❌ ${why}`
-                    : failedWhy
-                    ? `❌ #${spoolIdStr} was NOT assigned to ${loc}: ${failedWhy}`
-                    : (res.msg || 'Assign failed'), 'error', 7000);
+                if (res.blocked_reason === 'occupant_changed' || filledMeanwhile) {
+                    // Group 51.7: the slot holds another spool than the Swap /
+                    // Overwrite prompt named (or than the empty tile showed: none).
+                    // Nothing moved; redraw the grid so the user sees what is there
+                    // now (the spool stays in the buffer).
+                    const msg = filledMeanwhile
+                        ? `${loc} slot ${options.pickedSlot} was empty on screen but holds a spool now, so nothing `
+                          + `moved: the slots have been redrawn`
+                        : (failedWhy || res.msg || `${loc} slot ${finalSlot} holds another spool now`);
+                    showToast(`⚠️ ${msg}`, 'warning', 7000);
+                    if (filledMeanwhile && window.logClientEvent) window.logClientEvent(`⚠️ ${msg}.`, 'WARNING');
+                    refreshManageView((document.getElementById('manage-loc-id') || {}).value || loc);
+                } else {
+                    showToast(why ? `❌ ${why}`
+                        : failedWhy
+                        ? `❌ #${spoolIdStr} was NOT assigned to ${loc}: ${failedWhy}`
+                        : (res.msg || 'Assign failed'), 'error', 7000);
+                }
                 // A spool the move had already handed to the buffer before this
                 // one's write failed (a Swap's old spool, a swapped-out head
                 // spool) is in the user's hand all the same.
@@ -2599,7 +2726,7 @@ const _renderParentTreePicker = (rows, selfIdUpper, sel, locModalEl) => {
 
     const panel = document.createElement('div');
     panel.className = 'card bg-dark text-light shadow-lg';
-    panel.style.cssText = 'width:min(560px,92vw);max-height:80vh;display:flex;flex-direction:column;border:1px solid #0dcaf0;';
+    panel.style.cssText = 'width:min(35rem,92vw);max-height:80vh;display:flex;flex-direction:column;border:1px solid #0dcaf0;';
     let html = `
       <div class="card-header d-flex align-items-center justify-content-between">
         <span class="fw-bold text-info">🌳 Pick a parent location</span>

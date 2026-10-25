@@ -475,6 +475,22 @@ def test_return_mode_greys_out_every_slot_that_holds_a_spool():
     assert _slot(model, 3)["blocked"] is None and _slot(model, 2)["blocked"] is None
 
 
+def test_return_mode_only_stores_in_every_slot_also_one_feeding_another_head():
+    """Group 51.2: Return never loads (it sends auto_deploy false), so a free
+    slot that feeds another head is stores_only too, and its tile says "stored
+    only" instead of reading "-> XL-1 · XL-1 runs #99" as if Return loaded it.
+    Base proof (52741e6): slots 1, 2 and 4 answered stores_only False there."""
+    spools = [_sp(42, "XL-3", src="LR-MDB-1", src_slot=3)]
+    model, _ = _build(spools, "LR-MDB-1", spool=42, toolhead="XL-3", mode="return")
+    assert [(s["slot"], s["stores_only"]) for s in model["slots"]] == [
+        ("1", True), ("2", True), ("3", True), ("4", True)]
+    s1 = _slot(model, 1)
+    assert s1["feeds"]["id"] == "XL-1" and s1["feeds"]["is_source"] is False and s1["blocked"] is None
+    # Box mode keeps the engine's rule: slot 1 feeds XL-1, a head #42 isn't leaving.
+    model, _ = _build(spools, "LR-MDB-1", spool=42)
+    assert _slot(model, 1)["stores_only"] is False and _slot(model, 3)["stores_only"] is True
+
+
 @pytest.mark.parametrize("slot, refused", [("1", True), ("2", False), ("3", False), ("4", True)],
                          ids=["ghost-on-another-head", "stored", "same-slot-swap", "stale-on-the-pool-slot"])
 def test_a_greyed_out_ghost_slot_is_one_the_engine_refuses(slot, refused):

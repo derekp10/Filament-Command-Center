@@ -123,18 +123,27 @@
                 const unbound = !((bindings.toolheads[th.id] || []).length > 0);
                 let item = null;
                 let loaded = [];
+                let unread = false;
                 try {
-                    const r = await fetch(`/api/get_contents?id=${encodeURIComponent(th.id)}`);
-                    const items = (r.ok ? await r.json() : []) || [];
-                    // Group 42.4 (mirrors the pulse): the loaded spool, never a
-                    // ghost while one exists; a doubled head carries both ids.
-                    loaded = items.filter(i => !i.is_ghost);
-                    item = loaded[0] || items[0] || null;
+                    // reads-1: a STRICT read, so a Spoolman blip is the route's
+                    // 502, never [] drawn as an empty head: the head is marked
+                    // `unread` and keeps its last tile (_keepLastTiles).
+                    const r = await fetch(`/api/get_contents?id=${encodeURIComponent(th.id)}&strict=1`);
+                    const items = r.ok ? await r.json() : null;
+                    if (Array.isArray(items)) {
+                        // Group 42.4 (mirrors the pulse): the loaded spool, never a
+                        // ghost while one exists; a doubled head carries both ids.
+                        loaded = items.filter(i => !i.is_ghost);
+                        item = loaded[0] || items[0] || null;
+                    } else {
+                        unread = true;
+                    }
                 } catch (e) {
-                    item = null;
+                    unread = true;
                 }
                 const out = { ...th, item, unbound, loaded_count: loaded.length };
                 if (loaded.length > 1) out.loaded_ids = loaded.map(i => i.id);
+                if (unread) out.unread = true;
                 return out;
             }));
             // Re-sort by position so the visual order matches printer layout.
@@ -184,7 +193,8 @@
                 // material correction, or a same-color/same-weight swap) still
                 // repaints the new material line.
                 // 42.4: a second loaded spool appearing or leaving repaints the chip.
-                return th.id + (th.unbound ? '!u' : '') + ((th.loaded_count || 0) > 1 ? `!n${th.loaded_count}` : '') + ':' + (it ? `${it.id}:${it.color || ''}:${(it.details && it.details.material) || ''}:${Math.round(it.remaining_weight || 0)}/${Math.round(it.initial_weight || 0)}` : 'empty');
+                // reads-1: "? not read" and "empty" are different tiles.
+                return th.id + (th.unbound ? '!u' : '') + (th.unread ? '!r' : '') + ((th.loaded_count || 0) > 1 ? `!n${th.loaded_count}` : '') + ':' + (it ? `${it.id}:${it.color || ''}:${(it.details && it.details.material) || ''}:${Math.round(it.remaining_weight || 0)}/${Math.round(it.initial_weight || 0)}` : 'empty');
             }).join(','));
         });
         return parts.join('||');
@@ -210,13 +220,29 @@
         return `${th.id} holds ${who} — a toolhead holds one spool. Open ${th.id} and eject the one that isn't loaded.`;
     };
     const _doubledChip = (th) => ((th.loaded_count || 0) > 1
-        ? `<div class="fcc-ps-th-chip fcc-ps-th-doubled" style="font-size:0.72rem; color:#ffd54a; background:#2b2200; border-radius:4px; padding:0 4px;" title="${_doubledText(th).replace(/"/g, '&quot;')}">⚠️ ${th.loaded_count} spools</div>`
+        ? `<div class="fcc-ps-th-chip fcc-ps-th-doubled" style="color:#ffd54a; background:#2b2200; border-radius:4px; padding:0 4px;" title="${_doubledText(th).replace(/"/g, '&quot;')}">⚠️ ${th.loaded_count} spools</div>`
         : '');
     window.fccDoubledHeadText = _doubledText;
 
     const _renderToolheadBlock = (th) => {
         const it = th.item;
         const positionAttr = `data-toolhead="${th.id}"`;
+        if (th.unread && !it) {
+            // reads-1: Spoolman didn't answer and FCC has no earlier answer for
+            // this head, so it doesn't know what is loaded: "? not read", never
+            // "empty" (and never the unbound placeholder, which reads as empty).
+            return `
+                <div class="fcc-ps-th fcc-ps-th-unread" ${positionAttr}
+                     style="cursor:pointer;"
+                     title="${th.id} — Spoolman didn't answer, so FCC couldn't check what is loaded here. It tries again every few seconds.">
+                    <div class="fcc-ps-th-bar"><div class="fcc-ps-th-bar-fill" style="width:0%;"></div></div>
+                    <div class="fcc-ps-th-body fcc-ps-th-body-empty">
+                        <div class="fcc-ps-th-id text-truncate">${_thLabel(th)}</div>
+                    </div>
+                    <div class="fcc-ps-th-chip" style="color:#ffd54a;">? not read</div>
+                </div>
+            `;
+        }
         // L140 fix — unbound toolheads (no dryer-box slot_targets points
         // at them) render with a distinct "no bound slots" placeholder
         // instead of being hidden, so the printer is visible on the
@@ -236,7 +262,7 @@
                     <div class="fcc-ps-th-body fcc-ps-th-body-empty">
                         <div class="fcc-ps-th-id text-truncate">${_thLabel(th)}</div>
                     </div>
-                    <div class="fcc-ps-th-chip" style="font-size:0.72rem; color:#ffd54a;">🔗 no bound slot</div>
+                    <div class="fcc-ps-th-chip" style="color:#ffd54a;">🔗 no bound slot</div>
                 </div>
             `;
         }
@@ -252,7 +278,7 @@
                     <div class="fcc-ps-th-body fcc-ps-th-body-empty">
                         <div class="fcc-ps-th-id text-truncate">${_thLabel(th)}</div>
                     </div>
-                    <div class="fcc-ps-th-chip" style="font-size:0.78rem; color: rgba(255,255,255,0.65);">empty</div>
+                    <div class="fcc-ps-th-chip" style="color: rgba(255,255,255,0.65);">empty</div>
                 </div>
             `;
         }
@@ -287,7 +313,7 @@
         const unboundCls = th.unbound ? ' fcc-ps-th-unbound' : '';
         const unboundBorder = th.unbound ? ' border:1px dashed #ffd54a;' : '';
         const unboundHint = th.unbound
-            ? `<div class="fcc-ps-th-chip" style="font-size:0.72rem; color:#ffd54a;" title="No dryer-box slot is bound to this toolhead. Auto-deduct still works (it follows the toolhead); bind a slot in the Location Manager → Feeds editor to also track it as box-fed.">🔗 no bound slot</div>`
+            ? `<div class="fcc-ps-th-chip" style="color:#ffd54a;" title="No dryer-box slot is bound to this toolhead. Auto-deduct still works (it follows the toolhead); bind a slot in the Location Manager → Feeds editor to also track it as box-fed.">🔗 no bound slot</div>`
             : '';
         return `
             <div class="fcc-ps-th${unboundCls}" ${positionAttr}
@@ -314,6 +340,16 @@
     // gray fallback) and contrast is consistent with all other chips.
     const _renderToolheadCompact = (th) => {
         const it = th.item;
+        if (th.unread && !it) {
+            // reads-1: the collapsed form of "? not read" (see _renderToolheadBlock).
+            return `<span class="fcc-ps-mini fcc-ps-mini-empty fcc-ps-mini-unread"
+                          data-toolhead="${th.id}"
+                          title="${th.id} — Spoolman didn't answer, so FCC couldn't check what is loaded here">
+                <span class="fcc-ps-mini-swatch fcc-ps-mini-swatch-empty"></span>
+                <span class="fcc-ps-mini-id">${th.id}</span>
+                <span class="fcc-ps-mini-weight" style="color:#ffd54a;">? not read</span>
+            </span>`;
+        }
         if (th.unbound && !it) {
             // L140 companion — collapsed-mode placeholder for unbound AND empty
             // toolheads. An unbound toolhead that holds a spool falls through to
@@ -408,8 +444,8 @@
         return { cls, label: safe, title: `PrusaLink reports: ${safe}` };
     };
 
-    // Expanded-row badge — sits under the printer name (always visible in the
-    // expanded view).
+    // Expanded-row badge — first on the printer's info line, under its name
+    // and before the review count (Derek, 2026-10-24), in its slot (_renderRow).
     const _renderStateBadge = (state) => {
         const m = _stateMeta(state);
         if (!m) return '';
@@ -426,37 +462,253 @@
         return `<span class="fcc-ps-state fcc-ps-state-chip ${m.cls}" title="${m.title}">${m.label}</span>`;
     };
 
+    // A printer's name, escaped for the text and for an attribute (its title,
+    // data-printer): the attribute then reads back as the plain name.
+    const _esc = (v) => (typeof window.escHtml === 'function'
+        ? window.escHtml(v)
+        : String(v == null ? '' : v).replace(/[&<>"']/g, (c) => (
+            { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])));
+    // A value for an inline handler: a JS string first, then escaped for the
+    // attribute (CLAUDE.md, SpoolCardBuilder.jsArg). The browser decodes the
+    // attribute's entities before it compiles the handler, so an apostrophe
+    // ("Derek's XL") ends up inside the string, never ending it.
+    const _jsArg = (v) => ((window.SpoolCardBuilder && typeof window.SpoolCardBuilder.jsArg === 'function')
+        ? window.SpoolCardBuilder.jsArg(v)
+        : _esc(JSON.stringify(String(v == null ? '' : v))));
+
+    // --- A PRINTER: ITS NAME, ITS INFO LINE, THEN ITS TILES ----------------
+    // Derek, 2026-10-23 (picture 13 / 14 of 2026-10-22, style S3): "name on top
+    // of tool heads, probably reads better, especially if we indent in the
+    // toolheads more so that they read as a sub thing of the printer name".
+    // Derek, 2026-10-24, after the state and the count went before the name:
+    // "the printer name, then under it, the status and review, basically we
+    // could treat that section as an information area about state and
+    // issues, then the toolheads ... you now have to go hunting for the
+    // printer name to know what those statuses apply to". Each printer is a
+    // grid of two columns (global.css .fcc-ps-row):
+    //   [▲▼] [name]                     <- the name's line
+    //        [STATE] [🛑 N]             <- the info line (.fcc-ps-info)
+    //        [tile] [tile] [tile] ...   <- the tiles
+    // The name, the info line and the tiles start at the same place, a step
+    // in from the arrows. The state and the count each have a slot of the
+    // same width on every printer (the count's is there with no reviews too:
+    // cancel_review.js puts the 🛑 N in it), so the states and the counts line
+    // up down the page; more about a printer's state or its issues goes on
+    // the info line, after the count. The name keeps to one line: when the
+    // line is too short it ends in "…" (its full text is its title), so a long
+    // name can't reach the info line or the tiles. The arrows stay a pair, ▲
+    // over ▼, centred on the name's line and never making it taller (a
+    // middle printer has both). Where fewer than two tiles fit under the
+    // name (a phone) and more fit from the row's edge, they start there
+    // (_balanceRows, .fcc-ps-edge).
+    // data-printer holds the plain name (attribute-escaped), which
+    // cancel_review.js matches to a review's printer_name; until 2026-10-24 it
+    // held the handler's JS escape (Derek\'s XL), so a printer with an
+    // apostrophe in its name never showed its count.
     const _renderRow = (name, info, idx, total) => {
-        const safeName = name.replace(/"/g, '&quot;').replace(/'/g, "\\'");
+        const nameArg = _jsArg(name);
         const upBtn = idx > 0
-            ? `<button type="button" class="fcc-ps-reorder" title="Move up"
-                    onclick="event.stopPropagation(); window.movePrinterStatusRow('${safeName}', -1)">▲</button>`
+            ? `<button type="button" class="fcc-ps-reorder" data-dir="-1" title="Move up"
+                    onclick="event.stopPropagation(); window.movePrinterStatusRow(${nameArg}, -1)">▲</button>`
             : `<span class="fcc-ps-reorder-placeholder"></span>`;
         const downBtn = idx < total - 1
-            ? `<button type="button" class="fcc-ps-reorder" title="Move down"
-                    onclick="event.stopPropagation(); window.movePrinterStatusRow('${safeName}', 1)">▼</button>`
+            ? `<button type="button" class="fcc-ps-reorder" data-dir="1" title="Move down"
+                    onclick="event.stopPropagation(); window.movePrinterStatusRow(${nameArg}, 1)">▼</button>`
             : `<span class="fcc-ps-reorder-placeholder"></span>`;
         const stateBadge = _renderStateBadge(info.state);
         // Per-printer expanded row. The collapsed view is now a single
         // chip strip in the widget header (rendered separately in _render),
         // not per-row, so we don't include compact chips here anymore.
+        // The tiles' rows are laid out by _balanceRows after the render (no
+        // Bootstrap d-flex here: its !important display would beat the grid;
+        // the arrows' pair is laid out by global.css too).
         return `
-            <div class="fcc-ps-row" data-printer="${safeName}">
-                <div class="fcc-ps-name-col d-flex align-items-center">
-                    <div class="fcc-ps-reorder-stack d-flex flex-column">
-                        ${upBtn}
-                        ${downBtn}
-                    </div>
-                    <div class="fcc-ps-name-stack d-flex flex-column ms-2">
-                        <div class="fcc-ps-name text-info fw-bold">${(window.escHtml || String)(name)}</div>
-                        ${stateBadge}
-                    </div>
+            <div class="fcc-ps-row" data-printer="${_esc(name)}">
+                <div class="fcc-ps-reorder-stack">
+                    ${upBtn}
+                    ${downBtn}
                 </div>
-                <div class="fcc-ps-toolheads d-flex gap-2 flex-wrap">
+                <div class="fcc-ps-name text-info fw-bold" title="${_esc(name)}">${_esc(name)}</div>
+                <div class="fcc-ps-info">
+                    <span class="fcc-ps-state-slot">${stateBadge}</span>
+                    <span class="fcc-ps-count"></span>
+                </div>
+                <div class="fcc-ps-toolheads">
                     ${info.toolheads.map(_renderToolheadBlock).join('')}
                 </div>
             </div>
         `;
+    };
+
+    // --- EVEN ROWS OF TILES (Derek, 2026-10-22; under the name since 2026-10-23) ---
+    // A printer's tiles sit under its name. When they don't all fit on one
+    // line there, they split into the FEWEST rows with EQUAL counts: 8 -> 4 + 4,
+    // 7 -> 4 + 3, 10 -> 5 + 5, never 7 + 1. Rows as equal as they can be, the
+    // longer ones first (7 in three rows is 3 + 2 + 2). A row of one tile is
+    // left only where at most two fit on a line and the count is odd (a phone:
+    // 2 + 2 + 1). Until 2026-10-23 the tiles sat beside a 12.5rem name column
+    // and went under the name only on a phone; that "beside" mode is gone.
+    //
+    // tileRows(n, fit) -> {cols, rows, sizes}: `fit` is how many tiles fit on
+    // a line (0 counts as 1). Pure (pinned by
+    // tests/test_printer_status_even_rows.py).
+    const tileRows = (n, fit) => {
+        const count = Math.max(0, Math.floor(Number(n) || 0));
+        if (!count) return { cols: 0, rows: 0, sizes: [] };
+        const per = Math.max(1, Math.floor(Number(fit) || 0));
+        const rows = Math.ceil(count / per);
+        const big = count % rows;            // rows that get one tile more
+        const base = Math.floor(count / rows);
+        const sizes = [];
+        for (let i = 0; i < rows; i++) sizes.push(base + (i < big ? 1 : 0));
+        return { cols: sizes[0], rows, sizes };
+    };
+    window.fccPrinterStatusTileRows = tileRows;
+
+    // Measures every printer's tile area (the row's width from the name's
+    // first letter, a step in from the arrows) and lays
+    // its tiles out by tileRows: a grid of `cols` columns (--fcc-ps-cols)
+    // whose rows each start in column 1, so 7 in three rows reads 3 + 2 + 2 (a
+    // plain grid would fill 3 + 3 + 1). All reads first, then all writes. Runs
+    // after every render, on a Text size change and when the body's width
+    // changes; does nothing while the widget is collapsed (the body has no
+    // width), and the body's width changing on expand runs it again.
+    //
+    // A phone (review, 2026-10-23; the state and the count before the name
+    // since 2026-10-24): where fewer than two tiles fit on a line under the
+    // name and more fit across the row's whole width, the tiles start at the
+    // row's edge instead (the row gets .fcc-ps-edge), under the arrows: two to
+    // a line from 376 px at Standard (an iPhone 12 to 16 is 390 or 393 px, a
+    // Pixel or a Galaxy 412) up to 568 px; from 569 px two fit under the name.
+    // Where not even one fits under the name (below 369 px at Standard) the
+    // one a line starts at the edge too. The state, the count and their gaps
+    // are narrower than a tile, so the edge has room for one tile more than
+    // under the name, never two; it takes at most two a line anyway, so a
+    // wider state (OPERATIONAL) can't make a wider window show fewer.
+    //
+    // Widths are read to the fraction of a px (review, 2026-10-22): at a
+    // display scale of 110 % a width of 1439.83 px reads as 1440 in
+    // clientWidth (a whole px), and one tile more than fits was counted. The
+    // count the measure made is the tile area's data-fit, so a test can tell
+    // a measure that counted right from one the check below put right. Then
+    // what the browser drew is checked, all reads and then all writes again:
+    // a line of tiles wider than its area is laid out again with one tile
+    // fewer per line, so a rounding the sums don't see (a gap at another
+    // scale, a margin) can't leave it wrong either.
+    const _balanceRows = () => {
+        const widget = document.getElementById('printer-status-widget');
+        const body = widget && widget.querySelector('.fcc-ps-body');
+        if (!body || typeof body.querySelectorAll !== 'function') return;
+        const px = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
+        // An element's content box, to the fraction of a px. The tile area is
+        // the grid's second column (minmax(0, 1fr)), or both columns at the
+        // edge, so its width never follows the tiles.
+        const contentBox = (el) => {
+            const r = el.getBoundingClientRect();
+            const cs = getComputedStyle(el);
+            const left = r.left + px(cs.borderLeftWidth) + px(cs.paddingLeft);
+            const right = r.right - px(cs.borderRightWidth) - px(cs.paddingRight);
+            return { left, right, width: right - left };
+        };
+        const rows = [];
+        body.querySelectorAll('.fcc-ps-row').forEach((row) => {
+            const heads = row.querySelector('.fcc-ps-toolheads');
+            const name = row.querySelector('.fcc-ps-name');
+            const tiles = heads ? Array.from(heads.children).filter(el => el.classList && el.classList.contains('fcc-ps-th')) : [];
+            if (!heads || !name || !tiles.length) return;
+            // The row's own width, and the part of it under the name: from the
+            // name's column (its left edge, which no mode moves: only the
+            // arrows' column is before it, the same width on every printer)
+            // to the row's right edge.
+            const whole = contentBox(row);
+            const under = whole.right - name.getBoundingClientRect().left;
+            const gap = px(getComputedStyle(heads).columnGap);
+            const tileW = tiles[0].getBoundingClientRect().width;
+            if (!(whole.width > 0) || !(tileW > 0)) return;
+            // A twentieth of a px of slack, so k tiles and k - 1 gaps that fit
+            // exactly don't lose a tile to a gap's rounding; the check below
+            // catches the rare line it lets through.
+            const count = (w) => Math.max(0, Math.floor((w + gap + 0.05) / (tileW + gap)));
+            const fitUnder = count(under);
+            const fitWhole = count(whole.width);
+            const edge = fitUnder < 2 && fitWhole > fitUnder;
+            rows.push({ row, heads, tiles, edge, fitUnder, fit: edge ? Math.min(fitWhole, 2) : fitUnder, plan: null });
+        });
+        const lay = (r) => {
+            const plan = tileRows(r.tiles.length, r.fit);
+            r.plan = plan;
+            r.row.classList.toggle('fcc-ps-edge', r.edge);
+            r.heads.classList.add('fcc-ps-balanced');
+            r.heads.style.setProperty('--fcc-ps-cols', String(plan.cols));
+            r.heads.dataset.rows = plan.sizes.join('+');
+            let start = 0;
+            const starts = new Set(plan.sizes.map((size) => { const at = start; start += size; return at; }));
+            r.tiles.forEach((tile, i) => { tile.style.gridColumnStart = (i > 0 && starts.has(i)) ? '1' : ''; });
+        };
+        rows.forEach((r) => { r.heads.dataset.fit = String(r.fit); lay(r); });
+        // Drawn as planned? The first, longest, line of tiles ends inside
+        // the tile area. One tile a line goes back under the name where one
+        // fits there by measure: the edge is for the second tile, and for the
+        // first only where none fits under the name.
+        const drawnWrong = (r) => r.plan.cols > 0
+            && r.tiles[r.plan.cols - 1].getBoundingClientRect().right > contentBox(r.heads).right + 0.01;
+        for (let pass = 0; pass < 3; pass++) {
+            const wrong = rows.filter(drawnWrong);
+            if (!wrong.length) break;
+            wrong.forEach((r) => {
+                r.fit = Math.max(1, r.plan.cols - 1);
+                if (r.fit < 2 && r.fitUnder >= 1) r.edge = false;
+                lay(r);
+            });
+        }
+    };
+    window.balancePrinterStatusRows = _balanceRows;
+
+    // The body's width: the window, a scrollbar coming or going, the widget
+    // opening. Only a change of width lays the rows out again (their height
+    // changes when they do, and must not start it over). Compared to the
+    // fraction of a px: at a display scale such as 110 % a window one device
+    // px narrower is 0.91 px narrower, which rounding could hide.
+    let _bodyWidth = -1;
+    let _widthFrame = 0;
+    const _watchBodyWidth = (body) => {
+        if (!body || body._fccPsWidthWatched || typeof ResizeObserver !== 'function') return;
+        body._fccPsWidthWatched = true;
+        new ResizeObserver((entries) => {
+            const entry = entries && entries[entries.length - 1];
+            const w = entry ? entry.contentRect.width : -1;
+            if (w === _bodyWidth) return;
+            _bodyWidth = w;
+            // Out of the observer's callback: the layout it changes would
+            // otherwise be reported again in the same frame.
+            if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(_widthFrame);
+            _widthFrame = requestAnimationFrame(() => _balanceRows());
+        }).observe(body);
+    };
+    // A Text size change grows or shrinks every tile (rem), not the window.
+    document.addEventListener('fcc:text-size', () => _balanceRows());
+
+    // A ▲ / ▼ reached by keyboard keeps the focus through a repaint (the
+    // reorder draws the rows again, and so does a heartbeat that changed a
+    // tile): on the same printer's arrow, the same one when it still has it
+    // (▼ again moves the printer further down), else its other one. Without
+    // this the focus fell to the page after every move (review, 2026-10-23).
+    // An arrow clicked with the mouse lets it go, as before.
+    const _focusedArrow = (body) => {
+        const el = document.activeElement;
+        if (!el || typeof body.contains !== 'function' || !body.contains(el)
+            || !el.classList || !el.classList.contains('fcc-ps-reorder')) return null;
+        let byKeyboard = true;
+        try { byKeyboard = el.matches(':focus-visible'); } catch (e) { /* an old browser: keep it */ }
+        const row = byKeyboard ? el.closest('.fcc-ps-row') : null;
+        return row ? { printer: row.getAttribute('data-printer'), dir: el.getAttribute('data-dir') } : null;
+    };
+    const _refocusArrow = (body, kept) => {
+        const row = Array.from(body.querySelectorAll('.fcc-ps-row'))
+            .find((r) => r.getAttribute('data-printer') === kept.printer);
+        const arrows = row ? Array.from(row.querySelectorAll('button.fcc-ps-reorder')) : [];
+        const target = arrows.find((b) => b.getAttribute('data-dir') === kept.dir) || arrows[0];
+        if (target) target.focus();
     };
 
     const _render = (rows) => {
@@ -476,9 +728,18 @@
             return;
         }
         widget.style.display = '';
+        const kept = _focusedArrow(body);
         body.innerHTML = printerNames
             .map((name, idx) => _renderRow(name, rows[name], idx, printerNames.length))
             .join('');
+        // The 🛑 N counts first (the widget just overwrote body.innerHTML,
+        // dropping them), so the rows are measured as they will be drawn.
+        if (window.cancelReviewDecorate) window.cancelReviewDecorate();
+        // Even rows of tiles under each name (Derek, 2026-10-22 / 2026-10-23),
+        // laid out before the browser paints the new rows.
+        _balanceRows();
+        _watchBodyWidth(body);
+        if (kept) _refocusArrow(body, kept);
         // Header chip strip — every toolhead from every printer in the
         // user's printer order. Each printer's chips are wrapped in a
         // group div so CSS can add a vertical divider between groups,
@@ -486,13 +747,12 @@
         const headerChips = widget.querySelector('.fcc-ps-header-chips');
         if (headerChips) {
             headerChips.innerHTML = printerNames.map(name => {
-                const safeName = name.replace(/"/g, '&quot;');
                 // Lead each group with a compact state badge so live printer
                 // state (PRINTING / IDLE / PAUSED / OFFLINE …) is visible in
                 // the collapsed strip without expanding the widget.
                 const stateChip = _renderStateChip(rows[name].state);
                 const chips = rows[name].toolheads.map(_renderToolheadCompact).join('');
-                return `<div class="fcc-ps-printer-group" data-printer="${safeName}">${stateChip}${chips}</div>`;
+                return `<div class="fcc-ps-printer-group" data-printer="${_esc(name)}">${stateChip}${chips}</div>`;
             }).join('');
         }
         // Delegated click handler — bound ONCE on the stable widget root
@@ -501,8 +761,7 @@
         // and click, especially during active PRINTING when state/weight
         // ticks invalidated the fingerprint frequently (L361).
         _wireDelegation(widget);
-        // Re-paint the cancelled-print "🛑 N" review chip onto each printer's
-        // name (the widget just overwrote body.innerHTML, dropping any chips).
+        // The collapsed strip's groups get their 🛑 N counts too.
         if (window.cancelReviewDecorate) window.cancelReviewDecorate();
     };
 
@@ -516,13 +775,120 @@
             const tid = el.dataset.toolhead;
             if (tid && window.openManage) window.openManage(tid);
         });
+        // Enter on a focused ▲ / ▼ moves the printer, as a click does (review,
+        // 2026-10-23). The dashboard's scan accumulator (scripts.html) cancels
+        // every Enter outside a text field, a button's own press included, so
+        // Enter never reached the arrows there (Space did). A scan ends in
+        // Enter too: one still arriving (window.enterIsAScan) is left to the
+        // accumulator, and the press clears the scan buffer it consumed.
+        widget.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter' || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+            const btn = e.target && typeof e.target.closest === 'function'
+                ? e.target.closest('button.fcc-ps-reorder') : null;
+            if (!btn || !widget.contains(btn)) return;
+            if (typeof window.enterIsAScan === 'function' && window.enterIsAScan()) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            if (typeof window.clearScanBuffer === 'function') window.clearScanBuffer();
+            btn.click();
+        });
+    };
+
+    // --- reads-1 (Group 52 review): "Spoolman didn't answer", never "empty" ---
+    // A head's tile comes from Spoolman's spool list. When the heartbeat's one
+    // read of it fails, its `spool_read` says ok: false and every head in its
+    // printer_status is empty only because nothing was read; when the fan-out's
+    // strict read of one head fails, that head comes back `unread`. Either way a
+    // head keeps the spool its tile showed after the last read that worked, a
+    // head with no earlier answer is drawn "? not read", and
+    // #printer-status-read-notice says Spoolman didn't answer. Everything that
+    // isn't read from Spoolman (the printer's state badge, the 🔗 binding hint)
+    // still updates. The next good read redraws the tiles and hides the notice;
+    // a heartbeat that says nothing either way draws as before.
+    //
+    // `everyHead`: the heartbeat's read failed, so every head is unread;
+    // otherwise only the heads marked `unread`. `last` is what was drawn.
+    const _keepLastTiles = (rows, last, everyHead) => {
+        let kept = 0, unread = 0;
+        const out = {};
+        Object.keys(rows).forEach(name => {
+            const info = rows[name];
+            if (!info || typeof info !== 'object' || !Array.isArray(info.toolheads)) {
+                out[name] = info;
+                return;
+            }
+            const prev = new Map();
+            ((last && last[name] && last[name].toolheads) || []).forEach(p => {
+                if (p && p.id) prev.set(p.id, p);
+            });
+            out[name] = {
+                ...info,
+                toolheads: info.toolheads.map(th => {
+                    if (!th || !(everyHead || th.unread)) return th;
+                    const p = prev.get(th.id);
+                    const head = { ...th };
+                    delete head.loaded_ids;
+                    if (p && !p.unread) {
+                        kept++;
+                        head.item = p.item || null;
+                        head.loaded_count = p.loaded_count || 0;
+                        if (p.loaded_ids) head.loaded_ids = p.loaded_ids;
+                        delete head.unread;
+                    } else {
+                        unread++;
+                        head.item = null;
+                        head.loaded_count = 0;
+                        head.unread = true;
+                    }
+                    return head;
+                }),
+            };
+        });
+        return { rows: out, kept, unread };
+    };
+    const _readNoticeEl = () => {
+        let el = document.getElementById('printer-status-read-notice');
+        if (el) return el;
+        const widget = document.getElementById('printer-status-widget');
+        const body = widget && widget.querySelector('.fcc-ps-body');
+        if (!body || !body.parentNode) return null;
+        // Above the body, not in it: _render rewrites the body, and the notice
+        // must show in the collapsed view too (which hides the body). Same look
+        // as #manage-read-notice (Group 52.1b), a little smaller for the band.
+        el = document.createElement('div');
+        el.id = 'printer-status-read-notice';
+        el.className = 'fcc-ps-read-notice';
+        el.setAttribute('role', 'status');
+        el.setAttribute('aria-live', 'polite');
+        el.style.cssText = 'display:none; background:#2b2200; color:#ffd54a; border:1px solid #ffd54a;'
+            + ' border-radius:6px; padding:4px 10px; margin:4px 0; font-weight:bold; font-size:0.85rem;';
+        body.parentNode.insertBefore(el, body);
+        return el;
+    };
+    const _showReadFailure = (kept, why) => {
+        const el = _readNoticeEl();
+        if (!el) return;
+        const text = "⚠️ Spoolman didn't answer, so FCC couldn't check what's loaded on the toolheads just now."
+            + (kept ? ' These tiles are from its last answer.' : '')
+            + ' It tries again every few seconds.';
+        // Only on a change: an aria-live region re-announces a rewrite.
+        if (el.textContent !== text) el.textContent = text;
+        el.title = why ? String(why) : '';
+        el.style.display = 'block';
+    };
+    const _clearReadFailure = () => {
+        const el = document.getElementById('printer-status-read-notice');
+        if (!el) return;
+        el.style.display = 'none';
+        el.textContent = '';
+        el.title = '';
     };
 
     const refresh = async () => {
         if (_state.inFlight) return;
         _state.inFlight = true;
         try {
-            const rows = await _aggregate();
+            let rows = await _aggregate();
             // L56 — preserve printer `state` from the last bulk-pulse render
             // (refreshFromAggregate), since the per-printer fan-out here
             // doesn't include it. Without this merge, every sync-pulse
@@ -534,6 +900,18 @@
                     rows[name].state = cached.state;
                 }
             });
+            // reads-1: a head whose strict read failed keeps its last tile.
+            const anyUnread = Object.keys(rows).some(name => {
+                const heads = rows[name] && rows[name].toolheads;
+                return Array.isArray(heads) && heads.some(th => th && th.unread);
+            });
+            if (anyUnread) {
+                const kept = _keepLastTiles(rows, _state.rowsByPrinter, false);
+                rows = kept.rows;
+                _showReadFailure(kept.kept > 0, null);
+            } else {
+                _clearReadFailure();
+            }
             _state.rowsByPrinter = rows;
             const fp = _fingerprint(rows);
             if (fp === _state.lastFingerprint) return;  // unchanged, skip render
@@ -570,6 +948,9 @@
     window.togglePrinterStatusWidget = () => {
         _setCollapsed(!_isCollapsed());
         _renderShell();
+        // Opened: the rows are measured again (the window may have changed
+        // size, or the Text size, while the body had no width).
+        if (!_isCollapsed()) _balanceRows();
     };
 
     // Group 45.8: every heartbeat tick renders this widget from its
@@ -613,16 +994,27 @@
     // L206 bulk-pulse hook: render from a pre-fetched aggregate without
     // hitting the per-printer fan-out. Same fingerprint/wiggle protection
     // as refresh(). Called by startSmartSync's dashboard_pulse dispatcher
-    // when the response includes a printer_status section.
-    const refreshFromAggregate = (rows) => {
+    // when the response includes a printer_status section; `read` is the
+    // heartbeat's `spool_read` ({ok, error}), or undefined when it has none.
+    const refreshFromAggregate = (rows, read) => {
         if (!rows || typeof rows !== 'object') return;
         // A section the server couldn't build arrives as {error: "..."}
         // (routes_state_pulse.py). Treat it as missing so the tick's event takes
         // the fan-out fallback; rendering it threw in _fingerprint and aborted
         // the rest of the tick (review widget-2).
         if (typeof rows.error === 'string') return;
-        // The tick's inventory:sync-pulse, fired right after this, needs no fan-out.
+        // The tick's inventory:sync-pulse, fired right after this, needs no
+        // fan-out: not even when Spoolman didn't answer (one more whole-list
+        // read per head, just when it is slow).
         _state.pulseFed = true;
+        // reads-1: the read failed, so every head keeps its last tile.
+        if (read && read.ok === false) {
+            const kept = _keepLastTiles(rows, _state.rowsByPrinter, true);
+            rows = kept.rows;
+            _showReadFailure(kept.kept > 0, read.error);
+        } else {
+            _clearReadFailure();
+        }
         _state.rowsByPrinter = rows;
         const fp = _fingerprint(rows);
         if (fp === _state.lastFingerprint) return;

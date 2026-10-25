@@ -39,6 +39,10 @@ inventory-hub/data/locations.json.*.bak
 # doesn't pollute diffs.
 inventory-hub/.build_info
 
+# Real print captures kept for test fixtures (multi-MB .bgcode / decoded gcode,
+# e.g. the 2026-10-08 INDX raccoon print): durable on disk, never committed.
+/.captures/
+
 # L271 Phase 3.5 scratch (A/B baselines, not for commit)
 .l271_p35_tmp/
 config.json.*.bak

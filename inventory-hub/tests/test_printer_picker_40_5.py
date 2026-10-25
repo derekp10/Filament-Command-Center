@@ -226,6 +226,7 @@ def test_a_slot_whose_spool_runs_on_another_head_is_refused_before_the_fed_quest
     sm = FakeSpoolman({42: _sp("CR-CT-2-R1"), 99: FROM_POLYDRYER, 60: _sp("XL-3", src="LR-MDB-1", src_slot=1)})
     res = _move(sm, "LR-MDB-1", slot="1")
     assert res["status"] == "error" and "still holds #60, loaded on XL-3, while the slot feeds XL-1" in res["msg"], res
+    assert res["blocked_reason"] == "slot_claimed", res   # Group 51.3 (the question path's refusal)
     assert sm.writes == []
 
 

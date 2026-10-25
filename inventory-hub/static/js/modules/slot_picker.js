@@ -92,12 +92,14 @@
         if (document.getElementById('fcc-slot-picker-style')) return;
         const css = document.createElement('style');
         css.id = 'fcc-slot-picker-style';
+        // Widths that hold text are in rem (62.5rem = 1000 px at Standard), so the
+        // picker grows with the per-browser Text size and keeps its layout.
         css.textContent = `
-#${OVERLAY_ID} .fcc-sp-panel { width:min(1000px,96vw); max-height:90vh; display:flex; flex-direction:column; border:1px solid #0dcaf0; }
+#${OVERLAY_ID} .fcc-sp-panel { width:min(62.5rem,96vw); max-height:90vh; display:flex; flex-direction:column; border:1px solid #0dcaf0; }
 #${OVERLAY_ID} .fcc-sp-scroll { overflow:auto; }
 #${OVERLAY_ID} .fcc-sp-grid { display:flex; flex-wrap:wrap; gap:10px; justify-content:center; padding:12px; }
 #${OVERLAY_ID} .fcc-sp-section { width:100%; color:#9fe8ff; font-weight:800; font-size:0.85rem; letter-spacing:0.4px; margin:2px 4px -4px; }
-#${OVERLAY_ID} .fcc-sp-tile { width:205px; min-height:210px; display:flex; flex-direction:column; gap:6px; align-items:stretch; text-align:left;
+#${OVERLAY_ID} .fcc-sp-tile { width:12.8125rem; min-height:13.125rem; display:flex; flex-direction:column; gap:6px; align-items:stretch; text-align:left;
     background:#1b1b1b; color:#eee; border:2px solid #4a4a4a; border-radius:8px; padding:8px; cursor:pointer; }
 #${OVERLAY_ID} .fcc-sp-tile:hover { border-color:#8a939b; }
 #${OVERLAY_ID} .fcc-sp-tile.is-star { border-color:#ffc107; }
@@ -105,36 +107,36 @@
 #${OVERLAY_ID} .fcc-sp-tile:focus { outline:none; }
 #${OVERLAY_ID} .fcc-sp-top { display:flex; justify-content:space-between; align-items:center; gap:6px; }
 #${OVERLAY_ID} .fcc-sp-num { font-weight:900; color:#ffd36b; letter-spacing:0.5px; font-size:0.95rem; }
-#${OVERLAY_ID} .fcc-sp-star { font-size:0.72rem; font-weight:800; color:#111; background:#ffc107; border-radius:10px; padding:1px 7px; white-space:nowrap; }
+#${OVERLAY_ID} .fcc-sp-star { font-size:var(--fcc-fs-label); font-weight:800; color:#111; background:#ffc107; border-radius:10px; padding:1px 4px; white-space:nowrap; }
 #${OVERLAY_ID} .fcc-sp-empty { color:#c4c9ce; font-weight:800; font-size:1.05rem; text-align:center; padding:12px 0; border:1px dashed #5a5a5a; border-radius:6px; }
 #${OVERLAY_ID} .fcc-sp-feed { font-size:0.85rem; color:#8fe3ff; font-weight:700; }
 #${OVERLAY_ID} .fcc-sp-feed.is-other { color:#ffc27a; }
 #${OVERLAY_ID} .fcc-sp-feed.is-storage { color:#c4c9ce; font-weight:600; }
-#${OVERLAY_ID} .fcc-sp-res { font-size:0.8rem; color:#e6e6e6; }
-#${OVERLAY_ID} .fcc-sp-note { font-size:0.78rem; color:#d0d0d0; }
-#${OVERLAY_ID} .fcc-sp-warn { font-size:0.78rem; color:#ffc27a; font-weight:700; }
+#${OVERLAY_ID} .fcc-sp-res { font-size:var(--fcc-fs-small); color:#e6e6e6; }
+#${OVERLAY_ID} .fcc-sp-note { font-size:var(--fcc-fs-small); color:#d0d0d0; }
+#${OVERLAY_ID} .fcc-sp-warn { font-size:var(--fcc-fs-small); color:#ffc27a; font-weight:700; }
 #${OVERLAY_ID} .fcc-sp-pstate { font-weight:800; }
 #${OVERLAY_ID} .fcc-sp-pstate.is-printing { color:#ffa94d; }
 #${OVERLAY_ID} .fcc-sp-pstate.is-idle { color:#69db7c; }
 #${OVERLAY_ID} .fcc-sp-pstate.is-unknown { color:#ced4da; }
-#${OVERLAY_ID} .fcc-sp-pchip { font-size:0.82rem; background:#26313a; border:1px solid #4f6b80; border-radius:12px; padding:2px 9px; white-space:nowrap; }
+#${OVERLAY_ID} .fcc-sp-pchip { font-size:var(--fcc-fs-label); background:#26313a; border:1px solid #4f6b80; border-radius:12px; padding:2px 9px; white-space:nowrap; }
 #${OVERLAY_ID} .fcc-sp-qr { align-self:center; background:#fff; padding:3px; border-radius:3px; line-height:0; margin-top:auto; }
 #${OVERLAY_ID} .fcc-sp-footer { font-size:0.85rem; color:#e0e0e0; display:flex; flex-wrap:wrap; gap:6px 14px; align-items:center; justify-content:space-between; }
-#${OVERLAY_ID} .fcc-sp-keys { color:#c8c8c8; font-size:0.8rem; }
+#${OVERLAY_ID} .fcc-sp-keys { color:#c8c8c8; font-size:var(--fcc-fs-small); }
 #${OVERLAY_ID} .fcc-sp-msg { padding:14px 18px; font-size:1rem; }
 #${OVERLAY_ID} .fcc-sp-link { color:#8fe3ff; text-decoration:underline; background:none; border:0; padding:0; font-size:0.85rem; }
 #${OVERLAY_ID} .fcc-sp-tile.is-blocked { border-style:dashed; border-color:#6b5a3a; background:#151515; }
 #${OVERLAY_ID} .fcc-sp-tile.is-blocked .fcc-sp-num { color:#b9a77f; }
 #${OVERLAY_ID} .fcc-sp-tile.is-blocked.kb-active { border-color:#ffb74d; box-shadow:0 0 0 3px rgba(255,183,77,0.45); }
-#${OVERLAY_ID} .fcc-sp-block { font-size:0.78rem; color:#ffd27a; font-weight:700; }
+#${OVERLAY_ID} .fcc-sp-block { font-size:var(--fcc-fs-small); color:#ffd27a; font-weight:700; }
 #${OVERLAY_ID} .fcc-sp-status { display:none; margin:10px 12px 0; padding:6px 10px; border-radius:6px; background:#4a3200; color:#ffd27a; border:1px solid #ffb74d; font-weight:bold; }
-#${OVERLAY_ID} .fcc-sp-step { font-size:0.8rem; font-weight:800; color:#111; background:#9fe8ff; border-radius:10px; padding:1px 8px; margin-left:8px; white-space:nowrap; }
+#${OVERLAY_ID} .fcc-sp-step { font-size:var(--fcc-fs-label); font-weight:800; color:#111; background:#9fe8ff; border-radius:10px; padding:1px 8px; margin-left:8px; white-space:nowrap; }
 #${OVERLAY_ID} .fcc-sp-choice { display:flex; gap:16px; padding:14px 18px; align-items:flex-start; flex-wrap:wrap; }
-#${OVERLAY_ID} .fcc-sp-choice-card { width:205px; }
-#${OVERLAY_ID} .fcc-sp-choice-text { flex:1; min-width:240px; font-size:1rem; color:#f1f1f1; }
+#${OVERLAY_ID} .fcc-sp-choice-card { width:12.8125rem; }
+#${OVERLAY_ID} .fcc-sp-choice-text { flex:1; min-width:15rem; font-size:1rem; color:#f1f1f1; }
 #${OVERLAY_ID} .fcc-sp-choice-btns { display:flex; gap:10px; flex-wrap:wrap; margin-top:12px; }
-#${OVERLAY_ID} .fcc-sp-choice-btn { display:flex; flex-direction:column; align-items:flex-start; min-width:150px; text-align:left; }
-#${OVERLAY_ID} .fcc-sp-choice-btn small { font-weight:400; font-size:0.78rem; }
+#${OVERLAY_ID} .fcc-sp-choice-btn { display:flex; flex-direction:column; align-items:flex-start; min-width:9.375rem; text-align:left; }
+#${OVERLAY_ID} .fcc-sp-choice-btn small { font-weight:400; font-size:var(--fcc-fs-small); }
 #${OVERLAY_ID} .fcc-sp-choice-btn:focus { box-shadow:0 0 0 3px rgba(13,202,240,0.6); }
 `;
         document.head.appendChild(css);
@@ -339,13 +341,21 @@
         if (f && f.kind === 'toolhead') {
             // The engine's store_only rule (placement's stores_only; Group 40.2
             // review): the slot feeds the head the spool is leaving, or it is the
-            // slot the spool was deployed from. Either way it is not loaded.
+            // slot the spool was deployed from. Either way it is not loaded. In
+            // return mode every slot only stores (Group 51.2: Return never loads).
             const storesOnly = d.stores_only != null ? !!d.stores_only : !!f.is_source;
             feed = `<div class="fcc-sp-feed">→ ${_esc(f.id)} · ${_pstate(f.printer)}</div>`;
-            if (storesOnly) {
-                feed += f.is_source
-                    ? `<div class="fcc-sp-note">#${_esc(m.spool)} is on ${_esc(f.id)} now: it is stored here, not loaded back</div>`
-                    : `<div class="fcc-sp-note">#${_esc(m.spool)} came from this slot: it goes back in, stored, not loaded onto ${_esc(f.id)}</div>`;
+            // A greyed-out Return tile (it holds a spool) says only why it is out.
+            if (storesOnly && !(m.mode === 'return' && d.blocked)) {
+                let why;
+                if (f.is_source) {
+                    why = `#${_esc(m.spool)} is on ${_esc(f.id)} now: it is stored here, not loaded back`;
+                } else if (d.current || m.mode !== 'return') {
+                    why = `#${_esc(m.spool)} came from this slot: it goes back in, stored, not loaded onto ${_esc(f.id)}`;
+                } else {
+                    why = `Stored only: Return puts #${_esc(m.spool)} here without loading it onto ${_esc(f.id)}`;
+                }
+                feed += `<div class="fcc-sp-note">${why}</div>`;
             }
             extra = _runsLine(f.id, f.residents);
         } else if (f && f.kind === 'pool') {
@@ -480,7 +490,7 @@
             <div class="d-flex align-items-center gap-3">
                 <div class="d-flex flex-column align-items-center" title="Scan to cancel">
                     <div class="fcc-sp-qr" id="fcc-sp-qr-${s.id}-cancel"></div>
-                    <div style="font-size:0.66rem; color:#c8c8c8; font-weight:700;">📷 CANCEL</div>
+                    <div class="fcc-qr-caption" style="font-size:var(--fcc-fs-label); color:#c8c8c8; font-weight:700;">📷 CANCEL</div>
                 </div>
                 <button type="button" class="btn btn-sm btn-secondary" data-sp-act="cancel">Cancel</button>
             </div>`;
@@ -632,8 +642,11 @@
         s.view = 'choice';
         s.choice = { tile: t, via, actions };
         const occ = (t.data && t.data.spool) || null;
+        // One tone per action, for its button AND its QR (attachConfirmQRs'
+        // tones are named after the Bootstrap button variants).
+        const toneOf = (a, i) => (a.key === 'back' ? 'secondary' : (i === 0 ? 'warning' : 'info'));
         const btns = actions.map((a, i) => `
-            <button type="button" class="btn btn-sm ${a.key === 'back' ? 'btn-secondary' : (i === 0 ? 'btn-warning' : 'btn-info')} fcc-sp-choice-btn"
+            <button type="button" class="btn btn-sm btn-${toneOf(a, i)} fcc-sp-choice-btn"
                     data-sp-choice="${_esc(a.key)}">${_esc(a.label)}<small>${_esc(a.sub || '')}</small></button>`).join('');
         _setContent(s, `
             <div class="card bg-dark text-light shadow-lg fcc-sp-panel" data-sp-state="choice" data-sp-slot="${_esc(t.slot)}" tabindex="-1">
@@ -651,6 +664,8 @@
             </div>`);
         // Scannable choices (session-scoped, so a stale printout can't fire):
         // the first action, Overwrite as the third QR, and Back as the cancel.
+        // Each QR takes its button's colour (Derek, 2026-10-21): the first
+        // action is amber (btn-warning), Overwrite cyan (btn-info), Back grey.
         if (window.attachConfirmQRs) {
             const host = s.handle.element.querySelector('.fcc-sp-choice-qrs');
             const first = c.actions[0];
@@ -662,6 +677,9 @@
                 onCancel: () => _choose(s, 'back'),
                 confirmLabel: first.qr, storeLabel: over ? over.qr : undefined, cancelLabel: 'Scan to go Back',
                 theme: 'info',
+                confirmTone: toneOf(first, 0),
+                storeTone: over ? toneOf(over, actions.indexOf(over)) : undefined,
+                cancelTone: 'secondary',
             });
         }
         const btn = s.handle.element.querySelector('[data-sp-choice]');

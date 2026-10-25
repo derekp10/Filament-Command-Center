@@ -36,6 +36,7 @@ import prusalink_api  # type: ignore
 import print_deduct_ledger  # type: ignore
 import cancel_review_store  # type: ignore
 import cancel_fetch_store  # type: ignore
+import stock_report  # type: ignore  # Group 49.2b: the low-stock warning after a deduct
 
 from app_core import app
 
@@ -280,6 +281,10 @@ def api_smart_move():
         # Group 40.5: the Printer picker names where a spool put on a head came
         # from ("No box" = ''); absent, the engine's silent 13.6 rule.
         record_source=logic.record_source_from(payload),
+        # Group 51.6 / 51.7: what the picker showed on the head picked, and in
+        # the slot chosen for Swap / Overwrite.
+        expected_residents=logic.expected_residents_from(payload),
+        expected_occupant=logic.expected_occupant_from(payload),
     )
     stale = logic.stale_fed_refusal(payload, result) or logic.stale_confirm_refusal(payload, result)
     if stale:
@@ -461,6 +466,9 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label="",
                             "sid": sid, "toolhead": str(loc_id).upper(), "position": toolhead_idx,
                             "grams": round(actual_g, 2),
                             "attempt_used_before": round(used, 2), "attempt_used_after": round(new_used, 2),
+                            # Group 51 review (engine-4): whether the spool was
+                            # stock before the attempt (the write archives it at 0 g).
+                            "attempt_was_archived": bool(spool_data.get('archived')),
                             "remaining_before": None if remaining is None else round(remaining, 1),
                             "remaining_after": None if new_remaining is None else round(new_remaining, 1),
                             "display": disp.get('text', f"#{sid}"), "color": disp.get('color', '888888'),
@@ -568,6 +576,14 @@ def _record_applied_deduct(printer_name, job_id, *, filename, scale, details,
             f"⚠️ {printer_name}: {shortfall:.2f}g of '{filename}' wasn't deducted "
             f"(no bound spool, a failed write, or a near-empty spool) — weigh that "
             f"spool to true up.", "WARNING", "ffaa00")
+    # Group 49.2b: one Activity Log warning per filament this print took under
+    # the low-stock line (or out of stock). Only after the ledger write, so a
+    # crash here can never re-run the deduct; off-thread and wrapped, so it can
+    # never raise into, delay or change the deduct.
+    try:
+        stock_report.check_after_deduct(details)
+    except Exception as e:
+        state.logger.debug(f"49.2b low-stock check skipped for {printer_name} job {job_id}: {e}")
     return applied, shortfall
 
 
@@ -684,8 +700,8 @@ def _stash_shortfall_review(printer_name, job_id, *, filename, scale, uncharged,
     for f in failed or []:
         line = str(_norm_pos(f.get('position')))
         row = {k: f.get(k) for k in ("sid", "toolhead", "position", "grams", "attempt_used_before",
-                                     "attempt_used_after", "remaining_before", "remaining_after",
-                                     "display", "color")}
+                                     "attempt_used_after", "attempt_was_archived", "remaining_before",
+                                     "remaining_after", "display", "color")}
         row.update(ambiguous=False, unconfirmed_write=True)
         rows.append(row)
         unconfirmed[line] = f
@@ -2069,7 +2085,7 @@ def _rows_from_charges(rec, kind, charges):
                "remaining_before": before,
                "remaining_after": None if before is None else round(max(0.0, before - grams), 1)}
         if kept and stamped:
-            for key in ("attempt_used_before", "attempt_used_after"):
+            for key in ("attempt_used_before", "attempt_used_after", "attempt_was_archived"):
                 if key in original:
                     row[key] = original[key]
         rows[sid] = row
@@ -2378,8 +2394,13 @@ def api_cancel_deduct_confirm():
                     f"✔️ {where}: cancel-deduct {done_g:.2f}g on Spool #{sid} was already applied "
                     f"by the earlier attempt (it is at {used:.1f}g used) — not charged again.",
                     "SUCCESS", info.get('color', '888888'))
+                # Group 51 review (engine-4): stock or not BEFORE the attempt. The
+                # landed attempt archived a spool it emptied, so the record read
+                # now says archived, and its filament's "is out" was never said.
+                was = rec_rows[sid].get('attempt_was_archived')
                 applied.append({"sid": sid, "grams": done_g,
-                                "remaining": None if remaining is None else round(remaining, 1)})
+                                "remaining": None if remaining is None else round(remaining, 1),
+                                "was_archived": bool(spool.get('archived') if was is None else was)})
                 continue
             if abs(used - float(before)) > eps:
                 msg = (f"Spool #{sid}'s weight changed since the earlier attempt (it was weighed, or "
@@ -2404,7 +2425,8 @@ def api_cancel_deduct_confirm():
             grams = min(grams, avail)
         if grams <= 0:
             # Spool already empty — nothing to deduct, but it's not a failure.
-            applied.append({"sid": sid, "grams": 0.0, "remaining": 0.0})
+            applied.append({"sid": sid, "grams": 0.0, "remaining": 0.0,
+                            "was_archived": bool(spool.get('archived'))})
             continue
         new_used = used + grams
         ok = bool(spoolman_api.update_spool(sid, _deduct_payload(spool, new_used)))
@@ -2427,7 +2449,7 @@ def api_cancel_deduct_confirm():
                 failed_sids.add(sid)
                 # Stamped even when the re-read shows the old weight: the retry
                 # then also catches a weigh-out made before it ("changed" below).
-                attempts[sid] = (used, new_used)
+                attempts[sid] = (used, new_used, bool(spool.get('archived')))
                 state.add_log_entry(
                     f"❌ {where}: cancel-deduct failed for Spool #{sid}: {err}", "ERROR", "ff4444")
                 continue
@@ -2437,7 +2459,10 @@ def api_cancel_deduct_confirm():
             f"✔️ {where}: cancel-deduct {grams:.2f}g from Spool #{sid} (confirmed) {tail}",
             "SUCCESS", info.get('color', '888888'))
         applied.append({"sid": sid, "grams": round(grams, 2),
-                        "remaining": None if remaining is None else round(remaining, 1)})
+                        "remaining": None if remaining is None else round(remaining, 1),
+                        # Group 49.2b: a spool archived by hand (43.2) was no stock
+                        # before this charge, so it can't be what ran a filament out.
+                        "was_archived": bool(spool.get('archived'))})
 
     if errors:
         # Re-queue ONLY the spools that DIDN'T apply, so a retry can't double-
@@ -2466,12 +2491,14 @@ def api_cancel_deduct_confirm():
                 if sid_ in attempts:
                     row.pop('attempt_used_before', None)
                     row.pop('attempt_used_after', None)
+                    row.pop('attempt_was_archived', None)
                     if attempts[sid_] is not None:
                         # 43.6 — the attempt the retry judges by, and the grams it
                         # was for (so the card shows what was really confirmed).
-                        before_, after_ = attempts[sid_]
+                        before_, after_, was_ = attempts[sid_]
                         row['attempt_used_before'] = round(before_, 2)
                         row['attempt_used_after'] = round(after_, 2)
+                        row['attempt_was_archived'] = was_
                         row['grams'] = round(after_ - before_, 2)
                 retry_rows.append(row)
             retry_rec = dict(rec)
@@ -2500,6 +2527,7 @@ def api_cancel_deduct_confirm():
                 meta={"type": "cancel_deduct_pending",
                       "printer_name": printer, "job_id": str(job_id)})
             status = "confirmed" if applied else "error"
+            _low_stock_after_review(applied, printer, job_id)
             return jsonify({"status": status, "applied": applied, "errors": errors})
         # Every row of this review applied; the only errors name spools outside it
         # (a stale card). The job is done, so commit it below (Group 39 review,
@@ -2531,6 +2559,7 @@ def api_cancel_deduct_confirm():
                 f"'{rec.get('filename')}'; {kept['total_grams']:.2f}g still have no spool — pick "
                 f"another in 🛑 Review, or Discard.", "WARNING", "ffaa00",
                 meta={"type": "cancel_deduct_pending", "printer_name": printer, "job_id": str(job_id)})
+            _low_stock_after_review(applied, printer, job_id)
             return jsonify({"status": "confirmed", "applied": applied, "errors": errors,
                             "shortfall_g": kept['total_grams'], "kept": True, "rev": kept["rev"]})
     elif not print_deduct_ledger._is_blank_job(job_id):
@@ -2559,6 +2588,7 @@ def api_cancel_deduct_confirm():
     print_deduct_ledger.record_deduct(
         printer, job_id, filename=rec.get('filename'), scale=rec.get('progress'),
         grams=applied_total, confirmed=True, **extra)
+    _low_stock_after_review(applied, printer, job_id)
     resp = {"status": "confirmed", "applied": applied, "errors": errors}
     if shortfall is not None:
         resp["shortfall_g"] = shortfall
@@ -2575,6 +2605,18 @@ def api_cancel_deduct_confirm():
                 f"⚠️ {printer}: {shortfall:.2f}g of '{rec.get('filename')}' wasn't charged to any "
                 f"spool — weigh the spools to true up.", "WARNING", "ffaa00")
     return jsonify(resp)
+
+
+def _low_stock_after_review(applied, printer, job_id):
+    """Group 49.2b: a 🛑 Review Apply's charges that took a filament under the
+    low-stock line (or out) log the same one warning as an automatic deduct
+    (_record_applied_deduct). Called after the charges landed (and, on a full
+    Apply, after the ledger write); stock_report runs it off-thread and wrapped,
+    so it never raises into, delays or changes the Apply."""
+    try:
+        stock_report.check_after_deduct(applied)
+    except Exception as e:
+        state.logger.debug(f"49.2b low-stock check skipped for {printer} job {job_id} (review): {e}")
 
 
 @app.route('/api/cancel_deduct/dismiss', methods=['POST'])

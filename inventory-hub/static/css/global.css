@@ -3,6 +3,80 @@
 /* Dark Mode Kiosk Theme & Semantic Classes  */
 /* ========================================= */
 
+/* --- NAMED TEXT SIZES (readability rule, Derek 2026-10-21) ---
+   Text you read is never under 13.6 px; a label inside a pill or box never
+   under 12.8 px. Small text uses one of these names, never a hand-typed size
+   (tests/test_text_size_floor.py fails on a hand-typed size under 13.6 px):
+     --fcc-fs-label  12.8 px  labels in a pill or box: badges, tags, chips,
+                              IDLE / PRINTING, counts, the "📷 Scan to …" QR
+                              captions, short ALL-CAPS labels
+     --fcc-fs-small  13.6 px  the floor for text you read: names, ids, notes,
+                              hints, help lines, key legends, the line under
+                              a spool
+     --fcc-fs-row    14.4 px  list rows and tile data (the Low stock window)
+   The per-browser Text size setting gives them other values. DESIGN.md
+   "Typography" has the rule. */
+:root {
+    --fcc-fs-label: 0.8rem;
+    --fcc-fs-small: 0.85rem;
+    --fcc-fs-row: 0.9rem;
+}
+
+/* --- TEXT SIZE (per browser: Settings -> 🖥️ This Browser, text_size.js) ---
+   A tiny script in dashboard.html's <head> sets data-fcc-text-size on <html>
+   before the first paint (no attribute, or an unknown value, is Standard):
+     small     the compact look FCC had before the rule: the names take its
+               typical small sizes (a badge 12 px, a note 12.8 px); root 16 px
+     standard  the rule: the :root values above; root 16 px
+     large     the root grows (18 px, 20 px), so every rem size and Bootstrap's
+     xlarge    own scale grow together and keep their proportions
+   The root is a percentage, so a browser set to a bigger default keeps it. */
+:root[data-fcc-text-size="small"] {
+    --fcc-fs-label: 0.75rem;
+    --fcc-fs-small: 0.8rem;
+    --fcc-fs-row: 0.85rem;
+}
+:root[data-fcc-text-size="large"] {
+    font-size: 112.5%;
+}
+:root[data-fcc-text-size="xlarge"] {
+    font-size: 125%;
+}
+
+/* Windows grow with the text. Bootstrap sizes its dialogs in px (500 / 300 /
+   800 / 1140); in rem they are the same at Standard and grow at Large and
+   Extra Large, so a window keeps its proportions instead of wrapping and
+   cutting its own text short. FCC's own panels (overlays, the slot picker,
+   Printer Status tiles) are in rem for the same reason. Each still fits the
+   window: a dialog never gets wider than the screen. */
+.modal {
+    --bs-modal-width: 31.25rem;
+}
+@media (min-width: 576px) {
+    .modal-sm { --bs-modal-width: 18.75rem; }
+}
+@media (min-width: 992px) {
+    .modal-lg,
+    .modal-xl { --bs-modal-width: 50rem; }
+}
+@media (min-width: 1200px) {
+    .modal-xl { --bs-modal-width: 71.25rem; }
+}
+
+/* Bootstrap's own small sizes, held to the rule app-wide. A badge is 0.75em
+   (12 px, 10.5 px inside small text) and small text 0.875em (12.25 px inside
+   other small text). max() keeps one in a heading as big as it was. */
+.badge {
+    --bs-badge-font-size: max(var(--fcc-fs-label), 0.75em);
+}
+.small,
+small,
+code,
+kbd,
+samp {
+    font-size: max(var(--fcc-fs-small), 0.875em);
+}
+
 /* Fix Offcanvas Backdrop Z-Index to remain above Modals */
 .offcanvas-backdrop {
     z-index: 1085 !important;
@@ -74,6 +148,84 @@ body {
     align-items: center;
     gap: 0.5rem;
     height: 100%;
+}
+
+/* Title bar: no button's label ever wraps onto two lines (readability, Derek
+   2026-10-21). At Large / Extra Large, or in a narrow window, the bar runs
+   out of room, so it is a size container that gives way in steps. The
+   thresholds are in rem, which grows with the Text size, so each step comes
+   at the same point in every size; at Small and Standard on a 1600 px window
+   the bar is unchanged (it needs about 93rem).
+   From 992 px up the bar is one line (Bootstrap's navbar-expand-lg): the
+   spacing tightens, ADD INVENTORY reads ADD, the version badge goes, and
+   last the title shortens with "…" (its full text is its tooltip), so it
+   never runs under the Spoolman light and SEARCH.
+   Below 992 px Bootstrap puts the buttons on a line of their own under the
+   title (this bar's flex-wrap comes from .navbar there, so it is not set
+   here); a row too wide for the window wraps its buttons onto another line
+   instead of running off the screen, so ⚙️ Settings, the way back to a
+   smaller Text size, is always on screen, and the bar grows to hold its
+   lines instead of drawing them over Printer Status (readability review,
+   2026-10-21). */
+.fcc-titlebar {
+    container: fcc-titlebar / inline-size;
+}
+.fcc-titlebar .btn,
+.fcc-titlebar .status-label {
+    white-space: nowrap;
+}
+.fcc-titlebar .navbar-brand-group {
+    flex: 0 1 auto;
+    min-width: 0;
+}
+.fcc-titlebar .navbar-brand {
+    min-width: 0;
+    overflow: hidden;
+    /* clip + a margin: the title's soft glow is drawn past its box, and
+       `hidden` would cut it off even when the title has room. */
+    overflow: clip;
+    overflow-clip-margin: 0.75rem;
+    text-overflow: ellipsis;
+}
+.fcc-titlebar-actions {
+    flex: 0 0 auto;
+}
+#fcc-build-version {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+/* Step 1: no extra space between the items, beyond the bar's own gap. */
+@container fcc-titlebar (max-width: 94rem) {
+    .fcc-titlebar-actions { gap: 0.5rem !important; }
+    .fcc-titlebar-actions > * { margin-left: 0 !important; }
+}
+/* Step 2: ADD INVENTORY reads ADD (the button's tooltip says "Add inventory"). */
+@container fcc-titlebar (max-width: 85.5rem) {
+    .fcc-titlebar-more { display: none; }
+}
+/* Step 3, one-line bar only: the version badge goes where it would start to
+   shrink (about 78rem at every size). Squeezed further it was an empty
+   bordered box over the Spoolman light. Its text is its tooltip, and
+   Settings -> Build Info has the commit. Below this the title is the one
+   thing left to give. (Below 992 px the title has a line of its own, and the
+   badge keeps its place beside it.) */
+@media (min-width: 992px) {
+    @container fcc-titlebar (max-width: 78rem) {
+        #fcc-build-version { display: none; }
+    }
+}
+@media (max-width: 991.98px) {
+    .navbar {
+        height: auto;
+        min-height: 70px;
+    }
+    .fcc-titlebar-actions {
+        flex: 0 1 auto;
+        min-width: 0;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+    }
 }
 
 /* Main Layout */
@@ -378,7 +530,7 @@ body {
     background: none;
     border: none;
     font-weight: bold;
-    font-size: 0.8rem;
+    font-size: var(--fcc-fs-label);
     text-transform: uppercase;
     color: #fff;
 }
@@ -481,6 +633,41 @@ body {
     color: #ff9900 !important;
 }
 
+/* Group 48.2: "(from the filament)" beside a value the spool window shows from
+   its filament. A link-style button in a light blue that reads on the dark
+   modal (Bootstrap's link blue fails WCAG AA there); keyboard-reachable. */
+.fcc-from-filament-link,
+.fcc-from-filament-link:hover,
+.fcc-from-filament-link:focus {
+    color: #9fd8ff;
+    font-size: 0.85rem;
+    text-decoration: underline dotted;
+}
+
+/* Group 48.3: the ✏️ beside a card's 📍 badge (moves the spool). Light on the
+   dark card, with a visible keyboard focus ring. */
+.fcc-card-move-btn {
+    color: #fff;
+    background: rgba(0, 0, 0, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    padding: 0 6px;
+    line-height: 1.5;
+    font-size: 0.95rem;
+}
+.fcc-card-move-btn:hover,
+.fcc-card-move-btn:focus-visible {
+    color: #fff;
+    background: rgba(255, 170, 0, 0.35);
+    border-color: #ffaa00;
+    outline: 2px solid #ffaa00;
+    outline-offset: 1px;
+}
+
+/* Group 48.4: where the wizard's Slicer Profile suggestion came from. */
+.fcc-wiz-profile-note {
+    color: #9fd8ff;
+}
+
 .text-purple {
     color: #d633ff !important;
 }
@@ -557,7 +744,7 @@ body {
     z-index: 11000;
     text-align: center;
     width: 80%;
-    max-width: 600px;
+    max-width: 37.5rem;
     pointer-events: none;
 }
 
@@ -713,15 +900,24 @@ body {
     box-shadow: inset 0 0 0 2px #00d4ff, 0 0 8px rgba(0, 212, 255, 0.4);
     outline: none;
 }
+/* The title gives way (with "…") only when the row has no room left at all,
+   so the "optional" badge and the ▾ always stay inside the toggle (a phone
+   at Large / Extra Large pushed them out; readability review, 2026-10-21).
+   The summary takes only the room left over (flex-basis 0), as it always
+   did, so a long summary still never shortens the title. */
 .fcc-wiz-section-title {
-    flex: 0 0 auto;
+    flex: 0 1 auto;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+.fcc-wiz-section-chevron,
+.fcc-wiz-section-toggle > .badge {
+    flex-shrink: 0;
+}
 .fcc-wiz-section-summary {
-    flex: 1 1 auto;
+    flex: 1 1 0;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -807,6 +1003,27 @@ body {
     border-color: #ff4444;
 }
 
+/* A purple button: "No box" in "Record it as coming from…" (Derek, 2026-10-23:
+   grey, it and its QR were too close to Cancel's dark grey). Bootstrap's own
+   purple, which Bootstrap 5.3 has no button for, built as its btn-* variants
+   are (hover and active 15 % / 20 % darker); white text 6.5:1. Its QR wears
+   the same purple (inv_core.js QR_TONES.purple). */
+.btn-purple {
+    --bs-btn-color: #fff;
+    --bs-btn-bg: #6f42c1;
+    --bs-btn-border-color: #6f42c1;
+    --bs-btn-hover-color: #fff;
+    --bs-btn-hover-bg: #5e38a4;
+    --bs-btn-hover-border-color: #59359a;
+    --bs-btn-focus-shadow-rgb: 133, 94, 202;
+    --bs-btn-active-color: #fff;
+    --bs-btn-active-bg: #59359a;
+    --bs-btn-active-border-color: #533291;
+    --bs-btn-disabled-color: #fff;
+    --bs-btn-disabled-bg: #6f42c1;
+    --bs-btn-disabled-border-color: #6f42c1;
+}
+
 
 /* ========================================= */
 /* FCC SEMANTIC CLASSES - THE GOLD STANDARD  */
@@ -885,7 +1102,7 @@ body {
 }
 
 .fcc-archived-badge {
-    font-size: 0.8rem !important;
+    font-size: var(--fcc-fs-label) !important;
     letter-spacing: 0.02em !important;
     padding: 0.25rem 0.5rem !important;
 }
@@ -999,7 +1216,7 @@ body {
     z-index: 2000 !important;
 }
 .fcc-offcanvas-search {
-    width: 500px !important;
+    width: 31.25rem !important;
     max-width: 100vw !important;
     z-index: 1090 !important;
 }
@@ -1009,17 +1226,22 @@ body {
 .max-h-150px {
     max-height: 150px !important;
 }
+/* The search panel's material filter and #Hex group: 100 / 155 px at
+   Standard, in rem so they grow with the Text size, like the text inside
+   them. In px they cut a typed or picked value short at Large and Extra
+   Large ("Any Mat" read "Any M", #1A2B3C read #1A2B3; readability review,
+   2026-10-21). That filter row is their only user. */
 .w-100px {
-    width: 100px !important;
-    min-width: 100px !important;
-    max-width: 100px !important;
-    flex: 0 0 100px !important;
+    width: 6.25rem !important;
+    min-width: 6.25rem !important;
+    max-width: 6.25rem !important;
+    flex: 0 0 6.25rem !important;
 }
 .w-155px {
-    width: 155px !important;
-    min-width: 155px !important;
-    max-width: 155px !important;
-    flex: 0 0 155px !important;
+    width: 9.6875rem !important;
+    min-width: 9.6875rem !important;
+    max-width: 9.6875rem !important;
+    flex: 0 0 9.6875rem !important;
 }
 .fcc-color-swatch-sm {
     width: 24px !important;
@@ -1044,7 +1266,7 @@ body {
     font-size: 0.85rem !important;
 }
 .fcc-wiz-hint {
-    font-size: 0.8rem !important;
+    font-size: var(--fcc-fs-small) !important;
 }
 
 /* ========================================= */
@@ -1053,7 +1275,7 @@ body {
 
 /* --- MODAL SIZING & THEME --- */
 #manageModal .modal-dialog {
-    max-width: 1000px;
+    max-width: 62.5rem;
 }
 #manageModal .modal-body {
     background: #121212 !important;
@@ -1106,13 +1328,66 @@ body {
     pointer-events: none;
 }
 
+/* --- QR CODES UNDER THEIR BUTTONS (Derek, 2026-10-22) ---
+   "Align under the button they correspond to." A question's buttons row
+   (inv_core.js attachConfirmQRs, `alignTo`) becomes a grid of one column per
+   button, and its "📷 Scan to …" QR row joins it as a subgrid: each column is
+   as wide as its button or its QR, whichever is wider, the button fills it
+   (its text stays centred) and the QR is centred in it, so every QR sits
+   centred under its own button, at any Text size and window width. The
+   columns shrink toward the QR card (94 px) on a phone, the button labels
+   wrapping, before anything sticks out. Only added where the browser lays
+   out a subgrid; the !important ones beat the row's own inline flex. */
+.fcc-qr-align {
+    display: grid !important;
+    grid-template-columns: repeat(var(--fcc-qr-cols, 2), auto);
+    justify-content: center !important;
+    column-gap: min(14px, 3.4vw) !important;
+    row-gap: 0 !important;
+}
+.fcc-qr-align > .btn {
+    /* Its longest word, not the row's inline min-width: a box id kept whole
+       (.fcc-keep-whole) is one word, so its column is at least as wide. */
+    min-width: auto !important;
+}
+.fcc-qr-align > .fcc-confirm-qr-row {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: subgrid;
+}
+/* A box id ("LR-MDB-1") and "slot 3" on a button that wraps (review,
+   2026-10-22): a line may break after any hyphen, which read "LR-MDB- / 1" on
+   a phone at Extra Large. inv_core.js fccKeepWhole wraps them in this. */
+.fcc-keep-whole {
+    white-space: nowrap;
+}
+/* ... unless an id that long can't fit the screen at all (fccFitQuestion). */
+.fcc-keep-whole-off .fcc-keep-whole {
+    white-space: normal;
+}
+/* A question taller than the window scrolls inside itself (review, 2026-10-22:
+   "Record it as coming from…" was 667 px high on a 360 x 640 phone at Extra
+   Large, cut at the top and the bottom where nothing scrolls). The mountOverlay
+   root centres it; 8 px stay clear above and below. inv_core.js fccFitQuestion
+   adds this only to a question that doesn't fit: a scroller draws its text
+   without the screen's sub-pixel smoothing, even when it has nothing to
+   scroll. */
+.fcc-question-scroll {
+    max-height: calc(100vh - 16px);
+    max-height: calc(100dvh - 16px);
+    overflow-y: auto;
+}
+
 /* --- RED ZONE: NAV DECK --- */
 #loc-mgr-nav-deck {
     display: flex;
     gap: 10px;
     width: 100%;
     align-items: stretch;
-    height: 200px;
+    /* 200 px at Standard; in rem so the deck grows with the Text size like
+       the text in its cards (at Extra Large an archived buffered spool's card
+       held 197 px of content in 190: readability review, 2026-10-21). */
+    height: 12.5rem;
 }
 
 #loc-mgr-nav-deck .nav-card {
@@ -1150,7 +1425,7 @@ body {
 
 /* GOLD STANDARD: High Contrast Nav Labels */
 #loc-mgr-nav-deck .nav-label {
-    font-size: 0.8rem;
+    font-size: var(--fcc-fs-label);
     font-weight: 900;
     letter-spacing: 2px;
     text-transform: uppercase;
@@ -1465,23 +1740,80 @@ body {
 .fcc-ps-hint {
     /* Explicit color, not text-muted — Bootstrap text-muted (#6c757d) at
        opacity 0.6 dropped to ~1.4:1 contrast against the dark widget bg. */
-    font-size: 0.78rem;
+    font-size: var(--fcc-fs-small);
     margin-left: 0.5rem;
     color: rgba(255,255,255,0.55);
 }
+/* No gap between printers: each row's own padding puts the divider between
+   two printers half way, 0.5rem from each (review, 2026-10-23: the gap had
+   put 1rem above it, and the height went to hiding tiles on a short window). */
 .fcc-ps-body {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    gap: 0;
     padding-top: 0.4rem;
+    /* A size container: the printers' step in under the title (below)
+       depends on the body's width. */
+    container: fcc-ps-body / inline-size;
 }
+/* The printers step in under the title (Derek, 2026-10-24: "indenting the
+   rows in just a bit so it reads more like a sub set, and less like an
+   ordered list"). Each printer, its ▲▼ included, starts 1.5rem in, under the
+   title's first letter (the ▾ before the title is 1rem wide and 0.5rem from
+   it), so the printers read as the title's own and the arrows no longer sit
+   at the edge like a list's numbers. The divider between two printers steps
+   in with them. Only where the body is 23rem wide or more (from 400 px at
+   Standard): a phone narrower than that keeps its printers at the edge, as
+   before, because there the step would cost the second tile on each line
+   (two tiles beside each other are 21.5rem). In rem, so the step comes at the
+   same point at every Text size. */
+@container fcc-ps-body (min-width: 23rem) {
+    .fcc-ps-row {
+        margin-left: 1.5rem;
+    }
+}
+/* Printer Status never pushes the command deck off the screen (readability
+   review, 2026-10-21). The dashboard doesn't scroll, so every pixel the open
+   widget grows comes out of the main area: at Extra Large on a short laptop
+   window it cut the deck's QR codes (scanned from the screen) and left Live
+   Activity and the Buffer Zone 2 px tall. The open body takes at most 45 % of
+   the window, and less on a short one, so the deck and a 7rem strip of the
+   log and the buffer stay on screen; past that it scrolls inside itself.
+   45 %, not the 40 % it was until each printer's name got a line of its own
+   (2026-10-23): that line made the widget taller, and on a 1280 x 800 laptop
+   (a Framework 12 at 150 %) or a 1366 x 768 one, at Small and Standard, 40 %
+   left the second printer's tiles half under the fold. 45 % shows them all
+   there and still leaves the log and the buffer more than the 7rem strip.
+   260px = the title bar (70) + the deck (160) + the main area's padding and
+   gap (30); 10.5rem = the widget's own header and padding (about 3.5rem) +
+   the 7rem strip; 5rem is the least it keeps (a printer's name and the top
+   of its tiles). On a tall window (1600 x 1300) it changes nothing at any
+   size. Collapsing the widget gives everything back, as before. */
+.fcc-ps-widget:not(.collapsed) .fcc-ps-body {
+    max-height: min(45vh, max(5rem, calc(100vh - 260px - 10.5rem)));
+    overflow-y: auto;
+}
+/* A printer (Derek, 2026-10-23: the name on top, the tiles under it;
+   2026-10-24: "the printer name, then under it, the status and review ...
+   an information area about state and issues, then the toolheads"): a grid
+   of two columns, the ▲▼ arrows and the printer's own column, which holds
+   three lines: the name (.fcc-ps-name), the info line under it
+   (.fcc-ps-info: the state badge, then the 🛑 review count) and the tiles.
+   All three start at the same place, a step in from the arrows, so the name
+   comes first and the state and the tiles read as its own; the names, the
+   states, the counts and the tiles each line up down the page. The lines
+   are spaced by their own margins (the info line close under the name, the
+   tiles 0.35rem under the info line), not by a row gap. minmax(0, 1fr):
+   neither a long name nor a line of tiles can widen the column past the
+   row. */
 .fcc-ps-row {
-    display: flex;
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    column-gap: 0.5rem;
+    row-gap: 0;
     align-items: center;
-    gap: 1rem;
-    flex-wrap: wrap;
-    /* Horizontal divider between printer rows so the eye can quickly
-       trace which toolheads belong to which printer name on the left. */
+    /* Horizontal divider between printers so the eye can quickly trace
+       which toolheads belong to which printer name above them. */
     padding: 0.5rem 0;
     border-top: 1px solid rgba(255,255,255,0.35);
 }
@@ -1492,29 +1824,111 @@ body {
 .fcc-ps-row:last-child {
     padding-bottom: 0;
 }
-.fcc-ps-name-col {
-    /* Fixed width on the whole left column (reorder arrows + name) keeps
-       every printer's toolhead row aligned vertically. Long names wrap
-       within the column instead of pushing the row right. */
-    flex: 0 0 200px;
-    width: 200px;
-}
+/* The name's line: one line at every width. A name too long for it ends in
+   "…" (its full text is its title), so it never wraps onto the info line or
+   reaches the tiles. */
 .fcc-ps-name {
+    grid-column: 2;
+    grid-row: 1;
+    /* As wide as its text, never past its column (then the "…"): its title,
+       the full name, shows over the name and not over the empty line after
+       it. Its left edge is the column's either way. */
+    justify-self: start;
+    max-width: 100%;
     font-size: 1rem;
-    word-wrap: break-word;
-    overflow-wrap: break-word;
-    line-height: 1.2;
-    flex: 1 1 auto;
+    /* 1.3, not 1.2: overflow is hidden for the "…", and at 1.2 the line's
+       own box can cut a descender ("g", "y") or the top of an emoji. */
+    line-height: 1.3;
     min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
-/* L56 — printer-state badge sits under the printer name. Colors mirror
-   the dashboard status-light convention: green=active, amber=paused,
-   muted=idle, red=attention, dark-gray=offline. */
-.fcc-ps-name-stack { min-width: 0; flex: 1 1 auto; gap: 0.15rem; }
-.fcc-ps-state {
+/* The info line, under the name (Derek, 2026-10-24: "an information area
+   about state and issues"): the state badge, then the 🛑 N review count
+   (cancel_review.js puts it in its slot), each in a slot of the same width
+   on every printer, so the states and the counts line up down the page and
+   a review coming or going moves nothing. Anything more about a printer's
+   state or its issues goes here too, after the count, in a slot of its own
+   (flex: none, a fixed width where it should line up). The slots never
+   shrink; the line wraps only if a later item doesn't fit beside them (the
+   badge and the count take 8rem of the narrowest phone's 18rem). */
+.fcc-ps-info {
+    grid-column: 2;
+    grid-row: 2;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.25rem 0.5rem;
+    min-width: 0;
+    margin-top: 0.15rem;
+}
+/* The state badge's slot: as wide as ATTENTION, the widest state PrusaLink's
+   status reports (its ::after, hidden, is that word in the badge's own font
+   and padding: the rule below the badge's), so every printer's badge is the
+   same width, its text centred, and every count starts at the same place
+   whatever the state. A state wider still (OPERATIONAL, from the older
+   /api/printer some firmware answers instead) widens its own slot rather
+   than being cut. A printer whose state isn't known yet keeps the empty
+   slot, so its count lines up too. */
+.fcc-ps-state-slot {
+    flex: none;
+    display: grid;
+    align-items: center;
+}
+.fcc-ps-state-slot > .fcc-ps-state,
+.fcc-ps-state-slot::after {
+    grid-area: 1 / 1;
+}
+.fcc-ps-state-slot > .fcc-ps-state {
+    text-align: center;
+}
+.fcc-ps-state-slot::after {
+    content: "ATTENTION";
+    visibility: hidden;
+}
+/* The 🛑 N review count's slot: as wide as "🛑 88" in the count's own font
+   (its ::after, hidden), with or without reviews, so a review coming or
+   going never moves what follows it on the info line. A count of 100 or
+   more widens its own slot rather than being cut. */
+.fcc-ps-count {
+    flex: none;
+    display: grid;
+    align-items: center;
+    justify-items: start;
+    font-size: var(--fcc-fs-label);
+    font-weight: bold;
+}
+.fcc-ps-count > *,
+.fcc-ps-count::after {
+    grid-area: 1 / 1;
+}
+.fcc-ps-count::after {
+    content: "\1F6D1  88";
+    visibility: hidden;
+    white-space: nowrap;
+}
+/* The cancelled-print review count, "🛑 N" (cancel_review.js): never split
+   between its dot and its number, on the info line and in the collapsed
+   strip (where it keeps the 6 px it always had from the printer's chips). */
+.fcc-cr-chip {
+    white-space: nowrap;
+    flex: none;
+}
+.fcc-ps-printer-group .fcc-cr-chip {
+    margin-left: 6px;
+}
+/* L56 — printer-state badge, first on the printer's info line, under its
+   name (2026-10-24; it followed the name on the name's line before). Colors
+   mirror the dashboard status-light
+   convention: green=active, amber=paused, muted=idle, red=attention,
+   dark-gray=offline. The state slot's hidden ATTENTION shares this rule, so
+   the slot is exactly as wide as that badge would be. */
+.fcc-ps-state,
+.fcc-ps-state-slot::after {
     display: inline-block;
     align-self: flex-start;
-    font-size: 0.65rem;
+    font-size: var(--fcc-fs-label);
     font-weight: 700;
     letter-spacing: 0.04em;
     padding: 0.05rem 0.4rem;
@@ -1530,53 +1944,100 @@ body {
 .fcc-ps-state-chip {
     align-self: center;
     flex-shrink: 0;
-    font-size: 0.6rem;
+    font-size: var(--fcc-fs-label);
 }
 .fcc-ps-state-printing { background: rgba(16,185,129,0.18); color: #4ade80; border-color: rgba(74,222,128,0.4); }
 .fcc-ps-state-paused   { background: rgba(245,158,11,0.18); color: #ffc107; border-color: rgba(255,193,7,0.4); }
 .fcc-ps-state-idle     { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.6); border-color: rgba(255,255,255,0.18); }
 .fcc-ps-state-attention{ background: rgba(239,68,68,0.18); color: #ff6b6b; border-color: rgba(255,107,107,0.4); }
 .fcc-ps-state-offline  { background: rgba(0,0,0,0.35); color: rgba(255,255,255,0.50); border-color: rgba(255,255,255,0.15); }
+/* The ▲▼ pair, ▲ over ▼, before the name, centred on the name's line. The
+   pair never makes that line taller (review, 2026-10-23: a printer between
+   two others shows both arrows, and its line grew to their height, so its
+   tiles sat 6.6 px lower under its name than the others'): the stack is 0
+   tall on the line's centre and the arrows stand out of it evenly, above
+   into the row's 0.5rem top padding and below beside the info line, where
+   their column is empty (0.875rem each, 1px apart: 4.1 px past the 20.8 px
+   line at Standard, 3.9 px clear of the divider above). */
 .fcc-ps-reorder-stack {
-    width: 18px;
-    flex: 0 0 18px;
+    grid-column: 1;
+    grid-row: 1;
+    width: 1.125rem;     /* 18 px at Standard; the arrows grow with the Text size */
+    height: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 1px;
 }
 .fcc-ps-reorder {
+    flex: none;
     background: transparent;
     border: 1px solid rgba(255,255,255,0.18);
     color: rgba(13,202,240,0.7);
     border-radius: 3px;
     padding: 0;
-    width: 18px;
-    height: 16px;
-    font-size: 0.65rem;
+    width: 1.125rem;
+    height: 0.875rem;
+    font-size: var(--fcc-fs-label);
     line-height: 1;
     cursor: pointer;
-    margin-bottom: 2px;
     display: flex;
     align-items: center;
     justify-content: center;
 }
-.fcc-ps-reorder:last-child { margin-bottom: 0; }
 .fcc-ps-reorder:hover {
     background: rgba(13,202,240,0.2);
     color: #fff;
     border-color: rgba(13,202,240,0.7);
 }
+/* The first printer has no ▲ and the last no ▼. The empty place takes no
+   room, so a lone arrow sits on the name's line instead of above or below it
+   (the stack keeps its width, so every printer's name and tiles start at the
+   same place). */
 .fcc-ps-reorder-placeholder {
-    width: 18px;
-    height: 16px;
-    margin-bottom: 2px;
-    display: block;
+    display: none;
 }
-.fcc-ps-reorder-placeholder:last-child { margin-bottom: 0; }
+/* The tile area: under the info line, in the printer's column, so the tiles
+   start under the name's first letter. */
 .fcc-ps-toolheads {
-    flex-grow: 1;
+    grid-column: 2;
+    grid-row: 3;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 0.35rem;
+}
+/* A phone, where fewer than two tiles fit on a line under the name and more
+   fit across the row's whole width (review, 2026-10-23; at Standard every
+   window from 376 to 425 px since the info line went under the name,
+   2026-10-24: an iPhone 12 to 16 is 390 or 393 px, a Pixel or a Galaxy 412):
+   the tiles start at the row's edge, under the arrows, two to a line instead
+   of one. _balanceRows decides. The name and the info line stay where they
+   are, between the arrows and the tiles. */
+.fcc-ps-row.fcc-ps-edge > .fcc-ps-toolheads {
+    grid-column: 1 / -1;
+}
+/* Even rows of tiles (Derek, 2026-10-22): inv_printer_status.js _balanceRows
+   measures each printer's tile area and splits its tiles into the fewest rows
+   with equal counts (8 -> 4 + 4, 7 -> 4 + 3, 10 -> 5 + 5), one row when they
+   all fit. --fcc-ps-cols is the longest row's count; each row's first tile
+   starts in column 1 (so 7 in three rows reads 3 + 2 + 2). */
+.fcc-ps-toolheads.fcc-ps-balanced {
+    display: grid;
+    grid-template-columns: repeat(var(--fcc-ps-cols, 1), max-content);
+    justify-content: start;
 }
 .fcc-ps-th {
     display: flex;
     flex-direction: column;
-    width: 168px;
+    width: 10.5rem;      /* 168 px at Standard; a tile grows with its text */
+    /* Never narrower than that, not even before _balanceRows lays the rows
+       out: it measures a tile, and a tile shrunk to fit the room under the
+       name counted one that didn't fit (on a phone, while the state and the
+       count sat before the name; since the info line went under the name,
+       2026-10-24, there is room for a whole tile there on any window from
+       226 px, so this only guards a narrower room). */
+    flex: none;
     /* No outer fill — let the colored body inside dominate the block.
        The dark gray frame this used to have wasn't carrying any meaning
        and just shrank the visible color area. Border alone defines edges. */
@@ -1634,29 +2095,38 @@ body {
     text-shadow: 1px 1px 2px rgba(0,0,0,0.7);
 }
 .fcc-ps-th-id {
-    font-size: 0.72rem;
+    font-size: var(--fcc-fs-small);
     color: rgba(255,255,255,0.85);
     font-weight: bold;
-    max-width: 96px;
+    max-width: 6rem;
     text-shadow: 1px 1px 2px rgba(0,0,0,0.7);
 }
 .fcc-ps-th-chip {
-    font-size: 0.78rem;
+    font-size: var(--fcc-fs-label);
     color: rgba(255,255,255,0.6);
     text-align: center;
 }
+/* A loaded tile's name, weight and material (ui_builder.js, mode
+   'printer-status'). No colour dot before the name since 2026-10-24 (Derek:
+   it came "pretty close if not sometimes entering the border"; the band
+   above shows the colour). The name and the material line start 6 px in,
+   the band's own inset, so they sit under the head's label and clear of the
+   border; the name runs up to the weight, which keeps its place at the
+   right. Kept by tests/test_printer_status_tile_name.py. */
 .fcc-ps-chip {
-    font-size: 0.82rem;
+    font-size: var(--fcc-fs-small);
+    padding-left: 6px;
 }
 /* 30.4 — compact material line under the color name on the expanded
-   printer-status panel. Indented past the 12px swatch + gap so it aligns
-   under the color name; muted but dark-theme readable. */
+   printer-status panel, starting under the name (it was indented past the
+   dot); muted but dark-theme readable. Line height 1.2 (2026-10-22): at 1.1
+   the line's own box (text-truncate clips to it) cut a descender ("g", "y")
+   at Large. */
 .fcc-ps-chip-mat {
-    font-size: 0.7rem;
-    line-height: 1.1;
+    font-size: var(--fcc-fs-small);
+    line-height: 1.2;
     color: rgba(255,255,255,0.6);
     margin-top: 1px;
-    padding-left: 20px;
 }
 /* Default (expanded) view: per-printer rows with full schematic blocks;
    the inline header chip strip is hidden. */
@@ -1730,7 +2200,7 @@ body {
 .fcc-ps-mini-id {
     color: rgba(255,255,255,0.9);
     font-weight: bold;
-    font-size: 0.8rem;
+    font-size: var(--fcc-fs-label);
 }
 .fcc-ps-mini-weight {
     font-weight: bold;
@@ -1739,9 +2209,14 @@ body {
 .fcc-ps-mini-empty .fcc-ps-mini-weight { font-weight: normal; }
 /* Group each printer's chips together with a vertical divider between
    groups so the user can see at a glance which chips belong to which
-   printer in the collapsed strip. */
+   printer in the collapsed strip. A group wider than the window wraps its
+   own chips onto another line, its divider running down beside them
+   (review, 2026-10-23: the INDX's group ran off the right edge at 1024 px,
+   and at 1280 px at Extra Large, taking its last heads and its 🛑 count with
+   it; the strip is all a minimized widget shows). */
 .fcc-ps-printer-group {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 0.25rem;
     padding-left: 0.75rem;

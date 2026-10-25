@@ -245,21 +245,28 @@
                     // header offers Unbind when its spool isn't on the head, and
                     // a Spoolman blip (the plain read answers []) looked just like
                     // that, so Unbind detached a box whose spool was loaded.
+                    // Group 52.1c: ONE contents request for every box (it was one
+                    // per box, each a whole spool-list read, again on every
+                    // heartbeat while the view is open). That one read is strict
+                    // for all of them: when Spoolman doesn't answer, no box is
+                    // drawn empty. A single-slot box keeps its "couldn't read"
+                    // header; every other slot says it couldn't be read.
                     const unreadable = new Set();
-                    Promise.all(uniqueBoxes.map(b => {
-                        const strict = singleBoxes.has(b);
-                        const read = strict
-                            ? fetch(`/api/get_contents?id=${encodeURIComponent(b)}&strict=1`)
-                            : fetch(`/api/get_contents?id=${encodeURIComponent(b)}`);
-                        return read
-                            .then(r => {
-                                if (r.ok) return r.json();
-                                if (strict) unreadable.add(b);
-                                return [];
-                            })
-                            .then(items => [b, items])
-                            .catch(() => { if (strict) unreadable.add(b); return [b, []]; });
-                    })).then(boxContents => {
+                    const idsQuery = uniqueBoxes.map(b => encodeURIComponent(b)).join('&ids=');
+                    fetch(`/api/get_contents?ids=${idsQuery}`)
+                        .then(r => (r.ok ? r.json() : null))
+                        .catch(() => null)
+                        .then(body => {
+                            const readOk = !!(body && body.read_ok === true
+                                && body.contents && typeof body.contents === 'object');
+                            // A heartbeat refresh that couldn't read keeps the
+                            // tiles it drew last instead of flipping them all.
+                            if (!readOk && silent && _lastQsHtml) return null;
+                            if (!readOk) uniqueBoxes.forEach(b => unreadable.add(b));
+                            return uniqueBoxes.map(b => [b, readOk ? (body.contents[b] || []) : []]);
+                        })
+                    .then(boxContents => {
+                        if (!boxContents) return;
                         const slotMap = {};
                         // Every item claiming a slot (Group 42 review): two claims
                         // showed the last card while /api/quickswap moved the first.
@@ -323,7 +330,7 @@
                                     const who = claims.map(c => `#${c.id}`);
                                     const whoTxt = who.length > 2
                                         ? `${who.slice(0, -1).join(', ')} and ${who[who.length - 1]}` : who.join(' and ');
-                                    contentLines = `<div class="text-warning fw-bold" style="font-size:0.9rem; white-space:normal; max-width:240px;">⚠️ ${whoTxt} ${who.length > 2 ? 'all' : 'both'} claim slot ${e.slot} — open ${e.box} to sort them</div>`;
+                                    contentLines = `<div class="text-warning fw-bold" style="font-size:0.9rem; white-space:normal; max-width:15rem;">⚠️ ${whoTxt} ${who.length > 2 ? 'all' : 'both'} claim slot ${e.slot} — open ${e.box} to sort them</div>`;
                                     borderCls = 'btn-outline-warning';
                                     handler = 'window.quickSwapTap(this)';
                                     titleAttr = `FCC's records put ${whoTxt} in ${e.box} slot ${e.slot}; move one of them, then swap`;
@@ -363,7 +370,7 @@
                                     const bsSwatch = window.makeSwatchHtml(bufferTopSpool.color, bufferTopSpool.color_direction, { size: 14, marginRight: 6 });
                                     contentLines = `
                                         <div class="text-success fw-bold" style="font-size:0.9rem;">⬇️ Deposit from buffer:</div>
-                                        <div class="text-light" style="font-size:0.9rem; max-width:220px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                                        <div class="text-light" style="font-size:0.9rem; max-width:13.75rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
                                             ${bsSwatch}${bsDisplay}
                                         </div>`;
                                     borderCls = 'btn-outline-success';
@@ -390,7 +397,7 @@
                                     <button type="button" class="fcc-qs-slot btn ${borderCls} fw-bold d-flex flex-column align-items-start"
                                         data-box="${e.box}" data-slot="${e.slot}"
                                         data-toolhead="${th}" ${singleAttr}
-                                        style="min-width:240px; font-size:1.05rem; padding:10px 14px;"
+                                        style="min-width:15rem; font-size:1.05rem; padding:10px 14px;"
                                         onclick="${handler}"
                                         ${disabledAttr}
                                         title="${titleAttr}">
@@ -416,7 +423,21 @@
                                 .sort((a, b) => (a.box + a.slot).localeCompare(b.box + b.slot))
                                 .forEach(p => {
                                     const item = slotMap[`${p.box}|${p.slot}`];
-                                    if (item) {
+                                    if (unreadable.has(p.box)) {
+                                        // Group 52.1c: Spoolman didn't answer, so
+                                        // FCC can't tell this slot is empty.
+                                        html += `
+                                            <button type="button" class="fcc-qs-slot fcc-qs-pool btn btn-outline-warning fw-bold d-flex flex-column align-items-start"
+                                                data-box="${p.box}" data-slot="${p.slot}"
+                                                data-toolhead=""
+                                                data-pool="1"
+                                                style="min-width:15rem; font-size:1.05rem; padding:10px 14px;"
+                                                disabled
+                                                title="FCC couldn't read ${p.box} from Spoolman just now — reopen the view to try again">
+                                                <div class="text-warning fw-bold" style="font-size:1rem;">Slot ${p.slot}</div>
+                                                <div class="text-warning fw-bold" style="font-size:0.9rem;">⚠️ couldn't read ${p.box}</div>
+                                            </button>`;
+                                    } else if (item) {
                                         // Filled pool slot — show the spool
                                         // card. Tap opens the spool's details
                                         // (no toolhead to swap into).
@@ -438,12 +459,12 @@
                                                 data-box="${p.box}" data-slot="${p.slot}"
                                                 data-toolhead=""
                                                 data-pool="1"
-                                                style="min-width:240px; font-size:1.05rem; padding:10px 14px;"
+                                                style="min-width:15rem; font-size:1.05rem; padding:10px 14px;"
                                                 onclick="window.quickSwapDeposit(this)"
                                                 title="Drop the buffered spool into ${p.box} slot ${p.slot} (printer pool — no toolhead auto-deploy)">
-                                                <div class="text-warning fw-bold" style="font-size:1rem;">Slot ${p.slot} <span class="text-secondary small ms-1" style="font-size:0.75rem;">${p.box}</span></div>
+                                                <div class="text-warning fw-bold" style="font-size:1rem;">Slot ${p.slot} <span class="text-secondary small ms-1" style="font-size:var(--fcc-fs-small);">${p.box}</span></div>
                                                 <div class="text-success fw-bold" style="font-size:0.9rem;">⬇️ Deposit from buffer:</div>
-                                                <div class="text-light" style="font-size:0.9rem; max-width:220px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                                                <div class="text-light" style="font-size:0.9rem; max-width:13.75rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
                                                     ${bsSwatch}${bsDisplay}
                                                 </div>
                                             </button>`;
@@ -454,10 +475,10 @@
                                                 data-box="${p.box}" data-slot="${p.slot}"
                                                 data-toolhead=""
                                                 data-pool="1"
-                                                style="min-width:240px; font-size:1.05rem; padding:10px 14px; opacity:0.7;"
+                                                style="min-width:15rem; font-size:1.05rem; padding:10px 14px; opacity:0.7;"
                                                 disabled
                                                 title="${p.box} slot ${p.slot} is empty — scan a spool into the buffer to deposit here">
-                                                <div class="text-warning fw-bold" style="font-size:1rem;">Slot ${p.slot} <span class="text-secondary small ms-1" style="font-size:0.75rem;">${p.box}</span></div>
+                                                <div class="text-warning fw-bold" style="font-size:1rem;">Slot ${p.slot} <span class="text-secondary small ms-1" style="font-size:var(--fcc-fs-small);">${p.box}</span></div>
                                                 <div class="text-muted small fw-bold" style="font-size:0.9rem;">◦ empty staging slot</div>
                                             </button>`;
                                     }
@@ -560,7 +581,7 @@
 
         const panelHtml = `
             <div class="bg-dark border border-info rounded p-4 shadow-lg"
-                 style="min-width:420px; max-width:540px;">
+                 style="min-width:min(26.25rem,94vw); max-width:33.75rem;">
                 <div class="text-info fw-bold mb-3" style="font-size:1.25rem;"
                      id="fcc-quickswap-confirm-title">${_escapeHtml(titleText)}</div>
                 <div class="text-light mb-3" style="font-size:1.05rem;"
@@ -568,16 +589,18 @@
                 <!-- Buttons mirror the QR row's flex layout exactly (gap:14px;
                      justify-content:center; from attachConfirmQRs in
                      inv_core.js). The CONFIRM QR's "📷 SCAN TO CONFIRM"
-                     label is ~10px wider than CANCEL's, making the QR
-                     columns asymmetric. Measured widths: CONFIRM ≈ 133px,
-                     CANCEL ≈ 123px. We mirror those exactly so each
-                     button center lands under its QR center. -->
+                     label is wider than CANCEL's, making the QR columns
+                     asymmetric, so when the QR row is shown each button
+                     column takes its QR column's measured width (below):
+                     each button centre lands under its QR centre at any
+                     text size. With no QRs they are 133 / 123 px at Standard (in rem, so
+                     they grow with the per-browser Text size). -->
                 <div style="display:flex; gap:14px; justify-content:center; margin-top:14px;">
-                    <div style="width:133px; display:flex; justify-content:center;">
+                    <div class="fcc-qs-btncol" style="width:8.3125rem; display:flex; justify-content:center;">
                         <button type="button" id="fcc-quickswap-yes"
                             class="btn btn-info fw-bold w-100">Yes, swap</button>
                     </div>
-                    <div style="width:123px; display:flex; justify-content:center;">
+                    <div class="fcc-qs-btncol" style="width:7.6875rem; display:flex; justify-content:center;">
                         <button type="button" id="fcc-quickswap-no"
                             class="btn btn-outline-light fw-bold w-100">No, cancel</button>
                     </div>
@@ -671,12 +694,26 @@
         // one that benefits from "scan to confirm I really meant to
         // disrupt my print."
         if (stateInfo && warningBanner && window.attachConfirmQRs) {
+            // Each QR takes its button's colour (Derek, 2026-10-21): Yes, swap
+            // is cyan (btn-info), No, cancel a light outline.
             qrSession = window.attachConfirmQRs({
                 host: body,
                 onConfirm: doConfirm,
                 onCancel: () => { close(); },
                 theme: 'warning',
+                confirmTone: 'info',
+                cancelTone: 'light',
             });
+            // The button under each QR takes that QR column's width, so it
+            // stays centred under it whatever the caption's size.
+            const cells = body.querySelectorAll('.fcc-confirm-qr-row > .fcc-confirm-qr-cell');
+            const cols = ov.querySelectorAll('.fcc-qs-btncol');
+            if (cells.length === 2 && cols.length === 2) {
+                cols.forEach((col, i) => {
+                    const w = Math.ceil(cells[i].getBoundingClientRect().width);
+                    if (w > 0) col.style.width = `${w}px`;
+                });
+            }
         }
 
         yes.onclick = doConfirm;
@@ -765,13 +802,22 @@
             .then(({ ok, body }) => {
                 if (ok && body.action === 'quickswap_done') {
                     showToast(`⚡ Spool #${body.moved} → ${opts.toolhead}`, 'success', 2500);
+                    // An archived spool with filament on its record was un-archived to load it.
+                    if (window.noteUnarchived) window.noteUnarchived(body);
                     _refreshAfterMove();
                 } else if (body.action === 'quickswap_requires_confirm') {
                     _reaskFromServer(body, sent, {
                         ...opts, title: `Load ${opts.box} slot ${opts.slot} into ${opts.toolhead}?`,
                     }, (heads) => performSwap(opts, null, heads));
+                } else if (body.action === 'quickswap_spool_mismatch') {
+                    // Group 51.5: the slot holds another spool than the card
+                    // showed. Nothing moved; redraw the slots so the user sees it.
+                    showToast(`⚠️ ${body.error || `${opts.box} slot ${opts.slot} holds another spool now`}`,
+                        'warning', 7000);
+                    _refreshAfterMove();
                 } else if (body.action === 'quickswap_empty_slot') {
                     showToast(`⚠️ ${opts.box} slot ${opts.slot} is empty — nothing to swap`, 'warning', 4000);
+                    _refreshAfterMove();
                 } else if (body.action === 'quickswap_not_bound') {
                     showToast(`❌ Binding is stale — refresh and try again`, 'error', 7000);
                 } else {
@@ -917,6 +963,10 @@
             confirmed_toolheads: [],
             confirmed_fed_heads: [],
             spool_id: buffered.id,
+            // Group 51 review (engine-3): this tile showed the slot empty, so the
+            // server fills it only while it still is (never unseating a spool
+            // filed there meanwhile); on `original`, so every replay says so too.
+            shown_empty: true,
         };
         if (btn.dataset.singleSlot !== '1') original.expected_feed = notLoaded ? '' : String(toolhead).toUpperCase();
         const postDeposit = (payload, prior) => {
@@ -992,6 +1042,11 @@
                                         Object.assign({}, prior || {}, { heads }));
                                 }
                             });
+                    } else if (body.smart_move && body.smart_move.blocked_reason === 'picked_slot_taken') {
+                        // Group 51 review (engine-3): the slot this tile showed empty
+                        // was filled meanwhile. Nothing moved; the tiles are redrawn.
+                        showToast(`⚠️ ${body.msg || `${box} slot ${slot} was filled meanwhile, so nothing moved`}`, 'warning', 7000);
+                        _refreshAfterMove();
                     } else {
                         // Includes assignment_failed: the spool stays in the buffer.
                         showToast(`❌ Deposit failed: ${body.msg || body.error || body.action || 'unknown'}`, 'error', 7000);
@@ -1101,6 +1156,10 @@
             box: btn.dataset.box,
             slot: btn.dataset.slot,
         };
+        // Group 51.5: the spool the card shows. If another spool is in the slot
+        // by the time the Yes lands, the server refuses (quickswap_spool_mismatch)
+        // instead of loading a spool the user wasn't shown, and the grid refreshes.
+        if (btn.dataset.spoolId) opts.expected_spool = btn.dataset.spoolId;
         // Pull the display label from the button so the confirm overlay names
         // the specific spool. Ask-before-you-commit matters more when the
         // button text tells you what you're committing to.

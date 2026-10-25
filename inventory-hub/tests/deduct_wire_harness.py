@@ -16,14 +16,9 @@ from unittest.mock import MagicMock, patch
 
 import print_deduct
 import spoolman_api
+import spoolman_extra_fake
 
-def _unwire(value):
-    if isinstance(value, str):
-        try:
-            return json.loads(value)
-        except ValueError:
-            return value
-    return value
+_unwire = spoolman_extra_fake.unwire
 
 
 class WeightWireSpoolman:
@@ -68,11 +63,17 @@ class WeightWireSpoolman:
             body = {"message": f"No spool with ID {sid} found."}
             return MagicMock(ok=False, status_code=404, text=json.dumps(body),
                              json=MagicMock(return_value=body))
+        if "extra" in body:
+            # Stored as Spoolman stores it (merged key by key, as 0.27 does).
+            try:
+                extra = spoolman_extra_fake.apply_parsed(rec.get("extra"), body["extra"])
+            except spoolman_extra_fake.ExtraRejected as e:
+                return MagicMock(ok=False, status_code=e.status, text=e.message,
+                                 json=MagicMock(return_value={"message": e.message}))
+            rec["extra"] = extra
         for key in ("used_weight", "initial_weight", "archived", "location"):
             if key in body:
                 rec[key] = body[key]
-        if "extra" in body:
-            rec["extra"] = {key: _unwire(val) for key, val in body["extra"].items()}
         if sid in self.blind_after_patch:
             self.blind.add(sid)
         if sid in self.patch_fails:

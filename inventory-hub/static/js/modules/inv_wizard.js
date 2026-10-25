@@ -32,6 +32,11 @@ let wizardState = {
     // Group 40.7: every /api/locations row, toolheads and printers included (the
     // Location list hides those), for Clone's "starts blank on a head" rule.
     allLocationRows: [],
+    // The dynamic extras the user changed in this session ("fil:<key>",
+    // "spool:<key>"): edit mode sends a blank one as cleared only when it is
+    // here, so a field drawn blank by the page itself never clears the record
+    // (2026-10-21 review: a clear now really clears on Spoolman 0.27).
+    touchedExtras: new Set(),
 };
 
 // Empty-spool-weight inheritance helper (resolveEmptySpoolWeight) lives in
@@ -114,7 +119,7 @@ window.wizardClearSpoolEmptyWeightBadge = () => {
                 // mountOverlay so the .cmd-deck scrollbar-comp shift goes away
                 // and the overlay survives Bootstrap's focus trap.
                 const panelHtml = `
-                    <div style="background:#1e1e1e; color:#fff; border:2px solid #dc3545; border-radius:8px; padding:20px 24px; max-width:460px; width:92%;">
+                    <div style="background:#1e1e1e; color:#fff; border:2px solid #dc3545; border-radius:8px; padding:20px 24px; max-width:28.75rem; width:92%;">
                         <div style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">⚠️ Unsaved Changes</div>
                         <div style="color:#ffc; margin-bottom:16px;">You have unsaved changes. Discard them and close?</div>
                         <div style="display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;">
@@ -156,6 +161,15 @@ window.wizardClearSpoolEmptyWeightBadge = () => {
         };
         wizEl.addEventListener('input', _onDirty);
         wizEl.addEventListener('change', _onDirty);
+        // Which extras the user changed (window.wizardNoteExtraTouched). A chip's
+        // own onclick removes it, so its click is read in the capture phase,
+        // while the chip still sits in its box.
+        wizEl.addEventListener('input', (e) => window.wizardNoteExtraTouched(e.target));
+        wizEl.addEventListener('change', (e) => window.wizardNoteExtraTouched(e.target));
+        wizEl.addEventListener('click', (e) => {
+            const chip = e.target && e.target.closest ? e.target.closest('.dynamic-chip') : null;
+            if (chip) window.wizardNoteExtraTouched(chip);
+        }, true);
 
         // Chip removal uses onclick="this.remove()" which bypasses input/change events.
         wizEl.addEventListener('click', (e) => {
@@ -719,9 +733,22 @@ window.wizardPrefillSpoolPrice = (ownPrice, filamentPrice) => {
 
 const wizardReset = () => {
     wizardState.mode = 'manual';
+    wizardState.touchedExtras = new Set();
     wizardState.selectedFilamentId = null;
     wizardState.externalMetaData = null;
     wizardState.lockedAfterSuccess = false;
+    // Group 48.4: the last session's profile suggestion (its note, its pending
+    // new choice, and who set the field) doesn't carry over.
+    wizardState.profileSuggestion = null;
+    const _profileSel = document.getElementById('wiz_fil_ef_slicer_profile');
+    if (_profileSel) {
+        if (_profileSel.dataset) { delete _profileSel.dataset.fccSuggested; delete _profileSel.dataset.fccUserSet; }
+        if (typeof _profileSel.querySelectorAll === 'function') {
+            _profileSel.querySelectorAll('option[data-fcc-new-choice]').forEach(o => o.remove());
+        }
+    }
+    const _profileNoteEl = document.getElementById('wiz-fil-profile-note');
+    if (_profileNoteEl) { _profileNoteEl.textContent = ''; _profileNoteEl.style.display = 'none'; }
 
     // 17.3 follow-up: clear stale queue-label chips from the prior
     // success so a fresh wizard open doesn't show last-run's spool IDs.
@@ -1622,6 +1649,56 @@ window.wizardWatchLocationPick = () => {
     });
 };
 
+// Spool extras the wizard edits through inputs of its own: the Purchase and
+// Product Link fields in Metadata (#wiz-spool-purchase_url / -product_url).
+// Never rendered as a dynamic Spool Extras field as well, and never collected
+// from one: the collector read the dynamic copy AFTER the dedicated input, so a
+// link the user emptied (or a new one typed) was overwritten by the copy's old
+// value, and the save changed nothing (2026-10-21).
+const WIZ_SPOOL_EXTRAS_OWN_INPUT = ['purchase_url', 'product_url'];
+// Spool extras the dynamic Spool Extras section never shows: the ones above,
+// plus the label flag and the move engine's own slot / trail keys.
+const WIZ_SPOOL_EXTRAS_HIDDEN = ['needs_label_print', 'physical_source', 'physical_source_slot',
+    'container_slot', ...WIZ_SPOOL_EXTRAS_OWN_INPUT];
+window.wizardSpoolExtraShown = (key) => !WIZ_SPOOL_EXTRAS_HIDDEN.includes(key);
+
+// Records that the user changed a dynamic extra: an input or select of the
+// Filament Extras (.dynamic-extra-field) or Spool Extras (.dynamic-extra-spool-
+// field), or a chip (its box says which entity). Edit mode clears only these.
+window.wizardNoteExtraTouched = (el) => {
+    if (!el || typeof el.getAttribute !== 'function' || !el.classList) return;
+    const key = el.getAttribute('data-key');
+    if (!key) return;
+    let entity = null;
+    if (el.classList.contains('dynamic-extra-field')) entity = 'fil';
+    else if (el.classList.contains('dynamic-extra-spool-field')) entity = 'spool';
+    else if (el.classList.contains('dynamic-chip')) {
+        const box = el.closest ? el.closest('[id^="chip-container-"]') : null;
+        const m = box ? /^chip-container-(fil|spool)-/.exec(box.id) : null;
+        entity = m ? m[1] : null;
+    }
+    if (entity) wizardState.touchedExtras.add(`${entity}:${key}`);
+};
+const wizardExtraTouched = (entity, key) =>
+    !!(wizardState.touchedExtras && wizardState.touchedExtras.has(`${entity}:${key}`));
+
+// Edit mode: every multi-choice (chip) Filament Extras field the form shows
+// that the user emptied is sent as cleared (window.FCC_DELETE_EXTRA). The chip
+// collector sends only fields that still have chips, and a key left out keeps
+// its old list, so removing the last chip changed nothing (2026-10-21). A field
+// the form doesn't show (no chip box), or one the user didn't touch (a box the
+// page drew empty), is left alone.
+window.wizardClearEmptyChipFields = (extra) => {
+    (wizardState.extraFields?.filament || []).forEach(f => {
+        if (!f || f.field_type !== 'choice' || !f.multi_choice) return;
+        if (Object.prototype.hasOwnProperty.call(extra, f.key)) return;
+        if (!document.getElementById(`chip-container-fil-${f.key}`)) return;
+        if (!wizardExtraTouched('fil', f.key)) return;
+        extra[f.key] = window.FCC_DELETE_EXTRA;
+    });
+    return extra;
+};
+
 const wizardFetchExtraFields = () => {
     return fetch('/api/external/fields')
         .then(r => r.json())
@@ -1657,8 +1734,11 @@ const wizardFetchExtraFields = () => {
                         // side (badges on Filament Details modal) shipped in
                         // 17.1 round 1. `label_printed` (the legacy retired key)
                         // stays hidden — it's gone in M7+ data.
+                        // "Excluded" (2026-10-20) is set from the ⚠️ Low
+                        // stock list, which checks the reason and keeps the day.
                         if (['sheet_link', 'price_total', 'spoolman_reprint', 'label_printed',
-                             'nozzle_temp_max', 'bed_temp_max', 'purchase_url'].includes(field.key)) return;
+                             'nozzle_temp_max', 'bed_temp_max', 'purchase_url',
+                             'fcc_stock_excluded', 'fcc_stock_excluded_note', 'fcc_stock_excluded_at'].includes(field.key)) return;
 
                         let html = wizardGenerateFieldHTML(field, 'fil');
                         if (html) fContainer.innerHTML += html;
@@ -1671,7 +1751,7 @@ const wizardFetchExtraFields = () => {
                     sContainer.innerHTML = '';
                     d.fields.spool.sort((a, b) => (a.order || 0) - (b.order || 0));
                     d.fields.spool.forEach(field => {
-                        if (['needs_label_print', 'physical_source', 'physical_source_slot', 'container_slot'].includes(field.key)) return;
+                        if (!window.wizardSpoolExtraShown(field.key)) return;
 
                         // If Temp Resistance is still 'text' in Spoolman, hide it so they can change it to Choice later
                         if (field.key === 'spool_temp' && field.field_type === 'text') return;
@@ -1821,7 +1901,7 @@ window.wizardPromptFieldSync = (spoolKey) => {
         .map(([k, v]) => `<option value="${String(k).replace(/"/g, '&quot;')}">${String(v).replace(/</g, '&lt;')}</option>`)
         .join('');
     const panelHtml = `
-        <div style="background:#1e1e1e; color:#fff; border:2px solid #17a2b8; border-radius:8px; padding:20px 24px; max-width:520px; width:92%;">
+        <div style="background:#1e1e1e; color:#fff; border:2px solid #17a2b8; border-radius:8px; padding:20px 24px; max-width:32.5rem; width:92%;">
             <div style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">🔗 Link Field</div>
             <div style="color:#ffc; margin-bottom:12px;">Select a Filament field to synchronize with this Spool field:</div>
             <select id="fcc-wiz-fieldsync-sel" class="form-select form-select-sm bg-dark text-white border-secondary mb-3" style="width:100%;">
@@ -1868,7 +1948,7 @@ const wizardGenerateFieldHTML = (field, entityType) => {
                             data-linked-fil-key="${field.key}"
                             onclick="window.wizardToggleFieldSync('${field.key}')" 
                             title="Synced with Filament's ${field.name}. Click to unlink."
-                            style="font-size: 0.8rem; line-height: 1;">🔗</button>`;
+                            style="font-size: var(--fcc-fs-label); line-height: 1;">🔗</button>`;
         } else {
             // Unsynced state, user can click to map it manually
             syncHtml = `<button type="button" class="btn btn-sm btn-outline-secondary p-0 ms-2 border-0 wizard-sync-btn" 
@@ -1876,7 +1956,7 @@ const wizardGenerateFieldHTML = (field, entityType) => {
                             data-linked-fil-key=""
                             onclick="window.wizardToggleFieldSync('${field.key}')" 
                             title="Click to link this field to a Filament field."
-                            style="font-size: 0.8rem; line-height: 1; opacity: 0.5;">🔗</button>`;
+                            style="font-size: var(--fcc-fs-label); line-height: 1; opacity: 0.5;">🔗</button>`;
         }
     }
 
@@ -2040,9 +2120,9 @@ window.wizardOnNewChoiceAdded = (apiEntity, key, value, info) => {
     const input = document.getElementById(inputId);
     if (!input) return;
     if (input.tagName === 'SELECT') {
-        // wizardFetchExtraFields just re-rendered this select; the new value
-        // is already in the option list. Pick it and trigger change so
-        // dirty-tracking / sync handlers fire.
+        // The ➕ path just added the new value to this select's options (or
+        // it was there already). Pick it and trigger change so dirty-tracking
+        // / sync handlers fire.
         input.value = value;
         input.dispatchEvent(new Event('change', { bubbles: true }));
         wizardState.isDirty = true;
@@ -2066,7 +2146,7 @@ window.wizardSwapNewChoiceToSuggestion = (handle, suggestion, canonical, fieldLa
     const safeLabel = String(fieldLabel || 'value').replace(/</g, '&lt;');
     handle.element.dataset.stage = 'suggestion';
     handle.setContent(`
-        <div style="background:#1e1e1e; color:#fff; border:2px solid #ffaa00; border-radius:8px; padding:20px 24px; max-width:520px; width:92%;" data-stage-panel="suggestion">
+        <div style="background:#1e1e1e; color:#fff; border:2px solid #ffaa00; border-radius:8px; padding:20px 24px; max-width:32.5rem; width:92%;" data-stage-panel="suggestion">
             <div style="font-size:1.2em; font-weight:bold; margin-bottom:10px;">🤔 Did you mean <span style="color:#ffd700;">${safeSugg}</span>?</div>
             <div style="color:#ffc; margin-bottom:14px;">A similar ${safeLabel} already exists. Pick the existing one (recommended) or add "<strong>${safeCanon}</strong>" as a brand-new value.</div>
             <div style="display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;">
@@ -2090,7 +2170,7 @@ window.wizardSwapNewChoiceToConfirm = (handle, canonical, fieldLabel, onConfirm)
     const safeLabel = String(fieldLabel || 'value').replace(/</g, '&lt;');
     handle.element.dataset.stage = 'confirm';
     handle.setContent(`
-        <div style="background:#1e1e1e; color:#fff; border:2px solid #dc3545; border-radius:8px; padding:20px 24px; max-width:520px; width:92%;" data-stage-panel="confirm">
+        <div style="background:#1e1e1e; color:#fff; border:2px solid #dc3545; border-radius:8px; padding:20px 24px; max-width:32.5rem; width:92%;" data-stage-panel="confirm">
             <div style="font-size:1.2em; font-weight:bold; margin-bottom:10px;">⚠️ Add permanent new ${safeLabel}?</div>
             <div style="color:#ffc; margin-bottom:14px;">Add "<strong>${safeCanon}</strong>" as a permanent new ${safeLabel}? Spoolman doesn't expose UI to remove choices once added.</div>
             <div style="display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;">
@@ -2263,7 +2343,7 @@ window.wizardPromptNewChoice = (entityType, key) => {
     })();
 
     const panelHtml = `
-        <div style="background:#1e1e1e; color:#fff; border:2px solid #28a745; border-radius:8px; padding:20px 24px; max-width:520px; width:92%;">
+        <div style="background:#1e1e1e; color:#fff; border:2px solid #28a745; border-radius:8px; padding:20px 24px; max-width:32.5rem; width:92%;">
             <div style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">➕ Add New ${String(fieldLabel).replace(/</g, '&lt;')}</div>
             <div style="color:#ffc; margin-bottom:10px;">Enter the new value to permanently add it to the Spoolman database.</div>
             <input id="fcc-wiz-newchoice-input" type="text" class="form-control form-control-sm bg-dark text-white border-secondary mb-2" autocomplete="off" autocapitalize="off" spellcheck="false" />
@@ -2383,15 +2463,23 @@ window.wizardPromptNewChoice = (entityType, key) => {
                     }
                     return undefined;
                 }
-                // Single-choice (existing behavior): refresh the schema THEN
-                // fire the auto-assign hook — the select gets re-rendered by
-                // wizardFetchExtraFields, so we wait for the new <option> to
-                // exist before selecting it (Group 10.5).
-                return Promise.resolve(wizardFetchExtraFields()).then(() => {
-                    if (typeof window.wizardOnNewChoiceAdded === 'function') {
-                        window.wizardOnNewChoiceAdded(apiEntity, key, canonical, { wasNew: true });
-                    }
-                });
+                // Single-choice: in place too, never wizardFetchExtraFields,
+                // which draws every extra again, blank, and in Edit Spool a
+                // blank extra was then cleared on Save (2026-10-21 review).
+                // Register the value, add its <option>, then the auto-assign
+                // hook picks it (Group 10.5).
+                if (fieldDef && Array.isArray(fieldDef.choices) && !fieldDef.choices.includes(canonical)) {
+                    fieldDef.choices.push(canonical);
+                }
+                const select = document.getElementById(`wiz_${entityType}_ef_${key}`);
+                if (select && select.tagName === 'SELECT'
+                    && !Array.from(select.options).some((o) => o.value === canonical)) {
+                    select.appendChild(new Option(canonical, canonical));
+                }
+                if (typeof window.wizardOnNewChoiceAdded === 'function') {
+                    window.wizardOnNewChoiceAdded(apiEntity, key, canonical, { wasNew: true });
+                }
+                return undefined;
             })
             .catch(err => {
                 buttons.forEach(b => { b.disabled = false; });
@@ -2662,6 +2750,7 @@ window.applyFilamentFieldsFromTemplate = (temp) => {
     const chipContainer = document.getElementById('chip-container-fil-filament_attributes');
     if (chipContainer) {
         chipContainer.querySelectorAll('.dynamic-chip[data-key="filament_attributes"]').forEach(c => c.remove());
+        wizardState.touchedExtras.add('fil:filament_attributes');   // the user applied it
     }
     if (window.wizardAddMultiChoiceChip) {
         split.attrs.forEach(attr => {
@@ -2756,7 +2845,177 @@ window.applyFilamentFieldsFromTemplate = (temp) => {
             }
         }
     }
+
+    // Group 48.4: a blank Slicer Profile takes the one this source names (the
+    // Prusament spool page's product line); nothing else fills it.
+    window.wizardSuggestSlicerProfile({ lookup: temp.slicer_profile, source: temp.slicer_profile_source });
 };
+
+// --- Group 48.4: fill a blank Slicer Profile --------------------------------------------
+// Derek, 2026-10-19: for Prusament "it be perfered if we could just source that
+// from the site". Only ever into a BLANK Slicer Profile while a NEW filament is
+// being made (the 'manual' and 'external' modes): a profile the user picked, or
+// one an existing filament has, is never replaced, and nothing is written
+// before the wizard's own Save. The one source is a lookup that names a
+// profile (an external parser's `slicer_profile`: the Prusament page's product
+// line, "Prusament PLA Blend"): his own spelling when it is one of his profiles
+// already; otherwise a new choice, which Save adds to Spoolman's list first
+// (wizardCommitSuggestedChoices). Any later lookup that returns
+// `slicer_profile` works the same way. A note under the field says where it
+// came from.
+// Derek, 2026-10-20: never a guess from his own filaments. The profile he
+// records is one he confirmed prints well (a brand's own, a sister brand's like
+// Jayo → Sunlu, else a Generic one), and a variant's attributes needn't match
+// a profile name, so the brand + material guess the first build had is gone. A
+// brand or material change after a lookup clears the name it gave (it was
+// confirmed for the lookup's filament, not this one).
+const _PROFILE_KEY = 'slicer_profile';
+let _settingProfile = false;
+const _profileSelect = () => document.getElementById(`wiz_fil_ef_${_PROFILE_KEY}`);
+const _profileField = () => ((wizardState.extraFields || {}).filament || []).find(f => f && f.key === _PROFILE_KEY) || null;
+const _profileChoices = () => {
+    const raw = (_profileField() || {}).choices;
+    if (Array.isArray(raw)) return raw.map(String);
+    if (typeof raw === 'string') {
+        try { const p = JSON.parse(raw); return Array.isArray(p) ? p.map(String) : []; } catch (_) { return []; }
+    }
+    return [];
+};
+const _unquoteProfile = (v) => String(v == null ? '' : v).trim().replace(/^"(.*)"$/, '$1').trim();
+
+const _setProfileNote = (text) => {
+    let note = document.getElementById('wiz-fil-profile-note');
+    if (!note) {
+        const sel = _profileSelect();
+        const wrap = sel && typeof sel.closest === 'function' ? sel.closest('[data-extra-key]') : null;
+        if (!wrap) return;
+        note = document.createElement('div');
+        note.id = 'wiz-fil-profile-note';
+        note.className = 'small mt-1 fcc-wiz-profile-note';
+        wrap.appendChild(note);
+    }
+    note.textContent = text || '';
+    note.style.display = text ? '' : 'none';
+};
+
+// Drops the options FCC added for earlier suggestions ("… (new, from …)"),
+// except `keep`'s: a suggestion that no longer applies takes its option along.
+const _dropNewChoiceOptions = (sel, keep = null) => {
+    Array.from((sel && sel.options) || []).forEach(o => {
+        if (o.dataset && o.dataset.fccNewChoice === '1' && o.value !== keep) o.remove();
+    });
+};
+
+const _selectProfile = (sel, value, isNew, source) => {
+    _dropNewChoiceOptions(sel, isNew ? value : null);
+    if (isNew && !Array.from(sel.options || []).some(o => o.value === value)) {
+        const opt = document.createElement('option');
+        opt.value = value;
+        opt.textContent = `${value} (new, from ${source})`;
+        opt.dataset.fccNewChoice = '1';
+        sel.appendChild(opt);
+    }
+    _settingProfile = true;
+    try { sel.value = value; } finally { _settingProfile = false; }
+    sel.dataset.fccSuggested = value;
+};
+
+// Returns what it suggested ({value, isNew, from, vendor, material}) or null.
+window.wizardSuggestSlicerProfile = ({ lookup = '', source = '' } = {}) => {
+    const sel = _profileSelect();
+    if (!sel || !['manual', 'external'].includes(wizardState.mode)) return null;
+    const ds = sel.dataset || {};
+    const current = String(sel.value || '').trim();
+    if (ds.fccUserSet === '1' || (current && current !== ds.fccSuggested)) return null;
+    const want = _unquoteProfile(lookup);
+    if (!want) return null;
+    const match = _profileChoices().find(c => c.toLowerCase() === want.toLowerCase()) || null;
+    const from = String(source || '').trim() || 'the lookup';
+    _selectProfile(sel, match || want, !match, from);
+    _setProfileNote(match ? `🎚️ From ${from}: ${match}.`
+        : `🎚️ ${from} names this ${want}, which isn't in your profile list yet: Save adds it.`);
+    wizardState.profileSuggestion = { value: match || want, isNew: !match, from,
+                                      vendor: _profileVendorNow(), material: _profileMaterialNow() };
+    return wizardState.profileSuggestion;
+};
+
+const _profileVendorNow = () => String((document.getElementById('wiz-fil-vendor-search') || {}).value || '').trim();
+const _profileMaterialNow = () => String((document.getElementById('wiz-fil-material') || {}).value || '').trim();
+
+// A brand or material change after a lookup named the profile: the name was
+// confirmed for the lookup's filament, so a different brand or material clears
+// it (only while it is still FCC's own suggestion), with a note saying why.
+const _dropStaleProfileSuggestion = () => {
+    const s = wizardState.profileSuggestion;
+    const sel = _profileSelect();
+    if (!s || !sel) return;
+    const ds = sel.dataset || {};
+    if (ds.fccUserSet === '1' || String(sel.value || '').trim() !== ds.fccSuggested) return;
+    const same = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+    if (same(_profileVendorNow(), s.vendor) && same(_profileMaterialNow(), s.material)) return;
+    _settingProfile = true;
+    try { sel.value = ''; } finally { _settingProfile = false; }
+    delete sel.dataset.fccSuggested;
+    _dropNewChoiceOptions(sel);
+    wizardState.profileSuggestion = null;
+    _setProfileNote(`🎚️ The brand or material changed after ${s.from} named ${s.value}, so FCC cleared it: `
+        + `pick a profile.`);
+};
+
+// Save's step before it writes (Group 48.4): a suggested profile that isn't one
+// of the choices yet is added to Spoolman's list first (a choice field refuses
+// an unknown value). False when that failed: the save stops and says why.
+// Decided from what Save SENDS (Group 51 review, browser-3): the value is one
+// FCC offered as new (its option says "(new, from …)") and still isn't a
+// choice. Keyed on the suggestion, a "(new, …)" option picked again by hand
+// after the user had picked another (which drops the suggestion) was sent
+// without being added, and Spoolman refused every Save.
+window.wizardCommitSuggestedChoices = async (fPayload) => {
+    const sent = fPayload && fPayload.extra ? _unquoteProfile(fPayload.extra[_PROFILE_KEY]) : '';
+    if (!sent || _profileChoices().some(c => c.toLowerCase() === sent.toLowerCase())) return true;
+    const sel = _profileSelect();
+    const offered = Array.from((sel && sel.options) || [])
+        .find(o => o.value === sent && o.dataset && o.dataset.fccNewChoice === '1');
+    if (!offered) return true;
+    try {
+        const r = await fetch('/api/external/fields/add_choice', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ entity_type: 'filament', key: _PROFILE_KEY, new_choice: sent }),
+        });
+        const d = await r.json();
+        if (!r.ok || !d || d.success === false) throw new Error((d && (d.msg || d.error)) || `HTTP ${r.status}`);
+        const field = _profileField();
+        if (field && Array.isArray(field.choices) && !field.choices.includes(sent)) field.choices.push(sent);
+        // A choice now: its option is an ordinary one.
+        delete offered.dataset.fccNewChoice;
+        offered.textContent = sent;
+        const s = wizardState.profileSuggestion;
+        if (s && s.value === sent) s.isNew = false;
+        return true;
+    } catch (e) {
+        const msg = `Couldn't add the slicer profile "${sent}" to Spoolman's list (${(e && e.message) || e}), `
+            + `so nothing was saved. Pick a profile from the list, or Save again.`;
+        if (typeof showToast === 'function') showToast(`❌ ${msg}`, 'error', 7000);
+        const status = document.getElementById('wiz-status-msg');
+        if (status) status.innerText = msg;
+        return false;
+    }
+};
+
+// The user's own pick is never replaced; a brand or material change clears a
+// lookup's name that no longer applies.
+document.addEventListener('change', (e) => {
+    const t = e && e.target;
+    if (!t || !t.id) return;
+    if (t.id === `wiz_fil_ef_${_PROFILE_KEY}`) {
+        if (_settingProfile) return;
+        if (t.dataset) t.dataset.fccUserSet = '1';
+        wizardState.profileSuggestion = null;
+        _setProfileNote('');
+    } else if (t.id === 'wiz-fil-vendor-sel' || t.id === 'wiz-fil-material') {
+        _dropStaleProfileSuggestion();
+    }
+}, true);
 
 // Spool-level extract — returns the per-spool override dict the wizard
 // will merge onto each created spool. Does NOT touch the DOM.
@@ -2885,7 +3144,8 @@ window.wizardBuildFilamentLabelDiff = (orig, fPayload) => {
     const newExtra = fPayload.extra || {};
     const attrKey = (a) => {
         let arr = a;
-        if (typeof a === 'string') { try { arr = JSON.parse(a); } catch (_) { arr = a ? [a] : []; } }
+        if (a === window.FCC_DELETE_EXTRA) arr = [];   // every chip removed (cleared)
+        else if (typeof a === 'string') { try { arr = JSON.parse(a); } catch (_) { arr = a ? [a] : []; } }
         if (!Array.isArray(arr)) arr = (arr == null || arr === '') ? [] : [arr];
         return arr.map(x => String(x).trim().toLowerCase()).filter(Boolean).sort().join('|');
     };
@@ -2920,6 +3180,14 @@ window.wizardRenderPostSaveQueueActions = (mode, createdSpoolsArg, editSpoolId) 
     if (!actionRow) return;
     actionRow.innerHTML = '';
 
+    // Group 48.1: the queue row's text, "Brand - Material - Color" from the
+    // filament the wizard holds (the backlog's look), so a queued label reads
+    // like one before the queue window reads it live; "Spool #N" without one.
+    const fieldVal = (id) => { const el = document.getElementById(id); return el ? String(el.value || '').trim() : ''; };
+    const filamentText = [fieldVal('wiz-fil-vendor-search'), fieldVal('wiz-fil-material'), fieldVal('wiz-fil-color_name')]
+        .filter(Boolean).join(' - ');
+    const queueText = (sid) => filamentText || `Spool #${sid}`;
+
     const makeQueueChip = (sid) => {
         const btn = document.createElement('button');
         btn.type = 'button';
@@ -2940,7 +3208,7 @@ window.wizardRenderPostSaveQueueActions = (mode, createdSpoolsArg, editSpoolId) 
                 markQueued();
                 return;
             }
-            window.addToQueue({ id: sid, type: 'spool', display: `Spool #${sid}` });
+            window.addToQueue({ id: sid, type: 'spool', display: queueText(sid) });
             if (typeof showToast === 'function') showToast(`Queued label for Spool #${sid}`, 'success', 2500);
             markQueued();
         });
@@ -2988,7 +3256,7 @@ window.wizardRenderPostSaveQueueActions = (mode, createdSpoolsArg, editSpoolId) 
                     already++;
                     return;
                 }
-                window.addToQueue({ id: sid, type: 'spool', display: `Spool #${sid}` });
+                window.addToQueue({ id: sid, type: 'spool', display: queueText(sid) });
                 added++;
             });
             chips.forEach(c => c.markQueued());
@@ -3038,6 +3306,11 @@ window.wizardPlacementFor = (location, placement = wizardState.pendingPlacement)
     // "came from" answer, '' = No box) and for an occupied slot (Swap).
     if (p.record_source !== undefined && p.record_source !== null) out.record_source = p.record_source;
     if (p.swap === true) out.swap = true;
+    // Group 51.6 / 51.7: what the picker showed on the head picked, and in the
+    // slot chosen for Swap / Overwrite. A choice held until Save can be old by
+    // then: the server refuses it if another spool is there now.
+    if (Array.isArray(p.expected_residents)) out.expected_residents = p.expected_residents.slice();
+    if (p.expected_occupant != null) out.expected_occupant = p.expected_occupant;
     return out;
 };
 
@@ -3100,7 +3373,10 @@ window.wizardPickRefused = (data) => {
     const d = data || {};
     if (d.pick_refused === true) return true;
     const lr = d.location_result;
-    return !!(lr && typeof lr === 'object' && ['picked_slot_taken', 'record_source'].includes(lr.blocked_reason));
+    // Groups 51.3 / 51.6 / 51.7: a slot still claimed, or a head or slot that
+    // holds a spool the picker never showed, refuses the held choice too.
+    return !!(lr && typeof lr === 'object' && ['picked_slot_taken', 'record_source', 'slot_claimed',
+        'residents_changed', 'occupant_changed'].includes(lr.blocked_reason));
 };
 
 // Group 40.7 (Derek's answer 7: the wizard's Location behaves like Force
@@ -3138,6 +3414,7 @@ window.wizardLocationPicked = (value, before = null, { quiet = false } = {}) => 
                 location: pl.location, slot: pl.slot, picked_slot: pl.picked_slot,
                 expected_feed: pl.expected_feed, auto_deploy: pl.auto_deploy, swap: pl.swap === true,
                 record_source: pl.record_source, noStore: !!pl.noStore,
+                expected_residents: pl.expected_residents, expected_occupant: pl.expected_occupant,
                 label: pl.label, via: row.LocationID,
             };
             if (hidden) hidden.value = pl.location;
@@ -3187,7 +3464,10 @@ window.wizardPlaceRemaining = async ({ spoolIds = [], location = '', placement =
                 pl.picked_slot != null ? pl.picked_slot : null,
                 { expectedFeed: pl.expected_feed, swapDisplaced: pl.swap ? (pl.displaced || { id: null }) : null,
                   autoDeploy: pl.auto_deploy === false ? false : undefined, noStore: !!pl.noStore,
-                  recordSource: pl.record_source, origin: 'wizard_create', onOutcome: done }),
+                  recordSource: pl.record_source, origin: 'wizard_create',
+                  // Group 51.6 / 51.7: what the picker showed.
+                  expectedResidents: pl.expected_residents, expectedOccupant: pl.expected_occupant,
+                  onOutcome: done }),
         });
         if (!out || out.outcome !== 'moved') {
             left.push(...spoolIds.slice(i));
@@ -3247,6 +3527,9 @@ const _wizardMoveQuestion = (answer, ctx) => {
     // Group 40.7: the picker's "came from" answer and Swap, kept by every replay.
     if (f.record_source !== undefined && f.record_source !== null) original.record_source = f.record_source;
     if (f.swap === true) original.swap = true;
+    // Group 51.6 / 51.7: every replay still checks what the picker showed.
+    if (Array.isArray(f.expected_residents)) original.expected_residents = f.expected_residents.slice();
+    if (f.expected_occupant != null) original.expected_occupant = f.expected_occupant;
     let ended = false;
     const end = (how, res = null) => {
         if (ended) return;
@@ -3362,6 +3645,25 @@ const _wizardUnassignQuestion = (answer, ctx) => {
     });
 };
 
+// Group 40.7 review (wizard-refused-pick-resent): a refusal of the held picker
+// choice itself (the slot was taken meanwhile, …) would come back on every
+// Save, so the choice is dropped and the field shows its place again; the next
+// Save opens that place's picker (window.wizardSaveNeedsPicker). Returns the
+// status line's tail, or '' when no choice was held and sent.
+const _wizDropRefusedPick = (ctx) => {
+    const held = ctx.placement || null;
+    const sent = !!(ctx.fields && Object.keys(ctx.fields).length);
+    if (!held || !sent) return '';
+    const place = held.via || held.location;
+    if (wizardState.pendingPlacement === held) {
+        wizardState.pendingPlacement = null;
+        window.wizardShowLocation(place);
+    }
+    // A box's slot, or a printer's toolhead (a head's choice is held via its printer).
+    const what = _wizLocKey(held.location) === _wizLocKey(place) ? 'a slot' : 'a toolhead';
+    return ` Pick ${what} again: Save opens the picker for ${place}.`;
+};
+
 // An edit whose other changes saved but whose Location didn't move yet: the
 // server's question (asked here, then replayed on its door) or its refusal
 // (a 7 s error). `ctx`: {spoolId, location, fields, placement, host,
@@ -3378,27 +3680,28 @@ window.wizardEditLocationNotMoved = (data, ctx) => {
     if (asks) {
         const q = Object.assign({ origin: 'wizard_edit' }, ctx);
         if (_wizLocKey(ctx.location) === '') _wizardUnassignQuestion(lr, q);
-        else _wizardMoveQuestion(lr, q);
+        else {
+            // Group 51 review (browser-6): the answered question's replay refused
+            // over the held choice itself (a head or slot that changed since the
+            // pick) drops it too, or the next Save is refused the same way.
+            q.onDone = (outcome, res, info) => {
+                if (outcome === 'failed' && res && window.wizardPickRefused({ location_result: res })) {
+                    const why = res.status === 'success' ? (res.failures || {})[String(ctx.spoolId)] : res.msg;
+                    const tail = _wizDropRefusedPick(ctx);
+                    if (typeof ctx.onDone === 'function') ctx.onDone('refused', {
+                        msg: `Saved your other changes, but #${ctx.spoolId} was not moved: `
+                            + `${String(why || 'refused').replace(/\.\s*$/, '')}.`,
+                    }, { repick: !!tail, tail });
+                    return;
+                }
+                if (typeof ctx.onDone === 'function') ctx.onDone(outcome, res, info);
+            };
+            _wizardMoveQuestion(lr, q);
+        }
         return 'asking';
     }
-    // Group 40.7 review (wizard-refused-pick-resent): a refusal of the held
-    // choice itself (the slot was taken meanwhile, …) would come back on every
-    // Save, so the choice is dropped and the field shows its place again; the
-    // next Save opens that place's picker (window.wizardSaveNeedsPicker).
-    const held = ctx.placement || null;
-    const sent = !!(ctx.fields && Object.keys(ctx.fields).length);
-    const repick = !!(held && sent && window.wizardPickRefused(data));
-    let tail = '';
-    if (repick) {
-        const place = held.via || held.location;
-        if (wizardState.pendingPlacement === held) {
-            wizardState.pendingPlacement = null;
-            window.wizardShowLocation(place);
-        }
-        // A box's slot, or a printer's toolhead (a head's choice is held via its printer).
-        const what = _wizLocKey(held.location) === _wizLocKey(place) ? 'a slot' : 'a toolhead';
-        tail = ` Pick ${what} again: Save opens the picker for ${place}.`;
-    }
+    const tail = window.wizardPickRefused(data) ? _wizDropRefusedPick(ctx) : '';
+    const repick = !!tail;
     showToast(`❌ ${(data && data.msg) || `#${ctx.spoolId} was not moved`}${tail}`, 'error', 7000);
     if (window.logClientEvent) window.logClientEvent(`❌ Wizard edit: ${(data && data.msg) || 'not moved'}`, 'ERROR');
     if (typeof ctx.onDone === 'function') ctx.onDone('refused', data, { repick, tail });
@@ -3522,16 +3825,18 @@ window.wizardSubmit = async () => {
         if (productUrl) sp_payload.extra.product_url = productUrl;
         else if (isWizardEdit) sp_payload.extra.product_url = window.FCC_DELETE_EXTRA;
 
-        // Extract Dynamic Spool Fields
+        // Extract Dynamic Spool Fields (never a key with its own input above:
+        // its copy would overwrite what the user typed there).
         document.querySelectorAll('.dynamic-extra-spool-field').forEach(el => {
             const key = el.getAttribute('data-key');
-            if (!key) return;
+            if (!key || WIZ_SPOOL_EXTRAS_OWN_INPUT.includes(key)) return;
             if (el.type === 'checkbox') {
                 sp_payload.extra[key] = el.checked;
             } else if (el.value) {
                 sp_payload.extra[key] = el.value;
-            } else if (isWizardEdit) {
-                sp_payload.extra[key] = window.FCC_DELETE_EXTRA;  // 23.4 — blank-to-clear on edit
+            } else if (isWizardEdit && wizardExtraTouched('spool', key)) {
+                // 23.4 — blank-to-clear on edit, only a field the user emptied
+                sp_payload.extra[key] = window.FCC_DELETE_EXTRA;
             }
         });
 
@@ -3617,8 +3922,9 @@ window.wizardSubmit = async () => {
                     f_payload.extra[key] = el.checked;
                 } else if (el.value) {
                     f_payload.extra[key] = el.value;
-                } else if (isWizardEdit) {
-                    f_payload.extra[key] = window.FCC_DELETE_EXTRA;  // 23.4 — blank-to-clear on edit
+                } else if (isWizardEdit && wizardExtraTouched('fil', key)) {
+                    // 23.4 — blank-to-clear on edit, only a field the user emptied
+                    f_payload.extra[key] = window.FCC_DELETE_EXTRA;
                 }
             });
 
@@ -3631,6 +3937,9 @@ window.wizardSubmit = async () => {
                 if (!f_payload.extra[key]) f_payload.extra[key] = [];
                 f_payload.extra[key].push(val);
             });
+            // A chip field whose chips were all removed sent nothing above, and a
+            // key left out keeps its old list (2026-10-21): on edit, clear it.
+            if (isWizardEdit) window.wizardClearEmptyChipFields(f_payload.extra);
 
             // Vendor selection. The ➕ button now opens the Vendor Edit modal
             // in create mode and auto-selects the new vendor on save, so by the
@@ -3723,6 +4032,14 @@ window.wizardSubmit = async () => {
                 spool_overrides ? spool_overrides.length : qty, sp_payload.location, placement);
         }
 
+        // Group 48.4: a suggested slicer profile that isn't a choice yet (a new
+        // variant a Prusament page names) joins Spoolman's list before the
+        // filament that uses it; if that fails, nothing is saved.
+        if (!(await window.wizardCommitSuggestedChoices(f_payload))) {
+            document.getElementById('btn-wiz-submit').disabled = false;
+            return;
+        }
+
         const endpoint = wizardState.mode === 'edit_spool' ? '/api/edit_spool_wizard' : '/api/create_inventory_wizard';
 
         const res = await fetch(endpoint, {
@@ -3743,6 +4060,13 @@ window.wizardSubmit = async () => {
         if (data.success || partial) {
             // A partial save leaves the Location unsaved, so closing still warns.
             wizardState.isDirty = partial;
+            // 2026-10-20 review (engine-1): the Archived box follows the server. A box
+            // still ticked after the spool came back into stock (a weight fix with a
+            // move) sent archived: true on the next Save and archived it ON its head.
+            if (isWizardEdit && Object.prototype.hasOwnProperty.call(data, 'archived_now')) {
+                const box = document.getElementById('wiz-spool-archived');
+                if (box) box.checked = !!data.archived_now;
+            }
             msg.innerHTML = partial
                 ? `<span class="text-warning fw-bold">Saved your other changes. #${_wizEsc(editSid)} was not moved yet.</span>`
                 : `<span class="text-success fw-bold">Success! ${wizardState.mode === 'edit_spool' ? 'Spool Updated' : 'Spool(s) Generated'}.</span>`;
@@ -3901,7 +4225,7 @@ window.wizardSubmit = async () => {
                             setTimeout(() => { msg.innerHTML = ""; if (btn) btn.disabled = false; }, 3000);
                         } else {
                             const why = outcome === 'refused'
-                                ? (data.msg || `Saved your other changes, but #${editSid} was not moved.`)
+                                ? ((res && res.msg) || data.msg || `Saved your other changes, but #${editSid} was not moved.`)
                                     + ((info && info.tail) || '')
                                 : outcome === 'cancelled'
                                     ? `Saved your other changes. #${editSid} was not moved: Save again to move it.`

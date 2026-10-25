@@ -78,12 +78,15 @@ def _get_sample(api_base_url: str, fid):
 
 def _set_sample(api_base_url: str, fid, value):
     """Set (True/False) or clear (None) sample_printed via the same endpoint the
-    UI uses, merging against the live extra so siblings survive."""
+    UI uses, merging against the live extra so siblings survive. A clear sends
+    the delete sentinel, as the UI does: a key left out is KEPT (the server's
+    read-merge, and Spoolman 0.26+ itself), so popping it left the test's value
+    on the dev filament (2026-10-21)."""
     r = requests.get(f"{api_base_url}/api/filaments/{fid}", timeout=10)
     data = (r.json() or {}).get("data") or {}
     extra = dict(data.get("extra") or {})
     if value is None:
-        extra.pop("sample_printed", None)
+        extra["sample_printed"] = "__FCC_DELETE_EXTRA__"
     else:
         extra["sample_printed"] = bool(value)
     requests.post(

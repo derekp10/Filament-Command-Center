@@ -51,6 +51,7 @@ def test_wizard_success_state_renders_queue_label_chips(page: Page, base_url: st
             setVal('wiz-spool-price', '');
             // Fall through to filament create mode.
             wizardState.mode = 'create';
+            setVal('wiz-fil-vendor-search', 'Prusament');
             setVal('wiz-fil-color_name', 'Test');
             setVal('wiz-fil-material', 'PLA');
             setVal('wiz-fil-weight', '1000');
@@ -80,6 +81,10 @@ def test_wizard_success_state_renders_queue_label_chips(page: Page, base_url: st
     page.wait_for_function("() => Array.isArray(window.labelQueue) && window.labelQueue.length > 0", timeout=3000)
     queued = page.evaluate("() => (window.labelQueue || []).map(q => q.id)")
     assert 9991 in queued, f"chip click should enqueue the spool; got {queued}"
+    # Group 48.1: the queue row reads like the backlog's ("Brand - Material -
+    # Color", from the filament the wizard holds), not "Spool #9991".
+    display = page.evaluate("() => ((window.labelQueue || []).find(q => q.id === 9991) || {}).display")
+    assert display == "Prusament - PLA - Test", display
 
     # Chip should be disabled and re-styled to indicate "done".
     first = page.locator("#wiz-postcreate-actions .fcc-wiz-queue-label").first

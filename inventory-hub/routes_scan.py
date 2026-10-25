@@ -104,7 +104,7 @@ def api_prusament_apply_weights():
         return jsonify({"status": "error", "msg": str(e)})
 
 
-def _format_filament_edit_log(fid, before, requested):
+def _format_filament_edit_log(fid, before, requested, uncleared=()):
     """Build a Filament-edit activity-log line that shows actual before→after
     values per field — both native and extras — so the user has a real
     audit trail rather than just a list of keys.
@@ -112,7 +112,9 @@ def _format_filament_edit_log(fid, before, requested):
     `before` is the pre-patch full filament dict (from get_filament).
     `requested` is the partial-update payload the wizard/edit form sent —
     the authoritative source for the "new value" since Spoolman's PATCH
-    response doesn't always echo every field.
+    response doesn't always echo every field. `uncleared` names the extras
+    sent as cleared that Spoolman still holds (update_filament's
+    `fcc_uncleared_extras`): those say "(not cleared)", never "(cleared)".
 
     Always emits an `old → new` entry for each requested field even when
     they appear equal — the user explicitly asked for these to be visible
@@ -139,7 +141,8 @@ def _format_filament_edit_log(fid, before, requested):
                 if spoolman_api._is_delete_sentinel(new):
                     # 23.4 — render a blank-to-clear as a real deletion rather
                     # than leaking the internal delete-sentinel token.
-                    parts.append(f"extra.{ek}: {_short(old)} → (cleared)")
+                    parts.append(f"extra.{ek}: {_short(old)} → "
+                                 f"{'(not cleared)' if ek in uncleared else '(cleared)'}")
                 elif old == new:
                     parts.append(f"extra.{ek}: {_short(old)} (unchanged)")
                 else:
@@ -201,15 +204,21 @@ def api_update_filament():
     # block, OUTSIDE the success-determining try: a formatter/logger crash must
     # NOT invert a committed write into success:false (which made the user retry
     # and double-write). Log the log-failure and still report success.
+    uncleared = (updated.get('fcc_uncleared_extras') or ()) if isinstance(updated, dict) else ()
     try:
         state.add_log_entry(
-            _format_filament_edit_log(fid, before, data),
+            _format_filament_edit_log(fid, before, data, uncleared=uncleared),
             "SUCCESS", "00ff00",
         )
     except Exception as e:
         state.logger.error(
             f"Filament #{fid} updated OK but activity-log write failed: {e}")
-    return jsonify({"success": True, "filament": updated})
+    out = {"success": True, "filament": updated}
+    # 2026-10-21: an extra the edit cleared that Spoolman still holds (the
+    # modal toasts `warning` at 7 s; update_filament logged it already).
+    if isinstance(updated, dict) and updated.get('fcc_uncleared_note'):
+        out["warning"] = updated['fcc_uncleared_note']
+    return jsonify(out)
 
 def _no_home_unassign_msg(spool_id):
     """Group 39.6 — the unassign prompt names the spool and where it is: "#88 is
@@ -493,6 +502,10 @@ def api_manage_contents():
             # Group 40.5: Force Location's Printer picker names where a spool put
             # on a head came from ("No box" = '').
             record_source=logic.record_source_from(data),
+            # Group 51.6 / 51.7: what the screen showed on the head the user
+            # picked, and in the slot they chose Swap / Overwrite for.
+            expected_residents=logic.expected_residents_from(data),
+            expected_occupant=logic.expected_occupant_from(data),
         )
         stale = logic.stale_fed_refusal(data, result) or logic.stale_confirm_refusal(data, result)
         if stale:
@@ -1366,12 +1379,21 @@ def api_identify_scan():
             }), 200
 
         spool_id = int(first_spool['id'])
+        # Group 51 review (engine-3): a screen that showed this slot EMPTY (the
+        # Quick-Swap DEPOSIT tile) says so (`shown_empty: true`): a multi-slot
+        # box's slot then goes as `picked_slot`, filled only while it is still
+        # free, never unseating a spool filed there since the tile was drawn. A
+        # blind scan of a slot's label sends nothing: an explicit slot, as
+        # always. A single-slot box keeps its own slot-1 rule either way.
+        shown_empty = ((request.json or {}).get('shown_empty') is True
+                       and tgt_info.get('Type') == locations_db.DRYER_BOX_TYPE and max_slots > 1)
+        slot_kw = {'picked_slot': slot} if shown_empty else {'target_slot': slot}
         # Slot-QR scans pass the caller's confirm through: the heads whose
         # warning the user saw (Group 39.1). Frontend slot-QR paths pre-probe
         # too, but the backend check is the authoritative safety net — if the
         # printer went active between the probe and the scan, we still bail.
         move_result = logic.perform_smart_move(
-            target, [spool_id], target_slot=slot, origin='slot_qr_scan',
+            target, [spool_id], **slot_kw, origin='slot_qr_scan',
             # Group 40.0c: "Just store it" replays the scan with auto_deploy
             # false, and "Load it instead" with the head in confirmed_fed_heads.
             auto_deploy=logic.auto_deploy_requested(request.json),
@@ -1426,10 +1448,13 @@ def api_identify_scan():
         # answered assignment_done although the spool never moved.
         move_failed = logic.smart_move_failure(move_result, spool_id)
         if move_failed:
-            state.add_log_entry(
-                f"❌ Spool #{spool_id} was NOT loaded into <b>{target}:SLOT:{slot}</b> — {move_failed}",
-                "ERROR", "ff4444"
-            )
+            # A slot shown empty and filled meanwhile (engine-3) is a race, not an
+            # error: the engine already wrote its WARNING line.
+            if not (isinstance(move_result, dict) and move_result.get('blocked_reason') == 'picked_slot_taken'):
+                state.add_log_entry(
+                    f"❌ Spool #{spool_id} was NOT loaded into <b>{target}:SLOT:{slot}</b> — {move_failed}",
+                    "ERROR", "ff4444"
+                )
             return jsonify({
                 "type": "assignment",
                 "action": "assignment_failed",

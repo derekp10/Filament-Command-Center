@@ -676,14 +676,14 @@ window.commitBulkMove = () => {
                 <div style="flex:1; min-width:0;">
                     <div class="text-truncate" style="color:#fff; font-weight:600; font-size:0.9rem;"
                          title="${_esc(label)}">${idPrefix}${_esc(label)}</div>
-                    <div style="font-size:0.75rem; color:rgba(255,255,255,0.75);">${_esc(meta)}</div>
+                    <div style="font-size:var(--fcc-fs-small); color:rgba(255,255,255,0.75);">${_esc(meta)}</div>
                 </div>
-                <div style="font-size:0.8rem;">${badge}</div>
+                <div style="font-size:var(--fcc-fs-label);">${badge}</div>
             </div>`;
     };
 
     const _grid = (html) => `
-        <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr));
+        <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(16.25rem,1fr));
                     gap:6px;">${html}</div>`;
 
     // Group the skipped rows by reason, first-seen order (which follows
@@ -909,8 +909,8 @@ window.commitBulkMove = () => {
         _lastRenderHash = null;
         const content = `
             <div style="background:#1e1e1e; color:#fff; border:2px solid #00d4ff;
-                        border-radius:8px; padding:14px 16px;
-                        width:min(820px,94vw); max-height:80vh; display:flex; flex-direction:column;">
+                        border-radius:8px; padding:0.875rem 1rem;
+                        width:min(51.25rem,94vw); max-height:80vh; display:flex; flex-direction:column;">
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <div style="font-weight:bold; font-size:1.15em; color:#7fe8ff;">🔀 Bulk Move</div>
                     <button id="fcc-bulkmove-close" class="btn btn-sm btn-outline-light"
@@ -1001,9 +1001,9 @@ window.commitBulkMove = () => {
                 <div style="flex:1; min-width:0;">
                     <div class="text-truncate" style="color:#fff; font-weight:600; font-size:0.9rem;"
                          title="${_escapeHtml(row.display)}">#${row.id} ${_escapeHtml(row.display)}</div>
-                    <div style="font-size:0.75rem; color:rgba(255,255,255,0.75);">${_escapeHtml(weight)}${_escapeHtml(slot)}</div>
+                    <div style="font-size:var(--fcc-fs-small); color:rgba(255,255,255,0.75);">${_escapeHtml(weight)}${_escapeHtml(slot)}</div>
                 </div>
-                <div style="font-size:0.8rem;">${badge}</div>
+                <div style="font-size:var(--fcc-fs-label);">${badge}</div>
             </div>
         `;
     };
@@ -1032,7 +1032,7 @@ window.commitBulkMove = () => {
             </div>
             ${data.expected && data.expected.length ? `
                 <div style="font-weight:bold; color:#0ff; margin-bottom:6px;">Expected here</div>
-                <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:6px; margin-bottom:12px;">
+                <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(16.25rem,1fr)); gap:6px; margin-bottom:12px;">
                     ${expectedTiles}
                 </div>
             ` : `<div class="small" style="color:rgba(255,255,255,0.7);">Scan a location's QR to populate the expected list.</div>`}
@@ -1043,7 +1043,7 @@ window.commitBulkMove = () => {
                 </div>` : ''}
             ${data.rogue && data.rogue.length ? `
                 <div style="font-weight:bold; color:#fc0; margin-bottom:6px;">Rogue (scanned but expected elsewhere)</div>
-                <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:6px;">
+                <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(16.25rem,1fr)); gap:6px;">
                     ${rogueTiles}
                 </div>
             ` : ''}
@@ -1103,8 +1103,8 @@ window.commitBulkMove = () => {
         _lastRenderHash = null;  // force first render after open
         const content = `
             <div style="background:#1e1e1e; color:#fff; border:2px solid #ff00ff;
-                        border-radius:8px; padding:14px 16px;
-                        width:min(820px,94vw); max-height:80vh; display:flex; flex-direction:column;">
+                        border-radius:8px; padding:0.875rem 1rem;
+                        width:min(51.25rem,94vw); max-height:80vh; display:flex; flex-direction:column;">
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <div style="font-weight:bold; font-size:1.15em; color:#ff7eff;">
                         🕵️‍♀️ Audit in Progress
@@ -1208,7 +1208,7 @@ window.promptPrusamentMatched = (res) => {
     }
 
     const content = `
-        <div class="p-3" style="max-width:420px; background:#1e1e1e; color:#fff; border:1px solid #444; border-radius:8px;">
+        <div class="p-3" style="max-width:26.25rem; background:#1e1e1e; color:#fff; border:1px solid #444; border-radius:8px;">
             <h6 class="text-info mb-1">🎯 Matched Prusament spool</h6>
             <div class="mb-2"><strong>${esc(name)}</strong> <span class="text-muted">— Spool #${esc(sid)}</span></div>
             ${filledHtml}
@@ -2038,6 +2038,10 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
     // Group 40.5: the Printer picker's "came from" answer ('' = No box), on
     // `original` so a replay of the server's printing question keeps it.
     if (opts && opts.recordSource !== undefined) original.record_source = opts.recordSource;
+    // Group 51.6 / 51.7: what the picker showed on the head picked, and in the
+    // slot chosen for Swap / Overwrite; on `original`, so every replay checks it.
+    if (opts && Array.isArray(opts.expectedResidents)) original.expected_residents = opts.expectedResidents.slice();
+    if (opts && opts.expectedOccupant != null) original.expected_occupant = opts.expectedOccupant;
     const first = Object.assign({}, original, {
         confirmed_toolheads: Array.isArray(confirmedHeads) ? confirmedHeads : [],
     });
@@ -2103,6 +2107,17 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
                         // store it" that would only be refused.
                         noStore: !!(opts && opts.noStore),
                     });
+                    return;
+                }
+                if (res.blocked_reason === 'residents_changed' || res.blocked_reason === 'occupant_changed') {
+                    // Group 51.6 / 51.7: the head or slot holds a spool the picker
+                    // never showed. Nothing moved; 'cancelled' opens the picker
+                    // again (window.placeOneWithPicker), drawn from fresh data.
+                    // Checked before 'success': step 6's occupant_changed answers
+                    // status 'success' with the spool in `failures` (review engine-2).
+                    showToast(`⚠️ ${res.msg || ((res.failures || {})[String((payload.spools || spoolIds)[0])])
+                        || 'That place changed since you picked it: pick again'}`, 'warning', 7000);
+                    end('cancelled', res);
                     return;
                 }
                 if (res.status === 'success') {
@@ -2208,10 +2223,14 @@ const performContextAssign = (tid, slot = null, confirmedHeads = [], spoolIdsOve
 // create (Group 40.7: the spool doesn't exist yet when its picker opens).
 const _spoolWord = (sid) => (sid != null && String(sid) !== '' ? `#${sid}` : 'the new spool');
 
+// The spools the Printer picker showed on a picked head: what its question names
+// and, as `expected_residents`, what the move sends (Group 51.6).
+const _headResidents = (pick) => ((Array.isArray(pick.residents) && pick.residents.length) ? pick.residents
+    : (pick.resident ? [pick.resident] : []));
+
 const _confirmHeadPick = (pick, sid, host) => {
     const who = _spoolWord(sid);
-    const residents = (Array.isArray(pick.residents) && pick.residents.length) ? pick.residents
-        : (pick.resident ? [pick.resident] : []);
+    const residents = _headResidents(pick);
     if (!residents.length) return Promise.resolve(true);
     const and = (list) => (list.length < 2 ? list.join('') : `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`);
     const runs = and(residents.map(r => `#${r.id}` + (r.from ? ` (from ${r.from})` : '')));
@@ -2273,25 +2292,40 @@ const _askRecordSource = (pick, sid, host) => {
             clearTimeout(statusTimer);
             resolve(value);
         };
-        const optBtns = feeds.map((f, i) => f.free
-            ? `<button type="button" class="btn btn-sm btn-info fcc-rs-opt" data-rs-i="${i}">${esc(`${f.box} slot ${f.slot}`)}<small style="display:block;font-weight:400;">free</small></button>`
-            : `<button type="button" class="btn btn-sm btn-outline-secondary fcc-rs-opt" data-rs-i="${i}" disabled aria-disabled="true">${esc(`${f.box} slot ${f.slot}`)}<small style="display:block;font-weight:400;">holds #${esc(f.claimed_by)}</small></button>`).join('');
+        // The box id and "slot N" kept whole on a phone (window.fccKeepWhole,
+        // review 2026-10-22: "LR-MDB- / 1 slot 1" at Extra Large).
+        const whole = window.fccKeepWhole || String;
+        const optBtn = (f, i) => (f.free
+            ? `<button type="button" class="btn btn-sm btn-info fcc-rs-opt" data-rs-i="${i}">${whole(esc(`${f.box} slot ${f.slot}`))}<small style="display:block;font-weight:400;">free</small></button>`
+            : `<button type="button" class="btn btn-sm btn-outline-secondary fcc-rs-opt" data-rs-i="${i}" disabled aria-disabled="true">${whole(esc(`${f.box} slot ${f.slot}`))}<small style="display:block;font-weight:400;">holds #${esc(f.claimed_by)}</small></button>`);
+        // QR codes under their buttons (Derek, 2026-10-22): the buttons a QR
+        // stands for (the pre-selected slot, No box, Cancel) share a row with
+        // their QRs, each QR under its own button. The slots with no QR (held
+        // ones; every slot when several are free) sit on a line above them,
+        // in feed order, so the keys still go slots, No box, Cancel.
+        const slotsAbove = feeds.map((f, i) => (f === pre ? '' : optBtn(f, i))).join('');
+        // What each answer does later (Derek, 2026-10-23: "Return and eject
+        // send it back there" read "back where?"; the spool was never in the
+        // slot). A slot: ↩️ Return and ⏏️ Eject put the spool in it. No box:
+        // Return asks for a slot unless only one free slot feeds the head
+        // (routes_bindings._return_plan), and Eject leaves it Unassigned
+        // after its own question (logic._eject_destination, Group 41.8).
+        const msg = `${esc(Who)} isn't coming from a box, so pick a slot feeding ${esc(head)}: ↩️ Return and ⏏️ Eject`
+            + ' will put it in that slot later. With No box, Return will ask which slot (or use the only free one),'
+            + ' and Eject will leave it Unassigned.';
         handle = window.mountOverlay({
             id: 'fcc-record-source',
             tier: 'confirm',
             host: host || undefined,
             onEscape: () => finish(null),
             content: `
-                <div class="fcc-rs-panel" style="background:#1e1e1e; color:#fff; border:2px solid #0dcaf0; border-radius:8px; padding:18px 22px; max-width:620px; text-align:center;">
+                <div class="fcc-rs-panel" style="background:#1e1e1e; color:#fff; border:2px solid #0dcaf0; border-radius:8px; padding:18px min(22px, 4vw); max-width:38.75rem; text-align:center;">
                     <div class="fcc-rs-title" style="font-size:1.15em; font-weight:bold; margin-bottom:6px;">🔗 Record ${esc(who)} as coming from…</div>
-                    <div class="fcc-rs-msg" style="color:#ffc; margin-bottom:12px; text-align:left;">${esc(Who)} isn't coming from a box. Which slot feeding ${esc(head)} is its home? Return and eject send it back there.</div>
+                    <div class="fcc-rs-msg" style="color:#ffc; margin-bottom:12px; text-align:left;">${msg}</div>
                     <div class="fcc-rs-status" role="alert" style="display:none; margin-bottom:10px; padding:6px 10px; border-radius:6px; background:#4a3200; color:#ffd27a; border:1px solid #ffb74d; font-weight:bold; text-align:left;"></div>
-                    <div style="display:flex; gap:10px; justify-content:center; flex-wrap:wrap;">
-                        ${optBtns}
-                        <button type="button" class="btn btn-sm btn-secondary fcc-rs-none">No box</button>
-                        <button type="button" class="btn btn-sm btn-dark fcc-rs-cancel">Cancel</button>
-                    </div>
-                    <div class="fcc-rs-hint" style="font-size:0.8rem; color:#ccc; margin-top:8px;">←/→ move · Enter chooses · scan a slot's label to choose it · Esc goes back</div>
+                    ${slotsAbove ? `<div class="fcc-rs-slots" style="display:flex; gap:10px; justify-content:center; flex-wrap:wrap; margin-bottom:10px;">${slotsAbove}</div>` : ''}
+                    <div class="fcc-rs-btns" style="display:flex; gap:10px; justify-content:center; flex-wrap:wrap;">${pre ? optBtn(pre, feeds.indexOf(pre)) : ''}<button type="button" class="btn btn-sm btn-purple fcc-rs-none">No box</button><button type="button" class="btn btn-sm btn-dark fcc-rs-cancel">Cancel</button></div>
+                    <div class="fcc-rs-hint" style="font-size:var(--fcc-fs-small); color:#ccc; margin-top:8px;">←/→ move · Enter chooses · scan a slot's label to choose it · Esc goes back</div>
                 </div>`,
             initialFocus: pre ? `.fcc-rs-opt[data-rs-i="${feeds.indexOf(pre)}"]` : '.fcc-rs-none',
         });
@@ -2351,16 +2385,25 @@ const _askRecordSource = (pick, sid, host) => {
             const panel = ov.querySelector('.fcc-rs-panel') || handle.panel;
             // With a slot pre-selected, No box gets its own code (Group 40
             // review, BD-6): a scan-only user could pick only that slot or Back.
+            // Each code takes its button's colour (2026-10-21): the slot is
+            // cyan (btn-info), No box purple (btn-purple: its own colour since
+            // 2026-10-23, grey was too close to Cancel's), Cancel dark (btn-dark).
             qr = window.attachConfirmQRs({
                 host: panel,
+                // Each QR under its own button (2026-10-22).
+                alignTo: ov.querySelector('.fcc-rs-btns'),
                 onConfirm: pre ? () => choose(pre) : () => finish(''),
                 onStore: pre ? () => finish('') : undefined,
                 onCancel: () => finish(null),
                 confirmLabel: pre ? `Scan: ${pre.box} slot ${pre.slot}` : 'Scan: No box',
                 storeLabel: 'Scan: No box',
                 cancelLabel: 'Scan to go Back', theme: 'info',
+                confirmTone: pre ? 'info' : 'purple', storeTone: 'purple', cancelTone: 'dark',
             });
         }
+        // Fitted to the screen (window.fccFitQuestion): box ids whole where they
+        // fit, and taller than the window it scrolls inside itself.
+        if (window.fccFitQuestion) window.fccFitQuestion(ov.querySelector('.fcc-rs-panel') || handle.panel);
         // Scans are held off while it is open (processScan); a feed slot's label
         // picks that slot.
         question = {
@@ -2402,6 +2445,11 @@ const _placementFor = async (pick, sid, host, loc) => {
         if (send.auto_deploy === false) p.auto_deploy = false;
         if (pick.swap) { p.swap = true; p.displaced = pick.displaced || null; }
         if (pick.store_ok === false) p.noStore = true;
+        // Group 51.7: Swap / Overwrite named the slot's stored spool; another one
+        // there by the time the move lands is refused, never unseated unseen.
+        if ((pick.choice === 'swap' || pick.choice === 'overwrite') && pick.occupant && pick.occupant.id != null) {
+            p.expected_occupant = pick.occupant.id;
+        }
         return p;
     }
     if (pick.kind === 'head') {
@@ -2411,6 +2459,9 @@ const _placementFor = async (pick, sid, host, loc) => {
         if (rec === false) return false;
         const p = { location: pick.head, label: pick.head, short: pick.head };
         if (rec !== undefined) p.record_source = rec;
+        // Group 51.6: what the picker showed on the head ([] = empty). A spool
+        // loaded there meanwhile is refused, not unloaded unasked.
+        p.expected_residents = _headResidents(pick).map(r => r.id);
         return p;
     }
     return false;   // a pick these doors can't place (a return-mode "No slot"): stop
@@ -2479,6 +2530,9 @@ const _placeBufferWithPicker = async (box, ids = null) => {
                       noStore: !!pl.noStore,
                       // Group 40.5: where a spool put on a head came from.
                       recordSource: pl.record_source,
+                      // Group 51.6 / 51.7: what the picker showed.
+                      expectedResidents: pl.expected_residents,
+                      expectedOccupant: pl.expected_occupant,
                       onOutcome: done }),
             });
             if (out.outcome === 'moved') { loop.placed.push({ id: sid, short: out.placement.short }); continue; }

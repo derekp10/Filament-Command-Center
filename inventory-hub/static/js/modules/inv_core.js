@@ -172,6 +172,62 @@ window.unionConfirmFedHeads = unionConfirmFedHeads;
 // is settled as superseded (`onCancel({superseded: true})`), so its host
 // listener, QR session and scan hold-off never outlive its DOM.
 const _openMoveConfirms = {};
+
+// --- KEEP A BOX ID WHOLE (review, 2026-10-22) ---
+// A button label that wraps on a phone may break a line after any hyphen:
+// "Just store it in LR-MDB-1 slot 1" read "in LR- / MDB-1 slot / 1" at Extra
+// Large. Takes HTML whose text is already escaped (no tags) and wraps each
+// hyphenated word ("LR-MDB-1", "PM-DB-XL-L") and each "slot N" in a span that
+// doesn't break (global.css .fcc-keep-whole); the label's text is unchanged.
+const fccKeepWhole = (html) => String(html == null ? '' : html)
+    .replace(/\w+(?:-\w+)+|\bslot \d+/g, (m) => `<span class="fcc-keep-whole">${m}</span>`);
+window.fccKeepWhole = fccKeepWhole;
+// --- FIT A QUESTION TO THE SCREEN (review, 2026-10-22) ---
+// fccFitQuestion(panel): called once a question is drawn, again when its QR
+// codes are in (generateSafeQR draws them two frames later, and a QR's column
+// is as wide as its card), and on a resize while it is open:
+//  - box ids stay whole unless that pushes the question past the screen's
+//    sides (a very long id on a 360 px phone at Extra Large): then they break
+//    at their hyphens again (.fcc-keep-whole-off);
+//  - a question taller than the window scrolls inside itself
+//    (.fcc-question-scroll), so its top and bottom are never cut ("Record it as
+//    coming from…" was 667 px high on a 360 x 640 phone at Extra Large). Only
+//    then: a scroller draws its text without the screen's sub-pixel smoothing
+//    (greyscale, not ClearType), so a question that fits keeps it.
+const _fitQuestionNow = (panel) => {
+    if (!panel || !panel.classList || typeof panel.getBoundingClientRect !== 'function') return null;
+    const vw = (document.documentElement && document.documentElement.clientWidth) || window.innerWidth || 0;
+    const vh = window.innerHeight || 0;
+    if (!(vw > 0) || !(vh > 0)) return null;
+    let off = false;
+    if (typeof panel.querySelector === 'function' && panel.querySelector('.fcc-keep-whole')) {
+        panel.classList.remove('fcc-keep-whole-off');
+        off = panel.getBoundingClientRect().width > vw + 0.5 || panel.scrollWidth > panel.clientWidth + 1;
+        if (off) panel.classList.add('fcc-keep-whole-off');
+    }
+    panel.classList.remove('fcc-question-scroll');
+    const scroll = panel.getBoundingClientRect().height > vh - 16 + 0.5;
+    if (scroll) panel.classList.add('fcc-question-scroll');
+    return { off, scroll };
+};
+const fccFitQuestion = (panel) => {
+    const now = _fitQuestionNow(panel);
+    if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => _fitQuestionNow(panel))));
+    }
+    if (panel && !panel._fccFitOnResize && typeof window.addEventListener === 'function') {
+        // Until the question is gone (it leaves with its overlay).
+        const onResize = () => {
+            if (!panel.isConnected) { window.removeEventListener('resize', onResize); return; }
+            _fitQuestionNow(panel);
+        };
+        panel._fccFitOnResize = onResize;
+        window.addEventListener('resize', onResize);
+    }
+    return now;
+};
+window.fccFitQuestion = fccFitQuestion;
+
 window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', host = null,
                                ids = {}, onConfirm = null, onCancel = null,
                                title = '', onStore = null, storeLabel = '', loadLabel = '',
@@ -194,25 +250,23 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         : `⚠️ ${esc(first.printer_name || 'A printer')} is ${esc(first.state || 'PRINTING')}`;
     const bodyText = threeWay ? msg : (msg || 'Moving a spool now will disrupt the print. Continue?');
     const buttons = threeWay
-        ? (hasLoad ? `<button type="button" ${idAttr(ids.yes)}class="btn btn-warning btn-sm fcc-apc-yes" style="min-width:120px;">${esc(loadLabel || 'Load it instead')}</button>` : '')
-          + (hasStore ? `<button type="button" ${idAttr(ids.store)}class="btn btn-info btn-sm fcc-apc-store" style="min-width:120px;">${esc(storeLabel || 'Just store it')}</button>` : '')
+        ? (hasLoad ? `<button type="button" ${idAttr(ids.yes)}class="btn btn-warning btn-sm fcc-apc-yes" style="min-width:120px;">${fccKeepWhole(esc(loadLabel || 'Load it instead'))}</button>` : '')
+          + (hasStore ? `<button type="button" ${idAttr(ids.store)}class="btn btn-info btn-sm fcc-apc-store" style="min-width:120px;">${fccKeepWhole(esc(storeLabel || 'Just store it'))}</button>` : '')
           + `<button type="button" ${idAttr(ids.no)}class="btn btn-secondary btn-sm fcc-apc-no" style="min-width:100px;">Cancel</button>`
         : `<button type="button" ${idAttr(ids.yes)}class="btn btn-warning btn-sm fcc-apc-yes" style="min-width:120px;">Continue Anyway</button>
                 <button type="button" ${idAttr(ids.no)}class="btn btn-secondary btn-sm fcc-apc-no" style="min-width:120px;">Cancel</button>`;
     const extras = threeWay
-        ? `<div class="fcc-apc-hint" style="font-size:0.8rem; color:#ccc; margin-top:8px;">Enter ${hasStore ? 'stores it' : 'cancels'} · Esc cancels</div>`
+        ? `<div class="fcc-apc-hint" style="font-size:var(--fcc-fs-small); color:#ccc; margin-top:8px;">Enter ${hasStore ? 'stores it' : 'cancels'} · Esc cancels</div>`
         : '';
     const status = threeWay
         ? `<div class="fcc-apc-status" role="alert" style="display:none; margin-bottom:10px; padding:6px 10px; border-radius:6px; background:#4a3200; color:#ffd27a; border:1px solid #ffb74d; font-weight:bold; text-align:left;"></div>`
         : '';
     const content = `
-        <div class="fcc-apc-panel" style="background:#1e1e1e; color:#fff; border:2px solid ${border}; border-radius:8px; padding:20px 24px; max-width:${threeWay ? 560 : 480}px; text-align:center;">
+        <div class="fcc-apc-panel" style="background:#1e1e1e; color:#fff; border:2px solid ${border}; border-radius:8px; padding:20px min(24px, 4vw); max-width:${threeWay ? 35 : 30}rem; text-align:center;">
             <div class="fcc-apc-title" style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">${header}</div>
             <div class="fcc-apc-msg" style="color:#ffc; margin-bottom:14px;${threeWay ? ' text-align:left;' : ''}">${esc(bodyText)}</div>
             ${status}
-            <div style="display:flex; gap:10px; justify-content:center;${threeWay ? ' flex-wrap:wrap;' : ''}">
-                ${buttons}
-            </div>
+            <div class="fcc-apc-btns" style="display:flex; gap:10px; justify-content:center;${threeWay ? ' flex-wrap:wrap;' : ''}">${buttons}</div>
             ${extras}
         </div>`;
     const overlayId = ids.overlay || 'fcc-active-print-confirm-overlay';
@@ -322,18 +376,30 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         }
     }, true);
     if (window.attachConfirmQRs) {
-        // Inside the dialog PANEL, so the QR row stacks below the buttons.
+        // Under the buttons, each QR centred under its own button (Derek,
+        // 2026-10-22; `alignTo`, the buttons' row, else the dialog PANEL as
+        // before, which stacks the row below them).
         // A three-way with no Load (it can only store) scans its store as the
         // CONFIRM QR, so there are never two cancel codes.
+        // Each QR takes the colour of the button it stands for (Derek,
+        // 2026-10-21): Continue Anyway / Load it instead are amber
+        // (btn-warning), Just store it cyan (btn-info), Cancel grey.
         const theme = isPrinting ? 'warning' : 'info';
+        const alignTo = ov.querySelector('.fcc-apc-btns');
         qrSession = window.attachConfirmQRs(!threeWay
-            ? { host: handle.panel, onConfirm: yes, onCancel: no, theme: 'warning' }
+            ? { host: handle.panel, alignTo, onConfirm: yes, onCancel: no, theme: 'warning',
+                confirmTone: 'warning', cancelTone: 'secondary' }
             : hasLoad
-                ? { host: handle.panel, onConfirm: yes, onCancel: no, onStore: hasStore ? store : undefined,
-                    confirmLabel: 'Scan to Load', storeLabel: 'Scan to Store', cancelLabel: 'Scan to Cancel', theme }
-                : { host: handle.panel, onConfirm: store, onCancel: no,
-                    confirmLabel: 'Scan to Store', cancelLabel: 'Scan to Cancel', theme });
+                ? { host: handle.panel, alignTo, onConfirm: yes, onCancel: no, onStore: hasStore ? store : undefined,
+                    confirmLabel: 'Scan to Load', storeLabel: 'Scan to Store', cancelLabel: 'Scan to Cancel', theme,
+                    confirmTone: 'warning', storeTone: 'info', cancelTone: 'secondary' }
+                : { host: handle.panel, alignTo, onConfirm: store, onCancel: no,
+                    confirmLabel: 'Scan to Store', cancelLabel: 'Scan to Cancel', theme,
+                    confirmTone: 'info', cancelTone: 'secondary' });
     }
+    // Fitted to the screen: box ids whole where they fit, and a question
+    // taller than the window scrolls inside itself.
+    fccFitQuestion(handle.panel);
     if (threeWay) {
         // The question on screen: processScan holds off every other scan until
         // it is answered (a second slot label used to start a second move
@@ -518,8 +584,34 @@ window.toastIntoBuffer = (items) => {
         if (i && typeof showToast === 'function') showToast(`✋ #${i.id} → your buffer${tail}`, 'info', 5000);
     });
 };
+// --- A SPOOL UN-ARCHIVED TO LOAD IT (Derek, 2026-10-20) ---
+// Spools are archived when they hit 0 g, rarely by hand, so one whose record
+// still has filament on it and is being loaded onto a head physically has
+// filament: the move engine un-archives it in the head write and names it in
+// the answer's `unarchived` ([{id, left_g, head}]; on `smart_move` for a slot
+// scan and Quick-Swap, on `location_result` for the wizard). One at 0 g is
+// refused instead. One 7 s warning per spool, once per answer: takeIntoBuffer
+// calls this, so every door that completes a move warns (the Quick-Swap tap,
+// which takes nothing into the buffer, calls it itself). Returns the list.
+window.noteUnarchived = (answer) => {
+    const a = answer || {};
+    if (a.__fccUnarchivedNoted) return [];
+    const list = [a.unarchived, (a.smart_move || {}).unarchived, (a.location_result || {}).unarchived]
+        .find(Array.isArray) || [];
+    if (!list.length) return [];
+    try { a.__fccUnarchivedNoted = true; } catch (e) { /* a frozen answer */ }
+    list.forEach(u => {
+        if (!u || u.id == null || typeof showToast !== 'function') return;
+        const left = Number(u.left_g);
+        const grams = Number.isFinite(left) ? ` with ${Math.round(left)} g left on its record` : '';
+        showToast(`⚠️ #${u.id} was archived${grams}: FCC un-archived it to load it onto ${u.head || 'the toolhead'}. `
+            + `Weigh it if that's off.`, 'warning', 7000);
+    });
+    return list;
+};
 window.takeIntoBuffer = (answer, { render = true, toast = true } = {}) => {
     const a = answer || {};
+    window.noteUnarchived(a);
     const list = Array.isArray(a.to_buffer) ? a.to_buffer
         : ((a.smart_move && Array.isArray(a.smart_move.to_buffer)) ? a.smart_move.to_buffer : []);
     const items = list.filter(i => i && i.id != null);
@@ -742,11 +834,13 @@ window.escAttr = escAttr;
 
 // 23.4 — Shared delete-sentinel for clearing a Spoolman `extra` field. The
 // backend merge (spoolman_api._merge_extras_with_existing) treats an OMITTED
-// key as "keep" so partial PATCHes don't wipe siblings; a key whose value is
-// THIS sentinel is the explicit "delete this extra" signal (the merge pops it,
-// never forwards it to Spoolman). Every edit surface that lets the user blank
-// an extra (edit-filament, wizard spool-edit, vendor edit) sends this instead
-// of dropping the key client-side. MUST match spoolman_api.DELETE_EXTRA_SENTINEL.
+// key as "keep" so partial PATCHes don't wipe siblings, and so does Spoolman
+// 0.26+ itself; a key whose value is THIS sentinel is the explicit "clear this
+// extra" signal (the server writes the value that clears that field type, and
+// never forwards the sentinel). Every edit surface that lets the user blank an
+// extra (edit-filament and its pencils, wizard spool-edit, vendor edit) sends
+// this instead of dropping the key client-side: a dropped key is KEPT (2026-10-21,
+// Spoolman 0.27). MUST match spoolman_api.DELETE_EXTRA_SENTINEL.
 window.FCC_DELETE_EXTRA = '__FCC_DELETE_EXTRA__';
 
 const showToast = (msg, type = 'info', duration = 2000) => {
@@ -1104,50 +1198,94 @@ let _fccConfirmSeq = 0;
  *   onStore: () => void — optional (Group 40.3): a third QR between the two,
  *     encoding CMD:STORE:<sid>, for the "Just store it" answer.
  *   storeLabel: string, default "Scan to Store"
- *   theme: 'warning' | 'info' | 'danger' — drives the QR card border tint.
+ *   theme: 'warning' | 'info' | 'danger' — the CONFIRM QR's tone when
+ *     `confirmTone` isn't given.
+ *   confirmTone / storeTone / cancelTone: the colour of each QR card (border)
+ *     and its caption, named after the Bootstrap button the QR stands for, so
+ *     it is clear at a glance which code matches which button (Derek,
+ *     2026-10-21): 'warning' (amber, btn-warning), 'info' (cyan, btn-info),
+ *     'secondary' (grey, btn-secondary), 'light' (btn-outline-light), 'dark'
+ *     (btn-dark), 'danger', 'purple' (btn-purple, global.css: "No box" in
+ *     "Record it as coming from…"). Defaults: confirm = theme, store 'info',
+ *     cancel 'secondary'. Pass the tone of the button each QR mirrors.
+ *   alignTo: optional (Derek, 2026-10-22: "align under the button they
+ *     correspond to"): the element holding the buttons the QRs stand for,
+ *     exactly one <button> per QR, in QR order (confirm, [store], cancel).
+ *     The QR row joins it as its last row and shares its columns (a CSS
+ *     subgrid, global.css .fcc-qr-align): each column is as wide as its
+ *     button or its QR, whichever is wider, the button fills it and the QR is
+ *     centred in it, so every QR sits centred under its own button at any
+ *     Text size and window width, the buttons spaced to match. With anything
+ *     else in it, or a browser without subgrid, the row goes into `host` as
+ *     before.
  *
  * @returns {{sessionId: string, cleanup: function}} cleanup() removes the QR
  *   row from the DOM and unregisters the session. Call from your dialog's
  *   close handler so a late scan can't re-fire after the user dismissed.
  */
+// The QR tones (attachConfirmQRs). `border` is the button's own colour where
+// that reads on the dark dialogs (amber is Bootstrap's #ffc107, the Load it
+// instead / Continue Anyway button); `caption` is the readable text colour
+// for the "📷 Scan to …" line under the card. Purple is "No box"'s own colour
+// (Derek, 2026-10-23: its grey QR was too close to Cancel's): the button's
+// Bootstrap purple #6f42c1, its caption a lighter purple of the same family
+// (#a98eda, 6:1 on the dialog).
+const QR_TONES = {
+    warning:   { border: '#ffc107', caption: '#ffc107', bg: '#1a1608' },
+    info:      { border: '#4fa2c9', caption: '#8fd3f0', bg: '#0d1a20' },
+    secondary: { border: '#6c757d', caption: '#adb5bd', bg: '#0f1014' },
+    light:     { border: '#dee2e6', caption: '#dee2e6', bg: '#0f1014' },
+    dark:      { border: '#495057', caption: '#f8f9fa', bg: '#0f1014' },
+    danger:    { border: '#dc3545', caption: '#ff8a95', bg: '#1c0c0e' },
+    purple:    { border: '#6f42c1', caption: '#a98eda', bg: '#150f22' },
+};
+window.FCC_QR_TONES = QR_TONES;
 window.attachConfirmQRs = (opts) => {
     if (!opts || !opts.host) return { sessionId: '', cleanup: () => {} };
     const host = opts.host;
     const sid = `fcc-cqr-${++_fccConfirmSeq}-${Date.now().toString(36)}`;
-    const theme = opts.theme || 'warning';
-    const palette = {
-        warning: { border: '#ff8800', tint: 'rgba(255,136,0,0.12)', confirmBg: '#1a1208', cancelBg: '#0f1014' },
-        info:    { border: '#4fa2c9', tint: 'rgba(79,162,201,0.12)', confirmBg: '#0d1a20', cancelBg: '#0f1014' },
-        danger:  { border: '#dc3545', tint: 'rgba(220,53,69,0.12)', confirmBg: '#1c0c0e', cancelBg: '#0f1014' },
-    }[theme] || { border: '#ff8800', tint: 'rgba(255,136,0,0.12)', confirmBg: '#1a1208', cancelBg: '#0f1014' };
+    const tone = (name, dflt) => (QR_TONES[name] ? name : dflt);
+    const tones = {
+        confirm: tone(opts.confirmTone, tone(opts.theme, 'warning')),
+        store: tone(opts.storeTone, 'info'),
+        cancel: tone(opts.cancelTone, 'secondary'),
+    };
 
     const hasStore = typeof opts.onStore === 'function';
     const row = document.createElement('div');
     row.id = `${sid}-row`;
     row.className = 'fcc-confirm-qr-row';
-    row.style.cssText = 'display:flex; gap:14px; justify-content:center; margin-top:14px; padding-top:12px; border-top:1px dashed #444;';
-    const storeCell = hasStore ? `
-        <div style="display:flex; flex-direction:column; align-items:center; gap:4px;">
-            <div style="background:#0d1a20; border:2px solid #4fa2c9; border-radius:6px; padding:6px;">
-                <div id="${sid}-store-qr" style="background:#fff; padding:4px; border-radius:3px; line-height:0;"></div>
+    // Under its buttons (opts.alignTo): one <button> per QR, and a browser
+    // that lays out a subgrid; anything else keeps the row in `host`.
+    const qrCount = hasStore ? 3 : 2;
+    const alignTo = opts.alignTo || null;
+    const alignKids = alignTo ? Array.from(alignTo.children || []) : [];
+    const aligned = !!(alignTo && typeof CSS !== 'undefined' && CSS && typeof CSS.supports === 'function'
+        && CSS.supports('grid-template-columns', 'subgrid')
+        && alignKids.length === qrCount && alignKids.every((el) => el && el.tagName === 'BUTTON'));
+    if (aligned) {
+        alignTo.classList.add('fcc-qr-align');
+        alignTo.style.setProperty('--fcc-qr-cols', String(qrCount));
+        row.classList.add('fcc-qr-aligned');
+        row.style.cssText = 'margin-top:14px; padding-top:12px; border-top:1px dashed #444;';
+    } else {
+        row.style.cssText = 'display:flex; gap:14px; justify-content:center; margin-top:14px; padding-top:12px; border-top:1px dashed #444;';
+    }
+    // One QR card + its caption, in the tone of the button it stands for.
+    const cell = (role, qrId, label) => {
+        const t = QR_TONES[tones[role]];
+        return `
+        <div class="fcc-confirm-qr-cell" data-qr="${role}" data-qr-tone="${tones[role]}" style="display:flex; flex-direction:column; align-items:center; gap:4px;">
+            <div class="fcc-qr-card" style="background:${t.bg}; border:2px solid ${t.border}; border-radius:6px; padding:6px;">
+                <div id="${qrId}" style="background:#fff; padding:4px; border-radius:3px; line-height:0;"></div>
             </div>
-            <div style="font-size:0.72rem; color:#8fd3f0; font-weight:700; letter-spacing:0.5px; text-transform:uppercase;">📷 ${opts.storeLabel || 'Scan to Store'}</div>
-        </div>` : '';
-    row.innerHTML = `
-        <div style="display:flex; flex-direction:column; align-items:center; gap:4px;">
-            <div style="background:${palette.confirmBg}; border:2px solid ${palette.border}; border-radius:6px; padding:6px;">
-                <div id="${sid}-yes-qr" style="background:#fff; padding:4px; border-radius:3px; line-height:0;"></div>
-            </div>
-            <div style="font-size:0.72rem; color:${palette.border}; font-weight:700; letter-spacing:0.5px; text-transform:uppercase;">📷 ${opts.confirmLabel || 'Scan to Confirm'}</div>
-        </div>${storeCell}
-        <div style="display:flex; flex-direction:column; align-items:center; gap:4px;">
-            <div style="background:${palette.cancelBg}; border:2px solid #6c757d; border-radius:6px; padding:6px;">
-                <div id="${sid}-no-qr" style="background:#fff; padding:4px; border-radius:3px; line-height:0;"></div>
-            </div>
-            <div style="font-size:0.72rem; color:#adb5bd; font-weight:700; letter-spacing:0.5px; text-transform:uppercase;">📷 ${opts.cancelLabel || 'Scan to Cancel'}</div>
-        </div>
-    `;
-    host.appendChild(row);
+            <div class="fcc-qr-caption" style="font-size:var(--fcc-fs-label); color:${t.caption}; font-weight:700; letter-spacing:0.5px; text-transform:uppercase;">📷 ${label}</div>
+        </div>`;
+    };
+    row.innerHTML = cell('confirm', `${sid}-yes-qr`, opts.confirmLabel || 'Scan to Confirm')
+        + (hasStore ? cell('store', `${sid}-store-qr`, opts.storeLabel || 'Scan to Store') : '')
+        + cell('cancel', `${sid}-no-qr`, opts.cancelLabel || 'Scan to Cancel');
+    (aligned ? alignTo : host).appendChild(row);
 
     // Generate the QR codes themselves (uses the same lib generateSafeQR uses).
     generateSafeQR(`${sid}-yes-qr`, `CMD:CONFIRM:${sid}`, 70);
@@ -1182,6 +1320,13 @@ window.attachConfirmQRs = (opts) => {
         cleanup: () => {
             delete window._fccActiveConfirms[sid];
             try { row.remove(); } catch (_) { /* noop */ }
+            // The buttons go back to their own row (a dialog that stays open).
+            if (aligned) {
+                try {
+                    alignTo.classList.remove('fcc-qr-align');
+                    alignTo.style.removeProperty('--fcc-qr-cols');
+                } catch (_) { /* noop */ }
+            }
         },
     };
 };
@@ -1416,7 +1561,99 @@ window.buildLocationTree = function buildLocationTree(rows, opts) {
 // L206: split fetch + render so the bulk-pulse dispatcher can hand
 // pre-fetched data into _renderLocationsPayload without another round-trip.
 let _fetchLocationsInflight = false;
-const _renderLocationsPayload = (d) => {
+
+// --- reads-1 (Group 52 review): "Spoolman didn't answer" instead of 0/N ------
+// The table's counts come from Spoolman's spool list. When that read fails the
+// server still answers every row, each counted 0 (it read nothing), and says so
+// beside them: the heartbeat's `spool_read` ({ok, error}) or /api/locations'
+// X-FCC-Spool-Read header. A failed read keeps the counts each row showed after
+// the last read that worked, marks a row with none as "?" (never a confident
+// 0/N "empty"), and shows #loc-read-notice; the next good read redraws the
+// counts and hides it. An answer that says nothing either way (a test, an older
+// server) draws as before. Same look as #manage-read-notice (Group 52.1b).
+let _locLastCounts = null;   // Map(upper-cased LocationID -> {Occupancy, OccupancyRaw}), or null
+const _locKey = (r) => String(r && r.LocationID != null ? r.LocationID : '').toUpperCase();
+const _rememberLocCounts = (rows) => {
+    const m = new Map();
+    rows.forEach(r => {
+        if (!r || typeof r !== 'object') return;
+        m.set(_locKey(r), { Occupancy: r.Occupancy, OccupancyRaw: r.OccupancyRaw });
+    });
+    _locLastCounts = m;
+};
+// Copies of `rows` carrying the last counts read; `kept` / `unread` count the
+// rows that had one / had none. Keys are assigned in place (never deleted and
+// re-added), so a row kept unchanged serializes exactly as it did and the
+// table's no-wiggle hash skips the redraw.
+const _keepLastLocCounts = (rows) => {
+    let kept = 0, unread = 0;
+    const out = rows.map(r => {
+        if (!r || typeof r !== 'object') return r;
+        const last = _locLastCounts && _locLastCounts.get(_locKey(r));
+        const row = { ...r };
+        if (last) {
+            kept++;
+            row.Occupancy = last.Occupancy;
+            if (last.OccupancyRaw === undefined) delete row.OccupancyRaw;
+            else row.OccupancyRaw = last.OccupancyRaw;
+        } else {
+            // '--' to every other reader (the Location Manager's title shows no
+            // count for it); the table draws it as "?".
+            unread++;
+            row.Occupancy = '--';
+            if ('OccupancyRaw' in row) row.OccupancyRaw = null;
+            row._countUnread = true;
+        }
+        return row;
+    });
+    return { rows: out, kept, unread };
+};
+const _locReadNoticeEl = () => {
+    let el = document.getElementById('loc-read-notice');
+    if (el) return el;
+    const table = document.getElementById('location-table');
+    const wrap = (table && table.closest) ? (table.closest('.table-responsive') || table.closest('table')) : null;
+    if (!wrap || !wrap.parentNode) return null;
+    el = document.createElement('div');
+    el.id = 'loc-read-notice';
+    el.setAttribute('role', 'status');
+    el.setAttribute('aria-live', 'polite');
+    el.style.cssText = 'display:none; background:#2b2200; color:#ffd54a; border:1px solid #ffd54a;'
+        + ' border-radius:6px; padding:8px 12px; margin:10px 16px; font-weight:bold;';
+    wrap.parentNode.insertBefore(el, wrap);
+    return el;
+};
+const _showLocReadFailure = (kept, unread, why) => {
+    const el = _locReadNoticeEl();
+    if (!el) return;
+    const text = "⚠️ Spoolman didn't answer, so FCC couldn't count the spools just now."
+        + (kept ? ' These counts are from its last answer.' : '')
+        + (unread ? " A ? is a count it couldn't read." : '')
+        + ' It tries again every few seconds.';
+    // Only on a change: an aria-live region re-announces a rewrite.
+    if (el.textContent !== text) el.textContent = text;
+    el.title = why ? String(why) : '';
+    el.style.display = 'block';
+};
+const _clearLocReadFailure = () => {
+    const el = document.getElementById('loc-read-notice');
+    if (!el) return;
+    el.style.display = 'none';
+    el.textContent = '';
+    el.title = '';
+};
+// What /api/locations' header says about its counts: {ok}, or undefined when
+// it says nothing.
+const _locationsReadFromHeaders = (r) => {
+    let h = null;
+    try { h = (r && r.headers && typeof r.headers.get === 'function') ? r.headers.get('X-FCC-Spool-Read') : null; }
+    catch (e) { h = null; }
+    if (h === 'failed') return { ok: false, error: null };
+    if (h === 'ok') return { ok: true, error: null };
+    return undefined;
+};
+
+const _renderLocationsPayload = (d, read) => {
     if (!d) return;
     // The bulk endpoint can pass {error: ...} when locations.json is
     // corrupt — surface to console and bail out (the locations table
@@ -1424,6 +1661,16 @@ const _renderLocationsPayload = (d) => {
     if (!Array.isArray(d)) {
         if (d && d.error) console.warn("locations payload error:", d.error);
         return;
+    }
+    // reads-1: a read that failed keeps the last counts; one that worked is
+    // remembered; one that says nothing draws as before.
+    if (read && read.ok === false) {
+        const kept = _keepLastLocCounts(d);
+        d = kept.rows;
+        _showLocReadFailure(kept.kept > 0, kept.unread > 0, read.error);
+    } else {
+        if (read && read.ok === true) _rememberLocCounts(d);
+        _clearLocReadFailure();
     }
     // The body below was previously the entire .then() callback of
     // fetchLocations. Pulled out as-is so the legacy fetch path and the
@@ -1579,14 +1826,18 @@ const _renderLocationsPayload = (d) => {
             if (table) {
                 table.innerHTML = ordered.map(entry => {
                     if (entry.divider) {
-                        return `<tr class="loc-divider"><td colspan="5" style="background:#15151f; color:#9aa; font-weight:800; letter-spacing:1px; padding:6px 14px; border-top:2px solid #444; border-bottom:1px solid #2a2a3a; font-size:0.8rem; text-transform:uppercase;">${entry.divider}</td></tr>`;
+                        return `<tr class="loc-divider"><td colspan="5" style="background:#15151f; color:#9aa; font-weight:800; letter-spacing:1px; padding:6px 14px; border-top:2px solid #444; border-bottom:1px solid #2a2a3a; font-size:var(--fcc-fs-label); text-transform:uppercase;">${entry.divider}</td></tr>`;
                     }
                     const l = entry.row;
                     // 3. Status Pop Logic (Red/Green/White)
                     let statusHtml = '';
                     let occColor = '#fff'; // Default White (Under Capacity)
 
-                    if (l.Occupancy && l.Occupancy !== '--') {
+                    if (l._countUnread) {
+                        // reads-1: Spoolman didn't answer and this row has no
+                        // earlier count: unknown, never a confident 0/N.
+                        statusHtml = `<span class="text-pop loc-count-unread" style="font-weight:900; font-size:1.1rem; color:#ffd54a;" title="Not counted: Spoolman didn't answer">?</span>`;
+                    } else if (l.Occupancy && l.Occupancy !== '--') {
                         const parts = l.Occupancy.split('/');
                         if (parts.length === 2) {
                             const cur = parseInt(parts[0]);
@@ -1744,8 +1995,7 @@ const fetchLocations = () => {
     if (_fetchLocationsInflight) return;
     _fetchLocationsInflight = true;
     fetch('/api/locations')
-        .then(r => r.json())
-        .then(_renderLocationsPayload)
+        .then(r => r.json().then(d => _renderLocationsPayload(d, _locationsReadFromHeaders(r))))
         .catch(e => console.warn("fetchLocations failed:", e))
         .finally(() => { _fetchLocationsInflight = false; });
 };
@@ -1860,7 +2110,7 @@ window.openLogPillOverlay = () => {
         ).join('') || '<div class="small p-3" style="color: rgba(255,255,255,0.7);">Activity Log is empty.</div>';
         const html = `
             <div style="background:#1e1e1e; color:#fff; border:2px solid #0ff;
-                        border-radius:8px; padding:14px 16px; min-width:420px; max-width:90vw;
+                        border-radius:8px; padding:14px 16px; min-width:min(26.25rem,90vw); max-width:90vw;
                         max-height:80vh; display:flex; flex-direction:column;">
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <div style="font-weight:bold; font-size:1.1em; color:#0ff;">📡 Activity Log</div>
@@ -2232,8 +2482,19 @@ const _computePulseInclude = () => {
     // lives server-side (parallelized) so the network cost is one section
     // in the bulk payload, not N separate fetches.
     sections.push('printer_status');
+    // Group 52.1a: the 🏷️ Backlog button's count rides the heartbeat, counted
+    // from the tick's own spool-list read (the server reads the list once for
+    // every section), so inv_backlog.js no longer polls
+    // /api/print_queue/pending on every tick. While the backlog window is
+    // open its own list fetch sets the count, so the tick leaves it alone.
+    const backlogModal = document.getElementById('backlogModal');
+    if (document.getElementById('btn-backlog-count')
+            && !(backlogModal && backlogModal.classList.contains('show'))) {
+        sections.push('label_backlog');
+    }
     return { sections, manageId };
 };
+window._computePulseInclude = _computePulseInclude;   // for the node tests
 
 let _pulseInflight = false;
 let _pulseNextTimer = null;
@@ -2303,16 +2564,34 @@ const _dashboardPulseTick = () => {
                 // such a tab receives (updateLogState early-returns while paused).
                 _syncBulkMoveSignal(payload.status);
             }
-            if (payload.locations) _renderLocationsPayload(payload.locations);
-            if (payload.manage && payload.manage.contents && window._renderManagePayload) {
-                window._renderManagePayload(payload.manage.id, payload.manage.contents);
+            // reads-1: `spool_read` says whether the tick's one spool-list read
+            // worked; on a failed read the locations counts and the printer
+            // heads are zero / empty only because nothing was read, so both
+            // renderers keep what they drew and say Spoolman didn't answer.
+            const spoolRead = (payload.spool_read && typeof payload.spool_read === 'object')
+                ? payload.spool_read : undefined;
+            if (payload.locations) _renderLocationsPayload(payload.locations, spoolRead);
+            if (payload.manage) {
+                // Group 52.1b: only a list Spoolman really answered renders (an
+                // empty box is []); a section that couldn't read it (read_ok:
+                // false, no contents) keeps the cards on screen and says so,
+                // instead of drawing a slow Spoolman as an empty box.
+                if (Array.isArray(payload.manage.contents)) {
+                    if (window._renderManagePayload) window._renderManagePayload(payload.manage.id, payload.manage.contents);
+                } else if (window._showManageReadFailure) {
+                    window._showManageReadFailure(payload.manage.id,
+                        payload.manage.read_error || payload.manage.error);
+                }
+            }
+            if (payload.label_backlog && window._renderBacklogCount) {
+                window._renderBacklogCount(payload.label_backlog);
             }
             if (payload.printer_status) {
                 // L25 — note finish/cancel edges to arm the fast-poll burst
                 // (runs even if the widget renderer isn't mounted this tick).
                 _notePrinterStatesForFastPoll(payload.printer_status);
                 if (window.refreshPrinterStatusWidgetFromAggregate) {
-                    window.refreshPrinterStatusWidgetFromAggregate(payload.printer_status);
+                    window.refreshPrinterStatusWidgetFromAggregate(payload.printer_status, spoolRead);
                 }
             }
             if (payload.spools_refresh && window._renderSpoolsRefreshPayload) {
@@ -2320,7 +2599,8 @@ const _dashboardPulseTick = () => {
             }
 
             // Broadcast for listeners that still poll independently
-            // (inv_backlog, inv_details modal sync, inv_search results).
+            // (inv_details modal sync, inv_search results, the backlog window
+            // while it is open; its button count came in label_backlog above).
             // These do NOT include liveRefreshBuffer — that's now driven
             // directly by the spools_refresh payload above.
             document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'dashboard_pulse' } }));

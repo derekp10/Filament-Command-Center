@@ -241,7 +241,8 @@ def test_wizard_no_dirty_changes_skips_update_spool(monkeypatch):
         "spool_data": {"comment": "same"},
     })
     body = r.get_json()
-    assert body == {"success": True, "spool_id": 42}
+    # `archived_now` since the 2026-10-20 review: the page sets its Archived box from it.
+    assert body == {"success": True, "spool_id": 42, "archived_now": False}
 
 
 # ============================================================================

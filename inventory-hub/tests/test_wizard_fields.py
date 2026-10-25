@@ -52,9 +52,12 @@ def test_wizard_field_sync(page: Page):
 
         # Group 10.1: dynamic-extras panels (Custom Filament / Spool
         # Attributes) default collapsed in create mode — expand both
-        # before visibility assertions.
+        # before visibility assertions. The Color panel too: the filament's
+        # Original Color is moved there (wizardRelocateOriginalColorField),
+        # and since 2026-10-21 it is the synced text field this finds first
+        # (the Spool Extras no longer draw their own copy of the product link).
         page.evaluate(
-            "() => { ['wiz-fil-extras-panel', 'wiz-spool-extras-panel'].forEach(id => {"
+            "() => { ['wiz-fil-extras-panel', 'wiz-spool-extras-panel', 'wiz-fil-color-panel'].forEach(id => {"
             " const el = document.getElementById(id);"
             " if (el && !el.classList.contains('show'))"
             " bootstrap.Collapse.getOrCreateInstance(el, {toggle:false}).show(); }); }"

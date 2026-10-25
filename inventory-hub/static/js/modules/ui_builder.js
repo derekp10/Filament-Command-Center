@@ -6,6 +6,20 @@
 const SpoolCardBuilder = {
 
     /**
+     * A value for an inline handler's JS, in a double-quoted HTML attribute
+     * (Group 51 review, integration-2). The browser decodes the attribute's
+     * entities BEFORE it compiles the handler, so an HTML escape alone (&#39;)
+     * let an apostrophe ("Robin's Egg Blue") end the JS string, and the 🖨️ did
+     * nothing. JSON.stringify makes the JS string; the HTML escape keeps the
+     * attribute whole.
+     */
+    jsArg(v) {
+        return JSON.stringify(String(v == null ? '' : v))
+            .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+            .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    },
+
+    /**
      * Reusable formatter for rich data extraction.
      */
     getRichInfo(item) {
@@ -36,7 +50,8 @@ const SpoolCardBuilder = {
         const locId = options.locId || '';
         const isFil = item.type === 'filament';
         const typeIcon = isFil ? '🧬' : '🧵';
-        const safeDisplay = item.display ? item.display.replace(/"/g, '&quot;').replace(/'/g, '&#39;') : '';
+        // The 🖨️ handlers' display, as a JS string (jsArg).
+        const queueDisplay = this.jsArg(item.display || '');
         // Group 40.6: the head a DEPLOYED card's spool is loaded on, for its ↩️
         // (a LocationID; anything that could break out of the onclick is dropped).
         const deployedId = String(item.deployed_to || '').replace(/[^A-Za-z0-9_.:\-]/g, '');
@@ -83,6 +98,16 @@ const SpoolCardBuilder = {
         let locBadgeHTML = '';
         let row4FooterHTML = '';
 
+        // Group 48.3 (Derek's option B): the 📍 badge keeps opening the location,
+        // and a separate ✏️ beside it moves the spool through Force Location,
+        // the pair the spool window already has. A real button: Tab reaches it,
+        // Space or a click opens it (window.moveSpoolFromCard, inv_details.js,
+        // which reads where the spool is: a loaded spool's card is a ghost filed
+        // at its box, so the card can't say; Group 51 review, browser-4).
+        const moveBtnHTML = (from) => `<button type="button" class="btn btn-sm fcc-card-move-btn ms-1"
+            onclick="event.stopPropagation(); window.moveSpoolFromCard && window.moveSpoolFromCard(${item.id}, '${from}')"
+            title="Move this spool (Force Location)" aria-label="Move spool #${item.id}">✏️</button>`;
+
 
 
         if (mode === 'search') {
@@ -109,7 +134,7 @@ const SpoolCardBuilder = {
                         ${!isFil && window.processScan ? `<div class="fcc-card-action-btn" onclick="event.stopPropagation(); processScan('ID:${item.id}', 'search')" title="Add to Buffer/Manage">📥</div>` : ''}
                         <div class="fcc-card-action-btn" onclick="event.stopPropagation(); ${isFil ? `openFilamentDetails(${item.id})` : `openSpoolDetails(${item.id})`}" title="View Details">🔍</div>
                         ${!isFil ? `<div class="fcc-card-action-btn" onclick="event.stopPropagation(); window.openEditWizard(${item.id});" title="Edit Spool">✏️</div>` : ''}
-                        ${window.addToQueue ? `<div class="fcc-card-action-btn" onclick="event.stopPropagation(); window.addToQueue({ id: ${item.id}, type: '${isFil ? 'filament' : 'spool'}', display: '${safeDisplay}' }); showToast('Added to Print Queue');" title="Add to Print Queue">🖨️</div>` : ''}
+                        ${window.addToQueue ? `<div class="fcc-card-action-btn" onclick="event.stopPropagation(); window.addToQueue({ id: ${item.id}, type: '${isFil ? 'filament' : 'spool'}', display: ${queueDisplay} }); showToast('Added to Print Queue');" title="Add to Print Queue">🖨️</div>` : ''}
                         ${labelStateIcon}
                     </div>
                 `;
@@ -135,14 +160,16 @@ const SpoolCardBuilder = {
             } else {
                 locBadgeHTML = `<span class="badge bg-secondary"><i class="bi bi-question-circle"></i> Unassigned</span>`;
             }
-        } 
+            // Not on a filament, nor when the search picks a spool for a caller.
+            if (!isFil && !options.callbackFn) locBadgeHTML += moveBtnHTML('search');
+        }
         else if (mode === 'loc_list') {
             outerClasses += 'manage-list-item js-spool-card'; // Add classes needed by Location Manager tests/logic
             wrapperStyle += ` margin-bottom: 10px;`;
             // Unslotted items: primary card-body click = Pick Up (adds to buffer). Details stays on the 🔍 button.
             actionTarget = `ejectSpool(${item.id}, '${locId}', true)`;
 
-            const printHoverClick = window.addToQueue ? `event.stopPropagation(); window.addToQueue({ id: ${item.id}, type: 'spool', display: '${safeDisplay}' }); showToast('Added to Print Queue');` : '';
+            const printHoverClick = window.addToQueue ? `event.stopPropagation(); window.addToQueue({ id: ${item.id}, type: 'spool', display: ${queueDisplay} }); showToast('Added to Print Queue');` : '';
             
             // Add top-right fast-actions (Always attached for both ghosts and slotted array)
             navActionsHTML = `
@@ -203,7 +230,7 @@ const SpoolCardBuilder = {
             outerClasses += 'slot-btn full ';
             actionTarget = `handleSlotInteraction(${options.slotNum})`;
             
-            const printHoverClick = typeof addToQueue !== 'undefined' ? `event.stopPropagation(); addToQueue({ id: ${item.id}, type: 'spool', display: '${safeDisplay}' }); showToast('Added to Print Queue');` : '';
+            const printHoverClick = typeof addToQueue !== 'undefined' ? `event.stopPropagation(); addToQueue({ id: ${item.id}, type: 'spool', display: ${queueDisplay} }); showToast('Added to Print Queue');` : '';
             
             if (item.is_ghost) {
                 // Small variant of deployed block (Return block)
@@ -216,7 +243,7 @@ const SpoolCardBuilder = {
                         </div>
                         
                         <div class="text-center mb-1 w-100">
-                            <div style="font-size:0.8rem; color:#ccc; background: rgba(0,0,0,0.7); border-radius: 4px; display: inline-block; padding: 2px 6px;">CURRENTLY AT:</div>
+                            <div style="font-size:var(--fcc-fs-label); color:#ccc; background: rgba(0,0,0,0.7); border-radius: 4px; display: inline-block; padding: 2px 6px;">CURRENTLY AT:</div>
                             <div class="text-pop" style="font-size:1.1rem; font-weight:900; color:#fff;">${item.deployed_to || "Unknown"}</div>
                         </div>
                         
@@ -265,15 +292,18 @@ const SpoolCardBuilder = {
         }
         else if (mode === 'printer-status') {
             // Printer Status widget variant — passive, single-line "chip"
-            // showing a color swatch + filament name + weight metric. No
-            // actions; the click handler is owned by the parent SVG/row in
+            // showing the filament name + weight metric. No actions; the
+            // click handler is owned by the parent SVG/row in
             // inv_printer_status.js so the whole toolhead block (chip +
             // schematic) is a single tap target. Returns plain HTML — no
             // wrapper div with cursor or tabindex of its own.
-            const swatch = window.makeSwatchHtml(item.color, item.color_direction, {
-                size: 12,
-                borderColor: 'rgba(255,255,255,0.4)',
-            });
+            // No colour dot before the name (Derek, 2026-10-24: it sat "pretty
+            // close if not sometimes entering the border for the toolhead.
+            // Also, Names are a bit tight in there"): the band across the
+            // tile's top already shows the colour, so the name has the dot's
+            // room, starting under the head's label (global.css .fcc-ps-chip),
+            // and runs up to the weight. The collapsed strip's chips keep
+            // their dots (inv_printer_status.js _renderToolheadCompact).
             const weightStr = (item.remaining_weight !== undefined && item.remaining_weight !== null)
                 ? `${Math.round(item.remaining_weight)}g`
                 : (item.remaining != null && item.remaining !== '---' ? `${Math.round(item.remaining)}g` : '---');
@@ -300,8 +330,7 @@ const SpoolCardBuilder = {
             return `
                 <div class="fcc-ps-chip" style="font-size:0.85rem; line-height:1.2;">
                     <div class="d-flex align-items-center gap-2">
-                        ${swatch}
-                        <span class="text-light fw-bold text-truncate" style="max-width:140px;">${compactName}</span>
+                        <span class="text-light fw-bold text-truncate">${compactName}</span>
                         <span class="ms-auto fw-bold" style="color:${weightColor};">${weightStr}</span>
                     </div>
                     ${matLine}
@@ -321,20 +350,20 @@ const SpoolCardBuilder = {
                 ? `${Math.round(item.remaining_weight)}g` : '';
             const name = info.line3 || (item.display || '').replace(/^#\d+\s*/, '');
             const deployed = item.is_ghost
-                ? `<div class="fcc-sp-deployed" style="font-size:0.78rem; font-weight:800; color:#111; background:#ffc107; border-radius:3px; padding:0 4px; display:inline-block; margin-top:3px;">DEPLOYED → ${esc(item.deployed_to || '?')}</div>`
+                ? `<div class="fcc-sp-deployed" style="font-size:var(--fcc-fs-label); font-weight:800; color:#111; background:#ffc107; border-radius:3px; padding:0 4px; display:inline-block; margin-top:3px;">DEPLOYED → ${esc(item.deployed_to || '?')}</div>`
                 : '';
             const inner = `background: linear-gradient(to bottom, rgba(30,30,30,0.95) 0%, rgba(5,5,5,0.25) 100%), ${styles.frame}; border-radius:5px; padding:5px 7px;`;
             return `
                 <div class="fcc-sp-spool-card" data-spool-id="${esc(item.id)}" style="background:${styles.frame}; border-radius:6px; padding:1px; text-align:left;">
                     <div style="${inner}">
-                        <div class="d-flex justify-content-between align-items-center" style="font-size:0.8rem; color:#ddd;">
+                        <div class="d-flex justify-content-between align-items-center" style="font-size:var(--fcc-fs-small); color:#ddd;">
                             <span class="fw-bold">#${esc(item.id)}</span>
                             <span class="fw-bold">${weightStr ? '⚖️ ' + esc(weightStr) : ''}</span>
                         </div>
                         <div class="d-flex align-items-center gap-1" style="font-size:0.92rem; color:#fff;">
-                            ${swatch}<span class="fw-bold text-truncate" style="max-width:150px;">${esc(name)}</span>
+                            ${swatch}<span class="fw-bold text-truncate" style="max-width:9.375rem;">${esc(name)}</span>
                         </div>
-                        <div style="font-size:0.78rem; color:#ddd; opacity:0.9;">${esc(info.line2)}</div>
+                        <div style="font-size:var(--fcc-fs-small); color:#ddd; opacity:0.9;">${esc(info.line2)}</div>
                         ${deployed}
                     </div>
                 </div>`;
@@ -362,10 +391,10 @@ const SpoolCardBuilder = {
                 ? `${Math.round(item.remaining_weight)}g`
                 : (item.remaining != null && item.remaining !== '---' ? `${Math.round(item.remaining)}g` : '---');
             const thLine = options.showToolhead && toolhead
-                ? `<div class="text-warning small text-end" style="font-size:0.8rem;">→ ${toolhead}</div>`
+                ? `<div class="text-warning small text-end" style="font-size:var(--fcc-fs-small);">→ ${toolhead}</div>`
                 : '';
             const printHover = window.addToQueue
-                ? `event.stopPropagation(); window.addToQueue({ id: ${item.id}, type: 'spool', display: '${safeDisplay}' }); showToast('Added to Print Queue');`
+                ? `event.stopPropagation(); window.addToQueue({ id: ${item.id}, type: 'spool', display: ${queueDisplay} }); showToast('Added to Print Queue');`
                 : '';
             // Compact name: prefer color name, falling back to display minus #ID.
             const compactName = info.line3
@@ -379,20 +408,20 @@ const SpoolCardBuilder = {
                      data-box="${box}" data-slot="${slot}" data-toolhead="${toolhead}"
                      data-spool-id="${item.id}" data-spool-label="${safeLabel}"
                      tabindex="0" role="button"
-                     style="min-width:240px; max-width:260px; padding:0; cursor:pointer; background: ${styles.frame}; border-radius:6px; border: 1px solid rgba(13,202,240,0.55);"
+                     style="min-width:15rem; max-width:16.25rem; padding:0; cursor:pointer; background: ${styles.frame}; border-radius:6px; border: 1px solid rgba(13,202,240,0.55);"
                      onclick="${handler}"
                      title="${titleAttr}">
                     <div style="${innerBg}">
                         <div class="px-2 pt-2 pb-1">
                             <div class="d-flex justify-content-between align-items-center mb-1">
                                 <div class="text-warning fw-bold" style="font-size:0.95rem;">Slot ${slot}</div>
-                                <div class="text-light" style="font-size:0.78rem; opacity:0.75;">#${item.id}</div>
+                                <div class="text-light" style="font-size:var(--fcc-fs-small); opacity:0.75;">#${item.id}</div>
                             </div>
                             <div class="d-flex align-items-center" style="font-size:0.95rem;">
                                 ${swatch}
-                                <span class="text-light fw-bold text-truncate" style="max-width:200px;">${compactName}</span>
+                                <span class="text-light fw-bold text-truncate" style="max-width:12.5rem;">${compactName}</span>
                             </div>
-                            <div class="text-light" style="font-size:0.8rem; opacity:0.8;">${info.line2}</div>
+                            <div class="text-light" style="font-size:var(--fcc-fs-small); opacity:0.8;">${info.line2}</div>
                             <div class="d-flex justify-content-between align-items-center mt-1" style="font-size:0.9rem;">
                                 <div class="text-light fw-bold">⚖️ ${weightStr}</div>
                                 ${thLine}
@@ -413,7 +442,7 @@ const SpoolCardBuilder = {
             outerClasses += `buffer-item ${options.isFirst ? 'active-item' : ''} `;
             actionTarget = `openSpoolDetails(${item.id})`;
             
-            const printHoverClick = typeof addToQueue !== 'undefined' ? `event.stopPropagation(); addToQueue({ id: ${item.id}, type: 'spool', display: '${safeDisplay}' }); showToast('Added to Print Queue');` : '';
+            const printHoverClick = typeof addToQueue !== 'undefined' ? `event.stopPropagation(); addToQueue({ id: ${item.id}, type: 'spool', display: ${queueDisplay} }); showToast('Added to Print Queue');` : '';
             
             navActionsHTML = `
                 <div class="d-flex gap-3 align-items-center" style="z-index: 10; margin-right: 5px;">
@@ -441,6 +470,7 @@ const SpoolCardBuilder = {
             } else {
                 locBadgeHTML = `<span class="badge bg-secondary"><i class="bi bi-question-circle"></i> Unassigned</span>`;
             }
+            locBadgeHTML += moveBtnHTML('buffer');   // Group 48.3
             // Simplified Buffer Row Layout (mostly standard 3-row but compressed)
         }
         else if (mode === 'buffer_nav') {

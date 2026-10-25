@@ -9,8 +9,10 @@ call-through — the watchdog side effect is load-bearing), and the L206
 /api/dashboard_pulse aggregator + _pulse_section_printer_status.
 
 Wiring notes:
-- _pulse_section_locations calls routes_locations.api_get_locations()
-  (module-qualified — the only text change in the move).
+- _pulse_section_locations calls routes_locations.build_locations_response()
+  (module-qualified), the body of /api/locations, handing it the tick's
+  shared spool list (Group 52.1a).
+- _pulse_section_label_backlog counts through routes_print_queue.backlog_count.
 - state.GLOBAL_BUFFER / GLOBAL_QUEUE are read AND whole-replaced as
   attributes of the state module (never from-imported).
 - No dependency on print_monitor (verified by scan) — the pulse
@@ -30,6 +32,7 @@ import logic  # type: ignore
 import prusalink_api  # type: ignore
 
 import routes_locations  # type: ignore
+import routes_print_queue  # type: ignore
 
 from app_core import app
 
@@ -263,8 +266,16 @@ def api_get_logs_route():
 # effect: ~12 requests/5s -> 1 request/5s, same data, lower overhead.
 # ---------------------------------------------------------------------------
 
+# Group 52.1a — ONE spool-list read per heartbeat. Every section that needs the
+# spool list (locations, manage, printer_status, label_backlog) gets the same
+# spoolman_api.SpoolListRead as `spools=`: it reads Spoolman on the first
+# section's first use and every later section reuses that list. A busy tick
+# used to read the whole list three times in the pulse, plus twice more for the
+# label backlog's own /api/print_queue/pending poll. It lives for this one
+# request only (no cross-request cache: a read right after a move must see it).
 _VALID_PULSE_SECTIONS = frozenset({
-    'logs', 'status', 'locations', 'buffer', 'manage', 'printer_status'
+    'logs', 'status', 'locations', 'buffer', 'manage', 'printer_status',
+    'label_backlog',
 })
 
 
@@ -277,29 +288,71 @@ def _pulse_section_logs():
     return resp.get_json()
 
 
-def _pulse_section_locations():
-    """Invoke the /api/locations handler and unwrap. Handles the 500
-    locations-corrupt path by returning {'error': ...} so the caller
-    can decide how to surface it; the bulk endpoint as a whole still
-    returns 200 since other sections may have valid data."""
-    rv = routes_locations.api_get_locations()
+def _pulse_section_locations(spools=None):
+    """Build the /api/locations answer from the tick's shared spool list and
+    unwrap. Handles the 500 locations-corrupt path by returning {'error': ...}
+    so the caller can decide how to surface it; the bulk endpoint as a whole
+    still returns 200 since other sections may have valid data."""
+    rv = routes_locations.build_locations_response(spools=spools)
     if isinstance(rv, tuple):
         resp, status = rv[0], rv[1]
         return {'error': resp.get_json(), 'status': status}
     return rv.get_json()
 
 
-def _pulse_section_manage(loc_id):
-    """Mirror of /api/get_contents for one location."""
+def _pulse_section_manage(loc_id, spools=None):
+    """Mirror of /api/get_contents for the open Location Manager view, from the
+    tick's shared spool list.
+
+    Group 52.1b — it tells "couldn't read" from "empty". A read that worked
+    answers {'id', 'contents': [...], 'read_ok': True} (an empty box is
+    `contents: []`); one that didn't answers {'id', 'read_ok': False,
+    'read_error'} with NO `contents`, so the page keeps the cards it shows and
+    says Spoolman didn't answer (a page from before 52 just skips the render).
+    It used to answer `contents: []`, which painted a slow Spoolman as an empty
+    box."""
+    reader = spools if spools is not None else spoolman_api.SpoolListRead()
+    listed = reader.get()
+    if listed is None:
+        return {'id': loc_id, 'read_ok': False,
+                'read_error': f"couldn't read Spoolman ({reader.error})"}
+    contents = spoolman_api.bucket_spools_by_location([loc_id], spools=listed)
     return {
         'id': loc_id,
-        'contents': spoolman_api.get_spools_at_location_detailed(loc_id),
+        'contents': contents.get(str(loc_id).strip().upper(), []),
+        'read_ok': True,
     }
 
 
+def _pulse_spool_read(reader):
+    """What the tick's one spool-list read came to (Group 52 review, reads-1),
+    carried beside the sections as `spool_read`: {'ok': True, 'error': None},
+    or {'ok': False, 'error': why} when Spoolman didn't answer.
+
+    The locations and printer_status sections keep their usual shape either
+    way: a failed read counts every box 0/N and leaves every head empty, which
+    a page that doesn't read this key draws as before. A page that reads it
+    keeps the counts and tiles it drew and says Spoolman didn't answer. It is a
+    sibling key, never one inside printer_status, because the widget and
+    _notePrinterStatesForFastPoll read every printer_status key as a printer's
+    name. Call it only after a section has read (`reader.reads`): get() then
+    answers the list it already has and reads nothing."""
+    ok = reader.get() is not None
+    return {'ok': ok,
+            'error': None if ok else (reader.error or "Spoolman's spool list couldn't be read")}
 
 
-def _pulse_section_printer_status():
+def _pulse_section_label_backlog(spools=None):
+    """The 🏷️ Backlog button's count (Group 52.1a), from the tick's shared spool
+    list plus one filament read: the page used to poll
+    /api/print_queue/pending on every tick for it, two more whole-list reads.
+    Counted by routes_print_queue.backlog_count, the same flag filter the
+    backlog list uses (in FCC: Spoolman ignores an `extra=` filter)."""
+    reader = spools if spools is not None else spoolman_api.SpoolListRead()
+    return routes_print_queue.backlog_count(reader.get(), reader.error)
+
+
+def _pulse_section_printer_status(spools=None):
     """Server-side aggregator for the Printer Status widget. Replaces
     the client-side fan-out of printer_map + N x toolhead_slots +
     M x get_contents fetches with one server-side call. Toolhead
@@ -351,7 +404,16 @@ def _pulse_section_printer_status():
     # display hint. Occupancy matches get_spools_at_location_detailed exactly
     # (direct location + physical_source ghost).
     all_tids = [str(loc_id).upper() for loc_id in printer_map.keys()]
-    spools_by_tid = spoolman_api.bucket_spools_by_location(all_tids)
+    if spools is None:
+        spools_by_tid = spoolman_api.bucket_spools_by_location(all_tids)
+    else:
+        # Group 52.1a: the tick's shared list. A failed read buckets nothing,
+        # every head empty, as the fail-open read did before; answering
+        # {'error'} instead would send the widget to its per-toolhead fan-out
+        # (one more whole-list read per head) just when Spoolman is slow. The
+        # pulse says the read failed in its sibling `spool_read` key (reads-1),
+        # so the widget keeps the tiles it drew instead of drawing these empties.
+        spools_by_tid = spoolman_api.bucket_spools_by_location(all_tids, spools=spools.get() or [])
 
     def fetch_for_printer(item):
         name, entries = item
@@ -405,10 +467,14 @@ def api_dashboard_pulse():
 
     Query params:
       include   comma-separated section names. Valid: logs, status,
-                locations, buffer, manage, printer_status. Unknown
-                names are silently ignored (forward-compat).
+                locations, buffer, manage, printer_status, label_backlog.
+                Unknown names are silently ignored (forward-compat).
       manage_id required when 'manage' is in include - the LocationID
                 whose contents to fetch.
+
+    Group 52.1a: the sections that need Spoolman's spool list share ONE read
+    (`tick_spools`, read lazily by the first section that asks), so a tick
+    costs one whole-list read however many of them are on screen.
     Body (POST): {"refresh_spool_ids": [123, 124, ...]} - if present
                 and non-empty, the response includes a "spools_refresh"
                 section keyed by spool id, equivalent to a POST to
@@ -417,7 +483,10 @@ def api_dashboard_pulse():
     Returns: {section_name: payload, ...}. Sections that error
     individually return {"error": "..."} in their slot; the response
     as a whole stays 200 so a partial failure doesn't blank the
-    dashboard.
+    dashboard. When a section read the spool list, `spool_read`
+    ({ok, error}) says whether that one read worked (reads-1): on a
+    failed read the locations counts and the printer_status heads are
+    zero / empty because nothing was read, not because nothing is there.
     """
     raw_include = (request.args.get('include') or '').strip()
     requested = set(s.strip().lower() for s in raw_include.split(',') if s.strip())
@@ -432,6 +501,9 @@ def api_dashboard_pulse():
             refresh_spool_ids = []
 
     out = {}
+    # One spool-list read for this tick, shared by every section below that
+    # needs it (52.1a). Nothing is read until a section asks.
+    tick_spools = spoolman_api.SpoolListRead()
 
     # logs and status share the underlying Spoolman+FilaBridge health
     # check, so we invoke the handler at most once per request.
@@ -468,7 +540,7 @@ def api_dashboard_pulse():
 
     if 'locations' in include:
         try:
-            out['locations'] = _pulse_section_locations()
+            out['locations'] = _pulse_section_locations(spools=tick_spools)
         except Exception as e:
             out['locations'] = {'error': str(e)}
 
@@ -477,20 +549,31 @@ def api_dashboard_pulse():
 
     if 'manage' in include and manage_id:
         try:
-            out['manage'] = _pulse_section_manage(manage_id)
+            out['manage'] = _pulse_section_manage(manage_id, spools=tick_spools)
         except Exception as e:
             out['manage'] = {'error': str(e), 'id': manage_id}
 
     if 'printer_status' in include:
         try:
-            out['printer_status'] = _pulse_section_printer_status()
+            out['printer_status'] = _pulse_section_printer_status(spools=tick_spools)
         except Exception as e:
             out['printer_status'] = {'error': str(e)}
+
+    if 'label_backlog' in include:
+        try:
+            out['label_backlog'] = _pulse_section_label_backlog(spools=tick_spools)
+        except Exception as e:
+            out['label_backlog'] = {'error': str(e), 'read_ok': False}
 
     if refresh_spool_ids:
         try:
             out['spools_refresh'] = logic.get_live_spools_data(refresh_spool_ids)
         except Exception as e:
             out['spools_refresh'] = {'error': str(e)}
+
+    # reads-1: say what the shared read came to, once, for every section that
+    # used it. A tick whose sections read nothing carries no `spool_read`.
+    if tick_spools.reads:
+        out['spool_read'] = _pulse_spool_read(tick_spools)
 
     return jsonify(out)

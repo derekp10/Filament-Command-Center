@@ -160,6 +160,17 @@ const openSpoolDetails = (id, silent = false) => {
             writeSpoolTemp('spool-detail-temp-nozzle-max', unquoteExtra(filExtra.nozzle_temp_max));
             writeSpoolTemp('spool-detail-temp-bed',        fil.settings_bed_temp);
             writeSpoolTemp('spool-detail-temp-bed-max',    unquoteExtra(filExtra.bed_temp_max));
+            // Group 48.2: the filament's slicer profile, read-only here (Derek:
+            // "(from the filament)", so he knows to edit it there); the note
+            // opens the filament window, as the 🧬 Swatch button does.
+            const spSlicer = unquoteExtra(filExtra.slicer_profile);
+            const spSlicerEl = document.getElementById('spool-detail-slicer-profile');
+            if (spSlicerEl) spSlicerEl.innerText = spSlicer || "--";
+            const spSlicerSrc = document.getElementById('spool-detail-slicer-profile-src');
+            if (spSlicerSrc) {
+                spSlicerSrc.onclick = (d.filament && fil.id != null)
+                    ? () => { modals.spoolModal.hide(); openFilamentDetails(fil.id); } : null;
+            }
 
             document.getElementById('detail-weight').innerText = (fil.weight || 0) + "g";
 
@@ -535,7 +546,7 @@ const openFilamentDetails = (fid, silent = false) => {
                                     📥
                                 </button>
                                 <button class="btn btn-sm btn-outline-info py-0 px-2" 
-                                    onclick="window.addToQueue({ id: ${s.id}, type: 'spool', display: '${d.name} (ID:${s.id})' }); showToast('Added to Queue');" 
+                                    onclick="window.addToQueue({ id: ${s.id}, type: 'spool', display: ${window.SpoolCardBuilder.jsArg(`${d.name} (ID:${s.id})`)} }); showToast('Added to Queue');" 
                                     title="Send to Print Queue">
                                     🖨️
                                 </button>
@@ -629,15 +640,6 @@ const openFilamentDetails = (fid, silent = false) => {
             }
         })
         .catch(e => { if (!silent) setProcessing(false); console.error(e); showToast("Connection/Data Error", "error"); });
-};
-
-const quickQueue = (id) => {
-    fetch(`/api/spool_details?id=${id}`)
-        .then(r => r.json())
-        .then(d => {
-            if (!d.id) return;
-            addToQueue({ id: d.id, type: 'spool', display: d.filament?.name || "Unknown" });
-        });
 };
 
 // --- SMART SYNC LISTENER ---
@@ -766,7 +768,10 @@ window.promptEditSlicerProfile = (filamentId, currentProfile) => {
                         const filament = res && res.data ? res.data : null;
                         const merged = { ...((filament && filament.extra) || {}) };
                         if (newProfile) merged.slicer_profile = `"${newProfile}"`;
-                        else delete merged.slicer_profile;
+                        // (none): the clear sentinel. A deleted key is KEPT (the
+                        // server merges against the live record), so "(none)"
+                        // used to change nothing (2026-10-21).
+                        else merged.slicer_profile = window.FCC_DELETE_EXTRA;
                         return fetch('/api/update_filament', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
@@ -791,7 +796,11 @@ window.promptEditSlicerProfile = (filamentId, currentProfile) => {
                                 body: JSON.stringify({ entity_type: 'filament', key: 'slicer_profile', new_choice: newProfile }),
                             }).catch(() => {});
                         }
-                        if (typeof showToast === 'function') showToast('Slicer profile updated', 'success', 4000);
+                        if (typeof showToast === 'function') {
+                            showToast('Slicer profile updated', 'success', 4000);
+                            // A clear Spoolman didn't take (the server says which).
+                            if (saveRes.warning) showToast(saveRes.warning, 'warning', 7000);
+                        }
                         openFilamentDetails(filamentId, true);
                     })
                     .catch(err => {
@@ -901,11 +910,13 @@ window.promptEditSampleStatus = (filamentId, currentValue) => {
                 const merged = { ...((filament && filament.extra) || {}) };
                 // Send a raw JS boolean — spoolman_api.update_filament normalizes
                 // bools to the stored "true"/"false" form, matching the
-                // label-confirm write path. Deleting the key clears it to the
-                // "unknown" tri-state.
+                // label-confirm write path. The clear sentinel takes it back to
+                // the "unknown" tri-state; a deleted key is KEPT (the server
+                // merges against the live record), so "Unknown / clear" used to
+                // leave it as it was (2026-10-21).
                 if (choice === 'true') merged.sample_printed = true;
                 else if (choice === 'false') merged.sample_printed = false;
-                else delete merged.sample_printed;
+                else merged.sample_printed = window.FCC_DELETE_EXTRA;
                 return fetch('/api/update_filament', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -923,7 +934,10 @@ window.promptEditSampleStatus = (filamentId, currentValue) => {
                     });
                     return;
                 }
-                if (typeof showToast === 'function') showToast('Swatch status updated', 'success', 4000);
+                if (typeof showToast === 'function') {
+                    showToast('Swatch status updated', 'success', 4000);
+                    if (saveRes.warning) showToast(saveRes.warning, 'warning', 7000);
+                }
                 openFilamentDetails(filamentId, true);
             })
             .catch(err => {
@@ -938,8 +952,56 @@ window.promptEditSampleStatus = (filamentId, currentValue) => {
     });
 };
 
+// --- MOVE FROM A CARD (Group 48.3) ---
+// The ✏️ beside a search or buffer card's 📍 badge: Force Location for that
+// spool with the spool window closed (Derek's option B, 2026-10-19: the badge
+// keeps opening the location; this is the pair the spool window already has).
+// From a search card the search panel closes first (its focus trap would take
+// the dialog's input); a buffer card's spool leaves the buffer once its move
+// has landed, as a location scan's does. No new write path: Force Location's
+// own doors (manage_contents add, the box and Printer pickers).
+// Where the spool IS comes from its own record, read first (Group 51 review,
+// browser-4), as the spool window's ✏️ passes Spoolman's location. A card can't
+// say: a loaded spool's card is a ghost filed at its box, so the dialog opened
+// on Unassigned and a Force Move with no pick took the spool off its head. A
+// read that fails opens nothing.
+window.moveSpoolFromCard = (spoolId, from) => {
+    const sid = String(spoolId);
+    const unread = (why) => {
+        const msg = `Couldn't read #${sid} from Spoolman, so FCC can't show where it is: nothing was opened. `
+            + `Try again in a few seconds`;
+        showToast(`⚠️ ${msg}`, 'warning', 7000);
+        if (window.logClientEvent) window.logClientEvent(`⚠️ ✏️ on #${sid}: ${msg}${why ? ` (${why})` : ''}.`, 'WARNING');
+    };
+    (window.fetchT || fetch)(`/api/spool_details?id=${encodeURIComponent(sid)}`)
+        .then(r => (r.ok ? r.json() : null))
+        .then(d => {
+            if (!d || String(d.id) !== sid) { unread(); return; }
+            if (from === 'search' && window.SearchEngine && window.SearchEngine.offcanvas) {
+                try { window.SearchEngine.offcanvas.hide(); } catch (_) { /* noop */ }
+            }
+            window.promptEditLocation(sid, String(d.location || '').trim(), {
+                fromCard: true,
+                onDone: () => {
+                    if (from !== 'buffer' || !Array.isArray(state.heldSpools)) return;
+                    if (!state.heldSpools.some(s => String(s.id) === sid)) return;
+                    state.heldSpools = state.heldSpools.filter(s => String(s.id) !== sid);
+                    if (window._recentlyAssignedOut) window._recentlyAssignedOut.set(sid, Date.now());
+                    if (typeof renderBuffer === 'function') renderBuffer();
+                },
+            });
+        })
+        .catch(e => unread(e && e.message));
+};
+
 // --- MANUAL LOCATION OVERRIDE ---
-window.promptEditLocation = (spoolId, currentLoc) => {
+// `opts` (Group 48.3): {fromCard, onDone(res)}. From a search or buffer card's
+// ✏️ the spool window is closed, so the dialog mounts on the page body and its
+// questions have no host window (on `#spoolModal` they drew inside a hidden
+// window: invisible), the hidden spool window isn't refreshed, and `onDone`
+// hears a move that landed. Without it: the spool window's ✏️, as before.
+window.promptEditLocation = (spoolId, currentLoc, opts = {}) => {
+    const fromCard = !!(opts && opts.fromCard);
     let defaultLoc = currentLoc || "Unassigned";
     if (defaultLoc.startsWith("Deployed: ")) defaultLoc = defaultLoc.replace("Deployed: ", "");
     if (defaultLoc === "Unassigned") defaultLoc = "";
@@ -966,7 +1028,7 @@ window.promptEditLocation = (spoolId, currentLoc) => {
             `).join('');
 
             Swal.fire({
-                target: document.getElementById('spoolModal') || document.body,
+                target: fromCard ? document.body : (document.getElementById('spoolModal') || document.body),
                 title: 'Force Location Override',
                 html: `
                     <div class="text-start">
@@ -1217,7 +1279,8 @@ window.promptEditLocation = (spoolId, currentLoc) => {
                     // back as `picked_slot` so the Yes lands where the question said;
                     // the server keeps it only while it is still free. The first
                     // request sends no slot.
-                    const spoolModalEl = document.getElementById('spoolModal');
+                    // The questions' host: the spool window, or none from a card (48.3).
+                    const spoolModalEl = fromCard ? null : document.getElementById('spoolModal');
                     // What the move did, once the server stopped asking. A rejected
                     // write still answers status 'success' and names the spool in
                     // res.failures (2026-09-12).
@@ -1250,7 +1313,10 @@ window.promptEditLocation = (spoolId, currentLoc) => {
                             // off its head into the scan buffer.
                             window.takeIntoBuffer(res);
                             document.dispatchEvent(new CustomEvent('inventory:sync-pulse'));
-                            openSpoolDetails(spoolId, true);
+                            if (!fromCard) openSpoolDetails(spoolId, true);
+                            if (opts && typeof opts.onDone === 'function') {
+                                try { opts.onDone(res); } catch (e) { console.error(e); }
+                            }
                             return true;
                         }
                         showToast(failedWhy ? `❌ #${spoolId} was NOT moved: ${failedWhy}` : (res.msg || 'Override failed'), 'error', 7000);
@@ -1337,6 +1403,16 @@ window.promptEditLocation = (spoolId, currentLoc) => {
                                     });
                                     return;
                                 }
+                                if (ctx.outcome && (res.blocked_reason === 'residents_changed'
+                                                    || res.blocked_reason === 'occupant_changed')) {
+                                    // Group 51.6 / 51.7: the head or slot holds a spool the
+                                    // picker never showed. Nothing moved; the picker opens
+                                    // again, drawn from fresh data.
+                                    showToast(`⚠️ ${res.msg || 'That place changed since you picked it: pick again'}`,
+                                        'warning', 7000);
+                                    ctx.outcome({ outcome: 'cancelled', res });
+                                    return;
+                                }
                                 const moved = done(res, prior, ctx.placement || null);
                                 if (ctx.outcome) ctx.outcome({ outcome: moved ? 'moved' : 'failed', res });
                             });
@@ -1365,6 +1441,10 @@ window.promptEditLocation = (spoolId, currentLoc) => {
                                     if (pl.auto_deploy === false) original.auto_deploy = false;
                                     if (pl.swap) original.swap = true;
                                     if (pl.record_source !== undefined) original.record_source = pl.record_source;
+                                    // Group 51.6 / 51.7: what the picker showed on the head,
+                                    // and in the slot chosen for Swap / Overwrite.
+                                    if (Array.isArray(pl.expected_residents)) original.expected_residents = pl.expected_residents.slice();
+                                    if (pl.expected_occupant != null) original.expected_occupant = pl.expected_occupant;
                                     const first = Object.assign({}, original);
                                     if (pl.picked_slot != null) first.picked_slot = pl.picked_slot;
                                     const feed = pl.expected_feed != null ? String(pl.expected_feed).toUpperCase() : null;
@@ -1465,14 +1545,14 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
             </label>` : '';
 
     const content = `
-        <div style="background:#1e1e1e; color:#fff; border:2px solid #ffc107; border-radius:8px; padding:20px 24px; max-width:460px; text-align:left;">
+        <div style="background:#1e1e1e; color:#fff; border:2px solid #ffc107; border-radius:8px; padding:20px 24px; max-width:28.75rem; text-align:left;">
             <div style="font-size:1.2em; font-weight:bold; margin-bottom:10px;">📦 Spool archived — record the empty weight?</div>
             <p style="color:#ddd; margin-bottom:8px; font-size:0.95em;">
                 Spool <strong>#${esc(spoolId)}</strong> just hit 0g and was auto-archived. Its filament
                 <strong>#${esc(fil.id)}</strong> (<em>${esc(vendorName)} ${esc(material)}, ${esc(colorName)}</em>)
                 has no recorded <strong>empty spool weight</strong>.
             </p>
-            <p style="color:#bbb; font-size:0.82em; margin-bottom:12px;">
+            <p style="color:#bbb; font-size:var(--fcc-fs-small); margin-bottom:12px;">
                 Put the now-empty spool on your scale and enter the measured weight. It's saved to the
                 filament so every future spool of it inherits the value.
             </p>
@@ -2475,8 +2555,9 @@ const _editfilOpenModal = (fil) => {
                     if (k === 'filament_attributes') {
                         mergedExtra[k] = JSON.stringify(v);
                     } else if (v === '' || v == null) {
-                        // 23.4 — send the delete-sentinel so the backend merge
-                        // POPS the key. A client-side `delete` was lost: the
+                        // 23.4 — send the delete-sentinel so the backend
+                        // CLEARS the key (it writes the value that clears that
+                        // field type). A client-side `delete` was lost: the
                         // backend re-merges against the live record, so an
                         // omitted key means "keep" and blanking silently no-op'd.
                         mergedExtra[k] = window.FCC_DELETE_EXTRA;
@@ -2542,6 +2623,8 @@ const _editfilOpenModal = (fil) => {
             if (d && d.success) {
                 const newId = (d.filament && d.filament.id) || (isCreate ? '?' : fil.id);
                 showToast(isCreate ? `Filament #${newId} created.` : `Filament #${fil.id} updated.`, 'success');
+                // A field the edit cleared that Spoolman still holds (2026-10-21).
+                if (d.warning) showToast(d.warning, 'warning', 7000);
                 if (window.refreshFilamentSpools) window.refreshFilamentSpools();
                 if (isCreate && window.fetchLocations) window.fetchLocations();
                 bsModal.hide();
@@ -2616,7 +2699,7 @@ const _editfilShowEscapeConfirm = (bsModal) => {
     ov.id = 'editfil-esc-confirm';
     ov.style.cssText = 'position:absolute; inset:0; z-index:20000; background:rgba(0,0,0,0.85); display:flex; align-items:center; justify-content:center;';
     ov.innerHTML = `
-        <div style="background:#1e1e1e; color:#fff; border:2px solid #ff8800; border-radius:8px; padding:20px 24px; max-width:420px; text-align:center;">
+        <div style="background:#1e1e1e; color:#fff; border:2px solid #ff8800; border-radius:8px; padding:20px 24px; max-width:26.25rem; text-align:center;">
             <div style="font-size:1.1em; font-weight:bold; margin-bottom:8px;">Close without saving?</div>
             <div style="color:#ffc; margin-bottom:14px;">You have unsaved changes to this filament. Leave anyway?</div>
             <div style="display:flex; gap:10px; justify-content:center;">
@@ -2763,7 +2846,7 @@ const _showLabelReprintPrompt = (filId, displayName, changedLabels) => {
     const changedTxt = changedLabels.join(', ');
     const panel = document.createElement('div');
     panel.style.cssText = 'background:#1e1e1e; color:#fff; border:2px solid #ffc107; '
-        + 'border-radius:10px; padding:22px 26px; max-width:460px; text-align:center; '
+        + 'border-radius:10px; padding:22px 26px; max-width:28.75rem; text-align:center; '
         + 'box-shadow:0 8px 32px rgba(0,0,0,0.6);';
     panel.innerHTML = `
         <div style="font-size:2em; line-height:1; margin-bottom:6px;">🏷️</div>
@@ -2837,7 +2920,7 @@ const _renderDeleteOverlay = (overlay, { title, body, requireText, confirmLabel,
     const errId = `${overlay.id}-err`;
     overlay.innerHTML = `
         <div style="font-size:1.3em; font-weight:bold; color:#ff8888;">${title}</div>
-        <div style="color:#ddd; font-size:0.95em; max-width:480px;">${body}</div>
+        <div style="color:#ddd; font-size:0.95em; max-width:30rem;">${body}</div>
         ${requireText ? `
             <div style="display:flex; flex-direction:column; gap:6px; align-items:center;">
                 <label for="${inputId}" style="color:#aaa; font-size:0.85em;">
@@ -2845,7 +2928,7 @@ const _renderDeleteOverlay = (overlay, { title, body, requireText, confirmLabel,
                 </label>
                 <input id="${inputId}" type="text" autocomplete="off"
                     style="font-family:monospace; padding:6px 10px; min-width:240px; text-align:center; border:1px solid #555; border-radius:4px; background:#222; color:#fff;" />
-                <div id="${errId}" style="color:#ff5555; font-size:0.8em; min-height:1em;"></div>
+                <div id="${errId}" style="color:#ff5555; font-size:var(--fcc-fs-small); min-height:1em;"></div>
             </div>
         ` : ''}
         <div style="display:flex; gap:10px; margin-top:6px;">
@@ -3035,7 +3118,7 @@ const _showMergeFilamentFlow = async (sourceFilamentId) => {
 
     const pickerHtml = `
         <div style="background:#222; color:#fff; border:1px solid #555; border-radius:8px;
-                    padding:20px 22px; min-width:420px; max-width:560px;
+                    padding:20px 22px; min-width:min(26.25rem,94vw); max-width:35rem;
                     box-shadow:0 8px 32px rgba(0,0,0,0.55);">
             <h5 style="margin:0 0 8px; color:#5dd0ff;">🔗 Merge filament</h5>
             <div style="color:#ccc; font-size:0.9em; margin-bottom:12px;">
@@ -3131,7 +3214,7 @@ const _showMergeConfirmStep = (srcId, srcLabel, target, spoolCount, hostModalEl)
 
     const html = `
         <div style="background:#222; color:#fff; border:1px solid #ff9955; border-radius:8px;
-                    padding:20px 22px; min-width:420px; max-width:560px;
+                    padding:20px 22px; min-width:min(26.25rem,94vw); max-width:35rem;
                     box-shadow:0 8px 32px rgba(0,0,0,0.55);">
             <h5 style="margin:0 0 8px; color:#ffaa55;">⚠️ Confirm merge</h5>
             <div style="color:#ddd; font-size:0.92em; margin-bottom:10px;">
@@ -3480,9 +3563,9 @@ window.vendorEditSave = () => {
         empty_spool_weight: emptyWt,
     };
     // 23.4 — on EDIT (PATCH) a blanked website sends the delete-sentinel so the
-    // backend merge POPS it; an empty string would persist a literal '""'
-    // instead of clearing. On CREATE there's nothing to delete, so a blank
-    // stays an empty string.
+    // backend clears it (a JSON null on Spoolman 0.26+, which drops the key; a
+    // JSON empty string on an older one; a left-out key is kept since 0.26).
+    // On CREATE there's nothing to clear, so a blank stays an empty string.
     data.extra = { website: website ? `"${website}"` : (isCreate ? '' : window.FCC_DELETE_EXTRA) };
 
     const url = isCreate ? '/api/vendors' : `/api/vendors/${encodeURIComponent(vid)}`;
@@ -3505,6 +3588,8 @@ window.vendorEditSave = () => {
                 }));
             } else {
                 showToast(`Manufacturer updated.`, 'success', 4000);
+                // A field the edit cleared that Spoolman still holds (2026-10-21).
+                if (body.warning) showToast(body.warning, 'warning', 7000);
                 document.dispatchEvent(new CustomEvent('vendor:updated', {
                     detail: { id: vid, vendor: v },
                 }));

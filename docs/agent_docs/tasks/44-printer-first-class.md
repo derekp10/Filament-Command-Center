@@ -10,6 +10,8 @@
 > Code anchors were read on `dev` @ `3949aba`.
 >
 > **🔄 2026-10-13: still open.** Booked for one design sit-down together with [Group 37](37-location-system-redesign.md)'s fork 1. Derek added input while answering Group 41 Q4: reorganise by rename / re-ID, and keep IDs readable (where it is, what it is, which one). See "The design pass".
+>
+> **🔄 2026-10-19 (`/refresh-groups`):** [Group 35](35-config-cluster.md)'s G1 was re-decided without waiting for this sit-down: per-printer settings are keyed by the Printer row's Location ID now, and this group's migration re-keys them later if the printer id changes. **Derek's wider point, for the sit-down:** he needs one concrete id that carries the whole lineage (parents, children, grandparents) while keeping his naming conventions, and printers and toolheads should be joined properly. (Checked that morning: since the 2026-09-29 hotfix, Settings → Toolheads creates the heads' Location rows itself, `ensure_toolhead_rows`.)
 
 ---
 
@@ -25,7 +27,7 @@
   Before designing, read the hotfix's buglist entry ("✅ HOTFIXED 2026-09-29") and `tests/test_indx_printer_setup_hotfix.py`. Those refusals are the current safety net. The design must replace each one with a real operation, never just delete it.
 - **This is [Group 37](37-location-system-redesign.md)'s fork 1 applied to printers.** Fork 1 asks whether the human-readable composite LocationID is still the right model. This group asks what identifies a printer ("a stable id, not the Name and not the LocationID prefix"). Decide them together, or at least keep the printer answer consistent with fork 1.
 - **Group 34's NO FORCED RELABELING invariant still binds.** Existing LocationIDs and printed QR labels stay valid.
-- **[Group 35](35-config-cluster.md)'s decision G1** (key per-printer settings by display Name) depends on this answer. See the cross-group notes.
+- **[Group 35](35-config-cluster.md)'s decision G1** was re-decided 2026-10-19: per-printer settings are keyed by the Printer row's Location ID now; this group's migration re-keys them if the printer id changes. See the cross-group notes.
 
 ---
 
@@ -88,7 +90,7 @@ Derek wants background before any choice: where he meets it, what it's for, and 
 
 ## Cross-group notes
 
-- **[Group 35](35-config-cluster.md).** G1 keys the per-printer settings map by display Name. The hotfix already moved the printer-connection grid to LocationID, and 44.2 says to revisit G1. Settle the printer id here first, or re-decide G1 with Derek before Group 35 builds.
+- **[Group 35](35-config-cluster.md).** G1 was re-decided 2026-10-19 (Derek): per-printer settings are keyed by the Printer row's Location ID, so 35 can build first. If this group changes how a printer is identified, its migration re-keys those values (`path_filament_g`, and anything else 35 adds).
 - **[Group 37](37-location-system-redesign.md).** Fork 1 (the LocationID model): decide together.
 - **[Group 34](34-location-tree-cluster.md).** 44.4 re-enables the Add-child that 34's S1–S4 suppressed on printer topology.
 - **[Group 39](39-confirm-on-every-door.md).** Its confirms key on toolhead LocationIDs, which is consistent with a LocationID-based printer id.
