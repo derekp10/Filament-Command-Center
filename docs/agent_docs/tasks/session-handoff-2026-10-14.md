@@ -644,7 +644,10 @@ clearing, review every page that sends one (the ➕ redraw had been harmless onl
 ### Readability build + Derek's picture walks (2026-10-21 → 24) — DONE (merged to `dev` 2026-10-24; `main` waits for Derek)
 
 Derek approved the text-size rule item by item (2026-10-21), the build's pictures (2026-10-22: all five, with three
-changes) and the changes' pictures (2026-10-23/24); see completed-archive.md. Pictures, kept locally:
+changes) and the changes' pictures (2026-10-23/24); see completed-archive.md. The first merge (`047ff4f`) ran ahead of his
+last tweaks ("I meant that the images looked ok, and offered changes before we did the merge"): reverted on `dev`
+(`4b0d510`, a revert rather than a force-push, which the permission system blocks), the tweaks built, then merged on
+his explicit word. Lesson: a picture OK that comes with new suggestions is not a merge OK; ask "merge now?". Pictures, kept locally:
 `review-samples/2026-10-21-readability-build/`, `2026-10-22-qr-and-rows/`, `2026-10-23-printer-status/`.
 Research this session (no code; each folder's `corrections.md` first): the phone view + tags
 (`review-samples/2026-10-21-phone-tags/`), the scale (`2026-10-21-scale/`; Derek ordered a PN5180, it arrived
@@ -788,3 +791,6 @@ harness's 1% tolerance let stale CORE1 text pass).
 | `wf_35fd892d-f66` readability-walk-changes | QRs under their buttons, even rows | 4 | 1,877,812 subagent | ~3.9 h; 5 review fixes |
 | `wf_71b589b9-90b` record-source + firmware 8.0 | a dialog tweak + research | 5 | 1,915,610 subagent | ~69 min |
 | `wf_8be49633-0d1` printer-status-name-on-top | the name on a header line | 3 | 1,493,102 subagent | ~3 h; 6 review fixes |
+| `wf_bd626399-e77` printer-status-tweaks | printers stepped in, state before the name | 1 | 574,360 subagent | ~80 min |
+| `wf_d267909a-678` printer-status-name-then-info | the name first, an info line under it | 1 | 471,407 subagent | ~64 min |
+| `wf_5a660b3c-9d7` printer-status-drop-tile-dot | no colour dot beside a tile's spool name | 1 | 328,371 subagent | ~45 min |
