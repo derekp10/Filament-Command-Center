@@ -156,8 +156,9 @@
   one-line rows are liked as they are ("I love the design"); "shippable once we have addressed the other two things"
   (the name and the text size); the bigger text is kept ("looks good, so I'd say its a keeper for now", 2026-10-21
   walkthrough); and an archived spool scanned onto a toolhead is un-archived and loaded when its record still has
-  filament, refused at 0 g; built.)_ **Dev still holds the long-list scenario:** `low_stock_g` 925 (was 250) and two
-  sample exclusions (filaments 91 and 96): Claude puts them back.
+  filament, refused at 0 g; built.)_ **Released to prod 2026-10-25 (`main` `97fcf7c`):** what's left is
+  excluding the prod filaments he can't get, from the list's 🔕. Dev's long-list sample was put back (`low_stock_g`
+  250, filaments 91 and 96 included again).
 * **📐 Plan docs: named sizes and colors as the base for themes; alternative views (phone, wall tablet, printer pictures,
   the Location Manager) (Derek, 2026-10-21; written).** "Themes" in his sense are whole alternative designs a user
   can choose ("what we have now, or future ones, possibly ones that focus on using images of the printers themselves"),

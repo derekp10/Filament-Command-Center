@@ -1,5 +1,7 @@
 # **Done**
 
+* **[2026-10-25 — 🚢 Released: `dev` `09b395a` → `main` `97fcf7c`]** — on Derek's word ("If it's done and we completed the larger group goals for this multipart coding session then we can move to prod"): Groups 51 / 48 / 49 / 52 and their follow-ups, the ⚠️ Low stock list's Out and Excluded tabs, Spoolman 0.27 clears, and the readability build (text sizes, the Text size setting, QR codes, Printer Status). One conflict, `routes_print_queue.py`, resolved to dev's version (the same backlog fix as `73e456d` plus Group 52's count). Prod deploy: Derek's TrueNAS update.
+
 * **[2026-10-21 → 24 — 🔠 Readability: the text-size rule, a Text size setting, QR codes that match and sit under their buttons, Printer Status in rows → `feat/readability-2026-10-21` (merged to `dev` 2026-10-24)]** — Derek's 2026-10-21 text-size walkthrough, built by `wf_16904a49-dbb` (7 agents: the rule, the setting, a 3 + 1 review, a fixer; 13 review fixes), then the changes from his picture walks (2026-10-22: all five items approved with three changes; 2026-10-23/24) by `wf_35fd892d-f66`, `wf_71b589b9-90b` and `wf_8be49633-0d1`, each reviewed and fixed. Full sweeps: 4646 / 1 (a real print on the XL), 4731 / 0, 4806 / 2 (both the structural scan on a deliberately zero-high box, `a901b38`).
 
   * ✅ Text you read never under 13.6 px, labels in a pill or box never under 12.8 px, held by named sizes
