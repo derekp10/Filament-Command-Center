@@ -66,7 +66,9 @@ Close out the unreachable filament-archive feature, add a symmetric spool auto-u
 - [ ] Activity log records deletions
 - [ ] Deleted items are removed from all UI views immediately
 
-### 4.4 — Clean up filament attributes [DEFERRED 2026-04-28]
+### 4.4 — Clean up filament attributes [DEFERRED 2026-04-28 → ✅ DONE, archived 2026-10-12]
+> **2026-10-25 (`/refresh-groups`):** done. Every ask shipped in May 2026 (the `choice_validation.js` guards, `migrate_filament_attributes.py`, the boot-time `ensure_filament_attributes_cleaned()`), verified on prod and archived by [Group 47](47-buglist-reconciliation.md) 47.28 (see `completed-archive.md`). With it, Group 4 is `DONE`.
+
 **Buglist ref:** L221 (audit results captured there)
 **What:** Audit completed; deferred to a follow-up branch. Spoolman blocks per-choice removal via POST (`"Cannot remove existing choices"`), so the cleanup requires the heavy snapshot-restore migration pattern. Cost-vs-benefit favors deferring — the dead choices are unused (no broken data), just dropdown clutter.
 
