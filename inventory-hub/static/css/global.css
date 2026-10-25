@@ -2106,20 +2106,27 @@ body {
     color: rgba(255,255,255,0.6);
     text-align: center;
 }
+/* A loaded tile's name, weight and material (ui_builder.js, mode
+   'printer-status'). No colour dot before the name since 2026-10-24 (Derek:
+   it came "pretty close if not sometimes entering the border"; the band
+   above shows the colour). The name and the material line start 6 px in,
+   the band's own inset, so they sit under the head's label and clear of the
+   border; the name runs up to the weight, which keeps its place at the
+   right. Kept by tests/test_printer_status_tile_name.py. */
 .fcc-ps-chip {
     font-size: var(--fcc-fs-small);
+    padding-left: 6px;
 }
 /* 30.4 — compact material line under the color name on the expanded
-   printer-status panel. Indented past the 12px swatch + gap so it aligns
-   under the color name; muted but dark-theme readable. Line height 1.2
-   (2026-10-22): at 1.1 the line's own box (text-truncate clips to it) cut a
-   descender ("g", "y") at Large. */
+   printer-status panel, starting under the name (it was indented past the
+   dot); muted but dark-theme readable. Line height 1.2 (2026-10-22): at 1.1
+   the line's own box (text-truncate clips to it) cut a descender ("g", "y")
+   at Large. */
 .fcc-ps-chip-mat {
     font-size: var(--fcc-fs-small);
     line-height: 1.2;
     color: rgba(255,255,255,0.6);
     margin-top: 1px;
-    padding-left: 20px;
 }
 /* Default (expanded) view: per-printer rows with full schematic blocks;
    the inline header chip strip is hidden. */
