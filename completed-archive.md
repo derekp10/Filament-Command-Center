@@ -9,8 +9,11 @@
     wrapping ("ADD INVENTORY" reads "ADD" at Extra Large: "I don't think there's a good way around that").
   * ✅ Each "📷 Scan to …" QR wears its button's colour (the Load QR amber) and sits under its own button; "Record it as
     coming from…" has a purple No box and says where Return and Eject will put the spool.
-  * ✅ Printer Status: a printer's heads in even rows (the INDX's 8 → 4 + 4 at the bigger sizes), the name on a header
-    line with the tiles under it (Derek's pick of three spacing styles), the filament line 1.2 high.
+  * ✅ Printer Status (Derek's picks, 2026-10-22 to 24): the printers stepped in under the title; each one's name, an
+    info line under it (its state and 🛑 count, lined up across printers), then its tiles in even rows (the INDX's 8 one
+    row at Small and Standard, 4 + 4 at the bigger sizes); no colour dot beside a tile's spool name; a printer named
+    with an apostrophe gets its 🛑 count; the filament line 1.2 high. The first merge (`047ff4f`) ran ahead of his last
+    tweaks: reverted on `dev` (`4b0d510`), the tweaks built, then merged on his word (final sweep 4870 / 0).
   * ✅ Fixed on the way: the visual comparator looked only at alpha (only size changes failed) and now compares colour;
     an open Printer Status no longer pushes the command deck off short windows; the search filters keep their values
     at the bigger sizes; the question dialogs fit a phone.

@@ -1752,6 +1752,25 @@ body {
     flex-direction: column;
     gap: 0;
     padding-top: 0.4rem;
+    /* A size container: the printers' step in under the title (below)
+       depends on the body's width. */
+    container: fcc-ps-body / inline-size;
+}
+/* The printers step in under the title (Derek, 2026-10-24: "indenting the
+   rows in just a bit so it reads more like a sub set, and less like an
+   ordered list"). Each printer, its ▲▼ included, starts 1.5rem in, under the
+   title's first letter (the ▾ before the title is 1rem wide and 0.5rem from
+   it), so the printers read as the title's own and the arrows no longer sit
+   at the edge like a list's numbers. The divider between two printers steps
+   in with them. Only where the body is 23rem wide or more (from 400 px at
+   Standard): a phone narrower than that keeps its printers at the edge, as
+   before, because there the step would cost the second tile on each line
+   (two tiles beside each other are 21.5rem). In rem, so the step comes at the
+   same point at every Text size. */
+@container fcc-ps-body (min-width: 23rem) {
+    .fcc-ps-row {
+        margin-left: 1.5rem;
+    }
 }
 /* Printer Status never pushes the command deck off the screen (readability
    review, 2026-10-21). The dashboard doesn't scroll, so every pixel the open
@@ -1774,18 +1793,24 @@ body {
     max-height: min(45vh, max(5rem, calc(100vh - 260px - 10.5rem)));
     overflow-y: auto;
 }
-/* A printer (Derek, 2026-10-23: the name on top, the tiles under it): a
-   header line, then the tiles, in a two-column grid. Column 1 holds the ▲▼
-   arrows; column 2 the name, its state badge and the 🛑 review count (the
-   header line, .fcc-ps-head), and under them the tiles, so the tiles start
-   under the name's first letter, a step in from the arrows, and read as the
-   printer's own. minmax(0, 1fr): neither a long name nor a line of tiles can
-   widen the column past the row. */
+/* A printer (Derek, 2026-10-23: the name on top, the tiles under it;
+   2026-10-24: "the printer name, then under it, the status and review ...
+   an information area about state and issues, then the toolheads"): a grid
+   of two columns, the ▲▼ arrows and the printer's own column, which holds
+   three lines: the name (.fcc-ps-name), the info line under it
+   (.fcc-ps-info: the state badge, then the 🛑 review count) and the tiles.
+   All three start at the same place, a step in from the arrows, so the name
+   comes first and the state and the tiles read as its own; the names, the
+   states, the counts and the tiles each line up down the page. The lines
+   are spaced by their own margins (the info line close under the name, the
+   tiles 0.35rem under the info line), not by a row gap. minmax(0, 1fr):
+   neither a long name nor a line of tiles can widen the column past the
+   row. */
 .fcc-ps-row {
     display: grid;
     grid-template-columns: max-content minmax(0, 1fr);
     column-gap: 0.5rem;
-    row-gap: 0.35rem;
+    row-gap: 0;
     align-items: center;
     /* Horizontal divider between printers so the eye can quickly trace
        which toolheads belong to which printer name above them. */
@@ -1799,36 +1824,92 @@ body {
 .fcc-ps-row:last-child {
     padding-bottom: 0;
 }
-/* The header line: the name, then the state badge, then the 🛑 N count
-   (cancel_review.js appends it here). One line at every width: the name
-   gives way and ends in "…" (its full text is its title), the badge and the
-   count never shrink or wrap, so they stay on the name's line and the dot
-   never parts from its number. */
-.fcc-ps-head {
+/* The name's line: one line at every width. A name too long for it ends in
+   "…" (its full text is its title), so it never wraps onto the info line or
+   reaches the tiles. */
+.fcc-ps-name {
     grid-column: 2;
     grid-row: 1;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    min-width: 0;
-}
-.fcc-ps-name {
+    /* As wide as its text, never past its column (then the "…"): its title,
+       the full name, shows over the name and not over the empty line after
+       it. Its left edge is the column's either way. */
+    justify-self: start;
+    max-width: 100%;
     font-size: 1rem;
     /* 1.3, not 1.2: overflow is hidden for the "…", and at 1.2 the line's
        own box can cut a descender ("g", "y") or the top of an emoji. */
     line-height: 1.3;
-    flex: 0 1 auto;
     min-width: 0;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
-.fcc-ps-head .fcc-ps-state {
+/* The info line, under the name (Derek, 2026-10-24: "an information area
+   about state and issues"): the state badge, then the 🛑 N review count
+   (cancel_review.js puts it in its slot), each in a slot of the same width
+   on every printer, so the states and the counts line up down the page and
+   a review coming or going moves nothing. Anything more about a printer's
+   state or its issues goes here too, after the count, in a slot of its own
+   (flex: none, a fixed width where it should line up). The slots never
+   shrink; the line wraps only if a later item doesn't fit beside them (the
+   badge and the count take 8rem of the narrowest phone's 18rem). */
+.fcc-ps-info {
+    grid-column: 2;
+    grid-row: 2;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.25rem 0.5rem;
+    min-width: 0;
+    margin-top: 0.15rem;
+}
+/* The state badge's slot: as wide as ATTENTION, the widest state PrusaLink's
+   status reports (its ::after, hidden, is that word in the badge's own font
+   and padding: the rule below the badge's), so every printer's badge is the
+   same width, its text centred, and every count starts at the same place
+   whatever the state. A state wider still (OPERATIONAL, from the older
+   /api/printer some firmware answers instead) widens its own slot rather
+   than being cut. A printer whose state isn't known yet keeps the empty
+   slot, so its count lines up too. */
+.fcc-ps-state-slot {
     flex: none;
-    align-self: center;
+    display: grid;
+    align-items: center;
+}
+.fcc-ps-state-slot > .fcc-ps-state,
+.fcc-ps-state-slot::after {
+    grid-area: 1 / 1;
+}
+.fcc-ps-state-slot > .fcc-ps-state {
+    text-align: center;
+}
+.fcc-ps-state-slot::after {
+    content: "ATTENTION";
+    visibility: hidden;
+}
+/* The 🛑 N review count's slot: as wide as "🛑 88" in the count's own font
+   (its ::after, hidden), with or without reviews, so a review coming or
+   going never moves what follows it on the info line. A count of 100 or
+   more widens its own slot rather than being cut. */
+.fcc-ps-count {
+    flex: none;
+    display: grid;
+    align-items: center;
+    justify-items: start;
+    font-size: var(--fcc-fs-label);
+    font-weight: bold;
+}
+.fcc-ps-count > *,
+.fcc-ps-count::after {
+    grid-area: 1 / 1;
+}
+.fcc-ps-count::after {
+    content: "\1F6D1  88";
+    visibility: hidden;
+    white-space: nowrap;
 }
 /* The cancelled-print review count, "🛑 N" (cancel_review.js): never split
-   between its dot and its number, on the header line and in the collapsed
+   between its dot and its number, on the info line and in the collapsed
    strip (where it keeps the 6 px it always had from the printer's chips). */
 .fcc-cr-chip {
     white-space: nowrap;
@@ -1837,10 +1918,14 @@ body {
 .fcc-ps-printer-group .fcc-cr-chip {
     margin-left: 6px;
 }
-/* L56 — printer-state badge sits after the printer name. Colors mirror
-   the dashboard status-light convention: green=active, amber=paused,
-   muted=idle, red=attention, dark-gray=offline. */
-.fcc-ps-state {
+/* L56 — printer-state badge, first on the printer's info line, under its
+   name (2026-10-24; it followed the name on the name's line before). Colors
+   mirror the dashboard status-light
+   convention: green=active, amber=paused, muted=idle, red=attention,
+   dark-gray=offline. The state slot's hidden ATTENTION shares this rule, so
+   the slot is exactly as wide as that badge would be. */
+.fcc-ps-state,
+.fcc-ps-state-slot::after {
     display: inline-block;
     align-self: flex-start;
     font-size: var(--fcc-fs-label);
@@ -1866,13 +1951,13 @@ body {
 .fcc-ps-state-idle     { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.6); border-color: rgba(255,255,255,0.18); }
 .fcc-ps-state-attention{ background: rgba(239,68,68,0.18); color: #ff6b6b; border-color: rgba(255,107,107,0.4); }
 .fcc-ps-state-offline  { background: rgba(0,0,0,0.35); color: rgba(255,255,255,0.50); border-color: rgba(255,255,255,0.15); }
-/* The ▲▼ pair, ▲ over ▼, at the start of the header line, centred on it. The
-   pair never makes the line taller (review, 2026-10-23: a printer between two
-   others shows both arrows, and its header line grew to their height, so its
+/* The ▲▼ pair, ▲ over ▼, before the name, centred on the name's line. The
+   pair never makes that line taller (review, 2026-10-23: a printer between
+   two others shows both arrows, and its line grew to their height, so its
    tiles sat 6.6 px lower under its name than the others'): the stack is 0
-   tall on the line's centre and the arrows stand out of it evenly, above into
-   the row's 0.5rem top padding and below into the gap over the tiles, which
-   both have room for them (0.875rem each, 1px apart: 4.1 px past the 20.8 px
+   tall on the line's centre and the arrows stand out of it evenly, above
+   into the row's 0.5rem top padding and below beside the info line, where
+   their column is empty (0.875rem each, 1px apart: 4.1 px past the 20.8 px
    line at Standard, 3.9 px clear of the divider above). */
 .fcc-ps-reorder-stack {
     grid-column: 1;
@@ -1912,23 +1997,23 @@ body {
 .fcc-ps-reorder-placeholder {
     display: none;
 }
-/* The tile area: under the header line, in the name's column. */
+/* The tile area: under the info line, in the printer's column, so the tiles
+   start under the name's first letter. */
 .fcc-ps-toolheads {
     grid-column: 2;
-    grid-row: 2;
+    grid-row: 3;
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
+    margin-top: 0.35rem;
 }
-/* A phone where the step in leaves room for one tile on a line and the row's
-   whole width has room for two (review, 2026-10-23: at Standard a window 376
-   to 401 px wide, an iPhone 12 to 16): the tiles start at the row's edge,
-   under the arrows, two to a line instead of one. _balanceRows decides. The
-   gap over them is 0.5rem there, so a pair of arrows standing out under the
-   header line stays as clear of the tiles as it is of the divider above. */
-.fcc-ps-row.fcc-ps-edge {
-    row-gap: 0.5rem;
-}
+/* A phone, where fewer than two tiles fit on a line under the name and more
+   fit across the row's whole width (review, 2026-10-23; at Standard every
+   window from 376 to 425 px since the info line went under the name,
+   2026-10-24: an iPhone 12 to 16 is 390 or 393 px, a Pixel or a Galaxy 412):
+   the tiles start at the row's edge, under the arrows, two to a line instead
+   of one. _balanceRows decides. The name and the info line stay where they
+   are, between the arrows and the tiles. */
 .fcc-ps-row.fcc-ps-edge > .fcc-ps-toolheads {
     grid-column: 1 / -1;
 }
@@ -1946,6 +2031,13 @@ body {
     display: flex;
     flex-direction: column;
     width: 10.5rem;      /* 168 px at Standard; a tile grows with its text */
+    /* Never narrower than that, not even before _balanceRows lays the rows
+       out: it measures a tile, and a tile shrunk to fit the room under the
+       name counted one that didn't fit (on a phone, while the state and the
+       count sat before the name; since the info line went under the name,
+       2026-10-24, there is room for a whole tile there on any window from
+       226 px, so this only guards a narrower room). */
+    flex: none;
     /* No outer fill — let the colored body inside dominate the block.
        The dark gray frame this used to have wasn't carrying any meaning
        and just shrank the visible color area. Border alone defines edges. */
@@ -2014,20 +2106,27 @@ body {
     color: rgba(255,255,255,0.6);
     text-align: center;
 }
+/* A loaded tile's name, weight and material (ui_builder.js, mode
+   'printer-status'). No colour dot before the name since 2026-10-24 (Derek:
+   it came "pretty close if not sometimes entering the border"; the band
+   above shows the colour). The name and the material line start 6 px in,
+   the band's own inset, so they sit under the head's label and clear of the
+   border; the name runs up to the weight, which keeps its place at the
+   right. Kept by tests/test_printer_status_tile_name.py. */
 .fcc-ps-chip {
     font-size: var(--fcc-fs-small);
+    padding-left: 6px;
 }
 /* 30.4 — compact material line under the color name on the expanded
-   printer-status panel. Indented past the 12px swatch + gap so it aligns
-   under the color name; muted but dark-theme readable. Line height 1.2
-   (2026-10-22): at 1.1 the line's own box (text-truncate clips to it) cut a
-   descender ("g", "y") at Large. */
+   printer-status panel, starting under the name (it was indented past the
+   dot); muted but dark-theme readable. Line height 1.2 (2026-10-22): at 1.1
+   the line's own box (text-truncate clips to it) cut a descender ("g", "y")
+   at Large. */
 .fcc-ps-chip-mat {
     font-size: var(--fcc-fs-small);
     line-height: 1.2;
     color: rgba(255,255,255,0.6);
     margin-top: 1px;
-    padding-left: 20px;
 }
 /* Default (expanded) view: per-printer rows with full schematic blocks;
    the inline header chip strip is hidden. */

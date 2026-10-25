@@ -390,12 +390,13 @@ BIG_FLEET = {"ZZ Big %s" % p: {"state": {"state": "IDLE", "is_active": False},
 
 
 # Each printer row's tiles (Derek, 2026-10-22: even rows; 2026-10-23: under
-# the name, the name on a header line): the count on each line of tiles,
-# whether every tile sits under the header line and every line starts under
-# the name's first letter, and what the layout recorded (data-rows).
+# the name; 2026-10-24: under the info line under the name): the count on
+# each line of tiles, whether every tile sits under the name and the info
+# line and every line starts under the name's first letter, and what the
+# layout recorded (data-rows).
 PS_ROWS_JS = r"""() => Array.from(document.querySelectorAll('#printer-status-widget .fcc-ps-row')).map((row) => {
     const nameR = row.querySelector('.fcc-ps-name').getBoundingClientRect();
-    const header = Array.from(row.querySelectorAll('.fcc-ps-reorder, .fcc-ps-name, .fcc-ps-state, .fcc-cr-chip'))
+    const header = Array.from(row.querySelectorAll('.fcc-ps-reorder, .fcc-ps-name, .fcc-ps-info, .fcc-ps-state, .fcc-cr-chip'))
         .map((el) => el.getBoundingClientRect()).filter((r) => r.height > 0);
     const headerBottom = Math.max(...header.map((r) => r.bottom));
     const tiles = Array.from(row.querySelectorAll('.fcc-ps-th')).map((t) => t.getBoundingClientRect());
@@ -413,7 +414,7 @@ PS_ROWS_JS = r"""() => Array.from(document.querySelectorAll('#printer-status-wid
 def _uneven(rows: list) -> list:
     """The printer rows whose tiles aren't in even rows under the name: the
     lines differ by more than one, a longer line follows a shorter one, one
-    tile sits alone under fuller lines, a tile isn't under the header line or
+    tile sits alone under fuller lines, a tile isn't under the info line or
     a line doesn't start under the name, or the lines drawn aren't the ones the
     layout recorded (review, 2026-10-22)."""
     bad = []
@@ -438,8 +439,9 @@ def test_printer_status_leaves_the_deck_and_the_buffer_on_screen(page: Page, bas
     the open widget scrolls inside itself, so the whole deck and a 7rem strip
     of the log and the buffer stay on screen. Checked on a fleet bigger than
     the window (BIG_FLEET), so the limit is always in play. Since 2026-10-22
-    each printer's 8 heads are 4 + 4 (they were 7 + 1, or a line of 8), and
-    since 2026-10-23 under the name, on its header line."""
+    each printer's 8 heads are 4 + 4 (they were 7 + 1, or a line of 8), since
+    2026-10-23 under the name, and since 2026-10-24 under the info line under
+    the name."""
     from conftest import stub_printer_fleet
     _read_only(page)
     stub_printer_fleet(page, BIG_FLEET)
@@ -467,8 +469,9 @@ def test_on_a_tall_window_printer_status_keeps_its_room(page: Page, base_url: st
     2026-10-23), more than the open widget needs at any size, so nothing
     changes there.
     And dev's own fleet sits in even rows under each name (2026-10-22: the
-    INDX's 8 heads never 7 + 1; 2026-10-23: one row at Small and Standard,
-    4 + 4 at Large and Extra Large, under the name on its header line)."""
+    INDX's 8 heads never 7 + 1; 2026-10-23: under the name on its header
+    line; 2026-10-24: 4 + 4 at every size, the name starting past the state
+    and the review count), the open widget still well inside the limit."""
     _read_only(page)
     _store(page, name)
     _load_with_printers(page, base_url)

@@ -184,16 +184,15 @@
 > Ordinary backlog items, not hands-on work; most name the group that owns them. This heading was added on
 > 2026-10-19 so they stop reading as part of ⏸️ PENDING DEREK above, which had no closing heading.
 
-* **🖨️ Printer Status follow-ups (Derek, 2026-10-24, approving the name-on-top build).** (a) Indent the printers and
-  their ▲▼ a little under the "Printer Status" title, so they read "more like a sub set, and less like an ordered
-  list". (b) Put each printer's state badge and 🛑 review count BEFORE its name, so the states line up down the left:
-  "more of an easy glance at what's going on with each printer ... so your eyes don't have to dart all over the place
-  to find out which printer is idle, printing, or has an error". (c) Pre-existing, found by the build's review:
-  `_renderRow`'s `data-printer` holds the JS-escaped name, so a printer named with an apostrophe ("Derek's XL") never
-  gets its 🛑 count; the scan accumulator in `scripts.html` cancels Enter on every focused dashboard button except the
-  ▲▼ (fixed for those only); on short windows (1280×720, 1366×768 at Large) the open widget still scrolls. (d) Long
-  term: a customizable layout (tiles per row, style) for printers with many spools ("with AMS units on the bambu side,
-  things could get crazy"). **Standalone.**
+* **🖨️ Printer Status follow-ups (Derek, 2026-10-24).** Done before the merge: the printers step in under the title,
+  each one's name comes first with its state and 🛑 count on an info line under it, the tiles lost their colour dot,
+  and a printer named with an apostrophe gets its count. Left: (a) **a richer hover card for a tile** (a small spool
+  card, easier to read, especially in collapsed mode), and **a tap that opens the same card on a touchscreen**, where
+  there is no mouse to hover ("how a user who doesn't have a mouse could see that detail, that gets truncated"): design
+  it with the phone view, sample first; (b) the scan accumulator in `scripts.html` cancels Enter on every focused
+  dashboard button except the ▲▼; (c) on short windows (1280×800 at Large, 1366×768 at Small / Standard) the open
+  widget scrolls inside itself; (d) long term, a customizable layout (tiles per row, style) for printers with many
+  spools ("with AMS units on the bambu side, things could get crazy"). **Standalone.**
 * **🐞 Cancelled prints are under-charged because the cancel parser skips arc moves (found 2026-10-23).** FCC's
   prefix parser (the cancel / M73 path) walks the G-code's extrusion but ignores G2 / G3 arcs. Counting them takes
   Derek's raccoon INDX print (whole file) from 48.43 g to 52.26 g against the slicer footer's 52.27 g, so the "~7%

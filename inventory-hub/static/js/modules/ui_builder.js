@@ -292,15 +292,18 @@ const SpoolCardBuilder = {
         }
         else if (mode === 'printer-status') {
             // Printer Status widget variant — passive, single-line "chip"
-            // showing a color swatch + filament name + weight metric. No
-            // actions; the click handler is owned by the parent SVG/row in
+            // showing the filament name + weight metric. No actions; the
+            // click handler is owned by the parent SVG/row in
             // inv_printer_status.js so the whole toolhead block (chip +
             // schematic) is a single tap target. Returns plain HTML — no
             // wrapper div with cursor or tabindex of its own.
-            const swatch = window.makeSwatchHtml(item.color, item.color_direction, {
-                size: 12,
-                borderColor: 'rgba(255,255,255,0.4)',
-            });
+            // No colour dot before the name (Derek, 2026-10-24: it sat "pretty
+            // close if not sometimes entering the border for the toolhead.
+            // Also, Names are a bit tight in there"): the band across the
+            // tile's top already shows the colour, so the name has the dot's
+            // room, starting under the head's label (global.css .fcc-ps-chip),
+            // and runs up to the weight. The collapsed strip's chips keep
+            // their dots (inv_printer_status.js _renderToolheadCompact).
             const weightStr = (item.remaining_weight !== undefined && item.remaining_weight !== null)
                 ? `${Math.round(item.remaining_weight)}g`
                 : (item.remaining != null && item.remaining !== '---' ? `${Math.round(item.remaining)}g` : '---');
@@ -327,8 +330,7 @@ const SpoolCardBuilder = {
             return `
                 <div class="fcc-ps-chip" style="font-size:0.85rem; line-height:1.2;">
                     <div class="d-flex align-items-center gap-2">
-                        ${swatch}
-                        <span class="text-light fw-bold text-truncate" style="max-width:8.75rem;">${compactName}</span>
+                        <span class="text-light fw-bold text-truncate">${compactName}</span>
                         <span class="ms-auto fw-bold" style="color:${weightColor};">${weightStr}</span>
                     </div>
                     ${matLine}
