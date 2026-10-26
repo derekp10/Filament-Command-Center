@@ -339,11 +339,44 @@
             </div>`;
     }
 
+    // Why a progress_unknown review couldn't measure its print (the record's
+    // `unmeasured_reason`, print_deduct._UNMEASURED_WHY's keys; Group 56.3). A
+    // record from before 56.3 has none and was always "replaced".
+    function unmeasuredBanner(rec) {
+        const weigh = `<b>Weigh the spool</b> and adjust it directly, or <b>Discard</b> this review.`;
+        switch (rec.unmeasured_reason) {
+            case 'no_footer':
+                return `FCC couldn't measure how much filament this print used — <b>its file's
+                   filament footer couldn't be read</b> (a file from another slicer, or a damaged
+                   one), so nothing was deducted. ${weigh}`;
+            case 'empty_footer':
+                return `FCC couldn't measure how much filament this print used — <b>its file's
+                   filament footer lists no filament</b>, so nothing was deducted. If it really
+                   used none, <b>Discard</b> this review; otherwise <b>weigh the spool</b> and adjust
+                   it directly.`;
+            case 'unreadable_moves':
+                return `FCC couldn't measure how much filament this print used — <b>it couldn't
+                   read the moves in the print's file</b> (its footer lists filament, but FCC found
+                   no extrusion it could count), so nothing was deducted. ${weigh}`;
+            case 'no_download':
+                return `FCC couldn't measure how much filament this print used — <b>it couldn't
+                   download or read the print's file</b> from the printer (it may have been deleted,
+                   or stayed locked on the printer's screen), so nothing was deducted. ${weigh}`;
+            case 'unsampled':
+                return `FCC couldn't measure how much filament this print used — <b>it ended before
+                   FCC read its progress</b> (the printer reported none while FCC watched, or FCC
+                   restarted during it). ${weigh}`;
+            default:
+                return `FCC couldn't measure how much filament this print used — it was <b>replaced
+                   by a new print before a progress reading</b>. ${weigh}`;
+        }
+    }
+
     // Unresolved reviews (2026-06-13): usage couldn't be finalized at print-end.
     //   no_spool         — real grams computed, but NO spool was bound to the
     //                      toolhead. Apply RE-RESOLVES to whatever's bound now.
-    //   progress_unknown — the print was replaced before a progress reading, so
-    //                      its usage is unmeasurable. Weigh + adjust, or Discard.
+    //   progress_unknown — its usage is unmeasurable (unmeasuredBanner says why).
+    //                      Weigh + adjust, or Discard.
     // Neither carries per-spool nudge rows; both are non-destructive until acted on.
     function unresolvedCardHtml(rec, kind) {
         const total = fmtG(rec.total_grams);
@@ -361,9 +394,7 @@
                so nothing was deducted. <b>Pick the spool it really used</b> for each tool — a print
                can run on a different head than it was sliced for — then <b>Apply</b>. Or
                <b>Discard</b> if you've already trued it up.`
-            : `FCC couldn't measure how much filament this print used — it was <b>replaced by a new
-               print before a progress reading</b>. <b>Weigh the spool</b> and adjust it directly, or
-               <b>Discard</b> this review.`;
+            : unmeasuredBanner(rec);
         const applyBtn = isNoSpool
             ? `<button type="button" class="btn btn-sm btn-success fw-bold fcc-cr-confirm">Apply to the picked spool(s)</button>`
             : '';

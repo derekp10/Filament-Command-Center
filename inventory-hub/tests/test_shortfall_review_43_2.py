@@ -228,8 +228,12 @@ def test_a_crash_between_the_card_and_the_ledger_does_not_charge_again(logs):
         return real(printer, job, **meta)
 
     with patch.object(print_deduct_ledger, "record_deduct", side_effect=boom):
-        with pytest.raises(RuntimeError):
+        # Group 56 (review round 3): a raise after the spool writes comes out as
+        # CompletionMayHaveCharged, from the original error, so the deferred-fetch
+        # loop never retries it blind.
+        with pytest.raises(print_deduct.CompletionMayHaveCharged) as raised:
             _complete(sm, {0: 61.32})
+    assert isinstance(raised.value.__cause__, RuntimeError)
     assert _pending(CARD) is not None and not print_deduct_ledger.was_deducted(INDX, "1104")
     patches = len(sm.patches)
     res = _complete(sm, {0: 61.32})

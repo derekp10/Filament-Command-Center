@@ -1,5 +1,39 @@
 # **Done**
 
+* **[2026-10-26 — 🎯 Group 56 Deduct Accuracy (56.1–56.5) → `feature/group-56-deduct-accuracy` (merged to `dev`)]** — built overnight on Derek's "Try and get as much done as possible" ([task file](docs/agent_docs/tasks/56-deduct-accuracy.md), "Build notes"). Four reviews, every confirmed finding fixed: one independent agent on the build (`4555a01`), `wf_80c46b1e-f8e` (5 lenses + 1 batched skeptic: 29 findings, none red; `030a618`), `wf_4755954b-200` (2 + 1: 21, one orange; `9721591`) and `wf_8bbf3213-810` (1 + 1: 4, two yellow; `747f348`). Full sweeps 4861, 4886, 4898 and 4903 passed, 0 failed (load 1.05–1.06×). 56.6 (re-mapped prints) and 56.7 (firmware 8.0 checks) stay open, gated on hardware; `main` held.
+
+  * ✅ **Cancelled prints were under-charged because the cancel parser skipped arc moves (found 2026-10-23; the
+    "~7% BELOW the slicer footer" item of 2026-10-08 folded in).** The walk counted E only on G0 / G1, so every
+    arc-fitted print lost 4–9% of a tool's filament: the raccoon INDX file walked to 48.43 g against its 52.27 g
+    footer, and a cancel at 50% was charged 21.98 g. Arcs (and zero-padded `G01`–`G03`) now count: 52.26 g, and the
+    same cancel charges 23.80 g. Job 1078's run-out split, re-run on its real file: 83.19 g against the scale's
+    83.2 g (83.28 g before). Committed a trimmed fixture from the real capture
+    (`tests/fixtures/indx_raccoon_trimmed.gcode`, 170 KB, byte-exact).
+  * ✅ **One pass, scaled to the footer, clamped, and a 2% warning.** Each tool's charge is the share of its own
+    whole-file walk reached × its footer grams, never past the footer; the run-out split measures all its
+    boundaries in the same pass. A charged head whose walk drifts more than 2% (and 0.1 g) from its footer, or a
+    footer tool the walk can't see at all, gets one WARNING naming the head.
+  * ✅ **A completed print whose footer can't be read opens a review instead of recording 0 g**, and so do a
+    completion whose file couldn't be downloaded within the 72 h retry window and an ambiguous end FCC can't
+    measure (it may have been a completion); the card and the log say which. A completion is never charged while
+    a review holds its job.
+  * ✅ **Older Activity Log lines put a print's filename into the page unescaped (found 2026-10-19).** Every deduct and
+    monitor line (and the boot re-surface) now escapes the filename, the exception text, Spoolman's error body and
+    the review's refusal reasons, kept by an AST canary.
+  * ✅ **The `fb_url` slice:** the boot seed that GETs the decommissioned FilaBridge is gone (a check that only names
+    Printer rows with no PrusaLink IP replaced it), and the shortfall card reads the heads on `read_heads=`. The
+    rest of the vestigial plumbing stays parked (buglist).
+  * ✅ **Found by the reviews on the same path (pre-existing):** a queued completion whose ledger write failed after
+    its spool writes was charged again on every IDLE tick: its entry is now stamped `charging_since` right before
+    the first spool write, so a disk FCC can't write charges nothing and no later tick or process charges a stamped
+    job again (one ERROR line says so); a swap review that couldn't be written fell through to charging the whole
+    footer to the end spool (now it raises before any charge and is retried); a queued job with no job id was
+    dropped silently after promising a deduct; the 🛑 review store's 100-entry cap dropped its oldest review
+    silently (now an ERROR line names it).
+  * Follow-ups filed (standalone): other modules' unescaped error and name lines; a `.bgcode` FCC can't decode is
+    re-downloaded every 30 s for 72 h. Past INDX cancels: left as they are (the default); Claude can list them from
+    prod's ledger if Derek wants.
+
 * **[2026-10-25 — 🚢 Released: `dev` `09b395a` → `main` `97fcf7c`]** — on Derek's word ("If it's done and we completed the larger group goals for this multipart coding session then we can move to prod"): Groups 51 / 48 / 49 / 52 and their follow-ups, the ⚠️ Low stock list's Out and Excluded tabs, Spoolman 0.27 clears, and the readability build (text sizes, the Text size setting, QR codes, Printer Status). One conflict, `routes_print_queue.py`, resolved to dev's version (the same backlog fix as `73e456d` plus Group 52's count). Prod deploy: Derek's TrueNAS update.
 
 * **[2026-10-21 → 24 — 🔠 Readability: the text-size rule, a Text size setting, QR codes that match and sit under their buttons, Printer Status in rows → `feat/readability-2026-10-21` (merged to `dev` 2026-10-24)]** — Derek's 2026-10-21 text-size walkthrough, built by `wf_16904a49-dbb` (7 agents: the rule, the setting, a 3 + 1 review, a fixer; 13 review fixes), then the changes from his picture walks (2026-10-22: all five items approved with three changes; 2026-10-23/24) by `wf_35fd892d-f66`, `wf_71b589b9-90b` and `wf_8be49633-0d1`, each reviewed and fixed. Full sweeps: 4646 / 1 (a real print on the XL), 4731 / 0, 4806 / 2 (both the structural scan on a deliberately zero-high box, `a901b38`).

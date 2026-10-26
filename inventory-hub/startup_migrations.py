@@ -11,6 +11,7 @@ never prevent boot.
 
 Python 3.9 runtime (the container image) — keep syntax 3.9-safe.
 """
+import html
 import os
 
 import state  # type: ignore
@@ -282,11 +283,19 @@ def resurface_pending_cancel_reviews():
     try:
         _pending_reviews = cancel_review_store.list_pending()
         for _pr in _pending_reviews:
+            # The Activity Log is HTML: filenames are escaped (Group 56.4).
             if _pr.get('kind') == 'shortfall':
                 # Group 43.2: grams no spool took, not a cancelled print.
                 _msg = (f"🛑 Uncharged grams from a previous session: {_pr.get('printer_name')} — "
-                        f"{_pr.get('total_grams')}g of '{_pr.get('filename')}' went to no spool. "
+                        f"{_pr.get('total_grams')}g of '{html.escape(str(_pr.get('filename')), quote=False)}' "
+                        f"went to no spool. "
                         f"Review to pick the spool that took them, or Discard.")
+            elif _pr.get('kind') == 'progress_unknown':
+                # Group 56.3: nothing was measured, so there are no grams to name.
+                _msg = (f"🛑 Unmeasured print from a previous session: {_pr.get('printer_name')} — "
+                        f"couldn't measure how much '{html.escape(str(_pr.get('filename')), quote=False)}' "
+                        f"used. Review to weigh the spool, "
+                        f"or Discard.")
             else:
                 _msg = (f"🛑 Pending cancel review from a previous session: {_pr.get('printer_name')} "
                         f"— {_pr.get('total_grams')}g across {len(_pr.get('spools', []))} spool(s). "
