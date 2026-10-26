@@ -354,10 +354,18 @@
                    filament footer lists no filament</b>, so nothing was deducted. If it really
                    used none, <b>Discard</b> this review; otherwise <b>weigh the spool</b> and adjust
                    it directly.`;
+            case 'unreadable_moves':
+                return `FCC couldn't measure how much filament this print used — <b>it couldn't
+                   read the moves in the print's file</b> (its footer lists filament, but FCC found
+                   no extrusion it could count), so nothing was deducted. ${weigh}`;
             case 'no_download':
                 return `FCC couldn't measure how much filament this print used — <b>it couldn't
-                   download the print's file</b> from the printer (it may have been deleted), so
-                   nothing was deducted. ${weigh}`;
+                   download or read the print's file</b> from the printer (it may have been deleted,
+                   or stayed locked on the printer's screen), so nothing was deducted. ${weigh}`;
+            case 'unsampled':
+                return `FCC couldn't measure how much filament this print used — <b>it ended before
+                   FCC read its progress</b> (the printer reported none while FCC watched, or FCC
+                   restarted during it). ${weigh}`;
             default:
                 return `FCC couldn't measure how much filament this print used — it was <b>replaced
                    by a new print before a progress reading</b>. ${weigh}`;

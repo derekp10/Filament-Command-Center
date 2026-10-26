@@ -210,7 +210,13 @@ def test_full_raccoon_capture_walks_to_its_footer():
     for t, want in measured["footer"].items():
         assert abs(measured["whole"][t] - want) < 0.1, (t, measured["whole"])
     assert measured["partials"][1] == measured["footer"]
-    assert sum(measured["partials"][0].values()) == pytest.approx(23.80, abs=0.05)
+    half = measured["partials"][0]
+    assert sum(half.values()) == pytest.approx(23.80, abs=0.05)
+    # Per tool too: without arcs, scaling alone would move the TOTAL only ~0.08 g
+    # (T0 -0.19, T1 +0.22, T2 -0.11), so the sum can't pin arc counting by itself.
+    assert half[0] == pytest.approx(7.58, abs=0.02), half
+    assert half[1] == pytest.approx(11.615, abs=0.02), half
+    assert half[2] == pytest.approx(4.607, abs=0.02), half
 
 
 # --------------------------------------------------------------------------- #
@@ -264,6 +270,13 @@ def test_core_one_fixture_still_scales_and_clamps():
     vals = [p[1] for p in measured["partials"]]
     assert vals == sorted(vals) and all(v <= 6.35 for v in vals), vals
     assert vals[-1] == pytest.approx(6.35)
+    # The mid-file charge IS the footer's share (~1.4% under the walk's own grams):
+    # this tells scaling from no scaling, which the clamp alone can't.
+    total = len(g.encode("utf-8"))
+    cuts, whole = prusalink_api._walk_extrusion(g, [int(0.5 * total)], 1)
+    expected = round(6.35 * cuts[0][0][1] / whole[0][1], 4)
+    assert vals[1] == expected, (vals[1], expected)
+    assert vals[1] < cuts[0][0][1] * 6.35 / 2130.15 - 0.03, "the unscaled walk would charge more"
 
 
 def test_several_cuts_are_measured_in_one_pass_in_the_order_asked():
@@ -439,7 +452,7 @@ def test_a_completion_given_up_after_the_retry_window_opens_a_review(logs):
     assert print_deduct_ledger.was_deducted("XL", "J-9") is False
     rec = cancel_review_store.get_pending("XL", "J-9")
     assert rec["kind"] == "progress_unknown" and rec["unmeasured_reason"] == "no_download"
-    assert "couldn't download its file" in logs[-1][0]
+    assert "couldn't download or read its file" in logs[-1][0]
 
 
 def test_a_cancel_given_up_after_the_retry_window_still_records_and_warns(logs):
@@ -456,64 +469,105 @@ def test_a_cancel_given_up_after_the_retry_window_still_records_and_warns(logs):
 # --------------------------------------------------------------------------- #
 
 _ESCAPES = {"_esc", "print_deduct._esc", "html.escape"}
+# Outside text besides a filename: an exception, Spoolman's error body and the
+# review's refusal reasons built from them (56.4 and its reviews).
+_FREE_TEXT_NAMES = {"e", "err", "exc", "why"}
 
 
-def _unescaped_filenames(source, name):
-    """(offenders, checked): every f-string field naming a filename inside an
-    add_log_entry message (directly, or through a variable the same function
-    assigns and then logs) must go through an escape."""
+def _is_escape(node):
+    return isinstance(node, ast.Call) and ast.unparse(node.func) in _ESCAPES
+
+
+def _free_text(node):
+    """Whether `node` is outside text: a filename, an exception or error name, or
+    Spoolman's last error body."""
+    if isinstance(node, ast.Name) and (node.id in _FREE_TEXT_NAMES or "filename" in node.id):
+        return True
+    if isinstance(node, (ast.Attribute, ast.Subscript, ast.Call)):
+        text = ast.unparse(node)
+        return "filename" in text or "LAST_SPOOLMAN_ERROR" in text
+    return False
+
+
+def _unescaped_free_text(source, name):
+    """(offenders, checked): every piece of outside text put into an add_log_entry
+    message must go through an escape. A message may be an f-string, a +, % or
+    .format() build, written in the call or held in a variable the same function
+    assigns (=, +=, annotated) and then logs. `checked` counts every escape and
+    every offender seen, so a canary that sees nothing can't pass."""
     tree = ast.parse(source)
     offenders, checked = set(), set()
+
+    def visit(node):
+        if _is_escape(node):
+            checked.add((name, node.lineno, ast.unparse(node)))
+            return
+        if isinstance(node, ast.FormattedValue):
+            visit(node.value)
+            return
+        if _free_text(node):
+            text = ast.unparse(node)
+            checked.add((name, node.lineno, text))
+            offenders.add(f"{name}:{node.lineno}: {text}")
+            return
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+
     for fn in ast.walk(tree):
         if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         assigns = {}
         for node in ast.walk(fn):
             if isinstance(node, ast.Assign):
-                for target in node.targets:
-                    if isinstance(target, ast.Name):
-                        assigns.setdefault(target.id, []).append(node.value)
+                targets, value = node.targets, node.value
+            elif isinstance(node, (ast.AugAssign, ast.AnnAssign)) and node.value is not None:
+                targets, value = [node.target], node.value
+            else:
+                continue
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    assigns.setdefault(target.id, []).append(value)
         for node in ast.walk(fn):
             if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                     and node.func.attr == "add_log_entry" and node.args):
                 continue
             msg = node.args[0]
-            exprs = assigns.get(msg.id, []) if isinstance(msg, ast.Name) else [msg]
-            for expr in exprs:
-                for field in ast.walk(expr):
-                    if not isinstance(field, ast.FormattedValue):
-                        continue
-                    text = ast.unparse(field.value)
-                    if "filename" not in text:
-                        continue
-                    checked.add((name, field.lineno, text))
-                    v = field.value
-                    if not (isinstance(v, ast.Call) and ast.unparse(v.func) in _ESCAPES):
-                        offenders.add(f"{name}:{field.lineno}: {{{text}}}")
+            for expr in (assigns.get(msg.id, []) if isinstance(msg, ast.Name) else [msg]):
+                visit(expr)
     return sorted(offenders), checked
 
 
-def test_the_escape_canary_catches_a_raw_filename():
-    src = ("def f(filename, rec):\n"
-           "    state.add_log_entry(f\"ok '{_esc(filename)}'\", 'INFO')\n"
+def test_the_escape_canary_catches_raw_outside_text():
+    src = ("def f(filename, rec, e, err, why):\n"
+           "    state.add_log_entry(f\"ok '{_esc(filename)}' {_esc(e)}\", 'INFO')\n"
            "    msg = f\"bad '{rec.get('filename')}'\"\n"
            "    state.add_log_entry(msg, 'INFO')\n"
-           "    state.add_log_entry(f\"bad '{filename}'\", 'INFO')\n")
-    offenders, checked = _unescaped_filenames(src, "x.py")
-    assert len(checked) == 3 and len(offenders) == 2, (offenders, checked)
+           "    state.add_log_entry(f\"bad '{filename}' {e}\", 'INFO')\n"
+           "    m2 = 'x'\n"
+           "    m2 += f\"bad {err}\"\n"
+           "    state.add_log_entry(m2, 'INFO')\n"
+           "    state.add_log_entry('bad %s' % filename, 'INFO')\n"
+           "    state.add_log_entry('bad {}'.format(why), 'INFO')\n"
+           "    state.add_log_entry(f\"bad {spoolman_api.LAST_SPOOLMAN_ERROR}\", 'INFO')\n"
+           "    state.add_log_entry(f\"fine {len(rec)} {printer}\", 'INFO')\n")
+    offenders, checked = _unescaped_free_text(src, "x.py")
+    assert len(offenders) == 7, offenders
+    assert len(checked) == 9, checked
 
 
-def test_every_deduct_and_monitor_log_line_escapes_its_filename():
+def test_every_deduct_and_monitor_log_line_escapes_its_outside_text():
     offenders, checked = [], set()
-    for name in ("print_deduct.py", "print_monitor.py", "startup_migrations.py"):
+    for name in ("print_deduct.py", "print_monitor.py", "startup_migrations.py",
+                 "cancel_review_store.py"):
         with open(os.path.join(_HUB, name), encoding="utf-8") as fh:
-            bad, seen = _unescaped_filenames(fh.read(), name)
+            bad, seen = _unescaped_free_text(fh.read(), name)
         offenders += bad
         checked |= seen
-    assert not offenders, "log a filename through _esc(...):\n" + "\n".join(offenders)
-    # 22 in print_deduct (the id-less completion's line too), 10 in print_monitor,
-    # 2 in startup_migrations' boot re-surface
-    assert len(checked) >= 34, len(checked)
+    assert not offenders, "log outside text through _esc(...):\n" + "\n".join(offenders)
+    # Every escape the four modules' log lines carry (filenames, exceptions,
+    # Spoolman errors, refusal reasons): a floor, so a canary that stops seeing
+    # them fails instead of passing on nothing.
+    assert len(checked) >= 52, len(checked)
 
 
 def test_the_boot_re_surface_escapes_and_names_an_unmeasured_print(logs):
@@ -643,3 +697,275 @@ def test_a_completion_deduct_card_still_names_the_heads_at_print_end(logs):
     assert heads.call_count == 1
     card = cancel_review_store.get_pending("XL", "J-3#shortfall")
     assert card["heads_at_end"][0]["toolhead"] == "XL-1"
+
+
+# --------------------------------------------------------------------------- #
+# The second review (wf_80c46b1e-f8e): the warning's edges, the run-out split  #
+# on real and synthetic files, and the flows it found                          #
+# --------------------------------------------------------------------------- #
+
+def test_the_two_percent_line_is_drawn_where_it_says(logs):
+    """2.5% warns, 2.0% doesn't (the threshold is "more than 2%")."""
+    _cancel_usage("M83\nT0\nG1 E10.25\n" + _footer([10], [10]), 1.0, _XL_PM)
+    assert len(_gap_lines(logs)) == 1
+    del logs[:]
+    _cancel_usage("M83\nT0\nG1 E10.2\n" + _footer([10], [10]), 1.0, _XL_PM)
+    assert _gap_lines(logs) == []
+
+
+def test_every_head_over_the_line_gets_its_own_warning(logs):
+    g = "M83\nT0\nG1 E11\nT1\nG1 E11\n" + _footer([10, 10], [10, 10])
+    _cancel_usage(g, 1.0, _XL_PM)
+    lines = [m for m, a in _gap_lines(logs)]
+    assert len(lines) == 2, lines
+    assert lines[0].startswith("⚠️ XL XL-1:") and lines[1].startswith("⚠️ XL XL-2:"), lines
+
+
+def test_a_gap_under_a_tenth_of_a_gram_says_nothing(logs):
+    """A Core One MMU3-profile file walks a fixed ~29 mm (~0.09 g) of start G-code
+    the slicer doesn't count: +4.4% of a 2 g print, and nothing misread."""
+    _cancel_usage("M83\nT0\nG1 E2.088\n" + _footer([2], [2]), 1.0, _XL_PM)
+    assert _gap_lines(logs) == []
+
+
+def test_the_warning_never_raises_into_the_deduct(logs):
+    usage, terminal = _cancel_usage("M83\nT0\nG1 E11\n" + _footer([10], [10]), 1.0,
+                                    {"XL-1": "not a dict"})
+    assert terminal is None and usage == {0: 10.0}
+    assert _gap_lines(logs) == []
+
+
+def test_a_tool_whose_walk_nets_nothing_falls_back_to_the_footer_ratio():
+    """Relative E whose tail nets the tool below zero: there is no share to scale
+    by, so the partial is mm x the footer's g/mm (still clamped)."""
+    head = "M83\nT0\nG1 E2\n"
+    g = head + "G1 E-3\n" + _footer([5], [1.0])          # whole walk -1 mm
+    measured = prusalink_api.measure_filament_usage(g, [(len(head) + 1) / len(g)])
+    assert "0" not in {str(k) for k in measured["whole"]}
+    assert measured["partials"][0][0] == pytest.approx(0.4)   # 2 mm * 0.2 g/mm
+
+
+def _split_file():
+    # Walks 11 mm against a 10 mm / 5 g footer (10% over), one tool.
+    return "M83\nT0\n" + "G1 E1\n" * 11 + _footer([10], [5.0])
+
+
+def _split(progress):
+    text = _split_file()
+    swap = [{"position": 0, "progress": progress, "from_sid": 1, "to_sid": 2, "runout": False}]
+    with patch.object(prusalink_api, "_download_file_bytes", return_value=text.encode()):
+        return print_deduct._compute_swap_split("ip", "k", "f.gcode", {0: 5.0}, swap, {"0": 1},
+                                                path_filament_g=0.0, single_position=True)
+
+
+def test_the_run_out_split_charges_each_spool_its_share_of_the_footer():
+    """Driven through the real compute_segment_usage (only the download stubbed):
+    the swap's cumulative is the footer's share of the walk, not the walk's own
+    grams, and the two spools add up to the footer."""
+    text = _split_file()
+    cut = int(0.5 * len(text.encode()))
+    cuts, whole = prusalink_api._walk_extrusion(text, [cut], 0)
+    share = round(5.0 * cuts[0][0][0] / whole[0][0], 2)
+    rows = _split(0.5)[0]
+    assert rows[0] == {"sid": 1, "grams": share, "segment": 0, "runout": False}, rows
+    assert rows[1]["sid"] == 2 and rows[1]["grams"] == pytest.approx(5.0 - share, abs=0.01), rows
+
+
+def test_a_swap_captured_late_is_split_not_sent_to_the_manual_review():
+    """Deliberate (56.2): past the last move the cumulative is the whole footer,
+    so the run-out spool takes it all; the raw walk (5.5 g against 5 g) used to
+    trip the over-footer guard and drop the split."""
+    split = _split(0.999)
+    assert split is not None
+    assert split[0][0]["grams"] == pytest.approx(5.0) and split[0][1]["grams"] == pytest.approx(0.0)
+
+
+_JOB_1078 = os.path.join(_HUB, "data", "val_1078.gcode")
+
+
+@pytest.mark.skipif(not os.path.isfile(_JOB_1078),
+                    reason="job 1078's decoded G-code is git-ignored dev data (Derek's PC)")
+def test_job_1078s_run_out_split_still_matches_the_scale():
+    """The 2026-07-02 validation: Core One job 1078 ran out, and the scale said
+    the replacement spool used 83.2 g. Fed the true cut (21.7%), the split gave
+    83.28 g before 56.2; with arcs counted and the cumulative scaled to the
+    footer it gives 83.19 g."""
+    g = _read_text(_JOB_1078)
+    measured = prusalink_api.measure_filament_usage(g, [0.217])
+    assert measured["footer"] == {0: 109.76}
+    assert abs(measured["whole"][0] - 109.76) < 0.01, measured["whole"]
+    replacement = 109.76 - measured["partials"][0][0]
+    assert abs(replacement - 83.2) < 0.1, replacement
+
+
+def _isolated_tracker(monkeypatch, tmp_path):
+    import print_tracker_store
+    monkeypatch.setattr(print_tracker_store, "_STORE_PATH", str(tmp_path / "latch.json"))
+    monkeypatch.setattr(print_monitor, "_CANCEL_DEDUCT_RUN_ASYNC", False)
+    monkeypatch.setattr(print_monitor, "_fcc_owns_completion_deduct", lambda: False)
+    monkeypatch.setattr(print_deduct, "_snapshot_active_spools", lambda *a, **k: {})
+    with print_monitor._PRINT_TRACKER_LOCK:
+        print_monitor._PRINT_TRACKER.clear()
+
+
+def _tick(state_name, job):
+    with patch.object(prusalink_api, "get_printer_job", return_value=job):
+        print_monitor._track_print_edge("XL", {"state": state_name}, "http://fb")
+
+
+def test_an_unsampled_end_is_stored_as_unsampled_not_replaced(logs, monkeypatch, tmp_path):
+    """A job latched with no progress that reaches IDLE, and a restart's recovery
+    of one, ended before FCC read its progress; only the job change "replaced"
+    it (the reason rides on the record for the card)."""
+    _isolated_tracker(monkeypatch, tmp_path)
+    try:
+        _tick("PRINTING", {"filename": "f.gcode", "job_id": 7, "progress": None})
+        with patch.object(print_monitor, "_dispatch_ambiguous_edge") as disp:
+            _tick("IDLE", {})
+        assert disp.call_args.kwargs.get("unmeasured_reason") == "unsampled"
+        print_monitor._PRINT_TRACKER.clear()
+        _tick("PRINTING", {"filename": "f.gcode", "job_id": 7, "progress": None})
+        with patch.object(print_monitor, "_dispatch_ambiguous_edge") as disp:
+            _tick("PRINTING", {"filename": "g.gcode", "job_id": 8, "progress": 0.1})
+        assert disp.call_args.kwargs.get("unmeasured_reason", "replaced") == "replaced"
+        entry = {"state": "PRINTING", "job_id": 9, "filename": "f.gcode"}
+        with patch.object(prusalink_api, "get_printer_state", return_value={"state": "IDLE"}), \
+             patch.object(print_monitor, "_dispatch_ambiguous_edge") as disp:
+            print_monitor._recover_one_print_latch("XL", entry, "http://fb")
+        assert disp.call_args.kwargs.get("unmeasured_reason") == "unsampled"
+    finally:
+        print_monitor._PRINT_TRACKER.clear()
+    print_monitor._on_ambiguous_edge("XL", NASTY, "U-1", 0.0, "http://fb", progress_unknown=True,
+                                     unmeasured_reason="unsampled")
+    rec = cancel_review_store.get_pending("XL", "U-1")
+    assert rec["unmeasured_reason"] == "unsampled" and rec["ambiguous"] is True
+    assert any("ended before its progress" in m for m, a, k in logs), logs
+
+
+def _ambiguous_review(gcode, frac=0.99, ambiguous=True, job="A-1"):
+    with patch.object(prusalink_api, "fetch_printer_credentials",
+                      return_value={"ip_address": "1.2.3.4", "api_key": "k"}), \
+         patch.object(print_deduct.locations_db, "get_active_printer_map", return_value=_XL_PM), \
+         patch.object(prusalink_api, "fetch_cancel_gcode",
+                      side_effect=lambda ip, key, fn, f: {"gcode": gcode, "fraction": f}):
+        return print_deduct._create_pending_cancel_review("XL", NASTY, job, frac,
+                                                          fb_url="http://fb", ambiguous=ambiguous)
+
+
+def test_an_ambiguous_end_fcc_cant_measure_asks_instead_of_recording_zero(logs):
+    """FINISHED was missed (the next poll saw IDLE): it may have been a completion,
+    so a file without a footer opens the "couldn't measure" review, as 56.3 does
+    for completions; a true cancel keeps the 0 g entry and its WARNING."""
+    out = _ambiguous_review("M83\nT0\nG1 E5\n; another slicer's file\n")
+    assert out["status"] == "pending_unresolved", out
+    rec = cancel_review_store.get_pending("XL", "A-1")
+    assert rec["unmeasured_reason"] == "no_footer" and rec["ambiguous"] is True
+    assert print_deduct_ledger.was_deducted("XL", "A-1") is False
+    assert not any("non-Prusa slicer" in m for m, a, k in logs), logs   # one line, the review's
+    out = _ambiguous_review("M83\nT0\nG1 E5\n; another slicer's file\n", ambiguous=False, job="C-1")
+    assert out["status"] == "no_usage"
+    assert print_deduct_ledger.was_deducted("XL", "C-1") is True
+    assert any("non-Prusa slicer" in m and NASTY_ESC in m for m, a, k in logs), logs
+
+
+def test_an_ambiguous_end_before_any_extrusion_still_records_zero(logs):
+    head = "M83\nT0\n"
+    g = head + "G1 E5\n" + _footer([5], [1.0])
+    out = _ambiguous_review(g, frac=(len(head) - 1) / len(g))
+    assert out["status"] == "no_usage" and out.get("reason") == "nothing_reached", out
+    assert print_deduct_ledger.was_deducted("XL", "A-1") is True
+
+
+def test_moves_the_walk_cant_read_are_named_not_called_an_early_cancel(logs):
+    """Line-numbered moves the walk doesn't read: the footer lists filament but
+    the walk finds none. A cancel says FCC couldn't read the moves (and warns per
+    head), never "cancelled before any extrusion"; an ambiguous end asks."""
+    g = "N1 M83\nN2 T0\nN3 G1 X10 E5\n" + _footer([5], [1.0])
+    out = _ambiguous_review(g, frac=0.6, ambiguous=False, job="M-1")
+    assert out["status"] == "no_usage" and out.get("reason") == "unreadable_moves", out
+    msgs = [m for m, a, k in logs]
+    assert any("couldn't read this file's moves" in m for m in msgs), msgs
+    assert not any("before any extrusion" in m for m in msgs), msgs
+    assert len(_gap_lines(logs)) == 1
+    out = _ambiguous_review(g, frac=0.6, job="M-2")
+    assert out["status"] == "pending_unresolved"
+    assert cancel_review_store.get_pending("XL", "M-2")["unmeasured_reason"] == "unreadable_moves"
+
+
+def test_the_give_up_honours_the_crash_guard(logs):
+    """A queued completion whose retry charged the spools and stashed an
+    uncharged-grams card, then died before its ledger write, is a deducted job:
+    past the 72 h window it gets its ledger entry, not a card saying nothing was
+    deducted."""
+    cancel_review_store.add_pending({"printer_name": "XL", "job_id": "J-9#shortfall",
+                                     "shortfall_of": "J-9", "kind": "shortfall", "filename": NASTY,
+                                     "spools": [], "total_grams": 15.0})
+    _aged_fetch("complete")
+    with patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=True):
+        print_monitor._process_pending_cancel_fetches({"XL": {"state": "IDLE"}}, "http://fb")
+    assert not cancel_fetch_store.has_pending("XL", "J-9")
+    assert not cancel_review_store.has_pending("XL", "J-9")
+    assert print_deduct_ledger.was_deducted("XL", "J-9") is True
+    assert any("was already deducted" in m for m, a, k in logs), logs
+
+
+def test_a_give_up_while_fcc_doesnt_own_completions_keeps_the_old_record(logs):
+    _aged_fetch("complete")
+    with patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=False):
+        print_monitor._process_pending_cancel_fetches({"XL": {"state": "IDLE"}}, "http://fb")
+    assert print_deduct_ledger.was_deducted("XL", "J-9") is True
+    assert not cancel_review_store.has_pending("XL", "J-9")
+    assert any("Gave up fetching the completed print's gcode" in m for m, a, k in logs), logs
+
+
+def test_a_queued_completion_that_raises_is_dropped_not_charged_again(logs):
+    """The deduct writes the spools before its ledger entry; a raise in between
+    (a full disk) used to leave the entry queued, and every IDLE tick charged the
+    footer again."""
+    cancel_fetch_store.add_pending({
+        "printer_name": "XL", "job_id": "Q-1", "filename": NASTY, "progress": 1.0,
+        "first_seen": time.time(), "kind": "complete", "attempts": 1})
+    calls = []
+
+    def _boom(*a, **k):
+        calls.append(1)
+        raise OSError("[Errno 28] No space left <on device>")
+    with patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=True), \
+         patch.object(print_deduct, "deduct_completed_print", side_effect=_boom):
+        print_monitor._process_pending_cancel_fetches({"XL": {"state": "IDLE"}}, "http://fb")
+        print_monitor._process_pending_cancel_fetches({"XL": {"state": "IDLE"}}, "http://fb")
+    assert len(calls) == 1
+    assert not cancel_fetch_store.has_pending("XL", "Q-1")
+    line = next(m for m, a, k in logs if "Completed-print deduct failed" in m)
+    assert NASTY_ESC in line and "&lt;on device&gt;" in line and "not retried" in line, line
+
+
+def test_a_queued_job_without_an_id_is_dropped_with_a_word(logs):
+    cancel_fetch_store.add_pending({
+        "printer_name": "XL", "job_id": "", "filename": NASTY, "progress": 1.0,
+        "first_seen": time.time(), "kind": "complete", "attempts": 1})
+    print_monitor._process_pending_cancel_fetches({"XL": {"state": "IDLE"}}, "http://fb")
+    assert cancel_fetch_store.list_pending() == []
+    assert any("no job id" in m and NASTY_ESC in m for m, a, k in logs), logs
+
+
+def test_a_completion_held_by_a_review_is_not_charged_behind_it(logs):
+    """A restart's recovery can fire a completion again; while a review holds the
+    job, nothing is charged (its Discard would otherwise overwrite the entry)."""
+    _complete_with("M83\nT0\nG1 E5\n")                    # a no_footer review for J-7
+    with patch.object(print_deduct, "_apply_usage_to_printer",
+                      side_effect=AssertionError("charged behind a pending review")):
+        out = _complete_with("M83\nT0\nG1 E5\n" + _footer([5], [5]))
+    assert out == {"status": "skipped", "reason": "already pending", "job_id": "J-7"}
+    assert print_deduct_ledger.was_deducted("XL", "J-7") is False
+
+
+def test_a_review_the_store_pushes_out_is_reported(logs, monkeypatch):
+    monkeypatch.setattr(cancel_review_store, "_MAX_ENTRIES", 3)
+    for i in range(4):
+        cancel_review_store.add_pending({"printer_name": "XL", "job_id": f"E-{i}", "filename": NASTY,
+                                         "kind": "no_spool", "total_grams": 2.5, "spools": []})
+    assert len(cancel_review_store.list_pending()) == 3
+    assert not cancel_review_store.has_pending("XL", "E-0")
+    line = next(m for m, a, k in logs if "Review list is full" in m)
+    assert "job E-0" in line and "2.50g" in line and NASTY_ESC in line, line

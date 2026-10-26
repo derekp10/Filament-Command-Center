@@ -201,7 +201,7 @@ def _dispatch_completion_edge(printer_name, filename, job_id, fb_url, start_spoo
 
 
 def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
-                       progress_unknown=False):
+                       progress_unknown=False, unmeasured_reason="replaced"):
     """Action when a latched in-progress job reaches IDLE/READY WITHOUT our ever
     sampling the terminal STOPPED or FINISHED (2026-06-13): a fast cancel→restart
     that slipped the poll, or a PRINTING→offline→IDLE printer power-cycle. We
@@ -214,13 +214,16 @@ def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
     progress_unknown=True (the back-to-back job change): we never sampled a real
     progress for this job, so its usage is unmeasurable — _create_pending_cancel_
     review short-circuits to a non-destructive "weigh the spool" review rather than
-    computing a misleading 0g at 0%."""
+    computing a misleading 0g at 0%. `unmeasured_reason` says why for that review:
+    "replaced" (the job change, the default) or "unsampled" (the print reached IDLE,
+    or FCC restarted, before any progress was read; Group 56 review, round 2)."""
     # Instant ack (the ambiguous analogue of the cancel instant-ack), so the user
     # isn't met with silence during the async download.
     try:
         if progress_unknown:
+            how = "ended" if unmeasured_reason == "unsampled" else "was replaced"
             state.add_log_entry(
-                f"❓ Print on {printer_name} ('{print_deduct._esc(filename)}') was replaced before its "
+                f"❓ Print on {printer_name} ('{print_deduct._esc(filename)}') {how} before its "
                 f"progress could be measured — surfacing a review (couldn't measure "
                 f"usage)…", "INFO")
         else:
@@ -234,7 +237,8 @@ def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
     try:
         print_deduct._create_pending_cancel_review(printer_name, filename, job_id, progress,
                                       fb_url=fb_url, ambiguous=True,
-                                      progress_unknown=progress_unknown)
+                                      progress_unknown=progress_unknown,
+                                      unmeasured_reason=unmeasured_reason)
     except Exception as e:
         try:
             state.add_log_entry(
@@ -245,7 +249,7 @@ def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
 
 
 def _dispatch_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
-                             progress_unknown=False):
+                             progress_unknown=False, unmeasured_reason="replaced"):
     """Run the ambiguous-edge action OFF the heartbeat thread (mirrors
     _dispatch_cancel_edge). Synchronous when _CANCEL_DEDUCT_RUN_ASYNC is False
     (tests)."""
@@ -253,11 +257,13 @@ def _dispatch_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
         threading.Thread(
             target=_on_ambiguous_edge,
             args=(printer_name, filename, job_id, progress, fb_url),
-            kwargs={"progress_unknown": progress_unknown},
+            kwargs={"progress_unknown": progress_unknown,
+                    "unmeasured_reason": unmeasured_reason},
             daemon=True).start()
     else:
         _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
-                           progress_unknown=progress_unknown)
+                           progress_unknown=progress_unknown,
+                           unmeasured_reason=unmeasured_reason)
 
 
 def _track_print_edge(printer_name, state_info, fb_url):
@@ -634,7 +640,8 @@ def _track_print_edge(printer_name, state_info, fb_url):
         elif fire['kind'] == 'ambiguous':
             _dispatch_ambiguous_edge(
                 printer_name, fire['filename'], fire['job_id'], fire['progress'],
-                fb_url, progress_unknown=not fire.get('progress_sampled', False))
+                fb_url, progress_unknown=not fire.get('progress_sampled', False),
+                unmeasured_reason="unsampled")
         else:
             _dispatch_cancel_edge(printer_name, fire['filename'], fire['job_id'],
                                   fire['progress'], fb_url)
@@ -778,6 +785,13 @@ def _process_pending_cancel_fetches(states, fb_url):
             swap_log = rec.get("swap_log")  # 22.3(b): ordered mid-print swap history
             if not printer or job_id in (None, ""):
                 cancel_fetch_store.pop_pending(printer, job_id)
+                if printer and filename:
+                    # Its queue line promised a deduct: say why there won't be one
+                    # (no job id to hold it on; Group 56 review, round 2).
+                    state.add_log_entry(
+                        f"⚠️ {printer}: FCC can't hold the deduct for "
+                        f"'{print_deduct._esc(filename)}': the printer gave no job id for it "
+                        f"— weigh the spool to true it up.", "WARNING", "ffaa00")
                 continue
 
             # Resolved elsewhere (confirmed/dismissed, or a review already
@@ -797,10 +811,14 @@ def _process_pending_cancel_fetches(states, fb_url):
                     # Group 56.3: a completion FCC owns is never recorded at 0 g
                     # without a review. The "couldn't measure" card writes no
                     # ledger entry and holds the job (a pending review drops any
-                    # later fetch entry, above) until Discard.
-                    print_deduct._stash_unresolved_review(
-                        printer, filename, job_id, 1.0, usage_map=None,
-                        progress_unknown=True, reason="no_download")
+                    # later fetch entry, above) until Discard. First the crash
+                    # guard the deduct entry points use: a retry that charged the
+                    # spools and stashed an uncharged-grams card, then died before
+                    # its ledger write, is a deducted job, not an unmeasured one.
+                    if not print_deduct._shortfall_card_exists(printer, job_id, filename, 1.0):
+                        print_deduct._stash_unresolved_review(
+                            printer, filename, job_id, 1.0, usage_map=None,
+                            progress_unknown=True, reason="no_download")
                     cancel_fetch_store.pop_pending(printer, job_id)
                     continue
                 if kind == "complete":
@@ -863,6 +881,24 @@ def _process_pending_cancel_fetches(states, fb_url):
                 state.logger.debug(f"cancel-fetch retry failed for {rec}: {e}")
             except Exception:
                 pass
+            if rec.get("kind") == "complete":
+                # A completion deduct writes the spools before its ledger entry: a
+                # raise in between (a full disk failing the ledger write) left the
+                # entry queued, and every later IDLE tick charged the footer AGAIN
+                # (Group 56 review, round 2). Drop it and say so, as the live
+                # completion edge does when it raises; never retry blind.
+                try:
+                    cancel_fetch_store.pop_pending(rec.get("printer_name"), rec.get("job_id"))
+                except Exception:
+                    pass
+                try:
+                    state.add_log_entry(
+                        f"❌ Completed-print deduct failed for {rec.get('printer_name')} "
+                        f"('{print_deduct._esc(rec.get('filename'))}'): {print_deduct._esc(e)} — "
+                        f"not retried (it may have charged the spools already); weigh the "
+                        f"spool to true it up.", "ERROR", "ff4444")
+                except Exception:
+                    pass
 
 
 def _recover_print_tracker_on_start():
@@ -1009,7 +1045,8 @@ def _recover_one_print_latch(name, entry, fb_url):
             f"restarted and it's now {cur or 'idle'} — surfacing a review (couldn't "
             f"confirm completed vs cancelled).", "WARNING", "ffaa00")
         _dispatch_ambiguous_edge(name, filename, job_id, progress, fb_url,
-                                 progress_unknown=not progress_sampled)
+                                 progress_unknown=not progress_sampled,
+                                 unmeasured_reason="unsampled")
         with _PRINT_TRACKER_LOCK:
             _PRINT_TRACKER[name] = {'state': cur}
         return True

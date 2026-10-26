@@ -964,11 +964,13 @@ def _record_swap_events(entry, end_snap, progress, runout=False):
     return added
 
 
-def _log_cancel_uncomputable(printer_name, filename, reached_fraction, content):
+def _log_cancel_uncomputable(printer_name, filename, reached_fraction, content, reason=None):
     """Operator-facing log for a cancel whose partial we couldn't compute,
-    distinguishing the three reasons so a cancel never goes SILENTLY
+    distinguishing the reasons so a cancel never goes SILENTLY
     un-deducted. Returns the status string the caller should surface.
       content is None      → download failed / binary .bgcode  → 'error' (WARNING)
+      reason "unreadable_moves" → the footer lists filament but the walk read no
+                                  extrusion at all (Group 56.2)  → 'no_usage' (WARNING)
       footer present        → genuine zero-extrusion cancel      → 'no_usage' (INFO)
       footer absent         → unrecognized gcode (non-Prusa?)    → 'no_usage' (WARNING)
     """
@@ -980,6 +982,13 @@ def _log_cancel_uncomputable(printer_name, filename, reached_fraction, content):
             f"unreachable); no partial deduct. Weigh the spool to true it up.",
             "WARNING", "ffaa00")
         return "error"
+    if reason == "unreadable_moves":
+        state.add_log_entry(
+            f"🛑 Cancelled print on {printer_name} ('{_esc(filename)}', ~{pct:.0f}%) — "
+            f"FCC couldn't read this file's moves (its footer lists filament, but the walk "
+            f"found no extrusion at all), so there's no partial deduct. Weigh the spool.",
+            "WARNING", "ffaa00")
+        return "no_usage"
     has_footer = ('filament used [g]' in content and 'filament used [mm]' in content)
     if has_footer:
         state.add_log_entry(
@@ -996,7 +1005,7 @@ def _log_cancel_uncomputable(printer_name, filename, reached_fraction, content):
 
 
 def _compute_cancel_usage(printer_name, filename, job_id, reached_fraction,
-                          ip_address, api_key, use_footer=False):
+                          ip_address, api_key, use_footer=False, ambiguous=False):
     """Download + parse a print → (usage_map, terminal).
     On success: (usage_map, None). On a can't-compute outcome: (None, status
     dict). Shared by the cancel paths (auto-apply deduct_cancelled_print + preview
@@ -1010,9 +1019,16 @@ def _compute_cancel_usage(printer_name, filename, job_id, reached_fraction,
     from the footer gets one WARNING (_warn_parse_gap). use_footer=True (COMPLETED
     print): parse the full per-tool footer (the exact slicer estimate = what
     FilaBridge billed). Both yield {tool_index: grams} in the same space, so the
-    single-tool fold + downstream resolution are identical. A completion whose
-    footer is missing or lists nothing answers `no_usage` with `reason`
-    ("no_footer" / "empty_footer"), which its caller turns into a review (56.3).
+    single-tool fold + downstream resolution are identical.
+
+    `no_usage` carries a `reason` (56.3): "no_footer" / "empty_footer" (the file's
+    filament footer is missing or lists nothing) and, for a cancel, "nothing_reached"
+    (the walk reads the file; nothing was extruded before the cut) or
+    "unreadable_moves" (the footer lists filament but the walk found no extrusion at
+    all). A completion's caller turns any of them into a review, and so does the
+    cancel-review path for an `ambiguous` end (it may have been a completion), for
+    every reason but "nothing_reached"; that path then logs the review's own line,
+    so the cancel's "weigh the spool" line is skipped here.
 
     fetch_cancel_gcode transparently decodes binary G-code (.bgcode — Derek's
     whole fleet) and remaps the progress fraction from compressed-file space to
@@ -1042,15 +1058,22 @@ def _compute_cancel_usage(printer_name, filename, job_id, reached_fraction,
         measured = prusalink_api.measure_filament_usage(content, [prepared["fraction"]])
         usage_map = measured["partials"][0] if measured else {}
     if not usage_map:
-        terminal = {"status": "no_usage", "job_id": job_id}
-        if use_footer:
-            # A completion's caller opens a review instead (56.3); `reason` tells
-            # it which line to give it.
-            terminal["reason"] = ("empty_footer" if prusalink_api.footer_usage_present(content)
-                                  else "no_footer")
+        if use_footer or measured is None:
+            reason = ("empty_footer" if prusalink_api.footer_usage_present(content)
+                      else "no_footer")
+        elif not measured.get("whole"):
+            reason = "unreadable_moves"
         else:
-            # Cancel-specific "weigh the spool" log.
-            _log_cancel_uncomputable(printer_name, filename, reached_fraction, content)
+            reason = "nothing_reached"
+        terminal = {"status": "no_usage", "job_id": job_id, "reason": reason}
+        if not use_footer:
+            if reason == "unreadable_moves":
+                # Every footer tool is one the walk can't see (Group 56.2).
+                _warn_parse_gap(printer_name, filename, measured)
+            if not (ambiguous and reason != "nothing_reached"):
+                # Cancel-specific "weigh the spool" log.
+                _log_cancel_uncomputable(printer_name, filename, reached_fraction, content,
+                                         reason=reason)
         return None, terminal
 
     # Single-toolhead printer + single-material print (Derek's Core One: one
@@ -1085,12 +1108,17 @@ def _compute_cancel_usage(printer_name, filename, job_id, reached_fraction,
 # slicer's footer, per head, before FCC says so. Arcs counted, real files land
 # within ~1.4% (the Core One fixture) or ~0.01% (the raccoon INDX print).
 _PARSE_GAP_PCT = 2.0
+# ... and by at least this many grams: a Core One MMU3-profile file's start G-code
+# walks a fixed ~29 mm (~0.09 g) the slicer doesn't count, which is over 2% of any
+# print under ~4.4 g although nothing is misread (Group 56 review, round 2).
+_PARSE_GAP_MIN_G = 0.1
 
 
 def _warn_parse_gap(printer_name, filename, measured, sole_position=None):
     """Group 56.2 — one WARNING per charged head whose whole-file walk and slicer
-    footer differ by more than _PARSE_GAP_PCT, and per footer tool the walk sees
-    no extrusion of at all (it would never be charged). It never blocks or changes the
+    footer differ by more than _PARSE_GAP_PCT (and by at least _PARSE_GAP_MIN_G),
+    and per footer tool the walk sees no extrusion of at all (it would never be
+    charged). It never blocks or changes the
     charge: the cancel's partial is already scaled to the footer and clamped to it
     (prusalink_api.measure_filament_usage), so the line only says FCC may be
     misreading the file, the shape of the arcs bug that charged INDX cancels ~7%
@@ -1119,7 +1147,7 @@ def _warn_parse_gap(printer_name, filename, measured, sole_position=None):
                 continue
             got = float(whole.get(tool) or 0)
             gap = (got - want) / want * 100
-            if abs(gap) <= _PARSE_GAP_PCT:
+            if abs(gap) <= _PARSE_GAP_PCT or abs(got - want) < _PARSE_GAP_MIN_G:
                 continue
             pos = sole_position if sole_position is not None else tool
             head = "/".join(sorted(heads_at.get(pos, []))) or f"T{tool}"
@@ -1248,6 +1276,13 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
         _, fb_url = config_loader.get_api_urls()
     if print_deduct_ledger.was_deducted(printer_name, job_id):
         return {"status": "skipped", "reason": "already deducted", "job_id": job_id}
+    if not print_deduct_ledger._is_blank_job(job_id) and \
+            cancel_review_store.has_pending(printer_name, job_id):
+        # A review already holds this job (a "couldn't measure" card, 56.3, or a
+        # no_spool / spool_changed one): a completion fired again (a restart's
+        # recovery) must not charge it behind the card, whose Discard would then
+        # overwrite the ledger entry with 0 g (Group 56 review, round 2).
+        return {"status": "skipped", "reason": "already pending", "job_id": job_id}
     if _shortfall_card_exists(printer_name, job_id, filename, 1.0):
         return {"status": "skipped", "reason": "already deducted", "job_id": job_id}
     if not (ip_address and api_key):
@@ -1809,9 +1844,11 @@ def _resolve_usage_to_spools(printer_name, usage_map, fb_url, active_locs=None, 
 # The review card (cancel_review.js) words the same keys for its banner.
 _UNMEASURED_WHY = {
     "replaced": "replaced before a progress reading",
+    "unsampled": "it ended before FCC read its progress",
     "no_footer": "its file's filament footer couldn't be read",
     "empty_footer": "its file's filament footer lists no filament",
-    "no_download": "FCC couldn't download its file from the printer",
+    "unreadable_moves": "FCC couldn't read its file's moves",
+    "no_download": "FCC couldn't download or read its file",
 }
 
 
@@ -1832,10 +1869,12 @@ def _stash_unresolved_review(printer_name, filename, job_id, reached_fraction,
                          _UNMEASURED_WHY's keys, and rides on the record as
                          `unmeasured_reason` for the card: "replaced" (the default: a
                          back-to-back job change replaced it before we ever sampled a
-                         real progress), "no_footer" / "empty_footer" (a completion
-                         whose filament footer is missing or lists nothing, Group
-                         56.3) or "no_download" (a completion whose file FCC couldn't
-                         download for _CANCEL_FETCH_MAX_AGE_S).
+                         real progress), "unsampled" (it ended before FCC read its
+                         progress), "no_footer" / "empty_footer" / "unreadable_moves"
+                         (a completion, or an ambiguous end, whose filament footer is
+                         missing or lists nothing, or whose moves the walk can't read,
+                         Group 56.3) or "no_download" (a completion whose file FCC
+                         couldn't download, or decode, for _CANCEL_FETCH_MAX_AGE_S).
 
     Writes NO ledger entry — the review stays recoverable until confirm/dismiss.
     Idempotent: no-ops if a review is already pending or the job was already settled.
@@ -1964,7 +2003,8 @@ def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind
 
 
 def _create_pending_cancel_review(printer_name, filename, job_id, reached_fraction,
-                                  fb_url=None, ambiguous=False, progress_unknown=False):
+                                  fb_url=None, ambiguous=False, progress_unknown=False,
+                                  unmeasured_reason=None):
     """Compute the cancelled-print partial and STASH it for review instead of
     auto-writing (FilaBridge absorption design §9.7). Idempotent against the
     ledger (already confirmed/dismissed) and the pending store (already queued).
@@ -1975,7 +2015,14 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
     terminal state, so we couldn't confirm cancel vs completion. The compute is
     identical (the partial at `reached_fraction`, the retained progress = the
     confidence hint), but the record is flagged and the log/overlay reword to
-    "couldn't confirm". Still NEVER auto-deducts — it's a review either way."""
+    "couldn't confirm". Still NEVER auto-deducts — it's a review either way. An
+    ambiguous end FCC can't measure (its footer missing or empty, or moves the walk
+    can't read) may have been a completion, so it opens the "couldn't measure"
+    review instead of a 0 g ledger entry (Group 56.3's rule for completions).
+
+    progress_unknown=True: `unmeasured_reason` says why ("replaced" by the next job,
+    the default; "unsampled" when the print ended before FCC ever read its
+    progress), for the review's log line and card."""
     if fb_url is None:
         _, fb_url = config_loader.get_api_urls()
 
@@ -1995,7 +2042,8 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
         # non-destructive "couldn't measure usage — weigh the spool" review.
         return _stash_unresolved_review(printer_name, filename, job_id,
                                         reached_fraction, usage_map=None,
-                                        progress_unknown=True, ambiguous=ambiguous)
+                                        progress_unknown=True, ambiguous=ambiguous,
+                                        reason=unmeasured_reason)
 
     creds = prusalink_api.fetch_printer_credentials(fb_url, printer_name)
     if not creds:
@@ -2007,9 +2055,16 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
 
     usage_map, terminal = _compute_cancel_usage(
         printer_name, filename, job_id, reached_fraction,
-        creds.get('ip_address'), creds.get('api_key'))
+        creds.get('ip_address'), creds.get('api_key'), ambiguous=ambiguous)
     if terminal is not None:
         if terminal["status"] == "no_usage":
+            if ambiguous and terminal.get("reason") != "nothing_reached":
+                # It may have been a completion FCC can't measure (56.3): ask, don't
+                # close the job at 0 g. (A true cancel keeps the 0 g entry and the
+                # "weigh the spool" line _compute_cancel_usage logged.)
+                return _stash_unresolved_review(
+                    printer_name, filename, job_id, reached_fraction, usage_map=None,
+                    progress_unknown=True, ambiguous=True, reason=terminal.get("reason"))
             print_deduct_ledger.record_deduct(printer_name, job_id, filename=filename,
                                               scale=reached_fraction, grams=0)
         elif terminal["status"] == "error":

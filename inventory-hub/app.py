@@ -148,8 +148,8 @@ from app_core import app, add_header  # noqa: E402
 # the pending-cancel-review re-surface live in startup_migrations.py. They run
 # HERE, at the same import point as pre-carve (before any route can serve),
 # preserving the load->migrate->backup->prune->save ordering. The prune helper
-# + cap are re-exported: tests call app._prune_locations_backups directly and
-# the credentials seed below still calls it through this module's namespace.
+# + cap are re-exported: tests call app._prune_locations_backups directly. (The
+# FilaBridge credentials seed that also used it went in Group 56.5.)
 import startup_migrations  # noqa: E402
 from startup_migrations import MAX_LOCATIONS_BACKUPS, _prune_locations_backups  # noqa: E402
 startup_migrations.run_startup_migrations()

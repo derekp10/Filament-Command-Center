@@ -158,7 +158,8 @@ def test_unmeasured_reviews_say_why_and_offer_only_discard(page, require_server,
     None offers Apply, and the filename is shown as text."""
     page.goto(base_url, wait_until='domcontentloaded')
     pending = {"pending": [_unmeasured("U-1", "no_footer"), _unmeasured("U-2", "empty_footer"),
-                           _unmeasured("U-3", "no_download"), _unmeasured("U-4")]}
+                           _unmeasured("U-3", "no_download"), _unmeasured("U-5", "unreadable_moves"),
+                           _unmeasured("U-6", "unsampled"), _unmeasured("U-4")]}
     page.route("**/api/cancel_deduct/pending",
                lambda route: route.fulfill(status=200, content_type="application/json",
                                            body=json.dumps(pending)))
@@ -167,7 +168,9 @@ def test_unmeasured_reviews_say_why_and_offer_only_discard(page, require_server,
     want = {
         "U-1": "filament footer couldn't be read",
         "U-2": "filament footer lists no filament",
-        "U-3": "download the print's file",
+        "U-3": "download or read the print's file",
+        "U-5": "read the moves in the print's file",
+        "U-6": "it ended before FCC read its progress",
         "U-4": "replaced by a new print before a progress reading",
     }
     for job, words in want.items():

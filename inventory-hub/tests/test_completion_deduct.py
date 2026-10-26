@@ -263,12 +263,13 @@ def test_completed_print_no_creds_defers(stores_tmp):
 # --------------------------------------------------------------------------- #
 
 def test_compute_use_footer_vs_prefix_differ():
-    # The body extrudes 10mm on T0, the FOOTER claims 25g. A completion takes the
-    # footer (25g); a cancel takes the share of the body reached by the cancel
-    # point, times the footer (Group 56.2: 4 of 10mm = 10g, not the whole 25g).
+    # The body extrudes 10mm on T0, the FOOTER claims 25g over 20mm. A completion
+    # takes the footer (25g); a cancel takes the share of the body reached by the
+    # cancel point, times the footer (Group 56.2: 4 of 10mm = 10g; the walk alone
+    # at the footer's g/mm would say 4mm * 25/20 = 5g).
     body = "M83\nT0\nG1 X10 E4\n"
     gcode = (body + "G1 X20 E6\n"
-             "; filament used [mm] = 10\n; filament used [g] = 25\n")
+             "; filament used [mm] = 20\n; filament used [g] = 25\n")
     cut = (len(body) + 2) / len(gcode)   # inside the second move: it isn't reached
     pm = {"XL-1": {"printer_name": "XL", "position": 0}}
     with patch.object(app_module.locations_db, "get_active_printer_map", return_value=pm), \

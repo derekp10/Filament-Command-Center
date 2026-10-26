@@ -131,21 +131,24 @@ def _seeded_rows():
 
 
 def _no_network():
-    """Every way the old seed reached the network, set to fail the test."""
+    """Every way the old seed reached the network, set to fail the test. The
+    caller also asserts `boom.call_count == 0`: a request inside a try/except
+    (the old seed's own shape) would swallow the AssertionError."""
     boom = MagicMock(side_effect=AssertionError("the boot creds check made a request"))
-    return (patch.object(app_module.prusalink_api.requests, "get", boom),
+    return (boom, patch.object(app_module.prusalink_api.requests, "get", boom),
             patch.object(app_module.config_loader, "get_api_urls", boom))
 
 
 def test_creds_check_steady_state_is_silent():
     """Every Printer row has creds: no warning, no request, no write. Tool Head
     rows without creds and non-dict rows don't count."""
-    net_get, net_urls = _no_network()
+    boom, net_get, net_urls = _no_network()
     with patch.object(app_module.locations_db, "load_locations_list",
                       return_value=_seeded_rows()), net_get, net_urls, \
          patch.object(app_module.locations_db, "save_locations_list") as save, \
          patch.object(app_module.state, "logger", MagicMock()) as logger:
         app_module._note_printers_missing_credentials()
+    assert boom.call_count == 0
     save.assert_not_called()
     logger.warning.assert_not_called()
 
@@ -160,12 +163,13 @@ def test_creds_check_names_printers_without_an_ip():
          "printer_creds": {"ip_address": "   ", "api_key": "k"}},
     ]
     before = [dict(r) if isinstance(r, dict) else r for r in rows]
-    net_get, net_urls = _no_network()
+    boom, net_get, net_urls = _no_network()
     with patch.object(app_module.locations_db, "load_locations_list",
                       return_value=rows), net_get, net_urls, \
          patch.object(app_module.locations_db, "save_locations_list") as save, \
          patch.object(app_module.state, "logger", MagicMock()) as logger:
         app_module._note_printers_missing_credentials()
+    assert boom.call_count == 0
     save.assert_not_called()
     assert rows == before
     assert logger.warning.call_count == 1
