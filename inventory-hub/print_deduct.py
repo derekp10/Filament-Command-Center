@@ -1280,7 +1280,7 @@ def deduct_cancelled_print(printer_name, filename, job_id, reached_fraction,
 
 def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
                            ip_address=None, api_key=None, start_spools=None,
-                           swap_log=None):
+                           swap_log=None, before_charge=None):
     """Compute + AUTO-APPLY the full per-tool deduct for a COMPLETED (FINISHED)
     print — FCC's Phase-2 takeover of FilaBridge's completion deduct. Uses the
     slicer FOOTER (the full per-tool estimate, exact = what FilaBridge billed;
@@ -1311,7 +1311,13 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
     retries once the printer leaves FINISHED. Same status-dict shape as
     deduct_cancelled_print. Gated by the fcc_owns_completion_deduct flag at the
     EDGE (this primitive itself is unconditional, so the deferred-fetch retry can
-    still finish a completion enqueued while the flag was on)."""
+    still finish a completion enqueued while the flag was on).
+
+    `before_charge` (Group 56 review, round 4): called right before the first
+    spool write, after every early return; the deferred-fetch loop stamps its
+    queue entry with it, so no later tick or process charges the job again. A
+    raise from it propagates before anything is charged. A raise once the spool
+    writes have begun comes out as CompletionMayHaveCharged."""
     if fb_url is None:
         _, fb_url = config_loader.get_api_urls()
     if print_deduct_ledger.was_deducted(printer_name, job_id):
@@ -1390,9 +1396,9 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
     # diff misses — notably A→B→A (ran out, replaced, original re-loaded → start==end).
     # Best-effort: any detection error falls through to auto-apply (NEVER block/drop a
     # completion on a detection bug).
+    changed = set()
     if start_spools or swap_log:
         try:
-            changed = set()
             used_positions = {p for p, g in usage_map.items() if g > 0}
             if start_spools:
                 end_snap = _snapshot_active_spools(printer_name, fb_url, active_locs=active_locs)
@@ -1410,14 +1416,23 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
                 for ev in swap_log:
                     if ev.get('position') in used_positions:
                         changed.add(ev.get('position'))
-            if changed:
-                return _route_completion_to_review(
-                    printer_name, filename, job_id, usage_map, fb_url, sorted(changed),
-                    active_locs=active_locs, swap_log=swap_log,
-                    ip_address=ip_address, api_key=api_key, start_spools=start_spools)
         except Exception:
-            pass  # detection is best-effort; fall through to auto-apply
+            changed = set()  # detection is best-effort; fall through to auto-apply
+    if changed:
+        # Outside the best-effort try (Group 56 review, round 4): a review that
+        # can't be written raised into it and fell through to the full-footer
+        # auto-apply, the very mis-attribution 22.3 routes away from. Now it
+        # raises before any charge (the deferred loop retries; the edge logs it).
+        return _route_completion_to_review(
+            printer_name, filename, job_id, usage_map, fb_url, sorted(changed),
+            active_locs=active_locs, swap_log=swap_log,
+            ip_address=ip_address, api_key=api_key, start_spools=start_spools)
 
+    if before_charge is not None:
+        # The deferred-fetch loop's persistent claim (Group 56 review, round 4):
+        # stamps its queue entry right before the first spool write. If the stamp
+        # can't be written, this raises before anything is charged.
+        before_charge()
     failed = []
     try:
         spools_updated, details, known = _apply_usage_to_printer(
@@ -1761,9 +1776,6 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
         # (Shouldn't usually reach here: a flagged position has a bound end spool.)
         return _stash_unresolved_review(printer_name, filename, job_id, 1.0,
                                         usage_map=usage_map, no_spool=True)
-    # Claim the deferred-fetch slot too, so a queued kind='complete' retry (a prior
-    # finish-screen lock) can't later auto-apply the full footer behind this review.
-    cancel_fetch_store.pop_pending(printer_name, job_id)
     unresolved = _uncharged_usage(usage_map, charged)
     total = round(sum(r['grams'] for r in rows) + sum(unresolved.values()), 2)
     record = {
@@ -1787,6 +1799,15 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
     }
     uncharged = _carry_uncharged(record, unresolved, printer_name, fb_url, active_locs=active_locs)
     cancel_review_store.add_pending(record)
+    # Then claim the deferred-fetch slot too, so a queued kind='complete' retry (a
+    # prior finish-screen lock) can't later auto-apply the full footer behind this
+    # review. After the review is written (Group 56 review, round 4: popping first
+    # lost the entry when the review write then failed), and best-effort: the
+    # loop drops a leftover entry once it sees the review.
+    try:
+        cancel_fetch_store.pop_pending(printer_name, job_id)
+    except Exception:
+        pass
     how = "auto-split proposed" if auto_split else "full footer NOT auto-applied"
     state.add_log_entry(
         f"🔁 {printer_name}: spool changed mid-print ('{_esc(filename)}') at toolhead "

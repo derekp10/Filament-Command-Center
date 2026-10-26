@@ -967,9 +967,9 @@ def test_a_queued_completion_that_may_have_charged_is_dropped_not_charged_again(
         _ticks()
     assert len(calls) == 1
     assert not cancel_fetch_store.has_pending("XL", "Q-1")
-    lines = [m for m, a, k in logs if "Completed-print deduct failed" in m]
+    lines = [m for m, a, k in logs if "not retried" in m]
     assert len(lines) == 1, lines
-    assert NASTY_ESC in lines[0] and "&lt;on device&gt;" in lines[0] and "not retried" in lines[0]
+    assert NASTY_ESC in lines[0] and "&lt;on device&gt;" in lines[0] and "may have charged" in lines[0]
 
 
 def test_a_queued_job_that_raises_before_charging_stays_queued(logs, no_abandoned):
@@ -1001,81 +1001,193 @@ def test_a_queued_job_that_raises_before_charging_stays_queued(logs, no_abandone
         _ticks(1)
     assert state_["n"] == 2
     assert cancel_fetch_store.list_pending() == []
-    assert not any("Completed-print deduct failed" in m for m, a, k in logs), logs
+    assert not any("not retried" in m for m, a, k in logs), logs
 
 
-def test_a_full_disk_never_charges_a_queued_completion_twice(logs, no_abandoned, monkeypatch):
-    """The real deduct on a disk that has filled since the job was queued: the
-    claim (a re-save of the entry) fails first, so nothing is charged at all; and
-    when only the ledger fails, the job is charged once and never again, even
-    though dropping its entry fails too (only `_apply_usage_to_printer` stubbed)."""
-    charges = []
+def _full(*a, **k):
+    raise OSError(28, "No space left on device")
 
-    def _apply(printer, usage_map, fb_url, strategy_label="", active_locs=None, failed_out=None):
-        charges.append(dict(usage_map))
-        return 1, [{"sid": 5, "grams": 10.0, "remaining": 90.0, "toolhead": "XL-1", "position": 0}], {0}
 
-    def _full(*a, **k):
-        raise OSError(28, "No space left on device")
-    gcode = "M83\nT0\nG1 E10\n" + _footer([10], [10])
-    ctx = [patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=True),
-           patch.object(prusalink_api, "fetch_printer_credentials",
-                        return_value={"ip_address": "1.2.3.4", "api_key": "k"}),
-           patch.object(prusalink_api, "fetch_cancel_gcode",
-                        side_effect=lambda ip, key, fn, f: {"gcode": gcode, "fraction": f}),
-           patch.object(print_deduct.locations_db, "get_active_printer_map", return_value=_XL_PM),
-           patch.object(print_deduct, "_resolve_active_locs_for_printer",
-                        return_value=[("XL-1", {"position": 0, "printer_name": "XL"})]),
-           patch.object(print_deduct, "_apply_usage_to_printer", side_effect=_apply),
-           patch.object(print_deduct.stock_report, "check_after_deduct")]
-    for c in ctx:
-        c.start()
-    try:
-        # 1) Every store unwritable since the job was queued: nothing charged.
-        _queue_completion("D-1")
-        with patch.object(cancel_fetch_store, "_save", side_effect=_full), \
-             patch.object(print_deduct_ledger, "_save", side_effect=_full), \
-             patch.object(cancel_review_store, "_save", side_effect=_full):
-            _ticks()
-        assert charges == []
-        assert cancel_fetch_store.has_pending("XL", "D-1")
-        cancel_fetch_store.pop_pending("XL", "D-1")
-        # 2) The claim lands, then the disk fills: the ledger write and the drop
-        #    fail. Charged once; later ticks only retry the drop.
-        _queue_completion("D-2")
-        real_save = cancel_fetch_store._save
-        saves = {"n": 0}
+class _RealDeduct:
+    """The real deferred-fetch loop and the real deduct_completed_print, with only
+    the Spoolman side stubbed: `charges` records every footer that reached the
+    apply step (the first spool write)."""
 
-        def _claim_then_full(data):
-            saves["n"] += 1
-            if saves["n"] == 1:
-                return real_save(data)
-            raise OSError(28, "No space left on device")
-        with patch.object(cancel_fetch_store, "_save", side_effect=_claim_then_full), \
-             patch.object(print_deduct_ledger, "_save", side_effect=_full):
-            _ticks()
-        assert charges == [{0: 10.0}]
-        lines = [m for m, a, k in logs if "Completed-print deduct failed" in m]
-        assert len(lines) == 1 and "may have charged" in lines[0], lines
-        # 3) Only the drop fails, once (a one-off sharing collision on the queue
-        #    file): the next tick's claim would land, so only the in-process guard
-        #    keeps the job from being charged again.
-        _queue_completion("D-3")
-        saves = {"n": 0}
+    def __init__(self, raise_after_charge=None):
+        self.charges = []
+        self.raise_after_charge = raise_after_charge
+        gcode = "M83\nT0\nG1 E10\n" + _footer([10], [10])
 
-        def _drop_fails_once(data):
-            saves["n"] += 1
-            if saves["n"] == 2:
-                raise PermissionError(13, "sharing violation")
-            return real_save(data)
-        with patch.object(cancel_fetch_store, "_save", side_effect=_drop_fails_once), \
-             patch.object(print_deduct_ledger, "_save", side_effect=_full):
-            _ticks()
-        assert charges == [{0: 10.0}, {0: 10.0}], charges     # D-2's, then D-3's once
-        assert not cancel_fetch_store.has_pending("XL", "D-3")
-    finally:
-        for c in ctx:
+        def _apply(printer, usage_map, fb_url, strategy_label="", active_locs=None, failed_out=None):
+            self.charges.append(dict(usage_map))
+            if self.raise_after_charge:
+                raise self.raise_after_charge
+            return 1, [{"sid": 5, "grams": 10.0, "remaining": 90.0, "toolhead": "XL-1", "position": 0}], {0}
+        self.ctx = [
+            patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=True),
+            patch.object(prusalink_api, "fetch_printer_credentials",
+                         return_value={"ip_address": "1.2.3.4", "api_key": "k"}),
+            patch.object(prusalink_api, "fetch_cancel_gcode",
+                         side_effect=lambda ip, key, fn, f: {"gcode": gcode, "fraction": f}),
+            patch.object(print_deduct.locations_db, "get_active_printer_map", return_value=_XL_PM),
+            patch.object(print_deduct, "_resolve_active_locs_for_printer",
+                         return_value=[("XL-1", {"position": 0, "printer_name": "XL"})]),
+            patch.object(print_deduct, "_apply_usage_to_printer", side_effect=_apply),
+            patch.object(print_deduct.stock_report, "check_after_deduct"),
+        ]
+
+    def __enter__(self):
+        for c in self.ctx:
+            c.start()
+        return self
+
+    def __exit__(self, *exc):
+        for c in reversed(self.ctx):
             c.stop()
+
+
+def test_a_disk_fcc_cant_write_charges_nothing(logs, no_abandoned):
+    """Every store unwritable since the job was queued: the deduct's stamp right
+    before its first spool write raises, so nothing is charged and the job waits."""
+    _queue_completion("D-1")
+    with _RealDeduct() as run, \
+         patch.object(cancel_fetch_store, "_save", side_effect=_full), \
+         patch.object(print_deduct_ledger, "_save", side_effect=_full), \
+         patch.object(cancel_review_store, "_save", side_effect=_full):
+        _ticks()
+    assert run.charges == []
+    assert cancel_fetch_store.has_pending("XL", "D-1")
+    assert not cancel_fetch_store.get_pending("XL", "D-1").get("charging_since")
+
+
+def test_a_failed_ledger_write_charges_once_even_across_a_restart(logs, monkeypatch):
+    """The stamp lands, the spools are charged, then the ledger write and the drop
+    fail (the disk filled). That process never charges the job again, and nor
+    does the next one after a restart, with the disk still full or freed: the
+    entry's charging_since stamp says a charge may already have happened. One
+    ERROR line per process."""
+    monkeypatch.setattr(print_monitor, "_ABANDONED_COMPLETIONS", set())
+    _queue_completion("D-2")
+    real_save = cancel_fetch_store._save
+    saves = {"n": 0}
+
+    def _stamp_then_full(data):
+        saves["n"] += 1
+        if saves["n"] == 1:
+            return real_save(data)
+        raise OSError(28, "No space left on device")
+    with _RealDeduct() as run:
+        with patch.object(cancel_fetch_store, "_save", side_effect=_stamp_then_full), \
+             patch.object(print_deduct_ledger, "_save", side_effect=_full):
+            _ticks()
+        assert run.charges == [{0: 10.0}]
+        assert cancel_fetch_store.get_pending("XL", "D-2")["charging_since"]
+        assert len([m for m, a, k in logs if "not retried" in m]) == 1
+        # A restart: a fresh process, the disk still full, then freed.
+        monkeypatch.setattr(print_monitor, "_ABANDONED_COMPLETIONS", set())
+        with patch.object(cancel_fetch_store, "_save", side_effect=_full), \
+             patch.object(print_deduct_ledger, "_save", side_effect=_full):
+            _ticks()
+        _ticks()
+    assert run.charges == [{0: 10.0}]
+    assert not cancel_fetch_store.has_pending("XL", "D-2")
+    assert len([m for m, a, k in logs if "not retried" in m]) == 2       # once per process
+    assert any("interrupted after it began charging" in m for m, a, k in logs), logs
+
+
+def test_a_drop_that_fails_once_reports_once(logs, no_abandoned):
+    """The stamp lands, the ledger write fails and the drop fails once (a one-off
+    sharing collision): charged once, dropped on the next tick, one ERROR line
+    (the in-process guard keeps the stamped entry from being reported again)."""
+    _queue_completion("D-3")
+    real_save = cancel_fetch_store._save
+    saves = {"n": 0}
+
+    def _drop_fails_once(data):
+        saves["n"] += 1
+        if saves["n"] == 2:                      # 1: the stamp, 2: the drop
+            raise PermissionError(13, "sharing violation")
+        return real_save(data)
+    with _RealDeduct() as run, \
+         patch.object(cancel_fetch_store, "_save", side_effect=_drop_fails_once), \
+         patch.object(print_deduct_ledger, "_save", side_effect=_full):
+        _ticks()
+    assert run.charges == [{0: 10.0}]
+    assert not cancel_fetch_store.has_pending("XL", "D-3")
+    assert len([m for m, a, k in logs if "not retried" in m]) == 1
+
+
+def test_a_raise_while_charging_is_never_retried(logs, no_abandoned):
+    """A raise inside the spool writes (after one landed) comes out as
+    CompletionMayHaveCharged, from the original error, and the loop charges the
+    job exactly once."""
+    with _RealDeduct(raise_after_charge=ValueError("second head's write blew up")) as run:
+        with pytest.raises(print_deduct.CompletionMayHaveCharged) as raised:
+            print_deduct.deduct_completed_print("XL", NASTY, "D-4", fb_url="http://fb",
+                                                ip_address="1.2.3.4", api_key="k")
+        assert isinstance(raised.value.__cause__, ValueError)
+        run.charges.clear()
+        _queue_completion("D-5")
+        _ticks()
+    assert run.charges == [{0: 10.0}]
+    assert not cancel_fetch_store.has_pending("XL", "D-5")
+    assert len([m for m, a, k in logs if "not retried" in m]) == 1
+
+
+def test_a_swap_review_that_cant_be_written_charges_nothing_and_waits(logs, no_abandoned):
+    """A completion whose spool changed mid-print routes to a split review; if
+    that review can't be written, the old code swallowed the error and charged
+    the whole footer to the spool on the head at the end (22.3's very
+    mis-attribution). Now it raises before any charge: the entry waits, and the
+    next tick opens the review."""
+    cancel_fetch_store.add_pending({
+        "printer_name": "XL", "job_id": "S-1", "filename": NASTY, "progress": 1.0,
+        "first_seen": time.time(), "kind": "complete", "attempts": 1,
+        "swap_log": [{"seq": 0, "position": 0, "progress": 0.5, "from_sid": 4, "to_sid": 5}],
+        "start_spools": {"0": 4}})
+
+    def _rows(printer, usage_map, fb_url, active_locs=None, charged_out=None):
+        if charged_out is not None:
+            charged_out.add(0)
+        return [{"sid": 5, "grams": 10.0, "color": "ff0000", "position": 0, "toolhead": "XL-1"}]
+    real_save = cancel_review_store._save
+    saves = {"n": 0}
+
+    def _busy_once(data):
+        saves["n"] += 1
+        if saves["n"] == 1:
+            raise PermissionError(13, "review store busy")
+        return real_save(data)
+    with _RealDeduct() as run, \
+         patch.object(print_deduct, "_compute_swap_split", return_value=None), \
+         patch.object(print_deduct, "_resolve_usage_to_spools", side_effect=_rows), \
+         patch.object(print_deduct, "_snapshot_active_spools", return_value={0: 5}), \
+         patch.object(print_deduct, "_heads_snapshot", return_value=[]), \
+         patch.object(cancel_review_store, "_save", side_effect=_busy_once):
+        _ticks(1)
+        assert run.charges == [] and cancel_fetch_store.has_pending("XL", "S-1")
+        _ticks(1)
+    assert run.charges == []
+    assert cancel_review_store.get_pending("XL", "S-1")["kind"] == "spool_changed"
+    assert not cancel_fetch_store.has_pending("XL", "S-1")
+
+
+def test_a_stamped_job_whose_card_exists_is_recorded_not_reported(logs, no_abandoned):
+    """A stamped entry whose uncharged-grams card exists finished its charges (the
+    card is stashed after them, just before the ledger write): the 43.2 crash
+    guard records the job; nothing says it "may have charged"."""
+    cancel_fetch_store.add_pending({
+        "printer_name": "XL", "job_id": "K-1", "filename": NASTY, "progress": 1.0,
+        "first_seen": time.time(), "kind": "complete", "attempts": 1, "charging_since": 1.0})
+    cancel_review_store.add_pending({"printer_name": "XL", "job_id": "K-1#shortfall",
+                                     "shortfall_of": "K-1", "kind": "shortfall", "filename": NASTY,
+                                     "spools": [], "total_grams": 4.0})
+    with patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=True),          patch.object(print_deduct, "deduct_completed_print",
+                      side_effect=AssertionError("a stamped job must never be charged")):
+        _ticks()
+    assert print_deduct_ledger.was_deducted("XL", "K-1") is True
+    assert not cancel_fetch_store.has_pending("XL", "K-1")
+    assert not any("not retried" in m for m, a, k in logs), logs
 
 
 def test_a_junk_queue_record_doesnt_stop_the_rest(logs):

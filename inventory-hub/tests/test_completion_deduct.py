@@ -302,7 +302,9 @@ def test_fetch_retry_routes_complete_to_completion_deduct(stores_tmp):
         "attempts": 1, "last_status": "awaiting_fetch"})
     calls = {}
 
-    def _complete(printer, filename, job_id, fb_url=None, start_spools=None, swap_log=None):
+    def _complete(printer, filename, job_id, fb_url=None, start_spools=None, swap_log=None,
+                  before_charge=None):
+        # before_charge: the loop's persistent claim (Group 56 review, round 4).
         calls["complete"] = (printer, filename, job_id)
         return {"status": "deducted", "job_id": job_id}
 
