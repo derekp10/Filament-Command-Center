@@ -91,11 +91,13 @@ def test_g92_reset_accumulates_across_origin_reset():
         "G92 E0\n"          # reset extruder origin
         "G1 X20 E3\n"       # 3mm from reset -> physical total 8mm
     )
-    suffix = "G1 X30 E9\n"
-    footer = "; filament used [mm] = 8\n; filament used [g] = 0.016\n"
+    suffix = "G1 X30 E9\n"  # 6 more after the cut -> the file's 14mm
+    # The footer counts the whole file, as a slicer's does (Group 56.2: the charge
+    # is the share of the tool's whole-file extrusion reached, times its footer).
+    footer = "; filament used [mm] = 14\n; filament used [g] = 0.028\n"
     gcode, frac = _split_gcode(prefix, suffix, footer)
     usage = prusalink_api.parse_partial_filament_usage(gcode, frac)
-    # 8mm * (0.016/8) = 0.016g
+    # 8 of 14mm reached * 0.028g = 0.016g (ignoring the G92 would give 5 of 9mm)
     assert abs(usage.get(0, 0.0) - 0.016) < 1e-6, usage
 
 
@@ -126,17 +128,22 @@ def test_no_footer_metadata_returns_empty():
 
 def test_mm_to_g_uses_slicer_ratio_not_assumed_density():
     # Two different filaments (different g/mm) prove the ratio is per-tool and
-    # taken from the footer, not a hard-coded density.
-    prefix = "M83\nT0\nG1 E500\n"              # tool0 500mm reached
-    suffix = "T1\nG1 E500\n"                   # tool1 not reached
+    # taken from the footer, not a hard-coded density. Since Group 56.2 the ratio
+    # converts the whole-file walk the 2% check compares; the partial itself is
+    # the share of the tool's own walk reached, times its footer grams.
+    prefix = "M83\nT0\nG1 E250\n"              # tool0: 250 of its 500mm reached
+    suffix = "G1 E250\nT1\nG1 E500\n"          # the rest of tool0, all of tool1
     footer = (
         "; filament used [mm] = 1000, 1000\n"
         "; filament used [g] = 2.0, 3.0\n"     # tool0 0.002 g/mm, tool1 0.003 g/mm
     )
     gcode, frac = _split_gcode(prefix, suffix, footer)
     usage = prusalink_api.parse_partial_filament_usage(gcode, frac)
-    assert abs(usage.get(0, 0.0) - 1.0) < 1e-6, usage   # 500 * 0.002
+    assert abs(usage.get(0, 0.0) - 1.0) < 1e-6, usage   # 250/500 of tool0's 2.0g
     assert 1 not in usage, usage
+    whole = prusalink_api.measure_filament_usage(gcode, [1.0])["whole"]
+    assert abs(whole[0] - 1.0) < 1e-6, whole   # 500mm * 0.002
+    assert abs(whole[1] - 1.5) < 1e-6, whole   # 500mm * 0.003
 
 
 def test_empty_input_is_empty():

@@ -39,9 +39,9 @@ import state  # type: ignore
 #     delete is N NAS round-trips; run that OUTSIDE the lock and then re-read
 #     inside it. `api_delete_location` is the worked example.
 #   - Re-entrant (RLock) so a locked mutator may call another one.
-#   - Boot-time callers (startup_migrations, print_monitor's creds seed) run at
-#     import, before the server accepts a request, so they are deliberately not
-#     wrapped.
+#   - Boot-time callers (startup_migrations) run at import, before the server
+#     accepts a request, so they are deliberately not wrapped. (print_monitor's
+#     boot creds check only reads, Group 56.5.)
 
 _WRITE_LOCK = threading.RLock()
 
@@ -1145,42 +1145,6 @@ def get_printer_credentials(printer_name, loc_list=None):
             continue
         return {'ip_address': ip, 'api_key': creds.get('api_key')}
     return None
-
-
-def seed_printer_credentials(loc_list, creds_by_name, prime_only=True):
-    """Pure migration: write ``printer_creds`` onto each Printer row from a
-    ``{printer_name: {ip_address, api_key}}`` dict (pulled once from FilaBridge
-    ``/printers`` while it's still up — see app.py's boot seed).
-
-    ``prime_only=True`` (the boot default) NEVER overwrites a row that already
-    has a usable ip, so a manual Settings edit is never reverted by the auto-pull.
-    Returns ``(loc_list, changed)``. Idempotent — once every Printer row carries
-    creds (or FilaBridge is gone) it changes nothing.
-    """
-    if not isinstance(loc_list, list) or not isinstance(creds_by_name, dict):
-        return loc_list, False
-    changed = False
-    for row in loc_list:
-        if not isinstance(row, dict):
-            continue
-        if str(row.get('Type', '')).strip().lower() != 'printer':
-            continue
-        existing = row.get(PRINTER_CREDS_KEY)
-        has_ip = (isinstance(existing, dict)
-                  and bool(str(existing.get('ip_address', '') or '').strip()))
-        if prime_only and has_ip:
-            continue
-        src = creds_by_name.get(str(row.get('Name', '')))
-        if not isinstance(src, dict):
-            continue
-        ip = str(src.get('ip_address', '') or '').strip()
-        if not ip:
-            continue
-        new_creds = {'ip_address': ip, 'api_key': src.get('api_key')}
-        if existing != new_creds:
-            row[PRINTER_CREDS_KEY] = new_creds
-            changed = True
-    return loc_list, changed
 
 
 def set_printer_credentials(loc_list, printer_name, ip_address, api_key):

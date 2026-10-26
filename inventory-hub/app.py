@@ -325,7 +325,7 @@ from print_monitor import (  # noqa: E402,F401
     _CANCEL_MONITOR_IDLE_S, _CANCEL_FETCH_MAX_AGE_S, _cancel_monitor_started,
     _cancel_monitor_lock, _cancel_monitor_tick, _process_pending_cancel_fetches,
     _recover_print_tracker_on_start, _recover_one_print_latch,
-    _cancel_monitor_loop, _seed_printer_credentials_from_filabridge,
+    _cancel_monitor_loop, _note_printers_missing_credentials,
     _start_cancel_monitor,
 )
 # (_pulse_section_printer_status + /api/dashboard_pulse live in routes_state_pulse.py — L316 step 11)
@@ -371,17 +371,16 @@ if __name__ == '__main__':
     # without it (prod) this single process. The reloader PARENT skips it so dev
     # doesn't run two pollers.
     if (not _dev) or os.environ.get('WERKZEUG_RUN_MAIN', '').lower() == 'true':
-        # FilaBridge Phase-2 gate: relocate printer creds onto the Printer rows
-        # (one-time, prime-only) BEFORE the cancel monitor starts, so its first
-        # PrusaLink probe reads creds locally rather than from FilaBridge.
-        # 27.2 — belt-and-suspenders: the seed is best-effort and must never
-        # stop the cancel monitor from starting, so any unexpected raise here
-        # (not just the inner seed call the helper already guards) is contained.
+        # Name any Printer row with no PrusaLink IP before the cancel monitor
+        # starts (Group 56.5: this was the FilaBridge creds seed; FilaBridge is
+        # gone, so it reads locations.json only and writes nothing). 27.2 —
+        # belt-and-suspenders: the check is best-effort and must never stop the
+        # cancel monitor from starting, so any unexpected raise is contained.
         try:
-            print_monitor._seed_printer_credentials_from_filabridge()
-        except Exception as _seed_boot_err:
+            print_monitor._note_printers_missing_credentials()
+        except Exception as _creds_boot_err:
             state.logger.warning(
-                f"printer-creds seed raised at boot (monitor still starting): "
-                f"{_seed_boot_err}")
+                f"printer-creds check raised at boot (monitor still starting): "
+                f"{_creds_boot_err}")
         print_monitor._start_cancel_monitor()
     app.run(host='0.0.0.0', port=8000, use_reloader=_dev, debug=False)

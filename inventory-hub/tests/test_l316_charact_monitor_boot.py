@@ -6,8 +6,9 @@ Covers, WITHOUT ever starting the cancel-monitor daemon thread:
 
 1. _fcc_owns_completion_deduct — the REAL body (every deduct test patches it
    as a seam; the actual config read / default / exception-swallow was unpinned).
-2. _seed_printer_credentials_from_filabridge — the boot path that can WRITE
-   locations.json + a .bak. All disk/network is mocked.
+2. _note_printers_missing_credentials — the boot creds check that replaced the
+   FilaBridge creds seed (Group 56.5): it reads locations.json only, never the
+   network, and writes nothing.
 3. _cancel_monitor_loop resilience — recovery-before-first-tick, tick errors
    swallowed, adaptive sleep cadence. The infinite loop is escaped with a
    BaseException-derived sentinel (the loop's protections catch `Exception`
@@ -30,7 +31,6 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import app as app_module
-import startup_migrations  # L316: the seed calls the prune helper module-qualified
 import print_monitor  # L316: patch targets for moved symbols  # noqa: E402
 import state  # noqa: E402
 
@@ -109,13 +109,19 @@ def test_completion_flag_parses_bool_string_and_numeric_forms():
 
 
 # ---------------------------------------------------------------------------
-# 2. _seed_printer_credentials_from_filabridge — boot seed orchestration
+# 2. _note_printers_missing_credentials — the boot creds check (Group 56.5)
+#
+# It replaced _seed_printer_credentials_from_filabridge, which pulled creds
+# from FilaBridge `GET /printers` onto the Printer rows (and wrote
+# locations.json + a .bak). FilaBridge was decommissioned on 2026-06-13, so the
+# pull could only fail; the check reads locations.json, names the Printer rows
+# with no PrusaLink IP, and makes no request and no write.
 # ---------------------------------------------------------------------------
 
 def _seeded_rows():
     """Steady-state fleet: every Printer row already has creds. Includes a
     Tool Head without creds and a non-dict junk entry, neither of which may
-    trigger the seed."""
+    count as a printer missing creds."""
     return [
         {"LocationID": "XL", "Type": "Printer", "Name": "XL",
          "printer_creds": {"ip_address": "192.168.1.50", "api_key": "K"}},
@@ -124,238 +130,75 @@ def _seeded_rows():
     ]
 
 
-def _unseeded_rows():
-    """One Printer row missing creds entirely -> needs seed."""
-    return [
-        {"LocationID": "XL", "Type": "Printer", "Name": "XL",
-         "printer_creds": {"ip_address": "192.168.1.50", "api_key": "K"}},
-        {"LocationID": "CORE1", "Type": "Printer", "Name": "Core One"},
-    ]
+def _no_network():
+    """Every way the old seed reached the network, set to fail the test."""
+    boom = MagicMock(side_effect=AssertionError("the boot creds check made a request"))
+    return (patch.object(app_module.prusalink_api.requests, "get", boom),
+            patch.object(app_module.config_loader, "get_api_urls", boom))
 
 
-def test_seed_steady_state_no_network_no_write():
-    """The path that runs on EVERY prod boot now that FilaBridge is
-    decommissioned: all Printer rows have creds -> NO FilaBridge pull, NO
-    seed, NO save. Tool Head rows without creds and non-dict rows must not
-    count as needing seed."""
+def test_creds_check_steady_state_is_silent():
+    """Every Printer row has creds: no warning, no request, no write. Tool Head
+    rows without creds and non-dict rows don't count."""
+    net_get, net_urls = _no_network()
     with patch.object(app_module.locations_db, "load_locations_list",
-                      return_value=_seeded_rows()), \
-         patch.object(app_module.prusalink_api, "fetch_all_filabridge_printers") as fetch, \
-         patch.object(app_module.locations_db, "seed_printer_credentials") as seed, \
-         patch.object(app_module.locations_db, "save_locations_list") as save, \
-         patch.object(app_module.state, "logger", MagicMock()):
-        app_module._seed_printer_credentials_from_filabridge()
-    fetch.assert_not_called()
-    seed.assert_not_called()
-    save.assert_not_called()
-
-
-def test_seed_nonprinter_row_missing_creds_never_triggers():
-    """A credential-less NON-Printer row alone must not trigger the network
-    pull — the needs-seed predicate is scoped to Type=='printer' rows."""
-    rows = [{"LocationID": "XL-1", "Type": "Tool Head", "Name": "XL T1"}]
-    with patch.object(app_module.locations_db, "load_locations_list",
-                      return_value=rows), \
-         patch.object(app_module.prusalink_api, "fetch_all_filabridge_printers") as fetch, \
-         patch.object(app_module.locations_db, "save_locations_list") as save, \
-         patch.object(app_module.state, "logger", MagicMock()):
-        app_module._seed_printer_credentials_from_filabridge()
-    fetch.assert_not_called()
-    save.assert_not_called()
-
-
-def test_seed_locations_load_failure_warns_and_returns():
-    """locations.json unreadable at boot -> warning + early return; the seed
-    must never take FilaBridge's word over an unreadable local store, and
-    boot must not die."""
-    with patch.object(app_module.locations_db, "load_locations_list",
-                      side_effect=OSError("corrupt")), \
-         patch.object(app_module.prusalink_api, "fetch_all_filabridge_printers") as fetch, \
+                      return_value=_seeded_rows()), net_get, net_urls, \
          patch.object(app_module.locations_db, "save_locations_list") as save, \
          patch.object(app_module.state, "logger", MagicMock()) as logger:
-        app_module._seed_printer_credentials_from_filabridge()  # must not raise
-    fetch.assert_not_called()
+        app_module._note_printers_missing_credentials()
+    save.assert_not_called()
+    logger.warning.assert_not_called()
+
+
+def test_creds_check_names_printers_without_an_ip():
+    """A Printer row with no creds, and one whose creds hold a blank ip (Type
+    matched case-insensitively), are named in one warning that points at
+    Settings; nothing is fetched or written, and the rows stay as they are."""
+    rows = _seeded_rows() + [
+        {"LocationID": "CORE1", "Type": "Printer", "Name": "Core One"},
+        {"LocationID": "RCOI", "Type": "printer", "Name": "Core One INDX",
+         "printer_creds": {"ip_address": "   ", "api_key": "k"}},
+    ]
+    before = [dict(r) if isinstance(r, dict) else r for r in rows]
+    net_get, net_urls = _no_network()
+    with patch.object(app_module.locations_db, "load_locations_list",
+                      return_value=rows), net_get, net_urls, \
+         patch.object(app_module.locations_db, "save_locations_list") as save, \
+         patch.object(app_module.state, "logger", MagicMock()) as logger:
+        app_module._note_printers_missing_credentials()
+    save.assert_not_called()
+    assert rows == before
+    assert logger.warning.call_count == 1
+    msg = str(logger.warning.call_args.args[0])
+    assert "Core One, Core One INDX" in msg and "XL" not in msg, msg
+    assert "Printer Connections" in msg, msg
+
+
+def test_creds_check_locations_load_failure_warns_and_returns():
+    """locations.json unreadable at boot -> warning + early return; boot must
+    not die."""
+    with patch.object(app_module.locations_db, "load_locations_list",
+                      side_effect=OSError("corrupt")), \
+         patch.object(app_module.locations_db, "save_locations_list") as save, \
+         patch.object(app_module.state, "logger", MagicMock()) as logger:
+        app_module._note_printers_missing_credentials()  # must not raise
     save.assert_not_called()
     warn_msgs = [str(c.args[0]) for c in logger.warning.call_args_list]
     assert any("could not load locations" in m for m in warn_msgs), warn_msgs
 
 
-def test_seed_filabridge_pull_failure_warns_no_write():
-    """Row needs creds but the FilaBridge pull raises (the decommissioned-FB
-    reality) -> warning, NO save, boot continues."""
-    with patch.object(app_module.locations_db, "load_locations_list",
-                      return_value=_unseeded_rows()), \
-         patch.object(app_module.config_loader, "get_api_urls",
-                      return_value=("http://sm", "http://fb")), \
-         patch.object(app_module.prusalink_api, "fetch_all_filabridge_printers",
-                      side_effect=ConnectionError("FB is gone")), \
-         patch.object(app_module.locations_db, "seed_printer_credentials") as seed, \
-         patch.object(app_module.locations_db, "save_locations_list") as save, \
-         patch.object(app_module.state, "logger", MagicMock()) as logger:
-        app_module._seed_printer_credentials_from_filabridge()
-    seed.assert_not_called()
-    save.assert_not_called()
-    warn_msgs = [str(c.args[0]) for c in logger.warning.call_args_list]
-    assert any("FilaBridge pull failed" in m for m in warn_msgs), warn_msgs
-
-
-def test_seed_filabridge_empty_logs_retry_no_seed_call():
-    """FB reachable but /printers empty -> info log ('will retry next boot'),
-    NO seed, NO save. Also pins two predicate details: Type matching is
-    case-insensitive ('printer') and a creds dict with a BLANK ip_address
-    counts as still-missing (it triggered the pull)."""
-    rows = [{"LocationID": "CORE1", "Type": "printer", "Name": "Core One",
-             "printer_creds": {"ip_address": "   ", "api_key": "k"}}]
-    with patch.object(app_module.locations_db, "load_locations_list",
-                      return_value=rows), \
-         patch.object(app_module.config_loader, "get_api_urls",
-                      return_value=("http://sm", "http://fb")), \
-         patch.object(app_module.prusalink_api, "fetch_all_filabridge_printers",
-                      return_value=[]) as fetch, \
-         patch.object(app_module.locations_db, "seed_printer_credentials") as seed, \
-         patch.object(app_module.locations_db, "save_locations_list") as save, \
-         patch.object(app_module.state, "logger", MagicMock()) as logger:
-        app_module._seed_printer_credentials_from_filabridge()
-    fetch.assert_called_once_with("http://fb")  # blank-ip creds DID trigger the pull
-    seed.assert_not_called()
-    save.assert_not_called()
-    info_msgs = [str(c.args[0]) for c in logger.info.call_args_list]
-    assert any("will retry next boot" in m for m in info_msgs), info_msgs
-
-
-def test_seed_happy_path_backup_prune_save_and_log():
-    """Seed-needed happy path: seed called prime_only=True with the loaded
-    rows + FB printers; a timestamped .pre-printer-creds-seed-*.bak is
-    copied from locations_db.JSON_FILE; _prune_locations_backups runs; the
-    MIGRATED list is saved exactly once; the 'credential gate primed' info
-    line fires and no error is logged."""
-    rows = _unseeded_rows()
-    fb_printers = {"Core One": {"ip_address": "10.0.0.9", "api_key": "C1KEY"}}
-    migrated = [{"LocationID": "CORE1", "Type": "Printer",
-                 "printer_creds": {"ip_address": "10.0.0.9", "api_key": "C1KEY"}}]
-    json_file = app_module.locations_db.JSON_FILE
-    with patch.object(app_module.locations_db, "load_locations_list",
-                      return_value=rows), \
-         patch.object(app_module.config_loader, "get_api_urls",
-                      return_value=("http://sm", "http://fb")), \
-         patch.object(app_module.prusalink_api, "fetch_all_filabridge_printers",
-                      return_value=fb_printers), \
-         patch.object(app_module.locations_db, "seed_printer_credentials",
-                      return_value=(migrated, True)) as seed, \
-         patch.object(app_module.locations_db, "save_locations_list",
-                      return_value=True) as save, \
-         patch.object(startup_migrations, "_prune_locations_backups") as prune, \
-         patch("shutil.copy2") as copy2, \
-         patch.object(app_module.state, "logger", MagicMock()) as logger:
-        app_module._seed_printer_credentials_from_filabridge()
-
-    seed.assert_called_once_with(rows, fb_printers, prime_only=True)
-    copy2.assert_called_once()
-    src, dst = copy2.call_args.args
-    assert src == json_file
-    assert dst.startswith(f"{json_file}.pre-printer-creds-seed-")
-    assert dst.endswith(".bak")
-    prune.assert_called_once_with()
-    save.assert_called_once_with(migrated)
-    info_msgs = [str(c.args[0]) for c in logger.info.call_args_list]
-    assert any("credential gate primed" in m for m in info_msgs), info_msgs
-    logger.error.assert_not_called()
-
-
-def test_seed_save_failure_logs_error_no_exception():
-    """save_locations_list returning False must log an ERROR naming the
-    failure ('save FAILED') and return WITHOUT raising — boot survives a
-    failed persist and retries next boot."""
-    rows = _unseeded_rows()
-    with patch.object(app_module.locations_db, "load_locations_list",
-                      return_value=rows), \
-         patch.object(app_module.config_loader, "get_api_urls",
-                      return_value=("http://sm", "http://fb")), \
-         patch.object(app_module.prusalink_api, "fetch_all_filabridge_printers",
-                      return_value={"Core One": {"ip_address": "10.0.0.9"}}), \
-         patch.object(app_module.locations_db, "seed_printer_credentials",
-                      return_value=(rows, True)), \
-         patch.object(app_module.locations_db, "save_locations_list",
-                      return_value=False), \
-         patch.object(startup_migrations, "_prune_locations_backups"), \
-         patch("shutil.copy2"), \
-         patch.object(app_module.state, "logger", MagicMock()) as logger:
-        app_module._seed_printer_credentials_from_filabridge()  # must not raise
-    err_msgs = [str(c.args[0]) for c in logger.error.call_args_list]
-    assert any("save FAILED" in m for m in err_msgs), err_msgs
-
-
-def test_seed_unchanged_skips_backup_and_save():
-    """seed_printer_credentials reporting changed=False (e.g. FB only knows
-    printers whose rows are already primed) -> NO backup and NO save. The
-    changed-guard is what makes the boot path idempotent."""
-    rows = _unseeded_rows()
-    with patch.object(app_module.locations_db, "load_locations_list",
-                      return_value=rows), \
-         patch.object(app_module.config_loader, "get_api_urls",
-                      return_value=("http://sm", "http://fb")), \
-         patch.object(app_module.prusalink_api, "fetch_all_filabridge_printers",
-                      return_value={"Other": {"ip_address": "1.1.1.1"}}), \
-         patch.object(app_module.locations_db, "seed_printer_credentials",
-                      return_value=(rows, False)), \
-         patch.object(app_module.locations_db, "save_locations_list") as save, \
-         patch("shutil.copy2") as copy2, \
-         patch.object(app_module.state, "logger", MagicMock()):
-        app_module._seed_printer_credentials_from_filabridge()
-    copy2.assert_not_called()
-    save.assert_not_called()
-
-
-def test_seed_backup_failure_still_saves():
-    """The .bak write is best-effort: shutil.copy2 raising logs a warning
-    ('Could not write pre-printer-creds-seed backup') and the SAVE STILL
-    PROCEEDS — a backup problem must not block the credential gate."""
-    rows = _unseeded_rows()
-    migrated = [{"LocationID": "CORE1", "Type": "Printer",
-                 "printer_creds": {"ip_address": "10.0.0.9"}}]
-    with patch.object(app_module.locations_db, "load_locations_list",
-                      return_value=rows), \
-         patch.object(app_module.config_loader, "get_api_urls",
-                      return_value=("http://sm", "http://fb")), \
-         patch.object(app_module.prusalink_api, "fetch_all_filabridge_printers",
-                      return_value={"Core One": {"ip_address": "10.0.0.9"}}), \
-         patch.object(app_module.locations_db, "seed_printer_credentials",
-                      return_value=(migrated, True)), \
-         patch.object(app_module.locations_db, "save_locations_list",
-                      return_value=True) as save, \
-         patch.object(startup_migrations, "_prune_locations_backups") as prune, \
-         patch("shutil.copy2", side_effect=OSError("disk full")), \
-         patch.object(app_module.state, "logger", MagicMock()) as logger:
-        app_module._seed_printer_credentials_from_filabridge()
-    save.assert_called_once_with(migrated)
-    prune.assert_not_called()  # prune lives inside the same try as the backup
-    warn_msgs = [str(c.args[0]) for c in logger.warning.call_args_list]
-    assert any("Could not write pre-printer-creds-seed backup" in m
-               for m in warn_msgs), warn_msgs
-
-
-def test_seed_inner_seed_exception_is_swallowed():
-    """27.2 FIX — locations_db.seed_printer_credentials raising is now SWALLOWED
-    inside _seed_printer_credentials_from_filabridge (warning logged, save
-    skipped, no re-raise) so it can't kill the serving-process launch path
-    before _start_cancel_monitor. The docstring's 'never blocks startup'
-    contract now holds; the __main__ call site is also wrapped as
-    belt-and-suspenders for any other unexpected raise."""
-    rows = _unseeded_rows()
-    with patch.object(app_module.locations_db, "load_locations_list",
-                      return_value=rows), \
-         patch.object(app_module.config_loader, "get_api_urls",
-                      return_value=("http://sm", "http://fb")), \
-         patch.object(app_module.prusalink_api, "fetch_all_filabridge_printers",
-                      return_value={"Core One": {"ip_address": "10.0.0.9"}}), \
-         patch.object(app_module.locations_db, "seed_printer_credentials",
-                      side_effect=RuntimeError("seed exploded")), \
-         patch.object(app_module.locations_db, "save_locations_list") as save, \
-         patch.object(app_module.state, "logger", MagicMock()) as logger:
-        app_module._seed_printer_credentials_from_filabridge()  # must NOT raise
-    save.assert_not_called()
-    warn_msgs = [str(c.args[0]) for c in logger.warning.call_args_list]
-    assert any("seeding failed" in m for m in warn_msgs), warn_msgs
+def test_the_filabridge_seed_is_gone():
+    """The pull and its merge went with the seed: nothing left can reach the
+    decommissioned FilaBridge's /printers, and app.py's launch path calls the
+    check instead."""
+    import locations_db
+    import prusalink_api
+    assert not hasattr(prusalink_api, "fetch_all_filabridge_printers")
+    assert not hasattr(locations_db, "seed_printer_credentials")
+    assert not hasattr(print_monitor, "_seed_printer_credentials_from_filabridge")
+    src = open(os.path.join(os.path.dirname(os.path.abspath(app_module.__file__)), "app.py"),
+               encoding="utf-8").read()
+    assert "print_monitor._note_printers_missing_credentials()" in src
 
 
 # ---------------------------------------------------------------------------

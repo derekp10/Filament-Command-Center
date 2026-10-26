@@ -5,14 +5,14 @@ _PRINT_TRACKER_LOCK) and state frozensets, the _CANCEL_DEDUCT_RUN_ASYNC
 test seam, _fcc_owns_completion_deduct, the cancel/completion/ambiguous
 edge handlers + dispatchers, _track_print_edge, the adaptive
 _cancel_monitor_tick / _cancel_monitor_loop daemon, the deferred-fetch
-retry queue, restart recovery, and the boot credential seed.
+retry queue, restart recovery, and the boot credential seed (since Group 56.5 a
+check that only names Printer rows with no PrusaLink IP).
 
 Wiring notes:
 - Calls INTO print_deduct are module-qualified (print_deduct.deduct_completed_print
   etc.) so tests that patch symbols on print_deduct intercept them; this was
   the only text change in the move (bare names -> module-qualified).
-- The credential seed calls startup_migrations._prune_locations_backups.
-- NOTHING here starts at import time: the daemon spawn + creds seed remain
+- NOTHING here starts at import time: the daemon spawn + creds check remain
   under app.py's __main__ block (the whole unit suite depends on importing
   the app family without spawning the daemon).
 - Tests patch/assign the mutable globals ON THIS MODULE (repointed from
@@ -33,7 +33,6 @@ import cancel_fetch_store  # type: ignore
 import print_tracker_store  # type: ignore
 
 import print_deduct  # type: ignore
-import startup_migrations  # type: ignore
 
 
 
@@ -147,7 +146,7 @@ def _on_cancel_edge(printer_name, filename, job_id, progress, fb_url):
         try:
             state.add_log_entry(
                 f"❌ Cancelled-print review failed for {printer_name} "
-                f"('{filename}'): {e}", "ERROR", "ff4444")
+                f"('{print_deduct._esc(filename)}'): {print_deduct._esc(e)}", "ERROR", "ff4444")
         except Exception:
             pass
 
@@ -180,7 +179,7 @@ def _on_completion_edge(printer_name, filename, job_id, fb_url, start_spools=Non
         try:
             state.add_log_entry(
                 f"❌ Completed-print deduct failed for {printer_name} "
-                f"('{filename}'): {e}", "ERROR", "ff4444")
+                f"('{print_deduct._esc(filename)}'): {print_deduct._esc(e)}", "ERROR", "ff4444")
         except Exception:
             pass
 
@@ -221,7 +220,7 @@ def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
     try:
         if progress_unknown:
             state.add_log_entry(
-                f"❓ Print on {printer_name} ('{filename}') was replaced before its "
+                f"❓ Print on {printer_name} ('{print_deduct._esc(filename)}') was replaced before its "
                 f"progress could be measured — surfacing a review (couldn't measure "
                 f"usage)…", "INFO")
         else:
@@ -240,7 +239,7 @@ def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
         try:
             state.add_log_entry(
                 f"❌ Ambiguous-print review failed for {printer_name} "
-                f"('{filename}'): {e}", "ERROR", "ff4444")
+                f"('{print_deduct._esc(filename)}'): {print_deduct._esc(e)}", "ERROR", "ff4444")
         except Exception:
             pass
 
@@ -794,15 +793,25 @@ def _process_pending_cancel_fetches(states, fb_url):
             if now - first_seen > _CANCEL_FETCH_MAX_AGE_S:
                 pct = max(0.0, min(1.0, progress)) * 100
                 hrs = _CANCEL_FETCH_MAX_AGE_S // 3600
+                if kind == "complete" and _fcc_owns_completion_deduct():
+                    # Group 56.3: a completion FCC owns is never recorded at 0 g
+                    # without a review. The "couldn't measure" card writes no
+                    # ledger entry and holds the job (a pending review drops any
+                    # later fetch entry, above) until Discard.
+                    print_deduct._stash_unresolved_review(
+                        printer, filename, job_id, 1.0, usage_map=None,
+                        progress_unknown=True, reason="no_download")
+                    cancel_fetch_store.pop_pending(printer, job_id)
+                    continue
                 if kind == "complete":
                     state.add_log_entry(
                         f"✅ Gave up fetching the completed print's gcode on {printer} "
-                        f"('{filename}') after {hrs}h — no deduct recorded. "
+                        f"('{print_deduct._esc(filename)}') after {hrs}h — no deduct recorded. "
                         f"Weigh the spool to true it up.", "WARNING", "ffaa00")
                 else:
                     state.add_log_entry(
                         f"🛑 Gave up fetching the cancelled print's gcode on {printer} "
-                        f"('{filename}', ~{pct:.0f}%) after {hrs}h — no partial deduct. "
+                        f"('{print_deduct._esc(filename)}', ~{pct:.0f}%) after {hrs}h — no partial deduct. "
                         f"Weigh the spool to true it up.", "WARNING", "ffaa00")
                 print_deduct_ledger.record_deduct(printer, job_id, filename=filename,
                                                   scale=progress, grams=0)
@@ -941,7 +950,7 @@ def _recover_one_print_latch(name, entry, fb_url):
         # A DIFFERENT job is printing → the old one ended during the outage and
         # we can't tell cancel from completion → manual review; latch the new job.
         state.add_log_entry(
-            f"⚠️ {name}: a print ('{filename}', ~{pct:.0f}%) was in progress when FCC "
+            f"⚠️ {name}: a print ('{print_deduct._esc(filename)}', ~{pct:.0f}%) was in progress when FCC "
             f"restarted and a different job is printing now — its outcome is unknown, "
             f"not auto-deducted. Weigh the spool if that print was cancelled.",
             "WARNING", "ffaa00")
@@ -958,7 +967,7 @@ def _recover_one_print_latch(name, entry, fb_url):
         # status if it doesn't resume").
         state.add_log_entry(
             f"🛑 Recovering a cancel missed during an FCC restart on {name} "
-            f"('{filename}', ~{pct:.0f}%) — printer still {cur}.", "WARNING", "ffaa00")
+            f"('{print_deduct._esc(filename)}', ~{pct:.0f}%) — printer still {cur}.", "WARNING", "ffaa00")
         _dispatch_cancel_edge(name, filename, job_id, progress, fb_url)
         with _PRINT_TRACKER_LOCK:
             _PRINT_TRACKER[name] = {'state': cur}
@@ -972,7 +981,7 @@ def _recover_one_print_latch(name, entry, fb_url):
             # ledger, so a double restart can't double-deduct.
             state.add_log_entry(
                 f"✅ Recovering a completion missed during an FCC restart on {name} "
-                f"('{filename}') — printer still FINISHED.", "INFO")
+                f"('{print_deduct._esc(filename)}') — printer still FINISHED.", "INFO")
             # 22.3: the persisted entry round-trips start_spools/snapshot_job/swap_log,
             # so a restart AFTER the snapshot was captured still detects a mid-print
             # swap; a restart BEFORE capture has no snapshot → None → auto-apply.
@@ -996,7 +1005,7 @@ def _recover_one_print_latch(name, entry, fb_url):
         # edge; idempotent via the (printer, job_id) ledger + review store, so a
         # double restart can't double-surface. NEVER auto-deducts.
         state.add_log_entry(
-            f"❓ A print ('{filename}', ~{pct:.0f}%) was in progress on {name} when FCC "
+            f"❓ A print ('{print_deduct._esc(filename)}', ~{pct:.0f}%) was in progress on {name} when FCC "
             f"restarted and it's now {cur or 'idle'} — surfacing a review (couldn't "
             f"confirm completed vs cancelled).", "WARNING", "ffaa00")
         _dispatch_ambiguous_edge(name, filename, job_id, progress, fb_url,
@@ -1037,73 +1046,33 @@ def _cancel_monitor_loop():
         time.sleep(_CANCEL_MONITOR_FAST_S if busy else _CANCEL_MONITOR_IDLE_S)
 
 
-def _seed_printer_credentials_from_filabridge():
-    """FilaBridge Phase-2 cutover — credential gate. ONE-TIME, prime-only seed:
-    relocate each printer's ip_address + api_key OFF FilaBridge `GET /printers`
-    and ONTO its first-class Type:"Printer" row (printer_creds field), so the
-    whole PrusaLink read path (state/job/MMU probe, cancel-deduct download) stops
-    depending on FilaBridge being up. Pulls /printers ONLY when a Printer row is
-    still missing creds, and never overwrites a row that already has them (a
-    Settings edit wins). Idempotent — once every row has creds (or FilaBridge is
-    gone) it does nothing. Lives in the SERVING-process launch path (not module
-    import) because it makes a network call; mirrors the Phase-3/4 migrations'
-    load→migrate→backup→save shape. Best-effort: never blocks startup."""
+def _note_printers_missing_credentials():
+    """Boot check (Group 56.5; it replaced the FilaBridge Phase-2 creds seed). The
+    seed pulled each printer's ip_address + api_key from FilaBridge `GET /printers`
+    onto its Type:"Printer" row while FilaBridge still ran; FilaBridge was
+    decommissioned on 2026-06-13, so that pull could only fail. A row's PrusaLink
+    connection is entered in ⚙️ Settings → 🔌 Printer Connections, and a row
+    without an IP stays as it is. This only names, once per boot, the Printer rows
+    that have no IP yet: FCC can't read those printers' state or download their
+    files (no cancel or completion deduct) until one is entered. No network, no
+    write. Best-effort: never blocks startup."""
     try:
-        _cred_locs = locations_db.load_locations_list()
-    except Exception as _e:
-        state.logger.warning(f"printer-creds seed: could not load locations: {_e}")
+        rows = locations_db.load_locations_list()
+    except Exception as e:
+        state.logger.warning(f"printer-creds check: could not load locations: {e}")
         return
-    _needs_seed = any(
-        isinstance(r, dict)
-        and str(r.get('Type', '')).strip().lower() == 'printer'
-        and not (isinstance(r.get(locations_db.PRINTER_CREDS_KEY), dict)
-                 and str((r.get(locations_db.PRINTER_CREDS_KEY) or {}).get('ip_address', '') or '').strip())
-        for r in (_cred_locs or [])
-    )
-    if not _needs_seed:
-        return
-    try:
-        _, _cred_fb_url = config_loader.get_api_urls()
-        _fb_printers = prusalink_api.fetch_all_filabridge_printers(_cred_fb_url)
-    except Exception as _e:
-        state.logger.warning(f"printer-creds seed: FilaBridge pull failed: {_e}")
-        return
-    if not _fb_printers:
-        state.logger.info(
-            "🔐 Printer-creds seed: FilaBridge /printers unreachable or empty; "
-            "will retry next boot (rows still missing creds).")
-        return
-    try:
-        _cred_migrated, _cred_changed = locations_db.seed_printer_credentials(
-            _cred_locs, _fb_printers, prime_only=True)
-    except Exception as _seed_err:
-        # 27.2 — a raising seed must NOT propagate out of this best-effort boot
-        # helper (docstring: "never blocks startup"). Degrade to a warning and
-        # let the cancel monitor start; the seed retries next boot.
+    missing = []
+    for r in rows or []:
+        if not isinstance(r, dict) or str(r.get('Type', '')).strip().lower() != 'printer':
+            continue
+        creds = r.get(locations_db.PRINTER_CREDS_KEY)
+        if not (isinstance(creds, dict) and str(creds.get('ip_address', '') or '').strip()):
+            missing.append(str(r.get('Name') or r.get('LocationID') or '?'))
+    if missing:
         state.logger.warning(
-            f"printer-creds seed: seeding failed (boot continues, retries next "
-            f"boot): {_seed_err}")
-        return
-    if not _cred_changed:
-        return
-    try:
-        import shutil, time as _t
-        _stamp = _t.strftime('%Y%m%d-%H%M%S')
-        _backup = f"{locations_db.JSON_FILE}.pre-printer-creds-seed-{_stamp}.bak"
-        shutil.copy2(locations_db.JSON_FILE, _backup)
-        state.logger.info(f"📦 Backed up locations.json → {_backup}")
-        startup_migrations._prune_locations_backups()
-    except Exception as _bk_err:
-        state.logger.warning(f"Could not write pre-printer-creds-seed backup: {_bk_err}")
-    if locations_db.save_locations_list(_cred_migrated):
-        state.logger.info(
-            "🔐 Seeded printer credentials from FilaBridge onto Printer rows — "
-            "FilaBridge Phase-2 credential gate primed (FCC now reaches PrusaLink "
-            "without FilaBridge).")
-    else:
-        state.logger.error(
-            "❌ Printer-creds seed save FAILED — locations.json left unchanged; "
-            "will retry next boot.")
+            f"🔌 No PrusaLink IP saved for {', '.join(missing)}: FCC can't watch "
+            f"{'that printer' if len(missing) == 1 else 'those printers'} (no cancel or "
+            f"completion deduct) until one is entered in Settings → Printer Connections.")
 
 
 def _start_cancel_monitor():

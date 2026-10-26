@@ -140,3 +140,42 @@ def test_cancel_review_no_pending_shows_no_overlay(page, require_server, base_ur
     # No overlay mounts when there's nothing to review.
     page.wait_for_timeout(500)
     assert page.query_selector("#fcc-cancel-review-overlay") is None
+
+
+def _unmeasured(job, reason=None):
+    rec = {"printer_name": "XL", "job_id": job, "filename": "<b>&t.gcode",
+           "progress": 1.0, "total_grams": 0.0, "spools": [], "ambiguous": False,
+           "kind": "progress_unknown", "usage_map": None}
+    if reason is not None:
+        rec["unmeasured_reason"] = reason
+    return rec
+
+
+def test_unmeasured_reviews_say_why_and_offer_only_discard(page, require_server, base_url):
+    """Group 56.3: a completion whose footer couldn't be read, lists no filament,
+    or whose file couldn't be downloaded opens the "couldn't measure" card with
+    its own reason; a record from before 56.3 (no reason) keeps the old line.
+    None offers Apply, and the filename is shown as text."""
+    page.goto(base_url, wait_until='domcontentloaded')
+    pending = {"pending": [_unmeasured("U-1", "no_footer"), _unmeasured("U-2", "empty_footer"),
+                           _unmeasured("U-3", "no_download"), _unmeasured("U-4")]}
+    page.route("**/api/cancel_deduct/pending",
+               lambda route: route.fulfill(status=200, content_type="application/json",
+                                           body=json.dumps(pending)))
+    page.evaluate("() => window.openCancelReview()")
+    page.wait_for_selector('#fcc-cancel-review-overlay .fcc-cr-card[data-job="U-4"]', timeout=5000)
+    want = {
+        "U-1": "filament footer couldn't be read",
+        "U-2": "filament footer lists no filament",
+        "U-3": "download the print's file",
+        "U-4": "replaced by a new print before a progress reading",
+    }
+    for job, words in want.items():
+        card = page.locator(f'#fcc-cancel-review-overlay .fcc-cr-card[data-job="{job}"]')
+        text = " ".join(card.inner_text().split())
+        assert words in text, (job, text)
+        assert "<b>&t.gcode" in text, (job, text)
+        assert card.locator(".fcc-cr-confirm").count() == 0, job
+        assert card.locator(".fcc-cr-discard").count() == 1, job
+    page.keyboard.press("Escape")
+    page.wait_for_function("() => !document.getElementById('fcc-cancel-review-overlay')", timeout=5000)

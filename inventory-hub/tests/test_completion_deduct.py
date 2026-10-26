@@ -263,10 +263,13 @@ def test_completed_print_no_creds_defers(stores_tmp):
 # --------------------------------------------------------------------------- #
 
 def test_compute_use_footer_vs_prefix_differ():
-    # Body extrudes only 1mm on T0; the FOOTER claims the full 25g. A completion
-    # must take the footer (25g), the cancel prefix-parse takes the body (≈2.5g).
-    gcode = ("M83\nT0\nG1 X10 E1\n"
+    # The body extrudes 10mm on T0, the FOOTER claims 25g. A completion takes the
+    # footer (25g); a cancel takes the share of the body reached by the cancel
+    # point, times the footer (Group 56.2: 4 of 10mm = 10g, not the whole 25g).
+    body = "M83\nT0\nG1 X10 E4\n"
+    gcode = (body + "G1 X20 E6\n"
              "; filament used [mm] = 10\n; filament used [g] = 25\n")
+    cut = (len(body) + 2) / len(gcode)   # inside the second move: it isn't reached
     pm = {"XL-1": {"printer_name": "XL", "position": 0}}
     with patch.object(app_module.locations_db, "get_active_printer_map", return_value=pm), \
          patch.object(app_module.prusalink_api, "fetch_cancel_gcode",
@@ -274,11 +277,10 @@ def test_compute_use_footer_vs_prefix_differ():
         footer_map, t1 = app_module._compute_cancel_usage(
             "XL", "f", "J", 1.0, "1.2.3.4", "k", use_footer=True)
         prefix_map, t2 = app_module._compute_cancel_usage(
-            "XL", "f", "J", 1.0, "1.2.3.4", "k", use_footer=False)
+            "XL", "f", "J", cut, "1.2.3.4", "k", use_footer=False)
     assert t1 is None and t2 is None
     assert footer_map == {0: 25.0}
-    # prefix: 1mm * (25g/10mm) = 2.5g — strictly less than the footer.
-    assert abs(prefix_map[0] - 2.5) < 1e-6
+    assert abs(prefix_map[0] - 10.0) < 1e-6, prefix_map
     assert footer_map[0] > prefix_map[0]
 
 
