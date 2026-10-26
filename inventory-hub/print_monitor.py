@@ -677,6 +677,12 @@ _CANCEL_MONITOR_IDLE_S = 30
 # away (e.g. over a weekend). Retrying is nearly free — it only hits the network
 # once the printer leaves STOPPED — so the window is generous.
 _CANCEL_FETCH_MAX_AGE_S = 72 * 3600
+# (printer, job_id) of queued completions whose deduct raised once its spool
+# writes had begun (Group 56 review, round 3): never charged again by this
+# process, even when dropping their queue entry fails (a full disk can't write
+# the queue either). In memory on purpose: such a disk can't persist a marker,
+# and the claim before each deduct (a write) keeps a later process from charging.
+_ABANDONED_COMPLETIONS = set()
 _cancel_monitor_started = False
 _cancel_monitor_lock = threading.Lock()
 
@@ -794,6 +800,13 @@ def _process_pending_cancel_fetches(states, fb_url):
                         f"— weigh the spool to true it up.", "WARNING", "ffaa00")
                 continue
 
+            if (str(printer), str(job_id)) in _ABANDONED_COMPLETIONS:
+                # Its deduct raised after charging (below); the drop may not have
+                # landed (a full disk can't write the queue either). Never charge it
+                # again: only retry the drop.
+                cancel_fetch_store.pop_pending(printer, job_id)
+                continue
+
             # Resolved elsewhere (confirmed/dismissed, or a review already
             # stashed) → drop the queue entry. Keeps "ledger/review ⟹ no fetch".
             if (print_deduct_ledger.was_deducted(printer, job_id)
@@ -819,6 +832,16 @@ def _process_pending_cancel_fetches(states, fb_url):
                         print_deduct._stash_unresolved_review(
                             printer, filename, job_id, 1.0, usage_map=None,
                             progress_unknown=True, reason="no_download")
+                    cancel_fetch_store.pop_pending(printer, job_id)
+                    continue
+                if kind != "complete" and ambiguous:
+                    # An ambiguous end may have been a completion (Group 56 review,
+                    # round 3): its queue line promised a review, so it gets the
+                    # "couldn't measure" card, not a 0 g "cancelled print" entry.
+                    # Nothing auto-charges on this path, so no crash guard.
+                    print_deduct._stash_unresolved_review(
+                        printer, filename, job_id, progress, usage_map=None,
+                        progress_unknown=True, ambiguous=True, reason="no_download")
                     cancel_fetch_store.pop_pending(printer, job_id)
                     continue
                 if kind == "complete":
@@ -859,6 +882,12 @@ def _process_pending_cancel_fetches(states, fb_url):
                 if not _fcc_owns_completion_deduct():
                     cancel_fetch_store.pop_pending(printer, job_id)
                     continue
+                # Claim it before charging (Group 56 review, round 3): a store FCC
+                # can't write now (a full or read-only disk) would fail the ledger
+                # write AFTER the spools are charged, and a retry would charge them
+                # again. Re-saving the entry is that check: if it raises, nothing
+                # has been charged and the next tick tries again.
+                cancel_fetch_store.add_pending(rec)
                 # start_spools + swap_log (if captured before the finish-screen lock)
                 # ride the fetch record so the deferred completion still detects a
                 # mid-print spool swap (22.3/22.3(b)); None when not captured → auto-apply.
@@ -876,29 +905,33 @@ def _process_pending_cancel_fetches(states, fb_url):
             # Any terminal outcome (pending review / pending_unresolved / no_usage /
             # skipped) resolves this entry.
             cancel_fetch_store.pop_pending(printer, job_id)
+        except print_deduct.CompletionMayHaveCharged as e:
+            # The deduct raised once its spool writes had begun (the ledger write
+            # failing after them, say): the spools may already be charged, and every
+            # later IDLE tick used to charge the footer AGAIN (Group 56 review). Mark
+            # it given up for this process FIRST (the drop below is a write too, and
+            # may fail on the same disk), then drop it and say so, once.
+            _ABANDONED_COMPLETIONS.add((str(printer), str(job_id)))
+            try:
+                cancel_fetch_store.pop_pending(printer, job_id)
+            except Exception:
+                pass
+            try:
+                state.add_log_entry(
+                    f"❌ Completed-print deduct failed for {printer} "
+                    f"('{print_deduct._esc(filename)}'): {print_deduct._esc(e)} — not retried "
+                    f"(it may have charged the spools already); weigh the spool to true it up.",
+                    "ERROR", "ff4444")
+            except Exception:
+                pass
         except Exception as e:
+            # Anything else raised before a spool write (a review or queue store
+            # that couldn't be written, a malformed record): nothing was charged,
+            # so the entry stays queued and the next tick tries again.
             try:
                 state.logger.debug(f"cancel-fetch retry failed for {rec}: {e}")
             except Exception:
                 pass
-            if rec.get("kind") == "complete":
-                # A completion deduct writes the spools before its ledger entry: a
-                # raise in between (a full disk failing the ledger write) left the
-                # entry queued, and every later IDLE tick charged the footer AGAIN
-                # (Group 56 review, round 2). Drop it and say so, as the live
-                # completion edge does when it raises; never retry blind.
-                try:
-                    cancel_fetch_store.pop_pending(rec.get("printer_name"), rec.get("job_id"))
-                except Exception:
-                    pass
-                try:
-                    state.add_log_entry(
-                        f"❌ Completed-print deduct failed for {rec.get('printer_name')} "
-                        f"('{print_deduct._esc(rec.get('filename'))}'): {print_deduct._esc(e)} — "
-                        f"not retried (it may have charged the spools already); weigh the "
-                        f"spool to true it up.", "ERROR", "ff4444")
-                except Exception:
-                    pass
 
 
 def _recover_print_tracker_on_start():

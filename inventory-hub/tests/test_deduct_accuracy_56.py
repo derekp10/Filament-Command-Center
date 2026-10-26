@@ -538,21 +538,28 @@ def _unescaped_free_text(source, name):
 
 
 def test_the_escape_canary_catches_raw_outside_text():
-    src = ("def f(filename, rec, e, err, why):\n"
+    src = ("def f(filename, rec, e, err, why, exc, display_filename):\n"
            "    state.add_log_entry(f\"ok '{_esc(filename)}' {_esc(e)}\", 'INFO')\n"
+           "    state.add_log_entry(f\"ok {print_deduct._esc(err)} {html.escape(why, quote=False)}\", 'INFO')\n"
            "    msg = f\"bad '{rec.get('filename')}'\"\n"
            "    state.add_log_entry(msg, 'INFO')\n"
            "    state.add_log_entry(f\"bad '{filename}' {e}\", 'INFO')\n"
            "    m2 = 'x'\n"
            "    m2 += f\"bad {err}\"\n"
            "    state.add_log_entry(m2, 'INFO')\n"
+           "    m3: str = f\"bad {exc}\"\n"
+           "    state.add_log_entry(m3, 'INFO')\n"
            "    state.add_log_entry('bad %s' % filename, 'INFO')\n"
            "    state.add_log_entry('bad {}'.format(why), 'INFO')\n"
+           "    state.add_log_entry('bad ' + display_filename, 'INFO')\n"
+           "    state.add_log_entry(f\"bad {rec['filename']} {rec.filename}\", 'INFO')\n"
            "    state.add_log_entry(f\"bad {spoolman_api.LAST_SPOOLMAN_ERROR}\", 'INFO')\n"
            "    state.add_log_entry(f\"fine {len(rec)} {printer}\", 'INFO')\n")
     offenders, checked = _unescaped_free_text(src, "x.py")
-    assert len(offenders) == 7, offenders
-    assert len(checked) == 9, checked
+    # rec.get('filename'), filename, e, err, exc, % filename, .format(why),
+    # + display_filename, rec['filename'], rec.filename, LAST_SPOOLMAN_ERROR
+    assert len(offenders) == 11, offenders
+    assert len(checked) == 15, checked     # the 11 + 4 escapes
 
 
 def test_every_deduct_and_monitor_log_line_escapes_its_outside_text():
@@ -705,12 +712,21 @@ def test_a_completion_deduct_card_still_names_the_heads_at_print_end(logs):
 # --------------------------------------------------------------------------- #
 
 def test_the_two_percent_line_is_drawn_where_it_says(logs):
-    """2.5% warns, 2.0% doesn't (the threshold is "more than 2%")."""
-    _cancel_usage("M83\nT0\nG1 E10.25\n" + _footer([10], [10]), 1.0, _XL_PM)
-    assert len(_gap_lines(logs)) == 1
-    del logs[:]
-    _cancel_usage("M83\nT0\nG1 E10.2\n" + _footer([10], [10]), 1.0, _XL_PM)
-    assert _gap_lines(logs) == []
+    """Exactly 2% says nothing, 2.1% warns (the threshold is "more than 2%"):
+    51 against 50 is 2.0% to the last bit."""
+    for walk, warns in ((51, False), (51.05, True)):
+        del logs[:]
+        _cancel_usage(f"M83\nT0\nG1 E{walk}\n" + _footer([50], [50]), 1.0, _XL_PM)
+        assert len(_gap_lines(logs)) == (1 if warns else 0), (walk, logs)
+
+
+def test_the_tenth_of_a_gram_floor_is_drawn_where_it_says(logs):
+    """At least 0.1 g as well as 2%: 0.1 g over a 2 g footer warns, 0.09 g
+    doesn't (both are well over 2%)."""
+    for walk, warns in ((2.1, True), (2.09, False)):
+        del logs[:]
+        _cancel_usage(f"M83\nT0\nG1 E{walk}\n" + _footer([2], [2]), 1.0, _XL_PM)
+        assert len(_gap_lines(logs)) == (1 if warns else 0), (walk, logs)
 
 
 def test_every_head_over_the_line_gets_its_own_warning(logs):
@@ -795,6 +811,8 @@ def test_job_1078s_run_out_split_still_matches_the_scale():
     assert measured["footer"] == {0: 109.76}
     assert abs(measured["whole"][0] - 109.76) < 0.01, measured["whole"]
     replacement = 109.76 - measured["partials"][0][0]
+    # 83.194 g now; 83.279 g before 56.2, which this tolerance refuses.
+    assert abs(replacement - 83.19) < 0.03, replacement
     assert abs(replacement - 83.2) < 0.1, replacement
 
 
@@ -918,26 +936,157 @@ def test_a_give_up_while_fcc_doesnt_own_completions_keeps_the_old_record(logs):
     assert any("Gave up fetching the completed print's gcode" in m for m, a, k in logs), logs
 
 
-def test_a_queued_completion_that_raises_is_dropped_not_charged_again(logs):
-    """The deduct writes the spools before its ledger entry; a raise in between
-    (a full disk) used to leave the entry queued, and every IDLE tick charged the
-    footer again."""
+def _queue_completion(job="Q-1"):
     cancel_fetch_store.add_pending({
-        "printer_name": "XL", "job_id": "Q-1", "filename": NASTY, "progress": 1.0,
+        "printer_name": "XL", "job_id": job, "filename": NASTY, "progress": 1.0,
         "first_seen": time.time(), "kind": "complete", "attempts": 1})
+
+
+def _ticks(n=3):
+    for _ in range(n):
+        print_monitor._process_pending_cancel_fetches({"XL": {"state": "IDLE"}}, "http://fb")
+
+
+@pytest.fixture
+def no_abandoned(monkeypatch):
+    monkeypatch.setattr(print_monitor, "_ABANDONED_COMPLETIONS", set())
+
+
+def test_a_queued_completion_that_may_have_charged_is_dropped_not_charged_again(logs, no_abandoned):
+    """The deduct writes the spools before its ledger entry; a raise in between
+    (a ledger write that fails) used to leave the entry queued, and every IDLE
+    tick charged the footer again."""
+    _queue_completion()
     calls = []
 
     def _boom(*a, **k):
         calls.append(1)
-        raise OSError("[Errno 28] No space left <on device>")
+        raise print_deduct.CompletionMayHaveCharged("[Errno 28] No space left <on device>")
     with patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=True), \
          patch.object(print_deduct, "deduct_completed_print", side_effect=_boom):
-        print_monitor._process_pending_cancel_fetches({"XL": {"state": "IDLE"}}, "http://fb")
-        print_monitor._process_pending_cancel_fetches({"XL": {"state": "IDLE"}}, "http://fb")
+        _ticks()
     assert len(calls) == 1
     assert not cancel_fetch_store.has_pending("XL", "Q-1")
-    line = next(m for m, a, k in logs if "Completed-print deduct failed" in m)
-    assert NASTY_ESC in line and "&lt;on device&gt;" in line and "not retried" in line, line
+    lines = [m for m, a, k in logs if "Completed-print deduct failed" in m]
+    assert len(lines) == 1, lines
+    assert NASTY_ESC in lines[0] and "&lt;on device&gt;" in lines[0] and "not retried" in lines[0]
+
+
+def test_a_queued_job_that_raises_before_charging_stays_queued(logs, no_abandoned):
+    """Anything else raised before a spool write (a review the store couldn't
+    write, a queue write failing) charged nothing: the entry stays and the next
+    tick finishes it, for a completion and a cancel alike."""
+    _queue_completion("Q-2")
+    cancel_fetch_store.add_pending({
+        "printer_name": "XL", "job_id": "Q-3", "filename": NASTY, "progress": 0.5,
+        "first_seen": time.time(), "kind": "cancel", "attempts": 1})
+    state_ = {"n": 0}
+
+    def _flaky_complete(*a, **k):
+        state_["n"] += 1
+        if state_["n"] == 1:
+            raise PermissionError("review store busy")
+        return {"status": "deducted", "job_id": "Q-2"}
+
+    def _flaky_cancel(*a, **k):
+        if not state_.get("cancel"):
+            state_["cancel"] = 1
+            raise PermissionError("review store busy")
+        return {"status": "pending", "job_id": "Q-3"}
+    with patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=True), \
+         patch.object(print_deduct, "deduct_completed_print", side_effect=_flaky_complete), \
+         patch.object(print_deduct, "_create_pending_cancel_review", side_effect=_flaky_cancel):
+        _ticks(1)
+        assert cancel_fetch_store.has_pending("XL", "Q-2") and cancel_fetch_store.has_pending("XL", "Q-3")
+        _ticks(1)
+    assert state_["n"] == 2
+    assert cancel_fetch_store.list_pending() == []
+    assert not any("Completed-print deduct failed" in m for m, a, k in logs), logs
+
+
+def test_a_full_disk_never_charges_a_queued_completion_twice(logs, no_abandoned, monkeypatch):
+    """The real deduct on a disk that has filled since the job was queued: the
+    claim (a re-save of the entry) fails first, so nothing is charged at all; and
+    when only the ledger fails, the job is charged once and never again, even
+    though dropping its entry fails too (only `_apply_usage_to_printer` stubbed)."""
+    charges = []
+
+    def _apply(printer, usage_map, fb_url, strategy_label="", active_locs=None, failed_out=None):
+        charges.append(dict(usage_map))
+        return 1, [{"sid": 5, "grams": 10.0, "remaining": 90.0, "toolhead": "XL-1", "position": 0}], {0}
+
+    def _full(*a, **k):
+        raise OSError(28, "No space left on device")
+    gcode = "M83\nT0\nG1 E10\n" + _footer([10], [10])
+    ctx = [patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=True),
+           patch.object(prusalink_api, "fetch_printer_credentials",
+                        return_value={"ip_address": "1.2.3.4", "api_key": "k"}),
+           patch.object(prusalink_api, "fetch_cancel_gcode",
+                        side_effect=lambda ip, key, fn, f: {"gcode": gcode, "fraction": f}),
+           patch.object(print_deduct.locations_db, "get_active_printer_map", return_value=_XL_PM),
+           patch.object(print_deduct, "_resolve_active_locs_for_printer",
+                        return_value=[("XL-1", {"position": 0, "printer_name": "XL"})]),
+           patch.object(print_deduct, "_apply_usage_to_printer", side_effect=_apply),
+           patch.object(print_deduct.stock_report, "check_after_deduct")]
+    for c in ctx:
+        c.start()
+    try:
+        # 1) Every store unwritable since the job was queued: nothing charged.
+        _queue_completion("D-1")
+        with patch.object(cancel_fetch_store, "_save", side_effect=_full), \
+             patch.object(print_deduct_ledger, "_save", side_effect=_full), \
+             patch.object(cancel_review_store, "_save", side_effect=_full):
+            _ticks()
+        assert charges == []
+        assert cancel_fetch_store.has_pending("XL", "D-1")
+        cancel_fetch_store.pop_pending("XL", "D-1")
+        # 2) The claim lands, then the disk fills: the ledger write and the drop
+        #    fail. Charged once; later ticks only retry the drop.
+        _queue_completion("D-2")
+        real_save = cancel_fetch_store._save
+        saves = {"n": 0}
+
+        def _claim_then_full(data):
+            saves["n"] += 1
+            if saves["n"] == 1:
+                return real_save(data)
+            raise OSError(28, "No space left on device")
+        with patch.object(cancel_fetch_store, "_save", side_effect=_claim_then_full), \
+             patch.object(print_deduct_ledger, "_save", side_effect=_full):
+            _ticks()
+        assert charges == [{0: 10.0}]
+        lines = [m for m, a, k in logs if "Completed-print deduct failed" in m]
+        assert len(lines) == 1 and "may have charged" in lines[0], lines
+        # 3) Only the drop fails, once (a one-off sharing collision on the queue
+        #    file): the next tick's claim would land, so only the in-process guard
+        #    keeps the job from being charged again.
+        _queue_completion("D-3")
+        saves = {"n": 0}
+
+        def _drop_fails_once(data):
+            saves["n"] += 1
+            if saves["n"] == 2:
+                raise PermissionError(13, "sharing violation")
+            return real_save(data)
+        with patch.object(cancel_fetch_store, "_save", side_effect=_drop_fails_once), \
+             patch.object(print_deduct_ledger, "_save", side_effect=_full):
+            _ticks()
+        assert charges == [{0: 10.0}, {0: 10.0}], charges     # D-2's, then D-3's once
+        assert not cancel_fetch_store.has_pending("XL", "D-3")
+    finally:
+        for c in ctx:
+            c.stop()
+
+
+def test_a_junk_queue_record_doesnt_stop_the_rest(logs):
+    """One bad record never blocks the rest (the loop's own promise): a value
+    that isn't a record, ahead of a cancel past its 72 h window."""
+    data = cancel_fetch_store._load()
+    data["XL::junk"] = "not a record"
+    cancel_fetch_store._save(data)
+    _aged_fetch("cancel")
+    print_monitor._process_pending_cancel_fetches({"XL": {"state": "IDLE"}}, "http://fb")
+    assert print_deduct_ledger.was_deducted("XL", "J-9") is True
 
 
 def test_a_queued_job_without_an_id_is_dropped_with_a_word(logs):
@@ -969,3 +1118,96 @@ def test_a_review_the_store_pushes_out_is_reported(logs, monkeypatch):
     assert not cancel_review_store.has_pending("XL", "E-0")
     line = next(m for m, a, k in logs if "Review list is full" in m)
     assert "job E-0" in line and "2.50g" in line and NASTY_ESC in line, line
+
+
+# --------------------------------------------------------------------------- #
+# The third review (wf_4755954b-200): the round-2 fixes' own edges             #
+# --------------------------------------------------------------------------- #
+
+def test_the_dispatcher_hands_the_reason_on(logs, monkeypatch):
+    """The IDLE edge's "unsampled" must reach the record through the real
+    dispatcher, synchronously and on its thread."""
+    monkeypatch.setattr(print_monitor, "_CANCEL_DEDUCT_RUN_ASYNC", False)
+    print_monitor._dispatch_ambiguous_edge("XL", NASTY, "U-9", 0.0, "http://fb", progress_unknown=True,
+                                           unmeasured_reason="unsampled")
+    assert cancel_review_store.get_pending("XL", "U-9")["unmeasured_reason"] == "unsampled"
+    monkeypatch.setattr(print_monitor, "_CANCEL_DEDUCT_RUN_ASYNC", True)
+    with patch.object(print_monitor.threading, "Thread") as thread:
+        print_monitor._dispatch_ambiguous_edge("XL", NASTY, "U-10", 0.0, "http://fb",
+                                               progress_unknown=True, unmeasured_reason="unsampled")
+    assert thread.call_args.kwargs["kwargs"] == {"progress_unknown": True,
+                                                 "unmeasured_reason": "unsampled"}
+
+
+def test_an_ambiguous_end_whose_footer_lists_nothing_asks_too(logs):
+    out = _ambiguous_review("M83\nT0\nG1 X10\n" + _footer(["0.00"], ["0.00"]), job="A-2")
+    assert out["status"] == "pending_unresolved", out
+    rec = cancel_review_store.get_pending("XL", "A-2")
+    assert rec["unmeasured_reason"] == "empty_footer"
+    assert print_deduct_ledger.was_deducted("XL", "A-2") is False
+
+
+def test_a_grams_only_footer_reads_couldnt_be_read_not_lists_nothing(logs):
+    """A [g] footer with no [mm] one: the walk can't use it, but it lists 12.5 g,
+    so the review must not say the footer lists no filament (its card would
+    invite a Discard)."""
+    out = _ambiguous_review("M83\nT0\nG1 E5\n; filament used [g] = 12.5\n", job="A-3")
+    assert out["status"] == "pending_unresolved", out
+    assert cancel_review_store.get_pending("XL", "A-3")["unmeasured_reason"] == "no_footer"
+
+
+def test_an_ambiguous_end_without_a_job_id_warns_instead_of_holding_a_review(logs):
+    """No key to hold a review on: the next id-less end would vanish behind it."""
+    out = _ambiguous_review("M83\nT0\nG1 E5\n; another slicer's file\n", job="")
+    assert out["status"] == "no_usage", out
+    assert cancel_review_store.list_pending() == []
+    assert any("no job id" in m and NASTY_ESC in m for m, a, k in logs), logs
+
+
+def test_an_ambiguous_end_that_never_downloads_asks_after_the_window(logs):
+    """Its queue line promised a review; past 72 h it gets the "couldn't
+    measure" card, not a 0 g "cancelled print" entry. A plain cancel's give-up
+    is unchanged (test_a_cancel_given_up_after_the_retry_window_still_records_and_warns)."""
+    cancel_fetch_store.add_pending({
+        "printer_name": "XL", "job_id": "J-9", "filename": NASTY, "progress": 0.97,
+        "first_seen": time.time() - print_monitor._CANCEL_FETCH_MAX_AGE_S - 10,
+        "kind": "cancel", "ambiguous": True, "attempts": 30})
+    print_monitor._process_pending_cancel_fetches({"XL": {"state": "IDLE"}}, "http://fb")
+    assert not cancel_fetch_store.has_pending("XL", "J-9")
+    assert print_deduct_ledger.was_deducted("XL", "J-9") is False
+    rec = cancel_review_store.get_pending("XL", "J-9")
+    assert rec["unmeasured_reason"] == "no_download" and rec["ambiguous"] is True
+
+
+def test_a_cancel_whose_footer_lists_nothing_is_not_called_an_early_cancel(logs):
+    """A filament profile with no density writes "[g] = 0.00": FCC can't measure
+    the cancel, so it says so (weigh the spool) instead of "cancelled before any
+    extrusion"."""
+    out = _ambiguous_review("M83\nT0\nG1 E5\n" + _footer([100], ["0.00"]), frac=0.6,
+                            ambiguous=False, job="C-2")
+    assert out["status"] == "no_usage" and out["reason"] == "empty_footer", out
+    msgs = [m for m, a, k in logs]
+    assert any("lists no filament" in m and "Weigh the spool" in m for m in msgs), msgs
+    assert not any("before any extrusion" in m for m in msgs), msgs
+
+
+def test_unreadable_moves_on_a_one_head_printer_name_the_head_and_charge_nothing(logs):
+    g = "N1 M83\nN2 T1\nN3 G1 X10 E5\n" + _footer([0, 5], [0, 1.0])
+    with patch.object(prusalink_api, "fetch_printer_credentials",
+                      return_value={"ip_address": "1.2.3.4", "api_key": "k"}), \
+         patch.object(print_deduct.locations_db, "get_active_printer_map",
+                      return_value={"CORE1": {"printer_name": "XL", "position": 0}}), \
+         patch.object(prusalink_api, "fetch_cancel_gcode",
+                      side_effect=lambda ip, key, fn, f: {"gcode": g, "fraction": f}):
+        print_deduct._create_pending_cancel_review("XL", NASTY, "M-3", 0.6, fb_url="http://fb")
+    lines = [m for m, a in _gap_lines(logs)]
+    assert len(lines) == 1 and lines[0].startswith("⚠️ XL CORE1:"), lines
+    assert "Nothing was charged" in lines[0] and "charge is scaled" not in lines[0], lines
+
+
+def test_a_completion_held_by_a_review_says_so(logs):
+    _complete_with("M83\nT0\nG1 E5\n")                    # a no_footer review for J-7
+    del logs[:]
+    _complete_with("M83\nT0\nG1 E5\n" + _footer([5], [5]))
+    line = next(m for m, a, k in logs if "already holds this job" in m)
+    assert "progress_unknown" in line and NASTY_ESC in line, line

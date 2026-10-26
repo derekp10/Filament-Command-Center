@@ -38,6 +38,12 @@ def _reset_tracker(monkeypatch):
     # 22.3: no-op the start-spool snapshot capture so a flag-on PRINTING tick doesn't
     # hit real Spoolman (a test exercising capture overrides this locally).
     monkeypatch.setattr(print_deduct, "_snapshot_active_spools", lambda *a, **k: {})
+    # Group 56 review (round 3): keep this file off the network under --offline.
+    # The low-stock check after a deduct runs on its own thread and read Spoolman
+    # during a LATER test; a no_spool review's head snapshot read Spoolman too (a
+    # test that needs heads patches _heads_snapshot itself).
+    monkeypatch.setattr(print_deduct.stock_report, "check_after_deduct", lambda *a, **k: None)
+    monkeypatch.setattr(print_deduct, "_heads_snapshot", lambda *a, **k: [])
     prev_async = print_monitor._CANCEL_DEDUCT_RUN_ASYNC
     print_monitor._CANCEL_DEDUCT_RUN_ASYNC = False  # synchronous dispatch
     try:

@@ -130,13 +130,35 @@ def _seeded_rows():
     ]
 
 
+class _Patches:
+    """Several patches entered and left as one context manager."""
+
+    def __init__(self, patches):
+        self.patches = patches
+
+    def __enter__(self):
+        for p in self.patches:
+            p.start()
+
+    def __exit__(self, *exc):
+        for p in reversed(self.patches):
+            p.stop()
+
+
 def _no_network():
-    """Every way the old seed reached the network, set to fail the test. The
-    caller also asserts `boom.call_count == 0`: a request inside a try/except
-    (the old seed's own shape) would swallow the AssertionError."""
+    """Every way the old seed (or any HTTP call) could reach the network, set to
+    fail the test. The caller also asserts `boom.call_count == 0`: a request
+    inside a try/except (the old seed's own shape) would swallow the
+    AssertionError."""
     boom = MagicMock(side_effect=AssertionError("the boot creds check made a request"))
-    return (boom, patch.object(app_module.prusalink_api.requests, "get", boom),
-            patch.object(app_module.config_loader, "get_api_urls", boom))
+    requests_mod = app_module.prusalink_api.requests
+    network = _Patches([
+        patch.object(requests_mod, "get", boom),
+        patch.object(requests_mod, "post", boom),
+        patch.object(requests_mod, "request", boom),
+        patch.object(requests_mod.Session, "request", boom),
+    ])
+    return (boom, network, patch.object(app_module.config_loader, "get_api_urls", boom))
 
 
 def test_creds_check_steady_state_is_silent():
