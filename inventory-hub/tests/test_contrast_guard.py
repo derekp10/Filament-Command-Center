@@ -578,3 +578,35 @@ def test_settings_this_browser_section_is_readable(page: Page, base_url: str, as
     # The select itself: light text on its dark field.
     colours = select.evaluate("(el) => { const s = getComputedStyle(el); return [s.color, s.backgroundColor]; }")
     assert colours == ["rgb(255, 255, 255)", "rgb(33, 37, 41)"], colours
+
+
+@pytest.mark.usefixtures("require_server")
+def test_unmeasured_review_cards_are_readable(page: Page, base_url: str, assert_contrast):
+    """Group 56.3: the 🛑 Review's "couldn't measure" cards, one per reason (a
+    completion whose footer couldn't be read, one that lists no filament, one
+    whose file FCC couldn't download, and the older "replaced" card): the header,
+    the filename, the banner with its bold reason, and Discard all readable. Made-up
+    reviews in this page only; nothing is written."""
+    import json as _json
+    import conftest
+    pending = []
+    for i, reason in enumerate(["no_footer", "empty_footer", "no_download", None]):
+        rec = {"printer_name": "ZZ Contrast XL", "job_id": f"u{i}", "filename": "/usb/RACCOON~1.BGC",
+               "progress": 1.0, "total_grams": 0.0, "spools": [], "ambiguous": False,
+               "kind": "progress_unknown", "usage_map": None}
+        if reason:
+            rec["unmeasured_reason"] = reason
+        pending.append(rec)
+    page.route("**/api/cancel_deduct/pending*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=_json.dumps({"pending": pending})))
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openCancelReview === 'function'")
+    page.evaluate("() => window.openCancelReview()")
+    page.wait_for_selector('#fcc-cancel-review-overlay .fcc-cr-card[data-job="u3"]', timeout=15000)
+    overlay = page.locator("#fcc-cancel-review-overlay")
+    assert_contrast(overlay)
+    scored = " | ".join(o["text"] for o in conftest.contrast_offenders(overlay, min_ratio=100))
+    for words in ("filament footer couldn't be read", "filament footer lists no filament",
+                  "download the print's file", "replaced", "/usb/RACCOON~1.BGC", "Discard"):
+        assert words in scored, (words, scored)
+    page.keyboard.press("Escape")

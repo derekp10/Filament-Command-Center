@@ -4,7 +4,7 @@
 **Estimated effort:** MEDIUM (~3–6 h, 1 session) for 56.1–56.5. 56.1 + 56.2 ~2–3 h (with the trimmed fixture) · 56.3 ~1 h · 56.4 ~0.5–1 h · 56.5 ~0.5 h. 56.6 and 56.7 are gated on hardware and not in that estimate.
 **Risk:** **MEDIUM.** The deduct path charges real spools. Every change in 56.1–56.5 can be checked offline on file fixtures, and the same extrusion walk feeds the run-out / swap split (Group 22.3b), so its pins must stay green or change deliberately.
 
-> **Status: `TODO` — filed 2026-10-25 (`/refresh-groups`; Derek approved the grouping the same day: "Ok apply the grouping").** 56.1–56.5 are ready to build: no printer and no Derek decision needed, apart from one optional call (past cancels, below). 56.6 needs a printer and a real print; 56.7 runs itself after a printer's next firmware upgrade.
+> **Status: `PARTIAL` — 56.1–56.5 DONE 2026-10-25 (`feature/group-56-deduct-accuracy`, built overnight on Derek's "get as much done as possible"); 56.6 and 56.7 stay open, gated on hardware.** See "Build notes (2026-10-25)" at the end for what shipped, the numbers, and the deliberate test changes. Filed 2026-10-25 (`/refresh-groups`; Derek approved the grouping the same day: "Ok apply the grouping"). 56.6 needs a printer and a real print; 56.7 runs itself after a printer's next firmware upgrade.
 > Cancelled prints charge what they really used, a completed print FCC can't read asks instead of charging 0 g, and the deduct's log lines escape their filenames.
 > Code anchors were read on `dev` @ `d4b1ad7` (2026-10-25). Line numbers drift, so re-grep before editing.
 

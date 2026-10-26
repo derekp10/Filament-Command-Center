@@ -117,13 +117,29 @@ def test_arcs_count_in_absolute_e():
 
 def test_g_codes_that_are_not_moves_never_count():
     """G10 / G11 (firmware retract), G12 (the INDX nozzle clean), G28 / G29 /
-    G27 / G21 stay out even with an E-like parameter: `^G[0-3](?![0-9])`."""
+    G27 / G21 stay out even with an E-like parameter, zero-padded too (G010 is
+    G10). The old G0/G1 regex kept them out as well: this pins that widening it
+    to arcs (and padding) let none of them in."""
     g = ("M83\nT0\n"
          "G10 E5\nG11 E5\nG12 S90 E5\nG28 E5\nG29 E5\nG27 E5\nG21 E5\n"
+         "G010 E5\nG028 E5\nG0012 E5\n"
          "G1 E1\n"
          + _footer([1], [1]))
     measured = prusalink_api.measure_filament_usage(g, [1.0])
     assert abs(measured["whole"][0] - 1.0) < 1e-9, measured
+
+
+def test_zero_padded_moves_count_like_the_firmware_reads_them():
+    """`G01` / `G02` / `G03` / `G00` are G1 / G2 / G3 / G0 to the firmware (a
+    CNC-style slicer writes them); the walk before Group 56 dropped all of them."""
+    g = ("M83\nT0\n"
+         "G01 X10 E1\n"
+         "G02 X10 Y10 I5 J5 E2\n"
+         "G003X0Y10I-5J0E3\n"
+         "G00 E4\n"
+         + _footer([10], [10]))
+    measured = prusalink_api.measure_filament_usage(g, [1.0])
+    assert abs(measured["whole"][0] - 10.0) < 1e-9, measured
 
 
 def test_trimmed_indx_fixture_carries_arcs_on_every_tool():
@@ -150,7 +166,14 @@ def test_trimmed_indx_fixture_carries_arcs_on_every_tool():
 def test_trimmed_indx_fixture_whole_walk_lands_on_its_footer():
     """The real INDX G-code (no-space arcs, tool changes, Purge Station blocks,
     the G91 prime flush) walks to its footer on every tool; skipping arcs (the
-    regex before 56.1) falls short on every tool by more than 10%."""
+    regex before 56.1) falls short on every tool by more than 10%.
+
+    The excerpt's footer was computed for it by an independent signed-E count
+    over G0-G3 (make_trimmed_fixture.py beside the capture), so its first half
+    only proves the walker reads the real syntax the way that count does; the
+    second half (arcs carry >10% of every tool) is what tells the old walk from
+    the new. The check against the SLICER's own footer is the full-capture test
+    below, which runs where the git-ignored capture exists (Derek's PC)."""
     g = _read_text(_TRIMMED)
     measured = prusalink_api.measure_filament_usage(g, [1.0])
     assert set(measured["footer"]) == {0, 1, 2}
@@ -208,18 +231,24 @@ def test_partial_is_the_share_reached_times_the_footer():
 
 def test_a_net_negative_tail_never_charges_past_the_footer():
     """Relative E nets a final retract, so a cancel just before it reaches more
-    than the whole file: the charge stops at the footer."""
-    head = "M83\nT0\nG1 E10\n"
+    than the whole file: the charge stops at the footer. (Before 56.2 this
+    cancel was charged 12mm at the footer's g/mm: 1.2g against a 1g footer.)"""
+    head = "M83\nT0\nG1 E12\n"
     g = head + "G1 E-2\n" + _footer([10], [1.0])
     measured = prusalink_api.measure_filament_usage(g, [(len(head) + 1) / len(g)])
+    assert measured["whole"][0] == pytest.approx(1.0)
     assert measured["partials"][0][0] == pytest.approx(1.0)
 
 
 def test_absolute_e_wipe_tail_keeps_a_late_cancel_under_the_footer():
-    head = "M82\nT0\nG92 E0\nG1 E9.9\n"
-    g = head + "G1 E9.0\nG1 E10\n" + _footer([10], [1.0])   # a wipe, then the last 0.1mm
+    """Absolute E: a file that walks over its footer (10.5mm, a wipe, then 0.5mm
+    more past it: 11mm against 10mm). A late cancel before the wipe is charged
+    its share of the footer, not 10.5mm at the footer's g/mm (1.05g, past the
+    footer, before 56.2)."""
+    head = "M82\nT0\nG92 E0\nG1 E10.5\n"
+    g = head + "G1 E9.5\nG1 E11\n" + _footer([10], [1.0])
     late = prusalink_api.parse_partial_filament_usage(g, (len(head) + 1) / len(g))
-    assert late[0] == pytest.approx(0.99)
+    assert late[0] == pytest.approx(1.0 * 10.5 / 11, abs=1e-4)   # rounded to 4 dp
     assert prusalink_api.parse_partial_filament_usage(g, 1.0)[0] == pytest.approx(1.0)
 
 
@@ -318,6 +347,19 @@ def test_a_single_head_printer_names_its_head_not_the_tool_index(logs):
     assert len(lines) == 1 and lines[0][0].startswith("⚠️ XL CORE1:"), lines
 
 
+def test_a_footer_tool_the_walk_never_sees_is_named_even_before_it_prints(logs):
+    """T1's moves are something the walk doesn't read, so T1 would never be
+    charged, whatever the cut: one WARNING names it even though this cancel came
+    before T1's turn (an untouched head that the walk DOES see stays quiet,
+    test_an_untouched_head_is_not_checked)."""
+    g = ("M83\nT0\nG1 E10\nT1\nG5 E10\n"
+         "; filament used [mm] = 10, 10\n; filament used [g] = 10, 10\n")
+    _cancel_usage(g, _cut_before(g, "T1"), _XL_PM)
+    lines = _gap_lines(logs)
+    assert len(lines) == 1 and lines[0][0].startswith("⚠️ XL XL-2:"), lines
+    assert "0.00g" in lines[0][0] and "-100.0%" in lines[0][0], lines
+
+
 def test_a_completion_reads_the_footer_and_says_nothing_about_the_walk(logs):
     usage, terminal = _cancel_usage(_gap_file(), 1.0, _XL_PM, use_footer=True)
     assert terminal is None and usage == {0: 10.0, 1: 10.0}
@@ -352,6 +394,22 @@ def test_a_completion_without_a_readable_footer_opens_a_review(logs, gcode, reas
     assert rec["filename"] == NASTY                                      # stored raw
     msg = logs[-1][0]
     assert words in msg and NASTY_ESC in msg and "<b>" not in msg, msg
+
+
+def test_a_completion_without_a_job_id_warns_instead_of_sharing_one_review(logs):
+    """An id-less job has no key to hold a review on (every one would land on
+    the same "<printer>::" record and the second would vanish), so it warns every
+    time instead, as 43.2 does for id-less shortfalls."""
+    for _ in range(2):
+        with patch.object(print_deduct.locations_db, "get_active_printer_map", return_value={}), \
+             patch.object(prusalink_api, "fetch_cancel_gcode",
+                          side_effect=lambda ip, key, fn, f: {"gcode": "G1 E5\n", "fraction": f}):
+            out = print_deduct.deduct_completed_print("XL", NASTY, "", fb_url="http://fb",
+                                                      ip_address="1.2.3.4", api_key="k")
+        assert out["status"] == "no_usage" and out["reason"] == "no_footer", out
+    assert cancel_review_store.list_pending() == []
+    warned = [m for m, a, k in logs if "no job id" in m]
+    assert len(warned) == 2 and NASTY_ESC in warned[0] and "<b>" not in warned[0], logs
 
 
 def test_the_unmeasured_review_offers_only_discard_and_discard_settles_it(logs):
@@ -447,13 +505,66 @@ def test_the_escape_canary_catches_a_raw_filename():
 
 def test_every_deduct_and_monitor_log_line_escapes_its_filename():
     offenders, checked = [], set()
-    for name in ("print_deduct.py", "print_monitor.py"):
+    for name in ("print_deduct.py", "print_monitor.py", "startup_migrations.py"):
         with open(os.path.join(_HUB, name), encoding="utf-8") as fh:
             bad, seen = _unescaped_filenames(fh.read(), name)
         offenders += bad
         checked |= seen
     assert not offenders, "log a filename through _esc(...):\n" + "\n".join(offenders)
-    assert len(checked) >= 31, len(checked)   # 21 in print_deduct, 10 in print_monitor
+    # 22 in print_deduct (the id-less completion's line too), 10 in print_monitor,
+    # 2 in startup_migrations' boot re-surface
+    assert len(checked) >= 34, len(checked)
+
+
+def test_the_boot_re_surface_escapes_and_names_an_unmeasured_print(logs):
+    import startup_migrations
+    cancel_review_store.add_pending({"printer_name": "XL", "job_id": "R-1", "filename": NASTY,
+                                     "kind": "progress_unknown", "spools": [], "total_grams": 0.0})
+    cancel_review_store.add_pending({"printer_name": "XL", "job_id": "R-2#shortfall", "filename": NASTY,
+                                     "kind": "shortfall", "spools": [], "total_grams": 3.0})
+    startup_migrations.resurface_pending_cancel_reviews()
+    msgs = [m for m, a, k in logs]
+    assert len(msgs) == 2, msgs
+    assert all(NASTY_ESC in m and "<b>" not in m for m in msgs), msgs
+    unmeasured = next(m for m in msgs if "Unmeasured print" in m)
+    assert "couldn't measure how much" in unmeasured and "0.0g" not in unmeasured, unmeasured
+
+
+def test_spoolmans_error_text_is_escaped_in_the_deduct_lines(logs):
+    """A Spoolman (or proxy) error body is outside text too: a connect timeout's
+    `<HTTPConnection ...>` vanished from the line as a bogus tag."""
+    import spoolman_api
+    spool = {"id": 5, "used_weight": 100.0, "initial_weight": 1000.0, "filament": {"weight": 1000.0}}
+    err = "HTTPConnectionPool: Caused by ConnectTimeoutError(<HTTPConnection(host='x') at 0x1>)"
+
+    def _fail(*a, **k):
+        spoolman_api.LAST_SPOOLMAN_ERROR = err
+        return None
+    with patch.object(spoolman_api, "get_spools_at_location", return_value=[5]), \
+         patch.object(spoolman_api, "get_spool", return_value=dict(spool)), \
+         patch.object(spoolman_api, "update_spool", side_effect=_fail), \
+         patch.object(spoolman_api, "format_spool_display", return_value={"text": "#5", "color": "ff0000"}):
+        updated, details, known = print_deduct._apply_usage_to_printer(
+            "XL", {0: 2.0}, "http://fb", active_locs=[("XL-1", {"position": 0, "printer_name": "XL"})])
+    assert updated == 0
+    line = next(m for m, a, k in logs if "failed to auto-deduct" in m)
+    assert "&lt;HTTPConnection(host='x') at 0x1&gt;" in line and "<HTTP" not in line, line
+
+
+def test_a_refusal_reason_built_from_the_request_is_escaped(logs):
+    """`_rows_from_charges` echoes the request's `position` back in its reason;
+    the review's refusal line puts it in the Activity Log for every dashboard."""
+    cancel_review_store.add_pending({"printer_name": "XL", "job_id": "N-1", "filename": "f.gcode",
+                                     "kind": "no_spool", "spools": [], "total_grams": 2.0,
+                                     "usage_map": {"0": 2.0}, "progress": 1.0})
+    client = app_module.app.test_client()
+    r = client.post("/api/cancel_deduct/confirm", json={
+        "printer_name": "XL", "job_id": "N-1",
+        "charges": [{"position": "<img src=x onerror=alert(1)>", "sid": 1, "grams": 1}]})
+    assert r.get_json()["status"] == "error"
+    assert cancel_review_store.has_pending("XL", "N-1")
+    line = next(m for m, a, k in logs if "review Apply refused" in m)
+    assert "&lt;img src=x onerror=alert(1)&gt;" in line and "<img" not in line, line
 
 
 def test_the_converted_lines_render_a_filename_as_text(logs, monkeypatch):

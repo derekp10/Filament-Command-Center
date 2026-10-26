@@ -154,11 +154,12 @@ _TOOL_RE = re.compile(r'^T(\d+)(?![0-9])')
 _E_RE = re.compile(r'E(-?\d*\.?\d+)')
 # Every move that can extrude: G0 / G1 lines AND G2 / G3 arcs (Group 56.1),
 # with or WITHOUT a trailing space (Prusa no-spaces gcode emits
-# `G1X92.3Y9.4E.001` and `G3X122.82Y109.2I7.785J7.955E.23882`). The lookahead
-# keeps G10 / G11 / G12 / G28 / G29 out. Arc-fitted prints put 4-9% of a tool's
-# filament on arcs (the raccoon INDX print: 48.43 g counted against a 52.27 g
-# footer without them, 52.26 g with them).
-_EXTRUDING_MOVE_RE = re.compile(r'^G[0-3](?![0-9])')
+# `G1X92.3Y9.4E.001` and `G3X122.82Y109.2I7.785J7.955E.23882`), zero-padded
+# (`G01`, `G03`, which the firmware reads as G1 / G3) or not. The lookahead keeps
+# G10 / G11 / G12 / G28 / G29 out, padded or not. Arc-fitted prints put 4-9% of a
+# tool's filament on arcs (the raccoon INDX print: 48.43 g counted against a
+# 52.27 g footer without them, 52.26 g with them).
+_EXTRUDING_MOVE_RE = re.compile(r'^G0*[0-3](?![0-9])')
 
 
 def _walk_extrusion(gcode_content: str, cut_bytes: List[int], default_tool: int):
