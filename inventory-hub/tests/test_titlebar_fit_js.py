@@ -26,12 +26,16 @@ size is test_text_size_setting_e2e.py's.
 """
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
 import pytest
 
+from conftest import BASELINE_VIEWPORT
+
 HUB = Path(__file__).resolve().parent.parent
+BASELINE_WIDTH = BASELINE_VIEWPORT["width"]
 MODULES = HUB / "static" / "js" / "modules"
 GLOBAL_CSS = HUB / "static" / "css" / "global.css"
 DASHBOARD = HUB / "templates" / "dashboard.html"
@@ -80,10 +84,16 @@ def _page(page):
                              if (n) n.textContent = '12'; }""")
 
 
+# Every error the page reports, a ResizeObserver loop among them (it is an
+# ErrorEvent on window, never an exception a test would see).
+ERRORS_JS = "window.__errs = []; window.addEventListener('error', (e) => window.__errs.push(String(e.message)));"
+
+
 @pytest.fixture
 def bar(isolated_page):
     page = isolated_page
     _page(page)
+    page.add_script_tag(content=ERRORS_JS)
     page.add_script_tag(content=(MODULES / "titlebar_fit.js").read_text(encoding="utf-8"))
     return page
 
@@ -134,9 +144,9 @@ def _width(page, px):
     return _state(page)
 
 
-def _cut_without_last_step(page):
-    """Takes the last step off for a moment: is the title then cut?"""
-    over = page.evaluate("""(overJs) => {
+def _over_without_last_step(page):
+    """Takes the last step off for a moment: how far over is the title then?"""
+    return page.evaluate("""(overJs) => {
         const bar = document.querySelector('.fcc-titlebar');
         const on = ['fcc-tb-tight', 'fcc-tb-add', 'fcc-tb-nover'].filter((c) => bar.classList.contains(c));
         const last = on[on.length - 1];
@@ -145,7 +155,11 @@ def _cut_without_last_step(page):
         bar.classList.add(last);
         return over;
     }""", OVER_JS)
-    return over > 0.01
+
+
+def _cut_without_last_step(page):
+    """Takes the last step off for a moment: is the title then cut?"""
+    return _over_without_last_step(page) > 0.01
 
 
 def _check(page, px):
@@ -193,7 +207,7 @@ def test_a_growing_count_takes_a_step_and_a_shrinking_one_gives_it_back(bar):
     for px in range(1900, 899, -5):
         if _width(bar, px)["steps"]:
             break
-    _width(bar, px + 5)                                          # the widest bar that needs no step
+    _width(bar, px + 5)                                          # the narrowest bar that needs no step
     assert _state(bar)["steps"] == []
     bar.evaluate("() => { document.getElementById('btn-backlog-count').textContent = '🏷️ Backlog (1530)'; }")
     _settle(bar)
@@ -226,7 +240,7 @@ def test_the_text_size_event_fits_the_bar_when_its_box_does_not_change(bar):
     for px in range(1900, 899, -5):
         if _width(bar, px)["steps"]:
             break
-    _width(bar, px + 5)                                          # the widest bar that needs no step
+    _width(bar, px + 5)                                          # the narrowest bar that needs no step
     height = bar.evaluate("() => document.querySelector('.fcc-titlebar').getBoundingClientRect().height")
     bar.evaluate("""() => { const st = document.createElement('style');
         st.textContent = '.fcc-titlebar .navbar-brand { letter-spacing: 1px; }';
@@ -263,6 +277,128 @@ def test_buttons_that_still_do_not_fit_put_the_bar_on_two_lines(bar):
     assert not s["cut"] and s["badge"] == "whole", s
     s = _width(bar, 1900)
     assert not s["wrap"], s
+
+
+BIG_COUNTS_XL = """() => { document.documentElement.setAttribute('data-fcc-text-size', 'xlarge');
+    document.dispatchEvent(new CustomEvent('fcc:text-size'));
+    document.getElementById('btn-backlog-count').textContent = '🏷️ Backlog (1530)';
+    document.getElementById('btn-queue-count').textContent = '🛒 Queue (25)';
+    document.querySelector('#btn-low-stock-count [data-low-stock-count]').textContent = '120'; }"""
+
+GEAR_INSIDE_JS = """() => { const bar = document.querySelector('.fcc-titlebar');
+    const r = bar.getBoundingClientRect(); const cs = getComputedStyle(bar);
+    return document.getElementById('btn-config').getBoundingClientRect().right
+        - (r.right - parseFloat(cs.paddingRight)); }"""
+
+
+def _widest(page, has, lo, hi, fine=False):
+    """The widest bar in [lo, hi] for which `has(state)`, with `lo` having it and
+    `hi` not: to the pixel, or to 1/64 px (Chrome's layout unit) with `fine`."""
+    assert has(_width(page, lo)) and not has(_width(page, hi)), (lo, hi)
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        lo, hi = (mid, hi) if has(_width(page, mid)) else (lo, mid)
+    if fine:
+        for _ in range(6):
+            mid = (lo + hi) / 2
+            lo, hi = (mid, hi) if has(_width(page, mid)) else (lo, mid)
+    return lo
+
+
+def test_the_bar_wraps_as_soon_as_a_button_would_leave_it(bar):
+    """Around the wrap's onset, 1 px at a time: at every width the bar is on two
+    lines or ⚙️ is inside it (round 3: a wrap that waited for 30 px of overflow
+    passed every test, and on the real page ⚙️ was past the window's edge at 14
+    widths). And no ResizeObserver loop on the way into the band or out of it:
+    the observer watches a zero-high marker, since a fit on the bar itself
+    changes its height when it wraps (round 3: on the bar, every crossing
+    logged "ResizeObserver loop completed with undelivered notifications")."""
+    bar.evaluate(BIG_COUNTS_XL)
+    onset = _widest(bar, lambda s: s["wrap"], 900, 1900)
+    for px in list(range(onset - 5, onset + 41)) + [1900, onset - 1, 1900, onset]:
+        s = _width(bar, px)
+        past = bar.evaluate(GEAR_INSIDE_JS)
+        assert s["wrap"] or past <= 0.5, f"{px} px: one line, and ⚙️ {past:.2f} px past the bar's edge: {s}"
+    assert bar.evaluate("() => window.__errs") == []
+
+
+def test_a_step_comes_within_a_sliver_of_the_title_being_cut(bar):
+    """Chrome draws the title's "…" from 2/64 px over, so a step that waits for
+    more leaves "Filament Command Cent…" with the step still free (round 2). At
+    the widest bar that takes the first step, found to 1/64 px, the title would
+    be over by under 3/64 px without it. RED with the cut measured 0.1 px
+    coarser, which the 1 px sweep let through (round 3)."""
+    edge = _widest(bar, lambda s: bool(s["steps"]), 900, 1900, fine=True)
+    s = _width(bar, edge)
+    assert s["steps"] == STEPS[:1] and not s["cut"], s
+    over = _over_without_last_step(bar)
+    assert 0.01 < over < 3 / 64, f"at {edge} px the first step waits until the title is {over:.4f} px over"
+
+
+# A localStorage the page can use: `set_content` leaves it on about:blank, where
+# the real one is refused. `data` is what it holds, kept across "loads" here.
+STORE_JS = """(data) => { window.__store = data;
+    Object.defineProperty(window, 'localStorage', { configurable: true, get: () => ({
+        getItem: (k) => (k in window.__store ? window.__store[k] : null),
+        setItem: (k, v) => { window.__store[k] = String(v); },
+        removeItem: (k) => { delete window.__store[k]; } }) }); }"""
+
+# The counts land, as their painters write them (each drops data-count-pending).
+COUNTS_LAND = """() => {
+    document.getElementById('btn-backlog-count').innerHTML = '🏷️ Backlog <span class="fcc-count-num">(1530)</span>';
+    document.getElementById('btn-queue-count').innerText = '🛒 Queue (25)';
+    const n = document.querySelector('#btn-low-stock-count [data-low-stock-count]');
+    n.removeAttribute('data-count-pending'); n.textContent = '120'; }"""
+
+
+def _load(page, store, width, size=None):
+    """A fresh load: the placeholders from dashboard.html, `store` as this
+    browser's localStorage, the Text size `size` (else Standard) and the bar
+    `width` px wide before the script fits it."""
+    page.set_content(PAGE.format(bootstrap=BOOTSTRAP_BITS, css=GLOBAL_CSS.read_text(encoding="utf-8"),
+                                 nav=_nav_markup()))
+    page.evaluate(STORE_JS, store)
+    page.evaluate("""([w, size]) => { if (size) document.documentElement.setAttribute('data-fcc-text-size', size);
+        const b = document.querySelector('.fcc-titlebar'); b.style.flex = '0 0 auto'; b.style.width = w + 'px'; }""",
+                  [width, size])
+    page.add_script_tag(content=(MODULES / "titlebar_fit.js").read_text(encoding="utf-8"))
+    _settle(page)
+    return _state(page)
+
+
+def test_the_bar_keeps_last_times_steps_until_the_counts_come(isolated_page):
+    """The first paint is fitted to the counts' placeholders ("(…)", "…"), and
+    the first heartbeat's counts then took a step half a second into every load
+    at some widths: ADD INVENTORY read ADD and every button moved (round 3). The
+    bar remembers the steps it took with the counts in (this browser, with the
+    window's width and the Text size), and while a count is still on its
+    placeholder it takes at least those, so the counts landing move nothing.
+    Another Text size or another window width uses no memo. RED on 2749590:
+    nothing remembered."""
+    page = isolated_page
+    assert _nav_markup().count("data-count-pending>") == 3    # Backlog, Queue, Low stock
+    # A width where the placeholders need no step and the big counts do.
+    _load(page, {}, 1900)
+    page.evaluate(COUNTS_LAND)
+    _settle(page)
+    edge = _widest(page, lambda s: bool(s["steps"]), 900, 1900)
+    s = _width(page, edge)
+    assert s["steps"], s
+    store = page.evaluate("() => window.__store")
+    memo = json.loads(store["fcc.titleBar.fit"])
+    assert memo == {"w": page.evaluate("() => window.innerWidth"), "size": "standard", "level": len(s["steps"])}, memo
+
+    first = _load(page, {}, edge)                    # never here before: fitted to the placeholders
+    assert first["steps"] == [], first
+    first = _load(page, dict(store), edge)           # been here: last time's steps from the first paint
+    assert first["steps"] == s["steps"], first
+    page.evaluate(COUNTS_LAND)
+    _settle(page)
+    assert _state(page)["steps"] == s["steps"]
+
+    assert _load(page, dict(store), edge, size="small")["steps"] == [], "a memo from Standard was used at Small"
+    page.set_viewport_size({"width": BASELINE_WIDTH - 100, "height": 900})
+    assert _load(page, dict(store), edge)["steps"] == [], "a memo from another window width was used"
 
 
 def test_the_title_never_draws_over_the_spoolman_light(bar):

@@ -651,9 +651,9 @@ def quiet_heartbeat(page) -> None:
 # live Printer Status (dev's printers, their states, the spools on their heads
 # and the grams left) could match its baseline only until the next print.
 # Every source the widget reads answers this fixed fleet instead: the
-# heartbeat's printer_status section (the heartbeat carries only that and a
-# fixed ⚠️ Low stock count, VISUAL_LOW_STOCK, so the log, the other counts and
-# the rest of the page stay as loaded) and the
+# heartbeat's printer_status section (the heartbeat carries only that and fixed
+# ⚠️ Low stock and 🏷️ Backlog counts, VISUAL_LOW_STOCK and VISUAL_BACKLOG, so the
+# log, the Queue and the rest of the page stay as loaded) and the
 # fan-out's printer map, slot bindings and head contents (which keeps the
 # heartbeat's states, as PrusaLink reports them). Each head: (id, bound to a
 # box slot, the spool on it).
@@ -673,6 +673,9 @@ VISUAL_FLEET = {
 # snapshot shows a real count, the same on every run (Group 57 review: without
 # it the button showed its "…" placeholder, the state before any heartbeat).
 VISUAL_LOW_STOCK = {"read_ok": True, "count": 7, "low": 3, "out": 4, "threshold_g": 250.0}
+# And the 🏷️ Backlog count, which the page shows as "(…)" until its first
+# answer (Group 57 review, round 3; it read a made-up "(0)" before).
+VISUAL_BACKLOG = {"read_ok": True, "count": 0, "spools": 0, "filaments": 0}
 
 
 def fixed_title_counts(page, backlog=53, queue=0, low=1, out=11) -> None:
@@ -732,7 +735,7 @@ def stub_printer_fleet(page, fleet=None) -> None:
     def handle(route):
         url = urlsplit(route.request.url)
         if url.path.startswith("/api/dashboard_pulse"):
-            body = {"printer_status": rows, "low_stock": VISUAL_LOW_STOCK}
+            body = {"printer_status": rows, "low_stock": VISUAL_LOW_STOCK, "label_backlog": VISUAL_BACKLOG}
         elif url.path == "/api/printer_map":
             body = {"printers": pmap}
         elif url.path.startswith("/api/machine/") and url.path.endswith("/toolhead_slots"):

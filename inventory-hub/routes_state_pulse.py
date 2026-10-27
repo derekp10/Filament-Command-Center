@@ -500,7 +500,8 @@ def api_dashboard_pulse():
                 section keyed by spool id, in /api/spools/refresh's shape,
                 answered from the tick's own spool-list read (Group 57.5;
                 read before the printer probes, and an outage stops at the
-                first spool Spoolman doesn't answer: logic.get_live_spools_data).
+                first spool Spoolman doesn't answer: logic.get_live_spools_data),
+                or with one GET per spool when no section read the list.
 
     Returns: {section_name: payload, ...}. Sections that error
     individually return {"error": "..."} in their slot; the response

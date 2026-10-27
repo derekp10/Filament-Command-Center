@@ -61,6 +61,30 @@ const isScanInFlight = () => {
 };
 window.isScanInFlight = isScanInFlight;
 
+// --- A SCAN STILL ARRIVING (Group 57 review, round 3) ---
+// For a handler that claims a key a scan can carry: '/' (the global search's
+// key, fab_drag.js; the Low stock list's filter and its reason dialog,
+// inv_stock.js), since a Prusament spool QR is a URL ending in '/'.
+// isScanInFlight's 500 ms runs from a scan's FIRST key, and a slower scanner
+// (about 12 ms a key or more) is still typing a 45-character URL after it: a '/'
+// late in the URL read as a person's, was claimed, and the scan reached its
+// Enter cut short or with the buffer emptied. The reason dialog then took that
+// Enter for a person's and pressed its focused button: a scan saved an
+// exclusion. This also says yes while the buffer holds characters (not just a
+// Space a button press left) and the last of them came under 500 ms ago (the
+// accumulator stamps each key, scripts.html), however long the scan has taken;
+// a person's lone '/' finds the buffer empty. For a printable key only: whose
+// Enter it is stays enterIsAScan's question.
+const scanIsArriving = () => {
+    if (isScanInFlight()) return true;
+    const st = (typeof state !== 'undefined') ? state : window.state;
+    const now = (typeof performance !== 'undefined' && performance && typeof performance.now === 'function')
+        ? performance.now() : Date.now();
+    return !!(st && typeof st.scanBuffer === 'string' && st.scanBuffer.trim().length > 0
+        && st.scanLastKeyAt && (now - st.scanLastKeyAt) < 500);
+};
+window.scanIsArriving = scanIsArriving;
+
 // --- SCANNER BURST (the accumulator's barcode test, as a predicate) ---
 // "Did what is in scanBuffer arrive at scanner speed?" The accumulator
 // (scripts.html) calls a payload 'barcode' when it lands in under 150ms, and
@@ -2627,6 +2651,19 @@ const _dashboardPulseTick = () => {
             // These do NOT include liveRefreshBuffer — that's now driven
             // directly by the spools_refresh payload above.
             document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'dashboard_pulse' } }));
+        }, (e) => {
+            // FCC itself didn't answer (the network gone, a restart, an error
+            // page that isn't JSON): the title-bar counts this tick was to
+            // refresh are stale now, and say so, as on a read Spoolman failed
+            // (Group 57 review, round 3: they kept looking fresh). A renderer
+            // that throws above is not this: it is only logged below.
+            if (sections.includes('low_stock') && window._renderLowStockCount) {
+                window._renderLowStockCount(undefined, { sentAt, unreachable: true });
+            }
+            if (sections.includes('label_backlog') && window._renderBacklogCount) {
+                window._renderBacklogCount({ read_ok: false, unreachable: true });
+            }
+            throw e;
         })
         .catch(e => console.warn("dashboard_pulse failed:", e))
         .finally(() => {

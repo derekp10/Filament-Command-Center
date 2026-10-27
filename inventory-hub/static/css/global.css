@@ -275,14 +275,18 @@ body {
     position: absolute;
     left: 100%;
     top: 0;
+    /* The line box of the number's own font, so the "?" sits on the number's
+       baseline: with the button's 1.5 it sat a half-leading (1 px) low
+       (round 3). */
+    line-height: normal;
 }
+/* A filled button's own colour is under its border too, so its dashes would
+   not show: the fill stops inside the border. Backlog is always filled; the
+   ⚠️ outline button is filled while hovered or focused (Bootstrap), and lost
+   its dashes there (round 3). */
 #btn-low-stock-count[data-read="failed"],
 #btn-backlog-count[data-read="failed"] {
     border-style: dashed;
-}
-/* A filled button's own colour is under its border too, so its dashes would
-   not show: the fill stops inside the border. */
-#btn-backlog-count[data-read="failed"] {
     background-clip: padding-box;
 }
 @media (max-width: 991.98px) {

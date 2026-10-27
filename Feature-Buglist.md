@@ -199,7 +199,8 @@
   3. Claude's call, veto it if you like: the 🔍 Search panel's own "⚠️ Low stock" button goes once 1 is settled.
   4. For your information, nothing to pick (picture 4): a count FCC couldn't refresh (Spoolman didn't answer) keeps
      its number with a "?" after it and a dashed border, "⚠️ 12?", and the 🏷️ Backlog count does the same, "(53)?";
-     the tooltip says why. The "?" takes no room, so a blip never moves the bar. Before any count it reads "?".
+     the tooltip says why. The "?" takes no room, so a blip never moves the bar. Before its first answer a count
+     reads "…" ("(…)" on Backlog and Queue, which used to read a "(0)" nobody had read), and "?" if that read failed.
   If you never answer, A and (a) go to `dev` as built.
 * **📐 Plan docs: named sizes and colors as the base for themes; alternative views (phone, wall tablet, printer pictures,
   the Location Manager) (Derek, 2026-10-21; written).** _(→ **Group 60.1**: Claude first rewrites step 3's order, phone first, then the decisions one at a time)_ "Themes" in his sense are whole alternative designs a user
@@ -631,6 +632,31 @@ All 3 of these things are important and have value. We should table for now, and
   Group 57 fixed it for the ⚠️ Low stock buttons only (`inv_stock.js` takes a lone space back out of the buffer when
   Space pressed them). The general fix is for the accumulator to skip a Space aimed at a button, which is its own
   change to the scan path and wants its own tests.
+* **🔴 A slower scanner's "Scan to Cancel" can confirm a Quick-Swap.** _(Found 2026-10-27 by the Group 57 review,
+  round 3, while fixing the same flaw in the Low stock dialog.)_ `window.isScanInFlight` (inv_core.js) counts 500 ms
+  from a scan's FIRST key, so a scanner slower than about 25 to 50 ms a key is still typing a label when it says
+  "no scan". The Quick-Swap confirm overlay's Enter asks only that (`inv_quickswap.js:646`): with YES focused, the
+  Enter that ends a slower scanner's CMD:CANCEL scan performs the CONFIRM, the outcome the 2026-08-03 audit guard
+  exists to stop. The same rule guards the slot grid's Enter (`inv_quickswap.js:1878`: a spool label scanned after Q
+  opens an unrequested confirm), Shift+B for Bulk Moves (`inv_cmd.js:509`) and the wizard's Shift+E / Shift+C
+  (`inv_wizard.js:621`), each a key a long label can carry. The fixes exist: `window.enterIsAScan()` for an Enter
+  (what the shared move question, the slot picker and the reason dialog use) and `window.scanIsArriving()` (Group 57
+  round 3: characters in the buffer and the last key under 500 ms ago, from a per-key stamp) for a printable key.
+  Each site wants its own test with the real accumulator on a fake clock (`tests/test_slow_scan_slash_js.py`'s
+  harness types at exact speeds). Not changed on the Group 57 branch: it is the swap path. Claude's pick: fix it
+  next, it is small.
+* **⏱️ The buffer's server sync still orders by the wall clock.** _(Found 2026-10-27 by the Group 57 review, round 3;
+  older code, L28 and 21.6.)_ `loadBuffer`'s 3 s grace window (`inv_cmd.js`, `lastLocalBufferChange`) and the
+  recently-assigned-out TTL (`_recentlyAssignedOut`) are stamped with `Date.now`. A clock stepped back just after a
+  local buffer change (a time correction, a resume from sleep) makes the change look newer than every server read for
+  as long as the step: the tab skips the server's buffer and writes its own over it, so a second device's buffer
+  change is lost. Theoretical (it needs the step and a second device). The fix is `performance.now`, as Group 57's
+  ordering stamps use, but about ten test files set `lastLocalBufferChange` with `Date.now` and change with it.
+* **📶 When FCC itself doesn't answer, only the title-bar counts say so.** _(Group 57 review, round 3.)_ A heartbeat
+  whose request fails (the network gone, FCC restarting, a proxy's error page) now marks the ⚠️ Low stock and 🏷️
+  Backlog counts stale ("FCC didn't answer just now"). Group 52's notices (the Location Manager, the Printer Status
+  widget, the Locations table) still cover only a read FCC reports as failed, so on flaky Wi-Fi they keep looking
+  current. Worth doing with the phone view (📱).
 * **🐢 A bound-slot scan that loads its head lists the head's spools twice in the chained deploy.** _(Measured 2026-10-19
   by the Group 52 builder.)_ Such a scan makes four strict whole-list reads, each guarding a different moment; the
   chained deploy's step-4 resident list and its step-6 re-list of the same head could be one read when no printer probe

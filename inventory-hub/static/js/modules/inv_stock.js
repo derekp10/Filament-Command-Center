@@ -192,12 +192,22 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
     // A finite number, else null (Number(null) and Number('') are 0, not unknown).
     const _finite = (v) => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
 
+    // The Low line as the setting holds it (⚙️ Behavior takes decimals): rounded
+    // to whole grams, a line of 250.4 g read "Under 250 g" over a row of 250 g
+    // (round 3). To the microgram, as the server compares it.
+    const _lineText = (t) => String(parseFloat(Number(t).toFixed(6)));
+
     // The page's own clock, for putting reads in order: a wall-clock step (the
     // PC's time corrected, a resume from sleep) can't move it (Group 57 review,
     // round 2: a stamp from a fast clock froze the count). The heartbeat stamps
     // its sends on the same clock (inv_core.js).
     const _now = () => (typeof performance !== 'undefined' && performance && typeof performance.now === 'function'
         ? performance.now() : Date.now());
+
+    // A '/' in a scan still arriving is the scan's (window.scanIsArriving,
+    // inv_core.js; Group 57 review, round 3).
+    const _scanArriving = () => (typeof window.scanIsArriving === 'function' ? window.scanIsArriving()
+        : (typeof window.isScanInFlight === 'function' && window.isScanInFlight()));
 
     // Only a web link is ever put in an href (the server answers nothing else
     // either; this is the belt to its braces).
@@ -314,7 +324,7 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
     // threshold the dashboard's count last said, else "…"), so it never
     // changes length, nor moves the tabs below it, once the list arrives (57.1).
     function _subText(threshold) {
-        const g = _finite(threshold) !== null ? `${Math.round(_finite(threshold))} g` : '… g';
+        const g = _finite(threshold) !== null ? `${_lineText(_finite(threshold))} g` : '… g';
         return `Per filament, across its in-stock spools: low is under ${g} (⚙️ Settings → Behavior).`;
     }
 
@@ -410,7 +420,7 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
     // --- the tabs and the filter -------------------------------------------------------
 
     function _caption(handle, tab) {
-        if (tab === 'low') return `Under ${Math.round(handle._threshold)} g in stock, fewest grams first.`;
+        if (tab === 'low') return `Under ${_lineText(handle._threshold)} g in stock, fewest grams first.`;
         if (tab === 'out') return 'None left in stock. The ones with no spool on record come last.';
         return "Left off Low and Out: ones you can't get or won't restock. ✏️ changes why, or includes one again.";
     }
@@ -495,7 +505,7 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         if (!all.low.length && !all.out.length && !all.excluded.length) {
             _setBody(handle, `<div class="fcc-stock-state">
                     <div>✅ Nothing is low.</div>
-                    <div class="fcc-stock-state-sub">No filament is under ${esc(Math.round(threshold))} g,
+                    <div class="fcc-stock-state-sub">No filament is under ${esc(_lineText(threshold))} g,
                         and none has run out.</div>
                 </div>`, 'empty');
             if (!away) { try { handle.panel.focus({ preventScroll: true }); } catch (_) { /* noop */ } }
@@ -531,6 +541,12 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
             && Array.isArray(data.low) && Array.isArray(data.out);
         if (!good) {
             handle._data = null;
+            // The title bar's count is stale too while this, the newest read
+            // sent, failed (round 3: the list said so, the count looked fresh):
+            // Spoolman not answering (the route's own word for it), FCC's own
+            // failure, or no answer from FCC (none, or a page that isn't JSON).
+            _answer(sentAt, null, !res || !data ? 'unreachable'
+                : (data.error === 'spoolman_unreachable' ? 'spoolman' : 'fcc'));
             _setBody(handle, _errorHtml(data), 'error');
             const retry = handle.panel.querySelector('[data-stock-retry]');
             if (retry) { try { retry.focus({ preventScroll: true }); } catch (_) { /* noop */ } }
@@ -735,7 +751,10 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         // up: the search panel opening closed a list opened from the title bar,
         // and the dialog with it, losing the note typed into it (Group 57 review,
         // round 2). '/' typed into the note is the note's, and one in a scan
-        // stream the scan's (a Prusament QR's URL).
+        // still arriving the scan's (a Prusament QR's URL), however slow the
+        // scanner: round 3 found a slower scanner's late '/' claimed here and
+        // the scan buffer emptied, so the scan's Enter pressed the focused
+        // button and saved (or removed) an exclusion.
         if ((e.key === 'k' || e.key === 'K') && (e.ctrlKey || e.metaKey) && !e.altKey) {
             e.preventDefault();
             e.stopImmediatePropagation();
@@ -744,7 +763,7 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         if (e.key === '/' && !e.ctrlKey && !e.altKey && !e.metaKey) {
             const t = e.target;
             if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-            if (typeof window.isScanInFlight === 'function' && window.isScanInFlight()) return;
+            if (_scanArriving()) return;
             e.preventDefault();
             e.stopImmediatePropagation();       // nor the global search's '/', nor the scan buffer
             if (typeof window.clearScanBuffer === 'function') window.clearScanBuffer();
@@ -837,8 +856,17 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         const opener = handle._opener;
         handle._opener = null;
         const a = document.activeElement;
-        if (!(opts && opts.keepFocus) && opener && opener.isConnected && (!a || a === document.body)) {
-            try { opener.focus({ preventScroll: true }); } catch (_) { /* noop */ }
+        if (!(opts && opts.keepFocus) && opener && (!a || a === document.body)) {
+            if (opener.isConnected) {
+                try { opener.focus({ preventScroll: true }); } catch (_) { /* noop */ }
+            }
+            // One that can't take it (the search panel's button, hidden once
+            // that panel closed for the filament window; round 3): the title
+            // bar's ⚠️, the list's other way in, not the top of the page.
+            const btn = document.getElementById('btn-low-stock-count');
+            if (document.activeElement !== opener && btn) {
+                try { btn.focus({ preventScroll: true }); } catch (_) { /* noop */ }
+            }
         }
     }
 
@@ -965,9 +993,11 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
             return;
         }
         if (e.key === '/') {
-            // Not mid-scan: a Prusament QR's URL carries '/' (fab_drag.js's rule).
+            // Not in a scan still arriving: a Prusament QR's URL carries '/'
+            // (fab_drag.js's rule), and a slower scanner's late '/' focused the
+            // filter and emptied the scan buffer (round 3).
             if (inFilter) return;
-            if (typeof window.isScanInFlight === 'function' && window.isScanInFlight()) return;
+            if (_scanArriving()) return;
             e.preventDefault();
             e.stopImmediatePropagation();       // nor the global search's '/', nor the scan buffer
             if (typeof window.clearScanBuffer === 'function') window.clearScanBuffer();
@@ -1066,16 +1096,18 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
     let _triedAt = -Infinity;  // when the newest read, good or not, was sent
     let _staleWhy = null;      // why that read had no count (a key of _WHY), or null
 
-    // Why a count is stale: Spoolman didn't answer, FCC's own count failed, or the
-    // answer had none (an FCC from before the count).
+    // Why a count is stale: Spoolman didn't answer, FCC's own count failed, the
+    // answer had none (an FCC from before the count), or FCC itself didn't
+    // answer (round 3: the network gone, a restart).
     const _WHY = {
         spoolman: "Spoolman didn't answer just now",
         fcc: "FCC couldn't count them just now",
         missing: "FCC didn't send a count",
+        unreachable: "FCC didn't answer just now",
     };
 
     function _countWords(c) {
-        const under = _finite(c.threshold) !== null ? ` under ${Math.round(c.threshold)} g` : '';
+        const under = _finite(c.threshold) !== null ? ` under ${_lineText(c.threshold)} g` : '';
         return `${c.low} low${under}, ${c.out} out`;
     }
 
@@ -1085,6 +1117,7 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         const num = btn.querySelector('[data-low-stock-count]');
         const label = _count ? _countLabel(_count) : '?';
         const text = _count && why ? `${label}?` : label;
+        if (num) num.removeAttribute('data-count-pending');      // painted (titlebar_fit.js)
         if (num && num.textContent !== text) {
             num.textContent = label;
             if (_count && why) {
@@ -1131,10 +1164,12 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
     // threshold_g}, or {read_ok: false, read_error} (Spoolman), or {error,
     // read_ok: false} (the section itself failed); undefined when an answer that
     // was asked for one had none. `opts.sentAt`: when that heartbeat was sent
-    // (_now()'s clock); without it, now. Returns whether it painted a count.
+    // (_now()'s clock); without it, now. `opts.unreachable`: the heartbeat got
+    // no answer from FCC at all. Returns whether it painted a count.
     window._renderLowStockCount = function (sec, opts) {
         const sentAt = opts ? _finite(opts.sentAt) : null;
         const at = sentAt !== null ? sentAt : _now();
+        if (opts && opts.unreachable) return _answer(at, null, 'unreachable');
         if (!sec || typeof sec !== 'object') return _answer(at, null, 'missing');
         const count = sec.read_ok === true ? _parseCount(sec.low, sec.out, sec.threshold_g) : null;
         if (count) return _answer(at, count, null);

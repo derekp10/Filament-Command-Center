@@ -16,6 +16,7 @@ let _backlogCount = null;
 const _BACKLOG_WHY = {
     spoolman: "Spoolman didn't answer just now",
     fcc: "FCC couldn't count them just now",
+    unreachable: "FCC didn't answer just now",
 };
 
 // The button: "🏷️ Backlog (53)". A count a later read couldn't refresh keeps
@@ -54,7 +55,9 @@ const _paintBacklogCount = (why) => {
 // section (from the tick's own spool-list read plus one filament read), so the
 // button no longer re-reads Spoolman's whole spool and filament lists every 5 s.
 // A section that couldn't read Spoolman (read_ok false) keeps the count shown,
-// marked stale. Returns whether it painted a count.
+// marked stale, and so does a heartbeat FCC didn't answer at all ({read_ok:
+// false, unreachable: true}, inv_core.js; round 3). Returns whether it painted
+// a count.
 window._renderBacklogCount = (sec) => {
     if (!sec || typeof sec !== 'object') return false;
     if (sec.read_ok === true && typeof sec.count === 'number') {
@@ -63,7 +66,8 @@ window._renderBacklogCount = (sec) => {
         _paintBacklogCount(null);
         return true;
     }
-    _paintBacklogCount(sec.read_ok === false && sec.read_error && !sec.error ? 'spoolman' : 'fcc');
+    _paintBacklogCount(sec.unreachable ? 'unreachable'
+        : (sec.read_ok === false && sec.read_error && !sec.error ? 'spoolman' : 'fcc'));
     return false;
 };
 

@@ -2754,8 +2754,16 @@ let _liveRefreshAgain = false;
 // have mended it was dropped; now that one is dropped, and one more refresh
 // goes out once it is back. Stamped on the page's own clock (performance.now),
 // as the heartbeat is (inv_core.js), so a wall-clock step can't freeze them.
+// Round 3: the read behind each card is its own (`_bufferReadAt`, by spool id),
+// moved only by an answer that carries that spool: an answer with nothing in
+// it (an outage tick's {}, a section's {error}) or with only some of the cards
+// stopped an older, fuller refresh from painting the rest. A change still drops
+// every older answer: the callers' signals don't say which cards changed.
+// Hence too: while changes come faster than a refresh's round trip, the cards
+// wait for the first answer sent after the last one (painting an older read is
+// the round-2 revert, a weigh-out's 40 g back to 120 g).
 let _bufferChangedAt = -Infinity;
-let _bufferReadAt = -Infinity;
+const _bufferReadAt = new Map();
 const _bufferNow = () => (typeof performance !== 'undefined' && performance && typeof performance.now === 'function'
     ? performance.now() : Date.now());
 // L206: render path extracted so the bulk-pulse dispatcher can hand
@@ -2765,14 +2773,22 @@ const _bufferNow = () => (typeof performance !== 'undefined' && performance && t
 // page's own refresh); without it, the payload is painted as it comes.
 const _renderSpoolsRefreshPayload = (data, opts) => {
     if (!data || typeof data !== 'object') return;
-    if (opts && Number.isFinite(opts.sentAt)) {
-        if (opts.sentAt < _bufferChangedAt || opts.sentAt < _bufferReadAt) return;
-        _bufferReadAt = opts.sentAt;
+    const sentAt = opts && Number.isFinite(opts.sentAt) ? opts.sentAt : null;
+    if (sentAt !== null && sentAt < _bufferChangedAt) return;
+    // Cards that left the buffer keep no stamp.
+    if (_bufferReadAt.size > state.heldSpools.length) {
+        const held = new Set(state.heldSpools.map(s => String(s.id)));
+        Array.from(_bufferReadAt.keys()).forEach(k => { if (!held.has(k)) _bufferReadAt.delete(k); });
     }
     let changed = false;
     state.heldSpools.forEach(s => {
         const fresh = data[s.id];
         if (!fresh) return;
+        if (sentAt !== null) {
+            const key = String(s.id);
+            if (_bufferReadAt.has(key) && sentAt < _bufferReadAt.get(key)) return;
+            _bufferReadAt.set(key, sentAt);
+        }
         // Diff covers every field the buffer card actually renders. Pre-2026-04-28
         // this list excluded location / is_ghost / slot / deployed_to, so a backend-
         // driven location move (Location Manager, Quick-Swap, force-unassign,

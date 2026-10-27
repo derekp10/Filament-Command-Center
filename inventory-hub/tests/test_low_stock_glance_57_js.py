@@ -33,6 +33,7 @@ container).
 from __future__ import annotations
 
 import copy
+import json
 import re
 from pathlib import Path
 
@@ -72,8 +73,10 @@ document.addEventListener('keydown', (e) => { if (e.key === '/') window.__slashP
 const __take = (q) => (q.length > 1 ? q.shift() : q[0]);
 const __respond = (a) => {
     if (!a || a.network) return Promise.reject(new TypeError('Failed to fetch'));
+    // a.notJson: an error page that isn't JSON (a proxy's 502, say).
     const go = () => Promise.resolve({ ok: a.status >= 200 && a.status < 300, status: a.status,
-                                      json: () => Promise.resolve(JSON.parse(JSON.stringify(a.body))) });
+                                      json: () => (a.notJson ? Promise.reject(new SyntaxError("Unexpected token '<'"))
+                                          : Promise.resolve(JSON.parse(JSON.stringify(a.body)))) });
     return a.delay ? new Promise((r) => setTimeout(r, a.delay)).then(go) : go();
 };
 window.fetch = function (url, opts) {
@@ -166,6 +169,7 @@ def test_before_the_first_heartbeat_it_reads_an_ellipsis(bar):
     b = _btn(bar)
     assert b["text"] == "⚠️ …" and b["read"] is None, b
     assert b["label"] == "Low stock: opens the list." == b["title"]
+    assert bar.evaluate("(s) => document.querySelector(s).hasAttribute('data-count-pending')", NUM)
 
 
 def test_the_heartbeat_count_paints_the_button(bar):
@@ -178,6 +182,8 @@ def test_the_heartbeat_count_paints_the_button(bar):
     words = "Low stock: 12 (1 low under 250 g, 11 out). Opens the list."
     assert b["label"] == words == b["title"], b
     assert (b["read"], b["low"], b["out"]) == ("ok", "1", "11")
+    # Painted: no longer a placeholder the title bar keeps last time's steps for.
+    assert not bar.evaluate("(s) => document.querySelector(s).hasAttribute('data-count-pending')", NUM)
     _render(bar, {"read_ok": True, "count": 0, "low": 0, "out": 0, "threshold_g": 250.0})
     assert _btn(bar)["text"] == "⚠️ 0"
 
@@ -224,6 +230,39 @@ def test_a_stale_counts_question_mark_takes_no_room(bar):
     assert stale["mark"][1] <= stale["btnBox"][1] - stale["border"] + 0.01, stale       # inside the border
     _render(bar, GOOD)
     assert _widths(bar)["mark"] is None and _btn(bar)["num"] == "12"
+
+
+# Where a stale count's "?" sits against its number, by their text (the same
+# font, so equal tops are one baseline), and what the button's fill does.
+MARK_JS = """(sel) => { const b = document.querySelector(sel);
+    const num = b.querySelector('[data-low-stock-count], .fcc-count-num');
+    const mark = num.querySelector('.fcc-stale-mark');
+    const top = (node) => { const r = document.createRange(); r.selectNodeContents(node);
+                            return r.getBoundingClientRect().top; };
+    return { drop: mark ? top(mark.firstChild) - top(num.firstChild) : null,
+             clip: getComputedStyle(b).backgroundClip }; }"""
+
+
+def test_a_stale_counts_question_mark_sits_on_its_numbers_line(bar):
+    """The "?" was its own box with the button's 1.5 line-height, so it sat a
+    half-leading (1 px) under the digits it follows, in both buttons (round 3).
+    And the fill stops inside the dashed border on both: Backlog is filled, and
+    the ⚠️ outline button is filled while hovered or focused (Bootstrap), when
+    its dashes vanished into the fill (round 3). RED on 2749590: a 1.0 px drop,
+    and the ⚠️ fill under its border."""
+    bar.add_style_tag(content='body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }')
+    bar.add_script_tag(content=(MODULES / "inv_backlog.js").read_text(encoding="utf-8"))
+    _render(bar, GOOD)
+    bar.evaluate("() => window._renderBacklogCount({read_ok: true, count: 53})")
+    for sel in (BTN, "#btn-backlog-count"):
+        fresh = bar.evaluate(MARK_JS, sel)
+        assert fresh["drop"] is None and fresh["clip"] == "border-box", (sel, fresh)
+    _render(bar, DOWN)
+    bar.evaluate("() => window._renderBacklogCount({read_ok: false, read_error: 'down'})")
+    for sel in (BTN, "#btn-backlog-count"):
+        stale = bar.evaluate(MARK_JS, sel)
+        assert stale["drop"] is not None and abs(stale["drop"]) < 0.5, (sel, stale)
+        assert stale["clip"] == "padding-box", (sel, stale)
 
 
 def test_a_failed_read_before_any_count_reads_a_question_mark(bar):
@@ -577,3 +616,133 @@ def test_a_low_row_at_the_line_shows_its_tenth(bar):
     bar.wait_for_function("(s) => document.querySelector(s).dataset.stockState === 'ready'", arg=BODY)
     metas = bar.evaluate("() => [...document.querySelectorAll('#fcc-low-stock-overlay .fcc-stock-meta')].map((m) => m.textContent)")
     assert metas[:2] == ["151 g · 1 spool", "249.9 g · 2 spools"], metas
+
+
+def test_a_line_with_decimals_reads_as_it_is_set(bar):
+    """⚙️ Behavior takes decimals, and the line was shown rounded: a line of
+    250.4 g read "Under 250 g in stock" over a row of 250 g (round 3). Each
+    place shows it as set: the caption, the line under the title, and the
+    button's words."""
+    report = copy.deepcopy(REPORT)
+    report["threshold_g"] = 250.4
+    report["low"][1]["grams"] = 250.3
+    _render(bar, dict(GOOD, threshold_g=250.4))
+    assert "1 low under 250.4 g" in _btn(bar)["label"], _btn(bar)
+    bar.evaluate("(a) => { window.__answers = a; }", [_answer(report)])
+    bar.locator(BTN).click()
+    bar.wait_for_function("(s) => document.querySelector(s).dataset.stockState === 'ready'", arg=BODY)
+    cap = bar.evaluate("() => document.querySelector('#fcc-low-stock-overlay [data-stock-cap]').textContent")
+    sub = bar.evaluate("() => document.querySelector('#fcc-low-stock-overlay [data-stock-sub]').textContent")
+    metas = bar.evaluate("() => [...document.querySelectorAll('#fcc-low-stock-overlay .fcc-stock-meta')].map((m) => m.textContent)")
+    assert cap == "Under 250.4 g in stock, fewest grams first.", cap
+    assert "low is under 250.4 g" in sub, sub
+    assert metas[1] == "250 g · 2 spools", metas            # 250 g is under 250.4 g: no contradiction
+
+
+def test_a_heartbeat_fcc_didnt_answer_marks_both_counts_stale(bar):
+    """The tick's own request failing (the network gone, FCC restarting, an
+    error page that isn't JSON) left both counts looking fresh for as long as
+    it lasted (round 3). Each keeps its number with the stale look and says
+    FCC didn't answer; the next good tick makes them fresh again."""
+    bar.add_script_tag(content=(MODULES / "inv_backlog.js").read_text(encoding="utf-8"))
+    good = {"low_stock": GOOD, "label_backlog": {"read_ok": True, "count": 53}}
+    backlog = lambda: bar.evaluate("""() => { const b = document.getElementById('btn-backlog-count');
+        return { text: b.textContent.replace(/\\s+/g, ' ').trim(), read: b.dataset.read || null,
+                 title: b.title || '' }; }""")
+    for failed in (_answer(None, network=True), _answer(None, status=502, notJson=True)):
+        bar.evaluate("(a) => { window.__pulse = a; }", [_answer(good)])
+        bar.evaluate("() => window._dashboardPulseTickOnce()")
+        bar.wait_for_function("(s) => document.querySelector(s).dataset.read === 'ok'", arg=BTN)
+        bar.wait_for_function("() => document.getElementById('btn-backlog-count').dataset.read === 'ok'")
+        bar.evaluate("(a) => { window.__pulse = a; }", [failed])
+        bar.evaluate("() => window._dashboardPulseTickOnce()")
+        bar.wait_for_function("(s) => document.querySelector(s).dataset.read === 'failed'", arg=BTN)
+        b = _btn(bar)
+        assert b["num"] == "12?" and "(FCC didn't answer just now)" in b["label"], (failed, b)
+        bar.wait_for_function("() => document.getElementById('btn-backlog-count').dataset.read === 'failed'")
+        k = backlog()
+        assert k["text"] == "🏷️ Backlog (53)?" and "(FCC didn't answer just now)" in k["title"], (failed, k)
+    bar.evaluate("(a) => { window.__pulse = a; }", [_answer(good)])
+    bar.evaluate("() => window._dashboardPulseTickOnce()")
+    bar.wait_for_function("(s) => document.querySelector(s).dataset.read === 'ok'", arg=BTN)
+    assert _btn(bar)["num"] == "12"
+
+
+def test_the_lists_failed_read_marks_the_count_stale_too(bar):
+    """The newest read sent decides the stale look, the list's own included:
+    with Spoolman down the list said it couldn't read while the button's count
+    still looked fresh (round 3)."""
+    _render(bar, GOOD)
+    down = _answer({"success": False, "error": "spoolman_unreachable", "msg": "Spoolman didn't answer"}, status=502)
+    for answer, why in ((down, "Spoolman didn't answer just now"), (_answer(None, network=True), "FCC didn't answer just now")):
+        bar.evaluate("(a) => { window.__answers = a; }", [answer])
+        bar.locator(BTN).click()
+        bar.wait_for_function("(s) => document.querySelector(s).dataset.stockState === 'error'", arg=BODY)
+        b = _btn(bar)
+        assert b["num"] == "12?" and b["read"] == "failed" and f"({why})" in b["label"], (why, b)
+        bar.keyboard.press("Escape")
+        _render(bar, GOOD)
+
+
+def test_a_list_from_the_search_panels_button_gives_the_focus_to_the_title_bars(bar):
+    """Opened from the 🔍 search panel's own Low stock button: the panel closes
+    when the filament window opens, so the list that comes back can't give the
+    focus to that button, and Escape left it on the page (round 3). It goes to
+    the title bar's ⚠️, the list's other way in."""
+    bar.evaluate("""() => { const host = document.getElementById('offcanvasSearch'); host.classList.add('show');
+        const b = document.createElement('button'); b.id = 'global-search-low-stock'; b.textContent = 'Low stock';
+        host.appendChild(b); b.focus(); }""")
+    bar.evaluate("(a) => { window.__answers = a; }", [_answer(REPORT)] * 2)
+    bar.evaluate("() => window.openLowStockPanel()")
+    bar.wait_for_function("(s) => document.querySelector(s).dataset.stockState === 'ready'", arg=BODY)
+    bar.keyboard.press("Enter")                                 # the highlighted row's filament window
+    assert bar.evaluate("() => window.__opened") == [164]
+    bar.evaluate("""() => { const host = document.getElementById('offcanvasSearch');
+        host.classList.remove('show'); host.style.display = 'none';        // the panel closed for the window
+        const m = document.getElementById('filamentModal');
+        m.dispatchEvent(new Event('show.bs.modal', {bubbles: true}));
+        document.activeElement && document.activeElement.blur();
+        m.dispatchEvent(new Event('hidden.bs.modal', {bubbles: true})); }""")
+    bar.wait_for_function("(s) => !!document.querySelector(s)", arg=PANEL, timeout=5000)
+    bar.wait_for_function("(s) => document.querySelector(s).dataset.stockState === 'ready'", arg=BODY)
+    bar.keyboard.press("Escape")
+    assert bar.locator("#fcc-low-stock-overlay").count() == 0
+    assert bar.evaluate("() => document.activeElement && document.activeElement.id") == "btn-low-stock-count"
+
+
+
+QUEUE = [{"id": 7, "type": "spool", "display": "#7"}, {"id": 8, "type": "spool", "display": "#8"}]
+QUEUE_PAGE_JS = r"""(saved) => {
+    // A localStorage holding this browser's queue (set_content leaves the page
+    // on about:blank, where the real one is refused), and the server's queue.
+    const store = { fcc_label_queue: saved };
+    Object.defineProperty(window, 'localStorage', { configurable: true, get: () => ({
+        getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); } }) });
+    window.__posts = 0;
+    window.fetch = (url, opts) => {
+        if (String(url).indexOf('/api/state/queue') === 0) {
+            if (opts && opts.method === 'POST') { window.__posts += 1; return Promise.resolve({ json: () => Promise.resolve({}) }); }
+            return Promise.resolve({ json: () => Promise.resolve(JSON.parse(saved)) });
+        }
+        return Promise.reject(new TypeError('no network in this test'));
+    };
+}"""
+
+
+def test_the_queue_count_shows_this_browsers_queue_from_the_load(isolated_page):
+    """The 🛒 Queue count was painted only when the server's queue differed
+    from this browser's (inv_queue.js's loadQueue), so a browser whose queue
+    matched the server's read the page's "(0)" with labels queued (round 3).
+    It shows this browser's queue from the load and keeps it when the server
+    agrees, writing nothing. RED on 2749590: "(0)" for good."""
+    page = isolated_page
+    html = DASHBOARD.read_text(encoding="utf-8")
+    m = re.search(r'<button[^>]*id="btn-queue-count".*?</button>', html, re.S)
+    assert m and "data-count-pending>(…)" in m.group(0), "the Queue's placeholder should read (…), never (0)"
+    page.set_content(f"<!doctype html><html><body>{m.group(0)}</body></html>")
+    page.evaluate(QUEUE_PAGE_JS, json.dumps(QUEUE))
+    page.add_script_tag(content=(MODULES / "inv_queue.js").read_text(encoding="utf-8"))
+    text = lambda: page.evaluate("() => document.getElementById('btn-queue-count').textContent.trim()")
+    assert text() == "🛒 Queue (2)"
+    page.wait_for_timeout(2400)                      # one 2 s poll: the server's queue is the same
+    assert text() == "🛒 Queue (2)" and page.evaluate("() => window.__posts") == 0

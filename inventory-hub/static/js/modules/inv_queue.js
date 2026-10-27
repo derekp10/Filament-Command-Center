@@ -14,10 +14,26 @@ let clearConfirmModal = null;
 let multiSpoolModal = null;
 let multiSpoolData = []; // Store search results here
 
+// The title bar's 🛒 Queue count, written only when it changes: the bar fits
+// itself again whenever a button's text changes (titlebar_fit.js). From the
+// page's load it shows this browser's queue (Group 57 review, round 3): the
+// button kept the page's "(0)" until the server's queue differed from this
+// browser's, so a browser whose queue matched the server's read "(0)" with
+// labels queued.
+const _paintQueueCount = () => {
+    const btn = document.getElementById('btn-queue-count');
+    if (!btn) return;
+    const n = String(labelQueue.length);
+    if (btn.dataset.countShown === n) return;
+    btn.dataset.countShown = n;
+    btn.innerText = `🛒 Queue (${n})`;
+};
+_paintQueueCount();
+document.addEventListener('DOMContentLoaded', _paintQueueCount);
+
 window.updateQueueUI = () => {
     localStorage.setItem('fcc_label_queue', JSON.stringify(labelQueue));
-    const btn = document.getElementById('btn-queue-count');
-    if (btn) btn.innerText = `🛒 Queue (${labelQueue.length})`;
+    _paintQueueCount();
     document.dispatchEvent(new CustomEvent('inventory:queue-updated', { detail: { queue: labelQueue } }));
 };
 
@@ -352,8 +368,7 @@ const loadQueue = () => {
                         labelQueue.length = 0;
                         data.forEach(item => labelQueue.push(item));
 
-                        const btn = document.getElementById('btn-queue-count');
-                        if (btn) btn.innerText = `🛒 Queue (${labelQueue.length})`;
+                        _paintQueueCount();
 
                         if (modals.queueModal && document.getElementById('queueModal').classList.contains('show')) {
                             // Group 48.1: redraw, reading only labels new to the open window.

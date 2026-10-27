@@ -70,8 +70,13 @@ async function run(steps) {
             await flush();
         },
         tick: (sentAt, bw) => { ctx.__paint(payload(bw), sentAt === null ? undefined : { sentAt }); },
+        // A tick whose spools_refresh is `body` as it is ({} after an outage
+        // stop, {error} from a section that raised, or only some spools).
+        tickRaw: (sentAt, body) => { ctx.__paint(body, { sentAt }); },
+        only: (id, w) => ({ [id]: Object.assign({}, payload(w)[id], id === 1 ? { remaining_weight: w } : {}) }),
         inflight: () => pending.length,
         note: (what) => seen.push([what, B(), pending.length]),
+        noteA: (what) => seen.push([what, ctx.state.heldSpools.find((s) => s.id === 1).remaining_weight]),
     };
     await steps(api);
     return seen;
@@ -117,6 +122,21 @@ async function run(steps) {
         s.at(2000); s.change(40);
         s.at(2300); await s.land(40);
         s.tick(null, 77); s.note('after an unstamped payload');
+    });
+    // Round 3: a tick that carries nothing for a card lands before an older
+    // refresh that does: the refresh still paints that card.
+    for (const [name, body] of [['empty', {}], ['error', { error: 'boom' }]]) {
+        out['carries_nothing_' + name] = await run(async (s) => {
+            s.at(1000); s.change();                       // refresh R goes out; B moved on the server
+            s.at(1100); s.tickRaw(1100, body); s.note('after a tick that carried no card');
+            s.at(1200); await s.land(40); s.note('after R (sent before it) lands');
+        });
+    }
+    out.carries_some = await run(async (s) => {
+        s.at(1000); s.change();                           // R goes out
+        s.at(1100); s.tickRaw(1100, s.only(1, 490)); s.noteA('after a tick with only A (490 g)');
+        s.at(1200); await s.land(40); s.note('after R lands: B from R');
+        s.noteA('and A keeps the tick\'s newer 490 g');
     });
     console.log('RESULT:' + JSON.stringify(out));
 })().catch((e) => { console.log('RESULT:' + JSON.stringify({ error: String(e && e.stack || e) })); });
@@ -172,3 +192,27 @@ def test_changes_while_one_is_out_send_one_more_not_two(tmp_path):
 
 def test_a_payload_with_no_send_time_paints_as_it_comes(tmp_path):
     assert _run(tmp_path)["unstamped"] == [["after an unstamped payload", 77, 0]]
+
+
+def test_an_answer_that_carries_no_card_blocks_no_older_one_that_does(tmp_path):
+    """Round 3: the read stamp was one for the whole buffer, so an outage
+    tick's {} (or a section's {error}) landing first dropped an older refresh
+    that held the moved card, and it showed the old place until the next good
+    tick. The stamp is each card's now, moved only by an answer that carries
+    it. RED on 2749590: B stayed at 120."""
+    out = _run(tmp_path)
+    for name in ("empty", "error"):
+        assert out["carries_nothing_" + name] == [
+            ["after a tick that carried no card", 120, 1],
+            ["after R (sent before it) lands", 40, 0],
+        ], (name, out["carries_nothing_" + name])
+
+
+def test_an_answer_with_some_cards_moves_only_their_stamps(tmp_path):
+    """A tick that carried only A: R, sent before it, still paints B, and A
+    keeps the tick's newer read."""
+    assert _run(tmp_path)["carries_some"] == [
+        ["after a tick with only A (490 g)", 490],
+        ["after R lands: B from R", 40, 0],
+        ["and A keeps the tick's newer 490 g", 490],
+    ]

@@ -474,8 +474,9 @@ def test_an_outage_tick_stops_after_one_unanswered_spool(client):
 
 
 def test_a_spool_spoolman_cannot_send_stops_only_itself(client):
-    """One record Spoolman can't serialise fails the list read (a 500) and its
-    own read (a plain-text 500): Spoolman answered, so only that spool is left
+    """One record Spoolman can't serialise fails the list read (faked here as a
+    timeout; a 500 takes the same path) and its own read (a plain-text 500):
+    Spoolman answered, so only that spool is left
     alone and the others are refreshed (Group 57 review, round 2: the refresh
     stopped at it, and the spools after it never refreshed while the record
     stayed broken). RED on 6314386: none answered."""
@@ -640,6 +641,27 @@ def test_the_warning_and_the_list_agree_at_the_line():
     warning, (low, _out) = _crossing([130.1, 61.3], 70.0, 58.5)        # 249.9 g: it crossed
     assert low == 1 and warning is not None and warning[2] == "low", warning
     assert "running low: 249.9 g left in 3 spools" in warning[0], warning[0]
+
+
+def test_the_warning_reads_the_written_spool_as_it_is_now():
+    """"After" is the filament's spools as re-read, the written one included,
+    which may sit up to _MATCH_G from where the write left it: the list reads
+    that same record. Others hold 100 g, the write left 150.2 g and the re-read
+    shows 149.8 g: the list shows the filament Low at 249.8 g, so the warning
+    says so (round 3: nothing pinned it; the write's own 150.2 g makes 250.2 g
+    and no warning). The other way round, no warning for a filament the list
+    doesn't show."""
+    def run(written, reread):
+        spools = _line_spools([100.0, reread])
+        group = [{"sid": spools[-1]["id"], "before_g": 300.0, "after_g": written,
+                  "before_in": True, "after_in": True}]
+        return (stock_report._crossing(group, spools, THRESHOLD),
+                stock_report.low_out_count(spools, [F_LINE], THRESHOLD))
+    warning, (low, _out) = run(150.2, 149.8)
+    assert low == 1 and warning is not None and warning[2] == "low", warning
+    assert "running low: 249.8 g left in 2 spools" in warning[0], warning[0]
+    warning, (low, _out) = run(149.8, 150.2)
+    assert low == 0 and warning is None, warning
 
 
 def test_the_warning_says_the_grams_as_the_list_shows_them():

@@ -19,14 +19,49 @@
 // Below 992 px the buttons have a line of their own and the first two steps
 // are plain CSS: nothing here.
 // Loaded right after the bar (dashboard.html), so it fits before the first paint.
+// The first paint is fitted to the counts' placeholders, and the first
+// heartbeat brings the counts about half a second later: at some widths that
+// took a step (or gave one back) on every load, ADD INVENTORY reading ADD and
+// every button moving 80 px (round 3). So the bar remembers the steps it took
+// (localStorage `fcc.titleBar.fit`, with the window's width and the Text size),
+// and while a count is still on its placeholder (`data-count-pending`,
+// dashboard.html; each count's painter removes it) it takes at least those,
+// when the width and the Text size are the same as then.
 (function () {
     const STEPS = ['fcc-tb-tight', 'fcc-tb-add', 'fcc-tb-nover'];
     const WRAP = 'fcc-tb-wrap';
     const ONE_LINE = '(min-width: 992px)';
+    const MEMO = 'fcc.titleBar.fit';
     let bar = null;
     let brand = null;
     let actions = null;
     let busy = false;
+    let memo = null;          // {w, size, level} from the last load, read once
+
+    const sizeName = () => document.documentElement.getAttribute('data-fcc-text-size') || 'standard';
+
+    function readMemo() {
+        try {
+            const m = JSON.parse(localStorage.getItem(MEMO) || 'null');
+            if (m && Number.isFinite(m.w) && typeof m.size === 'string' && Number.isInteger(m.level)) return m;
+        } catch (_) { /* private window, blocked storage: no memo */ }
+        return null;
+    }
+
+    function remember(level) {
+        try {
+            const m = { w: window.innerWidth, size: sizeName(), level };
+            const text = JSON.stringify(m);
+            if (localStorage.getItem(MEMO) !== text) localStorage.setItem(MEMO, text);
+        } catch (_) { /* noop */ }
+    }
+
+    // The steps to take at least: the remembered ones while a count is still
+    // on its placeholder, at the width and Text size they were taken at.
+    function floor() {
+        if (!memo || !actions || !actions.querySelector('[data-count-pending]')) return 0;
+        return memo.w === window.innerWidth && memo.size === sizeName() ? memo.level : 0;
+    }
 
     // The title's own width, below the pixel. scrollWidth and clientWidth are
     // whole numbers, and Chrome draws the "…" from 1/64 px over, so a title up
@@ -64,17 +99,24 @@
         try {
             bar.classList.remove(...STEPS, WRAP);
             if (!window.matchMedia(ONE_LINE).matches) return;
+            const least = floor();
+            const pending = !!(actions && actions.querySelector('[data-count-pending]'));
             const need = natural();
+            // Steps taken: 0 to 3, and 4 with the second line (in nover's place).
+            let level = 0;
             for (const step of STEPS) {
-                if (!cut(need)) return;
+                if (level >= least && !cut(need)) break;
                 bar.classList.add(step);
+                level += 1;
             }
-            if (actions && overflowing()) {
+            if (level === STEPS.length && actions && (least > STEPS.length || overflowing())) {
                 // On two lines the title has a line of its own, and the badge its
                 // place beside it, as below 992 px.
                 bar.classList.remove('fcc-tb-nover');
                 bar.classList.add(WRAP);
+                level += 1;
             }
+            if (!pending) remember(level);
         } finally {
             busy = false;
         }
@@ -111,6 +153,7 @@
         brand = bar ? bar.querySelector('.navbar-brand') : null;
         if (!bar || !brand) return;
         actions = bar.querySelector('.fcc-titlebar-actions');
+        memo = readMemo();
         localBadge();
         fit();
         if (typeof ResizeObserver === 'function') {

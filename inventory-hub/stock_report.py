@@ -55,9 +55,11 @@ Neither for an excluded filament: no news there.
 A filament already under the line stays quiet until it runs out, so a print on
 a low filament doesn't log every time, and the same warning for one filament is
 logged once a minute at most (two writes landing together can each see the
-crossing). "Before" is the written spool's own grams before and after the write
-plus the filament's other in-stock spools, from one strict read of that
-filament's spools after the write.
+crossing). Both totals come from one strict read of that filament's spools
+after the write, summed as the list sums them: "after" is those spools as read
+(the written one as it is now, within _MATCH_G of where the write left it),
+"before" the same spools with the written ones' grams from before the write.
+The grams it names are the ones the filament's Low row shows (grams_text).
 
 It never gets in the way of the write that called it: it is called only after
 the write landed (for a print, after the exactly-once ledger write, so a crash
@@ -220,8 +222,9 @@ def under_line(grams, threshold):
 
 
 def _floor_tenth(grams):
-    """Grams to the tenth below, on grams rounded to the microgram (so a binary
-    249.89999999999998 is 249.9, not 249.8)."""
+    """Grams to the tenth below, on grams rounded to the microgram: a 1000 g
+    spool with 750.2 g used has 249.79999999999995 g left in binary, which is
+    249.8, not 249.7."""
     return math.floor(round(grams, 6) * 10) / 10
 
 
@@ -236,12 +239,17 @@ def _row_grams(grams, threshold=None):
 
 
 def grams_text(grams, threshold=None):
-    """Grams as the list shows them: whole, except where rounding would put a
-    total that is under the line at it or over it ("250 g left" under a 250 g
-    line): then the tenth, never rounded up (inv_stock.js's _stockText)."""
-    whole = round(grams)
-    if threshold is not None and under_line(grams, threshold) and whole >= threshold:
-        return f"{_floor_tenth(grams):.1f}"
+    """A total's grams exactly as its Low row shows them: the row's tenth
+    (_row_grams), drawn by inv_stock.js's _stockText rule, whole grams (rounded
+    half up, as Math.round does), except where that would put a row under the
+    line at it ("250 g" under "Under 250 g"): then the tenth. Round 3: built
+    from the total on its own, the warning said "249.5 g left" for 249.57 g
+    while the row said "249.6 g", and "248 g" against "249 g" for 248.5 g
+    (Python rounds half to even)."""
+    tenth = _row_grams(grams, threshold)
+    whole = math.floor(tenth + 0.5)
+    if threshold is not None and tenth < threshold and whole >= threshold:
+        return f"{tenth:.1f}"
     return f"{whole:.0f}"
 
 
