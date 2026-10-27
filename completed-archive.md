@@ -1,5 +1,7 @@
 # **Done**
 
+* **[2026-10-26 — 🚢 Released: `dev` `9301202` → `main` `1d9cae4`]** — on Derek's word ("If you think it's good to move to prod, lets move it over. under chargin by almost 10 percent is pretty big."): Group 56 Deduct Accuracy (56.1–56.5) and docs. No conflict (`main` held nothing `dev` lacked), no config or data migration. Prod deploy: Derek's TrueNAS update. All printers were on firmware 8.0 by then, and prod's last deducts (to 2026-10-24) still showed 8.3 file names, so the next completed and cancelled prints are the first on 8.0 and run this code (56.7).
+
 * **[2026-10-26 — 🎯 Group 56 Deduct Accuracy (56.1–56.5) → `feature/group-56-deduct-accuracy` (merged to `dev` `b8daba1`)]** — built overnight on Derek's "Try and get as much done as possible" ([task file](docs/agent_docs/tasks/56-deduct-accuracy.md), "Build notes"). Four reviews, every confirmed finding fixed: one independent agent on the build (`4555a01`), `wf_80c46b1e-f8e` (5 lenses + 1 batched skeptic: 29 findings, none red; `030a618`), `wf_4755954b-200` (2 + 1: 21, one orange; `9721591`) and `wf_8bbf3213-810` (1 + 1: 4, two yellow; `747f348`). Full sweeps 4861, 4886, 4898 and 4903 passed, 0 failed (load 1.05–1.06×). 56.6 (re-mapped prints) and 56.7 (firmware 8.0 checks) stay open, gated on hardware; `main` held.
 
   * ✅ **Cancelled prints were under-charged because the cancel parser skipped arc moves (found 2026-10-23; the

@@ -107,6 +107,12 @@
   ATTENTION-park and resume swap-diff logging shipped 2026-10-08, so the next time a joined slot runs
   out, the Activity Log will say either "parked at ATTENTION … recorded N swaps" or "no spool mapping
   change at any toolhead". Nothing to set up — just check the log afterwards and paste it here.
+* **⏸️ PENDING DEREK — the next spool that runs out mid-print, now on firmware 8.0 (Group 56.7).** 8.0 added a
+  Runout Reaction setting, and FCC's run-out split keys off the printer pausing. Nothing to set up. **In-slot
+  swap:** when a spool runs out and the printer pauses, load the new roll into that slot and scan it onto that
+  head in FCC before resuming; once the print ends, 🛑 Review should show a "spool changed mid-print" card with
+  each spool's share (weighing both spools before and after makes it a scale check, optional). **Joined spool
+  (SpoolJoin):** the item above. Either way, tell Claude what happened (or that the printer didn't pause).
 * **⏸️ PENDING DEREK — branch cleanup session.** 11 branches are fully merged into `dev` and could be
   deleted (4 of them also on `origin`): `feature/bulk-move-panel-affordance`, `feature/bulk-moves-l298`,
   `feature/bulk-moves-l298-p1`, `feature/group-34-location-tree-cluster`,
@@ -223,7 +229,7 @@
   new per-head usage data goes only to Prusa's cloud service, which has no public API. 8.0's OpenPrintTag reader is
   CORE One / L only for now; it adds to a tag's `consumed_weight` every 5 minutes and at print end (cancels too) and
   unload, so once a reader printer writes a tag, FCC's own tag writes must add deltas, never overwrite (an absolute
-  write is fine while none of Derek's printers write tags). **Standalone.**
+  write is fine while none of Derek's printers write tags). **Standalone.** **2026-10-26:** every printer is on 8.0 (Derek), and prod's last deducts (to 2026-10-24) still show 8.3 names, so the next completed and cancelled prints are the first on 8.0, and they run Group 56's code (released `main` `1d9cae4`). Claude reads prod's ledger afterwards (read-only); nothing for Derek to compare. The run-out half is the ⏸️ PENDING DEREK swap item.
 * **📋 Other modules still put outside text into the Activity Log unescaped (found 2026-10-26 by Group 56's
   review).** Group 56.4 escaped every filename, exception and Spoolman error in the deduct and monitor lines
   (`print_deduct._esc`, an AST canary in `tests/test_deduct_accuracy_56.py`), but about 20 lines in
