@@ -277,7 +277,7 @@ NAV_JS = """() => {
 
 def _counts_painted(page: Page):
     """The ⚠️ Low stock count (Group 57.2) painted, so the bar is measured at
-    its real width, not with the "…" it shows before the first heartbeat."""
+    its real width, not with the "–" it shows before the first heartbeat."""
     page.wait_for_function("() => { const n = document.querySelector('#btn-low-stock-count [data-low-stock-count]');"
                            " return !!n && /^\\d+$/.test(n.textContent.trim()); }", timeout=20_000)
     page.wait_for_timeout(300)

@@ -485,6 +485,28 @@ def test_each_window_width_keeps_its_own_steps(isolated_page):
     assert _load(page, old, edge)["steps"] == want
 
 
+def test_another_windows_entry_written_meanwhile_is_kept(isolated_page):
+    """The memo is read again just before it is written: another FCC window of
+    this browser may have written its own entry since this one loaded. Round 5:
+    nothing pinned that; with the load-time memo in its place every test passed,
+    and the other window's entry was dropped, so that window moved on its next
+    load. Here this window fits, another writes its entry, this one fits again
+    (a Text size change): both entries are kept."""
+    page = isolated_page
+    _load(page, {}, 1900)
+    _landed(page)
+    edge = _widest(page, lambda s: bool(s["steps"]), 900, 1900)
+    want = _width(page, edge)["steps"]
+    _flush(page)                                                  # this window's entry is written
+    other = {"w": 1440, "size": "standard", "level": 2}
+    page.evaluate("""([k, e]) => { const m = JSON.parse(window.__store[k] || '[]');
+        window.__store[k] = JSON.stringify([e].concat(m)); }""", [MEMO, other])      # the other window's
+    page.evaluate("() => document.dispatchEvent(new Event('fcc:text-size'))")       # this one fits again
+    _settle(page)
+    kept = _memo(page)
+    assert sorted((m["w"], m["level"]) for m in kept) == sorted([(BASELINE_WIDTH, len(want)), (1440, 2)]), kept
+
+
 HOLD_TIMERS_JS = """() => { window.__held = []; const real = window.setTimeout.bind(window);
     window.setTimeout = (fn, ms, ...a) => (ms === 1000 ? (window.__held.push(fn), 0) : real(fn, ms, ...a)); }"""
 

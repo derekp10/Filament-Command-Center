@@ -88,12 +88,15 @@
         }
 
         if (e.key === '?') {
-            // Mid-stream `?` (round-1 path): if we're clearly in a fast
-            // scan, yield to the scan accumulator immediately without the
-            // 120ms detour.
+            // Mid-stream `?` (round-1 path): if we're clearly in a scan,
+            // yield to the scan accumulator immediately without the 120ms
+            // detour. A scan still arriving, however slow the scanner: a
+            // legacy Google Sheets label is a URL with a '?' after its
+            // "https:" (window.scanIsArriving; Group 57 review, round 5).
             // Canonical definition lives in inv_core.js — this was one of three
             // identical copy-pasted variants (2026-08-03 scan-path audit).
-            if (window.isScanInFlight && window.isScanInFlight()) return;
+            if (window.scanIsArriving ? window.scanIsArriving()
+                : (window.isScanInFlight && window.isScanInFlight())) return;
             // Defer the help open — if more chars arrive within 120ms,
             // we'll cancel it above and let the scan accumulator handle
             // the `?`. The browser's default for `?` is no-op, so
@@ -102,6 +105,11 @@
             _pendingHelpTimer = setTimeout(() => {
                 _pendingHelpTimer = null;
                 window.toggleShortcutsOverlay();
+                // Nothing followed: the '?' was a person's, and so is whatever
+                // is in the scan buffer with it. Left there, opening and
+                // closing the list put "??" in front of the next scan and made
+                // a person's next Enter in a dialog a scan of it (round 5).
+                if (window.clearScanBuffer) window.clearScanBuffer();
             }, HELP_DEFER_MS);
         } else if (e.key === 'Escape' && ov.style.display === 'block') {
             // Group 10.1 SC round-3 fix: Escape used to bubble to whichever

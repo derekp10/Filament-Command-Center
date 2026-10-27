@@ -291,6 +291,13 @@
                 state.scanStartTime = 0;
             }
             else if (e.key.length === 1) {
+                // A Space with nothing collected is a person's (it pressed a
+                // focused button): no label starts with one. Kept, it sat in
+                // front of the next scan for 2 s (" CMD:WEIGH", a Malformed
+                // Command), started that scan's 500 ms early, and two of them
+                // made a person's Enter in a dialog a scan of "  " (Group 57
+                // review, rounds 2 and 5).
+                if (e.key === ' ' && !state.scanBuffer) return;
                 if (state.scanBuffer.length === 0) {
                     state.scanStartTime = Date.now();
                 }

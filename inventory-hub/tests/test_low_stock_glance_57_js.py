@@ -383,14 +383,15 @@ def test_space_on_the_focused_button_opens_the_list_and_escape_gives_the_focus_b
 
 
 def test_space_on_the_button_leaves_no_space_for_the_next_scan(bar):
-    """The scan accumulator (scripts.html) keeps the Space that pressed a
+    """The scan accumulator (scripts.html) kept the Space that pressed a
     focused button for 2 s: an Enter in the list became a scan of " ", and a
     label scanned meanwhile arrived as " CMD:WEIGH", "Malformed Command"
-    (Group 57 review, round 2). The button takes that space back out; a buffer
-    that holds a scan keeps it, and a mouse click leaves the buffer alone."""
-    # The accumulator's part that matters here: a key typed outside a field.
-    bar.evaluate("""() => document.addEventListener('keydown', (e) => {
-        if (e.key.length === 1 && !['INPUT', 'TEXTAREA'].includes(e.target.tagName)) state.scanBuffer += e.key; })""")
+    (Group 57 review, round 2). The button took that space back out; since
+    round 5 the REAL accumulator skips a Space while it holds nothing, so every
+    button is covered. A buffer that holds a scan keeps it, and a mouse click
+    leaves the buffer alone."""
+    from test_slow_scan_slash_js import _accumulator          # that module imports this one
+    bar.add_script_tag(content=_accumulator())
     bar.evaluate("(a) => { window.__answers = a; }", [_answer(REPORT)] * 3)
     bar.locator(BTN).focus()
     bar.keyboard.press("Space")
@@ -821,15 +822,17 @@ def test_an_older_tick_fcc_didnt_answer_marks_no_newer_count_stale(both):
 def test_an_older_ticks_backlog_count_never_paints_over_the_windows_read(both):
     """The heartbeat hands the Backlog its send time: a tick sent before the
     backlog window's read, landing after it, is older and its count is not
-    shown (round 4: whichever answer landed last painted)."""
+    shown (round 4: whichever answer landed last painted). The test waits for
+    the held tick's own end (it signals inventory:sync-pulse once drawn), not a
+    fixed time, which a slow run outlasted with nothing checked (round 5)."""
     bar = both
+    bar.evaluate("() => { window.__drawn = 0; document.addEventListener('inventory:sync-pulse', () => { window.__drawn += 1; }); }")
     bar.evaluate("(a) => { window.__pulse = a; }", [_answer({"label_backlog": {"read_ok": True, "count": 53}}, delay=900)])
     bar.evaluate("() => window._dashboardPulseTickOnce()")          # sent first, lands last
     bar.evaluate("(a) => { window.__backlogAnswers = a; }", [_answer(_items(7))])
     bar.evaluate("() => window.fetchBacklog()")
     bar.wait_for_function("() => document.getElementById('btn-backlog-count').textContent.indexOf('(7)') >= 0")
-    bar.wait_for_function("() => window.__pulseUrls.length === 1")
-    bar.wait_for_timeout(1300)                                       # the held tick has landed
+    bar.wait_for_function("() => window.__drawn === 1", timeout=5000)        # the held tick has landed
     k = _backlog_btn(bar)
     assert (k["text"], k["read"]) == ("🏷️ Backlog (7)", "ok"), k
 
@@ -892,20 +895,29 @@ def test_a_filtered_backlog_window_never_sets_the_count(both, filter_):
 def test_the_backlog_windows_failed_read_marks_the_count_stale(both):
     """The newest read sent decides the stale look, the window's own included
     (it said "Connection error" while the button looked fresh); the next good
-    read makes it fresh again."""
+    read makes it fresh again. The window says it too: in the list on a first
+    read, above the last list after that (round 5: the failure handler must
+    pass the failure on to the one that writes this, and nothing pinned it;
+    without it the window kept "Loading backlog..." with FCC not answering)."""
     bar = both
     bar.evaluate("(a) => { window.__pulse = a; }", [_answer({"label_backlog": {"read_ok": True, "count": 53}})])
     bar.evaluate("() => window._dashboardPulseTickOnce()")
     bar.wait_for_function("() => document.getElementById('btn-backlog-count').dataset.read === 'ok'")
     shown = 53
-    for failed, why in ((_answer(None, network=True), "FCC didn't answer just now"),
-                        (_answer(None, status=502, notJson=True), "FCC didn't answer just now"),
-                        (_answer({"success": False, "msg": "x"}), "Spoolman didn't answer just now")):
+    said = """() => { const n = document.getElementById('backlog-read-notice');
+        return (n && n.style.display !== 'none' && n.textContent) || document.getElementById('backlog-list').textContent.trim(); }"""
+    for failed, why, words in ((_answer(None, network=True), "FCC didn't answer just now",
+                                "Connection error fetching backlog."),
+                               (_answer(None, status=502, notJson=True), "FCC didn't answer just now",
+                                "⚠️ Connection error fetching backlog. Showing the last list; it tries again every few seconds."),
+                               (_answer({"success": False, "msg": "x"}), "Spoolman didn't answer just now",
+                                "⚠️ Error loading backlog: x Showing the last list; it tries again every few seconds.")):
         bar.evaluate("(a) => { window.__backlogAnswers = a; }", [failed])
         bar.evaluate("() => window.fetchBacklog()")
         bar.wait_for_function("() => document.getElementById('btn-backlog-count').dataset.read === 'failed'")
         k = _backlog_btn(bar)
         assert k["text"] == f"🏷️ Backlog ({shown})?" and f"({why})" in k["title"], (why, k)
+        assert bar.evaluate(said) == words, why
         bar.evaluate("(a) => { window.__backlogAnswers = a; }", [_answer(_items(0))])
         bar.evaluate("() => window.fetchBacklog()")
         bar.wait_for_function("() => document.getElementById('btn-backlog-count').dataset.read === 'ok'")
@@ -956,7 +968,10 @@ def test_a_tick_that_hangs_marks_both_counts_stale(both):
     bar.evaluate("(a) => { window.__pulse = a; }", [_answer({"low_stock": GOOD, "label_backlog": {"read_ok": True, "count": 53}})])
     bar.evaluate("() => window._dashboardPulseTickOnce()")
     bar.wait_for_function("(s) => document.querySelector(s).dataset.read === 'ok'", arg=BTN)
-    bar.wait_for_timeout(600)                     # a tick that answered in time leaves no timer behind
+    # A tick that answered in time leaves no timer behind. A page timer started
+    # now runs after the tick's own (it was set first, for less), however late
+    # the page's timers run: a fixed wait proved nothing on a slow run (round 5).
+    bar.evaluate("() => new Promise((r) => setTimeout(r, 400))")
     assert (_btn(bar)["read"], _backlog_btn(bar)["read"]) == ("ok", "ok"), (_btn(bar), _backlog_btn(bar))
     late = _answer({"low_stock": dict(GOOD, count=14, low=3), "label_backlog": {"read_ok": True, "count": 54}}, delay=1500)
     bar.evaluate("(a) => { window.__pulse = a; }", [late])
@@ -970,6 +985,26 @@ def test_a_tick_that_hangs_marks_both_counts_stale(both):
     assert _btn(bar)["num"] == "14"
     assert (_backlog_btn(bar)["text"], _backlog_btn(bar)["read"]) == ("🏷️ Backlog (54)", "ok")
     bar.evaluate("() => window._setPulseStaleMsForTest && window._setPulseStaleMsForTest()")
+
+
+def test_a_hung_tick_waits_thirty_seconds_before_the_counts_say_so(both):
+    """The 30 s itself, on the page's own clock (Playwright's, so the page's
+    timers run when the test says): fresh 29 s into a tick that hangs, stale
+    after 30 (round 5: every test set the time short, so a 3 s value passed
+    them all). 30 s is past the slowest real heartbeat, an offline printer's
+    probes."""
+    bar = both
+    bar.clock.install()
+    bar.evaluate("(a) => { window.__pulse = a; }",
+                 [_answer({"low_stock": GOOD, "label_backlog": {"read_ok": True, "count": 53}}), _answer(None, hang=True)])
+    bar.evaluate("() => window._dashboardPulseTickOnce()")
+    assert (_btn(bar)["read"], _backlog_btn(bar)["read"]) == ("ok", "ok")
+    bar.evaluate("() => window._dashboardPulseTickOnce()")          # hangs
+    bar.clock.run_for(29_000)
+    assert (_btn(bar)["read"], _backlog_btn(bar)["read"]) == ("ok", "ok")
+    bar.clock.run_for(1_500)
+    assert (_btn(bar)["num"], _btn(bar)["read"]) == ("12?", "failed"), _btn(bar)
+    assert (_backlog_btn(bar)["text"], _backlog_btn(bar)["read"]) == ("🏷️ Backlog (53)?", "failed")
 
 
 @pytest.mark.parametrize("answer, list_says, count_says", [

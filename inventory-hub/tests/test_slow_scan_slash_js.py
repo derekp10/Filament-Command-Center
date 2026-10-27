@@ -34,6 +34,19 @@ with 450 or 700 ms between them, in every place; the boundary (two keys left
 are a scan, one is a person's, two Spaces a button press left are nobody's
 scan); and a '/' the dialog takes empties the buffer, so a stray key never
 starts the next scan. RED on dd81587.
+
+Round 5: two keys a person left (two stray letters, the '?' that opened and
+closed the shortcut list) held the search, the list's filter and the dialog's
+'/' off for 2 s, each '/' restarting it. A buffer is a scan now while it LOOKS
+like one (a ':' or '/' in it, or "http" first), and every FCC label has its ':'
+before any '/', so the boundary moved: keys a person left hold nothing off;
+"https:" keeps its '/' however long the scanner paused, up to the accumulator's
+2 s. The keys are typed as a scanner sends them (Shift down before each capital
+and ':', and each key's keyup), and every test runs on the focused reason radio
+too (the radio capture's, since the accumulator ignores a radio's keys): a
+NumLock or dead key mid-label is skipped there, a one-key label and a 1.5 s
+stall before the Enter are scans, and a reason picked with the mouse starts the
+capture afresh. RED on 91e79e8.
 """
 from __future__ import annotations
 
@@ -71,9 +84,11 @@ window.SearchEngine = { open: function () { window.__search += 1; } };
 """
 
 # Typing on the page's fake clock: each key `ms` after the one before, Enter
-# last; `pauses` adds a key's own extra wait before it ({index: ms}). A capital
-# comes with Shift held, as a scanner sends it (Shift+B and the wizard's Shift+E
-# / Shift+C see a label's capitals as theirs).
+# last; `pauses` adds a key's own extra wait before it ({index: ms}). `text` is
+# a string, or a list of keys (a named key such as "NumLock" among them). Keys
+# go as a scanner sends them: Shift down before a capital or a shifted symbol
+# (':' among them; Shift+B and the wizard's Shift+E / Shift+C see a label's
+# capitals as theirs), each key's keyup, then Shift's.
 TYPE_JS = r"""([text, ms, enter, pauses]) => {
     if (!window.__fakeClock) {
         const base = Date.now(), pbase = performance.now();
@@ -82,13 +97,20 @@ TYPE_JS = r"""([text, ms, enter, pauses]) => {
         performance.now = () => pbase + window.__T;
         window.__fakeClock = true;
     }
-    const keys = [...text];
+    const keys = Array.isArray(text) ? text.slice() : [...text];
     if (enter) keys.push('Enter');
+    const SHIFTED = '~!@#$%^&*()_+{}|:"<>?';
+    const send = (t, type, key, shiftKey) =>
+        t.dispatchEvent(new KeyboardEvent(type, { key, shiftKey, bubbles: true, cancelable: true }));
     keys.forEach((key, i) => {
         window.__T += ms + ((pauses && pauses[i]) || 0);
         const t = document.activeElement || document.body;
-        const shiftKey = key.length === 1 && key !== key.toLowerCase();
-        t.dispatchEvent(new KeyboardEvent('keydown', { key, shiftKey, bubbles: true, cancelable: true }));
+        const shift = key.length === 1 && (key !== key.toLowerCase() || SHIFTED.includes(key));
+        if (shift) send(t, 'keydown', 'Shift', true);
+        send(t, 'keydown', key, shift);
+        const u = document.activeElement || document.body;      // where the key left the focus
+        send(u, 'keyup', key, shift);
+        if (shift) send(u, 'keyup', 'Shift', false);
     });
 }"""
 
@@ -138,13 +160,14 @@ def _reset(page):
 
 
 ROW = "#fcc-low-stock-overlay .fcc-stock-row.kb-active"
-PLACES = ["exclude", "dialog", "include", "list", "nothing"]
+RADIO = f"{DIALOG} input[value='discontinued']"
+PLACES = ["exclude", "dialog", "include", "radio", "list", "nothing"]
 
 
 def _place(page, where):
-    """Sets up `where` (the reason dialog with Exclude, its own text, or Include
-    again focused; the list with a row highlighted; nothing open) and returns
-    what puts the focus back there before each scan."""
+    """Sets up `where` (the reason dialog with Exclude, its own text, Include
+    again or a reason focused; the list with a row highlighted; nothing open)
+    and returns what puts the focus back there before each scan."""
     if where == "nothing":
         return lambda: page.evaluate("() => document.activeElement && document.activeElement.blur()")
     if where == "include":
@@ -161,9 +184,11 @@ def _place(page, where):
     page.keyboard.press("Delete")
     page.wait_for_selector(DIALOG)
     if where != "include":
-        page.locator(f"{DIALOG} input[value='discontinued']").check()
+        page.locator(RADIO).check()
     if where == "dialog":
         return lambda: page.locator(f"{DIALOG} .fcc-stock-dlg-name").click()     # the focus on the dialog itself
+    if where == "radio":
+        return lambda: page.locator(RADIO).focus()
     target = f"{DIALOG} [data-stock-dlg-save]" if where == "exclude" else f"{DIALOG} [data-stock-dlg-include]"
     return lambda: page.locator(target).focus()
 
@@ -173,7 +198,7 @@ def _whole(page, where, why):
     where it was scanned."""
     s = _seen(page)
     assert s["scans"] == [URL] and s["search"] == 0, (where, why, s)
-    if where in ("exclude", "dialog", "include"):
+    if where in ("exclude", "dialog", "include", "radio"):
         assert s["sent"] == [] and s["dialog"] and s["buffer"] == "", (where, why, s)
     if where == "list":
         assert s["opened"] == [] and not s["filter"] and s["filterValue"] == "" and s["list"], (where, why, s)
@@ -230,23 +255,103 @@ def test_a_scanner_that_sends_bursts_keeps_its_scan_whole(scan_page, where):
         _reset(page)
 
 
-def test_two_keys_left_are_a_scan_one_is_a_persons(scan_page):
-    """The boundary, with nothing open, 600 ms after the last key (past round
-    3's rule): two characters in the buffer are a scan, and its '/' joins it;
-    one is a key a person pressed and left, so a '/' is the person's and opens
-    the search; two Spaces (a button pressed twice) are nobody's scan either."""
+def test_keys_a_person_left_hold_nothing_off_a_scan_does(scan_page):
+    """The boundary, with nothing open, 600 ms and 1.9 s after the last key
+    (past the 500 ms a scan is in flight, inside the accumulator's 2 s). Keys a
+    person pressed and left don't look like a scan, so a '/' is the person's: it
+    opens the search and takes them out of the buffer (round 5: round 4 counted
+    any two characters, so "ab" or the shortcut list's "??" held the search off
+    for 2 s, each '/' restarting it). A buffer that looks like one (a ':' or '/'
+    in it, or "http" first) keeps its '/' however long the scanner paused. A
+    Space with nothing before it isn't kept at all."""
     page = scan_page
-    for left, theirs in (("ab", False), ("a", True), ("  ", True), (" a", True), ("a b", False)):
-        page.evaluate("() => { window.clearScanBuffer(); window.__search = 0; }")
-        _later(page, 3000)
-        _type(page, left, 10, enter=False)
-        _later(page, 600)
-        _type(page, "/", 10, enter=False)
+    for left, theirs in (("ab", True), ("a", True), ("  ", True), (" a", True), ("a b", True), ("??", True),
+                         ("12", True), ("ID:", False), ("https:", False), ("http", False), ("LOC:LR", False),
+                         ("https://prusament.com", False)):
+        for pause in (600, 1900):
+            page.evaluate("() => { window.clearScanBuffer(); window.__search = 0; }")
+            _later(page, 3000)
+            _type(page, left, 10, enter=False)
+            _later(page, pause)
+            _type(page, "/", 10, enter=False)
+            s = _seen(page)
+            if theirs:
+                assert s["search"] == 1 and s["buffer"] == "", (left, pause, s)
+            else:
+                assert s["search"] == 0 and s["buffer"] == left + "/", (left, pause, s)
+
+
+def test_a_space_a_button_left_never_starts_a_scan(scan_page):
+    """Space pressed on a focused button, then a label 1.5 s later: the label
+    arrives as it is ("LOC:LR-MDB-1", not " LOC:LR-MDB-1"), and it started when
+    its own first key came, so it is still in flight 400 ms later. RED on
+    91e79e8: the accumulator kept the space for 2 s and started the scan's
+    500 ms from it."""
+    page = scan_page
+    page.evaluate("() => { const b = document.createElement('button'); b.id = 'probe-btn';"
+                  " document.body.appendChild(b); b.focus(); }")
+    _type(page, " ", 10, enter=False)
+    assert _seen(page)["buffer"] == ""
+    _later(page, 1500)
+    _type(page, "LOC:LR", 13, enter=False)
+    _later(page, 300)
+    assert page.evaluate("() => window.isScanInFlight()") is True
+    _type(page, "-MDB-1", 13)
+    assert _seen(page)["scans"] == ["LOC:LR-MDB-1"]
+
+
+def test_a_scan_onto_a_reason_with_a_scanners_other_keys_arrives_whole(scan_page):
+    """Onto the focused reason (a radio: the radio capture's keys, not the
+    accumulator's), a label carrying a key that isn't a character: a NumLock
+    (a keypad-emulating scanner), a dead key (an international layout) or an
+    unidentified key. They are skipped, as the accumulator skips them, and as
+    Shift before each capital is: the label reaches the scan path whole and
+    nothing is saved. RED on 91e79e8: any such key started the capture afresh,
+    and "LOC:LR-MDB-" + NumLock + "1" arrived as "1"."""
+    page = scan_page
+    focus = _place(page, "radio")
+    for keys, want in ((list("LOC:LR-MDB-") + ["NumLock", "1"], "LOC:LR-MDB-1"),
+                       (list("ID:5") + ["Dead", "7"], "ID:57"),
+                       (list("LOC:XL") + ["Unidentified"] + list("-1"), "LOC:XL-1")):
+        for ms in (1, 13, 60, 150):
+            focus()
+            _type(page, keys, ms)
+            s = _seen(page)
+            assert s["scans"] == [want] and s["sent"] == [] and s["dialog"], (want, ms, s)
+            _reset(page)
+
+
+def test_a_one_key_label_and_a_pause_before_the_enter_are_scans_on_a_reason(scan_page):
+    """The radio capture's time rules, on the scanner's side: a one-key label
+    ("7", an old bare spool id) whose Enter comes 250 or 450 ms after it, a
+    label whose scanner paused 1.5 s before its Enter (under the accumulator's
+    2 s), and a label at 150 ms a key are scans, and nothing is saved.
+    Unpinned until round 5: a 100 ms rule for the lone key, the Enter or the
+    gap between keys passed every test."""
+    page = scan_page
+    focus = _place(page, "radio")
+    for keys, ms, pauses in (("7", 250, None), ("7", 450, None), ("57", 13, {2: 1500}),
+                             ("LOC:LR-MDB-1", 13, {12: 1500}), ("LOC:LR-MDB-1", 150, None)):
+        focus()
+        _type(page, keys, ms, pauses=pauses)
         s = _seen(page)
-        if theirs:
-            assert s["search"] == 1, (left, s)
-        else:
-            assert s["search"] == 0 and s["buffer"] == left + "/", (left, s)
+        assert s["scans"] == [keys] and s["sent"] == [] and s["dialog"], (keys, ms, pauses, s)
+        _reset(page)
+
+
+def test_a_reason_picked_with_the_mouse_starts_the_capture_afresh(scan_page):
+    """Two keys a person pressed on a reason ('/' from habit, twice), then
+    another reason picked with the mouse and Enter 400 ms later: the Enter is
+    theirs and saves, and nothing goes to the scan path (a scanner never
+    clicks). RED on 91e79e8: the two keys were scanned and nothing was saved."""
+    page = scan_page
+    focus = _place(page, "radio")
+    focus()
+    _type(page, "//", 300, enter=False)
+    page.locator(f"{DIALOG} input[value='cant_find']").click()
+    _type(page, "", 400)
+    page.wait_for_function("() => window.__sent.length === 1")
+    assert _seen(page)["scans"] == []
 
 
 def test_a_slash_the_dialog_takes_empties_the_buffer(scan_page):

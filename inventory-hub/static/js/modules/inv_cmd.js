@@ -508,7 +508,9 @@ window.commitBulkMove = () => {
     // three identical copy-pasted closures (2026-08-03 scan-path audit). A
     // scan still arriving, however slow the scanner (window.scanIsArriving;
     // Group 57 review, round 4: "LOC:LR-MDB-1" at 75 ms a key, with nothing
-    // open, armed a bulk move on its 'B' and reached processScan as "-1").
+    // open, armed a bulk move on its 'B' and reached processScan as "-1"; the
+    // 'B' comes after the label's ':', and keys a person left don't hold
+    // Shift+B off, round 5).
     const _scanInFlight = () => !!(window.scanIsArriving ? window.scanIsArriving()
         : (window.isScanInFlight && window.isScanInFlight()));
     document.addEventListener('keydown', (e) => {
@@ -1490,6 +1492,10 @@ const _quickPickItem = (locData, res) => {
 
 // --- SCAN ROUTER ---
 const processScan = (text, source = 'keyboard', capturedAt = null) => {
+    // Blanks around a scan are nobody's (the server strips them too); kept,
+    // the exact matches below missed (Group 57 review, round 5).
+    text = String(text == null ? '' : text).trim();
+    if (!text) return;
     const upper = text.toUpperCase();
     const locKey = upper.trim();
     if (_isLocRepeat(locKey, capturedAt)) {
@@ -1525,7 +1531,9 @@ const processScan = (text, source = 'keyboard', capturedAt = null) => {
         window._fccOpenMoveQuestion = openQuestion;
     }
     if (openQuestion) {
-        if (/^CMD:CANCEL(:.*)?$/.test(upper)) { openQuestion.cancel(); return; }
+        // At the end of the text, as routeConfirmScan reads its QRs: a stray
+        // key in front refused the question's own Cancel (round 5).
+        if (/CMD:CANCEL(:[A-Z0-9_-]+)?$/.test(upper)) { openQuestion.cancel(); return; }
         // A question whose answers are labels (Group 40.5's "Record it as coming
         // from…": a feed slot's label picks it) routes them itself.
         if (typeof openQuestion.route === 'function' && openQuestion.route(text)) { locDone(); return; }
@@ -1546,8 +1554,10 @@ const processScan = (text, source = 'keyboard', capturedAt = null) => {
     // the substring-matching routes below and answer whatever unrelated dialog
     // is up now (2026-09-12 review). A stale CMD:CANCEL:<sid> still falls
     // through: cancelling is always safe. A stale CMD:STORE:<sid> (Group 40.3's
-    // "Just store it") is a choice too, so it is stopped the same way.
-    if (/^CMD:(CONFIRM|STORE):.+/.test(upper)) {
+    // "Just store it") is a choice too, so it is stopped the same way. Read at
+    // the end of the text, so a stray key in front never lets one through
+    // (Group 57 review, round 5).
+    if (/CMD:(CONFIRM|STORE):\S+$/.test(upper)) {
         showToast('That confirm QR belongs to a dialog that has closed — ignored', 'warning', 7000);
         if (window.logClientEvent) window.logClientEvent('⚠️ Stale confirm QR scanned (its dialog had closed) — ignored', 'WARNING');
         return;

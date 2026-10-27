@@ -652,11 +652,15 @@
                 if (window.enterIsAScan ? window.enterIsAScan()
                     : (window.isScanInFlight && window.isScanInFlight())) return;
                 const active = document.activeElement;
+                // A person's Enter: a key they left in the scan buffer goes
+                // with it, so it can't start the next scan (round 5).
                 if (active === yes) {
                     e.preventDefault(); e.stopPropagation();
+                    if (window.clearScanBuffer) window.clearScanBuffer();
                     doConfirm();
                 } else if (active === no) {
                     e.preventDefault(); e.stopPropagation();
+                    if (window.clearScanBuffer) window.clearScanBuffer();
                     close();
                 }
                 return;
@@ -1897,7 +1901,13 @@
             if (window.enterIsAScan ? window.enterIsAScan()
                 : (window.isScanInFlight && window.isScanInFlight())) return;
             if (currentIdx >= 0) {
+                // A person's Enter, and theirs alone: the accumulator mustn't
+                // also submit a key left in the buffer (Group 57 review, round
+                // 5: Q, then 2, then Enter opened the swap AND put spool #2 in
+                // the scan buffer behind it). The standing order's idiom.
                 e.preventDefault();
+                e.stopImmediatePropagation();
+                if (window.clearScanBuffer) window.clearScanBuffer();
                 window.quickSwapTap(buttons[currentIdx]);
             }
         }

@@ -204,9 +204,9 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
     const _now = () => (typeof performance !== 'undefined' && performance && typeof performance.now === 'function'
         ? performance.now() : Date.now());
 
-    // A '/' in a scan still arriving is the scan's, however slow the scanner and
-    // however long it paused (window.scanIsArriving, inv_core.js; Group 57
-    // review, rounds 3 and 4).
+    // A '/' in a scan still arriving is the scan's, however slow the scanner,
+    // and after a pause too, up to the scan accumulator's 2 s reset
+    // (window.scanIsArriving, inv_core.js; Group 57 review, rounds 3 to 5).
     const _scanArriving = () => (typeof window.scanIsArriving === 'function' ? window.scanIsArriving()
         : (typeof window.isScanInFlight === 'function' && window.isScanInFlight()));
 
@@ -761,12 +761,14 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         // and the dialog with it, losing the note typed into it (Group 57 review,
         // round 2). '/' typed into the note is the note's, and one in a scan
         // still arriving the scan's (a Prusament QR's URL), however slow the
-        // scanner or long its pause: round 3 found a slower scanner's late '/'
-        // claimed here and the scan buffer emptied, so the scan's Enter pressed
-        // the focused button and saved (or removed) an exclusion, and round 4
-        // the same after a half-second stall. A '/' claimed here empties the
-        // buffer, which then holds at most one stray key: it mustn't start the
-        // next scan.
+        // scanner, and after a pause up to the accumulator's 2 s: round 3 found
+        // a slower scanner's late '/' claimed here and the scan buffer emptied,
+        // so the scan's Enter pressed the focused button and saved (or removed)
+        // an exclusion, and round 4 the same after a half-second stall. (A
+        // stall over 2 s empties the buffer before the '/' comes, so the rest of
+        // the URL reads as a person's keys: no code can tell, round 5.) A '/'
+        // claimed here empties the buffer, so the keys a person left in it
+        // don't start the next scan.
         if ((e.key === 'k' || e.key === 'K') && (e.ctrlKey || e.metaKey) && !e.altKey) {
             e.preventDefault();
             e.stopImmediatePropagation();
@@ -1273,18 +1275,10 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
             const btn = document.getElementById(id);
             if (btn && !btn.dataset.lowStockWired) {
                 btn.dataset.lowStockWired = '1';
-                btn.addEventListener('click', (e) => {
-                    // Pressed with Space (Enter is the scan accumulator's): the
-                    // accumulator kept that space, and for 2 s a scan arrived as
-                    // " CMD:WEIGH" ("Malformed Command") and an Enter in the list
-                    // as a scan of " " (Group 57 review, round 2).
-                    if (e && e.detail === 0 && typeof state !== 'undefined' && state
-                            && typeof state.scanBuffer === 'string' && state.scanBuffer && !state.scanBuffer.trim()
-                            && typeof window.clearScanBuffer === 'function') {
-                        window.clearScanBuffer();
-                    }
-                    window.openLowStockPanel();                                     // no event as opts
-                });
+                // Pressed with Space (Enter is the scan accumulator's), the space
+                // used to stay in the scan buffer for 2 s (Group 57 review, round
+                // 2); the accumulator skips a leading Space now (round 5).
+                btn.addEventListener('click', () => window.openLowStockPanel());   // no event as opts
             }
         });
     }
@@ -1302,13 +1296,21 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
     // A person's stray key on a reason (a '/' from habit) made their next Enter
     // a scan of it, however much later and whatever they pressed between (round
     // 4: '/', ArrowDown, Enter scanned "/" and saved nothing). A scanner sends no
-    // arrow, Tab or Space mid-label (Shift it sends before each capital), so any
-    // of those starts afresh; and at the Enter, keys over 2 s old are dropped
-    // (the scan accumulator's own reset, scripts.html), and one lone key 500 ms
-    // or more before it is a person's: no label is one character typed slower
-    // than that.
+    // key a person moves with mid-label (an arrow, Tab, Home, End, a page key,
+    // Backspace, Delete, Escape) and no Space, so those start afresh, and so
+    // does a click in the dialog (a scanner never clicks: a reason picked with
+    // the mouse after two stray keys scanned them, round 5). Any other key that
+    // isn't a character is skipped, as the accumulator skips it: Shift before
+    // each capital, and a NumLock or a dead key a scanner may send mid-label
+    // (round 4 started afresh on those, and the label arrived cut, round 5).
+    // At the Enter, keys over 2 s old are dropped (the scan accumulator's own
+    // reset, scripts.html), and one lone key 500 ms or more before it is a
+    // person's: no label is one character typed slower than that. A scanner
+    // that stalls that long right before its own Enter reads as a person, as
+    // everywhere else: no code can tell the two apart (round 5, accepted).
     const _radioKeys = { buf: '', first: 0, last: 0 };
-    const _SCANNER_KEYS = ['Enter', 'Shift', 'CapsLock', 'AltGraph'];
+    const _PERSON_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab', 'Home', 'End',
+        'PageUp', 'PageDown', 'Backspace', 'Delete', 'Escape'];
     document.addEventListener('keydown', (e) => {
         const t = e.target;
         if (!(t && t.matches && t.matches(`#${DIALOG_ID} input[type="radio"]`))) { _radioKeys.buf = ''; return; }
@@ -1326,11 +1328,14 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
             if (typeof window.processScan === 'function') window.processScan(buf, elapsed < 150 ? 'barcode' : 'keyboard');
             return;
         }
-        if (e.key === ' ' || (e.key.length !== 1 && !_SCANNER_KEYS.includes(e.key))) { _radioKeys.buf = ''; return; }
+        if (e.key === ' ' || _PERSON_KEYS.includes(e.key)) { _radioKeys.buf = ''; return; }
         if (e.key.length !== 1) return;
         if (!_radioKeys.buf || now - _radioKeys.last > 2000) { _radioKeys.buf = ''; _radioKeys.first = now; }
         _radioKeys.buf += e.key;
         _radioKeys.last = now;
+    }, true);
+    document.addEventListener('pointerdown', (e) => {
+        if (e.target && e.target.closest && e.target.closest(`#${DIALOG_ID}`)) _radioKeys.buf = '';
     }, true);
     _installScanCapture();
 

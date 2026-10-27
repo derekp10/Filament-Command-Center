@@ -32,6 +32,15 @@ leaves no 'q' behind, and a 'q' inside a label moves nothing; the
 shared question's Enter never answers a slow scan, a bare number's included;
 Shift+B and Shift+E / Shift+C never fire inside a slow label, and still do for a
 person. RED on dd81587 (each test says from what speed).
+
+Round 5 (RED on 91e79e8, each test says how): the person's side. Two Spaces a
+button press left made a person's Enter on YES, on the grid or in the three-way
+a scan of "  "; two keys a person left (the shortcut list's "??", a stray "12",
+the wizard's own E and C) held off Q, Shift+B and the wizard's next toggle for
+2 s; a key left in front of the confirm's own "Scan to Cancel" stopped it; Q,
+then a digit, then Enter opened the swap and also put that spool in the scan
+buffer. Pinned too: a one-key label never answers a confirm, and a label's 'E'
+right after its first key never toggles the wizard (both were unpinned).
 """
 from __future__ import annotations
 
@@ -68,6 +77,7 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"></head><body>
   <button class="fcc-qs-slot" data-toolhead="XL-1" data-box="LR-MDB-1" data-slot="2" data-spool-id="58">slot 2</button>
 </div></div>
 <div id="wizardModal" class="modal"><button id="wiz-btn">wizard</button></div>
+<div id="fcc-shortcuts-overlay" style="display:none"><div id="fcc-shortcuts-list"></div></div>
 </body></html>"""
 
 # Answers the printer check as the page's own module would, after inv_core.js.
@@ -296,3 +306,205 @@ def test_the_wizards_shift_e_and_c_never_fire_inside_a_slow_label(scan_page, ms)
     page.evaluate("() => { window.__T += 3000; }")
     page.keyboard.press("Shift+E")
     assert page.evaluate("() => window.__wiz") == ["expand"]
+
+
+# ---- Round 5: the person's side, and two unpinned scan rules -------------------------------------
+
+def _wizard(page):
+    """The wizard up with the focus on its button, nothing else open."""
+    page.evaluate("() => { document.getElementById('manageModal').classList.remove('show');"
+                  " document.getElementById('wizardModal').classList.add('show'); document.getElementById('wiz-btn').focus(); }")
+
+
+def _q(page):
+    """Q on the grid (the focus on slot 2): the focus goes to slot 1. A beat
+    after, so Q's deferred buffer clear has run, as it has by the time a
+    person's next key comes."""
+    page.locator(".fcc-qs-slot").nth(1).focus()
+    _type(page, "q", 10, enter=False)
+    page.wait_for_timeout(20)
+
+
+@pytest.mark.parametrize("ms", [1, 26, 150])
+def test_a_one_key_label_never_answers_a_confirm(scan_page, ms):
+    """A one-key label ("7", an old bare spool id) scanned at the Quick-Swap
+    confirm (YES focused), onto the grid after Q, and at the three-way: its
+    Enter is the scan's (it is in flight), so nothing is answered and "7"
+    reaches the scan path. Unpinned until round 5: without enterIsAScan's
+    in-flight rule every test stayed green, and "7" confirmed the swap."""
+    page = scan_page
+    _fresh(page)
+    _open_swap(page)
+    _type(page, "7", ms)
+    page.wait_for_timeout(50)
+    s = _seen(page)
+    assert s["posts"] == [] and s["open"] and s["scans"] == ["7"], (ms, s)
+    _fresh(page)
+    page.evaluate(PRINTING_JS, False)
+    _q(page)
+    _type(page, "7", ms)
+    page.wait_for_timeout(50)
+    s = _seen(page)
+    assert not s["open"] and s["scans"] == ["7"], (ms, s)
+    _fresh(page)
+    page.evaluate(THREE_WAY_JS)
+    page.wait_for_selector("#fcc-three-way-probe")
+    _type(page, "7", ms)
+    page.wait_for_timeout(50)
+    assert page.evaluate("() => window.__answer") is None and _seen(page)["scans"] == ["7"], ms
+
+
+@pytest.mark.parametrize("left", ["x", " ", "x "])
+def test_a_key_left_in_front_of_the_qrs_never_stops_them(scan_page, left):
+    """A key a person pressed on the confirm (a stray letter, a Space, or
+    both), then its own QR scanned a second later: "Scan to Cancel" cancels
+    the swap and sends nothing, and the three-way's "Scan to Store" stores.
+    RED on 91e79e8: the key sat in front of the payload, the anchored match
+    missed it, and the dialog stayed up with nothing said."""
+    page = scan_page
+    _fresh(page)
+    sid = _open_swap(page)
+    _type(page, left, 100, enter=False)
+    page.evaluate("() => { window.__T += 1000; }")
+    _type(page, f"CMD:CANCEL:{sid}", 8)
+    page.wait_for_timeout(50)
+    s = _seen(page)
+    assert s["posts"] == [] and not s["open"], (left, s)
+    _fresh(page)
+    page.evaluate(THREE_WAY_JS)
+    page.wait_for_selector("#fcc-three-way-probe")
+    sid = page.evaluate("() => Object.keys(window._fccActiveConfirms).slice(-1)[0]")
+    _type(page, left, 100, enter=False)
+    page.evaluate("() => { window.__T += 1000; }")
+    _type(page, f"CMD:STORE:{sid}", 8)
+    page.wait_for_timeout(50)
+    assert page.evaluate("() => window.__answer") == "store", left
+
+
+@pytest.mark.parametrize("left", ["  ", "x ", "x"])
+def test_a_persons_enter_after_stray_keys_answers_the_dialog(scan_page, left):
+    """Two Spaces pressed on a button (they press nothing here; a tile that
+    takes no Space is the real case), a stray letter and a Space, or a stray
+    letter, then a person's Enter 0.7 s later: YES swaps, the grid's
+    highlighted slot opens its confirm, and the three-way stores, each on the
+    first Enter, and the keys go with it (they would start the next scan). RED
+    on 91e79e8: the blanks stayed in the scan buffer and counted, so the Enter
+    was taken for a scan of "  " or "x " and lost; and the letter stayed."""
+    page = scan_page
+    _fresh(page)
+    _open_swap(page)
+    _type(page, left, 300, enter=False)
+    _type(page, "", 700)
+    page.wait_for_function("() => window.__posts.length === 1", timeout=3000)
+    assert _seen(page)["buffer"] == "", left
+    _fresh(page)
+    page.evaluate(PRINTING_JS, False)
+    _q(page)
+    _type(page, left, 300, enter=False)
+    _type(page, "", 700)
+    page.wait_for_selector("#fcc-quickswap-confirm-overlay", timeout=3000)
+    page.wait_for_timeout(20)
+    assert (_seen(page)["buffer"], _seen(page)["scans"]) == ("", []), left
+    _fresh(page)
+    page.evaluate(THREE_WAY_JS)
+    page.wait_for_selector("#fcc-three-way-probe")
+    _type(page, left, 300, enter=False)
+    _type(page, "", 700)
+    page.wait_for_timeout(20)
+    assert page.evaluate("() => window.__answer") == "store", left
+    assert (_seen(page)["buffer"], _seen(page)["scans"]) == ("", []), left
+
+
+def test_a_legacy_labels_question_mark_never_opens_the_shortcut_list(scan_page):
+    """A legacy Google Sheets label is a URL with a '?' after its "https:".
+    Scanned slowly, with the scanner pausing 200 ms (real time: the list waits
+    120 ms for a next key) right after the '?': the list stays shut and the
+    scan arrives whole. RED on 91e79e8: the '?' asked only whether a scan was
+    in flight (500 ms from its first key), so the list opened over the scan."""
+    page = scan_page
+    page.add_script_tag(content=(MODULES / "shortcuts_registry.js").read_text(encoding="utf-8"))
+    _fresh(page)
+    page.evaluate("() => document.activeElement && document.activeElement.blur()")
+    url = "https://docs.google.com/spreadsheets/d/1AbC/edit?gid=304905527#gid=304905527&range=98:98"
+    at = url.index("?") + 1
+    _type(page, url[:at], 26, enter=False)
+    page.wait_for_timeout(200)
+    _type(page, url[at:], 26)
+    assert page.evaluate("() => document.getElementById('fcc-shortcuts-overlay').style.display") != "block"
+    assert _seen(page)["scans"] == [url]
+
+
+def test_keys_a_person_left_never_stop_q_shift_b_or_the_wizard(scan_page):
+    """Two keys a person pressed and left ("??", "12"), then Q 0.6 s later:
+    the focus goes to the grid; then Shift+B 0.6 s after "12" with nothing
+    open: a bulk move arms; the wizard's Shift+E, Shift+C, Shift+E, Shift+C
+    0.6 s apart: all four act (the wizard keeps its own keys in the buffer, so
+    a label's first key is never cut). RED on 91e79e8: any two characters in
+    the buffer held these keys off for 2 s, and each blocked press restarted
+    it."""
+    page = scan_page
+    _fresh(page)
+    page.locator(".fcc-qs-slot").nth(1).focus()
+    _type(page, "??", 600, enter=False)
+    _type(page, "q", 600, enter=False)
+    assert page.evaluate("() => document.activeElement.dataset.slot") == "1"
+    assert _seen(page)["buffer"] == ""
+    _fresh(page)
+    page.evaluate("() => { document.getElementById('manageModal').classList.remove('show'); document.activeElement.blur(); }")
+    _type(page, "12", 600, enter=False)
+    _type(page, "B", 600, enter=False)
+    assert page.evaluate("() => window.__bulk") == 1
+    _fresh(page)
+    _wizard(page)
+    _type(page, "ECEC", 600, enter=False)
+    assert page.evaluate("() => window.__wiz") == ["expand", "collapse", "expand", "collapse"]
+
+
+def test_the_help_key_takes_its_question_marks_back(scan_page):
+    """'?' opens the shortcut list and '?' closes it (nothing followed either
+    within 120 ms, so both were a person's): neither stays in the scan buffer,
+    and Q 0.6 s later moves the focus to the grid. RED on 91e79e8: "??" stayed
+    for 2 s, held Q off, and a person's next Enter scanned it."""
+    page = scan_page
+    page.add_script_tag(content=(MODULES / "shortcuts_registry.js").read_text(encoding="utf-8"))
+    _fresh(page)
+    shown = "document.getElementById('fcc-shortcuts-overlay').style.display"
+    page.locator(".fcc-qs-slot").nth(1).focus()
+    _type(page, "?", 10, enter=False)
+    page.wait_for_function(f"() => {shown} === 'block'", timeout=3000)
+    assert _seen(page)["buffer"] == ""
+    _type(page, "?", 600, enter=False)
+    page.wait_for_function(f"() => {shown} === 'none'", timeout=3000)
+    assert _seen(page)["buffer"] == ""
+    _type(page, "q", 600, enter=False)
+    assert page.evaluate("() => document.activeElement.dataset.slot") == "1"
+
+
+def test_q_then_a_digit_then_enter_opens_the_swap_and_nothing_else(scan_page):
+    """Q, then 2 (a person expecting slot 2), then Enter 0.7 s later: the
+    highlighted slot's confirm opens, and the "2" goes nowhere. RED on 91e79e8:
+    the grid's Enter left the event to the accumulator too, which submitted
+    "2" (on dev, spool #2 into the scan buffer, unseen behind the dialog)."""
+    page = scan_page
+    _fresh(page)
+    page.evaluate(PRINTING_JS, False)
+    _q(page)
+    _type(page, "2", 300, enter=False)
+    _type(page, "", 700)
+    page.wait_for_selector("#fcc-quickswap-confirm-overlay", timeout=3000)
+    page.wait_for_timeout(50)
+    s = _seen(page)
+    assert s["scans"] == [] and s["buffer"] == "", s
+
+
+@pytest.mark.parametrize("ms", [13, 80])
+def test_a_labels_e_right_after_its_first_key_never_toggles_the_wizard(scan_page, ms):
+    """"LEG:120" with the wizard up: its 'E' is a Shift+E one key in, with
+    nothing in the buffer that looks like a scan yet, so only the in-flight
+    rule keeps it the scan's. Unpinned until round 5 (scanIsArriving without it
+    kept every test green, and the 'E' expanded the wizard)."""
+    page = scan_page
+    _fresh(page)
+    _wizard(page)
+    _type(page, "LEG:120", ms)
+    assert page.evaluate("() => window.__wiz") == [] and _seen(page)["scans"] == ["LEG:120"], ms

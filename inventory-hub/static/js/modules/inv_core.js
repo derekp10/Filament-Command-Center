@@ -61,28 +61,33 @@ const isScanInFlight = () => {
 };
 window.isScanInFlight = isScanInFlight;
 
-// --- A SCAN STILL ARRIVING (Group 57 review, round 3) ---
-// For a handler that claims a key a scan can carry: '/' (the global search's
-// key, fab_drag.js; the Low stock list's filter and its reason dialog,
-// inv_stock.js), since a Prusament spool QR is a URL ending in '/'.
-// isScanInFlight's 500 ms runs from a scan's FIRST key, and a slower scanner
-// (about 12 ms a key or more) is still typing a 45-character URL after it: a '/'
-// late in the URL read as a person's, was claimed, and the scan reached its
-// Enter cut short or with the buffer emptied. The reason dialog then took that
-// Enter for a person's and pressed its focused button: a scan saved an
-// exclusion. This also says yes while the buffer holds two or more characters
-// that aren't blank (a Space a button press left is), however slowly they came
-// and however long the scanner paused since: enterIsAScan's rule for an Enter.
-// Round 3 measured the pause instead (the last key under 500 ms ago), and a
-// scanner that stalled half a second before the URL's last '/' still saved an
-// exclusion (round 4). The accumulator empties its buffer 2 s after the last
-// key (scripts.html), so a person's '/' finds it empty, or holding the one
-// stray key a person leaves. For a printable key only: whose Enter it is stays
+// --- A SCAN STILL ARRIVING (Group 57 review, rounds 3 to 5) ---
+// For a handler that claims a printable key a scan can carry: '/' (the global
+// search's key, fab_drag.js; the Low stock list's filter and its reason dialog,
+// inv_stock.js), since a Prusament spool QR is a URL ending in '/'; '?' (the
+// shortcut list); the letter shortcuts (Q, Shift+B, the wizard's Shift+E /
+// Shift+C). isScanInFlight's 500 ms runs from a scan's FIRST key, and a slower
+// scanner (about 12 ms a key or more) is still typing a 45-character URL after
+// it: a '/' late in the URL read as a person's, was claimed, and the reason
+// dialog then took the scan's Enter for a person's and saved an exclusion. So
+// this also says yes while the buffer already looks like a scan
+// (looksLikeScanPayload: a ':' or '/' in it, or "http" first), however slowly
+// it came and however long the scanner paused, up to the accumulator's 2 s
+// reset (scripts.html). Every FCC label and QR has its ':' before the keys
+// these handlers claim ("https:" before a URL's first '/', "LOC:" before a slot
+// label's 'B'). Keys a person left (a stray letter, the '?' that opened the
+// shortcut list) don't look like one, so they hold nothing off once 500 ms
+// have passed. Round 3 measured the pause (the last key under 500 ms ago), and
+// a scanner that stalled half a second before the URL's last '/' still saved an
+// exclusion; round 4 counted any two characters, and two keys a person left
+// held off Q, Shift+B, '/' and the wizard's toggles for 2 s, each blocked press
+// restarting it (round 5). For a printable key only: whose Enter it is stays
 // enterIsAScan's question.
 const scanIsArriving = () => {
     if (isScanInFlight()) return true;
     const st = (typeof state !== 'undefined') ? state : window.state;
-    return !!(st && typeof st.scanBuffer === 'string' && st.scanBuffer.trim().length >= 2);
+    const buf = st && typeof st.scanBuffer === 'string' ? st.scanBuffer.trim() : '';
+    return !!(buf && window.looksLikeScanPayload && window.looksLikeScanPayload(buf));
 };
 window.scanIsArriving = scanIsArriving;
 
@@ -104,14 +109,17 @@ window.isScannerBurst = isScannerBurst;
 // --- WHOSE ENTER IS IT? (Group 40 review, BD-2) ---
 // For a dialog that answers its focused button on Enter yet must leave a scan's
 // Enter to the accumulator (scripts.html), which hands the payload to the open
-// question: two or more characters in the scan buffer (a slower scanner's label
-// still arriving), one in flight (under 500 ms), a scanner-speed burst, or a
-// buffer that looks like a scan payload. A person's Enter on a focused button
-// finds the buffer empty. The slot picker's rule (slot_picker.js, D1).
+// question: two or more characters in the scan buffer that aren't blank (a
+// slower scanner's label still arriving, a bare number's included), one in
+// flight (under 500 ms), a scanner-speed burst, or a buffer that looks like a
+// scan payload. A person's Enter on a focused button finds the buffer empty.
+// The slot picker's rule (slot_picker.js, D1). Blanks are nobody's scan: two
+// Spaces a button press left made a person's Enter a scan of "  " (Group 57
+// review, round 5).
 const enterIsAScan = () => {
     const st = (typeof state !== 'undefined') ? state : window.state;
     const buf = st && typeof st.scanBuffer === 'string' ? st.scanBuffer : '';
-    if (buf.length >= 2) return true;
+    if (buf.trim().length >= 2) return true;
     if (isScanInFlight() || isScannerBurst()) return true;
     return !!(buf && window.looksLikeScanPayload && window.looksLikeScanPayload(buf));
 };
@@ -375,8 +383,11 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
             // (Group 57 review, round 4).
             if (enterIsAScan()) return;
             const ae = document.activeElement;
+            // A person's Enter: a key they left in the scan buffer goes with
+            // it, so it can't start the next scan (Group 57 review, round 5).
             if (threeWay) {
                 e.preventDefault(); e.stopPropagation();
+                clearScanBuffer();
                 if (yesBtn && ae === yesBtn) yes();
                 else if (storeBtn && ae === storeBtn) store();
                 else if (ae === noBtn) no();
@@ -384,8 +395,8 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
                 else no();
                 return;
             }
-            if (ae === yesBtn) { e.preventDefault(); e.stopPropagation(); yes(); }
-            else if (ae === noBtn) { e.preventDefault(); e.stopPropagation(); no(); }
+            if (ae === yesBtn) { e.preventDefault(); e.stopPropagation(); clearScanBuffer(); yes(); }
+            else if (ae === noBtn) { e.preventDefault(); e.stopPropagation(); clearScanBuffer(); no(); }
             return;
         }
         const arrow = threeWay && (e.key === 'ArrowLeft' || e.key === 'ArrowRight');
@@ -1366,7 +1377,11 @@ window.routeConfirmScan = (text) => {
     // Match the prefix case-insensitively but preserve the session id's
     // case verbatim — sid contains base-36 digits/letters that uppercase
     // would mangle (broke registry lookup in earlier draft).
-    const m = String(text).match(/^[Cc][Mm][Dd]:(CONFIRM|CANCEL|STORE|confirm|cancel|store):(.+)$/);
+    // At the END of the text: a key a person left in the scan buffer in the
+    // last 2 s (a stray letter) sits in front of the QR's payload, and the
+    // dialog's own "Scan to Cancel" did nothing (Group 57 review, round 5).
+    // A session id is "fcc-cqr-<n>-<base 36>" (attachConfirmQRs).
+    const m = String(text).trim().match(/[Cc][Mm][Dd]:(CONFIRM|CANCEL|STORE|confirm|cancel|store):([A-Za-z0-9_-]+)$/);
     if (!m) return false;
     const action = m[1].toUpperCase();
     const sid = m[2].trim();

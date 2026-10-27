@@ -625,14 +625,35 @@ All 3 of these things are important and have value. We should table for now, and
   gets no answer at all (the review: an outage tick took 5 s + 3 s per buffered spool; a record Spoolman can't send
   stops only itself). `/api/spools/refresh` is unchanged. Pinned by `tests/test_low_stock_glance_57.py`. Archived
   when the branch merges.]_
-* **⌨️ Space on any focused button leaves a space in the scan buffer for 2 s.** _(Found 2026-10-26 by the Group 57
-  review, round 2.)_ The scan accumulator (`templates/components/scripts.html`) records every printable key outside a
+* **✅ FIXED (on `feature/group-57-low-stock-at-a-glance`, review round 5; goes to `dev` with Group 57): ⌨️ Space on
+  any focused button leaves a space in the scan buffer for 2 s.** The accumulator skips a Space while it holds
+  nothing (no label starts with one), processScan drops blanks around a scan, and `enterIsAScan` counts only keys
+  that aren't blank; pinned by `tests/test_slow_scan_slash_js.py` and `tests/test_slow_scan_confirms_js.py`.
+  _(Found 2026-10-26 by the Group 57 review, round 2.)_ The scan accumulator (`templates/components/scripts.html`) records every printable key outside a
   field, the Space that presses a focused button included. For the next 2 s a scan arrives with a leading space: a
   client-side command label (" CMD:WEIGH", " CMD:LOCATIONS", " CMD:DROP") misses its match and the server answers
   "Malformed Command", and an Enter in a list that reads Enter as "a scan is in flight" goes to the scan path as " ".
   Group 57 fixed it for the ⚠️ Low stock buttons only (`inv_stock.js` takes a lone space back out of the buffer when
   Space pressed them). The general fix is for the accumulator to skip a Space aimed at a button, which is its own
   change to the scan path and wants its own tests.
+* **⌨️ Four older dialogs answer a scan's Enter as a person's.** _(Found 2026-10-27 by the Group 57 review, round 5,
+  reproduced on dev, read-only; older than Group 57, so not fixed on its branch.)_ The standing order asks a handler
+  that acts on an Enter to leave a scan's Enter to the scan accumulator (`window.enterIsAScan()`); these don't:
+  - **The location editor's Enter-to-save** (`inv_loc_mgr.js`, Group 46.2). Off a text field it steps aside only for
+    a scanner burst or a ':' / '/', so a slower scanner's bare-number label ("57"; "1024" from about 40 ms a key) on
+    the Type select saves the form (POST /api/locations) and closes it, or presses a focused Cancel. In the Name
+    field it opens on, a label typed slower than the field capture's 150 ms is saved as the location's name
+    ("LOC:LR-MDB-1"). Careful: a person's typeahead on the Type select ("dr", then Enter) saving is 46.2's design,
+    which `enterIsAScan`'s two-keys rule would break; a digits-only rule wouldn't, and the Name field needs its own.
+  - **The legacy-ID duplicate picker** (`duplicate_picker.js`): its Enter answers every scan, aborting the picker or
+    taking the spool clicked in it, and the scan itself never reaches the scan path; it stays in the buffer and is
+    glued to the next scan for 2 s ("ID:57ID:58", an invalid id). The picker is opened by a scan, so the next scan is
+    likely; what a scan should do while it is open is the design question.
+  - **Smaller ones:** a focused wizard section header (`inv_wizard.js`: a scan's Enter collapses it and the scan
+    stays in the buffer), the floating pills (`draggable_pill.js`: Enter on the focused 🔍 opens the search and the
+    scan is processed too), the filament editor's "Close without saving?" with Close Anyway focused (a scan closes
+    it unsaved; Keep Editing has the focus by default), and the parent tree picker (`inv_loc_mgr.js`: Enter picks
+    the highlighted parent; read from the code).
 * **✅ FIXED (on `feature/group-57-low-stock-at-a-glance`, the commit after `1a1293b`; goes to `dev` with Group 57):
   🔴 A slower scanner's "Scan to Cancel" could confirm a Quick-Swap.** _(Found 2026-10-27 by the Group 57 review,
   round 3; reproduced on dev, read-only, in round 4.)_ `window.isScanInFlight` (inv_core.js) counts 500 ms from a
@@ -647,8 +668,9 @@ All 3 of these things are important and have value. We should table for now, and
   Each Enter now asks `window.enterIsAScan()` and each letter key `window.scanIsArriving()` (Q also keeps its 'q'
   out of the buffer, the standing order's idiom); `tests/test_slow_scan_confirms_js.py` drives
   them with the real accumulator on a fake clock (red on the old code from 18 ms a key for the cancel), and
-  `tests/test_scan_path_integrity.py` pins the stronger guards. The '?' help key still defers 120 ms (a scanner
-  slower than that could open the shortcut list from a label with a '?'; no FCC label has one).
+  `tests/test_scan_path_integrity.py` pins the stronger guards. The '?' help key asks `window.scanIsArriving()` too
+  (round 5): a legacy Google Sheets label is a URL with a '?' after its "https:", and a scanner slower than 120 ms a
+  key, or one pausing after the '?', opened the shortcut list over the scan.
 * **⏱️ The buffer's server sync still orders by the wall clock.** _(Found 2026-10-27 by the Group 57 review, round 3;
   older code, L28 and 21.6.)_ `loadBuffer`'s 3 s grace window (`inv_cmd.js`, `lastLocalBufferChange`) and the
   recently-assigned-out TTL (`_recentlyAssignedOut`) are stamped with `Date.now`. A clock stepped back just after a

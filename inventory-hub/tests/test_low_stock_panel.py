@@ -45,8 +45,9 @@ FILTER = "#fcc-low-stock-overlay [data-stock-filter]"
 # shim), a fetch that answers /api/stock_report from window.__answers and the
 # stock_exclusion writes from window.__writeAnswers (one per request; the last repeats;
 # {network:true} rejects like a dropped connection, {delay:ms} holds the
-# answer), and recorders for openFilamentDetails (inv_details.js's global) and
-# processScan (inv_cmd.js's).
+# answer, {hold:true} holds it until the test calls window.__release()), and
+# recorders for openFilamentDetails (inv_details.js's global) and processScan
+# (inv_cmd.js's).
 PRELUDE = r"""
 window.__pendingShortcuts = [];
 window.registerShortcut = function (s) { window.__pendingShortcuts.push(s); };
@@ -79,6 +80,7 @@ window.fetch = function (url, opts) {
                                    : Promise.resolve(JSON.parse(JSON.stringify(a.body)))),
         });
     };
+    if (a && a.hold) return new Promise((r) => { window.__release = () => r(go()); });
     return a && a.delay ? new Promise((r) => setTimeout(r, a.delay)).then(go) : go();
 };
 window.processScan = function (txt, source) { window.__scans.push([txt, source]); };
@@ -1367,10 +1369,13 @@ def test_the_window_keeps_one_size_whatever_it_shows(panel):
     its content (max-height: 86vh), and the tabs row was taken out while it
     read."""
     page, open_ = panel
-    open_(_answer(_many(30), delay=600))
+    # Held until it is measured: a timed hold could end first on a slow run
+    # (Group 57 review, round 5, saw it once).
+    open_(_answer(_many(30), hold=True))
     # Measured while it reads, or the test compares ready with ready (round 2).
     assert _state(page) == "loading", _state(page)
     frames = {"loading": _frame(page)}
+    page.evaluate("() => window.__release()")
     _wait_state(page, "ready")
     frames["low (30 rows)"] = _frame(page)
     for key in ("out", "excluded"):
@@ -1427,13 +1432,15 @@ def test_the_line_under_the_title_keeps_its_words_while_it_reads(panel):
     """It reads the same before the list arrives, with the line the dashboard's
     count last said (else "…"), so it never changes length once the list is in."""
     page, open_ = panel
-    open_(_answer(REPORT, delay=800))
+    open_(_answer(REPORT, hold=True))                 # held until it is read (round 5)
     sub = page.locator(PANEL + " [data-stock-sub]")
     assert sub.text_content().strip() == ("Per filament, across its in-stock spools: low is under … g "
                                           "(⚙️ Settings → Behavior).")
+    page.evaluate("() => window.__release()")
     _wait_state(page, "ready")
     assert "low is under 250 g" in sub.text_content()
     page.keyboard.press("Escape")
     page.evaluate("() => window._renderLowStockCount({read_ok: true, count: 3, low: 1, out: 2, threshold_g: 300})")
-    open_(_answer(REPORT, delay=800), click=False)
+    open_(_answer(REPORT, hold=True), click=False)
     assert "low is under 300 g" in sub.text_content()
+    page.evaluate("() => window.__release()")

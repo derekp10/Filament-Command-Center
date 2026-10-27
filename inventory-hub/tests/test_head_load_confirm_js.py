@@ -435,6 +435,63 @@ return {{ held, open, after: !!window._fccOpenMoveQuestion, posts: posts('/api/i
     assert sum("ignored" in (lg.get("msg") or "") for lg in res["logs"]) == 2, res["logs"]
 
 
+def test_a_key_left_in_front_of_a_scan_never_stops_the_questions_own_qrs(tmp_path):
+    """Group 57 review, round 5: a key a person left in the scan buffer in the
+    last 2 s (a stray letter) sits in front of the next scan, and processScan's
+    checks were anchored at its start: the three-way's own Store and Cancel QRs
+    did nothing, the CMD:CANCEL label was refused ("Answer the question on
+    screen first"), and a stale CONFIRM QR fell through to the commands and
+    the server. They are read at the end of the text now, blanks around a scan
+    are dropped, and a scan of nothing but blanks does nothing. RED on 91e79e8."""
+    res = _run(tmp_path, SCAN, f"""
+const out = {{}};
+// Each question from its own slot label (the same label read again within
+// 1.5 s is a double read, and is dropped).
+const ask = async (slot) => {{
+  answerWith('/api/identify_scan', [{_js(_slot(FED))}, {_js(SLOT_DONE)}]);
+  window.processScan('LOC:LR-MDB-1:SLOT:' + slot, 'barcode');
+  await __settle(150);
+  out.asked = (out.asked || 0) + (window._fccOpenMoveQuestion ? 1 : 0);
+  return posts('/api/identify_scan').length;
+}};
+let before = await ask(1);
+window.processScan('x' + 'CMD:STORE:' + sidOf(), 'barcode');
+await __settle(150);
+out.store = posts('/api/identify_scan').slice(before);
+out.storeOpen = !!window._fccOpenMoveQuestion;
+before = await ask(2);
+window.processScan('x' + 'CMD:CANCEL:' + sidOf(), 'barcode');
+await __settle(150);
+out.cancel = posts('/api/identify_scan').slice(before);
+out.cancelOpen = !!window._fccOpenMoveQuestion;
+before = await ask(3);
+window.processScan('qCMD:CANCEL', 'barcode');
+await __settle(150);
+out.label = posts('/api/identify_scan').slice(before);
+out.labelOpen = !!window._fccOpenMoveQuestion;
+await ask(4);
+window.processScan('  CMD:CANCEL  ', 'barcode');
+await __settle(150);
+out.blanksOpen = !!window._fccOpenMoveQuestion;
+const n = posts('/api/identify_scan').length;
+window.processScan('xCMD:CONFIRM:fcc-cqr-9-x', 'barcode');
+window.processScan('   ', 'barcode');
+await __settle(150);
+out.after = posts('/api/identify_scan').length - n;
+out.toasts = toasts();
+return out;
+""")
+    assert res["asked"] == 4, res
+    assert len(res["store"]) == 1 and res["store"][0]["auto_deploy"] is False and not res["storeOpen"], res
+    assert res["cancel"] == [] and not res["cancelOpen"], res
+    assert res["label"] == [] and not res["labelOpen"], res
+    assert not res["blanksOpen"], res
+    assert res["after"] == 0, res
+    assert not any("Answer the question on screen first" in t["msg"] for t in res["toasts"]), res["toasts"]
+    assert sum(t["msg"] == "Cancelled — nothing moved" for t in res["toasts"]) == 3, res["toasts"]
+    assert any("belongs to a dialog that has closed" in t["msg"] for t in res["toasts"]), res["toasts"]
+
+
 def test_a_stale_store_qr_posts_nothing(tmp_path):
     res = _run(tmp_path, SCAN, """
 window.processScan('CMD:STORE:fcc-cqr-9-x', 'barcode');
