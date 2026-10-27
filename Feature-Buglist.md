@@ -200,7 +200,8 @@
   4. For your information, nothing to pick (picture 4): a count FCC couldn't refresh (Spoolman didn't answer) keeps
      its number with a "?" after it and a dashed border, "⚠️ 12?", and the 🏷️ Backlog count does the same, "(53)?";
      the tooltip says why. The "?" takes no room, so a blip never moves the bar. Before its first answer a count
-     reads "…" ("(…)" on Backlog and Queue, which used to read a "(0)" nobody had read), and "?" if that read failed.
+     reads "–" ("(–)" on Backlog and Queue, which used to read a "(0)" nobody had read), and "?" if that read failed;
+     a heartbeat FCC hasn't answered after 30 s counts as failed.
   If you never answer, A and (a) go to `dev` as built.
 * **📐 Plan docs: named sizes and colors as the base for themes; alternative views (phone, wall tablet, printer pictures,
   the Location Manager) (Derek, 2026-10-21; written).** _(→ **Group 60.1**: Claude first rewrites step 3's order, phone first, then the decisions one at a time)_ "Themes" in his sense are whole alternative designs a user
