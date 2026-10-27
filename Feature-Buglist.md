@@ -653,10 +653,13 @@ All 3 of these things are important and have value. We should table for now, and
   change is lost. Theoretical (it needs the step and a second device). The fix is `performance.now`, as Group 57's
   ordering stamps use, but about ten test files set `lastLocalBufferChange` with `Date.now` and change with it.
 * **📶 When FCC itself doesn't answer, only the title-bar counts say so.** _(Group 57 review, round 3.)_ A heartbeat
-  whose request fails (the network gone, FCC restarting, a proxy's error page) now marks the ⚠️ Low stock and 🏷️
-  Backlog counts stale ("FCC didn't answer just now"). Group 52's notices (the Location Manager, the Printer Status
-  widget, the Locations table) still cover only a read FCC reports as failed, so on flaky Wi-Fi they keep looking
-  current. Worth doing with the phone view (📱).
+  whose request fails (the network gone, FCC restarting, a proxy's error page), or hasn't answered after 30 s (round
+  4), now marks the ⚠️ Low stock and 🏷️ Backlog counts stale ("FCC didn't answer just now"). Group 52's notices (the
+  Location Manager, the Printer Status widget, the Locations table) still cover only a read FCC reports as failed, so
+  on flaky Wi-Fi they keep looking current. And a request that hangs (a link dropped without closing the connection;
+  the heartbeat's fetch has no timeout) holds every later tick back until it fails, so nothing on the dashboard
+  refreshes meanwhile: an abort past the slowest real heartbeat (an offline printer's probes) would let the next tick
+  go. Worth doing with the phone view (📱).
 * **🐢 A bound-slot scan that loads its head lists the head's spools twice in the chained deploy.** _(Measured 2026-10-19
   by the Group 52 builder.)_ Such a scan makes four strict whole-list reads, each guarding a different moment; the
   chained deploy's step-4 resident list and its step-6 re-list of the same head could be one read when no printer probe

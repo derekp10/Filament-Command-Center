@@ -47,7 +47,8 @@ REPORT = {
 
 
 def _painted(page):
-    page.wait_for_function("(s) => { const n = document.querySelector(s); return !!n && n.textContent.trim() !== '…'; }",
+    # Painted once its painter has dropped the placeholder's marker (titlebar_fit.js).
+    page.wait_for_function("(s) => { const n = document.querySelector(s); return !!n && !n.hasAttribute('data-count-pending'); }",
                            arg=NUM, timeout=20_000)
     return page.locator(NUM).text_content().strip()
 
@@ -93,7 +94,7 @@ def test_the_count_is_the_lists_low_and_out(page: Page, base_url: str):
 def test_it_opens_the_list_and_the_list_sets_the_count(page: Page, base_url: str):
     """Every heartbeat cut off (quiet_heartbeat), so the only count is the
     list's own read: 2 low + 1 out. Until then the button says FCC didn't
-    answer, with "?" and no count, never a 0 and never its "…" as if nothing
+    answer, with "?" and no count, never a 0 and never its "–" as if nothing
     had been tried (Group 57 review, round 3). The search panel stays shut."""
     _read_only(page)
     quiet_heartbeat(page)

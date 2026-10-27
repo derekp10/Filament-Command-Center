@@ -57,18 +57,21 @@
                     ➕ ADD<span class="fcc-titlebar-more"> INVENTORY</span>
                 </button>
 
-                <!-- The three counts read "(…)" / "…" until their first answer, never
+                <!-- The three counts read "(–)" / "–" until their first answer, never
                      a count of 0 that wasn't read (Group 57 review, round 3: Backlog
                      and Queue read "(0)"). data-count-pending marks a count not yet
                      painted: the bar keeps the steps it took last time meanwhile
-                     (titlebar_fit.js), and each count's painter drops it. -->
+                     (titlebar_fit.js), and each count's painter drops it. An en dash,
+                     no wider than a digit: round 3's "…" was wider than a count under
+                     10, so with small counts the first paint took a step the counts
+                     then gave back, on every load (round 4). -->
                 <button class="btn btn-info ms-4" id="btn-backlog-count" onclick="window.openBacklogModal()"
                     title="Backlog: no count yet. Opens the label backlog."
                     aria-label="Backlog: no count yet. Opens the label backlog.">
-                    🏷️ Backlog <span class="fcc-count-num" data-count-pending>(…)</span>
+                    🏷️ Backlog <span class="fcc-count-num" data-count-pending>(–)</span>
                 </button>
                 <button class="btn btn-warning ms-2" id="btn-queue-count" onclick="openQueueModal()">
-                    🛒 Queue <span data-count-pending>(…)</span>
+                    🛒 Queue <span data-count-pending>(–)</span>
                 </button>
                 <!-- Group 57.2: the ⚠️ Low stock list (inv_stock.js, which wires the
                      click) with its count at a glance: how many filaments are low or
@@ -77,7 +80,7 @@
                      every Text size. -->
                 <button type="button" class="btn btn-outline-warning ms-2" id="btn-low-stock-count"
                     title="Low stock: opens the list." aria-label="Low stock: opens the list."><span
-                    aria-hidden="true">⚠️</span> <span data-low-stock-count data-count-pending>…</span></button>
+                    aria-hidden="true">⚠️</span> <span data-low-stock-count data-count-pending>–</span></button>
                 <!-- Phase 3: keyboard shortcut reference (?). Click or press `?` to open. -->
                 <button class="btn btn-outline-light ms-2" id="btn-shortcuts-help"
                     onclick="window.toggleShortcutsOverlay()"

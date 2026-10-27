@@ -295,10 +295,6 @@
                     state.scanStartTime = Date.now();
                 }
                 state.scanBuffer += e.key;
-                // Each key's time, on the page's own clock: a slower scanner is
-                // still typing past isScanInFlight's 500 ms (window.scanIsArriving,
-                // inv_core.js; Group 57 review, round 3).
-                state.scanLastKeyAt = performance.now();
                 clearTimeout(state.bufferTimeout);
                 state.bufferTimeout = setTimeout(() => {
                     state.scanBuffer = "";

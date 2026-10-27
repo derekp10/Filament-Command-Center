@@ -420,18 +420,22 @@ def test_an_empty_list_says_so(panel):
         "those lists, with your reason.")
 
 
-@pytest.mark.parametrize("answer", [
-    _answer(DOWN, status=502),
-    _answer(None, network=True),
-    _answer(None, status=502, badJson=True),
-    _answer({"success": True}, status=200),          # no lists: not a report
+@pytest.mark.parametrize("answer, said", [
+    (_answer(DOWN, status=502), "Spoolman didn't answer"),
+    # No answer from FCC itself, as the title bar's count says (Group 57 review,
+    # round 4: the list blamed Spoolman while the button said FCC didn't answer).
+    (_answer(None, network=True), "FCC didn't answer"),
+    (_answer(None, status=502, badJson=True), "FCC didn't answer"),
+    (_answer({"success": True}, status=200), "FCC couldn't build the list"),     # no lists: not a report
 ])
-def test_a_failed_read_is_an_error_never_an_empty_list(panel, answer):
+def test_a_failed_read_is_an_error_never_an_empty_list(panel, answer, said):
     page, open_ = panel
     open_(answer)
     _wait_state(page, "error")
     text = page.locator(BODY).inner_text()
-    assert "Spoolman didn't answer" in text
+    assert said in text, text
+    if said != "FCC couldn't build the list":
+        assert "This is not an empty list" in text, text
     assert "Nothing is low" not in text
     assert page.locator(PANEL + " .fcc-stock-row").count() == 0
     assert page.locator(PANEL + " [role=alert]").count() == 1
@@ -1173,6 +1177,61 @@ def test_a_scan_typed_onto_a_reason_radio_never_saves_the_dialog(panel):
     page.keyboard.press("ArrowDown")
     page.keyboard.press("Enter")
     page.wait_for_function("() => window.__sent.length === 1")
+
+
+# Date.now `ms` ahead of the real one, from now on (the reason radios' capture
+# reads it; the scan accumulator's 2 s reset is a timer this leaves alone).
+LATER_JS = """(ms) => { const real = window.__realDateNow || Date.now.bind(Date);
+    window.__realDateNow = real; const ahead = (window.__ahead || 0) + ms; window.__ahead = ahead;
+    Date.now = () => real() + ahead; }"""
+
+
+@pytest.mark.parametrize("between", ["ArrowDown", "Space", "late", "stale"])
+def test_a_persons_stray_key_on_a_reason_never_takes_their_enter(panel, between):
+    """Group 57 review, round 4: a key a person typed onto a reason radio (a '/'
+    from habit) made their next Enter a scan of it, however much later and
+    whatever they pressed between: Del, '/', ArrowDown, Enter scanned "/" and
+    saved nothing. A scanner sends no arrow or Space mid-label, so those start
+    afresh; at the Enter, one lone key 500 ms or more before it is a person's,
+    and keys over 2 s old are dropped (the accumulator's own reset). Each of
+    these Enters saves, with no scan. RED on dd81587: a scan of "/", nothing
+    sent."""
+    page, open_ = panel
+    open_(_answer(REPORT), _answer(REPORT), writes=[_ok("Prusament - PLA - Galaxy Black")])
+    _wait_state(page, "ready")
+    page.keyboard.press("Delete")
+    assert _focused(page)["value"] == "discontinued"
+    page.locator(DIALOG + " input[value='discontinued']").check()     # a reason picked, by mouse
+    if between == "stale":
+        page.keyboard.type("//")                               # two keys: they'd be a scan if fresh
+    else:
+        page.keyboard.press("/")
+    if between == "ArrowDown":
+        page.keyboard.press("ArrowDown")
+    elif between == "Space":
+        page.keyboard.press("Space")
+    elif between == "late":
+        page.evaluate(LATER_JS, 600)
+    else:
+        page.evaluate(LATER_JS, 2100)
+    page.keyboard.press("Enter")
+    page.wait_for_function("() => window.__sent.length === 1")
+    assert page.evaluate("window.__scans") == [], between
+    assert page.evaluate("window.__sent[0].body.reason") in ("discontinued", "cant_find"), between
+
+
+def test_a_one_key_label_scanned_onto_a_reason_is_still_a_scan(panel):
+    """The 500 ms rule is for a person's lone key: a scanner's one-character
+    label (spool #7's bare id) lands with its Enter right after it, and is a
+    scan, as before (the dialog stays, nothing sent)."""
+    page, open_ = panel
+    open_(_answer(REPORT))
+    _wait_state(page, "ready")
+    page.keyboard.press("Delete")
+    page.keyboard.type("7")
+    page.keyboard.press("Enter")
+    assert [s[0] for s in page.evaluate("window.__scans")] == ["7"]
+    assert page.evaluate("window.__sent") == [] and _dialog_open(page)
 
 
 def test_a_quiet_re_read_never_takes_the_focus_from_an_open_dialog(panel):

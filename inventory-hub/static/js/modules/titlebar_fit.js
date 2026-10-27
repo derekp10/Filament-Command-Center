@@ -23,44 +23,73 @@
 // heartbeat brings the counts about half a second later: at some widths that
 // took a step (or gave one back) on every load, ADD INVENTORY reading ADD and
 // every button moving 80 px (round 3). So the bar remembers the steps it took
-// (localStorage `fcc.titleBar.fit`, with the window's width and the Text size),
+// (localStorage `fcc.titleBar.fit`, by the window's width and the Text size),
 // and while a count is still on its placeholder (`data-count-pending`,
 // dashboard.html; each count's painter removes it) it takes at least those,
-// when the width and the Text size are the same as then.
+// when the width and the Text size are the same as then. The placeholders are
+// no wider than a count, so they never need a step the counts don't: a load
+// whose counts take the steps they took last time doesn't move.
+// The memo keeps a window per width and Text size (the newest MEMO_KEEP): with
+// one, two FCC windows at different widths each took the other's, and a reload
+// moved again (round 4). Written once the bar has kept its steps for a second
+// (or as the page goes), so a window resized by dragging keeps one entry, for
+// where it stopped, not one for every width it passed.
 (function () {
     const STEPS = ['fcc-tb-tight', 'fcc-tb-add', 'fcc-tb-nover'];
     const WRAP = 'fcc-tb-wrap';
     const ONE_LINE = '(min-width: 992px)';
     const MEMO = 'fcc.titleBar.fit';
+    const MEMO_KEEP = 8;
+    const REMEMBER_AFTER_MS = 1000;
     let bar = null;
     let brand = null;
     let actions = null;
     let busy = false;
-    let memo = null;          // {w, size, level} from the last load, read once
+    let memo = [];            // [{w, size, level}], newest first, read once at the load
+    let toRemember = null;    // {w, size, level} waiting for REMEMBER_AFTER_MS
+    let rememberTimer = null;
 
     const sizeName = () => document.documentElement.getAttribute('data-fcc-text-size') || 'standard';
 
     function readMemo() {
+        const ok = (m) => !!m && Number.isFinite(m.w) && typeof m.size === 'string' && Number.isInteger(m.level);
         try {
             const m = JSON.parse(localStorage.getItem(MEMO) || 'null');
-            if (m && Number.isFinite(m.w) && typeof m.size === 'string' && Number.isInteger(m.level)) return m;
+            if (Array.isArray(m)) return m.filter(ok).slice(0, MEMO_KEEP);
+            if (ok(m)) return [m];                         // round 3's one window
         } catch (_) { /* private window, blocked storage: no memo */ }
-        return null;
+        return [];
+    }
+
+    // What's stored now (another FCC window may have written since this load),
+    // with this window's entry first.
+    function writeMemo() {
+        clearTimeout(rememberTimer);
+        rememberTimer = null;
+        const m = toRemember;
+        toRemember = null;
+        if (!m) return;
+        try {
+            const rest = readMemo().filter((e) => !(e.w === m.w && e.size === m.size));
+            const text = JSON.stringify([m, ...rest].slice(0, MEMO_KEEP));
+            if (localStorage.getItem(MEMO) !== text) localStorage.setItem(MEMO, text);
+        } catch (_) { /* noop */ }
     }
 
     function remember(level) {
-        try {
-            const m = { w: window.innerWidth, size: sizeName(), level };
-            const text = JSON.stringify(m);
-            if (localStorage.getItem(MEMO) !== text) localStorage.setItem(MEMO, text);
-        } catch (_) { /* noop */ }
+        toRemember = { w: window.innerWidth, size: sizeName(), level };
+        clearTimeout(rememberTimer);
+        rememberTimer = setTimeout(writeMemo, REMEMBER_AFTER_MS);
     }
 
     // The steps to take at least: the remembered ones while a count is still
     // on its placeholder, at the width and Text size they were taken at.
     function floor() {
-        if (!memo || !actions || !actions.querySelector('[data-count-pending]')) return 0;
-        return memo.w === window.innerWidth && memo.size === sizeName() ? memo.level : 0;
+        if (!actions || !actions.querySelector('[data-count-pending]')) return 0;
+        const w = window.innerWidth;
+        const size = sizeName();
+        const m = memo.find((e) => e.w === w && e.size === size);
+        return m ? m.level : 0;
     }
 
     // The title's own width, below the pixel. scrollWidth and clientWidth are
@@ -173,6 +202,7 @@
         }
         document.addEventListener('fcc:text-size', fit);       // text_size.js, Settings -> This Browser
         window.addEventListener('load', fit);
+        window.addEventListener('pagehide', writeMemo);        // a reload within the second keeps it
         if (document.fonts && document.fonts.ready) document.fonts.ready.then(fit).catch(() => {});
     }
 

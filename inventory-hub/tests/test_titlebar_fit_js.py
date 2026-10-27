@@ -350,18 +350,49 @@ COUNTS_LAND = """() => {
     const n = document.querySelector('#btn-low-stock-count [data-low-stock-count]');
     n.removeAttribute('data-count-pending'); n.textContent = '120'; }"""
 
+# Small counts: under 10 each, as narrow as a count gets (round 4).
+COUNTS_SMALL = """() => {
+    document.getElementById('btn-backlog-count').innerHTML = '🏷️ Backlog <span class="fcc-count-num">(0)</span>';
+    document.getElementById('btn-queue-count').innerText = '🛒 Queue (0)';
+    const n = document.querySelector('#btn-low-stock-count [data-low-stock-count]');
+    n.removeAttribute('data-count-pending'); n.textContent = '3'; }"""
+
+MEMO = "fcc.titleBar.fit"
+
+
+def _flush(page):
+    """The page goes (pagehide): the bar writes the memo it was holding back (it
+    waits a second after a fit, so a resize drag writes one entry). set_content
+    doesn't fire it, and keeps the last load's timers, so each load flushes the
+    one before it first."""
+    page.evaluate("() => window.dispatchEvent(new Event('pagehide'))")
+
+
+def _memo(page):
+    _flush(page)
+    raw = page.evaluate("(k) => window.__store ? window.__store[k] : null", MEMO)
+    return json.loads(raw) if raw else None
+
 
 def _load(page, store, width, size=None):
     """A fresh load: the placeholders from dashboard.html, `store` as this
     browser's localStorage, the Text size `size` (else Standard) and the bar
-    `width` px wide before the script fits it."""
+    `width` px wide (None: as wide as the window) before the script fits it."""
+    _flush(page)
     page.set_content(PAGE.format(bootstrap=BOOTSTRAP_BITS, css=GLOBAL_CSS.read_text(encoding="utf-8"),
                                  nav=_nav_markup()))
     page.evaluate(STORE_JS, store)
     page.evaluate("""([w, size]) => { if (size) document.documentElement.setAttribute('data-fcc-text-size', size);
+        if (w === null) return;
         const b = document.querySelector('.fcc-titlebar'); b.style.flex = '0 0 auto'; b.style.width = w + 'px'; }""",
                   [width, size])
     page.add_script_tag(content=(MODULES / "titlebar_fit.js").read_text(encoding="utf-8"))
+    _settle(page)
+    return _state(page)
+
+
+def _landed(page, counts=COUNTS_LAND):
+    page.evaluate(counts)
     _settle(page)
     return _state(page)
 
@@ -384,9 +415,9 @@ def test_the_bar_keeps_last_times_steps_until_the_counts_come(isolated_page):
     edge = _widest(page, lambda s: bool(s["steps"]), 900, 1900)
     s = _width(page, edge)
     assert s["steps"], s
+    memo = _memo(page)
+    assert memo == [{"w": page.evaluate("() => window.innerWidth"), "size": "standard", "level": len(s["steps"])}], memo
     store = page.evaluate("() => window.__store")
-    memo = json.loads(store["fcc.titleBar.fit"])
-    assert memo == {"w": page.evaluate("() => window.innerWidth"), "size": "standard", "level": len(s["steps"])}, memo
 
     first = _load(page, {}, edge)                    # never here before: fitted to the placeholders
     assert first["steps"] == [], first
@@ -399,6 +430,119 @@ def test_the_bar_keeps_last_times_steps_until_the_counts_come(isolated_page):
     assert _load(page, dict(store), edge, size="small")["steps"] == [], "a memo from Standard was used at Small"
     page.set_viewport_size({"width": BASELINE_WIDTH - 100, "height": 900})
     assert _load(page, dict(store), edge)["steps"] == [], "a memo from another window width was used"
+
+
+def test_small_counts_never_move_the_bar_on_load(isolated_page):
+    """Round 4: round 3's placeholders, "(…)" and "…", were about 3 px wider
+    than a count under 10, and the memo only sets the steps to take at least:
+    within about 9 px above each step, a load with small counts took a step in
+    its first paint that the counts gave back half a second later, every time
+    (the version badge gone, then back; SEARCH and every button after it
+    moving). With en dashes the placeholders never need a step the counts
+    don't. Around each step, 1 px at a time: a second load's first paint has
+    the steps the counts took, and keeps them when they land. RED on dd81587."""
+    page = isolated_page
+    _load(page, {}, 1900)
+    _landed(page, COUNTS_SMALL)
+    edges = [_widest(page, lambda s, k=k: len(s["steps"]) >= k, 900, 1900) for k in (1, 2, 3)]
+    look = lambda s: (s["steps"], s["wrap"])
+    for edge in edges:
+        for px in range(edge - 4, edge + 10):
+            _load(page, {}, px)
+            landed = look(_landed(page, COUNTS_SMALL))
+            store = {MEMO: json.dumps(_memo(page))}
+            first = look(_load(page, store, px))
+            again = look(_landed(page, COUNTS_SMALL))
+            assert first == landed == again, f"{px} px: {first} on load, {again} once the counts came ({landed} with no memo)"
+
+
+def test_each_window_width_keeps_its_own_steps(isolated_page):
+    """Round 4: the memo held one window, so two FCC windows at different widths
+    each wrote over the other's, and a reload moved again. It keeps an entry
+    per width and Text size (the newest 8)."""
+    page = isolated_page
+    _load(page, {}, 1900)
+    _landed(page)
+    edge = _widest(page, lambda s: bool(s["steps"]), 900, 1900)
+    want = _width(page, edge)["steps"]
+    store = {MEMO: json.dumps(_memo(page))}
+    page.set_viewport_size({"width": BASELINE_WIDTH - 100, "height": 900})      # the other window
+    assert _load(page, store, edge)["steps"] == []                             # no entry for this width
+    assert _landed(page)["steps"] == want
+    both = _memo(page)
+    assert [(m["w"], m["level"]) for m in both] == [(BASELINE_WIDTH - 100, len(want)), (BASELINE_WIDTH, len(want))], both
+    page.set_viewport_size({"width": BASELINE_WIDTH, "height": 900})          # back in the first window
+    first = _load(page, {MEMO: json.dumps(both)}, edge)
+    assert first["steps"] == want, f"the first window's steps were lost: {first}"
+    # The newest 8 are kept.
+    many = [{"w": 1000 + i, "size": "standard", "level": 1} for i in range(8)]
+    _load(page, {MEMO: json.dumps(many)}, edge)
+    _landed(page)
+    kept = _memo(page)
+    assert len(kept) == 8 and kept[0]["w"] == BASELINE_WIDTH and kept[1:] == many[:7], kept
+    # A memo from round 3 (one window, not a list) still counts.
+    old = {MEMO: json.dumps({"w": BASELINE_WIDTH, "size": "standard", "level": len(want)})}
+    assert _load(page, old, edge)["steps"] == want
+
+
+HOLD_TIMERS_JS = """() => { window.__held = []; const real = window.setTimeout.bind(window);
+    window.setTimeout = (fn, ms, ...a) => (ms === 1000 ? (window.__held.push(fn), 0) : real(fn, ms, ...a)); }"""
+
+
+def test_a_window_resized_by_dragging_keeps_one_entry(isolated_page):
+    """The memo waits a second after a fit (held back here, so the test isn't
+    a race): a window dragged through ten widths writes one entry, for where it
+    stopped, not one for each width it passed, which would have pushed the
+    other windows' entries out. The page going writes it at once."""
+    page = isolated_page
+    page.set_viewport_size({"width": 1700, "height": 900})
+    other = [{"w": 1440, "size": "standard", "level": 2}]
+    _load(page, {MEMO: json.dumps(other)}, None)
+    page.evaluate(HOLD_TIMERS_JS)
+    _landed(page)
+    for w in range(1700, 1599, -10):
+        page.set_viewport_size({"width": w, "height": 900})
+        _settle(page)
+    assert page.evaluate("() => window.__held.length") >= 10
+    assert page.evaluate("(k) => window.__store[k]", MEMO) == json.dumps(other)      # nothing written yet
+    kept = _memo(page)
+    assert [m["w"] for m in kept] == [1600, 1440], kept
+
+
+def test_a_remembered_second_line_comes_from_the_first_paint(isolated_page):
+    """Extra Large in a narrow window with big counts takes the second line
+    (round 2). Remembered, the next load is on two lines from its first paint,
+    though the placeholders alone would fit on one (round 4: unpinned; without
+    the memo's wrap it went one line, then two half a second later, the navbar
+    growing under the page)."""
+    page = isolated_page
+    _load(page, {}, 1900, size="xlarge")
+    _landed(page)
+    onset = _widest(page, lambda s: s["wrap"], 900, 1900)
+    assert _width(page, onset)["wrap"]
+    store = {MEMO: json.dumps(_memo(page))}
+    assert not _load(page, {}, onset, size="xlarge")["wrap"], "the placeholders alone should fit on one line"
+    first = _load(page, store, onset, size="xlarge")
+    assert first["wrap"], f"one line on load, two once the counts came: {first}"
+    assert _landed(page)["wrap"]
+
+
+def test_counts_that_shrink_give_their_steps_back(isolated_page):
+    """The memo holds only while a count is pending: once the counts have come,
+    a count that shrinks gives a step back, and the lower steps are what's
+    remembered (round 4: unpinned; held for good, a step the counts no longer
+    need stayed for the whole session, and was remembered)."""
+    page = isolated_page
+    _load(page, {}, 1900)
+    _landed(page)
+    edge = _widest(page, lambda s: bool(s["steps"]), 900, 1900)
+    want = _width(page, edge)["steps"]
+    store = {MEMO: json.dumps(_memo(page))}
+    assert _load(page, store, edge)["steps"] == want
+    assert _landed(page)["steps"] == want
+    small = _landed(page, COUNTS_SMALL)["steps"]
+    assert len(small) < len(want), (small, want)
+    assert _memo(page)[0]["level"] == len(small)
 
 
 def test_the_title_never_draws_over_the_spoolman_light(bar):

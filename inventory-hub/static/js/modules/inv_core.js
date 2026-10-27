@@ -70,18 +70,19 @@ window.isScanInFlight = isScanInFlight;
 // late in the URL read as a person's, was claimed, and the scan reached its
 // Enter cut short or with the buffer emptied. The reason dialog then took that
 // Enter for a person's and pressed its focused button: a scan saved an
-// exclusion. This also says yes while the buffer holds characters (not just a
-// Space a button press left) and the last of them came under 500 ms ago (the
-// accumulator stamps each key, scripts.html), however long the scan has taken;
-// a person's lone '/' finds the buffer empty. For a printable key only: whose
-// Enter it is stays enterIsAScan's question.
+// exclusion. This also says yes while the buffer holds two or more characters
+// that aren't blank (a Space a button press left is), however slowly they came
+// and however long the scanner paused since: enterIsAScan's rule for an Enter.
+// Round 3 measured the pause instead (the last key under 500 ms ago), and a
+// scanner that stalled half a second before the URL's last '/' still saved an
+// exclusion (round 4). The accumulator empties its buffer 2 s after the last
+// key (scripts.html), so a person's '/' finds it empty, or holding the one
+// stray key a person leaves. For a printable key only: whose Enter it is stays
+// enterIsAScan's question.
 const scanIsArriving = () => {
     if (isScanInFlight()) return true;
     const st = (typeof state !== 'undefined') ? state : window.state;
-    const now = (typeof performance !== 'undefined' && performance && typeof performance.now === 'function')
-        ? performance.now() : Date.now();
-    return !!(st && typeof st.scanBuffer === 'string' && st.scanBuffer.trim().length > 0
-        && st.scanLastKeyAt && (now - st.scanLastKeyAt) < 500);
+    return !!(st && typeof st.scanBuffer === 'string' && st.scanBuffer.trim().length >= 2);
 };
 window.scanIsArriving = scanIsArriving;
 
@@ -2532,6 +2533,23 @@ window._computePulseInclude = _computePulseInclude;   // for the node tests
 
 let _pulseInflight = false;
 let _pulseNextTimer = null;
+
+// The title-bar counts a tick was to refresh are stale: FCC didn't answer it
+// (Group 57 review, round 3), or it hasn't after _PULSE_STALE_MS (round 4: a
+// request that hangs, such as a link dropped without closing the connection,
+// never fails, so the counts kept looking fresh, and no other tick goes out
+// while one is in flight). Its answer, if it comes after all, paints as any
+// other: it has the same send time.
+const _PULSE_STALE_MS = 30000;      // past the slowest heartbeat (an offline printer's probes)
+let _pulseStaleMs = _PULSE_STALE_MS;
+const _countsUnanswered = (sections, sentAt) => {
+    if (sections.includes('low_stock') && window._renderLowStockCount) {
+        window._renderLowStockCount(undefined, { sentAt, unreachable: true });
+    }
+    if (sections.includes('label_backlog') && window._renderBacklogCount) {
+        window._renderBacklogCount({ read_ok: false, unreachable: true }, { sentAt });
+    }
+};
 // _scheduleNextPulse owns every setTimeout we use to drive ticks so the
 // visibilitychange handler can cancel-and-reschedule when the tab comes
 // back to focus (otherwise the user would wait up to 30s — the hidden-
@@ -2584,6 +2602,7 @@ const _dashboardPulseTick = () => {
         }
         : { method: 'GET' };
 
+    const staleTimer = setTimeout(() => _countsUnanswered(sections, sentAt), _pulseStaleMs);
     fetch(url, fetchOpts)
         .then(r => r.json())
         .then(payload => {
@@ -2626,7 +2645,7 @@ const _dashboardPulseTick = () => {
                 }
             }
             if (payload.label_backlog && window._renderBacklogCount) {
-                window._renderBacklogCount(payload.label_backlog);
+                window._renderBacklogCount(payload.label_backlog, { sentAt });
             }
             // Asked for and not answered (an FCC from before the count) marks the
             // count stale rather than leaving it looking fresh.
@@ -2657,16 +2676,12 @@ const _dashboardPulseTick = () => {
             // refresh are stale now, and say so, as on a read Spoolman failed
             // (Group 57 review, round 3: they kept looking fresh). A renderer
             // that throws above is not this: it is only logged below.
-            if (sections.includes('low_stock') && window._renderLowStockCount) {
-                window._renderLowStockCount(undefined, { sentAt, unreachable: true });
-            }
-            if (sections.includes('label_backlog') && window._renderBacklogCount) {
-                window._renderBacklogCount({ read_ok: false, unreachable: true });
-            }
+            _countsUnanswered(sections, sentAt);
             throw e;
         })
         .catch(e => console.warn("dashboard_pulse failed:", e))
         .finally(() => {
+            clearTimeout(staleTimer);
             _pulseInflight = false;
             _scheduleNextPulse(_pulseInterval());
         });
@@ -2700,6 +2715,9 @@ window._dashboardPulseTickOnce = () => {
 };
 // Expose the current-cadence reader for the cadence test.
 window._pulseInterval = _pulseInterval;
+// How long a tick may hang before the counts say FCC hasn't answered (a test
+// sets it short; no argument puts back the 30 s).
+window._setPulseStaleMsForTest = (ms) => { _pulseStaleMs = Number.isFinite(ms) ? ms : _PULSE_STALE_MS; };
 // L25 fast-poll test hooks — feed synthetic printer_status transitions,
 // read whether the burst is armed, and reset state between tests.
 window._notePrinterStatesForFastPoll = _notePrinterStatesForFastPoll;

@@ -89,9 +89,9 @@
         // Delegates to the canonical definition in inv_core.js — this was one of
         // three identical copy-pasted closures (2026-08-03 scan-path audit). A
         // '/' in a scan still arriving is the scan's, however slow the scanner
-        // (window.scanIsArriving, Group 57 review, round 3: with isScanInFlight
-        // alone, a slower scanner's Prusament URL opened the search and lost its
-        // '/').
+        // or long its pause (window.scanIsArriving, Group 57 review, rounds 3
+        // and 4: with isScanInFlight alone, a slower scanner's Prusament URL
+        // opened the search and lost its '/').
         const scanInFlight = () => !!(window.scanIsArriving ? window.scanIsArriving()
             : (window.isScanInFlight && window.isScanInFlight()));
         document.addEventListener('keydown', (e) => {

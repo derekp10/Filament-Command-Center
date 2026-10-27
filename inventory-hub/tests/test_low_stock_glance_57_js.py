@@ -70,19 +70,25 @@ window.__opened = [];
 // '/' sits there on the real page: fab_drag.js).
 window.__slashPassed = 0;
 document.addEventListener('keydown', (e) => { if (e.key === '/') window.__slashPassed += 1; });
+window.__backlogAnswers = [];
+window.__backlogUrls = [];
 const __take = (q) => (q.length > 1 ? q.shift() : q[0]);
 const __respond = (a) => {
-    if (!a || a.network) return Promise.reject(new TypeError('Failed to fetch'));
+    // a.hang: a request that never settles (a link dropped without closing it).
+    if (a && a.hang) return new Promise(() => {});
+    // a.network: no answer at all (after a.delay, if it has one).
     // a.notJson: an error page that isn't JSON (a proxy's 502, say).
-    const go = () => Promise.resolve({ ok: a.status >= 200 && a.status < 300, status: a.status,
-                                      json: () => (a.notJson ? Promise.reject(new SyntaxError("Unexpected token '<'"))
-                                          : Promise.resolve(JSON.parse(JSON.stringify(a.body)))) });
-    return a.delay ? new Promise((r) => setTimeout(r, a.delay)).then(go) : go();
+    const go = () => (!a || a.network) ? Promise.reject(new TypeError('Failed to fetch'))
+        : Promise.resolve({ ok: a.status >= 200 && a.status < 300, status: a.status,
+                            json: () => (a.notJson ? Promise.reject(new SyntaxError("Unexpected token '<'"))
+                                : Promise.resolve(JSON.parse(JSON.stringify(a.body)))) });
+    return a && a.delay ? new Promise((r) => setTimeout(r, a.delay)).then(go) : go();
 };
 window.fetch = function (url, opts) {
     url = String(url);
     if (url.indexOf('/api/dashboard_pulse') === 0) { window.__pulseUrls.push(url); return __respond(__take(window.__pulse)); }
     if (url.indexOf('/api/stock_report') === 0) { window.__reports += 1; return __respond(__take(window.__answers)); }
+    if (url.indexOf('/api/print_queue/pending') === 0) { window.__backlogUrls.push(url); return __respond(__take(window.__backlogAnswers)); }
     if (url.indexOf('/stock_exclusion') >= 0) {
         window.__sent.push({ url, method: (opts && opts.method) || 'GET', body: opts && opts.body ? JSON.parse(opts.body) : null });
         return __respond(__take(window.__writeAnswers));
@@ -165,11 +171,49 @@ DOWN = {"read_ok": False, "read_error": "couldn't read Spoolman's spools (Spoolm
 
 # --- the count -----------------------------------------------------------------------
 
-def test_before_the_first_heartbeat_it_reads_an_ellipsis(bar):
+def test_before_the_first_heartbeat_it_reads_a_dash(bar):
     b = _btn(bar)
-    assert b["text"] == "⚠️ …" and b["read"] is None, b
+    assert b["text"] == "⚠️ –" and b["read"] is None, b
     assert b["label"] == "Low stock: opens the list." == b["title"]
     assert bar.evaluate("(s) => document.querySelector(s).hasAttribute('data-count-pending')", NUM)
+
+
+# A count's placeholder as its button draws it (the button's markup from
+# dashboard.html, in the title bar's font), against the narrowest count it
+# stands for: one digit, in brackets where the placeholder has them.
+PLACEHOLDER_JS = """(markup) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'fcc-titlebar-actions';
+    wrap.style.cssText = 'position:absolute; left:0; top:0;';
+    wrap.innerHTML = markup;
+    document.querySelector('.fcc-titlebar').appendChild(wrap);
+    const pend = wrap.querySelector('[data-count-pending]');
+    const text = pend.textContent;
+    const width = (t) => { pend.textContent = t; return pend.getBoundingClientRect().width; };
+    const shown = width(text);
+    const paren = text.startsWith('(');
+    const digit = Math.min(...'0123456789'.split('').map((d) => width(paren ? '(' + d + ')' : d)));
+    wrap.remove();
+    return { text, shown, digit };
+}"""
+
+
+def test_each_placeholder_is_no_wider_than_a_count(bar):
+    """Round 4: round 3's "(…)" and "…" were about 3 px wider than a count
+    under 10, so with small counts the first paint took a title-bar step the
+    counts then gave back, half a second into every load (titlebar_fit.js keeps
+    at least last time's steps while a count is pending, never fewer than the
+    placeholders need). The placeholders are an en dash, no wider than any
+    digit in the buttons' font. RED on dd81587."""
+    html = DASHBOARD.read_text(encoding="utf-8")
+    seen = {}
+    for bid in ("btn-backlog-count", "btn-queue-count", "btn-low-stock-count"):
+        m = re.search(rf'<button[^>]*id="{bid}".*?</button>', html, re.S)
+        assert m, bid
+        seen[bid] = bar.evaluate(PLACEHOLDER_JS, m.group(0))
+    assert [v["text"] for v in seen.values()] == ["(–)", "(–)", "–"], seen
+    for bid, v in seen.items():
+        assert v["shown"] <= v["digit"] + 0.01, (bid, v)
 
 
 def test_the_heartbeat_count_paints_the_button(bar):
@@ -710,6 +754,259 @@ def test_a_list_from_the_search_panels_button_gives_the_focus_to_the_title_bars(
     assert bar.evaluate("() => document.activeElement && document.activeElement.id") == "btn-low-stock-count"
 
 
+# --- round 4 -------------------------------------------------------------------------
+
+# Counts the heartbeat's own failure log line, so a test knows a held tick has
+# settled (it logs "dashboard_pulse failed:" once its request has failed).
+WARNS_JS = """() => { window.__pulseFails = 0; const warn = console.warn.bind(console);
+    console.warn = (...a) => { if (String(a[0]).indexOf('dashboard_pulse failed') === 0) window.__pulseFails += 1;
+                               return warn(...a); }; }"""
+
+# The backlog window's own controls, as fetchBacklog reads them (dashboard.html).
+BACKLOG_UI = """(filter) => { const m = document.getElementById('backlogModal');
+    m.innerHTML = '<select id="backlog-filter"><option value="all">All</option><option value="spool">Spools</option>'
+        + '<option value="filament">Filaments</option></select>'
+        + '<select id="backlog-sort"><option value="created_newest">Newest</option></select>'
+        + '<input type="checkbox" id="backlog-select-all"><button id="btn-backlog-queue-selected"></button>'
+        + '<div id="backlog-list"></div>';
+    document.getElementById('backlog-filter').value = filter || 'all'; }"""
+
+
+def _items(n):
+    """A backlog answer of `n` filaments needing a label."""
+    return {"success": True, "items": [{"type": "filament", "id": 100 + i, "material": "PLA", "name": f"F{i}",
+                                        "vendor": {"name": "V"}, "color_hex": "336699"} for i in range(n)]}
+
+
+def _backlog_btn(page):
+    return page.evaluate("""() => { const b = document.getElementById('btn-backlog-count');
+        return { text: b.textContent.replace(/\\s+/g, ' ').trim(), read: b.dataset.read || null,
+                 title: b.title || '' }; }""")
+
+
+@pytest.fixture
+def both(bar):
+    """The bar with the 🏷️ Backlog count's module too, and the backlog window's
+    controls."""
+    bar.add_script_tag(content=(MODULES / "inv_backlog.js").read_text(encoding="utf-8"))
+    bar.evaluate(BACKLOG_UI)
+    bar.evaluate(WARNS_JS)
+    return bar
+
+
+def test_an_older_tick_fcc_didnt_answer_marks_no_newer_count_stale(both):
+    """A tick sent before the list's and the backlog window's own reads fails
+    after they painted: it is older than both counts and marks neither stale
+    (Group 57 review, round 4: the failure branch's send time was unpinned, and
+    the Backlog took whichever answer landed last). RED with the tick's send
+    time dropped from its failure branch, and on dd81587 for the Backlog."""
+    bar = both
+    bar.evaluate("(a) => { window.__pulse = a; }", [_answer({"low_stock": GOOD, "label_backlog": {"read_ok": True, "count": 53}})])
+    bar.evaluate("() => window._dashboardPulseTickOnce()")
+    bar.wait_for_function("() => document.getElementById('btn-backlog-count').dataset.read === 'ok'")
+    bar.evaluate("(a) => { window.__pulse = a; }", [_answer(None, network=True, delay=900)])
+    bar.evaluate("() => window._dashboardPulseTickOnce()")          # sent first, fails last
+    bar.evaluate("(a) => { window.__answers = a; window.__backlogAnswers = [a[1]]; }", [_answer(REPORT), _answer(_items(7))])
+    bar.evaluate("() => window.fetchBacklog()")
+    bar.locator(BTN).click()
+    bar.wait_for_function("(s) => document.querySelector(s).dataset.stockState === 'ready'", arg=BODY)
+    bar.wait_for_function("() => window.__backlogUrls.length === 1")
+    bar.wait_for_function("() => document.getElementById('btn-backlog-count').textContent.indexOf('(7)') >= 0")
+    bar.wait_for_function("() => window.__pulseFails === 1")
+    assert (_btn(bar)["num"], _btn(bar)["read"]) == ("4", "ok"), _btn(bar)
+    k = _backlog_btn(bar)
+    assert (k["text"], k["read"]) == ("🏷️ Backlog (7)", "ok"), k
+
+
+def test_an_older_ticks_backlog_count_never_paints_over_the_windows_read(both):
+    """The heartbeat hands the Backlog its send time: a tick sent before the
+    backlog window's read, landing after it, is older and its count is not
+    shown (round 4: whichever answer landed last painted)."""
+    bar = both
+    bar.evaluate("(a) => { window.__pulse = a; }", [_answer({"label_backlog": {"read_ok": True, "count": 53}}, delay=900)])
+    bar.evaluate("() => window._dashboardPulseTickOnce()")          # sent first, lands last
+    bar.evaluate("(a) => { window.__backlogAnswers = a; }", [_answer(_items(7))])
+    bar.evaluate("() => window.fetchBacklog()")
+    bar.wait_for_function("() => document.getElementById('btn-backlog-count').textContent.indexOf('(7)') >= 0")
+    bar.wait_for_function("() => window.__pulseUrls.length === 1")
+    bar.wait_for_timeout(1300)                                       # the held tick has landed
+    k = _backlog_btn(bar)
+    assert (k["text"], k["read"]) == ("🏷️ Backlog (7)", "ok"), k
+
+
+def test_a_backlog_list_that_fails_to_draw_keeps_its_count_fresh(both):
+    """The window's read answered: a throw while drawing its rows is not FCC
+    not answering (the request's own failure handler, as the heartbeat's)."""
+    bar = both
+    bar.evaluate("() => { window.updateBacklogQueueBtn = () => { throw new Error('boom'); }; }")
+    bar.evaluate("(a) => { window.__backlogAnswers = a; }", [_answer(_items(2))])
+    bar.evaluate("() => window.fetchBacklog()")
+    bar.wait_for_function("""() => { const n = document.getElementById('backlog-read-notice');
+                                     return !!n && n.textContent.indexOf('Connection error') >= 0; }""")
+    k = _backlog_btn(bar)
+    assert (k["text"], k["read"]) == ("🏷️ Backlog (2)", "ok"), k
+
+
+def test_a_newer_failed_tick_keeps_an_older_backlog_read_stale(both):
+    """The other way round, as the Low stock count does it: the window's read
+    is slow, a tick sent after it fails first, then the read lands. Its count
+    is shown (newer than the one there) but stays stale: the newest read sent
+    failed. RED on dd81587: the slow read made the count look fresh."""
+    bar = both
+    bar.evaluate("(a) => { window.__pulse = a; }", [_answer({"label_backlog": {"read_ok": True, "count": 53}})])
+    bar.evaluate("() => window._dashboardPulseTickOnce()")
+    bar.wait_for_function("() => document.getElementById('btn-backlog-count').dataset.read === 'ok'")
+    bar.evaluate("(a) => { window.__backlogAnswers = a; }", [_answer(_items(7), delay=900)])
+    bar.evaluate("() => window.fetchBacklog()")                       # sent first, lands last
+    bar.evaluate("(a) => { window.__pulse = a; }", [_answer(None, network=True)])
+    bar.evaluate("() => window._dashboardPulseTickOnce()")
+    bar.wait_for_function("() => document.getElementById('btn-backlog-count').dataset.read === 'failed'")
+    assert _backlog_btn(bar)["text"] == "🏷️ Backlog (53)?"
+    bar.wait_for_function("() => document.getElementById('btn-backlog-count').textContent.indexOf('(7)') >= 0")
+    k = _backlog_btn(bar)
+    assert (k["text"], k["read"]) == ("🏷️ Backlog (7)?", "failed") and "(FCC didn't answer just now)" in k["title"], k
+
+
+@pytest.mark.parametrize("filter_", ["spool", "filament"])
+def test_a_filtered_backlog_window_never_sets_the_count(both, filter_):
+    """The button counts the whole backlog: the window filtered to spools or to
+    filaments set it to what the filter showed (found in round 4). A good
+    filtered read leaves the count as it was; a failed one marks it stale."""
+    bar = both
+    bar.evaluate(BACKLOG_UI, filter_)
+    bar.evaluate("(a) => { window.__pulse = a; }", [_answer({"label_backlog": {"read_ok": True, "count": 53}})])
+    bar.evaluate("() => window._dashboardPulseTickOnce()")
+    bar.wait_for_function("() => document.getElementById('btn-backlog-count').dataset.read === 'ok'")
+    bar.evaluate("(a) => { window.__backlogAnswers = a; }", [_answer(_items(7))])
+    bar.evaluate("() => window.fetchBacklog()")
+    bar.wait_for_function("() => document.querySelectorAll('#backlog-list .backlog-row').length === 7")
+    assert (_backlog_btn(bar)["text"], _backlog_btn(bar)["read"]) == ("🏷️ Backlog (53)", "ok")
+    bar.evaluate("(a) => { window.__backlogAnswers = a; }",
+                 [_answer({"success": False, "msg": "Spoolman didn't answer the spool list (HTTP 503)"})])
+    bar.evaluate("() => window.fetchBacklog()")
+    bar.wait_for_function("() => document.getElementById('btn-backlog-count').dataset.read === 'failed'")
+    k = _backlog_btn(bar)
+    assert k["text"] == "🏷️ Backlog (53)?" and "(Spoolman didn't answer just now)" in k["title"], k
+
+
+def test_the_backlog_windows_failed_read_marks_the_count_stale(both):
+    """The newest read sent decides the stale look, the window's own included
+    (it said "Connection error" while the button looked fresh); the next good
+    read makes it fresh again."""
+    bar = both
+    bar.evaluate("(a) => { window.__pulse = a; }", [_answer({"label_backlog": {"read_ok": True, "count": 53}})])
+    bar.evaluate("() => window._dashboardPulseTickOnce()")
+    bar.wait_for_function("() => document.getElementById('btn-backlog-count').dataset.read === 'ok'")
+    shown = 53
+    for failed, why in ((_answer(None, network=True), "FCC didn't answer just now"),
+                        (_answer(None, status=502, notJson=True), "FCC didn't answer just now"),
+                        (_answer({"success": False, "msg": "x"}), "Spoolman didn't answer just now")):
+        bar.evaluate("(a) => { window.__backlogAnswers = a; }", [failed])
+        bar.evaluate("() => window.fetchBacklog()")
+        bar.wait_for_function("() => document.getElementById('btn-backlog-count').dataset.read === 'failed'")
+        k = _backlog_btn(bar)
+        assert k["text"] == f"🏷️ Backlog ({shown})?" and f"({why})" in k["title"], (why, k)
+        bar.evaluate("(a) => { window.__backlogAnswers = a; }", [_answer(_items(0))])
+        bar.evaluate("() => window.fetchBacklog()")
+        bar.wait_for_function("() => document.getElementById('btn-backlog-count').dataset.read === 'ok'")
+        shown = 0
+        assert _backlog_btn(bar)["text"] == "🏷️ Backlog (0)"
+
+
+def test_an_older_failed_list_read_marks_no_newer_count_stale(bar):
+    """The list's failed read is stamped with its own send time: one that fails
+    after a newer heartbeat painted is older than that count and marks nothing
+    (round 4: unpinned; stamped with the time it failed, it marked the
+    heartbeat's fresh count stale)."""
+    _render(bar, GOOD)
+    bar.evaluate("(a) => { window.__answers = a; }", [_answer(None, network=True, delay=900)])
+    bar.locator(BTN).click()
+    bar.wait_for_selector(PANEL)
+    bar.evaluate("(a) => { window.__pulse = a; }", [_answer({"low_stock": dict(GOOD, count=13, low=2)})])
+    bar.evaluate("() => window._dashboardPulseTickOnce()")
+    bar.wait_for_function("(s) => document.querySelector(s).textContent.trim() === '13'", arg=NUM)
+    bar.wait_for_function("(s) => document.querySelector(s).dataset.stockState === 'error'", arg=BODY)
+    assert (_btn(bar)["num"], _btn(bar)["read"]) == ("13", "ok"), _btn(bar)
+
+
+def test_a_renderer_that_throws_is_not_fcc_not_answering(both):
+    """The failure branch is the request's own (.then's second argument): a
+    renderer that throws after the counts are painted (the Printer Status
+    widget's, say) is only logged. As a .catch it marked both counts "FCC
+    didn't answer just now" on every such tick (round 4: unpinned)."""
+    bar = both
+    bar.evaluate("() => { window.refreshPrinterStatusWidgetFromAggregate = () => { throw new Error('boom'); }; }")
+    bar.evaluate("(a) => { window.__pulse = a; }", [_answer({"low_stock": GOOD, "label_backlog": {"read_ok": True, "count": 53},
+                                                             "printer_status": {"XL": {}}})])
+    bar.evaluate("() => window._dashboardPulseTickOnce()")
+    bar.wait_for_function("() => window.__pulseFails === 1")
+    assert (_btn(bar)["num"], _btn(bar)["read"]) == ("12", "ok"), _btn(bar)
+    k = _backlog_btn(bar)
+    assert (k["text"], k["read"]) == ("🏷️ Backlog (53)", "ok"), k
+
+
+def test_a_tick_that_hangs_marks_both_counts_stale(both):
+    """A request that never settles never fails (a link dropped without
+    closing the connection), so the counts kept their fresh look for as long
+    as it hung, and no other tick goes out meanwhile (round 4). After the
+    heartbeat's stale time (30 s; short here) both say FCC didn't answer; an
+    answer that comes after all paints them fresh again. RED on dd81587."""
+    bar = both
+    bar.evaluate("() => window._setPulseStaleMsForTest && window._setPulseStaleMsForTest(300)")
+    bar.evaluate("(a) => { window.__pulse = a; }", [_answer({"low_stock": GOOD, "label_backlog": {"read_ok": True, "count": 53}})])
+    bar.evaluate("() => window._dashboardPulseTickOnce()")
+    bar.wait_for_function("(s) => document.querySelector(s).dataset.read === 'ok'", arg=BTN)
+    bar.wait_for_timeout(600)                     # a tick that answered in time leaves no timer behind
+    assert (_btn(bar)["read"], _backlog_btn(bar)["read"]) == ("ok", "ok"), (_btn(bar), _backlog_btn(bar))
+    late = _answer({"low_stock": dict(GOOD, count=14, low=3), "label_backlog": {"read_ok": True, "count": 54}}, delay=1500)
+    bar.evaluate("(a) => { window.__pulse = a; }", [late])
+    bar.evaluate("() => window._dashboardPulseTickOnce()")
+    bar.wait_for_function("(s) => document.querySelector(s).dataset.read === 'failed'", arg=BTN, timeout=1200)
+    b = _btn(bar)
+    assert b["num"] == "12?" and "(FCC didn't answer just now)" in b["label"], b
+    k = _backlog_btn(bar)
+    assert (k["text"], k["read"]) == ("🏷️ Backlog (53)?", "failed") and "(FCC didn't answer just now)" in k["title"], k
+    bar.wait_for_function("(s) => document.querySelector(s).dataset.read === 'ok'", arg=BTN, timeout=5000)
+    assert _btn(bar)["num"] == "14"
+    assert (_backlog_btn(bar)["text"], _backlog_btn(bar)["read"]) == ("🏷️ Backlog (54)", "ok")
+    bar.evaluate("() => window._setPulseStaleMsForTest && window._setPulseStaleMsForTest()")
+
+
+@pytest.mark.parametrize("answer, list_says, count_says", [
+    (_answer(None, network=True), "FCC didn't answer", "FCC didn't answer just now"),
+    (_answer(None, status=502, notJson=True), "FCC didn't answer", "FCC didn't answer just now"),
+    (_answer({"success": False, "error": "spoolman_unreachable", "msg": "x"}, status=502),
+     "Spoolman didn't answer", "Spoolman didn't answer just now"),
+    (_answer({"success": False, "error": "report_failed", "msg": "boom"}, status=500),
+     "FCC couldn't build the list", "FCC couldn't count them just now"),
+])
+def test_the_list_and_its_count_name_one_cause(bar, answer, list_says, count_says):
+    """One failed read, one cause on screen (round 4: with FCC not answering,
+    the list said Spoolman didn't answer while the button said FCC didn't)."""
+    _render(bar, GOOD)
+    bar.evaluate("(a) => { window.__answers = a; }", [answer])
+    bar.locator(BTN).click()
+    bar.wait_for_function("(s) => document.querySelector(s).dataset.stockState === 'error'", arg=BODY)
+    title = bar.evaluate("(s) => document.querySelector(s + ' .fcc-stock-error-title').textContent", BODY)
+    assert title == f"⚠️ {list_says}", title
+    assert f"({count_says})" in _btn(bar)["label"], _btn(bar)
+
+
+def test_a_list_from_the_open_search_panel_gives_the_focus_back_to_its_button(bar):
+    """The opener first: with the search panel still open, Escape gives the
+    focus to the panel's own Low stock button, and only a button that can't
+    take it falls back to the title bar's ⚠️ (round 4: unpinned; the fallback
+    first put the focus behind the open panel)."""
+    bar.evaluate("""() => { const host = document.getElementById('offcanvasSearch'); host.classList.add('show');
+        const b = document.createElement('button'); b.id = 'global-search-low-stock'; b.textContent = 'Low stock';
+        host.appendChild(b); b.focus(); }""")
+    bar.evaluate("(a) => { window.__answers = a; }", [_answer(REPORT)])
+    bar.evaluate("() => window.openLowStockPanel()")
+    bar.wait_for_function("(s) => document.querySelector(s).dataset.stockState === 'ready'", arg=BODY)
+    bar.keyboard.press("Escape")
+    assert bar.locator("#fcc-low-stock-overlay").count() == 0
+    assert bar.evaluate("() => document.activeElement && document.activeElement.id") == "global-search-low-stock"
+
 
 QUEUE = [{"id": 7, "type": "spool", "display": "#7"}, {"id": 8, "type": "spool", "display": "#8"}]
 QUEUE_PAGE_JS = r"""(saved) => {
@@ -719,10 +1016,11 @@ QUEUE_PAGE_JS = r"""(saved) => {
     Object.defineProperty(window, 'localStorage', { configurable: true, get: () => ({
         getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); } }) });
     window.__posts = 0;
+    window.__gets = 0;              // the poll's reads, counted once their answer is read
     window.fetch = (url, opts) => {
         if (String(url).indexOf('/api/state/queue') === 0) {
             if (opts && opts.method === 'POST') { window.__posts += 1; return Promise.resolve({ json: () => Promise.resolve({}) }); }
-            return Promise.resolve({ json: () => Promise.resolve(JSON.parse(saved)) });
+            return Promise.resolve({ json: () => { window.__gets += 1; return Promise.resolve(JSON.parse(saved)); } });
         }
         return Promise.reject(new TypeError('no network in this test'));
     };
@@ -738,11 +1036,13 @@ def test_the_queue_count_shows_this_browsers_queue_from_the_load(isolated_page):
     page = isolated_page
     html = DASHBOARD.read_text(encoding="utf-8")
     m = re.search(r'<button[^>]*id="btn-queue-count".*?</button>', html, re.S)
-    assert m and "data-count-pending>(…)" in m.group(0), "the Queue's placeholder should read (…), never (0)"
+    assert m and "data-count-pending>(–)" in m.group(0), "the Queue's placeholder should read (–), never (0)"
     page.set_content(f"<!doctype html><html><body>{m.group(0)}</body></html>")
     page.evaluate(QUEUE_PAGE_JS, json.dumps(QUEUE))
     page.add_script_tag(content=(MODULES / "inv_queue.js").read_text(encoding="utf-8"))
     text = lambda: page.evaluate("() => document.getElementById('btn-queue-count').textContent.trim()")
     assert text() == "🛒 Queue (2)"
-    page.wait_for_timeout(2400)                      # one 2 s poll: the server's queue is the same
+    # One 2 s poll, read (round 4: a fixed 2.4 s wait passed without one on a slow
+    # run): the server's queue is the same.
+    page.wait_for_function("() => window.__gets >= 1", timeout=10000)
     assert text() == "🛒 Queue (2)" and page.evaluate("() => window.__posts") == 0

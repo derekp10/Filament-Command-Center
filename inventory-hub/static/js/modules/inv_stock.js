@@ -204,8 +204,9 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
     const _now = () => (typeof performance !== 'undefined' && performance && typeof performance.now === 'function'
         ? performance.now() : Date.now());
 
-    // A '/' in a scan still arriving is the scan's (window.scanIsArriving,
-    // inv_core.js; Group 57 review, round 3).
+    // A '/' in a scan still arriving is the scan's, however slow the scanner and
+    // however long it paused (window.scanIsArriving, inv_core.js; Group 57
+    // review, rounds 3 and 4).
     const _scanArriving = () => (typeof window.scanIsArriving === 'function' ? window.scanIsArriving()
         : (typeof window.isScanInFlight === 'function' && window.isScanInFlight()));
 
@@ -375,12 +376,19 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         return body;
     }
 
-    function _errorHtml(data) {
-        const ours = data && data.error === 'report_failed';
-        const title = ours ? "⚠️ FCC couldn't build the list" : "⚠️ Spoolman didn't answer";
-        const text = ours
-            ? (data.msg || "Something went wrong building the Low-stock list.")
-            : "FCC couldn't read your spools, so it can't tell what is low right now. This is not an empty list.";
+    // `why`: the title bar count's word for the same failed read (_WHY), so the
+    // list and the button name one cause (round 4: with FCC not answering, the
+    // list blamed Spoolman while the button said FCC didn't answer).
+    function _errorHtml(data, why) {
+        let title = "⚠️ FCC couldn't build the list";
+        let text = (data && data.msg) || "Something went wrong building the Low-stock list.";
+        if (why === 'spoolman') {
+            title = "⚠️ Spoolman didn't answer";
+            text = "FCC couldn't read your spools, so it can't tell what is low right now. This is not an empty list.";
+        } else if (why === 'unreachable') {
+            title = "⚠️ FCC didn't answer";
+            text = "The page couldn't reach FCC just now, so it can't tell what is low. This is not an empty list.";
+        }
         return `<div class="fcc-stock-state" role="alert">
                 <div class="fcc-stock-error-title">${esc(title)}</div>
                 <div>${esc(text)}</div>
@@ -545,9 +553,10 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
             // sent, failed (round 3: the list said so, the count looked fresh):
             // Spoolman not answering (the route's own word for it), FCC's own
             // failure, or no answer from FCC (none, or a page that isn't JSON).
-            _answer(sentAt, null, !res || !data ? 'unreachable'
-                : (data.error === 'spoolman_unreachable' ? 'spoolman' : 'fcc'));
-            _setBody(handle, _errorHtml(data), 'error');
+            const why = !res || !data ? 'unreachable'
+                : (data.error === 'spoolman_unreachable' ? 'spoolman' : 'fcc');
+            _answer(sentAt, null, why);
+            _setBody(handle, _errorHtml(data, why), 'error');
             const retry = handle.panel.querySelector('[data-stock-retry]');
             if (retry) { try { retry.focus({ preventScroll: true }); } catch (_) { /* noop */ } }
             return;
@@ -752,9 +761,12 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         // and the dialog with it, losing the note typed into it (Group 57 review,
         // round 2). '/' typed into the note is the note's, and one in a scan
         // still arriving the scan's (a Prusament QR's URL), however slow the
-        // scanner: round 3 found a slower scanner's late '/' claimed here and
-        // the scan buffer emptied, so the scan's Enter pressed the focused
-        // button and saved (or removed) an exclusion.
+        // scanner or long its pause: round 3 found a slower scanner's late '/'
+        // claimed here and the scan buffer emptied, so the scan's Enter pressed
+        // the focused button and saved (or removed) an exclusion, and round 4
+        // the same after a half-second stall. A '/' claimed here empties the
+        // buffer, which then holds at most one stray key: it mustn't start the
+        // next scan.
         if ((e.key === 'k' || e.key === 'K') && (e.ctrlKey || e.metaKey) && !e.altKey) {
             e.preventDefault();
             e.stopImmediatePropagation();
@@ -994,8 +1006,9 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         }
         if (e.key === '/') {
             // Not in a scan still arriving: a Prusament QR's URL carries '/'
-            // (fab_drag.js's rule), and a slower scanner's late '/' focused the
-            // filter and emptied the scan buffer (round 3).
+            // (fab_drag.js's rule), and a slower scanner's late '/' (round 3),
+            // or one after a stall (round 4), focused the filter and emptied
+            // the scan buffer.
             if (inFilter) return;
             if (_scanArriving()) return;
             e.preventDefault();
@@ -1286,7 +1299,16 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
     // characters typed onto one and then Enter are a scan: they go to the scan
     // path and the dialog stays. Registered before the field scan capture, so it
     // sees that Enter first.
+    // A person's stray key on a reason (a '/' from habit) made their next Enter
+    // a scan of it, however much later and whatever they pressed between (round
+    // 4: '/', ArrowDown, Enter scanned "/" and saved nothing). A scanner sends no
+    // arrow, Tab or Space mid-label (Shift it sends before each capital), so any
+    // of those starts afresh; and at the Enter, keys over 2 s old are dropped
+    // (the scan accumulator's own reset, scripts.html), and one lone key 500 ms
+    // or more before it is a person's: no label is one character typed slower
+    // than that.
     const _radioKeys = { buf: '', first: 0, last: 0 };
+    const _SCANNER_KEYS = ['Enter', 'Shift', 'CapsLock', 'AltGraph'];
     document.addEventListener('keydown', (e) => {
         const t = e.target;
         if (!(t && t.matches && t.matches(`#${DIALOG_ID} input[type="radio"]`))) { _radioKeys.buf = ''; return; }
@@ -1295,14 +1317,17 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         if (e.key === 'Enter') {
             const buf = _radioKeys.buf;
             const elapsed = now - _radioKeys.first;
+            const since = now - _radioKeys.last;
             _radioKeys.buf = '';
-            if (!buf) return;                      // a person's Enter: the dialog saves
+            // A person's Enter: the dialog saves.
+            if (!buf || since > 2000 || (buf.length < 2 && since >= 500)) return;
             e.preventDefault();
             e.stopImmediatePropagation();
             if (typeof window.processScan === 'function') window.processScan(buf, elapsed < 150 ? 'barcode' : 'keyboard');
             return;
         }
-        if (e.key.length !== 1 || e.key === ' ') return;
+        if (e.key === ' ' || (e.key.length !== 1 && !_SCANNER_KEYS.includes(e.key))) { _radioKeys.buf = ''; return; }
+        if (e.key.length !== 1) return;
         if (!_radioKeys.buf || now - _radioKeys.last > 2000) { _radioKeys.buf = ''; _radioKeys.first = now; }
         _radioKeys.buf += e.key;
         _radioKeys.last = now;

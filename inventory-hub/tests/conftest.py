@@ -671,9 +671,9 @@ VISUAL_FLEET = {
 
 # The ⚠️ Low stock count the visual fleet's heartbeat carries (Group 57.2), so a
 # snapshot shows a real count, the same on every run (Group 57 review: without
-# it the button showed its "…" placeholder, the state before any heartbeat).
+# it the button showed its "–" placeholder, the state before any heartbeat).
 VISUAL_LOW_STOCK = {"read_ok": True, "count": 7, "low": 3, "out": 4, "threshold_g": 250.0}
-# And the 🏷️ Backlog count, which the page shows as "(…)" until its first
+# And the 🏷️ Backlog count, which the page shows as "(–)" until its first
 # answer (Group 57 review, round 3; it read a made-up "(0)" before).
 VISUAL_BACKLOG = {"read_ok": True, "count": 0, "spools": 0, "filaments": 0}
 

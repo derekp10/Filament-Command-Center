@@ -18,11 +18,22 @@ scan saved an exclusion, or "Include again" removed one. The list claimed it
 too (its filter key) and opened a filament window, and fab_drag.js opened the
 search.
 
-Pinned, at every speed from 1 to 40 ms a key: the URL reaches processScan whole
+Pinned, at every speed from 1 to 150 ms a key: the URL reaches processScan whole
 and once; the dialog writes nothing and stays up; the search never opens; the
 list opens no filament window and keeps its filter as it was. A person's lone
 '/' (the buffer empty, or its last key over 500 ms ago) is still the dialog's,
 the list's (its filter) and the page's (the search). RED on 2749590.
+
+Round 4: round 3's rule measured the scanner's pause (the last key under 500 ms
+ago), so a scanner that stalled half a second before the URL's last '/' still
+saved an exclusion, and one before an earlier '/' cut the scan, opened a
+filament window or the search. Two or more characters in the buffer are a scan
+now however long it paused (enterIsAScan's rule). Pinned too: a stall of 600 ms
+or 1.5 s before the last '/' or an earlier one, and a scanner sending bursts
+with 450 or 700 ms between them, in every place; the boundary (two keys left
+are a scan, one is a person's, two Spaces a button press left are nobody's
+scan); and a '/' the dialog takes empties the buffer, so a stray key never
+starts the next scan. RED on dd81587.
 """
 from __future__ import annotations
 
@@ -37,7 +48,8 @@ from test_low_stock_glance_57_js import (BOOTSTRAP_HIDDEN, BODY, BTN, GLOBAL_CSS
 HUB = Path(__file__).resolve().parent.parent
 SCRIPTS = HUB / "templates" / "components" / "scripts.html"
 URL = "https://prusament.com/spool/17705/5b1a183b26/"     # FCC's Prusament QR shape (logic.py)
-SPEEDS = [1, 8, 13, 18, 26, 40]                            # ms a key: fast to a slow Bluetooth scanner
+SPEEDS = [1, 8, 13, 18, 26, 40, 60, 150]                   # ms a key: fast to a very slow Bluetooth scanner
+SLASHES = [i for i, ch in enumerate(URL) if ch == "/"]     # where a stall can land before a '/'
 DIALOG = "#fcc-low-stock-reason"
 
 
@@ -58,8 +70,11 @@ window.__search = 0;
 window.SearchEngine = { open: function () { window.__search += 1; } };
 """
 
-# Typing on the page's fake clock: each key `ms` after the one before, Enter last.
-TYPE_JS = r"""([text, ms, enter]) => {
+# Typing on the page's fake clock: each key `ms` after the one before, Enter
+# last; `pauses` adds a key's own extra wait before it ({index: ms}). A capital
+# comes with Shift held, as a scanner sends it (Shift+B and the wizard's Shift+E
+# / Shift+C see a label's capitals as theirs).
+TYPE_JS = r"""([text, ms, enter, pauses]) => {
     if (!window.__fakeClock) {
         const base = Date.now(), pbase = performance.now();
         window.__T = 0;
@@ -69,16 +84,17 @@ TYPE_JS = r"""([text, ms, enter]) => {
     }
     const keys = [...text];
     if (enter) keys.push('Enter');
-    for (const key of keys) {
-        window.__T += ms;
+    keys.forEach((key, i) => {
+        window.__T += ms + ((pauses && pauses[i]) || 0);
         const t = document.activeElement || document.body;
-        t.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
-    }
+        const shiftKey = key.length === 1 && key !== key.toLowerCase();
+        t.dispatchEvent(new KeyboardEvent('keydown', { key, shiftKey, bubbles: true, cancelable: true }));
+    });
 }"""
 
 
-def _type(page, text, ms, enter=True):
-    page.evaluate(TYPE_JS, [text, ms, enter])
+def _type(page, text, ms, enter=True, pauses=None):
+    page.evaluate(TYPE_JS, [text, ms, enter, {str(k): v for k, v in (pauses or {}).items()}])
 
 
 def _later(page, ms):
@@ -121,14 +137,16 @@ def _reset(page):
     _later(page, 3000)
 
 
-@pytest.mark.parametrize("where", ["exclude", "dialog", "include"])
-def test_a_slow_scanners_url_never_answers_the_reason_dialog(scan_page, where):
-    """The dialog's focused button (Exclude, or Include again on an Excluded
-    row), or the dialog itself (a click on its text), and a Prusament URL
-    scanned at every speed: the scan goes to the scan path whole, nothing is
-    written, the dialog stays. RED on 2749590 from 13 ms a key: POST
-    /api/filament/164/stock_exclusion (or DELETE on Include again)."""
-    page = scan_page
+ROW = "#fcc-low-stock-overlay .fcc-stock-row.kb-active"
+PLACES = ["exclude", "dialog", "include", "list", "nothing"]
+
+
+def _place(page, where):
+    """Sets up `where` (the reason dialog with Exclude, its own text, or Include
+    again focused; the list with a row highlighted; nothing open) and returns
+    what puts the focus back there before each scan."""
+    if where == "nothing":
+        return lambda: page.evaluate("() => document.activeElement && document.activeElement.blur()")
     if where == "include":
         report = copy.deepcopy(REPORT)
         row = report["low"].pop(0)
@@ -138,50 +156,115 @@ def test_a_slow_scanners_url_never_answers_the_reason_dialog(scan_page, where):
         page.locator('[data-stock-tab="excluded"]').click()
     else:
         _open_list(page)
+    if where == "list":
+        return lambda: page.locator(ROW).focus()
     page.keyboard.press("Delete")
     page.wait_for_selector(DIALOG)
     if where != "include":
         page.locator(f"{DIALOG} input[value='discontinued']").check()
-    target = {"exclude": f"{DIALOG} [data-stock-dlg-save]", "include": f"{DIALOG} [data-stock-dlg-include]",
-              "dialog": f"{DIALOG} .fcc-stock-dlg-name"}[where]
+    if where == "dialog":
+        return lambda: page.locator(f"{DIALOG} .fcc-stock-dlg-name").click()     # the focus on the dialog itself
+    target = f"{DIALOG} [data-stock-dlg-save]" if where == "exclude" else f"{DIALOG} [data-stock-dlg-include]"
+    return lambda: page.locator(target).focus()
+
+
+def _whole(page, where, why):
+    """The URL reached the scan path whole and once, and nothing else happened
+    where it was scanned."""
+    s = _seen(page)
+    assert s["scans"] == [URL] and s["search"] == 0, (where, why, s)
+    if where in ("exclude", "dialog", "include"):
+        assert s["sent"] == [] and s["dialog"] and s["buffer"] == "", (where, why, s)
+    if where == "list":
+        assert s["opened"] == [] and not s["filter"] and s["filterValue"] == "" and s["list"], (where, why, s)
+
+
+@pytest.mark.parametrize("where", PLACES)
+def test_a_slow_scanners_url_does_nothing_but_scan(scan_page, where):
+    """A Prusament URL scanned at every speed onto the reason dialog (Exclude,
+    Include again on an Excluded row, or the dialog itself), onto the list, or
+    with nothing open: the scan goes to the scan path whole, nothing is written,
+    the dialog stays, no filter, no filament window, no search. RED on 2749590
+    from 13 ms a key: the dialog's POST /api/filament/164/stock_exclusion (or
+    DELETE on Include again); in the list the late '/' focused the filter, the
+    rest of the URL went into it, and its Enter opened #164's window; with
+    nothing open it opened the search panel and was lost."""
+    page = scan_page
+    focus = _place(page, where)
     for ms in SPEEDS:
-        if where == "dialog":
-            page.locator(target).click()                       # the focus on the dialog itself
+        focus()
+        _type(page, URL, ms)
+        _whole(page, where, ms)
+        _reset(page)
+
+
+@pytest.mark.parametrize("where", PLACES)
+def test_a_scanner_that_stalls_keeps_its_scan_whole(scan_page, where):
+    """Round 4: a scanner that stalled 500 ms or more before a '/' (a Bluetooth
+    link's hiccup, or a busy page) had it claimed as a person's: before the
+    URL's last '/', the claim emptied the buffer and the scan's Enter saved an
+    exclusion; before an earlier one, it cut the scan, opened the filament
+    window or the search. Before the last '/' and two earlier ones, after 600 ms
+    and 1.5 s (the accumulator keeps a buffer for 2 s). RED on dd81587."""
+    page = scan_page
+    focus = _place(page, where)
+    for at in (SLASHES[-1], SLASHES[-2], SLASHES[1]):
+        for stall in (600, 1500):
+            focus()
+            _type(page, URL, 13, pauses={at: stall})
+            _whole(page, where, (at, stall))
+            _reset(page)
+
+
+@pytest.mark.parametrize("where", PLACES)
+def test_a_scanner_that_sends_bursts_keeps_its_scan_whole(scan_page, where):
+    """A scanner that sends a few keys at a time: six keys 2 ms apart, then a
+    gap of 450 ms (round 4's skeptic: whole on round 3's code) or 700 ms (cut
+    there: the search opened twice and processScan got nothing)."""
+    page = scan_page
+    focus = _place(page, where)
+    for gap in (450, 700):
+        focus()
+        _type(page, URL, 2, pauses={i: gap for i in range(6, len(URL), 6)})
+        _whole(page, where, gap)
+        _reset(page)
+
+
+def test_two_keys_left_are_a_scan_one_is_a_persons(scan_page):
+    """The boundary, with nothing open, 600 ms after the last key (past round
+    3's rule): two characters in the buffer are a scan, and its '/' joins it;
+    one is a key a person pressed and left, so a '/' is the person's and opens
+    the search; two Spaces (a button pressed twice) are nobody's scan either."""
+    page = scan_page
+    for left, theirs in (("ab", False), ("a", True), ("  ", True), (" a", True), ("a b", False)):
+        page.evaluate("() => { window.clearScanBuffer(); window.__search = 0; }")
+        _later(page, 3000)
+        _type(page, left, 10, enter=False)
+        _later(page, 600)
+        _type(page, "/", 10, enter=False)
+        s = _seen(page)
+        if theirs:
+            assert s["search"] == 1, (left, s)
         else:
-            page.locator(target).focus()
-        _type(page, URL, ms)
-        s = _seen(page)
-        assert s["sent"] == [] and s["dialog"], (where, ms, s)
-        assert s["scans"] == [URL] and s["search"] == 0 and s["buffer"] == "", (where, ms, s)
-        _reset(page)
+            assert s["search"] == 0 and s["buffer"] == left + "/", (left, s)
 
 
-def test_a_slow_scanners_url_never_works_the_list(scan_page):
-    """The list up, a row highlighted, and a URL scanned at every speed: no
-    filament window, no filter, no search; the scan goes to the scan path
-    whole. RED on 2749590 from 13 ms a key: the late '/' focused the filter,
-    the rest of the URL went into it, and its Enter opened #164's window."""
+def test_a_slash_the_dialog_takes_empties_the_buffer(scan_page):
+    """A key a person pressed and left on the dialog, then their '/' 600 ms
+    later: the dialog takes the '/' and empties the buffer, so the stray key
+    doesn't start the next scan ("xLOC:LR-MDB-1", an unknown code). Unpinned
+    until round 4 (the buffer was empty before the '/' in every test)."""
     page = scan_page
-    _open_list(page)
-    for ms in SPEEDS:
-        page.locator("#fcc-low-stock-overlay .fcc-stock-row.kb-active").focus()
-        _type(page, URL, ms)
-        s = _seen(page)
-        assert s["opened"] == [] and not s["filter"] and s["filterValue"] == "" and s["list"], (ms, s)
-        assert s["scans"] == [URL] and s["search"] == 0, (ms, s)
-        _reset(page)
-
-
-def test_a_slow_scanners_url_never_opens_the_search(scan_page):
-    """No list open: fab_drag.js's '/' has the same rule. RED on 2749590 from
-    13 ms a key: the late '/' opened the search panel and was lost."""
-    page = scan_page
-    for ms in SPEEDS:
-        page.evaluate("() => document.activeElement && document.activeElement.blur()")
-        _type(page, URL, ms)
-        s = _seen(page)
-        assert s["scans"] == [URL] and s["search"] == 0, (ms, s)
-        _reset(page)
+    focus = _place(page, "exclude")
+    focus()
+    _type(page, "x", 10, enter=False)
+    _later(page, 600)
+    _type(page, "/", 10, enter=False)
+    s = _seen(page)
+    assert s["dialog"] and s["search"] == 0 and s["buffer"] == "", s
+    _type(page, "LOC:LR-MDB-1", 13)
+    s = _seen(page)
+    assert s["scans"] == ["LOC:LR-MDB-1"] and s["sent"] == [] and s["dialog"], s
 
 
 def test_a_persons_slash_is_still_theirs(scan_page):
