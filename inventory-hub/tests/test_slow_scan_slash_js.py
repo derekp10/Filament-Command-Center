@@ -354,6 +354,25 @@ def test_a_reason_picked_with_the_mouse_starts_the_capture_afresh(scan_page):
     assert _seen(page)["scans"] == []
 
 
+@pytest.mark.parametrize("key", ["Backspace", "Delete"])
+def test_a_stray_key_rubbed_out_on_a_reason_leaves_the_enter_the_persons(scan_page, key):
+    """A key a person typed onto a reason by mistake, rubbed out at once
+    (Backspace or Delete), then their Enter: the Enter is theirs and saves, and
+    nothing goes to the scan path. Quick, as a typo is fixed: the stray key is
+    under 500 ms old at the Enter, where the radio's lone-key rule would still
+    take it for a scan's. Unpinned until round 6: cutting the keys that start
+    the capture afresh down to the arrows kept every test green, and the stray
+    key and the Enter were scanned."""
+    page = scan_page
+    focus = _place(page, "radio")
+    focus()
+    _type(page, "x", 300, enter=False)
+    _type(page, [key], 100, enter=False)
+    _type(page, "", 200)
+    page.wait_for_function("() => window.__sent.length === 1")
+    assert _seen(page)["scans"] == []
+
+
 def test_a_slash_the_dialog_takes_empties_the_buffer(scan_page):
     """A key a person pressed and left on the dialog, then their '/' 600 ms
     later: the dialog takes the '/' and empties the buffer, so the stray key

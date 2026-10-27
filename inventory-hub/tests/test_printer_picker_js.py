@@ -148,6 +148,22 @@ return {{ posts: posts('/api/smart_move') }};
     assert post["record_source"] == {"box": "LR-MDB-1", "slot": "2"}, post
 
 
+def test_a_feed_slots_label_with_a_key_left_in_front_still_picks_it(tmp_path):
+    """A key a person left glued in front of the feed slot's label: the
+    question reads its last label, and picks the slot. RED on 5b5a18e: it read
+    the scan from its start, refused it and held it off as another scan."""
+    res = _run(tmp_path, f"""
+answerWith('/api/smart_move', [{_js(DONE)}]);
+window.__picks = [head('XL-2', {{ feeds: {_js(FREE_FEED)} }})];
+await scanLoc('XL');
+window.processScan('qLOC:LR-MDB-1:SLOT:2', 'barcode');
+await __settle(250);
+return {{ posts: posts('/api/smart_move') }};
+""")
+    [post] = res["posts"]
+    assert post["record_source"] == {"box": "LR-MDB-1", "slot": "2"}, post
+
+
 def test_another_scan_is_held_off_while_it_asks(tmp_path):
     res = _run(tmp_path, f"""
 answerWith('/api/smart_move', [{_js(DONE)}]);

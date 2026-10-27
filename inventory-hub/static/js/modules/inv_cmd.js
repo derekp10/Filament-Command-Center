@@ -1554,10 +1554,11 @@ const processScan = (text, source = 'keyboard', capturedAt = null) => {
     // the substring-matching routes below and answer whatever unrelated dialog
     // is up now (2026-09-12 review). A stale CMD:CANCEL:<sid> still falls
     // through: cancelling is always safe. A stale CMD:STORE:<sid> (Group 40.3's
-    // "Just store it") is a choice too, so it is stopped the same way. Read at
-    // the end of the text, so a stray key in front never lets one through
-    // (Group 57 review, round 5).
-    if (/CMD:(CONFIRM|STORE):\S+$/.test(upper)) {
+    // "Just store it") is a choice too, so it is stopped the same way. Read
+    // anywhere in the text: a stray key in front never lets one through (Group
+    // 57 review, round 5), and neither does a later scan glued after it with a
+    // Space in it (round 6; a live one was answered above, by routeConfirmScan).
+    if (/CMD:(CONFIRM|STORE):\S/.test(upper)) {
         showToast('That confirm QR belongs to a dialog that has closed — ignored', 'warning', 7000);
         if (window.logClientEvent) window.logClientEvent('⚠️ Stale confirm QR scanned (its dialog had closed) — ignored', 'WARNING');
         return;
@@ -2384,7 +2385,11 @@ const _askRecordSource = (pick, sid, host) => {
                 // reaching processScan, which picks the scanned slot.
                 if (window.enterIsAScan ? window.enterIsAScan() : (window.isScanInFlight && window.isScanInFlight())) return;
                 const ae = document.activeElement;
-                if (order.includes(ae)) { e.preventDefault(); e.stopPropagation(); ae.click(); }
+                if (order.includes(ae)) {
+                    e.preventDefault(); e.stopPropagation();
+                    if (window.clearScanBuffer) window.clearScanBuffer();   // a key a person left starts no scan
+                    ae.click();
+                }
                 return;
             }
             if (e.key === 'Tab' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
@@ -2427,7 +2432,11 @@ const _askRecordSource = (pick, sid, host) => {
             cancel: () => finish(null),
             flash,
             route: (text) => {
-                const m = /^LOC:(.+?):SLOT:(\d+)$/.exec(String(text || '').trim().toUpperCase());
+                // Its last label: a key a person left in front never stops it
+                // (Group 57 review, round 6).
+                const whole = String(text || '').trim().toUpperCase();
+                const at = whole.lastIndexOf('LOC:');
+                const m = /^LOC:(.+?):SLOT:(\d+)$/.exec(at > 0 ? whole.slice(at) : whole);
                 if (!m) return false;
                 const f = feeds.find(x => String(x.box).toUpperCase() === m[1].trim() && String(x.slot) === String(parseInt(m[2], 10)));
                 if (!f) return false;

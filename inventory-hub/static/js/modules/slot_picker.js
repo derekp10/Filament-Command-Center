@@ -1057,7 +1057,13 @@
     window.routePickerScan = (text) => {
         const s = _session;
         if (!s || s.settled) return false;
-        const up = String(text == null ? '' : text).trim().toUpperCase();
+        // Read from its last label (Group 57 review, round 6): a key a person
+        // left in front of the picker's own "Scan to cancel" (the Quick-Swap
+        // grid's 'q', say) got it refused. The session QRs and processScan's
+        // hold-off already read the end of a scan (round 5).
+        const whole = String(text == null ? '' : text).trim().toUpperCase();
+        const at = Math.max(whole.lastIndexOf('LOC:'), whole.lastIndexOf('CMD:'));
+        const up = at > 0 ? whole.slice(at) : whole;
         if (!up) return false;
         if (up === 'CMD:CANCEL') {
             // D3: said, not silent.
@@ -1086,7 +1092,7 @@
         }
         if (s.view === 'loading' && !s.model && _looksLikeAChoice(up, s)) {
             // D3: scanned before the slots were drawn: kept, and applied once they are.
-            s.pendingScan = String(text).trim();
+            s.pendingScan = up;
             const msgEl = s.handle && s.handle.element.querySelector('.fcc-sp-msg');
             if (msgEl) msgEl.textContent = `⏳ Loading ${s.location}… (${s.pendingScan} is picked once it has loaded)`;
             return true;

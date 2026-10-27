@@ -508,3 +508,96 @@ def test_a_labels_e_right_after_its_first_key_never_toggles_the_wizard(scan_page
     _wizard(page)
     _type(page, "LEG:120", ms)
     assert page.evaluate("() => window.__wiz") == [] and _seen(page)["scans"] == ["LEG:120"], ms
+
+
+# The shared move question's two-way (a print running: Yes / No), which has its
+# own Enter branch.
+TWO_WAY_JS = """() => { window.__answer = null;
+    window.confirmActivePrint({ activePrint: { printer_name: 'XL', state: 'PRINTING' }, activePrints: [],
+        msg: 'Load #57 onto XL-1?', ids: { overlay: 'fcc-two-way-probe' },
+        onConfirm: () => { window.__answer = 'load'; }, onCancel: () => { window.__answer = 'cancel'; } }); }"""
+
+
+def test_a_persons_enter_on_no_or_the_two_way_takes_a_key_left_too(scan_page):
+    """A key a person left, then their Enter 0.7 s later on the Quick-Swap
+    confirm's NO, or on the two-way question's Yes or No: the Enter answers it
+    and the key goes with it, so it can't start the next scan. Unpinned until
+    round 6: those three Enters each left the key in the scan buffer and every
+    test stayed green (round 5 drove YES and the three-way only)."""
+    page = scan_page
+    _fresh(page)
+    _open_swap(page)
+    page.keyboard.press("Tab")
+    assert page.evaluate("() => document.activeElement.id") == "fcc-quickswap-no"
+    _type(page, "x", 300, enter=False)
+    _type(page, "", 700)
+    page.wait_for_timeout(50)
+    s = _seen(page)
+    assert s["posts"] == [] and not s["open"] and s["buffer"] == "", s
+    for answer in ("load", "cancel"):
+        _fresh(page)
+        page.evaluate(TWO_WAY_JS)
+        page.wait_for_selector("#fcc-two-way-probe")
+        page.wait_for_function("() => document.activeElement && document.activeElement.classList.contains('fcc-apc-yes')")
+        if answer == "cancel":
+            page.keyboard.press("Tab")
+        _type(page, "x", 300, enter=False)
+        _type(page, "", 700)
+        page.wait_for_timeout(20)
+        assert page.evaluate("() => window.__answer") == answer
+        assert _seen(page)["buffer"] == "", answer
+
+
+def test_two_glued_qrs_are_read_by_the_last(scan_page):
+    """A stale cancel QR whose Enter a dialog ate, glued to the live confirm
+    scanned after it: the live one answers (the session id holds no ':').
+    Unpinned until round 6: an id read as "everything to the end" kept every
+    test green and read the pair as one cancel with a session nobody had."""
+    page = scan_page
+    _fresh(page)
+    sid = _open_swap(page)
+    page.evaluate("(t) => window.processScan(t)", f"CMD:CANCEL:fcc-cqr-0-oldCMD:CONFIRM:{sid}")
+    page.wait_for_function("() => window.__posts.length === 1")
+    s = _seen(page)
+    assert s["posts"] == ["/api/quickswap"] and not s["open"], s
+
+
+PICKER_STUBS = r"""
+window.showToast = function () {};
+window.logClientEvent = function () {};
+window.fetch = function () { return new Promise(() => {}); };     // the slots never load: the picker waits
+"""
+
+
+@pytest.fixture
+def picker(isolated_page):
+    page = isolated_page
+    page.set_content("<!doctype html><html><head><meta charset='utf-8'></head><body></body></html>")
+    page.add_script_tag(content=PICKER_STUBS)
+    for name in ("overlay_mount.js", "inv_core.js", "slot_picker.js"):
+        page.add_script_tag(content=(MODULES / name).read_text(encoding="utf-8"))
+    return page
+
+
+def _open_picker(page):
+    page.evaluate("""() => { window.__picked = undefined;
+        window.openSlotPicker({ location: 'CR-MDB-1', spool: 6 }).then((r) => { window.__picked = r; }); }""")
+    page.wait_for_selector("#fcc-slot-picker")
+
+
+@pytest.mark.parametrize("left", ["", "q", "x"])
+def test_a_key_left_in_front_of_the_pickers_own_cancel_never_stops_it(picker, left):
+    """The slot picker's own "Scan to cancel" (a bare CMD:CANCEL) cancels it
+    with a key a person left glued in front ('q', the Quick-Swap grid's key,
+    say). RED on 5b5a18e: the picker read the scan from its start, refused it
+    ("Ignored: qCMD:CANCEL") and stayed up. A stale session's cancel QR is
+    still only flashed, however it starts."""
+    page = picker
+    _open_picker(page)
+    assert page.evaluate("(t) => window.routePickerScan(t)", left + "CMD:CANCEL") is True
+    page.wait_for_function("() => window.__picked === null")
+    assert page.locator("#fcc-slot-picker").count() == 0
+    _open_picker(page)
+    assert page.evaluate("(t) => window.routePickerScan(t)", left + "CMD:CANCEL:fcc-cqr-1-x") is True
+    page.wait_for_timeout(50)
+    assert page.locator("#fcc-slot-picker").count() == 1 and page.evaluate("() => window.__picked") is None

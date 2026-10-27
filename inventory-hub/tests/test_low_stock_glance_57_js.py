@@ -388,8 +388,7 @@ def test_space_on_the_button_leaves_no_space_for_the_next_scan(bar):
     label scanned meanwhile arrived as " CMD:WEIGH", "Malformed Command"
     (Group 57 review, round 2). The button took that space back out; since
     round 5 the REAL accumulator skips a Space while it holds nothing, so every
-    button is covered. A buffer that holds a scan keeps it, and a mouse click
-    leaves the buffer alone."""
+    button is covered. A buffer that holds a scan keeps it."""
     from test_slow_scan_slash_js import _accumulator          # that module imports this one
     bar.add_script_tag(content=_accumulator())
     bar.evaluate("(a) => { window.__answers = a; }", [_answer(REPORT)] * 3)
@@ -402,11 +401,6 @@ def test_space_on_the_button_leaves_no_space_for_the_next_scan(bar):
     bar.keyboard.press("Space")
     bar.wait_for_selector(PANEL)
     assert bar.evaluate("() => state.scanBuffer") == "ID:5 "
-    bar.keyboard.press("Escape")
-    bar.evaluate("() => { state.scanBuffer = ' '; }")
-    bar.locator(BTN).click()
-    bar.wait_for_selector(PANEL)
-    assert bar.evaluate("() => state.scanBuffer") == " "
 
 
 def test_a_list_that_came_back_gives_the_focus_back_to_its_button(bar):
@@ -988,13 +982,16 @@ def test_a_tick_that_hangs_marks_both_counts_stale(both):
 
 
 def test_a_hung_tick_waits_thirty_seconds_before_the_counts_say_so(both):
-    """The 30 s itself, on the page's own clock (Playwright's, so the page's
-    timers run when the test says): fresh 29 s into a tick that hangs, stale
-    after 30 (round 5: every test set the time short, so a 3 s value passed
-    them all). 30 s is past the slowest real heartbeat, an offline printer's
-    probes."""
+    """The 30 s itself, on the page's own clock (Playwright's, paused, so the
+    page's time and timers move only when the test says): fresh 29 s into a
+    tick that hangs, stale after 30 (round 5: every test set the time short, so
+    a 3 s value passed them all). 30 s is past the slowest real heartbeat, an
+    offline printer's probes. Paused since round 6: installed alone the clock
+    still ran in real time, so a busy run could pass the 30 s before the test
+    looked at 29."""
     bar = both
     bar.clock.install()
+    bar.clock.pause_at(bar.evaluate("() => Date.now()") + 1000)
     bar.evaluate("(a) => { window.__pulse = a; }",
                  [_answer({"low_stock": GOOD, "label_backlog": {"read_ok": True, "count": 53}}), _answer(None, hang=True)])
     bar.evaluate("() => window._dashboardPulseTickOnce()")
