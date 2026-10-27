@@ -10,10 +10,10 @@
 > Derek's standing ask: *surface this section whenever he asks what's pending, even if he's asked
 > about something else.* He'll get to it; he doesn't know when.
 
-* **⏸️ PENDING DEREK — finish the 2026-10-26 release (Group 56; Claude removes this once (1) and (2) are done).**
-  (1) Run your TrueNAS update so prod gets `main` `1d9cae4`: until then prod still charges cancelled prints up to
-  ~9% short. (2) After your next **completed** print and your next **cancelled** print (the first ones on firmware
-  8.0), tell Claude "check 56.7": it reads prod's deduct records itself; nothing for you to compare. (3) If the
+* **⏸️ PENDING DEREK — finish the 2026-10-26 release (Group 56; Claude removes this once (2) is done).**
+  (1) ✅ Prod updated to `main` `1d9cae4` (Derek, 2026-10-26; prod's files checked the same evening). (2) After
+  your next **completed** print and your next **cancelled** print (the first ones on firmware 8.0), tell Claude
+  "check 56.7": it reads prod's deduct records itself; nothing for you to compare. (3) If the
   Activity Log ever shows "FCC's G-code walk of … came to … against the slicer's …", tell Claude: FCC may be
   misreading that file.
 * **⏸️ PENDING DEREK — Bulk Moves (L298) hands-on pass.** Built, merged to `dev`, covered by the
