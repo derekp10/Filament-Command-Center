@@ -5154,10 +5154,14 @@ def get_live_spools_data(spool_ids, spools=None):
     spool: the list is the non-archived one), or every id when that read
     failed, is read on its own, as every id was before (ten buffered spools
     were ten reads every 5 s). /api/spools/refresh passes none: one read per id.
-    When the list read failed and the first id's own read gets no answer
-    either, Spoolman isn't answering: the rest are left alone (their cards keep
+    When the list read failed and a spool's own read gets no answer either (no
+    connection, a timeout: spoolman_api.get_spool_answer), Spoolman isn't
+    answering: that spool and the ones after it are left alone (their cards keep
     what they show) instead of each waiting out its own 3 s timeout, which made
-    an outage tick 5 s + 3 s per buffered spool (Group 57 review).
+    an outage tick 5 s + 3 s per buffered spool (Group 57 review). An answer
+    that isn't a spool (a record Spoolman can't send, which also fails the list)
+    is only that spool's: the others are still read (round 2: it stopped the
+    refresh for every spool after it, on every tick).
     """
     listed = None
     list_failed = False
@@ -5171,10 +5175,12 @@ def get_live_spools_data(spool_ids, spools=None):
     for sid in spool_ids:
         try:
             spool_data = listed.get(str(sid)) if listed is not None else None
-            if spool_data is None:
-                spool_data = spoolman_api.get_spool(sid)
-                if spool_data is None and list_failed:
+            if spool_data is None and list_failed:
+                spool_data, answered = spoolman_api.get_spool_answer(sid)
+                if not answered:
                     break
+            elif spool_data is None:
+                spool_data = spoolman_api.get_spool(sid)
             if spool_data:
                 info = spoolman_api.format_spool_display(spool_data)
                 

@@ -210,6 +210,41 @@ def stock_of(spools):
     return math.fsum(rems), count, unknown
 
 
+def under_line(grams, threshold):
+    """A filament's grams are under the Low line: the one comparison behind the
+    list, the title-bar count and the low-stock warning (Group 57 review, round
+    2). On grams rounded to the microgram: spools of 136.2, 7.9, 69.6 and 36.3 g
+    make 250 g, but their sum in binary is 249.99999999999997, which counted as
+    Low under a 250 g line, and the warning (summed another way) said otherwise."""
+    return round(grams, 6) < threshold
+
+
+def _floor_tenth(grams):
+    """Grams to the tenth below, on grams rounded to the microgram (so a binary
+    249.89999999999998 is 249.9, not 249.8)."""
+    return math.floor(round(grams, 6) * 10) / 10
+
+
+def _row_grams(grams, threshold=None):
+    """A row's grams, to the tenth: a Low row's never rounded up to the line it
+    is under (249.96 g is 249.9, not 250.0), so the page can't show it at the
+    line either (inv_stock.js's _stockText)."""
+    tenth = round(grams, 1)
+    if threshold is not None and tenth >= threshold and under_line(grams, threshold):
+        return _floor_tenth(grams)
+    return tenth
+
+
+def grams_text(grams, threshold=None):
+    """Grams as the list shows them: whole, except where rounding would put a
+    total that is under the line at it or over it ("250 g left" under a 250 g
+    line): then the tenth, never rounded up (inv_stock.js's _stockText)."""
+    whole = round(grams)
+    if threshold is not None and under_line(grams, threshold) and whole >= threshold:
+        return f"{_floor_tenth(grams):.1f}"
+    return f"{whole:.0f}"
+
+
 def _fid_of(spool):
     fil = spool.get('filament') if isinstance(spool, dict) else None
     if not isinstance(fil, dict):
@@ -372,7 +407,7 @@ def _members(fil_by_id, by_fid, threshold):
             yield "excluded", fid, entry["fil"], grams, count, total, unknown, False
         elif count == 0:
             yield "out", fid, entry["fil"], 0.0, 0, total, unknown, False
-        elif not unknown and grams < threshold:
+        elif not unknown and under_line(grams, threshold):
             yield "low", fid, entry["fil"], grams, count, total, unknown, False
     for fid, fil in fil_by_id.items():
         if fid not in by_fid:
@@ -451,6 +486,8 @@ def build_report():
     lists = {"low": [], "out": [], "excluded": []}
     for kind, fid, fil, grams, count, total, unknown, no_spools in _members(fil_by_id, by_fid, threshold):
         row = _row(fid, fil, grams, count, total, template)
+        if kind == "low":
+            row["grams"] = _row_grams(grams, threshold)
         if no_spools:
             row["no_spools"] = True
         elif kind == "excluded":
@@ -742,7 +779,7 @@ def _crossing(group, spools, threshold):
     by_id = {str(s.get('id')): s for s in spools or []
              if isinstance(s, dict) and s.get('id') is not None}
     fil = None
-    before_g = after_g = 0.0
+    before_parts = []
     before_n = after_n = 0
     emptied = []
     for c in group:
@@ -764,20 +801,26 @@ def _crossing(group, spools, threshold):
             # archived with grams left was archived before the charge too.
             before_in = c["before_g"] > 0 and (fresh_in or c["after_g"] <= 0)
         if before_in:
-            before_g += c["before_g"]
+            before_parts.append(c["before_g"])
             before_n += 1
         if fresh_in:
-            after_g += c["after_g"]
             after_n += 1
         if before_in and not fresh_in:
             emptied.append(c["sid"])
         fil = fil or rec.get('filament')
 
     changed = {str(c["sid"]) for c in group}
-    other_g, other_n, other_unknown = stock_of([s for k, s in by_id.items() if k not in changed])
+    others = [s for k, s in by_id.items() if k not in changed]
+    _, other_n, other_unknown = stock_of(others)
     if other_unknown:
         return None   # a spool of unknown weight: neither low nor out can be told
-    before_total, after_total = other_g + before_g, other_g + after_g
+    # Summed as the list sums them (Group 57 review, round 2: the other spools'
+    # sum plus the changed one's, added on, could land on the other side of the
+    # line from the list's own sum): after the write, the filament's spools as
+    # read now (stock_of, the list's rule); before it, the same spools with the
+    # changed ones' grams from before the write.
+    after_total = stock_of(list(by_id.values()))[0]
+    before_total = math.fsum([remaining_g(s) for s in others if in_stock(s)] + before_parts)
     before_count, after_count = other_n + before_n, other_n + after_n
     if exclusion_of(fil):
         return None   # excluded: neither low nor out is news
@@ -787,9 +830,9 @@ def _crossing(group, spools, threshold):
         ids = ", ".join(f"#{s}" for s in sorted(emptied, key=lambda s: (_num(s) is None, _num(s) or 0)))
         tail = "was its last spool" if len(emptied) == 1 else "were its last spools"
         return f"⚠️ {name} is out: {ids} {tail} in stock", _log_colour(fil), "out"
-    if after_count > 0 and before_total >= threshold > after_total:
+    if after_count > 0 and not under_line(before_total, threshold) and under_line(after_total, threshold):
         noun = "spool" if after_count == 1 else "spools"
-        return (f"⚠️ {name} is running low: {after_total:.0f} g left in {after_count} {noun}",
+        return (f"⚠️ {name} is running low: {grams_text(after_total, threshold)} g left in {after_count} {noun}",
                 _log_colour(fil), "low")
     return None
 

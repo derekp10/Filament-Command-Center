@@ -2537,8 +2537,11 @@ const _dashboardPulseTick = () => {
     // When this tick was sent (Group 57 review): its spool list is read before
     // the printer probes, so its answer can land seconds after a fresher read
     // the page made meanwhile (the Low stock list's own, a buffer refresh after
-    // a weigh-out), which an older answer must not paint over.
-    const sentAt = Date.now();
+    // a weigh-out), which an older answer must not paint over. On the page's
+    // own clock (performance.now), which a wall-clock step can't move (round
+    // 2), as are the reads it is compared with (inv_stock.js, inv_cmd.js).
+    const sentAt = (typeof performance !== 'undefined' && performance && typeof performance.now === 'function')
+        ? performance.now() : Date.now();
     // Logs stay in the heartbeat even while paused (2026-08-05). Dropping the
     // section used to starve the "N new" pill and every flag riding that
     // payload; the freeze now happens at the render, not the fetch.

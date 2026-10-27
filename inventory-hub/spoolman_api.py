@@ -97,6 +97,23 @@ def get_spool(sid):
     except: return None
 
 
+def get_spool_answer(sid):
+    """`get_spool`, saying whether Spoolman answered at all (Group 57 review,
+    round 2): (what get_spool returns, True) when it answered, a body that isn't
+    JSON included (None then: a record Spoolman can't send); (None, False) when
+    it didn't (no connection, a timeout). The dashboard's buffer refresh stops
+    reading one spool at a time only on the second kind."""
+    sm_url, _ = config_loader.get_api_urls()
+    try:
+        resp = requests.get(f"{sm_url}/api/v1/spool/{sid}", timeout=3)
+    except Exception:
+        return None, False
+    try:
+        return parse_inbound_data(resp.json()), True
+    except Exception:
+        return None, True
+
+
 def get_all_spools(allow_archived=True):
     """Return every spool (optionally including archived) as parsed dicts.
     Backs the Prusament-scan matcher, which finds a spool by its stored

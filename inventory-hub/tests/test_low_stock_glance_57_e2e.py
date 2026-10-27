@@ -7,8 +7,10 @@ Pinned: the button sits in the title bar between 🛒 Queue and ?; its count is
 the list's Low + Out (the real heartbeat against the real /api/stock_report);
 it opens the list on its own, and the list it reads sets the count; a heartbeat
 that couldn't read draws "?" before any count, and "12?" with a dashed border
-after one; on the real page (Bootstrap loaded) the list doesn't move when it
-arrives, and "/" while it reads leaves the list open and the search panel shut.
+after one, as the 🏷️ Backlog count does, and a blip moves nothing on the bar
+(the "?" takes no room); on the real page (Bootstrap loaded) the list doesn't
+move when it arrives, and "/" while it reads leaves the list open and the
+search panel shut.
 The panel and the button themselves are pinned hermetically by
 test_low_stock_glance_57_js.py and test_low_stock_panel.py; the bar at every
 Text size by test_text_size_setting_e2e.py; its contrast by
@@ -201,3 +203,58 @@ def test_a_heartbeat_that_could_not_read_draws_a_question_mark(page: Page, base_
     page.goto(base_url)
     assert _painted(page) == "?"
     assert page.locator(BTN).get_attribute("data-read") == "failed"
+
+
+@pytest.mark.usefixtures("require_server")
+def test_a_blip_moves_nothing_on_the_bar(page: Page, base_url: str):
+    """At Standard on a 1600 px window (Derek's) the bar has a few px to spare.
+    The "?" of a stale count made the button 7 px wider, the bar took its first
+    step (titlebar_fit.js) and gave it back on the next good read: SEARCH moved
+    112 px and back on every Spoolman blip (Group 57 review, round 2). The "?"
+    is drawn in the button's padding now. The counts are fixed (Backlog 53,
+    Queue 0, Low stock 12) and the failed reads stubbed, in this page only."""
+    _read_only(page)
+    failing = {"on": False}
+    down = {"read_ok": False, "read_error": "couldn't read Spoolman's spools (test)"}
+
+    def pulse(route):
+        resp = route.fetch()
+        body = resp.json()
+        if "label_backlog" in body:
+            body["label_backlog"] = down if failing["on"] else {"read_ok": True, "count": 53, "spools": 53,
+                                                                 "filaments": 0}
+        if "low_stock" in body:
+            body["low_stock"] = down if failing["on"] else {"read_ok": True, "count": 12, "low": 1, "out": 11,
+                                                             "threshold_g": 250.0}
+        route.fulfill(response=resp, body=json.dumps(body))
+
+    def queue(route):
+        body = "[]" if route.request.method == "GET" else '{"success": true}'
+        route.fulfill(status=200, content_type="application/json", body=body)
+    page.route("**/api/dashboard_pulse*", pulse)
+    page.route("**/api/state/queue", queue)
+    page.goto(base_url)
+    page.wait_for_function("(s) => document.querySelector(s).textContent.trim() === '12'", arg=NUM, timeout=20_000)
+    page.wait_for_function("() => /\\(53\\)/.test(document.getElementById('btn-backlog-count').textContent)",
+                           timeout=20_000)
+    page.wait_for_timeout(300)
+    where = """() => { const bar = document.querySelector('.fcc-titlebar');
+        const xs = Array.from(document.querySelectorAll('.fcc-titlebar-actions > *')).map((el) =>
+            Math.round(el.getBoundingClientRect().left * 10) / 10);
+        return { steps: ['fcc-tb-tight', 'fcc-tb-add', 'fcc-tb-nover', 'fcc-tb-wrap'].filter((c) => bar.classList.contains(c)),
+                 xs, width: document.getElementById('btn-low-stock-count').getBoundingClientRect().width }; }"""
+    fresh = page.evaluate(where)
+    failing["on"] = True
+    page.wait_for_function("() => ['btn-low-stock-count', 'btn-backlog-count'].every((id) =>"
+                           " document.getElementById(id).dataset.read === 'failed')", timeout=20_000)
+    page.wait_for_timeout(300)
+    stale = page.evaluate(where)
+    assert page.locator(NUM).text_content().strip() == "12?"
+    assert "(53)?" in page.locator("#btn-backlog-count").text_content()
+    assert stale == fresh, (fresh, stale)
+    for sel in (BTN, "#btn-backlog-count"):
+        box = page.evaluate("""(sel) => { const b = document.querySelector(sel); const m = b.querySelector('.fcc-stale-mark');
+            const r = b.getBoundingClientRect(); const mr = m.getBoundingClientRect();
+            return { inside: mr.right <= r.right - parseFloat(getComputedStyle(b).borderRightWidth) + 0.01,
+                     dashed: getComputedStyle(b).borderTopStyle }; }""", sel)
+        assert box == {"inside": True, "dashed": "dashed"}, (sel, box)

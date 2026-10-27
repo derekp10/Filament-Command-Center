@@ -256,12 +256,22 @@ NAV_JS = """() => {
     const search = Array.from(nav.querySelectorAll('.btn')).find((b) => /SEARCH/.test(b.innerText));
     const ver = document.getElementById('fcc-build-version');
     const brand = nav.querySelector('.navbar-brand');
+    // Cut below the pixel, as titlebar_fit.js measures it (Group 57 review,
+    // round 2: on whole pixels a title up to 1.5 px too wide read as whole,
+    // while Chrome drew its "…").
+    const probe = document.createElement('span');
+    probe.className = brand.className;
+    probe.style.cssText = 'position:absolute;left:0;top:0;visibility:hidden;white-space:nowrap;min-width:0;max-width:none;';
+    probe.textContent = brand.textContent;
+    brand.parentNode.appendChild(probe);
+    const over = probe.getBoundingClientRect().width - brand.getBoundingClientRect().width;
+    probe.remove();
     return { btns, navH: Math.round(nr.height),
              overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
              gap: getComputedStyle(actions).columnGap, searchMargin: getComputedStyle(search).marginLeft,
              version: getComputedStyle(ver).display === 'none' ? 'hidden'
                  : (ver.scrollWidth > ver.clientWidth + 1 ? 'squeezed' : 'whole'),
-             title: brand.scrollWidth > brand.clientWidth + 1 ? 'shortened' : 'whole' };
+             title: over > 0.01 ? 'shortened' : 'whole' };
 }"""
 
 
@@ -288,8 +298,9 @@ def test_the_title_bar_keeps_its_buttons_on_one_line(page: Page, base_url: str, 
     assert nav["navH"] == 70 and not nav["overflow"], nav
     # 1600 px wide: the title is whole at every size, and the version badge
     # whole up to Large. PIN UPDATED DELIBERATELY (Group 57.2, 2026-10-26): the
-    # ⚠️ count moved every step up by its width, so at Extra Large the badge
-    # goes (it was whole there); it is never squeezed.
+    # ⚠️ count made the bar wider, so at Extra Large the bar takes its third
+    # step and the badge goes (it was whole there); it is never squeezed. The
+    # steps are titlebar_fit.js's, taken only while the title is cut.
     assert nav["title"] == "whole", nav
     assert nav["version"] == ("hidden" if name == "Extra Large" else "whole"), nav
     texts = [b["text"] for b in nav["btns"]]

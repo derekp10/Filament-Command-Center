@@ -180,15 +180,26 @@
 * **⏸️ PENDING DEREK — pick how the title bar's ⚠️ Low stock button reads (Group 57; built 2026-10-26 on
   `feature/group-57-low-stock-at-a-glance`, live on dev while that branch is checked out).** The title bar has a ⚠️
   button with a count of the filaments that are low or out (it opens the Low stock list), and the list's window keeps
-  one size. Pictures: `review-samples/2026-10-26-low-stock/` (also sent to your phone the same night).
-  1. **How it reads.** A: "⚠️ 12" (built). On your 1600 px window nothing else on the bar changes at Small / Standard;
-     at Large ADD INVENTORY reads ADD, at Extra Large the version badge hides. B: "⚠️ Low stock (12)" in words, which
-     tightens the bar sooner at every size. C: words at Small / Standard, and all three of Backlog, Queue and Low stock
-     as icon + number at Large / Extra Large. Claude's pick: A (the words are in its tooltip).
-  2. **What the number counts.** (a) Low + Out as one number (built; Claude's pick: the list's tabs already split it),
-     (b) both, "1 · 11" (a little too wide at Standard: the title starts to shorten), (c) Low only. Excluded never
-     counts.
+  one size. Pictures: `review-samples/2026-10-26-low-stock/` (also sent to your phone the same night), numbered as
+  below.
+  1. **How it reads** (pictures 1a–1c, 5a, 5b). A: "⚠️ 12" (built). On your 1600 px window nothing else on the bar
+     changes at Small / Standard; at Large ADD INVENTORY reads ADD, at Extra Large the version badge hides. The bar
+     gives way only as far as it must, whatever the counts say: a bigger count tightens the spacing before it ever
+     shortens the title. A's cost is in narrower windows: at 1280 px (the Framework 12 at 150%) the version badge
+     hides at Small / Standard and the title shortens at Extra Large; at Extra Large between 992 and 1100 px
+     (an iPad on its side) the title shrinks to its first letters ("F…" at 1024 px, picture 5a); below 992 px the
+     buttons need one more line (Standard at 768 px, an iPad upright, picture 5b). B: "⚠️ Low stock (12)" in words,
+     which tightens the bar sooner at every size. C: words at Small / Standard, and all three of Backlog, Queue and
+     Low stock as icon + number at Large / Extra Large and in narrow windows: the answer to A's narrow-window costs
+     (in 5a the title comes back, "Filament Co…" at 1024 px; in 5b the buttons fit one line). Claude's pick: A (the
+     words are in its tooltip), and C if you use FCC at Extra Large or on a tablet.
+  2. **What the number counts** (picture 2). (a) Low + Out as one number (built; Claude's pick: the list's tabs
+     already split it), (b) both, "1 · 11" (wider: at Small / Standard on your window the bar tightens its spacing,
+     the title stays whole), (c) Low only. Excluded never counts.
   3. Claude's call, veto it if you like: the 🔍 Search panel's own "⚠️ Low stock" button goes once 1 is settled.
+  4. For your information, nothing to pick (picture 4): a count FCC couldn't refresh (Spoolman didn't answer) keeps
+     its number with a "?" after it and a dashed border, "⚠️ 12?", and the 🏷️ Backlog count does the same, "(53)?";
+     the tooltip says why. The "?" takes no room, so a blip never moves the bar. Before any count it reads "?".
   If you never answer, A and (a) go to `dev` as built.
 * **📐 Plan docs: named sizes and colors as the base for themes; alternative views (phone, wall tablet, printer pictures,
   the Location Manager) (Derek, 2026-10-21; written).** _(→ **Group 60.1**: Claude first rewrites step 3's order, phone first, then the decisions one at a time)_ "Themes" in his sense are whole alternative designs a user
@@ -505,7 +516,7 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
   branch merges.]_
 
 ## 🔍 Search, Display & Filtering
-* **⚠️ Low stock: a title-bar button with a count, and a window that keeps one size (Derek, 2026-10-25, on prod).** _(→ **Group 57**: (b) as **57.1** first, then (a) as **57.2** after a sample)_ _[BUILT 2026-10-26 on `feature/group-57-low-stock-at-a-glance`: (b) the window is `min(40rem, 86vh)` tall on every list and state; (a) "⚠️ N" beside Queue, counted on every heartbeat from the tick's own reads (the cost question settled: no Spoolman read of its own), "?" before a count, the last count kept on a failed read. How it reads and what N counts wait on the ⏸️ PENDING DEREK pick above.]_
+* **⚠️ Low stock: a title-bar button with a count, and a window that keeps one size (Derek, 2026-10-25, on prod).** _(→ **Group 57**: (b) as **57.1** first, then (a) as **57.2** after a sample)_ _[BUILT 2026-10-26 on `feature/group-57-low-stock-at-a-glance`: (b) the window is `min(40rem, 86vh)` tall on every list and state; (a) "⚠️ N" beside Queue, counted on every heartbeat from the tick's own reads (the cost question settled: no Spoolman read of its own; not asked for while the backlog window is open), "?" before a count, and on a failed read the last count kept with a "?" after it and a dashed border (the 🏷️ Backlog count too, since the review). How it reads and what N counts wait on the ⏸️ PENDING DEREK pick above.]_
   (a) **Where the button lives: decided.** Today it sits in the 🔍 Search panel ("works, seems a bit odd. And doesn't
   really tell you anything at a glance"; 2026-10-20: "a bit fiddly"). Move it to the title bar beside 🏷️ Backlog and
   🛒 Queue, with a count, so it reads at a glance. Things to settle in the build: what the count shows (Low + Out, or
@@ -608,8 +619,18 @@ All 3 of these things are important and have value. We should table for now, and
   ten buffered spools are ten reads every 5 s. It could use the tick's one spool-list read (`SpoolListRead`), as the
   other heartbeat sections do since Group 52. _[BUILT 2026-10-26 on `feature/group-57-low-stock-at-a-glance`
   (`a6d2f1b`): every spool the tick's list holds is answered from it; one GET only for a spool it lacks (an archived
-  one), one per spool when the list read failed or the tick read no list. `/api/spools/refresh` is unchanged. Pinned by
-  `tests/test_low_stock_glance_57.py`. Archived when the branch merges.]_
+  one), one per spool when the tick read no list, and when the list read failed one per spool until the first that
+  gets no answer at all (the review: an outage tick took 5 s + 3 s per buffered spool; a record Spoolman can't send
+  stops only itself). `/api/spools/refresh` is unchanged. Pinned by `tests/test_low_stock_glance_57.py`. Archived
+  when the branch merges.]_
+* **⌨️ Space on any focused button leaves a space in the scan buffer for 2 s.** _(Found 2026-10-26 by the Group 57
+  review, round 2.)_ The scan accumulator (`templates/components/scripts.html`) records every printable key outside a
+  field, the Space that presses a focused button included. For the next 2 s a scan arrives with a leading space: a
+  client-side command label (" CMD:WEIGH", " CMD:LOCATIONS", " CMD:DROP") misses its match and the server answers
+  "Malformed Command", and an Enter in a list that reads Enter as "a scan is in flight" goes to the scan path as " ".
+  Group 57 fixed it for the ⚠️ Low stock buttons only (`inv_stock.js` takes a lone space back out of the buffer when
+  Space pressed them). The general fix is for the accumulator to skip a Space aimed at a button, which is its own
+  change to the scan path and wants its own tests.
 * **🐢 A bound-slot scan that loads its head lists the head's spools twice in the chained deploy.** _(Measured 2026-10-19
   by the Group 52 builder.)_ Such a scan makes four strict whole-list reads, each guarding a different moment; the
   chained deploy's step-4 resident list and its step-6 re-list of the same head could be one read when no printer probe

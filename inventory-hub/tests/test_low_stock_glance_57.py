@@ -16,8 +16,14 @@ so nothing reaches dev.
         `&` intact (it arrived as `&amp;`), and nothing in it can end the script.
   57.5  the buffer cards' live refresh answers every spool the tick's list
         holds from that list: one GET only for a spool it lacks (an archived
-        one), one per spool only when the list read failed or the tick read no
-        list. /api/spools/refresh keeps one GET per spool.
+        one), one per spool when the tick read no list, and when the list read
+        failed one per spool until the first that gets no answer at all (an
+        answer that isn't a spool is only that spool's). /api/spools/refresh
+        keeps one GET per spool.
+  Round 2 of the review: the line is compared on grams rounded to the
+        microgram (a decimal 250 g that sums to 249.99999999999997 is not
+        Low), the list and the low-stock warning sum the same way, and the
+        warning says the grams as the list shows them.
 
 New symbols are looked up inside the tests, so the file imports on the base and
 each test fails there for its own reason.
@@ -132,15 +138,28 @@ class _Resp:
             raise spoolman_api.requests.exceptions.HTTPError(f"{self.status_code} (test)")
 
 
+class _TextResp(_Resp):
+    """A plain-text 500: what Spoolman sends for a record it can't serialise."""
+
+    def __init__(self):
+        super().__init__(500, None)
+        self.text = "Internal Server Error"
+
+    def json(self):
+        raise ValueError("Expecting value: line 1 column 1 (char 0) (test)")
+
+
 class HttpSpoolman:
     """Spoolman's HTTP API at `requests.get`: the spool list (archived spools
     only with allow_archived=true), the filament list and single spools.
-    `down` holds the paths that time out. Every GET is recorded by path."""
+    `down` holds the paths that time out, `broken` the ones answered with a
+    plain-text 500. Every GET is recorded by path."""
 
-    def __init__(self, spools=SPOOLS, filaments=FILAMENTS, down=()):
+    def __init__(self, spools=SPOOLS, filaments=FILAMENTS, down=(), broken=()):
         self.spools = copy.deepcopy(list(spools))
         self.filaments = copy.deepcopy(list(filaments))
         self.down = set(down)
+        self.broken = set(broken)
         self.gets = []
 
     def get(self, url, *a, **k):
@@ -149,6 +168,8 @@ class HttpSpoolman:
         self.gets.append(path)
         if path in self.down:
             raise spoolman_api.requests.exceptions.ReadTimeout("Read timed out. (read timeout=5) (test)")
+        if path in self.broken:
+            return _TextResp()
         if path == SPOOL_LIST:
             archived_too = "allow_archived=true" in parts.query
             return _Resp(200, [s for s in self.spools if archived_too or not s.get("archived")])
@@ -452,6 +473,31 @@ def test_an_outage_tick_stops_after_one_unanswered_spool(client):
     assert body["spools_refresh"] == {}
 
 
+def test_a_spool_spoolman_cannot_send_stops_only_itself(client):
+    """One record Spoolman can't serialise fails the list read (a 500) and its
+    own read (a plain-text 500): Spoolman answered, so only that spool is left
+    alone and the others are refreshed (Group 57 review, round 2: the refresh
+    stopped at it, and the spools after it never refreshed while the record
+    stayed broken). RED on 6314386: none answered."""
+    ids = [101, 102, 105]
+    sm = HttpSpoolman(down={SPOOL_LIST}, broken={"/api/v1/spool/101"})
+    body = _pulse(client, sm, "printer_status", body={"refresh_spool_ids": ids})
+    assert sm.single_gets() == ["/api/v1/spool/101", "/api/v1/spool/102", "/api/v1/spool/105"], sm.gets
+    assert set(body["spools_refresh"]) == {"102", "105"}, body["spools_refresh"]
+    assert body["spools_refresh"]["102"] == _old_answer([102])["102"]
+
+
+def test_an_outage_stops_at_the_first_spool_with_no_answer_wherever_it_is(client):
+    """The list read failed; the first spool answers, the second times out:
+    Spoolman has stopped answering, so the spools after it are left for the
+    next tick (their cards keep what they show)."""
+    ids = [101, 102, 105]
+    sm = HttpSpoolman(down={SPOOL_LIST, "/api/v1/spool/102"})
+    body = _pulse(client, sm, "printer_status", body={"refresh_spool_ids": ids})
+    assert sm.single_gets() == ["/api/v1/spool/101", "/api/v1/spool/102"], sm.gets
+    assert set(body["spools_refresh"]) == {"101"}, body["spools_refresh"]
+
+
 def test_an_archived_spool_that_goes_unanswered_stops_nothing(client):
     """With the list read fine, an archived buffered spool's own read failing
     is just that spool: the others are answered from the list."""
@@ -537,3 +583,79 @@ def test_a_setting_that_isnt_text_is_no_template(client, value):
 def test_a_missing_setting_is_an_empty_string(client):
     _, literal = _rendered_template(client, None, set_key=False)
     assert json.loads(literal) == ""
+
+
+# ---------------------------------------------------------------------------
+# Round 2: the Low line, the list's sums, the warning
+# ---------------------------------------------------------------------------
+
+F_LINE = _filament(20, "On The Line")
+
+
+def _line_spools(grams):
+    return [_spool(200 + i, F_LINE, remaining=g) for i, g in enumerate(grams)]
+
+
+def test_a_total_of_exactly_the_line_is_not_low_in_any_order():
+    """136.2 + 7.9 + 69.6 + 36.3 g is 250 g, but its sum in binary is
+    249.99999999999997, which counted as Low under a 250 g line, in every order
+    (fsum), on a tab that says "Under 250 g" (Group 57 review, round 2). RED on
+    6314386."""
+    import itertools
+    for order in itertools.permutations([136.2, 7.9, 69.6, 36.3]):
+        spools = _line_spools(order)
+        assert stock_report.low_out_count(spools, [F_LINE], THRESHOLD) == (0, 0), order
+        report = _report(HttpSpoolman(spools=spools, filaments=[F_LINE]))
+        assert report["low"] == [] and report["out"] == [], (order, report)
+    assert stock_report.low_out_count(_line_spools([136.2, 7.9, 69.6, 36.2]), [F_LINE], THRESHOLD) == (1, 0)
+
+
+def test_stock_of_sums_in_any_order_to_the_same_grams():
+    """The total doesn't depend on the order Spoolman lists the spools in
+    (math.fsum): a sum added up left to right does."""
+    import itertools
+    totals = {stock_report.stock_of(_line_spools(order))[0]
+              for order in itertools.permutations([0.1, 249.7, 0.2, 36.3, 7.9])}
+    assert len(totals) == 1, totals
+
+
+def _crossing(others, before, after):
+    """The warning for one spool weighed from `before` to `after` grams, with
+    the filament's other spools holding `others`."""
+    spools = _line_spools(list(others) + [after])
+    sid = spools[-1]["id"]
+    group = [{"sid": sid, "before_g": before, "after_g": after, "before_in": True, "after_in": True}]
+    return stock_report._crossing(group, spools, THRESHOLD), stock_report.low_out_count(spools, [F_LINE], THRESHOLD)
+
+
+def test_the_warning_and_the_list_agree_at_the_line():
+    """The warning summed the other spools and added the changed one on, the
+    list summed them all: at the line they disagreed both ways (round 2: "is
+    running low: 250 g left" for a filament the list doesn't show, and a
+    filament on the Low list with no warning). RED on 6314386."""
+    warning, (low, _out) = _crossing([130.1, 61.3], 70.0, 58.6)        # 250.0 g after
+    assert warning is None and low == 0, (warning, low)
+    warning, (low, _out) = _crossing([136.2, 7.9, 69.6], 50.0, 36.3)   # 250.0 g after
+    assert warning is None and low == 0, (warning, low)
+    warning, (low, _out) = _crossing([130.1, 61.3], 70.0, 58.5)        # 249.9 g: it crossed
+    assert low == 1 and warning is not None and warning[2] == "low", warning
+    assert "running low: 249.9 g left in 3 spools" in warning[0], warning[0]
+
+
+def test_the_warning_says_the_grams_as_the_list_shows_them():
+    """Whole grams, except where rounding would put a total under the line at
+    it ("250 g left" under a 250 g line): then the tenth, never rounded up."""
+    assert stock_report.grams_text(151.4, THRESHOLD) == "151"
+    assert stock_report.grams_text(249.4, THRESHOLD) == "249"
+    assert stock_report.grams_text(249.96, THRESHOLD) == "249.9"
+    assert stock_report.grams_text(249.5, THRESHOLD) == "249.5"
+    assert stock_report.grams_text(260.0, THRESHOLD) == "260"
+
+
+def test_a_low_rows_grams_never_round_up_to_the_line():
+    """249.96 g is Low, and its row said 250.0 g, which the page showed as
+    "250 g" under "Under 250 g in stock" (round 2). Other rows keep the tenth."""
+    report = _report(HttpSpoolman(spools=_line_spools([200.0, 49.96]), filaments=[F_LINE]))
+    assert [r["grams"] for r in report["low"]] == [249.9], report["low"]
+    report = _report(HttpSpoolman(spools=_line_spools([151.06]), filaments=[F_LINE]))
+    assert [r["grams"] for r in report["low"]] == [151.1], report["low"]

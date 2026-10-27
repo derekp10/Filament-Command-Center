@@ -162,7 +162,8 @@ body {
    ⚠️ Low stock), so the room it needs changes with their numbers, and steps
    at fixed widths came too late once a count grew. With dev's counts that day
    on a 1600 px window: none at Small / Standard, the first two at Large, all
-   three at Extra Large.
+   three at Extra Large. If the buttons still don't fit with all three taken,
+   the bar takes a second line (step 4, below).
    Below 992 px Bootstrap puts the buttons on a line of their own under the
    title (this bar's flex-wrap comes from .navbar there, so it is not set
    here); a row too wide for the window wraps its buttons onto another line
@@ -170,16 +171,30 @@ body {
    smaller Text size, is always on screen, and the bar grows to hold its
    lines instead of drawing them over Printer Status (readability review,
    2026-10-21). */
+/* The box titlebar_fit.js measures in: its hidden copy of the title, and the
+   zero-high marker it watches for the bar's width. */
 .fcc-titlebar {
-    container: fcc-titlebar / inline-size;
+    position: relative;
+}
+.fcc-tb-marker {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    height: 0;
+    visibility: hidden;
+    pointer-events: none;
 }
 .fcc-titlebar .btn,
 .fcc-titlebar .status-label {
     white-space: nowrap;
 }
+/* Never narrower than the title's own right margin: a title cut to nothing
+   still draws its first letter (its glow's clip margin, below), which ran
+   over the Spoolman light (Group 57 review, round 2). */
 .fcc-titlebar .navbar-brand-group {
     flex: 0 1 auto;
-    min-width: 0;
+    min-width: 1rem;
 }
 .fcc-titlebar .navbar-brand {
     min-width: 0;
@@ -227,10 +242,49 @@ body {
     #fcc-build-version { flex-shrink: 0; }
     .fcc-titlebar.fcc-tb-nover #fcc-build-version { display: none; }
 }
-/* The ⚠️ Low stock count (inv_stock.js, Group 57.2): from a read that failed it
-   keeps its number with a "?" after it, and a dashed border, so a stale count
-   never looks like a fresh one. */
-#btn-low-stock-count[data-read="failed"] { border-style: dashed; }
+/* Step 4, one-line bar only, the last resort (titlebar_fit.js, Group 57 review,
+   round 2): the buttons still run past the bar's edge with the title cut to
+   nothing (Extra Large in a window just over 992 px, with big counts). The bar
+   takes a second line as it does below 992 px, the badge back beside the
+   title, so ⚙️ never leaves the screen. */
+@media (min-width: 992px) {
+    .fcc-titlebar.fcc-tb-wrap { flex-wrap: wrap; }
+    .fcc-titlebar.fcc-tb-wrap .fcc-titlebar-actions {
+        flex: 0 1 auto;
+        min-width: 0;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+    }
+    .navbar:has(> .fcc-titlebar.fcc-tb-wrap) {
+        height: auto;
+        min-height: 70px;
+    }
+}
+/* A count read from Spoolman that a later read couldn't refresh (the ⚠️ Low
+   stock count, inv_stock.js, Group 57.2; the 🏷️ Backlog count, inv_backlog.js,
+   since round 2): it keeps its number with a "?" after it, and a dashed border,
+   so a stale count never looks like a fresh one. The "?" is drawn in the
+   button's own padding and takes no room: the bar's steps follow its buttons'
+   width (titlebar_fit.js), and a blip moved every button 112 px and back
+   (Group 57 review, round 2). */
+[data-low-stock-count],
+.fcc-count-num {
+    position: relative;
+}
+.fcc-stale-mark {
+    position: absolute;
+    left: 100%;
+    top: 0;
+}
+#btn-low-stock-count[data-read="failed"],
+#btn-backlog-count[data-read="failed"] {
+    border-style: dashed;
+}
+/* A filled button's own colour is under its border too, so its dashes would
+   not show: the fill stops inside the border. */
+#btn-backlog-count[data-read="failed"] {
+    background-clip: padding-box;
+}
 @media (max-width: 991.98px) {
     .navbar {
         height: auto;

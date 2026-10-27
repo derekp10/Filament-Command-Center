@@ -9,17 +9,62 @@ window.openBacklogModal = () => {
 let lastBacklogHash = "";
 // Group 52.1a: set once a heartbeat has delivered the count (label_backlog).
 let _backlogCountFed = false;
+// The count the button shows, once one is known.
+let _backlogCount = null;
+
+// Why a count is stale, in the ⚠️ Low stock count's words (inv_stock.js).
+const _BACKLOG_WHY = {
+    spoolman: "Spoolman didn't answer just now",
+    fcc: "FCC couldn't count them just now",
+};
+
+// The button: "🏷️ Backlog (53)". A count a later read couldn't refresh keeps
+// its number with a "?" after it (drawn in the button's padding, taking no
+// room) and a dashed border, as the ⚠️ Low stock count does (global.css; Group
+// 57 review, round 2: on the same failed read one looked fresh, the other
+// stale); "(?)" before any count, never a 0 (Group 52's rule). Its text is
+// written only when it changed: the title bar fits itself again whenever a
+// button's text changes (titlebar_fit.js), and the same count rewritten on
+// every tick refitted it from scratch every 5 s.
+const _paintBacklogCount = (why) => {
+    const btn = document.getElementById('btn-backlog-count');
+    if (!btn) return;
+    const known = typeof _backlogCount === 'number';
+    const n = known ? String(_backlogCount) : '?';
+    const stale = known && !!why;
+    const key = `${n}${stale ? '?' : ''}`;
+    if (btn.dataset.countShown !== key) {
+        btn.dataset.countShown = key;
+        btn.innerHTML = `🏷️ Backlog <span class="fcc-count-num">(${n})${stale ? '<span class="fcc-stale-mark">?</span>' : ''}</span>`;
+    }
+    btn.dataset.read = why ? 'failed' : 'ok';
+    if (why) {
+        const said = _BACKLOG_WHY[why] || _BACKLOG_WHY.fcc;
+        const words = known ? `Backlog (${n})?, the last count (${said}). Opens the label backlog.`
+            : `Backlog (?), no count yet (${said}). Opens the label backlog.`;
+        btn.title = words;
+        btn.setAttribute('aria-label', words);
+    } else {
+        btn.removeAttribute('title');
+        btn.removeAttribute('aria-label');
+    }
+};
 
 // Group 52.1a: the dashboard heartbeat counts the backlog in its label_backlog
 // section (from the tick's own spool-list read plus one filament read), so the
 // button no longer re-reads Spoolman's whole spool and filament lists every 5 s.
-// A section that couldn't read Spoolman (read_ok false) keeps the count shown.
+// A section that couldn't read Spoolman (read_ok false) keeps the count shown,
+// marked stale. Returns whether it painted a count.
 window._renderBacklogCount = (sec) => {
-    if (!sec || sec.read_ok !== true || typeof sec.count !== 'number') return false;
-    _backlogCountFed = true;
-    const btn = document.getElementById('btn-backlog-count');
-    if (btn) btn.innerHTML = `🏷️ Backlog (${sec.count})`;
-    return true;
+    if (!sec || typeof sec !== 'object') return false;
+    if (sec.read_ok === true && typeof sec.count === 'number') {
+        _backlogCountFed = true;
+        _backlogCount = sec.count;
+        _paintBacklogCount(null);
+        return true;
+    }
+    _paintBacklogCount(sec.read_ok === false && sec.read_error && !sec.error ? 'spoolman' : 'fcc');
+    return false;
 };
 
 // Group 52.1a: a refresh that fails while the list shows rows keeps them and
@@ -82,7 +127,8 @@ window.fetchBacklog = () => {
             }
             _backlogNotice('');
             const items = data.items;
-            document.getElementById('btn-backlog-count').innerHTML = `🏷️ Backlog (${items.length})`;
+            _backlogCount = items.length;
+            _paintBacklogCount(null);
 
             // --- HASH COMPARISON TO PREVENT UI WIGGLE ---
             const newHash = JSON.stringify(items);

@@ -497,8 +497,10 @@ def api_dashboard_pulse():
     (`tick_filaments`) the same way.
     Body (POST): {"refresh_spool_ids": [123, 124, ...]} - if present
                 and non-empty, the response includes a "spools_refresh"
-                section keyed by spool id, equivalent to a POST to
-                /api/spools/refresh.
+                section keyed by spool id, in /api/spools/refresh's shape,
+                answered from the tick's own spool-list read (Group 57.5;
+                read before the printer probes, and an outage stops at the
+                first spool Spoolman doesn't answer: logic.get_live_spools_data).
 
     Returns: {section_name: payload, ...}. Sections that error
     individually return {"error": "..."} in their slot; the response

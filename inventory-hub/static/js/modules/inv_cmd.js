@@ -2741,20 +2741,34 @@ const loadBuffer = () => {
 // --- LIVE REFRESH POLLING ---
 // L28 polling guard: see updateLogState for rationale.
 let _liveRefreshInflight = false;
-// When the page last asked for the buffer's spools itself (liveRefreshBuffer,
-// right after a local change: a weigh-out, a move, a save). A heartbeat sent
-// before then may hold older records, so its spools_refresh is skipped (Group 57
+// Asked for again while one was in flight: one more goes out once it is back.
+let _liveRefreshAgain = false;
+// The buffer's answers are kept in order by when each read was sent (Group 57
 // review: since 57.5 a tick answers from the spool list it reads before its
 // printer probes, seconds before it lands, and it painted a weigh-out's 40 g
-// back to 120 g for a tick).
-let _bufferAskedAt = 0;
+// back to 120 g for a tick). An answer is painted only when it was sent after
+// the page's latest change to what the cards show (liveRefreshBuffer's callers:
+// a weigh-out, a move, a save) and after the read behind what they show now.
+// Round 2: a refresh asked for while another was in flight sent nothing, the
+// one in flight (read before the change) painted, and the heartbeat that would
+// have mended it was dropped; now that one is dropped, and one more refresh
+// goes out once it is back. Stamped on the page's own clock (performance.now),
+// as the heartbeat is (inv_core.js), so a wall-clock step can't freeze them.
+let _bufferChangedAt = -Infinity;
+let _bufferReadAt = -Infinity;
+const _bufferNow = () => (typeof performance !== 'undefined' && performance && typeof performance.now === 'function'
+    ? performance.now() : Date.now());
 // L206: render path extracted so the bulk-pulse dispatcher can hand
 // a spools_refresh payload (same {id: data} shape that /api/spools/refresh
 // returns) directly into the diff/update loop without another fetch.
-// `opts.sentAt`: when the heartbeat carrying it was sent.
+// `opts.sentAt`: when the read behind it was sent (a heartbeat, or this
+// page's own refresh); without it, the payload is painted as it comes.
 const _renderSpoolsRefreshPayload = (data, opts) => {
     if (!data || typeof data !== 'object') return;
-    if (opts && Number.isFinite(opts.sentAt) && opts.sentAt < _bufferAskedAt) return;
+    if (opts && Number.isFinite(opts.sentAt)) {
+        if (opts.sentAt < _bufferChangedAt || opts.sentAt < _bufferReadAt) return;
+        _bufferReadAt = opts.sentAt;
+    }
     let changed = false;
     state.heldSpools.forEach(s => {
         const fresh = data[s.id];
@@ -2792,13 +2806,11 @@ const _renderSpoolsRefreshPayload = (data, opts) => {
 };
 window._renderSpoolsRefreshPayload = _renderSpoolsRefreshPayload;
 
-const liveRefreshBuffer = () => {
+// One /api/spools/refresh for the buffer as it is now.
+const _sendBufferRefresh = () => {
     if (!state.heldSpools || state.heldSpools.length === 0) return;
-    _bufferAskedAt = Date.now();
-    if (_liveRefreshInflight) return;
-
     const spoolIds = state.heldSpools.map(s => s.id);
-
+    const sentAt = _bufferNow();
     _liveRefreshInflight = true;
     fetch('/api/spools/refresh', {
         method: 'POST',
@@ -2806,9 +2818,26 @@ const liveRefreshBuffer = () => {
         body: JSON.stringify({ spools: spoolIds })
     })
         .then(r => r.json())
-        .then(_renderSpoolsRefreshPayload)
+        .then(data => _renderSpoolsRefreshPayload(data, { sentAt }))
         .catch(e => console.warn("Live Refresh Buffer Failed", e))
-        .finally(() => { _liveRefreshInflight = false; });
+        .finally(() => {
+            _liveRefreshInflight = false;
+            if (_liveRefreshAgain) {
+                _liveRefreshAgain = false;
+                _sendBufferRefresh();
+            }
+        });
+};
+
+// Something the buffer's cards show has just changed here: read them again.
+const liveRefreshBuffer = () => {
+    if (!state.heldSpools || state.heldSpools.length === 0) return;
+    _bufferChangedAt = _bufferNow();
+    // The one in flight read the cards before this change: one more goes out
+    // once it is back, never two at once (L28's guard).
+    _liveRefreshAgain = _liveRefreshInflight;
+    if (_liveRefreshInflight) return;
+    _sendBufferRefresh();
 };
 window.liveRefreshBuffer = liveRefreshBuffer;
 

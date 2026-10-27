@@ -1309,6 +1309,8 @@ def test_the_window_keeps_one_size_whatever_it_shows(panel):
     read."""
     page, open_ = panel
     open_(_answer(_many(30), delay=600))
+    # Measured while it reads, or the test compares ready with ready (round 2).
+    assert _state(page) == "loading", _state(page)
     frames = {"loading": _frame(page)}
     _wait_state(page, "ready")
     frames["low (30 rows)"] = _frame(page)

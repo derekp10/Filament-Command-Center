@@ -651,8 +651,9 @@ def quiet_heartbeat(page) -> None:
 # live Printer Status (dev's printers, their states, the spools on their heads
 # and the grams left) could match its baseline only until the next print.
 # Every source the widget reads answers this fixed fleet instead: the
-# heartbeat's printer_status section (the heartbeat carries nothing else, so
-# the log, the counts and the rest of the page stay as loaded) and the
+# heartbeat's printer_status section (the heartbeat carries only that and a
+# fixed ⚠️ Low stock count, VISUAL_LOW_STOCK, so the log, the other counts and
+# the rest of the page stay as loaded) and the
 # fan-out's printer map, slot bindings and head contents (which keeps the
 # heartbeat's states, as PrusaLink reports them). Each head: (id, bound to a
 # box slot, the spool on it).

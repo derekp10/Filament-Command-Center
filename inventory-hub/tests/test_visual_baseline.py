@@ -16,10 +16,10 @@ Since the readability review (2026-10-21) the comparator compares colours
 Printer Status. A full-page capture of the live dashboard can't match from
 one run to the next (the Activity Log, the buffer, dev's printers and their
 grams, the counts), so each page gets fixed answers for its live feeds:
-_steady_page() (the heartbeat carries only a made-up printer fleet,
-conftest.stub_printer_fleet; no log lines; an empty buffer, queue and label
-backlog, kept in this page), and LIVE_MASK blanks what is still live (the
-version badge, the Locations list and its count).
+_steady_page() (the heartbeat carries only a made-up printer fleet and a
+fixed ⚠️ Low stock count, conftest.stub_printer_fleet; no log lines; an empty
+buffer, queue and label backlog, kept in this page), and LIVE_MASK blanks what
+is still live (the version badge, the Locations list and its count).
 """
 from __future__ import annotations
 

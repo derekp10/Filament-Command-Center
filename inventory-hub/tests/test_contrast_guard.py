@@ -189,14 +189,28 @@ def test_low_stock_panel_has_no_gray_on_gray_text(page: Page, base_url: str, ass
 @pytest.mark.usefixtures("require_server")
 def test_low_stock_title_bar_button_is_readable(page: Page, base_url: str, assert_contrast):
     """Group 57.2 — the ⚠️ count in the title bar (Bootstrap's outline-warning
-    on the dark bar): with its count, hovered, and with "?" after a read that
-    failed. Read-only: the heartbeat is dev's own; the failed read is stubbed.
-    The guard scores a root's descendants, so the bar's buttons row is the
-    root, and the count is shown to be among what it scores."""
+    on the dark bar): with its count, hovered, and stale after a read that
+    failed: "12?" (and the 🏷️ Backlog count's "(53)?", Group 57 review round 2,
+    whose "?" is drawn in the button's padding). Read-only: the heartbeat is
+    dev's own; the failed read is stubbed, without a reload, so the count kept
+    is the one painted before it. The guard scores a root's descendants, so the
+    bar's buttons row is the root, and the counts are shown to be among what
+    it scores."""
     import json as _json
     import conftest   # local: keeps this file's header out of other branches' merges
     from test_text_size_guard import _read_only
     _read_only(page)
+    failing = {"on": False}
+
+    def pulse(route):
+        resp = route.fetch()
+        body = resp.json()
+        if failing["on"]:
+            for key in ("low_stock", "label_backlog"):
+                if key in body:
+                    body[key] = {"read_ok": False, "read_error": "couldn't read Spoolman's spools (test)"}
+        route.fulfill(response=resp, body=_json.dumps(body))
+    page.route("**/api/dashboard_pulse*", pulse)
     page.goto(base_url)
     num = page.locator("#btn-low-stock-count [data-low-stock-count]")
     page.wait_for_function("() => { const n = document.querySelector('#btn-low-stock-count [data-low-stock-count]');"
@@ -208,18 +222,15 @@ def test_low_stock_title_bar_button_is_readable(page: Page, base_url: str, asser
     page.locator("#btn-low-stock-count").hover()
     assert_contrast(row)
 
-    def pulse(route):
-        resp = route.fetch()
-        body = resp.json()
-        if "low_stock" in body:
-            body["low_stock"] = {"read_ok": False, "read_error": "couldn't read Spoolman's spools (test)"}
-        route.fulfill(response=resp, body=_json.dumps(body))
-    page.route("**/api/dashboard_pulse*", pulse)
-    page.reload()
-    page.wait_for_function("() => { const b = document.getElementById('btn-low-stock-count');"
-                           " return !!b && b.dataset.read === 'failed'; }", timeout=20000)
+    page.wait_for_function(r"() => /\(\d+\)/.test(document.getElementById('btn-backlog-count').textContent)",
+                           timeout=20000)
+    failing["on"] = True
+    page.wait_for_function("() => ['btn-low-stock-count', 'btn-backlog-count'].every((id) =>"
+                           " document.getElementById(id).dataset.read === 'failed')", timeout=20000)
     page.mouse.move(5, 300)
     assert_contrast(row)
+    marks = [o.get("text", "").strip() for o in conftest.contrast_offenders(row, min_ratio=100)]
+    assert marks.count("?") >= 2, marks             # both "?" marks are scored
 
 
 @pytest.mark.usefixtures("require_server", "bound_slot")

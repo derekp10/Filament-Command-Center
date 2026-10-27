@@ -123,10 +123,20 @@ const ITEMS = [{ id: 901, type: 'spool', registered: '2026-02-01',
 const pending = (body) => (url) => url.startsWith('/api/print_queue/pending') ? { body } : { body: {} };
 const btn = document.getElementById('btn-backlog-count');
 btn.innerHTML = '🏷️ Backlog (0)';
+// Counts the writes (Group 57 review, round 2): the title bar fits itself again
+// on every change to a button's text (titlebar_fit.js).
+let html = btn.innerHTML;
+let writes = 0;
+Object.defineProperty(btn, 'innerHTML', { get: () => html, set: (v) => { writes += 1; html = String(v); }, configurable: true });
+const look = () => [btn.innerHTML, btn.dataset.read || null, btn.getAttribute('aria-label')];
 const counts = [];
-counts.push([window._renderBacklogCount({ read_ok: true, count: 3, spools: 2, filaments: 1 }), btn.innerHTML]);
-counts.push([window._renderBacklogCount({ read_ok: false, read_error: "couldn't read Spoolman" }), btn.innerHTML]);
-counts.push([window._renderBacklogCount({ read_ok: true }), btn.innerHTML]);
+const GOOD = { read_ok: true, count: 3, spools: 2, filaments: 1 };
+counts.push([window._renderBacklogCount(GOOD), ...look()]);
+counts.push([window._renderBacklogCount(GOOD), ...look()]);
+counts.push([window._renderBacklogCount({ read_ok: false, read_error: "couldn't read Spoolman" }), ...look()]);
+counts.push([window._renderBacklogCount({ read_ok: true }), ...look()]);
+counts.push([window._renderBacklogCount(GOOD), ...look()]);
+const countWrites = writes;
 
 // Window closed: a heartbeat (or any other) pulse fetches nothing.
 window.__respond = pending({ success: true, items: ITEMS });
@@ -151,7 +161,7 @@ window.__respond = pending({ success: true, items: ITEMS });
 __fire('inventory:sync-pulse', { source: 'dashboard_pulse' });
 await __settle(40);
 const noticeAfterOk = [notice.style.display, notice.textContent];
-return { counts, closedFetches, rowsOk, rowsAfterFail, noticeAfterFail, noticeAfterOk,
+return { counts, countWrites, closedFetches, rowsOk, rowsAfterFail, noticeAfterFail, noticeAfterOk,
          pendingGets: __rec.fetches.filter(f => f.url.startsWith('/api/print_queue/pending')).length };
 """
 
@@ -163,7 +173,18 @@ def test_the_backlog_button_takes_the_heartbeats_count_and_polls_only_while_open
     fails keeps its rows and says so (it used to replace them with the error,
     and the next good answer, matching the last hash, never redrew them)."""
     res = run(tmp_path, ["inv_backlog.js"], BACKLOG)
-    assert res["counts"] == [[True, "🏷️ Backlog (3)"], [False, "🏷️ Backlog (3)"], [False, "🏷️ Backlog (3)"]], res
+    # PIN UPDATED DELIBERATELY (Group 57 review, round 2): a count a later read
+    # couldn't refresh keeps its number, now marked stale as the ⚠️ Low stock
+    # count is (a "?" that takes no room, a dashed border, the words saying
+    # why); and the button is written only when what it shows changed.
+    fresh = '🏷️ Backlog <span class="fcc-count-num">(3)</span>'
+    stale = '🏷️ Backlog <span class="fcc-count-num">(3)<span class="fcc-stale-mark">?</span></span>'
+    spoolman = "Backlog (3)?, the last count (Spoolman didn't answer just now). Opens the label backlog."
+    fcc = "Backlog (3)?, the last count (FCC couldn't count them just now). Opens the label backlog."
+    assert res["counts"] == [[True, fresh, "ok", None], [True, fresh, "ok", None],
+                             [False, stale, "failed", spoolman], [False, stale, "failed", fcc],
+                             [True, fresh, "ok", None]], res
+    assert res["countWrites"] == 3, res          # fresh, stale, fresh: never the same text twice
     assert res["closedFetches"] == 0, res
     assert "backlog-row" in res["rowsOk"] and "#901" in res["rowsOk"], res
     assert res["rowsAfterFail"] == res["rowsOk"], "a failed refresh wiped the rows"
@@ -171,6 +192,20 @@ def test_the_backlog_button_takes_the_heartbeats_count_and_polls_only_while_open
     assert "Showing the last list" in res["noticeAfterFail"][1], res
     assert res["noticeAfterOk"] == ["none", ""], res
     assert res["pendingGets"] == 3, res
+
+
+def test_a_failed_backlog_read_before_any_count_reads_a_question_mark(tmp_path):
+    """Never a 0 (Group 52's rule; Group 57 review, round 2: the server's "(0)"
+    placeholder stayed up through a heartbeat that couldn't read)."""
+    res = run(tmp_path, ["inv_backlog.js"], """
+const btn = document.getElementById('btn-backlog-count');
+btn.innerHTML = '🏷️ Backlog (0)';
+const r = window._renderBacklogCount({ read_ok: false, read_error: "couldn't read Spoolman" });
+return { r, html: btn.innerHTML, read: btn.dataset.read || null, label: btn.getAttribute('aria-label') };
+""")
+    assert res["r"] is False and res["html"] == '🏷️ Backlog <span class="fcc-count-num">(?)</span>', res
+    assert res["read"] == "failed", res
+    assert res["label"] == "Backlog (?), no count yet (Spoolman didn't answer just now). Opens the label backlog.", res
 
 
 LOAD = """
