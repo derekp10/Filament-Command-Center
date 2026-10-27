@@ -39,11 +39,12 @@
                 <div class="text-white-50 small">Scan new items to add to this list. Type weight and press Enter to save.</div>
                 <div class="d-flex align-items-center gap-3">
                     <div class="form-check form-switch">
-                        <!-- onchange blur is LOAD-BEARING: the global scan handler's
-                             first line is `if (e.target.tagName === 'INPUT') return;`,
-                             so a focused checkbox DISARMS the barcode scanner — in the
+                        <!-- The blur: a focused checkbox used to DISARM the barcode
+                             scanner (the global scan handler skipped every INPUT), in the
                              one modal whose own footer says "Scan new items to add to
-                             this list". Same defect as the L298 bulk-move ack box.
+                             this list"; same defect as the L298 bulk-move ack box. Since
+                             Group 57's review, round 6, the handler reads a checkbox's
+                             keys as a button's, so scanning no longer rests on it.
                              ON CLICK, NOT ON CHANGE: Space toggles a focused checkbox and
                              fires `change` but not `click`, so blurring on change stopped
                              the keyboard user from toggling it back. -->

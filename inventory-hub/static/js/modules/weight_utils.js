@@ -273,7 +273,7 @@ function promptMissingEmptyWeight({
                 <div class="input-group input-group-sm">
                     <input type="number" min="0" step="0.1" inputmode="decimal"
                            id="${overlayId}-input"
-                           class="form-control bg-secondary text-light border-dark"
+                           class="form-control bg-secondary text-light border-dark fcc-weight-box"
                            placeholder="Empty spool weight">
                     <span class="input-group-text bg-dark text-light border-secondary">g</span>
                 </div>
@@ -302,8 +302,22 @@ function promptMissingEmptyWeight({
         const cancel = () => finish(null);
         const skip = () => finish(PROMPT_SKIP_TARE);
         const onKey = (e) => {
-            // Escape routes through mountOverlay's onEscape; only Enter here.
-            if (e.key === 'Enter') { e.preventDefault(); submit(); }
+            // Escape routes through mountOverlay's onEscape; only Enter here,
+            // and only while this prompt is on top.
+            if (e.key !== 'Enter' || (window.isTopOverlay && !window.isTopOverlay(handle.element))) return;
+            // A scan's Enter is the scan's (Group 57 review, round 6: a label
+            // scanned into the box was saved as the tare). One scanned into the
+            // box (a weight box, fcc-weight-box) is inv_core.js's weight
+            // capture's, which takes its Enter first; one typed with the focus
+            // on a button went to the scan accumulator.
+            if (e.target !== input && window.enterIsAScan && window.enterIsAScan()) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            if (window.clearScanBuffer) window.clearScanBuffer();
+            // Enter answers the button it is on: Cancel cancels, Skip skips.
+            if (e.target === cancelBtn) cancel();
+            else if (skipBtn && e.target === skipBtn) skip();
+            else submit();
         };
 
         const handle = window.mountOverlay({

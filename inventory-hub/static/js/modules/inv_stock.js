@@ -1211,8 +1211,10 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
             occlude: hostOpen ? ['#offcanvasSearch select'] : undefined,
             initialFocus: '.fcc-stock-panel',
             onBackdropClick: () => _close(handle),
-            // The reason dialog first: mountOverlay hands Escape to the overlay
-            // that mounted first, this one. A dialog that is saving stays.
+            // The reason dialog answers its own Escape (it is on top, and
+            // mountOverlay hands Escape to the overlay on top, round 6); this
+            // closes the list, or a dialog left under it. A dialog that is
+            // saving stays.
             onEscape: () => {
                 if (!handle._dialog) _close(handle);
                 else if (!handle._dialog.busy) _closeDialog(handle);

@@ -204,13 +204,14 @@
      a heartbeat FCC hasn't answered after 30 s counts as failed.
   If you never answer, A and (a) go to `dev` as built.
 * **⏸️ PENDING DEREK — your call: an old digits-only label scanned into a weight box (found 2026-10-27 by the
-  Group 57 review, round 5; nothing blocks on it).** Just an opinion, when you have one. You click a spool card's
-  weight (the Quick-Weigh window), type the scale's reading, say 645, and scan the next spool's label before pressing
-  Enter. FCC's own labels ("ID:57") are caught now and never saved as a weight (fixed on the Group 57 branch). An old
-  label that is digits only ("57", from before FCC's "ID:" labels) can't be told from more typing, so it joins the
-  reading ("64557") and the scan's Enter saves that: the spool reads full. The weigh-out list has the same rule, on
-  purpose: digits are a weight, so a scale that types its reading into the box (a USB scale in keyboard mode) still
-  works.
+  Group 57 review, rounds 5 and 6; nothing blocks on it).** Just an opinion, when you have one. You click a spool
+  card's weight (the Quick-Weigh window), type the scale's reading, say 645, and scan the next spool's label before
+  pressing Enter. FCC's own labels ("ID:57", a location's, a Prusament QR) are caught now at any scanner speed and
+  never saved as a weight (fixed on the Group 57 branch): their ':' gives them away. An old label that is digits only
+  ("57", from before FCC's "ID:" labels) can't be told from more typing, so it joins the reading and the scan's Enter
+  saves that: in Gross or Net the spool reads full ("64557"), and in Additive (the window's default) or Set Used it
+  reads empty, and Auto Archive archives it. The weigh-out list has the same rule, on purpose: digits are a weight, so
+  a scale that types its reading into the box (a USB scale in keyboard mode, with or without its unit) still works.
   1. Leave it (the default): digits are a weight. Right if you have a scale that types, or no digits-only labels left.
   2. Digits arriving at scanner speed (3 or more, each a few ms apart, then Enter) right after a pause count as a
      scan: catches the old label, but a scale that types would be caught too.
@@ -667,20 +668,35 @@ All 3 of these things are important and have value. We should table for now, and
     scan is processed too), the filament editor's "Close without saving?" with Close Anyway focused (a scan closes
     it unsaved; Keep Editing has the focus by default), and the parent tree picker (`inv_loc_mgr.js`: Enter picks
     the highlighted parent; read from the code).
-* **✅ FIXED (on `feature/group-57-low-stock-at-a-glance`, the commit after `aecf901`; goes to `dev` with Group 57,
-  or alone: its code needs nothing else from the branch, its test round 3's slow-scan harness): 🔴 a label scanned while the Quick-Weigh window is open was saved
-  as the spool's weight, and could archive it.** _(Found 2026-10-27 by the Group 57 review, round 5, on dev,
-  read-only; older than Group 57.)_ The window (`weight_entry.js`: a buffer card's weight, the weigh-out list, the
-  wizard's weigh) answered every Enter with Save, and its weight field, focused when it opens, had no field scan
-  capture. A number field (Gross, Net, Set Used) kept the digits of "ID:57" and Save stored 57 g; in Gross that is
-  under the empty spool, so the spool read empty and Auto Archive archived it. A reading typed first got the digits
-  appended (64557 g). With Save focused the scan's Enter saved what was typed so far, and on a mode tab the scan's 'D'
-  set the stored default mode. Now the field has the weigh-out's capture (a character a weight can't hold proves a
-  scan, judged by the gap between keys so a slower scanner counts, `installFieldScanCapture`'s new `perKey`; the
-  field keeps what was typed before), the Enter off the field and the D leave a scan alone, and the weigh-out list's
-  own boxes take a slower scanner's label too (they allowed a whole label only 150 ms). Pinned by
-  `tests/test_quick_weigh_scan_js.py` (13 red before it, 9 of 9 mutants caught). A digits-only label is left a weight:
-  ⏸️ PENDING DEREK.
+* **✅ FIXED (on `feature/group-57-low-stock-at-a-glance`, in `11f77b4` and completed in round 6's own commit; goes
+  to `dev` with Group 57, or alone: its code needs nothing else from the branch, its tests round 3's slow-scan
+  harness): 🔴 a label scanned into a weight box was saved as the weight, and could archive the spool.** _(Found
+  2026-10-27 by the Group 57 review, rounds 5 and 6, on dev, read-only; older than Group 57.)_ The Quick-Weigh window
+  (`weight_entry.js`: a buffer card's weight, the wizard's weigh) answered every Enter with Save, and its weight field,
+  focused when it opens, had no field scan capture. A number field (Gross, Net, Set Used) kept the digits of "ID:57"
+  and Save stored 57 g; in Gross that is under the empty spool, so the spool read empty and Auto Archive archived it.
+  A reading typed first got the digits appended (64557 g). Round 5 (`11f77b4`) judged the speed between keys, which
+  left a burst scanner (its Enter a moment after the label), one slower than 150 ms a key, or one pause inside a
+  label saving it. Round 6 found the same hole in the missing-tare prompt (a label became the spool's tare) and the
+  post-archive empty-weight prompt (it would become the filament's empty weight); a scan lost with the focus on the
+  Auto Archive switch (its Enter saved, its 'D' set the default mode); Enter on Cancel or × saving; the tare
+  prompt's Enter running Save twice and its Escape cancelling the window under it; and the weigh-out list dropping the
+  focus after a save and on every redraw, so the next reading went to the scan path as a spool id. Now every weight
+  box judges what was typed (class `fcc-weight-box`, `installWeightScanCapture` in `inv_core.js`): a ':' or '/' proves
+  a label at any speed and its keys never reach the box; anything else a weight can't hold is a scan only at scanner
+  speed, and a weight with its unit or a Space stays a weight; a label split by a focus move is put back together.
+  The scan accumulator reads a checkbox's keys, the overlay on top owns Escape and its keys, Enter presses the button
+  it is on, and the weigh-out list keeps the focus where a person types. Pinned by `tests/test_quick_weigh_scan_js.py`
+  and `tests/test_weight_box_scan_js.py`. Not covered: a label with no ':' typed slower than a scanner (an old bare
+  location label) and a stall of 2 s or more inside a label. A digits-only label is left a weight: ⏸️ PENDING DEREK.
+* **⚖️ The post-archive empty-weight prompt takes the focus from a reading being typed.** _(Found 2026-10-27 while
+  fixing the Group 57 review's round 6; older than Group 57.)_ When a weigh-out row's save archives its spool and its
+  filament has no empty weight, "📦 Spool archived — record the empty weight?" (`inv_details.js`,
+  `showArchiveEmptyWeightPrompt`) opens about half a second later and takes the focus. A person already typing the next
+  row's reading types it into the prompt instead, and Enter saves that reading as the filament's empty weight, which
+  every later spool of it inherits. A scanned label can't any more (its box is a weight box). Fix idea: leave the focus
+  where the person is typing (focus the prompt only when nothing has the focus, or open it once the list closes); a
+  call on where the prompt shows, since it is Derek's "one pre-filled confirm".
 * **✅ FIXED (on `feature/group-57-low-stock-at-a-glance`, the commit after `1a1293b`; goes to `dev` with Group 57):
   🔴 A slower scanner's "Scan to Cancel" could confirm a Quick-Swap.** _(Found 2026-10-27 by the Group 57 review,
   round 3; reproduced on dev, read-only, in round 4.)_ `window.isScanInFlight` (inv_core.js) counts 500 ms from a

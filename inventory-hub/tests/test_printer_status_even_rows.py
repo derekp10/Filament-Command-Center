@@ -222,7 +222,8 @@ window.fetch = (url) => (String(url).indexOf('/api/cancel_deduct/pending') !== -
 ACCUMULATOR = r"""
 window.__scans = [];
 document.addEventListener('keydown', (e) => {
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    const t = e.target;
+    if (t.tagName === 'TEXTAREA' || (t.tagName === 'INPUT' && t.type !== 'checkbox')) return;
     if (e.ctrlKey || e.altKey || e.metaKey) return;
     if (e.key === 'Enter') {
         e.preventDefault();
@@ -1249,7 +1250,7 @@ def test_the_dashboard_s_accumulator_cancels_every_enter_outside_a_text_field():
     stand-in with it."""
     src = SCRIPTS_HTML.read_text(encoding="utf-8")
     handler = src[src.index("document.addEventListener('keydown', (e) => {"):]
-    assert re.search(r"if \(e\.target\.tagName === 'INPUT' \|\| e\.target\.tagName === 'TEXTAREA'\) return;", handler)
+    assert re.search(r"const t = e\.target;\s*if \(t\.tagName === 'TEXTAREA' \|\| \(t\.tagName === 'INPUT' && t\.type !== 'checkbox'\)\) return;", handler)
     assert re.search(r"if \(e\.ctrlKey \|\| e\.altKey \|\| e\.metaKey\) return;", handler)
     assert re.search(r"if \(e\.key === 'Enter'\) \{\s*e\.preventDefault\(\);", handler)
 

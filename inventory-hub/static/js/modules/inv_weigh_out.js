@@ -124,11 +124,22 @@ window.openWeighOutModal = () => {
             });
         });
 
-    // Auto-focus the first empty input after modal shown
-    setTimeout(() => {
+    // Auto-focus the first empty input after modal shown, but never while a
+    // scan is arriving (Group 57 review, round 6): the WEIGH QR and the first
+    // spool's label scanned back to back were split between the scan buffer
+    // and the box, and the label's digits that reached the box were saved as
+    // that spool's weight. It waits for the scan to finish (the weight capture
+    // in inv_core.js puts a split label back together too), and leaves a box
+    // the person has already clicked into alone.
+    let waited = 0;
+    const focusFirst = () => {
+        const ae = document.activeElement;
+        if (ae && ae.classList && ae.classList.contains('weigh-input')) return;
+        if (state.scanBuffer && waited < 3000) { waited += 150; setTimeout(focusFirst, 150); return; }
         const firstInput = document.querySelector('.weigh-input:not(:disabled)');
         if (firstInput) firstInput.focus();
-    }, 500);
+    };
+    setTimeout(focusFirst, 500);
 };
 
 // ---------------------------------------------------------------------------
@@ -144,33 +155,15 @@ window.openWeighOutModal = () => {
 // weight box — in 'additive' mode that box is type="text", so the terminating
 // Enter tried to save the barcode AS A WEIGHT.
 //
-// Rather than drop the auto-focus (Derek wants the cursor there), capture
-// scanner input from inside the field and hand it to the global scan path.
-//
-// Two conditions, BOTH required, so ordinary typing is never hijacked:
-//   1. Scanner SPEED — the whole payload arrives in under 150ms, the same
-//      threshold the global accumulator uses to classify barcode vs keyboard.
-//   2. Not weight-shaped — it contains a character that cannot occur in a
-//      weight (anything outside 0-9 . + -). Real payloads carry a prefix or a
-//      URL ("ID:123", "LOC:PM-DB-A", "https://prusament…"), so this holds,
-//      while even an improbably fast typist entering "1234" is left alone.
-// A purely numeric barcode is deliberately NOT captured: it is genuinely
-// ambiguous with a weight, and treating it as a weight is the safe default.
-(function () {
-    if (!window.installFieldScanCapture) return;
-    const WEIGHTISH = /^[0-9.+\-]$/;
-    window.installFieldScanCapture({
-        match: (el) => el.classList && el.classList.contains('weigh-input'),
-        // Anything a weight box cannot legitimately contain. Broader than the
-        // shared `looksLikeScanPayload` on purpose: weights are strictly
-        // numeric here, so ANY other character proves it was scanned. A purely
-        // numeric barcode is deliberately NOT captured — genuinely ambiguous
-        // with a weight, and weight is the safe reading.
-        isScanPayload: (txt) => [...txt].some(c => !WEIGHTISH.test(c)),
-        // A slower scanner's label counts too (Group 57 review, round 5).
-        perKey: true,
-    });
-})();
+// Rather than drop the auto-focus (Derek wants the cursor there), each box is
+// a weight box (class fcc-weight-box), and inv_core.js's weight capture hands
+// a scan typed into it to the global scan path: a label is proved by its ':'
+// or '/' at any speed, anything else a weight can't hold by scanner speed, and
+// digits alone stay a weight (Group 57 review, rounds 5 and 6: the whole
+// payload had to arrive in under 150ms, so a slower scanner's label was typed
+// in as a weight). A purely numeric barcode is deliberately NOT captured: it
+// is genuinely ambiguous with a weight, and treating it as a weight is the
+// safe default.
 
 // Also refresh the UI any time the buffer updates while the modal is open
 document.addEventListener('inventory:buffer-updated', () => {
@@ -204,6 +197,15 @@ const renderWeighOutList = () => {
     container.querySelectorAll('.weigh-input').forEach((inp) => {
         if (inp.value !== '') preservedInputs[inp.dataset.id] = inp.value;
     });
+    // The box being typed into keeps the focus through the rebuild (Group 57
+    // review, round 6): the redraw a scan or a heartbeat makes replaced it, the
+    // focus fell to the page, and the person's next reading went to the scan
+    // path as a spool id.
+    const active = document.activeElement;
+    const focusedId = (active && active.classList && active.classList.contains('weigh-input')
+        && container.contains(active)) ? active.dataset.id : null;
+    let caret = null;
+    if (focusedId) { try { caret = [active.selectionStart, active.selectionEnd]; } catch (_) { caret = null; } }
 
     const activeSpools = state.heldSpools.filter(s => !processedWeighIds.has(s.id));
 
@@ -241,7 +243,7 @@ const renderWeighOutList = () => {
                     <div class="small text-info weigh-row-preview" data-id="${spool.id}" style="min-height:1em;"></div>
                 </div>
                 <div class="input-group" style="width: 150px;">
-                    <input type="${inputType}" class="form-control bg-dark text-white border-secondary weigh-input"
+                    <input type="${inputType}" class="form-control bg-dark text-white border-secondary weigh-input fcc-weight-box"
                         data-id="${spool.id}" placeholder="${placeholder}"
                         oninput="window.updateWeighRowPreview(this)"
                         onkeydown="window.handleWeighInput(event, this)">
@@ -268,6 +270,15 @@ const renderWeighOutList = () => {
             window.updateWeighRowPreview(inp);
         }
     });
+    if (focusedId) {
+        const inp = container.querySelector(`.weigh-input[data-id="${focusedId}"]`);
+        if (inp && !inp.disabled) {
+            inp.focus();
+            if (caret && caret[0] !== null) {
+                try { inp.setSelectionRange(caret[0], caret[1]); } catch (_) { /* a number box has no caret to set */ }
+            }
+        }
+    }
 };
 
 // Compute used_weight for a row given the modal-level mode + the cached
@@ -424,6 +435,11 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
     const rowEl = document.querySelector(`.weigh-row[data-id="${id}"]`);
     const inputEl = document.querySelector(`.weigh-input[data-id="${id}"]`);
     const btnEl = document.querySelector(`.weigh-save-btn[data-id="${id}"]`);
+    // The next box, found before this one is disabled: focusNextInput looks
+    // only at enabled boxes, so it found nothing and the focus fell to the
+    // page, where the person's next reading went to the scan path as a spool
+    // id (Group 57 review, round 6).
+    const nextInputEl = inputEl ? nextWeighInput(inputEl) : null;
     
     if (inputEl) inputEl.disabled = true;
     if (btnEl) {
@@ -523,15 +539,19 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
     });
 
     // Move to the next input immediately so the user can keep working while it saves
-    if (inputEl) focusNextInput(inputEl);
+    if (nextInputEl) nextInputEl.focus();
 };
 
-const focusNextInput = (currentInput) => {
+// The enabled box after this one, or the first other one after the last.
+const nextWeighInput = (currentInput) => {
     const inputs = Array.from(document.querySelectorAll('.weigh-input:not(:disabled)'));
     const currentIndex = inputs.indexOf(currentInput);
-    if (currentIndex > -1 && currentIndex + 1 < inputs.length) {
-        inputs[currentIndex + 1].focus();
-    }
+    if (currentIndex === -1) return null;
+    return inputs[currentIndex + 1] || inputs.find((x) => x !== currentInput) || null;
+};
+const focusNextInput = (currentInput) => {
+    const next = nextWeighInput(currentInput);
+    if (next) next.focus();
 };
 
 // Expose process scan specific to weigh out to capture commands if we want,

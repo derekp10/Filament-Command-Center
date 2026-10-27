@@ -245,7 +245,14 @@
 
         state.scanStartTime = 0;
         document.addEventListener('keydown', (e) => {
-            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+            // A field keeps its own keys. A checkbox can't hold typed text, so
+            // a scan typed with the focus on one (the Quick-Weigh's Auto Archive
+            // switch, a Tab away from its weight) is a scan, as on a button: it
+            // was lost, and its Enter and its 'D' worked the window's keys
+            // (Group 57 review, round 6). A radio stays its own: the Low stock
+            // reasons read their scans themselves (inv_stock.js).
+            const t = e.target;
+            if (t.tagName === 'TEXTAREA' || (t.tagName === 'INPUT' && t.type !== 'checkbox')) return;
 
             // A modifier combo is an APP SHORTCUT, never scanner output — a
             // barcode scanner types plain characters. Without this, Ctrl+C to

@@ -73,11 +73,15 @@ window.isScanInFlight = isScanInFlight;
 // this also says yes while the buffer already looks like a scan
 // (looksLikeScanPayload: a ':' or '/' in it, or "http" first), however slowly
 // it came and however long the scanner paused, up to the accumulator's 2 s
-// reset (scripts.html). Every FCC label and QR has its ':' before the keys
-// these handlers claim ("https:" before a URL's first '/', "LOC:" before a slot
-// label's 'B'). Keys a person left (a stray letter, the '?' that opened the
-// shortcut list) don't look like one, so they hold nothing off once 500 ms
-// have passed. Round 3 measured the pause (the last key under 500 ms ago), and
+// reset (scripts.html). Every FCC label and QR has its ':' before the '/' and
+// '?' these handlers claim ("https:" before a URL's first '/'), and before any
+// Q or B ("LOC:" before a slot label's 'B'). A label's own letters before its
+// ':' can still reach a letter shortcut (the C of LOC: and CMD:, the E of LEG:,
+// the D of ID:, CMD: and OLD:), which must leave the scan whole: the wizard's
+// toggles take no key out of it, and the Quick-Weigh's D reads the start of a
+// label (weight_entry.js, round 6). Keys a person left (a stray letter, the '?'
+// that opened the shortcut list) don't look like one, so they hold nothing off
+// once 500 ms have passed. Round 3 measured the pause (the last key under 500 ms ago), and
 // a scanner that stalled half a second before the URL's last '/' still saved an
 // exclusion; round 4 counted any two characters, and two keys a person left
 // held off Q, Shift+B, '/' and the wizard's toggles for 2 s, each blocked press
@@ -718,19 +722,20 @@ window.askMoveConfirm = (answer, ctx = {}) => {
 };
 
 // --- SCAN CAPTURE FROM A FOCUSED FIELD ---
-// The global accumulator bails on `e.target.tagName === 'INPUT'`, so any modal
-// that focuses a text field disarms the scanner. Sometimes dropping the
-// auto-focus is right; sometimes the field genuinely wants the cursor AND the
-// modal genuinely wants to accept scans (Weigh-Out says "scan them now while
-// this window is open" while focusing a weight box; Manage Contents re-focuses
-// its ID field after every add while its own CMD:DONE QR sits below).
+// The global accumulator bails on a field (`INPUT`, a checkbox aside, or
+// `TEXTAREA`), so any modal that focuses a text field disarms the scanner.
+// Sometimes dropping the auto-focus is right; sometimes the field genuinely
+// wants the cursor AND the modal genuinely wants to accept scans (Manage
+// Contents re-focuses its ID field after every add while its own CMD:DONE QR
+// sits below; the Low stock list's filter). A weight box has a rule of its own
+// (installWeightScanCapture, below).
 //
 // This lets such a field keep focus and still hand scanner input to the scan
 // path. Two conditions, BOTH required, so ordinary typing is never hijacked:
 //   1. scanner SPEED — the payload lands in under 150ms, the same threshold the
 //      global accumulator uses to classify barcode vs keyboard;
 //   2. the text does not look like something a human would type HERE — supplied
-//      per-caller, because "not a weight" and "not a spool id" differ.
+//      per-caller, because "not a filter" and "not a spool id" differ.
 //
 // One implementation, not one per modal: the 2026-08-03 audit found the same
 // scan-path defect re-written in four separate places, so new copies of this
@@ -739,13 +744,7 @@ window.askMoveConfirm = (answer, ctx = {}) => {
 //   match(el)          -> is this the field we care about?
 //   isScanPayload(txt) -> is this a scan rather than typing?
 //   onScan(txt, el)    -> what to do with it (default: window.processScan)
-//   perKey             -> judge the speed by the gap between keys, each under
-//                         150 ms and the Enter too, not by the whole payload:
-//                         for a field a person never types such text into (a
-//                         weight box), so a slower scanner's label counts too
-//                         (Group 57 review, round 5: "ID:57" at 40 ms a key
-//                         took 200 ms in all and was saved as 57 g)
-const installFieldScanCapture = ({ match, isScanPayload, onScan, perKey }) => {
+const installFieldScanCapture = ({ match, isScanPayload, onScan }) => {
     let buf = '';
     let startedAt = 0;
     let lastAt = 0;
@@ -756,8 +755,7 @@ const installFieldScanCapture = ({ match, isScanPayload, onScan, perKey }) => {
         const now = Date.now();
 
         if (e.key === 'Enter') {
-            const fast = buf.length >= 3 && startedAt
-                && ((now - startedAt) < 150 || (!!perKey && (now - lastAt) < 150));
+            const fast = buf.length >= 3 && startedAt && (now - startedAt) < 150;
             const looksScanned = fast && isScanPayload(buf);
             const payload = buf;
             const restore = preScanValue;
@@ -768,10 +766,7 @@ const installFieldScanCapture = ({ match, isScanPayload, onScan, perKey }) => {
             // RESTORE what the user had typed, don't blank the field. The
             // scanner's characters were appended to their in-progress value
             // (this handler doesn't preventDefault on character keys), so
-            // clearing outright silently destroyed an un-submitted weight —
-            // and the Group 31.3 preserve-text snapshot in renderWeighOutList
-            // then captured an already-empty field, so the buffer-updated
-            // redraw could not bring it back either.
+            // clearing outright silently destroyed an un-submitted entry.
             el.value = restore;
             if (onScan) onScan(payload, el);
             else if (window.processScan) window.processScan(payload, 'barcode');
@@ -791,6 +786,152 @@ const installFieldScanCapture = ({ match, isScanPayload, onScan, perKey }) => {
     }, true);   // capture: must beat the field's own Enter handler
 };
 window.installFieldScanCapture = installFieldScanCapture;
+
+// --- SCAN CAPTURE FROM A WEIGHT BOX (Group 57 review, rounds 5 and 6) ---
+// A weight box keeps the focus while it is open: the Quick-Weigh field
+// (weight_entry.js, from the moment the window opens), the weigh-out list's
+// boxes (inv_weigh_out.js, which says "scan them now while this window is
+// open"), the missing-tare prompt (weight_utils.js) and the post-archive
+// empty-weight prompt (inv_details.js). A scanner types into it, and a number
+// box keeps only a label's digits ("ID:57" reads 57), so its Enter saved a label
+// as a weight: in Gross the spool read empty and Auto Archive archived it, and
+// in a prompt the label became the tare (rounds 5 and 6). Round 5 judged the
+// speed between keys, and a burst scanner's pause before its Enter, a scanner
+// slower than 150 ms a key, or one pause inside the label still saved it. So a
+// weight box judges what was typed:
+//   - A ':' or '/' proves a label: every FCC label but the digits-only ones
+//     has one (ID:, FIL:, LOC:, CMD:, OLD:, LEG:, SPL:, a Prusament URL), and no
+//     weight does. The label starts at the letters typed right before it (its
+//     prefix), the box gets back what it held before them, and the label's
+//     other keys never reach the box; its Enter sends it to the scan path, at
+//     any speed. Keys more than 2 s apart (the accumulator's reset,
+//     scripts.html) are two inputs, and a person's own key (Backspace, an
+//     arrow, Tab, a Ctrl combination) drops it.
+//   - Anything else a weight can't hold, typed at scanner speed (3 keys or
+//     more inside 150 ms: a bare location label, another maker's barcode), is
+//     a scan too, unless it still reads as a weight: with its unit, a Space or
+//     a decimal comma ("645.5 g", "0.645kg", " 645,5", as a scale that
+//     types its reading sends it).
+//   - Digits alone stay a weight: an old digits-only label can't be told from
+//     a scale that types its reading (Derek's call, PENDING DEREK).
+// A label split by a focus move is put back together: its first keys still in
+// the scan buffer when a box takes the focus (the weigh-out list focuses its
+// first box half a second after it opens; the empty-weight prompt opens after
+// a save) start the box's label; a label still arriving when its box loses the
+// focus goes back to the scan buffer; and one whose box is redrawn (the
+// weigh-out list redraws on a scan, and on a heartbeat that changes a spool)
+// carries on in the box that took its place. The box's own previews follow (an
+// input event), and its own Enter handler sees only a person's Enter.
+// Every weight box has the class fcc-weight-box; the one capture below serves
+// them all.
+const installWeightScanCapture = ({ match, onScan }) => {
+    const RESET_MS = 2000;     // the accumulator's: keys further apart are two inputs
+    const BURST_MS = 150;      // scanner speed, the accumulator's 'barcode' test
+    const LETTER = /^[A-Za-z]$/;
+    const WEIGHT_KEY = /^[0-9.+\-]$/;
+    const WEIGHT_WITH_UNIT = /^\s*[+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)\s*(?:g|gr|grams?|kg|lbs?|oz)?\s*$/i;
+    const PERSON_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab', 'Home', 'End',
+        'PageUp', 'PageDown', 'Backspace', 'Delete', 'Escape'];
+    let box = null;     // the box the keys below went to
+    let keys = [];      // its keys since its last Enter or a person's key: { k, t, before }
+    let label = null;   // { text, restore, startAt, lastAt } once a ':' or '/' proved one
+    const scanState = () => ((typeof state !== 'undefined') ? state : window.state) || null;
+    const reset = () => { keys = []; label = null; };
+    const putBack = (el, value) => {
+        if (el.value === value) return;
+        el.value = value;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    document.addEventListener('keydown', (e) => {
+        const el = e.target;
+        if (!el || !match(el)) return;
+        const now = Date.now();
+        if (el !== box) {
+            // Its box was redrawn under a label still arriving: it carries on here.
+            if (box && !box.isConnected && label && now - label.lastAt <= RESET_MS) label.restore = el.value;
+            else reset();
+            box = el;
+        }
+        if (e.ctrlKey || e.altKey || e.metaKey || PERSON_KEYS.includes(e.key)) { reset(); return; }
+        if (e.key === 'Enter') {
+            let text = null;
+            let restore = '';
+            if (label && now - label.lastAt <= RESET_MS) {
+                text = label.text;
+                restore = label.restore;
+            } else if (keys.length >= 3) {
+                let i = keys.length - 1;
+                while (i > 0 && keys[i].t - keys[i - 1].t < BURST_MS) i--;
+                const run = keys.slice(i);
+                const runText = run.map((x) => x.k).join('');
+                if (run.length >= 3 && run[run.length - 1].t - run[0].t < BURST_MS
+                    && now - run[run.length - 1].t <= RESET_MS
+                    && [...runText].some((c) => !WEIGHT_KEY.test(c)) && !WEIGHT_WITH_UNIT.test(runText)) {
+                    text = runText;
+                    restore = run[0].before;
+                }
+            }
+            reset();
+            if (text === null) return;          // a person's Enter: the box's own handler has it
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            putBack(el, restore);
+            if (onScan) onScan(text, el);
+            else if (window.processScan) window.processScan(text, 'barcode');
+            return;
+        }
+        if (e.key.length !== 1) return;         // Shift, CapsLock, a dead key: nobody's character
+        const lastAt = label ? label.lastAt : (keys.length ? keys[keys.length - 1].t : 0);
+        if (lastAt && now - lastAt > RESET_MS) reset();
+        if (label) {                            // the label's own key: it never reaches the box
+            e.preventDefault();
+            label.text += e.key;
+            label.lastAt = now;
+            return;
+        }
+        const st = scanState();
+        const buf = st && typeof st.scanBuffer === 'string' ? st.scanBuffer : '';
+        if (buf && window.looksLikeScanPayload && window.looksLikeScanPayload(buf)) {
+            // The label's first keys went to the scan buffer before this box
+            // took the focus: it continues here.
+            e.preventDefault();
+            label = { text: buf + e.key, restore: el.value, startAt: st.scanStartTime || now, lastAt: now };
+            keys = [];
+            if (window.clearScanBuffer) window.clearScanBuffer();
+            return;
+        }
+        keys.push({ k: e.key, t: now, before: el.value });
+        if (e.key !== ':' && e.key !== '/') return;
+        // A label: from the letters typed right before its ':' (or '/'), and
+        // from the scan buffer when they started there.
+        let i = keys.length - 1;
+        while (i > 0 && LETTER.test(keys[i - 1].k) && keys[i].t - keys[i - 1].t <= RESET_MS) i--;
+        const lead = (i === 0 && /^[A-Za-z]+$/.test(buf)) ? buf : '';
+        e.preventDefault();
+        label = { text: lead + keys.slice(i).map((x) => x.k).join(''), restore: keys[i].before,
+            startAt: (lead && st.scanStartTime) || keys[i].t, lastAt: now };
+        keys = [];
+        if (lead && window.clearScanBuffer) window.clearScanBuffer();
+        putBack(el, label.restore);
+    }, true);   // capture: before the box's own Enter handler and its window's keys
+    document.addEventListener('focusout', (e) => {
+        if (e.target !== box || !label || Date.now() - label.lastAt > RESET_MS) return;
+        // The focus left mid-label: its last keys finish it in the scan buffer
+        // (or in the next weight box, which picks it up from there).
+        const st = scanState();
+        if (st) {
+            st.scanBuffer = label.text;
+            st.scanStartTime = label.startAt;
+            clearTimeout(st.bufferTimeout);
+            // The accumulator's own 2 s reset (scripts.html), for the keys it now holds.
+            st.bufferTimeout = setTimeout(() => { st.scanBuffer = ''; st.scanStartTime = 0; }, RESET_MS);
+        }
+        reset();
+        box = null;
+    }, true);
+};
+window.installWeightScanCapture = installWeightScanCapture;
+installWeightScanCapture({ match: (el) => !!(el.classList && el.classList.contains('fcc-weight-box')) });
 
 // A scan payload always carries a prefix marker (`ID:`, `LOC:`, `CMD:`,
 // `FIL:`, `SPOOL:`) or is a URL (Prusament QRs). Nothing a user types into an

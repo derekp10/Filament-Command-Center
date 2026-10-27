@@ -8,7 +8,8 @@
 //   - live preview of the resulting used_weight + remaining
 //   - tare context line (with source badge from the cascade resolver)
 //   - optional Auto-archive toggle (Quick-Weigh has it; FilaBridge does not)
-//   - keyboard nav: ←/→ to swap modes, Enter to submit, Escape to cancel
+//   - keyboard nav: ←/→ to swap modes, Enter to submit (on a button, that
+//     button), Escape to cancel
 //
 // Math comes from computeUsedWeight() / parseAdditiveInput() in weight_utils.js.
 // On submit the component invokes the caller's onSubmit({...}) — it does NOT
@@ -193,7 +194,7 @@
                     <label id="fcc-we-input-label" for="fcc-we-input"
                            class="form-label small text-light mb-1"></label>
                     <div class="input-group input-group-sm" style="margin-bottom:6px;">
-                        <input id="fcc-we-input" class="form-control bg-dark text-white border-secondary"
+                        <input id="fcc-we-input" class="form-control bg-dark text-white border-secondary fcc-weight-box"
                                style="font-size:1.15rem;"
                                autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
                         <span class="input-group-text bg-dark text-light border-secondary">g</span>
@@ -372,7 +373,7 @@
                     color_hex: promptCtx.color_hex || spool.color_hex || null,
                     allowSkip: !allowUnknownInitial,
                 });
-                if (tare === null) return;  // user cancelled
+                if (tare === null) { inputEl.focus(); return; }  // user cancelled: back to the reading
                 let effectiveMode = mode;
                 if (tare === window.PROMPT_SKIP_TARE) {
                     // Downgrade Gross → Net for this submission only. No tare
@@ -431,15 +432,26 @@
 
         function onKey(e) {
             // Escape is owned by mountOverlay's onEscape — see openModal caller.
+            // An overlay over this one (the missing-tare prompt) answers its own
+            // keys (Group 57 review, round 6: the prompt's Enter ran this Save a
+            // second time, and its arrows switched this window's mode).
+            if (window.isTopOverlay && !window.isTopOverlay(overlay)) return;
             if (e.key === 'Enter') {
-                if (e.target && e.target.classList && e.target.classList.contains('fcc-we-tab')) return;
                 // A scan's Enter with the focus off the field (on Save, say: its
                 // keys went to the scan accumulator) is the scan's, not a Save
                 // (Group 57 review, round 5: it saved the reading typed so far).
-                // A scan typed into the field is the field capture's (below).
+                // A label scanned into the field is the weight capture's
+                // (inv_core.js), which takes its Enter before this sees it.
                 if (e.target !== inputEl && window.enterIsAScan && window.enterIsAScan()) return;
                 e.preventDefault();
-                attemptSave();
+                e.stopImmediatePropagation();
+                if (window.clearScanBuffer) window.clearScanBuffer();
+                // Enter answers the control it is on (round 6: on Cancel, × or
+                // Set as default it saved): a button is pressed (a mode tab picks
+                // its mode); the field and the Auto Archive switch save.
+                const btn = e.target && e.target.closest ? e.target.closest('button') : null;
+                if (btn && overlay.contains(btn) && btn !== saveBtn) btn.click();
+                else attemptSave();
             } else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
                 if (e.target === inputEl) return; // don't steal cursor nav inside input
                 e.preventDefault();
@@ -455,9 +467,14 @@
                 // the input mid-edit.
                 if (e.target === inputEl) return;
                 // A scan's 'D' ("ID:57" with the focus on a mode tab) is the
-                // scan's: it set the stored default mode (round 5).
-                if (window.scanIsArriving ? window.scanIsArriving()
-                    : (window.isScanInFlight && window.isScanInFlight())) return;
+                // scan's: it set the stored default mode (round 5). One still
+                // arriving (scanIsArriving), or the D of a label's own start,
+                // typed after its I (ID:), CM (CMD:) or OL (OLD:) however slowly:
+                // taken after a pause, it cut the scan to ":57" (round 6).
+                const st = (typeof state !== 'undefined') ? state : window.state;
+                const buf = st && typeof st.scanBuffer === 'string' ? st.scanBuffer.trim() : '';
+                if ((window.scanIsArriving ? window.scanIsArriving()
+                    : (window.isScanInFlight && window.isScanInFlight())) || /(?:I|CM|OL)$/i.test(buf)) return;
                 e.preventDefault();
                 e.stopImmediatePropagation();
                 if (window.clearScanBuffer) window.clearScanBuffer();   // nor start the next scan
@@ -482,23 +499,12 @@
     }
 
     // A label scanned while the window is open is the scan's, never a weight
-    // (Group 57 review, round 5: RED). The field has the focus from the moment
-    // the window opens, so a scanner typed into it: a number field (Gross,
-    // Net, Set Used) kept the digits of "ID:57" and Save stored 57 g, which in
-    // Gross is under the empty spool, so Auto Archive archived the spool; a
-    // reading typed first got the digits appended (64557 g). The weigh-out's
-    // rule (inv_weigh_out.js): a character a weight can't hold proves a scan,
-    // the field gets back what was typed before it, and the scan goes to the
-    // scan path. A label of digits alone is left a weight: it can't be told
-    // from a scale that types its reading.
-    if (window.installFieldScanCapture) {
-        const WEIGHTISH = /^[0-9.+\-]$/;
-        window.installFieldScanCapture({
-            match: (el) => el.id === 'fcc-we-input',
-            isScanPayload: (txt) => [...txt].some((c) => !WEIGHTISH.test(c)),
-            perKey: true,
-        });
-    }
+    // (Group 57 review, rounds 5 and 6: RED). The field has the focus from the
+    // moment the window opens, and a number field kept the digits of "ID:57",
+    // so Save stored 57 g: in Gross under the empty spool, so Auto Archive
+    // archived the spool. The field is a weight box (fcc-weight-box), which
+    // inv_core.js's weight capture serves: a label goes to the scan path and
+    // the field keeps what was typed before it.
 
     window.WeightEntry = { openModal };
 })();

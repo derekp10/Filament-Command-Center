@@ -1558,7 +1558,7 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
             </p>
             <label class="form-label text-warning small mb-1">Empty spool weight (g)</label>
             <input type="number" step="0.1" min="0" id="fcc-archive-empty-wt"
-                class="form-control bg-dark text-white border-warning" autocomplete="off"
+                class="form-control bg-dark text-white border-warning fcc-weight-box" autocomplete="off"
                 placeholder="e.g. 167"${prefillAttr}>
             <div id="fcc-archive-empty-err" class="text-danger small" style="margin-top:4px;"></div>
             ${propagateRow}
@@ -1573,6 +1573,11 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
     let saving = false;
     const cleanup = () => { if (handle) { try { handle.cleanup(); } catch (_) { /* noop */ } handle = null; } };
 
+    // Its box is a weight box (fcc-weight-box): a label scanned into it goes to
+    // the scan path, never into the filament's empty weight (Group 57 review,
+    // round 6). It opens after a save, while the next spool's label may be on
+    // its way (inv_core.js's weight capture puts a label split by its focus
+    // back together).
     handle = window.mountOverlay({
         id: 'fcc-archive-empty-overlay',
         content,
