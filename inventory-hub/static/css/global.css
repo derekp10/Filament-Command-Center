@@ -152,19 +152,17 @@ body {
 
 /* Title bar: no button's label ever wraps onto two lines (readability, Derek
    2026-10-21). At Large / Extra Large, or in a narrow window, the bar runs
-   out of room, so it is a size container that gives way in steps. The
-   thresholds are in rem, which grows with the Text size, so each step comes
-   at the same point in every size; at Small and Standard on a 1600 px window
-   the bar is unchanged (it needs about 98rem of the 98.5rem there).
-   Each step sits just above what the bar needs at the step before it,
-   measured with the ⚠️ Low stock count (Group 57.2, 2026-10-26: it moved
-   every step up by its width): 98rem with the full spacing, 88.3rem once it
-   tightens, 82.6rem with ADD. Anything wider than that, a three-digit count
-   say, shortens the title, never the version badge.
+   out of room, so it gives way in steps.
    From 992 px up the bar is one line (Bootstrap's navbar-expand-lg): the
    spacing tightens, ADD INVENTORY reads ADD, the version badge goes, and
    last the title shortens with "…" (its full text is its tooltip), so it
-   never runs under the Spoolman light and SEARCH.
+   never runs under the Spoolman light and SEARCH. Each step is taken only
+   while the title is cut short (titlebar_fit.js, Group 57 review,
+   2026-10-26): the bar holds three live counts (🏷️ Backlog, 🛒 Queue,
+   ⚠️ Low stock), so the room it needs changes with their numbers, and steps
+   at fixed widths came too late once a count grew. With dev's counts that day
+   on a 1600 px window: none at Small / Standard, the first two at Large, all
+   three at Extra Large.
    Below 992 px Bootstrap puts the buttons on a line of their own under the
    title (this bar's flex-wrap comes from .navbar there, so it is not set
    here); a row too wide for the window wraps its buttons onto another line
@@ -200,28 +198,39 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
 }
-/* Step 1: no extra space between the items, beyond the bar's own gap. */
-@container fcc-titlebar (max-width: 98.25rem) {
+/* Step 1: no extra space between the items, beyond the bar's own gap. Below
+   992 px it always applies (the buttons have a line of their own), as it
+   always did there. */
+@media (min-width: 992px) {
+    .fcc-titlebar.fcc-tb-tight .fcc-titlebar-actions { gap: 0.5rem !important; }
+    .fcc-titlebar.fcc-tb-tight .fcc-titlebar-actions > * { margin-left: 0 !important; }
+}
+@media (max-width: 991.98px) {
     .fcc-titlebar-actions { gap: 0.5rem !important; }
     .fcc-titlebar-actions > * { margin-left: 0 !important; }
 }
-/* Step 2: ADD INVENTORY reads ADD (the button's tooltip says "Add inventory"). */
-@container fcc-titlebar (max-width: 88.5rem) {
+/* Step 2: ADD INVENTORY reads ADD (the button's tooltip says "Add inventory").
+   Below 992 px, always. */
+@media (min-width: 992px) {
+    .fcc-titlebar.fcc-tb-add .fcc-titlebar-more { display: none; }
+}
+@media (max-width: 991.98px) {
     .fcc-titlebar-more { display: none; }
 }
-/* Step 3, one-line bar only: the version badge goes where it would start to
-   shrink (about 82.75rem at every size). Squeezed further it was an empty
-   bordered box over the Spoolman light. Its text is its tooltip, and
-   Settings -> Build Info has the commit. Below this the title is the one
-   thing left to give, and until then it never shrinks (the title gives way
-   first). (Below 992 px the title has a line of its own, and the badge keeps
-   its place beside it.) */
+/* Step 3, one-line bar only: the version badge goes. Squeezed it was an empty
+   bordered box over the Spoolman light, so on this bar it never shrinks: the
+   title gives way first, which is what tells titlebar_fit.js that a step is
+   due. Its text is its tooltip, and Settings -> Build Info has the commit.
+   After this the title is the one thing left to give. (Below 992 px the title
+   has a line of its own, and the badge keeps its place beside it.) */
 @media (min-width: 992px) {
     #fcc-build-version { flex-shrink: 0; }
-    @container fcc-titlebar (max-width: 82.75rem) {
-        #fcc-build-version { display: none; }
-    }
+    .fcc-titlebar.fcc-tb-nover #fcc-build-version { display: none; }
 }
+/* The ⚠️ Low stock count (inv_stock.js, Group 57.2): from a read that failed it
+   keeps its number with a "?" after it, and a dashed border, so a stale count
+   never looks like a fresh one. */
+#btn-low-stock-count[data-read="failed"] { border-style: dashed; }
 @media (max-width: 991.98px) {
     .navbar {
         height: auto;

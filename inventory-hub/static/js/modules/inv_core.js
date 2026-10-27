@@ -2494,8 +2494,14 @@ const _computePulseInclude = () => {
     }
     // Group 57.2: the ⚠️ Low stock button's count, worked out on the server
     // from the same spool and filament reads as label_backlog (no read of its
-    // own). The list itself is still read only when it opens.
-    if (document.getElementById('btn-low-stock-count')) sections.push('low_stock');
+    // own). The list itself is still read only when it opens. Not while the
+    // backlog window is open either: label_backlog is left out then, so the
+    // count would read the filament list on its own every tick, for a button
+    // behind that window's backdrop (Group 57 review); it keeps its count.
+    if (document.getElementById('btn-low-stock-count')
+            && !(backlogModal && backlogModal.classList.contains('show'))) {
+        sections.push('low_stock');
+    }
     return { sections, manageId };
 };
 window._computePulseInclude = _computePulseInclude;   // for the node tests
@@ -2528,6 +2534,11 @@ const _dashboardPulseTick = () => {
     _pulseInflight = true;
 
     const { sections, manageId } = _computePulseInclude();
+    // When this tick was sent (Group 57 review): its spool list is read before
+    // the printer probes, so its answer can land seconds after a fresher read
+    // the page made meanwhile (the Low stock list's own, a buffer refresh after
+    // a weigh-out), which an older answer must not paint over.
+    const sentAt = Date.now();
     // Logs stay in the heartbeat even while paused (2026-08-05). Dropping the
     // section used to starve the "N new" pill and every flag riding that
     // payload; the freeze now happens at the render, not the fetch.
@@ -2590,8 +2601,10 @@ const _dashboardPulseTick = () => {
             if (payload.label_backlog && window._renderBacklogCount) {
                 window._renderBacklogCount(payload.label_backlog);
             }
-            if (payload.low_stock && window._renderLowStockCount) {
-                window._renderLowStockCount(payload.low_stock);
+            // Asked for and not answered (an FCC from before the count) marks the
+            // count stale rather than leaving it looking fresh.
+            if (sections.includes('low_stock') && window._renderLowStockCount) {
+                window._renderLowStockCount(payload.low_stock, { sentAt });
             }
             if (payload.printer_status) {
                 // L25 — note finish/cancel edges to arm the fast-poll burst
@@ -2602,7 +2615,7 @@ const _dashboardPulseTick = () => {
                 }
             }
             if (payload.spools_refresh && window._renderSpoolsRefreshPayload) {
-                window._renderSpoolsRefreshPayload(payload.spools_refresh);
+                window._renderSpoolsRefreshPayload(payload.spools_refresh, { sentAt });
             }
 
             // Broadcast for listeners that still poll independently

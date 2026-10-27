@@ -195,6 +195,8 @@ def test_low_stock_title_bar_button_is_readable(page: Page, base_url: str, asser
     root, and the count is shown to be among what it scores."""
     import json as _json
     import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    _read_only(page)
     page.goto(base_url)
     num = page.locator("#btn-low-stock-count [data-low-stock-count]")
     page.wait_for_function("() => { const n = document.querySelector('#btn-low-stock-count [data-low-stock-count]');"

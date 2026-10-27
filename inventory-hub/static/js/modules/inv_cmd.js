@@ -2741,11 +2741,20 @@ const loadBuffer = () => {
 // --- LIVE REFRESH POLLING ---
 // L28 polling guard: see updateLogState for rationale.
 let _liveRefreshInflight = false;
+// When the page last asked for the buffer's spools itself (liveRefreshBuffer,
+// right after a local change: a weigh-out, a move, a save). A heartbeat sent
+// before then may hold older records, so its spools_refresh is skipped (Group 57
+// review: since 57.5 a tick answers from the spool list it reads before its
+// printer probes, seconds before it lands, and it painted a weigh-out's 40 g
+// back to 120 g for a tick).
+let _bufferAskedAt = 0;
 // L206: render path extracted so the bulk-pulse dispatcher can hand
 // a spools_refresh payload (same {id: data} shape that /api/spools/refresh
 // returns) directly into the diff/update loop without another fetch.
-const _renderSpoolsRefreshPayload = (data) => {
+// `opts.sentAt`: when the heartbeat carrying it was sent.
+const _renderSpoolsRefreshPayload = (data, opts) => {
     if (!data || typeof data !== 'object') return;
+    if (opts && Number.isFinite(opts.sentAt) && opts.sentAt < _bufferAskedAt) return;
     let changed = false;
     state.heldSpools.forEach(s => {
         const fresh = data[s.id];
@@ -2785,6 +2794,7 @@ window._renderSpoolsRefreshPayload = _renderSpoolsRefreshPayload;
 
 const liveRefreshBuffer = () => {
     if (!state.heldSpools || state.heldSpools.length === 0) return;
+    _bufferAskedAt = Date.now();
     if (_liveRefreshInflight) return;
 
     const spoolIds = state.heldSpools.map(s => s.id);

@@ -59,7 +59,7 @@ import pytest
 import requests
 from playwright.sync_api import Page
 
-from conftest import close_wizard, own_the_buffer
+from conftest import close_wizard, fixed_title_counts, own_the_buffer
 from test_text_size_guard import _read_only, dev_ids, _open_picker, _close_picker  # noqa: F401  (dev_ids: fixture)
 
 pytestmark = pytest.mark.usefixtures("require_server")
@@ -265,15 +265,23 @@ NAV_JS = """() => {
 }"""
 
 
+def _counts_painted(page: Page):
+    """The ⚠️ Low stock count (Group 57.2) painted, so the bar is measured at
+    its real width, not with the "…" it shows before the first heartbeat."""
+    page.wait_for_function("() => { const n = document.querySelector('#btn-low-stock-count [data-low-stock-count]');"
+                           " return !!n && /^\\d+$/.test(n.textContent.trim()); }", timeout=20_000)
+    page.wait_for_timeout(300)
+
+
 @pytest.mark.parametrize("name", SIZES)
 def test_the_title_bar_keeps_its_buttons_on_one_line(page: Page, base_url: str, name):
+    """With the counts dev had on 2026-10-26 (Backlog 53, Queue 0, Low stock 12),
+    pinned, so the answer can't move with dev's data (Group 57 review)."""
     _read_only(page)
+    fixed_title_counts(page)
     _store(page, name)
     _load(page, base_url)
-    # The ⚠️ Low stock count (Group 57.2) painted, so the bar is measured at its
-    # real width, not with the "…" it shows before the first heartbeat.
-    page.wait_for_function("() => { const n = document.querySelector('#btn-low-stock-count [data-low-stock-count]');"
-                           " return !!n && n.textContent.trim() !== '…'; }", timeout=20_000)
+    _counts_painted(page)
     nav = page.evaluate(NAV_JS)
     wrapped = [b for b in nav["btns"] if b["lines"] != 1 or not b["inside"]]
     assert not wrapped, f"{name}: title-bar buttons that wrap or stick out of the bar: {wrapped}"
@@ -291,6 +299,28 @@ def test_the_title_bar_keeps_its_buttons_on_one_line(page: Page, base_url: str, 
         assert (nav["gap"], nav["searchMargin"]) == ("16px", "24px"), nav
     if name == "Extra Large":
         assert "➕ ADD" in texts, texts
+
+
+@pytest.mark.parametrize("name", SIZES)
+def test_bigger_counts_take_a_step_instead_of_cutting_the_title(page: Page, base_url: str, name):
+    """Backlog 153, Queue 10, Low stock 100 at 1600 px: the bar takes its next
+    step (titlebar_fit.js) and the title stays whole at every size. RED on
+    2d166e5: the steps came at fixed widths, and at Standard the title was cut
+    (Group 57 review)."""
+    _read_only(page)
+    fixed_title_counts(page, backlog=153, queue=10, low=40, out=60)
+    _store(page, name)
+    _load(page, base_url)
+    _counts_painted(page)
+    page.wait_for_function("() => /\\(10\\)/.test(document.getElementById('btn-queue-count').textContent)",
+                           timeout=10_000)
+    page.wait_for_timeout(300)
+    nav = page.evaluate(NAV_JS)
+    wrapped = [b for b in nav["btns"] if b["lines"] != 1 or not b["inside"]]
+    assert not wrapped and nav["navH"] == 70 and not nav["overflow"], nav
+    assert nav["title"] == "whole" and nav["version"] != "squeezed", nav
+    if name in ("Small", "Standard"):
+        assert nav["gap"] == "8px", f"{name}: the first step (tighter spacing) should have come: {nav}"
 
 
 # ---------------------------------------------------------------------------
@@ -321,9 +351,11 @@ def test_settings_stays_on_screen_in_a_narrow_window(page: Page, base_url: str, 
     window 744-820 px). The buttons now wrap onto another line, and the bar
     grows to hold them instead of drawing them over Printer Status."""
     _read_only(page)
+    fixed_title_counts(page)
     _store(page, name)
     page.set_viewport_size({"width": width, "height": 1100})
     _load(page, base_url)
+    _counts_painted(page)
     g = page.evaluate(GEAR_JS)
     left, top, right, bottom = g["rect"]
     assert left >= -0.5 and right <= g["vw"] + 0.5 and top >= -0.5 and bottom <= g["vh"] + 0.5, (name, width, g)
@@ -356,9 +388,11 @@ def test_the_title_gives_way_without_running_under_the_buttons(page: Page, base_
     Settings -> Build Info), then the title shortens with "…" inside its own
     box (its full text is its tooltip)."""
     _read_only(page)
+    fixed_title_counts(page)
     _store(page, name)
     page.set_viewport_size({"width": width, "height": 900})
     _load(page, base_url)
+    _counts_painted(page)
     b = page.evaluate(BRAND_JS)
     assert b["brandRight"] <= b["actionsLeft"] + 0.5, f"{name} @ {width} px: the title runs under the buttons: {b}"
     assert b["brandClips"] and b["brandTitle"] == "Filament Command Center", b

@@ -52,7 +52,8 @@ def _capture_logs(monkeypatch):
 
 def _patch_all_pulse_sections_forbidden(monkeypatch):
     """Patch every section helper to explode if invoked — used by tests
-    that pin which sections do NOT fire. (Group 52.1a added label_backlog.)"""
+    that pin which sections do NOT fire. (Group 52.1a added label_backlog,
+    Group 57.2 low_stock.)"""
     monkeypatch.setattr(routes_state_pulse, "_pulse_section_logs",
                         _fail_if_called("_pulse_section_logs"))
     monkeypatch.setattr(routes_state_pulse, "_pulse_section_locations",
@@ -63,6 +64,8 @@ def _patch_all_pulse_sections_forbidden(monkeypatch):
                         _fail_if_called("_pulse_section_printer_status"))
     monkeypatch.setattr(routes_state_pulse, "_pulse_section_label_backlog",
                         _fail_if_called("_pulse_section_label_backlog"))
+    monkeypatch.setattr(routes_state_pulse, "_pulse_section_low_stock",
+                        _fail_if_called("_pulse_section_low_stock"))
 
 
 # ---------------------------------------------------------------------------
@@ -537,7 +540,9 @@ def test_pulse_post_refresh_spool_ids_adds_spools_refresh_section(monkeypatch):
     seen = []
     sentinel = {"3": {"remaining_weight": 1.0}}
 
-    def fake_live(ids):
+    # **kw: a tick that read the spool list also passes it (spools=, Group
+    # 57.5); include=buffer reads none, so the ids come alone here.
+    def fake_live(ids, **kw):
         seen.append(ids)
         return sentinel
 
@@ -586,7 +591,7 @@ def test_pulse_spools_refresh_error_is_isolated(monkeypatch):
     """A raising get_live_spools_data degrades the spools_refresh slot to
     {'error': str(e)} while the response stays 200 with other sections
     intact."""
-    def _boom(ids):
+    def _boom(ids, **kw):
         raise RuntimeError("spoolman timeout")
 
     monkeypatch.setattr(app_module.logic, "get_live_spools_data", _boom)

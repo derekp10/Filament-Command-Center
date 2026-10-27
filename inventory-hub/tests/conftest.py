@@ -668,6 +668,47 @@ VISUAL_FLEET = {
 }
 
 
+# The ⚠️ Low stock count the visual fleet's heartbeat carries (Group 57.2), so a
+# snapshot shows a real count, the same on every run (Group 57 review: without
+# it the button showed its "…" placeholder, the state before any heartbeat).
+VISUAL_LOW_STOCK = {"read_ok": True, "count": 7, "low": 3, "out": 4, "threshold_g": 250.0}
+
+
+def fixed_title_counts(page, backlog=53, queue=0, low=1, out=11) -> None:
+    """The title bar's three counts, the same on every run (Group 57 review): the
+    bar's room depends on their width, so a test that measures it must not read
+    dev's live numbers (a Queue reaching 10 changed the answer). The heartbeat
+    is read from dev and its label_backlog / low_stock sections are rewritten
+    in this page; the queue answers `queue` made-up items. Install before
+    page.goto, after any catch-all route (this one must win)."""
+    import json as _json
+
+    def pulse(route):
+        resp = route.fetch()
+        try:
+            body = resp.json()
+        except Exception:
+            route.fulfill(response=resp)
+            return
+        if isinstance(body, dict):
+            if "label_backlog" in body:
+                body["label_backlog"] = {"read_ok": True, "count": backlog, "spools": backlog, "filaments": 0}
+            if "low_stock" in body:
+                body["low_stock"] = {"read_ok": True, "count": low + out, "low": low, "out": out,
+                                     "threshold_g": 250.0}
+        route.fulfill(response=resp, body=_json.dumps(body))
+
+    def queue_items(route):
+        if route.request.method == "GET":
+            items = [{"id": 990000 + i, "type": "spool", "display": f"#{990000 + i}"} for i in range(queue)]
+            route.fulfill(status=200, content_type="application/json", body=_json.dumps(items))
+        else:
+            route.fulfill(status=200, content_type="application/json", body='{"success": true}')
+
+    page.route("**/api/dashboard_pulse*", pulse)
+    page.route("**/api/state/queue", queue_items)
+
+
 def stub_printer_fleet(page, fleet=None) -> None:
     """Answer every source of the Printer Status widget with `fleet`
     (VISUAL_FLEET by default) for this page, so a snapshot that shows the
@@ -690,7 +731,7 @@ def stub_printer_fleet(page, fleet=None) -> None:
     def handle(route):
         url = urlsplit(route.request.url)
         if url.path.startswith("/api/dashboard_pulse"):
-            body = {"printer_status": rows}
+            body = {"printer_status": rows, "low_stock": VISUAL_LOW_STOCK}
         elif url.path == "/api/printer_map":
             body = {"printers": pmap}
         elif url.path.startswith("/api/machine/") and url.path.endswith("/toolhead_slots"):

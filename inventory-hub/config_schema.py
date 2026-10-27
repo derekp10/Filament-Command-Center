@@ -102,10 +102,10 @@ CONFIG_SCHEMA = [
           section="behavior", scope="server", min=0, max=10000,
           help="A filament counts as low when its in-stock spools (not archived, not "
                "empty) add up to less than this many grams: per filament, across all its "
-               "spools. The ⚠️ Low stock list in the search panel uses it, and so does the "
-               "one Activity Log warning when a print or a weigh-out takes a filament "
-               "under it. 0 = nothing is ever low (a filament with no stock left still "
-               "shows as out)."),
+               "spools. The ⚠️ Low stock list (the title bar's ⚠️ count opens it) uses it, "
+               "and so does the one Activity Log warning when a print or a weigh-out takes "
+               "a filament under it. 0 = nothing is ever low (a filament with no stock left "
+               "still shows as out)."),
     Field("fcc.weighEntry.defaultMode", "Default weigh-in mode", "select", "additive",
           section="client", scope="client",
           choices=["gross", "net", "additive", "set_used"],

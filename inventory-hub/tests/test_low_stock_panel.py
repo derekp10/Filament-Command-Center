@@ -196,7 +196,10 @@ def _ok(display, mark=MARK):
 def panel(isolated_page):
     """The page with the real modules loaded; returns (page, open(answers...))."""
     page = isolated_page
-    page.set_content(PAGE.format(css=GLOBAL_CSS.read_text(encoding="utf-8")))
+    # With Bootstrap 5.3's reboot rule, which the real page loads: it made 57.1's
+    # first "keep the tabs row's room" (a [hidden] rule) do nothing there, and
+    # this page didn't have it (Group 57 review).
+    page.set_content(PAGE.format(css=GLOBAL_CSS.read_text(encoding="utf-8") + "[hidden]{display:none!important}"))
     page.add_script_tag(content=PRELUDE)
     for name in ("overlay_mount.js", "inv_core.js", "inv_stock.js"):
         page.add_script_tag(content=(MODULES / name).read_text(encoding="utf-8"))
@@ -582,11 +585,18 @@ def test_a_scanners_enter_is_left_to_the_scan_accumulator(panel):
 
 
 def test_escape_closes_and_stops_listening(panel):
+    """PIN UPDATED DELIBERATELY (Group 57 review, 2026-10-26): closing hands the
+    focus back to the button that opened it (it used to drop to the page), so
+    the keys after it are sent from the page itself here: on the real page an
+    Enter on that button is the scan accumulator's, but this page has none, and
+    the button would open the list again."""
     page, open_ = panel
     open_(_answer(REPORT))
     _wait_state(page, "ready")
     page.keyboard.press("Escape")
     assert page.locator("#fcc-low-stock-overlay").count() == 0
+    assert page.evaluate("() => document.activeElement.id") == "global-search-low-stock"
+    page.evaluate("() => document.activeElement.blur()")
     page.keyboard.press("ArrowDown")
     page.keyboard.press("Enter")
     page.keyboard.press("Delete")

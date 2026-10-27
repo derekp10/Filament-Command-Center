@@ -282,9 +282,10 @@ def test_the_list_itself_is_unchanged_by_the_shared_rule():
 # ---------------------------------------------------------------------------
 
 def test_the_heartbeat_counts_low_stock_with_no_read_of_its_own(client):
-    """With the backlog count in the tick too (the dashboard always asks for
-    both), the count costs nothing: one spool-list read and one filament-list
-    read serve every section. RED before 57.2: no low_stock section."""
+    """With the backlog count in the tick too (the dashboard asks for both,
+    and for neither while the backlog window is open), the count costs nothing:
+    one spool-list read and one filament-list read serve every section. RED
+    before 57.2: no low_stock section."""
     sm = HttpSpoolman()
     body = _pulse(client, sm, "locations,printer_status,label_backlog,low_stock")
     assert sm.count(SPOOL_LIST) == 1, sm.gets
@@ -363,6 +364,29 @@ def test_the_setting_moves_the_line(client):
     assert body["low_stock"]["low"] == len(report["low"]) and body["low_stock"]["out"] == len(report["out"])
 
 
+def test_the_counts_called_on_their_own_read_their_own_lists():
+    """Outside the heartbeat (no shared reads passed in), backlog_count and
+    glance read the filament list themselves, and the two pulse sections the
+    spool list too: the same answers as through the heartbeat."""
+    import routes_print_queue
+    import routes_state_pulse
+    sm = HttpSpoolman()
+    spools = spoolman_api.parse_inbound_data([s for s in copy.deepcopy(SPOOLS) if not s.get("archived")])
+    assert _run(sm, lambda: stock_report.glance(spools)) == {
+        "read_ok": True, "count": 5, "low": 2, "out": 3, "threshold_g": THRESHOLD}
+    assert sm.count(FILAMENT_LIST) == 1 and sm.count(SPOOL_LIST) == 0, sm.gets
+    sm = HttpSpoolman()
+    assert _run(sm, lambda: routes_print_queue.backlog_count(spools)) == {
+        "read_ok": True, "count": 2, "spools": 1, "filaments": 1}
+    assert sm.count(FILAMENT_LIST) == 1, sm.gets
+    sm = HttpSpoolman()
+    assert _run(sm, routes_state_pulse._pulse_section_low_stock)["count"] == 5
+    assert _run(sm, routes_state_pulse._pulse_section_label_backlog)["count"] == 2
+    assert (sm.count(SPOOL_LIST), sm.count(FILAMENT_LIST)) == (2, 2), sm.gets   # one of each per section
+    sm = HttpSpoolman(down={FILAMENT_LIST})
+    assert _run(sm, lambda: stock_report.glance(spools))["read_ok"] is False
+
+
 def test_a_count_that_raises_keeps_the_others(client):
     sm = HttpSpoolman()
     with patch.object(stock_report, "low_out_count", side_effect=RuntimeError("boom")):
@@ -406,11 +430,36 @@ def test_an_archived_buffered_spool_is_read_on_its_own(client):
 
 
 def test_a_failed_list_read_falls_back_to_one_read_per_spool(client):
+    """The list read failed but Spoolman answers a single spool (a slow list
+    under load): every buffered spool is still refreshed, as before 57.5."""
     ids = [101, 102]
     sm = HttpSpoolman(down={SPOOL_LIST})
     body = _pulse(client, sm, "printer_status", body={"refresh_spool_ids": ids})
     assert sm.single_gets() == ["/api/v1/spool/101", "/api/v1/spool/102"], sm.gets
     assert body["spools_refresh"] == _old_answer(ids)
+
+
+def test_an_outage_tick_stops_after_one_unanswered_spool(client):
+    """The list read failed and so does the first spool's own read: Spoolman
+    isn't answering, so the rest are left alone (their cards keep what they
+    show) instead of each waiting out a 3 s timeout (Group 57 review: an
+    outage tick took 5 s + 3 s per buffered spool). RED before the fix: three
+    single GETs."""
+    ids = [101, 102, 105]
+    sm = HttpSpoolman(down={SPOOL_LIST, "/api/v1/spool/101", "/api/v1/spool/102", "/api/v1/spool/105"})
+    body = _pulse(client, sm, "printer_status", body={"refresh_spool_ids": ids})
+    assert sm.single_gets() == ["/api/v1/spool/101"], sm.gets
+    assert body["spools_refresh"] == {}
+
+
+def test_an_archived_spool_that_goes_unanswered_stops_nothing(client):
+    """With the list read fine, an archived buffered spool's own read failing
+    is just that spool: the others are answered from the list."""
+    ids = [110, 101]
+    sm = HttpSpoolman(down={"/api/v1/spool/110"})
+    body = _pulse(client, sm, "printer_status", body={"refresh_spool_ids": ids})
+    assert sm.single_gets() == ["/api/v1/spool/110"], sm.gets
+    assert set(body["spools_refresh"]) == {"101"}
 
 
 def test_a_tick_that_read_no_list_starts_no_list_read_for_the_buffer(client):
@@ -475,12 +524,14 @@ def test_nothing_in_a_template_can_end_the_script(client):
     assert "<" not in literal and ">" not in literal
 
 
-@pytest.mark.parametrize("value,expected", [("", ""), (None, None)])
-def test_no_template_is_still_no_link(client, value, expected):
-    """An empty or null setting stays falsy, so the windows show no Buy More
-    (a null used to arrive as the text "None")."""
+@pytest.mark.parametrize("value", ["", None, 123, True, ["x"]])
+def test_a_setting_that_isnt_text_is_no_template(client, value):
+    """The page reads it as JSON now, which would keep a number's or a
+    boolean's type, and the windows call .replace() on it: anything but text is
+    no template, so they show no Buy More (a null used to arrive as the text
+    "None", a link to /None)."""
     _, literal = _rendered_template(client, value)
-    assert json.loads(literal) == expected
+    assert json.loads(literal) == ""
 
 
 def test_a_missing_setting_is_an_empty_string(client):

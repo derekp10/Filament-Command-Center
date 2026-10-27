@@ -41,7 +41,9 @@ an empty list. Each spool carries its full filament record (Spoolman nests the
 same record /api/v1/filament returns: all 257 spools on dev matched on
 2026-10-19); a second strict read, of every filament, finds the ones with no
 spool on record. It runs only when the panel opens, never on the dashboard
-heartbeat.
+heartbeat. The title bar's ⚠️ count (`glance`, Group 57.2) does ride the
+heartbeat: it is worked out from the tick's own spool and filament reads by the
+list's own rule (`_members`), and reads nothing of its own.
 
 The warning (`check_after_deduct`, `check_after_weight_change`) logs ONE
 Activity Log WARNING per filament when a write takes it across a line:
@@ -190,8 +192,12 @@ def in_stock(spool):
 
 
 def stock_of(spools):
-    """(grams, in-stock spools, in-stock spools with unknown grams)."""
-    grams, count, unknown = 0.0, 0, 0
+    """(grams, in-stock spools, in-stock spools with unknown grams). The grams
+    are summed with math.fsum, so the order the spools are listed in can never
+    move a filament across the line (Group 57 review: 0.1 + 249.7 + 0.2 is
+    249.99999999999997 one way round and 250.0 another, and the title bar's
+    count and the list read two different lists)."""
+    rems, count, unknown = [], 0, 0
     for s in spools or []:
         if not in_stock(s):
             continue
@@ -200,8 +206,8 @@ def stock_of(spools):
         if rem is None:
             unknown += 1
         else:
-            grams += rem
-    return grams, count, unknown
+            rems.append(rem)
+    return math.fsum(rems), count, unknown
 
 
 def _fid_of(spool):
@@ -382,7 +388,11 @@ def low_out_count(spools, filaments, threshold):
     stock (`in_stock`), so it never decides Low or Out. A filament whose spools
     are all archived has no spool in stock either way: it is Out through the
     "no spool on record" path instead of the "none in stock" one, which changes
-    only its row's wording (`no_spools`), never the count."""
+    only its row's wording (`no_spools`), never the count. (The one way the two
+    could differ: a filament missing from `filaments` whose spools are all
+    archived, which the list counts Out from the spool's own copy. Spoolman
+    refuses to delete a filament that has spools, so that needs a delete landing
+    between one request's two reads.)"""
     fil_by_id, by_fid = _group(spools, filaments)
     low = out = 0
     for kind, *_ in _members(fil_by_id, by_fid, threshold):
