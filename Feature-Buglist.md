@@ -130,7 +130,6 @@
   on `origin`), `fix/backlog-label-filter` (merged `afdd509`, on `origin`), and three overnight-run branches missing
   from this list: `feature/group-41-honest-bulk-results`, `feature/group-42-single-slot-box-lifecycle`,
   `feature/group-45-sweep-hygiene` (local only).
-  **Added 2026-10-26 (merged into `dev` `b8daba1`):** `feature/group-56-deduct-accuracy` (on `origin`).
 * **⏸️ PENDING DEREK — lay out and label the INDX spool holders (and the 8-spool box; maybe the XL's holders).**
   _(Derek, 2026-10-19, answering the refresh's holder question.)_ Setting them up in FCC as a box with one slot per
   holder (no code) is *"possibly the way to go"*, but it is his grunt work and design first:

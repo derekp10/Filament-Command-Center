@@ -31,8 +31,8 @@
     dropped silently after promising a deduct; the 🛑 review store's 100-entry cap dropped its oldest review
     silently (now an ERROR line names it).
   * Follow-ups filed (standalone): other modules' unescaped error and name lines; a `.bgcode` FCC can't decode is
-    re-downloaded every 30 s for 72 h. Past INDX cancels: left as they are (the default); Claude can list them from
-    prod's ledger if Derek wants.
+    re-downloaded every 30 s for 72 h. Past cancels: left as they are (Derek, 2026-10-26). The branch was deleted on his
+    word the same day.
 
 * **[2026-10-25 — 🚢 Released: `dev` `09b395a` → `main` `97fcf7c`]** — on Derek's word ("If it's done and we completed the larger group goals for this multipart coding session then we can move to prod"): Groups 51 / 48 / 49 / 52 and their follow-ups, the ⚠️ Low stock list's Out and Excluded tabs, Spoolman 0.27 clears, and the readability build (text sizes, the Text size setting, QR codes, Printer Status). One conflict, `routes_print_queue.py`, resolved to dev's version (the same backlog fix as `73e456d` plus Group 52's count). Prod deploy: Derek's TrueNAS update.
 
