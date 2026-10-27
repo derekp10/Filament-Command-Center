@@ -19,6 +19,7 @@ test_contrast_guard.py.
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 from playwright.sync_api import Page, expect
@@ -90,19 +91,26 @@ def test_the_count_is_the_lists_low_and_out(page: Page, base_url: str):
 
 @pytest.mark.usefixtures("require_server")
 def test_it_opens_the_list_and_the_list_sets_the_count(page: Page, base_url: str):
-    """No heartbeat (quiet_heartbeat), so the only count is the list's own read:
-    2 low + 1 out. The search panel stays shut."""
+    """Every heartbeat cut off (quiet_heartbeat), so the only count is the
+    list's own read: 2 low + 1 out. Until then the button says FCC didn't
+    answer, with "?" and no count, never a 0 and never its "…" as if nothing
+    had been tried (Group 57 review, round 3). The search panel stays shut."""
     _read_only(page)
     quiet_heartbeat(page)
     page.route("**/api/stock_report", lambda route: route.fulfill(
         status=200, content_type="application/json", body=json.dumps(REPORT)))
     page.goto(base_url)
     page.wait_for_function("() => typeof window.openLowStockPanel === 'function'")
-    expect(page.locator(NUM)).to_have_text("…")
+    expect(page.locator(NUM)).to_have_text("?")
+    expect(page.locator(BTN)).to_have_attribute("aria-label", re.compile(r"\(FCC didn't answer just now\)"))
     page.locator(BTN).click()
     expect(page.locator(PANEL)).to_be_visible()
     page.wait_for_function("(s) => document.querySelector(s).dataset.stockState === 'ready'", arg=BODY)
-    expect(page.locator(NUM)).to_have_text("3")
+    # The list's read sets it; a heartbeat cut off after that read began marks
+    # it stale again ("3?"), as it should.
+    expect(page.locator(NUM)).to_have_text(re.compile(r"^3\??$"))
+    expect(page.locator(BTN)).to_have_attribute("data-low", "2")
+    expect(page.locator(BTN)).to_have_attribute("data-out", "1")
     expect(page.locator("#offcanvasSearch")).not_to_be_visible()
     page.keyboard.press("Escape")
     expect(page.locator("#fcc-low-stock-overlay")).to_have_count(0)
