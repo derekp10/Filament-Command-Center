@@ -368,13 +368,12 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         if (e.key === 'Enter') {
             // A scan in flight owns this Enter: it terminates the scan (a
             // "Scan to Cancel" QR must never perform the CONFIRM). So does a
-            // slower scanner's buffered payload (a ':' no human types here):
-            // its Enter used to answer the focused button, and in the
-            // three-way that is "Just store it".
-            if (window.isScanInFlight && window.isScanInFlight()) return;
-            const st = (typeof state !== 'undefined') ? state : window.state;
-            const buffered = st && typeof st.scanBuffer === 'string' ? st.scanBuffer : '';
-            if (buffered && window.looksLikeScanPayload && window.looksLikeScanPayload(buffered)) return;
+            // slower scanner's buffered payload: its Enter used to answer the
+            // focused button, and in the three-way that is "Just store it".
+            // enterIsAScan, the dialogs' one rule: a ':' alone (what this
+            // asked) let a slower scanner's bare-number label ("57") through
+            // (Group 57 review, round 4).
+            if (enterIsAScan()) return;
             const ae = document.activeElement;
             if (threeWay) {
                 e.preventDefault(); e.stopPropagation();

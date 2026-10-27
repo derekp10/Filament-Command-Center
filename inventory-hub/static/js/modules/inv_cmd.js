@@ -505,8 +505,12 @@ window.commitBulkMove = () => {
 // fires in the middle of somebody scanning a label).
 (function () {
     // Delegates to the canonical definition in inv_core.js — this was one of
-    // three identical copy-pasted closures (2026-08-03 scan-path audit).
-    const _scanInFlight = () => !!(window.isScanInFlight && window.isScanInFlight());
+    // three identical copy-pasted closures (2026-08-03 scan-path audit). A
+    // scan still arriving, however slow the scanner (window.scanIsArriving;
+    // Group 57 review, round 4: "LOC:LR-MDB-1" at 75 ms a key, with nothing
+    // open, armed a bulk move on its 'B' and reached processScan as "-1").
+    const _scanInFlight = () => !!(window.scanIsArriving ? window.scanIsArriving()
+        : (window.isScanInFlight && window.isScanInFlight()));
     document.addEventListener('keydown', (e) => {
         if (!e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
         if (e.key !== 'B' && e.key !== 'b') return;

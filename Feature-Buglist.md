@@ -632,19 +632,22 @@ All 3 of these things are important and have value. We should table for now, and
   Group 57 fixed it for the ⚠️ Low stock buttons only (`inv_stock.js` takes a lone space back out of the buffer when
   Space pressed them). The general fix is for the accumulator to skip a Space aimed at a button, which is its own
   change to the scan path and wants its own tests.
-* **🔴 A slower scanner's "Scan to Cancel" can confirm a Quick-Swap.** _(Found 2026-10-27 by the Group 57 review,
-  round 3, while fixing the same flaw in the Low stock dialog.)_ `window.isScanInFlight` (inv_core.js) counts 500 ms
-  from a scan's FIRST key, so a scanner slower than about 25 to 50 ms a key is still typing a label when it says
-  "no scan". The Quick-Swap confirm overlay's Enter asks only that (`inv_quickswap.js:646`): with YES focused, the
-  Enter that ends a slower scanner's CMD:CANCEL scan performs the CONFIRM, the outcome the 2026-08-03 audit guard
-  exists to stop. The same rule guards the slot grid's Enter (`inv_quickswap.js:1878`: a spool label scanned after Q
-  opens an unrequested confirm), Shift+B for Bulk Moves (`inv_cmd.js:509`) and the wizard's Shift+E / Shift+C
-  (`inv_wizard.js:621`), each a key a long label can carry. The fixes exist: `window.enterIsAScan()` for an Enter
-  (what the shared move question, the slot picker and the reason dialog use) and `window.scanIsArriving()` (Group 57
-  round 3: characters in the buffer and the last key under 500 ms ago, from a per-key stamp) for a printable key.
-  Each site wants its own test with the real accumulator on a fake clock (`tests/test_slow_scan_slash_js.py`'s
-  harness types at exact speeds). Not changed on the Group 57 branch: it is the swap path. Claude's pick: fix it
-  next, it is small.
+* **✅ FIXED (on `feature/group-57-low-stock-at-a-glance`, the commit after `1a1293b`; goes to `dev` with Group 57):
+  🔴 A slower scanner's "Scan to Cancel" could confirm a Quick-Swap.** _(Found 2026-10-27 by the Group 57 review,
+  round 3; reproduced on dev, read-only, in round 4.)_ `window.isScanInFlight` (inv_core.js) counts 500 ms from a
+  scan's FIRST key. The Quick-Swap confirm overlay's Enter asked only that (`inv_quickswap.js`): its "Scan to Cancel"
+  is about 30 characters, so on a scanner slower than about 17 ms a key its Enter pressed the focused YES, and during
+  a print the cancel loaded the spool onto the printing head (POST /api/quickswap with the head confirmed). The
+  deposit, the Return and the server's re-ask share that overlay. The slot grid's Enter after Q opened a swap nobody
+  asked for, and the next slow scan answered it; the shared move question (`window.confirmActivePrint`) let a slow
+  bare-number label ("1024") answer "Just store it"; Shift+B armed a bulk move on a slow label's 'B' and cut the scan
+  to "-1"; the wizard's Shift+E / Shift+C toggled its sections on a label's capitals; the grid's Q kept its 'q' in
+  the scan buffer (a label scanned within 2 s arrived as "qLOC:…") and jumped the focus on any 'q' inside a label.
+  Each Enter now asks `window.enterIsAScan()` and each letter key `window.scanIsArriving()` (Q also keeps its 'q'
+  out of the buffer, the standing order's idiom); `tests/test_slow_scan_confirms_js.py` drives
+  them with the real accumulator on a fake clock (red on the old code from 18 ms a key for the cancel), and
+  `tests/test_scan_path_integrity.py` pins the stronger guards. The '?' help key still defers 120 ms (a scanner
+  slower than that could open the shortcut list from a label with a '?'; no FCC label has one).
 * **⏱️ The buffer's server sync still orders by the wall clock.** _(Found 2026-10-27 by the Group 57 review, round 3;
   older code, L28 and 21.6.)_ `loadBuffer`'s 3 s grace window (`inv_cmd.js`, `lastLocalBufferChange`) and the
   recently-assigned-out TTL (`_recentlyAssignedOut`) are stamped with `Date.now`. A clock stepped back just after a

@@ -40,23 +40,26 @@ def _read(p: Path) -> str:
 # the user is expected to scan. The confirm overlays are the dangerous ones: they
 # render a "Scan to Cancel" QR while focusing the YES button, so before the fix
 # the CANCEL scan's terminating Enter performed the CONFIRM instead.
+# The guard is window.enterIsAScan() for an Enter and window.scanIsArriving()
+# for a printable key (Group 57 review, round 4): isScanInFlight alone counts
+# 500 ms from a scan's FIRST key, so a slower scanner's ~30-character "Scan to
+# Cancel" outlasted it and confirmed again. Behaviour: test_slow_scan_confirms_js.py.
 ENTER_OWNERSHIP_SITES = [
-    # (file, label, minimum expected guard count)
+    # (file, label, guard, minimum expected guard count)
     # The count matters: a bare "is the string present" check is VACUOUS for a
-    # file that uses isScanInFlight for something ELSE. It counts guard LINES:
-    # one guard reads `window.isScanInFlight && window.isScanInFlight()`, so
-    # counting occurrences let inv_cmd.js's Shift+B line alone satisfy a
-    # minimum of 2 (found 2026-10-13).
+    # file that uses the guard for something ELSE. It counts guard LINES: one
+    # guard reads `window.enterIsAScan ? window.enterIsAScan() : …`, so counting
+    # occurrences let one line satisfy a minimum of 2 (found 2026-10-13).
     # The Location Manager assign and scan-assign confirms render through the
     # shared window.confirmActivePrint since Group 39.4; its guard is pinned by
     # test_the_shared_active_print_confirm_owns_the_enter_guard below.
-    (JS / "inv_quickswap.js", "Quick-Swap confirm overlay + slot grid", 2),
-    (JS / "inv_cmd.js", "Shift+B closure", 1),
+    (JS / "inv_quickswap.js", "Quick-Swap confirm overlay + slot grid", "enterIsAScan", 2),
+    (JS / "inv_cmd.js", "Shift+B closure", "scanIsArriving", 1),
 ]
 
 
-def _guard_lines(src: str) -> int:
-    return sum(1 for line in src.splitlines() if "isScanInFlight" in line and "//" not in line.split("isScanInFlight")[0])
+def _guard_lines(src: str, guard: str) -> int:
+    return sum(1 for line in src.splitlines() if guard in line and "//" not in line.split(guard)[0])
 
 
 def _function_body(src: str, header: str) -> str:
@@ -65,9 +68,9 @@ def _function_body(src: str, header: str) -> str:
     return src[start:src.index("\n};", start)]
 
 
-@pytest.mark.parametrize("path,label,minimum", ENTER_OWNERSHIP_SITES,
-                         ids=[p.name for p, _, _ in ENTER_OWNERSHIP_SITES])
-def test_enter_handlers_yield_to_an_in_flight_scan(path: Path, label: str, minimum: int):
+@pytest.mark.parametrize("path,label,guard,minimum", ENTER_OWNERSHIP_SITES,
+                         ids=[p.name for p, _, _, _ in ENTER_OWNERSHIP_SITES])
+def test_enter_handlers_yield_to_an_in_flight_scan(path: Path, label: str, guard: str, minimum: int):
     """Each Enter handler must bail while a scan is in flight.
 
     Without it, the Enter that terminates a scan is treated as a press of the
@@ -76,10 +79,10 @@ def test_enter_handlers_yield_to_an_in_flight_scan(path: Path, label: str, minim
     toolhead.
     """
     src = _read(path)
-    found = _guard_lines(src)
+    found = _guard_lines(src, guard)
     assert found >= minimum, (
-        f"{path.name} ({label}) has {found} isScanInFlight guard(s), expected "
-        f">= {minimum}. One of its scan-in-flight guards was removed — if that "
+        f"{path.name} ({label}) has {found} {guard} guard(s), expected "
+        f">= {minimum}. One of its scan guards was removed or weakened — if that "
         "is the confirm-overlay one, scanning 'Scan to Cancel' performs the "
         "CONFIRM and yanks a spool off a live toolhead."
     )
@@ -91,13 +94,13 @@ def test_the_shared_active_print_confirm_owns_the_enter_guard():
     their Enter guard now. Pin that the shared one has it, and that both overlays
     still route through it: a re-inlined copy would need its own guard again."""
     core = _function_body(_read(JS / "inv_core.js"), "window.confirmActivePrint = ")
-    assert "isScanInFlight" in core, "window.confirmActivePrint lost its scan-in-flight Enter guard"
+    assert "enterIsAScan()" in core, "window.confirmActivePrint lost its enterIsAScan Enter guard"
     for path, fn in ((JS / "inv_loc_mgr.js", "const _confirmActivePrintAssign = "),
                      (JS / "inv_cmd.js", "const _confirmActivePrintScan = ")):
         body = _function_body(_read(path), fn)
         assert "window.confirmActivePrint(" in body, (
             f"{path.name}: {fn.strip()} no longer routes through window.confirmActivePrint; "
-            "a copy of the overlay needs its own isScanInFlight Enter guard")
+            "a copy of the overlay needs its own enterIsAScan Enter guard")
 
 
 def test_quickswap_guards_both_its_enter_handlers():
@@ -107,9 +110,9 @@ def test_quickswap_guards_both_its_enter_handlers():
     unrequested swap confirm — which then inherits the overlay bug above.
     """
     src = _read(JS / "inv_quickswap.js")
-    assert src.count("isScanInFlight") >= 2, (
-        "expected a scan-in-flight guard on BOTH the confirm overlay and the "
-        f"Quick-Swap slot grid; found {src.count('isScanInFlight')}"
+    assert _guard_lines(src, "enterIsAScan") >= 2, (
+        "expected an enterIsAScan guard on BOTH the confirm overlay and the "
+        f"Quick-Swap slot grid; found {_guard_lines(src, 'enterIsAScan')}"
     )
 
 
@@ -229,9 +232,9 @@ def test_wizard_shortcuts_yield_to_an_in_flight_scan():
     """Shift+E / Shift+C are indistinguishable from a scanner sending the
     uppercase letters 'E' and 'C', which appear in ordinary labels."""
     src = _read(JS / "inv_wizard.js")
-    assert "isScanInFlight" in src, (
-        "inv_wizard.js lost its scan-in-flight guard; a scanned label "
-        "containing E or C would fire expand/collapse and corrupt the scan"
+    assert "scanIsArriving" in src, (
+        "inv_wizard.js lost its scanIsArriving guard; a scanned label "
+        "containing E or C would fire expand/collapse (a slower scanner's too)"
     )
 
 

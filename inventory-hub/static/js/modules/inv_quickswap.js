@@ -643,7 +643,14 @@
                 // Bail out and let it bubble so the CMD:CONFIRM / CMD:CANCEL
                 // payload routes properly. Keyboard use is unaffected: pressing
                 // Enter by hand leaves scanBuffer empty.
-                if (window.isScanInFlight && window.isScanInFlight()) return;
+                // window.enterIsAScan, not isScanInFlight alone (Group 57 review,
+                // rounds 3 and 4): that counts 500 ms from a scan's FIRST key, and
+                // the ~30-character CANCEL payload outlasts it on any scanner
+                // slower than about 17 ms a key, so its Enter pressed YES again.
+                // Every caller of this overlay shares the rule: the swap, the
+                // deposit, the Return and the server's re-ask.
+                if (window.enterIsAScan ? window.enterIsAScan()
+                    : (window.isScanInFlight && window.isScanInFlight())) return;
                 const active = document.activeElement;
                 if (active === yes) {
                     e.preventDefault(); e.stopPropagation();
@@ -1851,11 +1858,20 @@
         const currentIdx = buttons.findIndex(b => b.classList.contains('kb-active'));
 
         if (e.key === 'q' || e.key === 'Q') {
+            // A 'q' inside a scan is the scan's (a confirm's session id
+            // carries one), however slow the scanner; a person's Q leaves no
+            // 'q' behind for the next scan to start with (Group 57 review,
+            // round 4: a label scanned within 2 s of Q arrived as "qLOC:…",
+            // an unknown code). The standing order's idiom, as Shift+B's.
+            if (window.scanIsArriving ? window.scanIsArriving()
+                : (window.isScanInFlight && window.isScanInFlight())) return;
             // Jump focus into the grid on Q. Scroll the section into view
             // first — Quick-Swap often sits below the fold when a toolhead
             // also has a long Feeds editor / contents list above it. Without
             // the scroll the cyan kb-active focus glow appears off-screen.
             e.preventDefault();
+            e.stopImmediatePropagation();
+            if (window.clearScanBuffer) window.clearScanBuffer();
             const section = document.getElementById('manage-quickswap-section');
             if (section && section.scrollIntoView) {
                 section.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1875,7 +1891,11 @@
             // scan a spool label, and without this the scan's terminating Enter
             // opened an unrequested "Load <box> slot N into <toolhead>?" confirm
             // — which then inherited the confirm-overlay Enter bug on top.
-            if (window.isScanInFlight && window.isScanInFlight()) return;
+            // window.enterIsAScan, so a slower scanner's label counts too (Group
+            // 57 review, round 4: a Prusament URL at 26 ms a key opened the
+            // confirm, and the next such scan answered it).
+            if (window.enterIsAScan ? window.enterIsAScan()
+                : (window.isScanInFlight && window.isScanInFlight())) return;
             if (currentIdx >= 0) {
                 e.preventDefault();
                 window.quickSwapTap(buttons[currentIdx]);
