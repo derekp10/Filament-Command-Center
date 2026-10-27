@@ -177,6 +177,19 @@
   filament, refused at 0 g; built.)_ **Released to prod 2026-10-25 (`main` `97fcf7c`):** what's left is
   excluding the prod filaments he can't get, from the list's 🔕. Dev's long-list sample was put back (`low_stock_g`
   250, filaments 91 and 96 included again).
+* **⏸️ PENDING DEREK — pick how the title bar's ⚠️ Low stock button reads (Group 57; built 2026-10-26 on
+  `feature/group-57-low-stock-at-a-glance`, live on dev while that branch is checked out).** The title bar has a ⚠️
+  button with a count of the filaments that are low or out (it opens the Low stock list), and the list's window keeps
+  one size. Pictures: `review-samples/2026-10-26-low-stock/` (also sent to your phone the same night).
+  1. **How it reads.** A: "⚠️ 12" (built). On your 1600 px window nothing else on the bar changes at Small / Standard;
+     at Large ADD INVENTORY reads ADD, at Extra Large the version badge hides. B: "⚠️ Low stock (12)" in words, which
+     tightens the bar sooner at every size. C: words at Small / Standard, and all three of Backlog, Queue and Low stock
+     as icon + number at Large / Extra Large. Claude's pick: A (the words are in its tooltip).
+  2. **What the number counts.** (a) Low + Out as one number (built; Claude's pick: the list's tabs already split it),
+     (b) both, "1 · 11" (a little too wide at Standard: the title starts to shorten), (c) Low only. Excluded never
+     counts.
+  3. Claude's call, veto it if you like: the 🔍 Search panel's own "⚠️ Low stock" button goes once 1 is settled.
+  If you never answer, A and (a) go to `dev` as built.
 * **📐 Plan docs: named sizes and colors as the base for themes; alternative views (phone, wall tablet, printer pictures,
   the Location Manager) (Derek, 2026-10-21; written).** _(→ **Group 60.1**: Claude first rewrites step 3's order, phone first, then the decisions one at a time)_ "Themes" in his sense are whole alternative designs a user
   can choose ("what we have now, or future ones, possibly ones that focus on using images of the printers themselves"),
@@ -252,7 +265,7 @@
   11 MB raccoon file, thousands of downloads). Rare (`decode_bgcode` skips bad blocks), and since Group 56.3 the
   give-up opens a "couldn't download or read its file" review. Direction: report a decode failure separately,
   carry it on the fetch record, and give up after a few attempts. **Standalone.**
-* **🎨 Design follow-ups from the 2026-10-22 text-size walk (each one: a sample to Derek before any restyle).** _(→ **Group 59** for (a)–(d), one picture session first; (e) → **Group 57.3**)_
+* **🎨 Design follow-ups from the 2026-10-22 text-size walk (each one: a sample to Derek before any restyle).** _(→ **Group 59** for (a)–(d), one picture session first; (e) → **Group 57.3**: it is option C of the Group 57 sample, 2026-10-26, see ⏸️ PENDING DEREK)_
   (a) **The slot picker in printer mode:** "it just looks scattered, and it's hard to tell what is what"; its slots
   break onto a second row and leave a lot of empty space after the head list. Rethink the layout (his idea: a 3×3 grid
   for the heads). (b) **The slot picker's Swap / Overwrite / Back panel:** "the buttons are all over the place", their
@@ -486,10 +499,13 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
 * **A Buy More link template with `&` breaks in the spool and filament windows.** _(→ **Group 57.4**)_ _(Found 2026-10-19 by the Group 49
   builder.)_ The details windows read the `buy_more_url_template` setting through Jinja's auto-escaping inside a
   `<script>` tag, so an `&` in it arrives as `&amp;` in the links they build. The ⚠️ Low stock panel builds its links on
-  the server and is fine. Pass the setting with `|tojson` instead.
+  the server and is fine. Pass the setting with `|tojson` instead. _[BUILT 2026-10-26 on
+  `feature/group-57-low-stock-at-a-glance` (`a6d2f1b`): `|tojson`, so nothing in the setting can end the script either;
+  a null setting no longer arrives as the text "None". Pinned by `tests/test_low_stock_glance_57.py`. Archived when the
+  branch merges.]_
 
 ## 🔍 Search, Display & Filtering
-* **⚠️ Low stock: a title-bar button with a count, and a window that keeps one size (Derek, 2026-10-25, on prod).** _(→ **Group 57**: (b) as **57.1** first, then (a) as **57.2** after a sample)_
+* **⚠️ Low stock: a title-bar button with a count, and a window that keeps one size (Derek, 2026-10-25, on prod).** _(→ **Group 57**: (b) as **57.1** first, then (a) as **57.2** after a sample)_ _[BUILT 2026-10-26 on `feature/group-57-low-stock-at-a-glance`: (b) the window is `min(40rem, 86vh)` tall on every list and state; (a) "⚠️ N" beside Queue, counted on every heartbeat from the tick's own reads (the cost question settled: no Spoolman read of its own), "?" before a count, the last count kept on a failed read. How it reads and what N counts wait on the ⏸️ PENDING DEREK pick above.]_
   (a) **Where the button lives: decided.** Today it sits in the 🔍 Search panel ("works, seems a bit odd. And doesn't
   really tell you anything at a glance"; 2026-10-20: "a bit fiddly"). Move it to the title bar beside 🏷️ Backlog and
   🛒 Queue, with a count, so it reads at a glance. Things to settle in the build: what the count shows (Low + Out, or
@@ -590,7 +606,10 @@ All 3 of these things are important and have value. We should table for now, and
 * **🐢 The buffer cards' live refresh reads Spoolman once per buffered spool on every heartbeat.** _(→ **Group 57.5**)_ _(Group 52 builder's
   note, 2026-10-19.)_ `spools_refresh` (`logic.get_live_spools_data`) makes one GET per spool in the buffer each tick:
   ten buffered spools are ten reads every 5 s. It could use the tick's one spool-list read (`SpoolListRead`), as the
-  other heartbeat sections do since Group 52.
+  other heartbeat sections do since Group 52. _[BUILT 2026-10-26 on `feature/group-57-low-stock-at-a-glance`
+  (`a6d2f1b`): every spool the tick's list holds is answered from it; one GET only for a spool it lacks (an archived
+  one), one per spool when the list read failed or the tick read no list. `/api/spools/refresh` is unchanged. Pinned by
+  `tests/test_low_stock_glance_57.py`. Archived when the branch merges.]_
 * **🐢 A bound-slot scan that loads its head lists the head's spools twice in the chained deploy.** _(Measured 2026-10-19
   by the Group 52 builder.)_ Such a scan makes four strict whole-list reads, each guarding a different moment; the
   chained deploy's step-4 resident list and its step-6 re-list of the same head could be one read when no printer probe
