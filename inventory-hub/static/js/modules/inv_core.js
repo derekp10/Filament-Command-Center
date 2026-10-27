@@ -2492,6 +2492,10 @@ const _computePulseInclude = () => {
             && !(backlogModal && backlogModal.classList.contains('show'))) {
         sections.push('label_backlog');
     }
+    // Group 57.2: the ⚠️ Low stock button's count, worked out on the server
+    // from the same spool and filament reads as label_backlog (no read of its
+    // own). The list itself is still read only when it opens.
+    if (document.getElementById('btn-low-stock-count')) sections.push('low_stock');
     return { sections, manageId };
 };
 window._computePulseInclude = _computePulseInclude;   // for the node tests
@@ -2585,6 +2589,9 @@ const _dashboardPulseTick = () => {
             }
             if (payload.label_backlog && window._renderBacklogCount) {
                 window._renderBacklogCount(payload.label_backlog);
+            }
+            if (payload.low_stock && window._renderLowStockCount) {
+                window._renderLowStockCount(payload.low_stock);
             }
             if (payload.printer_status) {
                 // L25 — note finish/cancel edges to arm the fast-poll burst

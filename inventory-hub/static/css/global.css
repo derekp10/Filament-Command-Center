@@ -155,7 +155,12 @@ body {
    out of room, so it is a size container that gives way in steps. The
    thresholds are in rem, which grows with the Text size, so each step comes
    at the same point in every size; at Small and Standard on a 1600 px window
-   the bar is unchanged (it needs about 93rem).
+   the bar is unchanged (it needs about 98rem of the 98.5rem there).
+   Each step sits just above what the bar needs at the step before it,
+   measured with the ⚠️ Low stock count (Group 57.2, 2026-10-26: it moved
+   every step up by its width): 98rem with the full spacing, 88.3rem once it
+   tightens, 82.6rem with ADD. Anything wider than that, a three-digit count
+   say, shortens the title, never the version badge.
    From 992 px up the bar is one line (Bootstrap's navbar-expand-lg): the
    spacing tightens, ADD INVENTORY reads ADD, the version badge goes, and
    last the title shortens with "…" (its full text is its tooltip), so it
@@ -196,22 +201,24 @@ body {
     text-overflow: ellipsis;
 }
 /* Step 1: no extra space between the items, beyond the bar's own gap. */
-@container fcc-titlebar (max-width: 94rem) {
+@container fcc-titlebar (max-width: 98.25rem) {
     .fcc-titlebar-actions { gap: 0.5rem !important; }
     .fcc-titlebar-actions > * { margin-left: 0 !important; }
 }
 /* Step 2: ADD INVENTORY reads ADD (the button's tooltip says "Add inventory"). */
-@container fcc-titlebar (max-width: 85.5rem) {
+@container fcc-titlebar (max-width: 88.5rem) {
     .fcc-titlebar-more { display: none; }
 }
 /* Step 3, one-line bar only: the version badge goes where it would start to
-   shrink (about 78rem at every size). Squeezed further it was an empty
+   shrink (about 82.75rem at every size). Squeezed further it was an empty
    bordered box over the Spoolman light. Its text is its tooltip, and
    Settings -> Build Info has the commit. Below this the title is the one
-   thing left to give. (Below 992 px the title has a line of its own, and the
-   badge keeps its place beside it.) */
+   thing left to give, and until then it never shrinks (the title gives way
+   first). (Below 992 px the title has a line of its own, and the badge keeps
+   its place beside it.) */
 @media (min-width: 992px) {
-    @container fcc-titlebar (max-width: 78rem) {
+    #fcc-build-version { flex-shrink: 0; }
+    @container fcc-titlebar (max-width: 82.75rem) {
         #fcc-build-version { display: none; }
     }
 }

@@ -3,7 +3,9 @@ console.log("🚀 Loaded Module: LOW STOCK");
 
 // window.openLowStockPanel()
 //
-// Opened by the search panel's "⚠️ Low stock" button (offcanvas_search.html).
+// Opened by the title bar's ⚠️ button (#btn-low-stock-count, which shows how
+// many filaments are low or out: Group 57.2, below) and the search panel's
+// "⚠️ Low stock" button (offcanvas_search.html).
 // One mountOverlay panel, per filament across its in-stock spools, from GET
 // /api/stock_report (stock_report.py), in three lists: Low (under the
 // `low_stock_g` setting, fewest grams first), Out (none in stock; the ones with
@@ -11,6 +13,11 @@ console.log("🚀 Loaded Module: LOW STOCK");
 // with why). It asks the server only when it opens or after a change made here,
 // never on the dashboard heartbeat (Group 45.8's lesson), and a failed read
 // shows an error that says Spoolman didn't answer, never "Nothing is low".
+// The window keeps one size whatever it shows (Group 57.1, Derek 2026-10-25:
+// "It jumps in size depending on its content's length"): a fixed height in
+// rem, the list the only part that scrolls; the tabs, the filter, the line
+// under the title and the key legend stay where they are on every list, a
+// filter with no match, while it reads and after an error.
 //
 // Derek, 2026-10-20: a long list needed to be easier to read (tabs, a filter,
 // one line per filament: a sample he tried, and liked, before it ships), a
@@ -55,6 +62,7 @@ console.log("🚀 Loaded Module: LOW STOCK");
     const NOTE_MAX = 500;      // stock_report.EXCLUDE_NOTE_MAX
     let _seq = 0;              // a newer load wins; an older answer never paints
     let _current = null;       // the open panel's handle
+    let _count = null;         // the title-bar count: {low, out, threshold}, once one is known
 
     const esc = (v) => (typeof window.escHtml === 'function'
         ? window.escHtml(v)
@@ -73,7 +81,8 @@ console.log("🚀 Loaded Module: LOW STOCK");
     const D = `#${DIALOG_ID}`;
     const CSS = `
 ${P} .fcc-stock-panel { background:#1e1e1e; color:#fff; border:2px solid #ffaa00; border-radius:8px;
-    padding:14px 16px 10px; width:min(50rem, 94vw); max-height:86vh; display:flex; flex-direction:column;
+    padding:14px 16px 10px; width:min(50rem, 94vw); height:min(40rem, 86vh); box-sizing:border-box;
+    display:flex; flex-direction:column;
     box-shadow:0 10px 40px rgba(0,0,0,.6); font-size:1rem; outline:none; text-align:left; }
 ${P} .fcc-stock-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 ${P} .fcc-stock-title { font-size:1.2em; font-weight:700; color:#fff; }
@@ -82,7 +91,7 @@ ${P} .fcc-stock-close { background:transparent; border:1px solid #777; color:#ff
 ${P} .fcc-stock-close:hover, ${P} .fcc-stock-close:focus-visible { border-color:#0dcaf0; outline:none; }
 ${P} .fcc-stock-sub { color:#ddd; font-size:.9em; margin:4px 0 6px; }
 ${P} .fcc-stock-tools { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:2px 0 8px; }
-${P} .fcc-stock-tools[hidden] { display:none; }
+${P} .fcc-stock-tools[hidden] { display:flex; visibility:hidden; }   /* keeps its room (57.1) */
 ${P} .fcc-stock-tabs { display:flex; flex-wrap:wrap; gap:4px; }
 ${P} .fcc-stock-tab { background:#2a2a2a; color:#fff; border:1px solid #555; border-radius:6px; padding:3px 10px;
     font-size:.92em; line-height:1.5; cursor:pointer; }
@@ -95,7 +104,7 @@ ${P} .fcc-stock-filter { flex:1 1 180px; min-width:140px; background:#111; color
     border-radius:6px; padding:4px 8px; font-size:.92em; }
 ${P} .fcc-stock-filter::placeholder { color:#aaa; }
 ${P} .fcc-stock-filter:focus { border-color:#0dcaf0; outline:none; box-shadow:0 0 0 2px rgba(13,202,240,.35); }
-${P} .fcc-stock-body { overflow:auto; flex:1 1 auto; min-height:70px; padding-right:4px; }
+${P} .fcc-stock-body { overflow:auto; flex:1 1 auto; min-height:0; padding-right:4px; }
 ${P} .fcc-stock-cap { color:#ddd; font-size:.9em; margin:0 0 6px; }
 ${P} .fcc-stock-row { box-sizing:border-box; display:flex; flex-wrap:wrap; align-items:center; column-gap:8px;
     row-gap:2px; padding:4px 8px; min-height:34px; border:1px solid #3a3a3a; border-radius:6px; margin-bottom:4px; cursor:pointer;
@@ -126,7 +135,9 @@ ${P} .fcc-stock-error-title { color:#ff8a8a; font-weight:700; font-size:1.05em; 
 ${P} .fcc-stock-retry { margin-top:12px; background:transparent; color:#fff; border:1px solid #0dcaf0;
     border-radius:6px; padding:4px 12px; cursor:pointer; }
 ${P} .fcc-stock-retry:hover, ${P} .fcc-stock-retry:focus-visible { background:#0dcaf0; color:#111; outline:none; }
-${P} .fcc-stock-foot { color:#ccc; font-size:.85em; margin-top:8px; border-top:1px solid #333; padding-top:6px; }
+${P} .fcc-stock-foot { color:#ccc; font-size:.85em; margin-top:8px; border-top:1px solid #333; padding-top:6px;
+    flex:0 0 auto; }
+${P} .fcc-stock-head, ${P} .fcc-stock-sub, ${P} .fcc-stock-tools { flex:0 0 auto; }
 @media (max-width: 520px) {
     ${P} .fcc-stock-name { flex-basis:calc(100% - 30px); white-space:normal; }
 }
@@ -169,6 +180,9 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
     }
 
     const _plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+    // A finite number, else null (Number(null) and Number('') are 0, not unknown).
+    const _finite = (v) => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
 
     // Only a web link is ever put in an href (the server answers nothing else
     // either; this is the belt to its braces).
@@ -274,6 +288,14 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
             </div>`;
     }
 
+    // The line under the title. The same words before the list is read (the
+    // threshold the dashboard's count last said, else "…"), so it never
+    // changes length, nor moves the tabs below it, once the list arrives (57.1).
+    function _subText(threshold) {
+        const g = _finite(threshold) !== null ? `${Math.round(_finite(threshold))} g` : '… g';
+        return `Per filament, across its in-stock spools: low is under ${g} (⚙️ Settings → Behavior).`;
+    }
+
     function _shellHtml() {
         const tabs = TABS.map((t, i) => `<button type="button" class="fcc-stock-tab" role="tab"
                 id="fcc-stock-tab-${t.key}" data-stock-tab="${t.key}" aria-controls="fcc-stock-list"
@@ -284,7 +306,7 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
                 <div class="fcc-stock-title" id="fcc-stock-title">⚠️ Low stock</div>
                 <button type="button" class="fcc-stock-close" data-stock-close aria-label="Close">✕</button>
             </div>
-            <div class="fcc-stock-sub" data-stock-sub>Per filament, across its in-stock spools.</div>
+            <div class="fcc-stock-sub" data-stock-sub>${esc(_subText(_count ? _count.threshold : null))}</div>
             <div class="fcc-stock-tools" data-stock-tools hidden>
                 <div class="fcc-stock-tabs" role="tablist" aria-label="Lists">${tabs}</div>
                 <input type="search" class="fcc-stock-filter" data-stock-filter
@@ -435,10 +457,7 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         const all = _lists(handle);
         const threshold = handle._threshold;
         const sub = handle.panel.querySelector('[data-stock-sub]');
-        if (sub) {
-            sub.textContent = `Per filament, across its in-stock spools: low is under ${Math.round(threshold)} g `
-                + '(⚙️ Settings → Behavior).';
-        }
+        if (sub) sub.textContent = _subText(threshold);
         // A re-read never takes the focus from an open reason dialog, and a
         // quiet one (after a change made here) not from wherever the user went
         // meanwhile either (2026-10-21 review, browser-4: it moved the focus out
@@ -491,6 +510,9 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         }
         handle._data = data;
         handle._threshold = Number.isFinite(Number(data.threshold_g)) ? Number(data.threshold_g) : 250;
+        // The list it just read is the newest count there is (after a change
+        // made here too): the title bar says the same as the tabs.
+        _setCount(data.low.length, data.out.length, handle._threshold);
         // A quiet re-read keeps the list, filter and row the user moved to while
         // it was on its way, not the ones it set out with (review browser-5).
         if (quiet && restore && (handle._tab !== restore.tab || (handle._filter || '') !== (restore.filter || ''))) {
@@ -951,6 +973,66 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         });
     }
 
+    // --- the title-bar count (Group 57.2) ----------------------------------------------
+    // #btn-low-stock-count (dashboard.html) says at a glance how many filaments
+    // are on the Low and Out lists (Derek, 2026-10-25: "Move it to the title bar
+    // beside 🏷️ Backlog and 🛒 Queue, with a count"). The count comes from the
+    // dashboard heartbeat's low_stock section, worked out on the server from the
+    // tick's own spool and filament reads by the list's own rule
+    // (stock_report.glance: no Spoolman read of its own), and from the list
+    // itself whenever this window reads it. Excluded filaments never count. A
+    // read that failed keeps the count shown (Group 52's rule: a blip is never a
+    // 0); before any count it reads "?". The words are in its tooltip and its
+    // accessible name: the bar has no room for them at every Text size.
+
+    // What the button shows: one number, Low + Out (Group 57.2's option (a)).
+    const _countLabel = (c) => String(c.low + c.out);
+
+    function _countWords(c) {
+        const under = _finite(c.threshold) !== null ? ` (under ${Math.round(c.threshold)} g)` : '';
+        return `Low stock: ${_plural(c.low, 'filament', 'filaments')} low${under}, ${c.out} out`;
+    }
+
+    function _paintCount(failed) {
+        const btn = document.getElementById('btn-low-stock-count');
+        if (!btn) return;
+        const num = btn.querySelector('[data-low-stock-count]');
+        const text = _count ? _countLabel(_count) : '?';
+        if (num && num.textContent !== text) num.textContent = text;
+        let words = _count ? `${_countWords(_count)}. Opens the list.` : 'Low stock: opens the list.';
+        if (failed) {
+            words = _count
+                ? `${_countWords(_count)}: the last count, since Spoolman didn't answer just now. Opens the list.`
+                : "Low stock: Spoolman didn't answer, so there is no count yet. Opens the list.";
+        }
+        btn.title = words;
+        btn.setAttribute('aria-label', words);
+        btn.dataset.read = failed ? 'failed' : 'ok';
+        if (_count) {
+            btn.dataset.low = String(_count.low);
+            btn.dataset.out = String(_count.out);
+        }
+    }
+
+    function _setCount(low, out, threshold) {
+        const n = (v) => (_finite(v) !== null && _finite(v) >= 0 ? Math.round(_finite(v)) : null);
+        if (n(low) === null || n(out) === null) return false;
+        const t = _finite(threshold) !== null ? _finite(threshold) : (_count ? _count.threshold : null);
+        _count = { low: n(low), out: n(out), threshold: t };
+        _paintCount(false);
+        return true;
+    }
+
+    // The heartbeat's low_stock section: {read_ok: true, count, low, out,
+    // threshold_g}, or {read_ok: false, read_error}. Returns whether it painted
+    // a count.
+    window._renderLowStockCount = function (sec) {
+        if (!sec || typeof sec !== 'object') return false;
+        if (sec.read_ok === true && _setCount(sec.low, sec.out, sec.threshold_g)) return true;
+        _paintCount(true);
+        return false;
+    };
+
     window.openLowStockPanel = function (opts) {
         if (typeof window.mountOverlay !== 'function') return null;
         const restore = opts && opts.restore ? opts.restore : null;
@@ -1026,11 +1108,13 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
     };
 
     function _wireButton() {
-        const btn = document.getElementById('global-search-low-stock');
-        if (btn && !btn.dataset.lowStockWired) {
-            btn.dataset.lowStockWired = '1';
-            btn.addEventListener('click', () => window.openLowStockPanel());   // no event as opts
-        }
+        ['global-search-low-stock', 'btn-low-stock-count'].forEach((id) => {
+            const btn = document.getElementById(id);
+            if (btn && !btn.dataset.lowStockWired) {
+                btn.dataset.lowStockWired = '1';
+                btn.addEventListener('click', () => window.openLowStockPanel());   // no event as opts
+            }
+        });
     }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _wireButton);
     else _wireButton();

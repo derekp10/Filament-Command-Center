@@ -189,6 +189,25 @@ class SpoolListRead:
         return self._spools
 
 
+class FilamentListRead:
+    """The filament list for ONE request, read at most once, on first use: the
+    filament half of SpoolListRead (Group 57.2: the heartbeat's label_backlog
+    and low_stock sections both count from it). Same rules: never kept past the
+    request, display readers only. `get()` answers the parsed list, or None when
+    the read failed (`error` says why); `reads` counts the HTTP reads (0 or 1)."""
+
+    def __init__(self):
+        self.reads = 0
+        self.error = None
+        self._filaments = None
+
+    def get(self):
+        if not self.reads:
+            self.reads = 1
+            self._filaments, self.error = read_filament_list()
+        return self._filaments
+
+
 def get_all_locations():
     """Fetches all locations from Spoolman."""
     sm_url, _ = config_loader.get_api_urls()

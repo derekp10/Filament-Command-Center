@@ -332,6 +332,90 @@ def _row(fid, fil, grams, count, total, template):
     }
 
 
+def _group(spools, filaments):
+    """({filament id: filament}, {filament id: {fil, spools}}) from a spool list
+    and the filament list. The filament list's own record wins over the copy
+    nested in a spool (the same record, read a moment apart)."""
+    fil_by_id = {}
+    for fil in filaments:
+        try:
+            fil_by_id[int((fil or {}).get('id'))] = fil
+        except (TypeError, ValueError, AttributeError):
+            continue
+    by_fid = {}
+    for s in spools:
+        fid = _fid_of(s)
+        if fid is None:
+            continue
+        entry = by_fid.setdefault(fid, {"fil": fil_by_id.get(fid) or s.get('filament'), "spools": []})
+        entry["spools"].append(s)
+    return fil_by_id, by_fid
+
+
+def _members(fil_by_id, by_fid, threshold):
+    """The list each filament is on: (kind, fid, fil, grams, in-stock spools,
+    spools on record, unknown, no_spools) for every one that is 'low', 'out' or
+    'excluded'. The one rule behind the list (build_report) and the title-bar
+    count (low_out_count), so the count never disagrees with the list it opens.
+    A filament with no spool on record at all is out (or excluded) too, after
+    the others; no_spools says so."""
+    for fid, entry in by_fid.items():
+        grams, count, unknown = stock_of(entry["spools"])
+        total = len(entry["spools"])
+        if exclusion_of(entry["fil"]):
+            yield "excluded", fid, entry["fil"], grams, count, total, unknown, False
+        elif count == 0:
+            yield "out", fid, entry["fil"], 0.0, 0, total, unknown, False
+        elif not unknown and grams < threshold:
+            yield "low", fid, entry["fil"], grams, count, total, unknown, False
+    for fid, fil in fil_by_id.items():
+        if fid not in by_fid:
+            yield ("excluded" if exclusion_of(fil) else "out"), fid, fil, 0.0, 0, 0, 0, True
+
+
+def low_out_count(spools, filaments, threshold):
+    """(low, out): how many filaments the ⚠️ Low stock list shows on Low and on
+    Out (Group 57.2's title-bar count), by the list's own rule (`_members`).
+
+    `spools` may be the NON-archived list (the dashboard heartbeat's one read)
+    as well as every spool (build_report's): an archived spool is never in
+    stock (`in_stock`), so it never decides Low or Out. A filament whose spools
+    are all archived has no spool in stock either way: it is Out through the
+    "no spool on record" path instead of the "none in stock" one, which changes
+    only its row's wording (`no_spools`), never the count."""
+    fil_by_id, by_fid = _group(spools, filaments)
+    low = out = 0
+    for kind, *_ in _members(fil_by_id, by_fid, threshold):
+        if kind == "low":
+            low += 1
+        elif kind == "out":
+            out += 1
+    return low, out
+
+
+def glance(spools, spools_error=None, filaments_read=None):
+    """The ⚠️ Low stock title-bar button's count for the dashboard heartbeat
+    (Group 57.2), from the tick's own reads: `spools` is its non-archived spool
+    list (None when that read failed) and `filaments_read` its shared
+    spoolman_api.FilamentListRead, which the label_backlog section counts from
+    too, so the count costs no Spoolman read of its own.
+
+    Answers {'read_ok': True, 'count', 'low', 'out', 'threshold_g'}, or
+    {'read_ok': False, 'read_error'} when either list couldn't be read (the
+    filament list isn't asked for once the spool read failed), so the page
+    keeps the count it shows and never draws a blip as 0. Excluded filaments
+    never count."""
+    if spools is None:
+        return {'read_ok': False, 'read_error': f"couldn't read Spoolman's spools ({spools_error})"}
+    reader = filaments_read if filaments_read is not None else spoolman_api.FilamentListRead()
+    filaments = reader.get()
+    if filaments is None:
+        return {'read_ok': False, 'read_error': f"couldn't read Spoolman's filaments ({reader.error})"}
+    threshold = low_stock_g()
+    low, out = low_out_count(spools, filaments, threshold)
+    return {'read_ok': True, 'count': low + out, 'low': low, 'out': out, 'threshold_g': threshold}
+
+
 def build_report():
     """The ⚠️ Low-stock list: {success, threshold_g, low, out, excluded,
     filaments, spools}. `low` runs from the fewest grams up; `out` and
@@ -353,42 +437,16 @@ def build_report():
     if not isinstance(filaments, list):
         raise StockReadError("Spoolman's answer wasn't a filament list")
 
-    # The filament list's own record wins over the copy nested in a spool (the
-    # same record, read a moment apart).
-    fil_by_id = {}
-    for fil in filaments:
-        try:
-            fil_by_id[int((fil or {}).get('id'))] = fil
-        except (TypeError, ValueError, AttributeError):
-            continue
-
-    by_fid = {}
-    for s in spools:
-        fid = _fid_of(s)
-        if fid is None:
-            continue
-        entry = by_fid.setdefault(fid, {"fil": fil_by_id.get(fid) or s.get('filament'), "spools": []})
-        entry["spools"].append(s)
-
-    low, out, excluded = [], [], []
-    for fid, entry in by_fid.items():
-        grams, count, unknown = stock_of(entry["spools"])
-        total = len(entry["spools"])
-        if exclusion_of(entry["fil"]):
-            row = _row(fid, entry["fil"], grams, count, total, template)
+    fil_by_id, by_fid = _group(spools, filaments)
+    lists = {"low": [], "out": [], "excluded": []}
+    for kind, fid, fil, grams, count, total, unknown, no_spools in _members(fil_by_id, by_fid, threshold):
+        row = _row(fid, fil, grams, count, total, template)
+        if no_spools:
+            row["no_spools"] = True
+        elif kind == "excluded":
             row["stock_unknown"] = unknown > 0   # a spool of unknown weight: grams is a floor
-            excluded.append(row)
-        elif count == 0:
-            out.append(_row(fid, entry["fil"], 0.0, 0, total, template))
-        elif not unknown and grams < threshold:
-            low.append(_row(fid, entry["fil"], grams, count, total, template))
-    # A filament with no spool on record at all is out too, after the others.
-    for fid, fil in fil_by_id.items():
-        if fid in by_fid:
-            continue
-        row = _row(fid, fil, 0.0, 0, 0, template)
-        row["no_spools"] = True
-        (excluded if row["excluded"] else out).append(row)
+        lists[kind].append(row)
+    low, out, excluded = lists["low"], lists["out"], lists["excluded"]
     low.sort(key=lambda r: (r["grams"], r["display"].lower(), r["filament_id"]))
     out.sort(key=lambda r: (bool(r.get("no_spools")), r["display"].lower(), r["filament_id"]))
     excluded.sort(key=lambda r: (r["display"].lower(), r["filament_id"]))

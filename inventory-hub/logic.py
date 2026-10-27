@@ -5142,16 +5142,30 @@ def process_audit_scan(scan_result):
 
     return {"status": "error", "msg": "Unknown scan type"}
 
-def get_live_spools_data(spool_ids):
+def get_live_spools_data(spool_ids, spools=None):
     """
-    Rapidly queries Spoolman for a specific list of Spool IDs and returns 
+    Rapidly queries Spoolman for a specific list of Spool IDs and returns
     their formatted display strings and colors.
     Used by the frontend to live-refresh the Dashboard Buffer and Location Manager UI.
+
+    `spools` (Group 57.5): the dashboard heartbeat's one spool-list read
+    (spoolman_api.SpoolListRead), shared with its other sections. An id the
+    list holds is answered from it; only an id it lacks (an archived buffered
+    spool: the list is the non-archived one), or every id when that read
+    failed, is read on its own, as every id was before (ten buffered spools
+    were ten reads every 5 s). /api/spools/refresh passes none: one read per id.
     """
+    listed = None
+    if spools is not None:
+        rows = spools.get()
+        if rows is not None:
+            listed = {str(s.get('id')): s for s in rows if isinstance(s, dict) and s.get('id') is not None}
     results = {}
     for sid in spool_ids:
         try:
-            spool_data = spoolman_api.get_spool(sid)
+            spool_data = listed.get(str(sid)) if listed is not None else None
+            if spool_data is None:
+                spool_data = spoolman_api.get_spool(sid)
             if spool_data:
                 info = spoolman_api.format_spool_display(spool_data)
                 

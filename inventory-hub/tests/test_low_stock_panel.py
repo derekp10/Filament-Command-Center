@@ -1266,3 +1266,103 @@ def test_a_double_click_on_the_button_leaves_its_dialog_open(panel):
     page.wait_for_timeout(450)
     page.mouse.click(5, 5)                                    # a real click outside still closes it
     assert not _dialog_open(page)
+
+
+# --- Group 57.1 (Derek, 2026-10-25): one size, whatever it shows ------------------------
+
+def _frame(page):
+    """Where the window and its fixed parts are, rounded to the pixel."""
+    return page.evaluate("""(sel) => {
+        const p = document.querySelector(sel);
+        const at = (q) => { const r = p.querySelector(q).getBoundingClientRect();
+                            return [Math.round(r.top), Math.round(r.height)]; };
+        const r = p.getBoundingClientRect();
+        return { box: [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)],
+                 sub: at('[data-stock-sub]'), tools: at('[data-stock-tools]'),
+                 body: at('[data-stock-body]'), foot: at('[data-stock-foot]') };
+    }""", PANEL)
+
+
+def _many(n):
+    rep = copy.deepcopy(REPORT)
+    rep["low"] = [_row(1000 + i, f"Brand{i:02d} - PLA - Colour {i:02d}", 10.0 + i, 1, 1) for i in range(n)]
+    return rep
+
+
+def test_the_window_keeps_one_size_whatever_it_shows(panel):
+    """It jumped in size with its content (Derek, 2026-10-25: "which makes
+    everything move around in a weird way"): now the window, the line under its
+    title, the tabs and filter row and the key legend are in the same place
+    while it reads, on every list, with a filter that matches nothing, a long
+    list, nothing at all and an error. RED on the base: the panel was as tall as
+    its content (max-height: 86vh), and the tabs row was taken out while it
+    read."""
+    page, open_ = panel
+    open_(_answer(_many(30), delay=600))
+    frames = {"loading": _frame(page)}
+    _wait_state(page, "ready")
+    frames["low (30 rows)"] = _frame(page)
+    for key in ("out", "excluded"):
+        _tab(page, key)
+        frames[key] = _frame(page)
+    page.locator(FILTER).fill("nothing matches this")
+    frames["no match"] = _frame(page)
+    open_(_answer(EMPTY), click=False)
+    _wait_state(page, "empty")
+    frames["nothing at all"] = _frame(page)
+    open_(_answer(DOWN, status=502), click=False)
+    _wait_state(page, "error")
+    frames["error"] = _frame(page)
+    first = frames["loading"]
+    moved = {name: f for name, f in frames.items() if f != first}
+    assert not moved, f"the window or its fixed parts moved: {first} vs {moved}"
+
+
+@pytest.mark.parametrize("size,viewport,height", [
+    ("standard", (1600, 1300), 640),     # 40rem
+    ("xlarge", (1600, 1300), 800),       # 40rem at a 20 px root
+    ("standard", (1280, 600), 516),      # 86vh: a short window still fits
+])
+def test_its_height_is_set_in_rem_and_fits_the_window(panel, size, viewport, height):
+    page, open_ = panel
+    page.set_viewport_size({"width": viewport[0], "height": viewport[1]})
+    page.evaluate("(s) => document.documentElement.setAttribute('data-fcc-text-size', s)", size)
+    open_(_answer(REPORT))
+    _wait_state(page, "ready")
+    box = _frame(page)["box"]
+    assert abs(box[3] - height) <= 1, box
+    assert box[1] >= 0 and box[1] + box[3] <= viewport[1], box
+
+
+def test_a_long_list_scrolls_inside_the_window(panel):
+    """Only the list scrolls (Derek: "If that means adding a scrollbar to the
+    list of filaments, that's fine"); ↑ from the first row wraps to the last,
+    which is scrolled into view inside the window."""
+    page, open_ = panel
+    open_(_answer(_many(40)))
+    _wait_state(page, "ready")
+    before = _frame(page)
+    assert page.locator(BODY).evaluate("b => b.scrollHeight > b.clientHeight + 100")
+    page.keyboard.press("ArrowUp")
+    assert _active_fid(page) == "1039"
+    assert page.locator(BODY).evaluate("b => b.scrollTop > 0")
+    row = page.locator(BODY + " .fcc-stock-row.kb-active").bounding_box()
+    body = page.locator(BODY).bounding_box()
+    assert row["y"] >= body["y"] - 1 and row["y"] + row["height"] <= body["y"] + body["height"] + 1, (row, body)
+    assert _frame(page) == before
+
+
+def test_the_line_under_the_title_keeps_its_words_while_it_reads(panel):
+    """It reads the same before the list arrives, with the line the dashboard's
+    count last said (else "…"), so it never changes length once the list is in."""
+    page, open_ = panel
+    open_(_answer(REPORT, delay=800))
+    sub = page.locator(PANEL + " [data-stock-sub]")
+    assert sub.text_content().strip() == ("Per filament, across its in-stock spools: low is under … g "
+                                          "(⚙️ Settings → Behavior).")
+    _wait_state(page, "ready")
+    assert "low is under 250 g" in sub.text_content()
+    page.keyboard.press("Escape")
+    page.evaluate("() => window._renderLowStockCount({read_ok: true, count: 3, low: 1, out: 2, threshold_g: 300})")
+    open_(_answer(REPORT, delay=800), click=False)
+    assert "low is under 300 g" in sub.text_content()
