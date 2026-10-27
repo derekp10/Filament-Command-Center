@@ -33,9 +33,9 @@ def fetch_printer_credentials(filabridge_url: str, printer_name: str):
     ``locations_db.get_printer_credentials``. ``filabridge_url`` is retained for
     the call-site/back-compat contract (every consumer + test stub passes it) but
     is now UNUSED — the same pattern Scope 1 used to retire ``_fb_spool_location``'s
-    FilaBridge read. The one-time boot seed (``fetch_all_filabridge_printers`` →
-    ``locations_db.seed_printer_credentials``) is what primes the rows from
-    FilaBridge before it is decommissioned.
+    FilaBridge read. A one-time boot seed primed the rows from FilaBridge before it
+    was decommissioned; it was removed in Group 56.5, and a row's connection is now
+    entered in Settings → Printer Connections.
 
     Lazy local import of ``locations_db`` to avoid a circular import at module
     load (``locations_db`` / ``app`` import ``prusalink_api``).
@@ -46,32 +46,6 @@ def fetch_printer_credentials(filabridge_url: str, printer_name: str):
     except Exception as e:
         print(f"Error reading printer credentials for {printer_name!r}: {e}")
         return None
-
-
-def fetch_all_filabridge_printers(filabridge_url: str) -> Dict[str, Dict]:
-    """Pull the full ``{printer_name: {ip_address, api_key}}`` map from FilaBridge
-    ``GET /printers``. Used ONLY by the one-time boot credential SEED
-    (``locations_db.seed_printer_credentials``) while FilaBridge is still up —
-    NOT on any live path. Returns ``{}`` on any failure (fail-soft: a missing
-    FilaBridge just means the seed retries next boot)."""
-    out: Dict[str, Dict] = {}
-    try:
-        response = requests.get(f"{filabridge_url}/printers", timeout=5)
-        if response.ok:
-            printers = (response.json() or {}).get('printers', {}) or {}
-            for _pid, pdata in printers.items():
-                if not isinstance(pdata, dict):
-                    continue
-                name = pdata.get('name')
-                if not name:
-                    continue
-                out[str(name)] = {
-                    "ip_address": pdata.get("ip_address"),
-                    "api_key": pdata.get("api_key"),
-                }
-    except Exception as e:
-        print(f"Error fetching all printers from FilaBridge: {e}")
-    return out
 
 
 def _parse_weights_from_match(match) -> Dict[int, float]:
@@ -97,8 +71,15 @@ def parse_footer_usage(gcode_content: str) -> Dict[int, float]:
     0,1,2,…). Empty dict when the footer is absent."""
     if not gcode_content:
         return {}
-    m = re.search(r';?\s*filament used \[g\]\s*=\s*([0-9.,\s]+)', gcode_content)
+    m = _GCODE_G_RE.search(gcode_content)
     return _parse_weights_from_match(m) if m else {}
+
+
+def footer_usage_present(gcode_content: str) -> bool:
+    """True when the file carries a per-tool ``filament used [g] = …`` footer line,
+    even one that lists only zeros: Group 56.3 tells a completion whose footer
+    couldn't be read from one whose footer lists no filament."""
+    return bool(gcode_content) and _GCODE_G_RE.search(gcode_content) is not None
 
 
 # --- Cancelled-print partial usage (FilaBridge absorption §9.2, slice 3) ------
@@ -167,72 +148,36 @@ def fetch_cancel_gcode(ip_address: str, api_key: str, filename: str,
         return None
 
 
+_GCODE_G_RE = re.compile(r';?\s*filament used \[g\]\s*=\s*([0-9.,\s]+)')
 _GCODE_MM_RE = re.compile(r';?\s*filament used \[mm\]\s*=\s*([0-9.,\s]+)')
+_TOOL_RE = re.compile(r'^T(\d+)(?![0-9])')
+_E_RE = re.compile(r'E(-?\d*\.?\d+)')
+# Every move that can extrude: G0 / G1 lines AND G2 / G3 arcs (Group 56.1),
+# with or WITHOUT a trailing space (Prusa no-spaces gcode emits
+# `G1X92.3Y9.4E.001` and `G3X122.82Y109.2I7.785J7.955E.23882`), zero-padded
+# (`G01`, `G03`, which the firmware reads as G1 / G3) or not. The lookahead keeps
+# G10 / G11 / G12 / G28 / G29 out, padded or not. Arc-fitted prints put 4-9% of a
+# tool's filament on arcs (the raccoon INDX print: 48.43 g counted against a
+# 52.27 g footer without them, 52.26 g with them).
+_EXTRUDING_MOVE_RE = re.compile(r'^G0*[0-3](?![0-9])')
 
 
-def parse_partial_filament_usage(gcode_content: str, reached_fraction: float) -> Dict[int, float]:
-    """Per-toolhead ACTUAL grams extruded up to a cancel point — the cancelled-
-    print partial-deduction core (FilaBridge absorption design §9.2, rung 1).
+def _walk_extrusion(gcode_content: str, cut_bytes: List[int], default_tool: int):
+    """One pass over a print file: each tool's extruded mm up to every byte in
+    `cut_bytes`, and over the whole file.
 
-    A cancelled print's ``filament used [g]`` footer is the FULL-job estimate,
-    so deducting it would massively over-charge. Instead we parse the gcode from
-    the start up to the byte position actually reached (PrusaLink ``progress`` is
-    ``sd_percent_done`` = the gcode FILE-BYTE fraction), summing each tool's real
-    extrusion, then convert mm->g using the slicer's OWN per-tool grams-per-mm
-    ratio (from the ``filament used [g]`` and ``[mm]`` footers — no material
-    density table needed, and it's exact for that filament).
-
-    Critically this is PER-TOOLHEAD by construction: a tool never selected
-    before the cancel sums to zero extrusion and is simply absent from the
-    result (the XL "untouched head deducts 0" invariant, satisfied natively).
-
-    Args:
-        gcode_content: the FULL gcode file text (footer + body). ``reached_byte``
-            is computed against this content's length, so it must be the whole
-            file, not a Range subset.
-        reached_fraction: progress 0.0..1.0 (``progress`` percent / 100) — the
-            fraction of the file reached when the print was cancelled.
-
-    Returns:
-        ``{toolhead_index: grams}`` for tools that extruded before the cancel.
-        Untouched tools are omitted (caller treats absent as 0). Empty dict when
-        nothing extruded (cancel before first extrusion) or the footer lacks the
-        per-tool g/mm metadata needed to convert.
+    A line counts toward a cut only when it ENDS at or before that byte (a line
+    the printer had started but not finished is left out). Returns
+    ``(cuts, whole)``: ``cuts`` is a list in `cut_bytes` order of
+    ``({tool: mm}, saw_tool)``, and ``whole`` is the same pair for the file.
 
     Handles absolute (M82, default) and relative (M83) extrusion, ``G92 E<n>``
     extruder-origin resets, per-tool absolute-E context across ``T<n>`` changes
     (each tool changer head has its own E coordinate), and inline ``;`` comments.
     """
-    if not gcode_content:
-        return {}
-
-    # --- per-tool grams-per-mm from the slicer footers ---------------------
-    g_match = re.search(r';?\s*filament used \[g\]\s*=\s*([0-9.,\s]+)', gcode_content)
-    mm_match = _GCODE_MM_RE.search(gcode_content)
-    if not g_match or not mm_match:
-        return {}
-    grams = _parse_weights_from_match(g_match)
-    mms = _parse_weights_from_match(mm_match)
-    g_per_mm = {
-        tool: grams[tool] / mm
-        for tool, mm in mms.items()
-        if mm > 0 and tool in grams
-    }
-    if not g_per_mm:
-        return {}
-
-    # --- prefix-parse the body up to the reached byte position -------------
-    reached_fraction = max(0.0, min(1.0, float(reached_fraction)))
-    total_bytes = len(gcode_content.encode('utf-8'))
-    reached_byte = int(reached_fraction * total_bytes)
-    if reached_byte <= 0:
-        return {}
-
-    # When the gcode carries no explicit `Tn` (a single-material print whose
-    # one tool is selected outside the body, common on MMU), attribute all
-    # extrusion to the sole tool the footer marks as used. Multi-tool prints
-    # have `Tn` changes and start at tool 0.
-    default_tool = next(iter(g_per_mm)) if len(g_per_mm) == 1 else 0
+    order = sorted(range(len(cut_bytes)), key=lambda i: cut_bytes[i])
+    cuts = [None] * len(cut_bytes)
+    nxt = 0
     active_tool = default_tool
     relative_e = False           # M82 absolute (default) vs M83 relative
     e_high: Dict[int, float] = {}   # per-tool high-water E since last G92 reset
@@ -242,14 +187,16 @@ def parse_partial_filament_usage(gcode_content: str, reached_fraction: float) ->
 
     for line in gcode_content.splitlines(keepends=True):
         consumed += len(line.encode('utf-8'))
-        if consumed > reached_byte:
-            break
+        # Every cut this line runs past sees the state before the line.
+        while nxt < len(order) and consumed > cut_bytes[order[nxt]]:
+            cuts[order[nxt]] = (dict(extruded_mm), saw_tool)
+            nxt += 1
         code = line.split(';', 1)[0].strip()
         if not code:
             continue
         upper = code.upper()
 
-        tmatch = re.match(r'^T(\d+)(?![0-9])', upper)
+        tmatch = _TOOL_RE.match(upper)
         if tmatch:
             active_tool = int(tmatch.group(1))
             saw_tool = True
@@ -261,7 +208,7 @@ def parse_partial_filament_usage(gcode_content: str, reached_fraction: float) ->
             relative_e = True
             continue
         if upper.startswith('G92'):
-            em = re.search(r'E(-?\d*\.?\d+)', upper)
+            em = _E_RE.search(upper)
             if em:
                 # G92 E<v> redefines the E origin: reset the high-water mark so
                 # extrusion past <v> counts (filament already used stays counted).
@@ -272,10 +219,8 @@ def parse_partial_filament_usage(gcode_content: str, reached_fraction: float) ->
                 # explicitly, so this only guards hand/odd gcode.)
                 e_high[active_tool] = 0.0
             continue
-        # Match G0/G1 with or WITHOUT a trailing space (Prusa no-spaces gcode
-        # emits `G1X92.3Y9.4E.001`); exclude G10/G11 etc.
-        if re.match(r'^G[01](?![0-9])', upper):
-            em = re.search(r'E(-?\d*\.?\d+)', upper)
+        if _EXTRUDING_MOVE_RE.match(upper):
+            em = _E_RE.search(upper)
             if not em:
                 continue
             e = float(em.group(1))
@@ -291,19 +236,114 @@ def parse_partial_filament_usage(gcode_content: str, reached_fraction: float) ->
                     extruded_mm[active_tool] = extruded_mm.get(active_tool, 0.0) + (e - hi)
                     e_high[active_tool] = e
 
-    # If we never saw a Tn but accumulated onto a default that has no g/mm,
-    # fold it onto the sole footer tool (single-material, no explicit select).
-    if not saw_tool and len(g_per_mm) == 1 and extruded_mm:
-        sole = next(iter(g_per_mm))
-        merged = sum(extruded_mm.values())
-        extruded_mm = {sole: merged}
+    whole = (dict(extruded_mm), saw_tool)
+    for i in order[nxt:]:
+        cuts[i] = whole
+    return cuts, whole
 
-    # --- convert extruded mm -> grams via the slicer's own ratio -----------
-    result = {}
-    for tool, mm in extruded_mm.items():
-        if mm > 0 and tool in g_per_mm:
-            result[tool] = round(mm * g_per_mm[tool], 4)
-    return result
+
+def measure_filament_usage(gcode_content: str, reached_fractions) -> Optional[Dict]:
+    """Per-toolhead grams a print used up to each of `reached_fractions`, from ONE
+    pass over the file (Group 56.2) — the cancelled-print partial-deduction core
+    (FilaBridge absorption design §9.2, rung 1) and the run-out split's boundaries.
+
+    A cancelled print's ``filament used [g]`` footer is the FULL-job estimate, so
+    deducting it would massively over-charge. Instead the gcode is walked from the
+    start, summing each tool's real extrusion up to the byte actually reached
+    (PrusaLink ``progress`` is ``sd_percent_done`` = the gcode FILE-BYTE fraction)
+    and on to the end of the file. Each tool's charge is the share of its own
+    whole-file extrusion reached, times the footer's grams for that tool, never
+    more than the footer: ``footer_g × partial_mm / whole_mm``. The footer is the
+    slicer's count of the whole job, so a walk that over- or under-counts the file
+    as a whole (the Core One fixture walks ~1.4% over, from moves the slicer counts
+    differently) can't move a cancel's charge past it, and a cancel at 99% stays
+    under the footer even where the walk leaves out a final wipe. A tool whose walk
+    sums to nothing over the file falls back to mm × the footer's own g/mm.
+
+    Critically this is PER-TOOLHEAD by construction: a tool never selected before
+    the cancel sums to zero extrusion and is simply absent from that result (the XL
+    "untouched head deducts 0" invariant, satisfied natively).
+
+    Args:
+        gcode_content: the FULL gcode file text (footer + body). Cut bytes are
+            computed against this content's length, so it must be the whole file,
+            not a Range subset.
+        reached_fractions: progress values 0.0..1.0 (``progress`` percent / 100).
+
+    Returns:
+        ``{"partials": [{tool: grams}, ...], "whole": {tool: grams},
+        "footer": {tool: grams}}``: one partial per fraction, in order (untouched
+        tools omitted; empty when nothing extruded before that cut), the whole-file
+        walk at the footer's g/mm (what the 2% check compares, unscaled), and the
+        footer's grams for every tool it gives a g/mm for. ``None`` when the file
+        lacks the per-tool ``[g]`` / ``[mm]`` footer needed to convert.
+    """
+    if not gcode_content:
+        return None
+
+    # --- per-tool grams-per-mm from the slicer footers ---------------------
+    g_match = _GCODE_G_RE.search(gcode_content)
+    mm_match = _GCODE_MM_RE.search(gcode_content)
+    if not g_match or not mm_match:
+        return None
+    grams = _parse_weights_from_match(g_match)
+    mms = _parse_weights_from_match(mm_match)
+    g_per_mm = {
+        tool: grams[tool] / mm
+        for tool, mm in mms.items()
+        if mm > 0 and tool in grams
+    }
+    if not g_per_mm:
+        return None
+
+    total_bytes = len(gcode_content.encode('utf-8'))
+    cut_bytes = [int(max(0.0, min(1.0, float(f))) * total_bytes) for f in reached_fractions]
+
+    # When the gcode carries no explicit `Tn` (a single-material print whose
+    # one tool is selected outside the body, common on MMU), attribute all
+    # extrusion to the sole tool the footer marks as used. Multi-tool prints
+    # have `Tn` changes and start at tool 0.
+    default_tool = next(iter(g_per_mm)) if len(g_per_mm) == 1 else 0
+    cuts, whole = _walk_extrusion(gcode_content, cut_bytes, default_tool)
+
+    def _fold(walked):
+        mm_by_tool, saw_tool = walked
+        # If we never saw a Tn but accumulated onto a default that has no g/mm,
+        # fold it onto the sole footer tool (single-material, no explicit select).
+        if not saw_tool and len(g_per_mm) == 1 and mm_by_tool:
+            return {next(iter(g_per_mm)): sum(mm_by_tool.values())}
+        return mm_by_tool
+
+    whole_mm = _fold(whole)
+    partials = []
+    for cut, walked in zip(cut_bytes, cuts):
+        result = {}
+        if cut > 0:
+            for tool, mm in _fold(walked).items():
+                if mm <= 0 or tool not in g_per_mm:
+                    continue
+                total_mm = whole_mm.get(tool, 0.0)
+                if total_mm > 0:
+                    charge = grams[tool] * mm / total_mm
+                else:
+                    charge = mm * g_per_mm[tool]
+                result[tool] = round(min(charge, grams[tool]), 4)
+        partials.append(result)
+    return {
+        "partials": partials,
+        "whole": {tool: round(mm * g_per_mm[tool], 4)
+                  for tool, mm in whole_mm.items() if mm > 0 and tool in g_per_mm},
+        "footer": {tool: grams[tool] for tool in g_per_mm},
+    }
+
+
+def parse_partial_filament_usage(gcode_content: str, reached_fraction: float) -> Dict[int, float]:
+    """``{toolhead_index: grams}`` a print used up to `reached_fraction` (0.0..1.0):
+    :func:`measure_filament_usage` for one cut. Untouched tools are omitted (the
+    caller treats absent as 0). Empty dict when nothing extruded before the cut, or
+    the footer lacks the per-tool g/mm metadata needed to convert."""
+    measured = measure_filament_usage(gcode_content, [reached_fraction])
+    return measured["partials"][0] if measured else {}
 
 
 # Marker PrusaSlicer emits immediately before each planned color change, e.g.
@@ -385,12 +425,15 @@ def compute_segment_usage(ip_address: str, api_key: str, filename: str,
     ``boundaries`` is an ordered list of PrusaLink progress fractions (0..1, the same
     ``progress`` stored on each ``swap_log`` event). Each is remapped to the decoded
     G-code position via :func:`bgcode_decode.progress_to_decoded_fraction` (the M73
-    time-progress inversion, scale-validated 2026-06-12) and prefix-parsed with
-    :func:`parse_partial_filament_usage`.
+    time-progress inversion, scale-validated 2026-06-12), and all of them are measured
+    in one pass by :func:`measure_filament_usage`, so each cumulative is the share of
+    the tool's whole-file extrusion reached times its footer grams, never past the
+    footer (Group 56.2).
 
     Returns ``{"footer": {tool: grams}, "cums": [ {tool: grams}, … ]}`` — the full-job
     footer plus one cumulative dict per boundary (same order as ``boundaries``) — or
-    ``None`` on any download/decode/parse failure so the caller degrades to the
+    ``None`` on any download/decode/parse failure (a file without the ``[mm]``
+    footer included: its boundaries can't be measured) so the caller degrades to the
     full-footer manual-split review rather than writing a guessed number.
     """
     raw = _download_file_bytes(ip_address, api_key, filename)
@@ -411,8 +454,10 @@ def compute_segment_usage(ip_address: str, api_key: str, filename: str,
         footer = parse_footer_usage(gcode)
         if not footer:
             return None
-        cums = [parse_partial_filament_usage(gcode, _remap(b)) for b in boundaries]
-        return {"footer": footer, "cums": cums}
+        measured = measure_filament_usage(gcode, [_remap(b) for b in boundaries])
+        if not measured:
+            return None
+        return {"footer": footer, "cums": measured["partials"]}
     except Exception as e:
         print(f"compute_segment_usage: failed for {filename}: {e}")
         return None

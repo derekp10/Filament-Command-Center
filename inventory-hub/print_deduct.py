@@ -23,6 +23,7 @@ commit) so intra-module calls see the patches.
 Python 3.9 runtime (the container image) — keep syntax 3.9-safe.
 """
 from flask import request, jsonify  # type: ignore
+import html
 import math
 import requests  # type: ignore
 import time
@@ -39,6 +40,23 @@ import cancel_fetch_store  # type: ignore
 import stock_report  # type: ignore  # Group 49.2b: the low-stock warning after a deduct
 
 from app_core import app
+
+
+def _esc(text):
+    """Free text for an Activity Log line: a print's filename, an exception. The
+    log's lines land in the page's innerHTML (CLAUDE.md "Activity Log messages are
+    HTML"), so a filename with `<` or `&` drew wrong (Group 56.4). Escaped where
+    each line is built; what the ledger and review records store stays raw."""
+    return html.escape(str(text), quote=False)
+
+
+class CompletionMayHaveCharged(Exception):
+    """A completion deduct raised once its spool writes had begun (a write itself,
+    or the ledger write after them): the spools may already be charged, so the
+    caller must never run it again blind. The deferred-fetch loop used to retry
+    any raise on the next IDLE tick and charge the footer again (Group 56 review).
+    Raised `from` the original error, whose text it carries."""
+
 
 def _resolve_active_locs_for_printer(printer_map, printer_name, filabridge_url):
     """Return [(loc_id, p_info)] for `printer_name`, ordered so the
@@ -428,7 +446,7 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label="",
                         ok = True
                         state.add_log_entry(
                             f"⚠️ {printer_name} {str(loc_id).upper()}: Spoolman reported an error for "
-                            f"Spool #{sid} ({err}), but the write landed — counted once.",
+                            f"Spool #{sid} ({_esc(err)}), but the write landed — counted once.",
                             "WARNING", "ffaa00")
                 if ok:
                     spools_updated += 1
@@ -454,7 +472,7 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label="",
                 else:
                     state.add_log_entry(
                         f"❌ {printer_name} {str(loc_id).upper()}: failed to auto-deduct from "
-                        f"Spool #{sid}: {err}", "ERROR", "ff4444")
+                        f"Spool #{sid}: {_esc(err)}", "ERROR", "ff4444")
                     if failed_out is not None:
                         # 43.2 — the attempt, for the uncharged-grams card: a write
                         # that reported failure may still have landed (the re-read
@@ -503,7 +521,7 @@ def _toolheads_charged(details):
 
 def _record_applied_deduct(printer_name, job_id, *, filename, scale, details,
                            usage_map, known_positions=None, confirmed=False,
-                           fb_url=None, active_locs=None, failed=None):
+                           fb_url=None, active_locs=None, failed=None, read_heads=False):
     """Single source of truth for the tail of an auto-applied deduct: record the
     ACTUALLY-applied grams in the exactly-once ledger, then surface any shortfall
     (requested-but-not-applied grams) as a 2dp WARNING so it's never silently lost.
@@ -529,8 +547,9 @@ def _record_applied_deduct(printer_name, job_id, *, filename, scale, details,
     job to charge again. `failed` (the apply loop's failed_out) are writes that
     reported failure and couldn't be confirmed by a re-read: the card carries them
     as 43.6-stamped rows, so its Apply checks whether each one landed before
-    charging anything. `fb_url` / `active_locs` let the card name every head at
-    print end; without them it is built from the deduct's own details. An id-less
+    charging anything. `read_heads` (Group 56.5: the deduct paths pass it) lets
+    the card name every head at print end, read now through `active_locs` when
+    given; without it the card is built from the deduct's own details. An id-less
     job gets no card (its key couldn't be told apart from the next id-less one),
     only the WARNING.
 
@@ -551,13 +570,14 @@ def _record_applied_deduct(printer_name, job_id, *, filename, scale, details,
             try:
                 card = _stash_shortfall_review(
                     printer_name, job_id, filename=filename, scale=scale, uncharged=uncharged,
-                    details=details, failed=failed, fb_url=fb_url, active_locs=active_locs)
+                    details=details, failed=failed, fb_url=fb_url, active_locs=active_locs,
+                    read_heads=read_heads)
             except Exception as e:
                 # The spools are already charged: the ledger write below must still
                 # happen, or the job is deducted again on the next retry.
                 state.add_log_entry(
                     f"❌ {printer_name}: couldn't open a review card for {shortfall:.2f}g of "
-                    f"'{filename}' that no spool took ({e}) — weigh the spools to true up.",
+                    f"'{_esc(filename)}' that no spool took ({_esc(e)}) — weigh the spools to true up.",
                     "ERROR", "ff4444")
     extra = {"confirmed": True} if confirmed else {}
     if shortfall > 0.05:
@@ -566,14 +586,14 @@ def _record_applied_deduct(printer_name, job_id, *, filename, scale, details,
                                       scale=scale, grams=applied, **extra)
     if card is not None:
         state.add_log_entry(
-            f"⚠️ {printer_name}: {shortfall:.2f}g of '{filename}' wasn't deducted "
+            f"⚠️ {printer_name}: {shortfall:.2f}g of '{_esc(filename)}' wasn't deducted "
             f"({_shortfall_reasons(card)}) — pick the spool that took it in 🛑 Review, "
             f"or Discard.", "WARNING", "ffaa00",
             meta={"type": "cancel_deduct_pending", "printer_name": printer_name,
                   "job_id": card["job_id"]})
     elif shortfall > 0.05:
         state.add_log_entry(
-            f"⚠️ {printer_name}: {shortfall:.2f}g of '{filename}' wasn't deducted "
+            f"⚠️ {printer_name}: {shortfall:.2f}g of '{_esc(filename)}' wasn't deducted "
             f"(no bound spool, a failed write, or a near-empty spool) — weigh that "
             f"spool to true up.", "WARNING", "ffaa00")
     # Group 49.2b: one Activity Log warning per filament this print took under
@@ -624,7 +644,7 @@ def _shortfall_card_exists(printer_name, job_id, filename, scale):
     print_deduct_ledger.record_deduct(printer_name, job_id, filename=filename, scale=scale,
                                       recovered=True)
     state.add_log_entry(
-        f"⚠️ {printer_name}: '{filename}' was already deducted — its uncharged-grams card "
+        f"⚠️ {printer_name}: '{_esc(filename)}' was already deducted — its uncharged-grams card "
         f"exists but the job's ledger entry was missing (a restart mid-deduct?), so nothing "
         f"was charged again.", "WARNING", "ffaa00")
     return True
@@ -658,7 +678,8 @@ def _uncharged_by_position(usage_map, details, known_positions=None):
 
 
 def _stash_shortfall_review(printer_name, job_id, *, filename, scale, uncharged, details=(),
-                            failed=(), fb_url=None, active_locs=None, heads=None):
+                            failed=(), fb_url=None, active_locs=None, heads=None,
+                            read_heads=False):
     """Group 43.2 — stash a review card for grams a deduct couldn't charge (a
     spool's record ran out, a head had no spool or two, a write failed), so they
     can still be placed: job 1104's 27.12 g went to no spool after #99's record
@@ -669,7 +690,8 @@ def _stash_shortfall_review(printer_name, job_id, *, filename, scale, uncharged,
     taken from the deduct's own details, because the auto-archive has already
     moved a run-out spool off its head; the other heads at that moment are there
     for the picker (the joined spool among them). `heads` is that snapshot when
-    the caller has it, else it's read now (only when `fb_url` is given). A write
+    the caller has it, else it's read now when `read_heads` says so (Group 56.5:
+    an explicit flag; it was keyed on `fb_url` being passed). A write
     that reported failure (`failed`) may have landed, so it rides as a 43.6-stamped
     row whose Apply checks before charging, and its grams come off its line.
     Returns the record, or None when the card exists, was settled, or would be
@@ -681,7 +703,7 @@ def _stash_shortfall_review(printer_name, job_id, *, filename, scale, uncharged,
     lines = dict(uncharged)
     if heads is None:
         heads = (_heads_snapshot(printer_name, fb_url, active_locs=active_locs)
-                 if fb_url is not None else [])
+                 if read_heads else [])
     heads = [dict(h) for h in heads or []]
     by_line = {}
     for h in heads:
@@ -950,31 +972,49 @@ def _record_swap_events(entry, end_snap, progress, runout=False):
     return added
 
 
-def _log_cancel_uncomputable(printer_name, filename, reached_fraction, content):
+def _log_cancel_uncomputable(printer_name, filename, reached_fraction, content, reason=None):
     """Operator-facing log for a cancel whose partial we couldn't compute,
-    distinguishing the three reasons so a cancel never goes SILENTLY
+    distinguishing the reasons so a cancel never goes SILENTLY
     un-deducted. Returns the status string the caller should surface.
       content is None      → download failed / binary .bgcode  → 'error' (WARNING)
+      reason "unreadable_moves" → the footer lists filament but the walk read no
+                                  extrusion at all (Group 56.2)  → 'no_usage' (WARNING)
+      reason "empty_footer" → the footer lists no filament (a profile with no
+                              density?)                           → 'no_usage' (WARNING)
       footer present        → genuine zero-extrusion cancel      → 'no_usage' (INFO)
       footer absent         → unrecognized gcode (non-Prusa?)    → 'no_usage' (WARNING)
     """
     pct = max(0.0, min(1.0, float(reached_fraction))) * 100
     if not content:
         state.add_log_entry(
-            f"🛑 Cancelled print on {printer_name} ('{filename}', ~{pct:.0f}%) — "
+            f"🛑 Cancelled print on {printer_name} ('{_esc(filename)}', ~{pct:.0f}%) — "
             f"couldn't fetch/parse the gcode (binary .bgcode or printer "
             f"unreachable); no partial deduct. Weigh the spool to true it up.",
             "WARNING", "ffaa00")
         return "error"
-    has_footer = ('filament used [g]' in content and 'filament used [mm]' in content)
-    if has_footer:
+    if reason == "unreadable_moves":
         state.add_log_entry(
-            f"🛑 Cancelled print on {printer_name} ('{filename}', ~{pct:.0f}%) — "
+            f"🛑 Cancelled print on {printer_name} ('{_esc(filename)}', ~{pct:.0f}%) — "
+            f"FCC couldn't read this file's moves (its footer lists filament, but the walk "
+            f"found no extrusion at all), so there's no partial deduct. Weigh the spool.",
+            "WARNING", "ffaa00")
+        return "no_usage"
+    if reason == "empty_footer":
+        state.add_log_entry(
+            f"🛑 Cancelled print on {printer_name} ('{_esc(filename)}', ~{pct:.0f}%) — "
+            f"its filament footer lists no filament (a filament profile with no density?), "
+            f"so there's no partial deduct. Weigh the spool.",
+            "WARNING", "ffaa00")
+        return "no_usage"
+    has_footer = ('filament used [g]' in content and 'filament used [mm]' in content)
+    if has_footer and reason in (None, "nothing_reached"):
+        state.add_log_entry(
+            f"🛑 Cancelled print on {printer_name} ('{_esc(filename)}', ~{pct:.0f}%) — "
             f"no partial usage to deduct (cancelled before any extrusion).",
             "INFO")
     else:
         state.add_log_entry(
-            f"🛑 Cancelled print on {printer_name} ('{filename}', ~{pct:.0f}%) — "
+            f"🛑 Cancelled print on {printer_name} ('{_esc(filename)}', ~{pct:.0f}%) — "
             f"gcode has no recognized per-tool 'filament used' footer "
             f"(non-Prusa slicer?); can't compute the partial. Weigh the spool.",
             "WARNING", "ffaa00")
@@ -982,19 +1022,30 @@ def _log_cancel_uncomputable(printer_name, filename, reached_fraction, content):
 
 
 def _compute_cancel_usage(printer_name, filename, job_id, reached_fraction,
-                          ip_address, api_key, use_footer=False):
+                          ip_address, api_key, use_footer=False, ambiguous=False):
     """Download + parse a print → (usage_map, terminal).
     On success: (usage_map, None). On a can't-compute outcome: (None, status
     dict). Shared by the cancel paths (auto-apply deduct_cancelled_print + preview
     _create_pending_cancel_review) AND the Phase-2 completion path
     (deduct_completed_print).
 
-    use_footer=False (cancel/partial): prefix-parse the body up to the cancel
-    point. use_footer=True (COMPLETED print): parse the full per-tool footer (the
-    exact slicer estimate = what FilaBridge billed — the cancel prefix-parse's
-    high-water-mark E omits the final wipe/ram tail, which a completion should
-    keep). Both yield {tool_index: grams} in the same space, so the single-tool
-    fold + downstream resolution are identical.
+    use_footer=False (cancel/partial): one pass over the body (Group 56.2,
+    prusalink_api.measure_filament_usage) gives each tool's share of its own
+    whole-file extrusion reached by the cancel point, times the footer's grams,
+    never more than the footer; a head whose whole-file walk drifts more than 2%
+    from the footer gets one WARNING (_warn_parse_gap). use_footer=True (COMPLETED
+    print): parse the full per-tool footer (the exact slicer estimate = what
+    FilaBridge billed). Both yield {tool_index: grams} in the same space, so the
+    single-tool fold + downstream resolution are identical.
+
+    `no_usage` carries a `reason` (56.3): "no_footer" / "empty_footer" (the file's
+    filament footer is missing or lists nothing) and, for a cancel, "nothing_reached"
+    (the walk reads the file; nothing was extruded before the cut) or
+    "unreadable_moves" (the footer lists filament but the walk found no extrusion at
+    all). A completion's caller turns any of them into a review, and so does the
+    cancel-review path for an `ambiguous` end (it may have been a completion), for
+    every reason but "nothing_reached"; that path then logs the review's own line,
+    so the cancel's "weigh the spool" line is skipped here.
 
     fetch_cancel_gcode transparently decodes binary G-code (.bgcode — Derek's
     whole fleet) and remaps the progress fraction from compressed-file space to
@@ -1014,17 +1065,39 @@ def _compute_cancel_usage(printer_name, filename, job_id, reached_fraction,
         # once the printer leaves STOPPED). (Was an immediate terminal error.)
         return None, {"status": "error", "reason": "download_failed", "job_id": job_id}
     content = prepared["gcode"]
+    measured = None
     if use_footer:
         # Completion: the full per-tool slicer footer (exact, = FilaBridge).
         usage_map = prusalink_api.parse_footer_usage(content)
     else:
-        usage_map = prusalink_api.parse_partial_filament_usage(content, prepared["fraction"])
+        # Cancel: one pass gives the partial (scaled to the footer, clamped to it)
+        # and the whole-file walk the 2% check compares (Group 56.2).
+        measured = prusalink_api.measure_filament_usage(content, [prepared["fraction"]])
+        usage_map = measured["partials"][0] if measured else {}
     if not usage_map:
+        if use_footer or measured is None:
+            # "Lists no filament" only when the [g] footer is there and reads all
+            # zeros; a [g] footer with no [mm] one (the walk needs both) couldn't be
+            # read, whatever it lists.
+            reason = ("empty_footer" if prusalink_api.footer_usage_present(content)
+                      and not prusalink_api.parse_footer_usage(content) else "no_footer")
+        elif not measured.get("whole"):
+            reason = "unreadable_moves"
+        else:
+            reason = "nothing_reached"
+        terminal = {"status": "no_usage", "job_id": job_id, "reason": reason}
         if not use_footer:
-            # Cancel-specific "weigh the spool" log. A completion with an empty
-            # footer is a degenerate no-op — its caller logs its own line.
-            _log_cancel_uncomputable(printer_name, filename, reached_fraction, content)
-        return None, {"status": "no_usage", "job_id": job_id}
+            if reason == "unreadable_moves":
+                # Every footer tool is one the walk can't see (Group 56.2). Nothing is
+                # charged from this file; a one-head printer's line names its head.
+                _warn_parse_gap(printer_name, filename, measured, charged=False,
+                                sole_position=_sole_position(printer_name,
+                                                             measured.get("footer") or {}))
+            if not (ambiguous and reason != "nothing_reached"):
+                # Cancel-specific "weigh the spool" log.
+                _log_cancel_uncomputable(printer_name, filename, reached_fraction, content,
+                                         reason=reason)
+        return None, terminal
 
     # Single-toolhead printer + single-material print (Derek's Core One: one
     # head, one spool): the slicer's tool INDEX can differ from the printer's
@@ -1036,6 +1109,7 @@ def _compute_cancel_usage(printer_name, filename, job_id, reached_fraction,
     # genuinely-ambiguous case falls through to the orphan warning instead.
     # Multi-head printers (XL / future INDX toolchanger) keep their per-tool map
     # untouched — there the tool index IS the toolhead position (1:1).
+    sole = None
     try:
         if len(usage_map) == 1:
             pm = locations_db.get_active_printer_map()
@@ -1046,9 +1120,85 @@ def _compute_cancel_usage(printer_name, filename, job_id, reached_fraction,
                 grams = next(iter(usage_map.values()))
                 usage_map = {sole: grams}
     except Exception:
-        pass
+        sole = None
 
+    if measured:
+        _warn_parse_gap(printer_name, filename, measured, sole_position=sole)
     return usage_map, None
+
+
+# Group 56.2 — how far a cancel's whole-file G-code walk may drift from the
+# slicer's footer, per head, before FCC says so. Arcs counted, real files land
+# within ~1.4% (the Core One fixture) or ~0.01% (the raccoon INDX print).
+_PARSE_GAP_PCT = 2.0
+# ... and by at least this many grams: a Core One MMU3-profile file's start G-code
+# walks a fixed ~29 mm (~0.09 g) the slicer doesn't count, which is over 2% of any
+# print under ~4.4 g although nothing is misread (Group 56 review, round 2).
+_PARSE_GAP_MIN_G = 0.1
+
+
+def _sole_position(printer_name, tools):
+    """The one head a single-head printer's lone footer tool folds onto (as
+    _compute_cancel_usage's fold does), else None. Best-effort: None on any
+    failure to read the printer map."""
+    try:
+        if len(tools) != 1:
+            return None
+        positions = {info.get('position', 0) for info in locations_db.get_active_printer_map().values()
+                     if info.get('printer_name') == printer_name}
+        return next(iter(positions)) if len(positions) == 1 else None
+    except Exception:
+        return None
+
+
+def _warn_parse_gap(printer_name, filename, measured, sole_position=None, charged=True):
+    """Group 56.2 — one WARNING per charged head whose whole-file walk and slicer
+    footer differ by more than _PARSE_GAP_PCT (and by at least _PARSE_GAP_MIN_G),
+    and per footer tool the walk sees no extrusion of at all (it would never be
+    charged). It never blocks or changes the
+    charge: the cancel's partial is already scaled to the footer and clamped to it
+    (prusalink_api.measure_filament_usage), so the line only says FCC may be
+    misreading the file, the shape of the arcs bug that charged INDX cancels ~7%
+    short. `sole_position` is the head a single-head printer's lone tool was folded
+    onto, so the line names that head. `charged=False` (the walk read no extrusion
+    at all, so nothing is charged from this file) words the line for that.
+    Best-effort: never raises into the deduct."""
+    try:
+        whole = measured.get("whole") or {}
+        footer = measured.get("footer") or {}
+        tools = set((measured.get("partials") or [{}])[0])
+        # A footer tool the walk sees nothing of is never charged, whatever the
+        # cut: say so even when this cancel came before that tool printed (an
+        # untouched head still walks to its own total over the whole file).
+        tools |= {t for t, g in footer.items() if (g or 0) > 0 and float(whole.get(t) or 0) <= 0}
+        tools = sorted(tools)
+        try:
+            pm = locations_db.get_active_printer_map() or {}
+        except Exception:
+            pm = {}
+        heads_at = {}
+        for loc_id, info in pm.items():
+            if info.get('printer_name') == printer_name:
+                heads_at.setdefault(info.get('position', 0), []).append(str(loc_id).upper())
+        for tool in tools:
+            want = float(footer.get(tool) or 0)
+            if want <= 0:
+                continue
+            got = float(whole.get(tool) or 0)
+            gap = (got - want) / want * 100
+            if abs(gap) <= _PARSE_GAP_PCT or abs(got - want) < _PARSE_GAP_MIN_G:
+                continue
+            pos = sole_position if sole_position is not None else tool
+            head = "/".join(sorted(heads_at.get(pos, []))) or f"T{tool}"
+            then = ("The cancel charge is scaled to the slicer's figure, but a gap over "
+                    f"{_PARSE_GAP_PCT:.0f}% means FCC may be misreading this file."
+                    if charged else "Nothing was charged from this file: FCC can't read its moves.")
+            state.add_log_entry(
+                f"⚠️ {printer_name} {head}: FCC's G-code walk of '{_esc(filename)}' came to "
+                f"{got:.2f}g for this head against the slicer's {want:.2f}g ({gap:+.1f}%). {then}",
+                "WARNING", "ffaa00")
+    except Exception as e:
+        state.logger.debug(f"56.2 parse-gap check skipped for {printer_name}: {e}")
 
 
 def deduct_cancelled_print(printer_name, filename, job_id, reached_fraction,
@@ -1115,7 +1265,7 @@ def deduct_cancelled_print(printer_name, filename, job_id, reached_fraction,
     total = round(sum(d["grams"] for d in details), 1)
     state.add_log_entry(
         f"🛑 Cancelled-print partial deduct on {printer_name}{_toolheads_charged(details)}: {total:.1f}g across "
-        f"{spools_updated} spool(s) at ~{pct:.0f}% progress ('{filename}').",
+        f"{spools_updated} spool(s) at ~{pct:.0f}% progress ('{_esc(filename)}').",
         "WARNING")
     # Record the APPLIED grams (was sum(usage_map) = the full requested — the drift
     # the completed/cancel-review paths didn't have; 22.4(2)) + surface any shortfall
@@ -1123,14 +1273,14 @@ def deduct_cancelled_print(printer_name, filename, job_id, reached_fraction,
     _record_applied_deduct(
         printer_name, job_id, filename=filename, scale=reached_fraction,
         details=details, usage_map=usage_map, known_positions=known, fb_url=fb_url,
-        failed=failed)
+        failed=failed, read_heads=True)
     return {"status": "deducted", "spools_updated": spools_updated,
             "details": details, "usage_map": usage_map, "job_id": job_id}
 
 
 def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
                            ip_address=None, api_key=None, start_spools=None,
-                           swap_log=None):
+                           swap_log=None, before_charge=None):
     """Compute + AUTO-APPLY the full per-tool deduct for a COMPLETED (FINISHED)
     print — FCC's Phase-2 takeover of FilaBridge's completion deduct. Uses the
     slicer FOOTER (the full per-tool estimate, exact = what FilaBridge billed;
@@ -1161,11 +1311,34 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
     retries once the printer leaves FINISHED. Same status-dict shape as
     deduct_cancelled_print. Gated by the fcc_owns_completion_deduct flag at the
     EDGE (this primitive itself is unconditional, so the deferred-fetch retry can
-    still finish a completion enqueued while the flag was on)."""
+    still finish a completion enqueued while the flag was on).
+
+    `before_charge` (Group 56 review, round 4): called right before the first
+    spool write, after every early return; the deferred-fetch loop stamps its
+    queue entry with it, so no later tick or process charges the job again. A
+    raise from it propagates before anything is charged. A raise once the spool
+    writes have begun comes out as CompletionMayHaveCharged."""
     if fb_url is None:
         _, fb_url = config_loader.get_api_urls()
     if print_deduct_ledger.was_deducted(printer_name, job_id):
         return {"status": "skipped", "reason": "already deducted", "job_id": job_id}
+    if not print_deduct_ledger._is_blank_job(job_id) and \
+            cancel_review_store.has_pending(printer_name, job_id):
+        # A review already holds this job (a "couldn't measure" card, 56.3, or a
+        # no_spool / spool_changed one): a completion fired again (a restart's
+        # recovery) must not charge it behind the card, whose Discard would then
+        # overwrite the ledger entry with 0 g (Group 56 review, round 2). Say so:
+        # the card may have been opened for less than the whole print (an
+        # ambiguous end at 40% that then finished).
+        held = cancel_review_store.get_pending(printer_name, job_id) or {}
+        state.add_log_entry(
+            f"⚠️ {printer_name} finished '{_esc(filename)}', but a 🛑 review already holds this "
+            f"job ({_esc(held.get('kind') or 'partial')}, ~{float(held.get('progress') or 0) * 100:.0f}%), "
+            f"so FCC charged nothing more: settle it there, and weigh the spool if the card "
+            f"covers less than the whole print.", "WARNING", "ffaa00",
+            meta={"type": "cancel_deduct_pending", "printer_name": printer_name,
+                  "job_id": str(job_id)})
+        return {"status": "skipped", "reason": "already pending", "job_id": job_id}
     if _shortfall_card_exists(printer_name, job_id, filename, 1.0):
         return {"status": "skipped", "reason": "already deducted", "job_id": job_id}
     if not (ip_address and api_key):
@@ -1180,11 +1353,24 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
         printer_name, filename, job_id, 1.0, ip_address, api_key, use_footer=True)
     if terminal is not None:
         if terminal["status"] == "no_usage":
-            print_deduct_ledger.record_deduct(printer_name, job_id, filename=filename,
-                                              scale=1.0, grams=0)
-            state.add_log_entry(
-                f"✅ Completed print on {printer_name} ('{filename}') — no filament "
-                f"usage in the footer; nothing to deduct.", "INFO")
+            # Group 56.3: a completion whose footer FCC can't read (another
+            # slicer's file, a damaged one) or that lists no filament asks instead
+            # of recording 0 g: a ledger entry would close the job for good with
+            # nothing charged. The "couldn't measure" review writes no ledger
+            # entry; Discard (or weighing the spool) settles it.
+            reason = terminal.get("reason") or "no_footer"
+            if print_deduct_ledger._is_blank_job(job_id):
+                # No job id to hold a review on (43.2's rule for id-less jobs:
+                # every one would share one key, and the ledger can't record it
+                # either), so say it, every time.
+                state.add_log_entry(
+                    f"❓ {printer_name}: couldn't measure how much '{_esc(filename)}' used "
+                    f"({_UNMEASURED_WHY.get(reason, reason)}), and the printer gave no job id to "
+                    f"hold a review on — weigh the spool to true it up.", "WARNING", "ffaa00")
+                return {"status": "no_usage", "reason": reason, "job_id": job_id}
+            return _stash_unresolved_review(
+                printer_name, filename, job_id, 1.0, usage_map=None,
+                progress_unknown=True, reason=reason)
         elif terminal["status"] == "error":
             # Download failed — the Connect finish-screen LOCK (the completion
             # analogue of the cancel-screen lock §9.10). Defer; the monitor
@@ -1210,9 +1396,9 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
     # diff misses — notably A→B→A (ran out, replaced, original re-loaded → start==end).
     # Best-effort: any detection error falls through to auto-apply (NEVER block/drop a
     # completion on a detection bug).
+    changed = set()
     if start_spools or swap_log:
         try:
-            changed = set()
             used_positions = {p for p, g in usage_map.items() if g > 0}
             if start_spools:
                 end_snap = _snapshot_active_spools(printer_name, fb_url, active_locs=active_locs)
@@ -1230,18 +1416,31 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
                 for ev in swap_log:
                     if ev.get('position') in used_positions:
                         changed.add(ev.get('position'))
-            if changed:
-                return _route_completion_to_review(
-                    printer_name, filename, job_id, usage_map, fb_url, sorted(changed),
-                    active_locs=active_locs, swap_log=swap_log,
-                    ip_address=ip_address, api_key=api_key, start_spools=start_spools)
         except Exception:
-            pass  # detection is best-effort; fall through to auto-apply
+            changed = set()  # detection is best-effort; fall through to auto-apply
+    if changed:
+        # Outside the best-effort try (Group 56 review, round 4): a review that
+        # can't be written raised into it and fell through to the full-footer
+        # auto-apply, the very mis-attribution 22.3 routes away from. Now it
+        # raises before any charge (the deferred loop retries; the edge logs it).
+        return _route_completion_to_review(
+            printer_name, filename, job_id, usage_map, fb_url, sorted(changed),
+            active_locs=active_locs, swap_log=swap_log,
+            ip_address=ip_address, api_key=api_key, start_spools=start_spools)
 
+    if before_charge is not None:
+        # The deferred-fetch loop's persistent claim (Group 56 review, round 4):
+        # stamps its queue entry right before the first spool write. If the stamp
+        # can't be written, this raises before anything is charged.
+        before_charge()
     failed = []
-    spools_updated, details, known = _apply_usage_to_printer(
-        printer_name, usage_map, fb_url, strategy_label="Complete", active_locs=active_locs,
-        failed_out=failed)
+    try:
+        spools_updated, details, known = _apply_usage_to_printer(
+            printer_name, usage_map, fb_url, strategy_label="Complete", active_locs=active_locs,
+            failed_out=failed)
+    except Exception as e:
+        raise CompletionMayHaveCharged(
+            f"{e} (raised while charging the spools: some may already be charged)") from e
     if spools_updated == 0 and not failed:
         # Footer had usage but NO spool is bound at the active toolhead(s). Don't
         # burn a terminal grams=0 ledger entry (it permanently blocks recovery —
@@ -1261,14 +1460,18 @@ def deduct_completed_print(printer_name, filename, job_id, fb_url=None,
     # records the applied grams + surfaces any shortfall over KNOWN positions (an
     # orphan tool index already warned inside the apply loop, so it's excluded here
     # to avoid a double-warn — 22.4(2)/(3)).
-    applied = round(sum(d["grams"] for d in details), 2)
-    state.add_log_entry(
-        f"✅ Completed-print deduct on {printer_name}{_toolheads_charged(details)}: {applied:.1f}g across "
-        f"{spools_updated} spool(s) ('{filename}').", "SUCCESS")
-    _record_applied_deduct(
-        printer_name, job_id, filename=filename, scale=1.0, details=details,
-        usage_map=usage_map, known_positions=known, fb_url=fb_url, active_locs=active_locs,
-        failed=failed)
+    try:
+        applied = round(sum(d["grams"] for d in details), 2)
+        state.add_log_entry(
+            f"✅ Completed-print deduct on {printer_name}{_toolheads_charged(details)}: {applied:.1f}g across "
+            f"{spools_updated} spool(s) ('{_esc(filename)}').", "SUCCESS")
+        _record_applied_deduct(
+            printer_name, job_id, filename=filename, scale=1.0, details=details,
+            usage_map=usage_map, known_positions=known, fb_url=fb_url, active_locs=active_locs,
+            failed=failed, read_heads=True)
+    except Exception as e:
+        raise CompletionMayHaveCharged(
+            f"{e} (raised after the spools were charged, before the job was recorded)") from e
     return {"status": "deducted", "spools_updated": spools_updated,
             "details": details, "usage_map": usage_map, "job_id": job_id}
 
@@ -1367,7 +1570,13 @@ def _compute_swap_split(ip_address, api_key, filename, usage_map, swap_log,
         for ev in evs:
             c = _tool_grams(cum_by_id.get(id(ev)) or {}, pos, allow_fold=single_position)
             # Cumulative must be monotonic and within the footer; a bad remap/parse
-            # that regresses or overshoots means we can't trust the split.
+            # that regresses or overshoots means we can't trust the split. Since
+            # Group 56.2 each cumulative is the share of the tool's own walk reached,
+            # times its footer, and never past it, so an overshoot can only come
+            # from the single-position fold (another tool's figure); a swap captured
+            # late now splits as given instead of falling back because the raw walk
+            # ran over its footer (the review still shows both spools' grams before
+            # anything is charged).
             if c < prev - 0.01 or c > footer_pos + 0.01:
                 return None
             seg_grams.append(max(0.0, c - prev))
@@ -1567,9 +1776,6 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
         # (Shouldn't usually reach here: a flagged position has a bound end spool.)
         return _stash_unresolved_review(printer_name, filename, job_id, 1.0,
                                         usage_map=usage_map, no_spool=True)
-    # Claim the deferred-fetch slot too, so a queued kind='complete' retry (a prior
-    # finish-screen lock) can't later auto-apply the full footer behind this review.
-    cancel_fetch_store.pop_pending(printer_name, job_id)
     unresolved = _uncharged_usage(usage_map, charged)
     total = round(sum(r['grams'] for r in rows) + sum(unresolved.values()), 2)
     record = {
@@ -1593,9 +1799,18 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
     }
     uncharged = _carry_uncharged(record, unresolved, printer_name, fb_url, active_locs=active_locs)
     cancel_review_store.add_pending(record)
+    # Then claim the deferred-fetch slot too, so a queued kind='complete' retry (a
+    # prior finish-screen lock) can't later auto-apply the full footer behind this
+    # review. After the review is written (Group 56 review, round 4: popping first
+    # lost the entry when the review write then failed), and best-effort: the
+    # loop drops a leftover entry once it sees the review.
+    try:
+        cancel_fetch_store.pop_pending(printer_name, job_id)
+    except Exception:
+        pass
     how = "auto-split proposed" if auto_split else "full footer NOT auto-applied"
     state.add_log_entry(
-        f"🔁 {printer_name}: spool changed mid-print ('{filename}') at toolhead "
+        f"🔁 {printer_name}: spool changed mid-print ('{_esc(filename)}') at toolhead "
         f"position(s) {sorted(changed_positions)} — {how}; "
         f"review the split: {total:.2f}g across {len(rows)} spool(s){uncharged}.",
         "WARNING", rows[0]['color'],
@@ -1704,9 +1919,21 @@ def _resolve_usage_to_spools(printer_name, usage_map, fb_url, active_locs=None, 
     return list(merged.values())
 
 
+# Why a progress_unknown review couldn't measure its print: the log line's words.
+# The review card (cancel_review.js) words the same keys for its banner.
+_UNMEASURED_WHY = {
+    "replaced": "replaced before a progress reading",
+    "unsampled": "it ended before FCC read its progress",
+    "no_footer": "its file's filament footer couldn't be read",
+    "empty_footer": "its file's filament footer lists no filament",
+    "unreadable_moves": "FCC couldn't read its file's moves",
+    "no_download": "FCC couldn't download or read its file",
+}
+
+
 def _stash_unresolved_review(printer_name, filename, job_id, reached_fraction,
                              usage_map=None, *, no_spool=False,
-                             progress_unknown=False, ambiguous=False):
+                             progress_unknown=False, ambiguous=False, reason=None):
     """Stash a persistent, RECOVERABLE review for a print whose usage couldn't be
     finalized — INSTEAD of writing a destructive terminal grams=0 ledger entry that
     would permanently block recovery (the 2026-06-13 silent-loss bug). Two kinds:
@@ -1715,10 +1942,18 @@ def _stash_unresolved_review(printer_name, filename, job_id, reached_fraction,
                          is bound to the toolhead, so there's nowhere to deduct. The
                          confirm endpoint RE-RESOLVES `usage_map` to whatever spool is
                          bound at apply time, so binding the toolhead later recovers it.
-      progress_unknown — the print was replaced (a back-to-back job change) before we
-                         ever sampled a real progress, so its usage is genuinely
-                         UNMEASURABLE (`usage_map` is None). Surfaced non-destructively
-                         ("weigh the spool and adjust it directly, or Discard").
+      progress_unknown — the print's usage is genuinely UNMEASURABLE (`usage_map` is
+                         None). Surfaced non-destructively ("weigh the spool and
+                         adjust it directly, or Discard"). `reason` says why, one of
+                         _UNMEASURED_WHY's keys, and rides on the record as
+                         `unmeasured_reason` for the card: "replaced" (the default: a
+                         back-to-back job change replaced it before we ever sampled a
+                         real progress), "unsampled" (it ended before FCC read its
+                         progress), "no_footer" / "empty_footer" / "unreadable_moves"
+                         (a completion, or an ambiguous end, whose filament footer is
+                         missing or lists nothing, or whose moves the walk can't read,
+                         Group 56.3) or "no_download" (a completion whose file FCC
+                         couldn't download, or decode, for _CANCEL_FETCH_MAX_AGE_S).
 
     Writes NO ledger entry — the review stays recoverable until confirm/dismiss.
     Idempotent: no-ops if a review is already pending or the job was already settled.
@@ -1737,12 +1972,14 @@ def _stash_unresolved_review(printer_name, filename, job_id, reached_fraction,
     kind = "no_spool" if no_spool else "progress_unknown"
 
     if no_spool:
-        msg = (f"⚠️ {printer_name}: print used ~{total:.2f}g ('{filename}') but it "
+        msg = (f"⚠️ {printer_name}: print used ~{total:.2f}g ('{_esc(filename)}') but it "
                f"couldn't be deducted (no spool bound to the toolhead, or the write was "
                f"rejected) — Review to apply once it's bound, or Discard.")
     else:  # progress_unknown
-        msg = (f"❓ {printer_name}: couldn't measure how much '{filename}' used (replaced "
-               f"before a progress reading) — Review to weigh the spool, or Discard.")
+        if reason not in _UNMEASURED_WHY:
+            reason = "replaced"
+        msg = (f"❓ {printer_name}: couldn't measure how much '{_esc(filename)}' used "
+               f"({_UNMEASURED_WHY[reason]}) — Review to weigh the spool, or Discard.")
 
     record = {
         "printer_name": printer_name,
@@ -1760,6 +1997,8 @@ def _stash_unresolved_review(printer_name, filename, job_id, reached_fraction,
                       if (no_spool and usage_map) else None),
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
+    if not no_spool:
+        record["unmeasured_reason"] = reason
     if no_spool:
         # 43.3 — the heads at PRINT END: what the card's picker can name as "the
         # spool that was there", so Apply never silently charges a spool loaded
@@ -1817,7 +2056,7 @@ def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind
         # The ambiguous edge fires at IDLE (file already unlocked), so this path
         # is only a transient blip — use neutral wording (NOT "clear the screen").
         state.add_log_entry(
-            f"❓ Print on {printer_name} (~{pct:.0f}%, '{filename}') ended without a "
+            f"❓ Print on {printer_name} (~{pct:.0f}%, '{_esc(filename)}') ended without a "
             f"clear cancel/finish signal and its gcode isn't readable yet — I'll "
             f"retry and surface a review when it's readable.",
             "WARNING", "ffaa00",
@@ -1825,7 +2064,7 @@ def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind
                   "printer_name": printer_name, "job_id": str(job_id)})
     elif kind == "complete":
         state.add_log_entry(
-            f"✅ Completed print on {printer_name} ('{filename}') detected — the "
+            f"✅ Completed print on {printer_name} ('{_esc(filename)}') detected — the "
             f"printer is still showing the finish screen, so the gcode is locked. "
             f"Clear it on the printer and I'll record the deduct automatically.",
             "INFO",
@@ -1833,7 +2072,7 @@ def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind
                   "printer_name": printer_name, "job_id": str(job_id)})
     else:
         state.add_log_entry(
-            f"🛑 Cancelled print on {printer_name} (~{pct:.0f}%, '{filename}') detected — "
+            f"🛑 Cancelled print on {printer_name} (~{pct:.0f}%, '{_esc(filename)}') detected — "
             f"the printer is still showing the cancel screen, so the gcode is locked. "
             f"Clear it on the printer and I'll record the partial deduct automatically.",
             "WARNING", "ffaa00",
@@ -1843,7 +2082,8 @@ def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind
 
 
 def _create_pending_cancel_review(printer_name, filename, job_id, reached_fraction,
-                                  fb_url=None, ambiguous=False, progress_unknown=False):
+                                  fb_url=None, ambiguous=False, progress_unknown=False,
+                                  unmeasured_reason=None):
     """Compute the cancelled-print partial and STASH it for review instead of
     auto-writing (FilaBridge absorption design §9.7). Idempotent against the
     ledger (already confirmed/dismissed) and the pending store (already queued).
@@ -1854,7 +2094,14 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
     terminal state, so we couldn't confirm cancel vs completion. The compute is
     identical (the partial at `reached_fraction`, the retained progress = the
     confidence hint), but the record is flagged and the log/overlay reword to
-    "couldn't confirm". Still NEVER auto-deducts — it's a review either way."""
+    "couldn't confirm". Still NEVER auto-deducts — it's a review either way. An
+    ambiguous end FCC can't measure (its footer missing or empty, or moves the walk
+    can't read) may have been a completion, so it opens the "couldn't measure"
+    review instead of a 0 g ledger entry (Group 56.3's rule for completions).
+
+    progress_unknown=True: `unmeasured_reason` says why ("replaced" by the next job,
+    the default; "unsampled" when the print ended before FCC ever read its
+    progress), for the review's log line and card."""
     if fb_url is None:
         _, fb_url = config_loader.get_api_urls()
 
@@ -1874,7 +2121,8 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
         # non-destructive "couldn't measure usage — weigh the spool" review.
         return _stash_unresolved_review(printer_name, filename, job_id,
                                         reached_fraction, usage_map=None,
-                                        progress_unknown=True, ambiguous=ambiguous)
+                                        progress_unknown=True, ambiguous=ambiguous,
+                                        reason=unmeasured_reason)
 
     creds = prusalink_api.fetch_printer_credentials(fb_url, printer_name)
     if not creds:
@@ -1886,9 +2134,26 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
 
     usage_map, terminal = _compute_cancel_usage(
         printer_name, filename, job_id, reached_fraction,
-        creds.get('ip_address'), creds.get('api_key'))
+        creds.get('ip_address'), creds.get('api_key'), ambiguous=ambiguous)
     if terminal is not None:
         if terminal["status"] == "no_usage":
+            if ambiguous and terminal.get("reason") != "nothing_reached":
+                # It may have been a completion FCC can't measure (56.3): ask, don't
+                # close the job at 0 g. (A true cancel keeps the 0 g entry and the
+                # "weigh the spool" line _compute_cancel_usage logged.)
+                reason = terminal.get("reason")
+                if print_deduct_ledger._is_blank_job(job_id):
+                    # No job id to hold a review on (every one would share one key,
+                    # and the next id-less end would vanish behind it): say it, as an
+                    # id-less completion does.
+                    state.add_log_entry(
+                        f"❓ {printer_name}: couldn't measure how much '{_esc(filename)}' used "
+                        f"({_UNMEASURED_WHY.get(reason, reason)}), and the printer gave no job id "
+                        f"to hold a review on — weigh the spool to true it up.", "WARNING", "ffaa00")
+                    return terminal
+                return _stash_unresolved_review(
+                    printer_name, filename, job_id, reached_fraction, usage_map=None,
+                    progress_unknown=True, ambiguous=True, reason=reason)
             print_deduct_ledger.record_deduct(printer_name, job_id, filename=filename,
                                               scale=reached_fraction, grams=0)
         elif terminal["status"] == "error":
@@ -1948,7 +2213,7 @@ def _create_pending_cancel_review(printer_name, filename, job_id, reached_fracti
     cancel_review_store.add_pending(record)
     state.add_log_entry(
         f"{lead} — review {'computed' if ambiguous else 'partial'} "
-        f"deduct: {total:.2f}g across {len(rows)} spool(s) ('{filename}'){uncharged}.",
+        f"deduct: {total:.2f}g across {len(rows)} spool(s) ('{_esc(filename)}'){uncharged}.",
         "WARNING", rows[0]['color'],
         meta={"type": "cancel_deduct_pending",
               "printer_name": printer_name, "job_id": str(job_id)})
@@ -2145,7 +2410,7 @@ def _confirm_no_spool_review(printer, job_id, rec):
     _, shortfall = _record_applied_deduct(
         printer, job_id, filename=rec.get('filename'), scale=rec.get('progress'),
         details=details, usage_map=umap, known_positions=known, confirmed=True,
-        fb_url=fb_url, active_locs=active_locs, failed=failed)
+        fb_url=fb_url, active_locs=active_locs, failed=failed, read_heads=True)
     resp = {"status": "confirmed", "applied": details, "shortfall_g": shortfall}
     if cancel_review_store.has_pending(printer, _shortfall_key(job_id)):
         resp["shortfall_card"] = _shortfall_key(job_id)
@@ -2257,12 +2522,12 @@ def api_cancel_deduct_confirm():
             # The pop was the claim: an unexpected raise must not lose the review.
             cancel_review_store.add_pending(rec)
             state.add_log_entry(
-                f"❌ {printer}: review Apply failed (job {job_id}): {e} — review kept for retry.",
+                f"❌ {printer}: review Apply failed (job {job_id}): {_esc(e)} — review kept for retry.",
                 "ERROR", "ff4444")
             return jsonify({"status": "error", "msg": str(e)}), 500
         if why:
             cancel_review_store.add_pending(rec)   # the pop was the claim: keep the review
-            state.add_log_entry(f"⚠️ {printer}: review Apply refused — {why}.", "WARNING", "ffaa00")
+            state.add_log_entry(f"⚠️ {printer}: review Apply refused — {_esc(why)}.", "WARNING", "ffaa00")
             return jsonify({"status": "error", "msg": why})
         if requested_total is None and kind == "no_spool":
             try:
@@ -2297,7 +2562,7 @@ def api_cancel_deduct_confirm():
         except Exception as e:
             cancel_review_store.add_pending(rec)
             state.add_log_entry(
-                f"❌ Cancel-review apply failed for {printer} (job {job_id}): {e} — "
+                f"❌ Cancel-review apply failed for {printer} (job {job_id}): {_esc(e)} — "
                 f"review kept for retry.", "ERROR", "ff4444")
             return jsonify({"status": "error", "msg": str(e)}), 500
     if kind == "progress_unknown":
@@ -2442,7 +2707,7 @@ def api_cancel_deduct_confirm():
             if now is not None and abs(now - new_used) <= eps:
                 ok = True
                 state.add_log_entry(
-                    f"⚠️ {where}: Spoolman reported an error for Spool #{sid} ({err}), but the "
+                    f"⚠️ {where}: Spoolman reported an error for Spool #{sid} ({_esc(err)}), but the "
                     f"write landed — counted once.", "WARNING", "ffaa00")
             else:
                 errors.append({"sid": sid, "error": err})
@@ -2451,7 +2716,7 @@ def api_cancel_deduct_confirm():
                 # then also catches a weigh-out made before it ("changed" below).
                 attempts[sid] = (used, new_used, bool(spool.get('archived')))
                 state.add_log_entry(
-                    f"❌ {where}: cancel-deduct failed for Spool #{sid}: {err}", "ERROR", "ff4444")
+                    f"❌ {where}: cancel-deduct failed for Spool #{sid}: {_esc(err)}", "ERROR", "ff4444")
                 continue
         remaining = None if capacity is None else max(0.0, capacity - new_used)
         tail = "[no known capacity]" if remaining is None else f"[➔ {remaining:.1f}g remaining]"
@@ -2475,7 +2740,7 @@ def api_cancel_deduct_confirm():
             # or it is gone with no ledger entry and no log line.
             cancel_review_store.add_pending(rec)
             why = "; ".join(f"#{e_['sid']}: {e_['error']}" for e_ in errors)
-            state.add_log_entry(f"⚠️ {printer}: review Apply refused — {why}. Review kept.",
+            state.add_log_entry(f"⚠️ {printer}: review Apply refused — {_esc(why)}. Review kept.",
                                 "WARNING", "ffaa00")
             return jsonify({"status": "error", "applied": [], "errors": errors,
                             "msg": "Nothing was charged — this card is out of date. Reopen the review."})
@@ -2556,7 +2821,7 @@ def api_cancel_deduct_confirm():
             cancel_review_store.add_pending(kept)
             state.add_log_entry(
                 f"⚠️ {printer}: charged {charged_now:.2f}g of the uncharged grams from "
-                f"'{rec.get('filename')}'; {kept['total_grams']:.2f}g still have no spool — pick "
+                f"'{_esc(rec.get('filename'))}'; {kept['total_grams']:.2f}g still have no spool — pick "
                 f"another in 🛑 Review, or Discard.", "WARNING", "ffaa00",
                 meta={"type": "cancel_deduct_pending", "printer_name": printer, "job_id": str(job_id)})
             _low_stock_after_review(applied, printer, job_id)
@@ -2578,7 +2843,7 @@ def api_cancel_deduct_confirm():
             except Exception as e:
                 state.add_log_entry(
                     f"❌ {printer}: couldn't open a review card for the grams the picked spools "
-                    f"couldn't take ({e}) — weigh the spools to true up.", "ERROR", "ff4444")
+                    f"couldn't take ({_esc(e)}) — weigh the spools to true up.", "ERROR", "ff4444")
     shortfall = None
     if requested_total is not None:
         # What the job asked that no spool took: a tool left unpicked, or a clamp
@@ -2595,14 +2860,14 @@ def api_cancel_deduct_confirm():
         if residue_card is not None:
             resp["shortfall_card"] = residue_card["job_id"]
             state.add_log_entry(
-                f"⚠️ {printer}: {residue_card['total_grams']:.2f}g of '{rec.get('filename')}' couldn't "
+                f"⚠️ {printer}: {residue_card['total_grams']:.2f}g of '{_esc(rec.get('filename'))}' couldn't "
                 f"be charged to the spool(s) picked ({_shortfall_reasons(residue_card)}) — pick another "
                 f"in 🛑 Review, or Discard.", "WARNING", "ffaa00",
                 meta={"type": "cancel_deduct_pending", "printer_name": printer,
                       "job_id": residue_card["job_id"]})
         elif shortfall > 0.05:
             state.add_log_entry(
-                f"⚠️ {printer}: {shortfall:.2f}g of '{rec.get('filename')}' wasn't charged to any "
+                f"⚠️ {printer}: {shortfall:.2f}g of '{_esc(rec.get('filename'))}' wasn't charged to any "
                 f"spool — weigh the spools to true up.", "WARNING", "ffaa00")
     return jsonify(resp)
 
@@ -2640,7 +2905,7 @@ def api_cancel_deduct_dismiss():
     if rec.get("kind") == "shortfall":
         state.add_log_entry(
             f"🚫 Dismissed the uncharged-grams review for {printer} (job {rec.get('shortfall_of')}): "
-            f"{float(rec.get('total_grams') or 0):.2f}g of '{rec.get('filename')}' stay uncharged.",
+            f"{float(rec.get('total_grams') or 0):.2f}g of '{_esc(rec.get('filename'))}' stay uncharged.",
             "INFO")
     else:
         state.add_log_entry(

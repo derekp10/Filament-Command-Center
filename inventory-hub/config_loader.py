@@ -171,8 +171,8 @@ def get_api_urls():
     server_ip = cfg.get("server_ip")
     sm_url = f"http://{server_ip}:{cfg.get('spoolman_port')}"
     # fb_url is VESTIGIAL post-FilaBridge-decommission (2026-06-13). The
-    # filabridge_ip/filabridge_port config keys were removed; the only remaining
-    # dereference is a fail-soft boot credential seed against the now-stopped
+    # filabridge_ip/filabridge_port config keys were removed, and the last
+    # dereference (the boot credential seed) went in Group 56.5: nothing calls
     # FilaBridge. Kept as a well-formed placeholder purely so the (sm_url, fb_url)
     # signature and its ~7 `_, fb_url = get_api_urls()` callers don't change.
     # Full removal (drop fb_url + the filabridge_url params threaded through

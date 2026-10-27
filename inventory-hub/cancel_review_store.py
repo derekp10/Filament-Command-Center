@@ -9,7 +9,8 @@ the activity-log scroll-off, so a pending review is never silently lost — the
 exact weight-drift problem §9 is built to solve.
 
 Keyed on (printer_name, job_id) like print_deduct_ledger; bounded to the most
-recent N. `pop_pending` is atomic under the lock so a double-click confirm/dismiss
+recent N, and a review the bound pushes out is reported in the Activity Log, never
+dropped silently. `pop_pending` is atomic under the lock so a double-click confirm/dismiss
 can't double-apply (the pop IS the claim — a concurrent second caller gets None).
 """
 from __future__ import annotations
@@ -39,15 +40,39 @@ def _load() -> dict:
         return {}
 
 
+def _report_evicted(rec) -> None:
+    """A review pushed out by the cap is a job neither the ledger nor a review owns
+    any more, its grams never asked about again, so it is never dropped silently
+    (Group 56 review, round 2: 56.3's "couldn't measure" cards stay until
+    Discard). Best-effort: the store's write never depends on the log line."""
+    try:
+        import html
+        import state
+        state.add_log_entry(
+            f"❌ The 🛑 Review list is full ({_MAX_ENTRIES} pending), so its oldest review was "
+            f"dropped: {rec.get('printer_name')} job {rec.get('job_id')} "
+            f"('{html.escape(str(rec.get('filename')), quote=False)}', "
+            f"{float(rec.get('total_grams') or 0):.2f}g, {rec.get('kind') or 'partial'}) — weigh "
+            f"that spool to true it up, and Discard the reviews you've settled.",
+            "ERROR", "ff4444")
+    except Exception:
+        pass
+
+
 def _save(data: dict) -> None:
+    evicted = []
     if len(data) > _MAX_ENTRIES:
-        data = dict(list(data.items())[-_MAX_ENTRIES:])
+        items = list(data.items())
+        evicted = [rec for _key_, rec in items[:-_MAX_ENTRIES]]
+        data = dict(items[-_MAX_ENTRIES:])
     os.makedirs(os.path.dirname(_STORE_PATH), exist_ok=True)
     tmp = _STORE_PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
     # 32.1 — retry on the Windows host↔container bind-mount sharing collision.
     atomic_store.replace_with_retry(tmp, _STORE_PATH)
+    for rec in evicted:
+        _report_evicted(rec)
 
 
 def add_pending(record: dict) -> None:

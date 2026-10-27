@@ -38,6 +38,12 @@ def _reset_tracker(monkeypatch):
     # 22.3: no-op the start-spool snapshot capture so a flag-on PRINTING tick doesn't
     # hit real Spoolman (a test exercising capture overrides this locally).
     monkeypatch.setattr(print_deduct, "_snapshot_active_spools", lambda *a, **k: {})
+    # Group 56 review (round 3): keep this file off the network under --offline.
+    # The low-stock check after a deduct runs on its own thread and read Spoolman
+    # during a LATER test; a no_spool review's head snapshot read Spoolman too (a
+    # test that needs heads patches _heads_snapshot itself).
+    monkeypatch.setattr(print_deduct.stock_report, "check_after_deduct", lambda *a, **k: None)
+    monkeypatch.setattr(print_deduct, "_heads_snapshot", lambda *a, **k: [])
     prev_async = print_monitor._CANCEL_DEDUCT_RUN_ASYNC
     print_monitor._CANCEL_DEDUCT_RUN_ASYNC = False  # synchronous dispatch
     try:
@@ -263,10 +269,14 @@ def test_completed_print_no_creds_defers(stores_tmp):
 # --------------------------------------------------------------------------- #
 
 def test_compute_use_footer_vs_prefix_differ():
-    # Body extrudes only 1mm on T0; the FOOTER claims the full 25g. A completion
-    # must take the footer (25g), the cancel prefix-parse takes the body (≈2.5g).
-    gcode = ("M83\nT0\nG1 X10 E1\n"
-             "; filament used [mm] = 10\n; filament used [g] = 25\n")
+    # The body extrudes 10mm on T0, the FOOTER claims 25g over 20mm. A completion
+    # takes the footer (25g); a cancel takes the share of the body reached by the
+    # cancel point, times the footer (Group 56.2: 4 of 10mm = 10g; the walk alone
+    # at the footer's g/mm would say 4mm * 25/20 = 5g).
+    body = "M83\nT0\nG1 X10 E4\n"
+    gcode = (body + "G1 X20 E6\n"
+             "; filament used [mm] = 20\n; filament used [g] = 25\n")
+    cut = (len(body) + 2) / len(gcode)   # inside the second move: it isn't reached
     pm = {"XL-1": {"printer_name": "XL", "position": 0}}
     with patch.object(app_module.locations_db, "get_active_printer_map", return_value=pm), \
          patch.object(app_module.prusalink_api, "fetch_cancel_gcode",
@@ -274,11 +284,10 @@ def test_compute_use_footer_vs_prefix_differ():
         footer_map, t1 = app_module._compute_cancel_usage(
             "XL", "f", "J", 1.0, "1.2.3.4", "k", use_footer=True)
         prefix_map, t2 = app_module._compute_cancel_usage(
-            "XL", "f", "J", 1.0, "1.2.3.4", "k", use_footer=False)
+            "XL", "f", "J", cut, "1.2.3.4", "k", use_footer=False)
     assert t1 is None and t2 is None
     assert footer_map == {0: 25.0}
-    # prefix: 1mm * (25g/10mm) = 2.5g — strictly less than the footer.
-    assert abs(prefix_map[0] - 2.5) < 1e-6
+    assert abs(prefix_map[0] - 10.0) < 1e-6, prefix_map
     assert footer_map[0] > prefix_map[0]
 
 
@@ -293,7 +302,9 @@ def test_fetch_retry_routes_complete_to_completion_deduct(stores_tmp):
         "attempts": 1, "last_status": "awaiting_fetch"})
     calls = {}
 
-    def _complete(printer, filename, job_id, fb_url=None, start_spools=None, swap_log=None):
+    def _complete(printer, filename, job_id, fb_url=None, start_spools=None, swap_log=None,
+                  before_charge=None):
+        # before_charge: the loop's persistent claim (Group 56 review, round 4).
         calls["complete"] = (printer, filename, job_id)
         return {"status": "deducted", "job_id": job_id}
 

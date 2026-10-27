@@ -26,8 +26,9 @@
   destination blocked; reloading while armed brings the pill back. **Known, NOT a failure:** scanning
   a cart *parent* (e.g. `CR-CT-2`) finds only its direct spools (Group 37.4).
 * **⏸️ PENDING DEREK — one session with a print running (mid-print checks; updated 2026-10-14).** Covers the
-  active-print chain fix (2026-09-12) and Group 39 "Confirm on Every Door" (merged to `dev` 2026-10-13, **not
-  released yet**, so run these on dev, `http://localhost:8000`, which reads the same printers). Everything here
+  active-print chain fix (2026-09-12) and Group 39 "Confirm on Every Door" (merged to `dev` 2026-10-13; **released
+  2026-10-19, `main` `0140edf`**, so they run on prod or on dev, `http://localhost:8000`, which reads the same
+  printers). Everything here
   has automated coverage too; these are what only a real printer, the real scanner and your eyes can check: does
   the wording read right, and does each move really ask once. **Setup:** start a multi-tool print on the XL; put a
   spare spool or two in the buffer. `LR-MDB-1` slots 1-3 feed XL-1 to XL-3 on dev.
@@ -51,10 +52,11 @@
   Core One INDX switched off** (no print needed): in the Location Manager open `RCOI-1` and assign a buffered
   spool to it; then scan `RCOI-1`'s toolhead label with a spool in the buffer. Each time a "⏳ Checking 🦝 Core One
   INDX…" notice appears within about half a second (a pill at the top, or a label on the dimmed screen), and the
-  move still goes through. **After the next release:** a tab left open across the update says "This FCC page is
-  out of date … reload" when it confirms a mid-print move; Ctrl+F5 fixes it.
+  move still goes through. **After the 2026-10-19 release (`main` `0140edf`, now past):** a tab left open across that
+  update said "This FCC page is out of date … reload" when it confirmed a mid-print move; Ctrl+F5 fixed it. Only a tab
+  opened before that update can show it, so skip this one unless such a tab is still open.
 * **⏸️ PENDING DEREK — the "head already runs another spool" question on slot labels (Group 40.3; on dev since
-  `d6fc8b2`, 2026-10-15).** Your everyday path: a slot-label scan into a bound
+  `d6fc8b2`, 2026-10-15; on prod since `main` `0140edf`, 2026-10-19).** Your everyday path: a slot-label scan into a bound
   `LR-MDB-1` slot now asks first when the head that slot feeds runs a spool from somewhere else (e.g. a PolyDryer),
   with three buttons, each with a scannable QR: **Load it instead** · **Just store it in LR-MDB-1 slot N** ·
   **Cancel**; Enter = Just store it. Automated tests cover all of it; these check the wording, your scanner and the
@@ -68,7 +70,8 @@
   | S5 | Printing: store by default | While the XL prints, XL-2 empty: scan a spool, then `LOC:LR-MDB-1:SLOT:2` | The prompt says the XL is printing; Enter stores the spool in slot 2 and leaves XL-2 alone |
   | S6 | Deposit onto a fed head | As in S3 (XL-1 runs the PolyDryer spool): open XL-1 → Quick-Swap grid → ⬇️ Deposit a buffered spool into `LR-MDB-1` slot 1. Then once more, tapping the tile twice quickly | The same prompt as S3, and only ONE prompt, even on the double tap |
   | S7 | Someone re-points the slot meanwhile (optional, two tabs) | Tab A: S3's scan; leave the prompt open. Tab B: Location Manager → `LR-MDB-1` → 🔗 Slot → Toolhead Feeds → slot 1 → XL-2, save. Tab A: Load it instead | FCC asks again: "LR-MDB-1 slot 1 now feeds XL-2 (it fed XL-1 when you were asked). Load #N onto XL-2?" Set slot 1 back to XL-1 afterwards |
-* **⏸️ PENDING DEREK — the pickers and Swap option C (Group 40's last leg, built 2026-10-19; on dev since `8d0ff64`).**
+* **⏸️ PENDING DEREK — the pickers and Swap option C (Group 40's last leg, built 2026-10-19; on dev since `8d0ff64`; on prod since
+  `main` `0140edf`).**
   Automated tests cover all of it; these check the feel, the wording and your scanner.
   **Setup:** printer idle unless a row says otherwise; empty the buffer between rows. Spools slotted BEFORE this
   build carry no "where it sat before" record, so a Swap leaves those Unassigned (and buffered); the record starts
@@ -93,14 +96,13 @@
   T-line pick the spool on the head the print really used, then Apply. Pass if the deduct lands on that spool (the
   Activity Log names the printer and head) and nothing is charged on the sliced-for head. (The review-card spool
   picker, built 2026-10-13.)
-* **⏸️ PENDING DEREK — capture one raw multi-slot `.bgcode` as a test fixture.** A print using **≥3
-  non-contiguous slots** (e.g. 1, 4, 8 → T0, T3, T7), raw and unconverted, dropped at
-  `inventory-hub/tests/fixtures/`. Settles the last open gcode questions and turns them into hermetic
-  regression tests. The 3-slot raccoon capture already answered the two scariest ones (the footer is
-  zero-padded 8-wide, and the INDX selects with bare `T<n>`), so this is now about the purge/parser
-  gap rather than correctness of the index mapping. Weighed before/after for those slots would also
-  let the multi-tool completion deduct be validated against the scale the way job 1078 validated the
-  runout split.
+* **⏸️ PENDING DEREK — weigh the spools before and after one multi-slot INDX print.** _(Shrunk 2026-10-25 from
+  "capture one raw multi-slot `.bgcode` as a test fixture": the 3-slot raccoon capture answered the gcode questions
+  (the footer is zero-padded 8-wide, and the INDX selects with bare `T<n>`), and the purge/parser gap turned out to
+  be FCC's parser skipping arcs, fixed in Group 56.1 (2026-10-25). FCC downloads each job's file itself, so
+  nothing needs capturing.)_ Weigh the spools on the slots a print uses (ideally ≥3 non-contiguous ones, e.g. 1, 4,
+  8 → T0, T3, T7, which also exercises the index mapping) before and after, and paste the numbers here: that
+  validates the multi-tool completion deduct against the scale the way job 1078 validated the runout split.
 * **⏸️ PENDING DEREK — the next SpoolJoin print will answer the detection question by itself.** The
   ATTENTION-park and resume swap-diff logging shipped 2026-10-08, so the next time a joined slot runs
   out, the Activity Log will say either "parked at ATTENTION … recorded N swaps" or "no spool mapping
@@ -124,6 +126,10 @@
   **Added 2026-10-21 (merged into `dev` `e7699c4`):** `fix/low-stock-out-list-2026-10-20`,
   `feat/not-buying-again-2026-10-20`, `fix/extras-clear-spoolman-027-2026-10-21`, `bundle/2026-10-21` (all on
   `origin`).
+  **Added 2026-10-25 (merged into `dev`, found by the refresh):** `feat/readability-2026-10-21` (merged `09b395a`,
+  on `origin`), `fix/backlog-label-filter` (merged `afdd509`, on `origin`), and three overnight-run branches missing
+  from this list: `feature/group-41-honest-bulk-results`, `feature/group-42-single-slot-box-lifecycle`,
+  `feature/group-45-sweep-hygiene` (local only).
 * **⏸️ PENDING DEREK — lay out and label the INDX spool holders (and the 8-spool box; maybe the XL's holders).**
   _(Derek, 2026-10-19, answering the refresh's holder question.)_ Setting them up in FCC as a box with one slot per
   holder (no code) is *"possibly the way to go"*, but it is his grunt work and design first:
@@ -156,10 +162,11 @@
   one-line rows are liked as they are ("I love the design"); "shippable once we have addressed the other two things"
   (the name and the text size); the bigger text is kept ("looks good, so I'd say its a keeper for now", 2026-10-21
   walkthrough); and an archived spool scanned onto a toolhead is un-archived and loaded when its record still has
-  filament, refused at 0 g; built.)_ **Dev still holds the long-list scenario:** `low_stock_g` 925 (was 250) and two
-  sample exclusions (filaments 91 and 96): Claude puts them back.
+  filament, refused at 0 g; built.)_ **Released to prod 2026-10-25 (`main` `97fcf7c`):** what's left is
+  excluding the prod filaments he can't get, from the list's 🔕. Dev's long-list sample was put back (`low_stock_g`
+  250, filaments 91 and 96 included again).
 * **📐 Plan docs: named sizes and colors as the base for themes; alternative views (phone, wall tablet, printer pictures,
-  the Location Manager) (Derek, 2026-10-21; written).** "Themes" in his sense are whole alternative designs a user
+  the Location Manager) (Derek, 2026-10-21; written).** _(→ **Group 60.1**: Claude first rewrites step 3's order, phone first, then the decisions one at a time)_ "Themes" in his sense are whole alternative designs a user
   can choose ("what we have now, or future ones, possibly ones that focus on using images of the printers themselves"),
   with the classic look kept, as stepping stones toward the MOBILE item and the Project Color Loadout's screens. To go
   through with him one decision at a time, not to read cold:
@@ -171,7 +178,7 @@
   decisions). Its phone and tablet screenshots are in `review-samples/2026-10-21-views/` on Derek's machine.
   **Phone first** (decided 2026-10-21; see "📱 Phone view first" under 🗒️ Notes): step 3's milestone order is rewritten
   after the readability merge.
-* **⏸️ PENDING DEREK — tap a tagged Bambu spool with Chrome's NFC test page (2026-10-21).** On the Pixel, open
+* **⏸️ PENDING DEREK — tap a tagged Bambu spool with Chrome's NFC test page (2026-10-21).** _(→ **Group 60.4**)_ On the Pixel, open
   https://googlechrome.github.io/samples/web-nfc/, press **Scan** only (never Write or Make Read-Only), and hold the
   phone flat on the side of a Bambu spool near the hub. A "Serial Number" line means the phone can link Bambu spools by
   their tag ID; "Cannot read data" every time means Bambu reading comes from the scale. Waiting on a spool with a tag:
@@ -184,7 +191,7 @@
 > Ordinary backlog items, not hands-on work; most name the group that owns them. This heading was added on
 > 2026-10-19 so they stop reading as part of ⏸️ PENDING DEREK above, which had no closing heading.
 
-* **🖨️ Printer Status follow-ups (Derek, 2026-10-24).** Done before the merge: the printers step in under the title,
+* **🖨️ Printer Status follow-ups (Derek, 2026-10-24).** _(→ **Group 50**, 2026-10-25: (a) **50.5**, (b) **50.6** with the ⌨️ Enter item, (c) **50.7**, (e) folded into **50.1**, sample first; (d) parked)_ Done before the merge: the printers step in under the title,
   each one's name comes first with its state and 🛑 count on an info line under it, the tiles lost their colour dot,
   and a printer named with an apostrophe gets its count. Left: (a) **a richer hover card for a tile** (a small spool
   card, easier to read, especially in collapsed mode), and **a tap that opens the same card on a touchscreen**, where
@@ -192,19 +199,14 @@
   it with the phone view, sample first; (b) the scan accumulator in `scripts.html` cancels Enter on every focused
   dashboard button except the ▲▼; (c) on short windows (1280×800 at Large, 1366×768 at Small / Standard) the open
   widget scrolls inside itself; (d) long term, a customizable layout (tiles per row, style) for printers with many
-  spools ("with AMS units on the bambu side, things could get crazy"). **Standalone.**
-* **🐞 Cancelled prints are under-charged because the cancel parser skips arc moves (found 2026-10-23).** FCC's
-  prefix parser (the cancel / M73 path) walks the G-code's extrusion but ignores G2 / G3 arcs. Counting them takes
-  Derek's raccoon INDX print (whole file) from 48.43 g to 52.26 g against the slicer footer's 52.27 g, so the "~7%
-  under the footer" on cancelled multi-tool prints is FCC's own bug, not missing printer data; a raccoon print
-  cancelled at 50% was 1.96 g short. Fix: count arcs; log a warning when a whole-file parse and the footer differ by
-  more than 2% for any head (FCC's Core One fixture parses ~1.3% OVER its footer for another reason, so keep scaling /
-  clamping to the footer too); a completed print whose footer can't be read opens a review instead of recording 0 g.
-  The same extrusion walk feeds the planned M600 colour split (Group 22.3b), and the fix shrinks the PENDING DEREK
-  "capture one raw multi-slot .bgcode" item to its weigh-before-and-after check. Needs no printer (file fixtures).
-  Past cancels: leave them (weigh any doubtful spool), or list them with what each missed (Derek's call).
-  **Standalone.**
-* **🐞 A print re-mapped to another head on the printer is charged to the wrong spool (found 2026-10-23).** FCC charges
+  spools ("with AMS units on the bambu side, things could get crazy"). (e) **The collapsed strip needs the same clean-up
+  (Derek, 2026-10-25, on prod):** "I know what is what, but it kind of reads as just a mess of toolheads. Because I
+  follow a naming convention, I can tell what's what, but if anyone else doesn't, then it gets confusing fast." He
+  found it when the Settings → This Browser "Printer Status toolhead labels" choice (XL-3 / 3 / Tool 3) changed only
+  the expanded tiles: he expected the strip to follow it too (Group 46.3 kept the strip on the full id on purpose,
+  so that is a decision to revisit). Give the strip a clear per-printer grouping like the expanded view's (the name
+  first, its state and 🛑 count, then its heads), sample first. **Standalone.**
+* **🐞 A print re-mapped to another head on the printer is charged to the wrong spool (found 2026-10-23).** _(→ **Group 56.6**, gated: a printer and a real print)_ FCC charges
   the file's tool N to head N (`print_deduct.py`, "the tool index IS the toolhead position"). Derek re-maps at print
   start (job 1104 was sliced for head 1 and run on head 2, Group 43.3), and firmware 7.0's sticky and Smart mapping
   make that more common; a SpoolJoin run-out switch is invisible too. The printer's metrics stream (`M334`, UDP) sends
@@ -214,7 +216,7 @@
   Derek wants it: a small listener on dev, then one short re-mapped print with metrics on (needs a printer and a real
   print). **Standalone.**
 * **⚠️ After a printer moves to firmware 8.0, check FCC's first completed and first cancelled deduct (noted
-  2026-10-23).** 8.0.0 (2026-10-22) also brings 7.0's changes to a printer that skipped it (the INDX was on 6.9.2 in
+  2026-10-23).** _(→ **Group 56.7**, gated: the first deducts after an upgrade)_ 8.0.0 (2026-10-22) also brings 7.0's changes to a printer that skipped it (the INDX was on 6.9.2 in
   October): PrusaLink file downloads keep long file names (FCC downloads each job's file by the path PrusaLink reports,
   and prod's ledger holds 8.3 names like `/usb/MAIN-B~1.BGC`), a Runout Reaction setting (FCC's run-out split keys off
   the pause) and tool-mapping changes. PrusaLink's own status looks unchanged in 8.0 (likely, not checked live); 8.0's
@@ -222,7 +224,23 @@
   CORE One / L only for now; it adds to a tag's `consumed_weight` every 5 minutes and at print end (cancels too) and
   unload, so once a reader printer writes a tag, FCC's own tag writes must add deltas, never overwrite (an absolute
   write is fine while none of Derek's printers write tags). **Standalone.**
-* **🎨 Design follow-ups from the 2026-10-22 text-size walk (each one: a sample to Derek before any restyle).**
+* **📋 Other modules still put outside text into the Activity Log unescaped (found 2026-10-26 by Group 56's
+  review).** Group 56.4 escaped every filename, exception and Spoolman error in the deduct and monitor lines
+  (`print_deduct._esc`, an AST canary in `tests/test_deduct_accuracy_56.py`), but about 20 lines in
+  `logic.py` (e.g. force-unassign, `:4627-4630`) log `{err}` = `spoolman_api.LAST_SPOOLMAN_ERROR` or `{why}`
+  raw, and `routes_locations.py` / `routes_scan.py` / `routes_config_attrs.py` / `routes_inventory.py` log `{e}`
+  / `{err}` raw. When Spoolman is down a connect error's `<urllib3.connection.HTTPConnection object at 0x…>`
+  vanishes from the line as a bogus tag, and `routes_inventory.py:74` logs a typed filament name raw ('Silk
+  <Gold>' shows as 'Silk '), against CLAUDE.md's own rule. Direction: move the escaper to `state` (e.g.
+  `state.esc`) and widen the canary to every module. **Standalone.**
+* **🔁 A `.bgcode` FCC can't decode is re-downloaded every 30 s for 72 hours (found 2026-10-26 by Group 56's
+  review).** `prusalink_api.fetch_cancel_gcode` returns None for a failed download, an empty decode and a
+  decode exception alike, so `_compute_cancel_usage` treats all three as "download failed" and the job is
+  queued; the monitor then downloads the whole file again on every IDLE tick until the 72 h give-up (for the
+  11 MB raccoon file, thousands of downloads). Rare (`decode_bgcode` skips bad blocks), and since Group 56.3 the
+  give-up opens a "couldn't download or read its file" review. Direction: report a decode failure separately,
+  carry it on the fetch record, and give up after a few attempts. **Standalone.**
+* **🎨 Design follow-ups from the 2026-10-22 text-size walk (each one: a sample to Derek before any restyle).** _(→ **Group 59** for (a)–(d), one picture session first; (e) → **Group 57.3**)_
   (a) **The slot picker in printer mode:** "it just looks scattered, and it's hard to tell what is what"; its slots
   break onto a second row and leave a lot of empty space after the head list. Rethink the layout (his idea: a 3×3 grid
   for the heads). (b) **The slot picker's Swap / Overwrite / Back panel:** "the buttons are all over the place", their
@@ -232,7 +250,7 @@
   section's settings on the right. (d) **Grey help text on black** "might need a re-think later" (the 2026-10-22 build
   only lifted it to pass the contrast guard): with step 2's named colours. (e) **The title bar at Extra Large:** if the
   squeeze ever bothers him, Backlog and Queue could shrink to their icon and count at that size. **Standalone.**
-* **📱 Phone view first, with spool tags (Derek, 2026-10-21).** The phone ("pocket") view comes before the tablet one:
+* **📱 Phone view first, with spool tags (Derek, 2026-10-21).** _(→ **Group 60**, an epic, design-first: the view **60.2**, tags **60.3**)_ The phone ("pocket") view comes before the tablet one:
   Android (a Pixel 11 Pro XL), Chrome, a web page (no app for now). Testing over plain http uses Chrome's "Insecure
   origins treated as secure" flag on the phone; real HTTPS comes later from a reverse-proxy container with a
   DNS-challenge certificate, on his network with no open ports. FCC itself stays plain http and platform-agnostic
@@ -242,7 +260,7 @@
   scan does); FCC's values stay and the tag fills blanks; Bambu next; OpenPrintTag for untagged spools too (he has ~40
   blank tags). Research: `review-samples/2026-10-21-phone-tags/`. Next: rewrite the step 3 plan doc's order.
   **Standalone.**
-* **⚖️ SpoolmanScale that reads every tag and talks to FCC (Derek, 2026-10-21).** His NFC scale project
+* **⚖️ SpoolmanScale that reads every tag and talks to FCC (Derek, 2026-10-21).** _(→ **Group 60.5**)_ His NFC scale project
   (github.com/Niko11111/SpoolmanScale; every part bought, case not printed): "set a spool on a scale, have it read out,
   and then put it away". Its PN532 can't read OpenPrintTag (ISO 15693), so Derek **ordered a PN5180** (Amazon
   B09G2KXPRL; no licence lock-in). Plan: our own copy of the scale's firmware with the new reader (its update check
@@ -250,13 +268,13 @@
   weigh-ins go through FCC's rules. Under study: two readers (the PN532 for Bambu-style tags with the stock code, the
   PN5180 for OpenPrintTag) and every brand's tags (research running). Research: `review-samples/2026-10-21-scale/`
   (`corrections.md` first). **Standalone.**
-* **🎨 Filament colours aren't the most accurate available (Derek, 2026-10-21).** The hex FCC stores feeds PrusaSlicer,
+* **🎨 Filament colours aren't the most accurate available (Derek, 2026-10-21).** _(→ **Group 60.6**)_ The hex FCC stores feeds PrusaSlicer,
   on-screen colour picking and the printed swatch labels, so it should match the printed colour, and FCC should record
   where each colour came from. For one real Galaxy Red spool three sources disagree: its tag #bf1d2d, Prusament's spool
   page (what FCC's QR import takes) #8d2129, SpoolmanDB #d94a5a. Research `wf_43831b5c-daf`: each import path's
   source, which source is closest to the printed colour, recording the source, and fixing stored colours. A colour edit
   already asks to reprint the swatch label (when a sample was printed or its label confirmed). **Standalone.**
-* **🏷️ 123 of prod's 267 spools have no label status at all (found 2026-10-21).** `needs_label_print` is missing
+* **🏷️ 123 of prod's 267 spools have no label status at all (found 2026-10-21).** _(→ **Group 58.5**, the false green tick, ready; **58.6**, the prod repair, a decision)_ `needs_label_print` is missing
   (neither "needs printing" nor "confirmed") on 123 in-stock prod spools, 96 of them from the first import
   (2026-02-11), so the 🏷️ Backlog can't see them; prod's #76 is one, with no label on it. Derek: "the check flag for
   needing a label might not have been applied, or it might have been lost". A scanner-speed `ID:` scan outside an
@@ -265,7 +283,7 @@
   status (`spoolman_api` reads a missing flag as False); check whether an old bulk-loss path wiped the flag, and
   whether Spoolman's automatic backups still hold older values. **Standalone.**
 * **🔍 Audit: Done moves unscanned spools with no confirm and no undo, and unlabelled spools read as lost (traced
-  2026-10-21, read-only, `wf_88cad35d-ac5`).** Derek's once-over relies on Audit. `CMD:DONE` (the panel's Done &
+  2026-10-21, read-only, `wf_88cad35d-ac5`).** _(→ **Group 58.1–58.4**; Derek decides first what Done does)_ Derek's once-over relies on Audit. `CMD:DONE` (the panel's Done &
   Auto-Park, the FINISH tile's QR, the Location Manager's Done QR) parks every expected-but-unscanned spool at UNKNOWN
   with no confirm, no undo and no check of where it is now, including a spool loaded on a printer that is expected at
   its home box (the head then reads empty). Audit has no notion of "no label": typing an id + Enter marks one found,
@@ -278,10 +296,10 @@
   once-over: a list of spools filed only at a cart or room (each place's Location Manager shows its own under
   "Loose / Floating"). Trace: `review-samples/2026-10-21-audit/`. **Standalone; a candidate group.**
 * **🧪 `test_fab_no_overlap_with_cmd_deck.py` writes 7 spools into dev's shared buffer (found 2026-10-21 by the
-  readability review).** It doesn't call `conftest.own_the_buffer`, so a run leaves dev's buffer changed (the reviewer
+  readability review).** _(→ **Group 45.10**; its second half, the spool-details visual skip, → **45.11**, with the duplicate entry under 🧪 Testing)_ It doesn't call `conftest.own_the_buffer`, so a run leaves dev's buffer changed (the reviewer
   put it back to []). Also: `test_baseline_spool_details_modal` always skips (no buffer cards after search closes), so
   its April baseline is never compared. **Standalone.**
-* **Emptying a plain field in the wizard doesn't clear it (found 2026-10-21 by the extras-clear fix).** The wizard
+* **Emptying a plain field in the wizard doesn't clear it (found 2026-10-21 by the extras-clear fix).** _(→ **Group 54.5**)_ The wizard
   drops a native field it reads as empty from its payload (`settings_extruder_temp`, `settings_bed_temp`, price, the
   spool's and the filament's empty weight), so erasing one and saving keeps the old value. Not an extra, so the
   sentinel doesn't cover it: an edit-mode clear would send `null` for these (Spoolman takes null for its own optional
@@ -319,7 +337,6 @@ This should have an option to select a different loaded spool, or any spool. Cur
 * ✅ **Legacy-column schema check relaxed 2026-10-08** — archived 2026-10-12 (Group 47.14, see `completed-archive.md`); the proper schema is Group 44's job.
 * **Deleting a printer's last toolhead leaves `PRINTER:<prefix>` pool bindings dangling** _(→ **Group 44.6**)_ — the box's Feeds save then fails with a 400 (the Settings guard blocks the same removal). Drop the sentinel when the prefix disappears, or refuse the delete with the Settings guard's reason.
 * **Dual-role printer → multi-head: the removal guard over-counts** _(→ **Group 44.5**)_ — once any `CORE1-n` head holds a spool, removing the `CORE1` self-entry is blocked by a prefix-matched "spools are stored there". Check removed keys with an exact-location spool lookup. (Prod moved the INDX to a new `RCOI` prefix, so this only bites a future in-place conversion.)
-* **📉 The cancel-path prefix parser lands ~7% BELOW the slicer footer on a multi-tool INDX print — so cancelled INDX prints under-deduct.** _(Measured 2026-10-08 against Derek's real `racoon_v4-INDX_0.4n_0.1mm_PLA,PLA,PLA_COREONEINDX_5h14m.bgcode`, pulled read-only off the printer's USB; 11.4 MB raw / 27 MB decoded, 476 tool changes across T0/T1/T2.)_ Running `parse_partial_filament_usage(gcode, 1.0)` over the WHOLE file and comparing to `parse_footer_usage`: tool 0 17.58 vs 18.83 g (−6.64%), tool 1 22.20 vs 24.44 (−9.16%), tool 2 8.65 vs 9.00 (−3.86%), **total 48.43 vs 52.27 g (−7.34%)**. In mm the body nets 16239.65 against a footer of 17525.85. Breakdown per tool: gross +E 29822 mm, retraction −13583 mm, of which **purge-station extrusion is 6869 mm (~39% of the footer total)** — the INDX has no wipe tower (`total filament used for wipe tower [g]=0.00`, confirmed by Derek) and emits `;-------Purge Station specific Gcode-----` blocks instead, and there is **no separate purge/prime stat in the metadata at all**, so purge filament is inside the per-tool footer numbers. **Blast radius:** the FINISHED-completion deduct reads the footer, so it is unaffected and correct. The CANCELLED deduct reads the prefix parse, so it under-charges by this margin on the INDX (conservative direction, still wrong). `_compute_swap_split` is largely insulated because it ties its LAST segment to `footer − prior`, so per-spool totals still sum exactly to the footer; only the segment BOUNDARY placement drifts. **Mechanism not yet pinned** — likely the load/unload asymmetry at each of the 476 tool changes (filament pulled and discarded at a swap leaves as negative E but is real consumption), but that is inference, not proof. Next step: attribute the 1286 mm gap directly (sum E inside vs outside the purge blocks, and across `T` boundaries) on the captured file, then decide whether the cancel path should scale to the footer the way the swap-split already does. Not reproducible on a single-tool print, so it needs the INDX file. **Standalone.** **2026-10-19 (refresh): ready to build, no longer waiting on data.** The captured file and the attribution scripts were copied out of the temp session folder on 2026-10-19 to the repo's git-ignored `.captures/indx-raccoon-2026-10-08/` (`racoon_indx.bgcode`, `racoon_decoded.gcode`, `purge_attrib.py`, `purge_check.py`, `fetch_racoon.py`; byte-checked); derive a trimmed fixture from them (11 MB is too big to commit). Fix shape: one parse pass returns the partial and the whole-file total per tool; scale the partial by footer / total per tool and clamp to the footer; attribute the 1286 mm gap first, so the final wipe / ram tail isn't over-charged. One focused 3–6 h session on the hot deduct path; no Derek decision (Claude's call, offered for veto 2026-10-19; none).
 * **🔄 Refresh dev's data from prod (locations, Spoolman inventory, config) — and make it a repeatable operation.** _(→ **Group 45.6**)_ _(Derek, 2026-10-01: "we should also now consider updating dev to a more recent version of the data on prod". Explicitly NOT urgent — filed as the follow-up.)_ Dev's `locations.json` and dev Spoolman (`:7913`) have drifted from prod (`:7912`, files at `\\TRUENAS\App_Data\InventoryHub`): prod now carries the `RCOI` INDX printer with RCOI-1…RCOI-8, while dev still reflects the older fleet, and dev's locations carry test residue (e.g. the blank-`LocationID` "TestCart" row that is the standing Group 37.1 red pair). Consequences while it drifts: E2E fixtures encode a fleet prod no longer has, "does this repro on prod?" gets harder to answer, and the gap quietly grows. Wanted deciding: how much to copy (locations only, or Spoolman spools/filaments/vendors too), what dev-only state must survive a refresh (the fixed `DEV_BOX_BINDING_BASELINES` boxes PM-DB-1/2/4/5 at `{}`, the virtual test spools), and whether this becomes a scripted `--refresh-from-prod` alongside `--reset-dev` or stays a manual copy. ⚠️ Read-only against prod — a refresh must never write to `:7912`. Would also let the TestCart row be dropped and close the Group 37.1 pair. **Decided 2026-10-13 (Derek): script the full refresh:** locations plus the Spoolman inventory, prod read-only, the dev-only test fixtures re-applied and the reset snapshot retaken. Run it one evening when Derek is around to approve the prod reads; still not urgent. (The TestCart row was deleted separately on 2026-10-13, so that pair already passes. And since this was filed, dev's locations were copied from prod on 2026-10-08, so dev already has RCOI; dev's Spoolman inventory is still June's.) **Standalone.**
 
 * **🔀 Bulk Move polish (while the feature flag is off).** _(Low priority. Bulk Moves (L298) is complete and ships dark behind `fcc.bulkMove.enabled` (default off, `config_schema.py:97`: prod dark, dev on), so none of this reaches prod until Derek turns it on after the ⏸️ PENDING DEREK hands-on pass. Merged 2026-10-12 (Group 47.11) from two of Derek's reports: the wrong/empty-source report (2026-08-13, filed 2026-09-12) and item 3 of the Bulk Move active-print testing report (2026-09-12). That report's items 1–2 shipped in `51d9a49` and are archived; its item 4, dev/prod data parity, is Group 45.6.)_ Build both parts together when the feature is turned on. The flag's own gate gap (three backend doors ignored it) was fixed 2026-10-13 and archived. **Standalone** — L298 is complete; don't nest this under it. **2026-10-19:** the multi-user awareness item's last door, the Bulk Move commit vs its preview (`logic.py:3824-3862`), rides with this; build it when Bulk Moves is turned on.
@@ -387,7 +404,7 @@ This should have an option to select a different loaded spool, or any spool. Cur
 * **Mid-print spool swap / run-out apportionment: only the M600 single-extruder multi-color split is left (Group 22.3(b), blocked on data).** ✅ Shipped and released: (c) a completion whose toolhead spool changed between start and completion goes to a `spool_changed` review instead of dumping the full footer on the current spool (`e522d99`, 2026-06-14); (a) swap-event capture, which also catches A→B→A, plus the `parse_color_change_segments` segmentation primitive (merged `8592964`); (b) the runout / single-swap auto-split (`adc1e36`, 2026-07-03), validated on real Core One job 1078 to within 0.08 g of the scale (`print_deduct._compute_swap_split`, `prusalink_api.compute_segment_usage`, the `path_filament_g` remnant, `test_runout_auto_split.py`); and a swap on one head of a multi-head printer no longer drops the other heads (`4101884`, 2026-10-08).
   **Remaining:** the M600 single-extruder multi-color (A→B→A per-color) split. `_compute_swap_split` generalizes to it, but it needs a real M600 multi-color print for ground truth. Do the apportioned grams match the weighed spools, and does `;COLOR_CHANGE` survive the `.bgcode` decode (if not, the boundary moves to the `M600` line)? **💡 Derek's steering:** make the system genuinely SWAP-AWARE. A pause is NOT always a filament swap (magnets, inserts, an inspection, a clog clear), so segment on actual filament events (`;COLOR_CHANGE`/M600, the runout sensor, an explicit FCC eject-load), and ideally let the user confirm or annotate each pause's reason. ColorMix is NOT this case: its tool changes give a per-tool footer, which the completion deduct already handles. Design + capture checklist: §22.3(b) of `docs/agent_docs/tasks/22-filabridge-phase2-detection-deduct-followups.md`.
 
-* **Retire the vestigial `fb_url` / `filabridge_url` plumbing (mechanical refactor, no product decision).** Spun off from the FilaBridge-artifacts cleanup part (3) once parts (1)+(2) shipped (2026-07-06). Post-decommission, `config_loader.get_api_urls()` still returns a dead `fb_url` (a `server_ip`-derived placeholder) purely to keep its `(sm_url, fb_url)` 2-tuple signature, and a `filabridge_url` positional param is still threaded through `prusalink_api` (`get_printer_state` / `_probe_printer_state` / `get_printer_job` / `get_printer_mmu_flag` / `fetch_printer_credentials`) and passed by ~7 callers (`print_deduct.py`, `print_monitor.py`, `routes_bindings.py`, `routes_state_pulse.py`, `logic.py`) plus ~12 test stubs, even though every one of them ignores it (creds now come from `locations_db.get_printer_credentials`; the sole real deref is a fail-soft boot seed against the stopped FilaBridge). Clean rip-out: collapse `get_api_urls()` to return `sm_url` only, drop the `filabridge_url` param everywhere, delete `fetch_all_filabridge_printers` if it's the last user. Pure signature churn — verifiable offline by the existing prusalink/deduct tests. Low priority. **2026-10-19 (Claude's call, offered for veto; none):** leave the plumbing, except a narrow slice the next time `print_monitor` / `print_deduct` are touched: drop the boot seed that still GETs the retired FilaBridge `/printers` (`print_monitor.py:1040`, `:1067`; `prusalink_api.fetch_all_filabridge_printers`) and replace the `fb_url is not None` switch in the shortfall card (`print_deduct.py:666-668`) with an explicit flag. Keep `get_api_urls()`'s 2-tuple (`setup_fields.py` and ~131 test references use it).
+* **Retire the vestigial `fb_url` / `filabridge_url` plumbing (mechanical refactor, no product decision).** _(Its narrow slice ✅ **done in Group 56.5** (2026-10-25, `feature/group-56-deduct-accuracy`): the boot seed that GETs FilaBridge `/printers` is gone (replaced by a check that only names Printer rows with no PrusaLink IP), `prusalink_api.fetch_all_filabridge_printers` and `locations_db.seed_printer_credentials` were deleted (no callers left), and the shortfall card reads the heads on an explicit `read_heads=` flag. Nothing calls FilaBridge any more; the rest below, the dead `fb_url` / `filabridge_url` parameters, stays parked.)_ Spun off from the FilaBridge-artifacts cleanup part (3) once parts (1)+(2) shipped (2026-07-06). Post-decommission, `config_loader.get_api_urls()` still returns a dead `fb_url` (a `server_ip`-derived placeholder) purely to keep its `(sm_url, fb_url)` 2-tuple signature, and a `filabridge_url` positional param is still threaded through `prusalink_api` (`get_printer_state` / `_probe_printer_state` / `get_printer_job` / `get_printer_mmu_flag` / `fetch_printer_credentials`) and passed by ~7 callers (`print_deduct.py`, `print_monitor.py`, `routes_bindings.py`, `routes_state_pulse.py`, `logic.py`) plus ~12 test stubs, even though every one of them ignores it (creds now come from `locations_db.get_printer_credentials`; the last real deref, a fail-soft boot seed against the stopped FilaBridge, went in Group 56.5). Clean rip-out: collapse `get_api_urls()` to return `sm_url` only, drop the `filabridge_url` param everywhere (`fetch_all_filabridge_printers` is already gone, Group 56.5). Pure signature churn — verifiable offline by the existing prusalink/deduct tests. Low priority. **2026-10-19 (Claude's call, offered for veto; none):** leave the plumbing, except a narrow slice the next time `print_monitor` / `print_deduct` are touched: drop the boot seed that still GETs the retired FilaBridge `/printers` (`print_monitor.py:1040`, `:1067`; `prusalink_api.fetch_all_filabridge_printers`) and replace the `fb_url is not None` switch in the shortfall card (`print_deduct.py:666-668`) with an explicit flag. Keep `get_api_urls()`'s 2-tuple (`setup_fields.py` and ~131 test references use it).
 
 * Rename inventory hub to Filament Command Center. _(→ **Group 55.2** for the leftover text only: the screen has said Filament Command Center since January (`dashboard.html:7`, `:19`); left are the "Inventory Hub" headers in `.env.example` and `config.json.example` and the old Jan-2026 "Inventory Hub - System Operator Manual". **The full rename of every reference to Filament Command Center (the `inventory-hub/` folder, the container, the TrueNAS app and the prod folder) stays on this list as eventual work** (Derek, 2026-10-19: *"unless of course the entire scope and abilities of the project change, like the color picker or project manager"*).)_
 
@@ -397,7 +414,7 @@ This should have an option to select a different loaded spool, or any spool. Cur
 
 * Keeping the screen on when afk, still causes the screen to blank out. Confirmed on laptop, not on desktop. _[ON HOLD — OS-level power management, not fixable in app code. Candidate mitigations if we care: Wake Lock API (`navigator.wakeLock.request('screen')`) gated behind a toggle in the nav bar; only works when the tab is foreground. Worth considering if we add a kiosk/shop-floor mode.]_
 
-* Check why FIL:58 wasn't marked as labeled when scanned. The `label_printed` field was retired in M7 and replaced with `needs_label_print` (boolean) — barcode-scan path now updates this field at `app.py:921-922, 968-969`. The FIL:58 case specifically needs manual repro to see whether the update fires and why Activity Log was silent. Could be because FIL:58 is an old physical swatch with no prior spoolman state. _[ON HOLD — need to locate or reprint the FIL:58 physical label/swatch before repro can be attempted. When found: scan with DevTools open → Network tab → `/api/identify_scan` response + Activity Log ticker.]_
+* Check why FIL:58 wasn't marked as labeled when scanned. _(→ **Group 58.7**, still on hold)_ The `label_printed` field was retired in M7 and replaced with `needs_label_print` (boolean) — barcode-scan path now updates this field at `app.py:921-922, 968-969`. The FIL:58 case specifically needs manual repro to see whether the update fires and why Activity Log was silent. Could be because FIL:58 is an old physical swatch with no prior spoolman state. _[ON HOLD — need to locate or reprint the FIL:58 physical label/swatch before repro can be attempted. When found: scan with DevTools open → Network tab → `/api/identify_scan` response + Activity Log ticker.]_
 
 * 🔬 **If the dashboard ever freezes again** (scans stop registering until a hard refresh): **don't refresh first.** Press F12, screenshot the Console's FIRST red error and any failed or still-Pending Network rows (or right-click → "Save all as HAR"), note what you did in the last 30 seconds, then refresh and paste it all here. _(The L28 frontend lock-up and its modal-on-modal sub-bug are fixed and archived — 2026-10-12, Group 47.33, see `completed-archive.md`.)_
 
@@ -409,13 +426,9 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
 # **Active Backlog (Organized by Feature Area)**
 
 ## 📋 Activity Log
-* **Older Activity Log lines put a print's filename into the page unescaped.** _(Found 2026-10-19 by the Group 49
-  builder.)_ The deduct and review lines put the job's filename into the log's HTML as it is, so a filename with `<` or
-  `&` draws wrong. Group 49's own warnings escape their names with `html.escape`; do the same where those older lines
-  are built.
 
 ## 🎨 UI & Theming
-* Refactor the longer "strip" cards used in the Location Manager window. Merge the horizontal layout with modern grid card features without cramping the text or making the button layout look weird. _(2026-10-19 refresh: still standalone. It needs Derek to pick from a mock-up, which Claude can build on a real cart, e.g. `CR-CT-2-R1`, whenever he wants to look: two variants, one row per spool with all three QR badges or with one, both keeping Group 40.6's ↩️ RETURN footer. Its double LABEL handler is tidied in Group 48.1.)_
+* Refactor the longer "strip" cards used in the Location Manager window. Merge the horizontal layout with modern grid card features without cramping the text or making the button layout look weird. _(→ **Group 59.5**, 2026-10-25)_ _(2026-10-19 refresh: still standalone. It needs Derek to pick from a mock-up, which Claude can build on a real cart, e.g. `CR-CT-2-R1`, whenever he wants to look: two variants, one row per spool with all three QR badges or with one, both keeping Group 40.6's ↩️ RETURN footer. Its double LABEL handler is tidied in Group 48.1.)_
 * ✅ **High-Contrast Pop everywhere** — now a CLAUDE.md standing order (Derek, 2026-10-19): readable contrast in everything new, reusing looks he has approved, and never an app-wide restyle without showing him a sample first. Archived 2026-10-19 (see `completed-archive.md`).
 * **Printer Status: with 8 toolheads in a small window, the toolhead list wraps to a second line.** _(Derek,
   2026-10-19.)_ It looks odd on the collapsed version, the small one meant to be read at a glance. Part of a Printer
@@ -430,7 +443,7 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
 
 ## ⌨️ Keyboard Navigation
 * ✅ **Keyboard navigation everywhere** — now a CLAUDE.md standing order (Derek, 2026-10-19): keyboard navigation in everything new, where it makes sense, following the existing idiom. Archived 2026-10-19 (see `completed-archive.md`). Its one concrete gap, the Printer Status tiles, is **Group 50.3**.
-* **Enter on a focused button inside a window does nothing (app-wide).** _(Found 2026-10-19 while building Group
+* **Enter on a focused button inside a window does nothing (app-wide).** _(→ **Group 50.6**, with the Printer Status follow-ups' (b): the same root cause)_ _(Found 2026-10-19 while building Group
   48.2.)_ Tab to a button in the spool window (its ✏️ or 🖨️, or the new "(from the filament)" link) and press Enter:
   nothing happens; Space works. The scan accumulator in `templates/components/scripts.html` calls `preventDefault` on
   every Enter outside a text field, so a scanner's Enter never presses whatever has focus. Fix idea: let Enter through on
@@ -458,18 +471,25 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
   profile names contains it (Blend, Carbon Fiber, High Speed, "+"), so a PLA Blend would learn only from his PLA
   Blends. Not now: there is no concrete list of Prusa's profiles, and it varies by printer (the XL has custom profiles
   for more brands than the INDX).
-* **A Buy More link template with `&` breaks in the spool and filament windows.** _(Found 2026-10-19 by the Group 49
+* **A Buy More link template with `&` breaks in the spool and filament windows.** _(→ **Group 57.4**)_ _(Found 2026-10-19 by the Group 49
   builder.)_ The details windows read the `buy_more_url_template` setting through Jinja's auto-escaping inside a
   `<script>` tag, so an `&` in it arrives as `&amp;` in the links they build. The ⚠️ Low stock panel builds its links on
   the server and is fine. Pass the setting with `|tojson` instead.
 
 ## 🔍 Search, Display & Filtering
-* **Where the ⚠️ Low stock button should live.** _(Derek, 2026-10-20: "Low stock button location works for now, but
-  it's a bit fiddily if I click on it to get more info … I don't have a good suggestion on where to put it yet.")_
-  Today it sits in the 🔍 Search panel, and the list is an overlay on top of it. Done the same day: the list comes back
-  on the same row once a window opened from it (the filament, or a spool or edit opened from that) is closed, so it no
-  longer has to be reopened from Search each time. Still open: a better home for the button. Ideas, none decided: a
-  dashboard button with a count like 🏷️ Backlog's, or a Settings / tools menu entry.
+* **⚠️ Low stock: a title-bar button with a count, and a window that keeps one size (Derek, 2026-10-25, on prod).** _(→ **Group 57**: (b) as **57.1** first, then (a) as **57.2** after a sample)_
+  (a) **Where the button lives: decided.** Today it sits in the 🔍 Search panel ("works, seems a bit odd. And doesn't
+  really tell you anything at a glance"; 2026-10-20: "a bit fiddly"). Move it to the title bar beside 🏷️ Backlog and
+  🛒 Queue, with a count, so it reads at a glance. Things to settle in the build: what the count shows (Low + Out, or
+  both separately; Excluded never counts); its cost (`build_report` reads every spool and every filament strictly, too
+  heavy for each heartbeat: compute it on a slower cadence or after a deduct, a weigh-in or an exclusion, and say
+  "couldn't read" rather than 0, Group 52); and room in the title bar at Large / Extra Large, where it already
+  tightens (the design follow-ups' "Backlog and Queue as icon + count" idea may be needed). (b) **One size for the
+  window:** "It jumps in size depending on its content's length, which makes everything move around in a weird way.
+  This is kind of contradictory to some of the other modal design decisions we've made in the past." Give it a fixed
+  height (in rem, so it follows the Text size) with the filament list scrolling inside it ("If that means adding a
+  scrollbar to the list of filaments, that's fine"), the tabs, filter and legend staying put whatever tab or filter
+  is chosen. The list's come-back behaviour (2026-10-20) stays. **Standalone.**
 
 ## ⚡ Quick-Swap Enhancements
 *(No open items — resolved entries archived in `completed-archive.md`.)*
@@ -520,12 +540,12 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
 ## 🎟️ Print Queue, Labels & Filament Usage
 
 ## 🧪 Testing
-* **🧪 The recurring sweep reds, filed from the logs (2026-10-08 to 10-13).** _(→ **Group 45.8**; filed 2026-10-13 by the Group 45 reconcile, `wf_1a1ff135-1c6`)_ Five full `RUN_INTEGRATION` sweeps are on disk with tracebacks (13, 16, 28, 13 and 17 reds). With the TestCart pair gone (46.5) the same families recur, and only 17 of the 87 reds failed at a 3 s limit. The main mechanism is the sweep itself saturating dev Spoolman through FCC: `hub.log` has 8,577 five-second `get_all_spools` read timeouts on 2026-10-13, packed into the E2E windows, against 16–81 ms quiet reads. `/api/get_contents` re-reads the whole spool list and fails open to `[]`; `/api/filament_details` gives up after 3 s and returns null, so its window never opens. Families: **(A)** windows that open only after Spoolman answers (filament details, the add-spool wizard's pre-filled weight, Prusament onboarding, the spool modal): feed made-up data to every read those tests make; **(B)** the Location Manager open (`#manageModal` only after `/api/get_contents`): readiness waits and `open_manage_modal`, and capture the request log for `test_bind_picker_opens_from_quickswap_header` (red 5 of 5) before changing it; **(C)** the slot-scan error toast (`test_ui_slot_scan_bad_target_shows_error_toast`, red 5 of 5 even after Group 33 raised its limit): capture first, it may be a real product bug (a leaked audit or bulk-move session swallowing scans, or a modal gate); **(D)** `test_doassign_buffer_safety` races FCC's own 2 s buffer poll: make the injected buffer authoritative (today it can also persist its fake spools #42/#44/#99 to dev's server buffer). Done when three consecutive full sweeps on a normal desktop show none of these families, each labelled by 45.1(c)'s load line. **Progress 2026-10-13/14 (overnight run):** the request log showed the mechanism on a QUIET machine: every dashboard load and every 5 s heartbeat fired 13 parallel `/api/get_contents` (one per toolhead, each a full spool-list read, 2–3.4 s apiece), and each test's own requests queued behind them. The widget now renders from the heartbeat's own section (95 → 35 requests per idle 21 s, 52 → 0 `get_contents`). Families A and B's isolated reds then passed 5 of 5; C passes; D's tests own their buffer endpoint (and no longer write made-up spools into dev's buffer). The faster page exposed latent test races that had leaned on the slowness (wizard closes inside Bootstrap's show transition, Location Manager opens before the locations load, injected state overwritten by a real poll), fixed with shared helpers (`conftest.close_wizard` / `wait_modal_settled` / `quiet_heartbeat` / `own_the_buffer`), plus one product gap (an early tile click was dropped; `openManage` now waits for the first load). Sweeps: 15 reds in 21:44 (the races), then 1 red in 20:46 (the same race, fixed), then **0 reds: 3004 passed in 21:01**. **Left:** the done criterion, three consecutive clean full sweeps (1 of 3 so far).
+* **🧪 The recurring sweep reds, filed from the logs (2026-10-08 to 10-13).** _(→ **Group 45.8**; filed 2026-10-13 by the Group 45 reconcile, `wf_1a1ff135-1c6`)_ Five full `RUN_INTEGRATION` sweeps are on disk with tracebacks (13, 16, 28, 13 and 17 reds). With the TestCart pair gone (46.5) the same families recur, and only 17 of the 87 reds failed at a 3 s limit. The main mechanism is the sweep itself saturating dev Spoolman through FCC: `hub.log` has 8,577 five-second `get_all_spools` read timeouts on 2026-10-13, packed into the E2E windows, against 16–81 ms quiet reads. `/api/get_contents` re-reads the whole spool list and fails open to `[]`; `/api/filament_details` gives up after 3 s and returns null, so its window never opens. Families: **(A)** windows that open only after Spoolman answers (filament details, the add-spool wizard's pre-filled weight, Prusament onboarding, the spool modal): feed made-up data to every read those tests make; **(B)** the Location Manager open (`#manageModal` only after `/api/get_contents`): readiness waits and `open_manage_modal`, and capture the request log for `test_bind_picker_opens_from_quickswap_header` (red 5 of 5) before changing it; **(C)** the slot-scan error toast (`test_ui_slot_scan_bad_target_shows_error_toast`, red 5 of 5 even after Group 33 raised its limit): capture first, it may be a real product bug (a leaked audit or bulk-move session swallowing scans, or a modal gate); **(D)** `test_doassign_buffer_safety` races FCC's own 2 s buffer poll: make the injected buffer authoritative (today it can also persist its fake spools #42/#44/#99 to dev's server buffer). Done when three consecutive full sweeps on a normal desktop show none of these families, each labelled by 45.1(c)'s load line. **Progress 2026-10-13/14 (overnight run):** the request log showed the mechanism on a QUIET machine: every dashboard load and every 5 s heartbeat fired 13 parallel `/api/get_contents` (one per toolhead, each a full spool-list read, 2–3.4 s apiece), and each test's own requests queued behind them. The widget now renders from the heartbeat's own section (95 → 35 requests per idle 21 s, 52 → 0 `get_contents`). Families A and B's isolated reds then passed 5 of 5; C passes; D's tests own their buffer endpoint (and no longer write made-up spools into dev's buffer). The faster page exposed latent test races that had leaned on the slowness (wizard closes inside Bootstrap's show transition, Location Manager opens before the locations load, injected state overwritten by a real poll), fixed with shared helpers (`conftest.close_wizard` / `wait_modal_settled` / `quiet_heartbeat` / `own_the_buffer`), plus one product gap (an early tile click was dropped; `openManage` now waits for the first load). Sweeps: 15 reds in 21:44 (the races), then 1 red in 20:46 (the same race, fixed), then **0 reds: 3004 passed in 21:01**. **Left:** the done criterion, three consecutive clean full sweeps (1 of 3 so far). **✅ Met 2026-10-25 (`/refresh-groups`):** no full sweep since has had a red from families A–D, and the last three (2026-10-24) were 4841, 4843 and 4870 passed, 0 failed, at load 1.06×, 1.09× and 1.05× (none BUSY); 45.8 is done (Group 45's row and task file).
 * **🧪 Host-side test imports run FCC's startup migrations against whichever `data/locations.json` the working directory resolves to.** _(Found 2026-10-13 by Group 45, while triaging a sweep red; filed, not changed.)_ `locations_db.JSON_FILE` is the relative `data/locations.json` and `state.py` opens a relative `hub.log`; 90 test files `import app` on the host, which runs `startup_migrations` at import. From `inventory-hub/` (the canonical run) that is dev's REAL `inventory-hub/data/locations.json`, migrated by the host process while the container uses it (idempotent and usually a no-op, but it can write backups and migrations). From the repo root it is a stray, git-ignored repo-root `data/locations.json` left by a 2026-06-05 run (two rows, `CORE1` + `XL`, plus a `.pre-toolheads-migration` backup), which `test_printers_are_first_class_on_disk` read on 2026-10-13 (fixed: it now reads the container's file by absolute path). The host's hold on `hub.log` is already gone (Group 45 review: it blocked the container's log rotation on Windows and dropped its records). Options: point `JSON_FILE` / `hub.log` at module-relative paths (the container's WORKDIR is `/app`, so prod resolves the same), or give host test runs their own data dir; and delete the stray repo-root `data/`. _(→ **Group 45.9**, 2026-10-19: a host-only data dir that conftest points at a temp copy, `RotatingFileHandler(..., delay=True)`, and the stray repo-root `data/` and `hub.log` deleted.)_
-* **`test_baseline_spool_details_modal` skips when dev's buffer is empty.** _(Seen 2026-10-19 in the bundle run:
+* **`test_baseline_spool_details_modal` skips when dev's buffer is empty.** _(**Duplicate** of the second half of the `test_fab_no_overlap_with_cmd_deck.py` item under 🗒️ Notes; both → **Group 45.11**, 2026-10-25.)_ _(Seen 2026-10-19 in the bundle run:
   "No spool cards visible after closing offcanvas".)_ The visual test opens the spool window from a buffer card, so on
   an empty buffer it never runs. Give it its own card (`conftest.own_the_buffer`) so it always judges the window.
-* **Group 52's two read-notice contrast checks judge nothing.** _(Found 2026-10-19 by the reads-1 fixer.)_
+* **Group 52's two read-notice contrast checks judge nothing.** _(→ **Group 45.12**)_ _(Found 2026-10-19 by the reads-1 fixer.)_
   `assert_contrast(root)` / `contrast_offenders(root)` score the root's descendants only, and
   `test_manage_read_notice_has_no_gray_on_gray_text` / `test_backlog_read_notice_has_no_gray_on_gray_text` pass the
   notice itself, which has no children. Its colours pass by eye (about 11:1). Re-root both on the notice's parent and
@@ -533,13 +553,13 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
   guard score the root too.
 
 ## ⚙️ App Flow, Architecture & Database
-* **MOBILE** Make the entire app mobile friendly so NFC/Scanning works on phones. (Perhaps a desktop mode to utalize barcode scanners, and a mobile mode of mostly touch interface and scanning barcodes/QR codes and NFC tags). The main difference being that mobile mode won't relye on all the inlaid barcode/qr codes we currently have in the interface currently for interacting with the UI elements. _(2026-10-21: phone first, Android + Chrome; see "📱 Phone view first" under 🗒️ Notes, and `docs/agent_docs/tasks/design-step3-alternative-views.md`.)_
+* **MOBILE** Make the entire app mobile friendly so NFC/Scanning works on phones. (Perhaps a desktop mode to utalize barcode scanners, and a mobile mode of mostly touch interface and scanning barcodes/QR codes and NFC tags). The main difference being that mobile mode won't relye on all the inlaid barcode/qr codes we currently have in the interface currently for interacting with the UI elements. _(2026-10-21: phone first, Android + Chrome; see "📱 Phone view first" under 🗒️ Notes, and `docs/agent_docs/tasks/design-step3-alternative-views.md`.)_ _(→ **Group 60.2**, 2026-10-25.)_
 * **Frontend file-size pass (optional, low priority).** _(Narrowed 2026-10-12, Group 47.32, from "Refactor dashboard to be more modular if possible, and reduce token size/context requirements." The backend half shipped as L316 and is archived. Derek kept a frontend pass on the list, just in case.)_ The frontend is already split into 24 modules under `static/js/modules/`, but four files are big enough that changing one feature means loading a lot of unrelated code: `inv_wizard.js` (4,472 lines), `inv_details.js` (3,721), `inv_loc_mgr.js` (2,325) and `inv_cmd.js` (2,203), as of 2026-10-12. Split them along natural feature seams (e.g. the Bulk Move panel out of `inv_cmd.js`) so an agent can load one feature without the whole file. No bug behind it. **Standalone.** _(2026-10-19, Claude's call, offered for veto; none: split only when a group already rewrites that part, lowest risk first (the ~700-line Bulk Move panel out of `inv_cmd.js`), not `inv_loc_mgr.js` before the Group 37/44 sit-down, and only after Group 53's load-order canary.)_
 * **🧹 One source for the frontend's toolhead-Type lists.** _(Left as "a separate DRY item" when the backend duplicate was collapsed, 2026-06-15 `19a4a5e`; filed 2026-10-12 by Group 47.)_ The backend has one canonical `locations_db.TOOLHEAD_TYPES` frozenset (`locations_db.py:73`), but the frontend hard-codes the Types itself: `TOOLHEAD_TYPES` at `inv_quickswap.js:17`, plus two lists in `inv_loc_mgr.js` that add `Printer` (`SINGLE_OCC` at `:81`, which hides "Move all →" where it would be a no-op, and `_isPrinterTopologyType` at `:2300`). They agree today, so nothing has drifted, but a new toolhead Type would have to be added in every copy. Fix: serve the toolhead set from the backend (e.g. in the dashboard bootstrap or alongside `/api/printer_map`), read it from one `window.` constant, and derive the with-`Printer` list from it. _(→ **Group 53.1**, 2026-10-19: the copies have grown to 8; one list in `inv_core.js`, pinned against the backend's.)_
 * Make as much of Command Center user configurable as possible, using UI elements and a config import/export feature. _[→ **Group 35** for what's left. ✅ The Config system shipped 2026-06-01 (L18 Phases 1–4, main `6bd1f76`): the ⚙️ Admin / Config button opens a schema-driven Settings card, `GET`/`PUT /api/config`, a guarded toolhead editor, and import/export with redacted secrets and a dry-run diff. Adding a setting is now one `Field` in `config_schema.py`. Group 35 owns the tail: per-printer settings (the "Per-printer settings section in the Config tool" item) and L18 Phase 5 action-tool co-location. The "Config button … NEEDS DESIGN SESSION" item was archived 2026-10-12 (Group 47.20).]_
 * Continue to support Spoolman's "Import from External" feature for filaments... _[Status of existing parsers + a gap list of unimplemented sources lives in the module docstring at the top of `inventory-hub/external_parsers.py` as of 2026-05-13 (Group 11). The audit + dropdown cleanup landed; the items below are the still-unimplemented sources.]_
     - open-filament-database
-    - Open Print Tags (Initialize, Read, and Write)
+    - Open Print Tags (Initialize, Read, and Write) _(→ **Group 60.3**, read-only first; 2026-10-25)_
 * Refactoring setup code to be dynamic. On brand new installs, maintain existing code to get it started.
 * Add the ability to configure which extra fields should be bound and propagated to the other type of item. (Filament <-> Spool). _(**Kept, parked (Derek, 2026-10-19)**, with a new thought: maybe share fields freely as a Settings configuration; the slicer profile on the spool card (Group 48.2) is the current example. He may have forgotten its first purpose.)_
 
@@ -555,7 +575,7 @@ I think we've inadvertently created 3 levels of logic/complexity here:
 2. A UI layer, for debugging, but should only really need to be looked at to confirm things
 3. A full on interface that is easier to move spools around than having to use Spoolman's lackluster interface.
 All 3 of these things are important and have value. We should table for now, and come back to once we've gotten more of the functionality in place.
-* **🐢 The buffer cards' live refresh reads Spoolman once per buffered spool on every heartbeat.** _(Group 52 builder's
+* **🐢 The buffer cards' live refresh reads Spoolman once per buffered spool on every heartbeat.** _(→ **Group 57.5**)_ _(Group 52 builder's
   note, 2026-10-19.)_ `spools_refresh` (`logic.get_live_spools_data`) makes one GET per spool in the buffer each tick:
   ten buffered spools are ten reads every 5 s. It could use the tick's one spool-list read (`SpoolListRead`), as the
   other heartbeat sections do since Group 52.
@@ -563,7 +583,7 @@ All 3 of these things are important and have value. We should table for now, and
   by the Group 52 builder.)_ Such a scan makes four strict whole-list reads, each guarding a different moment; the
   chained deploy's step-4 resident list and its step-6 re-list of the same head could be one read when no printer probe
   ran between them. A move-engine change (`logic.py`), for an engine session.
-* **The archive edge doesn't read `remaining_weight`.** _(Group 51 review note, 2026-10-19.)_ Since the review, a
+* **The archive edge doesn't read `remaining_weight`.** _(→ **Group 54.6**)_ _(Group 51 review note, 2026-10-19.)_ Since the review, a
   `remaining_weight` write (the weigh-out row's fallback when the spool's details can't be read) un-archives a spool
   weighed back into stock, but weighing one to 0 g that way still doesn't archive it (it never did). Rare path: make
   `spoolman_api._auto_archive_on_empty` read it too.

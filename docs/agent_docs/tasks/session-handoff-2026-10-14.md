@@ -641,7 +641,7 @@ is the minimum (his call).
 **Lesson:** a fix that makes a long-dead write path work turns old UI quirks into data loss: when a clear starts
 clearing, review every page that sends one (the ➕ redraw had been harmless only because clears did nothing).
 
-### Readability build + Derek's picture walks (2026-10-21 → 24) — DONE (merged to `dev` 2026-10-24; `main` waits for Derek)
+### Readability build + Derek's picture walks (2026-10-21 → 24) — DONE (merged to `dev` 2026-10-24; RELEASED `main` `97fcf7c` 2026-10-25)
 
 Derek approved the text-size rule item by item (2026-10-21), the build's pictures (2026-10-22: all five, with three
 changes) and the changes' pictures (2026-10-23/24); see completed-archive.md. The first merge (`047ff4f`) ran ahead of his
