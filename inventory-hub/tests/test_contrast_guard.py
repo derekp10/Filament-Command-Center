@@ -186,6 +186,40 @@ def test_low_stock_panel_has_no_gray_on_gray_text(page: Page, base_url: str, ass
     assert_contrast(panel)
 
 
+@pytest.mark.usefixtures("require_server")
+def test_low_stock_title_bar_button_is_readable(page: Page, base_url: str, assert_contrast):
+    """Group 57.2 — the ⚠️ count in the title bar (Bootstrap's outline-warning
+    on the dark bar): with its count, hovered, and with "?" after a read that
+    failed. Read-only: the heartbeat is dev's own; the failed read is stubbed.
+    The guard scores a root's descendants, so the bar's buttons row is the
+    root, and the count is shown to be among what it scores."""
+    import json as _json
+    import conftest   # local: keeps this file's header out of other branches' merges
+    page.goto(base_url)
+    num = page.locator("#btn-low-stock-count [data-low-stock-count]")
+    page.wait_for_function("() => { const n = document.querySelector('#btn-low-stock-count [data-low-stock-count]');"
+                           " return !!n && /^\\d+$/.test(n.textContent.trim()); }", timeout=20000)
+    row = page.locator("nav.navbar .fcc-titlebar-actions")
+    assert_contrast(row)
+    count = num.text_content().strip()
+    assert any(o.get("text", "").strip() == count for o in conftest.contrast_offenders(row, min_ratio=100))
+    page.locator("#btn-low-stock-count").hover()
+    assert_contrast(row)
+
+    def pulse(route):
+        resp = route.fetch()
+        body = resp.json()
+        if "low_stock" in body:
+            body["low_stock"] = {"read_ok": False, "read_error": "couldn't read Spoolman's spools (test)"}
+        route.fulfill(response=resp, body=_json.dumps(body))
+    page.route("**/api/dashboard_pulse*", pulse)
+    page.reload()
+    page.wait_for_function("() => { const b = document.getElementById('btn-low-stock-count');"
+                           " return !!b && b.dataset.read === 'failed'; }", timeout=20000)
+    page.mouse.move(5, 300)
+    assert_contrast(row)
+
+
 @pytest.mark.usefixtures("require_server", "bound_slot")
 def test_printer_status_widget_collapsed_has_no_gray_on_gray_text(
     page: Page, base_url: str, assert_contrast

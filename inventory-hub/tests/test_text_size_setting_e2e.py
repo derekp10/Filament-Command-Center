@@ -255,11 +255,13 @@ NAV_JS = """() => {
     const actions = nav.querySelector('.fcc-titlebar-actions');
     const search = Array.from(nav.querySelectorAll('.btn')).find((b) => /SEARCH/.test(b.innerText));
     const ver = document.getElementById('fcc-build-version');
+    const brand = nav.querySelector('.navbar-brand');
     return { btns, navH: Math.round(nr.height),
              overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
              gap: getComputedStyle(actions).columnGap, searchMargin: getComputedStyle(search).marginLeft,
              version: getComputedStyle(ver).display === 'none' ? 'hidden'
-                 : (ver.scrollWidth > ver.clientWidth + 1 ? 'squeezed' : 'whole') };
+                 : (ver.scrollWidth > ver.clientWidth + 1 ? 'squeezed' : 'whole'),
+             title: brand.scrollWidth > brand.clientWidth + 1 ? 'shortened' : 'whole' };
 }"""
 
 
@@ -268,12 +270,20 @@ def test_the_title_bar_keeps_its_buttons_on_one_line(page: Page, base_url: str, 
     _read_only(page)
     _store(page, name)
     _load(page, base_url)
+    # The ⚠️ Low stock count (Group 57.2) painted, so the bar is measured at its
+    # real width, not with the "…" it shows before the first heartbeat.
+    page.wait_for_function("() => { const n = document.querySelector('#btn-low-stock-count [data-low-stock-count]');"
+                           " return !!n && n.textContent.trim() !== '…'; }", timeout=20_000)
     nav = page.evaluate(NAV_JS)
     wrapped = [b for b in nav["btns"] if b["lines"] != 1 or not b["inside"]]
     assert not wrapped, f"{name}: title-bar buttons that wrap or stick out of the bar: {wrapped}"
     assert nav["navH"] == 70 and not nav["overflow"], nav
-    # 1600 px wide: the version badge is whole at every size.
-    assert nav["version"] == "whole", nav
+    # 1600 px wide: the title is whole at every size, and the version badge
+    # whole up to Large. PIN UPDATED DELIBERATELY (Group 57.2, 2026-10-26): the
+    # ⚠️ count moved every step up by its width, so at Extra Large the badge
+    # goes (it was whole there); it is never squeezed.
+    assert nav["title"] == "whole", nav
+    assert nav["version"] == ("hidden" if name == "Extra Large" else "whole"), nav
     texts = [b["text"] for b in nav["btns"]]
     if name in ("Small", "Standard"):
         # The classic bar, unchanged.
