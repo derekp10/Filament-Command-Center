@@ -433,6 +433,11 @@
             // Escape is owned by mountOverlay's onEscape — see openModal caller.
             if (e.key === 'Enter') {
                 if (e.target && e.target.classList && e.target.classList.contains('fcc-we-tab')) return;
+                // A scan's Enter with the focus off the field (on Save, say: its
+                // keys went to the scan accumulator) is the scan's, not a Save
+                // (Group 57 review, round 5: it saved the reading typed so far).
+                // A scan typed into the field is the field capture's (below).
+                if (e.target !== inputEl && window.enterIsAScan && window.enterIsAScan()) return;
                 e.preventDefault();
                 attemptSave();
             } else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
@@ -449,7 +454,13 @@
                 // so D is unused there; still, don't hijack when focus is on
                 // the input mid-edit.
                 if (e.target === inputEl) return;
+                // A scan's 'D' ("ID:57" with the focus on a mode tab) is the
+                // scan's: it set the stored default mode (round 5).
+                if (window.scanIsArriving ? window.scanIsArriving()
+                    : (window.isScanInFlight && window.isScanInFlight())) return;
                 e.preventDefault();
+                e.stopImmediatePropagation();
+                if (window.clearScanBuffer) window.clearScanBuffer();   // nor start the next scan
                 persistCurrentModeAsDefault();
             }
         }
@@ -468,6 +479,25 @@
 
         applyMode(mode);
         // Initial focus is handled by mountOverlay's initialFocus option.
+    }
+
+    // A label scanned while the window is open is the scan's, never a weight
+    // (Group 57 review, round 5: RED). The field has the focus from the moment
+    // the window opens, so a scanner typed into it: a number field (Gross,
+    // Net, Set Used) kept the digits of "ID:57" and Save stored 57 g, which in
+    // Gross is under the empty spool, so Auto Archive archived the spool; a
+    // reading typed first got the digits appended (64557 g). The weigh-out's
+    // rule (inv_weigh_out.js): a character a weight can't hold proves a scan,
+    // the field gets back what was typed before it, and the scan goes to the
+    // scan path. A label of digits alone is left a weight: it can't be told
+    // from a scale that types its reading.
+    if (window.installFieldScanCapture) {
+        const WEIGHTISH = /^[0-9.+\-]$/;
+        window.installFieldScanCapture({
+            match: (el) => el.id === 'fcc-we-input',
+            isScanPayload: (txt) => [...txt].some((c) => !WEIGHTISH.test(c)),
+            perKey: true,
+        });
     }
 
     window.WeightEntry = { openModal };

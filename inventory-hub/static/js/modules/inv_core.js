@@ -739,7 +739,13 @@ window.askMoveConfirm = (answer, ctx = {}) => {
 //   match(el)          -> is this the field we care about?
 //   isScanPayload(txt) -> is this a scan rather than typing?
 //   onScan(txt, el)    -> what to do with it (default: window.processScan)
-const installFieldScanCapture = ({ match, isScanPayload, onScan }) => {
+//   perKey             -> judge the speed by the gap between keys, each under
+//                         150 ms and the Enter too, not by the whole payload:
+//                         for a field a person never types such text into (a
+//                         weight box), so a slower scanner's label counts too
+//                         (Group 57 review, round 5: "ID:57" at 40 ms a key
+//                         took 200 ms in all and was saved as 57 g)
+const installFieldScanCapture = ({ match, isScanPayload, onScan, perKey }) => {
     let buf = '';
     let startedAt = 0;
     let lastAt = 0;
@@ -750,7 +756,8 @@ const installFieldScanCapture = ({ match, isScanPayload, onScan }) => {
         const now = Date.now();
 
         if (e.key === 'Enter') {
-            const fast = buf.length >= 3 && startedAt && (now - startedAt) < 150;
+            const fast = buf.length >= 3 && startedAt
+                && ((now - startedAt) < 150 || (!!perKey && (now - lastAt) < 150));
             const looksScanned = fast && isScanPayload(buf);
             const payload = buf;
             const restore = preScanValue;

@@ -203,6 +203,19 @@
      reads "–" ("(–)" on Backlog and Queue, which used to read a "(0)" nobody had read), and "?" if that read failed;
      a heartbeat FCC hasn't answered after 30 s counts as failed.
   If you never answer, A and (a) go to `dev` as built.
+* **⏸️ PENDING DEREK — your call: an old digits-only label scanned into a weight box (found 2026-10-27 by the
+  Group 57 review, round 5; nothing blocks on it).** Just an opinion, when you have one. You click a spool card's
+  weight (the Quick-Weigh window), type the scale's reading, say 645, and scan the next spool's label before pressing
+  Enter. FCC's own labels ("ID:57") are caught now and never saved as a weight (fixed on the Group 57 branch). An old
+  label that is digits only ("57", from before FCC's "ID:" labels) can't be told from more typing, so it joins the
+  reading ("64557") and the scan's Enter saves that: the spool reads full. The weigh-out list has the same rule, on
+  purpose: digits are a weight, so a scale that types its reading into the box (a USB scale in keyboard mode) still
+  works.
+  1. Leave it (the default): digits are a weight. Right if you have a scale that types, or no digits-only labels left.
+  2. Digits arriving at scanner speed (3 or more, each a few ms apart, then Enter) right after a pause count as a
+     scan: catches the old label, but a scale that types would be caught too.
+  Claude's pick: 1, unless you still scan digits-only labels while weighing by hand. Two things answer it: do you still
+  have digits-only spool labels, and does any scale of yours type its reading?
 * **📐 Plan docs: named sizes and colors as the base for themes; alternative views (phone, wall tablet, printer pictures,
   the Location Manager) (Derek, 2026-10-21; written).** _(→ **Group 60.1**: Claude first rewrites step 3's order, phone first, then the decisions one at a time)_ "Themes" in his sense are whole alternative designs a user
   can choose ("what we have now, or future ones, possibly ones that focus on using images of the printers themselves"),
@@ -654,6 +667,20 @@ All 3 of these things are important and have value. We should table for now, and
     scan is processed too), the filament editor's "Close without saving?" with Close Anyway focused (a scan closes
     it unsaved; Keep Editing has the focus by default), and the parent tree picker (`inv_loc_mgr.js`: Enter picks
     the highlighted parent; read from the code).
+* **✅ FIXED (on `feature/group-57-low-stock-at-a-glance`, the commit after `aecf901`; goes to `dev` with Group 57,
+  or alone: its code needs nothing else from the branch, its test round 3's slow-scan harness): 🔴 a label scanned while the Quick-Weigh window is open was saved
+  as the spool's weight, and could archive it.** _(Found 2026-10-27 by the Group 57 review, round 5, on dev,
+  read-only; older than Group 57.)_ The window (`weight_entry.js`: a buffer card's weight, the weigh-out list, the
+  wizard's weigh) answered every Enter with Save, and its weight field, focused when it opens, had no field scan
+  capture. A number field (Gross, Net, Set Used) kept the digits of "ID:57" and Save stored 57 g; in Gross that is
+  under the empty spool, so the spool read empty and Auto Archive archived it. A reading typed first got the digits
+  appended (64557 g). With Save focused the scan's Enter saved what was typed so far, and on a mode tab the scan's 'D'
+  set the stored default mode. Now the field has the weigh-out's capture (a character a weight can't hold proves a
+  scan, judged by the gap between keys so a slower scanner counts, `installFieldScanCapture`'s new `perKey`; the
+  field keeps what was typed before), the Enter off the field and the D leave a scan alone, and the weigh-out list's
+  own boxes take a slower scanner's label too (they allowed a whole label only 150 ms). Pinned by
+  `tests/test_quick_weigh_scan_js.py` (13 red before it, 9 of 9 mutants caught). A digits-only label is left a weight:
+  ⏸️ PENDING DEREK.
 * **✅ FIXED (on `feature/group-57-low-stock-at-a-glance`, the commit after `1a1293b`; goes to `dev` with Group 57):
   🔴 A slower scanner's "Scan to Cancel" could confirm a Quick-Swap.** _(Found 2026-10-27 by the Group 57 review,
   round 3; reproduced on dev, read-only, in round 4.)_ `window.isScanInFlight` (inv_core.js) counts 500 ms from a

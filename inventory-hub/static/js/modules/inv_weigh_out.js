@@ -167,6 +167,8 @@ window.openWeighOutModal = () => {
         // numeric barcode is deliberately NOT captured — genuinely ambiguous
         // with a weight, and weight is the safe reading.
         isScanPayload: (txt) => [...txt].some(c => !WEIGHTISH.test(c)),
+        // A slower scanner's label counts too (Group 57 review, round 5).
+        perKey: true,
     });
 })();
 
