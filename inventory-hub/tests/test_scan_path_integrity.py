@@ -262,9 +262,10 @@ def test_weigh_out_captures_a_scan_from_a_focused_weight_field_e2e(page):
 
     Driven against a synthetic .weigh-input rather than a real weigh-out
     session: the capture listener is bound to `document` and keys only off the
-    element's class, so this exercises the real code path without needing spools
-    in the buffer — and without mutating dev inventory. processScan is stubbed
-    for the same reason.
+    class every weight box carries (fcc-weight-box, inv_core.js's weight
+    capture since Group 57's review, round 6), so this exercises the real code
+    path without needing spools in the buffer — and without mutating dev
+    inventory. processScan is stubbed for the same reason.
     """
     page.goto("http://localhost:8000/", wait_until="domcontentloaded")
     page.wait_for_function("typeof state !== 'undefined'", timeout=15000)
@@ -274,7 +275,7 @@ def test_weigh_out_captures_a_scan_from_a_focused_weight_field_e2e(page):
         window.processScan = (text, source) => window.__scanned.push([text, source]);
         const inp = document.createElement('input');
         inp.type = 'text';
-        inp.className = 'weigh-input';
+        inp.className = 'weigh-input fcc-weight-box';
         inp.id = '__probe_weigh_input';
         document.body.appendChild(inp);
         inp.focus();
