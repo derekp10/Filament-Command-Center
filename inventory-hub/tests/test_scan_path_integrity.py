@@ -321,23 +321,44 @@ def test_weigh_out_captures_a_scan_from_a_focused_weight_field_e2e(page):
         "barcode AS A WEIGHT"
     )
 
-    # 2. HUMAN: a plain numeric weight must NOT be hijacked, even if typed fast.
-    page.evaluate("""
-        window.__scanned = [];
-        const inp = document.getElementById('__probe_weigh_input');
-        inp.value = '';
-        for (const ch of '1234') {
-            inp.dispatchEvent(new KeyboardEvent('keydown', {key: ch, bubbles: true}));
-            inp.value += ch;
-        }
-        inp.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
-    """)
+    # 2. HUMAN: a plain numeric weight typed at a person's pace is never
+    #    hijacked.
+    def _type(text, gap_ms):
+        page.evaluate("""async ([txt, gap]) => {
+            window.__scanned = [];
+            const inp = document.getElementById('__probe_weigh_input');
+            inp.value = '';
+            for (const ch of txt) {
+                inp.dispatchEvent(new KeyboardEvent('keydown', {key: ch, bubbles: true}));
+                inp.value += ch;
+                if (gap) await new Promise((r) => setTimeout(r, gap));
+            }
+            inp.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
+        }""", [text, gap_ms])
+
+    _type("1234", 70)
     assert page.evaluate("window.__scanned.length") == 0, (
-        "a numeric weight was misrouted to processScan — weights must never be "
-        "treated as scans, however fast they are typed"
+        "a numeric weight typed at a person's pace was misrouted to processScan"
     )
     assert page.evaluate("document.getElementById('__probe_weigh_input').value") == "1234", (
         "a typed weight was cleared out of the field"
+    )
+
+    # 3. A reading with a '.' arriving at scanner speed (a scale that types it)
+    #    stays a weight too.
+    _type("645.5", 0)
+    assert page.evaluate("window.__scanned.length") == 0, "a scale's reading with a '.' was misrouted to processScan"
+    assert page.evaluate("document.getElementById('__probe_weigh_input').value") == "645.5"
+
+    # 4. Digits alone faster than a person types are a scan, never a weight:
+    #    an old digits-only label (Derek, 2026-10-28: "I'd love to safe guard
+    #    against barcode scans adding data to the weight field"; it said
+    #    "weights must never be treated as scans, however fast they are typed"
+    #    until then).
+    _type("1234", 0)
+    assert page.evaluate("window.__scanned") == [["1234", "barcode"]], page.evaluate("window.__scanned")
+    assert page.evaluate("document.getElementById('__probe_weigh_input').value") == "", (
+        "a digits-only label was left in the weight field, where Enter would save it as a weight"
     )
 
     page.evaluate("document.getElementById('__probe_weigh_input').remove()")
