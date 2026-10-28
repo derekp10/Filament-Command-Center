@@ -1504,7 +1504,10 @@ window.refreshFilamentSpools = () => {
 //   empty-weight storage cascade (all NATIVE Spoolman number fields):
 //     spool.spool_weight > filament.spool_weight > vendor.empty_spool_weight
 //   this prompt writes the FILAMENT default (always) + the VENDOR default (opt-in).
-window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight = null) => {
+// `opts.skipIf()`: true when the prompt should not open after all (the
+// weigh-out list: a spool has been scanned since the save, Group 57 review,
+// round 8). Asked right before it is drawn.
+window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight = null, opts = {}) => {
     if (!filamentId) return;
     let fil;
     try {
@@ -1573,6 +1576,11 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
         </div>
     `;
 
+    if (opts && typeof opts.skipIf === 'function' && opts.skipIf()) {
+        showToast(`Didn't ask for #${spoolId}'s empty spool weight: the next spool was already scanned`, 'info', 5000);
+        return;
+    }
+
     let handle = null;
     let saving = false;
     // Closed (Later, Escape or a save), the focus goes back where it was: the
@@ -1602,6 +1610,11 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
         onEscape: cleanup,   // Escape == "Later" (no-op); mountOverlay owns Escape
     });
     const ov = handle.element;
+    // A spool scanned over it in the weigh-out list answers it Later: that
+    // spool is the one being weighed now, and its reading would go in this box
+    // as the filament's empty weight (inv_weigh_out.js, round 8). A save
+    // already on its way still lands.
+    ov.fccDismissForScan = cleanup;
     const wtEl = ov.querySelector('#fcc-archive-empty-wt');
     const errEl = ov.querySelector('#fcc-archive-empty-err');
     const propEl = ov.querySelector('#fcc-archive-propagate');

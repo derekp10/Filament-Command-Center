@@ -1496,10 +1496,6 @@ const processScan = (text, source = 'keyboard', capturedAt = null) => {
     // the exact matches below missed (Group 57 review, round 5).
     text = String(text == null ? '' : text).trim();
     if (!text) return;
-    // Where the weigh-out list's focus was as the scan was read: a spool it
-    // names takes the focus there, with what was typed meanwhile (Group 57
-    // review, round 7; inv_weigh_out.js).
-    const weighFrom = window.weighOutScanFrom ? window.weighOutScanFrom() : null;
     const upper = text.toUpperCase();
     const locKey = upper.trim();
     if (_isLocRepeat(locKey, capturedAt)) {
@@ -1652,6 +1648,11 @@ const processScan = (text, source = 'keyboard', capturedAt = null) => {
     setProcessing(true, { label: slotScan && window.printerLabelForTarget
         ? window.printerLabelForTarget(slotScan[1], slotScan[2]) : null });
     locInFlight();
+    // The weigh-out list, open: where the person's keys were as the scan went
+    // out. A spool the answer names takes the focus, with what was typed
+    // meanwhile, and until the answer Enter saves nothing there (Group 57
+    // review, rounds 7 and 8; inv_weigh_out.js).
+    const weighFrom = window.weighOutScanStart ? window.weighOutScanStart() : null;
     // `confirmed_fed_heads` (Group 40.3): this page can show the "already
     // running another spool" question, so a slot scan is asked it instead of
     // being refused as a stale page (logic.stale_fed_refusal). Empty: the user
@@ -2003,7 +2004,8 @@ const processScan = (text, source = 'keyboard', capturedAt = null) => {
                 }
             } else if (res.type === 'error') showToast(res.msg, 'error');
         })
-        .catch((e) => { locDone(); setProcessing(false); console.error(e); showToast("Scan Error", "error"); });
+        .catch((e) => { locDone(); setProcessing(false); console.error(e); showToast("Scan Error", "error"); })
+        .finally(() => { if (window.weighOutScanDone) window.weighOutScanDone(weighFrom); });
 };
 
 // The active-print confirm for a scan assign: the shared one (inv_core.js,

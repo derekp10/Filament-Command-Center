@@ -847,3 +847,20 @@ def test_another_makers_label_keeps_its_own_prefix(weigh):
     press(page, "SN:4471", 5)
     s = _seen(page)
     assert s["scans"] == ["SN:4471"] and s["saved"] == [] and s["buffer"] == "", s
+
+
+@pytest.mark.parametrize("label, ms", [("PID:57", 5), ("UID:57", 5), ("BLOC:XL-1", 5), ("HOLD:5", 5),
+                                       ("PROFIL:12", 5), ("PID:57", 200)])
+def test_another_makers_label_ending_in_an_fcc_prefix_stays_whole(weigh, label, ms):
+    """Another maker's label whose prefix ends in letters FCC reads ("PID:57",
+    "BLOC:XL-1"), scanned into the field at a steady pace (a burst scanner, or
+    a slow one at 200 ms a key): it reaches the scan path as printed, and the
+    server answers Unknown Code. RED on b114fd7: it was cut at the FCC prefix
+    ("ID:57", "LOC:XL-1"), and the scan path acted on it (#57 joined the
+    buffer; the buffer moved onto XL-1). A person's letter typed before a scan
+    is still cut off (test_a_unit_or_a_stray_letter_typed_before_a_scan_stays_out_of_it)."""
+    page, open_ = weigh
+    open_("gross")
+    press(page, label, ms)
+    s = _seen(page)
+    assert s["scans"] == [label] and s["saved"] == [], (label, ms, s)

@@ -25,11 +25,18 @@ const MODE_PLACEHOLDERS = {
     additive: '+25 / -10',
     set_used: 'used',
 };
-const MODE_INPUT_TYPES = {
-    gross: 'number',
-    net: 'number',
+// Every box is a text box, with a number pad on a phone where the mode takes a
+// plain reading (Group 57 review, round 8). A number box reads "645." as 645
+// and can't say what was typed, so a redraw between the '.' and the next digit
+// saved 6455 (in Set Used the spool read empty and was archived), and it kept
+// only the digits of "0.645kg" or "6,45". A text box keeps what was typed, and
+// a reading is read strictly (window.parseGramsReading): anything but grams is
+// refused.
+const MODE_INPUT_MODES = {
+    gross: 'decimal',
+    net: 'decimal',
     additive: 'text',
-    set_used: 'number',
+    set_used: 'decimal',
 };
 
 const fetchSpoolDetails = (id) => {
@@ -79,9 +86,9 @@ const setWeighOutMode = (mode) => {
     });
     const hint = document.getElementById('weigh-out-mode-hint');
     if (hint) hint.innerText = MODE_HINTS[mode] || '';
-    // Refresh placeholders + input types + previews on every visible row.
+    // Refresh placeholders + keyboards + previews on every visible row.
     document.querySelectorAll('.weigh-input').forEach((inp) => {
-        inp.type = MODE_INPUT_TYPES[mode];
+        inp.inputMode = MODE_INPUT_MODES[mode];
         inp.placeholder = MODE_PLACEHOLDERS[mode];
     });
     refreshAllRowPreviews();
@@ -90,6 +97,10 @@ const setWeighOutMode = (mode) => {
 window.openWeighOutModal = () => {
     // Sync UI to state.heldSpools but ignore processed ones for this session
     processedWeighIds.clear();
+    fadeTimers.forEach((t) => clearTimeout(t));
+    fadeTimers.clear();
+    pendingScan = null;
+    rescanAfterSave = null;
     // 31.3 review fix: start every session fresh. Closing the modal does NOT
     // clear #weigh-out-list, so rows (with any un-submitted text) linger in the
     // hidden DOM. Wipe them BEFORE the first render so the preserve-text
@@ -100,6 +111,9 @@ window.openWeighOutModal = () => {
     const listEl = document.getElementById('weigh-out-list');
     if (listEl) listEl.innerHTML = '';
     renderWeighOutList();
+    // The first row is the target until the person or a scan picks another.
+    const firstBox = document.querySelector('#weigh-out-list .weigh-input:not(:disabled)');
+    weighTargetId = firstBox ? firstBox.dataset.id : null;
     modals.weighOutModal.show();
 
     // Wire the mode selector exactly once per page lifetime.
@@ -125,10 +139,24 @@ window.openWeighOutModal = () => {
         });
 
     // A weight key typed on the window's other controls (a mode button, the
-    // Auto-Archive switch, the window itself) goes into this box (inv_core.js's
-    // weight capture, data-fcc-weight-keys; Group 57 review, round 7).
+    // Auto-Archive switch, the window itself) goes into the target's box, one
+    // typed on a row's 💾 into that row's (inv_core.js's weight capture,
+    // data-fcc-weight-keys; Group 57 review, rounds 7 and 8). With no box for
+    // it while a scan is being answered, it is held for the spool the scan
+    // names (an empty list: it stayed in the scan buffer, and the reading was
+    // saved cut short).
     const modalEl = document.getElementById('weighOutModal');
-    if (modalEl) modalEl.fccWeightBox = currentWeighBox;
+    if (modalEl) {
+        modalEl.fccWeightBox = (from) => {
+            const row = from && from.closest ? from.closest('.weigh-row') : null;
+            return row ? row.querySelector('.weigh-input:not(:disabled)') : currentWeighBox();
+        };
+        modalEl.fccWeightHold = (key) => {
+            if (!pendingScan) return false;
+            pendingScan.held += key;
+            return true;
+        };
+    }
 
     // Auto-focus the first empty input after modal shown, but never while a
     // scan is arriving (Group 57 review, round 6): the WEIGH QR and the first
@@ -142,8 +170,9 @@ window.openWeighOutModal = () => {
         const ae = document.activeElement;
         if (ae && ae.classList && ae.classList.contains('weigh-input')) return;
         if (state.scanBuffer && waited < 3000) { waited += 150; setTimeout(focusFirst, 150); return; }
-        const firstInput = document.querySelector('.weigh-input:not(:disabled)');
-        if (firstInput) firstInput.focus();
+        if (!weighOutIsUp()) return;
+        const box = currentWeighBox();
+        if (box) box.focus();
     };
     setTimeout(focusFirst, 500);
 };
@@ -171,83 +200,208 @@ window.openWeighOutModal = () => {
 // is genuinely ambiguous with a weight, and treating it as a weight is the
 // safe default.
 //
-// Where the next reading goes (Group 57 review, round 7). The window's flow is
-// "scan a spool, type its weight", and a scanned spool's row is drawn at the
-// top: the focus stayed in the box that had it, so the reading was saved to
-// another spool (at 0 g that spool was archived and taken off its place). A
-// spool scanned while the window is open now gives its own box the focus
-// (processScan calls weighOutScanFrom when the scan is read and
-// weighOutTakeScan once it names a spool), and a reading typed into the old
-// box before the server answered goes with it. The focus comes back to a box
-// after the missing-tare and empty-weight prompts close (weighOutRefocus); it
-// fell to the page, where the next reading went to the scan path as a spool id.
-// A weight key typed on the window's other controls goes into the box that
-// last had the focus (currentWeighBox, through the weight capture).
-let lastWeighBoxId = null;
+// Where the next reading goes (Group 57 review, rounds 7 and 8). The window's
+// flow is "scan a spool, type its weight", and a scanned spool's row is drawn
+// at the top. The list keeps a TARGET, the spool whose reading is being
+// entered: its box taking the focus makes it the target (a click or Tab into
+// it, a click on its row, the save moving on to the next row), and so does a
+// scan that names a spool, even one answered while a dialog is over the list.
+// A weight key typed on the window's other controls goes into the target's box
+// (one typed on a row's 💾, into that row's), and the focus comes back to it
+// when a dialog over the list closes. Round 7 sent both to the box that had
+// had the focus last, which a scan under a prompt never changed, and round 6
+// kept the focus there through a scan: each time the reading for the spool in
+// the person's hand was saved to another spool (at 0 g that spool was
+// archived and taken off its place).
+// - A scanned spool's box takes the focus. One weighed this session (its row
+//   faded away) is drawn again (round 8: the reading meant to weigh it again
+//   went in the next spool's box).
+// - What was typed while the scan was answered goes with it (processScan calls
+//   weighOutScanStart as it sends a scan, weighOutTakeScan once the answer
+//   names a spool, weighOutScanDone after any answer): a reading started in
+//   the box that had the focus, or typed on another control (it went in the
+//   target's box), or with no box to go in (an empty list: held for it).
+//   Until the answer, Enter saves nothing (round 8: a reading and Enter typed
+//   before the answer were saved to another spool).
+// - The missing-tare and empty-weight prompts close when a spool is scanned
+//   over them, and neither opens once a spool scan has been answered since
+//   its Enter (round 8): the scanned spool's reading went in the prompt's box,
+//   as an empty spool weight.
+let weighTargetId = null;       // the target's spool id (a string), or null
+let pendingScan = null;         // a scan sent while the window is open, not yet answered
+let scanSeq = 0;                // weighOutScanStart's count: only the latest scan moves the focus
+let scansTaken = 0;             // spool scans weighOutTakeScan took ("since" for the prompts)
+let rescanAfterSave = null;     // a spool scanned while its own save was on its way
+const fadeTimers = new Map();   // a saved row's fade, by spool id
 document.addEventListener('focusin', (e) => {
     const t = e.target;
-    if (t && t.classList && t.classList.contains('weigh-input')) lastWeighBoxId = t.dataset.id;
+    if (t && t.classList && t.classList.contains('weigh-input')) weighTargetId = t.dataset.id;
 });
 
-// The box a reading goes in: the one that last had the focus, else the first
-// empty one, else the first.
+const boxFor = (id) => (id == null ? null
+    : document.querySelector(`#weigh-out-list .weigh-input[data-id="${id}"]:not(:disabled)`));
+
+// The target's box (none while its save is on its way). With no target, or
+// its row gone, the only box listed: never a guess among several spools.
 const currentWeighBox = () => {
     const list = document.getElementById('weigh-out-list');
     if (!list) return null;
-    const boxes = Array.from(list.querySelectorAll('.weigh-input:not(:disabled)'));
-    return boxes.find((b) => b.dataset.id === lastWeighBoxId) || boxes.find((b) => b.value === '') || boxes[0] || null;
+    if (weighTargetId != null && list.querySelector(`.weigh-row[data-id="${weighTargetId}"]`)) return boxFor(weighTargetId);
+    const boxes = list.querySelectorAll('.weigh-input:not(:disabled)');
+    return boxes.length === 1 ? boxes[0] : null;
 };
 
-// Open, with no overlay over it (the prompts, a question): the person is here.
-const weighOutIsUp = () => {
+const weighOutShown = () => {
     const modalEl = document.getElementById('weighOutModal');
-    return !!(modalEl && modalEl.classList.contains('show') && !document.querySelector('[data-overlay-mount="1"]'));
+    return !!(modalEl && modalEl.classList.contains('show'));
 };
+// Open, with no overlay over it (the prompts, a question): the person is here.
+const weighOutIsUp = () => weighOutShown() && !document.querySelector('[data-overlay-mount="1"]');
 
-// The focus back on spool `id`'s box (else currentWeighBox) after something
-// over the window took it. True when a box has it.
-window.weighOutRefocus = (id) => {
+// The focus back in the target's box after something over the window took
+// it. True when a box has it.
+window.weighOutRefocus = () => {
     if (!weighOutIsUp()) return false;
-    const list = document.getElementById('weigh-out-list');
-    const box = (id != null && list && list.querySelector(`.weigh-input[data-id="${id}"]:not(:disabled)`)) || currentWeighBox();
+    const box = currentWeighBox();
     if (!box) return false;
     box.focus();
     return true;
 };
 
-// Where the focus was when a scan was read: { id, value } of the box, or null.
-window.weighOutScanFrom = () => {
-    const ae = document.activeElement;
-    if (!weighOutIsUp() || !ae || !ae.classList || !ae.classList.contains('weigh-input')) return null;
-    return { id: ae.dataset.id, value: ae.value };
+// A saved spool's row drawn again for another reading: its box empty (the
+// redraw keeps what a box held, the saved reading too) and its details read
+// afresh (its used weight has changed).
+const showAgain = (n) => {
+    processedWeighIds.delete(n);
+    weighOutDetailsCache.delete(n);
+    renderWeighOutList();
+    const box = boxFor(n);
+    if (box && box.value) { box.value = ''; window.updateWeighRowPreview(box); }
+    fetchSpoolDetails(n).then(() => { const b = boxFor(n); if (b) window.updateWeighRowPreview(b); });
+};
+const refocusAfterFailedSave = (n, inputEl) => {
+    if (rescanAfterSave !== n) return;
+    rescanAfterSave = null;
+    if (inputEl && weighOutIsUp() && weighTargetId === String(n)) inputEl.focus();
 };
 
-// A scan named spool `spoolId`: its box takes the focus, with what was typed
-// into the box that had it since the scan was read (`from`) as its reading;
-// with nothing typed, what its box holds is selected, so the reading typed
-// next replaces it.
-window.weighOutTakeScan = (spoolId, from) => {
-    if (!weighOutIsUp()) return;
+// processScan, as it sends a scan: where the person's keys were. Null when the
+// window isn't open.
+window.weighOutScanStart = () => {
+    if (!weighOutShown()) return null;
     const ae = document.activeElement;
+    const el = ae && ae.classList && ae.classList.contains('fcc-weight-box') ? ae : null;
+    const t = currentWeighBox();
+    pendingScan = { seq: ++scanSeq, el, id: el && el.dataset.id != null ? el.dataset.id : null,
+        value: el ? el.value : null, targetId: t ? t.dataset.id : null, targetValue: t ? t.value : null, held: '' };
+    return pendingScan;
+};
+
+// After the scan's answer, whatever it was: a reading held for it that no
+// spool took is said to be gone, never kept for a later scan.
+window.weighOutScanDone = (from) => {
+    if (!from || pendingScan !== from) return;
+    pendingScan = null;
+    if (from.held) showToast(`The reading typed while a scan was read ("${from.held}") wasn't kept: type it again`, 'warning', 7000);
+};
+
+// What was typed since the scan was read, taken out of where it went: the
+// held keys, and what was added to the end of the box that had the focus or of
+// the target's. Never from a box the person moved to meanwhile.
+const takeTyped = (from, box) => {
+    if (!from) return '';
+    let typed = from.held;
+    from.held = '';
+    const ae = document.activeElement;
+    if (!ae || ae === box || !ae.classList || !ae.classList.contains('fcc-weight-box')) return typed;
+    let was = null;
+    if (ae === from.el || (from.id != null && ae.dataset.id === from.id)) was = from.value;
+    else if (from.targetId != null && ae.dataset.id === from.targetId) was = from.targetValue;
+    if (was == null || ae.value.length <= was.length || !ae.value.startsWith(was)) return typed;
+    typed += ae.value.slice(was.length);
+    ae.value = was;
+    ae.dispatchEvent(new Event('input', { bubbles: true }));
+    return typed;
+};
+
+// The prompt on top of the list that closes when a spool is scanned over it
+// (fccDismissForScan).
+const topWeighPrompt = () => {
+    const top = Array.from(document.querySelectorAll('[data-overlay-mount="1"]'))
+        .find((m) => window.isTopOverlay && window.isTopOverlay(m));
+    return top && typeof top.fccDismissForScan === 'function' ? top : null;
+};
+
+// A scan named spool `spoolId` (processScan; `from`, weighOutScanStart's): it
+// is the target, and its box takes the focus with what was typed since the
+// scan was read as its reading. With nothing typed, what its box holds is
+// selected, so the reading typed next replaces it.
+window.weighOutTakeScan = (spoolId, from) => {
+    if (!weighOutShown() || (from && from.seq !== scanSeq)) return;   // a later scan has the say
+    const id = String(spoolId);
+    const n = Number(spoolId);
+    weighTargetId = id;
+    scansTaken += 1;
+    // Weighed this session (its row has faded away, or is fading): drawn
+    // again. Its own save still on its way: its box opens again once that has
+    // landed.
+    const fade = fadeTimers.get(n);
+    if (fade) { clearTimeout(fade); fadeTimers.delete(n); }
+    if (fade || processedWeighIds.has(n)) showAgain(n);
+    const box = boxFor(id);
+    if (!box && document.querySelector(`#weigh-out-list .weigh-row[data-id="${id}"]`)) rescanAfterSave = n;
     const modalEl = document.getElementById('weighOutModal');
-    if (ae && ae !== document.body && !modalEl.contains(ae)) return;   // a window over this one has it
-    const box = document.querySelector(`#weigh-out-list .weigh-input[data-id="${spoolId}"]`);
-    if (!box || box.disabled) return;
-    let typed = '';
-    if (from && ae !== box && ae && ae.classList && ae.classList.contains('weigh-input')
-        && ae.dataset.id === from.id && ae.value.length > from.value.length && ae.value.startsWith(from.value)) {
-        typed = ae.value.slice(from.value.length);
-        ae.value = from.value;
-        window.updateWeighRowPreview(ae);
+    const prompt = topWeighPrompt();
+    const ae = document.activeElement;
+    // Another window over this one keeps the focus: the target's box gets it
+    // when that window closes.
+    if (!prompt && (!weighOutIsUp() || (ae && ae !== document.body && !modalEl.contains(ae)))) return;
+    if (!box) {
+        // Meanwhile no other spool's box keeps the focus.
+        if (rescanAfterSave === n) {
+            if (prompt) prompt.fccDismissForScan();
+            modalEl.focus();
+        }
+        return;
     }
+    const typed = takeTyped(from, box);
+    if (from && pendingScan === from) pendingScan = null;
+    if (prompt) prompt.fccDismissForScan();
+    // Typed into its own box meanwhile (it had the focus, or was the target):
+    // that is the reading, never selected for the next key to replace.
+    const changed = !!from && ((from.id === id && box.value !== from.value)
+        || (from.targetId === id && box.value !== from.targetValue));
     box.focus();
     if (typed) {
         box.value = typed;
         window.updateWeighRowPreview(box);
-    } else {
+    } else if (!changed) {
         try { box.select(); } catch (_) { /* nothing to select */ }
     }
 };
+
+// Another window closed over this one: the focus back in the target's box.
+// The weigh-out window itself closed: nothing is pending.
+document.addEventListener('hidden.bs.modal', (e) => {
+    if (e.target && e.target.id === 'weighOutModal') { pendingScan = null; rescanAfterSave = null; return; }
+    const modalEl = document.getElementById('weighOutModal');
+    const ae = document.activeElement;
+    if (modalEl && ae && ae !== document.body && modalEl.contains(ae)) return;
+    window.weighOutRefocus();
+});
+
+// A click on a row's card (its name, its "Current" line) picks that row: its
+// box takes the focus (round 8: the focus went to the window itself, and the
+// reading typed next to the box that had had it, another spool's).
+document.addEventListener('click', (e) => {
+    const t = e.target;
+    const row = t && t.closest ? t.closest('#weigh-out-list .weigh-row') : null;
+    if (!row || t.closest('input, button, a, select, textarea, label')) return;
+    const sel = window.getSelection ? window.getSelection() : null;
+    if (sel && !sel.isCollapsed) return;           // its text being selected
+    const box = row.querySelector('.weigh-input:not(:disabled)');
+    if (box) box.focus();
+});
 
 // Also refresh the UI any time the buffer updates while the modal is open
 document.addEventListener('inventory:buffer-updated', () => {
@@ -304,7 +458,7 @@ const renderWeighOutList = () => {
     emptyMsg.style.display = "none";
 
     const mode = window.weighOutMode || 'net';
-    const inputType = MODE_INPUT_TYPES[mode];
+    const inputMode = MODE_INPUT_MODES[mode];
     const placeholder = MODE_PLACEHOLDERS[mode];
 
     let html = "";
@@ -327,7 +481,7 @@ const renderWeighOutList = () => {
                     <div class="small text-info weigh-row-preview" data-id="${spool.id}" style="min-height:1em;"></div>
                 </div>
                 <div class="input-group" style="width: 150px;">
-                    <input type="${inputType}" class="form-control bg-dark text-white border-secondary weigh-input fcc-weight-box"
+                    <input type="text" inputmode="${inputMode}" autocomplete="off" class="form-control bg-dark text-white border-secondary weigh-input fcc-weight-box"
                         data-id="${spool.id}" placeholder="${placeholder}"
                         oninput="window.updateWeighRowPreview(this)"
                         onkeydown="window.handleWeighInput(event, this)">
@@ -378,7 +532,8 @@ const computeRowResult = (id, rawInputValue) => {
         value = parsed.value;
     } else {
         if (rawInputValue === '' || rawInputValue === null || rawInputValue === undefined) return null;
-        value = Number(rawInputValue);
+        value = window.parseGramsReading(rawInputValue);
+        if (Number.isNaN(value)) return { error: 'not_a_reading' };
     }
     if (value === null || Number.isNaN(value)) return null;
     return window.computeUsedWeight({
@@ -445,26 +600,44 @@ window.saveWeighOutRow = async (idStr) => {
     if (!inputEl) return;
     const raw = inputEl.value;
     if (raw === '' || raw === '+' || raw === '-') return;
+    // Not while a scan read in this window is being answered: its spool's
+    // reading may still be on its way to its box (Group 57 review, round 8: a
+    // reading and Enter typed before the answer were saved to another spool).
+    if (pendingScan) {
+        showToast('A scan is still being read: press Enter again in a moment', 'info', 4000);
+        return;
+    }
+    const taken = scansTaken;
+    const notAReading = () => showToast(`"${raw}" is not a weight in grams`, 'error', 7000);
 
     let details = weighOutDetailsCache.get(id);
     if (!details) details = await fetchSpoolDetails(id);
     if (!details) {
         // Fallback: backend treats `newWeight` as remaining_weight.
-        window.saveSpoolWeight(id, raw);
+        const n = window.parseGramsReading(raw);
+        if (Number.isNaN(n)) { notAReading(); return; }
+        window.saveSpoolWeight(id, n);
         return;
     }
 
     let r = computeRowResult(id, raw);
+    if (r && r.error === 'not_a_reading') { notAReading(); return; }
     if (!r || r.error) {
         showToast('Could not compute used weight', 'error');
         return;
     }
     if (r.requires_empty) {
         // Gross + missing tare. Use the shared inline overlay so the user
-        // can fill it in without leaving the bulk flow.
-        const tare = await window.promptMissingEmptyWeight(details.context || {});
-        // Cancelled: back to the row's box (round 7: the focus fell to the page).
-        if (tare === null) { window.weighOutRefocus(id); return; }
+        // can fill it in without leaving the bulk flow. Not once a spool scan
+        // has been answered since Enter (round 8): that spool is the one being
+        // weighed now, and its reading would go in the prompt's box as a tare.
+        // A spool scanned while the prompt is up closes it.
+        const unsaved = () => showToast(`#${id} wasn't saved: it needs its empty spool weight`, 'warning', 7000);
+        if (scansTaken !== taken) { unsaved(); return; }
+        const tare = await window.promptMissingEmptyWeight(Object.assign({}, details.context || {},
+            { onScanDismiss: unsaved }));
+        // Cancelled: back to the target's box (round 7: the focus fell to the page).
+        if (tare === null) { window.weighOutRefocus(); return; }
         details.empty = Number(tare);
         weighOutDetailsCache.set(id, details);
         r = computeRowResult(id, raw);
@@ -496,7 +669,10 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
     if (Object.keys(updates).length === 0) return;
 
     const id = parseInt(idStr, 10);
-    
+    // The spool scans answered in the weigh-out list by the time the save lands:
+    // after one, the empty-weight prompt isn't opened (round 8).
+    const takenAtSave = scansTaken;
+
     // Check auto archive for the bulk weigh out modal specifically.
     // When a caller passes autoArchiveOpts explicitly (true/false), it owns
     // the decision — phase-2 used_weight flows pre-compute the verdict and
@@ -556,18 +732,32 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
                 // `emptyPrefill` carries the tare the user already entered
                 // during a Gross weigh so this is a one-click pre-filled
                 // confirm rather than a second, redundant ask.
+                // Not once a spool has been scanned in the weigh-out list since
+                // the save began: that spool is the one being weighed now, and
+                // its reading would go in the prompt's box as the filament's
+                // empty weight (Group 57 review, round 8). A spool scanned while
+                // the prompt is up closes it.
                 if (res && res.needs_empty_weight_prompt && res.filament_id && window.showArchiveEmptyWeightPrompt) {
-                    setTimeout(() => window.showArchiveEmptyWeightPrompt(id, res.filament_id, emptyPrefill), 400);
+                    setTimeout(() => window.showArchiveEmptyWeightPrompt(id, res.filament_id, emptyPrefill,
+                        { skipIf: () => scansTaken !== takenAtSave }), 400);
                 }
-                
+
                 // Visual feedback that it's done
-                if (rowEl) {
+                if (rowEl && rescanAfterSave === id) {
+                    // Scanned again while it saved: its row stays for the next
+                    // reading, its details read afresh (round 8).
+                    rescanAfterSave = null;
+                    showAgain(id);
+                    const again = boxFor(id);
+                    if (again && weighOutIsUp() && weighTargetId === String(id)) again.focus();
+                } else if (rowEl) {
                     rowEl.style.transition = 'opacity 0.3s';
                     rowEl.style.opacity = '0';
-                    setTimeout(() => {
+                    fadeTimers.set(id, setTimeout(() => {
+                        fadeTimers.delete(id);
                         processedWeighIds.add(id);
                         renderWeighOutList();
-                    }, 300);
+                    }, 300));
                 } else {
                     processedWeighIds.add(id);
                 }
@@ -610,6 +800,7 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
                 btnEl.disabled = false;
                 btnEl.innerText = "💾";
             }
+            refocusAfterFailedSave(id, inputEl);
         }
     })
     .catch(e => {
@@ -621,6 +812,7 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
             btnEl.disabled = false;
             btnEl.innerText = "💾";
         }
+        refocusAfterFailedSave(id, inputEl);
     });
 
     // Move to the next input immediately so the user can keep working while it saves

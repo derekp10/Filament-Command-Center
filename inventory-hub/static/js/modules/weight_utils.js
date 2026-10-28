@@ -248,6 +248,10 @@ function promptMissingEmptyWeight({
     helper = 'Place the empty spool on the scale and enter the reading. We’ll use it as the tare for this and future weigh-ins.',
     overlayId = 'fcc-missing-empty-weight-overlay',
     allowSkip = false,
+    // The weigh-out list's: a spool scanned over the prompt cancels it (Group
+    // 57 review, round 8: that spool's reading went in this box as the tare),
+    // after this is called to say so.
+    onScanDismiss = null,
 } = {}) {
     return new Promise((resolve) => {
         const swatch = color_hex
@@ -331,6 +335,9 @@ function promptMissingEmptyWeight({
             onEscape: cancel,
         });
         const overlay = handle.element;
+        if (typeof onScanDismiss === 'function') {
+            overlay.fccDismissForScan = () => { if (!resolved) onScanDismiss(); cancel(); };
+        }
 
         const input = overlay.querySelector(`#${overlayId}-input`);
         const saveBtn = overlay.querySelector(`#${overlayId}-save`);

@@ -268,6 +268,27 @@ def test_escape_goes_to_the_overlay_on_top(isolated_page):
 
 # --- Group 57 review, round 7 ------------------------------------------------
 
+@pytest.mark.parametrize("cut", ["I", "ID"])
+def test_a_redraw_inside_a_labels_prefix_keeps_the_label_whole(wo, cut):
+    """The list drawn again (the saved row's fade, a heartbeat) between a
+    scanner's first letters and the ':' that proves its label: the label
+    finishes in the box that took the old one's place, reaches the scan path
+    whole, and leaves nothing in the box. RED on b114fd7: the letters went with
+    the old box, so 'D:57' or ':57' went to the scan path (Unknown Code); with
+    the text boxes of round 8, the box kept them too. Group 57 review, round 8
+    (found as a rare red of
+    test_weigh_out_scan_focus_js.py::test_save_then_scan_the_next_spool_then_its_reading,
+    the fade landing between the letters and the ':')."""
+    page = wo
+    _open(page)
+    press(page, cut, 5, enter=False)
+    page.evaluate("() => document.dispatchEvent(new CustomEvent('inventory:buffer-updated'))")
+    press(page, "ID:57"[len(cut):], 5)
+    page.wait_for_timeout(20)
+    assert page.evaluate("() => window.__scans") == ["ID:57"] and _box(page, 6) == "", cut
+    assert page.evaluate("() => window.__posts") == []
+
+
 @pytest.mark.parametrize("gap", [450, 700])
 def test_a_redraw_before_a_burst_scanners_enter_keeps_the_scan(wo, gap):
     """A burst scanner's label (keys 2 ms apart, its Enter 450 or 700 ms

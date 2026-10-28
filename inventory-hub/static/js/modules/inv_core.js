@@ -802,11 +802,12 @@ window.installFieldScanCapture = installFieldScanCapture;
 //   - A ':' or '/' proves a label: every FCC label but the digits-only ones
 //     has one (ID:, FIL:, LOC:, CMD:, OLD:, LEG:, SPL:, a Prusament URL), and no
 //     weight does. The label starts at its prefix, the letters typed right
-//     before it (only the prefix FCC reads when a person's letter came first:
-//     a unit's 'g' or a stray 'x' made "gID:57", round 7), the box gets back
-//     what it held before them (a number box's own text too: the E of LEG:
-//     stayed in an empty box, round 7), and the label's other keys never reach
-//     the box. Its Enter sends it to the scan path at any speed, as 'barcode'
+//     before it (only the prefix FCC reads when a person's letter came first,
+//     slower than the label's own keys: a unit's 'g' or a stray 'x' made
+//     "gID:57", round 7; another maker's "PID:57" stays whole, round 8), the
+//     box gets back what it held before them (a number box's own text too: the
+//     E of LEG: stayed in an empty box, round 7), and the label's other keys
+//     never reach the box. Its Enter sends it to the scan path at any speed, as 'barcode'
 //     only when its keys came at scanner speed, the accumulator's test (round
 //     7: a label typed by hand marked the spool's printed label verified). Keys
 //     more than 2 s apart (the accumulator's reset, scripts.html) are two
@@ -833,19 +834,32 @@ window.installFieldScanCapture = installFieldScanCapture;
 // A weight key (a digit, '.', ',', '+' or '-') typed on another control of a
 // dialog that says so (data-fcc-weight-keys: the Quick-Weigh, the weigh-out
 // list, the two prompts), with no scan arriving, goes into its weight box
-// (the dialog's `fccWeightBox()`, else its first): a person who clicked the
-// Auto Archive switch and then typed the reading sent it to the scan path as a
-// spool id, and that spool joined the buffer unseen (round 7). A scan's first
-// key is a letter, which stays the scan accumulator's.
+// (the dialog's `fccWeightBox(control)`: the weigh-out list's target, or the
+// row the control is in; else its first): a person who clicked the Auto
+// Archive switch and then typed the reading sent it to the scan path as a
+// spool id, and that spool joined the buffer unseen (round 7). With no box for
+// it, the dialog may keep it (`fccWeightHold`, round 8). A scan's first key is
+// a letter, which stays the scan accumulator's.
 // Every weight box has the class fcc-weight-box; the one capture below serves
 // them all.
+//
+// A reading in grams, as a person or a scale types it: a number with an
+// optional sign and '.', and blanks or a grams unit around it ("645.5",
+// "645.5 g", " 645", "645g"). Anything else (a comma, kg, a label's letters)
+// is no reading: NaN. The weigh-out list's text boxes read theirs with it
+// (Group 57 review, round 8).
+const GRAMS_READING = /^\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(?:g|gr|grams?)?\s*$/i;
+window.parseGramsReading = (raw) => {
+    const m = GRAMS_READING.exec(String(raw == null ? '' : raw));
+    return m ? Number(m[1]) : NaN;
+};
 const installWeightScanCapture = ({ match, onScan }) => {
     const RESET_MS = 2000;     // the accumulator's: keys further apart are two inputs
     const BURST_MS = 150;      // scanner speed, the accumulator's 'barcode' test
     const LETTER = /^[A-Za-z]$/;
     const WEIGHT_KEY = /^[0-9.+\-]$/;
     const WEIGHT_TYPED = /^[0-9.,+\-]$/;      // a person's weight key (a comma for a decimal one)
-    const WEIGHT_WITH_UNIT = /^\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+)\s*(?:g|gr|grams?)?\s*$/i;
+    const WEIGHT_WITH_UNIT = GRAMS_READING;
     // The prefixes the scan path reads (logic.resolve_scan), longest first.
     const PREFIXES = ['LEGACY', 'SPOOL', 'HTTPS', 'HTTP', 'LOC', 'LEG', 'OLD', 'SPL', 'FIL', 'CMD', 'ID'];
     const PERSON_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab', 'Home', 'End',
@@ -901,7 +915,11 @@ const installWeightScanCapture = ({ match, onScan }) => {
         else if (window.processScan) window.processScan(text, lastAt - startAt < BURST_MS ? 'barcode' : 'keyboard');
     };
     // The weight box a person's weight key on another control of its dialog
-    // goes in, or null.
+    // goes in: the dialog's `fccWeightBox(control)` when it has one (the
+    // weigh-out list's target, round 8: never just its first box), else its
+    // first. HELD when the dialog kept the key itself (`fccWeightHold`: the
+    // weigh-out list, for a scan it is answering), else null.
+    const HELD = {};
     const ownBox = (e, t) => {
         if (e.key.length !== 1 || !WEIGHT_TYPED.test(e.key) || e.ctrlKey || e.altKey || e.metaKey) return null;
         if (!t.closest || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable
@@ -909,24 +927,31 @@ const installWeightScanCapture = ({ match, onScan }) => {
         if (scanBuf()) return null;                  // a scan's key: one is arriving
         const scope = t.closest('[data-fcc-weight-keys]');
         if (!scope) return null;
-        const el = (typeof scope.fccWeightBox === 'function' && scope.fccWeightBox())
-            || scope.querySelector('.fcc-weight-box:not(:disabled)');
-        return el && !el.disabled && match(el) ? el : null;
+        const el = typeof scope.fccWeightBox === 'function' ? scope.fccWeightBox(t)
+            : scope.querySelector('.fcc-weight-box:not(:disabled)');
+        if (el && !el.disabled && match(el)) return el;
+        return typeof scope.fccWeightHold === 'function' && scope.fccWeightHold(e.key) ? HELD : null;
     };
     document.addEventListener('keydown', (e) => {
         let el = e.target;
         if (!el) return;
         if (!match(el)) {
             el = ownBox(e, el);
+            if (el === HELD) { e.preventDefault(); e.stopPropagation(); return; }
             if (!el) return;
             el.focus();               // the key is typed into the box, which now has the focus
             e.stopPropagation();      // and the scan accumulator never sees it
         }
         const now = Date.now();
         if (el !== box) {
-            // Its box was redrawn under a label still arriving: it carries on here.
-            if (box && !box.isConnected && label && now - label.lastAt <= RESET_MS) label.restore = el.value;
-            else reset();
+            // Its box was redrawn under a label still arriving: it carries on
+            // here, and so do the keys before a label's ':' (round 8: a redraw
+            // between them and the ':' sent ":57" to the scan path, and a text
+            // box kept the letters). Keys too old to belong to it are dropped
+            // below, as anywhere.
+            const redrawn = !!(box && !box.isConnected);
+            if (redrawn && label && now - label.lastAt <= RESET_MS) label.restore = el.value;
+            else if (!(redrawn && keys.length)) reset();
             box = el;
         }
         // A person's own key: they are typing here, so no label is (one handed
@@ -990,7 +1015,17 @@ const installWeightScanCapture = ({ match, onScan }) => {
         const letters = keys.slice(i, keys.length - 1).map((x) => x.k).join('');
         const lettersLeft = i === 0 && /^[A-Za-z]+$/.test(buf);   // letters in the scan buffer before them
         const lead = lettersLeft && window.isScanInFlight && window.isScanInFlight() ? buf : '';
-        const from = prefixStart(lead + letters);
+        let from = prefixStart(lead + letters);
+        // Only a person's letters in front are cut off, the one before the
+        // prefix coming slower than the label's own keys: another maker's
+        // label ("PID:57", at any steady pace) stays whole (round 8: it went to
+        // the scan path as ID:57, and #57 joined the buffer).
+        const k = i + from - lead.length;                        // the prefix's first key, if typed here
+        if (k > i) {
+            let pace = 0;
+            for (let j = k + 1; j < keys.length; j++) pace = Math.max(pace, keys[j].t - keys[j - 1].t);
+            if (keys[k].t - keys[k - 1].t <= Math.max(BURST_MS, 2 * pace)) from = 0;
+        }
         const start = i + Math.max(0, from - lead.length);
         e.preventDefault();
         label = { text: lead.slice(Math.min(from, lead.length)) + keys.slice(start).map((x) => x.k).join(''),

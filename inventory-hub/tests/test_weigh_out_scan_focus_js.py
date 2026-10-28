@@ -45,7 +45,13 @@ STUBS = r"""
 window.__errors = [];
 window.addEventListener('error', (e) => window.__errors.push(String(e.message)));
 window.__posts = [];
-window.__answerMs = 50;
+window.__answerMs = 50;              // /api/identify_scan's answer, ms later (real time)
+window.__answerMsFor = {};           // ... for one scan's text
+window.__saveMs = 0;                 // /api/spool/update's
+window.__filamentMs = 0;             // /api/filament_details' (the empty-weight prompt reads it first)
+window.__detailsMs = 0;              // /api/spool_details'
+window.__detailsFail = false;        // /api/spool_details answers nothing a spool's details can be read from
+window.__answeredScans = 0;
 window.__spools = {
     6: { id: 6, initial_weight: 1000, used_weight: 31, spool_weight: 167,
          filament: { id: 2, name: 'Red', material: 'PLA', vendor: { name: 'Acme' } } },
@@ -68,7 +74,7 @@ window.fetch = function (url, opts) {
     if (opts && opts.method && opts.method !== 'GET') window.__posts.push({ url, body });
     let ans = { status: 'success', success: true };
     let m = /spool_details\?id=(\d+)/.exec(url);
-    if (m) ans = window.__spools[m[1]] || {};
+    if (m) ans = window.__detailsFail ? {} : (window.__spools[m[1]] || {});
     m = /filament_details\?id=(\d+)/.exec(url);
     if (m) ans = { id: Number(m[1]), name: 'Grey', material: 'PLA', vendor: { id: 9, name: 'Acme' } };
     if (url.includes('/api/spool/update') && body.updates.archived) {
@@ -79,8 +85,15 @@ window.fetch = function (url, opts) {
         ans = s && window.__rows[s[1]] ? Object.assign({ type: 'spool' }, window.__rows[s[1]])
             : { type: 'error', msg: 'Unknown Code' };
     }
-    const ms = url.includes('/api/identify_scan') ? window.__answerMs : 0;
-    return new Promise((res) => setTimeout(() => res({ ok: true, status: 200, json: () => Promise.resolve(ans) }), ms));
+    const scan = url.includes('/api/identify_scan');
+    const ms = scan ? (body.text in window.__answerMsFor ? window.__answerMsFor[body.text] : window.__answerMs)
+        : url.includes('/api/spool/update') ? window.__saveMs
+        : url.includes('/api/filament_details') ? window.__filamentMs
+        : url.includes('/api/spool_details') ? window.__detailsMs : 0;
+    return new Promise((res) => setTimeout(() => {
+        if (scan) window.__answeredScans += 1;
+        res({ ok: true, status: 200, json: () => Promise.resolve(ans) });
+    }, ms));
 };
 window.__si = window.setInterval; window.setInterval = () => 0;   // inv_cmd.js's 2 s buffer poll: off
 """
@@ -141,6 +154,24 @@ def _saved(page, n=1):
     page.wait_for_timeout(30)
 
 
+def _scan_answered(page, n=1):
+    """The server's answer to the `n`th scan in, and handled."""
+    page.wait_for_function("(n) => window.__answeredScans >= n", arg=n, timeout=5000)
+    page.wait_for_timeout(30)
+
+
+def _unassigned(page):
+    return page.evaluate("() => window.__posts.filter((p) => p.url === '/api/manage_contents').map((p) => p.body.spool_id)")
+
+
+def _filament_writes(page):
+    return page.evaluate("() => window.__posts.filter((p) => p.url === '/api/update_filament').length")
+
+
+def _toasts(page):
+    return page.evaluate("() => Array.from(document.querySelectorAll('#toast-container .toast-msg')).map((t) => t.innerText)")
+
+
 @pytest.mark.parametrize("reading, used", [("425", 325), ("0", 750)])
 def test_a_scanned_spools_box_takes_the_focus_and_its_reading(wo, reading, used):
     """#6's box has the focus and spool #57's label is scanned into it, as the
@@ -174,8 +205,7 @@ def test_a_listed_spool_scanned_to_pick_it_takes_the_focus(wo, stale):
     if stale:
         page.evaluate("(v) => { document.querySelector('.weigh-input[data-id=\"134\"]').value = v; }", stale)
     press(page, "ID:134", 5)
-    page.wait_for_function("() => window.__posts.some((p) => p.url === '/api/identify_scan')")
-    page.wait_for_timeout(120)
+    _scan_answered(page)
     assert _focus(page) == "134"
     later(page, 900)
     press(page, "425", 150)
@@ -373,3 +403,460 @@ def test_a_weight_typed_after_ticking_the_empty_weight_prompts_vendor_box_goes_i
     page.wait_for_function("() => window.__posts.some((p) => p.url === '/api/vendors/9')", timeout=3000)
     filament = page.evaluate("() => window.__posts.filter((p) => p.url === '/api/update_filament').map((p) => p.body)")
     assert filament == [{"id": 5, "data": {"spool_weight": 167}}] and _scans(page) == [], filament
+
+
+# --- Group 57 review, round 8 -------------------------------------------------
+# The list keeps a target, the spool whose reading is being entered: a scan,
+# a click or Tab into a box, a click on a row and the save moving on set it.
+# Each test below is RED on b114fd7 unless it says it pins a limit.
+
+
+@pytest.mark.parametrize("mode, used", [("net", 575), ("gross", 742)])
+def test_a_spools_own_box_keeps_the_reading_typed_before_its_scan_was_answered(wo, mode, used):
+    """The list opens on #6's box, the person scans #6's own label to pick it
+    and starts the reading before the server has answered (a slow Spoolman):
+    the reading stays whole (Net: 1000 g - 425 g = 575 g used; Gross: 1000 g -
+    (425 g - 167 g) = 742 g, nothing archived). RED on b114fd7: the answer
+    selected what was in the box, the '4' typed meanwhile with it, so the next
+    key replaced it and 25 g was saved (in Gross, under the 167 g spool, so #6
+    was archived and taken off its place)."""
+    page, open_ = wo
+    page.evaluate("() => { window.__answerMs = 700; }")
+    open_(mode=mode)
+    press(page, "ID:6", 5)
+    later(page, 300)
+    press(page, "4", 0, enter=False)          # the server hasn't answered yet
+    _scan_answered(page)
+    later(page, 150)
+    press(page, "25", 150)
+    _saved(page)
+    ups = _updates(page)
+    assert [u["id"] for u in ups] == [6] and ups[0]["updates"] == {"used_weight": used}, ups
+    assert _unassigned(page) == []
+
+
+def _focus_off_a_box(page, where):
+    if where == "mode button":
+        page.locator("#weigh-out-mode [data-mode='net']").click()
+    elif where == "switch":
+        page.locator("#weigh-auto-archive").focus()
+    else:                                     # the window itself, as a click on its empty space leaves it
+        page.evaluate("() => document.getElementById('weighOutModal').focus()")
+
+
+@pytest.mark.parametrize("where", ["mode button", "switch", "window"])
+def test_a_scan_read_off_a_box_takes_the_reading_typed_before_its_answer(wo, where):
+    """The focus on a mode button, the Auto-Archive switch or the window
+    itself, #57's label scanned, and the reading started before the server has
+    answered: the whole reading goes to #57 (750 g - 425 g = 325 g used), and
+    #6's box, where the first key went meanwhile (the target's), is empty
+    again. RED on b114fd7: the '4' stayed in #6's box and 25 g was saved to
+    #57."""
+    page, open_ = wo
+    page.evaluate("() => { window.__answerMs = 700; }")
+    open_()
+    _focus_off_a_box(page, where)
+    later(page, 700)
+    press(page, "ID:57", 5)
+    later(page, 300)
+    press(page, "4", 0, enter=False)
+    _scan_answered(page)
+    assert (_focus(page), _box(page, 57), _box(page, 6)) == ("57", "4", ""), where
+    later(page, 150)
+    press(page, "25", 150)
+    _saved(page)
+    ups = _updates(page)
+    assert [u["id"] for u in ups] == [57] and ups[0]["updates"]["used_weight"] == 325, (where, ups)
+
+
+def test_enter_before_a_scan_is_answered_saves_nothing(wo):
+    """The whole reading and Enter typed before the server has answered #57's
+    scan, the focus on a mode button: nothing is saved then (a toast says to
+    press Enter again), and once the answer is in, the reading is in #57's box
+    and Enter saves it there. RED on b114fd7: the reading went into #6's box,
+    and Enter saved it to #6."""
+    page, open_ = wo
+    page.evaluate("() => { window.__answerMs = 700; }")
+    open_()
+    page.locator("#weigh-out-mode [data-mode='net']").click()
+    later(page, 700)
+    press(page, "ID:57", 5)
+    later(page, 300)
+    press(page, "425", 150)                   # with its Enter, before the answer
+    page.wait_for_timeout(50)
+    assert _updates(page) == []
+    _scan_answered(page)
+    assert (_focus(page), _box(page, 57), _box(page, 6)) == ("57", "425", "")
+    later(page, 300)
+    press(page, "", 0)                        # Enter
+    _saved(page)
+    ups = _updates(page)
+    assert [u["id"] for u in ups] == [57] and ups[0]["updates"]["used_weight"] == 325, ups
+
+
+def test_a_reading_typed_before_a_scan_is_answered_on_an_empty_list_is_kept_for_it(wo):
+    """The list opened empty (the focus on the window, as Bootstrap leaves it),
+    #57's label scanned, and the reading started before the answer: the first
+    key is kept for #57, and its box takes the whole reading (325 g used).
+    RED on b114fd7: the '4' stayed in the scan buffer, and 25 g was saved."""
+    page, _ = wo
+    page.evaluate("() => { window.__answerMs = 700; }")
+    page.evaluate(SETUP, [])
+    page.evaluate("() => { window.weighOutMode = 'net'; window.openWeighOutModal(); }")
+    page.evaluate("() => document.getElementById('weighOutModal').focus()")
+    later(page, 700)
+    press(page, "ID:57", 5)
+    later(page, 300)
+    press(page, "4", 0, enter=False)
+    _scan_answered(page)
+    # ... and nowhere else: a key left in the scan buffer would join the next scan.
+    assert (_focus(page), _box(page, 57), page.evaluate("() => state.scanBuffer")) == ("57", "4", "")
+    later(page, 150)
+    press(page, "25", 150)
+    _saved(page)
+    ups = _updates(page)
+    assert [u["id"] for u in ups] == [57] and ups[0]["updates"]["used_weight"] == 325, ups
+
+
+@pytest.mark.parametrize("scanned, early", [(57, False), (134, False), (57, True)])
+def test_a_spool_scanned_over_the_empty_weight_prompt_closes_it_and_takes_the_reading(wo, scanned, early):
+    """Empties weighed in Net: #8 at 0 g is archived, and the empty-weight
+    prompt asks for its filament's empty spool weight, its box focused. The
+    person scans the next spool instead (#57, new, or #134, listed) and types
+    its reading: the prompt closes (Later), the scanned spool's box takes the
+    focus, and the reading is saved to it, never as an empty weight. A first
+    key typed into the prompt's box before the answer goes along. RED on
+    b114fd7: the prompt stayed up, its box took the reading (Enter saved it as
+    the filament's empty weight), and once it closed the focus came back to
+    #6's box."""
+    page, open_ = wo
+    open_(held=(8, 6, 134))
+    press(page, "0", 150)
+    _saved(page)
+    page.wait_for_function("() => document.activeElement && document.activeElement.id === 'fcc-archive-empty-wt'")
+    if early:
+        page.evaluate("() => { window.__answerMs = 600; }")
+    later(page, 700)
+    press(page, f"ID:{scanned}", 5)
+    if early:
+        later(page, 300)
+        press(page, "4", 0, enter=False)
+    _scan_answered(page)
+    assert page.locator("#fcc-archive-empty-overlay").count() == 0 and _focus(page) == str(scanned)
+    later(page, 150)
+    press(page, "25" if early else "425", 150)
+    _saved(page, 2)
+    ups = _updates(page)
+    used = {57: 325, 134: 575}[scanned]
+    assert [u["id"] for u in ups] == [8, scanned] and ups[1]["updates"]["used_weight"] == used, ups
+    assert _filament_writes(page) == 0
+
+
+def test_a_spool_scanned_over_the_missing_tare_prompt_cancels_it(wo):
+    """Gross, and #8 with no empty spool weight on record: Enter asks for it.
+    The person scans the next spool (#57) instead and types its reading: the
+    prompt is cancelled (a warning says #8 wasn't saved), #57's box takes the
+    focus, and the reading is saved to #57 (750 g - (425 g - 150 g) = 475 g
+    used); nothing is saved to #8. RED on b114fd7: the prompt stayed up, the
+    reading went into its box as #8's tare, and Enter saved #8 with it."""
+    page, open_ = wo
+    open_(held=(8, 6), mode="gross")
+    press(page, "645", 150)
+    prompt = "#fcc-missing-empty-weight-overlay"
+    page.wait_for_function("(s) => document.activeElement === document.querySelector(s + '-input')", arg=prompt)
+    later(page, 700)
+    press(page, "ID:57", 5)
+    _scan_answered(page)
+    assert page.locator(prompt).count() == 0 and _focus(page) == "57"
+    assert any("#8 wasn't saved" in t for t in _toasts(page)), _toasts(page)
+    later(page, 150)
+    press(page, "425", 150)
+    _saved(page)
+    ups = _updates(page)
+    assert [u["id"] for u in ups] == [57] and ups[0]["updates"]["used_weight"] == 475, ups
+
+
+def test_the_tare_prompt_isnt_opened_once_the_next_spool_is_scanned(wo):
+    """Gross, #8 with no empty spool weight on record, and its details still
+    being read (a slow Spoolman) when Enter is pressed; meanwhile the next
+    spool, #57, is scanned: no prompt asks for #8's tare once its details are
+    in (a warning says #8 wasn't saved), and #57's box keeps the focus for its
+    reading. RED on b114fd7: the prompt opened over the list and took the
+    focus, so #57's reading went into its box as #8's tare."""
+    page, open_ = wo
+    page.evaluate("() => { window.__detailsMs = 800; }")
+    open_(held=(8, 6), mode="gross")
+    press(page, "645", 150)                   # its Enter: #8's details aren't in yet
+    page.evaluate("() => window.processScan('ID:57', 'barcode')")
+    _scan_answered(page)
+    assert _focus(page) == "57"
+    page.wait_for_timeout(1200)               # #8's details are in
+    assert page.locator("#fcc-missing-empty-weight-overlay").count() == 0 and _focus(page) == "57"
+    assert any("#8 wasn't saved" in t for t in _toasts(page)), _toasts(page)
+    assert _updates(page) == []
+
+
+@pytest.mark.parametrize("typed, remaining", [("645g", 645), ("6,45", None)])
+def test_with_no_details_a_reading_is_still_read_as_grams(wo, typed, remaining):
+    """A spool whose details can't be read (the save then sends the reading as
+    what is left on the spool): a reading in grams with its unit is saved as
+    645 g left; a decimal comma is refused, with nothing saved. Pins the
+    strict read on that path too."""
+    page, open_ = wo
+    page.evaluate("() => { window.__detailsFail = true; }")
+    open_()
+    press(page, typed, 150)
+    page.wait_for_timeout(150)
+    ups = _updates(page)
+    assert [u["updates"].get("remaining_weight") for u in ups] == ([remaining] if remaining else []), (typed, ups)
+
+
+def test_the_empty_weight_prompt_isnt_opened_once_the_next_spool_is_scanned(wo):
+    """#8 weighed empty (0 g) is archived, and before its empty-weight prompt
+    opens (400 ms later, after it reads the filament) the next spool, #57, is
+    scanned: the prompt isn't opened, and #57's box keeps the focus for its
+    reading. RED on b114fd7: the prompt opened over the list after the scan and
+    took the focus, so #57's reading went into its box as the filament's empty
+    weight."""
+    page, open_ = wo
+    page.evaluate("() => { window.__filamentMs = 600; }")
+    open_(held=(8, 6))
+    press(page, "0", 150)
+    _saved(page)
+    page.evaluate("() => window.processScan('ID:57', 'barcode')")
+    _scan_answered(page)
+    page.wait_for_timeout(1300)
+    assert page.locator("#fcc-archive-empty-overlay").count() == 0 and _focus(page) == "57"
+    later(page, 700)
+    press(page, "425", 150)
+    _saved(page, 2)
+    assert [u["id"] for u in _updates(page)] == [8, 57] and _filament_writes(page) == 0
+
+
+@pytest.mark.parametrize("when", ["faded", "fading", "saving"])
+def test_a_spool_weighed_this_session_scanned_again_takes_the_reading(wo, when):
+    """#6 saved (500 g) and then scanned again to weigh it again (a misread),
+    once its row has faded away, while it fades, or while its save is still on
+    its way: its row is drawn again and its box takes the focus, so the new
+    reading is saved to #6 (1000 g - 480 g = 520 g used), never to #134, whose
+    box the save moved the focus to. RED on b114fd7: "Already in Buffer", and
+    the reading was saved to #134."""
+    page, open_ = wo
+    open_()
+    if when == "saving":
+        page.evaluate("() => { window.__saveMs = 600; }")
+    press(page, "500", 150)
+    page.wait_for_function("() => window.__posts.some((p) => p.url === '/api/spool/update')")
+    if when == "faded":
+        page.wait_for_function("() => !document.querySelector('.weigh-input[data-id=\"6\"]')")
+    if when == "fading":
+        page.wait_for_timeout(40)                 # landed: its row's 300 ms fade has begun
+    listed = page.evaluate("""() => { window.__answerMs = 0;
+        const listed = !!document.querySelector('.weigh-row[data-id="6"]');
+        window.processScan('ID:6', 'barcode'); return listed; }""")
+    if when == "fading" and not listed:
+        pytest.skip("the row's fade ended before the scan (a slow machine)")
+    _scan_answered(page)
+    if when == "saving":
+        assert _focus(page) not in ("6", "134")   # no other spool's box keeps it meanwhile,
+        press(page, "4", 0, enter=False)          # nor takes a key typed then
+        assert _box(page, 134) == ""
+        page.evaluate("() => window.clearScanBuffer()")
+        page.wait_for_function("() => { const b = document.querySelector('.weigh-input[data-id=\"6\"]'); return b && !b.disabled; }")
+    page.wait_for_timeout(450)                    # past the 300 ms fade the scan stops
+    assert _focus(page) == "6" and _box(page, 6) == "", when
+    later(page, 700)
+    press(page, "480", 150)
+    _saved(page, 2)
+    ups = _updates(page)
+    assert [u["id"] for u in ups] == [6, 6] and ups[1]["updates"]["used_weight"] == 520, (when, ups)
+
+
+def test_a_decimal_point_survives_a_redraw(wo):
+    """'645.' typed, then the list drawn again (a heartbeat that changed a
+    spool does that), then '5' and Enter: 645.5 g is saved (1000 g - 645.5 g =
+    354.5 g used). RED on b114fd7: a number box reads '645.' as 645, the
+    redraw kept 645, and 6455 was saved (Net: 0 g used; in Set Used the spool
+    read empty and was archived)."""
+    page, open_ = wo
+    open_()
+    press(page, "645.", 150, enter=False)
+    page.evaluate("() => document.dispatchEvent(new CustomEvent('inventory:buffer-updated'))")
+    assert (_focus(page), _box(page, 6)) == ("6", "645.")
+    later(page, 150)
+    press(page, "5", 150)
+    _saved(page)
+    assert _updates(page)[0]["updates"]["used_weight"] == 354.5
+
+
+@pytest.mark.parametrize("typed, used", [("6,45", None), ("0.645kg", None), ("645 g", 355), ("645g", 355), (" 645", 355)])
+def test_a_weigh_out_box_saves_only_grams(wo, typed, used):
+    """A reading typed by hand: in grams, with or without its unit or a blank
+    in front, it is saved (1000 g - 645 g = 355 g used); a decimal comma or a
+    kilogram reading is refused, with nothing saved and the box still holding
+    it. RED on b114fd7 for the refusals: a number box kept only the digits, and
+    saved "6,45" as 645 g and "0.645kg" as 0.645 g."""
+    page, open_ = wo
+    open_()
+    press(page, typed, 150)
+    page.wait_for_timeout(150)
+    ups = _updates(page)
+    if used is None:
+        assert ups == [] and (_focus(page), _box(page, 6)) == ("6", typed), (typed, ups)
+    else:
+        assert [u["updates"]["used_weight"] for u in ups] == [used], (typed, ups)
+
+
+@pytest.mark.parametrize("where", ["name", "current", "save button"])
+def test_a_reading_typed_after_a_click_on_another_row_goes_in_that_row(wo, where):
+    """#6's box has the focus; the person clicks #134's row (its name, its
+    "Current" line, or its 💾 with its box empty) and types the reading: it
+    goes into #134's box and is saved to #134 (1000 g - 425 g = 575 g used).
+    RED on b114fd7: the focus went to the window (or the 💾), and the reading
+    went into #6's box, which had had the focus, and was saved to #6."""
+    page, open_ = wo
+    open_()
+    row = page.locator(".weigh-row[data-id='134']")
+    if where == "name":
+        row.locator(".fw-bold").click()
+    elif where == "current":
+        row.locator(".text-white-50").click()
+    else:
+        row.locator(".weigh-save-btn").click()
+    later(page, 700)
+    press(page, "425", 150)
+    _saved(page)
+    ups = _updates(page)
+    assert [u["id"] for u in ups] == [134] and ups[0]["updates"]["used_weight"] == 575, (where, ups)
+
+
+def test_a_spool_scanned_under_another_window_gets_the_focus_when_it_closes(wo):
+    """A window over the list (a stand-in for one of Bootstrap's: the filament
+    details, say) with its own field focused, and #57 scanned: the focus stays
+    in that window (pins the guard); when it closes, #57's box takes it, and
+    the reading typed then is saved to #57 (325 g used). RED on b114fd7: when
+    it closed the focus went nowhere, and the reading went to the scan path as
+    a spool id."""
+    page, open_ = wo
+    open_()
+    page.evaluate("""() => { const m = document.createElement('div'); m.className = 'modal show'; m.id = 'fccProbeModal';
+        m.innerHTML = '<input id="fcc-probe-in">'; document.body.appendChild(m);
+        document.getElementById('fcc-probe-in').focus(); }""")
+    page.evaluate("() => window.processScan('ID:57', 'barcode')")
+    _answered(page, 57)
+    assert _focus(page) == "fcc-probe-in"
+    page.evaluate("""() => { const m = document.getElementById('fccProbeModal');
+        m.classList.remove('show'); m.style.display = 'none';
+        m.dispatchEvent(new Event('hidden.bs.modal', { bubbles: true })); }""")
+    assert _focus(page) == "57"
+    later(page, 700)
+    press(page, "425", 150)
+    _saved(page)
+    ups = _updates(page)
+    assert [u["id"] for u in ups] == [57] and ups[0]["updates"]["used_weight"] == 325, ups
+
+
+def test_a_weighed_spool_scanned_again_under_another_window_gets_its_box_when_it_closes(wo):
+    """#6 saved and its row faded away; a window over the list, and #6 scanned
+    again (to weigh it again): when the window closes, #6's row is back and its
+    box takes the focus, so the new reading is saved to #6 (520 g used), never
+    to #134, the only other box. RED on b114fd7 (the reading went to #134), and
+    on a fix that drew the row again only when nothing covered the list."""
+    page, open_ = wo
+    open_()
+    press(page, "500", 150)
+    _saved(page)
+    page.wait_for_function("() => !document.querySelector('.weigh-input[data-id=\"6\"]')")   # faded
+    page.evaluate("""() => { const m = document.createElement('div'); m.className = 'modal show'; m.id = 'fccProbeModal';
+        m.innerHTML = '<input id="fcc-probe-in">'; document.body.appendChild(m);
+        document.getElementById('fcc-probe-in').focus(); }""")
+    page.evaluate("() => window.processScan('ID:6', 'barcode')")
+    _scan_answered(page)
+    assert _focus(page) == "fcc-probe-in"
+    page.evaluate("""() => { const m = document.getElementById('fccProbeModal');
+        m.classList.remove('show'); m.style.display = 'none';
+        m.dispatchEvent(new Event('hidden.bs.modal', { bubbles: true })); }""")
+    assert (_focus(page), _box(page, 6)) == ("6", "")
+    later(page, 700)
+    press(page, "480", 150)
+    _saved(page, 2)
+    ups = _updates(page)
+    assert [u["id"] for u in ups] == [6, 6] and ups[1]["updates"]["used_weight"] == 520, ups
+
+
+def test_a_box_moved_to_while_a_scan_is_answered_keeps_what_was_typed_there(wo):
+    """#57 scanned from #6's box, and while the answer is on its way the person
+    moves to #134's box and types there: that stays in #134's box (they went
+    there on purpose), and #57's box takes the focus empty. Pins the move's
+    limit: only what was typed where the focus was as the scan went out, or in
+    the target's box, goes with the scan."""
+    page, open_ = wo
+    page.evaluate("() => { window.__answerMs = 700; }")
+    open_()
+    press(page, "ID:57", 5)
+    later(page, 300)
+    page.locator(".weigh-input[data-id='134']").focus()
+    press(page, "9", 0, enter=False)
+    _scan_answered(page)
+    assert (_focus(page), _box(page, 134), _box(page, 57)) == ("57", "9", "")
+
+
+def test_a_reading_edited_in_the_old_box_while_a_scan_is_answered_stays_there(wo):
+    """A reading left in #6's box ('300'), #57 scanned into it, and while the
+    answer is on its way the person edits #6's reading (Backspace, then more
+    digits): an edit, not an addition, so it stays in #6's box as typed, and
+    #57's box takes the focus empty. Pins the move's other limit."""
+    page, open_ = wo
+    page.evaluate("() => { window.__answerMs = 700; }")
+    open_()
+    press(page, "300", 150, enter=False)
+    later(page, 600)
+    press(page, "ID:57", 5)
+    later(page, 300)
+    press(page, ["Backspace", "4", "2", "5", "1"], 150, enter=False)
+    _scan_answered(page)
+    assert (_focus(page), _box(page, 6), _box(page, 57)) == ("57", "304251", "")
+
+
+def test_a_weight_key_on_a_control_never_goes_to_a_guessed_box(wo):
+    """The target's spool taken out of the buffer, two spools left: a reading
+    typed on a mode button goes into neither box (to the scan path, as before
+    Group 57), never into one picked by guess; with one spool left, it goes
+    into that one's box and is saved. RED on b114fd7: it went into the first
+    empty box."""
+    page, open_ = wo
+    open_(held=(6, 134, 57))
+    drop = "(id) => { state.heldSpools = state.heldSpools.filter((s) => s.id !== id); renderBuffer(); }"
+    page.evaluate(drop, 6)
+    page.locator("#weigh-out-mode [data-mode='net']").click()
+    later(page, 700)
+    press(page, "425", 150)
+    page.wait_for_function("() => window.__posts.some((p) => ['/api/identify_scan', '/api/spool/update'].includes(p.url))")
+    page.wait_for_timeout(50)
+    assert _updates(page) == [] and _scans(page) == ["425"] and (_box(page, 134), _box(page, 57)) == ("", "")
+    _scan_answered(page)                          # the scan path answered it (Unknown Code)
+    page.evaluate(drop, 57)
+    page.locator("#weigh-out-mode [data-mode='net']").click()
+    later(page, 700)
+    press(page, "425", 150)
+    _saved(page)
+    assert [u["id"] for u in _updates(page)] == [134]
+
+
+def test_only_the_latest_scan_moves_the_focus(wo):
+    """Two spools scanned back to back, the first answered last (#57 slow,
+    then #134): the focus ends in #134's box, the spool scanned last, and the
+    reading is saved to it. RED on b114fd7: #57's late answer moved the focus
+    to #57's box."""
+    page, open_ = wo
+    page.evaluate("() => { window.__answerMsFor = { 'ID:57': 600, 'ID:134': 50 }; }")
+    open_()
+    press(page, "ID:57", 5)
+    later(page, 300)
+    press(page, "ID:134", 5)
+    _scan_answered(page, 2)
+    assert _focus(page) == "134"
+    later(page, 700)
+    press(page, "425", 150)
+    _saved(page)
+    assert [u["id"] for u in _updates(page)] == [134]
