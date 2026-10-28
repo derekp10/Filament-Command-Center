@@ -66,13 +66,14 @@ def test_the_dialogs_own_confirm_still_answers_it(tmp_path):
     assert res["confirmed"] == 1, res
 
 
-@pytest.mark.parametrize("glued", [" 57", " LOC:LR-MDB-1:SLOT:2"])
+@pytest.mark.parametrize("glued", [" 57", " LOC:LR-MDB-1:SLOT:2", "57", "ID:57", "LOC:LR-MDB-1:SLOT:2"])
 def test_a_live_dialogs_qr_with_a_scan_glued_after_it_says_so(tmp_path, glued):
     """A live dialog's own QR read with a later scan glued after it (its Enter
-    eaten, a Space between): stopped, as a stale one is, but the toast says
-    what happened and the dialog stays live and unanswered. RED on 4ac78d0: it
-    said the QR belonged to a dialog that had closed, while it was on
-    screen."""
+    eaten, a Space between or none): stopped, as a stale one is, but the toast
+    says what happened and the dialog stays live and unanswered. RED on
+    4ac78d0: it said the QR belonged to a dialog that had closed, while it was
+    on screen; and on b114fd7 with no Space between (round 8: the session id
+    was read on into the next scan's letters)."""
     sid = "fcc-cqr-1-live"
     body = """
 window.__live = 0;

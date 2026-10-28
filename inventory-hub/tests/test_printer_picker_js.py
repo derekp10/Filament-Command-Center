@@ -181,18 +181,22 @@ return {{ posts: posts('/api/smart_move') }};
     assert post["record_source"] == {"box": "XLOC", "slot": "2"}, post
 
 
-def test_a_scanners_double_read_of_a_label_with_a_key_in_front_acts_once(tmp_path):
-    """The feed slot's label with a key left in front ('qLOC:…'), and the
-    scanner's second read of it 20 ms later: the question picks the slot once,
-    and the second read is dropped as a double read ("Ignored a second read").
-    RED on 4ac78d0: the first read wasn't remembered as a location label read,
-    so the second went on to the server as a fresh slot scan (one that loads
-    the buffer's spool into that slot)."""
+@pytest.mark.parametrize("first", ["qLOC:LR-MDB-1:SLOT:2", "LOC:LR-MDB-1:SLOT:3LOC:LR-MDB-1:SLOT:2",
+                                   "LOC:XL-1LOC:LR-MDB-1:SLOT:2"])
+def test_a_scanners_double_read_of_a_label_with_a_key_in_front_acts_once(tmp_path, first):
+    """The feed slot's label with a key left in front ('qLOC:…'), or another
+    label glued in front (a scan whose Enter was lost), and the scanner's
+    second read of the slot's label 20 ms later: the question picks the slot
+    once, and the second read is dropped as a double read ("Ignored a second
+    read"). RED on 4ac78d0 for the key (round 7) and on b114fd7 for a glued
+    label (round 8): the first read was remembered as its whole text, so the
+    second went on to the server as a fresh slot scan (one that loads the
+    buffer's spool into that slot)."""
     res = _run(tmp_path, f"""
 answerWith('/api/smart_move', [{_js(DONE)}]);
 window.__picks = [head('XL-2', {{ feeds: {_js(FREE_FEED)} }})];
 await scanLoc('XL');
-window.processScan('qLOC:LR-MDB-1:SLOT:2', 'barcode');
+window.processScan({_js(first)}, 'barcode');
 await __settle(20);
 window.processScan('LOC:LR-MDB-1:SLOT:2', 'barcode', Date.now());
 await __settle(250);
@@ -200,6 +204,27 @@ return {{ moves: posts('/api/smart_move').length, scans: posts('/api/identify_sc
 """)
     assert res["moves"] == 1 and res["scans"] == ["LOC:XL"], res
     assert any("Ignored a second read" in t["msg"] for t in res["toasts"]), res["toasts"]
+
+
+def test_a_label_the_question_refused_acts_once_it_has_closed(tmp_path):
+    """"Record it as coming from…" open, and a label it doesn't take scanned
+    (CR-SHELF's, no feed slot): refused, held off. The question cancelled, and
+    the label scanned on purpose a moment later: it goes to the server. RED on
+    b114fd7: the refused read counted as that label's read, and the deliberate
+    scan, inside 1.5 s, was dropped as its second read."""
+    res = _run(tmp_path, f"""
+answerWith('/api/smart_move', [{_js(DONE)}]);
+window.__picks = [head('XL-2', {{ feeds: {_js(FREE_FEED)} }})];
+await scanLoc('XL');
+window.processScan('LOC:CR-SHELF', 'barcode');
+await __settle(50);
+window.processScan('CMD:CANCEL', 'barcode');
+await __settle(250);
+window.processScan('LOC:CR-SHELF', 'barcode');
+await __settle(250);
+return {{ moves: posts('/api/smart_move').length, scans: posts('/api/identify_scan').map(p => p.text) }};
+""")
+    assert res["moves"] == 0 and res["scans"] == ["LOC:XL", "LOC:CR-SHELF"], res
 
 
 def test_another_scan_is_held_off_while_it_asks(tmp_path):

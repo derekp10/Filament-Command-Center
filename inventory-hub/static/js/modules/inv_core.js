@@ -1054,11 +1054,12 @@ installWeightScanCapture({ match: (el) => !!(el.classList && el.classList.contai
 // its arguments). A key a person left in front of it ("qLOC:…") is not part of
 // it, and a box id that ends in LOC or CMD stays whole: reading from the last
 // "CMD:" made LOC:BOXCMD:SLOT:2 into CMD:SLOT:2, slot 2 of the picker's own box
-// (round 7). A LocationID holds no ':'. Anything else comes back whole. The
-// slot picker, the "Record it as coming from…" question and processScan's
-// double-read rule read it.
-const SLOT_LABEL_AT_END = /LOC:[^:\s]+:SLOT:\d+$/;
-const LOC_LABEL_AT_END = /LOC:[^:\s]+$/;
+// (round 7). A LocationID holds no ':', but it may hold a Space ("GARAGE
+// SHELF", round 8: "LOC:BOX CMD:SLOT:2" still read as CMD:SLOT:2). Anything
+// else comes back whole. The slot picker, the "Record it as coming from…"
+// question and processScan's double-read rule read it.
+const SLOT_LABEL_AT_END = /LOC:[^:]+:SLOT:\d+$/;
+const LOC_LABEL_AT_END = /LOC:[^:]+$/;
 const CMD_LABEL_AT_END = /CMD:[A-Z]+(?::[A-Z0-9_-]+)*$/;
 window.lastScanLabel = (text) => {
     const whole = String(text == null ? '' : text).trim().toUpperCase();

@@ -46,14 +46,15 @@
 //   spool runs on another head, a stale record where nothing loads, and any
 //   occupied slot in return mode) say why and are never picked.
 //
-//   window.routePickerScan(text) -> bool. processScan calls it right after
-//   routeConfirmScan. While a picker is open it claims EVERY scan: a choice's
-//   label picks it (LOC:<box>:SLOT:<n> or CMD:SLOT:<n> for a box; LOC:<head> or
-//   a Printer Pool slot label for a printer), CMD:CANCEL cancels, and anything
-//   else is refused with a 7 s warning, an Activity Log line and the panel's
-//   own status line (toasts sit under the panel). It never falls through and
-//   acts. A choice's label scanned while the picker is still loading is kept
-//   and applied once the slots are drawn.
+//   window.routePickerScan(text) -> true, 'refused' or false. processScan calls
+//   it right after routeConfirmScan. While a picker is open it claims EVERY
+//   scan: a choice's label picks it (LOC:<box>:SLOT:<n> or CMD:SLOT:<n> for a
+//   box; LOC:<head> or a Printer Pool slot label for a printer), CMD:CANCEL
+//   cancels, and anything else is refused ('refused', which processScan doesn't
+//   count as that label's read) with a 7 s warning, an Activity Log line and
+//   the panel's own status line (toasts sit under the panel). It never falls
+//   through and acts. A choice's label scanned while the picker is still
+//   loading is kept and applied once the slots are drawn.
 //   window.isSlotPickerOpen() -> bool.
 //
 // Keys (listed in the ? overlay): ←/→/↑/↓ move the highlight (wraps), 1–9
@@ -1089,7 +1090,7 @@
             // first); any other label waits.
             _refuse(s, `Choose what happens to slot ${s.choice && s.choice.tile ? s.choice.tile.slot : ''}'s spool first, or Back. (Ignored: ${text})`,
                 `Scan "${text}" ignored: the slot picker is asking what happens to a slot's spool`);
-            return true;
+            return 'refused';
         }
         if (s.view === 'loading' && !s.model && _looksLikeAChoice(up, s)) {
             // D3: scanned before the slots were drawn: kept, and applied once they are.
@@ -1119,7 +1120,10 @@
         }
         _warn('Finish or cancel the slot picker first');
         _flash(s, `Finish or cancel the slot picker first. (Ignored: ${text})`);
-        return true;
+        // Refused: processScan doesn't count it as that label's read, so the
+        // label scanned again once the picker has closed acts (Group 57
+        // review, round 8).
+        return 'refused';
     };
 
     // After load: scripts.html loads this file BEFORE shortcuts_registry.js.

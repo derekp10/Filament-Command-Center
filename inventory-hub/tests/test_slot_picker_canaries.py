@@ -52,8 +52,10 @@ def test_process_scan_routes_to_the_picker_before_any_command():
     stale_guard = body.index("/CMD:(CONFIRM|STORE):\\S/.test(upper)")       # anywhere: Group 57 review, rounds 5 and 6
     assert confirm < picker < stale_guard < first_cmd
     # A read the picker (or the open question) took by its last label counts
-    # for the double-read rule (round 7): both say routed().
-    assert "window.routePickerScan(text)) { routed(); return; }" in body
+    # for the double-read rule (round 7): both say routed(). One the picker
+    # refused doesn't (round 8): unread().
+    assert "const picker = window.routePickerScan ? window.routePickerScan(text) : false;" in body
+    assert "if (picker) { if (picker === 'refused') unread(); else routed(); return; }" in body
     assert "openQuestion.route(text)) { routed(); return; }" in body
 
 

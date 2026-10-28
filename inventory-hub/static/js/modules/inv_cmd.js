@@ -1506,17 +1506,22 @@ const processScan = (text, source = 'keyboard', capturedAt = null) => {
     }
     // Answered at once unless it reaches the server below (every early return
     // here is an answer); in flight from the request until its answer.
+    const locBefore = window._fccLastLocScan;
     const locScan = locKey.startsWith('LOC:') ? (window._fccLastLocScan = { text: locKey, doneAt: Date.now() }) : null;
     const locInFlight = () => { if (locScan) locScan.doneAt = null; };
     const locDone = () => { if (locScan && locScan.doneAt == null) locScan.doneAt = Date.now(); };
     // A read the open question or the slot picker took by its last label (a key
-    // left in front of it, "qLOC:…") counts as that label read, so its second
-    // read is dropped too (Group 57 review, round 7: it acted again).
+    // left in front of it, "qLOC:…", or another label glued before it,
+    // "LOC:A…LOC:B:SLOT:2") counts as that label read, so its second read is
+    // dropped too (Group 57 review, rounds 7 and 8: it acted again).
     const routed = () => {
         const last = window.lastScanLabel ? window.lastScanLabel(locKey) : locKey;
-        if (!locScan && last.startsWith('LOC:')) window._fccLastLocScan = { text: last, doneAt: Date.now() };
+        if (last.startsWith('LOC:') && last !== locKey) window._fccLastLocScan = { text: last, doneAt: Date.now() };
         else locDone();
     };
+    // A read they refused is no read: the label scanned again once they have
+    // closed acts (round 8: it was dropped as a second read for 1.5 s).
+    const unread = () => { if (locScan && window._fccLastLocScan === locScan) window._fccLastLocScan = locBefore; };
     // Active-dialog confirm-by-scan (registered via window.attachConfirmQRs).
     // Must run BEFORE the regular CMD: branches so a CMD:CONFIRM:<sid> scan
     // routes to the dialog's callback instead of hitting the backend or the
@@ -1550,13 +1555,14 @@ const processScan = (text, source = 'keyboard', capturedAt = null) => {
         if (openQuestion.flash) openQuestion.flash(`${why}. (Ignored: ${text})`);
         if (window.logClientEvent) window.logClientEvent(
             `⚠️ Scan "${text}" ignored: "${openQuestion.title}" is still open`, 'WARNING');
-        locDone();
+        unread();
         return;
     }
     // Group 40.1: an open slot picker claims every scan next. A choice's label
     // picks it, CMD:CANCEL cancels, anything else is refused with a warning, so
-    // a scan never acts behind the picker (slot_picker.js).
-    if (window.routePickerScan && window.routePickerScan(text)) { routed(); return; }
+    // a scan never acts behind the picker (slot_picker.js; 'refused' says so).
+    const picker = window.routePickerScan ? window.routePickerScan(text) : false;
+    if (picker) { if (picker === 'refused') unread(); else routed(); return; }
     // A session-scoped CMD:CONFIRM:<sid> that routeConfirmScan didn't claim
     // belongs to a dialog that has already closed. Never let it fall through to
     // the substring-matching routes below and answer whatever unrelated dialog
@@ -1567,10 +1573,12 @@ const processScan = (text, source = 'keyboard', capturedAt = null) => {
     // 57 review, round 5), and neither does a later scan glued after it with a
     // Space in it (round 6; a live one alone was answered above, by
     // routeConfirmScan). A live dialog's own QR with a scan glued after it is
-    // stopped too, and said so: it was called a closed dialog's (round 7).
+    // stopped too, and said so: it was called a closed dialog's (round 7), and
+    // with no Space between them still was (round 8: its id read on into the
+    // next scan's letters).
     if (/CMD:(CONFIRM|STORE):\S/.test(upper)) {
-        const sid = (/CMD:(?:CONFIRM|STORE):([A-Za-z0-9_-]+)/i.exec(text) || [])[1];
-        const live = !!(sid && window._fccActiveConfirms && window._fccActiveConfirms[sid]);
+        const live = Object.keys(window._fccActiveConfirms || {}).some((sid) =>
+            upper.includes(`CMD:CONFIRM:${sid}`.toUpperCase()) || upper.includes(`CMD:STORE:${sid}`.toUpperCase()));
         showToast(live ? 'That confirm QR was read together with another scan — ignored: scan it on its own'
             : 'That confirm QR belongs to a dialog that has closed — ignored', 'warning', 7000);
         if (window.logClientEvent) window.logClientEvent(live
