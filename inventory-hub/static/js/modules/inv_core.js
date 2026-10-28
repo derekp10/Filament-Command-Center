@@ -998,10 +998,7 @@ const installWeightScanCapture = ({ match, onScan }) => {
         if (e.ctrlKey || e.altKey || e.metaKey || !t.closest || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT'
             || t.isContentEditable || (t.tagName === 'INPUT' && t.type !== 'checkbox')) return false;
         const scope = t.closest('[data-fcc-weight-keys]');
-        if (!scope || typeof scope.fccWeightUnhold !== 'function' || !scope.fccWeightUnhold(1)) return false;
-        heldAt = 0;               // a person's key: what comes next is no scanner's run
-        heldRun = 0;
-        return true;
+        return !!(scope && typeof scope.fccWeightUnhold === 'function' && scope.fccWeightUnhold(1));
     };
     document.addEventListener('keydown', (e) => {
         let el = e.target;
