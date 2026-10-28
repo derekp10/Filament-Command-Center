@@ -892,6 +892,30 @@ def test_a_label_held_while_the_picker_loads_and_then_refused_acts_once_it_has_c
     assert _server_scans(page) == ["LOC:LR-MDB-1:SLOT:2"], load
 
 
+@pytest.mark.parametrize("how", ["CMD:CANCEL", "Escape"])
+def test_a_label_held_while_the_picker_loads_is_no_read_when_it_closes_first(picker_scan, how):
+    """The picker for CR-MDB-1 still loading its slots, another box's slot
+    label scanned (held, to be applied once they are drawn), and the picker
+    closed before they come (CMD:CANCEL, or Escape): the label scanned on
+    purpose a moment later goes to the server. RED on 2942ba1: the held read
+    still counted as that label's, and the deliberate scan, inside 1.5 s, was
+    dropped as its second read."""
+    page, open_ = picker_scan
+    page.evaluate("() => { window.__holdModels = true; }")
+    open_(BOX_MODEL, loaded=False)
+    page.evaluate("() => window.processScan('LOC:LR-MDB-1:SLOT:2', 'barcode')")
+    if how == "Escape":
+        page.keyboard.press("Escape")
+    else:
+        page.evaluate("() => window.processScan('CMD:CANCEL', 'barcode')")
+    page.wait_for_function("() => window.__picked === null")
+    page.evaluate("() => { window.__holdModels = false; window.__loadModels(); }")
+    page.wait_for_timeout(300)
+    page.evaluate("() => window.processScan('LOC:LR-MDB-1:SLOT:2', 'barcode')")
+    page.wait_for_timeout(100)
+    assert _server_scans(page) == ["LOC:LR-MDB-1:SLOT:2"], how
+
+
 def test_a_refused_read_between_a_pick_and_its_second_read_leaves_that_read_dropped(picker_scan):
     """Slot 2 picked by its label; the next spool's picker opens and refuses
     another box's slot label; then the scanner's second read of slot 2's label

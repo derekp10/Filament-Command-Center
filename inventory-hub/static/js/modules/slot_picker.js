@@ -153,6 +153,11 @@
     const _finish = (s, result) => {
         if (!s || s.settled) return;
         s.settled = true;
+        // A choice's label held while the slots loaded and never applied (the
+        // picker closed first: a cancel, Escape, a session) was no read
+        // either (Group 57 review, round 10).
+        if (s.pendingScan && window.unreadLocScan) window.unreadLocScan(s.pendingScan);
+        s.pendingScan = null;
         _dropChoiceQR(s);
         clearTimeout(s.statusTimer);
         (s.disposers || []).forEach((d) => { try { d(); } catch (_) { /* noop */ } });
