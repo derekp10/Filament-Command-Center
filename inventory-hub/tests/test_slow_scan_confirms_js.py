@@ -720,14 +720,21 @@ window.fetch = function (url, opts) {
     const body = opts && opts.body ? JSON.parse(opts.body) : null;
     if (opts && opts.method && opts.method !== 'GET') window.__posts.push({ url, body });
     let ans = { status: 'success' };
-    if (url.includes('/api/placement_options')) {
+    const model = url.includes('/api/placement_options');
+    if (model) {
         const loc = (new URL(url, 'http://x/')).searchParams.get('location');
         ans = window.__models[loc] || { read_ok: false, read_error: 'no model' };
     } else if (url.includes('/api/identify_scan')) {
         ans = { type: 'error', msg: 'Unknown Code' };
     }
-    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(JSON.parse(JSON.stringify(ans))) });
+    const answer = { ok: true, status: 200, json: () => Promise.resolve(JSON.parse(JSON.stringify(ans))) };
+    // The slots' read held until the test lets it go (window.__loadModels()).
+    if (model && window.__holdModels) return new Promise((r) => window.__heldModels.push(() => r(answer)));
+    return Promise.resolve(answer);
 };
+window.__holdModels = false;
+window.__heldModels = [];
+window.__loadModels = () => { const fs = window.__heldModels; window.__heldModels = []; fs.forEach((f) => f()); };
 window.__si = window.setInterval; window.setInterval = () => 0;   // inv_cmd.js's 2 s buffer poll: off
 """
 
@@ -742,11 +749,14 @@ def picker_scan(isolated_page):
         page.add_script_tag(content=(MODULES / name).read_text(encoding="utf-8"))
     page.add_script_tag(content="window.setInterval = window.__si;")
 
-    def open_(model=BOX_MODEL):
+    def open_(model=BOX_MODEL, loaded=True):
         page.evaluate("(m) => { window.__models = m; }", {"CR-MDB-1": model})
         page.evaluate("""() => { window.__picked = undefined;
             window.openSlotPicker({ location: 'CR-MDB-1', spool: 6 }).then((r) => { window.__picked = r; }); }""")
-        page.wait_for_function("() => document.querySelectorAll('#fcc-slot-picker .fcc-sp-tile').length > 0")
+        if loaded:
+            page.wait_for_function("() => document.querySelectorAll('#fcc-slot-picker .fcc-sp-tile').length > 0")
+        else:
+            page.wait_for_selector("#fcc-slot-picker")
 
     return page, open_
 
@@ -831,3 +841,87 @@ def test_a_label_the_pickers_swap_question_refused_acts_once_it_has_closed(picke
     page.evaluate("() => window.processScan('LOC:LR-MDB-1:SLOT:2', 'barcode')")
     page.wait_for_timeout(100)
     assert _server_scans(page) == ["LOC:LR-MDB-1:SLOT:2"]
+
+
+# Group 57 review, round 9: the refusals that still counted as a read.
+
+
+def _cancel_then_scan_again(page, label):
+    page.evaluate("() => window.processScan('CMD:CANCEL', 'barcode')")
+    page.wait_for_function("() => window.__picked === null")
+    page.wait_for_timeout(300)
+    page.evaluate("(t) => window.processScan(t, 'barcode')", label)
+    page.wait_for_timeout(100)
+
+
+def test_a_greyed_out_tiles_label_the_picker_refused_acts_once_it_has_closed(picker_scan):
+    """The picker open for CR-MDB-1, its slot 2 greyed out (its spool runs on
+    another head), and slot 2's label scanned: refused, nothing picked. The
+    picker cancelled, and the label scanned on purpose a moment later: it goes
+    to the server. RED on 66f2c44: that refusal answered as a pick would, so
+    the read counted as that label's, and the deliberate scan, inside 1.5 s,
+    was dropped as its second read."""
+    page, open_ = picker_scan
+    slots = [dict(s) for s in _SLOTS]
+    slots[1] = dict(slots[1], free=False, blocked="its spool #60 runs on XL-3")
+    open_(dict(BOX_MODEL, slots=slots))
+    page.evaluate("() => window.processScan('LOC:CR-MDB-1:SLOT:2', 'barcode')")
+    page.wait_for_timeout(50)
+    assert page.evaluate("() => window.__picked === undefined") and page.locator("#fcc-slot-picker").count() == 1
+    _cancel_then_scan_again(page, "LOC:CR-MDB-1:SLOT:2")
+    assert _server_scans(page) == ["LOC:CR-MDB-1:SLOT:2"]
+
+
+@pytest.mark.parametrize("load", ["loaded", "failed"])
+def test_a_label_held_while_the_picker_loads_and_then_refused_acts_once_it_has_closed(picker_scan, load):
+    """The picker for CR-MDB-1 still loading its slots, and another box's slot
+    label scanned (held, to be picked once they are drawn): once they are in,
+    it is refused (not one of this box's slots), or they never come (a failed
+    read) and it is refused too. The picker cancelled, and the label scanned on
+    purpose a moment later: it goes to the server. RED on 66f2c44: the read
+    counted as that label's from the moment it was held, and the deliberate
+    scan was dropped as its second read."""
+    page, open_ = picker_scan
+    page.evaluate("() => { window.__holdModels = true; }")
+    open_(BOX_MODEL if load == "loaded" else {"read_ok": False, "read_error": "Spoolman didn't answer"}, loaded=False)
+    page.evaluate("() => window.processScan('LOC:LR-MDB-1:SLOT:2', 'barcode')")
+    page.evaluate("() => { window.__holdModels = false; window.__loadModels(); }")
+    page.wait_for_timeout(100)
+    assert page.evaluate("() => window.__picked === undefined") and _server_scans(page) == [], load
+    _cancel_then_scan_again(page, "LOC:LR-MDB-1:SLOT:2")
+    assert _server_scans(page) == ["LOC:LR-MDB-1:SLOT:2"], load
+
+
+def test_a_refused_read_between_a_pick_and_its_second_read_leaves_that_read_dropped(picker_scan):
+    """Slot 2 picked by its label; the next spool's picker opens and refuses
+    another box's slot label; then the scanner's second read of slot 2's label
+    arrives: it is still dropped, never picking slot 2 for the next spool. Pins
+    the refusal's hand-back of the read before it (round 8: b114fd7 picked the
+    slot for the next spool)."""
+    page, open_ = picker_scan
+    open_()
+    page.evaluate("() => window.processScan('LOC:CR-MDB-1:SLOT:2', 'barcode')")
+    page.wait_for_function("() => window.__picked !== undefined")
+    open_()                                           # the next spool's picker
+    page.evaluate("() => window.processScan('LOC:LR-MDB-1:SLOT:2', 'barcode')")     # refused
+    page.evaluate("() => window.processScan('LOC:CR-MDB-1:SLOT:2', 'barcode', Date.now() + 20)")
+    page.wait_for_timeout(100)
+    assert page.evaluate("() => window.__picked === undefined") and page.locator("#fcc-slot-picker").count() == 1
+
+
+def test_a_plain_label_the_picker_took_counts_as_read_for_one_and_a_half_seconds(picker_scan):
+    """The picker takes 'LOC:CR-MDB-1:SLOT:2' as printed: read again a second
+    later it is dropped as the scanner's second read; scanned 1.6 s after the
+    first, it acts. Pins the window's end for a plain label (round 8 pinned
+    only a key in front: a record that never ended would have dropped every
+    later scan of the label, the hidden stop Derek ruled out)."""
+    page, open_ = picker_scan
+    open_()
+    page.evaluate("() => window.processScan('LOC:CR-MDB-1:SLOT:2', 'barcode')")
+    page.wait_for_function("() => window.__picked !== undefined")
+    page.evaluate("() => window.processScan('LOC:CR-MDB-1:SLOT:2', 'barcode', Date.now() + 1000)")
+    page.wait_for_timeout(50)
+    assert _server_scans(page) == []
+    page.evaluate("() => window.processScan('LOC:CR-MDB-1:SLOT:2', 'barcode', Date.now() + 1600)")
+    page.wait_for_timeout(100)
+    assert _server_scans(page) == ["LOC:CR-MDB-1:SLOT:2"]

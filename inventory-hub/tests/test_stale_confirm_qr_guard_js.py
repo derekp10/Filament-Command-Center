@@ -87,3 +87,31 @@ return { live: window.__live, still: !!window._fccActiveConfirms[%s], toasts: to
     assert res["live"] == 0 and res["still"], res
     assert any("read together with another scan" in t for t in res["toasts"]), res
     assert not any("dialog that has closed" in t for t in res["toasts"]), res
+
+
+@pytest.mark.parametrize("text, answer", [
+    ("CMD:CONFIRM:FCC-CQR-1-LIVE", "confirm"),     # a scanner set to send upper case
+    ("cmd:confirm:FCC-CQR-1-LIVE", "confirm"),     # Caps Lock on: a keyboard wedge swaps every letter
+    ("CMD:STORE:FCC-CQR-1-LIVE", "store"),
+    ("cmd:cancel:FCC-CQR-1-LIVE", "cancel"),
+])
+def test_a_live_dialogs_qr_read_in_another_case_answers_it(tmp_path, text, answer):
+    """A live dialog's own QR read with its letters' case changed: it answers
+    its dialog, as when it is read as printed (a session id is always in lower
+    case). RED on 66f2c44: nothing was answered (the id was looked up in the
+    case it was read in), and the toast said the QR had been read together
+    with another scan, though it was read alone; an upper-case Cancel went on
+    to the server."""
+    sid = "fcc-cqr-1-live"
+    body = """
+window.__got = [];
+window._fccActiveConfirms[%s] = { onConfirm: () => window.__got.push('confirm'),
+    onStore: () => window.__got.push('store'), onCancel: () => window.__got.push('cancel') };
+const tb = toasts().length;
+window.processScan(%s, 'barcode');
+await __settle(120);
+return { got: window.__got, scans: posts('/api/identify_scan').map((p) => p.text), toasts: toasts().slice(tb).map((t) => t.msg) };
+""" % (json.dumps(sid), json.dumps(text))
+    res = run_js(tmp_path, SCAN, PRELUDE + body)
+    assert res["got"] == [answer] and res["scans"] == [], res
+    assert not any("read together with another scan" in t for t in res["toasts"]), res

@@ -53,10 +53,12 @@ def test_process_scan_routes_to_the_picker_before_any_command():
     assert confirm < picker < stale_guard < first_cmd
     # A read the picker (or the open question) took by its last label counts
     # for the double-read rule (round 7): both say routed(). One the picker
-    # refused doesn't (round 8): unread().
+    # refused doesn't (round 8): unread(); nor one the question refused (round
+    # 9: a held feed slot).
     assert "const picker = window.routePickerScan ? window.routePickerScan(text) : false;" in body
     assert "if (picker) { if (picker === 'refused') unread(); else routed(); return; }" in body
-    assert "openQuestion.route(text)) { routed(); return; }" in body
+    assert "const answered = typeof openQuestion.route === 'function' ? openQuestion.route(text) : false;" in body
+    assert "if (answered) { if (answered === 'refused') unread(); else routed(); return; }" in body
 
 
 def test_the_template_loads_the_picker_between_inv_cmd_and_the_shortcut_registry():

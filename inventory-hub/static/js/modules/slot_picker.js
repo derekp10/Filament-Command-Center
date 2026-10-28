@@ -51,10 +51,11 @@
 //   scan: a choice's label picks it (LOC:<box>:SLOT:<n> or CMD:SLOT:<n> for a
 //   box; LOC:<head> or a Printer Pool slot label for a printer), CMD:CANCEL
 //   cancels, and anything else is refused ('refused', which processScan doesn't
-//   count as that label's read) with a 7 s warning, an Activity Log line and
-//   the panel's own status line (toasts sit under the panel). It never falls
-//   through and acts. A choice's label scanned while the picker is still
-//   loading is kept and applied once the slots are drawn.
+//   count as that label's read; so is a greyed-out tile's label) with a 7 s
+//   warning, an Activity Log line and the panel's own status line (toasts sit
+//   under the panel). It never falls through and acts. A choice's label
+//   scanned while the picker is still loading is kept and applied once the
+//   slots are drawn (refused then, its read is dropped: window.unreadLocScan).
 //   window.isSlotPickerOpen() -> bool.
 //
 // Keys (listed in the ? overlay): ←/→/↑/↓ move the highlight (wraps), 1–9
@@ -280,17 +281,20 @@
         return Object.assign(base, { box: t.box });
     };
 
+    // 'refused' when nothing was picked (a greyed-out tile, or the picker closed
+    // for a bulk move or an audit): a scan that did that is no read of its
+    // label (Group 57 review, round 9).
     const _pick = (s, t, via) => {
         if (!s || s.settled || !t) return;
         const started = _sessionStarted();
-        if (started) { _closeForSession(s, started); return; }
+        if (started) { _closeForSession(s, started); return 'refused'; }
         const d = t.data || {};
         const boxSlot = t.kind === 'slot' || t.kind === 'pool';
         if (boxSlot && d.blocked) {
             // D4: greyed out, never picked; the panel says why.
             _refuse(s, `${t.box} slot ${t.slot}: ${d.blocked}`,
                 `Slot picker: ${t.box} slot ${t.slot} can't take #${s.model && s.model.spool}: ${d.blocked}`);
-            return;
+            return 'refused';
         }
         if (boxSlot && !d.free && s.model && s.model.mode !== 'return') {
             // Q2 (decided 2026-10-13): an occupied slot asks what happens to its
@@ -744,13 +748,17 @@
     // ---- load ---------------------------------------------------------------------
 
     // D3: a choice's label scanned while the slots were loading, applied once
-    // they are drawn (or refused, if they never are).
+    // they are drawn (or refused, if they never are). Refused either way, it
+    // was no read of its label (Group 57 review, round 9: processScan had kept
+    // it as one, and the label scanned again was dropped as a second read).
     const _applyPendingScan = (s, ok) => {
         const text = s.pendingScan;
         s.pendingScan = null;
         if (!text || s.settled) return;
-        if (ok) { window.routePickerScan(text); return; }
-        _refuse(s, `"${text}" wasn't applied: the slot picker couldn't load ${s.location}`);
+        let refused = true;
+        if (ok) refused = window.routePickerScan(text) === 'refused';
+        else _refuse(s, `"${text}" wasn't applied: the slot picker couldn't load ${s.location}`);
+        if (refused && window.unreadLocScan) window.unreadLocScan(text);
     };
 
     const _load = (s) => {
@@ -1106,16 +1114,16 @@
                 const box = m[1].trim();
                 const slot = _normSlot(m[2]);
                 const t = s.tiles.find((x) => (x.kind === 'slot' || x.kind === 'pool') && x.box === box && x.slot === slot);
-                if (t) { _pick(s, t, 'scan'); return true; }
+                if (t) return _pick(s, t, 'scan') === 'refused' ? 'refused' : true;
             }
             m = /^CMD:SLOT:(\d+)$/.exec(up);
             if (m && s.model.mode !== 'printer') {
                 const t = s.tiles.find((x) => x.kind === 'slot' && x.slot === _normSlot(m[1]));
-                if (t) { _pick(s, t, 'scan'); return true; }
+                if (t) return _pick(s, t, 'scan') === 'refused' ? 'refused' : true;
             }
             if (s.model.mode === 'printer' && up.startsWith('LOC:') && !up.includes(':SLOT:')) {
                 const t = s.tiles.find((x) => x.kind === 'head' && x.head === up.slice(4).trim());
-                if (t) { _pick(s, t, 'scan'); return true; }
+                if (t) return _pick(s, t, 'scan') === 'refused' ? 'refused' : true;
             }
         }
         _warn('Finish or cancel the slot picker first');

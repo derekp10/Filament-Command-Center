@@ -227,6 +227,29 @@ return {{ moves: posts('/api/smart_move').length, scans: posts('/api/identify_sc
     assert res["moves"] == 0 and res["scans"] == ["LOC:XL", "LOC:CR-SHELF"], res
 
 
+def test_a_held_feed_slots_label_the_question_refused_acts_once_it_has_closed(tmp_path):
+    """"Record it as coming from…" open, and a feed slot another spool holds
+    scanned (LR-MDB-1 slot 3, #61's): refused ("holds #61"). The question
+    cancelled, and the label scanned on purpose a moment later: it goes to the
+    server. RED on 66f2c44: that refusal answered as a pick would, so the read
+    counted as that label's, and the deliberate scan, inside 1.5 s, was
+    dropped as its second read."""
+    feeds = FREE_FEED + [{"box": "LR-MDB-1", "slot": "3", "spool": None, "claimed_by": 61, "free": False}]
+    res = _run(tmp_path, f"""
+answerWith('/api/smart_move', [{_js(DONE)}]);
+window.__picks = [head('XL-2', {{ feeds: {_js(feeds)} }})];
+await scanLoc('XL');
+window.processScan('LOC:LR-MDB-1:SLOT:3', 'barcode');
+await __settle(50);
+window.processScan('CMD:CANCEL', 'barcode');
+await __settle(250);
+window.processScan('LOC:LR-MDB-1:SLOT:3', 'barcode');
+await __settle(250);
+return {{ moves: posts('/api/smart_move').length, scans: posts('/api/identify_scan').map(p => p.text) }};
+""")
+    assert res["moves"] == 0 and res["scans"] == ["LOC:XL", "LOC:LR-MDB-1:SLOT:3"], res
+
+
 def test_another_scan_is_held_off_while_it_asks(tmp_path):
     res = _run(tmp_path, f"""
 answerWith('/api/smart_move', [{_js(DONE)}]);

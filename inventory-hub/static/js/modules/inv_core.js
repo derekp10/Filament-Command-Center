@@ -1731,8 +1731,11 @@ window.routeConfirmScan = (text) => {
     // At the END of the text: a key a person left in the scan buffer in the
     // last 2 s (a stray letter) sits in front of the QR's payload, and the
     // dialog's own "Scan to Cancel" did nothing (Group 57 review, round 5).
-    // A session id is "fcc-cqr-<n>-<base 36>" (attachConfirmQRs).
-    const m = String(text).trim().match(/[Cc][Mm][Dd]:(CONFIRM|CANCEL|STORE|confirm|cancel|store):([A-Za-z0-9_-]+)$/);
+    // A session id is "fcc-cqr-<n>-<base 36>" (attachConfirmQRs), always in
+    // lower case, so one read in upper case is the same id: a scanner with
+    // Caps Lock on (it swaps a keyboard wedge's letters) or set to send upper
+    // case read every session QR as nothing (Group 57 review, round 9).
+    const m = String(text).trim().match(/CMD:(CONFIRM|CANCEL|STORE):([A-Za-z0-9_-]+)$/i);
     if (!m) return false;
     const action = m[1].toUpperCase();
     const sid = m[2].trim();
@@ -1740,7 +1743,8 @@ window.routeConfirmScan = (text) => {
     // the most-recently-registered active confirm. The exact-sid path is the
     // safe one. Unscoped matches are NOT supported intentionally so a stale
     // printed QR can't accidentally fire.
-    const entry = window._fccActiveConfirms && window._fccActiveConfirms[sid];
+    const confirms = window._fccActiveConfirms || {};
+    const entry = confirms[sid] || confirms[sid.toLowerCase()];
     if (!entry) return false;
     if (action === 'CONFIRM') entry.onConfirm();
     else if (action === 'STORE') {

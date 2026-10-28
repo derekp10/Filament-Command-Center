@@ -1463,6 +1463,13 @@ const _isLocRepeat = (key, capturedAt) => {
     const at = capturedAt || Date.now();
     return last.doneAt == null || at < last.doneAt + LOC_REPEAT_MS;
 };
+// A label the slot picker held while it loaded and then refused (or never
+// loaded) was no read either: scanned again, it acts (Group 57 review, round
+// 9). `label`: as the picker held it (window.lastScanLabel's).
+window.unreadLocScan = (label) => {
+    const last = window._fccLastLocScan;
+    if (last && last.text === String(label == null ? '' : label).trim().toUpperCase()) window._fccLastLocScan = null;
+};
 
 // Group 40.5 item F (Derek's answer 8, 2026-10-13): what an empty-buffer scan of
 // a location label grabs. Only a place that holds one spool grabs one, and only
@@ -1551,8 +1558,10 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
         // key in front refused the question's own Cancel (round 5).
         if (/CMD:CANCEL(:[A-Z0-9_-]+)?$/.test(upper)) { openQuestion.cancel(); return; }
         // A question whose answers are labels (Group 40.5's "Record it as coming
-        // from…": a feed slot's label picks it) routes them itself.
-        if (typeof openQuestion.route === 'function' && openQuestion.route(text)) { routed(); return; }
+        // from…": a feed slot's label picks it) routes them itself; 'refused'
+        // (a held slot, round 9) is no read of the label.
+        const answered = typeof openQuestion.route === 'function' ? openQuestion.route(text) : false;
+        if (answered) { if (answered === 'refused') unread(); else routed(); return; }
         const why = openQuestion.hint || 'Answer the question on screen first: Load it instead, Just store it, or Cancel';
         showToast(why, 'warning', 7000);
         if (openQuestion.flash) openQuestion.flash(`${why}. (Ignored: ${text})`);
@@ -2479,7 +2488,7 @@ const _askRecordSource = (pick, sid, host) => {
                 if (!f) return false;
                 if (!f.free) {
                     flash(`${f.box} slot ${f.slot} holds #${f.claimed_by}: pick a free slot, No box, or Cancel`);
-                    return true;
+                    return 'refused';
                 }
                 choose(f);
                 return true;
