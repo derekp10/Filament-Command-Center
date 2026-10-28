@@ -45,7 +45,7 @@ def test_the_picker_has_no_text_input_and_mounts_through_mount_overlay():
 def test_process_scan_routes_to_the_picker_before_any_command():
     src = _read(MODULES / "inv_cmd.js")
     start = src.index("const processScan = ")
-    body = src[start:start + 6000]
+    body = src[start:start + 9000]          # its opening routes (they grew in Group 57's review, round 7)
     confirm = body.index("window.routeConfirmScan(text)")
     picker = body.index("window.routePickerScan(text)")
     first_cmd = body.index("if (upper === 'CMD:AUDIT')")

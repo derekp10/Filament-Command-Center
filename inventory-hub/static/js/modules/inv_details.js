@@ -1544,8 +1544,12 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
                     <span style="color:#9aa;">— every ${esc(vendorName)} spool without its own weight inherits it.</span></span>
             </label>` : '';
 
+    // data-fcc-weight-keys: a weight key typed on its vendor box or its buttons
+    // goes into its weight box (inv_core.js's weight capture; Group 57 review,
+    // round 7: after a tick of the vendor box a typed weight went to the scan
+    // path as a spool id).
     const content = `
-        <div style="background:#1e1e1e; color:#fff; border:2px solid #ffc107; border-radius:8px; padding:20px 24px; max-width:28.75rem; text-align:left;">
+        <div data-fcc-weight-keys style="background:#1e1e1e; color:#fff; border:2px solid #ffc107; border-radius:8px; padding:20px 24px; max-width:28.75rem; text-align:left;">
             <div style="font-size:1.2em; font-weight:bold; margin-bottom:10px;">📦 Spool archived — record the empty weight?</div>
             <p style="color:#ddd; margin-bottom:8px; font-size:0.95em;">
                 Spool <strong>#${esc(spoolId)}</strong> just hit 0g and was auto-archived. Its filament
@@ -1571,7 +1575,19 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
 
     let handle = null;
     let saving = false;
-    const cleanup = () => { if (handle) { try { handle.cleanup(); } catch (_) { /* noop */ } handle = null; } };
+    // Closed (Later, Escape or a save), the focus goes back where it was: the
+    // weigh-out list's next box, whose reading went to the scan path as a spool
+    // id while the focus sat on the page (Group 57 review, round 7). A box the
+    // list drew again meanwhile is found by its spool (weighOutRefocus).
+    const returnTo = document.activeElement;
+    const cleanup = () => {
+        if (!handle) return;
+        try { handle.cleanup(); } catch (_) { /* noop */ }
+        handle = null;
+        if (returnTo && returnTo !== document.body && returnTo.isConnected && !returnTo.disabled
+            && typeof returnTo.focus === 'function') returnTo.focus();
+        else if (window.weighOutRefocus) window.weighOutRefocus();
+    };
 
     // Its box is a weight box (fcc-weight-box): a label scanned into it goes to
     // the scan path, never into the filament's empty weight (Group 57 review,

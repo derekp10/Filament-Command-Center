@@ -186,11 +186,12 @@ def test_accumulator_modifier_guard_does_not_include_shift():
 # Focus-holding controls that look like buttons
 # ---------------------------------------------------------------------------
 
-# `id` -> the file it lives in. Each is a checkbox/radio that RENDERS as a
-# button or switch, so nothing on screen hints that a focus-holding <input> is
-# active and the scanner has gone deaf.
+# `id` -> the file it lives in. Each is a radio that RENDERS as a button, so
+# nothing on screen hints that a focus-holding <input> is active and the scanner
+# has gone deaf. The weigh-out list's Auto-Archive switch left this list in
+# Group 57's review, round 7: a checkbox's keys reach the scan accumulator
+# since round 6, and its blur left the focus on the page (see the test after).
 BLUR_ON_CHANGE_CONTROLS = [
-    ("weigh-auto-archive", TPL / "modals_weigh_out.html"),
     ("feeds-slot-order-ltr", TPL / "modals_loc_mgr.html"),
     ("feeds-slot-order-rtl", TPL / "modals_loc_mgr.html"),
 ]
@@ -211,6 +212,23 @@ def test_focus_holding_control_blurs_on_change(ctrl_id: str, path: Path):
         "the global scan handler bails on tagName === 'INPUT' and the scanner "
         "is silently dead. This is the L298 bulk-move ack-box defect."
     )
+
+
+def test_the_weigh_out_switch_keeps_the_focus_and_its_keys_go_to_a_box():
+    """The weigh-out list's Auto-Archive switch keeps the focus when clicked
+    (Group 57 review, round 7): a scan typed on it reaches the scan accumulator,
+    which reads a checkbox's keys since round 6, and a reading typed on it goes
+    into a weight box, because its window says so (data-fcc-weight-keys,
+    inv_core.js's weight capture). Its old blur left the focus on the page,
+    where the reading typed next went to the scan path as a spool id."""
+    src = _read(TPL / "modals_weigh_out.html")
+    idx = src.find('id="weigh-auto-archive"')
+    tag = src[src.rfind("<", 0, idx):src.find(">", idx)]
+    assert "blur" not in tag, tag
+    modal = src[src.find('<div class="modal fade" id="weighOutModal"'):]
+    assert "data-fcc-weight-keys" in modal[:modal.find(">")], "the weigh-out window lost data-fcc-weight-keys"
+    accumulator = _read(TPL / "scripts.html")
+    assert "t.type !== 'checkbox'" in accumulator, "the scan accumulator no longer reads a checkbox's keys"
 
 
 # ---------------------------------------------------------------------------

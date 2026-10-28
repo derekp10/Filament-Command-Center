@@ -153,8 +153,12 @@
                </div>`
             : '';
 
+        // data-fcc-weight-keys: a weight key typed on its other controls (the
+        // Auto Archive switch, a mode tab) goes into the field (inv_core.js's
+        // weight capture; Group 57 review, round 7: after a click on the switch
+        // the reading went to the scan path as a spool id).
         const panelHtml = `
-            <div role="dialog" aria-modal="true" aria-labelledby="fcc-we-title"
+            <div role="dialog" aria-modal="true" aria-labelledby="fcc-we-title" data-fcc-weight-keys
                  style="background:#1f2024;color:#eee;border:1px solid #555;
                         border-radius:8px;padding:0;min-width:min(23.75rem,92vw);
                         max-width:32.5rem;width:92vw;
@@ -249,6 +253,10 @@
             // Quick visual confirmation that the click registered.
             const original = setDefaultBtn.textContent;
             setDefaultBtn.textContent = `✓ ${MODE_DEFS[mode].label} is default`;
+            // Disabling the button drops a focus it has to the page, where the
+            // reading typed next went to the scan path as a spool id (Group 57
+            // review, round 7): the field takes it.
+            if (document.activeElement === setDefaultBtn) inputEl.focus();
             setDefaultBtn.disabled = true;
             setTimeout(() => {
                 setDefaultBtn.textContent = original;

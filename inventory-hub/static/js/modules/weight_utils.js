@@ -262,8 +262,10 @@ function promptMissingEmptyWeight({
         // the CONFIRM tier so it sits above the WeightEntry overlay.
         const tier = document.getElementById('fcc-weight-entry-overlay') ? 'confirm' : 'standard';
 
+        // data-fcc-weight-keys: a weight key typed on its buttons goes into its
+        // box (inv_core.js's weight capture; Group 57 review, round 7).
         const panelHtml = `
-            <div role="dialog" aria-modal="true" aria-labelledby="${overlayId}-title"
+            <div role="dialog" aria-modal="true" aria-labelledby="${overlayId}-title" data-fcc-weight-keys
                  style="background:#1f2024;color:#eee;border:1px solid #555;
                         border-radius:8px;padding:18px 20px;min-width:320px;
                         max-width:480px;box-shadow:0 8px 32px rgba(0,0,0,0.6);">

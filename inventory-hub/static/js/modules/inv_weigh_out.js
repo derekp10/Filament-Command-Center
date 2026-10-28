@@ -124,6 +124,12 @@ window.openWeighOutModal = () => {
             });
         });
 
+    // A weight key typed on the window's other controls (a mode button, the
+    // Auto-Archive switch, the window itself) goes into this box (inv_core.js's
+    // weight capture, data-fcc-weight-keys; Group 57 review, round 7).
+    const modalEl = document.getElementById('weighOutModal');
+    if (modalEl) modalEl.fccWeightBox = currentWeighBox;
+
     // Auto-focus the first empty input after modal shown, but never while a
     // scan is arriving (Group 57 review, round 6): the WEIGH QR and the first
     // spool's label scanned back to back were split between the scan buffer
@@ -164,6 +170,84 @@ window.openWeighOutModal = () => {
 // in as a weight). A purely numeric barcode is deliberately NOT captured: it
 // is genuinely ambiguous with a weight, and treating it as a weight is the
 // safe default.
+//
+// Where the next reading goes (Group 57 review, round 7). The window's flow is
+// "scan a spool, type its weight", and a scanned spool's row is drawn at the
+// top: the focus stayed in the box that had it, so the reading was saved to
+// another spool (at 0 g that spool was archived and taken off its place). A
+// spool scanned while the window is open now gives its own box the focus
+// (processScan calls weighOutScanFrom when the scan is read and
+// weighOutTakeScan once it names a spool), and a reading typed into the old
+// box before the server answered goes with it. The focus comes back to a box
+// after the missing-tare and empty-weight prompts close (weighOutRefocus); it
+// fell to the page, where the next reading went to the scan path as a spool id.
+// A weight key typed on the window's other controls goes into the box that
+// last had the focus (currentWeighBox, through the weight capture).
+let lastWeighBoxId = null;
+document.addEventListener('focusin', (e) => {
+    const t = e.target;
+    if (t && t.classList && t.classList.contains('weigh-input')) lastWeighBoxId = t.dataset.id;
+});
+
+// The box a reading goes in: the one that last had the focus, else the first
+// empty one, else the first.
+const currentWeighBox = () => {
+    const list = document.getElementById('weigh-out-list');
+    if (!list) return null;
+    const boxes = Array.from(list.querySelectorAll('.weigh-input:not(:disabled)'));
+    return boxes.find((b) => b.dataset.id === lastWeighBoxId) || boxes.find((b) => b.value === '') || boxes[0] || null;
+};
+
+// Open, with no overlay over it (the prompts, a question): the person is here.
+const weighOutIsUp = () => {
+    const modalEl = document.getElementById('weighOutModal');
+    return !!(modalEl && modalEl.classList.contains('show') && !document.querySelector('[data-overlay-mount="1"]'));
+};
+
+// The focus back on spool `id`'s box (else currentWeighBox) after something
+// over the window took it. True when a box has it.
+window.weighOutRefocus = (id) => {
+    if (!weighOutIsUp()) return false;
+    const list = document.getElementById('weigh-out-list');
+    const box = (id != null && list && list.querySelector(`.weigh-input[data-id="${id}"]:not(:disabled)`)) || currentWeighBox();
+    if (!box) return false;
+    box.focus();
+    return true;
+};
+
+// Where the focus was when a scan was read: { id, value } of the box, or null.
+window.weighOutScanFrom = () => {
+    const ae = document.activeElement;
+    if (!weighOutIsUp() || !ae || !ae.classList || !ae.classList.contains('weigh-input')) return null;
+    return { id: ae.dataset.id, value: ae.value };
+};
+
+// A scan named spool `spoolId`: its box takes the focus, with what was typed
+// into the box that had it since the scan was read (`from`) as its reading;
+// with nothing typed, what its box holds is selected, so the reading typed
+// next replaces it.
+window.weighOutTakeScan = (spoolId, from) => {
+    if (!weighOutIsUp()) return;
+    const ae = document.activeElement;
+    const modalEl = document.getElementById('weighOutModal');
+    if (ae && ae !== document.body && !modalEl.contains(ae)) return;   // a window over this one has it
+    const box = document.querySelector(`#weigh-out-list .weigh-input[data-id="${spoolId}"]`);
+    if (!box || box.disabled) return;
+    let typed = '';
+    if (from && ae !== box && ae && ae.classList && ae.classList.contains('weigh-input')
+        && ae.dataset.id === from.id && ae.value.length > from.value.length && ae.value.startsWith(from.value)) {
+        typed = ae.value.slice(from.value.length);
+        ae.value = from.value;
+        window.updateWeighRowPreview(ae);
+    }
+    box.focus();
+    if (typed) {
+        box.value = typed;
+        window.updateWeighRowPreview(box);
+    } else {
+        try { box.select(); } catch (_) { /* nothing to select */ }
+    }
+};
 
 // Also refresh the UI any time the buffer updates while the modal is open
 document.addEventListener('inventory:buffer-updated', () => {
@@ -379,7 +463,8 @@ window.saveWeighOutRow = async (idStr) => {
         // Gross + missing tare. Use the shared inline overlay so the user
         // can fill it in without leaving the bulk flow.
         const tare = await window.promptMissingEmptyWeight(details.context || {});
-        if (tare === null) return;
+        // Cancelled: back to the row's box (round 7: the focus fell to the page).
+        if (tare === null) { window.weighOutRefocus(id); return; }
         details.empty = Number(tare);
         weighOutDetailsCache.set(id, details);
         r = computeRowResult(id, raw);

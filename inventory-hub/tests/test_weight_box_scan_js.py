@@ -108,7 +108,9 @@ def test_after_a_save_the_next_box_keeps_the_focus(wo):
     press(page, "500", 200)
     page.wait_for_function("() => window.__posts.some((p) => p.url === '/api/spool/update')")
     assert _focus(page) == "134"
-    page.wait_for_timeout(500)                     # the saved row fades and the list is drawn again
+    # The saved row fades and the list is drawn again (waited for, not timed:
+    # round 7 found a fixed wait could check before the redraw).
+    page.wait_for_function("() => !document.querySelector('.weigh-input[data-id=\"6\"]')")
     assert _focus(page) == "134"
     later(page, 600)
     press(page, "42", 200, enter=False)
@@ -262,3 +264,145 @@ def test_escape_goes_to_the_overlay_on_top(isolated_page):
     page.keyboard.press("Escape")
     page.keyboard.press("Escape")
     assert page.evaluate("() => window.__esc") == ["ov-b", "ov-a", "ov-c", "ov-d"]
+
+
+# --- Group 57 review, round 7 ------------------------------------------------
+
+@pytest.mark.parametrize("gap", [450, 700])
+def test_a_redraw_before_a_burst_scanners_enter_keeps_the_scan(wo, gap):
+    """A burst scanner's label (keys 2 ms apart, its Enter 450 or 700 ms
+    later) typed into #6's box, and the list drawn again before its Enter (a
+    heartbeat that changed a spool): the Enter finishes the label in the box
+    that took #6's place, and the reading typed next goes into the box. RED on
+    4ac78d0: the label went back to the scan buffer, its Enter reached the
+    box's own handler (the scan was lost) and the reading was swallowed into it
+    ("ID:57500")."""
+    page = wo
+    _open(page)
+    press(page, "ID:57", 2, enter=False)
+    page.evaluate("() => document.dispatchEvent(new CustomEvent('inventory:buffer-updated'))")
+    later(page, gap)
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(20)
+    assert page.evaluate("() => window.__scans") == ["ID:57"], gap
+    later(page, 600)
+    press(page, "500", 150)
+    page.wait_for_function("() => window.__posts.some((p) => p.url === '/api/spool/update')")
+    assert page.evaluate("() => window.__scans") == ["ID:57"], gap
+
+
+def test_the_saved_rows_fade_before_a_burst_scanners_enter_keeps_the_scan(wo):
+    """#6 saved, and the next spool's label scanned into #134's box right away
+    by a burst scanner: the saved row's fade draws the list again before the
+    label's Enter, and the scan still reaches the scan path whole. RED on
+    4ac78d0: the Enter reached #134's own handler and the scan was lost."""
+    page = wo
+    _open(page)
+    press(page, "500", 150)
+    page.wait_for_function("() => window.__posts.some((p) => p.url === '/api/spool/update')")
+    later(page, 100)
+    press(page, "ID:57", 2, enter=False)
+    page.wait_for_function("() => !document.querySelector('.weigh-input[data-id=\"6\"]')")   # the fade drew the list
+    later(page, 450)
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(20)
+    assert page.evaluate("() => window.__scans") == ["ID:57"] and _focus(page) == "134"
+
+
+TWO_BOXES = ("<!doctype html><html><head><meta charset='utf-8'></head><body>"
+             "<input type='number' class='form-control fcc-weight-box' id='a'>"
+             "<input type='number' class='form-control fcc-weight-box' id='b' value='167'>"
+             "<button id='btn'>b</button></body></html>")
+
+
+def _two_boxes(page):
+    page.set_content(TWO_BOXES)
+    page.add_script_tag(content=STUBS)
+    page.add_script_tag(content=(MODULES / "inv_core.js").read_text(encoding="utf-8"))
+    page.add_script_tag(content=_accumulator())
+    page.evaluate("""() => { window.__saved = []; document.getElementById('b').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); window.__saved.push(e.target.value); } }); }""")
+    page.evaluate(FAKE_CLOCK)
+    page.locator("#a").focus()
+
+
+def test_a_labels_enter_after_its_box_lost_the_focus_is_the_labels(isolated_page):
+    """A label arriving in one weight box when another takes the focus with
+    only the label's Enter to come (the post-archive empty-weight prompt
+    opening after a save, its weight pre-filled): the Enter finishes the label,
+    and the new box's own Enter handler never sees it. RED on 4ac78d0: that
+    handler took it (the prompt saved its pre-filled weight to the filament)
+    and the scan was lost."""
+    page = isolated_page
+    _two_boxes(page)
+    press(page, "ID:57", 5, enter=False)
+    page.locator("#b").focus()
+    later(page, 400)
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(20)
+    assert page.evaluate("() => [window.__scans, window.__saved, state.scanBuffer]") == [["ID:57"], [], ""]
+    later(page, 600)
+    page.keyboard.press("Enter")                    # a person's Enter there is the box's
+    assert page.evaluate("() => window.__saved") == ["167"]
+
+
+def test_a_label_handed_back_leaves_the_scan_buffer_after_2_s(isolated_page):
+    """A label still arriving when its box loses the focus to a button goes
+    back to the scan buffer, and leaves it 2 s after its last key, as any scan
+    the accumulator holds. Unpinned until round 7: without that reset it stayed
+    for good, glued to the next scan."""
+    page = isolated_page
+    _two_boxes(page)
+    press(page, "ID:5", 5, enter=False)
+    page.locator("#btn").focus()
+    assert page.evaluate("() => state.scanBuffer") == "ID:5"
+    page.wait_for_timeout(2300)                     # real time: the reset is a timer
+    assert page.evaluate("() => state.scanBuffer") == ""
+
+
+def test_a_box_the_person_clicked_into_keeps_the_focus_when_the_window_opens(wo):
+    """The window opened and the person clicks into #134's box at once: the
+    first box doesn't take the focus from it half a second later. Unpinned
+    until round 7: without that rule, every test stayed green."""
+    page = wo
+    page.evaluate("() => window.openWeighOutModal()")
+    page.locator(".weigh-input[data-id='134']").click()
+    page.wait_for_timeout(800)                      # real time: past the half second
+    assert _focus(page) == "134"
+
+
+def test_the_caret_stays_where_it_was_through_a_redraw(wo):
+    """A reading being typed in Additive (a text box), the caret moved back,
+    and the list drawn again (a heartbeat): the next key lands where the caret
+    was. Unpinned until round 7: without the caret's restore, every test
+    stayed green and the key went to the end ("+251")."""
+    page = wo
+    page.evaluate("() => { window.weighOutMode = 'additive'; }")
+    _open(page)
+    press(page, "+25", 150, enter=False)
+    page.keyboard.press("ArrowLeft")
+    page.keyboard.press("ArrowLeft")
+    page.evaluate("() => document.dispatchEvent(new CustomEvent('inventory:buffer-updated'))")
+    later(page, 300)
+    press(page, "1", 150, enter=False)
+    assert _box(page, 6) == "+125"
+
+
+def test_a_persons_key_after_a_label_was_handed_back_keeps_their_reading(isolated_page):
+    """A label still arriving when its box lost the focus to another weight
+    box (it went back to the scan buffer), then a person's own key there
+    (Delete) and their reading: the reading is theirs, and Enter saves it.
+    RED on 4ac78d0: the label waiting in the scan buffer took the person's
+    next key, and the reading went to the scan path glued to it
+    ("ID:5200")."""
+    page = isolated_page
+    _two_boxes(page)
+    press(page, "ID:5", 5, enter=False)
+    page.locator("#b").focus()
+    page.locator("#b").select_text()
+    later(page, 300)
+    page.keyboard.press("Delete")
+    later(page, 300)
+    press(page, "200", 150)
+    page.wait_for_timeout(20)
+    assert page.evaluate("() => [window.__scans, window.__saved]") == [[], ["200"]]

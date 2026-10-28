@@ -1496,6 +1496,10 @@ const processScan = (text, source = 'keyboard', capturedAt = null) => {
     // the exact matches below missed (Group 57 review, round 5).
     text = String(text == null ? '' : text).trim();
     if (!text) return;
+    // Where the weigh-out list's focus was as the scan was read: a spool it
+    // names takes the focus there, with what was typed meanwhile (Group 57
+    // review, round 7; inv_weigh_out.js).
+    const weighFrom = window.weighOutScanFrom ? window.weighOutScanFrom() : null;
     const upper = text.toUpperCase();
     const locKey = upper.trim();
     if (_isLocRepeat(locKey, capturedAt)) {
@@ -1920,6 +1924,10 @@ const processScan = (text, source = 'keyboard', capturedAt = null) => {
                 // future surface that needs it; we just don't toast.
                 if (state.heldSpools.some(s => s.id === res.id)) showToast("Already in Buffer", "warning");
                 else { state.heldSpools.unshift({ id: res.id, display: res.display, color: res.color, color_direction: res.color_direction, remaining_weight: res.remaining_weight, details: res.details, archived: res.archived, location: res.location, is_ghost: res.is_ghost, slot: res.slot, deployed_to: res.deployed_to }); renderBuffer(); }
+                // The weigh-out list's flow is "scan a spool, type its weight": its
+                // box takes the focus (Group 57 review, round 7: the reading was
+                // saved to the spool whose box kept it).
+                if (window.weighOutTakeScan) window.weighOutTakeScan(res.id, weighFrom);
             } else if (res.type === 'ambiguous') {
                 // Item 3.6 — backend found multiple spools attached to this
                 // legacy id. Prompt the user to disambiguate. "Use selected"

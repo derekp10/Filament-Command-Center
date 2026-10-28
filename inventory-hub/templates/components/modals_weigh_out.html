@@ -1,5 +1,8 @@
 <!-- modals_weigh_out.html -->
-<div class="modal fade" id="weighOutModal" tabindex="-1" aria-hidden="true">
+<!-- data-fcc-weight-keys: a weight key typed on this window's other controls (a
+     mode button, the switch, the window itself) goes into its weight box, the one
+     that last had the focus (inv_core.js's weight capture; Group 57 review, round 7). -->
+<div class="modal fade" id="weighOutModal" tabindex="-1" aria-hidden="true" data-fcc-weight-keys>
     <div class="modal-dialog modal-lg modal-dialog-centered">
         <div class="modal-content bg-dark border border-success border-2 shadow-lg">
             <div class="modal-header border-bottom border-success border-opacity-50 text-white">
@@ -39,17 +42,16 @@
                 <div class="text-white-50 small">Scan new items to add to this list. Type weight and press Enter to save.</div>
                 <div class="d-flex align-items-center gap-3">
                     <div class="form-check form-switch">
-                        <!-- The blur: a focused checkbox used to DISARM the barcode
-                             scanner (the global scan handler skipped every INPUT), in the
-                             one modal whose own footer says "Scan new items to add to
-                             this list"; same defect as the L298 bulk-move ack box. Since
-                             Group 57's review, round 6, the handler reads a checkbox's
-                             keys as a button's, so scanning no longer rests on it.
-                             ON CLICK, NOT ON CHANGE: Space toggles a focused checkbox and
-                             fires `change` but not `click`, so blurring on change stopped
-                             the keyboard user from toggling it back. -->
-                        <input class="form-check-input" type="checkbox" id="weigh-auto-archive" checked
-                               onclick="this.blur();">
+                        <!-- It keeps the focus when clicked. It used to blur itself: a
+                             focused checkbox DISARMED the barcode scanner (the global scan
+                             handler skipped every INPUT), in the one modal whose own footer
+                             says "Scan new items to add to this list". Since Group 57's
+                             review, round 6, the handler reads a checkbox's keys as a
+                             button's, so a scan works with the focus here; and the blur
+                             left the focus on the page, where a reading typed next went to
+                             the scan path as a spool id (round 7). A reading typed here
+                             goes into the weight box (data-fcc-weight-keys, above). -->
+                        <input class="form-check-input" type="checkbox" id="weigh-auto-archive" checked>
                         <label class="form-check-label text-warning small" for="weigh-auto-archive">Auto-Archive 0g</label>
                     </div>
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>

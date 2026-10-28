@@ -204,14 +204,16 @@
      a heartbeat FCC hasn't answered after 30 s counts as failed.
   If you never answer, A and (a) go to `dev` as built.
 * **⏸️ PENDING DEREK — your call: an old digits-only label scanned into a weight box (found 2026-10-27 by the
-  Group 57 review, rounds 5 and 6; nothing blocks on it).** Just an opinion, when you have one. You click a spool
+  Group 57 review, rounds 5 to 7; nothing blocks on it).** Just an opinion, when you have one. You click a spool
   card's weight (the Quick-Weigh window), type the scale's reading, say 645, and scan the next spool's label before
   pressing Enter. FCC's own labels ("ID:57", a location's, a Prusament QR) are caught now at any scanner speed and
   never saved as a weight (fixed on the Group 57 branch): their ':' gives them away. An old label that is digits only
   ("57", from before FCC's "ID:" labels) can't be told from more typing, so it joins the reading and the scan's Enter
   saves that: in Gross or Net the spool reads full ("64557"), and in Additive (the window's default) or Set Used it
   reads empty, and Auto Archive archives it. The weigh-out list has the same rule, on purpose: digits are a weight, so
-  a scale that types its reading into the box (a USB scale in keyboard mode, with or without its unit) still works.
+  a scale that types its reading into the box in grams (a USB scale in keyboard mode, with or without its "g") still
+  works. One that types kilograms, pounds or ounces, or a decimal comma, is read as a scan and nothing is saved (the
+  box is grams and kept only the digits: "0.645kg" was saved as 0.645 g, round 7).
   1. Leave it (the default): digits are a weight. Right if you have a scale that types, or no digits-only labels left.
   2. Digits arriving at scanner speed (3 or more, each a few ms apart, then Enter) right after a pause count as a
      scan: catches the old label, but a scale that types would be caught too.
@@ -668,10 +670,10 @@ All 3 of these things are important and have value. We should table for now, and
     scan is processed too), the filament editor's "Close without saving?" with Close Anyway focused (a scan closes
     it unsaved; Keep Editing has the focus by default), and the parent tree picker (`inv_loc_mgr.js`: Enter picks
     the highlighted parent; read from the code).
-* **✅ FIXED (on `feature/group-57-low-stock-at-a-glance`, in `11f77b4` and completed in round 6's own commit; goes
+* **✅ FIXED (on `feature/group-57-low-stock-at-a-glance`, in `11f77b4`, `cec4a65` and round 7's own commit; goes
   to `dev` with Group 57, or alone: its code needs nothing else from the branch, its tests round 3's slow-scan
   harness): 🔴 a label scanned into a weight box was saved as the weight, and could archive the spool.** _(Found
-  2026-10-27 by the Group 57 review, rounds 5 and 6, on dev, read-only; older than Group 57.)_ The Quick-Weigh window
+  2026-10-27 by the Group 57 review, rounds 5 to 7, on dev, read-only; older than Group 57.)_ The Quick-Weigh window
   (`weight_entry.js`: a buffer card's weight, the wizard's weigh) answered every Enter with Save, and its weight field,
   focused when it opens, had no field scan capture. A number field (Gross, Net, Set Used) kept the digits of "ID:57"
   and Save stored 57 g; in Gross that is under the empty spool, so the spool read empty and Auto Archive archived it.
@@ -681,20 +683,36 @@ All 3 of these things are important and have value. We should table for now, and
   post-archive empty-weight prompt (it would become the filament's empty weight); a scan lost with the focus on the
   Auto Archive switch (its Enter saved, its 'D' set the default mode); Enter on Cancel or × saving; the tare
   prompt's Enter running Save twice and its Escape cancelling the window under it; and the weigh-out list dropping the
-  focus after a save and on every redraw, so the next reading went to the scan path as a spool id. Now every weight
-  box judges what was typed (class `fcc-weight-box`, `installWeightScanCapture` in `inv_core.js`): a ':' or '/' proves
-  a label at any speed and its keys never reach the box; anything else a weight can't hold is a scan only at scanner
-  speed, and a weight with its unit or a Space stays a weight; a label split by a focus move is put back together.
-  The scan accumulator reads a checkbox's keys, the overlay on top owns Escape and its keys, Enter presses the button
-  it is on, and the weigh-out list keeps the focus where a person types. Pinned by `tests/test_quick_weigh_scan_js.py`
-  and `tests/test_weight_box_scan_js.py`. Not covered: a label with no ':' typed slower than a scanner (an old bare
-  location label) and a stall of 2 s or more inside a label. A digits-only label is left a weight: ⏸️ PENDING DEREK.
+  focus after a save and on every redraw, so the next reading went to the scan path as a spool id. Round 7 found what
+  round 6's fixes left: kept in the box that had it, the focus put a scanned spool's reading on another spool (its
+  row is drawn at the top; a 0 g reading archived the other spool and took it off its place), and a spool already
+  listed, scanned to pick it, never got the focus (older); a redraw between a burst scanner's label and its Enter lost
+  the scan and swallowed the next reading; a reading typed after a click on the Auto Archive switch, or on the
+  empty-weight prompt's vendor box, went to the scan path as a spool id, which joined the buffer unseen; the focus
+  fell to the page after the list's two prompts closed and after Set as default (mostly older); a unit or a stray
+  letter typed before a scan joined its prefix ("gID:57"); a number box kept a label's E or dashes, and the next
+  reading was refused; a kilogram, pound or ounce reading or a decimal comma was saved as grams; and a label typed
+  by hand went as 'barcode', marking the spool's printed label verified. Now every weight box judges what was typed
+  (class `fcc-weight-box`, `installWeightScanCapture` in `inv_core.js`): a ':' or '/' proves a label at any speed,
+  from its prefix, and its keys never reach the box (a number box is cleared of the ones it took); anything else a
+  weight can't hold is a scan only at scanner speed, and a weight in grams with its unit or a Space stays a weight; a
+  label split by a focus move is put back together, its Enter too, across a redraw as well; 'barcode' only at scanner
+  speed. A weight window marks itself `data-fcc-weight-keys`, so a weight key typed on its other controls goes into
+  its weight box. The scan accumulator reads a checkbox's keys, the overlay on top owns Escape and its keys, Enter
+  presses the button it is on, and the weigh-out list puts a reading in the box of the spool it is for: a scanned
+  spool's box takes the focus (with what was typed while the scan was answered), and the focus comes back to a box
+  after the prompts. Pinned by `tests/test_quick_weigh_scan_js.py`, `tests/test_weight_box_scan_js.py` and
+  `tests/test_weigh_out_scan_focus_js.py` (the real scan router). Not covered: a label with no ':' typed slower than
+  a scanner (an old bare location label), a stall of 2 s or more inside a label, and a reading typed by hand in kg,
+  lb or oz or with a comma (the box keeps its digits, as before Group 57). A digits-only label is left a weight:
+  ⏸️ PENDING DEREK.
 * **⚖️ The post-archive empty-weight prompt takes the focus from a reading being typed.** _(Found 2026-10-27 while
   fixing the Group 57 review's round 6; older than Group 57.)_ When a weigh-out row's save archives its spool and its
   filament has no empty weight, "📦 Spool archived — record the empty weight?" (`inv_details.js`,
   `showArchiveEmptyWeightPrompt`) opens about half a second later and takes the focus. A person already typing the next
   row's reading types it into the prompt instead, and Enter saves that reading as the filament's empty weight, which
-  every later spool of it inherits. A scanned label can't any more (its box is a weight box). Fix idea: leave the focus
+  every later spool of it inherits. A scanned label can't any more (its box is a weight box), and when it closes it
+  gives the focus back to the box that had it (round 7). Fix idea: leave the focus
   where the person is typing (focus the prompt only when nothing has the focus, or open it once the list closes); a
   call on where the prompt shows, since it is Derek's "one pre-filled confirm".
 * **✅ FIXED (on `feature/group-57-low-stock-at-a-glance`, the commit after `1a1293b`; goes to `dev` with Group 57):
