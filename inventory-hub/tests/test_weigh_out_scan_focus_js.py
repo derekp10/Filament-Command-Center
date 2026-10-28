@@ -52,6 +52,13 @@ window.__filamentMs = 0;             // /api/filament_details' (the empty-weight
 window.__detailsMs = 0;              // /api/spool_details'
 window.__detailsFail = false;        // /api/spool_details answers nothing a spool's details can be read from
 window.__answeredScans = 0;
+// Answers held until the test lets them go (window.__release('scan' | 'save')),
+// so a test that types "before the answer" never races a timer: __holdScans
+// is true (every scan) or a list of scan texts, __holdSaves true or false.
+window.__holdScans = false;
+window.__holdSaves = false;
+window.__held = { scan: [], save: [] };
+window.__release = (kind) => { const fs = window.__held[kind]; window.__held[kind] = []; fs.forEach((f) => f()); };
 window.__spools = {
     6: { id: 6, initial_weight: 1000, used_weight: 31, spool_weight: 167,
          filament: { id: 2, name: 'Red', material: 'PLA', vendor: { name: 'Acme' } } },
@@ -90,10 +97,17 @@ window.fetch = function (url, opts) {
         : url.includes('/api/spool/update') ? window.__saveMs
         : url.includes('/api/filament_details') ? window.__filamentMs
         : url.includes('/api/spool_details') ? window.__detailsMs : 0;
-    return new Promise((res) => setTimeout(() => {
-        if (scan) window.__answeredScans += 1;
-        res({ ok: true, status: 200, json: () => Promise.resolve(ans) });
-    }, ms));
+    const save = url.includes('/api/spool/update');
+    const held = scan ? (window.__holdScans === true
+        || (Array.isArray(window.__holdScans) && window.__holdScans.includes(body.text))) : (save && window.__holdSaves);
+    return new Promise((res) => {
+        const answer = () => {
+            if (scan) window.__answeredScans += 1;
+            res({ ok: true, status: 200, json: () => Promise.resolve(ans) });
+        };
+        if (held) window.__held[scan ? 'scan' : 'save'].push(answer);
+        else setTimeout(answer, ms);
+    });
 };
 window.__si = window.setInterval; window.setInterval = () => 0;   // inv_cmd.js's 2 s buffer poll: off
 """
@@ -160,6 +174,15 @@ def _scan_answered(page, n=1):
     page.wait_for_timeout(30)
 
 
+def _held(page, kind, n=1):
+    """`n` answers of `kind` ('scan' / 'save') held, waiting on the test."""
+    page.wait_for_function("([k, n]) => window.__held[k].length >= n", arg=[kind, n], timeout=5000)
+
+
+def _release(page, kind):
+    page.evaluate("(k) => window.__release(k)", kind)
+
+
 def _unassigned(page):
     return page.evaluate("() => window.__posts.filter((p) => p.url === '/api/manage_contents').map((p) => p.body.spool_id)")
 
@@ -220,12 +243,14 @@ def test_a_reading_typed_before_the_scan_is_answered_goes_with_it(wo):
     and the box that had the focus keeps what it held. RED on 4ac78d0: it all
     went into #6's box and was saved to #6."""
     page, open_ = wo
-    page.evaluate("() => { window.__answerMs = 500; }")
+    page.evaluate("() => { window.__holdScans = true; }")
     open_()
     press(page, "ID:57", 5)
+    _held(page, "scan")
     later(page, 300)
     press(page, "4", 0, enter=False)          # the server hasn't answered yet
     assert _box(page, 6) == "4"
+    _release(page, "scan")
     _answered(page, 57)
     assert (_focus(page), _box(page, 57), _box(page, 6)) == ("57", "4", "")
     later(page, 150)
@@ -421,11 +446,13 @@ def test_a_spools_own_box_keeps_the_reading_typed_before_its_scan_was_answered(w
     key replaced it and 25 g was saved (in Gross, under the 167 g spool, so #6
     was archived and taken off its place)."""
     page, open_ = wo
-    page.evaluate("() => { window.__answerMs = 700; }")
+    page.evaluate("() => { window.__holdScans = true; }")
     open_(mode=mode)
     press(page, "ID:6", 5)
+    _held(page, "scan")
     later(page, 300)
     press(page, "4", 0, enter=False)          # the server hasn't answered yet
+    _release(page, "scan")
     _scan_answered(page)
     later(page, 150)
     press(page, "25", 150)
@@ -453,13 +480,15 @@ def test_a_scan_read_off_a_box_takes_the_reading_typed_before_its_answer(wo, whe
     again. RED on b114fd7: the '4' stayed in #6's box and 25 g was saved to
     #57."""
     page, open_ = wo
-    page.evaluate("() => { window.__answerMs = 700; }")
+    page.evaluate("() => { window.__holdScans = true; }")
     open_()
     _focus_off_a_box(page, where)
     later(page, 700)
     press(page, "ID:57", 5)
+    _held(page, "scan")
     later(page, 300)
     press(page, "4", 0, enter=False)
+    _release(page, "scan")
     _scan_answered(page)
     assert (_focus(page), _box(page, 57), _box(page, 6)) == ("57", "4", ""), where
     later(page, 150)
@@ -476,15 +505,17 @@ def test_enter_before_a_scan_is_answered_saves_nothing(wo):
     and Enter saves it there. RED on b114fd7: the reading went into #6's box,
     and Enter saved it to #6."""
     page, open_ = wo
-    page.evaluate("() => { window.__answerMs = 700; }")
+    page.evaluate("() => { window.__holdScans = true; }")
     open_()
     page.locator("#weigh-out-mode [data-mode='net']").click()
     later(page, 700)
     press(page, "ID:57", 5)
+    _held(page, "scan")
     later(page, 300)
     press(page, "425", 150)                   # with its Enter, before the answer
     page.wait_for_timeout(50)
     assert _updates(page) == []
+    _release(page, "scan")
     _scan_answered(page)
     assert (_focus(page), _box(page, 57), _box(page, 6)) == ("57", "425", "")
     later(page, 300)
@@ -500,14 +531,16 @@ def test_a_reading_typed_before_a_scan_is_answered_on_an_empty_list_is_kept_for_
     key is kept for #57, and its box takes the whole reading (325 g used).
     RED on b114fd7: the '4' stayed in the scan buffer, and 25 g was saved."""
     page, _ = wo
-    page.evaluate("() => { window.__answerMs = 700; }")
+    page.evaluate("() => { window.__holdScans = true; }")
     page.evaluate(SETUP, [])
     page.evaluate("() => { window.weighOutMode = 'net'; window.openWeighOutModal(); }")
     page.evaluate("() => document.getElementById('weighOutModal').focus()")
     later(page, 700)
     press(page, "ID:57", 5)
+    _held(page, "scan")
     later(page, 300)
     press(page, "4", 0, enter=False)
+    _release(page, "scan")
     _scan_answered(page)
     # ... and nowhere else: a key left in the scan buffer would join the next scan.
     assert (_focus(page), _box(page, 57), page.evaluate("() => state.scanBuffer")) == ("57", "4", "")
@@ -535,12 +568,14 @@ def test_a_spool_scanned_over_the_empty_weight_prompt_closes_it_and_takes_the_re
     _saved(page)
     page.wait_for_function("() => document.activeElement && document.activeElement.id === 'fcc-archive-empty-wt'")
     if early:
-        page.evaluate("() => { window.__answerMs = 600; }")
+        page.evaluate("() => { window.__holdScans = true; }")
     later(page, 700)
     press(page, f"ID:{scanned}", 5)
     if early:
+        _held(page, "scan")
         later(page, 300)
         press(page, "4", 0, enter=False)
+        _release(page, "scan")
     _scan_answered(page)
     assert page.locator("#fcc-archive-empty-overlay").count() == 0 and _focus(page) == str(scanned)
     later(page, 150)
@@ -644,7 +679,7 @@ def test_a_spool_weighed_this_session_scanned_again_takes_the_reading(wo, when):
     page, open_ = wo
     open_()
     if when == "saving":
-        page.evaluate("() => { window.__saveMs = 600; }")
+        page.evaluate("() => { window.__holdSaves = true; }")
     press(page, "500", 150)
     page.wait_for_function("() => window.__posts.some((p) => p.url === '/api/spool/update')")
     if when == "faded":
@@ -662,6 +697,8 @@ def test_a_spool_weighed_this_session_scanned_again_takes_the_reading(wo, when):
         press(page, "4", 0, enter=False)          # nor takes a key typed then
         assert _box(page, 134) == ""
         page.evaluate("() => window.clearScanBuffer()")
+        page.evaluate("() => { window.__holdSaves = false; }")
+        _release(page, "save")                # its save lands now
         page.wait_for_function("() => { const b = document.querySelector('.weigh-input[data-id=\"6\"]'); return b && !b.disabled; }")
     page.wait_for_timeout(450)                    # past the 300 ms fade the scan stops
     assert _focus(page) == "6" and _box(page, 6) == "", when
@@ -791,12 +828,14 @@ def test_a_box_moved_to_while_a_scan_is_answered_keeps_what_was_typed_there(wo):
     limit: only what was typed where the focus was as the scan went out, or in
     the target's box, goes with the scan."""
     page, open_ = wo
-    page.evaluate("() => { window.__answerMs = 700; }")
+    page.evaluate("() => { window.__holdScans = true; }")
     open_()
     press(page, "ID:57", 5)
+    _held(page, "scan")
     later(page, 300)
     page.locator(".weigh-input[data-id='134']").focus()
     press(page, "9", 0, enter=False)
+    _release(page, "scan")
     _scan_answered(page)
     assert (_focus(page), _box(page, 134), _box(page, 57)) == ("57", "9", "")
 
@@ -807,13 +846,15 @@ def test_a_reading_edited_in_the_old_box_while_a_scan_is_answered_stays_there(wo
     digits): an edit, not an addition, so it stays in #6's box as typed, and
     #57's box takes the focus empty. Pins the move's other limit."""
     page, open_ = wo
-    page.evaluate("() => { window.__answerMs = 700; }")
+    page.evaluate("() => { window.__holdScans = true; }")
     open_()
     press(page, "300", 150, enter=False)
     later(page, 600)
     press(page, "ID:57", 5)
+    _held(page, "scan")
     later(page, 300)
     press(page, ["Backspace", "4", "2", "5", "1"], 150, enter=False)
+    _release(page, "scan")
     _scan_answered(page)
     assert (_focus(page), _box(page, 6), _box(page, 57)) == ("57", "304251", "")
 
@@ -849,11 +890,15 @@ def test_only_the_latest_scan_moves_the_focus(wo):
     reading is saved to it. RED on b114fd7: #57's late answer moved the focus
     to #57's box."""
     page, open_ = wo
-    page.evaluate("() => { window.__answerMsFor = { 'ID:57': 600, 'ID:134': 50 }; }")
+    page.evaluate("() => { window.__holdScans = ['ID:57']; }")
     open_()
     press(page, "ID:57", 5)
+    _held(page, "scan")
     later(page, 300)
     press(page, "ID:134", 5)
+    _scan_answered(page, 1)
+    assert _focus(page) == "134"
+    _release(page, "scan")                    # #57's answer comes last
     _scan_answered(page, 2)
     assert _focus(page) == "134"
     later(page, 700)
