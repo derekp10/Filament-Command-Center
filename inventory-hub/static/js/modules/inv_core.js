@@ -820,8 +820,15 @@ window.installFieldScanCapture = installFieldScanCapture;
 //     sends it). A kilogram, pound or ounce reading, or a decimal comma, is a
 //     scan: the box is grams and keeps only the digits ("0.645kg" saved 0.645 g
 //     and the spool read empty, round 7).
-//   - Digits alone stay a weight: an old digits-only label can't be told from
-//     a scale that types its reading (Derek's call, PENDING DEREK).
+//   - Digits alone faster than a person types (3 keys or more, each within 40
+//     ms of the last, an Enter as fast counted: an old digits-only label "57")
+//     are a scan too, never a weight (Derek, 2026-10-28: a scan must never add
+//     to a weight). A reading with a '.', a grams unit or a padding Space stays
+//     a weight at any speed, as a scale that types its reading sends it; only
+//     a scale typing a bare whole number can't be told from such a label (it
+//     reads as a scan, so nothing is saved). Digits a scanner sends while the
+//     weigh-out list holds a reading for a scan it is answering go to the scan
+//     buffer, not the reading.
 // A label split by a focus move is put back together. Its first keys still
 // arriving in the scan buffer when a box takes the focus (or put there by this
 // capture) start the box's label. A label still arriving when its box loses the
@@ -856,6 +863,7 @@ window.parseGramsReading = (raw) => {
 const installWeightScanCapture = ({ match, onScan }) => {
     const RESET_MS = 2000;     // the accumulator's: keys further apart are two inputs
     const BURST_MS = 150;      // scanner speed, the accumulator's 'barcode' test
+    const DIGITS_BURST_MS = 40;   // digits closer together than any person types them
     const LETTER = /^[A-Za-z]$/;
     const WEIGHT_KEY = /^[0-9.+\-]$/;
     const WEIGHT_TYPED = /^[0-9.,+\-]$/;      // a person's weight key (a comma for a decimal one)
@@ -868,6 +876,7 @@ const installWeightScanCapture = ({ match, onScan }) => {
     let keys = [];          // its keys since its last Enter or a person's key: { k, t, before }
     let label = null;       // { text, restore, startAt, lastAt } once a ':' or '/' proved one
     let handedOff = null;   // { text, startAt, lastAt }: a label this capture put back in the scan buffer
+    let heldAt = 0, heldFrom = 0, heldRun = 0;   // the keys a dialog holds (fccWeightHold): the last one's time, its run
     const scanState = () => ((typeof state !== 'undefined') ? state : window.state) || null;
     const scanBuf = () => { const st = scanState(); return st && typeof st.scanBuffer === 'string' ? st.scanBuffer : ''; };
     const reset = () => { keys = []; label = null; };
@@ -914,6 +923,33 @@ const installWeightScanCapture = ({ match, onScan }) => {
         if (onScan) onScan(text, el);
         else if (window.processScan) window.processScan(text, lastAt - startAt < BURST_MS ? 'barcode' : 'keyboard');
     };
+    // A scan typed into the box with no ':' or '/', found at its Enter: the last
+    // run of keys at scanner speed (3 or more inside 150 ms, the accumulator's
+    // test) holding anything a weight can't, or a run of digits alone whose
+    // keys came faster than a person types (each within 40 ms of the last, an
+    // Enter as fast counted, 3 at least): an old digits-only label (Derek,
+    // 2026-10-28: a scan must never add to a weight). What came before it,
+    // slower, is the person's and stays in the box. A reading with a '.', a
+    // grams unit or a padding Space stays a weight at any speed.
+    const burstScan = (now) => {
+        let i = keys.length - 1;
+        while (i > 0 && keys[i].t - keys[i - 1].t < BURST_MS) i--;
+        const run = keys.slice(i);
+        const last = run[run.length - 1];
+        if (now - last.t > RESET_MS) return null;
+        const scan = (from) => ({ text: run.slice(from).map((x) => x.k).join(''), restore: run[from].before,
+            startAt: run[from].t, lastAt: last.t });
+        const text = run.map((x) => x.k).join('');
+        if (/^\d+$/.test(text)) {
+            let j = run.length - 1;
+            while (j > 0 && run[j].t - run[j - 1].t <= DIGITS_BURST_MS) j--;
+            const fast = run.length - j + (now - last.t <= DIGITS_BURST_MS ? 1 : 0);
+            return fast >= 3 ? scan(j) : null;
+        }
+        if (run.length >= 3 && last.t - run[0].t < BURST_MS
+            && [...text].some((c) => !WEIGHT_KEY.test(c)) && !WEIGHT_WITH_UNIT.test(text)) return scan(0);
+        return null;
+    };
     // The weight box a person's weight key on another control of its dialog
     // goes in: the dialog's `fccWeightBox(control)` when it has one (the
     // weigh-out list's target, round 8: never just its first box), else its
@@ -930,7 +966,24 @@ const installWeightScanCapture = ({ match, onScan }) => {
         const el = typeof scope.fccWeightBox === 'function' ? scope.fccWeightBox(t)
             : scope.querySelector('.fcc-weight-box:not(:disabled)');
         if (el && !el.disabled && match(el)) return el;
-        return typeof scope.fccWeightHold === 'function' && scope.fccWeightHold(e.key) ? HELD : null;
+        if (typeof scope.fccWeightHold !== 'function') return null;
+        const now = Date.now();
+        if (heldAt && now - heldAt <= DIGITS_BURST_MS && typeof scope.fccWeightUnhold === 'function') {
+            // Held keys a scanner sent (this one within 40 ms of the last):
+            // a scan's, never a reading. They go to the scan buffer and this
+            // key after them, so the scan arrives whole (Derek, 2026-10-28).
+            const burst = scope.fccWeightUnhold(heldRun);
+            const st = scanState();
+            if (burst && st) { st.scanBuffer = burst; st.scanStartTime = heldFrom; }
+            heldAt = 0;
+            heldRun = 0;
+            return null;
+        }
+        if (!scope.fccWeightHold(e.key)) return null;
+        if (!heldAt || now - heldAt > DIGITS_BURST_MS) { heldFrom = now; heldRun = 0; }
+        heldAt = now;
+        heldRun += 1;
+        return HELD;
     };
     document.addEventListener('keydown', (e) => {
         let el = e.target;
@@ -967,16 +1020,8 @@ const installWeightScanCapture = ({ match, onScan }) => {
                 // prompt saved its tare on it).
                 found = { text: handedOff.text, restore: el.value, startAt: handedOff.startAt, lastAt: handedOff.lastAt };
                 if (window.clearScanBuffer) window.clearScanBuffer();
-            } else if (keys.length >= 3) {
-                let i = keys.length - 1;
-                while (i > 0 && keys[i].t - keys[i - 1].t < BURST_MS) i--;
-                const run = keys.slice(i);
-                const runText = run.map((x) => x.k).join('');
-                if (run.length >= 3 && run[run.length - 1].t - run[0].t < BURST_MS
-                    && now - run[run.length - 1].t <= RESET_MS
-                    && [...runText].some((c) => !WEIGHT_KEY.test(c)) && !WEIGHT_WITH_UNIT.test(runText)) {
-                    found = { text: runText, restore: run[0].before, startAt: run[0].t, lastAt: run[run.length - 1].t };
-                }
+            } else if (keys.length >= 2) {
+                found = burstScan(now);
             }
             reset();
             handedOff = null;

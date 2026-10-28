@@ -156,6 +156,14 @@ window.openWeighOutModal = () => {
             pendingScan.held += key;
             return true;
         };
+        // The last `n` held keys, taken back: a scanner sent them (inv_core.js:
+        // a scan never becomes a reading).
+        modalEl.fccWeightUnhold = (n) => {
+            if (!pendingScan || !n) return '';
+            const keys = pendingScan.held.slice(-n);
+            pendingScan.held = pendingScan.held.slice(0, -n);
+            return keys;
+        };
     }
 
     // Auto-focus the first empty input after modal shown, but never while a
@@ -193,12 +201,13 @@ window.openWeighOutModal = () => {
 // Rather than drop the auto-focus (Derek wants the cursor there), each box is
 // a weight box (class fcc-weight-box), and inv_core.js's weight capture hands
 // a scan typed into it to the global scan path: a label is proved by its ':'
-// or '/' at any speed, anything else a weight can't hold by scanner speed, and
-// digits alone stay a weight (Group 57 review, rounds 5 and 6: the whole
-// payload had to arrive in under 150ms, so a slower scanner's label was typed
-// in as a weight). A purely numeric barcode is deliberately NOT captured: it
-// is genuinely ambiguous with a weight, and treating it as a weight is the
-// safe default.
+// or '/' at any speed, anything else a weight can't hold by scanner speed
+// (Group 57 review, rounds 5 and 6: the whole payload had to arrive in under
+// 150ms, so a slower scanner's label was typed in as a weight), and digits
+// alone faster than a person types them, an old digits-only label (Derek,
+// 2026-10-28: a scan must never add to a weight). A reading with a '.', a
+// grams unit or a padding Space stays a weight at any speed, as a scale that
+// types its reading sends it.
 //
 // Where the next reading goes (Group 57 review, rounds 7 and 8). The window's
 // flow is "scan a spool, type its weight", and a scanned spool's row is drawn

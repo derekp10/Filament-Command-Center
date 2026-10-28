@@ -37,9 +37,10 @@ any speed, and its keys never reach the box; anything else a weight can't hold
 is a scan only at scanner speed, unless it reads as a weight with its unit; a
 Space or a comma is a weight's. The window's keys belong to it only while it is
 on top (window.isTopOverlay), Enter answers the control it is on, and the D
-leaves a scan's own D alone. A label of digits alone ("57") typed after a
-reading is not pinned: it can't be told from a scale that types its reading,
-which is Derek's call.
+leaves a scan's own D alone. An old digits-only label ("57") is a scan when
+its keys come faster than a person types (Derek, 2026-10-28: a scan must
+never add to a weight); a reading with a '.', a unit or a padding Space
+stays a weight at any speed, as a scale that types it sends it.
 """
 from __future__ import annotations
 
@@ -233,6 +234,63 @@ def test_a_reading_with_its_unit_or_a_space_is_a_weight(weigh, mode, typed, ms, 
     page.wait_for_function("() => window.__saved.length === 1")
     s = _seen(page)
     assert s["saved"] == [saved] and s["scans"] == [], (typed, s)
+
+
+@pytest.mark.parametrize("mode", ["gross", "additive", "set_used"])
+@pytest.mark.parametrize("before, before_ms, pause, label, ms, enter_ms", [
+    ("645", 200, 600, "57", 5, 5),        # Derek's case: a reading typed, then an old digits-only label
+    ("645", 100, 100, "57", 5, 5),        # a fast typist's reading right before it: only the label goes
+    ("", 0, 0, "1024", 5, 450),           # a burst scanner, its Enter a moment after the label
+    ("645", 200, 600, "1024", 30, 30),    # a slower scanner, 30 ms a key
+    ("", 0, 0, "57", 5, 5),               # two digits into an empty field, the Enter as fast
+])
+def test_a_digits_only_label_is_a_scan_never_a_weight(weigh, mode, before, before_ms, pause, label, ms, enter_ms):
+    """An old digits-only label ("57", from before FCC's ID: labels) scanned
+    into the field, after a reading typed by hand or into an empty field: it
+    goes to the scan path, the field keeps the reading as it was, and nothing
+    is saved (Derek, 2026-10-28: a scan must never add to a weight). RED on
+    e74350f: the digits joined the reading ("64557"), and its Enter saved that
+    (in Additive or Set Used the spool read empty, and Auto Archive archived
+    it)."""
+    page, open_ = weigh
+    open_(mode)
+    if before:
+        press(page, before, before_ms, enter=False)
+        later(page, pause)
+    press(page, label, ms, pauses={len(label): enter_ms - ms})
+    page.wait_for_timeout(50)
+    s = _seen(page)
+    assert s["saved"] == [] and s["scans"] == [label] and s["value"] == before, (mode, label, s)
+
+
+@pytest.mark.parametrize("reading, ms, enter_ms", [("425", 60, 60), ("42", 45, 45), ("1000", 60, 60), ("7", 5, 5),
+                                                   ("42", 20, 100)])
+def test_a_fast_typists_digits_stay_a_reading(weigh, reading, ms, enter_ms):
+    """Digits typed by hand as fast as a person can (45 to 60 ms a key, the
+    Enter as fast), two keys rolled together (20 ms apart, the Enter 100 ms
+    later), or a single key: a reading, saved. Only digits closer than 40 ms,
+    3 keys at least with the Enter, are a scanner's. Pins the line."""
+    page, open_ = weigh
+    open_("net")
+    press(page, reading, ms, pauses={len(reading): enter_ms - ms})
+    page.wait_for_function("() => window.__saved.length === 1")
+    s = _seen(page)
+    assert s["saved"] == [reading] and s["scans"] == [], (reading, s)
+
+
+def test_a_scale_that_types_a_bare_whole_number_reads_as_a_scan(weigh):
+    """A scale that types its reading as a bare whole number at scanner speed
+    ("645": no '.', no unit, no padding) can't be told from an old digits-only
+    label: it reads as a scan, so nothing is saved (and no wrong weight is
+    either). With a '.', a unit or a Space it stays a weight
+    (test_a_reading_with_its_unit_or_a_space_is_a_weight). Pins the
+    trade-off of Derek's 2026-10-28 call, which he may look at again."""
+    page, open_ = weigh
+    open_("net")
+    press(page, "645", 5)
+    page.wait_for_timeout(50)
+    s = _seen(page)
+    assert s["saved"] == [] and s["scans"] == ["645"], s
 
 
 def test_a_fast_label_without_a_colon_is_a_scan(weigh):
@@ -581,8 +639,10 @@ def test_the_weigh_out_lists_weight_box_takes_a_label_at_any_speed(isolated_page
 
 
 def test_a_persons_reading_and_enter_still_save(weigh):
-    """A reading typed by hand, by a fast typist too, and Enter saves it in
-    every mode: the weight capture never takes digits, '.', '+' or '-'. Keys a
+    """A reading typed by hand, by a fast typist too (60 ms a key, faster than
+    anyone types digits), and Enter saves it in every mode: the weight capture
+    takes digits, '.', '+' or '-' only when they come faster still (a
+    scanner, Derek 2026-10-28; this test typed at 30 ms a key until then). Keys a
     person left in the scan buffer before the window opened don't take that
     Enter (only an Enter off the field asks whether it is a scan's), and leave
     with it (round 6: they stayed, to start the next scan)."""
@@ -590,7 +650,7 @@ def test_a_persons_reading_and_enter_still_save(weigh):
     for mode, reading in (("gross", "645.5"), ("net", "425"), ("additive", "-10"), ("set_used", "575")):
         page.evaluate("() => { state.scanBuffer = 'ab'; state.scanStartTime = Date.now() - 1000; }")
         open_(mode)
-        press(page, reading, 30)
+        press(page, reading, 60)
         page.wait_for_function("() => window.__saved.length === 1")
         assert _seen(page)["saved"] == [reading], mode
         # and the keys left in the scan buffer went with it: they'd start the next scan

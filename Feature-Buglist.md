@@ -203,23 +203,6 @@
      reads "–" ("(–)" on Backlog and Queue, which used to read a "(0)" nobody had read), and "?" if that read failed;
      a heartbeat FCC hasn't answered after 30 s counts as failed.
   If you never answer, A and (a) go to `dev` as built.
-* **⏸️ PENDING DEREK — your call: an old digits-only label scanned into a weight box (found 2026-10-27 by the
-  Group 57 review, rounds 5 to 7; nothing blocks on it).** Just an opinion, when you have one. You click a spool
-  card's weight (the Quick-Weigh window), type the scale's reading, say 645, and scan the next spool's label before
-  pressing Enter. FCC's own labels ("ID:57", a location's, a Prusament QR) are caught now at any scanner speed and
-  never saved as a weight (fixed on the Group 57 branch): their ':' gives them away. An old label that is digits only
-  ("57", from before FCC's "ID:" labels) can't be told from more typing, so it joins the reading and the scan's Enter
-  saves that: in Gross or Net the spool reads full ("64557"), and in Additive (the window's default) or Set Used it
-  reads empty, and Auto Archive archives it. The weigh-out list has the same rule, on purpose: digits are a weight, so
-  a scale that types its reading into the box in grams (a USB scale in keyboard mode, with or without its "g") still
-  works. One that types kilograms, pounds or ounces, or a decimal comma, is read as a scan and nothing is saved (the
-  box is grams and kept only the digits: "0.645kg" was saved as 0.645 g, round 7; typed by hand into the weigh-out
-  list it is refused too, round 8).
-  1. Leave it (the default): digits are a weight. Right if you have a scale that types, or no digits-only labels left.
-  2. Digits arriving at scanner speed (3 or more, each a few ms apart, then Enter) right after a pause count as a
-     scan: catches the old label, but a scale that types would be caught too.
-  Claude's pick: 1, unless you still scan digits-only labels while weighing by hand. Two things answer it: do you still
-  have digits-only spool labels, and does any scale of yours type its reading?
 * **📐 Plan docs: named sizes and colors as the base for themes; alternative views (phone, wall tablet, printer pictures,
   the Location Manager) (Derek, 2026-10-21; written).** _(→ **Group 60.1**: Claude first rewrites step 3's order, phone first, then the decisions one at a time)_ "Themes" in his sense are whole alternative designs a user
   can choose ("what we have now, or future ones, possibly ones that focus on using images of the printers themselves"),
@@ -719,8 +702,13 @@ All 3 of these things are important and have value. We should table for now, and
   `tests/test_weigh_out_scan_focus_js.py` (the real scan router). Not covered: a label with no ':' typed slower than
   a scanner (an old bare location label), a stall of 2 s or more inside a label, and a reading typed by hand in kg,
   lb or oz or with a comma into the Quick-Weigh or a prompt (a number box keeps its digits, as before Group 57; the
-  weigh-out list refuses it). A digits-only label is left a weight:
-  ⏸️ PENDING DEREK.
+  weigh-out list refuses it). **Derek's call (2026-10-28): a scan must never add to a weight.** Digits alone faster
+  than a person types (3 keys or more, each within 40 ms of the last, an Enter as fast counted) are a scan, never a
+  weight, so an old digits-only label goes to the scan path (in the weigh-out list too, also while it holds a
+  reading for a scan it is answering); a reading with a '.', a grams unit or a padding Space stays a weight at any
+  speed, as a scale that types its reading sends it. Only a scale typing a bare whole number can't be told from such
+  a label: it reads as a scan, so nothing is saved (he may look at that again). Not caught: a digits-only label from
+  a scanner slower than 40 ms a key, or one or two digits with its Enter a moment later.
 * **⚖️ The post-archive empty-weight prompt takes the focus from a reading being typed.** _(Found 2026-10-27 while
   fixing the Group 57 review's round 6; older than Group 57.)_ When a weigh-out row's save archives its spool and its
   filament has no empty weight, "📦 Spool archived — record the empty weight?" (`inv_details.js`,

@@ -905,3 +905,46 @@ def test_only_the_latest_scan_moves_the_focus(wo):
     press(page, "425", 150)
     _saved(page)
     assert [u["id"] for u in _updates(page)] == [134]
+
+
+def test_a_digits_only_label_scanned_into_a_weigh_out_box_goes_to_the_scan_path(wo):
+    """#6's box holding a reading typed by hand ('300'), and an old
+    digits-only label ("134") scanned into it: the label goes to the scan
+    path, #6's box keeps '300', and nothing is saved (Derek, 2026-10-28). RED
+    on e74350f: the digits joined the reading ("300134"), and Enter saved that
+    to #6."""
+    page, open_ = wo
+    open_()
+    press(page, "300", 150, enter=False)
+    later(page, 600)
+    press(page, "134", 5)
+    page.wait_for_function("() => window.__posts.some((p) => p.url === '/api/identify_scan')")
+    page.wait_for_timeout(50)
+    assert (_scans(page), _box(page, 6), _updates(page)) == (["134"], "300", [])
+
+
+def test_a_digits_only_label_scanned_while_a_scan_is_answered_is_a_scan(wo):
+    """The list empty, #57's label scanned and its answer on its way, a key
+    typed by hand ('4', held for #57's reading), and then an old digits-only
+    label ("1024") scanned: the label's keys, closer together than a person
+    types, go to the scan path whole (after #57's answer, as the scan
+    accumulator queues a scan while one is answered), and #57's box gets the
+    person's '4' alone. RED on e74350f: the label was held as #57's reading
+    too, its box took "41024", and the label never reached the scan path."""
+    page, _ = wo
+    page.evaluate("() => { window.__holdScans = ['ID:57']; }")
+    page.evaluate(SETUP, [])
+    page.evaluate("() => { window.weighOutMode = 'net'; window.openWeighOutModal(); }")
+    page.evaluate("() => document.getElementById('weighOutModal').focus()")
+    later(page, 700)
+    press(page, "ID:57", 5)
+    _held(page, "scan")
+    later(page, 300)
+    press(page, "4", 0, enter=False)
+    later(page, 600)
+    press(page, "1024", 5)
+    _release(page, "scan")
+    page.wait_for_function("() => window.__posts.filter((p) => p.url === '/api/identify_scan').length >= 2",
+                           timeout=5000)
+    _scan_answered(page, 2)
+    assert (_scans(page), _box(page, 57), page.evaluate("() => state.scanBuffer")) == (["ID:57", "1024"], "4", "")
