@@ -64,3 +64,25 @@ def test_the_dialogs_own_confirm_still_answers_it(tmp_path):
     answers it: the guard stops only a session's QR."""
     res = _scan(tmp_path, "confirm", "CMD:CONFIRM")
     assert res["confirmed"] == 1, res
+
+
+@pytest.mark.parametrize("glued", [" 57", " LOC:LR-MDB-1:SLOT:2"])
+def test_a_live_dialogs_qr_with_a_scan_glued_after_it_says_so(tmp_path, glued):
+    """A live dialog's own QR read with a later scan glued after it (its Enter
+    eaten, a Space between): stopped, as a stale one is, but the toast says
+    what happened and the dialog stays live and unanswered. RED on 4ac78d0: it
+    said the QR belonged to a dialog that had closed, while it was on
+    screen."""
+    sid = "fcc-cqr-1-live"
+    body = """
+window.__live = 0;
+window._fccActiveConfirms[%s] = { onConfirm: () => { window.__live += 1; }, onStore: null, onCancel: () => {} };
+const tb = toasts().length;
+window.processScan(%s, 'barcode');
+await __settle(120);
+return { live: window.__live, still: !!window._fccActiveConfirms[%s], toasts: toasts().slice(tb).map((t) => t.msg) };
+""" % (json.dumps(sid), json.dumps("CMD:CONFIRM:" + sid + glued), json.dumps(sid))
+    res = run_js(tmp_path, SCAN, PRELUDE + body)
+    assert res["live"] == 0 and res["still"], res
+    assert any("read together with another scan" in t for t in res["toasts"]), res
+    assert not any("dialog that has closed" in t for t in res["toasts"]), res

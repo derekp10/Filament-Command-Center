@@ -164,6 +164,44 @@ return {{ posts: posts('/api/smart_move') }};
     assert post["record_source"] == {"box": "LR-MDB-1", "slot": "2"}, post
 
 
+def test_a_feed_slot_of_a_box_whose_id_ends_in_loc_is_read_whole(tmp_path):
+    """A feed slot in a box whose id ends in LOC ("XLOC"): its label picks it.
+    RED on 4ac78d0: the question read from the last "LOC:" in the scan, which
+    was inside the box id ("LOC:SLOT:2"), and refused it."""
+    feeds = [{"box": "XLOC", "slot": "2", "spool": None, "claimed_by": None, "free": True}]
+    res = _run(tmp_path, f"""
+answerWith('/api/smart_move', [{_js(DONE)}]);
+window.__picks = [head('XL-2', {{ feeds: {_js(feeds)} }})];
+await scanLoc('XL');
+window.processScan('LOC:XLOC:SLOT:2', 'barcode');
+await __settle(250);
+return {{ posts: posts('/api/smart_move') }};
+""")
+    [post] = res["posts"]
+    assert post["record_source"] == {"box": "XLOC", "slot": "2"}, post
+
+
+def test_a_scanners_double_read_of_a_label_with_a_key_in_front_acts_once(tmp_path):
+    """The feed slot's label with a key left in front ('qLOC:…'), and the
+    scanner's second read of it 20 ms later: the question picks the slot once,
+    and the second read is dropped as a double read ("Ignored a second read").
+    RED on 4ac78d0: the first read wasn't remembered as a location label read,
+    so the second went on to the server as a fresh slot scan (one that loads
+    the buffer's spool into that slot)."""
+    res = _run(tmp_path, f"""
+answerWith('/api/smart_move', [{_js(DONE)}]);
+window.__picks = [head('XL-2', {{ feeds: {_js(FREE_FEED)} }})];
+await scanLoc('XL');
+window.processScan('qLOC:LR-MDB-1:SLOT:2', 'barcode');
+await __settle(20);
+window.processScan('LOC:LR-MDB-1:SLOT:2', 'barcode', Date.now());
+await __settle(250);
+return {{ moves: posts('/api/smart_move').length, scans: posts('/api/identify_scan').map(p => p.text), toasts: toasts() }};
+""")
+    assert res["moves"] == 1 and res["scans"] == ["LOC:XL"], res
+    assert any("Ignored a second read" in t["msg"] for t in res["toasts"]), res["toasts"]
+
+
 def test_another_scan_is_held_off_while_it_asks(tmp_path):
     res = _run(tmp_path, f"""
 answerWith('/api/smart_move', [{_js(DONE)}]);

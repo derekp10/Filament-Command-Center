@@ -1013,6 +1013,24 @@ const installWeightScanCapture = ({ match, onScan }) => {
 window.installWeightScanCapture = installWeightScanCapture;
 installWeightScanCapture({ match: (el) => !!(el.classList && el.classList.contains('fcc-weight-box')) });
 
+// --- A SCAN'S LAST LABEL (Group 57 review, rounds 6 and 7) ---
+// The label at the end of a scan's text, upper-cased: a box's slot label
+// (LOC:<box>:SLOT:<n>), a location's (LOC:<id>) or a command (CMD:<word>, with
+// its arguments). A key a person left in front of it ("qLOC:…") is not part of
+// it, and a box id that ends in LOC or CMD stays whole: reading from the last
+// "CMD:" made LOC:BOXCMD:SLOT:2 into CMD:SLOT:2, slot 2 of the picker's own box
+// (round 7). A LocationID holds no ':'. Anything else comes back whole. The
+// slot picker, the "Record it as coming from…" question and processScan's
+// double-read rule read it.
+const SLOT_LABEL_AT_END = /LOC:[^:\s]+:SLOT:\d+$/;
+const LOC_LABEL_AT_END = /LOC:[^:\s]+$/;
+const CMD_LABEL_AT_END = /CMD:[A-Z]+(?::[A-Z0-9_-]+)*$/;
+window.lastScanLabel = (text) => {
+    const whole = String(text == null ? '' : text).trim().toUpperCase();
+    const m = SLOT_LABEL_AT_END.exec(whole) || LOC_LABEL_AT_END.exec(whole) || CMD_LABEL_AT_END.exec(whole);
+    return m ? m[0] : whole;
+};
+
 // A scan payload always carries a prefix marker (`ID:`, `LOC:`, `CMD:`,
 // `FIL:`, `SPOOL:`) or is a URL (Prusament QRs). Nothing a user types into an
 // id/weight box looks like that, which is what makes the distinction safe.

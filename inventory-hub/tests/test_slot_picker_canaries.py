@@ -51,6 +51,10 @@ def test_process_scan_routes_to_the_picker_before_any_command():
     first_cmd = body.index("if (upper === 'CMD:AUDIT')")
     stale_guard = body.index("/CMD:(CONFIRM|STORE):\\S/.test(upper)")       # anywhere: Group 57 review, rounds 5 and 6
     assert confirm < picker < stale_guard < first_cmd
+    # A read the picker (or the open question) took by its last label counts
+    # for the double-read rule (round 7): both say routed().
+    assert "window.routePickerScan(text)) { routed(); return; }" in body
+    assert "openQuestion.route(text)) { routed(); return; }" in body
 
 
 def test_the_template_loads_the_picker_between_inv_cmd_and_the_shortcut_registry():

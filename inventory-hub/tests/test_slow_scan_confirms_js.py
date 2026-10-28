@@ -601,3 +601,83 @@ def test_a_key_left_in_front_of_the_pickers_own_cancel_never_stops_it(picker, le
     assert page.evaluate("(t) => window.routePickerScan(t)", left + "CMD:CANCEL:fcc-cqr-1-x") is True
     page.wait_for_timeout(50)
     assert page.locator("#fcc-slot-picker").count() == 1 and page.evaluate("() => window.__picked") is None
+
+
+# The slot picker on a model, as /api/placement_options answers (Group 57
+# review, round 7): a box with four free slots, the same box named XLOC, and a
+# printer with two empty heads.
+_SLOTS = [{"blocked": None, "claimants": [], "current": False, "feeds": None, "free": True, "occupant_state": None,
+           "slot": str(n), "spool": None, "stores_only": False, "swap_to": None, "would_prompt": False}
+          for n in (1, 2, 3, 4)]
+BOX_MODEL = {"allow_none": False, "location": "CR-MDB-1", "max_slots": 4, "mode": "box", "name": "CR box",
+             "printers": [], "read_error": None, "read_ok": True, "recommend_reason": "no_prompt", "recommend_text": "",
+             "recommended": {"box": "CR-MDB-1", "kind": "slot", "slot": "1"}, "slot_order": "ltr", "slots": _SLOTS,
+             "spool": 6, "spool_display": "#6", "spool_location": "CR-CT-4", "toolhead": None, "type": "Dryer Box",
+             "unslotted": []}
+PRINTER_MODEL = {"heads": [{"current": False, "feeds": [], "id": f"XL-{n}", "position": n - 1, "resident": None,
+                            "residents": []} for n in (1, 2)],
+                 "location": "XL", "mode": "printer", "msg": "", "name": "XL", "pool": [], "printers": [],
+                 "read_error": None, "read_ok": True, "recommend_reason": "several_free", "recommend_text": "",
+                 "recommended": None, "self_head": False, "spool": 6, "spool_display": "#6",
+                 "spool_keeps_trail": "", "spool_location": "CR-CT-4", "type": "Printer"}
+
+MODEL_STUBS = r"""
+window.showToast = function () {};
+window.logClientEvent = function () {};
+window.__hold = false;
+window.__held = [];
+window.fetch = function (url) {
+    const loc = (new URL(String(url), 'http://x/')).searchParams.get('location');
+    const body = window.__models[loc] || { read_ok: false, read_error: 'no model' };
+    const answer = { ok: true, status: 200, json: () => Promise.resolve(JSON.parse(JSON.stringify(body))) };
+    if (window.__hold) return new Promise((r) => window.__held.push(() => r(answer)));
+    return Promise.resolve(answer);
+};
+"""
+
+
+@pytest.fixture
+def picker_models(isolated_page):
+    page = isolated_page
+    page.set_content("<!doctype html><html><head><meta charset='utf-8'></head><body></body></html>")
+    page.add_script_tag(content=MODEL_STUBS)
+    for name in ("overlay_mount.js", "inv_core.js", "slot_picker.js"):
+        page.add_script_tag(content=(MODULES / name).read_text(encoding="utf-8"))
+    xloc = dict(BOX_MODEL, location="XLOC", name="XLOC", recommended={"box": "XLOC", "kind": "slot", "slot": "1"})
+    page.evaluate("(m) => { window.__models = m; }", {"CR-MDB-1": BOX_MODEL, "XLOC": xloc, "XL": PRINTER_MODEL})
+    return page
+
+
+@pytest.mark.parametrize("loc, scanned, hold, picked", [
+    ("CR-MDB-1", "qLOC:CR-MDB-1:SLOT:2", False, {"box": "CR-MDB-1", "slot": "2"}),
+    ("CR-MDB-1", "qLOC:CR-MDB-1:SLOT:2", True, {"box": "CR-MDB-1", "slot": "2"}),   # read while it loads
+    ("XL", "qLOC:XL-1", False, {"head": "XL-1"}),
+    ("XLOC", "LOC:XLOC:SLOT:2", False, {"box": "XLOC", "slot": "2"}),               # a box id ending in LOC
+    ("CR-MDB-1", "LOC:BOXCMD:SLOT:2", False, None),                                 # another box, its id ending in CMD
+])
+def test_the_picker_reads_a_scans_last_whole_label(picker_models, loc, scanned, hold, picked):
+    """A slot's or a head's label with a key left in front ('qLOC:…') picks it,
+    in box mode, in printer mode and read while the slots load. A box whose id
+    ends in LOC or CMD is read whole: XLOC's own slot label picks its slot, and
+    another box BOXCMD's slot label is refused, never a slot of the box the
+    picker is for. RED on 4ac78d0 for the box ids (its last-"CMD:" read made
+    LOC:BOXCMD:SLOT:2 into CMD:SLOT:2, slot 2 of CR-MDB-1, and refused XLOC's
+    own label). The key-in-front cases were unpinned: the only test drove the
+    picker's own cancel, whose slots never loaded."""
+    page = picker_models
+    page.evaluate("""([loc, hold]) => { window.__picked = undefined; window.__hold = hold; window.__held = [];
+        window.openSlotPicker({ location: loc, spool: 6 }).then((r) => { window.__picked = r; }); }""", [loc, hold])
+    page.wait_for_selector("#fcc-slot-picker")
+    if not hold:
+        page.wait_for_function("() => document.querySelectorAll('#fcc-slot-picker .fcc-sp-tile').length > 0")
+    assert page.evaluate("(t) => window.routePickerScan(t)", scanned) is True
+    if hold:
+        page.evaluate("() => { window.__hold = false; window.__held.forEach((f) => f()); }")
+    page.wait_for_timeout(300)
+    got = page.evaluate("""() => window.__picked === undefined ? 'open'
+        : (window.__picked === null ? 'cancelled' : { box: window.__picked.box, slot: window.__picked.slot, head: window.__picked.head })""")
+    if picked is None:
+        assert got == "open" and page.locator("#fcc-slot-picker").count() == 1, got
+    else:
+        assert got != "open" and got != "cancelled", got
+        assert {k: got.get(k) for k in picked} == picked, got

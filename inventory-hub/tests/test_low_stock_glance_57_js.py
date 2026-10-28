@@ -988,10 +988,14 @@ def test_a_hung_tick_waits_thirty_seconds_before_the_counts_say_so(both):
     a 3 s value passed them all). 30 s is past the slowest real heartbeat, an
     offline printer's probes. Paused since round 6: installed alone the clock
     still ran in real time, so a busy run could pass the 30 s before the test
-    looked at 29."""
+    looked at 29. A second ahead, in seconds: Playwright's Python client reads a
+    number as seconds, so round 6's milliseconds put the page in the year
+    58,792 and fired every timer then pending (round 7)."""
     bar = both
     bar.clock.install()
-    bar.clock.pause_at(bar.evaluate("() => Date.now()") + 1000)
+    now_ms = bar.evaluate("() => Date.now()")
+    bar.clock.pause_at(now_ms / 1000 + 1)
+    assert abs(bar.evaluate("() => Date.now()") - (now_ms + 1000)) < 50
     bar.evaluate("(a) => { window.__pulse = a; }",
                  [_answer({"low_stock": GOOD, "label_backlog": {"read_ok": True, "count": 53}}), _answer(None, hang=True)])
     bar.evaluate("() => window._dashboardPulseTickOnce()")

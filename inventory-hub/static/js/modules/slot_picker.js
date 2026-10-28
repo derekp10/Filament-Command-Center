@@ -1060,10 +1060,11 @@
         // Read from its last label (Group 57 review, round 6): a key a person
         // left in front of the picker's own "Scan to cancel" (the Quick-Swap
         // grid's 'q', say) got it refused. The session QRs and processScan's
-        // hold-off already read the end of a scan (round 5).
-        const whole = String(text == null ? '' : text).trim().toUpperCase();
-        const at = Math.max(whole.lastIndexOf('LOC:'), whole.lastIndexOf('CMD:'));
-        const up = at > 0 ? whole.slice(at) : whole;
+        // hold-off already read the end of a scan (round 5). The whole label at
+        // the end (window.lastScanLabel, inv_core.js): reading from the last
+        // "CMD:" made LOC:BOXCMD:SLOT:2 into CMD:SLOT:2, a slot of this box
+        // (round 7).
+        const up = window.lastScanLabel(text);
         if (!up) return false;
         if (up === 'CMD:CANCEL') {
             // D3: said, not silent.

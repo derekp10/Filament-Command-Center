@@ -1513,6 +1513,14 @@ const processScan = (text, source = 'keyboard', capturedAt = null) => {
     const locScan = locKey.startsWith('LOC:') ? (window._fccLastLocScan = { text: locKey, doneAt: Date.now() }) : null;
     const locInFlight = () => { if (locScan) locScan.doneAt = null; };
     const locDone = () => { if (locScan && locScan.doneAt == null) locScan.doneAt = Date.now(); };
+    // A read the open question or the slot picker took by its last label (a key
+    // left in front of it, "qLOC:…") counts as that label read, so its second
+    // read is dropped too (Group 57 review, round 7: it acted again).
+    const routed = () => {
+        const last = window.lastScanLabel ? window.lastScanLabel(locKey) : locKey;
+        if (!locScan && last.startsWith('LOC:')) window._fccLastLocScan = { text: last, doneAt: Date.now() };
+        else locDone();
+    };
     // Active-dialog confirm-by-scan (registered via window.attachConfirmQRs).
     // Must run BEFORE the regular CMD: branches so a CMD:CONFIRM:<sid> scan
     // routes to the dialog's callback instead of hitting the backend or the
@@ -1540,7 +1548,7 @@ const processScan = (text, source = 'keyboard', capturedAt = null) => {
         if (/CMD:CANCEL(:[A-Z0-9_-]+)?$/.test(upper)) { openQuestion.cancel(); return; }
         // A question whose answers are labels (Group 40.5's "Record it as coming
         // from…": a feed slot's label picks it) routes them itself.
-        if (typeof openQuestion.route === 'function' && openQuestion.route(text)) { locDone(); return; }
+        if (typeof openQuestion.route === 'function' && openQuestion.route(text)) { routed(); return; }
         const why = openQuestion.hint || 'Answer the question on screen first: Load it instead, Just store it, or Cancel';
         showToast(why, 'warning', 7000);
         if (openQuestion.flash) openQuestion.flash(`${why}. (Ignored: ${text})`);
@@ -1552,7 +1560,7 @@ const processScan = (text, source = 'keyboard', capturedAt = null) => {
     // Group 40.1: an open slot picker claims every scan next. A choice's label
     // picks it, CMD:CANCEL cancels, anything else is refused with a warning, so
     // a scan never acts behind the picker (slot_picker.js).
-    if (window.routePickerScan && window.routePickerScan(text)) { locDone(); return; }
+    if (window.routePickerScan && window.routePickerScan(text)) { routed(); return; }
     // A session-scoped CMD:CONFIRM:<sid> that routeConfirmScan didn't claim
     // belongs to a dialog that has already closed. Never let it fall through to
     // the substring-matching routes below and answer whatever unrelated dialog
@@ -1561,10 +1569,17 @@ const processScan = (text, source = 'keyboard', capturedAt = null) => {
     // "Just store it") is a choice too, so it is stopped the same way. Read
     // anywhere in the text: a stray key in front never lets one through (Group
     // 57 review, round 5), and neither does a later scan glued after it with a
-    // Space in it (round 6; a live one was answered above, by routeConfirmScan).
+    // Space in it (round 6; a live one alone was answered above, by
+    // routeConfirmScan). A live dialog's own QR with a scan glued after it is
+    // stopped too, and said so: it was called a closed dialog's (round 7).
     if (/CMD:(CONFIRM|STORE):\S/.test(upper)) {
-        showToast('That confirm QR belongs to a dialog that has closed — ignored', 'warning', 7000);
-        if (window.logClientEvent) window.logClientEvent('⚠️ Stale confirm QR scanned (its dialog had closed) — ignored', 'WARNING');
+        const sid = (/CMD:(?:CONFIRM|STORE):([A-Za-z0-9_-]+)/i.exec(text) || [])[1];
+        const live = !!(sid && window._fccActiveConfirms && window._fccActiveConfirms[sid]);
+        showToast(live ? 'That confirm QR was read together with another scan — ignored: scan it on its own'
+            : 'That confirm QR belongs to a dialog that has closed — ignored', 'warning', 7000);
+        if (window.logClientEvent) window.logClientEvent(live
+            ? `⚠️ Confirm QR read together with another scan ("${text}") — ignored`
+            : '⚠️ Stale confirm QR scanned (its dialog had closed) — ignored', 'WARNING');
         return;
     }
 
@@ -2441,10 +2456,9 @@ const _askRecordSource = (pick, sid, host) => {
             flash,
             route: (text) => {
                 // Its last label: a key a person left in front never stops it
-                // (Group 57 review, round 6).
-                const whole = String(text || '').trim().toUpperCase();
-                const at = whole.lastIndexOf('LOC:');
-                const m = /^LOC:(.+?):SLOT:(\d+)$/.exec(at > 0 ? whole.slice(at) : whole);
+                // (Group 57 review, round 6), and a box id ending in LOC stays
+                // whole (round 7; window.lastScanLabel, inv_core.js).
+                const m = /^LOC:(.+?):SLOT:(\d+)$/.exec(window.lastScanLabel(text));
                 if (!m) return false;
                 const f = feeds.find(x => String(x.box).toUpperCase() === m[1].trim() && String(x.slot) === String(parseInt(m[2], 10)));
                 if (!f) return false;
