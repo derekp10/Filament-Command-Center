@@ -661,10 +661,10 @@ All 3 of these things are important and have value. We should table for now, and
     scan is processed too), the filament editor's "Close without saving?" with Close Anyway focused (a scan closes
     it unsaved; Keep Editing has the focus by default), and the parent tree picker (`inv_loc_mgr.js`: Enter picks
     the highlighted parent; read from the code).
-* **✅ FIXED (on `feature/group-57-low-stock-at-a-glance`, in `11f77b4`, `cec4a65`, `a692e5d`, `dcb90be`, `66f2c44` and `229d325`; goes
+* **✅ FIXED (on `feature/group-57-low-stock-at-a-glance`, in `11f77b4`, `cec4a65`, `a692e5d`, `dcb90be`, `66f2c44`, `229d325` and `9eaf28a`; goes
   to `dev` with Group 57, or alone: its code needs nothing else from the branch, its tests round 3's slow-scan
   harness): 🔴 a label scanned into a weight box was saved as the weight, and could archive the spool.** _(Found
-  2026-10-27 by the Group 57 review, rounds 5 to 9, on dev, read-only; older than Group 57.)_ The Quick-Weigh window
+  2026-10-27 by the Group 57 review, rounds 5 to 10, on dev, read-only; older than Group 57.)_ The Quick-Weigh window
   (`weight_entry.js`: a buffer card's weight, the wizard's weigh) answered every Enter with Save, and its weight field,
   focused when it opens, had no field scan capture. A number field (Gross, Net, Set Used) kept the digits of "ID:57"
   and Save stored 57 g; in Gross that is under the empty spool, so the spool read empty and Auto Archive archived it.
@@ -702,7 +702,13 @@ All 3 of these things are important and have value. We should table for now, and
   after a scanner's second Enter, stayed in the wrong box; a held key ignored Backspace; a redraw during a save drew
   its row enabled, and the new reading typed after a scan of it vanished with the row; a label's first letters were
   moved as a reading, and its carry put the old box's reading in the new spool's box; and with no details any
-  mode's reading was saved as what is left (Additive '+25' as 25 g left). Now every weight box judges what was typed
+  mode's reading was saved as what is left (Additive '+25' as 25 g left). Round 10 found what round 9's own changes
+  brought: the save's redraw drew a saved row enabled while it faded, so a quick key and Enter saved that spool
+  again with the digits joined (Set Used: archived); a save that waited for its details opened its missing-tare
+  prompt over the next row's reading, which became its tare; a row waiting for its details left the page
+  clickable, and a correction went to the next spool; and, older, a later scan that named no spool freed Enter
+  while an earlier spool scan was still out, and a middle scan's keys were dropped from the reading. Now every
+  weight box judges what was typed
   (class `fcc-weight-box`, `installWeightScanCapture` in `inv_core.js`): a ':' or '/' proves a label at any speed,
   from its prefix, and its keys never reach the box (a number box is cleared of the ones it took); anything else a
   weight can't hold is a scan only at scanner speed, and a weight in grams with its unit or a Space stays a weight; a
@@ -717,7 +723,9 @@ All 3 of these things are important and have value. We should table for now, and
   that row's); the focus comes back to it when a dialog over the list closes; a spool scanned over a prompt closes
   it, and neither prompt opens while a scan is answered or once a spool scan has been answered since its Enter; a
   scan queued behind another counts from its read, and an earlier spool scan takes the focus when the later one
-  names no spool; a saving row stays disabled through a redraw, and a save moves the focus only from its own row;
+  names no spool, with the keys typed under the scans after it; Enter waits while any scan that may still take the
+  focus is out; a saving or fading row stays disabled through a redraw, and a save moves the focus only from its own
+  row; a save that reads its details first dims the page, and its tare prompt opens only where the person was left;
   with no details only a Net reading is saved. The list's boxes are text boxes, Net, Gross and Set Used read
   strictly as grams. Pinned by `tests/test_quick_weigh_scan_js.py`, `tests/test_weight_box_scan_js.py` and
   `tests/test_weigh_out_scan_focus_js.py` (the real scan router). Not covered: a label with no ':' typed slower than
