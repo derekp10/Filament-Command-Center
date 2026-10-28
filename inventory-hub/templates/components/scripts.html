@@ -285,12 +285,23 @@
                         console.warn("UI frozen, queuing scan:", state.scanBuffer);
                         const bffr = state.scanBuffer;
                         const src = source;
+                        // The weigh-out list hears of the scan as it is read, not
+                        // as it goes out (Group 57 review, round 9): until then
+                        // the earlier scan's answer counted as the latest, moved
+                        // the focus and took the reading typed for this one.
+                        const weighRead = window.weighOutScanStart ? window.weighOutScanStart() : null;
                         const tryProcess = setInterval(() => {
                             const fg = document.getElementById('focus-guard');
                             if (!state.processing && (!fg || fg.style.display !== 'flex')) {
                                 clearInterval(tryProcess);
                                 console.log("UI unfrozen, processing queued scan:", bffr);
-                                processScan(bffr, src, capturedAt);
+                                try {
+                                    processScan(bffr, src, capturedAt, weighRead);
+                                } finally {
+                                    // Answered without going out (a second read dropped,
+                                    // a dialog's own QR): nothing to wait for.
+                                    if (weighRead && !weighRead.sent && window.weighOutScanDone) window.weighOutScanDone(weighRead);
+                                }
                             }
                         }, 250);
                     } else {

@@ -1506,7 +1506,10 @@ window.refreshFilamentSpools = () => {
 //   this prompt writes the FILAMENT default (always) + the VENDOR default (opt-in).
 // `opts.skipIf()`: true when the prompt should not open after all (the
 // weigh-out list: a spool has been scanned since the save, Group 57 review,
-// round 8). Asked right before it is drawn.
+// round 8). Asked right before it is drawn, after `opts.settle()` (a promise:
+// the weigh-out list's scan being answered, round 9: it opened over the scan,
+// and the scanned spool's reading went in its box). `opts.scanPending()`: true
+// while that list is answering a scan, and Save waits until it has.
 window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight = null, opts = {}) => {
     if (!filamentId) return;
     let fil;
@@ -1576,6 +1579,7 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
         </div>
     `;
 
+    if (opts && typeof opts.settle === 'function') await opts.settle();
     if (opts && typeof opts.skipIf === 'function' && opts.skipIf()) {
         showToast(`Didn't ask for #${spoolId}'s empty spool weight: the next spool was already scanned`, 'info', 5000);
         return;
@@ -1625,6 +1629,10 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
     if (wtEl && wtEl.value) { try { wtEl.select(); } catch (_) { /* noop */ } }
 
     const doSave = async () => {
+        if (opts && typeof opts.scanPending === 'function' && opts.scanPending()) {
+            showToast('A scan is still being read: press Enter again in a moment', 'info', 4000);
+            return;
+        }
         const raw = wtEl ? wtEl.value : '';
         const n = Number(raw);
         if (raw === '' || raw == null || !Number.isFinite(n) || n <= 0) {

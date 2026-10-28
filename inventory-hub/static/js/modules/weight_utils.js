@@ -252,6 +252,10 @@ function promptMissingEmptyWeight({
     // 57 review, round 8: that spool's reading went in this box as the tare),
     // after this is called to say so.
     onScanDismiss = null,
+    // The weigh-out list's too: true while it is answering a scan, and Save
+    // waits until it has (round 9: the scanned spool's reading and Enter,
+    // typed before the answer, were saved as this spool's tare).
+    scanPending = null,
 } = {}) {
     return new Promise((resolve) => {
         const swatch = color_hex
@@ -301,6 +305,10 @@ function promptMissingEmptyWeight({
             resolve(value);
         };
         const submit = () => {
+            if (typeof scanPending === 'function' && scanPending()) {
+                showToast('A scan is still being read: press Enter again in a moment', 'info', 4000);
+                return;
+            }
             const v = Number(input.value);
             if (!(v > 0)) { input.focus(); return; }
             finish(v);

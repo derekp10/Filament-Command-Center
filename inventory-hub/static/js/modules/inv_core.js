@@ -825,10 +825,13 @@ window.installFieldScanCapture = installFieldScanCapture;
 //     are a scan too, never a weight (Derek, 2026-10-28: a scan must never add
 //     to a weight). A reading with a '.', a grams unit or a padding Space stays
 //     a weight at any speed, as a scale that types its reading sends it; only
-//     a scale typing a bare whole number can't be told from such a label (it
-//     reads as a scan, so nothing is saved). Digits a scanner sends while the
-//     weigh-out list holds a reading for a scan it is answering go to the scan
-//     buffer, not the reading.
+//     a scale typing a bare whole number can't be told from such a label: it
+//     is read as a scan, and the scan path looks a bare number up as a spool
+//     id, so a spool with that id joins the scan buffer (and in the weigh-out
+//     list takes the focus, as any scanned spool does); no weight is saved
+//     from it (round 9). Digits a scanner sends while the weigh-out list holds
+//     a reading for a scan it is answering go to the scan buffer, not the
+//     reading.
 // A label split by a focus move is put back together. Its first keys still
 // arriving in the scan buffer when a box takes the focus (or put there by this
 // capture) start the box's label. A label still arriving when its box loses the
@@ -838,6 +841,8 @@ window.installFieldScanCapture = installFieldScanCapture;
 // in the box that took its place, Enter and all (round 7: a burst scanner's
 // Enter came after the redraw, and the scan was lost). The box's own previews
 // follow (an input event), and its own Enter handler sees only a person's Enter.
+// The keys before a label's ':' carry on only in the same spool's box drawn
+// again, never in another spool's (round 9).
 // A weight key (a digit, '.', ',', '+' or '-') typed on another control of a
 // dialog that says so (data-fcc-weight-keys: the Quick-Weigh, the weigh-out
 // list, the two prompts), with no scan arriving, goes into its weight box
@@ -845,8 +850,9 @@ window.installFieldScanCapture = installFieldScanCapture;
 // row the control is in; else its first): a person who clicked the Auto
 // Archive switch and then typed the reading sent it to the scan path as a
 // spool id, and that spool joined the buffer unseen (round 7). With no box for
-// it, the dialog may keep it (`fccWeightHold`, round 8). A scan's first key is
-// a letter, which stays the scan accumulator's.
+// it, the dialog may keep it (`fccWeightHold`, round 8), and a Backspace there
+// takes the last kept key back (round 9). A scan's first key is a letter,
+// which stays the scan accumulator's.
 // Every weight box has the class fcc-weight-box; the one capture below serves
 // them all.
 //
@@ -985,10 +991,23 @@ const installWeightScanCapture = ({ match, onScan }) => {
         heldRun += 1;
         return HELD;
     };
+    // A Backspace on another control of a dialog holding keys takes back the
+    // last of them: they are shown nowhere, so a typo is put right blind
+    // (Group 57 review, round 9: '45', Backspace, '25' became 4525).
+    const unholdLast = (e, t) => {
+        if (e.ctrlKey || e.altKey || e.metaKey || !t.closest || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT'
+            || t.isContentEditable || (t.tagName === 'INPUT' && t.type !== 'checkbox')) return false;
+        const scope = t.closest('[data-fcc-weight-keys]');
+        if (!scope || typeof scope.fccWeightUnhold !== 'function' || !scope.fccWeightUnhold(1)) return false;
+        heldAt = 0;               // a person's key: what comes next is no scanner's run
+        heldRun = 0;
+        return true;
+    };
     document.addEventListener('keydown', (e) => {
         let el = e.target;
         if (!el) return;
         if (!match(el)) {
+            if (e.key === 'Backspace' && unholdLast(e, el)) { e.preventDefault(); e.stopPropagation(); return; }
             el = ownBox(e, el);
             if (el === HELD) { e.preventDefault(); e.stopPropagation(); return; }
             if (!el) return;
@@ -998,13 +1017,18 @@ const installWeightScanCapture = ({ match, onScan }) => {
         const now = Date.now();
         if (el !== box) {
             // Its box was redrawn under a label still arriving: it carries on
-            // here, and so do the keys before a label's ':' (round 8: a redraw
-            // between them and the ':' sent ":57" to the scan path, and a text
-            // box kept the letters). Keys too old to belong to it are dropped
-            // below, as anywhere.
+            // here, and so do the keys before a label's ':' in the same spool's
+            // box drawn again (round 8: a redraw between them and the ':' sent
+            // ":57" to the scan path, and a text box kept the letters). Not in
+            // another spool's box: what each of those keys found in the old box
+            // would be put back in this one (round 9: a scan's answer moved the
+            // focus mid-prefix, and the old box's reading turned up in the new
+            // spool's). Keys too old to belong to it are dropped below, as
+            // anywhere.
             const redrawn = !!(box && !box.isConnected);
+            const twin = redrawn && box.dataset && el.dataset && box.dataset.id != null && el.dataset.id === box.dataset.id;
             if (redrawn && label && now - label.lastAt <= RESET_MS) label.restore = el.value;
-            else if (!(redrawn && keys.length)) reset();
+            else if (!(twin && keys.length)) reset();
             box = el;
         }
         // A person's own key: they are typing here, so no label is (one handed

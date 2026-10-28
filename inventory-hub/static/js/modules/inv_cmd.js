@@ -1491,7 +1491,10 @@ const _quickPickItem = (locData, res) => {
 };
 
 // --- SCAN ROUTER ---
-const processScan = (text, source = 'keyboard', capturedAt = null) => {
+// `weighRead`: the weigh-out list's mark for this scan, made as it was read
+// when the scan accumulator queued it behind another (weighOutScanStart); it
+// is ended by the queue if the scan never goes out (Group 57 review, round 9).
+const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = null) => {
     // Blanks around a scan are nobody's (the server strips them too); kept,
     // the exact matches below missed (Group 57 review, round 5).
     text = String(text == null ? '' : text).trim();
@@ -1656,11 +1659,13 @@ const processScan = (text, source = 'keyboard', capturedAt = null) => {
     setProcessing(true, { label: slotScan && window.printerLabelForTarget
         ? window.printerLabelForTarget(slotScan[1], slotScan[2]) : null });
     locInFlight();
-    // The weigh-out list, open: where the person's keys were as the scan went
-    // out. A spool the answer names takes the focus, with what was typed
-    // meanwhile, and until the answer Enter saves nothing there (Group 57
-    // review, rounds 7 and 8; inv_weigh_out.js).
-    const weighFrom = window.weighOutScanStart ? window.weighOutScanStart() : null;
+    // The weigh-out list, open: where the person's keys were as the scan was
+    // read (now, or when the scan accumulator queued it: weighRead). A spool
+    // the answer names takes the focus, with what was typed meanwhile, and
+    // until the answer Enter saves nothing there (Group 57 review, rounds 7 to
+    // 9; inv_weigh_out.js).
+    const weighFrom = weighRead || (window.weighOutScanStart ? window.weighOutScanStart() : null);
+    if (weighFrom) weighFrom.sent = true;
     // `confirmed_fed_heads` (Group 40.3): this page can show the "already
     // running another spool" question, so a slot scan is asked it instead of
     // being refused as a stale page (logic.stale_fed_refusal). Empty: the user

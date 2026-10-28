@@ -242,6 +242,7 @@ def test_a_reading_with_its_unit_or_a_space_is_a_weight(weigh, mode, typed, ms, 
     ("645", 100, 100, "57", 5, 5),        # a fast typist's reading right before it: only the label goes
     ("", 0, 0, "1024", 5, 450),           # a burst scanner, its Enter a moment after the label
     ("645", 200, 600, "1024", 30, 30),    # a slower scanner, 30 ms a key
+    ("", 0, 0, "1024", 35, 35),           # 35 ms a key, under the 40 ms line (round 9: the line was unpinned)
     ("", 0, 0, "57", 5, 5),               # two digits into an empty field, the Enter as fast
 ])
 def test_a_digits_only_label_is_a_scan_never_a_weight(weigh, mode, before, before_ms, pause, label, ms, enter_ms):
@@ -264,12 +265,13 @@ def test_a_digits_only_label_is_a_scan_never_a_weight(weigh, mode, before, befor
 
 
 @pytest.mark.parametrize("reading, ms, enter_ms", [("425", 60, 60), ("42", 45, 45), ("1000", 60, 60), ("7", 5, 5),
-                                                   ("42", 20, 100)])
+                                                   ("42", 20, 100), ("425", 42, 42)])
 def test_a_fast_typists_digits_stay_a_reading(weigh, reading, ms, enter_ms):
-    """Digits typed by hand as fast as a person can (45 to 60 ms a key, the
+    """Digits typed by hand as fast as a person can (42 to 60 ms a key, the
     Enter as fast), two keys rolled together (20 ms apart, the Enter 100 ms
-    later), or a single key: a reading, saved. Only digits closer than 40 ms,
-    3 keys at least with the Enter, are a scanner's. Pins the line."""
+    later), or a single key: a reading, saved. Only digits 40 ms apart or
+    closer, 3 keys at least with the Enter, are a scanner's. Pins the line (a
+    scanner at 35 ms: test_a_digits_only_label_is_a_scan_never_a_weight)."""
     page, open_ = weigh
     open_("net")
     press(page, reading, ms, pauses={len(reading): enter_ms - ms})
@@ -281,10 +283,12 @@ def test_a_fast_typists_digits_stay_a_reading(weigh, reading, ms, enter_ms):
 def test_a_scale_that_types_a_bare_whole_number_reads_as_a_scan(weigh):
     """A scale that types its reading as a bare whole number at scanner speed
     ("645": no '.', no unit, no padding) can't be told from an old digits-only
-    label: it reads as a scan, so nothing is saved (and no wrong weight is
-    either). With a '.', a unit or a Space it stays a weight
-    (test_a_reading_with_its_unit_or_a_space_is_a_weight). Pins the
-    trade-off of Derek's 2026-10-28 call, which he may look at again."""
+    label: it reads as a scan, and no weight is saved from it. The scan path
+    looks a bare number up as a spool id, so a spool with that id joins the
+    scan buffer (in the weigh-out list it takes the focus:
+    test_weigh_out_scan_focus_js's digits test). With a '.', a unit or a
+    Space it stays a weight (test_a_reading_with_its_unit_or_a_space_is_a_weight).
+    Pins the trade-off of Derek's 2026-10-28 call, which he may look at again."""
     page, open_ = weigh
     open_("net")
     press(page, "645", 5)
@@ -909,18 +913,23 @@ def test_another_makers_label_keeps_its_own_prefix(weigh):
     assert s["scans"] == ["SN:4471"] and s["saved"] == [] and s["buffer"] == "", s
 
 
-@pytest.mark.parametrize("label, ms", [("PID:57", 5), ("UID:57", 5), ("BLOC:XL-1", 5), ("HOLD:5", 5),
-                                       ("PROFIL:12", 5), ("PID:57", 200)])
-def test_another_makers_label_ending_in_an_fcc_prefix_stays_whole(weigh, label, ms):
+@pytest.mark.parametrize("label, ms, pauses", [("PID:57", 5, None), ("UID:57", 5, None), ("BLOC:XL-1", 5, None),
+                                               ("HOLD:5", 5, None), ("PROFIL:12", 5, None), ("PID:57", 200, None),
+                                               ("PID:57", 100, {1: 80})])
+def test_another_makers_label_ending_in_an_fcc_prefix_stays_whole(weigh, label, ms, pauses):
     """Another maker's label whose prefix ends in letters FCC reads ("PID:57",
     "BLOC:XL-1"), scanned into the field at a steady pace (a burst scanner, or
-    a slow one at 200 ms a key): it reaches the scan path as printed, and the
-    server answers Unknown Code. RED on b114fd7: it was cut at the FCC prefix
-    ("ID:57", "LOC:XL-1"), and the scan path acted on it (#57 joined the
-    buffer; the buffer moved onto XL-1). A person's letter typed before a scan
-    is still cut off (test_a_unit_or_a_stray_letter_typed_before_a_scan_stays_out_of_it)."""
+    a slow one at 200 ms a key), or unevenly (100 ms a key, 180 ms before the
+    'I': within twice the label's own slowest gap): it reaches the scan path as
+    printed, and the server answers Unknown Code. RED on b114fd7: it was cut at
+    the FCC prefix ("ID:57", "LOC:XL-1"), and the scan path acted on it (#57
+    joined the buffer; the buffer moved onto XL-1). A person's letter typed
+    before a scan is still cut off
+    (test_a_unit_or_a_stray_letter_typed_before_a_scan_stays_out_of_it). The
+    uneven case pins the rule's 2x (round 9: every test typed a label at one
+    pace)."""
     page, open_ = weigh
     open_("gross")
-    press(page, label, ms)
+    press(page, label, ms, pauses=pauses)
     s = _seen(page)
     assert s["scans"] == [label] and s["saved"] == [], (label, ms, s)
