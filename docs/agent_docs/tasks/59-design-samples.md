@@ -7,6 +7,7 @@
 > **Status: `TODO` — filed 2026-10-25 (`/refresh-groups`; Derek approved the grouping the same day: "Ok apply the grouping"). Design-first: nothing is built before Derek picks from pictures.** Whenever Derek wants to look; it blocks nothing.
 > Four looks Derek flagged on his 2026-10-22 text-size walk, plus the older strip-card refactor, made into before / after pictures in one sitting, one item at a time (his format: images in `review-samples/` as clickable links, never a long doc).
 > Code anchors were read on `dev` @ `d4b1ad7` (2026-10-25). Line numbers drift, so re-grep before editing.
+> **⏸️ 2026-10-29: 59.1 and 59.2 wait for the box sit-down** (Derek wants the box-to-toolhead system rethought first; the ⏸️ PENDING DEREK item in `Feature-Buglist.md`): the slot picker may change with it. 59.3–59.5 can go ahead.
 
 ## Items covered (quoted from `Feature-Buglist.md`)
 

@@ -4,7 +4,7 @@
 **Estimated effort:** MEDIUM–LARGE (~8–15 h, 1.5–2 sessions, plus one sample look with Derek). 50.1 ~2–4 h (with (e)) · 50.3 ~1–2 h · 50.4 ~3–6 h · 50.6 ~1–2 h · 50.7 ~1–2 h after the sample · tests and baselines throughout. 50.2 is not built yet (Derek: "more time in the oven"); 50.5 is designed with the phone view ([Group 60](60-phone-and-tags.md)) and not in this estimate.
 **Risk:** **LOW–MEDIUM.** Mostly display (the widget's renderers, its one delegated click handler, the strip CSS). Real hazards: a key handler must never swallow scanner input (50.3 and, app-wide, 50.6), and 50.4's "I loaded it" runs a real load, so it goes through an existing door with its questions intact.
 
-> **Status: `TODO` — filed 2026-10-19 (`/refresh-groups`). Derek's decisions are in (2026-10-19); 50.2 waits in the oven and the group ships without it.** It can start any time.
+> **Status: `IN PROGRESS` — started 2026-10-29 on `feature/group-50-printer-status-polish` (cut from `dev` `f5e068f`). 50.1 (the folded strip, from Derek's two rounds of answers under Decisions) and 50.3 (heads by keyboard) are built; 50.6 and 50.7 are next. ⏸️ 50.4 is held for the box sit-down (Derek, 2026-10-29). 50.2 waits in the oven and 50.5 goes with the phone view; the group ships without them.** Filed 2026-10-19 (`/refresh-groups`).
 > **🔄 2026-10-25 (`/refresh-groups`): re-grounded and grown.** The readability build (merged 2026-10-24, released `main` `97fcf7c`) rewrote Printer Status (each printer a name, an info line, then its tiles in even rows), so every anchor below was re-read on `dev` @ `d4b1ad7`. From Derek's 2026-10-24/25 follow-ups the group gains **50.5** a richer hover card and a tap on touch (design, with the phone view), **50.6** Enter eaten by the scan accumulator on focused buttons (with the app-wide ⌨️ item, same root cause), **50.7** short windows scroll the open widget; and **50.1 absorbs (e)**, the collapsed strip's clean-up, which revisits 46.3's "the strip keeps the full id". **Sample first** for 50.1 and 50.7. (d), a customizable layout, is parked.
 > The first slice of the Printer Status redesign Derek wants: the collapsed strip reads per printer and fits both printers, the tiles work by keyboard, and a head shows quietly when a spool is stored for it but not loaded. Every 2026-10-19 decision and his exact answers: [refresh-2026-10-19.md](refresh-2026-10-19.md).
 > Code anchors were read on `dev` @ `d4b1ad7` (2026-10-25). Line numbers drift, so re-grep before editing.
@@ -30,6 +30,12 @@
   - **50.2:** the "reach the spool on a head" gesture stays in the oven.
   - **50.3:** covered by his keyboard standing order (CLAUDE.md, 2026-10-19).
 - **Derek (2026-10-25), (e):** the strip should read per printer like the expanded view (the name first, its state and 🛑 count, then its heads), and he expected the toolhead-label setting to reach the strip. **Sample first.**
+- **Derek (2026-10-29), on the strip samples** (`review-samples/2026-10-29-printer-status-strip/` on his machine, git-ignored, with the prototype scripts `g50_samples.py` / `g50_weight_samples.py`): *"I love every thing about this new redesign."*
+  - **Printers:** the full name by default, *"but I also want an option to switch it to just use printer ids… (And if id is available on mouse over of the printer, that also works too.)"*
+  - **Weights:** *"I'd like a way to show the weight, either as an option to turn on or off in settings."* Before a print he reads the strip's grams against the slicer's per-tool estimates, and watches for drift on spools not weighed in a while. Then, from `2-weights.png` (A beside the ring, B inside the pill, C under the ring): *"I'd say A and C with an option to choose. Perhaps A as default, but I really like C too. A matches exactly what we currently have on live layout wise. Weight should be on by default, it's kind of the point for me at least, but I can see why someone might not want it on."*
+  - **Every option in the pictures is a setting:** *"I'd like those all surfaced as options in settings if we haven't already."*
+  - **Plain words in Settings:** *"update the listing for the 'XL-3' to just say by ID, or By name, instead, it's a bit ambiguous to anyone outside of my environment… We should also try and avoid my setup specific language in the settings window and help documents."* (Now a CLAUDE.md standing order.)
+- **⏸️ 50.4 held (Derek, 2026-10-29):** he wants the whole box-to-toolhead system rethought at its own sit-down (the ⏸️ PENDING DEREK item); 50.4 builds on its slot bindings, so it waits for that. Its design below stays as the starting point.
 - **Claude's calls (for veto when the screenshots go to Derek):**
   - each printer's group in the strip starts with its name, then its state and 🛑 count, then its heads (Derek's (e)); the sample shows the full name and the short Location ID (`XL` / `RCOI`) side by side for him to pick, since the strip is short of room;
   - **revised 2026-10-25:** the strip's head labels **follow the 46.3 setting** (XL-3 / 3 / Tool 3), as Derek expected; the per-printer grouping keeps "1" on two printers from being confused. (The 2026-10-19 call was "the strip always shows head numbers"; 46.3 kept the strip on the full id on purpose, and that pin flips here, deliberately.) In "3" mode the heads are the ringed numbers of Derek's 2026-10-19 answer; in "XL-3" / "Tool 3" mode the sample shows how the ring carries over;
@@ -61,13 +67,15 @@
 - **Overflow (Derek):** when the strip is wider than the window, switch to **one row per printer** (each group on its own line, names aligned) rather than a ragged wrap; if one printer's row is still too wide, that row **scrolls sideways**.
 - `data-toolhead` stays the full id, so clicks and every test that selects by it are unaffected.
 - Measure the real width at 1600×1300 and at 1024 px, at every Text size, before and after (bounding boxes, not arithmetic).
+- **Built 2026-10-29.** Three settings in Settings → 🖥️ This Browser (client fields in `config_schema.py`), each applied the moment it is picked with no Save (a scan never picks, titlebar_prefs.js's rule): `fcc.printerStatus.toolheadLabel` By ID / By number / By Tool + number (its old values `XL-3` / `3` / `Tool 3` rewritten at load), `fcc.printerStatus.printerName` By name / By ID (the heartbeat's `printer_status` gives each printer its `id`, the Printer row's LocationID, from the row that lists its first head; hovering a name shows both), and `fcc.printerStatus.stripWeight` Beside each toolhead (default) / Under each toolhead / Off. A spool of unknown weight reads "---" in a plain ring, never a red "0g". Measured on dev's real page, read-only, at 1600 px Standard: 54 px with number labels and the grams beside, 88 px (a line per printer) with ID labels, 69 px with the grams under (the old strip: 110 px). `_fitStrip` measures it after a render, a resize, a Text size change, a 🛑 count change and on folding. Pinned by `tests/test_printer_status_strip_50.py` (31 tests; 25 of its first 26 red on the base).
 
-### 50.3 — tiles by keyboard (standing order)
+### 50.3 — tiles by keyboard (standing order) — built 2026-10-29
 - `tabindex="0"` and `role="button"` on tiles and strip heads; a visible focus ring.
 - Enter / Space opens the head, by extending `_wireDelegation`'s existing `keydown` (never per-render listeners: the L361 click-loss lesson), which already does the scanner-safe part for the ▲▼: act only when a tile or head itself has focus, leave a scan's Enter to the accumulator (`window.enterIsAScan()`), then `stopImmediatePropagation` and clear the scan buffer. If 50.6 lands first, Enter on a focused tile may need nothing beyond `role="button"` semantics plus Space.
 - Tooltip: "click to open XL-3 (its assignments and Quick-Swap)".
+- **Built:** every tile and strip head has `tabindex="0"` and `role="button"`; Enter or Space on one opens the head (`_wireDelegation`'s keydown; a scan's Enter, `enterIsAScan`, and a Space inside a label, `scanIsArriving`, stay the scan's); a focused head keeps the focus through a heartbeat's repaint; a visible focus ring; the tile tooltips end "Click to open XL-3: what it holds, and its Quick-Swap slots."; the reach is in the ? shortcut list.
 
-### 50.4 — "stored, not loaded", quietly
+### 50.4 — "stored, not loaded", quietly (⏸️ held for the box sit-down, Derek 2026-10-29)
 - **What counts (derived; no new record, no move-engine change):** a multi-slot Dryer Box slot whose binding is this head holds a spool that is not on any head. Exclude single-slot boxes (their slot-1 binding is the lifecycle attachment: their spool IS on the head) and Printer Pool slots (they feed no one head). Several such slots for one head: show the count and list them in the hover text.
 - **Where:** the expanded tile gets a quiet line, e.g. "📦 #57 waits in LR-MDB-1 slot 2 · I loaded it". The collapsed strip has little room (Derek): a small mark on the head (a dot or 📦), its details in the hover text; show Derek a screenshot and take his pick.
 - **"I loaded it":** runs the normal load of that slot's spool onto the head, the Quick-Swap tap's door (`/api/quickswap`, with Group 51.5's `expected_spool`), so it asks exactly as a Quick-Swap tap does (a printing head, a head running another spool) and Undo covers it. Never a load without his tap: FCC can't see what is physically on the head.
@@ -81,6 +89,33 @@
 ### 50.6 — Enter on a focused button (app-wide)
 - In the accumulator's keydown (`scripts.html:279`), when the target is (or is inside) a `button`, `a[href]` or `[role="button"]` and `window.enterIsAScan()` says no scan is arriving, let the Enter through (no `preventDefault`) and clear the one stray character the scan buffer may hold; a scan's Enter still goes to the accumulator as today. Then retire the widget's own ▲▼ workaround (`inv_printer_status.js:784-794`) or keep it as harmless.
 - Check the dialogs that already answer their focused button on Enter (CLAUDE.md, "Keyboard nav idiom") still get one Enter, not two.
+
+- **The inventory (2026-10-29, read-only workflow: 60 key handlers, every Swal, mountOverlay, Bootstrap; the full rows are in
+  `review-samples/2026-10-29-printer-status-strip/enter_inventory_50_6.txt` on Derek's machine).** One press is safe: every
+  workaround that presses its own focused button calls preventDefault and stops the event, so none double-fires. **A held
+  Enter is not:** Chrome clicks a focused button on each auto-repeat, so presses that do nothing today could land on the
+  next dialog under the key: the printing yes/no (`confirmActivePrint`, Continue Anyway focused: it could disrupt a print),
+  the Quick-Swap confirm, the slot picker's ⭐, the bind-a-slot picker's first row, the record-source pick. **The plan:**
+  - A. The accumulator (`scripts.html`, Enter branch, before the buffer is touched): when the TARGET itself is a `button`,
+    `a[href]` or `[role="button"]` and `enterIsAScan()` is false, drop the buffer and skip processScan; leave the default
+    (the browser's click) only when `!e.repeat`, no scan waits in `state.scanQueue`, the target is in the top mounted
+    overlay (`isTopOverlay`; with none mounted, `!scanFrozen()`), it isn't in a closing Bootstrap modal / offcanvas, and in
+    a gating dialog only while `isGatingModalOnScreen(id)`; otherwise preventDefault, as today.
+  - B. One capture-phase window keydown guard at the top of `inv_core.js`: an auto-repeated Enter outside a TEXTAREA does
+    nothing (scanners never auto-repeat). It covers `confirmActivePrint`, the Quick-Swap confirm, the bind-picker search,
+    the slot picker, the record-source pick, the tree picker and the Low stock list at once (the per-handler `e.repeat`
+    guards are the alternative). Plus: the Quick-Swap grid's Enter follows the focus, not a stale `.kb-active` tile (a
+    hidden highlight could take any button's Enter in `#manageModal`); Sweep Unused Tags opens on Cancel; Enter kept off
+    `inv_config.js`'s `confirm()` remove / purge buttons; the location editor's Enter branch calls preventDefault itself;
+    `vendorEditSave` gets an in-flight latch.
+  - C. Tests: a person's Enter on a button clicks once; a scan's Enter on a button clicks nothing and reaches processScan
+    whole; a repeated Enter clicks nothing; Enter behind an overlay or on a fading `#confirmModal` does nothing; a held
+    Enter on "🔗 Bind a Slot…" binds nothing; the location editor saves once.
+  - Then retire the redundant workarounds (`inv_printer_status.js`'s ▲▼ Enter, the "Close without saving?" Enter branch,
+    a few `.click()` calls) once the run is green.
+  - **For Derek (defaults if he doesn't answer: as today):** the printing yes/no could open on Cancel instead of Continue
+    Anyway (the three-way already opens on its safe answer); the config import and the label-reprint prompt open on their
+    Apply / Yes, so after 50.6 one Enter applies them.
 
 ### 50.7 — short windows (sample first)
 - Options for Derek, as pictures at 1280×800 Large and 1366×768 Standard: (a) leave it (he accepted the length); (b) a tighter info line or tiles on short windows; (c) open collapsed by default on a short window; (d) let the widget take more of the window there, at the deck's expense (the deck's QR codes must stay on screen, DESIGN.md `:129`). Default: (a).
@@ -108,7 +143,7 @@
 
 ## Open questions
 
-- **50.1:** the full name or the short Location ID at the head of each strip group; how the ring looks in "XL-3" / "Tool 3" label modes (the sample).
+- **50.1:** ✅ answered 2026-10-29 (two rounds; Decisions above) and built.
 - **50.4, derived mark vs a record:** show the mark for every stored-but-not-loaded slot (derived, the default above), or only after a mid-print "Just store it" (a small record)? Decide from how it looks with his real data; ask Derek with a screenshot if the derived mark shows on slots he prepped on purpose.
 - **50.4 on the collapsed strip:** what the small mark looks like (Derek: "open to other ideas, since the collapsed strip has little room").
 - **50.2:** the gesture (right-click / long-press, a small spool button, 50.5's tap card, or both); still in the oven.

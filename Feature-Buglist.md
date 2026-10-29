@@ -10,9 +10,10 @@
 > Derek's standing ask: *surface this section whenever he asks what's pending, even if he's asked
 > about something else.* He'll get to it; he doesn't know when.
 
-* **⏸️ PENDING DEREK — after your next finished print and your next cancelled print, say "check 56.7" (Group 56 is on prod since 2026-10-26; Claude removes this item once (2) is done).**
-  (1) ✅ Prod updated to `main` `1d9cae4` (Derek, 2026-10-26; prod's files checked the same evening). (2) After
-  your next **completed** print and your next **cancelled** print (the first ones on firmware 8.0), tell Claude
+* **⏸️ PENDING DEREK — after your next cancelled print, say "check 56.7" (the finished print checked out 2026-10-29; Group 56 is on prod since 2026-10-26; Claude removes this item once (2) is done).**
+  (1) ✅ Prod updated to `main` `1d9cae4` (Derek, 2026-10-26; prod's files checked the same evening). (2) ✅ **The
+  completed half, 2026-10-29:** the XL's first finished print since 8.0.0 and Group 56 (job 730) was charged right
+  (Claude read prod's ledger and log). Still to come: after your next **cancelled** print, tell Claude
   "check 56.7": it reads prod's deduct records itself; nothing for you to compare. (3) If the
   Activity Log ever shows "FCC's G-code walk of … came to … against the slicer's …", tell Claude: FCC may be
   misreading that file.
@@ -119,7 +120,7 @@
   head in FCC before resuming; once the print ends, 🛑 Review should show a "spool changed mid-print" card with
   each spool's share (weighing both spools before and after makes it a scale check, optional). **Joined spool
   (SpoolJoin):** the item above. Either way, tell Claude what happened (or that the printer didn't pause).
-* **⏸️ PENDING DEREK — branch cleanup session.** 11 branches are fully merged into `dev` and could be
+* **⏸️ PENDING DEREK — branch cleanup session: say "delete them on GitHub" (the rest is done, 2026-10-29).** Derek, 2026-10-29: *"If were done with them, and don't need them to address a pending item for me, then we can probably clean them up."* Two independent checks found all 35 branches below wholly on `dev` (every commit; the GitHub copies too), none in a worktree, stash or tag, and no pending item or design that needs one: your Bulk Moves and mid-print tests run on the released app, and new work branches from `dev`. **Deleted on this PC 2026-10-29** (a list of each name and its commit, to bring any back, is `review-samples/branches-deleted-2026-10-29.txt`). **The 26 copies on GitHub are still there:** Claude Code's auto mode stopped the push that deletes them, so it waits for you to say "delete them on GitHub" (or allow it). _The original list:_ 11 branches are fully merged into `dev` and could be
   deleted (4 of them also on `origin`): `feature/bulk-move-panel-affordance`, `feature/bulk-moves-l298`,
   `feature/bulk-moves-l298-p1`, `feature/group-34-location-tree-cluster`,
   `feature/group-36-attribute-force-reset-data-loss`, `feature/group-38-hermeticity-residuals`,
@@ -144,7 +145,42 @@
   `feature/group-45-sweep-hygiene` (local only).
   **Added 2026-10-29 (merged into `dev`):** `feature/group-57-low-stock-at-a-glance` (`90ba651`) and
   `feature/group-61-scanner-safe-dialogs` (`438ab3f`), both on `origin`.
-* **⏸️ PENDING DEREK — lay out and label the INDX spool holders (and the 8-spool box; maybe the XL's holders).**
+* **⏸️ PENDING DEREK — a sit-down on the box-to-toolhead system: has it grown bigger than it needs to be? (Derek, 2026-10-29; nothing here blocks a release.)**
+  In his words: *"maybe, the whole box to a toolhead system has become a bit too big and more complicated than it needs
+  to be. I don't really want to gut all the work we've done on it, but its complexity definitely makes it more of a
+  hassle for things… I feel there's some friction in the process and system here that may have just come from stuff
+  that sounded like a cool idea at the time, but maybe doesn't hold up long term. I don't know. I think we file this
+  whole box thing for a later re-hash and its own sit down together to think this over between the two of us."*
+  **What today's model doesn't fit:** on the INDX, spools sit on holders on both sides (in Prusa USS dryboxes) **or**
+  come from the 8-slot dryer box under the printer ("INBXX"), either/or: the box isn't connected while a USS drybox is,
+  and he switches by hand (pulls the filament and drybox off the head, runs the PTFE tube from the box into the Core
+  One). He hasn't decided how he'll run either. PolyDryers fit *"to some extent"*, but he usually runs a PTFE tube from
+  the box slot that feeds the head into the PolyDryer, so the XL has the same either/or: "which feeder is connected to
+  this head right now" is a general question, not an INDX one.
+  **Until the sit-down (Claude's call):** nothing new is built on the box system; bug fixes that keep today's data safe
+  still go ahead. Held for it (a sweep of the buglist and the queued groups, 2026-10-29):
+  - Group 50.4, a head's "stored, not loaded" mark with "I loaded it";
+  - Group 59.1 / 59.2, the slot picker's printer-mode layout and its Swap / Overwrite / Back panel;
+  - Group 37.5, a "Spool Holder" type (storage on the printer), and 37.7, a Return chooser across two boxes feeding
+    one head;
+  - the INDX holders layout (the item below) and "assigning spools to INDX heads and holders without labels";
+  - a slot→toolhead setup step and "re-map slots from the picker" (Group 40 leftovers), and the leftovers' engine notes;
+  - what Max Spools "0" means; a one-spool box (PolyDryer) that takes a second spool; a Bulk Move into a box that puts
+    every spool in with no slot;
+  - the bound-slot scan reading the head twice (a speed fix inside auto-deploy);
+  - the Location Manager redesign's slot grids (design step 3, milestone 6);
+  - Group 42's PolyDryer hands-on checks (never filed here; at the sit-down, file the ones that survive).
+  Your hands-on checks of today's box features (S1–S7, C1–W2 and the box rows of the mid-print session) are optional
+  until then: running a few is good prep, since they show what feels heavy.
+  **Claude prepares, before it:** a one-page map of today's box system in plain words, with pictures (each part and
+  what it does); how often you really use each part (prod's Activity Log, read-only, with Group 45.7's count of stale
+  trails); and the friction already on record, e.g. a PolyDryer's one binding has two editors (its Feeds slot 1, and
+  Quick-Swap's "attached, follows #N"). Limits on any change: retiring a box extra keeps its values (no casual
+  `force_reset` in setup_fields), and dev's box bindings are your hand-made state, so a prototype on dev needs your OK.
+  Related: the Group 37 / 44 design sit-down (what identifies a location and a printer). One small call for you then:
+  delete the old `feeder_map` boot import first (dead on dev and prod; if the bindings change shape, it would write the
+  old one back).
+* **⏸️ PENDING DEREK — lay out and label the INDX spool holders (and the 8-spool box; maybe the XL's holders).** _(⏸️ Waits for the box sit-down above (2026-10-29): it may change how holders are set up.)_
   _(Derek, 2026-10-19, answering the refresh's holder question.)_ Setting them up in FCC as a box with one slot per
   holder (no code) is *"possibly the way to go"*, but it is his grunt work and design first:
   - **4 holders on each side** of the INDX, each holding nothing, a spool, or a **USS Prusa drybox** (it works like a
@@ -244,7 +280,7 @@
   new per-head usage data goes only to Prusa's cloud service, which has no public API. 8.0's OpenPrintTag reader is
   CORE One / L only for now; it adds to a tag's `consumed_weight` every 5 minutes and at print end (cancels too) and
   unload, so once a reader printer writes a tag, FCC's own tag writes must add deltas, never overwrite (an absolute
-  write is fine while none of Derek's printers write tags). **Standalone.** **2026-10-26:** every printer is on 8.0 (Derek), and prod's last deducts (to 2026-10-24) still show 8.3 names, so the next completed and cancelled prints are the first on 8.0, and they run Group 56's code (released `main` `1d9cae4`). Claude reads prod's ledger afterwards (read-only); nothing for Derek to compare. The run-out half is the ⏸️ PENDING DEREK swap item.
+  write is fine while none of Derek's printers write tags). **Standalone.** **2026-10-26:** every printer is on 8.0 (Derek), and prod's last deducts (to 2026-10-24) still show 8.3 names, so the next completed and cancelled prints are the first on 8.0, and they run Group 56's code (released `main` `1d9cae4`). Claude reads prod's ledger afterwards (read-only); nothing for Derek to compare. The run-out half is the ⏸️ PENDING DEREK swap item. **2026-10-29, the completed half checked (prod, read-only):** the XL's first finished print on 8.0.0, job 730 (`/usb/SPACER~1.BGC`, 10:42), was charged from its footer at completion, 179.6 g across XL-1 (#270, 68.8 g), XL-4 (#242, 98.2 g) and XL-5 (#230, 12.6 g), one ledger entry (scale 1.0), no WARNING. Each spool's weight at the start was exactly what the last logged write left (234.6, 284.2 and 163.2 g), and the grams are in line with the earlier spacer prints (job 729, 2026-10-22: 177.5 g on the same heads). The file is still reported by its **8.3 name**, so 8.0.0's long-name change didn't reach the path PrusaLink's job reports (`file.refs.download`), and FCC needed nothing; it also means an 8.3 name in the ledger doesn't tell which firmware a print ran on. If a long name ever shows up there, check the download: `prusalink_api._download_file_bytes` puts the path into the URL as it is, so a '#' or '?' in a name breaks it unless PrusaLink escapes the path itself. **The cancel half waits** for the next cancelled print (the 2026-10-22 INDX cancels, jobs 1130 to 1133, ran before Group 56 reached prod).
 * **📋 Other modules still put outside text into the Activity Log unescaped (found 2026-10-26 by Group 56's
   review).** Group 56.4 escaped every filename, exception and Spoolman error in the deduct and monitor lines
   (`print_deduct._esc`, an AST canary in `tests/test_deduct_accuracy_56.py`), but about 20 lines in
