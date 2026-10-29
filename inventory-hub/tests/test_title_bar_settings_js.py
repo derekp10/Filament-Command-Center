@@ -46,6 +46,15 @@ def test_the_two_fields_are_browser_settings_with_their_defaults():
         "client", "client", "select", "Low and Out", ["Low and Out", "One number"])
 
 
+def test_when_the_bar_is_full_is_a_browser_setting_that_shortens_by_default():
+    """Derek, 2026-10-29, on the bar short of room: "I like both, if we could
+    option it": the title shortened (option (c), as 57.3 built it, the
+    default) or a second line."""
+    full = config_schema.get_field("fcc.titleBar.full")
+    assert (full.section, full.scope, full.type, full.default, full.choices) == (
+        "client", "client", "select", "Shorten the title", ["Shorten the title", "Take a second line"])
+
+
 # A localStorage the page can use (set_content leaves it on about:blank, where
 # the real one is refused): `data`, or one that throws.
 STORE_JS = """(data) => { Object.defineProperty(window, 'localStorage', { configurable: true, get: () => {
@@ -71,11 +80,27 @@ def test_the_head_script_puts_both_settings_on_the_page_before_it_draws(isolated
     assert got == want, (stored, got)
 
 
+@pytest.mark.parametrize("stored, want", [
+    ({}, "shorten"),
+    ({"fcc.titleBar.full": "Take a second line"}, "wrap"),
+    ({"fcc.titleBar.full": "take a second line"}, "shorten"),
+    (None, "shorten"),
+])
+def test_the_head_script_puts_when_full_on_the_page_before_it_draws(isolated_page, stored, want):
+    page = isolated_page
+    page.set_content("<!doctype html><html><head></head><body></body></html>")
+    page.evaluate(STORE_JS, stored)
+    page.add_script_tag(content=_boot_script())
+    assert page.evaluate("() => document.documentElement.getAttribute('data-fcc-tb-full')") == want, stored
+
+
 SELECTS = """<!doctype html><html><head></head><body>
 <select class="cfgset-input" data-key="fcc.titleBar.buttons" data-initial="Automatic">
   <option>Automatic</option><option>Always words</option><option>Always icons</option></select>
 <select class="cfgset-input" data-key="fcc.lowStock.count" data-initial="Low and Out">
   <option>Low and Out</option><option>One number</option></select>
+<select class="cfgset-input" data-key="fcc.titleBar.full" data-initial="Shorten the title">
+  <option>Shorten the title</option><option>Take a second line</option></select>
 </body></html>"""
 
 
@@ -107,7 +132,16 @@ def test_a_pick_applies_at_once_is_stored_and_tells_the_title_bar(prefs):
     assert seen["attrs"] == ["icons", "one"]
     assert seen["store"] == {"fcc.titleBar.buttons": "Always icons", "fcc.lowStock.count": "One number"}
     assert [(e["pref"], e["value"]) for e in seen["events"]] == [("buttons", "icons"), ("count", "one")]
-    assert seen["initial"] == ["Always icons", "One number"], "stored already: Save has nothing left to do"
+    assert seen["initial"] == ["Always icons", "One number", "Shorten the title"], (
+        "stored already: Save has nothing left to do")
+
+
+def test_take_a_second_line_applies_at_once_and_is_stored(prefs):
+    _pick(prefs, "fcc.titleBar.full", "Take a second line")
+    seen = prefs.evaluate("""() => ({ attr: document.documentElement.getAttribute('data-fcc-tb-full'),
+        store: window.__store, events: window.__events })""")
+    assert seen["attr"] == "wrap" and seen["store"] == {"fcc.titleBar.full": "Take a second line"}, seen
+    assert [(e["pref"], e["value"]) for e in seen["events"]] == [("full", "wrap")], seen
 
 
 def test_a_scan_typed_on_the_select_picks_nothing(prefs):
@@ -274,8 +308,9 @@ def test_low_and_out_keep_their_space_around_the_pills(bar):
 
 
 @pytest.mark.parametrize("stored, want", [
-    ({}, ["auto", "both"]),
-    ({"fcc.titleBar.buttons": "Always icons", "fcc.lowStock.count": "One number"}, ["icons", "one"]),
+    ({}, ["auto", "both", "shorten"]),
+    ({"fcc.titleBar.buttons": "Always icons", "fcc.lowStock.count": "One number",
+      "fcc.titleBar.full": "Take a second line"}, ["icons", "one", "wrap"]),
 ])
 def test_without_the_head_script_the_module_puts_the_settings_on(isolated_page, stored, want):
     """A page built without dashboard.html's <head> script still shows the
@@ -286,7 +321,8 @@ def test_without_the_head_script_the_module_puts_the_settings_on(isolated_page, 
     page.evaluate(STORE_JS, stored)
     page.add_script_tag(content=(MODULES / "titlebar_prefs.js").read_text(encoding="utf-8"))
     got = page.evaluate("""() => [document.documentElement.getAttribute('data-fcc-tb-buttons'),
-                                  document.documentElement.getAttribute('data-fcc-low-count')]""")
+                                  document.documentElement.getAttribute('data-fcc-low-count'),
+                                  document.documentElement.getAttribute('data-fcc-tb-full')]""")
     assert got == want, (stored, got)
 
 

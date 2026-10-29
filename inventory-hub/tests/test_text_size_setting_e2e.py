@@ -455,6 +455,31 @@ def test_the_title_gives_way_without_running_under_the_buttons(page: Page, base_
     assert b["version"] == "whole", f"{name} @ {width} px: the version badge is squeezed or gone: {b}"
 
 
+@pytest.mark.parametrize("width", (1180, 1280))
+def test_take_a_second_line_keeps_the_title_whole(page: Page, base_url: str, width):
+    """Settings -> When the title bar is full on Take a second line (Derek,
+    2026-10-29: "I like both, if we could option it"): at Extra Large, where
+    the default shortens the title ("F…" at 1180 px, "Filament C…" at 1280),
+    the bar takes a second line, the title whole with the whole badge beside
+    it; on his 1600 px window, where the title fits, nothing changes."""
+    _read_only(page)
+    fixed_title_counts(page)
+    _store(page, "Extra Large")
+    page.add_init_script("(() => { try { localStorage.setItem('fcc.titleBar.full', 'Take a second line'); }"
+                         " catch (e) {} })();")
+    page.set_viewport_size({"width": width, "height": 900})
+    _load(page, base_url)
+    _counts_painted(page)
+    nav = page.evaluate(NAV_JS)
+    b = page.evaluate(BRAND_JS)
+    assert b["below"] and nav["title"] == "whole" and nav["version"] == "whole", (width, nav, b)
+    assert nav["verText"].startswith("commit "), f"on two lines the badge is whole: {nav}"
+    page.set_viewport_size({"width": 1600, "height": 900})
+    page.wait_for_timeout(400)
+    nav = page.evaluate(NAV_JS)
+    assert nav["navH"] == 70 and nav["title"] == "whole", nav
+
+
 DECK_JS = """() => {
     const q = (s) => document.querySelector(s);
     const main = q('.main-container').getBoundingClientRect();

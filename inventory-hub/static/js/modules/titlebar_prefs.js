@@ -15,11 +15,16 @@
  *    window's own words and count pills ("Low [1] Out [11]"), or the two added
  *    up ("Low stock (12)", or "⚠️ 12" without the words). inv_stock.js paints
  *    both.
+ *  - "When the title bar is full" ('fcc.titleBar.full'): Shorten the title
+ *    (default) / Take a second line. What the bar does when, with its other
+ *    steps taken, the whole title still doesn't fit (titlebar_fit.js): the
+ *    title ends in "…", or the bar takes a second line (Derek, 2026-10-29: "I
+ *    like both, if we could option it").
  *
- *  - dashboard.html's <head> applies both before the first paint (a tiny inline
- *    script, #fcc-title-bar-boot): data-fcc-tb-buttons (auto / words / icons)
- *    and data-fcc-low-count (both / one) on <html>. Keep its maps the same as
- *    PREFS below.
+ *  - dashboard.html's <head> applies them before the first paint (a tiny inline
+ *    script, #fcc-title-bar-boot): data-fcc-tb-buttons (auto / words / icons),
+ *    data-fcc-low-count (both / one) and data-fcc-tb-full (shorten / wrap) on
+ *    <html>. Keep its maps the same as PREFS below.
  *  - global.css turns the attributes into the look ("Title bar"), and
  *    titlebar_fit.js fits the bar again on a change (the `fcc:title-bar` event).
  *  - This module changes them LIVE: a pick in Settings applies and stores it,
@@ -36,6 +41,11 @@
         count: Object.freeze({
             key: 'fcc.lowStock.count', label: 'Low stock count', def: 'Low and Out', attr: 'data-fcc-low-count',
             map: Object.freeze({ 'Low and Out': 'both', 'One number': 'one' }),
+        }),
+        full: Object.freeze({
+            key: 'fcc.titleBar.full', label: 'When the title bar is full', def: 'Shorten the title',
+            attr: 'data-fcc-tb-full',
+            map: Object.freeze({ 'Shorten the title': 'shorten', 'Take a second line': 'wrap' }),
         }),
     });
     const _known = (p, name) => typeof name === 'string' && Object.prototype.hasOwnProperty.call(p.map, name);

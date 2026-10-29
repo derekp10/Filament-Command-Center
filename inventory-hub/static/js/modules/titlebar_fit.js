@@ -25,7 +25,10 @@
 // would run under the buttons (Extra Large in a window under about 1130 px;
 // review of 57.3: the buttons still fitted, so the bar stayed on one line with
 // the badge's date drawn under the Spoolman light); on two lines the badge is
-// whole again.
+// whole again. With Settings -> When the title bar is full on Take a second
+// line (titlebar_prefs.js; Derek, 2026-10-29: "I like both, if we could option
+// it"), the bar takes it as soon as the title would be cut with every step
+// taken, and the title is never shortened.
 // Below 992 px the buttons have a line of their own, and the spacing, icon and
 // ADD steps are plain CSS: nothing here.
 // Loaded right after the bar (dashboard.html), so it fits before the first paint.
@@ -34,9 +37,9 @@
 // took a step (or gave one back) on every load, ADD INVENTORY reading ADD and
 // every button moving 80 px (round 3). So the bar remembers the steps it took
 // (localStorage `fcc.titleBar.fit`, by the window's width, the Text size and
-// the two title-bar settings, whose labels change the width), and while a
+// the title-bar settings, which change the width or the steps), and while a
 // count is still on its placeholder (`data-count-pending`, dashboard.html;
-// each count's painter removes it) it takes at least those, when all four are
+// each count's painter removes it) it takes at least those, when all of them are
 // the same as then. The placeholders are
 // no wider than a count, so they never need a step the counts don't: a load
 // whose counts take the steps they took last time doesn't move.
@@ -69,9 +72,12 @@
 
     const root = document.documentElement;
     const sizeName = () => root.getAttribute('data-fcc-text-size') || 'standard';
-    // The two title-bar settings (titlebar_prefs.js), as one memo key.
+    // The title-bar settings (titlebar_prefs.js), as one memo key.
     const modeName = () => (root.getAttribute('data-fcc-tb-buttons') || 'auto') + '|'
-        + (root.getAttribute('data-fcc-low-count') || 'both');
+        + (root.getAttribute('data-fcc-low-count') || 'both') + '|'
+        + (root.getAttribute('data-fcc-tb-full') || 'shorten');
+    // When the title bar is full: a second line rather than a shortened title.
+    const wrapsWhenFull = () => root.getAttribute('data-fcc-tb-full') === 'wrap';
     // The steps, in their order: the icon step only with Automatic (Always
     // words and Always icons fix the look).
     const steps = () => ((root.getAttribute('data-fcc-tb-buttons') || 'auto') === 'auto'
@@ -183,7 +189,8 @@
                 level += 1;
             }
             if (level === order.length && cut(need)) bar.classList.add(CUT);
-            if (level === order.length && actions && (least > order.length || overflowing() || crowded())) {
+            if (level === order.length && actions
+                && (least > order.length || overflowing() || crowded() || (wrapsWhenFull() && cut(need)))) {
                 // On two lines the title has a line of its own, and the whole badge
                 // its place beside it, as below 992 px: the badge never goes (57.3).
                 bar.classList.remove('fcc-tb-shortver', CUT);

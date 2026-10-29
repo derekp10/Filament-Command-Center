@@ -10,7 +10,7 @@
 > Derek's standing ask: *surface this section whenever he asks what's pending, even if he's asked
 > about something else.* He'll get to it; he doesn't know when.
 
-* **⏸️ PENDING DEREK — finish the 2026-10-26 release (Group 56; Claude removes this once (2) is done).**
+* **⏸️ PENDING DEREK — after your next finished print and your next cancelled print, say "check 56.7" (Group 56 is on prod since 2026-10-26; Claude removes this item once (2) is done).**
   (1) ✅ Prod updated to `main` `1d9cae4` (Derek, 2026-10-26; prod's files checked the same evening). (2) After
   your next **completed** print and your next **cancelled** print (the first ones on firmware 8.0), tell Claude
   "check 56.7": it reads prod's deduct records itself; nothing for you to compare. (3) If the
@@ -620,6 +620,7 @@ All 3 of these things are important and have value. We should table for now, and
   Group 57 fixed it for the ⚠️ Low stock buttons only (`inv_stock.js` takes a lone space back out of the buffer when
   Space pressed them). The general fix is for the accumulator to skip a Space aimed at a button, which is its own
   change to the scan path and wants its own tests.
+* **🔎 Scanner-OK fields: a field that takes the scans meant for it (Derek, 2026-10-29).** _(An idea, standalone: "if it makes sense"; he is fine dropping it.)_ Today a scan with the focus in a field is either sent to the scan path (the weight boxes, the Low stock filter, and from Group 61 the location editor's Name box) or typed in as the field's text. The idea: a field says which scans it takes, and only those fill it while it has the focus; anything else goes to the scan path. Example: the Prusament URL field in the create-spool flows takes a scanned Prusament URL (no copying it from a web page opened elsewhere), while scanning a Prusament label anywhere else keeps today's flow (FCC sees the spool isn't known and offers to add it). One declaration per field (say `data-fcc-scan-accepts="prusament-url"`) read by the one field capture (`installFieldScanCapture`), so a new field opts in without new code. Derek: "I don't want to get too rigid with things because sometimes things just work in an unexpected way, and it turns out to be a really good unintended feature."
 * **⌨️ Four older dialogs answer a scan's Enter as a person's.** _(**Next after Group 57**, Derek 2026-10-28: "a priority after we get this group … done"; before the phone work, which leans on scanning too. It must work out of the box with any scanner, no special line ending: "I wanted this to work out of the box with little modifications for anyone wanting to use it.")_ _(Found 2026-10-27 by the Group 57 review, round 5,
   reproduced on dev, read-only; older than Group 57, so not fixed on its branch.)_ The standing order asks a handler
   that acts on an Enter to leave a scan's Enter to the scan accumulator (`window.enterIsAScan()`); these don't:

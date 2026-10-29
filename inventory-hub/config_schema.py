@@ -147,6 +147,17 @@ CONFIG_SCHEMA = [
                "Low stock window's tabs show them (Low 1, Out 11). One number: the two added up "
                "(Low stock (12), or ⚠️ 12 with no room for the words). Excluded filaments never "
                "count. It changes as soon as you pick it, with no Save needed."),
+    # Derek, 2026-10-29, on the bar short of room: "I like both, if we could
+    # option it". The default is option (c), as built in 57.3.
+    Field("fcc.titleBar.full", "When the title bar is full", "select", "Shorten the title",
+          section="client", scope="client",
+          choices=["Shorten the title", "Take a second line"],
+          help="What the title bar does when, with its other space savers taken (tighter "
+               "spacing, the icons, ADD, the version badge's date alone), the whole title still "
+               "doesn't fit. Shorten the title keeps one line: the title ends in … and its full "
+               "name is its tooltip. Take a second line keeps the title whole and puts the buttons "
+               "on a line of their own, which takes some room from the panels below on a small "
+               "screen. It changes as soon as you pick it, with no Save needed."),
     Field("fcc.bulkMove.enabled", "Enable Bulk Moves", "bool", False,
           section="behavior", scope="server",
           help="Show the 🔀 Bulk Move affordances and accept bulk-move scans. "

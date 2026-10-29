@@ -455,8 +455,10 @@ def test_the_bar_keeps_last_times_steps_until_the_counts_come(isolated_page):
     s = _width(page, edge)
     assert s["steps"], s
     memo = _memo(page)
-    assert memo == [{"w": page.evaluate("() => window.innerWidth"), "size": "standard", "mode": "auto|both",
-                     "level": len(s["steps"])}], memo
+    # PIN UPDATED DELIBERATELY (2026-10-29): the settings key gained When the
+    # title bar is full ("auto|both|shorten").
+    assert memo == [{"w": page.evaluate("() => window.innerWidth"), "size": "standard",
+                     "mode": "auto|both|shorten", "level": len(s["steps"])}], memo
     store = page.evaluate("() => window.__store")
 
     first = _load(page, {}, edge)                    # never here before: fitted to the placeholders
@@ -694,12 +696,13 @@ def test_below_992_px_the_script_takes_no_step(bar):
 
 # --- Group 57.3: the settings ----------------------------------------------------------
 
-def _set(page, buttons=None, count=None):
+def _set(page, buttons=None, count=None, full=None):
     """A title-bar setting changed (titlebar_prefs.js puts it on <html> and
     says so with fcc:title-bar)."""
-    page.evaluate("""([b, c]) => { const r = document.documentElement;
+    page.evaluate("""([b, c, f]) => { const r = document.documentElement;
         if (b) r.setAttribute('data-fcc-tb-buttons', b); if (c) r.setAttribute('data-fcc-low-count', c);
-        document.dispatchEvent(new CustomEvent('fcc:title-bar')); }""", [buttons, count])
+        if (f) r.setAttribute('data-fcc-tb-full', f);
+        document.dispatchEvent(new CustomEvent('fcc:title-bar')); }""", [buttons, count, full])
     _settle(page)
 
 
@@ -775,6 +778,40 @@ def test_each_setting_keeps_its_own_memo(isolated_page):
     store = {MEMO: json.dumps(_memo(page))}
     assert _load(page, store, edge)["steps"] == want
     assert _load(page, store, edge, attrs={"data-fcc-tb-buttons": "words"})["steps"] == []
+    assert _load(page, store, edge, attrs={"data-fcc-tb-full": "wrap"})["steps"] == []
+
+
+@pytest.mark.parametrize("size", (None, "xlarge"))
+def test_take_a_second_line_never_shortens_the_title(bar, size):
+    """Settings -> When the title bar is full on Take a second line (Derek,
+    2026-10-29: "I like both, if we could option it"): with every step taken
+    and the title still too wide, the bar takes its second line, the title
+    whole with the whole badge beside it, where Shorten the title (the
+    default) cuts it. Swept from a whole title down to 900 px: on one line the
+    title is never cut and the steps still come in their order first
+    (_check); the second line comes exactly where the default starts cutting
+    the title, and a switch back cuts it there again (fcc:title-bar)."""
+    if size:
+        bar.evaluate("""(s) => { document.documentElement.setAttribute('data-fcc-text-size', s);
+            document.dispatchEvent(new CustomEvent('fcc:text-size')); }""", size)
+    bar.evaluate(COUNTS_LAND)
+    _settle(bar)
+    cut_from = _widest(bar, lambda s: s["cut"] or s["wrap"], 900, 1900)   # the default's first cut
+    _set(bar, full="wrap")
+    seen = set()
+    for px in range(1500, 899, -3):
+        s = _check(bar, px)
+        if s["wrap"]:
+            assert not s["cut"] and s["badge"] == "whole", (px, s)
+            seen.add("wrap")
+        else:
+            assert not s["cut"], f"{px} px: the title is cut on one line with Take a second line: {s}"
+    assert "wrap" in seen
+    assert _width(bar, cut_from)["wrap"] and not _width(bar, cut_from + 1)["wrap"], cut_from
+    _set(bar, full="shorten")
+    s = _width(bar, cut_from)
+    assert s["cut"] and not s["wrap"], s
+    assert bar.evaluate("() => window.__errs") == []
 
 
 def _badge_text(page):

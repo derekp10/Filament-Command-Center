@@ -17,16 +17,19 @@
             document.documentElement.setAttribute('data-fcc-text-size', slug);
         })();
     </script>
-    <!-- Title bar buttons and Low stock count (Settings -> 🖥️ This Browser;
-         titlebar_prefs.js changes them live, Group 57.3). Set on <html> before
-         anything draws, so the bar is fitted to the labels it shows from the
-         first paint. Absent or unknown = Automatic, and Low and Out. -->
+    <!-- Title bar buttons, Low stock count and When the title bar is full
+         (Settings -> 🖥️ This Browser; titlebar_prefs.js changes them live, Group
+         57.3). Set on <html> before anything draws, so the bar is fitted to the
+         labels it shows from the first paint. Absent or unknown = Automatic, Low
+         and Out, and Shorten the title. -->
     <script id="fcc-title-bar-boot">
         (function () {
             var prefs = [
                 ['fcc.titleBar.buttons', 'data-fcc-tb-buttons',
                     { 'Automatic': 'auto', 'Always words': 'words', 'Always icons': 'icons' }, 'auto'],
-                ['fcc.lowStock.count', 'data-fcc-low-count', { 'Low and Out': 'both', 'One number': 'one' }, 'both']
+                ['fcc.lowStock.count', 'data-fcc-low-count', { 'Low and Out': 'both', 'One number': 'one' }, 'both'],
+                ['fcc.titleBar.full', 'data-fcc-tb-full',
+                    { 'Shorten the title': 'shorten', 'Take a second line': 'wrap' }, 'shorten']
             ];
             for (var i = 0; i < prefs.length; i++) {
                 var picked = null;
@@ -145,7 +148,7 @@
          and number, ADD, the badge's date alone) only while the title is cut
          short, whatever its live counts say (global.css "Title bar"). Right
          after the bar, so it fits before the first paint. -->
-    <script src="{{ url_for('static', filename='js/modules/titlebar_fit.js') }}?v=1.3"></script>
+    <script src="{{ url_for('static', filename='js/modules/titlebar_fit.js') }}?v=1.4"></script>
 
     <!-- Shortcuts overlay — populated by shortcuts_registry.js at runtime.
          L218 fix: the panel previously sat alone with no backdrop, so outside
