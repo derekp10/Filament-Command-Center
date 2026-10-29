@@ -244,6 +244,41 @@
         });
 
         state.scanStartTime = 0;
+        // Scans read while FCC is busy (the focus guard up, or a scan or a save
+        // being answered) wait in ONE queue and go out in the order they were
+        // read (Group 57 review, round 11). Each used to wait on its own 250 ms
+        // poll, so when the busy answer came, the first poll to tick went
+        // first: a slot label scanned right after a spool could reach the
+        // server before the spool, and the spool scanned before them went into
+        // the slot. A scan read while the queue still holds one joins it too,
+        // so it never goes ahead of a scan read before it.
+        // (On `state`, and function declarations: the tests lift this block
+        // into a page as a script of its own.)
+        state.scanQueue = state.scanQueue || [];
+        state.scanQueueTimer = state.scanQueueTimer || null;
+        function scanFrozen() {
+            const g = document.getElementById('focus-guard');
+            return (g && g.style.display === 'flex') || state.processing;
+        }
+        function drainScanQueue() {
+            const queue = state.scanQueue;
+            // One at a time: a scan that goes to the server turns processing on
+            // at once (inv_cmd.js), so the next one waits for its answer.
+            while (queue.length && !scanFrozen()) {
+                const q = queue.shift();
+                console.log("UI unfrozen, processing queued scan:", q.text);
+                try {
+                    processScan(q.text, q.source, q.capturedAt, q.weighRead);
+                } catch (err) {
+                    console.error("Queued scan failed:", q.text, err);
+                } finally {
+                    // Answered without going out (a second read dropped,
+                    // a dialog's own QR): nothing to wait for.
+                    if (q.weighRead && !q.weighRead.sent && window.weighOutScanDone) window.weighOutScanDone(q.weighRead);
+                }
+            }
+            if (!queue.length && state.scanQueueTimer) { clearInterval(state.scanQueueTimer); state.scanQueueTimer = null; }
+        }
         document.addEventListener('keydown', (e) => {
             // A field keeps its own keys. A checkbox can't hold typed text, so
             // a scan typed with the focus on one (the Quick-Weigh's Auto Archive
@@ -278,32 +313,18 @@
                     // handled, which a queued scan replays only afterwards.
                     const capturedAt = Date.now();
 
-                    const g = document.getElementById('focus-guard');
-                    const isFrozen = (g && g.style.display === 'flex') || state.processing;
-
-                    if (isFrozen) {
-                        console.warn("UI frozen, queuing scan:", state.scanBuffer);
-                        const bffr = state.scanBuffer;
-                        const src = source;
+                    if (scanFrozen() || state.scanQueue.length) {
+                        console.warn("UI busy, queuing scan:", state.scanBuffer);
                         // The weigh-out list hears of the scan as it is read, not
                         // as it goes out (Group 57 review, round 9): until then
                         // the earlier scan's answer counted as the latest, moved
                         // the focus and took the reading typed for this one.
                         const weighRead = window.weighOutScanStart ? window.weighOutScanStart() : null;
-                        const tryProcess = setInterval(() => {
-                            const fg = document.getElementById('focus-guard');
-                            if (!state.processing && (!fg || fg.style.display !== 'flex')) {
-                                clearInterval(tryProcess);
-                                console.log("UI unfrozen, processing queued scan:", bffr);
-                                try {
-                                    processScan(bffr, src, capturedAt, weighRead);
-                                } finally {
-                                    // Answered without going out (a second read dropped,
-                                    // a dialog's own QR): nothing to wait for.
-                                    if (weighRead && !weighRead.sent && window.weighOutScanDone) window.weighOutScanDone(weighRead);
-                                }
-                            }
-                        }, 250);
+                        state.scanQueue.push({ text: state.scanBuffer, source, capturedAt, weighRead });
+                        if (!state.scanQueueTimer) state.scanQueueTimer = setInterval(drainScanQueue, 250);
+                        // Not busy any more (the queue only held scans its poll
+                        // hadn't sent yet): those go now, then this one.
+                        drainScanQueue();
                     } else {
                         processScan(state.scanBuffer, source, capturedAt);
                     }
