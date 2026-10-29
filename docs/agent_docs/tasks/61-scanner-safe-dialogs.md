@@ -4,7 +4,7 @@
 **Estimated effort:** SMALL–MEDIUM (~4–6 h, one night session plus one review).
 **Risk:** **LOW–MEDIUM.** Key handling only, no server change. The hazard is the same one Group 57's eleven review rounds kept finding: a handler that acts on an Enter (or a Space) a scanner sent, or a scan that is lost or glued to the next one.
 
-> **Status: `IN PROGRESS` — built 2026-10-29 (night) in `a95163c` (from Group 57's tip, rebased onto `dev` once Group 57 was merged into it), reviewed the same night (15 findings, all confirmed; see Review below), the review's fixes on top, then checked by one more prober (5 findings, all fixed; see Review 2); the full run follows.** Derek made it the priority after Group 57 (2026-10-28: "a priority after we get this group … done"; before the phone work, which leans on scanning too) and answered its two design questions on 2026-10-29 before bed.
+> **Status: `READY` (awaiting Derek's OK to merge into `dev`) — built 2026-10-29 (night) in `a95163c` (from Group 57's tip, rebased onto `dev` once Group 57 was merged into it), reviewed the same night (15 findings, all confirmed; see Review below), the review's fixes in `bf22167`, then checked by one more prober (5 findings, all fixed in `b6497b0`; see Review 2). Full run on `b6497b0`: 5679 passed, 0 failed, 41 skipped, 45:54, load 1.23×.** Derek made it the priority after Group 57 (2026-10-28: "a priority after we get this group … done"; before the phone work, which leans on scanning too) and answered its two design questions on 2026-10-29 before bed.
 > _Filed from the buglist item "⌨️ Four older dialogs answer a scan's Enter as a person's" (found 2026-10-27 by the Group 57 review, round 5, reproduced on dev, read-only; older than Group 57)._
 
 ## The rule it applies
