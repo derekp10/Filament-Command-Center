@@ -177,32 +177,6 @@
   filament, refused at 0 g; built.)_ **Released to prod 2026-10-25 (`main` `97fcf7c`):** what's left is
   excluding the prod filaments he can't get, from the list's 🔕. Dev's long-list sample was put back (`low_stock_g`
   250, filaments 91 and 96 included again).
-* **⏸️ PENDING DEREK — pick how the title bar's ⚠️ Low stock button reads (Group 57; built 2026-10-26 on
-  `feature/group-57-low-stock-at-a-glance`, live on dev while that branch is checked out).** The title bar has a ⚠️
-  button with a count of the filaments that are low or out (it opens the Low stock list), and the list's window keeps
-  one size. Pictures: `review-samples/2026-10-26-low-stock/` (also sent to your phone the same night), numbered as
-  below.
-  1. **How it reads** (pictures 1a–1c, 5a, 5b). A: "⚠️ 12" (built). On your 1600 px window nothing else on the bar
-     changes at Small / Standard; at Large ADD INVENTORY reads ADD, at Extra Large the version badge hides. The bar
-     gives way only as far as it must, whatever the counts say: a bigger count tightens the spacing before it ever
-     shortens the title. A's cost is in narrower windows: at 1280 px (the Framework 12 at 150%) the version badge
-     hides at Small / Standard and the title shortens at Extra Large; at Extra Large between 992 and 1100 px
-     (an iPad on its side) the title shrinks to its first letters ("F…" at 1024 px, picture 5a); below 992 px the
-     buttons need one more line (Standard at 768 px, an iPad upright, picture 5b). B: "⚠️ Low stock (12)" in words,
-     which tightens the bar sooner at every size. C: words at Small / Standard, and all three of Backlog, Queue and
-     Low stock as icon + number at Large / Extra Large and in narrow windows: the answer to A's narrow-window costs
-     (in 5a the title comes back, "Filament Co…" at 1024 px; in 5b the buttons fit one line). Claude's pick: A (the
-     words are in its tooltip), and C if you use FCC at Extra Large or on a tablet.
-  2. **What the number counts** (picture 2). (a) Low + Out as one number (built; Claude's pick: the list's tabs
-     already split it), (b) both, "1 · 11" (wider: at Small / Standard on your window the bar tightens its spacing,
-     the title stays whole), (c) Low only. Excluded never counts.
-  3. Claude's call, veto it if you like: the 🔍 Search panel's own "⚠️ Low stock" button goes once 1 is settled.
-  4. For your information, nothing to pick (picture 4): a count FCC couldn't refresh (Spoolman didn't answer) keeps
-     its number with a "?" after it and a dashed border, "⚠️ 12?", and the 🏷️ Backlog count does the same, "(53)?";
-     the tooltip says why. The "?" takes no room, so a blip never moves the bar. Before its first answer a count
-     reads "–" ("(–)" on Backlog and Queue, which used to read a "(0)" nobody had read), and "?" if that read failed;
-     a heartbeat FCC hasn't answered after 30 s counts as failed.
-  If you never answer, A and (a) go to `dev` as built.
 * **⏸️ PENDING DEREK — look again at the scale trade-off of your digits-only call, if you like (Group 57 review,
   2026-10-28; nothing here blocks a release).** A scanner's digits are now a scan, never a weight (your call). The one
   case that can't be told apart is a scale that types a bare whole number into the box ("645", no '.', unit or
@@ -473,6 +447,9 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
 ## 📋 Activity Log
 
 ## 🎨 UI & Theming
+* **The ⚠️ Low stock button's Low and Out could wear icons instead of words, later (Derek, 2026-10-28: "I do like the other options though. Perhaps add to the theming working for a later reconsider?").** Group 57.3 shows Low and Out apart in the Low stock window's own words and count pills ("⚠️ Low 1 · Out 11"). The other marks he liked, pictured in `review-samples/2026-10-28-low-stock-count/6a`, `6b` and `6d`: amber and red dots (🟡 1 🔴 11, the narrowest; a red dot can read as a red filament), and a low battery and a no-entry sign (🪫 1 🚫 11; 🪫 is a newer emoji, an empty box on older phones). If one is picked, the window's tabs wear the same two (`6d`). A theme choice rather than a third setting; see the themes plan (Group 60).
+* **A spinner instead of the dash before a count's first answer, later (Derek, 2026-10-28: "Keep the dashes, but a spinner sounds cool too").** The title bar's counts read "(–)" / "–" until their first answer (`data-count-pending`). A spinner would have to stay a digit wide (round 4: a wider placeholder made the bar take a step on every load) and hold still under the system's reduce-motion setting (the dash there).
+* **One mark for "might not be current", used everywhere (Derek, 2026-10-28).** A count FCC couldn't refresh keeps its number with a "?" and a dashed border (Group 57), and he is fine with it for now, but the dashed border also means "no box feeds this toolhead" (the dashed "no bound slot" tiles in Printer Status and Quick-Swap), so it can read as a missing box instead of a missing connection. Wanted: one definitive mark for out of sync / couldn't read / might not be current, used by the stale counts, Group 52's "couldn't read" notices and Printer Status' "? not read" tiles alike. "I might want to change it later if I feel it gives the wrong impression." A sample first.
 * Refactor the longer "strip" cards used in the Location Manager window. Merge the horizontal layout with modern grid card features without cramping the text or making the button layout look weird. _(→ **Group 59.5**, 2026-10-25)_ _(2026-10-19 refresh: still standalone. It needs Derek to pick from a mock-up, which Claude can build on a real cart, e.g. `CR-CT-2-R1`, whenever he wants to look: two variants, one row per spool with all three QR badges or with one, both keeping Group 40.6's ↩️ RETURN footer. Its double LABEL handler is tidied in Group 48.1.)_
 * ✅ **High-Contrast Pop everywhere** — now a CLAUDE.md standing order (Derek, 2026-10-19): readable contrast in everything new, reusing looks he has approved, and never an app-wide restyle without showing him a sample first. Archived 2026-10-19 (see `completed-archive.md`).
 * **Printer Status: with 8 toolheads in a small window, the toolhead list wraps to a second line.** _(Derek,
@@ -643,7 +620,7 @@ All 3 of these things are important and have value. We should table for now, and
   Group 57 fixed it for the ⚠️ Low stock buttons only (`inv_stock.js` takes a lone space back out of the buffer when
   Space pressed them). The general fix is for the accumulator to skip a Space aimed at a button, which is its own
   change to the scan path and wants its own tests.
-* **⌨️ Four older dialogs answer a scan's Enter as a person's.** _(Found 2026-10-27 by the Group 57 review, round 5,
+* **⌨️ Four older dialogs answer a scan's Enter as a person's.** _(**Next after Group 57**, Derek 2026-10-28: "a priority after we get this group … done"; before the phone work, which leans on scanning too. It must work out of the box with any scanner, no special line ending: "I wanted this to work out of the box with little modifications for anyone wanting to use it.")_ _(Found 2026-10-27 by the Group 57 review, round 5,
   reproduced on dev, read-only; older than Group 57, so not fixed on its branch.)_ The standing order asks a handler
   that acts on an Enter to leave a scan's Enter to the scan accumulator (`window.enterIsAScan()`); these don't:
   - **The location editor's Enter-to-save** (`inv_loc_mgr.js`, Group 46.2). Off a text field it steps aside only for
