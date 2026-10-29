@@ -458,7 +458,14 @@ def page(page, request):
     """pytest-playwright's page, logging its network for the failure report
     (Group 45.1(c)): requests slower than SLOW_REQUEST_S and requests still in
     flight when the test fails, plus where hub.log stood when the test began.
-    Listeners only append to lists, so a passing test pays nothing visible."""
+    Listeners only append to lists, so a passing test pays nothing visible.
+
+    Teardown: every route the test put on comes off without waiting for a
+    handler still running, as Playwright advises. A route handler still in
+    route.fetch() when its test ended (fixed_title_counts' heartbeat) raised
+    TargetClosedError at the NEXT test's setup: the 57.3 sweep's ERROR at
+    setup of an unrelated test. Reproduced 3 of 3 with a slow server, and 0
+    of 3 with this."""
     net = {"slow": [], "pending": {}}
 
     def _started(req):
@@ -477,7 +484,11 @@ def page(page, request):
     request.node._fcc_net = net
     request.node._fcc_page = page
     request.node._fcc_hub_offset = hub_log_size()
-    return page
+    yield page
+    try:
+        page.unroute_all(behavior="ignoreErrors")
+    except Exception:
+        pass    # the test closed its page itself
 
 
 # ---------------------------------------------------------------------------
