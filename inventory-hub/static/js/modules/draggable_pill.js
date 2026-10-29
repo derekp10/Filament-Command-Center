@@ -134,7 +134,19 @@
         // <button> semantics for keyboard/AT users.
         el.addEventListener('keydown', (e) => {
             if ((e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') && typeof opts.onTap === 'function') {
+                // A scan's Enter, and a Space inside a scan, are the scan's
+                // (Group 61): with the 🔍 focused, a scan opened the search and
+                // was processed too. A Space inside a scan presses nothing.
+                if (e.key === 'Enter' ? (window.enterIsAScan && window.enterIsAScan())
+                    : (window.scanIsArriving && window.scanIsArriving())) {
+                    if (e.key !== 'Enter') e.preventDefault();
+                    return;
+                }
                 e.preventDefault();
+                // A person's press: the scan accumulator never sees it, and a
+                // key they left in the scan buffer goes with it.
+                e.stopImmediatePropagation();
+                if (window.clearScanBuffer) window.clearScanBuffer();
                 opts.onTap();
             }
         });

@@ -1,5 +1,53 @@
 # **Done**
 
+* **[2026-10-29 — ⌨️ Group 61 Scanner-Safe Dialogs (61.1–61.3) → `feature/group-61-scanner-safe-dialogs` (merged to `dev`)]** — built overnight 2026-10-29 with Derek's two answers from before bed ([task file](docs/agent_docs/tasks/61-scanner-safe-dialogs.md)): the legacy-ID duplicate picker holds scans until answered, and a whole FCC label scanned into the location editor's Name box goes to the scan path. Reviewed once (`wf_5c41a2bc-812`, 3 agents: 15 findings, 1 red, all fixed in `bf22167`) and checked again by one prober (`wf_8447ded2-df6`: 5 findings, all in the first fix, fixed in `b6497b0`). Full run on `b6497b0`: 5679 passed, 0 failed, load 1.23×. Merged on Derek's "Sure merge if done" (2026-10-29); `main` held.
+
+  * ✅ **Older dialogs answered a scan's Enter as a person's (found 2026-10-27 by the Group 57 review, round 5).** The
+    location editor's Enter-to-save, the legacy-ID duplicate picker, the parent tree picker, a wizard section header,
+    the floating pills and the filament editor's "Close without saving?" now leave a scan's Enter, and a Space inside a
+    scan, to the scan path.
+  * ✅ **61.1 The duplicate picker holds scans until it is answered.** A listed spool's own `ID:` / `SPL:` label or bare
+    number picks it, `CMD:CANCEL` cancels, and any other scan is refused with a 7 s note; a person's "#135" jump, arrow,
+    Tab or click in its list is theirs. Found while building it: its "Use selected" sent the pick as a scanned `ID:`
+    label, so the server marked the spool's label printed and the spool left the label backlog; only a scanned `ID:`
+    label verifies a label now.
+  * ✅ **61.2 The location editor judges the keys typed, not the text in its boxes.** A label scanned into a box goes to
+    the scan path and the box gets back its text and caret (the review's red: a label typed with the caret inside a name
+    took the name's tail with it, "ID:51" for "ID:5", and on dev's page a move to "LR-MDB-11"); its dropdowns and buttons
+    judge only the keys typed on them, and a dropdown a scan moved is put back, while a person's typeahead jump still
+    saves.
+  * ✅ **61.3 The parent tree picker holds scans too** (a place's own `LOC:` label picks it as the parent), and the
+    smaller dialogs pass a scan on. A held key's repeats are a person's (in the weight boxes as well), and a label right
+    after a letter counts only at scanner pace.
+  * Not covered (CLAUDE.md, the keyboard idiom): a label typed right after a letter slower than 80 ms a key, an old
+    label with no prefix typed slower than a burst, and a stray key with an Enter under 500 ms after it. Follow-up filed
+    (standalone idea): "Scanner-OK fields". Pinned by `tests/test_scanner_safe_dialogs_61_js.py` (144). The branch stays
+    on `origin` (the branch-cleanup list).
+
+* **[2026-10-29 — ⚠️ Group 57 Low Stock at a Glance (57.1–57.5) → `feature/group-57-low-stock-at-a-glance` (merged to `dev` `90ba651`)]** — built overnight 2026-10-26 on Derek's "get started on the bulk of this group's work for the evening while I sleep" ([task file](docs/agent_docs/tasks/57-low-stock-at-a-glance.md): "Build notes", "Reviews", "Derek's picks and 57.3"); 57.3 built 2026-10-28/29 on his picks. Eleven review rounds and a review of 57.3, every confirmed finding fixed. Full run on `ca1a701`: 5532 passed, 2 failed (two Printer Status widget tests run under load, which pass alone 3 of 3 and with their file 22 of 22). Merged on Derek's "Yes, tonight" (2026-10-29); `main` held. Archived with Group 61 the same day (the merge went in without its paperwork).
+
+  * ✅ **57.1 The ⚠️ Low stock window keeps one size** (`min(48rem, 86vh)`; only the list scrolls, the tabs and filter
+    stay put).
+  * ✅ **57.2 A ⚠️ Low stock count in the title bar**, beside 🏷️ Backlog and 🛒 Queue, from the heartbeat's own reads
+    (no Spoolman read of its own). A count reads "–" until its first answer, and one FCC couldn't refresh keeps its
+    number with a "?" and a dashed border (the Backlog count too).
+  * ✅ **57.3 Three title-bar settings** (Settings → 🖥️ This Browser, Derek's picks of 2026-10-28/29): Title bar buttons
+    (Automatic / Always words / Always icons), Low stock count (Low and Out / One number) and When the title bar is
+    full (Shorten the title / Take a second line). The version badge never goes. It also closes the design follow-ups'
+    (e), the title bar at Extra Large.
+  * ✅ **57.4 The Buy More link's `&`** (`|tojson`), and **57.5 the buffer cards' live refresh** from the heartbeat's
+    one spool list (one GET only for a spool it lacks).
+  * ✅ **Older bugs the reviews found, the three red ones each in their own commits:** a label scanned into a weight box
+    was saved as the weight and could archive the spool (found in rounds 5–11: the Quick-Weigh, the two weight
+    prompts, the weigh-out list's target); scans read while FCC was busy could go out in the wrong order, so a slot
+    label could file the wrong spool (round 11: one queue, in read order); a slower scanner's "Scan to Cancel" could
+    confirm a Quick-Swap (round 3); and a Space on a focused button stayed in the scan buffer for 2 s (round 2, fixed
+    in round 5).
+  * Follow-ups filed (standalone): the post-archive prompt taking a reading being typed, the buffer's server sync on the
+    wall clock, FCC not answering said only by the counts, icon marks for Low and Out, a spinner for the dash, and one
+    "might not be current" mark everywhere. The four older dialogs became Group 61. ⏸️ PENDING DEREK: the digits-only
+    call's scale trade-off. The branch stays on `origin` (the branch-cleanup list).
+
 * **[2026-10-26 — 🚢 Released: `dev` `9301202` → `main` `1d9cae4`]** — on Derek's word ("If you think it's good to move to prod, lets move it over. under chargin by almost 10 percent is pretty big."): Group 56 Deduct Accuracy (56.1–56.5) and docs. No conflict (`main` held nothing `dev` lacked), no config or data migration. Prod deploy: Derek's TrueNAS update. All printers were on firmware 8.0 by then, and prod's last deducts (to 2026-10-24) still showed 8.3 file names, so the next completed and cancelled prints are the first on 8.0 and run this code (56.7).
 
 * **[2026-10-26 — 🎯 Group 56 Deduct Accuracy (56.1–56.5) → `feature/group-56-deduct-accuracy` (merged to `dev` `b8daba1`)]** — built overnight on Derek's "Try and get as much done as possible" ([task file](docs/agent_docs/tasks/56-deduct-accuracy.md), "Build notes"). Four reviews, every confirmed finding fixed: one independent agent on the build (`4555a01`), `wf_80c46b1e-f8e` (5 lenses + 1 batched skeptic: 29 findings, none red; `030a618`), `wf_4755954b-200` (2 + 1: 21, one orange; `9721591`) and `wf_8bbf3213-810` (1 + 1: 4, two yellow; `747f348`). Full sweeps 4861, 4886, 4898 and 4903 passed, 0 failed (load 1.05–1.06×). 56.6 (re-mapped prints) and 56.7 (firmware 8.0 checks) stay open, gated on hardware; `main` held.

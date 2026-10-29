@@ -493,28 +493,9 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
   profile names contains it (Blend, Carbon Fiber, High Speed, "+"), so a PLA Blend would learn only from his PLA
   Blends. Not now: there is no concrete list of Prusa's profiles, and it varies by printer (the XL has custom profiles
   for more brands than the INDX).
-* **A Buy More link template with `&` breaks in the spool and filament windows.** _(→ **Group 57.4**)_ _(Found 2026-10-19 by the Group 49
-  builder.)_ The details windows read the `buy_more_url_template` setting through Jinja's auto-escaping inside a
-  `<script>` tag, so an `&` in it arrives as `&amp;` in the links they build. The ⚠️ Low stock panel builds its links on
-  the server and is fine. Pass the setting with `|tojson` instead. _[BUILT 2026-10-26 on
-  `feature/group-57-low-stock-at-a-glance` (`a6d2f1b`): `|tojson`, so nothing in the setting can end the script either;
-  a null setting no longer arrives as the text "None". Pinned by `tests/test_low_stock_glance_57.py`. Archived when the
-  branch merges.]_
 
 ## 🔍 Search, Display & Filtering
-* **⚠️ Low stock: a title-bar button with a count, and a window that keeps one size (Derek, 2026-10-25, on prod).** _(→ **Group 57**: (b) as **57.1** first, then (a) as **57.2** after a sample)_ _[BUILT 2026-10-26 on `feature/group-57-low-stock-at-a-glance`: (b) the window is `min(40rem, 86vh)` tall on every list and state; (a) "⚠️ N" beside Queue, counted on every heartbeat from the tick's own reads (the cost question settled: no Spoolman read of its own; not asked for while the backlog window is open), "?" before a count, and on a failed read the last count kept with a "?" after it and a dashed border (the 🏷️ Backlog count too, since the review). Derek picked how it reads and what N counts on 2026-10-28 (look C and the count as two settings in Settings → This Browser, Low and Out apart by default; the window 48rem tall), built as 57.3 in `41b819d` and reviewed once (fixed in `4c0a043`).]_
-  (a) **Where the button lives: decided.** Today it sits in the 🔍 Search panel ("works, seems a bit odd. And doesn't
-  really tell you anything at a glance"; 2026-10-20: "a bit fiddly"). Move it to the title bar beside 🏷️ Backlog and
-  🛒 Queue, with a count, so it reads at a glance. Things to settle in the build: what the count shows (Low + Out, or
-  both separately; Excluded never counts); its cost (`build_report` reads every spool and every filament strictly, too
-  heavy for each heartbeat: compute it on a slower cadence or after a deduct, a weigh-in or an exclusion, and say
-  "couldn't read" rather than 0, Group 52); and room in the title bar at Large / Extra Large, where it already
-  tightens (the design follow-ups' "Backlog and Queue as icon + count" idea may be needed). (b) **One size for the
-  window:** "It jumps in size depending on its content's length, which makes everything move around in a weird way.
-  This is kind of contradictory to some of the other modal design decisions we've made in the past." Give it a fixed
-  height (in rem, so it follows the Text size) with the filament list scrolling inside it ("If that means adding a
-  scrollbar to the list of filaments, that's fine"), the tabs, filter and legend staying put whatever tab or filter
-  is chosen. The list's come-back behaviour (2026-10-20) stays. **Standalone.**
+*(No open items — resolved entries archived in `completed-archive.md`.)*
 
 ## ⚡ Quick-Swap Enhancements
 *(No open items — resolved entries archived in `completed-archive.md`.)*
@@ -600,131 +581,7 @@ I think we've inadvertently created 3 levels of logic/complexity here:
 2. A UI layer, for debugging, but should only really need to be looked at to confirm things
 3. A full on interface that is easier to move spools around than having to use Spoolman's lackluster interface.
 All 3 of these things are important and have value. We should table for now, and come back to once we've gotten more of the functionality in place.
-* **🐢 The buffer cards' live refresh reads Spoolman once per buffered spool on every heartbeat.** _(→ **Group 57.5**)_ _(Group 52 builder's
-  note, 2026-10-19.)_ `spools_refresh` (`logic.get_live_spools_data`) makes one GET per spool in the buffer each tick:
-  ten buffered spools are ten reads every 5 s. It could use the tick's one spool-list read (`SpoolListRead`), as the
-  other heartbeat sections do since Group 52. _[BUILT 2026-10-26 on `feature/group-57-low-stock-at-a-glance`
-  (`a6d2f1b`): every spool the tick's list holds is answered from it; one GET only for a spool it lacks (an archived
-  one), one per spool when the tick read no list, and when the list read failed one per spool until the first that
-  gets no answer at all (the review: an outage tick took 5 s + 3 s per buffered spool; a record Spoolman can't send
-  stops only itself). `/api/spools/refresh` is unchanged. Pinned by `tests/test_low_stock_glance_57.py`. Archived
-  when the branch merges.]_
-* **✅ FIXED (on `feature/group-57-low-stock-at-a-glance`, review round 5; goes to `dev` with Group 57): ⌨️ Space on
-  any focused button leaves a space in the scan buffer for 2 s.** The accumulator skips a Space while it holds
-  nothing (no label starts with one), processScan drops blanks around a scan, and `enterIsAScan` counts only keys
-  that aren't blank; pinned by `tests/test_slow_scan_slash_js.py` and `tests/test_slow_scan_confirms_js.py`.
-  _(Found 2026-10-26 by the Group 57 review, round 2.)_ The scan accumulator (`templates/components/scripts.html`) records every printable key outside a
-  field, the Space that presses a focused button included. For the next 2 s a scan arrives with a leading space: a
-  client-side command label (" CMD:WEIGH", " CMD:LOCATIONS", " CMD:DROP") misses its match and the server answers
-  "Malformed Command", and an Enter in a list that reads Enter as "a scan is in flight" goes to the scan path as " ".
-  Group 57 fixed it for the ⚠️ Low stock buttons only (`inv_stock.js` takes a lone space back out of the buffer when
-  Space pressed them). The general fix is for the accumulator to skip a Space aimed at a button, which is its own
-  change to the scan path and wants its own tests.
 * **🔎 Scanner-OK fields: a field that takes the scans meant for it (Derek, 2026-10-29).** _(An idea, standalone: "if it makes sense"; he is fine dropping it.)_ Today a scan with the focus in a field is either sent to the scan path (the weight boxes, the Low stock filter, and from Group 61 the location editor's Name box) or typed in as the field's text. The idea: a field says which scans it takes, and only those fill it while it has the focus; anything else goes to the scan path. Example: the Prusament URL field in the create-spool flows takes a scanned Prusament URL (no copying it from a web page opened elsewhere), while scanning a Prusament label anywhere else keeps today's flow (FCC sees the spool isn't known and offers to add it). One declaration per field (say `data-fcc-scan-accepts="prusament-url"`) read by the one field capture (`installFieldScanCapture`), so a new field opts in without new code. Derek: "I don't want to get too rigid with things because sometimes things just work in an unexpected way, and it turns out to be a really good unintended feature."
-* **⌨️ Four older dialogs answer a scan's Enter as a person's.** _(**Next after Group 57**, Derek 2026-10-28: "a priority after we get this group … done"; before the phone work, which leans on scanning too. It must work out of the box with any scanner, no special line ending: "I wanted this to work out of the box with little modifications for anyone wanting to use it.")_ _(Found 2026-10-27 by the Group 57 review, round 5,
-  reproduced on dev, read-only; older than Group 57, so not fixed on its branch.)_ The standing order asks a handler
-  that acts on an Enter to leave a scan's Enter to the scan accumulator (`window.enterIsAScan()`); these don't:
-  - **The location editor's Enter-to-save** (`inv_loc_mgr.js`, Group 46.2). Off a text field it steps aside only for
-    a scanner burst or a ':' / '/', so a slower scanner's bare-number label ("57"; "1024" from about 40 ms a key) on
-    the Type select saves the form (POST /api/locations) and closes it, or presses a focused Cancel. In the Name
-    field it opens on, a label typed slower than the field capture's 150 ms is saved as the location's name
-    ("LOC:LR-MDB-1"). Careful: a person's typeahead on the Type select ("dr", then Enter) saving is 46.2's design,
-    which `enterIsAScan`'s two-keys rule would break; a digits-only rule wouldn't, and the Name field needs its own.
-  - **The legacy-ID duplicate picker** (`duplicate_picker.js`): its Enter answers every scan, aborting the picker or
-    taking the spool clicked in it, and the scan itself never reaches the scan path; it stays in the buffer and is
-    glued to the next scan for 2 s ("ID:57ID:58", an invalid id). The picker is opened by a scan, so the next scan is
-    likely; what a scan should do while it is open is the design question.
-  - **Smaller ones:** a focused wizard section header (`inv_wizard.js`: a scan's Enter collapses it and the scan
-    stays in the buffer), the floating pills (`draggable_pill.js`: Enter on the focused 🔍 opens the search and the
-    scan is processed too), the filament editor's "Close without saving?" with Close Anyway focused (a scan closes
-    it unsaved; Keep Editing has the focus by default), and the parent tree picker (`inv_loc_mgr.js`: Enter picks
-    the highlighted parent; read from the code).
-* **✅ FIXED (on `feature/group-57-low-stock-at-a-glance`, in `11f77b4`, `cec4a65`, `a692e5d`, `dcb90be`, `66f2c44`, `229d325`, `9eaf28a` and `47e820b`; goes
-  to `dev` with Group 57, or alone: its code needs nothing else from the branch, its tests round 3's slow-scan
-  harness): 🔴 a label scanned into a weight box was saved as the weight, and could archive the spool.** _(Found
-  2026-10-27 by the Group 57 review, rounds 5 to 11, on dev, read-only; older than Group 57.)_ The Quick-Weigh window
-  (`weight_entry.js`: a buffer card's weight, the wizard's weigh) answered every Enter with Save, and its weight field,
-  focused when it opens, had no field scan capture. A number field (Gross, Net, Set Used) kept the digits of "ID:57"
-  and Save stored 57 g; in Gross that is under the empty spool, so the spool read empty and Auto Archive archived it.
-  A reading typed first got the digits appended (64557 g). Round 5 (`11f77b4`) judged the speed between keys, which
-  left a burst scanner (its Enter a moment after the label), one slower than 150 ms a key, or one pause inside a
-  label saving it. Round 6 found the same hole in the missing-tare prompt (a label became the spool's tare) and the
-  post-archive empty-weight prompt (it would become the filament's empty weight); a scan lost with the focus on the
-  Auto Archive switch (its Enter saved, its 'D' set the default mode); Enter on Cancel or × saving; the tare
-  prompt's Enter running Save twice and its Escape cancelling the window under it; and the weigh-out list dropping the
-  focus after a save and on every redraw, so the next reading went to the scan path as a spool id. Round 7 found what
-  round 6's fixes left: kept in the box that had it, the focus put a scanned spool's reading on another spool (its
-  row is drawn at the top; a 0 g reading archived the other spool and took it off its place), and a spool already
-  listed, scanned to pick it, never got the focus (older); a redraw between a burst scanner's label and its Enter lost
-  the scan and swallowed the next reading; a reading typed after a click on the Auto Archive switch, or on the
-  empty-weight prompt's vendor box, went to the scan path as a spool id, which joined the buffer unseen; the focus
-  fell to the page after the list's two prompts closed and after Set as default (mostly older); a unit or a stray
-  letter typed before a scan joined its prefix ("gID:57"); a number box kept a label's E or dashes, and the next
-  reading was refused; a kilogram, pound or ounce reading or a decimal comma was saved as grams; and a label typed
-  by hand went as 'barcode', marking the spool's printed label verified. Round 8 found what round 7's fixes left,
-  in the weigh-out list: a spool's own box, picked by its scan, selected the reading typed while the scan was
-  answered, and a scan read off a box split the reading between another spool's box and the scanned one (both
-  need a slow Spoolman), so a cut reading was saved, or the whole one to the other spool; a spool scanned over the
-  empty-weight or missing-tare prompt never got the focus, and the prompt's close put it back in another spool's
-  box (a reading typed into the prompt itself would be saved as an empty weight); a spool weighed this session,
-  scanned again to weigh it again, left the focus in the next spool's box (older); a click on another row's name
-  sent the reading to the box that had had the focus; a number box dropped a '.' across a redraw (645.5 saved as
-  6455; older); another maker's label ("PID:57") was cut to an FCC one; and (found while fixing) a redraw
-  between a label's first letters and its ':' lost the letters (":57", older). Round 9 found what round 8 left,
-  each needing a slow Spoolman (most older than round 8): a prompt over a scan still being answered saved the
-  scanned spool's reading as a tare or as the filament's empty weight (its Enter wasn't held, and it opened over
-  the scan); a save that read its spool's details first took the focus from the box a scan had picked, and after
-  the list's last save the focus fell to the page, where a reading went to the scan path as a spool id; a scan read
-  while another was answered was queued, and until it went out the earlier answer moved the focus and took its
-  reading; a reading left in a spool's own box joined the new one (300425); a key typed on another row's 💾, or
-  after a scanner's second Enter, stayed in the wrong box; a held key ignored Backspace; a redraw during a save drew
-  its row enabled, and the new reading typed after a scan of it vanished with the row; a label's first letters were
-  moved as a reading, and its carry put the old box's reading in the new spool's box; and with no details any
-  mode's reading was saved as what is left (Additive '+25' as 25 g left). Round 10 found what round 9's own changes
-  brought: the save's redraw drew a saved row enabled while it faded, so a quick key and Enter saved that spool
-  again with the digits joined (Set Used: archived); a save that waited for its details opened its missing-tare
-  prompt over the next row's reading, which became its tare; a row waiting for its details left the page
-  clickable, and a correction went to the next spool; and, older, a later scan that named no spool freed Enter
-  while an earlier spool scan was still out, and a middle scan's keys were dropped from the reading. Round 11 found
-  what round 10 left: the page round 10 dimmed over a row waiting for its details was one shared flag, so another
-  answer lifted it while the row still waited, and a correction clicked into that row went to the next spool
-  (older); two answers that came in reverse put a reading's pieces out of order ("452" for "425", with no
-  warning); and a key sent to the scan path from the window, after the last box, didn't stop a late tare prompt
-  from taking the rest of the reading as the tare (older). (Its red, the scan queue's order, is the entry below.)
-  Now every
-  weight box judges what was typed
-  (class `fcc-weight-box`, `installWeightScanCapture` in `inv_core.js`): a ':' or '/' proves a label at any speed,
-  from its prefix, and its keys never reach the box (a number box is cleared of the ones it took); anything else a
-  weight can't hold is a scan only at scanner speed, and a weight in grams with its unit or a Space stays a weight; a
-  label split by a focus move is put back together, its Enter too, across a redraw as well; 'barcode' only at scanner
-  speed. A weight window marks itself `data-fcc-weight-keys`, so a weight key typed on its other controls goes into
-  its weight box. The scan accumulator reads a checkbox's keys, the overlay on top owns Escape and its keys, Enter
-  presses the button it is on, and the weigh-out list keeps a target, the spool whose reading is being entered (a
-  scan, a click or Tab into a box, a click on a row, the save moving on): a scanned spool's box takes the focus
-  (one weighed this session is drawn again) with what was typed while the scan was answered, wherever it went;
-  Enter saves nothing until the answer, in the list or a prompt over it; a weight key on another control goes into
-  the target's box (a row's 💾,
-  that row's); the focus comes back to it when a dialog over the list closes; a spool scanned over a prompt closes
-  it, and neither prompt opens while a scan is answered or once a spool scan has been answered since its Enter; a
-  scan queued behind another counts from its read, and an earlier spool scan takes the focus when the later one
-  names no spool, with the keys typed under the scans after it, in the order they were typed; Enter waits while any scan that may still take the
-  focus is out; a saving or fading row stays disabled through a redraw, and a save moves the focus only from its own
-  row; a row waiting for its details is taken back by a click on it (nothing has been sent for it yet), and its tare
-  prompt opens only where the person was left, with no key typed anywhere since;
-  with no details only a Net reading is saved. The list's boxes are text boxes, Net, Gross and Set Used read
-  strictly as grams. Pinned by `tests/test_quick_weigh_scan_js.py`, `tests/test_weight_box_scan_js.py` and
-  `tests/test_weigh_out_scan_focus_js.py` (the real scan router). Not covered: a label with no ':' typed slower than
-  a scanner (an old bare location label), a stall of 2 s or more inside a label, and a reading typed by hand in kg,
-  lb or oz or with a comma into the Quick-Weigh or a prompt (a number box keeps its digits, as before Group 57; the
-  weigh-out list refuses it). **Derek's call (2026-10-28): a scan must never add to a weight.** Digits alone faster
-  than a person types (3 keys or more, each within 40 ms of the last, an Enter as fast counted) are a scan, never a
-  weight, so an old digits-only label goes to the scan path (in the weigh-out list too, also while it holds a
-  reading for a scan it is answering); a reading with a '.', a grams unit or a padding Space stays a weight at any
-  speed, as a scale that types its reading sends it. Only a scale typing a bare whole number can't be told from such
-  a label: it reads as a scan, no weight is saved from it, and the scan path looks the number up as a spool id, so a
-  spool with that id joins the buffer (in the weigh-out list it takes the focus): ⏸️ PENDING DEREK. Not caught: a digits-only label from
-  a scanner slower than 40 ms a key, or one or two digits with its Enter a moment later.
-* **✅ FIXED (on `feature/group-57-low-stock-at-a-glance`, in `b61a304`; goes to `dev` with Group 57, or alone: it is one block of `scripts.html` and its own test file): 🔴 scans read while FCC was busy could go out in the wrong order, and a slot label could file the wrong spool.** _(Found 2026-10-28 by the Group 57 review, round 11, in a harness with the real scan accumulator; older than Group 57: the queue's per-scan poll is from `cf0e5a1`, 2026-04-06.)_ A scan read while another was answered (or with the focus guard up) waited on a 250 ms poll of its own, so when the busy answer came the first poll to tick went first, not the scan read first: about half the time at a person's pace (9 of 16 in the skeptic's random runs). A spool, then its slot label, scanned inside one slow answer (a slot scan waiting on a printer check, a slow Spoolman) could reach the server label first, and the server's slot rule filed the spool already in the buffer into the slot; and a scan read after the answer came, before the poll ticked, went out at once, ahead of the waiting ones. Now the accumulator keeps ONE queue, drained in read order by one poll and one scan at a time (a scan that goes to the server turns processing on at once); a scan read while it still holds one joins it. Pinned by `tests/test_scan_queue_order_js.py` (the real accumulator on a hand-moved poll clock: 3 cases red on `1c593f5`, 6 mutants caught).
 * **⚖️ The post-archive empty-weight prompt takes the focus from a reading being typed.** _(Found 2026-10-27 while
   fixing the Group 57 review's round 6; older than Group 57.)_ When a weigh-out row's save archives its spool and its
   filament has no empty weight, "📦 Spool archived — record the empty weight?" (`inv_details.js`,
@@ -736,23 +593,6 @@ All 3 of these things are important and have value. We should table for now, and
   reading being typed into the next row, with no scan, when it opens. Fix idea: leave the focus
   where the person is typing (focus the prompt only when nothing has the focus, or open it once the list closes); a
   call on where the prompt shows, since it is Derek's "one pre-filled confirm".
-* **✅ FIXED (on `feature/group-57-low-stock-at-a-glance`, the commit after `1a1293b`; goes to `dev` with Group 57):
-  🔴 A slower scanner's "Scan to Cancel" could confirm a Quick-Swap.** _(Found 2026-10-27 by the Group 57 review,
-  round 3; reproduced on dev, read-only, in round 4.)_ `window.isScanInFlight` (inv_core.js) counts 500 ms from a
-  scan's FIRST key. The Quick-Swap confirm overlay's Enter asked only that (`inv_quickswap.js`): its "Scan to Cancel"
-  is about 30 characters, so on a scanner slower than about 17 ms a key its Enter pressed the focused YES, and during
-  a print the cancel loaded the spool onto the printing head (POST /api/quickswap with the head confirmed). The
-  deposit, the Return and the server's re-ask share that overlay. The slot grid's Enter after Q opened a swap nobody
-  asked for, and the next slow scan answered it; the shared move question (`window.confirmActivePrint`) let a slow
-  bare-number label ("1024") answer "Just store it"; Shift+B armed a bulk move on a slow label's 'B' and cut the scan
-  to "-1"; the wizard's Shift+E / Shift+C toggled its sections on a label's capitals; the grid's Q kept its 'q' in
-  the scan buffer (a label scanned within 2 s arrived as "qLOC:…") and jumped the focus on any 'q' inside a label.
-  Each Enter now asks `window.enterIsAScan()` and each letter key `window.scanIsArriving()` (Q also keeps its 'q'
-  out of the buffer, the standing order's idiom); `tests/test_slow_scan_confirms_js.py` drives
-  them with the real accumulator on a fake clock (red on the old code from 18 ms a key for the cancel), and
-  `tests/test_scan_path_integrity.py` pins the stronger guards. The '?' help key asks `window.scanIsArriving()` too
-  (round 5): a legacy Google Sheets label is a URL with a '?' after its "https:", and a scanner slower than 120 ms a
-  key, or one pausing after the '?', opened the shortcut list over the scan.
 * **⏱️ The buffer's server sync still orders by the wall clock.** _(Found 2026-10-27 by the Group 57 review, round 3;
   older code, L28 and 21.6.)_ `loadBuffer`'s 3 s grace window (`inv_cmd.js`, `lastLocalBufferChange`) and the
   recently-assigned-out TTL (`_recentlyAssignedOut`) are stamped with `Date.now`. A clock stepped back just after a
