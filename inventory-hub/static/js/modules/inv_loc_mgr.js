@@ -2483,18 +2483,31 @@ window.saveLocation = () => {
 // Enter then submitted it as a scan of "t".
 // Deliberately NOT a global "ignore SELECT" in the scanner: a focused dropdown
 // would then swallow a blind barcode scan. So a scan on a dropdown or a button
-// is left to the accumulator. On a dropdown (Group 61 and its review): a
-// scanner-speed burst (window.isScannerBurst), a slower scanner's buffer that
-// looks like a scan payload (a ':' or '/' that no typeahead produces), or keys
-// that match the start of none of its options: a person types to jump to an
-// option ("dr" for Dryer Box, "3" for a custom type "3D Printer Shelf" or a
-// parent "2nd Floor"), and a slower scanner's bare-number label ("57") or old
-// label with no prefix ("PM-DB-1") saved the form. The scan's letters had moved
-// the dropdown by typeahead too ("CMD:NEXT" moved the Parent to the next place
-// starting with C), so it is put back, and a toast says so. On a button, a
-// scan's Enter is window.enterIsAScan's, and a Space inside a scan presses no
-// button or dropdown (a LocationID may hold one: "LOC:GARAGE SHELF" clicked a
-// focused Cancel). A scan typed INTO a text field never reaches the
+// is left to the accumulator. Whose Enter it is there is judged on the keys
+// typed on that control while it has the focus, never on the accumulator's
+// buffer, which spans 2 s and every control (Group 61 review 2: a person's
+// "pr" on the Type select made their Enter on the Parent, or on Save, a
+// scan). An Enter on a control nothing was typed on is a person's, unless the
+// buffer is plainly a scan (a burst, a ':' or '/'). On a dropdown (Group 61
+// and its reviews), a scan is a burst, a ':' or '/' (no typeahead produces
+// one), or a search that matches the start of none of its options: the
+// search the browser holds, its keys since its own 1 s reset. A person types
+// to jump to an option ("dr" for Dryer Box, "3" for a custom type "3D Printer
+// Shelf" or a parent "2nd Floor", "d" and a second later "s" for Section),
+// while a slower scanner's bare-number label ("57") or old label with no
+// prefix ("PM-DB-1") saved the form. The scan's letters had moved the
+// dropdown by typeahead too ("CMD:NEXT" moved the Parent to the next place
+// starting with C), so it is put back to what it held before the scan's own
+// first key (a person's jump just before the scan stays, review 2), the scan
+// goes out without that jump glued in front, and a toast says so. On a
+// button, a scan is two keys or more typed on it, one under 500 ms ago, a
+// burst, or a ':' or '/' (window.enterIsAScan's rule, on its own keys). A
+// Space inside a scan presses no button, and on a dropdown none inside a
+// label (a LocationID may hold one: "LOC:GARAGE SHELF" clicked a focused
+// Cancel), while a person's Space stays part of their typeahead ("bin 2":
+// held off for 500 ms, review 2, the browser stopped on "Bin 1" and Enter
+// saved it). A person's own key (an arrow, Tab, Home, a held key's repeats)
+// ends the keys before it. A scan typed INTO a text field never reaches the
 // accumulator at all; the shared field-scan capture installed below hands it to
 // the scan path and restores the field before this handler could save it: any
 // burst (no name, id or count is typed 3 keys and an Enter inside 150 ms), a
@@ -2528,52 +2541,113 @@ const _installLocEditorEnterToSave = () => {
             labels: true,
         });
     }
-    const scanBuf = () => {
-        const st = (typeof state !== 'undefined') ? state : window.state;
-        return st && typeof st.scanBuffer === 'string' ? st.scanBuffer : '';
+    const scanState = () => ((typeof state !== 'undefined') ? state : window.state) || null;
+    const scanBuf = () => { const st = scanState(); return st && typeof st.scanBuffer === 'string' ? st.scanBuffer : ''; };
+    const payload = (txt) => !!(txt && window.looksLikeScanPayload && window.looksLikeScanPayload(txt));
+    const BURST_MS = 150, IN_FLIGHT_MS = 500, TYPEAHEAD_MS = 1000, RESET_MS = 2000;
+    const PERSON_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab', 'Home', 'End',
+        'PageUp', 'PageDown', 'Backspace', 'Delete', 'Escape'];
+    // The keys typed on the dropdown or button that has the focus, each with
+    // its time and the dropdown's value before it.
+    let run = null;   // { el, keys: [{ k, t, before }] }
+    const keysOn = (el, now) => (run && run.el === el && run.keys.length
+        && now - run.keys[run.keys.length - 1].t <= RESET_MS) ? run.keys : [];
+    const textOf = (keys) => keys.map((x) => x.k).join('');
+    // A burst at the end of the keys: 3 or more inside 150 ms of the first of
+    // them, the Enter (now) included (the accumulator's 'barcode' test).
+    const burstAt = (keys, now) => {
+        let i = keys.length - 1;
+        while (i > 0 && keys[i].t - keys[i - 1].t < BURST_MS) i--;
+        return keys.length - i >= 3 && now - keys[i].t < BURST_MS;
     };
-    // What a dropdown held before the keys now arriving on it (the scan
-    // accumulator adds each key after this handler sees it, so an empty
-    // buffer means this key starts them).
-    let selBefore = null;   // { el, value }
-    const putSelectBack = (sel) => {
-        const was = selBefore;
-        selBefore = null;
-        if (!was || was.el !== sel || sel.value === was.value) return;
-        sel.value = was.value;
+    // The search the browser's typeahead holds after keys[end - 1]: the keys
+    // since its own 1 s reset.
+    const searchOf = (keys, end) => {
+        let i = end - 1;
+        while (i > 0 && keys[i].t - keys[i - 1].t <= TYPEAHEAD_MS) i--;
+        return textOf(keys.slice(Math.max(0, i), end));
+    };
+    // Where a scan starts among a dropdown's keys: after a pause (longer than
+    // the scan's own keys, twice over, and than a burst's 150 ms) that ends a
+    // person's jump to an option, else at the first of them.
+    const scanFrom = (sel, keys) => {
+        for (let k = keys.length - 1; k > 0; k--) {
+            let pace = 0;
+            for (let j = k + 1; j < keys.length; j++) pace = Math.max(pace, keys[j].t - keys[j - 1].t);
+            if (keys[k].t - keys[k - 1].t <= Math.max(BURST_MS, 2 * pace)) continue;
+            const theirs = searchOf(keys, k);
+            if (!payload(theirs) && _locTypeaheadMatches(sel, theirs)) return k;
+        }
+        return 0;
+    };
+    const putSelectBack = (sel, value) => {
+        if (sel.value === value) return;
+        sel.value = value;
         sel.dispatchEvent(new Event('change', { bubbles: true }));   // the breadcrumb, a suggested id
         const opt = sel.options[sel.selectedIndex];
         const what = sel.id === 'edit-parent' ? 'Parent' : (sel.id === 'edit-type' ? 'Type' : 'The dropdown');
         if (window.showToast) window.showToast(
-            `${what} is back to "${opt ? opt.textContent.trim() : was.value}": the scan's letters had changed it`, 'info', 4000);
+            `${what} is back to "${opt ? opt.textContent.trim() : value}": the scan's letters had changed it`, 'info', 4000);
+    };
+    // The scan the accumulator sends at this Enter is the control's own keys
+    // from `from`: keys typed on another control first, or a person's jump
+    // just before the scan, are no part of it.
+    const scanIsOnly = (keys, from) => {
+        const st = scanState();
+        const own = textOf(keys.slice(from));
+        if (!st || typeof st.scanBuffer !== 'string' || st.scanBuffer === own || !st.scanBuffer.endsWith(own)) return;
+        st.scanBuffer = own;
+        st.scanStartTime = keys[from].t;
     };
     modalEl.addEventListener('keydown', (e) => {
-        if (e.ctrlKey || e.altKey || e.metaKey || e.isComposing) return;
+        if (e.isComposing) return;
         const tag = ((e.target && e.target.tagName) || '').toUpperCase();
-        if (e.key === ' ' && (tag === 'BUTTON' || tag === 'SELECT') && window.scanIsArriving && window.scanIsArriving()) {
-            e.preventDefault();   // the scan accumulator still reads it
+        const ctl = tag === 'SELECT' || tag === 'BUTTON';
+        const now = Date.now();
+        if (e.ctrlKey || e.altKey || e.metaKey || (e.key !== 'Enter' && (e.repeat || PERSON_KEYS.includes(e.key)))) {
+            if (ctl) run = null;
             return;
         }
-        if (tag === 'SELECT' && e.key.length === 1) {
-            if (!selBefore || selBefore.el !== e.target || !scanBuf()) selBefore = { el: e.target, value: e.target.value };
+        if (ctl && e.key.length === 1) {
+            const keys = keysOn(e.target, now);
+            if (e.key === ' ') {
+                if (payload(textOf(keys)) || (tag === 'BUTTON' && keys.length && now - keys[0].t < IN_FLIGHT_MS)) {
+                    e.preventDefault();   // inside a scan: the scan accumulator still reads it
+                } else if (tag === 'BUTTON') {
+                    return;               // a person's press of the button
+                }
+            }
+            if (!keys.length) run = { el: e.target, keys: [] };
+            run.keys.push({ k: e.key, t: now, before: tag === 'SELECT' ? e.target.value : null });
             return;
         }
         if (e.key !== 'Enter') return;
         // A held key repeats keydown, and the modal stays focusable for its
         // ~150 ms fade after a successful save: neither may save again.
         if (e.repeat || !modalEl.classList.contains('show')) return;
-        if (tag !== 'INPUT' && tag !== 'SELECT' && tag !== 'BUTTON') return;
-        if (tag === 'SELECT') {
-            const typed = scanBuf().trim();
-            if ((window.isScannerBurst && window.isScannerBurst())
-                || (typed && ((window.looksLikeScanPayload && window.looksLikeScanPayload(typed))
-                    || !_locTypeaheadMatches(e.target, typed)))) {
-                putSelectBack(e.target);
-                return;
+        if (tag !== 'INPUT' && !ctl) return;
+        if (ctl) {
+            const keys = keysOn(e.target, now);
+            run = null;
+            let scan;
+            if (!keys.length) {
+                scan = (window.isScannerBurst && window.isScannerBurst()) || payload(scanBuf().trim());
+            } else if (tag === 'SELECT') {
+                scan = burstAt(keys, now) || payload(textOf(keys))
+                    || !_locTypeaheadMatches(e.target, searchOf(keys, keys.length));
+            } else {
+                const typed = textOf(keys).trim();
+                scan = typed.length >= 2 || now - keys[0].t < IN_FLIGHT_MS || payload(typed) || burstAt(keys, now);
+            }
+            if (scan) {
+                if (keys.length) {
+                    const from = tag === 'SELECT' ? scanFrom(e.target, keys) : 0;
+                    if (tag === 'SELECT') putSelectBack(e.target, keys[from].before);
+                    scanIsOnly(keys, from);
+                }
+                return;   // the scan accumulator has it
             }
         }
-        selBefore = null;
-        if (tag === 'BUTTON' && window.enterIsAScan && window.enterIsAScan()) return;
         e.preventDefault();
         // The accumulator is a bubble-phase listener on `document`, so stopping
         // here keeps it from seeing this Enter; the typeahead letters it already

@@ -168,8 +168,15 @@ window.showLegacySpoolPicker = (payload, opts = {}) => {
         onAbort();
     };
 
+    // A person's own key in the picker (an arrow or Home / End that moves the
+    // list, PageUp / PageDown, Tab) or a click in it: the keys typed before it
+    // were theirs, so they never make the next Enter a scan (Group 61 review 2:
+    // "#134" typed, ArrowDown to #135, and the Enter picked #134 as a scan of
+    // "#134"). A scanner sends none of these.
+    const PERSON_KEYS = ['ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown', 'Tab'];
     const keyHandler = (e) => {
         // Escape is owned by mountOverlay's onEscape.
+        if (PERSON_KEYS.includes(e.key)) { if (window.clearScanBuffer) window.clearScanBuffer(); return; }
         // A Space inside a scan (a location id may hold one) never presses the
         // focused button; the scan accumulator still reads it.
         if (e.key === ' ' && window.scanIsArriving && window.scanIsArriving()) { e.preventDefault(); return; }
@@ -238,6 +245,7 @@ window.showLegacySpoolPicker = (payload, opts = {}) => {
     window._fccOpenMoveQuestions = (window._fccOpenMoveQuestions || []).concat([question]);
     window._fccOpenMoveQuestion = question;
 
+    ov.addEventListener('mousedown', () => { if (window.clearScanBuffer) window.clearScanBuffer(); });
     ov.querySelector('#fcc-legacy-picker-cancel').onclick = onCancelClick;
     ov.querySelector('#fcc-legacy-picker-print').onclick = onPrintClick;
     ov.querySelector('#fcc-legacy-picker-use').onclick = onUseClick;

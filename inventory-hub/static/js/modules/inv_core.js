@@ -760,7 +760,11 @@ window.askMoveConfirm = (answer, ctx = {}) => {
 //                             those keys, at any speed, starting at the first of
 //                             them or after a pause (keys a person typed just
 //                             before it stay theirs; "Box ID:3" typed on with no
-//                             pause stays a name);
+//                             pause stays a name); right after a letter, only at
+//                             scanner pace (every key within 80 ms), since a
+//                             person going on with a word after putting a typo
+//                             right is no scan ("Grid:2", its "id:2" after a
+//                             Backspace, review 2);
 //                           - digits alone faster than a person types (3 keys or
 //                             more, each within 40 ms of the last, an Enter as
 //                             fast counted: an old digits-only label "57"), the
@@ -768,7 +772,9 @@ window.askMoveConfirm = (answer, ctx = {}) => {
 //                         Its Enter sends it to the scan path, and the box gets
 //                         back its text and caret from before the scan's first
 //                         key. A label is looked for before the burst test, so
-//                         a burst scanner's stall inside one sends it whole.
+//                         a burst scanner's stall inside one sends it whole. A
+//                         held key's repeats are a person's: a scanner never
+//                         sends one ("Shelf 1111" was sent as spool #111).
 const installFieldScanCapture = ({ match, isScanPayload, onScan, labels = false }) => {
     let buf = '';
     let startedAt = 0;
@@ -779,6 +785,8 @@ const installFieldScanCapture = ({ match, isScanPayload, onScan, labels = false 
     const RESET_MS = 2000;          // the accumulator's: keys further apart are two inputs
     const BURST_MS = 150;           // scanner speed, the accumulator's 'barcode' test
     const DIGITS_BURST_MS = 40;     // digits closer together than any person types them
+    const SCANNER_PACE_MS = 80;     // a label's keys this close together: no person types one (its ':' takes Shift)
+    const LETTER = /^[A-Za-z]$/;
     const PERSON_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab', 'Home', 'End',
         'PageUp', 'PageDown', 'Backspace', 'Delete', 'Escape'];
     let run = null;                 // { el, keys: [{ k, t, before, s0, s1 }] }
@@ -800,16 +808,19 @@ const installFieldScanCapture = ({ match, isScanPayload, onScan, labels = false 
     };
     // Where a label starts among the keys: the first key from which they read
     // as one, when it is the run's first or comes after a pause (longer than
-    // the label's own keys, twice over, and than a burst's 150 ms).
+    // the label's own keys, twice over, and than a burst's 150 ms). Right
+    // after a letter (the key before it, or the box's text before the run),
+    // only when its keys came at scanner pace.
     const labelFrom = (keys) => {
         const text = keys.map((x) => x.k).join('');
         for (let k = 0; k < keys.length; k++) {
             if (!window.fccIsLabel || !window.fccIsLabel(text.slice(k))) continue;
-            if (k > 0) {
-                let pace = 0;
-                for (let j = k + 1; j < keys.length; j++) pace = Math.max(pace, keys[j].t - keys[j - 1].t);
-                if (keys[k].t - keys[k - 1].t <= Math.max(BURST_MS, 2 * pace)) continue;
-            }
+            let pace = 0;
+            for (let j = k + 1; j < keys.length; j++) pace = Math.max(pace, keys[j].t - keys[j - 1].t);
+            if (k > 0 && keys[k].t - keys[k - 1].t <= Math.max(BURST_MS, 2 * pace)) continue;
+            const prev = k > 0 ? keys[k - 1].k
+                : (keys[0].s0 > 0 ? keys[0].before.charAt(keys[0].s0 - 1) : '');
+            if (LETTER.test(prev) && pace > SCANNER_PACE_MS) continue;
             return k;
         }
         return -1;
@@ -875,8 +886,10 @@ const installFieldScanCapture = ({ match, isScanPayload, onScan, labels = false 
         }
 
         if (labels) {
-            if (e.isComposing || e.ctrlKey || e.altKey || e.metaKey || PERSON_KEYS.includes(e.key)) {
+            if (e.isComposing || e.repeat || e.ctrlKey || e.altKey || e.metaKey || PERSON_KEYS.includes(e.key)) {
                 run = null;
+                // A held key's repeats: a person's, never a scanner's burst.
+                if (e.repeat) { buf = ''; startedAt = 0; preScanValue = ''; return; }
             } else if (e.key.length === 1) {
                 if (!inStep(el, now)) run = { el, keys: [] };
                 const [s0, s1] = caretOf(el);
@@ -1140,7 +1153,10 @@ const installWeightScanCapture = ({ match, onScan }) => {
         }
         // A person's own key: they are typing here, so no label is (one handed
         // back to the scan buffer included: it took their next key, round 7).
-        if (e.ctrlKey || e.altKey || e.metaKey || PERSON_KEYS.includes(e.key)) { reset(); handedOff = null; return; }
+        // A held key's repeats are a person's too: a scanner never sends one,
+        // and a held digit read as a fast digits-only label (Group 61 review 2).
+        if (e.ctrlKey || e.altKey || e.metaKey || PERSON_KEYS.includes(e.key)
+            || (e.repeat && e.key !== 'Enter')) { reset(); handedOff = null; return; }
         if (e.key === 'Enter') {
             let found = null;
             if (label && now - label.lastAt <= RESET_MS) {

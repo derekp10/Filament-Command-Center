@@ -97,10 +97,12 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><style>.modal{display
   <select id="edit-type"><option>Room</option><option>Dryer Box</option><option>Shelf</option><option>Printer</option>
     <option>3D Printer Shelf</option></select>
   <select id="edit-parent"><option value="__auto__">Auto</option><option value="__none__">Top level</option>
-    <option value="FL2">2nd Floor (FL2)</option><option value="CR">Computer Room (CR)</option>
+    <option value="FL2">2nd Floor (FL2)</option><option value="B1">Bin 1 (B1)</option><option value="B2">Bin 2 (B2)</option>
+    <option value="CR">Computer Room (CR)</option>
     <option value="GARAGE">Garage (GARAGE)</option><option value="LR">Living Room (LR)</option></select>
   <button id="loc-cancel" type="button">Cancel</button>
 </div></div>
+<input id="test-weight" class="fcc-weight-box" type="text">
 <div id="editFilamentModal" class="modal show"><div class="modal-dialog"><div class="modal-content">filament editor</div></div></div>
 <div id="wizardModal" class="modal show">
   <button type="button" class="fcc-wiz-section-toggle" data-bs-target="#wiz-spool-extras-panel">Extras</button>
@@ -158,7 +160,9 @@ def _type(page, text, ms, enter=True):
 # the caret, over the selection, and its input event. Backspace takes out the
 # selection or the character before the caret; ArrowLeft / ArrowRight move the
 # caret; "Ctrl+A" selects everything, another "Ctrl+<key>" changes nothing (a
-# copy); Enter last (its keydown). `pauses`: {index: extra ms before that key}.
+# copy); "repeat:<key>" is a held key's repeat (its keydown says repeat, and
+# the character goes in); Enter last (its keydown). `pauses`: {index: extra ms
+# before that key}.
 TYPE_BOX_JS = r"""([text, ms, enter, pauses]) => {
     if (!window.__fakeClock) {
         const base = Date.now(), pbase = performance.now();
@@ -174,10 +178,11 @@ TYPE_BOX_JS = r"""([text, ms, enter, pauses]) => {
         window.__T += ms + ((pauses && pauses[String(i)]) || 0);
         const t = document.activeElement || document.body;
         const ctrl = /^Ctrl\+.$/.test(key);
-        const k = ctrl ? key.slice(5).toLowerCase() : key;
+        const repeat = /^repeat:.$/.test(key);
+        const k = ctrl ? key.slice(5).toLowerCase() : (repeat ? key.slice(7) : key);
         const shift = !ctrl && k.length === 1 && (k !== k.toLowerCase() || SHIFTED.includes(k));
-        if (shift) t.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift', shiftKey: true, bubbles: true, cancelable: true }));
-        const go = t.dispatchEvent(new KeyboardEvent('keydown', { key: k, ctrlKey: ctrl, shiftKey: shift, bubbles: true, cancelable: true }));
+        if (shift && !repeat) t.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift', shiftKey: true, bubbles: true, cancelable: true }));
+        const go = t.dispatchEvent(new KeyboardEvent('keydown', { key: k, ctrlKey: ctrl, shiftKey: shift, repeat, bubbles: true, cancelable: true }));
         if (go && t.tagName === 'INPUT' && t.type === 'text' && !t.readOnly) {
             const s0 = t.selectionStart, s1 = t.selectionEnd;
             if (ctrl) {
@@ -195,8 +200,8 @@ TYPE_BOX_JS = r"""([text, ms, enter, pauses]) => {
                 t.dispatchEvent(new Event('input', { bubbles: true }));
             }
         }
-        t.dispatchEvent(new KeyboardEvent('keyup', { key: k, bubbles: true }));
-        if (shift) t.dispatchEvent(new KeyboardEvent('keyup', { key: 'Shift', bubbles: true }));
+        if (!repeat) t.dispatchEvent(new KeyboardEvent('keyup', { key: k, bubbles: true }));
+        if (shift && !repeat) t.dispatchEvent(new KeyboardEvent('keyup', { key: 'Shift', bubbles: true }));
     });
 }"""
 
@@ -341,6 +346,37 @@ def test_a_spools_number_typed_on_a_button_picks_it(page61):
     assert _ids(page61)[1] == ["ID:135", "keyboard"], _ids(page61)
 
 
+@pytest.mark.parametrize("move", ["ArrowDown", "click", "Tab"])
+def test_a_persons_move_after_typing_in_the_list_is_theirs(page61, move):
+    """"#134" typed in the list (it jumps to #134), then the person moves:
+    ArrowDown or a click to #135 and Enter picks #135, the spool shown; Tab to
+    Cancel and Enter cancels. RED on bf22167 (Group 61 review 2): the Enter
+    within 2 s was taken as a scan of "#134", and #134 joined the buffer, the
+    spool the person had moved away from."""
+    _open_picker(page61)
+    page61.focus("#fcc-legacy-picker-sel")
+    page61.keyboard.type("#134", delay=120)
+    assert page61.input_value("#fcc-legacy-picker-sel") == "134"
+    if move == "ArrowDown":
+        page61.keyboard.press("ArrowDown")
+    elif move == "click":
+        page61.locator("#fcc-legacy-picker-sel option[value='135']").click()
+    else:
+        page61.keyboard.press("Tab")
+        assert page61.evaluate("() => document.activeElement.id") == "fcc-legacy-picker-cancel"
+    page61.keyboard.press("Enter")
+    page61.wait_for_timeout(300)
+    if move == "Tab":
+        assert not _picker(page61)["open"] and _picker(page61)["held"] == []
+        assert _ids(page61) == [["LEG:120", "barcode"]], _ids(page61)
+    else:
+        page61.wait_for_function("() => window.__ids.length === 2", timeout=5000)
+        assert _ids(page61)[1] == ["ID:135", "keyboard"], _ids(page61)
+        page61.wait_for_function("() => state.heldSpools.length === 1")
+        assert _picker(page61)["held"] == [135]
+    assert _buffer(page61) == ""
+
+
 @pytest.mark.parametrize("label", ["120", "LEG:120"])
 def test_the_legacy_label_read_again_is_named_as_itself(page61, label):
     """A scanner's second read of the legacy label that opened the picker. RED
@@ -459,6 +495,118 @@ def test_a_scans_letters_on_a_dropdown_are_put_back(page61):
     assert _ids(page61)[1][0] == "PM-DB-1"
     assert page61.input_value("#edit-type") == "Room"
     assert page61.evaluate("() => window.__saves") == 0
+
+
+@pytest.mark.parametrize("select, first, second, want", [
+    ("#edit-type", "d", "s", "Shelf"),                          # Dryer Box, then a second later Shelf
+    ("#edit-parent", "g", "l", "LR"),                           # Garage, then a second later Living Room
+])
+def test_a_persons_second_jump_a_second_later_still_saves(page61, select, first, second, want):
+    """The browser's typeahead starts a new search after a second, so "d" and
+    1.3 s later "s" is a jump to Shelf. RED on bf22167 (Group 61 review 2): the
+    rule read the scan accumulator's 2 s buffer, "ds", so the Enter was a scan
+    ("Unknown Code"), the dropdown went back to Room, and nothing was saved."""
+    page61.focus(select)
+    page61.keyboard.press(first)
+    page61.wait_for_timeout(1300)
+    page61.keyboard.press(second)
+    page61.wait_for_timeout(200)
+    page61.keyboard.press("Enter")
+    assert page61.evaluate("() => window.__saves") == 1
+    assert page61.input_value(select) == want
+    assert _ids(page61) == [] and _buffer(page61) == ""
+
+
+@pytest.mark.parametrize("tabs, saves, clicks", [(1, 1, 0), (2, 0, 1)])
+def test_keys_typed_on_one_control_never_make_an_enter_on_another_a_scan(page61, tabs, saves, clicks):
+    """"pr" on the Type select (Printer), Tab to the Parent (or on to Cancel),
+    Enter: the person's (a scanner's Enter lands where its keys did). RED on
+    bf22167 (Group 61 review 2): the Parent's options were checked against the
+    Type's keys, and on Cancel two keys in the buffer made the Enter a scan of
+    "pr"; nothing was saved or pressed."""
+    page61.focus("#edit-type")
+    page61.keyboard.type("pr", delay=150)
+    for _ in range(tabs):
+        page61.keyboard.press("Tab")
+    page61.keyboard.press("Enter")
+    page61.wait_for_timeout(200)
+    assert page61.input_value("#edit-type") == "Printer"
+    assert page61.evaluate("() => [window.__saves, window.__clicks.cancel]") == [saves, clicks]
+    assert _ids(page61) == [] and _buffer(page61) == ""
+
+
+def test_a_persons_jump_just_before_a_scan_stays(page61):
+    """A person picks Garage with "g", and 0.8 s later a scan arrives on the
+    same dropdown (its "L" moves it to Living Room): it is put back to Garage,
+    the person's pick, and the scan goes out alone. RED on bf22167 (Group 61
+    review 2): put back to Computer Room, from before the person's key, and
+    "gLOC:CR" went out (Unknown Code)."""
+    page61.select_option("#edit-parent", "CR")
+    page61.focus("#edit-parent")
+    page61.keyboard.press("g")
+    page61.wait_for_timeout(800)
+    page61.keyboard.type("LOC:CR", delay=40)
+    page61.keyboard.press("Enter")
+    page61.wait_for_function("() => window.__ids.length === 1", timeout=5000)
+    assert page61.input_value("#edit-parent") == "GARAGE"
+    assert _ids(page61) == [["LOC:CR", "keyboard"]]
+    assert page61.evaluate("() => window.__saves") == 0
+
+
+@pytest.mark.parametrize("buf, ago", [("12345678", 0), ("LOC:FCC-TEST-SLOW", 1000)])
+def test_a_scan_whose_keys_the_dropdown_never_saw_is_still_a_scan(page61, buf, ago):
+    """The hermetic twins of 46.2's E2E (test_loc_editor_enter_to_save_e2e.py):
+    a scan in the buffer whose keys reached no control of the editor, a burst
+    or a slower scanner's payload, its Enter on the Type select: a scan, never
+    a save (the one Enter on a control nothing was typed on that isn't a
+    person's)."""
+    _clock(page61)
+    page61.focus("#edit-type")
+    page61.evaluate("([b, ago]) => { state.scanBuffer = b; state.scanStartTime = Date.now() - ago; }", [buf, ago])
+    _type(page61, "", 0)
+    page61.wait_for_function("() => window.__ids.length === 1")
+    assert _ids(page61)[0][0] == buf
+    assert page61.evaluate("() => window.__saves") == 0
+
+
+def test_a_burst_that_matches_an_option_is_still_a_scan(page61):
+    """An old label with no prefix, "GARAGE", scanned at scanner speed on the
+    Parent: it is also the start of "Garage (GARAGE)", but no person types six
+    keys and an Enter inside 150 ms, so it is a scan, not a save (the fake
+    clock, so the speed is exact: the decision is what is tested)."""
+    _clock(page61)
+    page61.select_option("#edit-parent", "CR")
+    page61.focus("#edit-parent")
+    _type(page61, "GARAGE", 5)
+    page61.wait_for_function("() => window.__ids.length === 1", timeout=5000)
+    assert _ids(page61)[0][0] == "GARAGE"
+    assert page61.input_value("#edit-parent") == "CR"
+    assert page61.evaluate("() => window.__saves") == 0
+
+
+def test_a_one_key_label_on_an_editor_button_is_a_scan(page61):
+    """A digits-only label one key long, its Enter right after it, with Cancel
+    focused: a scan of spool #5, and Cancel is not pressed (in flight, under
+    500 ms from its key)."""
+    _clock(page61)
+    page61.focus("#loc-cancel")
+    _type(page61, "5", 1)
+    assert page61.evaluate("() => window.__clicks.cancel") == 0
+    page61.wait_for_function("() => window.__ids.length === 1")
+    assert _ids(page61) == [["5", "barcode"]]
+
+
+@pytest.mark.parametrize("ms", [80, 100])
+def test_a_persons_space_on_a_dropdown_is_part_of_their_jump(page61, ms):
+    """"bin 2" to reach Bin 2 (Bin 1 starts the same): the browser's typeahead
+    gets the Space. RED on bf22167 (Group 61 review 2): a Space under 500 ms
+    after the first key was held off as a scan's, the dropdown stopped on Bin 1,
+    and Enter saved Bin 1."""
+    page61.focus("#edit-parent")
+    page61.keyboard.type("bin 2", delay=ms)
+    page61.keyboard.press("Enter")
+    assert page61.input_value("#edit-parent") == "B2"
+    assert page61.evaluate("() => window.__saves") == 1 and _ids(page61) == []
 
 
 def test_a_slower_scan_on_an_editor_button_is_a_scan(page61):
@@ -768,6 +916,55 @@ def test_a_persons_own_key_splits_the_keys_around_it(page61, between):
     _type_box(page61, ":5", 120)
     assert page61.evaluate("() => window.__saves") == 1 and _ids(page61) == []
     assert _box(page61)[0] == "Bin ID:5"
+
+
+@pytest.mark.parametrize("held", [3, 5])
+def test_a_held_keys_repeats_are_typing_not_a_scan(page61, held):
+    """A person holds the "1" too long (the system repeats it every 33 ms) and
+    presses Enter: their name, typo and all, is saved; a scanner never sends a
+    repeat. RED on bf22167 (Group 61 review 2): the repeats read as a digits
+    label faster than a person types, and "111" went out as spool #111."""
+    _clock(page61)
+    _name(page61, "Shelf ", select=False)
+    _type_box(page61, "1", 0, enter=False)
+    _type_box(page61, ["repeat:1"] * held, 33, enter=False, pauses={0: 500})
+    _type_box(page61, "", 100)
+    assert page61.evaluate("() => window.__saves") == 1 and _ids(page61) == []
+    assert _box(page61)[0] == "Shelf " + "1" * (held + 1)
+
+
+def test_a_held_key_in_a_weight_box_is_the_reading(page61):
+    """The same in a weight box (the weight capture's 40 ms digits rule, Group
+    57): a held "5" is a person's reading, never a scan. RED on bf22167: "555"
+    went to the scan path as a spool id, and the reading lost its repeats."""
+    _clock(page61)
+    page61.evaluate("() => { const w = document.getElementById('test-weight'); w.value = ''; w.focus(); }")
+    _type_box(page61, "645", 180, enter=False)
+    _type_box(page61, ["repeat:5"] * 3, 33, enter=False, pauses={0: 500})
+    _type_box(page61, "", 100)
+    page61.wait_for_timeout(100)
+    assert _ids(page61) == [] and page61.input_value("#test-weight") == "645555"
+
+
+@pytest.mark.parametrize("before, typo, rest, pause, want", [
+    ("Gr", "x", "id:2", 0, "Grid:2"),                           # a typo put right just before "id"
+    ("Gr", "", "id:2", 2200, "Grid:2"),                         # a pause there
+    ("G", "x", "old:1", 0, "Gold:1"),
+])
+def test_a_word_put_right_after_a_typo_stays_a_name(page61, before, typo, rest, pause, want):
+    """A person typing a name that holds a prefix inside a word, at their own
+    pace: putting a typo right (or pausing) just before the prefix's letters
+    starts a new run of keys, and a label right after a letter counts only at
+    scanner pace. RED on bf22167 (Group 61 review 2): "id:2" went out as spool
+    #2 and the box was left at "Gr"."""
+    _clock(page61)
+    _name(page61, "")
+    _type_box(page61, before, 150, enter=False)
+    if typo:
+        _type_box(page61, [typo, "Backspace"], 150, enter=False)
+    _type_box(page61, rest, 150, pauses={0: pause} if pause else None)
+    assert page61.evaluate("() => window.__saves") == 1 and _ids(page61) == []
+    assert _box(page61)[0] == want
 
 
 def test_a_box_put_back_tells_its_listeners(page61):
