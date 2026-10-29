@@ -18,8 +18,10 @@ proportions). Kept per browser in localStorage 'fcc.textSize'.
 The readability review (2026-10-21) added the bigger sizes in smaller windows
 and the setting's own edges:
   - below 992 px ⚙️ Settings stays on screen (the buttons wrap, the bar grows);
-  - 992-1280 px: the title shortens with "…" and the version badge goes,
-    instead of running under the buttons;
+  - 992-1280 px: the title shortens with "…" and the version badge keeps
+    its place (Group 57.3), 1rem clear of the buttons, and where even a title
+    cut to nothing leaves it no room the bar takes a second line, instead of
+    either running under the buttons;
   - on a short laptop window the open Printer Status scrolls inside itself, so
     the command deck and a strip of the log and buffer stay on screen, and on
     1600 x 1300 it keeps its room;
@@ -59,7 +61,7 @@ import pytest
 import requests
 from playwright.sync_api import Page
 
-from conftest import close_wizard, own_the_buffer
+from conftest import close_wizard, fixed_title_counts, own_the_buffer
 from test_text_size_guard import _read_only, dev_ids, _open_picker, _close_picker  # noqa: F401  (dev_ids: fixture)
 
 pytestmark = pytest.mark.usefixtures("require_server")
@@ -242,10 +244,17 @@ def test_the_settings_control_works_by_mouse_and_keyboard(page: Page, base_url: 
 NAV_JS = """() => {
     const nav = document.querySelector('nav.navbar');
     const nr = nav.getBoundingClientRect();
+    // Lines by their middles: a box whose middle is within half its height
+    // of a line's is on it (57.3: the Low and Out count pills sit a pixel or
+    // two lower than the words beside them).
     const lines = (el) => {
         const r = document.createRange(); r.selectNodeContents(el);
-        return new Set(Array.from(r.getClientRects()).filter((x) => x.width > 0.5)
-            .map((x) => Math.round(x.top + x.height / 2))).size;
+        const mids = [];
+        Array.from(r.getClientRects()).filter((x) => x.width > 0.5).forEach((x) => {
+            const mid = x.top + x.height / 2;
+            if (!mids.some((m) => Math.abs(m - mid) < x.height / 2)) mids.push(mid);
+        });
+        return mids.length;
     };
     const btns = Array.from(nav.querySelectorAll('.btn')).map((b) => {
         const r = b.getBoundingClientRect();
@@ -255,32 +264,98 @@ NAV_JS = """() => {
     const actions = nav.querySelector('.fcc-titlebar-actions');
     const search = Array.from(nav.querySelectorAll('.btn')).find((b) => /SEARCH/.test(b.innerText));
     const ver = document.getElementById('fcc-build-version');
+    const brand = nav.querySelector('.navbar-brand');
+    // Cut below the pixel, as titlebar_fit.js measures it (Group 57 review,
+    // round 2: on whole pixels a title up to 1.5 px too wide read as whole,
+    // while Chrome drew its "…").
+    const probe = document.createElement('span');
+    probe.className = brand.className;
+    probe.style.cssText = 'position:absolute;left:0;top:0;visibility:hidden;white-space:nowrap;min-width:0;max-width:none;';
+    probe.textContent = brand.textContent;
+    brand.parentNode.appendChild(probe);
+    const over = probe.getBoundingClientRect().width - brand.getBoundingClientRect().width;
+    probe.remove();
     return { btns, navH: Math.round(nr.height),
              overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
              gap: getComputedStyle(actions).columnGap, searchMargin: getComputedStyle(search).marginLeft,
              version: getComputedStyle(ver).display === 'none' ? 'hidden'
-                 : (ver.scrollWidth > ver.clientWidth + 1 ? 'squeezed' : 'whole') };
+                 : (ver.scrollWidth > ver.clientWidth + 1 ? 'squeezed' : 'whole'),
+             verText: ver.innerText.trim(),
+             // How far the badge is from the first of the buttons (the Spoolman
+             // light): never under them on one line, and 1rem with the title
+             // cut (review of 57.3).
+             badgeGap: actions.firstElementChild.getBoundingClientRect().left - ver.getBoundingClientRect().right,
+             rem: parseFloat(getComputedStyle(document.documentElement).fontSize),
+             title: over > 0.01 ? 'shortened' : 'whole' };
 }"""
+
+
+def _counts_painted(page: Page):
+    """The ⚠️ Low stock count (Group 57.2) painted, so the bar is measured at
+    its real width, not with the "–" it shows before the first heartbeat (its
+    Low and Out pills, 57.3, are painted with it)."""
+    page.wait_for_function("() => { const n = document.querySelector('#btn-low-stock-count [data-out-count]');"
+                           " return !!n && /^\\d+$/.test(n.textContent.trim()); }", timeout=20_000)
+    page.wait_for_timeout(300)
 
 
 @pytest.mark.parametrize("name", SIZES)
 def test_the_title_bar_keeps_its_buttons_on_one_line(page: Page, base_url: str, name):
+    """With the counts dev had on 2026-10-26 (Backlog 53, Queue 0, Low stock 12),
+    pinned, so the answer can't move with dev's data (Group 57 review)."""
     _read_only(page)
+    fixed_title_counts(page)
     _store(page, name)
     _load(page, base_url)
+    _counts_painted(page)
     nav = page.evaluate(NAV_JS)
     wrapped = [b for b in nav["btns"] if b["lines"] != 1 or not b["inside"]]
     assert not wrapped, f"{name}: title-bar buttons that wrap or stick out of the bar: {wrapped}"
-    assert nav["navH"] == 70 and not nav["overflow"], nav
-    # 1600 px wide: the version badge is whole at every size.
-    assert nav["version"] == "whole", nav
+    assert not nav["overflow"], nav
+    # 1600 px wide: one line, and the title and the version badge whole at
+    # every size. PINS UPDATED DELIBERATELY (Group 57.3, 2026-10-28): the badge
+    # never goes (Derek: he reads the build's date at a glance), and out of the
+    # box the ⚠️ button shows Low and Out apart ("Low [1] Out [11]"), wider than
+    # one number: at Extra Large the badge shows its date and time alone (it
+    # went there before); at Small and Standard the words are kept and only the
+    # spacing tightens (the first step). The steps are titlebar_fit.js's, taken
+    # only while the title is cut.
+    assert nav["title"] == "whole" and nav["version"] == "whole" and nav["navH"] == 70, nav
+    assert nav["badgeGap"] >= -0.5, f"{name}: the badge runs under the buttons: {nav}"
+    assert nav["verText"].startswith("commit ") == (name != "Extra Large"), nav
     texts = [b["text"] for b in nav["btns"]]
     if name in ("Small", "Standard"):
-        # The classic bar, unchanged.
-        assert "➕ ADD INVENTORY" in texts, texts
-        assert (nav["gap"], nav["searchMargin"]) == ("16px", "24px"), nav
+        assert "➕ ADD INVENTORY" in texts and "🏷️ Backlog (53)" in texts, texts
+        assert (nav["gap"], nav["searchMargin"]) == ("8px", "0px"), nav
+    if name == "Large":
+        assert "➕ ADD INVENTORY" in texts and "🏷️ 53" in texts, texts
     if name == "Extra Large":
         assert "➕ ADD" in texts, texts
+
+
+@pytest.mark.parametrize("name", SIZES)
+def test_bigger_counts_take_a_step_instead_of_cutting_the_title(page: Page, base_url: str, name):
+    """Backlog 153, Queue 10, Low stock 100 at 1600 px: the bar takes its next
+    step (titlebar_fit.js) and the title stays whole at every size. RED on
+    2d166e5: the steps came at fixed widths, and at Standard the title was cut
+    (Group 57 review)."""
+    _read_only(page)
+    fixed_title_counts(page, backlog=153, queue=10, low=40, out=60)
+    _store(page, name)
+    _load(page, base_url)
+    _counts_painted(page)
+    page.wait_for_function("() => /\\(10\\)/.test(document.getElementById('btn-queue-count').textContent)",
+                           timeout=10_000)
+    page.wait_for_timeout(300)
+    nav = page.evaluate(NAV_JS)
+    wrapped = [b for b in nav["btns"] if b["lines"] != 1 or not b["inside"]]
+    assert not wrapped and not nav["overflow"], nav
+    # The title and the badge stay whole, on one line at every size (review of
+    # 57.3: the one-line pin came back; 57.3 had dropped it with no need).
+    assert nav["title"] == "whole" and nav["version"] == "whole" and nav["navH"] == 70, nav
+    assert nav["badgeGap"] >= -0.5, f"{name}: the badge runs under the buttons: {nav}"
+    if name in ("Small", "Standard"):
+        assert nav["gap"] == "8px", f"{name}: the first step (tighter spacing) should have come: {nav}"
 
 
 # ---------------------------------------------------------------------------
@@ -311,9 +386,11 @@ def test_settings_stays_on_screen_in_a_narrow_window(page: Page, base_url: str, 
     window 744-820 px). The buttons now wrap onto another line, and the bar
     grows to hold them instead of drawing them over Printer Status."""
     _read_only(page)
+    fixed_title_counts(page)
     _store(page, name)
     page.set_viewport_size({"width": width, "height": 1100})
     _load(page, base_url)
+    _counts_painted(page)
     g = page.evaluate(GEAR_JS)
     left, top, right, bottom = g["rect"]
     assert left >= -0.5 and right <= g["vw"] + 0.5 and top >= -0.5 and bottom <= g["vh"] + 0.5, (name, width, g)
@@ -328,7 +405,19 @@ BRAND_JS = """() => {
     const bcs = getComputedStyle(brand);
     const actions = nav.querySelector('.fcc-titlebar-actions').getBoundingClientRect();
     const ver = document.getElementById('fcc-build-version');
-    return { brandRight: brand.getBoundingClientRect().right, actionsLeft: actions.left,
+    // Cut below the pixel, as titlebar_fit.js measures it.
+    const probe = document.createElement('span');
+    probe.className = brand.className;
+    probe.style.cssText = 'position:absolute;left:0;top:0;visibility:hidden;white-space:nowrap;min-width:0;max-width:none;';
+    probe.textContent = brand.textContent;
+    brand.parentNode.appendChild(probe);
+    const over = probe.getBoundingClientRect().width - brand.getBoundingClientRect().width;
+    probe.remove();
+    // On two lines the buttons are under the title (57.3).
+    return { brandRight: brand.getBoundingClientRect().right, actionsLeft: actions.left, cut: over > 0.01,
+             verRight: ver.getBoundingClientRect().right,
+             rem: parseFloat(getComputedStyle(document.documentElement).fontSize),
+             below: actions.top >= brand.getBoundingClientRect().bottom - 0.5,
              brandClips: bcs.overflowX !== 'visible' && bcs.textOverflow === 'ellipsis',
              brandTitle: brand.getAttribute('title'),
              version: getComputedStyle(ver).display === 'none' ? 'hidden'
@@ -342,17 +431,53 @@ def test_the_title_gives_way_without_running_under_the_buttons(page: Page, base_
     """992-1280 px wide (an iPad in landscape, a small laptop): the title ran
     on under the Spoolman light and SEARCH (HEAD: 225 px of it at Extra Large,
     1024 px), and the version badge was squeezed to an empty bordered box over
-    the light. Now the badge goes first (its text is its tooltip, and in
-    Settings -> Build Info), then the title shortens with "…" inside its own
-    box (its full text is its tooltip)."""
+    the light. Now the title shortens with "…" and the badge keeps its place,
+    1rem clear of the buttons; where even a title cut to nothing leaves the
+    badge no room (Large at 1024 px, Extra Large at 1024 and 1100 px), the bar
+    takes a second line, the title whole with the badge beside it (Group 57.3:
+    the badge went first, until Derek kept it, 2026-10-28; review of 57.3: on
+    one line its date was drawn under the Spoolman light, RED on 41b819d). The
+    title still clips in its own box if it must (its full text is its
+    tooltip)."""
     _read_only(page)
+    fixed_title_counts(page)
     _store(page, name)
     page.set_viewport_size({"width": width, "height": 900})
     _load(page, base_url)
+    _counts_painted(page)
     b = page.evaluate(BRAND_JS)
-    assert b["brandRight"] <= b["actionsLeft"] + 0.5, f"{name} @ {width} px: the title runs under the buttons: {b}"
+    assert b["below"] or b["brandRight"] <= b["actionsLeft"] + 0.5, f"{name} @ {width} px: the title runs under the buttons: {b}"
+    # On one line the badge is never under the buttons, and 1rem clear of
+    # them while the title is cut.
+    assert b["below"] or b["actionsLeft"] - b["verRight"] >= (b["rem"] - 0.75 if b["cut"] else -0.5), (
+        f"{name} @ {width} px: the version badge runs under the buttons, or touches them: {b}")
     assert b["brandClips"] and b["brandTitle"] == "Filament Command Center", b
-    assert b["version"] in ("hidden", "whole"), f"{name} @ {width} px: the version badge is squeezed: {b}"
+    assert b["version"] == "whole", f"{name} @ {width} px: the version badge is squeezed or gone: {b}"
+
+
+@pytest.mark.parametrize("width", (1180, 1280))
+def test_take_a_second_line_keeps_the_title_whole(page: Page, base_url: str, width):
+    """Settings -> When the title bar is full on Take a second line (Derek,
+    2026-10-29: "I like both, if we could option it"): at Extra Large, where
+    the default shortens the title ("F…" at 1180 px, "Filament C…" at 1280),
+    the bar takes a second line, the title whole with the whole badge beside
+    it; on his 1600 px window, where the title fits, nothing changes."""
+    _read_only(page)
+    fixed_title_counts(page)
+    _store(page, "Extra Large")
+    page.add_init_script("(() => { try { localStorage.setItem('fcc.titleBar.full', 'Take a second line'); }"
+                         " catch (e) {} })();")
+    page.set_viewport_size({"width": width, "height": 900})
+    _load(page, base_url)
+    _counts_painted(page)
+    nav = page.evaluate(NAV_JS)
+    b = page.evaluate(BRAND_JS)
+    assert b["below"] and nav["title"] == "whole" and nav["version"] == "whole", (width, nav, b)
+    assert nav["verText"].startswith("commit "), f"on two lines the badge is whole: {nav}"
+    page.set_viewport_size({"width": 1600, "height": 900})
+    page.wait_for_timeout(400)
+    nav = page.evaluate(NAV_JS)
+    assert nav["navH"] == 70 and nav["title"] == "whole", nav
 
 
 DECK_JS = """() => {

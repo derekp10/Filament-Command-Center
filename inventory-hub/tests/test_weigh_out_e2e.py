@@ -46,10 +46,12 @@ def test_weigh_out_modal_e2e(page: Page, clean_buffer):
     weight_input.fill("850")
     weight_input.press("Enter")
 
-    # 9. Verify the button reaches the saved state (floppy-disk emoji).
-    # The UI progression is ⏳ (saving) → 💾 (saved).
-    save_btn = page.locator(".weigh-save-btn[data-id='1']")
-    expect(save_btn).to_contain_text("💾", timeout=5000)
+    # 9. The save lands: its row (⏳ while saving, ✅ once saved, disabled
+    # throughout) fades out and is gone; a save that failed would give the 💾
+    # back and keep the row. This step used to wait for the 💾 as "saved": the
+    # save's own redraw drew the fading row again, enabled, which let a key
+    # typed then save the spool a second time (Group 57 review, round 10).
+    expect(page.locator(".weigh-row[data-id='1']")).to_have_count(0, timeout=5000)
 
     # 10. Close the modal cleanly.
     modal.locator(".btn-close").click()

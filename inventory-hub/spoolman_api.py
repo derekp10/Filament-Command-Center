@@ -97,6 +97,23 @@ def get_spool(sid):
     except: return None
 
 
+def get_spool_answer(sid):
+    """`get_spool`, saying whether Spoolman answered at all (Group 57 review,
+    round 2): (what get_spool returns, True) when it answered, a body that isn't
+    JSON included (None then: a record Spoolman can't send); (None, False) when
+    it didn't (no connection, a timeout). The dashboard's buffer refresh stops
+    reading one spool at a time only on the second kind."""
+    sm_url, _ = config_loader.get_api_urls()
+    try:
+        resp = requests.get(f"{sm_url}/api/v1/spool/{sid}", timeout=3)
+    except Exception:
+        return None, False
+    try:
+        return parse_inbound_data(resp.json()), True
+    except Exception:
+        return None, True
+
+
 def get_all_spools(allow_archived=True):
     """Return every spool (optionally including archived) as parsed dicts.
     Backs the Prusament-scan matcher, which finds a spool by its stored
@@ -187,6 +204,25 @@ class SpoolListRead:
             self.reads = 1
             self._spools, self.error = read_spool_list(self.allow_archived)
         return self._spools
+
+
+class FilamentListRead:
+    """The filament list for ONE request, read at most once, on first use: the
+    filament half of SpoolListRead (Group 57.2: the heartbeat's label_backlog
+    and low_stock sections both count from it). Same rules: never kept past the
+    request, display readers only. `get()` answers the parsed list, or None when
+    the read failed (`error` says why); `reads` counts the HTTP reads (0 or 1)."""
+
+    def __init__(self):
+        self.reads = 0
+        self.error = None
+        self._filaments = None
+
+    def get(self):
+        if not self.reads:
+            self.reads = 1
+            self._filaments, self.error = read_filament_list()
+        return self._filaments
 
 
 def get_all_locations():

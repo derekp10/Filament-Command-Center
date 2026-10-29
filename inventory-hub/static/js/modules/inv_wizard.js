@@ -617,8 +617,12 @@ window.wizardCollapseAllSections = () => {
         // on the modal rather than a field) fired expand/collapse once per such
         // character AND left those characters in state.scanBuffer, corrupting
         // the scan. Bail while a scan is in flight and let the accumulator have
-        // the keystroke.
-        if (window.isScanInFlight && window.isScanInFlight()) return;
+        // the keystroke: one still arriving, however slow the scanner
+        // (window.scanIsArriving; Group 57 review, round 4). The keys this
+        // leaves in the buffer don't look like a scan, so they no longer stop
+        // the next toggle (round 5: E, C, then E did nothing).
+        if (window.scanIsArriving ? window.scanIsArriving()
+            : (window.isScanInFlight && window.isScanInFlight())) return;
         // ⚠️ preventDefault ONLY — deliberately NOT stopImmediatePropagation.
         // The guard above CANNOT fire on the FIRST character of a scan:
         // scanBuffer is still empty because the accumulator hasn't seen that

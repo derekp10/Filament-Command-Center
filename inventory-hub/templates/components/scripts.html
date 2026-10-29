@@ -47,9 +47,9 @@
 
 <script src="{{ url_for('static', filename='js/modules/inv_details.js') }}?v=2"></script>
 
-<script src="{{ url_for('static', filename='js/modules/inv_queue.js') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/inv_queue.js') }}?v=1.1"></script>
 
-<script src="{{ url_for('static', filename='js/modules/inv_backlog.js') }}?v=1.1"></script>
+<script src="{{ url_for('static', filename='js/modules/inv_backlog.js') }}?v=1.2"></script>
 
 <!-- Item 3.6: shared spool-disambiguation picker. Loads after inv_queue.js so
      the picker's "🖨️ Print new label" path can call window.addToQueue. -->
@@ -58,8 +58,9 @@
 <script src="{{ url_for('static', filename='js/modules/inv_loc_mgr.js') }}"></script>
 
 <script src="{{ url_for('static', filename='js/modules/inv_search.js') }}?v=1.1"></script>
-<!-- Group 49.2a: the ⚠️ Low-stock list, opened by the search panel's button. -->
-<script src="{{ url_for('static', filename='js/modules/inv_stock.js') }}?v=1.0"></script>
+<!-- Group 49.2a: the ⚠️ Low-stock list, opened by the title bar's ⚠️ count
+     (Group 57.2) and the search panel's button. -->
+<script src="{{ url_for('static', filename='js/modules/inv_stock.js') }}?v=1.2"></script>
 <script src="{{ url_for('static', filename='js/modules/inv_cmd.js') }}?v=1.2"></script>
 <script src="{{ url_for('static', filename='js/modules/inv_weigh_out.js') }}?v=2.2"></script>
 
@@ -87,6 +88,11 @@
      Settings -> 🖥️ This Browser. dashboard.html's <head> applies the stored size
      before the first paint; this module only handles a change. -->
 <script src="{{ url_for('static', filename='js/modules/text_size.js') }}?v=1.0"></script>
+<!-- Group 57.3: the title bar's per-browser settings (Title bar buttons, Low
+     stock count, When the title bar is full), changed live from Settings ->
+     🖥️ This Browser.
+     dashboard.html's <head> applies them before the first paint. -->
+<script src="{{ url_for('static', filename='js/modules/titlebar_prefs.js') }}?v=1.2"></script>
 
 <script>
     // Module Initialization
@@ -94,31 +100,11 @@
         // Bootstrapping
         requestWakeLock();
 
-        // L42 — Replace server-rendered UTC build stamp with a local-time
-        // version so users in PDT/EST/etc don't see "tomorrow's date" when
-        // the container clock is UTC. Round 2 also threads the commit SHA
-        // (when known) into the badge so the dashboard advertises the
-        // actual git revision that's running, not just a freshness mtime.
-        const verEl = document.getElementById('fcc-build-version');
-        if (verEl) {
-            const pad = (n) => String(n).padStart(2, '0');
-            const fmt = (unix) => {
-                const d = new Date(unix * 1000);
-                return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-            };
-            const sha = (verEl.dataset.buildCommitSha || '').trim();
-            const commitTs = parseInt(verEl.dataset.buildCommitTs || '0', 10);
-            const mtime = parseFloat(verEl.dataset.buildMtime || '0');
-            // Prefer the commit-aware label when the server resolved one.
-            if (sha) {
-                let label = `commit ${sha}`;
-                if (commitTs > 0) label += ` • ${fmt(commitTs)}`;
-                verEl.textContent = label;
-            } else if (mtime > 0) {
-                verEl.textContent = `build ${fmt(mtime)}`;
-            }
-            // Keep the original (UTC) text in the tooltip so it's recoverable.
-        }
+        // L42's local-time version badge (the container's clock is UTC, with
+        // the commit SHA when the server resolved one) is written by
+        // titlebar_fit.js, right after the bar and before its first fit
+        // (Group 57 review, round 2: written here, after the first paint, the
+        // shorter local text moved the bar's buttons on every load).
 
         // Initialize Modals
         ['locMgrModal', 'locModal', 'manageModal', 'confirmModal',
@@ -263,8 +249,53 @@
         });
 
         state.scanStartTime = 0;
+        // Scans read while FCC is busy (the focus guard up, or a scan or a save
+        // being answered) wait in ONE queue and go out in the order they were
+        // read (Group 57 review, round 11). Each used to wait on its own 250 ms
+        // poll, so when the busy answer came, the first poll to tick went
+        // first: a slot label scanned right after a spool could reach the
+        // server before the spool, and the spool scanned before them went into
+        // the slot. A scan read while the queue still holds one joins it too,
+        // so it never goes ahead of a scan read before it.
+        // (On `state`, and function declarations: the tests lift this block
+        // into a page as a script of its own.)
+        state.scanQueue = state.scanQueue || [];
+        state.scanQueueTimer = state.scanQueueTimer || null;
+        function scanFrozen() {
+            const g = document.getElementById('focus-guard');
+            return (g && g.style.display === 'flex') || state.processing;
+        }
+        function drainScanQueue() {
+            const queue = state.scanQueue;
+            // One at a time: a scan that goes to the server turns processing on
+            // at once (inv_cmd.js), so the next one waits for its answer.
+            while (queue.length && !scanFrozen()) {
+                const q = queue.shift();
+                console.log("UI unfrozen, processing queued scan:", q.text);
+                try {
+                    processScan(q.text, q.source, q.capturedAt, q.weighRead);
+                } catch (err) {
+                    console.error("Queued scan failed:", q.text, err);
+                } finally {
+                    // Answered without going out (a second read dropped,
+                    // a dialog's own QR): nothing to wait for.
+                    if (q.weighRead && !q.weighRead.sent && window.weighOutScanDone) window.weighOutScanDone(q.weighRead);
+                }
+            }
+            if (!queue.length && state.scanQueueTimer) { clearInterval(state.scanQueueTimer); state.scanQueueTimer = null; }
+        }
         document.addEventListener('keydown', (e) => {
-            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+            // A field keeps its own keys. A checkbox can't hold typed text, so
+            // a scan typed with the focus on one (the Quick-Weigh's Auto Archive
+            // switch, a Tab away from its weight) is a scan, as on a button: it
+            // was lost, and its Enter and its 'D' worked the window's keys
+            // (Group 57 review, round 6). A person's reading typed there would be
+            // one too (a spool id, round 7), so a weight window's controls send a
+            // weight key to its weight box before it gets here (inv_core.js's
+            // weight capture, data-fcc-weight-keys). A radio stays its own: the
+            // Low stock reasons read their scans themselves (inv_stock.js).
+            const t = e.target;
+            if (t.tagName === 'TEXTAREA' || (t.tagName === 'INPUT' && t.type !== 'checkbox')) return;
 
             // A modifier combo is an APP SHORTCUT, never scanner output — a
             // barcode scanner types plain characters. Without this, Ctrl+C to
@@ -287,21 +318,18 @@
                     // handled, which a queued scan replays only afterwards.
                     const capturedAt = Date.now();
 
-                    const g = document.getElementById('focus-guard');
-                    const isFrozen = (g && g.style.display === 'flex') || state.processing;
-
-                    if (isFrozen) {
-                        console.warn("UI frozen, queuing scan:", state.scanBuffer);
-                        const bffr = state.scanBuffer;
-                        const src = source;
-                        const tryProcess = setInterval(() => {
-                            const fg = document.getElementById('focus-guard');
-                            if (!state.processing && (!fg || fg.style.display !== 'flex')) {
-                                clearInterval(tryProcess);
-                                console.log("UI unfrozen, processing queued scan:", bffr);
-                                processScan(bffr, src, capturedAt);
-                            }
-                        }, 250);
+                    if (scanFrozen() || state.scanQueue.length) {
+                        console.warn("UI busy, queuing scan:", state.scanBuffer);
+                        // The weigh-out list hears of the scan as it is read, not
+                        // as it goes out (Group 57 review, round 9): until then
+                        // the earlier scan's answer counted as the latest, moved
+                        // the focus and took the reading typed for this one.
+                        const weighRead = window.weighOutScanStart ? window.weighOutScanStart() : null;
+                        state.scanQueue.push({ text: state.scanBuffer, source, capturedAt, weighRead });
+                        if (!state.scanQueueTimer) state.scanQueueTimer = setInterval(drainScanQueue, 250);
+                        // Not busy any more (the queue only held scans its poll
+                        // hadn't sent yet): those go now, then this one.
+                        drainScanQueue();
                     } else {
                         processScan(state.scanBuffer, source, capturedAt);
                     }
@@ -310,6 +338,13 @@
                 state.scanStartTime = 0;
             }
             else if (e.key.length === 1) {
+                // A Space with nothing collected is a person's (it pressed a
+                // focused button): no label starts with one. Kept, it sat in
+                // front of the next scan for 2 s (" CMD:WEIGH", a Malformed
+                // Command), started that scan's 500 ms early, and two of them
+                // made a person's Enter in a dialog a scan of "  " (Group 57
+                // review, rounds 2 and 5).
+                if (e.key === ' ' && !state.scanBuffer) return;
                 if (state.scanBuffer.length === 0) {
                     state.scanStartTime = Date.now();
                 }

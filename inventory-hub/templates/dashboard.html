@@ -17,19 +17,44 @@
             document.documentElement.setAttribute('data-fcc-text-size', slug);
         })();
     </script>
+    <!-- Title bar buttons, Low stock count and When the title bar is full
+         (Settings -> 🖥️ This Browser; titlebar_prefs.js changes them live, Group
+         57.3). Set on <html> before anything draws, so the bar is fitted to the
+         labels it shows from the first paint. Absent or unknown = Automatic, Low
+         and Out, and Shorten the title. -->
+    <script id="fcc-title-bar-boot">
+        (function () {
+            var prefs = [
+                ['fcc.titleBar.buttons', 'data-fcc-tb-buttons',
+                    { 'Automatic': 'auto', 'Always words': 'words', 'Always icons': 'icons' }, 'auto'],
+                ['fcc.lowStock.count', 'data-fcc-low-count', { 'Low and Out': 'both', 'One number': 'one' }, 'both'],
+                ['fcc.titleBar.full', 'data-fcc-tb-full',
+                    { 'Shorten the title': 'shorten', 'Take a second line': 'wrap' }, 'shorten']
+            ];
+            for (var i = 0; i < prefs.length; i++) {
+                var picked = null;
+                try { picked = window.localStorage.getItem(prefs[i][0]); } catch (e) { /* storage blocked */ }
+                var map = prefs[i][2];
+                document.documentElement.setAttribute(prefs[i][1],
+                    Object.prototype.hasOwnProperty.call(map, picked) ? map[picked] : prefs[i][3]);
+            }
+        })();
+    </script>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/global.css') }}?v=15">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/global.css') }}?v=17">
 </head>
 
 <body>
     <!-- No title-bar button's label wraps (readability, 2026-10-21): at a
          bigger Text size or in a narrow window the bar tightens its spacing,
-         then shortens ADD INVENTORY to ADD, drops the version badge and
-         shortens the title with "…"; below 992 px wide the buttons move onto
-         another line rather than leave the screen (global.css "Title bar"). -->
+         then shows Backlog, Queue and Low stock as icon and number (Settings ->
+         Title bar buttons: Automatic), then shortens ADD INVENTORY to ADD and
+         the version badge to its date and time, and last the title with "…";
+         the badge never goes (Group 57.3, Derek). Below 992 px wide the buttons
+         have a line of their own (global.css "Title bar"). -->
     <nav class="navbar navbar-expand-lg">
         <div class="container-fluid fcc-titlebar">
             <div class="navbar-brand-group">
@@ -57,12 +82,46 @@
                     ➕ ADD<span class="fcc-titlebar-more"> INVENTORY</span>
                 </button>
 
-                <button class="btn btn-info ms-4" id="btn-backlog-count" onclick="window.openBacklogModal()">
-                    🏷️ Backlog (0)
+                <!-- The three counts read "(–)" / "–" until their first answer, never
+                     a count of 0 that wasn't read (Group 57 review, round 3: Backlog
+                     and Queue read "(0)"). data-count-pending marks a count not yet
+                     painted: the bar keeps the steps it took last time meanwhile
+                     (titlebar_fit.js), and each count's painter drops it. An en dash,
+                     no wider than a digit: round 3's "…" was wider than a count under
+                     10, so with small counts the first paint took a step the counts
+                     then gave back, on every load (round 4).
+                     Group 57.3: a label's word and brackets are spans of their own
+                     (fcc-tb-word, fcc-tb-paren), which the bar drops to show the icon
+                     and number alone (Settings -> Title bar buttons; global.css
+                     "Title bar"). Each painter writes the same shape. -->
+                <button class="btn btn-info ms-4" id="btn-backlog-count" onclick="window.openBacklogModal()"
+                    title="Backlog: no count yet. Opens the label backlog."
+                    aria-label="Backlog: no count yet. Opens the label backlog.">
+                    🏷️<span class="fcc-tb-word"> Backlog</span> <span class="fcc-count-num" data-count-pending><span
+                    class="fcc-tb-paren">(</span>–<span class="fcc-tb-paren">)</span></span>
                 </button>
-                <button class="btn btn-warning ms-2" id="btn-queue-count" onclick="openQueueModal()">
-                    🛒 Queue (0)
+                <button class="btn btn-warning ms-2" id="btn-queue-count" onclick="openQueueModal()"
+                    title="Queue: opens the label print queue." aria-label="Queue: opens the label print queue.">
+                    🛒<span class="fcc-tb-word"> Queue</span> <span class="fcc-count-num" data-count-pending><span
+                    class="fcc-tb-paren">(</span>–<span class="fcc-tb-paren">)</span></span>
                 </button>
+                <!-- Group 57.2 / 57.3: the ⚠️ Low stock list (inv_stock.js, which wires
+                     the click) with its count at a glance, from the heartbeat's
+                     low_stock section, in both forms Settings -> Low stock count picks
+                     from (global.css shows one): Low and Out apart, in the list's own
+                     words and count pills, or one number, the two added up.
+                     inv_stock.js paints both. The words are its tooltip and accessible
+                     name, and hold what it shows: these are the default form's, and
+                     inv_stock.js writes the other form's at the load. -->
+                <button type="button" class="btn btn-outline-warning ms-2" id="btn-low-stock-count"
+                    title="Low –, Out –: no count yet. Opens the list."
+                    aria-label="Low –, Out –: no count yet. Opens the list."><span
+                    aria-hidden="true">⚠️</span><span class="fcc-ls-both"> <span class="fcc-tb-count">Low<span
+                    class="fcc-ls-pill" data-low-count data-count-pending>–</span>Out<span class="fcc-ls-pill"
+                    data-out-count data-count-pending>–</span></span></span><span class="fcc-ls-one"><span
+                    class="fcc-tb-word"> Low stock</span> <span class="fcc-tb-count"><span
+                    class="fcc-tb-paren">(</span><span data-low-stock-count data-count-pending>–</span><span
+                    class="fcc-tb-paren">)</span></span></span></button>
                 <!-- Phase 3: keyboard shortcut reference (?). Click or press `?` to open. -->
                 <button class="btn btn-outline-light ms-2" id="btn-shortcuts-help"
                     onclick="window.toggleShortcutsOverlay()"
@@ -85,6 +144,11 @@
             </div>
         </div>
     </nav>
+    <!-- Group 57 review: the bar takes each of its steps (tighter spacing, icon
+         and number, ADD, the badge's date alone) only while the title is cut
+         short, whatever its live counts say (global.css "Title bar"). Right
+         after the bar, so it fits before the first paint. -->
+    <script src="{{ url_for('static', filename='js/modules/titlebar_fit.js') }}?v=1.4"></script>
 
     <!-- Shortcuts overlay — populated by shortcuts_registry.js at runtime.
          L218 fix: the panel previously sat alone with no backdrop, so outside
@@ -257,7 +321,11 @@
     <script>
         // Inject the Spoolman URL from Python
         const SPOOLMAN_URL = "{{ spoolman_url }}";
-        const BUY_MORE_URL_TEMPLATE = "{{ buy_more_template }}";
+        // As JSON (Group 57.4): inside quotes Jinja's HTML escaping reached the
+        // script as it was, so a template's & arrived as &amp; in the spool and
+        // filament windows' Buy More links. tojson writes a JS string whose
+        // < > & ' are \u-escapes, so nothing in it can end this script either.
+        const BUY_MORE_URL_TEMPLATE = {{ buy_more_template|tojson }};
         // Feature gate: Bulk Moves (L298) ships OFF; each install turns it on
         // in its own config.json. The backend refuses the API independently,
         // so this only decides whether the affordances render.

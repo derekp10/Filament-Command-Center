@@ -45,12 +45,20 @@ def test_the_picker_has_no_text_input_and_mounts_through_mount_overlay():
 def test_process_scan_routes_to_the_picker_before_any_command():
     src = _read(MODULES / "inv_cmd.js")
     start = src.index("const processScan = ")
-    body = src[start:start + 6000]
+    body = src[start:start + 9000]          # its opening routes (they grew in Group 57's review, round 7)
     confirm = body.index("window.routeConfirmScan(text)")
     picker = body.index("window.routePickerScan(text)")
     first_cmd = body.index("if (upper === 'CMD:AUDIT')")
-    stale_guard = body.index("/^CMD:(CONFIRM|STORE):.+/.test(upper)")
+    stale_guard = body.index("/CMD:(CONFIRM|STORE):\\S/.test(upper)")       # anywhere: Group 57 review, rounds 5 and 6
     assert confirm < picker < stale_guard < first_cmd
+    # A read the picker (or the open question) took by its last label counts
+    # for the double-read rule (round 7): both say routed(). One the picker
+    # refused doesn't (round 8): unread(); nor one the question refused (round
+    # 9: a held feed slot).
+    assert "const picker = window.routePickerScan ? window.routePickerScan(text) : false;" in body
+    assert "if (picker) { if (picker === 'refused') unread(); else routed(); return; }" in body
+    assert "const answered = typeof openQuestion.route === 'function' ? openQuestion.route(text) : false;" in body
+    assert "if (answered) { if (answered === 'refused') unread(); else routed(); return; }" in body
 
 
 def test_the_template_loads_the_picker_between_inv_cmd_and_the_shortcut_registry():

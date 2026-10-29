@@ -169,6 +169,11 @@ def dashboard():
     port = cfg.get('spoolman_port', 7912)
     sm_url = f"http://{ip}:{port}"
     buy_more_url_template = cfg.get('buy_more_url_template', '')
+    # Always text (Group 57 review): the page now reads it as JSON (|tojson), which
+    # keeps a number's or a boolean's type, and the windows call .replace() on it.
+    # A null, a number or true typed into config.json is no template.
+    if not isinstance(buy_more_url_template, str):
+        buy_more_url_template = ''
     
     # Re-read .build_info on every dashboard render so a post-commit hook
     # update (host-side) takes effect without needing a container restart.

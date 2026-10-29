@@ -3,7 +3,9 @@ console.log("🚀 Loaded Module: LOW STOCK");
 
 // window.openLowStockPanel()
 //
-// Opened by the search panel's "⚠️ Low stock" button (offcanvas_search.html).
+// Opened by the title bar's ⚠️ button (#btn-low-stock-count, which shows how
+// many filaments are low or out: Group 57.2, below) and the search panel's
+// "⚠️ Low stock" button (offcanvas_search.html).
 // One mountOverlay panel, per filament across its in-stock spools, from GET
 // /api/stock_report (stock_report.py), in three lists: Low (under the
 // `low_stock_g` setting, fewest grams first), Out (none in stock; the ones with
@@ -11,6 +13,11 @@ console.log("🚀 Loaded Module: LOW STOCK");
 // with why). It asks the server only when it opens or after a change made here,
 // never on the dashboard heartbeat (Group 45.8's lesson), and a failed read
 // shows an error that says Spoolman didn't answer, never "Nothing is low".
+// The window keeps one size whatever it shows (Group 57.1, Derek 2026-10-25:
+// "It jumps in size depending on its content's length"): a fixed height in
+// rem, the list the only part that scrolls; the tabs, the filter, the line
+// under the title and the key legend stay where they are on every list, a
+// filter with no match, while it reads and after an error.
 //
 // Derek, 2026-10-20: a long list needed to be easier to read (tabs, a filter,
 // one line per filament: a sample he tried, and liked, before it ships), a
@@ -55,6 +62,7 @@ console.log("🚀 Loaded Module: LOW STOCK");
     const NOTE_MAX = 500;      // stock_report.EXCLUDE_NOTE_MAX
     let _seq = 0;              // a newer load wins; an older answer never paints
     let _current = null;       // the open panel's handle
+    let _count = null;         // the title-bar count: {low, out, threshold}, once one is known
 
     const esc = (v) => (typeof window.escHtml === 'function'
         ? window.escHtml(v)
@@ -73,7 +81,8 @@ console.log("🚀 Loaded Module: LOW STOCK");
     const D = `#${DIALOG_ID}`;
     const CSS = `
 ${P} .fcc-stock-panel { background:#1e1e1e; color:#fff; border:2px solid #ffaa00; border-radius:8px;
-    padding:14px 16px 10px; width:min(50rem, 94vw); max-height:86vh; display:flex; flex-direction:column;
+    padding:14px 16px 10px; width:min(50rem, 94vw); height:min(48rem, 86vh); box-sizing:border-box;
+    display:flex; flex-direction:column;
     box-shadow:0 10px 40px rgba(0,0,0,.6); font-size:1rem; outline:none; text-align:left; }
 ${P} .fcc-stock-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 ${P} .fcc-stock-title { font-size:1.2em; font-weight:700; color:#fff; }
@@ -82,7 +91,10 @@ ${P} .fcc-stock-close { background:transparent; border:1px solid #777; color:#ff
 ${P} .fcc-stock-close:hover, ${P} .fcc-stock-close:focus-visible { border-color:#0dcaf0; outline:none; }
 ${P} .fcc-stock-sub { color:#ddd; font-size:.9em; margin:4px 0 6px; }
 ${P} .fcc-stock-tools { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:2px 0 8px; }
-${P} .fcc-stock-tools[hidden] { display:none; }
+/* Not ready (reading, an error, nothing at all): the row keeps its room, so the
+   list never moves when it arrives (57.1). A class, never the hidden attribute:
+   Bootstrap's reboot makes [hidden] display:none !important (Group 57 review). */
+${P} .fcc-stock-tools.fcc-stock-tools-wait { visibility:hidden; }
 ${P} .fcc-stock-tabs { display:flex; flex-wrap:wrap; gap:4px; }
 ${P} .fcc-stock-tab { background:#2a2a2a; color:#fff; border:1px solid #555; border-radius:6px; padding:3px 10px;
     font-size:.92em; line-height:1.5; cursor:pointer; }
@@ -95,7 +107,7 @@ ${P} .fcc-stock-filter { flex:1 1 180px; min-width:140px; background:#111; color
     border-radius:6px; padding:4px 8px; font-size:.92em; }
 ${P} .fcc-stock-filter::placeholder { color:#aaa; }
 ${P} .fcc-stock-filter:focus { border-color:#0dcaf0; outline:none; box-shadow:0 0 0 2px rgba(13,202,240,.35); }
-${P} .fcc-stock-body { overflow:auto; flex:1 1 auto; min-height:70px; padding-right:4px; }
+${P} .fcc-stock-body { overflow:auto; flex:1 1 auto; min-height:0; padding-right:4px; }
 ${P} .fcc-stock-cap { color:#ddd; font-size:.9em; margin:0 0 6px; }
 ${P} .fcc-stock-row { box-sizing:border-box; display:flex; flex-wrap:wrap; align-items:center; column-gap:8px;
     row-gap:2px; padding:4px 8px; min-height:34px; border:1px solid #3a3a3a; border-radius:6px; margin-bottom:4px; cursor:pointer;
@@ -126,9 +138,16 @@ ${P} .fcc-stock-error-title { color:#ff8a8a; font-weight:700; font-size:1.05em; 
 ${P} .fcc-stock-retry { margin-top:12px; background:transparent; color:#fff; border:1px solid #0dcaf0;
     border-radius:6px; padding:4px 12px; cursor:pointer; }
 ${P} .fcc-stock-retry:hover, ${P} .fcc-stock-retry:focus-visible { background:#0dcaf0; color:#111; outline:none; }
-${P} .fcc-stock-foot { color:#ccc; font-size:.85em; margin-top:8px; border-top:1px solid #333; padding-top:6px; }
+${P} .fcc-stock-foot { color:#ccc; font-size:.85em; margin-top:8px; border-top:1px solid #333; padding-top:6px;
+    flex:0 0 auto; }
+${P} .fcc-stock-head, ${P} .fcc-stock-sub, ${P} .fcc-stock-tools { flex:0 0 auto; }
 @media (max-width: 520px) {
     ${P} .fcc-stock-name { flex-basis:calc(100% - 30px); white-space:normal; }
+}
+/* A very short window (a phone on its side): the list keeps room for its rows;
+   the line under the title and the key legend go (Group 57 review). */
+@media (max-height: 480px) {
+    ${P} .fcc-stock-sub, ${P} .fcc-stock-foot { display:none; }
 }
 ${D} .fcc-stock-dlg { background:#1e1e1e; color:#fff; border:2px solid #ff8a8a; border-radius:8px; padding:14px 16px;
     width:min(28.75rem, 92vw); max-height:90vh; overflow:auto; box-shadow:0 10px 40px rgba(0,0,0,.6);
@@ -169,6 +188,27 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
     }
 
     const _plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+    // A finite number, else null (Number(null) and Number('') are 0, not unknown).
+    const _finite = (v) => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
+
+    // The Low line as the setting holds it (⚙️ Behavior takes decimals): rounded
+    // to whole grams, a line of 250.4 g read "Under 250 g" over a row of 250 g
+    // (round 3). To the microgram, as the server compares it.
+    const _lineText = (t) => String(parseFloat(Number(t).toFixed(6)));
+
+    // The page's own clock, for putting reads in order: a wall-clock step (the
+    // PC's time corrected, a resume from sleep) can't move it (Group 57 review,
+    // round 2: a stamp from a fast clock froze the count). The heartbeat stamps
+    // its sends on the same clock (inv_core.js).
+    const _now = () => (typeof performance !== 'undefined' && performance && typeof performance.now === 'function'
+        ? performance.now() : Date.now());
+
+    // A '/' in a scan still arriving is the scan's, however slow the scanner,
+    // and after a pause too, up to the scan accumulator's 2 s reset
+    // (window.scanIsArriving, inv_core.js; Group 57 review, rounds 3 to 5).
+    const _scanArriving = () => (typeof window.scanIsArriving === 'function' ? window.scanIsArriving()
+        : (typeof window.isScanInFlight === 'function' && window.isScanInFlight()));
 
     // Only a web link is ever put in an href (the server answers nothing else
     // either; this is the belt to its braces).
@@ -219,8 +259,15 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         return tokens.every((t) => hay.includes(t));
     }
 
-    function _stockText(row) {
-        const grams = Math.round(Number(row.grams) || 0);
+    // `threshold`: the Low line, for a row on the Low list.
+    function _stockText(row, threshold) {
+        const g = Number(row.grams) || 0;
+        let grams = Math.round(g);
+        // Whole grams, except where rounding would put a Low row at the line it
+        // is under ("250 g" under "Under 250 g in stock"): then the tenth, which
+        // the server never rounds up to the line (stock_report._row_grams;
+        // Group 57 review, round 2).
+        if (_finite(threshold) !== null && g < threshold && grams >= threshold) grams = g.toFixed(1);
         const inStock = Number(row.spools) || 0;
         const total = Number(row.spools_total) || 0;
         // A filament with no spool on record at all (Derek, 2026-10-20: "they are
@@ -233,7 +280,7 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
 
     // --- rows -----------------------------------------------------------------------
 
-    function _rowHtml(row, kind) {
+    function _rowHtml(row, kind, threshold) {
         const name = String(row.display == null ? '' : row.display);
         const tags = (Array.isArray(row.attributes) ? row.attributes : [])
             .map((a) => `<span class="fcc-stock-tag">${esc(a)}</span>`).join('');
@@ -268,10 +315,18 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
                 ${_swatch(row)}
                 <span class="fcc-stock-name">${esc(name)}${tags}</span>
                 ${middle}
-                <span class="fcc-stock-meta">${esc(_stockText(row))}</span>
+                <span class="fcc-stock-meta">${esc(_stockText(row, kind === 'low' ? threshold : null))}</span>
                 ${tail}
                 ${note}
             </div>`;
+    }
+
+    // The line under the title. The same words before the list is read (the
+    // threshold the dashboard's count last said, else "…"), so it never
+    // changes length, nor moves the tabs below it, once the list arrives (57.1).
+    function _subText(threshold) {
+        const g = _finite(threshold) !== null ? `${_lineText(_finite(threshold))} g` : '… g';
+        return `Per filament, across its in-stock spools: low is under ${g} (⚙️ Settings → Behavior).`;
     }
 
     function _shellHtml() {
@@ -284,8 +339,8 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
                 <div class="fcc-stock-title" id="fcc-stock-title">⚠️ Low stock</div>
                 <button type="button" class="fcc-stock-close" data-stock-close aria-label="Close">✕</button>
             </div>
-            <div class="fcc-stock-sub" data-stock-sub>Per filament, across its in-stock spools.</div>
-            <div class="fcc-stock-tools" data-stock-tools hidden>
+            <div class="fcc-stock-sub" data-stock-sub>${esc(_subText(_count ? _count.threshold : null))}</div>
+            <div class="fcc-stock-tools fcc-stock-tools-wait" data-stock-tools aria-hidden="true">
                 <div class="fcc-stock-tabs" role="tablist" aria-label="Lists">${tabs}</div>
                 <input type="search" class="fcc-stock-filter" data-stock-filter
                        placeholder="Filter: brand, material, colour, reason… ( / )" aria-label="Filter the lists"
@@ -312,16 +367,28 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         body.innerHTML = html;
         body.dataset.stockState = stateName;
         const tools = handle.panel.querySelector('[data-stock-tools]');
-        if (tools) tools.hidden = stateName !== 'ready';
+        if (tools) {
+            const wait = stateName !== 'ready';
+            tools.classList.toggle('fcc-stock-tools-wait', wait);
+            if (wait) tools.setAttribute('aria-hidden', 'true');
+            else tools.removeAttribute('aria-hidden');
+        }
         return body;
     }
 
-    function _errorHtml(data) {
-        const ours = data && data.error === 'report_failed';
-        const title = ours ? "⚠️ FCC couldn't build the list" : "⚠️ Spoolman didn't answer";
-        const text = ours
-            ? (data.msg || "Something went wrong building the Low-stock list.")
-            : "FCC couldn't read your spools, so it can't tell what is low right now. This is not an empty list.";
+    // `why`: the title bar count's word for the same failed read (_WHY), so the
+    // list and the button name one cause (round 4: with FCC not answering, the
+    // list blamed Spoolman while the button said FCC didn't answer).
+    function _errorHtml(data, why) {
+        let title = "⚠️ FCC couldn't build the list";
+        let text = (data && data.msg) || "Something went wrong building the Low-stock list.";
+        if (why === 'spoolman') {
+            title = "⚠️ Spoolman didn't answer";
+            text = "FCC couldn't read your spools, so it can't tell what is low right now. This is not an empty list.";
+        } else if (why === 'unreachable') {
+            title = "⚠️ FCC didn't answer";
+            text = "The page couldn't reach FCC just now, so it can't tell what is low. This is not an empty list.";
+        }
         return `<div class="fcc-stock-state" role="alert">
                 <div class="fcc-stock-error-title">${esc(title)}</div>
                 <div>${esc(text)}</div>
@@ -361,7 +428,7 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
     // --- the tabs and the filter -------------------------------------------------------
 
     function _caption(handle, tab) {
-        if (tab === 'low') return `Under ${Math.round(handle._threshold)} g in stock, fewest grams first.`;
+        if (tab === 'low') return `Under ${_lineText(handle._threshold)} g in stock, fewest grams first.`;
         if (tab === 'out') return 'None left in stock. The ones with no spool on record come last.';
         return "Left off Low and Out: ones you can't get or won't restock. ✏️ changes why, or includes one again.";
     }
@@ -405,7 +472,7 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         if (!all[tab].length) html += `<div class="fcc-stock-none">${esc(_noneText(tab))}</div>`;
         else if (!rows.length) {
             html += `<div class="fcc-stock-none">${esc(`Nothing in ${label} matches “${handle._filter.trim()}”.`)}</div>`;
-        } else html += rows.map((r) => _rowHtml(r, tab)).join('');
+        } else html += rows.map((r) => _rowHtml(r, tab, handle._threshold)).join('');
         const body = _setBody(handle, html, 'ready');
         const foot = handle.panel.querySelector('[data-stock-foot]');
         if (foot) foot.textContent = _footText(tab);
@@ -435,10 +502,7 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         const all = _lists(handle);
         const threshold = handle._threshold;
         const sub = handle.panel.querySelector('[data-stock-sub]');
-        if (sub) {
-            sub.textContent = `Per filament, across its in-stock spools: low is under ${Math.round(threshold)} g `
-                + '(⚙️ Settings → Behavior).';
-        }
+        if (sub) sub.textContent = _subText(threshold);
         // A re-read never takes the focus from an open reason dialog, and a
         // quiet one (after a change made here) not from wherever the user went
         // meanwhile either (2026-10-21 review, browser-4: it moved the focus out
@@ -449,7 +513,7 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         if (!all.low.length && !all.out.length && !all.excluded.length) {
             _setBody(handle, `<div class="fcc-stock-state">
                     <div>✅ Nothing is low.</div>
-                    <div class="fcc-stock-state-sub">No filament is under ${esc(Math.round(threshold))} g,
+                    <div class="fcc-stock-state-sub">No filament is under ${esc(_lineText(threshold))} g,
                         and none has run out.</div>
                 </div>`, 'empty');
             if (!away) { try { handle.panel.focus({ preventScroll: true }); } catch (_) { /* noop */ } }
@@ -468,6 +532,7 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
 
     async function _load(handle, restore, quiet) {
         const token = ++_seq;
+        const sentAt = _now();
         // Try again after a failed read restores the same place (review browser-5).
         if (restore) handle._lastRestore = restore;
         if (!quiet) _setBody(handle, '<div class="fcc-stock-state">Reading your spools from Spoolman…</div>', 'loading');
@@ -484,13 +549,23 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
             && Array.isArray(data.low) && Array.isArray(data.out);
         if (!good) {
             handle._data = null;
-            _setBody(handle, _errorHtml(data), 'error');
+            // The title bar's count is stale too while this, the newest read
+            // sent, failed (round 3: the list said so, the count looked fresh):
+            // Spoolman not answering (the route's own word for it), FCC's own
+            // failure, or no answer from FCC (none, or a page that isn't JSON).
+            const why = !res || !data ? 'unreachable'
+                : (data.error === 'spoolman_unreachable' ? 'spoolman' : 'fcc');
+            _answer(sentAt, null, why);
+            _setBody(handle, _errorHtml(data, why), 'error');
             const retry = handle.panel.querySelector('[data-stock-retry]');
             if (retry) { try { retry.focus({ preventScroll: true }); } catch (_) { /* noop */ } }
             return;
         }
         handle._data = data;
         handle._threshold = Number.isFinite(Number(data.threshold_g)) ? Number(data.threshold_g) : 250;
+        // The title bar says what the tabs say, unless a heartbeat sent after
+        // this read began has painted a newer count meanwhile (_answer).
+        _answer(sentAt, _parseCount(data.low.length, data.out.length, handle._threshold), null);
         // A quiet re-read keeps the list, filter and row the user moved to while
         // it was on its way, not the ones it set out with (review browser-5).
         if (quiet && restore && (handle._tab !== restore.tab || (handle._filter || '') !== (restore.filter || ''))) {
@@ -511,6 +586,10 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
             tab: handle._tab || null,
             filter: handle._filter || '',
             scrollTop: body ? body.scrollTop : 0,
+            // The button that opened the list, so a list that comes back gives
+            // the focus back to it too (Group 57 review, round 2: a list that
+            // came back opened with the focus on the page, and left it there).
+            opener: handle._opener || null,
         };
     }
 
@@ -677,6 +756,33 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         const d = handle._dialog;
         if (!d) return;
         if (!d.overlay.element || !d.overlay.element.isConnected) { _dropDialog(handle); return; }
+        // The global search's keys (fab_drag.js) are the dialog's while it is
+        // up: the search panel opening closed a list opened from the title bar,
+        // and the dialog with it, losing the note typed into it (Group 57 review,
+        // round 2). '/' typed into the note is the note's, and one in a scan
+        // still arriving the scan's (a Prusament QR's URL), however slow the
+        // scanner, and after a pause up to the accumulator's 2 s: round 3 found
+        // a slower scanner's late '/' claimed here and the scan buffer emptied,
+        // so the scan's Enter pressed the focused button and saved (or removed)
+        // an exclusion, and round 4 the same after a half-second stall. (A
+        // stall over 2 s empties the buffer before the '/' comes, so the rest of
+        // the URL reads as a person's keys: no code can tell, round 5.) A '/'
+        // claimed here empties the buffer, so the keys a person left in it
+        // don't start the next scan.
+        if ((e.key === 'k' || e.key === 'K') && (e.ctrlKey || e.metaKey) && !e.altKey) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            return;
+        }
+        if (e.key === '/' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+            const t = e.target;
+            if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+            if (_scanArriving()) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();       // nor the global search's '/', nor the scan buffer
+            if (typeof window.clearScanBuffer === 'function') window.clearScanBuffer();
+            return;
+        }
         if (e.key !== 'Enter' || e.altKey || e.metaKey) return;
         const t = e.target;
         // Enter in the note is a new line; Ctrl+Enter saves from anywhere.
@@ -752,10 +858,30 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         if (_current === handle) _current = null;
     }
 
-    function _close(handle) {
+    // `opts.keepFocus`: another window takes the focus next (a filament window,
+    // one opened over the list), so it isn't handed back.
+    function _close(handle, opts) {
         _closeDialog(handle);
         _unlisten(handle);
         try { handle.cleanup(); } catch (_) { /* noop */ }
+        // Back to the button that opened it (the title bar's ⚠️, opened with Space:
+        // Enter is the scan accumulator's), not the top of the page (Group 57
+        // review), when nothing else has taken the focus meanwhile.
+        const opener = handle._opener;
+        handle._opener = null;
+        const a = document.activeElement;
+        if (!(opts && opts.keepFocus) && opener && (!a || a === document.body)) {
+            if (opener.isConnected) {
+                try { opener.focus({ preventScroll: true }); } catch (_) { /* noop */ }
+            }
+            // One that can't take it (the search panel's button, hidden once
+            // that panel closed for the filament window; round 3): the title
+            // bar's ⚠️, the list's other way in, not the top of the page.
+            const btn = document.getElementById('btn-low-stock-count');
+            if (document.activeElement !== opener && btn) {
+                try { btn.focus({ preventScroll: true }); } catch (_) { /* noop */ }
+            }
+        }
     }
 
     // --- the list comes back (Derek, 2026-10-20) ---
@@ -838,7 +964,7 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         const id = parseInt(fid, 10);
         if (!Number.isFinite(id)) return;
         _armWhenShown(_snapshot(handle, id));
-        _close(handle);
+        _close(handle, { keepFocus: true });
         // A details window is a Bootstrap modal: this panel (z 20000) would hide
         // it, so the panel closes first; showing the modal also closes the search
         // panel underneath (inv_core.js's show.bs.modal handler).
@@ -881,12 +1007,19 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
             return;
         }
         if (e.key === '/') {
-            // Not mid-scan: a Prusament QR's URL carries '/' (fab_drag.js's rule).
-            if (inFilter || !ready || !filter) return;
-            if (typeof window.isScanInFlight === 'function' && window.isScanInFlight()) return;
+            // Not in a scan still arriving: a Prusament QR's URL carries '/'
+            // (fab_drag.js's rule), and a slower scanner's late '/' (round 3),
+            // or one after a stall (round 4), focused the filter and emptied
+            // the scan buffer.
+            if (inFilter) return;
+            if (_scanArriving()) return;
             e.preventDefault();
             e.stopImmediatePropagation();       // nor the global search's '/', nor the scan buffer
             if (typeof window.clearScanBuffer === 'function') window.clearScanBuffer();
+            // Still reading (or an error, or nothing to filter): the key is the
+            // list's, not the global search's, whose panel opening closed a list
+            // opened from the title bar (Group 57 review).
+            if (!ready || !filter) return;
             try { filter.focus(); filter.select(); } catch (_) { /* noop */ }
             return;
         }
@@ -951,6 +1084,160 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         });
     }
 
+    // --- the title-bar count (Group 57.2) ----------------------------------------------
+    // #btn-low-stock-count (dashboard.html) says at a glance how many filaments
+    // are on the Low and Out lists (Derek, 2026-10-25: "Move it to the title bar
+    // beside 🏷️ Backlog and 🛒 Queue, with a count"). The count comes from the
+    // dashboard heartbeat's low_stock section, worked out on the server from the
+    // tick's own spool and filament reads by the list's own rule
+    // (stock_report.glance: no Spoolman read of its own), and from the list
+    // itself whenever this window reads it. Excluded filaments never count.
+    // A read that failed keeps the count shown (Group 52's rule: a blip is never a
+    // 0), with a "?" after it and a dashed border, so a stale count never looks
+    // like a fresh one (Group 57 review); before any count it reads "?". The "?"
+    // takes no room (global.css), so a blip never moves the bar's buttons
+    // (round 2). The words are in its tooltip and its accessible name, which
+    // holds the number it shows (WCAG 2.5.3; the bar has no room for them at
+    // every Text size).
+    // The two sources are kept in order by when each read was sent: a heartbeat
+    // reads the spool list before its printer probes, so it can land seconds
+    // after a fresher read by the list itself, and the list's own read can land
+    // after a fresher heartbeat. The count shown is the newest read's, and it is
+    // marked stale while the newest read sent failed (_answer).
+
+    // What the button shows (Group 57.3; Derek, 2026-10-28; Settings -> Low stock
+    // count, data-fcc-low-count on <html>): Low and Out apart, in this list's own
+    // words and count pills ("Low [1] Out [11]", the default), or one number, the
+    // two added up ("Low stock (12)"). Both forms are on the button and both are
+    // painted; global.css shows the one picked.
+    const _countLabel = (c) => String(c.low + c.out);
+    const _bothShown = () => document.documentElement.getAttribute('data-fcc-low-count') !== 'one';
+    let _countAt = -Infinity;  // when the read behind the count shown was sent
+    let _triedAt = -Infinity;  // when the newest read, good or not, was sent
+    let _staleWhy = null;      // why that read had no count (a key of _WHY), or null
+
+    // Why a count is stale: Spoolman didn't answer, FCC's own count failed, the
+    // answer had none (an FCC from before the count), or FCC itself didn't
+    // answer (round 3: the network gone, a restart).
+    const _WHY = {
+        spoolman: "Spoolman didn't answer just now",
+        fcc: "FCC couldn't count them just now",
+        missing: "FCC didn't send a count",
+        unreachable: "FCC didn't answer just now",
+    };
+
+    function _countWords(c) {
+        const under = _finite(c.threshold) !== null ? ` under ${_lineText(c.threshold)} g` : '';
+        return `${c.low} low${under}, ${c.out} out`;
+    }
+
+    // The words before any count, for the form shown: "Low – Out –", and "Low ?
+    // Out ?" once a read failed, show Out, so the name says it too (WCAG 2.5.3;
+    // review of 57.3: it read "Low stock: opens the list.").
+    function _noCountWords(why) {
+        if (_bothShown()) {
+            return why ? `Low ?, Out ?, no count yet (${_WHY[why]}). Opens the list.`
+                : 'Low –, Out –: no count yet. Opens the list.';
+        }
+        return why ? `Low stock: ?, no count yet (${_WHY[why]}). Opens the list.` : 'Low stock: opens the list.';
+    }
+
+    // Before the first answer the button keeps its placeholders, and only its
+    // words follow the form shown: at the load (dashboard.html's are the default
+    // form's) and when the setting changes.
+    function _paintPendingWords() {
+        const btn = document.getElementById('btn-low-stock-count');
+        if (!btn) return;
+        const words = _noCountWords(null);
+        if (btn.title !== words) btn.title = words;
+        if (btn.getAttribute('aria-label') !== words) btn.setAttribute('aria-label', words);
+    }
+
+    function _paintCount(why) {
+        const btn = document.getElementById('btn-low-stock-count');
+        if (!btn) return;
+        const stale = !!(_count && why);
+        const put = (sel, text) => {
+            const el = btn.querySelector(sel);
+            if (!el) return;
+            el.removeAttribute('data-count-pending');                 // painted (titlebar_fit.js)
+            if (el.textContent !== text) el.textContent = text;
+        };
+        put('[data-low-stock-count]', _count ? _countLabel(_count) : '?');
+        put('[data-low-count]', _count ? String(_count.low) : '?');
+        put('[data-out-count]', _count ? String(_count.out) : '?');
+        // The "?" after each form's last number (drawn in the button's padding).
+        btn.querySelectorAll('.fcc-tb-count').forEach((wrap) => {
+            const mark = Array.from(wrap.children).find((c) => c.classList.contains('fcc-stale-mark'));
+            if (stale && !mark) {
+                const m = document.createElement('span');
+                m.className = 'fcc-stale-mark';
+                m.textContent = '?';
+                wrap.appendChild(m);
+            } else if (!stale && mark) mark.remove();
+        });
+        // The words hold what the button shows (WCAG 2.5.3, label in name).
+        const shown = !_count ? 'Low stock: ?'
+            : (_bothShown() ? `Low ${_count.low}, Out ${_count.out}` : `Low stock: ${_countLabel(_count)}`);
+        const text = stale ? `${shown}?` : shown;
+        let words;
+        if (!_count) words = _noCountWords(why);
+        else if (why) words = `${text}, the last count (${_WHY[why]}): ${_countWords(_count)}. Opens the list.`;
+        else words = `${text} (${_countWords(_count)}). Opens the list.`;
+        btn.title = words;
+        btn.setAttribute('aria-label', words);
+        btn.dataset.read = why ? 'failed' : 'ok';
+        if (_count) {
+            btn.dataset.low = String(_count.low);
+            btn.dataset.out = String(_count.out);
+        }
+    }
+
+    // {low, out, threshold} from an answer's numbers, else null (not a count).
+    function _parseCount(low, out, threshold) {
+        const n = (v) => (_finite(v) !== null && _finite(v) >= 0 ? Math.round(_finite(v)) : null);
+        if (n(low) === null || n(out) === null) return null;
+        const t = _finite(threshold) !== null ? _finite(threshold) : (_count ? _count.threshold : null);
+        return { low: n(low), out: n(out), threshold: t };
+    }
+
+    // A read sent at `at` (_now()) answered `count`, or none and `why`. Its count
+    // is taken only when it is newer than the one shown, and its success or
+    // failure counts only when it is the newest read sent: an older answer never
+    // paints over a newer one, either way round. Returns whether it took the count.
+    function _answer(at, count, why) {
+        const took = !!count && at >= _countAt;
+        if (took) { _count = count; _countAt = at; }
+        if (at >= _triedAt) { _triedAt = at; _staleWhy = count ? null : (why || 'fcc'); }
+        _paintCount(_staleWhy);
+        return took;
+    }
+
+    // The heartbeat's low_stock section: {read_ok: true, count, low, out,
+    // threshold_g}, or {read_ok: false, read_error} (Spoolman), or {error,
+    // read_ok: false} (the section itself failed); undefined when an answer that
+    // was asked for one had none. `opts.sentAt`: when that heartbeat was sent
+    // (_now()'s clock); without it, now. `opts.unreachable`: the heartbeat got
+    // no answer from FCC at all. Returns whether it painted a count.
+    window._renderLowStockCount = function (sec, opts) {
+        const sentAt = opts ? _finite(opts.sentAt) : null;
+        const at = sentAt !== null ? sentAt : _now();
+        if (opts && opts.unreachable) return _answer(at, null, 'unreachable');
+        if (!sec || typeof sec !== 'object') return _answer(at, null, 'missing');
+        const count = sec.read_ok === true ? _parseCount(sec.low, sec.out, sec.threshold_g) : null;
+        if (count) return _answer(at, count, null);
+        return _answer(at, null, sec.read_ok === false && sec.read_error && !sec.error ? 'spoolman' : 'fcc');
+    };
+
+    // Settings -> Low stock count changed: the button's words follow the form
+    // it shows now (titlebar_prefs.js). Before the first answer only its words:
+    // the placeholders stay until a count, or a failed read, comes.
+    document.addEventListener('fcc:title-bar', () => {
+        if (_triedAt !== -Infinity) _paintCount(_staleWhy);
+        else _paintPendingWords();
+    });
+    _paintPendingWords();
+
     window.openLowStockPanel = function (opts) {
         if (typeof window.mountOverlay !== 'function') return null;
         const restore = opts && opts.restore ? opts.restore : null;
@@ -960,6 +1247,10 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         if (_current) { _closeDialog(_current); _unlisten(_current); }    // re-opening replaces the panel
         const host = document.getElementById('offcanvasSearch');
         const hostOpen = !!(host && host.classList.contains('show'));
+        // What had the focus (the button that opened it), for _close to give it
+        // back; a list coming back has its first opening's.
+        const opener = restore && restore.opener && restore.opener.isConnected ? restore.opener
+            : (document.activeElement && document.activeElement !== document.body ? document.activeElement : null);
         const handle = window.mountOverlay({
             id: OVERLAY_ID,
             content: _shellHtml(),
@@ -967,14 +1258,17 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
             occlude: hostOpen ? ['#offcanvasSearch select'] : undefined,
             initialFocus: '.fcc-stock-panel',
             onBackdropClick: () => _close(handle),
-            // The reason dialog first: mountOverlay hands Escape to the overlay
-            // that mounted first, this one. A dialog that is saving stays.
+            // The reason dialog answers its own Escape (it is on top, and
+            // mountOverlay hands Escape to the overlay on top, round 6); this
+            // closes the list, or a dialog left under it. A dialog that is
+            // saving stays.
             onEscape: () => {
                 if (!handle._dialog) _close(handle);
                 else if (!handle._dialog.busy) _closeDialog(handle);
             },
         });
         _current = handle;
+        handle._opener = opener;
         handle._host = hostOpen ? host : null;
         handle._data = null;
         handle._tab = null;
@@ -1012,10 +1306,10 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
             const shows = {
                 modal: () => {
                     const at = _snapshot(handle);
-                    _close(handle);
+                    _close(handle, { keepFocus: true });
                     _armReturn(at);
                 },
-                offcanvas: () => _close(handle),
+                offcanvas: () => _close(handle, { keepFocus: true }),
             };
             handle._stockShows = shows;
             document.addEventListener('show.bs.modal', shows.modal);
@@ -1026,11 +1320,16 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
     };
 
     function _wireButton() {
-        const btn = document.getElementById('global-search-low-stock');
-        if (btn && !btn.dataset.lowStockWired) {
-            btn.dataset.lowStockWired = '1';
-            btn.addEventListener('click', () => window.openLowStockPanel());   // no event as opts
-        }
+        ['global-search-low-stock', 'btn-low-stock-count'].forEach((id) => {
+            const btn = document.getElementById(id);
+            if (btn && !btn.dataset.lowStockWired) {
+                btn.dataset.lowStockWired = '1';
+                // Pressed with Space (Enter is the scan accumulator's), the space
+                // used to stay in the scan buffer for 2 s (Group 57 review, round
+                // 2); the accumulator skips a leading Space now (round 5).
+                btn.addEventListener('click', () => window.openLowStockPanel());   // no event as opts
+            }
+        });
     }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _wireButton);
     else _wireButton();
@@ -1043,7 +1342,24 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
     // characters typed onto one and then Enter are a scan: they go to the scan
     // path and the dialog stays. Registered before the field scan capture, so it
     // sees that Enter first.
+    // A person's stray key on a reason (a '/' from habit) made their next Enter
+    // a scan of it, however much later and whatever they pressed between (round
+    // 4: '/', ArrowDown, Enter scanned "/" and saved nothing). A scanner sends no
+    // key a person moves with mid-label (an arrow, Tab, Home, End, a page key,
+    // Backspace, Delete, Escape) and no Space, so those start afresh, and so
+    // does a click in the dialog (a scanner never clicks: a reason picked with
+    // the mouse after two stray keys scanned them, round 5). Any other key that
+    // isn't a character is skipped, as the accumulator skips it: Shift before
+    // each capital, and a NumLock or a dead key a scanner may send mid-label
+    // (round 4 started afresh on those, and the label arrived cut, round 5).
+    // At the Enter, keys over 2 s old are dropped (the scan accumulator's own
+    // reset, scripts.html), and one lone key 500 ms or more before it is a
+    // person's: no label is one character typed slower than that. A scanner
+    // that stalls that long right before its own Enter reads as a person, as
+    // everywhere else: no code can tell the two apart (round 5, accepted).
     const _radioKeys = { buf: '', first: 0, last: 0 };
+    const _PERSON_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab', 'Home', 'End',
+        'PageUp', 'PageDown', 'Backspace', 'Delete', 'Escape'];
     document.addEventListener('keydown', (e) => {
         const t = e.target;
         if (!(t && t.matches && t.matches(`#${DIALOG_ID} input[type="radio"]`))) { _radioKeys.buf = ''; return; }
@@ -1052,25 +1368,31 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         if (e.key === 'Enter') {
             const buf = _radioKeys.buf;
             const elapsed = now - _radioKeys.first;
+            const since = now - _radioKeys.last;
             _radioKeys.buf = '';
-            if (!buf) return;                      // a person's Enter: the dialog saves
+            // A person's Enter: the dialog saves.
+            if (!buf || since > 2000 || (buf.length < 2 && since >= 500)) return;
             e.preventDefault();
             e.stopImmediatePropagation();
             if (typeof window.processScan === 'function') window.processScan(buf, elapsed < 150 ? 'barcode' : 'keyboard');
             return;
         }
-        if (e.key.length !== 1 || e.key === ' ') return;
+        if (e.key === ' ' || _PERSON_KEYS.includes(e.key)) { _radioKeys.buf = ''; return; }
+        if (e.key.length !== 1) return;
         if (!_radioKeys.buf || now - _radioKeys.last > 2000) { _radioKeys.buf = ''; _radioKeys.first = now; }
         _radioKeys.buf += e.key;
         _radioKeys.last = now;
+    }, true);
+    document.addEventListener('pointerdown', (e) => {
+        if (e.target && e.target.closest && e.target.closest(`#${DIALOG_ID}`)) _radioKeys.buf = '';
     }, true);
     _installScanCapture();
 
     if (typeof window.registerShortcut === 'function') {
         window.registerShortcut({
             id: 'low-stock-arrows', scope: 'Low Stock List', keys: ['↑', '↓'],
-            description: 'Move between filaments in the ⚠️ Low stock list (search panel). Wraps at the ends; '
-                + 'from the filter, into the list.'
+            description: "Move between filaments in the ⚠️ Low stock list (the title bar's ⚠️, or the search "
+                + 'panel). Wraps at the ends; from the filter, into the list.'
         });
         window.registerShortcut({
             id: 'low-stock-tabs', scope: 'Low Stock List', keys: ['←', '→'],

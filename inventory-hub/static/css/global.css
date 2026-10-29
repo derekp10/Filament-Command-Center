@@ -152,14 +152,20 @@ body {
 
 /* Title bar: no button's label ever wraps onto two lines (readability, Derek
    2026-10-21). At Large / Extra Large, or in a narrow window, the bar runs
-   out of room, so it is a size container that gives way in steps. The
-   thresholds are in rem, which grows with the Text size, so each step comes
-   at the same point in every size; at Small and Standard on a 1600 px window
-   the bar is unchanged (it needs about 93rem).
+   out of room, so it gives way in steps.
    From 992 px up the bar is one line (Bootstrap's navbar-expand-lg): the
-   spacing tightens, ADD INVENTORY reads ADD, the version badge goes, and
-   last the title shortens with "…" (its full text is its tooltip), so it
-   never runs under the Spoolman light and SEARCH.
+   spacing tightens, Backlog, Queue and Low stock show their icon and number
+   alone (Settings -> Title bar buttons: Automatic), ADD INVENTORY reads ADD,
+   the version badge shows its date and time alone, and last the title
+   shortens with "…" (its full text is its tooltip): the badge never goes
+   (Group 57.3, Derek 2026-10-28: he reads the build's date at a glance; a
+   second line in its place squeezed the Buffer Zone on a small laptop). Each step is taken only while
+   the title is cut short (titlebar_fit.js, Group 57 review, 2026-10-26): the
+   bar holds three live counts (🏷️ Backlog, 🛒 Queue, ⚠️ Low stock), so the
+   room it needs changes with their numbers, and steps at fixed widths came
+   too late once a count grew. Always words or Always icons skips the icon
+   step (its look is fixed). If the buttons still run past the bar's edge, it
+   takes a second line (step 5, below).
    Below 992 px Bootstrap puts the buttons on a line of their own under the
    title (this bar's flex-wrap comes from .navbar there, so it is not set
    here); a row too wide for the window wraps its buttons onto another line
@@ -167,16 +173,30 @@ body {
    smaller Text size, is always on screen, and the bar grows to hold its
    lines instead of drawing them over Printer Status (readability review,
    2026-10-21). */
+/* The box titlebar_fit.js measures in: its hidden copy of the title, and the
+   zero-high marker it watches for the bar's width. */
 .fcc-titlebar {
-    container: fcc-titlebar / inline-size;
+    position: relative;
+}
+.fcc-tb-marker {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    height: 0;
+    visibility: hidden;
+    pointer-events: none;
 }
 .fcc-titlebar .btn,
 .fcc-titlebar .status-label {
     white-space: nowrap;
 }
+/* Never narrower than the title's own right margin: a title cut to nothing
+   still draws its first letter (its glow's clip margin, below), which ran
+   over the Spoolman light (Group 57 review, round 2). */
 .fcc-titlebar .navbar-brand-group {
     flex: 0 1 auto;
-    min-width: 0;
+    min-width: 1rem;
 }
 .fcc-titlebar .navbar-brand {
     min-width: 0;
@@ -195,25 +215,138 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
 }
-/* Step 1: no extra space between the items, beyond the bar's own gap. */
-@container fcc-titlebar (max-width: 94rem) {
+/* The labels (Group 57.3; Settings -> 🖥️ This Browser -> Title bar buttons,
+   data-fcc-tb-buttons on <html>, titlebar_prefs.js): a count's word and
+   brackets are spans of their own (dashboard.html, and each count's painter
+   writes the same shape), dropped to leave the icon and number: always with
+   Always icons; with Automatic as the bar's second step (fcc-tb-icons, from
+   992 px up) and always below 992 px, where the buttons have a line of their
+   own; never with Always words. */
+:root[data-fcc-tb-buttons="icons"] .fcc-titlebar .fcc-tb-word,
+:root[data-fcc-tb-buttons="icons"] .fcc-titlebar .fcc-tb-paren,
+.fcc-titlebar.fcc-tb-icons .fcc-tb-word,
+.fcc-titlebar.fcc-tb-icons .fcc-tb-paren {
+    display: none;
+}
+@media (max-width: 991.98px) {
+    :root:not([data-fcc-tb-buttons="words"]) .fcc-titlebar .fcc-tb-word,
+    :root:not([data-fcc-tb-buttons="words"]) .fcc-titlebar .fcc-tb-paren {
+        display: none;
+    }
+}
+/* The ⚠️ button's two forms (Settings -> Low stock count, data-fcc-low-count):
+   Low and Out apart, in the Low stock window's own words and count pills (the
+   default), or one number, the two added up. inv_stock.js paints both. */
+:root[data-fcc-low-count="one"] #btn-low-stock-count .fcc-ls-both,
+:root:not([data-fcc-low-count="one"]) #btn-low-stock-count .fcc-ls-one {
+    display: none;
+}
+/* A count pill, as the window's tabs draw theirs (inv_stock.js .fcc-stock-count):
+   white on #444, 9.7:1. */
+.fcc-ls-pill {
+    display: inline-block;
+    min-width: 1.6em;
+    margin-left: 0.3em;
+    padding: 0 0.4em;
+    border-radius: 0.6em;
+    background: #444;
+    color: #fff;
+    font-size: var(--fcc-fs-row);
+    font-weight: 600;
+    line-height: 1.35;
+    text-align: center;
+}
+.fcc-ls-pill[data-low-count] {
+    margin-right: 0.55em;
+}
+/* Step 1: no extra space between the items, beyond the bar's own gap. Below
+   992 px it always applies (the buttons have a line of their own), as it
+   always did there. */
+@media (min-width: 992px) {
+    .fcc-titlebar.fcc-tb-tight .fcc-titlebar-actions { gap: 0.5rem !important; }
+    .fcc-titlebar.fcc-tb-tight .fcc-titlebar-actions > * { margin-left: 0 !important; }
+}
+@media (max-width: 991.98px) {
     .fcc-titlebar-actions { gap: 0.5rem !important; }
     .fcc-titlebar-actions > * { margin-left: 0 !important; }
 }
-/* Step 2: ADD INVENTORY reads ADD (the button's tooltip says "Add inventory"). */
-@container fcc-titlebar (max-width: 85.5rem) {
+/* Step 2 (Automatic only): the icon and number alone (fcc-tb-icons, above).
+   Step 3: ADD INVENTORY reads ADD (the button's tooltip says "Add inventory").
+   Below 992 px, always. */
+@media (min-width: 992px) {
+    .fcc-titlebar.fcc-tb-add .fcc-titlebar-more { display: none; }
+}
+@media (max-width: 991.98px) {
     .fcc-titlebar-more { display: none; }
 }
-/* Step 3, one-line bar only: the version badge goes where it would start to
-   shrink (about 78rem at every size). Squeezed further it was an empty
-   bordered box over the Spoolman light. Its text is its tooltip, and
-   Settings -> Build Info has the commit. Below this the title is the one
-   thing left to give. (Below 992 px the title has a line of its own, and the
-   badge keeps its place beside it.) */
+/* The version badge never shrinks on the one-line bar, nor goes (Group 57.3:
+   it went as step 3 until Derek, 2026-10-28, "I like keeping the current build
+   visible"). Squeezed it was an empty bordered box over the Spoolman light, so
+   the title gives way first, which is what tells titlebar_fit.js that a step
+   is due. (Below 992 px the title has a line of its own, and the badge keeps
+   its place beside it.) */
 @media (min-width: 992px) {
-    @container fcc-titlebar (max-width: 78rem) {
-        #fcc-build-version { display: none; }
+    #fcc-build-version { flex-shrink: 0; }
+    /* With the title cut and every step taken (fcc-tb-cut, titlebar_fit.js,
+       which counts it), the badge keeps the gap the title's own margin kept
+       before the badge stayed: it touched the Spoolman light (review of 57.3).
+       Only then: at every width it took ADD's step on a 1600 px window at
+       Large. */
+    .fcc-titlebar.fcc-tb-cut #fcc-build-version { margin-right: 1rem; }
+    /* Step 4 (57.3): the badge's date and time alone ("2026-10-28 18:45"; the
+       commit is in its tooltip and in Settings -> Build Info), before the bar
+       ever takes a second line. */
+    .fcc-titlebar.fcc-tb-shortver .fcc-ver-lead { display: none; }
+}
+/* Step 5, one-line bar only, the last resort (titlebar_fit.js, Group 57
+   review, round 2): the buttons still run past the bar's edge with the title
+   cut to nothing (Extra Large in a window just over 992 px, with big counts),
+   or the badge would run under them (review of 57.3: Extra Large in a window
+   under about 1130 px). The bar takes a second line as it does below 992 px,
+   the title whole with the whole badge beside it, so ⚙️ never leaves the
+   screen and the badge's date is never drawn under the Spoolman light. */
+@media (min-width: 992px) {
+    .fcc-titlebar.fcc-tb-wrap { flex-wrap: wrap; }
+    .fcc-titlebar.fcc-tb-wrap .fcc-titlebar-actions {
+        flex: 0 1 auto;
+        min-width: 0;
+        flex-wrap: wrap;
+        justify-content: flex-end;
     }
+    .navbar:has(> .fcc-titlebar.fcc-tb-wrap) {
+        height: auto;
+        min-height: 70px;
+    }
+}
+/* A count read from Spoolman that a later read couldn't refresh (the ⚠️ Low
+   stock count, inv_stock.js, Group 57.2; the 🏷️ Backlog count, inv_backlog.js,
+   since round 2): it keeps its number with a "?" after it, and a dashed border,
+   so a stale count never looks like a fresh one. The "?" is drawn in the
+   button's own padding and takes no room: the bar's steps follow its buttons'
+   width (titlebar_fit.js), and a blip moved every button 112 px and back
+   (Group 57 review, round 2). */
+[data-low-stock-count],
+.fcc-count-num,
+.fcc-tb-count {
+    position: relative;
+}
+.fcc-stale-mark {
+    position: absolute;
+    left: 100%;
+    top: 0;
+    /* The line box of the number's own font, so the "?" sits on the number's
+       baseline: with the button's 1.5 it sat a half-leading (1 px) low
+       (round 3). */
+    line-height: normal;
+}
+/* A filled button's own colour is under its border too, so its dashes would
+   not show: the fill stops inside the border. Backlog is always filled; the
+   ⚠️ outline button is filled while hovered or focused (Bootstrap), and lost
+   its dashes there (round 3). */
+#btn-low-stock-count[data-read="failed"],
+#btn-backlog-count[data-read="failed"] {
+    border-style: dashed;
+    background-clip: padding-box;
 }
 @media (max-width: 991.98px) {
     .navbar {

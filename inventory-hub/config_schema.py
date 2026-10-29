@@ -102,10 +102,10 @@ CONFIG_SCHEMA = [
           section="behavior", scope="server", min=0, max=10000,
           help="A filament counts as low when its in-stock spools (not archived, not "
                "empty) add up to less than this many grams: per filament, across all its "
-               "spools. The ⚠️ Low stock list in the search panel uses it, and so does the "
-               "one Activity Log warning when a print or a weigh-out takes a filament "
-               "under it. 0 = nothing is ever low (a filament with no stock left still "
-               "shows as out)."),
+               "spools. The ⚠️ Low stock list (the title bar's ⚠️ count opens it) uses it, "
+               "and so does the one Activity Log warning when a print or a weigh-out takes "
+               "a filament under it. 0 = nothing is ever low (a filament with no stock left "
+               "still shows as out)."),
     Field("fcc.weighEntry.defaultMode", "Default weigh-in mode", "select", "additive",
           section="client", scope="client",
           choices=["gross", "net", "additive", "set_used"],
@@ -128,6 +128,36 @@ CONFIG_SCHEMA = [
                "under 13.6 px); Small is the compact look FCC had before that; Large and Extra "
                "Large make everything bigger together. It changes as soon as you pick it, with "
                "no Save needed."),
+    # Group 57.3 (Derek, 2026-10-28: look C as a setting, not hard-coded).
+    # titlebar_prefs.js keys on these exact strings, and so does the script in
+    # dashboard.html's <head> that applies them before the first paint.
+    Field("fcc.titleBar.buttons", "Title bar buttons", "select", "Automatic",
+          section="client", scope="client",
+          choices=["Automatic", "Always words", "Always icons"],
+          help="How Backlog, Queue and Low stock are labelled in the title bar. Automatic: with "
+               "their words while the bar has room (🏷️ Backlog (53)), and the icon and number "
+               "alone when it hasn't (🏷️ 53): in a narrow window, at a bigger Text size, or when "
+               "a count gets a digit longer. Always words and Always icons keep one look. Low and "
+               "Out keep their words in every look, as they tell the two numbers apart. It "
+               "changes as soon as you pick it, with no Save needed."),
+    Field("fcc.lowStock.count", "Low stock count", "select", "Low and Out",
+          section="client", scope="client",
+          choices=["Low and Out", "One number"],
+          help="What the title bar's ⚠️ button shows. Low and Out: the two lists apart, as the "
+               "Low stock window's tabs show them (Low 1, Out 11). One number: the two added up "
+               "(Low stock (12), or ⚠️ 12 with no room for the words). Excluded filaments never "
+               "count. It changes as soon as you pick it, with no Save needed."),
+    # Derek, 2026-10-29, on the bar short of room: "I like both, if we could
+    # option it". The default is option (c), as built in 57.3.
+    Field("fcc.titleBar.full", "When the title bar is full", "select", "Shorten the title",
+          section="client", scope="client",
+          choices=["Shorten the title", "Take a second line"],
+          help="What the title bar does when, with its other space savers taken (tighter "
+               "spacing, the icons, ADD, the version badge's date alone), the whole title still "
+               "doesn't fit. Shorten the title keeps one line: the title ends in … and its full "
+               "name is its tooltip. Take a second line keeps the title whole and puts the buttons "
+               "on a line of their own, which takes some room from the panels below on a small "
+               "screen. It changes as soon as you pick it, with no Save needed."),
     Field("fcc.bulkMove.enabled", "Enable Bulk Moves", "bool", False,
           section="behavior", scope="server",
           help="Show the 🔀 Bulk Move affordances and accept bulk-move scans. "

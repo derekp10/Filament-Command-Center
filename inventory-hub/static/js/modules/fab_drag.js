@@ -87,8 +87,14 @@
         // --- Keyboard: open search from anywhere (none existed before) --------
         const openSearch = () => { if (window.SearchEngine && window.SearchEngine.open) window.SearchEngine.open(); };
         // Delegates to the canonical definition in inv_core.js — this was one of
-        // three identical copy-pasted closures (2026-08-03 scan-path audit).
-        const scanInFlight = () => !!(window.isScanInFlight && window.isScanInFlight());
+        // three identical copy-pasted closures (2026-08-03 scan-path audit). A
+        // '/' in a scan still arriving is the scan's, however slow the scanner,
+        // and after a pause up to the accumulator's 2 s (window.scanIsArriving,
+        // Group 57 review, rounds 3 to 5: with isScanInFlight alone, a slower
+        // scanner's Prusament URL opened the search and lost its '/'). Keys a
+        // person left don't hold it off.
+        const scanInFlight = () => !!(window.scanIsArriving ? window.scanIsArriving()
+            : (window.isScanInFlight && window.isScanInFlight()));
         document.addEventListener('keydown', (e) => {
             const tag = (e.target && e.target.tagName) || '';
             const inField = tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable);
@@ -111,6 +117,10 @@
                 // on `document` in the bubble phase, and ours runs first
                 // (fab_drag.js is loaded before that inline block).
                 e.stopImmediatePropagation();
+                // The keys a person left before it go too, as the Low stock
+                // list's and its dialog's '/' take them (Group 57 review, round
+                // 5): kept, they started the next scan ("abLOC:…").
+                if (window.clearScanBuffer) window.clearScanBuffer();
                 openSearch();
             }
         });

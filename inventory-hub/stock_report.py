@@ -41,7 +41,9 @@ an empty list. Each spool carries its full filament record (Spoolman nests the
 same record /api/v1/filament returns: all 257 spools on dev matched on
 2026-10-19); a second strict read, of every filament, finds the ones with no
 spool on record. It runs only when the panel opens, never on the dashboard
-heartbeat.
+heartbeat. The title bar's ⚠️ count (`glance`, Group 57.2) does ride the
+heartbeat: it is worked out from the tick's own spool and filament reads by the
+list's own rule (`_members`), and reads nothing of its own.
 
 The warning (`check_after_deduct`, `check_after_weight_change`) logs ONE
 Activity Log WARNING per filament when a write takes it across a line:
@@ -53,9 +55,11 @@ Neither for an excluded filament: no news there.
 A filament already under the line stays quiet until it runs out, so a print on
 a low filament doesn't log every time, and the same warning for one filament is
 logged once a minute at most (two writes landing together can each see the
-crossing). "Before" is the written spool's own grams before and after the write
-plus the filament's other in-stock spools, from one strict read of that
-filament's spools after the write.
+crossing). Both totals come from one strict read of that filament's spools
+after the write, summed as the list sums them: "after" is those spools as read
+(the written one as it is now, within _MATCH_G of where the write left it),
+"before" the same spools with the written ones' grams from before the write.
+The grams it names are the ones the filament's Low row shows (grams_text).
 
 It never gets in the way of the write that called it: it is called only after
 the write landed (for a print, after the exactly-once ledger write, so a crash
@@ -190,8 +194,12 @@ def in_stock(spool):
 
 
 def stock_of(spools):
-    """(grams, in-stock spools, in-stock spools with unknown grams)."""
-    grams, count, unknown = 0.0, 0, 0
+    """(grams, in-stock spools, in-stock spools with unknown grams). The grams
+    are summed with math.fsum, so the order the spools are listed in can never
+    move a filament across the line (Group 57 review: 0.1 + 249.7 + 0.2 is
+    249.99999999999997 one way round and 250.0 another, and the title bar's
+    count and the list read two different lists)."""
+    rems, count, unknown = [], 0, 0
     for s in spools or []:
         if not in_stock(s):
             continue
@@ -200,8 +208,49 @@ def stock_of(spools):
         if rem is None:
             unknown += 1
         else:
-            grams += rem
-    return grams, count, unknown
+            rems.append(rem)
+    return math.fsum(rems), count, unknown
+
+
+def under_line(grams, threshold):
+    """A filament's grams are under the Low line: the one comparison behind the
+    list, the title-bar count and the low-stock warning (Group 57 review, round
+    2). On grams rounded to the microgram: spools of 136.2, 7.9, 69.6 and 36.3 g
+    make 250 g, but their sum in binary is 249.99999999999997, which counted as
+    Low under a 250 g line, and the warning (summed another way) said otherwise."""
+    return round(grams, 6) < threshold
+
+
+def _floor_tenth(grams):
+    """Grams to the tenth below, on grams rounded to the microgram: a 1000 g
+    spool with 750.2 g used has 249.79999999999995 g left in binary, which is
+    249.8, not 249.7."""
+    return math.floor(round(grams, 6) * 10) / 10
+
+
+def _row_grams(grams, threshold=None):
+    """A row's grams, to the tenth: a Low row's never rounded up to the line it
+    is under (249.96 g is 249.9, not 250.0), so the page can't show it at the
+    line either (inv_stock.js's _stockText)."""
+    tenth = round(grams, 1)
+    if threshold is not None and tenth >= threshold and under_line(grams, threshold):
+        return _floor_tenth(grams)
+    return tenth
+
+
+def grams_text(grams, threshold=None):
+    """A total's grams exactly as its Low row shows them: the row's tenth
+    (_row_grams), drawn by inv_stock.js's _stockText rule, whole grams (rounded
+    half up, as Math.round does), except where that would put a row under the
+    line at it ("250 g" under "Under 250 g"): then the tenth. Round 3: built
+    from the total on its own, the warning said "249.5 g left" for 249.57 g
+    while the row said "249.6 g", and "248 g" against "249 g" for 248.5 g
+    (Python rounds half to even)."""
+    tenth = _row_grams(grams, threshold)
+    whole = math.floor(tenth + 0.5)
+    if threshold is not None and tenth < threshold and whole >= threshold:
+        return f"{tenth:.1f}"
+    return f"{whole:.0f}"
 
 
 def _fid_of(spool):
@@ -332,6 +381,94 @@ def _row(fid, fil, grams, count, total, template):
     }
 
 
+def _group(spools, filaments):
+    """({filament id: filament}, {filament id: {fil, spools}}) from a spool list
+    and the filament list. The filament list's own record wins over the copy
+    nested in a spool (the same record, read a moment apart)."""
+    fil_by_id = {}
+    for fil in filaments:
+        try:
+            fil_by_id[int((fil or {}).get('id'))] = fil
+        except (TypeError, ValueError, AttributeError):
+            continue
+    by_fid = {}
+    for s in spools:
+        fid = _fid_of(s)
+        if fid is None:
+            continue
+        entry = by_fid.setdefault(fid, {"fil": fil_by_id.get(fid) or s.get('filament'), "spools": []})
+        entry["spools"].append(s)
+    return fil_by_id, by_fid
+
+
+def _members(fil_by_id, by_fid, threshold):
+    """The list each filament is on: (kind, fid, fil, grams, in-stock spools,
+    spools on record, unknown, no_spools) for every one that is 'low', 'out' or
+    'excluded'. The one rule behind the list (build_report) and the title-bar
+    count (low_out_count), so the count never disagrees with the list it opens.
+    A filament with no spool on record at all is out (or excluded) too, after
+    the others; no_spools says so."""
+    for fid, entry in by_fid.items():
+        grams, count, unknown = stock_of(entry["spools"])
+        total = len(entry["spools"])
+        if exclusion_of(entry["fil"]):
+            yield "excluded", fid, entry["fil"], grams, count, total, unknown, False
+        elif count == 0:
+            yield "out", fid, entry["fil"], 0.0, 0, total, unknown, False
+        elif not unknown and under_line(grams, threshold):
+            yield "low", fid, entry["fil"], grams, count, total, unknown, False
+    for fid, fil in fil_by_id.items():
+        if fid not in by_fid:
+            yield ("excluded" if exclusion_of(fil) else "out"), fid, fil, 0.0, 0, 0, 0, True
+
+
+def low_out_count(spools, filaments, threshold):
+    """(low, out): how many filaments the ⚠️ Low stock list shows on Low and on
+    Out (Group 57.2's title-bar count), by the list's own rule (`_members`).
+
+    `spools` may be the NON-archived list (the dashboard heartbeat's one read)
+    as well as every spool (build_report's): an archived spool is never in
+    stock (`in_stock`), so it never decides Low or Out. A filament whose spools
+    are all archived has no spool in stock either way: it is Out through the
+    "no spool on record" path instead of the "none in stock" one, which changes
+    only its row's wording (`no_spools`), never the count. (The one way the two
+    could differ: a filament missing from `filaments` whose spools are all
+    archived, which the list counts Out from the spool's own copy. Spoolman
+    refuses to delete a filament that has spools, so that needs a delete landing
+    between one request's two reads.)"""
+    fil_by_id, by_fid = _group(spools, filaments)
+    low = out = 0
+    for kind, *_ in _members(fil_by_id, by_fid, threshold):
+        if kind == "low":
+            low += 1
+        elif kind == "out":
+            out += 1
+    return low, out
+
+
+def glance(spools, spools_error=None, filaments_read=None):
+    """The ⚠️ Low stock title-bar button's count for the dashboard heartbeat
+    (Group 57.2), from the tick's own reads: `spools` is its non-archived spool
+    list (None when that read failed) and `filaments_read` its shared
+    spoolman_api.FilamentListRead, which the label_backlog section counts from
+    too, so the count costs no Spoolman read of its own.
+
+    Answers {'read_ok': True, 'count', 'low', 'out', 'threshold_g'}, or
+    {'read_ok': False, 'read_error'} when either list couldn't be read (the
+    filament list isn't asked for once the spool read failed), so the page
+    keeps the count it shows and never draws a blip as 0. Excluded filaments
+    never count."""
+    if spools is None:
+        return {'read_ok': False, 'read_error': f"couldn't read Spoolman's spools ({spools_error})"}
+    reader = filaments_read if filaments_read is not None else spoolman_api.FilamentListRead()
+    filaments = reader.get()
+    if filaments is None:
+        return {'read_ok': False, 'read_error': f"couldn't read Spoolman's filaments ({reader.error})"}
+    threshold = low_stock_g()
+    low, out = low_out_count(spools, filaments, threshold)
+    return {'read_ok': True, 'count': low + out, 'low': low, 'out': out, 'threshold_g': threshold}
+
+
 def build_report():
     """The ⚠️ Low-stock list: {success, threshold_g, low, out, excluded,
     filaments, spools}. `low` runs from the fewest grams up; `out` and
@@ -353,42 +490,18 @@ def build_report():
     if not isinstance(filaments, list):
         raise StockReadError("Spoolman's answer wasn't a filament list")
 
-    # The filament list's own record wins over the copy nested in a spool (the
-    # same record, read a moment apart).
-    fil_by_id = {}
-    for fil in filaments:
-        try:
-            fil_by_id[int((fil or {}).get('id'))] = fil
-        except (TypeError, ValueError, AttributeError):
-            continue
-
-    by_fid = {}
-    for s in spools:
-        fid = _fid_of(s)
-        if fid is None:
-            continue
-        entry = by_fid.setdefault(fid, {"fil": fil_by_id.get(fid) or s.get('filament'), "spools": []})
-        entry["spools"].append(s)
-
-    low, out, excluded = [], [], []
-    for fid, entry in by_fid.items():
-        grams, count, unknown = stock_of(entry["spools"])
-        total = len(entry["spools"])
-        if exclusion_of(entry["fil"]):
-            row = _row(fid, entry["fil"], grams, count, total, template)
+    fil_by_id, by_fid = _group(spools, filaments)
+    lists = {"low": [], "out": [], "excluded": []}
+    for kind, fid, fil, grams, count, total, unknown, no_spools in _members(fil_by_id, by_fid, threshold):
+        row = _row(fid, fil, grams, count, total, template)
+        if kind == "low":
+            row["grams"] = _row_grams(grams, threshold)
+        if no_spools:
+            row["no_spools"] = True
+        elif kind == "excluded":
             row["stock_unknown"] = unknown > 0   # a spool of unknown weight: grams is a floor
-            excluded.append(row)
-        elif count == 0:
-            out.append(_row(fid, entry["fil"], 0.0, 0, total, template))
-        elif not unknown and grams < threshold:
-            low.append(_row(fid, entry["fil"], grams, count, total, template))
-    # A filament with no spool on record at all is out too, after the others.
-    for fid, fil in fil_by_id.items():
-        if fid in by_fid:
-            continue
-        row = _row(fid, fil, 0.0, 0, 0, template)
-        row["no_spools"] = True
-        (excluded if row["excluded"] else out).append(row)
+        lists[kind].append(row)
+    low, out, excluded = lists["low"], lists["out"], lists["excluded"]
     low.sort(key=lambda r: (r["grams"], r["display"].lower(), r["filament_id"]))
     out.sort(key=lambda r: (bool(r.get("no_spools")), r["display"].lower(), r["filament_id"]))
     excluded.sort(key=lambda r: (r["display"].lower(), r["filament_id"]))
@@ -674,7 +787,7 @@ def _crossing(group, spools, threshold):
     by_id = {str(s.get('id')): s for s in spools or []
              if isinstance(s, dict) and s.get('id') is not None}
     fil = None
-    before_g = after_g = 0.0
+    before_parts = []
     before_n = after_n = 0
     emptied = []
     for c in group:
@@ -696,20 +809,26 @@ def _crossing(group, spools, threshold):
             # archived with grams left was archived before the charge too.
             before_in = c["before_g"] > 0 and (fresh_in or c["after_g"] <= 0)
         if before_in:
-            before_g += c["before_g"]
+            before_parts.append(c["before_g"])
             before_n += 1
         if fresh_in:
-            after_g += c["after_g"]
             after_n += 1
         if before_in and not fresh_in:
             emptied.append(c["sid"])
         fil = fil or rec.get('filament')
 
     changed = {str(c["sid"]) for c in group}
-    other_g, other_n, other_unknown = stock_of([s for k, s in by_id.items() if k not in changed])
+    others = [s for k, s in by_id.items() if k not in changed]
+    _, other_n, other_unknown = stock_of(others)
     if other_unknown:
         return None   # a spool of unknown weight: neither low nor out can be told
-    before_total, after_total = other_g + before_g, other_g + after_g
+    # Summed as the list sums them (Group 57 review, round 2: the other spools'
+    # sum plus the changed one's, added on, could land on the other side of the
+    # line from the list's own sum): after the write, the filament's spools as
+    # read now (stock_of, the list's rule); before it, the same spools with the
+    # changed ones' grams from before the write.
+    after_total = stock_of(list(by_id.values()))[0]
+    before_total = math.fsum([remaining_g(s) for s in others if in_stock(s)] + before_parts)
     before_count, after_count = other_n + before_n, other_n + after_n
     if exclusion_of(fil):
         return None   # excluded: neither low nor out is news
@@ -719,9 +838,9 @@ def _crossing(group, spools, threshold):
         ids = ", ".join(f"#{s}" for s in sorted(emptied, key=lambda s: (_num(s) is None, _num(s) or 0)))
         tail = "was its last spool" if len(emptied) == 1 else "were its last spools"
         return f"⚠️ {name} is out: {ids} {tail} in stock", _log_colour(fil), "out"
-    if after_count > 0 and before_total >= threshold > after_total:
+    if after_count > 0 and not under_line(before_total, threshold) and under_line(after_total, threshold):
         noun = "spool" if after_count == 1 else "spools"
-        return (f"⚠️ {name} is running low: {after_total:.0f} g left in {after_count} {noun}",
+        return (f"⚠️ {name} is running low: {grams_text(after_total, threshold)} g left in {after_count} {noun}",
                 _log_colour(fil), "low")
     return None
 

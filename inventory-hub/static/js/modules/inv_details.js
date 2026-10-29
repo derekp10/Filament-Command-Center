@@ -1504,7 +1504,13 @@ window.refreshFilamentSpools = () => {
 //   empty-weight storage cascade (all NATIVE Spoolman number fields):
 //     spool.spool_weight > filament.spool_weight > vendor.empty_spool_weight
 //   this prompt writes the FILAMENT default (always) + the VENDOR default (opt-in).
-window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight = null) => {
+// `opts.skipIf()`: true when the prompt should not open after all (the
+// weigh-out list: a spool has been scanned since the save, Group 57 review,
+// round 8). Asked right before it is drawn, after `opts.settle()` (a promise:
+// the weigh-out list's scan being answered, round 9: it opened over the scan,
+// and the scanned spool's reading went in its box). `opts.scanPending()`: true
+// while that list is answering a scan, and Save waits until it has.
+window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight = null, opts = {}) => {
     if (!filamentId) return;
     let fil;
     try {
@@ -1544,8 +1550,12 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
                     <span style="color:#9aa;">— every ${esc(vendorName)} spool without its own weight inherits it.</span></span>
             </label>` : '';
 
+    // data-fcc-weight-keys: a weight key typed on its vendor box or its buttons
+    // goes into its weight box (inv_core.js's weight capture; Group 57 review,
+    // round 7: after a tick of the vendor box a typed weight went to the scan
+    // path as a spool id).
     const content = `
-        <div style="background:#1e1e1e; color:#fff; border:2px solid #ffc107; border-radius:8px; padding:20px 24px; max-width:28.75rem; text-align:left;">
+        <div data-fcc-weight-keys style="background:#1e1e1e; color:#fff; border:2px solid #ffc107; border-radius:8px; padding:20px 24px; max-width:28.75rem; text-align:left;">
             <div style="font-size:1.2em; font-weight:bold; margin-bottom:10px;">📦 Spool archived — record the empty weight?</div>
             <p style="color:#ddd; margin-bottom:8px; font-size:0.95em;">
                 Spool <strong>#${esc(spoolId)}</strong> just hit 0g and was auto-archived. Its filament
@@ -1558,7 +1568,7 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
             </p>
             <label class="form-label text-warning small mb-1">Empty spool weight (g)</label>
             <input type="number" step="0.1" min="0" id="fcc-archive-empty-wt"
-                class="form-control bg-dark text-white border-warning" autocomplete="off"
+                class="form-control bg-dark text-white border-warning fcc-weight-box" autocomplete="off"
                 placeholder="e.g. 167"${prefillAttr}>
             <div id="fcc-archive-empty-err" class="text-danger small" style="margin-top:4px;"></div>
             ${propagateRow}
@@ -1569,10 +1579,33 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
         </div>
     `;
 
+    if (opts && typeof opts.settle === 'function') await opts.settle();
+    if (opts && typeof opts.skipIf === 'function' && opts.skipIf()) {
+        showToast(`Didn't ask for #${spoolId}'s empty spool weight: the next spool was already scanned`, 'info', 5000);
+        return;
+    }
+
     let handle = null;
     let saving = false;
-    const cleanup = () => { if (handle) { try { handle.cleanup(); } catch (_) { /* noop */ } handle = null; } };
+    // Closed (Later, Escape or a save), the focus goes back where it was: the
+    // weigh-out list's next box, whose reading went to the scan path as a spool
+    // id while the focus sat on the page (Group 57 review, round 7). A box the
+    // list drew again meanwhile is found by its spool (weighOutRefocus).
+    const returnTo = document.activeElement;
+    const cleanup = () => {
+        if (!handle) return;
+        try { handle.cleanup(); } catch (_) { /* noop */ }
+        handle = null;
+        if (returnTo && returnTo !== document.body && returnTo.isConnected && !returnTo.disabled
+            && typeof returnTo.focus === 'function') returnTo.focus();
+        else if (window.weighOutRefocus) window.weighOutRefocus();
+    };
 
+    // Its box is a weight box (fcc-weight-box): a label scanned into it goes to
+    // the scan path, never into the filament's empty weight (Group 57 review,
+    // round 6). It opens after a save, while the next spool's label may be on
+    // its way (inv_core.js's weight capture puts a label split by its focus
+    // back together).
     handle = window.mountOverlay({
         id: 'fcc-archive-empty-overlay',
         content,
@@ -1581,6 +1614,11 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
         onEscape: cleanup,   // Escape == "Later" (no-op); mountOverlay owns Escape
     });
     const ov = handle.element;
+    // A spool scanned over it in the weigh-out list answers it Later: that
+    // spool is the one being weighed now, and its reading would go in this box
+    // as the filament's empty weight (inv_weigh_out.js, round 8). A save
+    // already on its way still lands.
+    ov.fccDismissForScan = cleanup;
     const wtEl = ov.querySelector('#fcc-archive-empty-wt');
     const errEl = ov.querySelector('#fcc-archive-empty-err');
     const propEl = ov.querySelector('#fcc-archive-propagate');
@@ -1591,6 +1629,10 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
     if (wtEl && wtEl.value) { try { wtEl.select(); } catch (_) { /* noop */ } }
 
     const doSave = async () => {
+        if (opts && typeof opts.scanPending === 'function' && opts.scanPending()) {
+            showToast('A scan is still being read: press Enter again in a moment', 'info', 4000);
+            return;
+        }
         const raw = wtEl ? wtEl.value : '';
         const n = Number(raw);
         if (raw === '' || raw == null || !Number.isFinite(n) || n <= 0) {

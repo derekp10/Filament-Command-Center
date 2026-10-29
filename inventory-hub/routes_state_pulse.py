@@ -13,6 +13,8 @@ Wiring notes:
   (module-qualified), the body of /api/locations, handing it the tick's
   shared spool list (Group 52.1a).
 - _pulse_section_label_backlog counts through routes_print_queue.backlog_count.
+- _pulse_section_low_stock counts through stock_report.glance (Group 57.2),
+  from the same spool list and the same filament list as label_backlog.
 - state.GLOBAL_BUFFER / GLOBAL_QUEUE are read AND whole-replaced as
   attributes of the state module (never from-imported).
 - No dependency on print_monitor (verified by scan) — the pulse
@@ -33,6 +35,7 @@ import prusalink_api  # type: ignore
 
 import routes_locations  # type: ignore
 import routes_print_queue  # type: ignore
+import stock_report  # type: ignore
 
 from app_core import app
 
@@ -273,9 +276,12 @@ def api_get_logs_route():
 # used to read the whole list three times in the pulse, plus twice more for the
 # label backlog's own /api/print_queue/pending poll. It lives for this one
 # request only (no cross-request cache: a read right after a move must see it).
+# Group 57.2: the filament list likewise, read once (spoolman_api.
+# FilamentListRead) for the two sections that count from it, label_backlog
+# and low_stock (the ⚠️ Low stock button's count).
 _VALID_PULSE_SECTIONS = frozenset({
     'logs', 'status', 'locations', 'buffer', 'manage', 'printer_status',
-    'label_backlog',
+    'label_backlog', 'low_stock',
 })
 
 
@@ -342,14 +348,26 @@ def _pulse_spool_read(reader):
             'error': None if ok else (reader.error or "Spoolman's spool list couldn't be read")}
 
 
-def _pulse_section_label_backlog(spools=None):
+def _pulse_section_label_backlog(spools=None, filaments=None):
     """The 🏷️ Backlog button's count (Group 52.1a), from the tick's shared spool
     list plus one filament read: the page used to poll
     /api/print_queue/pending on every tick for it, two more whole-list reads.
     Counted by routes_print_queue.backlog_count, the same flag filter the
-    backlog list uses (in FCC: Spoolman ignores an `extra=` filter)."""
+    backlog list uses (in FCC: Spoolman ignores an `extra=` filter).
+    `filaments`: the tick's shared FilamentListRead (57.2)."""
     reader = spools if spools is not None else spoolman_api.SpoolListRead()
-    return routes_print_queue.backlog_count(reader.get(), reader.error)
+    return routes_print_queue.backlog_count(reader.get(), reader.error, filaments_read=filaments)
+
+
+def _pulse_section_low_stock(spools=None, filaments=None):
+    """The ⚠️ Low stock button's count (Group 57.2): how many filaments are on
+    the list's Low and Out tabs, by its own rule (stock_report.glance), from the
+    tick's shared spool list and filament list, so it reads nothing of its own
+    when label_backlog is in the tick too. The list itself (/api/stock_report)
+    is still read only when it opens. A read that failed answers read_ok:
+    false, and the page keeps the count it shows."""
+    reader = spools if spools is not None else spoolman_api.SpoolListRead()
+    return stock_report.glance(reader.get(), reader.error, filaments_read=filaments)
 
 
 def _pulse_section_printer_status(spools=None):
@@ -467,18 +485,23 @@ def api_dashboard_pulse():
 
     Query params:
       include   comma-separated section names. Valid: logs, status,
-                locations, buffer, manage, printer_status, label_backlog.
-                Unknown names are silently ignored (forward-compat).
+                locations, buffer, manage, printer_status, label_backlog,
+                low_stock. Unknown names are silently ignored (forward-compat).
       manage_id required when 'manage' is in include - the LocationID
                 whose contents to fetch.
 
     Group 52.1a: the sections that need Spoolman's spool list share ONE read
     (`tick_spools`, read lazily by the first section that asks), so a tick
     costs one whole-list read however many of them are on screen.
+    Group 57.2: label_backlog and low_stock share one filament-list read
+    (`tick_filaments`) the same way.
     Body (POST): {"refresh_spool_ids": [123, 124, ...]} - if present
                 and non-empty, the response includes a "spools_refresh"
-                section keyed by spool id, equivalent to a POST to
-                /api/spools/refresh.
+                section keyed by spool id, in /api/spools/refresh's shape,
+                answered from the tick's own spool-list read (Group 57.5;
+                read before the printer probes, and an outage stops at the
+                first spool Spoolman doesn't answer: logic.get_live_spools_data),
+                or with one GET per spool when no section read the list.
 
     Returns: {section_name: payload, ...}. Sections that error
     individually return {"error": "..."} in their slot; the response
@@ -504,6 +527,7 @@ def api_dashboard_pulse():
     # One spool-list read for this tick, shared by every section below that
     # needs it (52.1a). Nothing is read until a section asks.
     tick_spools = spoolman_api.SpoolListRead()
+    tick_filaments = spoolman_api.FilamentListRead()
 
     # logs and status share the underlying Spoolman+FilaBridge health
     # check, so we invoke the handler at most once per request.
@@ -561,13 +585,25 @@ def api_dashboard_pulse():
 
     if 'label_backlog' in include:
         try:
-            out['label_backlog'] = _pulse_section_label_backlog(spools=tick_spools)
+            out['label_backlog'] = _pulse_section_label_backlog(spools=tick_spools, filaments=tick_filaments)
         except Exception as e:
             out['label_backlog'] = {'error': str(e), 'read_ok': False}
 
+    if 'low_stock' in include:
+        try:
+            out['low_stock'] = _pulse_section_low_stock(spools=tick_spools, filaments=tick_filaments)
+        except Exception as e:
+            out['low_stock'] = {'error': str(e), 'read_ok': False}
+
     if refresh_spool_ids:
         try:
-            out['spools_refresh'] = logic.get_live_spools_data(refresh_spool_ids)
+            # 57.5: from the list a section above already read (one GET only
+            # for an id it lacks); a tick that read no list keeps one GET per id
+            # rather than start a whole-list read for the buffer alone.
+            if tick_spools.reads:
+                out['spools_refresh'] = logic.get_live_spools_data(refresh_spool_ids, spools=tick_spools)
+            else:
+                out['spools_refresh'] = logic.get_live_spools_data(refresh_spool_ids)
         except Exception as e:
             out['spools_refresh'] = {'error': str(e)}
 

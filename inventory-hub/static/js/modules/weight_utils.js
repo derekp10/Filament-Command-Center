@@ -248,6 +248,14 @@ function promptMissingEmptyWeight({
     helper = 'Place the empty spool on the scale and enter the reading. We’ll use it as the tare for this and future weigh-ins.',
     overlayId = 'fcc-missing-empty-weight-overlay',
     allowSkip = false,
+    // The weigh-out list's: a spool scanned over the prompt cancels it (Group
+    // 57 review, round 8: that spool's reading went in this box as the tare),
+    // after this is called to say so.
+    onScanDismiss = null,
+    // The weigh-out list's too: true while it is answering a scan, and Save
+    // waits until it has (round 9: the scanned spool's reading and Enter,
+    // typed before the answer, were saved as this spool's tare).
+    scanPending = null,
 } = {}) {
     return new Promise((resolve) => {
         const swatch = color_hex
@@ -262,8 +270,10 @@ function promptMissingEmptyWeight({
         // the CONFIRM tier so it sits above the WeightEntry overlay.
         const tier = document.getElementById('fcc-weight-entry-overlay') ? 'confirm' : 'standard';
 
+        // data-fcc-weight-keys: a weight key typed on its buttons goes into its
+        // box (inv_core.js's weight capture; Group 57 review, round 7).
         const panelHtml = `
-            <div role="dialog" aria-modal="true" aria-labelledby="${overlayId}-title"
+            <div role="dialog" aria-modal="true" aria-labelledby="${overlayId}-title" data-fcc-weight-keys
                  style="background:#1f2024;color:#eee;border:1px solid #555;
                         border-radius:8px;padding:18px 20px;min-width:320px;
                         max-width:480px;box-shadow:0 8px 32px rgba(0,0,0,0.6);">
@@ -273,7 +283,7 @@ function promptMissingEmptyWeight({
                 <div class="input-group input-group-sm">
                     <input type="number" min="0" step="0.1" inputmode="decimal"
                            id="${overlayId}-input"
-                           class="form-control bg-secondary text-light border-dark"
+                           class="form-control bg-secondary text-light border-dark fcc-weight-box"
                            placeholder="Empty spool weight">
                     <span class="input-group-text bg-dark text-light border-secondary">g</span>
                 </div>
@@ -295,6 +305,10 @@ function promptMissingEmptyWeight({
             resolve(value);
         };
         const submit = () => {
+            if (typeof scanPending === 'function' && scanPending()) {
+                showToast('A scan is still being read: press Enter again in a moment', 'info', 4000);
+                return;
+            }
             const v = Number(input.value);
             if (!(v > 0)) { input.focus(); return; }
             finish(v);
@@ -302,8 +316,22 @@ function promptMissingEmptyWeight({
         const cancel = () => finish(null);
         const skip = () => finish(PROMPT_SKIP_TARE);
         const onKey = (e) => {
-            // Escape routes through mountOverlay's onEscape; only Enter here.
-            if (e.key === 'Enter') { e.preventDefault(); submit(); }
+            // Escape routes through mountOverlay's onEscape; only Enter here,
+            // and only while this prompt is on top.
+            if (e.key !== 'Enter' || (window.isTopOverlay && !window.isTopOverlay(handle.element))) return;
+            // A scan's Enter is the scan's (Group 57 review, round 6: a label
+            // scanned into the box was saved as the tare). One scanned into the
+            // box (a weight box, fcc-weight-box) is inv_core.js's weight
+            // capture's, which takes its Enter first; one typed with the focus
+            // on a button went to the scan accumulator.
+            if (e.target !== input && window.enterIsAScan && window.enterIsAScan()) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            if (window.clearScanBuffer) window.clearScanBuffer();
+            // Enter answers the button it is on: Cancel cancels, Skip skips.
+            if (e.target === cancelBtn) cancel();
+            else if (skipBtn && e.target === skipBtn) skip();
+            else submit();
         };
 
         const handle = window.mountOverlay({
@@ -315,6 +343,9 @@ function promptMissingEmptyWeight({
             onEscape: cancel,
         });
         const overlay = handle.element;
+        if (typeof onScanDismiss === 'function') {
+            overlay.fccDismissForScan = () => { if (!resolved) onScanDismiss(); cancel(); };
+        }
 
         const input = overlay.querySelector(`#${overlayId}-input`);
         const saveBtn = overlay.querySelector(`#${overlayId}-save`);

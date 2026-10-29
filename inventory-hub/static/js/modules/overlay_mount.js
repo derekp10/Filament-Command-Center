@@ -48,6 +48,11 @@
 //     manually) is a no-op.
 //   - Mounting with an `id` that's already mounted tears down the prior
 //     handle first (re-mount).
+//   - The overlay on top owns the keys: Escape is answered by the topmost one
+//     only (the highest tier, then the last mounted), and window.isTopOverlay(el)
+//     lets an overlay's own key handler ask the same (Group 57 review, round 6:
+//     the first one mounted answered Escape, so Escape in the missing-tare
+//     prompt cancelled the Quick-Weigh under it and left the prompt up).
 
 (function () {
     const Z = Object.freeze({ standard: 20000, confirm: 20100 });
@@ -75,6 +80,16 @@
             } catch (_) { /* invalid selector — ignore */ }
         });
         return () => touched.forEach(([el, prev]) => { el.style.pointerEvents = prev; });
+    }
+
+    // The overlay on top: the highest tier, then the last mounted (each one
+    // mounts at the end of <body>).
+    function isTopOverlay(root) {
+        let top = null;
+        document.querySelectorAll('[data-overlay-mount="1"]').forEach((el) => {
+            if (!top || (Z[el.dataset.overlayTier] || 0) >= (Z[top.dataset.overlayTier] || 0)) top = el;
+        });
+        return !!root && top === root;
     }
 
     function mountOverlay(opts) {
@@ -145,6 +160,7 @@
 
         const onKey = (e) => {
             if (e.key !== 'Escape') return;
+            if (!isTopOverlay(root)) return;   // an overlay over this one answers it
             e.preventDefault();
             // stopImmediatePropagation prevents OTHER capture-phase listeners on
             // document (e.g. inv_loc_mgr.js's manage-modal Escape handler) from
@@ -235,6 +251,7 @@
     }
 
     window.mountOverlay = mountOverlay;
+    window.isTopOverlay = isTopOverlay;
     window.getOverlay = getOverlay;
     window.closeOverlay = closeOverlay;
     window.closeAllOverlays = closeAllOverlays;

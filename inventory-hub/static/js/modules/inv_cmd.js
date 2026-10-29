@@ -505,8 +505,14 @@ window.commitBulkMove = () => {
 // fires in the middle of somebody scanning a label).
 (function () {
     // Delegates to the canonical definition in inv_core.js — this was one of
-    // three identical copy-pasted closures (2026-08-03 scan-path audit).
-    const _scanInFlight = () => !!(window.isScanInFlight && window.isScanInFlight());
+    // three identical copy-pasted closures (2026-08-03 scan-path audit). A
+    // scan still arriving, however slow the scanner (window.scanIsArriving;
+    // Group 57 review, round 4: "LOC:LR-MDB-1" at 75 ms a key, with nothing
+    // open, armed a bulk move on its 'B' and reached processScan as "-1"; the
+    // 'B' comes after the label's ':', and keys a person left don't hold
+    // Shift+B off, round 5).
+    const _scanInFlight = () => !!(window.scanIsArriving ? window.scanIsArriving()
+        : (window.isScanInFlight && window.isScanInFlight()));
     document.addEventListener('keydown', (e) => {
         if (!e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
         if (e.key !== 'B' && e.key !== 'b') return;
@@ -1457,6 +1463,13 @@ const _isLocRepeat = (key, capturedAt) => {
     const at = capturedAt || Date.now();
     return last.doneAt == null || at < last.doneAt + LOC_REPEAT_MS;
 };
+// A label the slot picker held while it loaded and then refused (or never
+// loaded) was no read either: scanned again, it acts (Group 57 review, round
+// 9). `label`: as the picker held it (window.lastScanLabel's).
+window.unreadLocScan = (label) => {
+    const last = window._fccLastLocScan;
+    if (last && last.text === String(label == null ? '' : label).trim().toUpperCase()) window._fccLastLocScan = null;
+};
 
 // Group 40.5 item F (Derek's answer 8, 2026-10-13): what an empty-buffer scan of
 // a location label grabs. Only a place that holds one spool grabs one, and only
@@ -1485,7 +1498,14 @@ const _quickPickItem = (locData, res) => {
 };
 
 // --- SCAN ROUTER ---
-const processScan = (text, source = 'keyboard', capturedAt = null) => {
+// `weighRead`: the weigh-out list's mark for this scan, made as it was read
+// when the scan accumulator queued it behind another (weighOutScanStart); it
+// is ended by the queue if the scan never goes out (Group 57 review, round 9).
+const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = null) => {
+    // Blanks around a scan are nobody's (the server strips them too); kept,
+    // the exact matches below missed (Group 57 review, round 5).
+    text = String(text == null ? '' : text).trim();
+    if (!text) return;
     const upper = text.toUpperCase();
     const locKey = upper.trim();
     if (_isLocRepeat(locKey, capturedAt)) {
@@ -1496,9 +1516,22 @@ const processScan = (text, source = 'keyboard', capturedAt = null) => {
     }
     // Answered at once unless it reaches the server below (every early return
     // here is an answer); in flight from the request until its answer.
+    const locBefore = window._fccLastLocScan;
     const locScan = locKey.startsWith('LOC:') ? (window._fccLastLocScan = { text: locKey, doneAt: Date.now() }) : null;
     const locInFlight = () => { if (locScan) locScan.doneAt = null; };
     const locDone = () => { if (locScan && locScan.doneAt == null) locScan.doneAt = Date.now(); };
+    // A read the open question or the slot picker took by its last label (a key
+    // left in front of it, "qLOC:…", or another label glued before it,
+    // "LOC:A…LOC:B:SLOT:2") counts as that label read, so its second read is
+    // dropped too (Group 57 review, rounds 7 and 8: it acted again).
+    const routed = () => {
+        const last = window.lastScanLabel ? window.lastScanLabel(locKey) : locKey;
+        if (last.startsWith('LOC:') && last !== locKey) window._fccLastLocScan = { text: last, doneAt: Date.now() };
+        else locDone();
+    };
+    // A read they refused is no read: the label scanned again once they have
+    // closed acts (round 8: it was dropped as a second read for 1.5 s).
+    const unread = () => { if (locScan && window._fccLastLocScan === locScan) window._fccLastLocScan = locBefore; };
     // Active-dialog confirm-by-scan (registered via window.attachConfirmQRs).
     // Must run BEFORE the regular CMD: branches so a CMD:CONFIRM:<sid> scan
     // routes to the dialog's callback instead of hitting the backend or the
@@ -1521,31 +1554,48 @@ const processScan = (text, source = 'keyboard', capturedAt = null) => {
         window._fccOpenMoveQuestion = openQuestion;
     }
     if (openQuestion) {
-        if (/^CMD:CANCEL(:.*)?$/.test(upper)) { openQuestion.cancel(); return; }
+        // At the end of the text, as routeConfirmScan reads its QRs: a stray
+        // key in front refused the question's own Cancel (round 5).
+        if (/CMD:CANCEL(:[A-Z0-9_-]+)?$/.test(upper)) { openQuestion.cancel(); return; }
         // A question whose answers are labels (Group 40.5's "Record it as coming
-        // from…": a feed slot's label picks it) routes them itself.
-        if (typeof openQuestion.route === 'function' && openQuestion.route(text)) { locDone(); return; }
+        // from…": a feed slot's label picks it) routes them itself; 'refused'
+        // (a held slot, round 9) is no read of the label.
+        const answered = typeof openQuestion.route === 'function' ? openQuestion.route(text) : false;
+        if (answered) { if (answered === 'refused') unread(); else routed(); return; }
         const why = openQuestion.hint || 'Answer the question on screen first: Load it instead, Just store it, or Cancel';
         showToast(why, 'warning', 7000);
         if (openQuestion.flash) openQuestion.flash(`${why}. (Ignored: ${text})`);
         if (window.logClientEvent) window.logClientEvent(
             `⚠️ Scan "${text}" ignored: "${openQuestion.title}" is still open`, 'WARNING');
-        locDone();
+        unread();
         return;
     }
     // Group 40.1: an open slot picker claims every scan next. A choice's label
     // picks it, CMD:CANCEL cancels, anything else is refused with a warning, so
-    // a scan never acts behind the picker (slot_picker.js).
-    if (window.routePickerScan && window.routePickerScan(text)) { locDone(); return; }
+    // a scan never acts behind the picker (slot_picker.js; 'refused' says so).
+    const picker = window.routePickerScan ? window.routePickerScan(text) : false;
+    if (picker) { if (picker === 'refused') unread(); else routed(); return; }
     // A session-scoped CMD:CONFIRM:<sid> that routeConfirmScan didn't claim
     // belongs to a dialog that has already closed. Never let it fall through to
     // the substring-matching routes below and answer whatever unrelated dialog
     // is up now (2026-09-12 review). A stale CMD:CANCEL:<sid> still falls
     // through: cancelling is always safe. A stale CMD:STORE:<sid> (Group 40.3's
-    // "Just store it") is a choice too, so it is stopped the same way.
-    if (/^CMD:(CONFIRM|STORE):.+/.test(upper)) {
-        showToast('That confirm QR belongs to a dialog that has closed — ignored', 'warning', 7000);
-        if (window.logClientEvent) window.logClientEvent('⚠️ Stale confirm QR scanned (its dialog had closed) — ignored', 'WARNING');
+    // "Just store it") is a choice too, so it is stopped the same way. Read
+    // anywhere in the text: a stray key in front never lets one through (Group
+    // 57 review, round 5), and neither does a later scan glued after it with a
+    // Space in it (round 6; a live one alone was answered above, by
+    // routeConfirmScan). A live dialog's own QR with a scan glued after it is
+    // stopped too, and said so: it was called a closed dialog's (round 7), and
+    // with no Space between them still was (round 8: its id read on into the
+    // next scan's letters).
+    if (/CMD:(CONFIRM|STORE):\S/.test(upper)) {
+        const live = Object.keys(window._fccActiveConfirms || {}).some((sid) =>
+            upper.includes(`CMD:CONFIRM:${sid}`.toUpperCase()) || upper.includes(`CMD:STORE:${sid}`.toUpperCase()));
+        showToast(live ? 'That confirm QR was read together with another scan — ignored: scan it on its own'
+            : 'That confirm QR belongs to a dialog that has closed — ignored', 'warning', 7000);
+        if (window.logClientEvent) window.logClientEvent(live
+            ? `⚠️ Confirm QR read together with another scan ("${text}") — ignored`
+            : '⚠️ Stale confirm QR scanned (its dialog had closed) — ignored', 'WARNING');
         return;
     }
 
@@ -1618,6 +1668,13 @@ const processScan = (text, source = 'keyboard', capturedAt = null) => {
     setProcessing(true, { label: slotScan && window.printerLabelForTarget
         ? window.printerLabelForTarget(slotScan[1], slotScan[2]) : null });
     locInFlight();
+    // The weigh-out list, open: where the person's keys were as the scan was
+    // read (now, or when the scan accumulator queued it: weighRead). A spool
+    // the answer names takes the focus, with what was typed meanwhile, and
+    // until the answer Enter saves nothing there (Group 57 review, rounds 7 to
+    // 9; inv_weigh_out.js).
+    const weighFrom = weighRead || (window.weighOutScanStart ? window.weighOutScanStart() : null);
+    if (weighFrom) weighFrom.sent = true;
     // `confirmed_fed_heads` (Group 40.3): this page can show the "already
     // running another spool" question, so a slot scan is asked it instead of
     // being refused as a stale page (logic.stale_fed_refusal). Empty: the user
@@ -1905,6 +1962,10 @@ const processScan = (text, source = 'keyboard', capturedAt = null) => {
                 // future surface that needs it; we just don't toast.
                 if (state.heldSpools.some(s => s.id === res.id)) showToast("Already in Buffer", "warning");
                 else { state.heldSpools.unshift({ id: res.id, display: res.display, color: res.color, color_direction: res.color_direction, remaining_weight: res.remaining_weight, details: res.details, archived: res.archived, location: res.location, is_ghost: res.is_ghost, slot: res.slot, deployed_to: res.deployed_to }); renderBuffer(); }
+                // The weigh-out list's flow is "scan a spool, type its weight": its
+                // box takes the focus (Group 57 review, round 7: the reading was
+                // saved to the spool whose box kept it).
+                if (window.weighOutTakeScan) window.weighOutTakeScan(res.id, weighFrom);
             } else if (res.type === 'ambiguous') {
                 // Item 3.6 — backend found multiple spools attached to this
                 // legacy id. Prompt the user to disambiguate. "Use selected"
@@ -1965,7 +2026,8 @@ const processScan = (text, source = 'keyboard', capturedAt = null) => {
                 }
             } else if (res.type === 'error') showToast(res.msg, 'error');
         })
-        .catch((e) => { locDone(); setProcessing(false); console.error(e); showToast("Scan Error", "error"); });
+        .catch((e) => { locDone(); setProcessing(false); console.error(e); showToast("Scan Error", "error"); })
+        .finally(() => { if (window.weighOutScanDone) window.weighOutScanDone(weighFrom); });
 };
 
 // The active-print confirm for a scan assign: the shared one (inv_core.js,
@@ -2370,7 +2432,11 @@ const _askRecordSource = (pick, sid, host) => {
                 // reaching processScan, which picks the scanned slot.
                 if (window.enterIsAScan ? window.enterIsAScan() : (window.isScanInFlight && window.isScanInFlight())) return;
                 const ae = document.activeElement;
-                if (order.includes(ae)) { e.preventDefault(); e.stopPropagation(); ae.click(); }
+                if (order.includes(ae)) {
+                    e.preventDefault(); e.stopPropagation();
+                    if (window.clearScanBuffer) window.clearScanBuffer();   // a key a person left starts no scan
+                    ae.click();
+                }
                 return;
             }
             if (e.key === 'Tab' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
@@ -2413,13 +2479,16 @@ const _askRecordSource = (pick, sid, host) => {
             cancel: () => finish(null),
             flash,
             route: (text) => {
-                const m = /^LOC:(.+?):SLOT:(\d+)$/.exec(String(text || '').trim().toUpperCase());
+                // Its last label: a key a person left in front never stops it
+                // (Group 57 review, round 6), and a box id ending in LOC stays
+                // whole (round 7; window.lastScanLabel, inv_core.js).
+                const m = /^LOC:(.+?):SLOT:(\d+)$/.exec(window.lastScanLabel(text));
                 if (!m) return false;
                 const f = feeds.find(x => String(x.box).toUpperCase() === m[1].trim() && String(x.slot) === String(parseInt(m[2], 10)));
                 if (!f) return false;
                 if (!f.free) {
                     flash(`${f.box} slot ${f.slot} holds #${f.claimed_by}: pick a free slot, No box, or Cancel`);
-                    return true;
+                    return 'refused';
                 }
                 choose(f);
                 return true;
@@ -2741,15 +2810,54 @@ const loadBuffer = () => {
 // --- LIVE REFRESH POLLING ---
 // L28 polling guard: see updateLogState for rationale.
 let _liveRefreshInflight = false;
+// Asked for again while one was in flight: one more goes out once it is back.
+let _liveRefreshAgain = false;
+// The buffer's answers are kept in order by when each read was sent (Group 57
+// review: since 57.5 a tick answers from the spool list it reads before its
+// printer probes, seconds before it lands, and it painted a weigh-out's 40 g
+// back to 120 g for a tick). An answer is painted only when it was sent after
+// the page's latest change to what the cards show (liveRefreshBuffer's callers:
+// a weigh-out, a move, a save) and after the read behind what they show now.
+// Round 2: a refresh asked for while another was in flight sent nothing, the
+// one in flight (read before the change) painted, and the heartbeat that would
+// have mended it was dropped; now that one is dropped, and one more refresh
+// goes out once it is back. Stamped on the page's own clock (performance.now),
+// as the heartbeat is (inv_core.js), so a wall-clock step can't freeze them.
+// Round 3: the read behind each card is its own (`_bufferReadAt`, by spool id),
+// moved only by an answer that carries that spool: an answer with nothing in
+// it (an outage tick's {}, a section's {error}) or with only some of the cards
+// stopped an older, fuller refresh from painting the rest. A change still drops
+// every older answer: the callers' signals don't say which cards changed.
+// Hence too: while changes come faster than a refresh's round trip, the cards
+// wait for the first answer sent after the last one (painting an older read is
+// the round-2 revert, a weigh-out's 40 g back to 120 g).
+let _bufferChangedAt = -Infinity;
+const _bufferReadAt = new Map();
+const _bufferNow = () => (typeof performance !== 'undefined' && performance && typeof performance.now === 'function'
+    ? performance.now() : Date.now());
 // L206: render path extracted so the bulk-pulse dispatcher can hand
 // a spools_refresh payload (same {id: data} shape that /api/spools/refresh
 // returns) directly into the diff/update loop without another fetch.
-const _renderSpoolsRefreshPayload = (data) => {
+// `opts.sentAt`: when the read behind it was sent (a heartbeat, or this
+// page's own refresh); without it, the payload is painted as it comes.
+const _renderSpoolsRefreshPayload = (data, opts) => {
     if (!data || typeof data !== 'object') return;
+    const sentAt = opts && Number.isFinite(opts.sentAt) ? opts.sentAt : null;
+    if (sentAt !== null && sentAt < _bufferChangedAt) return;
+    // Cards that left the buffer keep no stamp.
+    if (_bufferReadAt.size > state.heldSpools.length) {
+        const held = new Set(state.heldSpools.map(s => String(s.id)));
+        Array.from(_bufferReadAt.keys()).forEach(k => { if (!held.has(k)) _bufferReadAt.delete(k); });
+    }
     let changed = false;
     state.heldSpools.forEach(s => {
         const fresh = data[s.id];
         if (!fresh) return;
+        if (sentAt !== null) {
+            const key = String(s.id);
+            if (_bufferReadAt.has(key) && sentAt < _bufferReadAt.get(key)) return;
+            _bufferReadAt.set(key, sentAt);
+        }
         // Diff covers every field the buffer card actually renders. Pre-2026-04-28
         // this list excluded location / is_ghost / slot / deployed_to, so a backend-
         // driven location move (Location Manager, Quick-Swap, force-unassign,
@@ -2783,12 +2891,11 @@ const _renderSpoolsRefreshPayload = (data) => {
 };
 window._renderSpoolsRefreshPayload = _renderSpoolsRefreshPayload;
 
-const liveRefreshBuffer = () => {
+// One /api/spools/refresh for the buffer as it is now.
+const _sendBufferRefresh = () => {
     if (!state.heldSpools || state.heldSpools.length === 0) return;
-    if (_liveRefreshInflight) return;
-
     const spoolIds = state.heldSpools.map(s => s.id);
-
+    const sentAt = _bufferNow();
     _liveRefreshInflight = true;
     fetch('/api/spools/refresh', {
         method: 'POST',
@@ -2796,9 +2903,26 @@ const liveRefreshBuffer = () => {
         body: JSON.stringify({ spools: spoolIds })
     })
         .then(r => r.json())
-        .then(_renderSpoolsRefreshPayload)
+        .then(data => _renderSpoolsRefreshPayload(data, { sentAt }))
         .catch(e => console.warn("Live Refresh Buffer Failed", e))
-        .finally(() => { _liveRefreshInflight = false; });
+        .finally(() => {
+            _liveRefreshInflight = false;
+            if (_liveRefreshAgain) {
+                _liveRefreshAgain = false;
+                _sendBufferRefresh();
+            }
+        });
+};
+
+// Something the buffer's cards show has just changed here: read them again.
+const liveRefreshBuffer = () => {
+    if (!state.heldSpools || state.heldSpools.length === 0) return;
+    _bufferChangedAt = _bufferNow();
+    // The one in flight read the cards before this change: one more goes out
+    // once it is back, never two at once (L28's guard).
+    _liveRefreshAgain = _liveRefreshInflight;
+    if (_liveRefreshInflight) return;
+    _sendBufferRefresh();
 };
 window.liveRefreshBuffer = liveRefreshBuffer;
 
