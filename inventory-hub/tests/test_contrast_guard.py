@@ -189,9 +189,10 @@ def test_low_stock_panel_has_no_gray_on_gray_text(page: Page, base_url: str, ass
 @pytest.mark.usefixtures("require_server")
 def test_low_stock_title_bar_button_is_readable(page: Page, base_url: str, assert_contrast):
     """Group 57.2 — the ⚠️ count in the title bar (Bootstrap's outline-warning
-    on the dark bar): with its count, hovered, and stale after a read that
-    failed: "12?" (and the 🏷️ Backlog count's "(53)?", Group 57 review round 2,
-    whose "?" is drawn in the button's padding). Read-only: the heartbeat is
+    on the dark bar): out of the box Low and Out in count pills (57.3: white on
+    #444), and as one number (Settings -> Low stock count), hovered, and stale
+    after a read that failed: "Out 11?" (and the 🏷️ Backlog count's "(53)?",
+    Group 57 review round 2, whose "?" is drawn in the button's padding). Read-only: the heartbeat is
     dev's own; the failed read is stubbed, without a reload, so the count kept
     is the one painted before it. The guard scores a root's descendants, so the
     bar's buttons row is the root, and the counts are shown to be among what
@@ -217,10 +218,16 @@ def test_low_stock_title_bar_button_is_readable(page: Page, base_url: str, asser
                            " return !!n && /^\\d+$/.test(n.textContent.trim()); }", timeout=20000)
     row = page.locator("nav.navbar .fcc-titlebar-actions")
     assert_contrast(row)
-    count = num.text_content().strip()
-    assert any(o.get("text", "").strip() == count for o in conftest.contrast_offenders(row, min_ratio=100))
+    scored = lambda: [o.get("text", "").strip() for o in conftest.contrast_offenders(row, min_ratio=100)]
+    pills = [page.locator(f"#btn-low-stock-count [data-{k}-count]").text_content().strip() for k in ("low", "out")]
+    assert all(n in scored() for n in pills), (pills, scored())
     page.locator("#btn-low-stock-count").hover()
     assert_contrast(row)
+    # One number (Settings -> Low stock count), shown live.
+    page.evaluate("() => document.documentElement.setAttribute('data-fcc-low-count', 'one')")
+    assert_contrast(row)
+    assert num.text_content().strip() in scored(), scored()
+    page.evaluate("() => document.documentElement.setAttribute('data-fcc-low-count', 'both')")
 
     page.wait_for_function(r"() => /\(\d+\)/.test(document.getElementById('btn-backlog-count').textContent)",
                            timeout=20000)

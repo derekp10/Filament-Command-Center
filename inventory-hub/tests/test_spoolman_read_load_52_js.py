@@ -177,13 +177,18 @@ def test_the_backlog_button_takes_the_heartbeats_count_and_polls_only_while_open
     # couldn't refresh keeps its number, now marked stale as the ⚠️ Low stock
     # count is (a "?" that takes no room, a dashed border, the words saying
     # why); and the button is written only when what it shows changed.
-    fresh = '🏷️ Backlog <span class="fcc-count-num">(3)</span>'
-    stale = '🏷️ Backlog <span class="fcc-count-num">(3)<span class="fcc-stale-mark">?</span></span>'
+    # PIN UPDATED DELIBERATELY (Group 57.3): its word and brackets are spans
+    # the title bar drops to show "🏷️ 3" (Settings -> Title bar buttons), and
+    # its words are its accessible name and tooltip when fresh too.
+    count = '<span class="fcc-count-num"><span class="fcc-tb-paren">(</span>3<span class="fcc-tb-paren">)</span>'
+    fresh = '🏷️<span class="fcc-tb-word"> Backlog</span> ' + count + '</span>'
+    stale = '🏷️<span class="fcc-tb-word"> Backlog</span> ' + count + '<span class="fcc-stale-mark">?</span></span>'
+    ok = "Backlog (3). Opens the label backlog."
     spoolman = "Backlog (3)?, the last count (Spoolman didn't answer just now). Opens the label backlog."
     fcc = "Backlog (3)?, the last count (FCC couldn't count them just now). Opens the label backlog."
-    assert res["counts"] == [[True, fresh, "ok", None], [True, fresh, "ok", None],
+    assert res["counts"] == [[True, fresh, "ok", ok], [True, fresh, "ok", ok],
                              [False, stale, "failed", spoolman], [False, stale, "failed", fcc],
-                             [True, fresh, "ok", None]], res
+                             [True, fresh, "ok", ok]], res
     assert res["countWrites"] == 3, res          # fresh, stale, fresh: never the same text twice
     assert res["closedFetches"] == 0, res
     assert "backlog-row" in res["rowsOk"] and "#901" in res["rowsOk"], res
@@ -203,7 +208,8 @@ btn.innerHTML = '🏷️ Backlog (0)';
 const r = window._renderBacklogCount({ read_ok: false, read_error: "couldn't read Spoolman" });
 return { r, html: btn.innerHTML, read: btn.dataset.read || null, label: btn.getAttribute('aria-label') };
 """)
-    assert res["r"] is False and res["html"] == '🏷️ Backlog <span class="fcc-count-num">(?)</span>', res
+    assert res["r"] is False and res["html"] == ('🏷️<span class="fcc-tb-word"> Backlog</span> <span class="fcc-count-num">'
+                                                 '<span class="fcc-tb-paren">(</span>?<span class="fcc-tb-paren">)</span></span>'), res
     assert res["read"] == "failed", res
     assert res["label"] == "Backlog (?), no count yet (Spoolman didn't answer just now). Opens the label backlog.", res
 

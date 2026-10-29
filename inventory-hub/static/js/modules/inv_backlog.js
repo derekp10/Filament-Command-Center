@@ -19,7 +19,10 @@ const _BACKLOG_WHY = {
     unreachable: "FCC didn't answer just now",
 };
 
-// The button: "🏷️ Backlog (53)". A count a later read couldn't refresh keeps
+// The button: "🏷️ Backlog (53)", its word and brackets spans of their own, which
+// the title bar drops to show "🏷️ 53" (Group 57.3; Settings -> Title bar
+// buttons). Its tooltip and accessible name always say the words. A count a
+// later read couldn't refresh keeps
 // its number with a "?" after it (drawn in the button's padding, taking no
 // room) and a dashed border, as the ⚠️ Low stock count does (global.css; Group
 // 57 review, round 2: on the same failed read one looked fresh, the other
@@ -36,7 +39,8 @@ const _paintBacklogCount = (why) => {
     const key = `${n}${stale ? '?' : ''}`;
     if (btn.dataset.countShown !== key) {
         btn.dataset.countShown = key;
-        btn.innerHTML = `🏷️ Backlog <span class="fcc-count-num">(${n})${stale ? '<span class="fcc-stale-mark">?</span>' : ''}</span>`;
+        btn.innerHTML = '🏷️<span class="fcc-tb-word"> Backlog</span> <span class="fcc-count-num"><span class="fcc-tb-paren">('
+            + `</span>${n}<span class="fcc-tb-paren">)</span>${stale ? '<span class="fcc-stale-mark">?</span>' : ''}</span>`;
     }
     btn.dataset.read = why ? 'failed' : 'ok';
     if (why) {
@@ -46,8 +50,9 @@ const _paintBacklogCount = (why) => {
         btn.title = words;
         btn.setAttribute('aria-label', words);
     } else {
-        btn.removeAttribute('title');
-        btn.removeAttribute('aria-label');
+        const words = known ? `Backlog (${n}). Opens the label backlog.` : 'Backlog: no count yet. Opens the label backlog.';
+        btn.title = words;
+        btn.setAttribute('aria-label', words);
     }
 };
 

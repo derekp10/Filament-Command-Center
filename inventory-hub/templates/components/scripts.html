@@ -47,9 +47,9 @@
 
 <script src="{{ url_for('static', filename='js/modules/inv_details.js') }}?v=2"></script>
 
-<script src="{{ url_for('static', filename='js/modules/inv_queue.js') }}"></script>
+<script src="{{ url_for('static', filename='js/modules/inv_queue.js') }}?v=1.1"></script>
 
-<script src="{{ url_for('static', filename='js/modules/inv_backlog.js') }}?v=1.1"></script>
+<script src="{{ url_for('static', filename='js/modules/inv_backlog.js') }}?v=1.2"></script>
 
 <!-- Item 3.6: shared spool-disambiguation picker. Loads after inv_queue.js so
      the picker's "🖨️ Print new label" path can call window.addToQueue. -->
@@ -60,7 +60,7 @@
 <script src="{{ url_for('static', filename='js/modules/inv_search.js') }}?v=1.1"></script>
 <!-- Group 49.2a: the ⚠️ Low-stock list, opened by the title bar's ⚠️ count
      (Group 57.2) and the search panel's button. -->
-<script src="{{ url_for('static', filename='js/modules/inv_stock.js') }}?v=1.0"></script>
+<script src="{{ url_for('static', filename='js/modules/inv_stock.js') }}?v=1.1"></script>
 <script src="{{ url_for('static', filename='js/modules/inv_cmd.js') }}?v=1.2"></script>
 <script src="{{ url_for('static', filename='js/modules/inv_weigh_out.js') }}?v=2.2"></script>
 
@@ -88,6 +88,10 @@
      Settings -> 🖥️ This Browser. dashboard.html's <head> applies the stored size
      before the first paint; this module only handles a change. -->
 <script src="{{ url_for('static', filename='js/modules/text_size.js') }}?v=1.0"></script>
+<!-- Group 57.3: the title bar's two per-browser settings (Title bar buttons,
+     Low stock count), changed live from Settings -> 🖥️ This Browser.
+     dashboard.html's <head> applies them before the first paint. -->
+<script src="{{ url_for('static', filename='js/modules/titlebar_prefs.js') }}?v=1.0"></script>
 
 <script>
     // Module Initialization

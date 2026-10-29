@@ -46,11 +46,28 @@ REPORT = {
 }
 
 
+# The count as the button says it: the total (painted in both of its forms,
+# Group 57.3) and a "?" when the form shown has its stale mark.
+COUNT_JS = """(sel) => { const b = document.querySelector(sel);
+    const total = b.querySelector('[data-low-stock-count]').textContent.trim();
+    const mark = Array.from(b.querySelectorAll('.fcc-tb-count > .fcc-stale-mark')).some((m) => m.getClientRects().length);
+    return total + (mark ? '?' : ''); }"""
+
+
+def _count(page):
+    return page.evaluate(COUNT_JS, BTN)
+
+
+def _wait_count(page, pattern):
+    page.wait_for_function("([js, sel, re]) => new RegExp(re).test((0, eval)('(' + js + ')')(sel))",
+                           arg=[COUNT_JS, BTN, pattern], timeout=20_000)
+
+
 def _painted(page):
     # Painted once its painter has dropped the placeholder's marker (titlebar_fit.js).
     page.wait_for_function("(s) => { const n = document.querySelector(s); return !!n && !n.hasAttribute('data-count-pending'); }",
                            arg=NUM, timeout=20_000)
-    return page.locator(NUM).text_content().strip()
+    return _count(page)
 
 
 @pytest.mark.usefixtures("require_server")
@@ -79,12 +96,13 @@ def test_the_count_is_the_lists_low_and_out(page: Page, base_url: str):
         report = page.evaluate("() => fetch('/api/stock_report', {cache: 'no-store'}).then((r) => r.json())")
         assert report.get("success") is True, report
         low, out = len(report["low"]), len(report["out"])
-        shown = page.locator(NUM).text_content().strip()
+        shown = _count(page)
         seen.append((shown, low, out))
         assert not shown.endswith("?"), f"the heartbeat couldn't count (dev Spoolman slow?): {seen}"
         if shown == str(low + out):
             assert (btn.get_attribute("data-low"), btn.get_attribute("data-out")) == (str(low), str(out))
-            assert f"Low stock: {low + out} (" in (btn.get_attribute("aria-label") or "")
+            # Out of the box the button shows Low and Out apart (57.3).
+            assert f"Low {low}, Out {out} (" in (btn.get_attribute("aria-label") or "")
             return
         page.wait_for_timeout(6000)                       # one more heartbeat
     pytest.fail(f"the count never matched the list: {seen}")
@@ -102,14 +120,14 @@ def test_it_opens_the_list_and_the_list_sets_the_count(page: Page, base_url: str
         status=200, content_type="application/json", body=json.dumps(REPORT)))
     page.goto(base_url)
     page.wait_for_function("() => typeof window.openLowStockPanel === 'function'")
-    expect(page.locator(NUM)).to_have_text("?")
+    _wait_count(page, r"^\?$")
     expect(page.locator(BTN)).to_have_attribute("aria-label", re.compile(r"\(FCC didn't answer just now\)"))
     page.locator(BTN).click()
     expect(page.locator(PANEL)).to_be_visible()
     page.wait_for_function("(s) => document.querySelector(s).dataset.stockState === 'ready'", arg=BODY)
     # The list's read sets it; a heartbeat cut off after that read began marks
     # it stale again ("3?"), as it should.
-    expect(page.locator(NUM)).to_have_text(re.compile(r"^3\??$"))
+    _wait_count(page, r"^3\??$")
     expect(page.locator(BTN)).to_have_attribute("data-low", "2")
     expect(page.locator(BTN)).to_have_attribute("data-out", "1")
     expect(page.locator("#offcanvasSearch")).not_to_be_visible()
@@ -193,7 +211,7 @@ def test_a_count_that_could_not_be_read_again_looks_stale(page: Page, base_url: 
     assert good.isdigit(), good
     failing["on"] = True
     page.wait_for_function("(s) => document.querySelector(s).dataset.read === 'failed'", arg=BTN, timeout=20_000)
-    assert page.locator(NUM).text_content().strip() == good + "?"
+    assert _count(page) == good + "?"
     assert page.evaluate("(s) => getComputedStyle(document.querySelector(s)).borderTopStyle", BTN) == "dashed"
 
 
@@ -243,14 +261,14 @@ def test_a_blip_moves_nothing_on_the_bar(page: Page, base_url: str):
     page.route("**/api/dashboard_pulse*", pulse)
     page.route("**/api/state/queue", queue)
     page.goto(base_url)
-    page.wait_for_function("(s) => document.querySelector(s).textContent.trim() === '12'", arg=NUM, timeout=20_000)
+    _wait_count(page, r"^12$")
     page.wait_for_function("() => /\\(53\\)/.test(document.getElementById('btn-backlog-count').textContent)",
                            timeout=20_000)
     page.wait_for_timeout(300)
     where = """() => { const bar = document.querySelector('.fcc-titlebar');
         const xs = Array.from(document.querySelectorAll('.fcc-titlebar-actions > *')).map((el) =>
             Math.round(el.getBoundingClientRect().left * 10) / 10);
-        return { steps: ['fcc-tb-tight', 'fcc-tb-add', 'fcc-tb-nover', 'fcc-tb-wrap'].filter((c) => bar.classList.contains(c)),
+        return { steps: ['fcc-tb-tight', 'fcc-tb-icons', 'fcc-tb-add', 'fcc-tb-shortver', 'fcc-tb-wrap'].filter((c) => bar.classList.contains(c)),
                  xs, width: document.getElementById('btn-low-stock-count').getBoundingClientRect().width }; }"""
     fresh = page.evaluate(where)
     failing["on"] = True
@@ -258,7 +276,7 @@ def test_a_blip_moves_nothing_on_the_bar(page: Page, base_url: str):
                            " document.getElementById(id).dataset.read === 'failed')", timeout=20_000)
     page.wait_for_timeout(300)
     stale = page.evaluate(where)
-    assert page.locator(NUM).text_content().strip() == "12?"
+    assert _count(page) == "12?"
     assert "(53)?" in page.locator("#btn-backlog-count").text_content()
     assert stale == fresh, (fresh, stale)
     for sel in (BTN, "#btn-backlog-count"):

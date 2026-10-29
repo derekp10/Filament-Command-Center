@@ -242,10 +242,17 @@ def test_the_settings_control_works_by_mouse_and_keyboard(page: Page, base_url: 
 NAV_JS = """() => {
     const nav = document.querySelector('nav.navbar');
     const nr = nav.getBoundingClientRect();
+    // Lines by their middles: a box whose middle is within half its height
+    // of a line's is on it (57.3: the Low and Out count pills sit a pixel or
+    // two lower than the words beside them).
     const lines = (el) => {
         const r = document.createRange(); r.selectNodeContents(el);
-        return new Set(Array.from(r.getClientRects()).filter((x) => x.width > 0.5)
-            .map((x) => Math.round(x.top + x.height / 2))).size;
+        const mids = [];
+        Array.from(r.getClientRects()).filter((x) => x.width > 0.5).forEach((x) => {
+            const mid = x.top + x.height / 2;
+            if (!mids.some((m) => Math.abs(m - mid) < x.height / 2)) mids.push(mid);
+        });
+        return mids.length;
     };
     const btns = Array.from(nav.querySelectorAll('.btn')).map((b) => {
         const r = b.getBoundingClientRect();
@@ -271,14 +278,16 @@ NAV_JS = """() => {
              gap: getComputedStyle(actions).columnGap, searchMargin: getComputedStyle(search).marginLeft,
              version: getComputedStyle(ver).display === 'none' ? 'hidden'
                  : (ver.scrollWidth > ver.clientWidth + 1 ? 'squeezed' : 'whole'),
+             verText: ver.innerText.trim(),
              title: over > 0.01 ? 'shortened' : 'whole' };
 }"""
 
 
 def _counts_painted(page: Page):
     """The ⚠️ Low stock count (Group 57.2) painted, so the bar is measured at
-    its real width, not with the "–" it shows before the first heartbeat."""
-    page.wait_for_function("() => { const n = document.querySelector('#btn-low-stock-count [data-low-stock-count]');"
+    its real width, not with the "–" it shows before the first heartbeat (its
+    Low and Out pills, 57.3, are painted with it)."""
+    page.wait_for_function("() => { const n = document.querySelector('#btn-low-stock-count [data-out-count]');"
                            " return !!n && /^\\d+$/.test(n.textContent.trim()); }", timeout=20_000)
     page.wait_for_timeout(300)
 
@@ -295,19 +304,23 @@ def test_the_title_bar_keeps_its_buttons_on_one_line(page: Page, base_url: str, 
     nav = page.evaluate(NAV_JS)
     wrapped = [b for b in nav["btns"] if b["lines"] != 1 or not b["inside"]]
     assert not wrapped, f"{name}: title-bar buttons that wrap or stick out of the bar: {wrapped}"
-    assert nav["navH"] == 70 and not nav["overflow"], nav
-    # 1600 px wide: the title is whole at every size, and the version badge
-    # whole up to Large. PIN UPDATED DELIBERATELY (Group 57.2, 2026-10-26): the
-    # ⚠️ count made the bar wider, so at Extra Large the bar takes its third
-    # step and the badge goes (it was whole there); it is never squeezed. The
-    # steps are titlebar_fit.js's, taken only while the title is cut.
-    assert nav["title"] == "whole", nav
-    assert nav["version"] == ("hidden" if name == "Extra Large" else "whole"), nav
+    assert not nav["overflow"], nav
+    # 1600 px wide: one line, and the title and the version badge whole at
+    # every size. PINS UPDATED DELIBERATELY (Group 57.3, 2026-10-28): the badge
+    # never goes (Derek: he reads the build's date at a glance), and out of the
+    # box the ⚠️ button shows Low and Out apart ("Low 1 · Out 11"), wider than
+    # one number: at Extra Large the badge shows its date and time alone (it
+    # went there before); at Small and Standard the words are kept and only the
+    # spacing tightens (the first step). The steps are titlebar_fit.js's, taken
+    # only while the title is cut.
+    assert nav["title"] == "whole" and nav["version"] == "whole" and nav["navH"] == 70, nav
+    assert nav["verText"].startswith("commit ") == (name != "Extra Large"), nav
     texts = [b["text"] for b in nav["btns"]]
     if name in ("Small", "Standard"):
-        # The classic bar, unchanged.
-        assert "➕ ADD INVENTORY" in texts, texts
-        assert (nav["gap"], nav["searchMargin"]) == ("16px", "24px"), nav
+        assert "➕ ADD INVENTORY" in texts and "🏷️ Backlog (53)" in texts, texts
+        assert (nav["gap"], nav["searchMargin"]) == ("8px", "0px"), nav
+    if name == "Large":
+        assert "➕ ADD INVENTORY" in texts and "🏷️ 53" in texts, texts
     if name == "Extra Large":
         assert "➕ ADD" in texts, texts
 
@@ -328,8 +341,10 @@ def test_bigger_counts_take_a_step_instead_of_cutting_the_title(page: Page, base
     page.wait_for_timeout(300)
     nav = page.evaluate(NAV_JS)
     wrapped = [b for b in nav["btns"] if b["lines"] != 1 or not b["inside"]]
-    assert not wrapped and nav["navH"] == 70 and not nav["overflow"], nav
-    assert nav["title"] == "whole" and nav["version"] != "squeezed", nav
+    assert not wrapped and not nav["overflow"], nav
+    # The title and the badge stay whole (57.3: where nothing else fits, the
+    # bar takes a second line instead of hiding the badge).
+    assert nav["title"] == "whole" and nav["version"] == "whole", nav
     if name in ("Small", "Standard"):
         assert nav["gap"] == "8px", f"{name}: the first step (tighter spacing) should have come: {nav}"
 
@@ -381,7 +396,9 @@ BRAND_JS = """() => {
     const bcs = getComputedStyle(brand);
     const actions = nav.querySelector('.fcc-titlebar-actions').getBoundingClientRect();
     const ver = document.getElementById('fcc-build-version');
+    // On two lines the buttons are under the title (57.3).
     return { brandRight: brand.getBoundingClientRect().right, actionsLeft: actions.left,
+             below: actions.top >= brand.getBoundingClientRect().bottom - 0.5,
              brandClips: bcs.overflowX !== 'visible' && bcs.textOverflow === 'ellipsis',
              brandTitle: brand.getAttribute('title'),
              version: getComputedStyle(ver).display === 'none' ? 'hidden'
@@ -395,9 +412,10 @@ def test_the_title_gives_way_without_running_under_the_buttons(page: Page, base_
     """992-1280 px wide (an iPad in landscape, a small laptop): the title ran
     on under the Spoolman light and SEARCH (HEAD: 225 px of it at Extra Large,
     1024 px), and the version badge was squeezed to an empty bordered box over
-    the light. Now the badge goes first (its text is its tooltip, and in
-    Settings -> Build Info), then the title shortens with "…" inside its own
-    box (its full text is its tooltip)."""
+    the light. Now the bar takes a second line, the title whole with the badge
+    beside it (Group 57.3: the badge went first and the title then shortened
+    with "…", until Derek kept the badge, 2026-10-28). The title still clips in
+    its own box if it must (its full text is its tooltip)."""
     _read_only(page)
     fixed_title_counts(page)
     _store(page, name)
@@ -405,9 +423,9 @@ def test_the_title_gives_way_without_running_under_the_buttons(page: Page, base_
     _load(page, base_url)
     _counts_painted(page)
     b = page.evaluate(BRAND_JS)
-    assert b["brandRight"] <= b["actionsLeft"] + 0.5, f"{name} @ {width} px: the title runs under the buttons: {b}"
+    assert b["below"] or b["brandRight"] <= b["actionsLeft"] + 0.5, f"{name} @ {width} px: the title runs under the buttons: {b}"
     assert b["brandClips"] and b["brandTitle"] == "Filament Command Center", b
-    assert b["version"] in ("hidden", "whole"), f"{name} @ {width} px: the version badge is squeezed: {b}"
+    assert b["version"] == "whole", f"{name} @ {width} px: the version badge is squeezed or gone: {b}"
 
 
 DECK_JS = """() => {

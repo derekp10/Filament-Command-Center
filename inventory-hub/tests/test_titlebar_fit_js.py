@@ -14,14 +14,17 @@ whole pixels a title up to 1.5 px too wide read as fitting, and Chrome drew its
 each one.
 
 Pinned: no step while the title fits; the steps come in their order (tighter
-spacing, then ADD, then no version badge), each only once the title would be
-cut without it, and never later; a count that grows takes a step and one that
-shrinks gives it back (the bar watches its buttons' text); a Text size change
-fits again, through its own event when the bar's box doesn't change; buttons
-that still don't fit with every step taken put the bar on two lines (⚙️ stays
-on screen) and give it back; the version badge reads in local time before the
-first fit; below 992 px the script takes no step (the CSS does, as before); the
-version badge never shrinks on the one-line bar. The bar on dev at every Text
+spacing, then the icon and number alone with Settings -> Title bar buttons on
+Automatic, then ADD, then a second line), each only once the title would be cut
+without it, and never later; the version badge never shrinks and never goes,
+and the title is never left cut (Group 57.3: the badge went as the third step,
+and the title was then cut); Always words and Always icons skip the icon step;
+a count that grows takes a step and one that shrinks gives it back (the bar
+watches its buttons' text); a Text size change, or a title-bar setting's, fits
+again through its own event; buttons that still don't fit put the bar on two
+lines (⚙️ stays on screen) and give it back; the memo is kept per width, Text
+size and settings; the version badge reads in local time before the first fit;
+below 992 px the script takes no step (the CSS does, as before). The bar on dev at every Text
 size is test_text_size_setting_e2e.py's.
 """
 from __future__ import annotations
@@ -39,7 +42,8 @@ BASELINE_WIDTH = BASELINE_VIEWPORT["width"]
 MODULES = HUB / "static" / "js" / "modules"
 GLOBAL_CSS = HUB / "static" / "css" / "global.css"
 DASHBOARD = HUB / "templates" / "dashboard.html"
-STEPS = ["fcc-tb-tight", "fcc-tb-add", "fcc-tb-nover"]
+STEPS = ["fcc-tb-tight", "fcc-tb-icons", "fcc-tb-add", "fcc-tb-shortver"]   # Automatic (no setting stored)
+ALL_JS = "['fcc-tb-tight', 'fcc-tb-icons', 'fcc-tb-add', 'fcc-tb-nover']"
 COMMIT_TS = 1793044800          # 2026-10-26, a fixed commit time for the badge
 
 # What the bar takes from Bootstrap 5.3 (navbar, utilities, buttons).
@@ -126,7 +130,7 @@ def _state(page):
     s = page.evaluate("""() => {
         const bar = document.querySelector('.fcc-titlebar');
         const ver = document.getElementById('fcc-build-version');
-        return { steps: ['fcc-tb-tight', 'fcc-tb-add', 'fcc-tb-nover'].filter((c) => bar.classList.contains(c)),
+        return { steps: ['fcc-tb-tight', 'fcc-tb-icons', 'fcc-tb-add', 'fcc-tb-shortver', 'fcc-tb-nover'].filter((c) => bar.classList.contains(c)),
                  wrap: bar.classList.contains('fcc-tb-wrap'),
                  badge: getComputedStyle(ver).display === 'none' ? 'hidden'
                      : (ver.scrollWidth > ver.clientWidth + 1 ? 'squeezed' : 'whole') };
@@ -148,7 +152,7 @@ def _over_without_last_step(page):
     """Takes the last step off for a moment: how far over is the title then?"""
     return page.evaluate("""(overJs) => {
         const bar = document.querySelector('.fcc-titlebar');
-        const on = ['fcc-tb-tight', 'fcc-tb-add', 'fcc-tb-nover'].filter((c) => bar.classList.contains(c));
+        const on = ['fcc-tb-tight', 'fcc-tb-icons', 'fcc-tb-add', 'fcc-tb-shortver'].filter((c) => bar.classList.contains(c));
         const last = on[on.length - 1];
         bar.classList.remove(last);
         const over = (0, eval)('(' + overJs + ')')();
@@ -163,13 +167,14 @@ def _cut_without_last_step(page):
 
 
 def _check(page, px):
-    """One width: the badge never squeezed; a step only where the title would be
-    cut without it; the title cut only once every step is taken."""
+    """One width: the badge whole (never squeezed, never gone, 57.3); a step
+    only where the title would be cut without it; the title cut only once
+    every step is taken."""
     s = _width(page, px)
-    assert s["badge"] != "squeezed", (px, s)
-    if s["steps"]:
+    assert s["badge"] == "whole", (px, s)
+    if s["steps"] and not s["wrap"]:
         assert _cut_without_last_step(page), f"{px} px: {s['steps'][-1]} taken with room to spare"
-    if len(s["steps"]) < 3:
+    if len(s["steps"]) < len(STEPS) and not s["wrap"]:
         assert not s["cut"], f"{px} px: the title is cut with a step still to take: {s}"
     return s
 
@@ -180,8 +185,9 @@ def test_no_step_while_the_title_fits(bar):
 
 
 def test_each_step_comes_in_order_only_once_the_title_would_be_cut(bar):
-    """From wide to narrow: none, then tight, then tight + ADD, then all three,
-    and only then the title is cut (the last resort). Each step is taken only
+    """From wide to narrow: none, then tight, then tight + icons, then + ADD,
+    then + the badge's date alone, and only then the title is cut (the last
+    resort; 57.3: the badge went first). Each step is taken only
     where the title would be cut without it, and never a pixel later: around
     each step the bar is checked 1 px at a time (round 2: on whole pixels the
     title stayed cut for 1 or 2 px above every step, "Filament Command Cent…"
@@ -195,8 +201,8 @@ def test_each_step_comes_in_order_only_once_the_title_would_be_cut(bar):
         last = s["steps"]
         if not seen or seen[-1] != s["steps"]:
             seen.append(s["steps"])
-    assert seen[:4] == [[], STEPS[:1], STEPS[:2], STEPS], seen
-    for edge in edges[:3]:
+    assert seen[:5] == [[], STEPS[:1], STEPS[:2], STEPS[:3], STEPS], seen
+    for edge in edges[:4]:
         for px in range(edge + 12, edge - 3, -1):
             _check(bar, px)
 
@@ -221,13 +227,13 @@ def test_a_growing_count_takes_a_step_and_a_shrinking_one_gives_it_back(bar):
 def test_a_text_size_change_fits_again(bar):
     """Settings' Text size changes the root size, not the bar's width: the
     fcc:text-size event (text_size.js) fits it again."""
-    _width(bar, 1600)
+    _width(bar, 1900)
     assert _state(bar)["steps"] == []
     bar.evaluate("""() => { document.documentElement.setAttribute('data-fcc-text-size', 'xlarge');
                              document.dispatchEvent(new CustomEvent('fcc:text-size')); }""")
     _settle(bar)
     s = _state(bar)
-    assert s["steps"] and not (len(s["steps"]) < 3 and s["cut"]), s
+    assert s["steps"] and not (len(s["steps"]) < len(STEPS) and s["cut"]), s
 
 
 def test_the_text_size_event_fits_the_bar_when_its_box_does_not_change(bar):
@@ -260,14 +266,11 @@ def test_buttons_that_still_do_not_fit_put_the_bar_on_two_lines(bar):
     review, round 2). The bar takes a second line instead, as below 992 px: the
     title whole on its own line with the badge beside it, ⚙️ inside the bar.
     It gives the line back once the buttons fit."""
-    bar.evaluate("""() => { document.documentElement.setAttribute('data-fcc-text-size', 'xlarge');
-        document.dispatchEvent(new CustomEvent('fcc:text-size'));
-        document.getElementById('btn-backlog-count').textContent = '🏷️ Backlog (1530)';
-        document.getElementById('btn-queue-count').textContent = '🛒 Queue (25)';
-        document.querySelector('#btn-low-stock-count [data-low-stock-count]').textContent = '120'; }""")
+    bar.evaluate(BIG_COUNTS_XL)
     one_line = bar.evaluate("() => document.querySelector('nav.navbar').getBoundingClientRect().height")
     s = _width(bar, 900)
-    assert s["wrap"] and s["steps"] == STEPS[:2], s
+    # On two lines the badge is whole again (the short step comes off).
+    assert s["wrap"] and s["steps"] == STEPS[:3], s
     look = bar.evaluate("""() => { const bar = document.querySelector('.fcc-titlebar');
         const r = bar.getBoundingClientRect(); const cs = getComputedStyle(bar);
         const edge = r.right - parseFloat(cs.paddingRight);
@@ -279,11 +282,29 @@ def test_buttons_that_still_do_not_fit_put_the_bar_on_two_lines(bar):
     assert not s["wrap"], s
 
 
-BIG_COUNTS_XL = """() => { document.documentElement.setAttribute('data-fcc-text-size', 'xlarge');
-    document.dispatchEvent(new CustomEvent('fcc:text-size'));
-    document.getElementById('btn-backlog-count').textContent = '🏷️ Backlog (1530)';
-    document.getElementById('btn-queue-count').textContent = '🛒 Queue (25)';
-    document.querySelector('#btn-low-stock-count [data-low-stock-count]').textContent = '120'; }"""
+# A count as its painter writes it: the word and brackets spans of their own,
+# which the icon step drops (inv_backlog.js, inv_queue.js; 57.3).
+def _count_html(icon, word, n):
+    return (f'{icon}<span class="fcc-tb-word"> {word}</span> <span class="fcc-count-num">'
+            f'<span class="fcc-tb-paren">(</span>{n}<span class="fcc-tb-paren">)</span></span>')
+
+
+# The ⚠️ button's numbers, both forms (inv_stock.js paints both), painted.
+LOW_JS = """(low, out) => { const b = document.getElementById('btn-low-stock-count');
+    const put = (sel, t) => { const el = b.querySelector(sel); el.removeAttribute('data-count-pending'); el.textContent = t; };
+    put('[data-low-count]', String(low)); put('[data-out-count]', String(out));
+    put('[data-low-stock-count]', String(low + out)); }"""
+
+
+def _counts_js(backlog, queue, low, out):
+    return ("""() => { document.getElementById('btn-backlog-count').innerHTML = %s;
+    document.getElementById('btn-queue-count').innerHTML = %s;
+    (%s)(%d, %d); }""" % (json.dumps(_count_html('🏷️', 'Backlog', backlog)), json.dumps(_count_html('🛒', 'Queue', queue)),
+                         LOW_JS, low, out))
+
+
+BIG_COUNTS_XL = ("""() => { document.documentElement.setAttribute('data-fcc-text-size', 'xlarge');
+    document.dispatchEvent(new CustomEvent('fcc:text-size')); (%s)(); }""" % _counts_js(1530, 25, 20, 100))
 
 GEAR_INSIDE_JS = """() => { const bar = document.querySelector('.fcc-titlebar');
     const r = bar.getBoundingClientRect(); const cs = getComputedStyle(bar);
@@ -344,18 +365,10 @@ STORE_JS = """(data) => { window.__store = data;
         removeItem: (k) => { delete window.__store[k]; } }) }); }"""
 
 # The counts land, as their painters write them (each drops data-count-pending).
-COUNTS_LAND = """() => {
-    document.getElementById('btn-backlog-count').innerHTML = '🏷️ Backlog <span class="fcc-count-num">(1530)</span>';
-    document.getElementById('btn-queue-count').innerText = '🛒 Queue (25)';
-    const n = document.querySelector('#btn-low-stock-count [data-low-stock-count]');
-    n.removeAttribute('data-count-pending'); n.textContent = '120'; }"""
+COUNTS_LAND = _counts_js(1530, 25, 20, 100)
 
 # Small counts: under 10 each, as narrow as a count gets (round 4).
-COUNTS_SMALL = """() => {
-    document.getElementById('btn-backlog-count').innerHTML = '🏷️ Backlog <span class="fcc-count-num">(0)</span>';
-    document.getElementById('btn-queue-count').innerText = '🛒 Queue (0)';
-    const n = document.querySelector('#btn-low-stock-count [data-low-stock-count]');
-    n.removeAttribute('data-count-pending'); n.textContent = '3'; }"""
+COUNTS_SMALL = _counts_js(0, 0, 1, 2)
 
 MEMO = "fcc.titleBar.fit"
 
@@ -374,18 +387,21 @@ def _memo(page):
     return json.loads(raw) if raw else None
 
 
-def _load(page, store, width, size=None):
+def _load(page, store, width, size=None, attrs=None):
     """A fresh load: the placeholders from dashboard.html, `store` as this
-    browser's localStorage, the Text size `size` (else Standard) and the bar
-    `width` px wide (None: as wide as the window) before the script fits it."""
+    browser's localStorage, the Text size `size` (else Standard), `attrs` on
+    <html> (the title-bar settings, as dashboard.html's <head> puts them) and
+    the bar `width` px wide (None: as wide as the window) before the script
+    fits it."""
     _flush(page)
     page.set_content(PAGE.format(bootstrap=BOOTSTRAP_BITS, css=GLOBAL_CSS.read_text(encoding="utf-8"),
                                  nav=_nav_markup()))
     page.evaluate(STORE_JS, store)
-    page.evaluate("""([w, size]) => { if (size) document.documentElement.setAttribute('data-fcc-text-size', size);
+    page.evaluate("""([w, size, attrs]) => { if (size) document.documentElement.setAttribute('data-fcc-text-size', size);
+        Object.entries(attrs || {}).forEach(([k, v]) => document.documentElement.setAttribute(k, v));
         if (w === null) return;
         const b = document.querySelector('.fcc-titlebar'); b.style.flex = '0 0 auto'; b.style.width = w + 'px'; }""",
-                  [width, size])
+                  [width, size, attrs])
     page.add_script_tag(content=(MODULES / "titlebar_fit.js").read_text(encoding="utf-8"))
     _settle(page)
     return _state(page)
@@ -407,7 +423,8 @@ def test_the_bar_keeps_last_times_steps_until_the_counts_come(isolated_page):
     Another Text size or another window width uses no memo. RED on 2749590:
     nothing remembered."""
     page = isolated_page
-    assert _nav_markup().count("data-count-pending>") == 3    # Backlog, Queue, Low stock
+    # Backlog, Queue, and the ⚠️ button's Low, Out and one-number counts (57.3).
+    assert _nav_markup().count("data-count-pending>") == 5
     # A width where the placeholders need no step and the big counts do.
     _load(page, {}, 1900)
     page.evaluate(COUNTS_LAND)
@@ -416,7 +433,8 @@ def test_the_bar_keeps_last_times_steps_until_the_counts_come(isolated_page):
     s = _width(page, edge)
     assert s["steps"], s
     memo = _memo(page)
-    assert memo == [{"w": page.evaluate("() => window.innerWidth"), "size": "standard", "level": len(s["steps"])}], memo
+    assert memo == [{"w": page.evaluate("() => window.innerWidth"), "size": "standard", "mode": "auto|both",
+                     "level": len(s["steps"])}], memo
     store = page.evaluate("() => window.__store")
 
     first = _load(page, {}, edge)                    # never here before: fitted to the placeholders
@@ -444,7 +462,8 @@ def test_small_counts_never_move_the_bar_on_load(isolated_page):
     page = isolated_page
     _load(page, {}, 1900)
     _landed(page, COUNTS_SMALL)
-    edges = [_widest(page, lambda s, k=k: len(s["steps"]) >= k, 900, 1900) for k in (1, 2, 3)]
+    # (On two lines the short-badge step comes off: past every step.)
+    edges = [_widest(page, lambda s, k=k: len(s["steps"]) >= k or s["wrap"], 900, 1900) for k in (1, 2, 3, 4)]
     look = lambda s: (s["steps"], s["wrap"])
     for edge in edges:
         for px in range(edge - 4, edge + 10):
@@ -475,14 +494,16 @@ def test_each_window_width_keeps_its_own_steps(isolated_page):
     first = _load(page, {MEMO: json.dumps(both)}, edge)
     assert first["steps"] == want, f"the first window's steps were lost: {first}"
     # The newest 8 are kept.
-    many = [{"w": 1000 + i, "size": "standard", "level": 1} for i in range(8)]
+    many = [{"w": 1000 + i, "size": "standard", "mode": "auto|both", "level": 1} for i in range(8)]
     _load(page, {MEMO: json.dumps(many)}, edge)
     _landed(page)
     kept = _memo(page)
     assert len(kept) == 8 and kept[0]["w"] == BASELINE_WIDTH and kept[1:] == many[:7], kept
-    # A memo from round 3 (one window, not a list) still counts.
-    old = {MEMO: json.dumps({"w": BASELINE_WIDTH, "size": "standard", "level": len(want)})}
-    assert _load(page, old, edge)["steps"] == want
+    # A memo from before 57.3 (no settings in it; its steps counted the badge's)
+    # is no use: round 3's one window, and round 4's list.
+    for old in ({"w": BASELINE_WIDTH, "size": "standard", "level": len(want)},
+                [{"w": BASELINE_WIDTH, "size": "standard", "level": len(want)}]):
+        assert _load(page, {MEMO: json.dumps(old)}, edge)["steps"] == [], old
 
 
 def test_another_windows_entry_written_meanwhile_is_kept(isolated_page):
@@ -498,7 +519,7 @@ def test_another_windows_entry_written_meanwhile_is_kept(isolated_page):
     edge = _widest(page, lambda s: bool(s["steps"]), 900, 1900)
     want = _width(page, edge)["steps"]
     _flush(page)                                                  # this window's entry is written
-    other = {"w": 1440, "size": "standard", "level": 2}
+    other = {"w": 1440, "size": "standard", "mode": "auto|both", "level": 2}
     page.evaluate("""([k, e]) => { const m = JSON.parse(window.__store[k] || '[]');
         window.__store[k] = JSON.stringify([e].concat(m)); }""", [MEMO, other])      # the other window's
     page.evaluate("() => document.dispatchEvent(new Event('fcc:text-size'))")       # this one fits again
@@ -518,7 +539,7 @@ def test_a_window_resized_by_dragging_keeps_one_entry(isolated_page):
     other windows' entries out. The page going writes it at once."""
     page = isolated_page
     page.set_viewport_size({"width": 1700, "height": 900})
-    other = [{"w": 1440, "size": "standard", "level": 2}]
+    other = [{"w": 1440, "size": "standard", "mode": "auto|both", "level": 2}]
     _load(page, {MEMO: json.dumps(other)}, None)
     page.evaluate(HOLD_TIMERS_JS)
     _landed(page)
@@ -608,5 +629,112 @@ def test_below_992_px_the_script_takes_no_step(bar):
     _settle(bar)
     assert _state(bar)["steps"] == [] and not _state(bar)["wrap"]
     look = bar.evaluate("""() => ({ gap: getComputedStyle(document.querySelector('.fcc-titlebar-actions')).columnGap,
-        more: getComputedStyle(document.querySelector('.fcc-titlebar-more')).display })""")
-    assert look == {"gap": "8px", "more": "none"}, look
+        more: getComputedStyle(document.querySelector('.fcc-titlebar-more')).display,
+        word: getComputedStyle(document.querySelector('#btn-backlog-count .fcc-tb-word')).display })""")
+    assert look == {"gap": "8px", "more": "none", "word": "none"}, look
+
+
+# --- Group 57.3: the settings ----------------------------------------------------------
+
+def _set(page, buttons=None, count=None):
+    """A title-bar setting changed (titlebar_prefs.js puts it on <html> and
+    says so with fcc:title-bar)."""
+    page.evaluate("""([b, c]) => { const r = document.documentElement;
+        if (b) r.setAttribute('data-fcc-tb-buttons', b); if (c) r.setAttribute('data-fcc-low-count', c);
+        document.dispatchEvent(new CustomEvent('fcc:title-bar')); }""", [buttons, count])
+    _settle(page)
+
+
+def _word_shown(page):
+    return page.evaluate("() => getComputedStyle(document.querySelector('#btn-backlog-count .fcc-tb-word')).display")
+
+
+def test_always_words_never_takes_the_icon_step(bar):
+    """Always words: the words stay; the bar takes the spacing, ADD, then the
+    second line, the badge whole and the title never cut on the way."""
+    bar.evaluate(COUNTS_LAND)
+    _set(bar, buttons="words")
+    seen = []
+    for px in range(1900, 899, -10):
+        s = _width(bar, px)
+        assert s["badge"] == "whole", (px, s)
+        assert "fcc-tb-icons" not in s["steps"] and _word_shown(bar) != "none", (px, s)
+        look = (tuple(s["steps"]), s["wrap"])
+        if not seen or seen[-1] != look:
+            seen.append(look)
+    assert seen[:4] == [((), False), (("fcc-tb-tight",), False), (("fcc-tb-tight", "fcc-tb-add"), False),
+                        (("fcc-tb-tight", "fcc-tb-add", "fcc-tb-shortver"), False)], seen
+
+
+def test_always_icons_shows_the_icon_and_number_with_room_to_spare(bar):
+    bar.evaluate(COUNTS_LAND)
+    _set(bar, buttons="icons")
+    s = _width(bar, 1900)
+    assert s["steps"] == [] and _word_shown(bar) == "none", s
+
+
+def test_automatic_drops_the_words_as_its_second_step(bar):
+    """The icon step comes after the spacing and before ADD: at the widest bar
+    that takes it, the words are gone and ADD INVENTORY is whole."""
+    bar.evaluate(COUNTS_LAND)
+    edge = _widest(bar, lambda s: "fcc-tb-icons" in s["steps"], 900, 1900)
+    s = _width(bar, edge)
+    assert s["steps"] == STEPS[:2] and not s["cut"], s
+    assert _word_shown(bar) == "none"
+    assert bar.evaluate("() => getComputedStyle(document.querySelector('.fcc-titlebar-more')).display") != "none"
+    assert _width(bar, edge + 1)["steps"] == STEPS[:1] and _word_shown(bar) != "none"
+
+
+def test_a_settings_change_fits_the_bar_again(bar):
+    """Words are wider than icons: switching Always icons to Always words at
+    the narrowest bar with no step fits again, through fcc:title-bar (an
+    attribute on <html> is no text change in the buttons the MutationObserver
+    sees). RED with the listener removed."""
+    bar.evaluate(COUNTS_LAND)
+    _set(bar, buttons="icons")
+    for px in range(1900, 899, -5):
+        if _width(bar, px)["steps"]:
+            break
+    _width(bar, px + 5)                                          # the narrowest bar that needs no step, with icons
+    assert _state(bar)["steps"] == []
+    bar.evaluate("() => document.documentElement.setAttribute('data-fcc-tb-buttons', 'words')")
+    _settle(bar)
+    assert _state(bar)["steps"] == [] and _state(bar)["cut"], "it should wait for the event"
+    bar.evaluate("() => document.dispatchEvent(new CustomEvent('fcc:title-bar'))")
+    _settle(bar)
+    s = _state(bar)
+    assert s["steps"] and not s["cut"], s
+
+
+def test_each_setting_keeps_its_own_memo(isolated_page):
+    """The labels change the bar's width, so a memo taken with one setting
+    isn't used with another (57.3)."""
+    page = isolated_page
+    _load(page, {}, 1900)
+    _landed(page)
+    edge = _widest(page, lambda s: bool(s["steps"]), 900, 1900)
+    want = _width(page, edge)["steps"]
+    store = {MEMO: json.dumps(_memo(page))}
+    assert _load(page, store, edge)["steps"] == want
+    assert _load(page, store, edge, attrs={"data-fcc-tb-buttons": "words"})["steps"] == []
+
+
+def _badge_text(page):
+    return page.evaluate("() => document.getElementById('fcc-build-version').innerText.trim()")
+
+
+def test_the_badge_shows_its_date_alone_before_the_title_is_cut(bar):
+    """Group 57.3: the badge never goes (Derek reads the build's date at a
+    glance): as the last step before the title is cut it shows its date and
+    time alone, the commit in its tooltip (and Settings -> Build Info). On two
+    lines (buttons that don't fit, below) it is whole again, beside the title."""
+    bar.evaluate(COUNTS_LAND)
+    edge = _widest(bar, lambda s: "fcc-tb-shortver" in s["steps"] or s["wrap"], 900, 1900)
+    s = _width(bar, edge)
+    assert s["steps"] == STEPS and not s["wrap"] and not s["cut"] and s["badge"] == "whole", s
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", _badge_text(bar)), _badge_text(bar)
+    assert bar.locator("#fcc-build-version").get_attribute("title").endswith("UTC")
+    s = _width(bar, edge + 1)
+    assert "fcc-tb-shortver" not in s["steps"] and _badge_text(bar).startswith("commit abcdef01 • "), s
+    bar.evaluate(BIG_COUNTS_XL)
+    assert _width(bar, 900)["wrap"] and _badge_text(bar).startswith("commit abcdef01 • ")

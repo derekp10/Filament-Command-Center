@@ -142,11 +142,19 @@ def _answer(body, status=200, **kw):
     return a
 
 
+# The look these tests pin: Settings -> Low stock count on One number, and
+# Title bar buttons on Always icons ("⚠️ 12", Group 57.2's option (a)). The
+# default form, Low and Out apart (Group 57.3), is test_title_bar_settings_js.py's.
+ONE_NUMBER_ICONS = """() => { document.documentElement.setAttribute('data-fcc-low-count', 'one');
+    document.documentElement.setAttribute('data-fcc-tb-buttons', 'icons'); }"""
+
+
 @pytest.fixture
 def bar(isolated_page):
     page = isolated_page
     page.set_content(PAGE.format(css=GLOBAL_CSS.read_text(encoding="utf-8") + BOOTSTRAP_HIDDEN,
                                  button=_button_markup()))
+    page.evaluate(ONE_NUMBER_ICONS)
     page.add_script_tag(content=PRELUDE)
     for name in ("overlay_mount.js", "inv_core.js", "inv_stock.js"):
         page.add_script_tag(content=(MODULES / name).read_text(encoding="utf-8"))
@@ -160,7 +168,8 @@ def _render(page, sec):
 
 def _btn(page):
     return page.evaluate("""(sel) => { const b = document.querySelector(sel);
-        return { num: b.querySelector('[data-low-stock-count]').textContent, text: b.textContent.replace(/\\s+/g, ' ').trim(),
+        return { num: b.querySelector('.fcc-ls-one .fcc-tb-count').textContent.replace(/[()]/g, ''),
+                 text: b.innerText.replace(/\\s+/g, ' ').trim().replace(/ \\?$/, Array.from(b.querySelectorAll('.fcc-stale-mark')).some((m) => m.getClientRects().length) ? '?' : ' ?'),
                  title: b.title, label: b.getAttribute('aria-label'), read: b.dataset.read || null,
                  low: b.dataset.low || null, out: b.dataset.out || null }; }""", BTN)
 
@@ -181,20 +190,25 @@ def test_before_the_first_heartbeat_it_reads_a_dash(bar):
 # A count's placeholder as its button draws it (the button's markup from
 # dashboard.html, in the title bar's font), against the narrowest count it
 # stands for: one digit, in brackets where the placeholder has them.
-PLACEHOLDER_JS = """(markup) => {
+PLACEHOLDER_JS = """([markup, form]) => {
+    document.documentElement.setAttribute('data-fcc-low-count', form);
     const wrap = document.createElement('div');
     wrap.className = 'fcc-titlebar-actions';
     wrap.style.cssText = 'position:absolute; left:0; top:0;';
     wrap.innerHTML = markup;
     document.querySelector('.fcc-titlebar').appendChild(wrap);
-    const pend = wrap.querySelector('[data-count-pending]');
-    const text = pend.textContent;
-    const width = (t) => { pend.textContent = t; return pend.getBoundingClientRect().width; };
-    const shown = width(text);
-    const paren = text.startsWith('(');
-    const digit = Math.min(...'0123456789'.split('').map((d) => width(paren ? '(' + d + ')' : d)));
+    const out = [];
+    wrap.querySelectorAll('[data-count-pending]').forEach((pend) => {
+        if (!pend.getClientRects().length) return;          // in the form not shown
+        const text = pend.textContent;
+        const width = (t) => { pend.textContent = t; return pend.getBoundingClientRect().width; };
+        const shown = width(text);
+        const paren = text.startsWith('(');
+        const digit = Math.min(...'0123456789'.split('').map((d) => width(paren ? '(' + d + ')' : d)));
+        out.push({ text, shown, digit });
+    });
     wrap.remove();
-    return { text, shown, digit };
+    return out;
 }"""
 
 
@@ -210,10 +224,15 @@ def test_each_placeholder_is_no_wider_than_a_count(bar):
     for bid in ("btn-backlog-count", "btn-queue-count", "btn-low-stock-count"):
         m = re.search(rf'<button[^>]*id="{bid}".*?</button>', html, re.S)
         assert m, bid
-        seen[bid] = bar.evaluate(PLACEHOLDER_JS, m.group(0))
-    assert [v["text"] for v in seen.values()] == ["(–)", "(–)", "–"], seen
-    for bid, v in seen.items():
-        assert v["shown"] <= v["digit"] + 0.01, (bid, v)
+        for form in ("both", "one"):                  # Settings -> Low stock count (57.3)
+            seen[(bid, form)] = bar.evaluate(PLACEHOLDER_JS, [m.group(0), form])
+    texts = {k: [v["text"] for v in vs] for k, vs in seen.items()}
+    assert texts == {("btn-backlog-count", "both"): ["(–)"], ("btn-backlog-count", "one"): ["(–)"],
+                     ("btn-queue-count", "both"): ["(–)"], ("btn-queue-count", "one"): ["(–)"],
+                     ("btn-low-stock-count", "both"): ["–", "–"], ("btn-low-stock-count", "one"): ["–"]}, texts
+    for k, vs in seen.items():
+        for v in vs:
+            assert v["shown"] <= v["digit"] + 0.01, (k, v)
 
 
 def test_the_heartbeat_count_paints_the_button(bar):
@@ -251,7 +270,8 @@ def test_a_failed_read_keeps_the_last_count_and_says_so(bar):
 
 def _widths(page):
     return page.evaluate("""(sel) => { const b = document.querySelector(sel);
-        const n = b.querySelector('[data-low-stock-count]'); const m = n.querySelector('.fcc-stale-mark');
+        const n = b.querySelector('[data-low-stock-count]');
+        const m = b.querySelector('.fcc-ls-one .fcc-tb-count > .fcc-stale-mark');
         const r = (el) => { const q = el.getBoundingClientRect(); return [q.left, q.right]; };
         return { btn: b.getBoundingClientRect().width, num: r(n), mark: m ? r(m) : null, btnBox: r(b),
                  border: parseFloat(getComputedStyle(b).borderRightWidth) }; }""", BTN)
@@ -280,10 +300,12 @@ def test_a_stale_counts_question_mark_takes_no_room(bar):
 # font, so equal tops are one baseline), and what the button's fill does.
 MARK_JS = """(sel) => { const b = document.querySelector(sel);
     const num = b.querySelector('[data-low-stock-count], .fcc-count-num');
-    const mark = num.querySelector('.fcc-stale-mark');
+    const mark = b.querySelector('.fcc-ls-one .fcc-tb-count > .fcc-stale-mark, .fcc-count-num > .fcc-stale-mark');
+    // The digits' own text (its brackets are spans of their own, Group 57.3).
+    const digits = Array.from(num.childNodes).find((c) => c.nodeType === 3 && /\\d/.test(c.textContent)) || num.firstChild;
     const top = (node) => { const r = document.createRange(); r.selectNodeContents(node);
                             return r.getBoundingClientRect().top; };
-    return { drop: mark ? top(mark.firstChild) - top(num.firstChild) : null,
+    return { drop: mark ? top(mark.firstChild) - top(digits) : null,
              clip: getComputedStyle(b).backgroundClip }; }"""
 
 
@@ -1072,8 +1094,10 @@ def test_the_queue_count_shows_this_browsers_queue_from_the_load(isolated_page):
     page = isolated_page
     html = DASHBOARD.read_text(encoding="utf-8")
     m = re.search(r'<button[^>]*id="btn-queue-count".*?</button>', html, re.S)
-    assert m and "data-count-pending>(–)" in m.group(0), "the Queue's placeholder should read (–), never (0)"
+    assert m, "dashboard.html has no #btn-queue-count"
     page.set_content(f"<!doctype html><html><body>{m.group(0)}</body></html>")
+    shown = page.evaluate("() => document.querySelector('#btn-queue-count [data-count-pending]').textContent")
+    assert shown == "(–)", f"the Queue's placeholder should read (–), never (0): {shown!r}"
     page.evaluate(QUEUE_PAGE_JS, json.dumps(QUEUE))
     page.add_script_tag(content=(MODULES / "inv_queue.js").read_text(encoding="utf-8"))
     text = lambda: page.evaluate("() => document.getElementById('btn-queue-count').textContent.trim()")

@@ -81,7 +81,7 @@ console.log("🚀 Loaded Module: LOW STOCK");
     const D = `#${DIALOG_ID}`;
     const CSS = `
 ${P} .fcc-stock-panel { background:#1e1e1e; color:#fff; border:2px solid #ffaa00; border-radius:8px;
-    padding:14px 16px 10px; width:min(50rem, 94vw); height:min(40rem, 86vh); box-sizing:border-box;
+    padding:14px 16px 10px; width:min(50rem, 94vw); height:min(48rem, 86vh); box-sizing:border-box;
     display:flex; flex-direction:column;
     box-shadow:0 10px 40px rgba(0,0,0,.6); font-size:1rem; outline:none; text-align:left; }
 ${P} .fcc-stock-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
@@ -1105,8 +1105,13 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
     // after a fresher heartbeat. The count shown is the newest read's, and it is
     // marked stale while the newest read sent failed (_answer).
 
-    // What the button shows: one number, Low + Out (Group 57.2's option (a)).
+    // What the button shows (Group 57.3; Derek, 2026-10-28; Settings -> Low stock
+    // count, data-fcc-low-count on <html>): Low and Out apart, in this list's own
+    // words and count pills ("Low 1 · Out 11", the default), or one number, the
+    // two added up ("Low stock (12)"). Both forms are on the button and both are
+    // painted; global.css shows the one picked.
     const _countLabel = (c) => String(c.low + c.out);
+    const _bothShown = () => document.documentElement.getAttribute('data-fcc-low-count') !== 'one';
     let _countAt = -Infinity;  // when the read behind the count shown was sent
     let _triedAt = -Infinity;  // when the newest read, good or not, was sent
     let _staleWhy = null;      // why that read had no count (a key of _WHY), or null
@@ -1129,23 +1134,34 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
     function _paintCount(why) {
         const btn = document.getElementById('btn-low-stock-count');
         if (!btn) return;
-        const num = btn.querySelector('[data-low-stock-count]');
-        const label = _count ? _countLabel(_count) : '?';
-        const text = _count && why ? `${label}?` : label;
-        if (num) num.removeAttribute('data-count-pending');      // painted (titlebar_fit.js)
-        if (num && num.textContent !== text) {
-            num.textContent = label;
-            if (_count && why) {
-                const mark = document.createElement('span');
-                mark.className = 'fcc-stale-mark';
-                mark.textContent = '?';
-                num.appendChild(mark);
-            }
-        }
+        const stale = !!(_count && why);
+        const put = (sel, text) => {
+            const el = btn.querySelector(sel);
+            if (!el) return;
+            el.removeAttribute('data-count-pending');                 // painted (titlebar_fit.js)
+            if (el.textContent !== text) el.textContent = text;
+        };
+        put('[data-low-stock-count]', _count ? _countLabel(_count) : '?');
+        put('[data-low-count]', _count ? String(_count.low) : '?');
+        put('[data-out-count]', _count ? String(_count.out) : '?');
+        // The "?" after each form's last number (drawn in the button's padding).
+        btn.querySelectorAll('.fcc-tb-count').forEach((wrap) => {
+            const mark = Array.from(wrap.children).find((c) => c.classList.contains('fcc-stale-mark'));
+            if (stale && !mark) {
+                const m = document.createElement('span');
+                m.className = 'fcc-stale-mark';
+                m.textContent = '?';
+                wrap.appendChild(m);
+            } else if (!stale && mark) mark.remove();
+        });
+        // The words hold what the button shows (WCAG 2.5.3, label in name).
+        const shown = !_count ? 'Low stock: ?'
+            : (_bothShown() ? `Low ${_count.low}, Out ${_count.out}` : `Low stock: ${_countLabel(_count)}`);
+        const text = stale ? `${shown}?` : shown;
         let words;
         if (!_count) words = why ? `Low stock: ?, no count yet (${_WHY[why]}). Opens the list.` : 'Low stock: opens the list.';
-        else if (why) words = `Low stock: ${text}, the last count (${_WHY[why]}): ${_countWords(_count)}. Opens the list.`;
-        else words = `Low stock: ${text} (${_countWords(_count)}). Opens the list.`;
+        else if (why) words = `${text}, the last count (${_WHY[why]}): ${_countWords(_count)}. Opens the list.`;
+        else words = `${text} (${_countWords(_count)}). Opens the list.`;
         btn.title = words;
         btn.setAttribute('aria-label', words);
         btn.dataset.read = why ? 'failed' : 'ok';
@@ -1190,6 +1206,11 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
         if (count) return _answer(at, count, null);
         return _answer(at, null, sec.read_ok === false && sec.read_error && !sec.error ? 'spoolman' : 'fcc');
     };
+
+    // Settings -> Low stock count changed: the button's words follow the form
+    // it shows now (titlebar_prefs.js). Not before the first answer: the
+    // placeholders stay until a count, or a failed read, comes.
+    document.addEventListener('fcc:title-bar', () => { if (_triedAt !== -Infinity) _paintCount(_staleWhy); });
 
     window.openLowStockPanel = function (opts) {
         if (typeof window.mountOverlay !== 'function') return null;

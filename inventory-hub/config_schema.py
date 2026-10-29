@@ -128,6 +128,24 @@ CONFIG_SCHEMA = [
                "under 13.6 px); Small is the compact look FCC had before that; Large and Extra "
                "Large make everything bigger together. It changes as soon as you pick it, with "
                "no Save needed."),
+    # Group 57.3 (Derek, 2026-10-28: look C as a setting, not hard-coded).
+    # titlebar_prefs.js keys on these exact strings, and so does the script in
+    # dashboard.html's <head> that applies them before the first paint.
+    Field("fcc.titleBar.buttons", "Title bar buttons", "select", "Automatic",
+          section="client", scope="client",
+          choices=["Automatic", "Always words", "Always icons"],
+          help="How Backlog, Queue and Low stock are labelled in the title bar. Automatic: with "
+               "their words while the bar has room (🏷️ Backlog (53)), and just the icon and number "
+               "when it hasn't, in a narrow window or at a bigger Text size (🏷️ 53). It changes "
+               "only when the window or the Text size does, never on a timer. It changes as soon "
+               "as you pick it, with no Save needed."),
+    Field("fcc.lowStock.count", "Low stock count", "select", "Low and Out",
+          section="client", scope="client",
+          choices=["Low and Out", "One number"],
+          help="What the title bar's ⚠️ button shows. Low and Out: the two lists apart, as the "
+               "Low stock window's tabs show them (Low 1, Out 11). One number: the two added up "
+               "(Low stock (12), or ⚠️ 12 with no room for the words). Excluded filaments never "
+               "count. It changes as soon as you pick it, with no Save needed."),
     Field("fcc.bulkMove.enabled", "Enable Bulk Moves", "bool", False,
           section="behavior", scope="server",
           help="Show the 🔀 Bulk Move affordances and accept bulk-move scans. "

@@ -1395,8 +1395,8 @@ def test_the_window_keeps_one_size_whatever_it_shows(panel):
 
 
 @pytest.mark.parametrize("size,viewport,height", [
-    ("standard", (1600, 1300), 640),     # 40rem
-    ("xlarge", (1600, 1300), 800),       # 40rem at a 20 px root
+    ("standard", (1600, 1300), 768),     # 48rem (57.3, Derek: "I'm ok with it growing a little")
+    ("xlarge", (1600, 1300), 960),       # 48rem at a 20 px root
     ("standard", (1280, 600), 516),      # 86vh: a short window still fits
 ])
 def test_its_height_is_set_in_rem_and_fits_the_window(panel, size, viewport, height):
