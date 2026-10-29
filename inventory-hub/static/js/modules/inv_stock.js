@@ -1107,7 +1107,7 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
 
     // What the button shows (Group 57.3; Derek, 2026-10-28; Settings -> Low stock
     // count, data-fcc-low-count on <html>): Low and Out apart, in this list's own
-    // words and count pills ("Low 1 · Out 11", the default), or one number, the
+    // words and count pills ("Low [1] Out [11]", the default), or one number, the
     // two added up ("Low stock (12)"). Both forms are on the button and both are
     // painted; global.css shows the one picked.
     const _countLabel = (c) => String(c.low + c.out);
@@ -1129,6 +1129,28 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
     function _countWords(c) {
         const under = _finite(c.threshold) !== null ? ` under ${_lineText(c.threshold)} g` : '';
         return `${c.low} low${under}, ${c.out} out`;
+    }
+
+    // The words before any count, for the form shown: "Low – Out –", and "Low ?
+    // Out ?" once a read failed, show Out, so the name says it too (WCAG 2.5.3;
+    // review of 57.3: it read "Low stock: opens the list.").
+    function _noCountWords(why) {
+        if (_bothShown()) {
+            return why ? `Low ?, Out ?, no count yet (${_WHY[why]}). Opens the list.`
+                : 'Low –, Out –: no count yet. Opens the list.';
+        }
+        return why ? `Low stock: ?, no count yet (${_WHY[why]}). Opens the list.` : 'Low stock: opens the list.';
+    }
+
+    // Before the first answer the button keeps its placeholders, and only its
+    // words follow the form shown: at the load (dashboard.html's are the default
+    // form's) and when the setting changes.
+    function _paintPendingWords() {
+        const btn = document.getElementById('btn-low-stock-count');
+        if (!btn) return;
+        const words = _noCountWords(null);
+        if (btn.title !== words) btn.title = words;
+        if (btn.getAttribute('aria-label') !== words) btn.setAttribute('aria-label', words);
     }
 
     function _paintCount(why) {
@@ -1159,7 +1181,7 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
             : (_bothShown() ? `Low ${_count.low}, Out ${_count.out}` : `Low stock: ${_countLabel(_count)}`);
         const text = stale ? `${shown}?` : shown;
         let words;
-        if (!_count) words = why ? `Low stock: ?, no count yet (${_WHY[why]}). Opens the list.` : 'Low stock: opens the list.';
+        if (!_count) words = _noCountWords(why);
         else if (why) words = `${text}, the last count (${_WHY[why]}): ${_countWords(_count)}. Opens the list.`;
         else words = `${text} (${_countWords(_count)}). Opens the list.`;
         btn.title = words;
@@ -1208,9 +1230,13 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
     };
 
     // Settings -> Low stock count changed: the button's words follow the form
-    // it shows now (titlebar_prefs.js). Not before the first answer: the
-    // placeholders stay until a count, or a failed read, comes.
-    document.addEventListener('fcc:title-bar', () => { if (_triedAt !== -Infinity) _paintCount(_staleWhy); });
+    // it shows now (titlebar_prefs.js). Before the first answer only its words:
+    // the placeholders stay until a count, or a failed read, comes.
+    document.addEventListener('fcc:title-bar', () => {
+        if (_triedAt !== -Infinity) _paintCount(_staleWhy);
+        else _paintPendingWords();
+    });
+    _paintPendingWords();
 
     window.openLowStockPanel = function (opts) {
         if (typeof window.mountOverlay !== 'function') return null;

@@ -135,10 +135,11 @@ CONFIG_SCHEMA = [
           section="client", scope="client",
           choices=["Automatic", "Always words", "Always icons"],
           help="How Backlog, Queue and Low stock are labelled in the title bar. Automatic: with "
-               "their words while the bar has room (🏷️ Backlog (53)), and just the icon and number "
-               "when it hasn't, in a narrow window or at a bigger Text size (🏷️ 53). It changes "
-               "only when the window or the Text size does, never on a timer. It changes as soon "
-               "as you pick it, with no Save needed."),
+               "their words while the bar has room (🏷️ Backlog (53)), and the icon and number "
+               "alone when it hasn't (🏷️ 53): in a narrow window, at a bigger Text size, or when "
+               "a count gets a digit longer. Always words and Always icons keep one look. Low and "
+               "Out keep their words in every look, as they tell the two numbers apart. It "
+               "changes as soon as you pick it, with no Save needed."),
     Field("fcc.lowStock.count", "Low stock count", "select", "Low and Out",
           section="client", scope="client",
           choices=["Low and Out", "One number"],

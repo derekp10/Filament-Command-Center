@@ -179,7 +179,25 @@ def test_out_of_the_box_it_reads_low_and_out_with_dashes_until_the_first_count(b
     s = _shown(bar)
     assert (s["form"], s["low"], s["out"], s["pending"]) == ("both", "–", "–", 3), s
     assert s["text"] == "⚠️ Low–Out–", s
-    assert s["label"] == "Low stock: opens the list." == s["title"]
+    # PIN UPDATED DELIBERATELY (review of 57.3): the words hold what it shows,
+    # Out included (WCAG 2.5.3, label in name); they read "Low stock: opens
+    # the list.". dashboard.html's own words are this form's, so they hold it
+    # before inv_stock.js runs too.
+    assert s["label"] == "Low –, Out –: no count yet. Opens the list." == s["title"], s
+    assert 'aria-label="Low –, Out –: no count yet. Opens the list."' in _button_markup()
+
+
+def test_a_first_read_that_failed_names_low_and_out(bar):
+    """Spoolman down at the load: the button reads "Low ? Out ?" for as long as
+    it stays down, and its words say both (review of 57.3: "Low stock: ?, no
+    count yet (…)", with no Out)."""
+    assert _render(bar, DOWN) is False
+    s = _shown(bar)
+    assert (s["low"], s["out"]) == ("?", "?"), s
+    assert s["label"] == ("Low ?, Out ?, no count yet (Spoolman didn't answer just now). "
+                          "Opens the list.") == s["title"], s
+    bar.evaluate("() => window.fccTitleBarPrefs.set('count', 'One number')")
+    assert _shown(bar)["label"] == "Low stock: ?, no count yet (Spoolman didn't answer just now). Opens the list."
 
 
 def test_the_count_paints_low_and_out_apart_with_words_that_hold_them(bar):
@@ -230,6 +248,46 @@ def test_a_switch_before_the_first_count_leaves_the_placeholders(bar):
     s = _shown(bar)
     assert (s["form"], s["total"], s["pending"]) == ("one", "–", 3), s
     assert s["label"] == "Low stock: opens the list.", s
+    # Its words follow the form shown back, the placeholders still untouched.
+    bar.evaluate("() => window.fccTitleBarPrefs.set('count', 'Low and Out')")
+    s = _shown(bar)
+    assert (s["form"], s["low"], s["pending"]) == ("both", "–", 3), s
+    assert s["label"] == "Low –, Out –: no count yet. Opens the list.", s
+
+
+def test_low_and_out_keep_their_space_around_the_pills(bar):
+    """Each pill sits 0.3em after its word and the Low pill 0.55em before Out
+    (global.css), so the count never reads as "Low1Out11" (review of 57.3: the
+    spacing was unpinned). Measured on the drawn text, against the pill's own
+    font size."""
+    _render(bar, GOOD)
+    g = bar.evaluate("""(sel) => { const wrap = document.querySelector(sel + ' .fcc-ls-both .fcc-tb-count');
+        const word = (w) => Array.from(wrap.childNodes).find((n) => n.nodeType === 3 && n.textContent.trim() === w);
+        const box = (n) => { const r = document.createRange(); r.selectNodeContents(n); return r.getBoundingClientRect(); };
+        const low = box(word('Low')), out = box(word('Out'));
+        const lp = wrap.querySelector('[data-low-count]').getBoundingClientRect();
+        const op = wrap.querySelector('[data-out-count]').getBoundingClientRect();
+        return { lowToPill: lp.left - low.right, pillToOut: out.left - lp.right, outToPill: op.left - out.right,
+                 em: parseFloat(getComputedStyle(wrap.querySelector('[data-low-count]')).fontSize) }; }""", BTN)
+    assert g["lowToPill"] >= 0.25 * g["em"] and g["outToPill"] >= 0.25 * g["em"], g
+    assert g["pillToOut"] >= 0.5 * g["em"], g
+
+
+@pytest.mark.parametrize("stored, want", [
+    ({}, ["auto", "both"]),
+    ({"fcc.titleBar.buttons": "Always icons", "fcc.lowStock.count": "One number"}, ["icons", "one"]),
+])
+def test_without_the_head_script_the_module_puts_the_settings_on(isolated_page, stored, want):
+    """A page built without dashboard.html's <head> script still shows the
+    stored settings: titlebar_prefs.js puts them on <html> itself (review of
+    57.3: unpinned)."""
+    page = isolated_page
+    page.set_content(SELECTS)
+    page.evaluate(STORE_JS, stored)
+    page.add_script_tag(content=(MODULES / "titlebar_prefs.js").read_text(encoding="utf-8"))
+    got = page.evaluate("""() => [document.documentElement.getAttribute('data-fcc-tb-buttons'),
+                                  document.documentElement.getAttribute('data-fcc-low-count')]""")
+    assert got == want, (stored, got)
 
 
 def test_always_icons_drops_the_words_and_brackets_but_never_low_and_out(bar):

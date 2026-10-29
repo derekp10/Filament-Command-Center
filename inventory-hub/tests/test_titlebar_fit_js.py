@@ -166,15 +166,37 @@ def _cut_without_last_step(page):
     return _over_without_last_step(page) > 0.01
 
 
+# How far the version badge's right edge is from the first of the buttons (the
+# Spoolman light), and the root size: on one line it keeps 1rem (its margin).
+BADGE_ROOM_JS = """() => { const ver = document.getElementById('fcc-build-version');
+    const first = document.querySelector('.fcc-titlebar-actions').firstElementChild;
+    return { gap: first.getBoundingClientRect().left - ver.getBoundingClientRect().right,
+             rem: parseFloat(getComputedStyle(document.documentElement).fontSize) }; }"""
+
+
+def _badge_room(page):
+    return page.evaluate(BADGE_ROOM_JS)
+
+
 def _check(page, px):
-    """One width: the badge whole (never squeezed, never gone, 57.3); a step
-    only where the title would be cut without it; the title cut only once
-    every step is taken."""
+    """One width: the badge whole (never squeezed, never gone, 57.3) and, on one
+    line, never under the buttons, and 1rem clear of them while the title is
+    cut (review of 57.3: with the title cut to nothing it was drawn under the
+    Spoolman light, and with the title cut it touched it); a step only where
+    the title would be cut without it; the title cut only once every step is
+    taken."""
     s = _width(page, px)
     assert s["badge"] == "whole", (px, s)
+    if not s["wrap"]:
+        room = _badge_room(page)
+        least = room["rem"] - 0.75 if s["cut"] else -0.5
+        assert room["gap"] >= least, f"{px} px: the badge is {room['gap']:.2f} px from the buttons: {s}"
     if s["steps"] and not s["wrap"]:
         assert _cut_without_last_step(page), f"{px} px: {s['steps'][-1]} taken with room to spare"
-    if len(s["steps"]) < len(STEPS) and not s["wrap"]:
+    # Always words and Always icons take no icon step.
+    auto = page.evaluate("() => (document.documentElement.getAttribute('data-fcc-tb-buttons') || 'auto') === 'auto'")
+    order = STEPS if auto else [c for c in STEPS if c != "fcc-tb-icons"]
+    if len(s["steps"]) < len(order) and not s["wrap"]:
         assert not s["cut"], f"{px} px: the title is cut with a step still to take: {s}"
     return s
 
@@ -605,6 +627,39 @@ def test_the_title_never_draws_over_the_spoolman_light(bar):
         assert gap >= -0.5, (px, s, gap)
 
 
+@pytest.mark.parametrize("case", ("Extra Large", "Always words"))
+def test_the_badge_never_runs_under_the_buttons(bar, case):
+    """The title's group may shrink to a stub and the badge never shrinks, so
+    with the title cut to nothing the badge spilled out of its group and was
+    drawn under the Spoolman light and SEARCH, while the buttons still fitted
+    the bar and it stayed on one line (review of 57.3: Extra Large in a window
+    of 992-1112 px with the defaults; Always words at every size). Swept from
+    a whole title to the second line: on one line the badge is never under the
+    buttons, and keeps 1rem from the light while the title is cut; where it
+    can't, the bar takes its second line, the title whole with the whole badge
+    beside it. RED on 41b819d: 0 px from the light once the title was cut,
+    then up to 125 px under the buttons. The gap comes only with a cut title,
+    so no step comes sooner (a margin at every width took ADD's step at Large
+    on a 1600 px window: test_text_size_setting_e2e.py)."""
+    if case == "Extra Large":
+        bar.evaluate("""() => { document.documentElement.setAttribute('data-fcc-text-size', 'xlarge');
+            document.dispatchEvent(new CustomEvent('fcc:text-size')); }""")
+    else:
+        _set(bar, buttons="words")
+    bar.evaluate(COUNTS_LAND)
+    _settle(bar)
+    seen = set()
+    for px in range(1500, 899, -3):
+        s = _check(bar, px)
+        if s["wrap"]:
+            assert not s["cut"] and s["badge"] == "whole", (px, s)
+            seen.add("wrap")
+        elif s["cut"]:
+            seen.add("cut")
+    assert seen == {"cut", "wrap"}, f"the sweep should cross a cut title and the second line: {seen}"
+    assert bar.evaluate("() => window.__errs") == []
+
+
 def test_the_version_badge_reads_in_local_time_before_the_first_fit(isolated_page):
     """L42's local text was written at DOMContentLoaded, after the first paint:
     the bar was fitted to the server's longer UTC text, and the buttons moved
@@ -632,6 +687,9 @@ def test_below_992_px_the_script_takes_no_step(bar):
         more: getComputedStyle(document.querySelector('.fcc-titlebar-more')).display,
         word: getComputedStyle(document.querySelector('#btn-backlog-count .fcc-tb-word')).display })""")
     assert look == {"gap": "8px", "more": "none", "word": "none"}, look
+    # Always words keeps the words there too (review of 57.3: unpinned).
+    bar.evaluate("() => document.documentElement.setAttribute('data-fcc-tb-buttons', 'words')")
+    assert _word_shown(bar) != "none"
 
 
 # --- Group 57.3: the settings ----------------------------------------------------------

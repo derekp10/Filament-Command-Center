@@ -287,6 +287,12 @@ body {
    its place beside it.) */
 @media (min-width: 992px) {
     #fcc-build-version { flex-shrink: 0; }
+    /* With the title cut and every step taken (fcc-tb-cut, titlebar_fit.js,
+       which counts it), the badge keeps the gap the title's own margin kept
+       before the badge stayed: it touched the Spoolman light (review of 57.3).
+       Only then: at every width it took ADD's step on a 1600 px window at
+       Large. */
+    .fcc-titlebar.fcc-tb-cut #fcc-build-version { margin-right: 1rem; }
     /* Step 4 (57.3): the badge's date and time alone ("2026-10-28 18:45"; the
        commit is in its tooltip and in Settings -> Build Info), before the bar
        ever takes a second line. */
@@ -294,9 +300,11 @@ body {
 }
 /* Step 5, one-line bar only, the last resort (titlebar_fit.js, Group 57
    review, round 2): the buttons still run past the bar's edge with the title
-   cut to nothing (Extra Large in a window just over 992 px, with big counts).
-   The bar takes a second line as it does below 992 px, the title whole with
-   the whole badge beside it, so ⚙️ never leaves the screen. */
+   cut to nothing (Extra Large in a window just over 992 px, with big counts),
+   or the badge would run under them (review of 57.3: Extra Large in a window
+   under about 1130 px). The bar takes a second line as it does below 992 px,
+   the title whole with the whole badge beside it, so ⚙️ never leaves the
+   screen and the badge's date is never drawn under the Spoolman light. */
 @media (min-width: 992px) {
     .fcc-titlebar.fcc-tb-wrap { flex-wrap: wrap; }
     .fcc-titlebar.fcc-tb-wrap .fcc-titlebar-actions {

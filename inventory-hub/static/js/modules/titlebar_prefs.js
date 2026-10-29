@@ -8,11 +8,13 @@
  *    are labelled. Automatic: their words while the bar has room, and only
  *    the icon and number when it hasn't (titlebar_fit.js takes that as its
  *    second step, after the spacing, so the version badge stays; below 992 px
- *    always). The other two keep one look.
+ *    always). The other two keep one look. Low and Out keep their words in
+ *    every look: they tell the two numbers apart.
  *  - "Low stock count" ('fcc.lowStock.count'): Low and Out (default) / One
  *    number. What the ⚠️ button shows: the two lists apart, in the Low stock
- *    window's own words and count pills ("Low 1 · Out 11"), or the two added up
- *    ("Low stock (12)", or "⚠️ 12" without the words). inv_stock.js paints both.
+ *    window's own words and count pills ("Low [1] Out [11]"), or the two added
+ *    up ("Low stock (12)", or "⚠️ 12" without the words). inv_stock.js paints
+ *    both.
  *
  *  - dashboard.html's <head> applies both before the first paint (a tiny inline
  *    script, #fcc-title-bar-boot): data-fcc-tb-buttons (auto / words / icons)

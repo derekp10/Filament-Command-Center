@@ -21,7 +21,11 @@
 // The bar takes a second line only when the buttons run past its edge with
 // every step taken (Extra Large in a window just over 992 px, with big
 // counts), so ⚙️ Settings, the way back to a smaller Text size, never leaves
-// the screen (round 2); on two lines the badge is whole again.
+// the screen (round 2), or when the title is cut to nothing and the badge
+// would run under the buttons (Extra Large in a window under about 1130 px;
+// review of 57.3: the buttons still fitted, so the bar stayed on one line with
+// the badge's date drawn under the Spoolman light); on two lines the badge is
+// whole again.
 // Below 992 px the buttons have a line of their own, and the spacing, icon and
 // ADD steps are plain CSS: nothing here.
 // Loaded right after the bar (dashboard.html), so it fits before the first paint.
@@ -43,18 +47,24 @@
 // where it stopped, not one for every width it passed.
 (function () {
     const WRAP = 'fcc-tb-wrap';
+    // The title is cut with every step taken: the badge keeps a gap from the
+    // Spoolman light (global.css; review of 57.3: it touched it). Only then, so
+    // the gap never brings a step sooner (a margin at every width took ADD's
+    // step on a 1600 px window at Large).
+    const CUT = 'fcc-tb-cut';
     // Every class a fit may have set: they all come off before it measures.
-    const ALL = ['fcc-tb-tight', 'fcc-tb-icons', 'fcc-tb-add', 'fcc-tb-shortver', 'fcc-tb-nover', WRAP];
+    const ALL = ['fcc-tb-tight', 'fcc-tb-icons', 'fcc-tb-add', 'fcc-tb-shortver', CUT, WRAP];
     const ONE_LINE = '(min-width: 992px)';
     const MEMO = 'fcc.titleBar.fit';
     const MEMO_KEEP = 8;
     const REMEMBER_AFTER_MS = 1000;
     let bar = null;
     let brand = null;
+    let badge = null;
     let actions = null;
     let busy = false;
-    let memo = [];            // [{w, size, level}], newest first, read once at the load
-    let toRemember = null;    // {w, size, level} waiting for REMEMBER_AFTER_MS
+    let memo = [];            // [{w, size, mode, level}], newest first, read once at the load
+    let toRemember = null;    // {w, size, mode, level} waiting for REMEMBER_AFTER_MS
     let rememberTimer = null;
 
     const root = document.documentElement;
@@ -143,6 +153,18 @@
         return actions.getBoundingClientRect().right > edge + 0.5;
     }
 
+    // The version badge runs under the buttons, its right margin counted (the
+    // gap to the Spoolman light). The title's group may shrink to a stub and
+    // the badge never shrinks, so with the title cut to nothing the badge
+    // spilled out of its group while the buttons still fitted the bar.
+    function crowded() {
+        if (!badge || !actions) return false;
+        const r = badge.getBoundingClientRect();
+        if (!r.width) return false;
+        const gap = parseFloat(getComputedStyle(badge).marginRight) || 0;
+        return r.right + gap > actions.getBoundingClientRect().left + 0.5;
+    }
+
     function fit() {
         if (!bar || !bar.isConnected || busy) return;
         busy = true;
@@ -160,10 +182,11 @@
                 bar.classList.add(step);
                 level += 1;
             }
-            if (level === order.length && actions && (least > order.length || overflowing())) {
+            if (level === order.length && cut(need)) bar.classList.add(CUT);
+            if (level === order.length && actions && (least > order.length || overflowing() || crowded())) {
                 // On two lines the title has a line of its own, and the whole badge
                 // its place beside it, as below 992 px: the badge never goes (57.3).
-                bar.classList.remove('fcc-tb-shortver');
+                bar.classList.remove('fcc-tb-shortver', CUT);
                 bar.classList.add(WRAP);
                 level += 1;
             }
@@ -212,6 +235,7 @@
         brand = bar ? bar.querySelector('.navbar-brand') : null;
         if (!bar || !brand) return;
         actions = bar.querySelector('.fcc-titlebar-actions');
+        badge = document.getElementById('fcc-build-version');
         memo = readMemo();
         localBadge();
         fit();

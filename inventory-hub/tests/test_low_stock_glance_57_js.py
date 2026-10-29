@@ -1102,6 +1102,14 @@ def test_the_queue_count_shows_this_browsers_queue_from_the_load(isolated_page):
     page.add_script_tag(content=(MODULES / "inv_queue.js").read_text(encoding="utf-8"))
     text = lambda: page.evaluate("() => document.getElementById('btn-queue-count').textContent.trim()")
     assert text() == "🛒 Queue (2)"
+    # Its word and brackets are spans of their own, which the title bar drops to
+    # show "🛒 2" (Group 57.3), and its words are its tooltip and accessible
+    # name (review of 57.3: the text alone read the same without the spans).
+    painted = page.evaluate("""() => { const b = document.getElementById('btn-queue-count');
+        return { html: b.innerHTML, label: b.getAttribute('aria-label'), title: b.title }; }""")
+    assert painted["html"] == ('🛒<span class="fcc-tb-word"> Queue</span> <span class="fcc-count-num">'
+                               '<span class="fcc-tb-paren">(</span>2<span class="fcc-tb-paren">)</span></span>'), painted
+    assert painted["label"] == "Queue (2). Opens the label print queue." == painted["title"], painted
     # One 2 s poll, read (round 4: a fixed 2.4 s wait passed without one on a slow
     # run): the server's queue is the same.
     page.wait_for_function("() => window.__gets >= 1", timeout=10000)
