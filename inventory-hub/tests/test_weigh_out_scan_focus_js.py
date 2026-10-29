@@ -52,13 +52,16 @@ window.__filamentMs = 0;             // /api/filament_details' (the empty-weight
 window.__detailsMs = 0;              // /api/spool_details'
 window.__detailsFail = false;        // /api/spool_details answers nothing a spool's details can be read from
 window.__answeredScans = 0;
-// Answers held until the test lets them go (window.__release('scan' | 'save')),
-// so a test that types "before the answer" never races a timer: __holdScans
-// is true (every scan) or a list of scan texts, __holdSaves true or false.
+// Answers held until the test lets them go (window.__release('scan' | 'save' |
+// 'details' | 'filament'), so a test that types "before the answer" never races
+// a timer: __holdScans is true (every scan) or a list of scan texts,
+// __holdSaves and __holdFilament true or false, __holdDetails true or a list
+// of spool ids (one let go with __releaseDetails(id)).
 window.__holdScans = false;
 window.__holdSaves = false;
 window.__holdDetails = false;        // /api/spool_details, the open's own read included (__release('details'))
-window.__held = { scan: [], save: [], details: [] };
+window.__holdFilament = false;       // /api/filament_details (the empty-weight prompt's first read)
+window.__held = { scan: [], save: [], details: [], filament: [] };
 window.__release = (kind) => { const fs = window.__held[kind]; window.__held[kind] = []; fs.forEach((f) => f()); };
 window.__spools = {
     6: { id: 6, initial_weight: 1000, used_weight: 31, spool_weight: 167,
@@ -106,17 +109,27 @@ window.fetch = function (url, opts) {
         : url.includes('/api/spool_details') ? window.__detailsMs : 0;
     const save = url.includes('/api/spool/update');
     const details = url.includes('/api/spool_details');
+    const fil = url.includes('/api/filament_details');
+    const detailsId = details ? Number((/spool_details\?id=(\d+)/.exec(url) || [])[1]) : null;
     const held = scan ? (window.__holdScans === true
         || (Array.isArray(window.__holdScans) && window.__holdScans.includes(body.text)))
-        : (save ? window.__holdSaves : (details && window.__holdDetails));
+        : save ? window.__holdSaves : fil ? window.__holdFilament : (details && (window.__holdDetails === true
+            || (Array.isArray(window.__holdDetails) && window.__holdDetails.includes(detailsId))));
     return new Promise((res) => {
         const answer = () => {
             if (scan) window.__answeredScans += 1;
             res({ ok: true, status: 200, json: () => Promise.resolve(ans) });
         };
-        if (held) window.__held[scan ? 'scan' : (save ? 'save' : 'details')].push(answer);
+        answer.sid = detailsId;
+        if (held) window.__held[scan ? 'scan' : save ? 'save' : fil ? 'filament' : 'details'].push(answer);
         else setTimeout(answer, ms);
     });
+};
+// One spool's held details (__holdDetails a list of spool ids) let go.
+window.__releaseDetails = (id) => {
+    const go = window.__held.details.filter((f) => f.sid === id);
+    window.__held.details = window.__held.details.filter((f) => f.sid !== id);
+    go.forEach((f) => f());
 };
 window.__si = window.setInterval; window.setInterval = () => 0;   // inv_cmd.js's 2 s buffer poll: off
 """
@@ -1044,7 +1057,7 @@ def test_a_prompt_doesnt_open_while_a_scan_is_answered(wo, prompt):
         open_(held=(8, 6), mode="gross")
         press(page, "645", 150)                   # its Enter: #8's details aren't in yet
     else:
-        page.evaluate("() => { window.__filamentMs = 300; }")
+        page.evaluate("() => { window.__holdFilament = true; }")
         open_(held=(8, 6, 134))
         press(page, "0", 150)
         _saved(page)
@@ -1055,7 +1068,12 @@ def test_a_prompt_doesnt_open_while_a_scan_is_answered(wo, prompt):
         _release(page, "details")                 # #8's details are in: its prompt is due
         page.wait_for_timeout(300)
     else:
-        page.wait_for_timeout(1300)               # the prompt is due by now
+        # The empty-weight prompt's first read, held: it is due once let go
+        # (round 11: a 1.3 s wait raced its read on a busy machine).
+        _held(page, "filament")
+        page.evaluate("() => { window.__holdFilament = false; }")
+        _release(page, "filament")
+        page.wait_for_timeout(300)
     assert page.locator("[data-overlay-mount='1']").count() == 0, prompt
     later(page, 700)
     press(page, "425", 150)                       # and Enter: held off until the answer
@@ -1729,22 +1747,111 @@ def test_a_spools_details_are_read_with_a_timeout(wo):
     assert calls and all(ms == 10000 for _, ms in calls), calls
 
 
-def test_a_row_waiting_for_its_details_dims_the_page(wo):
-    """#6's details still being read when its reading is entered: the page is
-    dimmed as for a save (the processing overlay), so a click meant to put #6's
-    reading right can't land on its waiting row and send the correction to the
-    next spool's box. RED on 2942ba1: nothing dimmed the page; a click on #6's
-    name moved no focus, and the correction typed next was saved to #134."""
+def _dimmed(page):
+    return page.evaluate("() => { const o = document.getElementById('processing-overlay');"
+                         " return !!state.processing || (!!o && o.style.display === 'block'); }")
+
+
+@pytest.mark.parametrize("where", ["name", "box"])
+def test_a_click_on_a_row_waiting_for_its_details_takes_it_back(wo, where):
+    """#6's details still being read when '500' is entered: its row waits and
+    the focus moves on to #134's box. Nothing is sent for #6 yet, so a click on
+    its row (its name, or its disabled box) takes it back: its box open again,
+    the focus there with '500' selected, and a toast saying it wasn't saved.
+    The correction typed next replaces it, and #6 is saved once, with 470 (530
+    used). RED on 1c593f5: the page was dimmed, so the click landed on the dim
+    and did nothing, and the correction went to #134's box."""
     page, open_ = wo
-    page.evaluate("() => { window.__holdDetails = true; }")
+    page.evaluate("() => { window.__holdDetails = [6]; }")
     open_()
     press(page, "500", 150)                       # its details aren't in yet
-    dimmed = page.evaluate("() => { const o = document.getElementById('processing-overlay'); return !!o && o.style.display === 'block'; }")
-    assert dimmed and page.evaluate("() => state.processing") is True
-    page.evaluate("() => { window.__holdDetails = false; }")
-    _release(page, "details")
-    _saved(page)                                  # its details came, its save went out
-    assert [u["id"] for u in _updates(page)] == [6]
+    assert _focus(page) == "134" and not _dimmed(page)
+    target = '.weigh-row[data-id="6"] .fw-bold' if where == "name" else '.weigh-input[data-id="6"]'
+    page.locator(target).click(force=True, timeout=2000)
+    assert _focus(page) == "6" and _box(page, 6) == "500"
+    assert page.evaluate("() => { const b = document.activeElement; return [b.selectionStart, b.selectionEnd]; }") == [0, 3]
+    assert any("#6 wasn't saved: put its reading right" in t for t in _toasts(page)), _toasts(page)
+    later(page, 900)
+    press(page, "470", 150)
+    page.evaluate("() => window.__releaseDetails(6)")
+    _saved(page)
+    page.wait_for_timeout(100)
+    ups = _updates(page)
+    assert [(u["id"], u["updates"]["used_weight"]) for u in ups] == [(6, 530)], ups
+
+
+def test_a_row_taken_back_while_another_waits_too_never_saves_its_correction_elsewhere(wo):
+    """Net, #6, #134 and #57, the details of #6 and #134 slow: '500' on #6 (a
+    slip) and '480' on #134 both wait, the focus on #57. #6's details come and
+    its save lands. A click on #134's name takes #134 back, and its correction,
+    '470', is saved to #134 (530 used), never to #57. RED on 1c593f5 (the
+    round-11 ORANGE): #6's save lifted the dim while #134 still waited, the
+    click moved no focus, and '470' was saved to #57."""
+    page, open_ = wo
+    page.evaluate("() => { window.__holdDetails = [6, 134]; }")
+    open_(held=(6, 134, 57))
+    press(page, "500", 150)
+    later(page, 900)
+    press(page, "480", 150)
+    assert _focus(page) == "57"
+    page.evaluate("() => window.__releaseDetails(6)")
+    _saved(page)                                  # #6's save went out and landed
+    page.wait_for_timeout(100)
+    page.locator('.weigh-row[data-id="134"] .fw-bold').click(force=True, timeout=2000)
+    assert (_focus(page), _box(page, 134)) == ("134", "480")
+    later(page, 900)
+    press(page, "470", 150)
+    page.evaluate("() => window.__releaseDetails(134)")
+    _saved(page, 2)
+    page.wait_for_timeout(100)
+    ups = [(u["id"], u["updates"]["used_weight"]) for u in _updates(page)]
+    assert ups == [(6, 500), (134, 530)], ups
+
+
+def test_a_click_on_a_saving_row_says_so_and_the_focus_stays_where_the_keys_go(wo):
+    """#6's save on its way (held) and a click that reaches its row (the dim a
+    save keeps can be lifted by another answer): a toast says #6 is being
+    saved, and the focus goes back to #134's box, where the keys go, never
+    left on the window. Pins round 11's message; the keys went to #134 before
+    it too, unseen."""
+    page, open_ = wo
+    page.evaluate("() => { window.__holdSaves = true; }")
+    open_()
+    press(page, "500", 150)                       # #6's details are in: its save goes out
+    _held(page, "save")
+    page.evaluate("""() => { document.getElementById('weighOutModal').focus();
+        document.querySelector('.weigh-row[data-id="6"] .fw-bold').click(); }""")
+    assert _focus(page) == "134"
+    assert any("#6 is being saved" in t for t in _toasts(page)), _toasts(page)
+    page.evaluate("() => { window.__holdSaves = false; }")
+    _release(page, "save")
+
+
+@pytest.mark.parametrize("typed", [False, True])
+def test_a_late_tare_prompt_after_the_last_box_minds_a_key_sent_to_the_scan_path(wo, typed):
+    """Gross, the list only #8 (no empty spool weight), its details slow: '645'
+    entered, the focus left on the window (the last box). With nothing typed
+    since, the tare prompt opens once the details come. With a key typed on the
+    window meanwhile (it goes to the scan path: no box takes it), it doesn't,
+    and a warning says #8 wasn't saved. RED on 1c593f5 with a key typed: the
+    prompt opened and took the rest of the reading as #8's tare."""
+    page, open_ = wo
+    page.evaluate("() => { window.__holdDetails = [8]; }")
+    open_(held=(8,), mode="gross")
+    press(page, "645", 150)
+    assert _focus(page) == "weighOutModal"
+    if typed:
+        later(page, 900)
+        press(page, "1", 0, enter=False)
+    page.evaluate("() => window.__releaseDetails(8)")
+    page.wait_for_timeout(300)
+    prompt = page.evaluate("() => !!document.querySelector('.fcc-weight-box:not(.weigh-input)')")
+    if typed:
+        assert not prompt
+        assert any("#8 wasn't saved: it needs its empty spool weight" in t for t in _toasts(page)), _toasts(page)
+    else:
+        assert prompt, "nothing typed since: the prompt opens"
+    assert _updates(page) == []
 
 
 def test_enter_waits_for_an_earlier_spool_scan_after_a_later_one_named_none(wo):
@@ -1834,6 +1941,82 @@ def test_keys_held_for_a_scan_that_named_no_spool_with_no_spool_scan_before_it_a
     page.wait_for_timeout(300)
     assert (_focus(page), _box(page, 57)) == ("57", "")
     assert any('("2") wasn\'t kept' in t for t in _toasts(page)), _toasts(page)
+
+
+HOOK_OPEN = """() => { window.weighOutMode = 'net'; window.openWeighOutModal();
+    document.getElementById('weighOutModal').focus(); }"""
+# #57 joins the list, as processScan's answer adds it, and is answered as a spool.
+HOOK_57 = """(from) => { state.heldSpools.unshift(Object.assign({}, window.__rows[57]));
+    document.dispatchEvent(new CustomEvent('inventory:buffer-updated'));
+    window.weighOutTakeScan(57, window[from]); window.weighOutScanDone(window[from]); }"""
+
+
+def test_a_reading_typed_across_scans_answered_in_reverse_comes_out_in_the_order_typed(wo):
+    """The pending model alone, its hooks called as processScan calls them: the
+    list empty, #57's scan read and '4' typed, a label read and '2', another
+    and '5'; #57 answered first, then the LAST label, then the middle one (a
+    scan typed into a box goes out at once, so answers can come in any order).
+    #57's box gets '425', with nothing said to be lost. RED on 1c593f5: the
+    keys were handed on in the order the answers came, '452'."""
+    page, _ = wo
+    page.evaluate(SETUP, [])
+    page.evaluate(HOOK_OPEN)
+    later(page, 700)
+    for name, key in (("__a", "4"), ("__b", "2"), ("__c", "5")):
+        page.evaluate("(n) => { window[n] = window.weighOutScanStart(); }", name)
+        press(page, key, 0, enter=False)
+        later(page, 300)
+    page.evaluate(HOOK_57, "__a")
+    page.evaluate("() => { window.weighOutScanDone(window.__c); window.weighOutScanDone(window.__b); }")
+    page.wait_for_timeout(150)
+    assert (_focus(page), _box(page, 57)) == ("57", "425")
+    assert not any("wasn't kept" in t for t in _toasts(page)), _toasts(page)
+
+
+def test_a_label_answered_before_the_spool_scan_read_before_it_hands_its_keys_on(wo):
+    """A label read after #57's scan is answered (naming no spool) before #57's
+    is: what was typed under it waits on #57's scan, still out, and goes into
+    #57's box with the rest. Before round 11 it was said to be gone, and #57
+    got '4' of '425'."""
+    page, _ = wo
+    page.evaluate(SETUP, [])
+    page.evaluate(HOOK_OPEN)
+    later(page, 700)
+    page.evaluate("() => { window.__a = window.weighOutScanStart(); }")
+    press(page, "4", 0, enter=False)
+    later(page, 300)
+    page.evaluate("() => { window.__b = window.weighOutScanStart(); }")
+    press(page, "25", 150, enter=False)
+    page.evaluate("() => window.weighOutScanDone(window.__b)")
+    page.evaluate(HOOK_57, "__a")
+    page.wait_for_timeout(150)
+    assert (_focus(page), _box(page, 57)) == ("57", "425")
+    assert not any("wasn't kept" in t for t in _toasts(page)), _toasts(page)
+
+
+def test_the_kept_spool_scan_takes_the_focus_while_a_scan_read_before_it_is_still_out(wo):
+    """A label read first (its answer still out), then #57's scan, then another
+    label: #57 answered while the later label is out (kept), then the later
+    label (no spool): #57's box takes the focus and the reading typed under
+    both, though the first label hasn't been answered. Pins the fallback's
+    rule: it waits only for scans read after the kept one (a mutant waiting for
+    any scan left #57 out for good)."""
+    page, _ = wo
+    page.evaluate(SETUP, [])
+    page.evaluate(HOOK_OPEN)
+    later(page, 700)
+    page.evaluate("() => { window.__x = window.weighOutScanStart(); }")
+    later(page, 300)
+    page.evaluate("() => { window.__a = window.weighOutScanStart(); }")
+    press(page, "4", 0, enter=False)
+    later(page, 300)
+    page.evaluate("() => { window.__y = window.weighOutScanStart(); }")
+    press(page, "25", 150, enter=False)
+    page.evaluate(HOOK_57, "__a")
+    page.evaluate("() => window.weighOutScanDone(window.__y)")
+    page.wait_for_timeout(150)
+    assert (_focus(page), _box(page, 57)) == ("57", "425")
+    page.evaluate("() => window.weighOutScanDone(window.__x)")
 
 
 def test_the_fallback_goes_to_the_latest_spool_scan_read(wo):
