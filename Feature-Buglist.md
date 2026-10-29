@@ -661,10 +661,10 @@ All 3 of these things are important and have value. We should table for now, and
     scan is processed too), the filament editor's "Close without saving?" with Close Anyway focused (a scan closes
     it unsaved; Keep Editing has the focus by default), and the parent tree picker (`inv_loc_mgr.js`: Enter picks
     the highlighted parent; read from the code).
-* **✅ FIXED (on `feature/group-57-low-stock-at-a-glance`, in `11f77b4`, `cec4a65`, `a692e5d`, `dcb90be`, `66f2c44`, `229d325` and `9eaf28a`; goes
+* **✅ FIXED (on `feature/group-57-low-stock-at-a-glance`, in `11f77b4`, `cec4a65`, `a692e5d`, `dcb90be`, `66f2c44`, `229d325`, `9eaf28a` and `47e820b`; goes
   to `dev` with Group 57, or alone: its code needs nothing else from the branch, its tests round 3's slow-scan
   harness): 🔴 a label scanned into a weight box was saved as the weight, and could archive the spool.** _(Found
-  2026-10-27 by the Group 57 review, rounds 5 to 10, on dev, read-only; older than Group 57.)_ The Quick-Weigh window
+  2026-10-27 by the Group 57 review, rounds 5 to 11, on dev, read-only; older than Group 57.)_ The Quick-Weigh window
   (`weight_entry.js`: a buffer card's weight, the wizard's weigh) answered every Enter with Save, and its weight field,
   focused when it opens, had no field scan capture. A number field (Gross, Net, Set Used) kept the digits of "ID:57"
   and Save stored 57 g; in Gross that is under the empty spool, so the spool read empty and Auto Archive archived it.
@@ -707,7 +707,13 @@ All 3 of these things are important and have value. We should table for now, and
   again with the digits joined (Set Used: archived); a save that waited for its details opened its missing-tare
   prompt over the next row's reading, which became its tare; a row waiting for its details left the page
   clickable, and a correction went to the next spool; and, older, a later scan that named no spool freed Enter
-  while an earlier spool scan was still out, and a middle scan's keys were dropped from the reading. Now every
+  while an earlier spool scan was still out, and a middle scan's keys were dropped from the reading. Round 11 found
+  what round 10 left: the page round 10 dimmed over a row waiting for its details was one shared flag, so another
+  answer lifted it while the row still waited, and a correction clicked into that row went to the next spool
+  (older); two answers that came in reverse put a reading's pieces out of order ("452" for "425", with no
+  warning); and a key sent to the scan path from the window, after the last box, didn't stop a late tare prompt
+  from taking the rest of the reading as the tare (older). (Its red, the scan queue's order, is the entry below.)
+  Now every
   weight box judges what was typed
   (class `fcc-weight-box`, `installWeightScanCapture` in `inv_core.js`): a ':' or '/' proves a label at any speed,
   from its prefix, and its keys never reach the box (a number box is cleared of the ones it took); anything else a
@@ -723,9 +729,10 @@ All 3 of these things are important and have value. We should table for now, and
   that row's); the focus comes back to it when a dialog over the list closes; a spool scanned over a prompt closes
   it, and neither prompt opens while a scan is answered or once a spool scan has been answered since its Enter; a
   scan queued behind another counts from its read, and an earlier spool scan takes the focus when the later one
-  names no spool, with the keys typed under the scans after it; Enter waits while any scan that may still take the
+  names no spool, with the keys typed under the scans after it, in the order they were typed; Enter waits while any scan that may still take the
   focus is out; a saving or fading row stays disabled through a redraw, and a save moves the focus only from its own
-  row; a save that reads its details first dims the page, and its tare prompt opens only where the person was left;
+  row; a row waiting for its details is taken back by a click on it (nothing has been sent for it yet), and its tare
+  prompt opens only where the person was left, with no key typed anywhere since;
   with no details only a Net reading is saved. The list's boxes are text boxes, Net, Gross and Set Used read
   strictly as grams. Pinned by `tests/test_quick_weigh_scan_js.py`, `tests/test_weight_box_scan_js.py` and
   `tests/test_weigh_out_scan_focus_js.py` (the real scan router). Not covered: a label with no ':' typed slower than
@@ -739,6 +746,7 @@ All 3 of these things are important and have value. We should table for now, and
   a label: it reads as a scan, no weight is saved from it, and the scan path looks the number up as a spool id, so a
   spool with that id joins the buffer (in the weigh-out list it takes the focus): ⏸️ PENDING DEREK. Not caught: a digits-only label from
   a scanner slower than 40 ms a key, or one or two digits with its Enter a moment later.
+* **✅ FIXED (on `feature/group-57-low-stock-at-a-glance`, in `b61a304`; goes to `dev` with Group 57, or alone: it is one block of `scripts.html` and its own test file): 🔴 scans read while FCC was busy could go out in the wrong order, and a slot label could file the wrong spool.** _(Found 2026-10-28 by the Group 57 review, round 11, in a harness with the real scan accumulator; older than Group 57: the queue's per-scan poll is from `cf0e5a1`, 2026-04-06.)_ A scan read while another was answered (or with the focus guard up) waited on a 250 ms poll of its own, so when the busy answer came the first poll to tick went first, not the scan read first: about half the time at a person's pace (9 of 16 in the skeptic's random runs). A spool, then its slot label, scanned inside one slow answer (a slot scan waiting on a printer check, a slow Spoolman) could reach the server label first, and the server's slot rule filed the spool already in the buffer into the slot; and a scan read after the answer came, before the poll ticked, went out at once, ahead of the waiting ones. Now the accumulator keeps ONE queue, drained in read order by one poll and one scan at a time (a scan that goes to the server turns processing on at once); a scan read while it still holds one joins it. Pinned by `tests/test_scan_queue_order_js.py` (the real accumulator on a hand-moved poll clock: 3 cases red on `1c593f5`, 6 mutants caught).
 * **⚖️ The post-archive empty-weight prompt takes the focus from a reading being typed.** _(Found 2026-10-27 while
   fixing the Group 57 review's round 6; older than Group 57.)_ When a weigh-out row's save archives its spool and its
   filament has no empty weight, "📦 Spool archived — record the empty weight?" (`inv_details.js`,
