@@ -245,7 +245,7 @@
         // Existing LocationIDs are read-only (renaming = remove+add, which the
         // backend guards); new rows get an editable LocationID.
         const locInput = isNew
-            ? `<input class="form-control form-control-sm pm-loc bg-dark text-white border-secondary" type="text" value="${loc}" placeholder="LocationID (e.g. CORE1-M6)" autocomplete="off" style="max-width:170px;">`
+            ? `<input class="form-control form-control-sm pm-loc bg-dark text-white border-secondary" type="text" value="${loc}" placeholder="LocationID (e.g. PRINTER-1)" autocomplete="off" style="max-width:170px;">`
             : `<input class="form-control form-control-sm pm-loc bg-dark text-white border-secondary" type="text" value="${loc}" readonly title="LocationID is fixed for existing toolheads — add or remove instead" style="max-width:170px; opacity:.7;">`;
         return `<div class="d-flex align-items-center gap-2 py-1 pm-row">
             ${locInput}

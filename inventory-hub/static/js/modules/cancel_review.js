@@ -604,9 +604,16 @@
         });
         // Minimized/collapsed view: onto each printer's group in the header chip
         // strip — the only thing visible when the widget is minimized (Derek
-        // 2026-06-12, "in case the activity log isn't always visible").
-        document.querySelectorAll('.fcc-ps-header-chips .fcc-ps-printer-group[data-printer]')
-            .forEach((grp) => apply(grp, grp.getAttribute('data-printer')));
+        // 2026-06-12, "in case the activity log isn't always visible"). Since
+        // Group 50.1 in the group's own count slot, after the printer's name and
+        // state; a count that comes or goes measures the strip again (it may no
+        // longer fit beside the title, or fit again).
+        let stripChanged = false;
+        document.querySelectorAll('.fcc-ps-header-chips .fcc-ps-printer-group[data-printer]').forEach((grp) => {
+            const host = grp.querySelector('.fcc-ps-strip-count') || grp;
+            if (apply(host, grp.getAttribute('data-printer'))) stripChanged = true;
+        });
+        if (stripChanged && typeof window.fitPrinterStatusStrip === 'function') window.fitPrinterStatusStrip();
         return changed;
     }
     async function refreshBadge() {

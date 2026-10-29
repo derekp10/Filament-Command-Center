@@ -204,7 +204,9 @@ def test_the_tile_and_the_strip_say_a_head_holds_two_spools(tmp_path):
     assert res["unhandled"] == [], res
     assert "⚠️ 2 spools" in res["body"] and f'title="{DOUBLED_TEXT}"' in res["body"], res["body"]
     assert "background:#2b2200" in res["body"], "the chip needs an opaque background (contrast guard)"
-    assert "⚠️2" in res["strip"] and DOUBLED_TEXT in res["strip"], res["strip"]
+    # Group 50.1: the strip escapes its titles with escHtml, an apostrophe too
+    # (the page decodes it back to the same text).
+    assert "⚠️2" in res["strip"] and DOUBLED_TEXT.replace("'", "&#39;") in res["strip"], res["strip"]
 
 
 def test_one_loaded_spool_shows_no_warning(tmp_path):

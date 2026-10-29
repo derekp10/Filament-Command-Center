@@ -396,7 +396,9 @@ def _pulse_section_printer_status(spools=None):
     from concurrent.futures import ThreadPoolExecutor
 
     cfg = config_loader.load_config()
-    printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
+    # Group 50.1: one read of the rows serves the map and each printer's id.
+    loc_rows = locations_db.load_locations_list()
+    printer_map = locations_db.get_active_printer_map(loc_rows)  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
     _, fb_url = config_loader.get_api_urls()
     grouped = {}
     for loc_id, info in printer_map.items():
@@ -469,7 +471,12 @@ def _pulse_section_printer_status(spools=None):
             state_info = prusalink_api.get_printer_state(fb_url, name)
         except Exception:
             state_info = None
-        return name, {'toolheads': toolheads, 'state': state_info}
+        # Group 50.1: the printer's own id (its Printer row's LocationID), for
+        # the folded strip's "By ID" setting. The row that lists the printer's
+        # first head decides, so two rows sharing a Name still give one id;
+        # '' when no row lists it (the strip then shows the name).
+        printer_id = locations_db.printer_owning_toolhead(loc_rows, entries[0]['location_id']) if entries else None
+        return name, {'toolheads': toolheads, 'state': state_info, 'id': printer_id or ''}
 
     out = {}
     max_workers = max(1, min(8, len(grouped)))

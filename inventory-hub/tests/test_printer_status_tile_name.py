@@ -187,13 +187,15 @@ SIZES_JS = r"""() => {
 
 # Each head's chip in the collapsed strip: its round dots, whether the first
 # is the chip's first child, its width and what it is filled with.
-STRIP_DOTS_JS = r"""() => Array.from(document.querySelectorAll('#printer-status-widget .fcc-ps-header-chips .fcc-ps-mini')).map((m) => {
-    const dots = Array.from(m.querySelectorAll('span')).filter((el) => { const r = el.getBoundingClientRect();
-        return r.width > 0 && r.height > 0 && getComputedStyle(el).borderTopLeftRadius === '50%'; });
-    const d = dots[0]; const s = d ? getComputedStyle(d) : null;
-    return { th: m.dataset.toolhead, dots: dots.length, first: !!d && m.firstElementChild === d,
-             w: d ? d.getBoundingClientRect().width : 0,
-             fill: s ? (s.backgroundImage !== 'none' ? s.backgroundImage : s.backgroundColor) : null };
+# Group 50.1: folded, each head is a ring (its label on its spool's colours,
+# ringed in its weight colour) with its grams beside it.
+STRIP_RINGS_JS = r"""() => Array.from(document.querySelectorAll('#printer-status-widget .fcc-ps-header-chips .fcc-ps-strip-head')).map((m) => {
+    const ring = m.querySelector('.fcc-ps-ring'); const s = getComputedStyle(ring);
+    const w = m.querySelector('.fcc-ps-mini-weight');
+    return { th: m.dataset.toolhead, empty: ring.classList.contains('fcc-ps-ring-empty'),
+             fill: s.backgroundImage !== 'none' ? s.backgroundImage : s.backgroundColor,
+             border: s.borderTopColor, h: ring.getBoundingClientRect().height, label: ring.textContent,
+             grams: w ? w.textContent : null, title: m.title };
 })"""
 
 
@@ -264,24 +266,32 @@ def test_transition_spool_is_whole_beside_four_digits(widget, size):
 
 
 @pytest.mark.parametrize("size", SIZES)
-def test_the_collapsed_strip_keeps_its_dots(widget, size):
-    """Minimized, a head is a chip in the strip: its dot first, then its id
-    and its weight. Every chip keeps its dot: the filament's colours on a
-    loaded head (a gradient where it has several), the striped one on an
-    empty head."""
+def test_the_folded_strip_wears_each_spools_colours(widget, size):
+    """PIN REPLACED DELIBERATELY (Group 50.1; Derek, 2026-10-29: "I love every
+    thing about this new redesign"): folded, a head was a chip with a dot, its
+    id and its grams; it is now its label on its spool's colours (a gradient
+    where it has several), ringed in its weight colour, with its grams beside
+    it (the weights setting's default). An empty head is a hollow ring with no
+    grams; a spool whose weight is unknown reads "---", never a red 0 g."""
     page = widget
     _tiles(page, size)
     page.evaluate("() => window.togglePrinterStatusWidget()")
     page.wait_for_function("() => document.getElementById('printer-status-widget').classList.contains('collapsed')")
-    chips = {c["th"]: c for c in page.evaluate(STRIP_DOTS_JS)}
+    rings = {c["th"]: c for c in page.evaluate(STRIP_RINGS_JS)}
     heads = [h["id"] for p in FLEET.values() for h in p["toolheads"]]
-    assert sorted(chips) == sorted(heads), chips
-    for k, c in chips.items():
-        assert c["dots"] == 1 and c["first"] and c["w"] >= 11.5, f"{k}'s chip lost its dot at {size}: {c}"
+    assert sorted(rings) == sorted(heads), rings
+    for k, c in rings.items():
+        assert c["label"] == k and c["h"] > 0, f"{k}'s ring at {size}: {c}"
+    for k in LOADED:
+        assert not rings[k]["empty"], rings[k]
+        assert WEIGHTS[k] == rings[k]["grams"] or (WEIGHTS[k] == "---" and rings[k]["grams"] == "---"), rings[k]
     for k in ("ZT-2", "ZU-3"):
-        assert "gradient" in chips[k]["fill"], f"{k} has several colours: {chips[k]}"
+        assert "gradient" in rings[k]["fill"], f"{k} has several colours: {rings[k]}"
     for k in ("ZT-6", "ZT-7", "ZT-8", "ZU-4", "ZU-5"):
-        assert "repeating-linear-gradient" in chips[k]["fill"], f"{k} is empty: {chips[k]}"
+        assert rings[k]["empty"] and rings[k]["grams"] in (None, "?"), f"{k} is empty: {rings[k]}"
+    # The ring is the weight bar's colour: cyan, amber under 100 g, red at 0.
+    assert rings["ZT-1"]["border"] == "rgb(13, 202, 240)" and rings["ZT-5"]["border"] == "rgb(255, 193, 7)", rings
+    assert rings["ZT-4"]["border"] == "rgb(255, 107, 107)" and "weight unknown" in rings["ZT-3"]["title"], rings
 
 
 @pytest.mark.parametrize("size", SIZES)
@@ -305,8 +315,13 @@ def test_every_tile_keeps_its_size_and_rows(widget, size):
 
 def test_the_hover_text_still_names_the_spool_in_full(widget):
     """Hovering a tile says which head, the spool in full (the long name
-    whole, not cut) and its weight."""
+    whole, not cut) and its weight.
+
+    PIN UPDATED DELIBERATELY (Group 50.3, 2026-10-29): it also says what a
+    click does. It said "click to Quick-Swap", but a click opens the head in
+    the Location Manager (what it holds, and its Quick-Swap slots)."""
     tiles = _tiles(widget, "Standard")
-    assert tiles["ZT-4"]["title"] == f"ZT-4 — #9604 {LONG} — 0g remaining (click to Quick-Swap)", tiles["ZT-4"]
-    assert tiles["ZT-2"]["title"] == "ZT-2 — #9602 Transition Spool — 1000g remaining (click to Quick-Swap)"
-    assert tiles["ZT-3"]["title"] == "ZT-3 — #9603 — 0g remaining (click to Quick-Swap)", tiles["ZT-3"]
+    tail = "Click to open {0}: what it holds, and its Quick-Swap slots."
+    assert tiles["ZT-4"]["title"] == f"ZT-4 — #9604 {LONG} — 0g remaining. " + tail.format("ZT-4"), tiles["ZT-4"]
+    assert tiles["ZT-2"]["title"] == "ZT-2 — #9602 Transition Spool — 1000g remaining. " + tail.format("ZT-2")
+    assert tiles["ZT-3"]["title"] == "ZT-3 — #9603 — 0g remaining. " + tail.format("ZT-3"), tiles["ZT-3"]

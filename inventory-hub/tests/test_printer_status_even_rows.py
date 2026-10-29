@@ -184,7 +184,7 @@ PAGE = """<!doctype html><html data-fcc-text-size="standard"><head><meta charset
             <span class="fcc-ps-title">🖨️ Printer Status</span>
             <span class="fcc-ps-hint">click to collapse</span>
         </div>
-        <div class="fcc-ps-header-chips d-flex flex-wrap align-items-center gap-1 ms-3"></div>
+        <div class="fcc-ps-header-chips"></div>
     </div>
     <div class="fcc-ps-body">
         <div class="fcc-ps-skeleton">Loading printer status…</div>
@@ -1360,25 +1360,29 @@ def test_on_a_short_laptop_window_every_tile_shows_or_scrolls_into_view(widget, 
 
 # --- the collapsed strip (review, 2026-10-23, F5) ----------------------------------
 
-# Per printer group of the collapsed strip: its chips' right edges against the
-# window, its 🛑 count's text, whether the count is its last chip, how many
-# lines the count's own text takes, and the page's sideways scroll.
+# Per printer group of the folded strip (Group 50.1): its parts in order, their
+# edges against the window, its 🛑 count's text and how many lines it takes, its
+# heads (a box that scrolls sideways when they don't fit), and the page's
+# sideways scroll.
 STRIP_JS = r"""() => ({ iw: innerWidth, sw: document.documentElement.scrollWidth,
     groups: Array.from(document.querySelectorAll('#printer-status-widget .fcc-ps-header-chips .fcc-ps-printer-group')).map((g) => {
         const kids = Array.from(g.children); const chip = g.querySelector('.fcc-cr-chip');
+        const box = g.querySelector('.fcc-ps-strip-heads');
         const lines = (el) => { const r = document.createRange(); r.selectNodeContents(el);
             const tops = []; Array.from(r.getClientRects()).filter((x) => x.width > 0).forEach((x) => {
                 if (!tops.some((t) => Math.abs(t - x.top) < 3)) tops.push(x.top); }); return tops.length; };
-        return { printer: g.dataset.printer, chips: kids.length,
+        return { printer: g.dataset.printer, parts: kids.map((k) => k.className),
                  right: Math.max(...kids.map((k) => k.getBoundingClientRect().right)),
                  left: Math.min(...kids.map((k) => k.getBoundingClientRect().left)),
-                 count: chip ? chip.textContent : null, last: chip ? kids[kids.length - 1] === chip : null,
-                 countLines: chip ? lines(chip) : 0, state: kids[0] && kids[0].classList.contains('fcc-ps-state-chip') }; }) })"""
+                 count: chip ? chip.textContent : null, countLines: chip ? lines(chip) : 0,
+                 heads: box ? box.querySelectorAll('.fcc-ps-strip-head').length : 0,
+                 scrolls: !!box && box.scrollWidth > box.clientWidth + 1 }; }) })"""
 
 
-# Dev's own head ids (RCOI-1 .. RCOI-8, XL-1 .. XL-5): the strip's chips are as
+# Dev's own head ids (RCOI-1 .. RCOI-8, XL-1 .. XL-5): the strip's heads are as
 # wide as dev's.
 STRIP_FLEET = {INDX: _printer("RCOI", 8, loaded=(0, 3)), XL: _printer("XL", 5, "PRINTING", loaded=(1, 2))}
+STRIP_PARTS = ["fcc-ps-strip-name", "fcc-ps-strip-state", "fcc-ps-strip-count", "fcc-ps-strip-heads"]
 
 
 @pytest.mark.parametrize("width, size", [(1024, "Small"), (1024, "Standard"), (1024, "Large"), (1024, "Extra Large"),
@@ -1388,9 +1392,14 @@ def test_the_collapsed_strip_keeps_every_chip_on_screen(widget, width, size):
     count rides on it "in case the activity log isn't always visible"). A
     printer's group wider than the window ran off its right edge, taking its
     last heads and its 🛑 count with it (the INDX's 8 heads at 1024 px at every
-    size, at 1280 px at Extra Large, and on a phone). Now a group wraps its own
-    chips: every chip inside the window, the state first and the count last,
-    the 🛑 never parted from its number."""
+    size, at 1280 px at Extra Large, and on a phone).
+
+    PIN UPDATED DELIBERATELY (Group 50.1, 2026-10-29): each printer is now its
+    name, its state, its 🛑 count and then its heads (it was the state, the
+    heads, then the count), and a printer whose heads don't fit even on a line
+    of their own scrolls them sideways inside their own box (Derek's fallback,
+    2026-10-19) instead of wrapping them. Still: every part inside the window,
+    the page never scrolls sideways, the 🛑 never parted from its number."""
     page = widget
     page.set_viewport_size({"width": width, "height": 900})
     _size(page, size)
@@ -1403,10 +1412,13 @@ def test_the_collapsed_strip_keeps_every_chip_on_screen(widget, width, size):
                            timeout=3000)
     got = page.evaluate(STRIP_JS)
     assert got["sw"] <= got["iw"], f"the page scrolls sideways: {got}"
-    assert [(g["printer"], g["chips"], g["count"], g["last"], g["state"], g["countLines"]) for g in got["groups"]] == [
-        (INDX, 10, "🛑 3", True, True, 1), (XL, 7, "🛑 12", True, True, 1)], got
+    assert [(g["printer"], g["parts"], g["heads"], g["count"], g["countLines"]) for g in got["groups"]] == [
+        (INDX, STRIP_PARTS, 8, "🛑 3", 1), (XL, STRIP_PARTS, 5, "🛑 12", 1)], got
     for g in got["groups"]:
-        assert g["left"] >= -0.5 and g["right"] <= got["iw"] + 0.5, f"a chip is off the screen: {width} {size} {g}"
+        assert g["left"] >= -0.5 and g["right"] <= got["iw"] + 0.5, f"a part is off the screen: {width} {size} {g}"
+    # On a phone the INDX's eight heads don't fit beside its name: they scroll.
+    if width <= 412:
+        assert got["groups"][0]["scrolls"], got
 
 
 @pytest.mark.parametrize("size", SIZES)

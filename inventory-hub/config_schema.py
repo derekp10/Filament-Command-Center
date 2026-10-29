@@ -110,14 +110,40 @@ CONFIG_SCHEMA = [
           section="client", scope="client",
           choices=["gross", "net", "additive", "set_used"],
           help="Which input mode the weight-entry overlay opens in."),
-    # Group 46.3. The choices are what XL-3's tile would read, so the dropdown
-    # shows the result; inv_printer_status.js keys on these exact strings.
-    Field("fcc.printerStatus.toolheadLabel", "Printer Status toolhead labels", "select", "XL-3",
+    # Group 46.3; the choices renamed by Group 50.1 (Derek, 2026-10-29: they
+    # were "XL-3" / "3" / "Tool 3", his own head's id, which means nothing on
+    # another install; no setup's own names in Settings). inv_printer_status.js
+    # keys on these exact strings and moves a browser's old choice to its new
+    # name on load. Like the two below, a pick applies at once, with no Save.
+    Field("fcc.printerStatus.toolheadLabel", "Printer Status toolhead labels", "select", "By ID",
           section="client", scope="client",
-          choices=["XL-3", "3", "Tool 3"],
-          help="How each toolhead tile is labelled in Printer Status: its full id (XL-3), just "
-               "its number (3), or Tool and its number, counting from 1 like the printer's "
-               "own screen (Tool 3). The collapsed strip always shows the full id."),
+          choices=["By ID", "By number", "By Tool + number"],
+          help="How each toolhead is labelled in Printer Status, open or folded. By ID: its ID, "
+               "as named in the Location Manager. By number: its number on its printer (1, 2, "
+               "3…). By Tool + number: Tool and its number (Tool 1, Tool 2…), counting from 1 "
+               "like a printer's own screen. It changes as soon as you pick it, with no Save "
+               "needed."),
+    # Group 50.1 (Derek, 2026-10-29): "I'd like the full name, but I also want
+    # an option to switch it to just use printer ids". The ID is the Printer
+    # row's LocationID (the heartbeat's printer_status gives it as `id`).
+    Field("fcc.printerStatus.printerName", "Printers in the folded Printer Status", "select", "By name",
+          section="client", scope="client",
+          choices=["By name", "By ID"],
+          help="How each printer is shown when Printer Status is folded: by its name, or by its "
+               "ID from the Location Manager, which takes less room. Hover over a printer to see "
+               "the other. It changes as soon as you pick it, with no Save needed."),
+    # Group 50.1 (Derek, 2026-10-29): weights on by default ("it's kind of the
+    # point for me at least, but I can see why someone might not want it");
+    # beside each head by default (today's strip has its grams there), under
+    # it as the other look ("I really like C too").
+    Field("fcc.printerStatus.stripWeight", "Weights in the folded Printer Status", "select",
+          "Beside each toolhead",
+          section="client", scope="client",
+          choices=["Beside each toolhead", "Under each toolhead", "Off"],
+          help="Each loaded toolhead's grams left, in the colour of its ring: cyan, amber under "
+               "100 g, red when empty. Under each toolhead keeps the strip as wide as with no "
+               "weights, a line taller. Off: the ring's colour alone, and the grams are in each "
+               "toolhead's tooltip. It changes as soon as you pick it, with no Save needed."),
     # Readability (Derek, 2026-10-21). text_size.js keys on these exact
     # strings, and so does the script in dashboard.html's <head> that applies
     # the size before the first paint.

@@ -2042,14 +2042,11 @@ body {
     white-space: nowrap;
 }
 /* The cancelled-print review count, "🛑 N" (cancel_review.js): never split
-   between its dot and its number, on the info line and in the collapsed
-   strip (where it keeps the 6 px it always had from the printer's chips). */
+   between its dot and its number, on the info line and in the folded strip
+   (in its own slot there, between the state and the heads, Group 50.1). */
 .fcc-cr-chip {
     white-space: nowrap;
     flex: none;
-}
-.fcc-ps-printer-group .fcc-cr-chip {
-    margin-left: 6px;
 }
 /* L56 — printer-state badge, first on the printer's info line, under its
    name (2026-10-24; it followed the name on the name's line before). Colors
@@ -2294,73 +2291,157 @@ body {
 }
 .fcc-ps-widget:not(.fcc-ps-loading) .fcc-ps-skeleton { display: none; }
 
-/* Compact mini-chip: swatch + ID + weight inline, click-to-quickswap. */
-.fcc-ps-mini {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    padding: 2px 8px;
-    background: rgba(0,0,0,0.4);
-    border: 1px solid rgba(255,255,255,0.15);
-    border-radius: 12px;
-    font-size: 0.85rem;
-    cursor: pointer;
-    transition: border-color 0.15s, background 0.15s;
-    line-height: 1.4;
-    white-space: nowrap;
+/* The folded strip (Group 50.1; Derek, 2026-10-19 / 25 / 29: "I love every
+   thing about this new redesign"). Each printer reads as it does open: its
+   name (or its ID, a setting), its state, its 🛑 count, then its heads; no
+   divider between printers, the names and the spacing part them. A head is its
+   label (the toolhead-label setting) on its spool's colour, ringed in the
+   colour of the tiles' weight bars (cyan, amber under 100 g, red at 0 g); a
+   hollow grey ring holds no spool, a dashed one has no box slot feeding it, a
+   dotted amber one couldn't be read. Its grams sit beside the ring (the
+   default) or under it, in the ring's colour, or only in its tooltip (the
+   weights setting). The strip takes what the title leaves (at least 20rem);
+   when a printer's heads don't fit there it goes under the title
+   (.fcc-ps-strip-under, inv_printer_status.js _fitStrip), two printers that
+   don't fit on one line take a line each from the same edge, and a printer
+   whose heads don't fit even then scrolls them sideways (Derek's fallback).
+   Sizes are rem, so the strip keeps its proportions at every Text size. */
+.fcc-ps-header-chips {
+    margin-left: 1rem;
 }
-.fcc-ps-mini:hover {
-    border-color: rgba(13,202,240,0.7);
-    background: rgba(13,202,240,0.1);
-}
-.fcc-ps-mini-swatch {
-    display: inline-block;
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    border: 1px solid rgba(255,255,255,0.4);
-    flex-shrink: 0;
-}
-.fcc-ps-mini-swatch-empty {
-    background: repeating-linear-gradient(
-        45deg,
-        rgba(255,255,255,0.18),
-        rgba(255,255,255,0.18) 2px,
-        rgba(0,0,0,0.4) 2px,
-        rgba(0,0,0,0.4) 4px
-    );
-}
-.fcc-ps-mini-id {
-    color: rgba(255,255,255,0.9);
-    font-weight: bold;
-    font-size: var(--fcc-fs-label);
-}
-.fcc-ps-mini-weight {
-    font-weight: bold;
-    font-size: 0.85rem;
-}
-.fcc-ps-mini-empty .fcc-ps-mini-weight { font-weight: normal; }
-/* Group each printer's chips together with a vertical divider between
-   groups so the user can see at a glance which chips belong to which
-   printer in the collapsed strip. A group wider than the window wraps its
-   own chips onto another line, its divider running down beside them
-   (review, 2026-10-23: the INDX's group ran off the right edge at 1024 px,
-   and at 1280 px at Extra Large, taking its last heads and its 🛑 count with
-   it; the strip is all a minimized widget shows). */
-.fcc-ps-printer-group {
-    display: flex;
+.fcc-ps-widget.collapsed .fcc-ps-header { align-items: flex-start; }
+.fcc-ps-widget.collapsed .fcc-ps-header-bar { min-height: 1.85rem; }
+.fcc-ps-widget.collapsed .fcc-ps-header-chips {
+    flex: 1 1 20rem;
+    min-width: 0;
     flex-wrap: wrap;
     align-items: center;
+    gap: 0.3rem 1.6rem;
+}
+.fcc-ps-widget.collapsed .fcc-ps-header-chips.fcc-ps-strip-under { flex-basis: 100%; }
+.fcc-ps-printer-group {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 0.4rem;
+    max-width: 100%;
+    min-width: 0;
+}
+.fcc-ps-strip-name {
+    color: #0dcaf0;
+    font-weight: 700;
+    font-size: var(--fcc-fs-small);
+    white-space: nowrap;
+    max-width: 12rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: none;
+}
+.fcc-ps-strip-state,
+.fcc-ps-strip-count { flex: none; }
+.fcc-ps-strip-state:empty,
+.fcc-ps-strip-count:empty { display: none; }
+.fcc-ps-strip-heads {
+    display: inline-flex;
+    align-items: center;
     gap: 0.25rem;
-    padding-left: 0.75rem;
-    margin-left: 0.5rem;
-    border-left: 2px solid rgba(255,255,255,0.45);
+    padding: 2px;
+    min-width: 0;
+    flex: 0 1 auto;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: thin;
 }
-.fcc-ps-printer-group:first-child {
-    padding-left: 0;
-    margin-left: 0;
-    border-left: none;
+/* A head: its ring and grams (the stack), then a doubled head's ⚠️N. */
+.fcc-ps-strip-head {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    flex: none;
+    cursor: pointer;
+    border-radius: 0.8rem;
 }
+.fcc-ps-strip-stack {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+}
+.fcc-ps-ring {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    min-width: 1.6rem;
+    height: 1.6rem;
+    border-radius: 0.8rem;
+    /* The fallback matters: an undefined var() in the shorthand would void the
+       whole border, style included. */
+    border: 3px solid var(--fcc-ring, rgba(255,255,255,0.5));
+    /* The filament colour stops inside the border, so a dashed ring's gaps
+       show the strip, not the colour. */
+    background-clip: padding-box;
+    font-size: var(--fcc-fs-label);
+    font-weight: 800;
+    line-height: 1;
+    color: #fff;
+    flex: none;
+    white-space: nowrap;
+}
+.fcc-ps-ring-pill { padding: 0 0.45rem; }
+.fcc-ps-ring-empty {
+    background: rgba(0,0,0,0.45);
+    border-width: 2px;
+    border-style: solid;
+    border-color: rgba(255,255,255,0.55);
+    color: rgba(255,255,255,0.88);
+}
+.fcc-ps-ring-unbound { border-style: dashed; }
+.fcc-ps-ring-unread { border-color: #ffd54a; border-style: dotted; }
+.fcc-ps-strip-head:hover .fcc-ps-ring { box-shadow: 0 0 0 2px rgba(13,202,240,0.7); }
+/* Group 50.3: a head reached by Tab (a tile, or one in the strip) shows the focus.
+   In the strip it hugs the head: the heads' box clips 2px past them (it scrolls). */
+.fcc-ps-th:focus-visible {
+    outline: 2px solid #0dcaf0;
+    outline-offset: 2px;
+}
+.fcc-ps-strip-head:focus-visible {
+    outline: 2px solid #0dcaf0;
+    outline-offset: 0;
+}
+.fcc-ps-strip-head .fcc-ps-mini-weight {
+    font-size: var(--fcc-fs-small);
+    font-weight: 700;
+    line-height: 1;
+    white-space: nowrap;
+}
+.fcc-ps-strip-unread { color: #ffd54a; }
+.fcc-ps-strip-w-unknown { color: rgba(255,255,255,0.75); }
+.fcc-ps-strip-w-none { visibility: hidden; }
+.fcc-ps-mini-doubled {
+    color: #ffd54a;
+    background: #2b2200;
+    border-radius: 4px;
+    padding: 0 4px;
+    font-size: var(--fcc-fs-label);
+    font-weight: 700;
+    white-space: nowrap;
+}
+/* Weights beside each head: a little more room between heads, so each
+   number reads as its own head's. */
+.fcc-ps-strip-wt-beside .fcc-ps-strip-heads { gap: 0.55rem; }
+/* Weights under each head: the ring on top, its grams under it; the strip is
+   as wide as with no weights and a line taller, its names and states on the
+   rings' line. */
+.fcc-ps-strip-wt-under .fcc-ps-strip-stack {
+    flex-direction: column;
+    gap: 0.1rem;
+    min-width: 2.4rem;
+}
+.fcc-ps-strip-wt-under .fcc-ps-strip-heads { gap: 0.15rem; align-items: flex-start; }
+.fcc-ps-strip-wt-under .fcc-ps-printer-group { align-items: flex-start; }
+.fcc-ps-strip-wt-under .fcc-ps-strip-name,
+.fcc-ps-strip-wt-under .fcc-ps-strip-state,
+.fcc-ps-strip-wt-under .fcc-ps-strip-count { margin-top: 0.15rem; }
 
 /* L184 — Activity Log corner pill. Anchored top-of-deck on the right so it
    clears the cmd-deck. The search FAB is now DRAG-TO-PARK (buglist 21.1,

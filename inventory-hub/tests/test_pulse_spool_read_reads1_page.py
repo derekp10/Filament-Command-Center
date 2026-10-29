@@ -78,7 +78,7 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><style>{css}</style><
             <span class="fcc-ps-title">🖨️ Printer Status</span>
             <span class="fcc-ps-hint">click to collapse</span>
         </div>
-        <div class="fcc-ps-header-chips d-flex flex-wrap align-items-center gap-1 ms-3"></div>
+        <div class="fcc-ps-header-chips"></div>
     </div>
     <div class="fcc-ps-body">
         <div class="fcc-ps-skeleton text-secondary fw-bold" style="padding: 0.5rem 0;">Loading printer status…</div>
@@ -174,7 +174,8 @@ WIDGET_JS = r"""() => {
     const squash = (s) => String(s || '').replace(/\s+/g, ' ').trim();
     const tiles = [...w.querySelectorAll('.fcc-ps-body .fcc-ps-th')].map((t) => ({
         head: t.dataset.toolhead, spool: t.dataset.spoolId || null, text: squash(t.textContent) }));
-    const minis = [...w.querySelectorAll('.fcc-ps-header-chips .fcc-ps-mini')].map((m) => squash(m.textContent));
+    const minis = [...w.querySelectorAll('.fcc-ps-header-chips .fcc-ps-mini')].map((m) => ({
+        text: squash(m.textContent), title: m.title }));
     const badge = squash((w.querySelector('.fcc-ps-body .fcc-ps-state') || {}).textContent);
     const n = document.getElementById('printer-status-read-notice');
     const notice = n ? { shown: getComputedStyle(n).display !== 'none', text: n.textContent, title: n.title,
@@ -266,7 +267,11 @@ def test_a_failed_first_tick_draws_no_head_empty(pg):
     assert [t["head"] for t in w["tiles"]] == ["ZR-1", "ZR-2"], w
     for t in w["tiles"]:
         assert "not read" in t["text"] and "empty" not in t["text"] and t["spool"] is None, t
-    assert len(w["minis"]) == 2 and all("not read" in m and "empty" not in m for m in w["minis"]), w
+    # Folded (Group 50.1), an unread head is its label and a "?", and its
+    # tooltip says Spoolman didn't answer; never "empty".
+    assert len(w["minis"]) == 2 and all(
+        m["text"].endswith("?") and "didn't answer" in m["title"] and "empty" not in m["text"] + m["title"]
+        for m in w["minis"]), w
     assert _shown(w["notice"]) and "Spoolman didn't answer" in w["notice"]["text"], w
     assert "last answer" not in w["notice"]["text"], w
     # The next good tick draws the real tiles.
@@ -460,7 +465,7 @@ def test_the_widget_notice_and_unread_tiles_are_readable(pg, assert_contrast):
     pg.evaluate("document.getElementById('printer-status-widget').classList.add('collapsed')")
     assert pg.locator("#printer-status-read-notice").is_visible()
     assert not pg.locator("#printer-status-widget .fcc-ps-body").is_visible()
-    assert pg.locator("#printer-status-widget .fcc-ps-mini-unread").first.is_visible()
+    assert pg.locator("#printer-status-widget .fcc-ps-ring-unread").first.is_visible()
     assert_contrast(widget)
 
 
