@@ -1508,10 +1508,13 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
     if (!text) return;
     const upper = text.toUpperCase();
     const locKey = upper.trim();
+    // The Activity Log draws its lines as HTML: a scan's text in one is escaped
+    // (Group 61 review).
+    const escLog = window.escHtml || ((s) => s);
     if (_isLocRepeat(locKey, capturedAt)) {
         showToast(`ℹ️ Ignored a second read of ${String(text).trim()}`, 'info', 3500);
         if (window.logClientEvent) window.logClientEvent(
-            `ℹ️ Scan "${String(text).trim()}" ignored: the same label was read twice within ${LOC_REPEAT_MS / 1000} s`, 'INFO');
+            `ℹ️ Scan "${escLog(String(text).trim())}" ignored: the same label was read twice within ${LOC_REPEAT_MS / 1000} s`, 'INFO');
         return;
     }
     // Answered at once unless it reaches the server below (every early return
@@ -1566,7 +1569,7 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
         showToast(why, 'warning', 7000);
         if (openQuestion.flash) openQuestion.flash(`${why}. (Ignored: ${text})`);
         if (window.logClientEvent) window.logClientEvent(
-            `⚠️ Scan "${text}" ignored: "${openQuestion.title}" is still open`, 'WARNING');
+            `⚠️ Scan "${escLog(text)}" ignored: "${escLog(openQuestion.title)}" is still open`, 'WARNING');
         unread();
         return;
     }
@@ -1594,7 +1597,7 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
         showToast(live ? 'That confirm QR was read together with another scan — ignored: scan it on its own'
             : 'That confirm QR belongs to a dialog that has closed — ignored', 'warning', 7000);
         if (window.logClientEvent) window.logClientEvent(live
-            ? `⚠️ Confirm QR read together with another scan ("${text}") — ignored`
+            ? `⚠️ Confirm QR read together with another scan ("${escLog(text)}") — ignored`
             : '⚠️ Stale confirm QR scanned (its dialog had closed) — ignored', 'WARNING');
         return;
     }

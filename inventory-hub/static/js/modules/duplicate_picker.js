@@ -8,8 +8,11 @@ console.log("🚀 Loaded Module: DUPLICATE PICKER");
 //            color_hex, display}, ...] }
 // opts.onSelect(spoolId, source): called when the user picks a spool with
 //                 "✓ Use selected" (source 'keyboard': a pick from the list is
-//                 no label scan), or scans a listed spool's own label (the
-//                 scan's own source).
+//                 no label scan), or scans a listed spool's own label (an
+//                 ID:<n> label keeps the scan's own source; an SPL:<n> or a
+//                 bare number goes as 'keyboard', since only a scanned ID:
+//                 label verifies a spool's printed label, as outside the
+//                 picker).
 // opts.onAbort(): called when the user cancels OR queues a label (no further
 //                 scan flow — the re-labeling route disambiguates from here).
 //
@@ -25,6 +28,9 @@ console.log("🚀 Loaded Module: DUPLICATE PICKER");
 // other scan is refused with a note and does nothing. Before, its Enter
 // pressed "Use selected" (the first spool joined the buffer) and the scan's
 // own text stayed in the scan buffer, glued to the next scan ("ID:57ID:58").
+// A person who types in the list to jump to a spool ("#135": every option
+// starts with its number) and presses Enter picks the spool the list jumped
+// to (Group 61 review: it was refused as a scan of "#135").
 window.showLegacySpoolPicker = (payload, opts = {}) => {
     const { legacy_id, candidates = [] } = payload || {};
     const onSelect = typeof opts.onSelect === 'function' ? opts.onSelect : () => { };
@@ -67,7 +73,7 @@ window.showLegacySpoolPicker = (payload, opts = {}) => {
         <div style="background:#1e1e1e; color:#fff; border:2px solid #ffaa00; border-radius:8px; padding:20px 24px; max-width:37.5rem; width:92%;">
             <div style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">⚠️ Multiple spools share Legacy ID ${escapeHtml(legacy_id || '?')}</div>
             <div style="color:#ffc; margin-bottom:14px;">
-                ${candidates.length} spools are attached to the filament with this legacy ID. Pick the right one to continue, queue a fresh <code>ID:</code>-format label for the chosen spool, or add a new spool on this filament if none on the list is the right one.
+                ${candidates.length} spools are attached to the filament with this legacy ID. Pick the right one to continue, queue a fresh <code style="color:#ffaa55;">ID:</code>-format label for the chosen spool, or add a new spool on this filament if none on the list is the right one.
             </div>
             <div id="fcc-legacy-picker-flash" role="alert" style="color:#ffc107; min-height:1.5em; margin-bottom:8px;"></div>
             <select id="fcc-legacy-picker-sel" class="form-select form-select-sm bg-dark text-white border-secondary mb-3" size="${Math.min(6, candidates.length)}" style="width:100%;">${optsHtml}</select>
@@ -168,10 +174,17 @@ window.showLegacySpoolPicker = (payload, opts = {}) => {
         // focused button; the scan accumulator still reads it.
         if (e.key === ' ' && window.scanIsArriving && window.scanIsArriving()) { e.preventDefault(); return; }
         if (e.key === 'Enter') {
+            const active = document.activeElement;
             // A scan's Enter is the scan's: the accumulator sends it to
             // processScan, which brings it back here as an answer or refuses it.
-            if (window.enterIsAScan ? window.enterIsAScan() : (window.isScanInFlight && window.isScanInFlight())) return;
-            const active = document.activeElement;
+            // Not keys a person typed in the list to jump to the spool it now
+            // shows (the start of its text, "#135").
+            const st = (typeof state !== 'undefined') ? state : window.state;
+            const typed = (st && typeof st.scanBuffer === 'string' ? st.scanBuffer : '').trim().toLowerCase();
+            const shown = active && active.id === 'fcc-legacy-picker-sel' && active.options[active.selectedIndex];
+            const jumped = !!(typed && shown && !(window.isScannerBurst && window.isScannerBurst())
+                && String(shown.textContent || '').trim().toLowerCase().startsWith(typed));
+            if (!jumped && (window.enterIsAScan ? window.enterIsAScan() : (window.isScanInFlight && window.isScanInFlight()))) return;
             e.preventDefault(); e.stopPropagation();
             // A person's Enter: a key they left in the scan buffer goes with it.
             if (window.clearScanBuffer) window.clearScanBuffer();
@@ -185,6 +198,15 @@ window.showLegacySpoolPicker = (payload, opts = {}) => {
     // The open question processScan brings every scan to while the picker is
     // up (the move questions' registry, inv_cmd.js).
     const flash = (msg) => { const f = ov.querySelector('#fcc-legacy-picker-flash'); if (f) f.textContent = msg; };
+    const refuse = (text, why) => {
+        flash(why);
+        if (window.showToast) window.showToast(why, 'warning', 7000);
+        // The Activity Log draws its lines as HTML: the scan's text is escaped.
+        const esc = window.escHtml || ((s) => s);
+        if (window.logClientEvent) window.logClientEvent(`⚠️ Scan "${esc(String(text).trim())}" ignored: ${esc(why)}`, 'WARNING');
+        return 'refused';
+    };
+    const legacyUp = String(legacy_id == null ? '' : legacy_id).trim().toUpperCase();
     question = {
         title: `Multiple spools share Legacy ID ${legacy_id || '?'}`,
         element: ov,
@@ -193,19 +215,24 @@ window.showLegacySpoolPicker = (payload, opts = {}) => {
         flash,
         route: (text, source) => {
             const t = String(text == null ? '' : text).trim().toUpperCase();
-            const m = /(?:ID|SPL):(\d+)$/.exec(t) || /^(\d+)$/.exec(t);
-            if (!m) return false;
-            const id = parseInt(m[1], 10);
-            if (!candidates.some(c => c.id === id)) {
-                const why = `#${id} isn't one of the spools listed: pick one of them, print a new label, add a new spool, or Cancel`;
-                flash(why);
-                if (window.showToast) window.showToast(why, 'warning', 7000);
-                if (window.logClientEvent) window.logClientEvent(`⚠️ Scan "${String(text).trim()}" ignored: ${why}`, 'WARNING');
-                return 'refused';
+            const m = /(?:ID|SPL):(\d+)$/.exec(t) || /^#?(\d+)$/.exec(t);
+            const id = m ? parseInt(m[1], 10) : null;
+            if (m && candidates.some(c => c.id === id)) {
+                cleanup();
+                // Only a scanned ID: label verifies a spool's printed label (the
+                // server's rule, routes_scan.py): an SPL: label or a bare number
+                // goes out as no label scan, as it does outside the picker.
+                onSelect(id, /(?:^|[^A-Z])ID:\d+$/.test(t) ? (source || 'keyboard') : 'keyboard');
+                return true;
             }
-            cleanup();
-            onSelect(id, source || 'keyboard');
-            return true;
+            // The legacy label this question is about, read again (a scanner's
+            // double read): it is no spool number.
+            const leg = /(?:LEGACY|LEG|OLD):(.+)$/.exec(t);
+            if (legacyUp && ((leg && leg[1].trim() === legacyUp) || (!leg && t === legacyUp))) {
+                return refuse(text, `That is legacy label ${legacy_id}, which this question is about: pick one of the spools listed, print a new label, add a new spool, or Cancel`);
+            }
+            if (!m) return false;
+            return refuse(text, `#${id} isn't one of the spools listed: pick one of them, print a new label, add a new spool, or Cancel`);
         },
     };
     window._fccOpenMoveQuestions = (window._fccOpenMoveQuestions || []).concat([question]);

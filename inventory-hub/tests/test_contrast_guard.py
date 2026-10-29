@@ -666,3 +666,42 @@ def test_unmeasured_review_cards_are_readable(page: Page, base_url: str, assert_
                   "ended before FCC read its progress", "/usb/RACCOON~1.BGC", "Discard"):
         assert words in scored, (words, scored)
     page.keyboard.press("Escape")
+
+
+@pytest.mark.usefixtures("require_server")
+def test_scan_holding_pickers_notice_lines_are_readable(page: Page, base_url: str, assert_contrast):
+    """Group 61 review: the notice line of each picker that holds scans (the
+    legacy-ID duplicate picker's and the parent tree picker's), with the note a
+    refused scan is given. Opened from the page's own functions with made-up
+    spools and places; nothing is read or written."""
+    import conftest
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.showLegacySpoolPicker === 'function'"
+                           " && typeof _renderParentTreePicker === 'function'")
+    note = "#999 isn't one of the spools listed: pick one of them, print a new label, add a new spool, or Cancel"
+    page.evaluate("""(note) => {
+        const spool = (id) => ({ id, remaining_weight: 800, location: 'ZZ-CONTRAST-1', archived: false, filament_id: 7,
+            filament_name: 'Contrast Black', material: 'PLA', vendor_name: 'FCC Test', display: '#' + id });
+        window.showLegacySpoolPicker({ legacy_id: '999120', candidates: [spool(999134), spool(999135)] });
+        document.getElementById('fcc-legacy-picker-flash').textContent = note;
+    }""", note)
+    picker = page.locator("#fcc-legacy-picker-overlay")
+    expect(picker).to_be_visible(timeout=5000)
+    assert_contrast(picker)
+    assert any(o.get("id") == "fcc-legacy-picker-flash"
+               for o in conftest.contrast_offenders(picker, min_ratio=100)), "the picker's notice line was never scored"
+    page.click("#fcc-legacy-picker-cancel")
+    page.evaluate("""() => {
+        const rows = [{ LocationID: 'ZZ-CONTRAST-ROOM', Name: 'Contrast Room', Type: 'Room' },
+                      { LocationID: 'ZZ-CONTRAST-BOX', Name: 'Contrast Box', Type: 'Dryer Box' }];
+        _renderParentTreePicker(rows, 'ZZ-CONTRAST-BOX', document.getElementById('edit-parent'),
+            document.getElementById('locModal'));
+    }""")
+    tree = page.locator("#fcc-parent-tree-picker")
+    expect(tree).to_be_visible(timeout=5000)
+    page.evaluate("""() => { document.querySelector('#fcc-parent-tree-picker .fcc-tp-flash').textContent =
+        "ZZ-CONTRAST-BOX isn't one of the parents offered here (this location itself, one inside it, or not a place): pick a parent, or Cancel"; }""")
+    assert_contrast(tree)
+    assert any("fcc-tp-flash" in (o.get("className") or "")
+               for o in conftest.contrast_offenders(tree, min_ratio=100)), "the tree picker's notice line was never scored"
+    page.click("#fcc-parent-tree-picker [data-tp='cancel']")

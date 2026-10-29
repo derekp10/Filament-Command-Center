@@ -2483,22 +2483,40 @@ window.saveLocation = () => {
 // Enter then submitted it as a scan of "t".
 // Deliberately NOT a global "ignore SELECT" in the scanner: a focused dropdown
 // would then swallow a blind barcode scan. So a scan on a dropdown or a button
-// is left to the accumulator: a scanner-speed burst (window.isScannerBurst), a
-// slower scanner's buffer that looks like a scan payload (a ':' or '/' that
-// no typeahead produces), or digits alone (Group 61: a slower scanner's
-// bare-number label, "57", saved the form or pressed a focused Cancel; no type
-// starts with a digit, so typeahead never makes them, and a person's "dr"
-// then Enter still saves). A scan typed INTO a text field never reaches the
+// is left to the accumulator. On a dropdown (Group 61 and its review): a
+// scanner-speed burst (window.isScannerBurst), a slower scanner's buffer that
+// looks like a scan payload (a ':' or '/' that no typeahead produces), or keys
+// that match the start of none of its options: a person types to jump to an
+// option ("dr" for Dryer Box, "3" for a custom type "3D Printer Shelf" or a
+// parent "2nd Floor"), and a slower scanner's bare-number label ("57") or old
+// label with no prefix ("PM-DB-1") saved the form. The scan's letters had moved
+// the dropdown by typeahead too ("CMD:NEXT" moved the Parent to the next place
+// starting with C), so it is put back, and a toast says so. On a button, a
+// scan's Enter is window.enterIsAScan's, and a Space inside a scan presses no
+// button or dropdown (a LocationID may hold one: "LOC:GARAGE SHELF" clicked a
+// focused Cancel). A scan typed INTO a text field never reaches the
 // accumulator at all; the shared field-scan capture installed below hands it to
-// the scan path and restores the field before this handler could save it: a
-// burst, or a whole FCC label at any speed (Group 61, Derek 2026-10-29: "if a
-// scan came in, it should go to a buffer or load a card, but not input data";
-// a slower scanner's "LOC:LR-MDB-1" was saved as the location's name).
+// the scan path and restores the field before this handler could save it: any
+// burst (no name, id or count is typed 3 keys and an Enter inside 150 ms), a
+// whole FCC label at any speed, or digits faster than a person types (Group 61,
+// Derek 2026-10-29: "if a scan came in, it should go to a buffer or load a
+// card, but not input data"; a slower scanner's "LOC:LR-MDB-1" was saved as
+// the location's name).
 // Enter on a button activates that button. The accumulator cancels every Enter
 // outside INPUT/TEXTAREA, which also killed native button activation, and it
 // would have submitted leftover typeahead letters as a scan.
 // The parent tree picker mounts on document.body, so its keys never pass
 // through #locModal; it neutralises its own Enter.
+// Do these keys, typed on a dropdown, jump to one of its options? The start of
+// an option's text, or one letter again and again (which steps through the
+// options starting with it), as the browser's typeahead reads them.
+const _locTypeaheadMatches = (sel, typed) => {
+    const t = String(typed || '').trim().toLowerCase();
+    if (!t) return false;
+    const texts = Array.from(sel.options || []).map(o => String(o.textContent || '').trim().toLowerCase());
+    if (texts.some(x => x.startsWith(t))) return true;
+    return /^(.)\1+$/.test(t) && texts.some(x => x.startsWith(t[0]));
+};
 const _installLocEditorEnterToSave = () => {
     const modalEl = document.getElementById('locModal');
     if (!modalEl || modalEl._fccEnterToSave) return;
@@ -2506,23 +2524,56 @@ const _installLocEditorEnterToSave = () => {
     if (window.installFieldScanCapture) {
         window.installFieldScanCapture({
             match: (el) => el.tagName === 'INPUT' && !!(el.closest && el.closest('#locModal')),
-            isScanPayload: (txt) => !!(window.looksLikeScanPayload && window.looksLikeScanPayload(txt)),
+            isScanPayload: () => true,
             labels: true,
         });
     }
+    const scanBuf = () => {
+        const st = (typeof state !== 'undefined') ? state : window.state;
+        return st && typeof st.scanBuffer === 'string' ? st.scanBuffer : '';
+    };
+    // What a dropdown held before the keys now arriving on it (the scan
+    // accumulator adds each key after this handler sees it, so an empty
+    // buffer means this key starts them).
+    let selBefore = null;   // { el, value }
+    const putSelectBack = (sel) => {
+        const was = selBefore;
+        selBefore = null;
+        if (!was || was.el !== sel || sel.value === was.value) return;
+        sel.value = was.value;
+        sel.dispatchEvent(new Event('change', { bubbles: true }));   // the breadcrumb, a suggested id
+        const opt = sel.options[sel.selectedIndex];
+        const what = sel.id === 'edit-parent' ? 'Parent' : (sel.id === 'edit-type' ? 'Type' : 'The dropdown');
+        if (window.showToast) window.showToast(
+            `${what} is back to "${opt ? opt.textContent.trim() : was.value}": the scan's letters had changed it`, 'info', 4000);
+    };
     modalEl.addEventListener('keydown', (e) => {
-        if (e.key !== 'Enter' || e.ctrlKey || e.altKey || e.metaKey || e.isComposing) return;
+        if (e.ctrlKey || e.altKey || e.metaKey || e.isComposing) return;
+        const tag = ((e.target && e.target.tagName) || '').toUpperCase();
+        if (e.key === ' ' && (tag === 'BUTTON' || tag === 'SELECT') && window.scanIsArriving && window.scanIsArriving()) {
+            e.preventDefault();   // the scan accumulator still reads it
+            return;
+        }
+        if (tag === 'SELECT' && e.key.length === 1) {
+            if (!selBefore || selBefore.el !== e.target || !scanBuf()) selBefore = { el: e.target, value: e.target.value };
+            return;
+        }
+        if (e.key !== 'Enter') return;
         // A held key repeats keydown, and the modal stays focusable for its
         // ~150 ms fade after a successful save: neither may save again.
         if (e.repeat || !modalEl.classList.contains('show')) return;
-        const tag = ((e.target && e.target.tagName) || '').toUpperCase();
         if (tag !== 'INPUT' && tag !== 'SELECT' && tag !== 'BUTTON') return;
-        if (tag !== 'INPUT') {
-            const st = (typeof state !== 'undefined') ? state : window.state;
-            if (window.isScannerBurst && window.isScannerBurst()) return;
-            if (st && st.scanBuffer && window.looksLikeScanPayload && window.looksLikeScanPayload(st.scanBuffer)) return;
-            if (st && st.scanBuffer && /^\d+$/.test(st.scanBuffer.trim())) return;
+        if (tag === 'SELECT') {
+            const typed = scanBuf().trim();
+            if ((window.isScannerBurst && window.isScannerBurst())
+                || (typed && ((window.looksLikeScanPayload && window.looksLikeScanPayload(typed))
+                    || !_locTypeaheadMatches(e.target, typed)))) {
+                putSelectBack(e.target);
+                return;
+            }
         }
+        selBefore = null;
+        if (tag === 'BUTTON' && window.enterIsAScan && window.enterIsAScan()) return;
         e.preventDefault();
         // The accumulator is a bubble-phase listener on `document`, so stopping
         // here keeps it from seeing this Enter; the typeahead letters it already
@@ -2850,7 +2901,9 @@ const _renderParentTreePicker = (rows, selfIdUpper, sel, locModalEl) => {
                 const why = `${id} isn't one of the parents offered here (this location itself, one inside it, or not a place): pick a parent, or Cancel`;
                 flash(why);
                 if (window.showToast) window.showToast(why, 'warning', 7000);
-                if (window.logClientEvent) window.logClientEvent(`⚠️ Scan "${String(text).trim()}" ignored: ${why}`, 'WARNING');
+                // The Activity Log draws its lines as HTML: the scan's text is escaped.
+                const esc = window.escHtml || ((s) => s);
+                if (window.logClientEvent) window.logClientEvent(`⚠️ Scan "${esc(String(text).trim())}" ignored: ${esc(why)}`, 'WARNING');
                 return 'refused';
             }
             pick(node.dataset.tpVal);

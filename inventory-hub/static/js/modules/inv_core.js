@@ -744,32 +744,104 @@ window.askMoveConfirm = (answer, ctx = {}) => {
 //   match(el)          -> is this the field we care about?
 //   isScanPayload(txt) -> is this a scan rather than typing?
 //   onScan(txt, el)    -> what to do with it (default: window.processScan)
-//   labels             -> (Group 61) a whole FCC label at the END of the field
-//                         (window.fccLabelAtEnd), typed at any speed, is a scan
-//                         too: its Enter sends it to the scan path, and the
-//                         field keeps what it held before it. For fields no
-//                         label belongs in (the location editor's: a slower
-//                         scanner's "LOC:LR-MDB-1" was saved as the name).
+//   labels             -> (Group 61) for fields no scan belongs in (the location
+//                         editor's: a slower scanner's "LOC:LR-MDB-1" was saved
+//                         as the name). Two more scans, judged on the KEYS typed
+//                         since the box last changed any other way (a click that
+//                         moved the caret, a value set by code, a paste, a
+//                         person's own key such as Backspace or an arrow, or a
+//                         pause of 2 s, the accumulator's reset), never on the
+//                         box's text (Group 61 review: read from the box, a
+//                         label typed with the caret inside the name took the
+//                         name's tail with it, "ID:51" for "ID:5", and a stored
+//                         name that looked like a label went to the scan path on
+//                         a plain Enter):
+//                           - a whole FCC label (window.fccIsLabel) at the end of
+//                             those keys, at any speed, starting at the first of
+//                             them or after a pause (keys a person typed just
+//                             before it stay theirs; "Box ID:3" typed on with no
+//                             pause stays a name);
+//                           - digits alone faster than a person types (3 keys or
+//                             more, each within 40 ms of the last, an Enter as
+//                             fast counted: an old digits-only label "57"), the
+//                             weight capture's rule.
+//                         Its Enter sends it to the scan path, and the box gets
+//                         back its text and caret from before the scan's first
+//                         key. A label is looked for before the burst test, so
+//                         a burst scanner's stall inside one sends it whole.
 const installFieldScanCapture = ({ match, isScanPayload, onScan, labels = false }) => {
     let buf = '';
     let startedAt = 0;
     let lastAt = 0;
     let preScanValue = '';   // what the user had typed BEFORE the burst began
-    // `labels`: what the field held before the current run of keys (a pause
-    // of 2 s, the accumulator's reset, starts a new run), for a label typed
-    // over selected text: the location editor selects the Name box's text as
-    // it opens, so a scan typed there replaced the whole name.
-    let runEl = null;
-    let runAt = 0;
-    let runStart = '';
+    // `labels`: the keys typed into the box since it last changed any other
+    // way, each with the box's text and selection before it.
+    const RESET_MS = 2000;          // the accumulator's: keys further apart are two inputs
+    const BURST_MS = 150;           // scanner speed, the accumulator's 'barcode' test
+    const DIGITS_BURST_MS = 40;     // digits closer together than any person types them
+    const PERSON_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab', 'Home', 'End',
+        'PageUp', 'PageDown', 'Backspace', 'Delete', 'Escape'];
+    let run = null;                 // { el, keys: [{ k, t, before, s0, s1 }] }
+    // A number box (Max Spools) or a read-only one has no caret to follow, and
+    // a label's letters never reach it: its keys are judged as they were typed.
+    const caretOf = (el) => {
+        if (el.readOnly) return [null, null];
+        try { return [el.selectionStart, el.selectionEnd]; } catch (_) { return [null, null]; }
+    };
+    // Is the box as the run's last key left it?
+    const inStep = (el, now) => {
+        if (!run || run.el !== el || !run.keys.length) return false;
+        const last = run.keys[run.keys.length - 1];
+        if (now - last.t > RESET_MS) return false;
+        if (last.s0 == null) return true;
+        const [s0, s1] = caretOf(el);
+        return (el.value || '') === last.before.slice(0, last.s0) + last.k + last.before.slice(last.s1)
+            && s0 === last.s0 + 1 && s1 === s0;
+    };
+    // Where a label starts among the keys: the first key from which they read
+    // as one, when it is the run's first or comes after a pause (longer than
+    // the label's own keys, twice over, and than a burst's 150 ms).
+    const labelFrom = (keys) => {
+        const text = keys.map((x) => x.k).join('');
+        for (let k = 0; k < keys.length; k++) {
+            if (!window.fccIsLabel || !window.fccIsLabel(text.slice(k))) continue;
+            if (k > 0) {
+                let pace = 0;
+                for (let j = k + 1; j < keys.length; j++) pace = Math.max(pace, keys[j].t - keys[j - 1].t);
+                if (keys[k].t - keys[k - 1].t <= Math.max(BURST_MS, 2 * pace)) continue;
+            }
+            return k;
+        }
+        return -1;
+    };
+    // Where digits alone typed faster than a person types start: the last run
+    // of keys at scanner speed is digits only, and 3 of them or more (an Enter
+    // as fast counted) came each within 40 ms of the last.
+    const digitsFrom = (keys, now) => {
+        let i = keys.length - 1;
+        while (i > 0 && keys[i].t - keys[i - 1].t < BURST_MS) i--;
+        if (!/^\d+$/.test(keys.slice(i).map((x) => x.k).join(''))) return -1;
+        let j = keys.length - 1;
+        while (j > i && keys[j].t - keys[j - 1].t <= DIGITS_BURST_MS) j--;
+        const fast = keys.length - j + (now - keys[keys.length - 1].t <= DIGITS_BURST_MS ? 1 : 0);
+        return fast >= 3 ? j : -1;
+    };
+    const sendFrom = (e, el, keys, k, now) => {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        const first = keys[k];
+        el.value = first.before;
+        try { if (first.s0 != null) el.setSelectionRange(first.s0, first.s1); } catch (_) { /* no caret */ }
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        run = null;
+        const text = keys.slice(k).map((x) => x.k).join('');
+        if (onScan) onScan(text, el);
+        else if (window.processScan) window.processScan(text, now - first.t < BURST_MS ? 'barcode' : 'keyboard');
+    };
     document.addEventListener('keydown', (e) => {
         const el = e.target;
         if (!el || !match(el)) return;
         const now = Date.now();
-        if (labels && e.key !== 'Enter') {
-            if (el !== runEl || now - runAt > 2000) { runEl = el; runStart = el.value || ''; }
-            runAt = now;
-        }
 
         if (e.key === 'Enter') {
             const fast = buf.length >= 3 && startedAt && (now - startedAt) < 150;
@@ -777,21 +849,19 @@ const installFieldScanCapture = ({ match, isScanPayload, onScan, labels = false 
             const payload = buf;
             const restore = preScanValue;
             buf = ''; startedAt = 0; preScanValue = '';
-            if (!looksScanned) {
-                const hit = labels && window.fccLabelAtEnd ? window.fccLabelAtEnd(el.value || '') : null;
-                if (!hit) return;   // a real entry — let the field's own handler run
-                e.preventDefault();
-                e.stopImmediatePropagation();
-                // What it held before the label: the text in front of it, or,
-                // when the label is all there is (typed over selected text),
-                // what it held before that run of keys.
-                el.value = hit.before !== '' ? hit.before : (el === runEl ? runStart : '');
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                runEl = null;
-                if (onScan) onScan(hit.label, el);
-                else if (window.processScan) window.processScan(hit.label, 'keyboard');
-                return;
+            if (labels) {
+                const keys = inStep(el, now) ? run.keys : null;
+                run = null;
+                let k = keys ? labelFrom(keys) : -1;
+                // A burst: the run's last keys (its caret is put back too).
+                if (k < 0 && keys && looksScanned && keys.length >= payload.length
+                    && keys.slice(keys.length - payload.length).map((x) => x.k).join('') === payload) {
+                    k = keys.length - payload.length;
+                }
+                if (k < 0 && keys && !looksScanned) k = digitsFrom(keys, now);
+                if (k >= 0) { sendFrom(e, el, keys, k, now); return; }
             }
+            if (!looksScanned) return;   // a real entry — let the field's own handler run
             e.preventDefault();
             e.stopImmediatePropagation();
             // RESTORE what the user had typed, don't blank the field. The
@@ -804,6 +874,15 @@ const installFieldScanCapture = ({ match, isScanPayload, onScan, labels = false 
             return;
         }
 
+        if (labels) {
+            if (e.isComposing || e.ctrlKey || e.altKey || e.metaKey || PERSON_KEYS.includes(e.key)) {
+                run = null;
+            } else if (e.key.length === 1) {
+                if (!inStep(el, now)) run = { el, keys: [] };
+                const [s0, s1] = caretOf(el);
+                run.keys.push({ k: e.key, t: now, before: el.value || '', s0, s1 });
+            }
+        }
         if (e.key.length !== 1 || e.ctrlKey || e.altKey || e.metaKey) return;
         // A gap longer than the scanner threshold means a human — start over,
         // and re-snapshot what is in the field at the moment a burst begins.
@@ -1170,21 +1249,16 @@ window.lastScanLabel = (text) => {
 window.looksLikeScanPayload = (txt) =>
     /[:/]/.test(txt) || /^https?/i.test(txt);
 
-// The label at the END of a field's text (Group 61): a whole FCC label, from a
-// prefix the scan path reads (logic.resolve_scan; the weight capture keeps the
-// same list) to the end, or a web address; null when there is none. The prefix
-// starts the text or follows something that isn't a letter ("Grid:2" stays a
-// name; "Shelf 3LOC:A" is a name with a label typed after it), and something
-// other than a blank follows its ':' ("Shelf: top" and "LOC: here" stay
-// names). `before` is the text in front of it.
+// Is this text one whole FCC label (Group 61)? A prefix the scan path reads
+// (logic.resolve_scan; the weight capture keeps the same list) with something
+// other than a blank after its ':' ("Shelf: top" and "LOC: here" are names),
+// or a web address. A text box's keys are judged with it
+// (installFieldScanCapture's `labels`): where in them a label starts is the
+// capture's question, never this one's ("Grid:2" is no label: "ID" there is
+// inside a word).
 const LABEL_PREFIXES = ['LEGACY', 'SPOOL', 'LOC', 'LEG', 'OLD', 'SPL', 'FIL', 'CMD', 'ID'];
-const LABEL_AT_END = new RegExp('(?:^|[^A-Za-z])((?:' + LABEL_PREFIXES.join('|') + '):\\S.*|https?:\\/\\/\\S+)$', 'i');
-window.fccLabelAtEnd = (text) => {
-    const s = String(text == null ? '' : text);
-    const m = LABEL_AT_END.exec(s);
-    if (!m) return null;
-    return { label: m[1], before: s.slice(0, s.length - m[1].length) };
-};
+const WHOLE_LABEL = new RegExp('^(?:(?:' + LABEL_PREFIXES.join('|') + '):\\S.*|https?:\\/\\/\\S+)$', 'i');
+window.fccIsLabel = (text) => WHOLE_LABEL.test(String(text == null ? '' : text));
 
 // --- INITIALIZATION HELPERS ---
 const acquireLock = async () => {
