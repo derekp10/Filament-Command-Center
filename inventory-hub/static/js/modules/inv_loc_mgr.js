@@ -2483,11 +2483,17 @@ window.saveLocation = () => {
 // Enter then submitted it as a scan of "t".
 // Deliberately NOT a global "ignore SELECT" in the scanner: a focused dropdown
 // would then swallow a blind barcode scan. So a scan on a dropdown or a button
-// is left to the accumulator: a scanner-speed burst (window.isScannerBurst), or
-// a slower scanner's buffer that looks like a scan payload (a ':' or '/' that
-// no typeahead produces). A scan typed INTO a text field never reaches the
+// is left to the accumulator: a scanner-speed burst (window.isScannerBurst), a
+// slower scanner's buffer that looks like a scan payload (a ':' or '/' that
+// no typeahead produces), or digits alone (Group 61: a slower scanner's
+// bare-number label, "57", saved the form or pressed a focused Cancel; no type
+// starts with a digit, so typeahead never makes them, and a person's "dr"
+// then Enter still saves). A scan typed INTO a text field never reaches the
 // accumulator at all; the shared field-scan capture installed below hands it to
-// the scan path and restores the field before this handler could save it.
+// the scan path and restores the field before this handler could save it: a
+// burst, or a whole FCC label at any speed (Group 61, Derek 2026-10-29: "if a
+// scan came in, it should go to a buffer or load a card, but not input data";
+// a slower scanner's "LOC:LR-MDB-1" was saved as the location's name).
 // Enter on a button activates that button. The accumulator cancels every Enter
 // outside INPUT/TEXTAREA, which also killed native button activation, and it
 // would have submitted leftover typeahead letters as a scan.
@@ -2501,6 +2507,7 @@ const _installLocEditorEnterToSave = () => {
         window.installFieldScanCapture({
             match: (el) => el.tagName === 'INPUT' && !!(el.closest && el.closest('#locModal')),
             isScanPayload: (txt) => !!(window.looksLikeScanPayload && window.looksLikeScanPayload(txt)),
+            labels: true,
         });
     }
     modalEl.addEventListener('keydown', (e) => {
@@ -2514,6 +2521,7 @@ const _installLocEditorEnterToSave = () => {
             const st = (typeof state !== 'undefined') ? state : window.state;
             if (window.isScannerBurst && window.isScannerBurst()) return;
             if (st && st.scanBuffer && window.looksLikeScanPayload && window.looksLikeScanPayload(st.scanBuffer)) return;
+            if (st && st.scanBuffer && /^\d+$/.test(st.scanBuffer.trim())) return;
         }
         e.preventDefault();
         // The accumulator is a bubble-phase listener on `document`, so stopping
@@ -2732,6 +2740,7 @@ const _renderParentTreePicker = (rows, selfIdUpper, sel, locModalEl) => {
         <span class="fw-bold text-info">🌳 Pick a parent location</span>
         <button type="button" class="btn-close btn-close-white" data-tp="cancel" title="Cancel"></button>
       </div>
+      <div class="px-3 pt-2 fcc-tp-flash" role="alert" style="color:#ffc107; min-height:1.5em;"></div>
       <div class="card-body p-0" style="overflow:auto;">
         <div class="list-group list-group-flush">
           <button type="button" class="list-group-item list-group-item-action bg-dark text-light fcc-tp-node" data-tp-val="${escA(_LOC_PARENT_NONE)}">— Top level (no parent) —</button>
@@ -2747,6 +2756,20 @@ const _renderParentTreePicker = (rows, selfIdUpper, sel, locModalEl) => {
     panel.innerHTML = html;
 
     let handle;
+    // Group 61: a scan while the picker is open goes to the scan path, never to
+    // a node (its Enter picked the highlighted parent and the scan was thrown
+    // away). The picker holds scans as the slot picker does (processScan's open
+    // question): a location's own label picks it as the parent, CMD:CANCEL
+    // cancels, any other scan is refused with a note.
+    let question = null;
+    const unregister = () => {
+        if (!question) return;
+        const open = (window._fccOpenMoveQuestions || []).filter(q => q !== question);
+        window._fccOpenMoveQuestions = open;
+        window._fccOpenMoveQuestion = open.length ? open[open.length - 1] : null;
+        question = null;
+    };
+    const flash = (msg) => { const f = panel.querySelector('.fcc-tp-flash'); if (f) f.textContent = msg; };
     const nodes = () => Array.from(panel.querySelectorAll('.fcc-tp-node'));
     const setActive = (idx) => {
         const ns = nodes();
@@ -2767,20 +2790,27 @@ const _renderParentTreePicker = (rows, selfIdUpper, sel, locModalEl) => {
             sel.value = opt.value;
         }
         sel.dispatchEvent(new Event('change'));   // sync breadcrumb (bound in _populateParentSelect)
+        unregister();
         if (handle) handle.cleanup();
     };
 
     panel.addEventListener('click', (e) => {
-        if (e.target.closest('[data-tp="cancel"]')) { if (handle) handle.cleanup(); return; }
+        if (e.target.closest('[data-tp="cancel"]')) { unregister(); if (handle) handle.cleanup(); return; }
         const node = e.target.closest('.fcc-tp-node');
         if (node) pick(node.dataset.tpVal);
     });
     panel.addEventListener('keydown', (e) => {
         const ns = nodes();
         const cur = ns.findIndex(n => n.classList.contains('kb-active'));
+        // A Space inside a scan (a location id may hold one) presses no node;
+        // the scan accumulator still reads it.
+        if (e.key === ' ' && window.scanIsArriving && window.scanIsArriving()) { e.preventDefault(); return; }
         if (e.key === 'ArrowDown') { e.preventDefault(); setActive(cur + 1); }
         else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(cur - 1); }
         else if (e.key === 'Enter') {
+            // A scan's Enter is the scan's (Group 61): the accumulator sends it
+            // to processScan, which brings it to this picker's question below.
+            if (window.enterIsAScan && window.enterIsAScan()) return;
             // Same class as Group 46.2: this Enter reached the scan accumulator,
             // which submitted any letters typed in the picker as a scan
             // ("Unknown Code"). Picking a node consumes it.
@@ -2799,7 +2829,36 @@ const _renderParentTreePicker = (rows, selfIdUpper, sel, locModalEl) => {
         backdrop: true,
         backdropDismiss: true,
         occlude: ['#edit-parent', '#edit-type', '#edit-type-custom'],
+        onEscape: () => { unregister(); handle.cleanup(); },
     });
+    // (Closed any other way, its root leaves the page, and processScan drops a
+    // question whose dialog has gone.)
+    question = {
+        title: 'Pick a parent location',
+        element: handle.element,
+        hint: 'Answer the question on screen first: pick a parent (or scan its label), or Cancel',
+        cancel: () => { unregister(); handle.cleanup(); },
+        flash,
+        route: (text) => {
+            const last = window.lastScanLabel ? window.lastScanLabel(text) : String(text).trim().toUpperCase();
+            const m = /^LOC:(.+)$/.exec(last);
+            if (!m || /:SLOT:\d+$/.test(last)) return false;
+            const id = m[1].trim();
+            const node = nodes().find(n => n.dataset.tpVal !== _LOC_PARENT_NONE && n.dataset.tpVal !== _LOC_PARENT_AUTO
+                && _locUC(n.dataset.tpVal) === id);
+            if (!node) {
+                const why = `${id} isn't one of the parents offered here (this location itself, one inside it, or not a place): pick a parent, or Cancel`;
+                flash(why);
+                if (window.showToast) window.showToast(why, 'warning', 7000);
+                if (window.logClientEvent) window.logClientEvent(`⚠️ Scan "${String(text).trim()}" ignored: ${why}`, 'WARNING');
+                return 'refused';
+            }
+            pick(node.dataset.tpVal);
+            return true;
+        },
+    };
+    window._fccOpenMoveQuestions = (window._fccOpenMoveQuestions || []).concat([question]);
+    window._fccOpenMoveQuestion = question;
     // Pre-highlight the currently-selected parent (or the first node) without
     // forcing a concrete node onto an Auto/unselectable-parent row.
     setTimeout(() => {

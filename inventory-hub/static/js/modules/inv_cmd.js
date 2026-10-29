@@ -1560,7 +1560,7 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
         // A question whose answers are labels (Group 40.5's "Record it as coming
         // from…": a feed slot's label picks it) routes them itself; 'refused'
         // (a held slot, round 9) is no read of the label.
-        const answered = typeof openQuestion.route === 'function' ? openQuestion.route(text) : false;
+        const answered = typeof openQuestion.route === 'function' ? openQuestion.route(text, source) : false;
         if (answered) { if (answered === 'refused') unread(); else routed(); return; }
         const why = openQuestion.hint || 'Answer the question on screen first: Load it instead, Just store it, or Cancel';
         showToast(why, 'warning', 7000);
@@ -1970,11 +1970,17 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
                 // Item 3.6 — backend found multiple spools attached to this
                 // legacy id. Prompt the user to disambiguate. "Use selected"
                 // re-routes through processScan with explicit ID:NNN so the
-                // normal spool path runs (label-verify, buffer add, etc.).
+                // normal spool path runs (buffer add, etc.).
                 // "Print new label" is handled inside the picker module.
+                // Group 61: with the pick's own source. A pick from the list
+                // is no label scan ('keyboard'): sent as 'barcode', it marked
+                // the spool's label as printed and verified, and the spool
+                // left the label backlog, though the picker is there because
+                // that spool has no label of its own. A listed spool's own
+                // label scanned while it is open keeps the scan's source.
                 if (typeof window.showLegacySpoolPicker === 'function') {
                     window.showLegacySpoolPicker(res, {
-                        onSelect: (sid) => { processScan(`ID:${sid}`, 'barcode'); },
+                        onSelect: (sid, source) => { processScan(`ID:${sid}`, source || 'keyboard'); },
                         onAbort: () => { /* user cancelled or chose to re-print */ },
                     });
                 } else {

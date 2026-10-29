@@ -468,8 +468,20 @@ window.wizardRefreshAllSectionSummaries = () => {
             // lock blocks the redundant toggle.
             btn.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+                    // A scan's Enter, and a Space inside a scan, are the scan's
+                    // (Group 61): its Enter collapsed the section and the scan
+                    // stayed in the buffer, glued to the next one. The scan
+                    // accumulator reads them (its Enter takes the button's own
+                    // press away), and a Space inside a scan presses nothing.
+                    if (e.key === 'Enter' ? (window.enterIsAScan && window.enterIsAScan())
+                        : (window.scanIsArriving && window.scanIsArriving())) {
+                        if (e.key !== 'Enter') e.preventDefault();
+                        return;
+                    }
                     e.preventDefault();
                     e.stopPropagation();
+                    // A person's key: a key they left in the scan buffer goes with it.
+                    if (window.clearScanBuffer) window.clearScanBuffer();
                     const now = Date.now();
                     if (now - lastKbAt < 400) return;
                     lastKbAt = now;

@@ -57,7 +57,10 @@ def test_process_scan_routes_to_the_picker_before_any_command():
     # 9: a held feed slot).
     assert "const picker = window.routePickerScan ? window.routePickerScan(text) : false;" in body
     assert "if (picker) { if (picker === 'refused') unread(); else routed(); return; }" in body
-    assert "const answered = typeof openQuestion.route === 'function' ? openQuestion.route(text) : false;" in body
+    # PIN UPDATED DELIBERATELY (Group 61, 2026-10-29): the route gets the
+    # scan's source too, so the legacy-ID picker's pick of a scanned label keeps
+    # it (a pick from its list goes as 'keyboard', no label verify).
+    assert "const answered = typeof openQuestion.route === 'function' ? openQuestion.route(text, source) : false;" in body
     assert "if (answered) { if (answered === 'refused') unread(); else routed(); return; }" in body
 
 

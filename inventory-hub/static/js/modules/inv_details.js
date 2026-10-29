@@ -2766,10 +2766,24 @@ const _editfilShowEscapeConfirm = (bsModal) => {
         if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cleanup(); return; }
         const yesBtn = document.getElementById('editfil-esc-yes');
         const noBtn = document.getElementById('editfil-esc-no');
+        // Group 61: a scan never answers it. Its Enter is the scan's (with
+        // Close Anyway focused it closed the editor unsaved, and either way
+        // the scan stayed in the buffer): the scan goes to the scan path and
+        // the question stays for a person. A Space inside a scan presses
+        // nothing.
+        if (e.key === ' ' && window.scanIsArriving && window.scanIsArriving()) { e.preventDefault(); return; }
         if (e.key === 'Enter') {
+            if (window.enterIsAScan && window.enterIsAScan()) return;
             const active = document.activeElement;
-            if (active === yesBtn) { e.preventDefault(); e.stopPropagation(); cleanup(); bsModal.hide(); }
-            else if (active === noBtn) { e.preventDefault(); e.stopPropagation(); cleanup(); }
+            if (active === yesBtn) {
+                e.preventDefault(); e.stopPropagation();
+                if (window.clearScanBuffer) window.clearScanBuffer();
+                cleanup(); bsModal.hide();
+            } else if (active === noBtn) {
+                e.preventDefault(); e.stopPropagation();
+                if (window.clearScanBuffer) window.clearScanBuffer();
+                cleanup();
+            }
             return;
         }
         if (e.key === 'Tab') {

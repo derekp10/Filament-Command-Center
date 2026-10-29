@@ -744,15 +744,32 @@ window.askMoveConfirm = (answer, ctx = {}) => {
 //   match(el)          -> is this the field we care about?
 //   isScanPayload(txt) -> is this a scan rather than typing?
 //   onScan(txt, el)    -> what to do with it (default: window.processScan)
-const installFieldScanCapture = ({ match, isScanPayload, onScan }) => {
+//   labels             -> (Group 61) a whole FCC label at the END of the field
+//                         (window.fccLabelAtEnd), typed at any speed, is a scan
+//                         too: its Enter sends it to the scan path, and the
+//                         field keeps what it held before it. For fields no
+//                         label belongs in (the location editor's: a slower
+//                         scanner's "LOC:LR-MDB-1" was saved as the name).
+const installFieldScanCapture = ({ match, isScanPayload, onScan, labels = false }) => {
     let buf = '';
     let startedAt = 0;
     let lastAt = 0;
     let preScanValue = '';   // what the user had typed BEFORE the burst began
+    // `labels`: what the field held before the current run of keys (a pause
+    // of 2 s, the accumulator's reset, starts a new run), for a label typed
+    // over selected text: the location editor selects the Name box's text as
+    // it opens, so a scan typed there replaced the whole name.
+    let runEl = null;
+    let runAt = 0;
+    let runStart = '';
     document.addEventListener('keydown', (e) => {
         const el = e.target;
         if (!el || !match(el)) return;
         const now = Date.now();
+        if (labels && e.key !== 'Enter') {
+            if (el !== runEl || now - runAt > 2000) { runEl = el; runStart = el.value || ''; }
+            runAt = now;
+        }
 
         if (e.key === 'Enter') {
             const fast = buf.length >= 3 && startedAt && (now - startedAt) < 150;
@@ -760,7 +777,21 @@ const installFieldScanCapture = ({ match, isScanPayload, onScan }) => {
             const payload = buf;
             const restore = preScanValue;
             buf = ''; startedAt = 0; preScanValue = '';
-            if (!looksScanned) return;   // a real entry — let the field's own handler run
+            if (!looksScanned) {
+                const hit = labels && window.fccLabelAtEnd ? window.fccLabelAtEnd(el.value || '') : null;
+                if (!hit) return;   // a real entry — let the field's own handler run
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                // What it held before the label: the text in front of it, or,
+                // when the label is all there is (typed over selected text),
+                // what it held before that run of keys.
+                el.value = hit.before !== '' ? hit.before : (el === runEl ? runStart : '');
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                runEl = null;
+                if (onScan) onScan(hit.label, el);
+                else if (window.processScan) window.processScan(hit.label, 'keyboard');
+                return;
+            }
             e.preventDefault();
             e.stopImmediatePropagation();
             // RESTORE what the user had typed, don't blank the field. The
@@ -1138,6 +1169,22 @@ window.lastScanLabel = (text) => {
 // id/weight box looks like that, which is what makes the distinction safe.
 window.looksLikeScanPayload = (txt) =>
     /[:/]/.test(txt) || /^https?/i.test(txt);
+
+// The label at the END of a field's text (Group 61): a whole FCC label, from a
+// prefix the scan path reads (logic.resolve_scan; the weight capture keeps the
+// same list) to the end, or a web address; null when there is none. The prefix
+// starts the text or follows something that isn't a letter ("Grid:2" stays a
+// name; "Shelf 3LOC:A" is a name with a label typed after it), and something
+// other than a blank follows its ':' ("Shelf: top" and "LOC: here" stay
+// names). `before` is the text in front of it.
+const LABEL_PREFIXES = ['LEGACY', 'SPOOL', 'LOC', 'LEG', 'OLD', 'SPL', 'FIL', 'CMD', 'ID'];
+const LABEL_AT_END = new RegExp('(?:^|[^A-Za-z])((?:' + LABEL_PREFIXES.join('|') + '):\\S.*|https?:\\/\\/\\S+)$', 'i');
+window.fccLabelAtEnd = (text) => {
+    const s = String(text == null ? '' : text);
+    const m = LABEL_AT_END.exec(s);
+    if (!m) return null;
+    return { label: m[1], before: s.slice(0, s.length - m[1].length) };
+};
 
 // --- INITIALIZATION HELPERS ---
 const acquireLock = async () => {
