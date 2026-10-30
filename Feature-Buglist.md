@@ -120,32 +120,7 @@
   head in FCC before resuming; once the print ends, 🛑 Review should show a "spool changed mid-print" card with
   each spool's share (weighing both spools before and after makes it a scale check, optional). **Joined spool
   (SpoolJoin):** the item above. Either way, tell Claude what happened (or that the printer didn't pause).
-* **⏸️ PENDING DEREK — branch cleanup session: say "delete them on GitHub" (the rest is done, 2026-10-29).** Derek, 2026-10-29: *"If were done with them, and don't need them to address a pending item for me, then we can probably clean them up."* Two independent checks found all 35 branches below wholly on `dev` (every commit; the GitHub copies too), none in a worktree, stash or tag, and no pending item or design that needs one: your Bulk Moves and mid-print tests run on the released app, and new work branches from `dev`. **Deleted on this PC 2026-10-29** (a list of each name and its commit, to bring any back, is `review-samples/branches-deleted-2026-10-29.txt`). **The 26 copies on GitHub are still there:** Claude Code's auto mode stopped the push that deletes them, so it waits for you to say "delete them on GitHub" (or allow it). _The original list:_ 11 branches are fully merged into `dev` and could be
-  deleted (4 of them also on `origin`): `feature/bulk-move-panel-affordance`, `feature/bulk-moves-l298`,
-  `feature/bulk-moves-l298-p1`, `feature/group-34-location-tree-cluster`,
-  `feature/group-36-attribute-force-reset-data-loss`, `feature/group-38-hermeticity-residuals`,
-  `fix/active-print-chain-confirm`, `fix/locations-json-write-lock`,
-  `fix/scan-path-and-bindings-2026-08-03`, `fix/update-spool-request-timeout`,
-  `hotfix/indx-printer-setup`. Derek, 2026-10-08: *"I didn't know we had gotten that many loose ends
-  out there… one or two might be waiting on a few of the tests I need to do."* Wants its own pass so
-  each is checked rather than swept.
-  **Added 2026-10-19 (Group 40, merged into `dev` `8d0ff64`):** `feature/group-40-slot-picker`,
-  `feature/group-40-engine-403`, `feature/g40-6-return-picker`, `feature/g40-7-wizard-server`, `fix/g40-6-review`,
-  `fix/g40-7-review` (all on `origin`).
-  **Added 2026-10-20 (the 2026-10-19 bundle, merged into `dev` `2ec9f46`):**
-  `feature/group-51-move-archive-integrity`, `feature/groups-48-49-cards-restock`,
-  `feature/group-49-find-and-restock`, `feature/group-52-spoolman-read-load`, `fix/bundle-reads-1`,
-  `bundle/2026-10-19` (all on `origin`); and `fix/bundle-followups-2026-10-20` (merged `0bd0293`, on `origin`).
-  **Added 2026-10-21 (merged into `dev` `e7699c4`):** `fix/low-stock-out-list-2026-10-20`,
-  `feat/not-buying-again-2026-10-20`, `fix/extras-clear-spoolman-027-2026-10-21`, `bundle/2026-10-21` (all on
-  `origin`).
-  **Added 2026-10-25 (merged into `dev`, found by the refresh):** `feat/readability-2026-10-21` (merged `09b395a`,
-  on `origin`), `fix/backlog-label-filter` (merged `afdd509`, on `origin`), and three overnight-run branches missing
-  from this list: `feature/group-41-honest-bulk-results`, `feature/group-42-single-slot-box-lifecycle`,
-  `feature/group-45-sweep-hygiene` (local only).
-  **Added 2026-10-29 (merged into `dev`):** `feature/group-57-low-stock-at-a-glance` (`90ba651`) and
-  `feature/group-61-scanner-safe-dialogs` (`438ab3f`), both on `origin`.
-* **⏸️ PENDING DEREK — a sit-down on the box-to-toolhead system: has it grown bigger than it needs to be? (Derek, 2026-10-29; nothing here blocks a release.)**
+* **⏸️ PENDING DEREK — a sit-down on the box-to-toolhead system: has it grown bigger than it needs to be? (Derek, 2026-10-29; nothing waits for it, and nothing here blocks a release.)**
   In his words: *"maybe, the whole box to a toolhead system has become a bit too big and more complicated than it needs
   to be. I don't really want to gut all the work we've done on it, but its complexity definitely makes it more of a
   hassle for things… I feel there's some friction in the process and system here that may have just come from stuff
@@ -157,8 +132,14 @@
   One). He hasn't decided how he'll run either. PolyDryers fit *"to some extent"*, but he usually runs a PTFE tube from
   the box slot that feeds the head into the PolyDryer, so the XL has the same either/or: "which feeder is connected to
   this head right now" is a general question, not an INDX one.
-  **Until the sit-down (Claude's call):** nothing new is built on the box system; bug fixes that keep today's data safe
-  still go ahead. Held for it (a sweep of the buglist and the queued groups, 2026-10-29):
+  **Nothing waits for it (Derek, the same day):** *"don't let this change anything currently slated for the group set.
+  I'm ok with working on it, because the code is useful. I just wonder if it can't be done more efficiently, and some
+  of that might just be my issues with the UI in its current state… I may decide after sitting down (or later) that
+  retooling it might just be a bad idea, and the complexity is still warranted. I'm just feeling indecisive on it right
+  now. So continue to push things [in] the group set, and continue to touch those systems until I've made a more
+  definitive answer. (Which may just come after I've figured out how I want to handle the USS dryboxes and the
+  INBXX.)"* So box-system work is built as slated. What was queued on 2026-10-29, for the sit-down to look at (none of
+  it held):
   - Group 50.4, a head's "stored, not loaded" mark with "I loaded it";
   - Group 59.1 / 59.2, the slot picker's printer-mode layout and its Swap / Overwrite / Back panel;
   - Group 37.5, a "Spool Holder" type (storage on the printer), and 37.7, a Return chooser across two boxes feeding
@@ -170,8 +151,8 @@
   - the bound-slot scan reading the head twice (a speed fix inside auto-deploy);
   - the Location Manager redesign's slot grids (design step 3, milestone 6);
   - Group 42's PolyDryer hands-on checks (never filed here; at the sit-down, file the ones that survive).
-  Your hands-on checks of today's box features (S1–S7, C1–W2 and the box rows of the mid-print session) are optional
-  until then: running a few is good prep, since they show what feels heavy.
+  Running a few of your hands-on box checks before it (S1–S7, C1–W2 and the box rows of the mid-print session) is good
+  prep: they show what feels heavy.
   **Claude prepares, before it:** a one-page map of today's box system in plain words, with pictures (each part and
   what it does); how often you really use each part (prod's Activity Log, read-only, with Group 45.7's count of stale
   trails); and the friction already on record, e.g. a PolyDryer's one binding has two editors (its Feeds slot 1, and
@@ -180,7 +161,7 @@
   Related: the Group 37 / 44 design sit-down (what identifies a location and a printer). One small call for you then:
   delete the old `feeder_map` boot import first (dead on dev and prod; if the bindings change shape, it would write the
   old one back).
-* **⏸️ PENDING DEREK — lay out and label the INDX spool holders (and the 8-spool box; maybe the XL's holders).** _(⏸️ Waits for the box sit-down above (2026-10-29): it may change how holders are set up.)_
+* **⏸️ PENDING DEREK — lay out and label the INDX spool holders (and the 8-spool box; maybe the XL's holders).** _(The box sit-down above may come after this one: Derek, 2026-10-29, expects his answer on the box system once he has decided how to run the USS dryboxes and the INBXX.)_
   _(Derek, 2026-10-19, answering the refresh's holder question.)_ Setting them up in FCC as a box with one slot per
   holder (no code) is *"possibly the way to go"*, but it is his grunt work and design first:
   - **4 holders on each side** of the INDX, each holding nothing, a spool, or a **USS Prusa drybox** (it works like a

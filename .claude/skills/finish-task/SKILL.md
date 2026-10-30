@@ -20,7 +20,7 @@ disable-model-invocation: true
 **Step 3: The Merge & Sweep**
 * Execute `git checkout dev` to safely return to the main development branch.
 * Execute `git merge <name-of-the-current-feature-branch>` to combine the new code.
-* Execute `git branch -d <name-of-the-current-feature-branch>` to delete the temporary branch.
+* Execute `git push origin dev`, then delete the branch here and on GitHub, where it was pushed as a backup, with its name written out in each command: `git branch -d <name-of-the-current-feature-branch>` and `git push origin --delete <name-of-the-current-feature-branch>` (CLAUDE.md, "Branches: delete at merge").
 
 ** Step 4: Finishing up
 * Sync changes so the user doesn't have to.
