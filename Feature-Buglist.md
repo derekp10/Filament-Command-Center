@@ -229,6 +229,8 @@
 > Ordinary backlog items, not hands-on work; most name the group that owns them. This heading was added on
 > 2026-10-19 so they stop reading as part of ⏸️ PENDING DEREK above, which had no closing heading.
 
+* **🟡 Card text from Spoolman goes into several cards as HTML, unescaped (found 2026-10-30, building Group 50.4).** `SpoolCardBuilder` (ui_builder.js) puts a spool's colour name or display (`info.line3`) straight into the markup in its other modes (the buffer and search cards, the Location Manager's list and grid, around lines 253, 279 and 543), so a filament named with a `<` would be read as HTML. Group 50.4 escaped the two places it touched (the Printer Status tile's chip and the Quick-Swap confirm's spool label). Fix: escape with `window.escHtml` where text is interpolated, check the cards still read the same, and pin it with a name holding `<b>`. **Standalone.**
+
 * **🖨️ Printer Status follow-ups (Derek, 2026-10-24).** _(→ **Group 50**, 2026-10-25: (a) **50.5**, (b) **50.6** with the ⌨️ Enter item, (c) **50.7**, (e) folded into **50.1**, sample first; (d) parked)_ Done before the merge: the printers step in under the title,
   each one's name comes first with its state and 🛑 count on an info line under it, the tiles lost their colour dot,
   and a printer named with an apostrophe gets its count. Left: (a) **a richer hover card for a tile** (a small spool

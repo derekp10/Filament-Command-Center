@@ -229,7 +229,9 @@
                 // repaints the new material line.
                 // 42.4: a second loaded spool appearing or leaving repaints the chip.
                 // reads-1: "? not read" and "empty" are different tiles.
-                return th.id + (th.unbound ? '!u' : '') + (th.unread ? '!r' : '') + ((th.loaded_count || 0) > 1 ? `!n${th.loaded_count}` : '') + ':' + (it ? `${it.id}:${it.color || ''}:${(it.details && it.details.material) || ''}:${Math.round(it.remaining_weight || 0)}/${Math.round(it.initial_weight || 0)}` : 'empty');
+                // 50.4: a spool stored for the head, or loaded from its slot, repaints it.
+                const waiting = (th.waiting || []).map(w => `${w.id}@${w.box}:${w.slot}`).join('/');
+                return th.id + (th.unbound ? '!u' : '') + (th.unread ? '!r' : '') + ((th.loaded_count || 0) > 1 ? `!n${th.loaded_count}` : '') + (waiting ? `!w${waiting}` : '') + ':' + (it ? `${it.id}:${it.color || ''}:${(it.details && it.details.material) || ''}:${Math.round(it.remaining_weight || 0)}/${Math.round(it.initial_weight || 0)}` : 'empty');
             }).join(','));
         });
         return parts.join('||');
@@ -258,6 +260,46 @@
         ? `<div class="fcc-ps-th-chip fcc-ps-th-doubled" style="color:#ffd54a; background:#2b2200; border-radius:4px; padding:0 4px;" title="${_doubledText(th).replace(/"/g, '&quot;')}">⚠️ ${th.loaded_count} spools</div>`
         : '');
     window.fccDoubledHeadText = _doubledText;
+
+    // Group 50.4 ("stored, not loaded"; Derek, 2026-10-14 and 30): a spool
+    // stored in a box slot that feeds this head but not loaded on it, as a
+    // mid-print "Just store it" leaves one (the heartbeat's `waiting`, every
+    // such spool, a slot prepped on purpose included). No notice at a print's
+    // end and no "Load now": the head shows it quietly until the spool is
+    // loaded by any path or leaves the slot. The words, for a tooltip or a
+    // screen reader: the full head id whatever the label setting.
+    const _waitingText = (th) => {
+        const w = th.waiting || [];
+        if (!w.length) return '';
+        const one = (x) => `${x.display || `#${x.id}`} in ${x.box} slot ${x.slot}`;
+        const list = w.length === 1 ? one(w[0])
+            : `${w.slice(0, -1).map(one).join(', ')} and ${one(w[w.length - 1])}`;
+        return `Stored for ${th.id}, not loaded: ${list}.`;
+    };
+    // The open tile's quiet line. One spool: "📦 #93 waits in slot 2" and
+    // "I loaded it", which runs the Quick-Swap tap's own load of that slot onto
+    // the head (window.quickSwapTap: its confirm, a printing head's question,
+    // Group 51.5's check that the slot still holds that spool, Undo), never a
+    // write of its own: FCC can't see what is on the head. Several: their
+    // count, and the tile opens the head, whose Quick-Swap slots load each.
+    const _waitingBlock = (th) => {
+        const w = th.waiting || [];
+        if (!w.length) return '';
+        const tip = _waitingText(th) + (w.length === 1
+            ? ` "I loaded it" records it on ${th.id}, as a Quick-Swap does, asking first.`
+            : ` Open ${th.id} to load one from its Quick-Swap slots.`);
+        if (w.length > 1) {
+            return `<div class="fcc-ps-th-waiting" title="${_esc(tip)}">`
+                + `<div class="fcc-ps-th-waiting-text text-truncate">📦 ${w.length} spools wait</div></div>`;
+        }
+        const x = w[0];
+        return `<div class="fcc-ps-th-waiting" title="${_esc(tip)}">`
+            + `<div class="fcc-ps-th-waiting-text text-truncate"><span class="fcc-ps-th-waiting-id">📦 #${_esc(x.id)}</span>`
+            + `<span class="fcc-ps-th-waiting-where"> waits in slot ${_esc(x.slot)}</span></div>`
+            + `<button type="button" class="fcc-ps-loaded-it" data-toolhead="${_esc(th.id)}" data-box="${_esc(x.box)}"`
+            + ` data-slot="${_esc(x.slot)}" data-spool-id="${_esc(x.id)}" data-spool-label="${_esc(x.display || `#${x.id}`)}">`
+            + '✓ I loaded it</button></div>';
+    };
 
     const _renderToolheadBlock = (th) => {
         const it = th.item;
@@ -316,6 +358,7 @@
                         <div class="fcc-ps-th-id text-truncate">${_thLabel(th)}</div>
                     </div>
                     <div class="fcc-ps-th-chip" style="color: rgba(255,255,255,0.65);">empty</div>
+                    ${_waitingBlock(th)}
                 </div>
             `;
         }
@@ -342,6 +385,11 @@
         const chipHtml = window.SpoolCardBuilder
             ? window.SpoolCardBuilder.buildCard(it, 'printer-status', {})
             : `<div class="fcc-ps-th-chip text-light">${weight}g</div>`;
+        // Group 50.7 (Derek, 2026-10-30): on a window too short for the open
+        // widget its material line under the name gives way, and the material
+        // shows here in the colour band, beside the head's label (hidden
+        // otherwise; global.css, .fcc-ps-tight).
+        const material = (it.details && it.details.material) || '';
         // A loaded toolhead that ALSO has no dryer-box slot bound keeps the
         // dashed accent + a 🔗 hint (preserves L140 discoverability) WHILE
         // showing its real spool. The 🔗 chip sits on the dark tile area
@@ -362,10 +410,12 @@
                 </div>
                 <div class="fcc-ps-th-body" style="background:${bodyBg};">
                     <div class="fcc-ps-th-id text-truncate">${_thLabel(th)}</div>
+                    ${material ? `<div class="fcc-ps-th-mat text-truncate text-pop">${_esc(material)}</div>` : ''}
                 </div>
                 ${chipHtml}
                 ${unboundHint}
                 ${_doubledChip(th)}
+                ${_waitingBlock(th)}
             </div>
         `;
     };
@@ -390,6 +440,12 @@
         const unb = th.unbound ? ' fcc-ps-ring-unbound' : '';
         const feed = th.unbound ? ' No box slot feeds it.' : '';
         const open = ` Click to open ${th.id}.`;
+        // Group 50.4 (Derek's pick, 2026-10-30): an amber dot on the ring when
+        // a spool is stored for the head and not loaded; the words are in its
+        // tooltip and its accessible name (a screen reader), and a tap, a click
+        // or Enter opens the head, whose Quick-Swap slots show and load it.
+        const waitTip = (th.waiting || []).length ? ` ${_waitingText(th)}` : '';
+        const waitCls = waitTip ? ' fcc-ps-ring-waiting' : '';
         let ring;
         let tip;
         let below = '';
@@ -398,8 +454,8 @@
             ring = `<span class="${shape} fcc-ps-ring-empty fcc-ps-ring-unread">${label}</span>`;
             below = '<span class="fcc-ps-mini-weight fcc-ps-strip-unread">?</span>';
         } else if (!it) {
-            tip = `${th.id}: empty.${feed}${open}`;
-            ring = `<span class="${shape} fcc-ps-ring-empty${unb}">${label}</span>`;
+            tip = `${th.id}: empty.${feed}${waitTip}${open}`;
+            ring = `<span class="${shape} fcc-ps-ring-empty${unb}${waitCls}">${label}</span>`;
             // Under: an invisible line keeps the ring in line with its neighbours'.
             if (weightMode === 'Under each toolhead') {
                 below = '<span class="fcc-ps-mini-weight fcc-ps-strip-w-none" aria-hidden="true">0g</span>';
@@ -414,8 +470,8 @@
             const fill = typeof window.getFilamentStyle === 'function'
                 ? window.getFilamentStyle(it.color, it.color_direction || 'longitudinal').frame
                 : '#444';
-            tip = `${th.id}: ${it.display || `#${it.id}`}, ${known ? `${Math.round(weight)} g left` : 'weight unknown'}.${feed}${open}`;
-            ring = `<span class="${shape}${unb} text-pop" style="${pal ? `--fcc-ring:${pal}; ` : ''}background:${fill};">${label}</span>`;
+            tip = `${th.id}: ${it.display || `#${it.id}`}, ${known ? `${Math.round(weight)} g left` : 'weight unknown'}.${feed}${waitTip}${open}`;
+            ring = `<span class="${shape}${unb}${waitCls} text-pop" style="${pal ? `--fcc-ring:${pal}; ` : ''}background:${fill};">${label}</span>`;
             if (weightMode !== 'Off') {
                 below = known
                     ? `<span class="fcc-ps-mini-weight" style="color:${pal};">${Math.round(weight)}g</span>`
@@ -425,7 +481,7 @@
         const doubled = (th.loaded_count || 0) > 1
             ? `<span class="fcc-ps-mini-doubled" title="${_esc(_doubledText(th))}">⚠️${th.loaded_count}</span>`
             : '';
-        return `<span class="fcc-ps-mini fcc-ps-strip-head" data-toolhead="${_esc(th.id)}" tabindex="0" role="button" title="${_esc(tip)}">`
+        return `<span class="fcc-ps-mini fcc-ps-strip-head" data-toolhead="${_esc(th.id)}" tabindex="0" role="button" title="${_esc(tip)}" aria-label="${_esc(tip)}">`
             + `<span class="fcc-ps-strip-stack">${ring}${below}</span>${doubled}</span>`;
     };
 
@@ -651,6 +707,32 @@
     // a line of tiles wider than its area is laid out again with one tile
     // fewer per line, so a rounding the sums don't see (a gap at another
     // scale, a margin) can't leave it wrong either.
+    // Group 50.7 (Derek, 2026-10-30, option (b) of the short-window samples):
+    // on a window too short for the open widget (it would scroll inside
+    // itself; it may take 45 % of the window, global.css), each printer's
+    // state and 🛑 count go beside its name, one line for two, and each tile's
+    // material moves from its own line up into its colour band (.fcc-ps-tight),
+    // so every head shows whole and the Buffer Zone and the Activity Log keep
+    // their room. Measured, never estimated: the widget is drawn without the
+    // step first, and takes it only when that would scroll, so a tall window
+    // never does. After every layout of the rows (_balanceRows) and when the
+    // window's height alone changes.
+    const _fitTight = () => {
+        const widget = document.getElementById('printer-status-widget');
+        const body = widget && widget.querySelector('.fcc-ps-body');
+        if (!body || !widget.classList || widget.classList.contains('collapsed')) return;
+        widget.classList.remove('fcc-ps-tight');
+        if (body.scrollHeight > body.clientHeight + 1) widget.classList.add('fcc-ps-tight');
+    };
+    window.fitPrinterStatusTight = _fitTight;
+    let _tightFrame = 0;
+    if (typeof window.addEventListener === 'function') {
+        window.addEventListener('resize', () => {
+            if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(_tightFrame);
+            _tightFrame = requestAnimationFrame(_fitTight);
+        });
+    }
+
     const _balanceRows = () => {
         const widget = document.getElementById('printer-status-widget');
         const body = widget && widget.querySelector('.fcc-ps-body');
@@ -717,6 +799,7 @@
                 lay(r);
             });
         }
+        _fitTight();
     };
     window.balancePrinterStatusRows = _balanceRows;
 
@@ -899,6 +982,15 @@
         if (widget._fccPsClicksWired) return;
         widget._fccPsClicksWired = true;
         widget.addEventListener('click', (e) => {
+            // Group 50.4: "I loaded it" runs the Quick-Swap tap's load of its
+            // slot onto the head (its confirm and questions), and never also
+            // opens the head its tile stands for.
+            const loadedIt = e.target.closest('.fcc-ps-loaded-it');
+            if (loadedIt && widget.contains(loadedIt)) {
+                e.stopPropagation();
+                if (typeof window.quickSwapTap === 'function') window.quickSwapTap(loadedIt);
+                return;
+            }
             const el = e.target.closest('.fcc-ps-th, .fcc-ps-mini');
             if (!el || !widget.contains(el)) return;
             e.stopPropagation();

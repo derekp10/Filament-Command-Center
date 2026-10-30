@@ -154,6 +154,12 @@ MODULES = HUB / "static" / "js" / "modules"
 GLOBAL_CSS = HUB / "static" / "css" / "global.css"
 SCRIPTS_HTML = HUB / "templates" / "components" / "scripts.html"
 
+# A window tall enough that the open widget never needs its short-window step
+# (Group 50.7: the state beside the name, the material in the colour band),
+# whatever the width and Text size here: these tests pin the layout it has when
+# it fits. The step has its own: tests/test_printer_status_waiting_tight_50.py.
+TALL = 6000
+
 # The Bootstrap rules the widget's markup leans on, so the layout here is the
 # page's (box-sizing, and the utility classes on the arrows and the chip).
 BOOTSTRAP_STANDIN = """
@@ -658,7 +664,7 @@ PHONES = {
 @pytest.mark.parametrize("width", list(PHONES))
 def test_a_phone_too_narrow_for_two_under_the_name_starts_them_at_the_row_s_edge(widget, width):
     page = widget
-    page.set_viewport_size({"width": width, "height": 900})
+    page.set_viewport_size({"width": width, "height": TALL})
     _feed(page)
     got = _layout(page)
     indx, xl, edge = PHONES[width]
@@ -708,7 +714,7 @@ def test_the_name_then_the_info_line_with_the_dot_and_its_count_together(widget,
     effect on the red notification dot"). 12 reviews for the INDX at its
     widest (PRINTING) on a phone at Extra Large is the fullest info line."""
     page = widget
-    page.set_viewport_size({"width": width, "height": 1300})
+    page.set_viewport_size({"width": width, "height": TALL})
     _size(page, size)
     fleet = {INDX: _printer("ZE", 8, "PRINTING", loaded=(0, 3)), XL: _printer("ZX", 5, loaded=(1, 2))}
     _feed(page, fleet)
@@ -751,7 +757,7 @@ def test_the_names_the_states_the_counts_and_the_tiles_line_up_down_the_page(wid
     state and its reviews, in one column. A printer whose state isn't known
     yet keeps the empty slot."""
     page = widget
-    page.set_viewport_size({"width": width, "height": 1300})
+    page.set_viewport_size({"width": width, "height": TALL})
     _size(page, size)
     _feed(page, ALIGN)
     _reviews(page, ALIGN_REVIEWS)
@@ -906,7 +912,7 @@ def test_a_printer_between_two_others_has_the_same_name_line(widget, width, size
     above, of the info line beside them and of every tile, on a phone whose
     tiles start at the row's edge too (390 px at Standard, 430 px at Large)."""
     page = widget
-    page.set_viewport_size({"width": width, "height": 1300})
+    page.set_viewport_size({"width": width, "height": TALL})
     _size(page, size)
     _feed(page, THREE)
     rows = page.evaluate(ARROWS_JS)
@@ -1008,7 +1014,7 @@ def test_a_60_character_name_neither_overlaps_nor_shifts_the_tiles(widget, width
     and the info line, its badge and its count, and every tile sit exactly
     where they sit under a short name."""
     page = widget
-    page.set_viewport_size({"width": width, "height": 1300})
+    page.set_viewport_size({"width": width, "height": TALL})
     _size(page, size)
     tiles_js = """() => { const row = document.querySelector('#printer-status-widget .fcc-ps-row');
         const r0 = row.getBoundingClientRect();
@@ -1154,6 +1160,8 @@ def test_at_a_110_percent_display_scale_it_counts_what_really_fits(scaled_chromi
         _build(page)
         cdp = context.new_cdp_session(page)
         wid = cdp.send("Browser.getWindowForTarget")["windowId"]
+        # These five printers scroll inside the widget here, short-window step or not
+        # (Group 50.7): the trap was found with the widget's scrollbar there.
         cdp.send("Browser.setWindowBounds", {"windowId": wid, "bounds": {"width": window, "height": 1300}})
         page.wait_for_function("(w) => Math.abs(innerWidth - w) <= 2", arg=window, timeout=5000)
         _feed(page, TRAP_FLEET)
@@ -1221,7 +1229,7 @@ def test_a_repaint_a_reorder_and_collapsing_keep_the_rows_even(widget):
     # Collapsed, the window and the size change; opened again, it measures again.
     page.evaluate("() => window.togglePrinterStatusWidget()")
     assert page.evaluate("() => document.getElementById('printer-status-widget').classList.contains('collapsed')")
-    page.set_viewport_size({"width": 1024, "height": 900})
+    page.set_viewport_size({"width": 1024, "height": TALL})
     _size(page, "Extra Large")
     page.evaluate("() => window.togglePrinterStatusWidget()")
     _settled(page, {INDX: "4+4", XL: "3+2"})

@@ -324,13 +324,17 @@ const SpoolCardBuilder = {
             // details modal. Material is already in the pulse payload as
             // item.details.material (no backend change).
             const material = (item.details && item.details.material) || '';
+            // Escaped (2026-10-30, with Group 50.4): the name and the
+            // material are Spoolman's free text, and this returns HTML.
+            const escText = window.escHtml || ((s) => String(s == null ? '' : s)
+                .replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])));
             const matLine = material
-                ? `<div class="fcc-ps-chip-mat text-truncate">${material}</div>`
+                ? `<div class="fcc-ps-chip-mat text-truncate">${escText(material)}</div>`
                 : '';
             return `
                 <div class="fcc-ps-chip" style="font-size:0.85rem; line-height:1.2;">
                     <div class="d-flex align-items-center gap-2">
-                        <span class="text-light fw-bold text-truncate">${compactName}</span>
+                        <span class="text-light fw-bold text-truncate">${escText(compactName)}</span>
                         <span class="ms-auto fw-bold" style="color:${weightColor};">${weightStr}</span>
                     </div>
                     ${matLine}

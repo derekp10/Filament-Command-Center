@@ -1192,8 +1192,12 @@
         showConfirmOverlay({
             ...opts,
             title: `Load ${opts.box} slot ${opts.slot} into ${opts.toolhead}?`,
+            // Escaped (Group 50.4): a spool's name is free text, and the
+            // label is plain text wherever it comes from (the card's
+            // data-spool-label, the tile's innerText, Printer Status's
+            // "I loaded it").
             body: (spoolLabel
-                    ? `<div class="text-warning fw-bold mb-2">Spool: ${spoolLabel}</div>`
+                    ? `<div class="text-warning fw-bold mb-2">Spool: ${_escapeHtml(spoolLabel)}</div>`
                     : '')
                 + 'This moves that spool onto <b>' + opts.toolhead + '</b>. '
                 + 'Any spool currently on the toolhead goes back to <em>its own</em> recorded source box — '

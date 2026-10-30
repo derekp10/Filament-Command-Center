@@ -2157,6 +2157,143 @@ body {
     grid-template-columns: repeat(var(--fcc-ps-cols, 1), max-content);
     justify-content: start;
 }
+/* Group 50.7 (Derek, 2026-10-30, option (b) of the short-window samples): a
+   window too short for the open widget (it would scroll inside itself) puts
+   each printer's state and 🛑 count beside its name, one line for two, and
+   moves each tile's material from its own line up into its colour band, beside
+   the head's label, so every head shows whole and the Buffer Zone and the
+   Activity Log keep their room. A tall window never changes (inv_printer_status.js
+   _fitTight measures it). Four columns: the arrows, the name (it gives way
+   first, ending in "…"), the info line (as wide as its slots, never cut), and
+   an empty flexible one: the tiles span from the name's edge to the row's end,
+   as under the name (the whole row at the edge, as before), and a span that
+   crosses a flexible column gives its width to that column only, never to the
+   name's or the info's (with three columns the tiles' width went to the info
+   line's and the name shrank to a few px). */
+.fcc-ps-widget.fcc-ps-tight .fcc-ps-row {
+    grid-template-columns: max-content minmax(0, max-content) max-content minmax(0, 1fr);
+}
+.fcc-ps-widget.fcc-ps-tight .fcc-ps-info {
+    grid-column: 3;
+    grid-row: 1;
+    margin-top: 0;
+}
+.fcc-ps-widget.fcc-ps-tight .fcc-ps-toolheads {
+    grid-column: 2 / -1;
+    grid-row: 2;
+}
+.fcc-ps-widget.fcc-ps-tight .fcc-ps-row.fcc-ps-edge > .fcc-ps-toolheads {
+    grid-column: 1 / -1;
+}
+.fcc-ps-widget.fcc-ps-tight .fcc-ps-chip-mat {
+    display: none;
+}
+.fcc-ps-widget.fcc-ps-tight .fcc-ps-th-body {
+    min-height: 1.5rem;
+    padding: 2px 6px;
+    margin-bottom: 2px;
+}
+/* A little less air between printers and above their tiles (the gap between
+   tiles stays: it saved 3 px and moved where a line of tiles breaks), and a spool
+   waiting for the head (50.4) on one line, its number beside "I loaded it"
+   (the slot is in its tooltip), so a waiting spool doesn't push the second
+   printer's tiles out of sight on the laptop at the printer, where it is loaded. */
+.fcc-ps-widget.fcc-ps-tight .fcc-ps-row {
+    padding-top: 0.3rem;
+    padding-bottom: 0.3rem;
+}
+.fcc-ps-widget.fcc-ps-tight .fcc-ps-row:first-child {
+    padding-top: 0;
+}
+.fcc-ps-widget.fcc-ps-tight .fcc-ps-row:last-child {
+    padding-bottom: 0;
+}
+.fcc-ps-widget.fcc-ps-tight .fcc-ps-toolheads {
+    margin-top: 0.25rem;
+}
+.fcc-ps-widget.fcc-ps-tight .fcc-ps-th {
+    padding-bottom: 3px;
+}
+.fcc-ps-widget.fcc-ps-tight .fcc-ps-th-waiting {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+}
+.fcc-ps-widget.fcc-ps-tight .fcc-ps-th-waiting-text {
+    min-width: 0;
+}
+.fcc-ps-widget.fcc-ps-tight .fcc-ps-th-waiting-where {
+    display: none;
+}
+/* The material in the colour band, shown only in the tight step: after the
+   label, at the band's right, in white with the card text halo (.text-pop on
+   the element) so it reads over a light filament too. It gives way before the
+   label does. */
+.fcc-ps-th-mat {
+    display: none;
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 4.5rem;
+    font-size: var(--fcc-fs-small);
+    font-weight: bold;
+    color: #fff;
+}
+.fcc-ps-widget.fcc-ps-tight .fcc-ps-th-mat {
+    display: block;
+}
+/* Group 50.4: a spool stored in a slot feeding the head, not loaded on it
+   ("stored, not loaded"; Derek, 2026-10-14 and 30): the tile's quiet line,
+   with "I loaded it" (the Quick-Swap tap's load, asking first). Amber on the
+   dark tile, as the tile's other hints. */
+.fcc-ps-th-waiting {
+    padding: 2px 6px 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
+}
+.fcc-ps-th-waiting-text {
+    max-width: 100%;
+    font-size: var(--fcc-fs-small);
+    color: #ffd27a;
+}
+.fcc-ps-loaded-it {
+    font-size: var(--fcc-fs-label);
+    font-weight: bold;
+    line-height: 1.3;
+    white-space: nowrap;
+    padding: 0 0.5rem;
+    background: #3a2f00;
+    color: #ffd27a;
+    border: 1px solid #ffb74d;
+    border-radius: 4px;
+    cursor: pointer;
+}
+.fcc-ps-loaded-it:hover {
+    background: #4a3b00;
+}
+.fcc-ps-loaded-it:focus-visible {
+    outline: 2px solid #0dcaf0;
+    outline-offset: 1px;
+}
+/* The folded strip's mark for it: an amber dot on the head's ring (Derek's
+   pick of three, 2026-10-30); the words are in the head's tooltip and its
+   accessible name. */
+.fcc-ps-ring-waiting {
+    position: relative;
+}
+.fcc-ps-ring-waiting::after {
+    content: "";
+    position: absolute;
+    top: -3px;
+    right: -3px;
+    width: 0.6rem;
+    height: 0.6rem;
+    border-radius: 50%;
+    background: #ffb74d;
+    border: 2px solid #1e1e1e;
+}
 .fcc-ps-th {
     display: flex;
     flex-direction: column;
