@@ -2004,7 +2004,9 @@ const getFilamentStyle = (colorStr, direction = 'longitudinal') => {
         }
     }
 
-    return { frame: frameGrad, inner: innerGrad, border: borderStyle, base: colors[0], isSolid: isSolid };
+    // `text`: the class for text drawn on these colours, the one look
+    // (global.css --fcc-text-halo; Group 50.8): a card puts it on its text.
+    return { frame: frameGrad, inner: innerGrad, border: borderStyle, base: colors[0], isSolid: isSolid, text: 'text-pop' };
 };
 window.getFilamentStyle = getFilamentStyle;
 

@@ -105,6 +105,7 @@ The color palette relies on heavy dark mode foundations to minimize screen glare
 - **Accents:** Neon Cyan (`#00d4ff`) represents primary navigation and active states. Neon Purple (`#d633ff`) and Warning Orange (`#ff9900`) are used for specific functional modes (e.g., Auditing, Dropping).
 - **Status Indicators:** Saturated Green (`#00ff00`) and Red (`#ff4444`) provide immediate visual confirmation of online/offline statuses and success/error logs.
 - **Text:** White (`#ffffff`) is the default, with subtle muting (`#aaaaaa`, `#eeeeee`) applied strictly to secondary information to preserve contrast ratios in the dark environment.
+- **Text on a filament's colour has one look (2026-10-30, Derek: "we should match the style if it's more readable and better"):** white in a dark halo (the `text-pop-heavy` shadow above), so a card reads on a white spool as on a black one. Its value is written once, `--fcc-text-halo` in `global.css`'s `:root`; `.text-pop` and every class for card text on a filament colour use it, and `getFilamentStyle` (inv_core.js), the helper every filament card takes its colours from, names the class (`text`), so a new card puts it on its text. Change the look there and every card follows. Text on a box of its own (a dark label, a badge) keeps that box. Pinned by `tests/test_text_on_filament_halo.py`.
 
 ## Typography
 The system employs a dual-font strategy: standard sans-serif for UI elements and monospaced fonts for technical data.

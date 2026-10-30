@@ -20,6 +20,14 @@
     --fcc-fs-label: 0.8rem;
     --fcc-fs-small: 0.85rem;
     --fcc-fs-row: 0.9rem;
+    /* The one look of text drawn on a filament's colour (a card's name, brand,
+       weight, slot; a toolhead's label on its colour band): white in a dark
+       halo, so it reads on a white spool as on a black one. Defined here only:
+       .text-pop and every class for card text on a filament colour use it, and
+       getFilamentStyle (inv_core.js) names the class for a new card's text
+       (Derek, 2026-10-30: "we should match the style if it's more readable and
+       better", in the shared code every filament card draws from). */
+    --fcc-text-halo: 2px 2px 4px rgba(0, 0, 0, 0.9), -1px -1px 2px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.8);
 }
 
 /* --- TEXT SIZE (per browser: Settings -> 🖥️ This Browser, text_size.js) ---
@@ -574,7 +582,7 @@ body {
     color: #fff;
     margin-right: 15px;
     border: 1px solid rgba(255, 255, 255, 0.2);
-    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8), -1px -1px 2px rgba(0, 0, 0, 0.5);
+    text-shadow: var(--fcc-text-halo);
 }
 
 .cham-text {
@@ -584,7 +592,7 @@ body {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8), -1px -1px 2px rgba(0, 0, 0, 0.5);
+    text-shadow: var(--fcc-text-halo);
 }
 
 /* Actions & Buttons */
@@ -755,7 +763,7 @@ body {
 }
 
 .text-pop {
-    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9), -1px -1px 2px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.8);
+    text-shadow: var(--fcc-text-halo);
 }
 
 .text-pop-light {
@@ -1211,14 +1219,14 @@ body {
     line-height: 1.2 !important;
     word-break: break-all !important;
     min-height: 1.8rem !important;
-    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8), -1px -1px 2px rgba(0, 0, 0, 0.5) !important;
+    text-shadow: var(--fcc-text-halo) !important;
 }
 
 .fcc-card-metric {
     font-weight: bold !important;
     color: #fff !important;
     font-size: 1.2rem !important;
-    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9), -1px -1px 2px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.8) !important;
+    text-shadow: var(--fcc-text-halo) !important;
 }
 
 .fcc-btn-buffer-del {
@@ -1243,6 +1251,8 @@ body {
 .fcc-subtext {
     font-size: 0.85rem;
     color: #aaa;
+    /* On a card's lightest edge: the one look's halo (50.8), its own dimmer grey. */
+    text-shadow: var(--fcc-text-halo);
 }
 
 /* Modals */
@@ -1564,7 +1574,7 @@ body {
     text-transform: uppercase;
     margin-bottom: 8px;
     color: #fff;
-    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9), -1px -1px 2px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.8);
+    text-shadow: var(--fcc-text-halo);
 }
 
 /* GOLD STANDARD: High Contrast Nav Text */
@@ -1573,7 +1583,7 @@ body {
     font-weight: 800;
     line-height: 1.2;
     color: #fff;
-    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9), -1px -1px 2px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.8);
+    text-shadow: var(--fcc-text-halo);
 }
 
 .nav-qr {
@@ -1640,7 +1650,7 @@ body {
     letter-spacing: 1px;
     font-size: 1.1rem;
     color: #fff;
-    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9), -1px -1px 2px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.8);
+    text-shadow: var(--fcc-text-halo);
     opacity: 1;
 }
 
@@ -1655,20 +1665,20 @@ body {
     font-size: 0.85rem;
     font-weight: 700;
     color: #fff;
-    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9), -1px -1px 2px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.8);
+    text-shadow: var(--fcc-text-halo);
 }
 .text-line-2 {
     font-size: 0.9rem;
     font-weight: 800;
     color: #fff;
-    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9), -1px -1px 2px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.8);
+    text-shadow: var(--fcc-text-halo);
     margin-top: 2px;
 }
 .text-line-3 {
     font-size: 1.1rem;
     font-weight: 900;
     color: #fff;
-    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9), -1px -1px 2px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.8);
+    text-shadow: var(--fcc-text-halo);
     margin: 4px 0;
     line-height: 1.1;
 }
@@ -1676,7 +1686,7 @@ body {
     font-size: 0.9rem;
     font-weight: 700;
     color: #fff;
-    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.9), -1px -1px 2px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.8);
+    text-shadow: var(--fcc-text-halo);
 }
 
 .btn-label-compact {
@@ -2359,14 +2369,17 @@ body {
     font-weight: 900;
     font-size: 0.85rem;
     color: #fff;
-    text-shadow: 1px 1px 2px rgba(0,0,0,0.7);
+    text-shadow: var(--fcc-text-halo);
 }
+/* The head's label on its spool's colour band: the one look of text on a
+   filament's colour (--fcc-text-halo), as the material beside it (50.8; it was
+   a softer shadow, faint on a white spool). */
 .fcc-ps-th-id {
     font-size: var(--fcc-fs-small);
-    color: rgba(255,255,255,0.85);
+    color: #fff;
     font-weight: bold;
     max-width: 6rem;
-    text-shadow: 1px 1px 2px rgba(0,0,0,0.7);
+    text-shadow: var(--fcc-text-halo);
 }
 .fcc-ps-th-chip {
     font-size: var(--fcc-fs-label);

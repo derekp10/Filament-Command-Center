@@ -1151,7 +1151,7 @@ const _buildDepositCard = (locId) => {
             </div>
             <div id="qr-deposit-trigger" class="bg-white p-2 rounded mb-2 mt-2" style="box-shadow: 0 4px 10px rgba(0,0,0,0.5);"></div>
 
-            <div class="text-pop-light js-deposit-spool" style="color: #fff; margin-top: 5px; font-weight: bold;"></div>
+            <div class="text-pop js-deposit-spool" style="color: #fff; margin-top: 5px; font-weight: bold;"></div>
         </div>`;
     _paintDepositCard(depositCard, state.heldSpools[0]);
     return depositCard;
