@@ -392,8 +392,8 @@ def test_a_click_opens_the_list_on_its_own(bar):
 def test_space_on_the_focused_button_opens_the_list_and_escape_gives_the_focus_back(bar):
     """Keyboard (standing order): Tab reaches it, Space opens it, Escape closes
     it and the focus is back on the button, not at the top of the page (Group 57
-    review). (Enter is the scan accumulator's on the real page: scripts.html
-    cancels every Enter outside a field, the title bar's other buttons included.)"""
+    review). (On the real page Enter presses it too, since Group 50.6: the scan
+    accumulator, scripts.html, lets a person's Enter press a focused button.)"""
     bar.evaluate("(a) => { window.__answers = a; }", [_answer(REPORT)])
     bar.locator(BTN).focus()
     bar.keyboard.press("Space")

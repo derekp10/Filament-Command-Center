@@ -73,8 +73,8 @@ window.processScan = function (t) { window.__scans.push(t); if (window.routeConf
 
 PAGE = """<!doctype html><html><head><meta charset="utf-8"></head><body>
 <div id="manageModal" class="modal show"><div id="quickswap-grid">
-  <button class="fcc-qs-slot" data-toolhead="XL-1" data-box="LR-MDB-1" data-slot="1" data-spool-id="57">slot 1</button>
-  <button class="fcc-qs-slot" data-toolhead="XL-1" data-box="LR-MDB-1" data-slot="2" data-spool-id="58">slot 2</button>
+  <button class="fcc-qs-slot" data-toolhead="XL-1" data-box="LR-MDB-1" data-slot="1" data-spool-id="57" onclick="window.quickSwapTap(this)">slot 1</button>
+  <button class="fcc-qs-slot" data-toolhead="XL-1" data-box="LR-MDB-1" data-slot="2" data-spool-id="58" onclick="window.quickSwapTap(this)">slot 2</button>
 </div></div>
 <div id="wizardModal" class="modal"><button id="wiz-btn">wizard</button></div>
 <div id="fcc-shortcuts-overlay" style="display:none"><div id="fcc-shortcuts-list"></div></div>
@@ -130,10 +130,36 @@ def _fresh(page):
 
 
 def _open_swap(page, slot=0):
-    """The real tap on a slot, with XL-1 printing: the confirm with its QRs."""
+    """The real tap on a slot, with XL-1 printing: the confirm with its QRs,
+    and YES focused, the worst case for a scan's Enter. (On a printing head
+    it opens on NO since Group 50.6; test_a_printing_swap_opens_on_no pins
+    that.)"""
     page.evaluate("(i) => window.quickSwapTap(document.querySelectorAll('.fcc-qs-slot')[i])", slot)
     page.wait_for_selector("#fcc-quickswap-confirm-overlay .fcc-confirm-qr-row", timeout=5000)
+    page.wait_for_function("() => document.activeElement && document.activeElement.id === 'fcc-quickswap-no'")
+    page.evaluate("() => document.getElementById('fcc-quickswap-yes').focus()")
     return page.evaluate("() => Object.keys(window._fccActiveConfirms).slice(-1)[0]")
+
+
+def test_a_printing_swap_opens_on_no_and_an_idle_one_on_yes(scan_page):
+    """Group 50.6 (Derek, 2026-10-29: "I don't want an accidental double press
+    to mess things up"): with XL-1 printing the swap's confirm opens on "No,
+    cancel", and Enter there cancels, sending nothing; with it idle, on "Yes,
+    swap" (Undo covers that one)."""
+    page = scan_page
+    _fresh(page)
+    page.evaluate("() => window.quickSwapTap(document.querySelectorAll('.fcc-qs-slot')[0])")
+    page.wait_for_selector("#fcc-quickswap-confirm-overlay .fcc-confirm-qr-row", timeout=5000)
+    page.wait_for_function("() => document.activeElement && document.activeElement.id === 'fcc-quickswap-no'")
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(100)
+    s = _seen(page)
+    assert s["posts"] == [] and not s["open"], s
+    _fresh(page)
+    page.evaluate(PRINTING_JS, False)
+    page.evaluate("() => window.quickSwapTap(document.querySelectorAll('.fcc-qs-slot')[0])")
+    page.wait_for_selector("#fcc-quickswap-confirm-overlay")
+    page.wait_for_function("() => document.activeElement && document.activeElement.id === 'fcc-quickswap-yes'")
 
 
 def _seen(page):
@@ -538,8 +564,9 @@ def test_a_persons_enter_on_no_or_the_two_way_takes_a_key_left_too(scan_page):
         _fresh(page)
         page.evaluate(TWO_WAY_JS)
         page.wait_for_selector("#fcc-two-way-probe")
-        page.wait_for_function("() => document.activeElement && document.activeElement.classList.contains('fcc-apc-yes')")
-        if answer == "cancel":
+        # The yes / no opens on Cancel (Group 50.6, Derek 2026-10-29); Tab reaches Yes.
+        page.wait_for_function("() => document.activeElement && document.activeElement.classList.contains('fcc-apc-no')")
+        if answer == "load":
             page.keyboard.press("Tab")
         _type(page, "x", 300, enter=False)
         _type(page, "", 700)

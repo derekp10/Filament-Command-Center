@@ -690,7 +690,12 @@
             content: panelHtml,
             tier: 'confirm',  // sits above the Location Manager modal
             focusGuard: true,
-            initialFocus: '#fcc-quickswap-yes',
+            // On a printing head it opens on "No, cancel", as the printing
+            // yes / no does (Group 50.6; Derek, 2026-10-29: "I don't want an
+            // accidental double press to mess things up"): a swap that disrupts
+            // the print takes a deliberate Tab or click. An idle head's swap
+            // keeps Yes first (Undo covers it).
+            initialFocus: stateInfo ? '#fcc-quickswap-no' : '#fcc-quickswap-yes',
             onEscape: close,
         });
         const ov = handle.element;
@@ -1900,16 +1905,28 @@
             // confirm, and the next such scan answered it).
             if (window.enterIsAScan ? window.enterIsAScan()
                 : (window.isScanInFlight && window.isScanInFlight())) return;
-            if (currentIdx >= 0) {
-                // A person's Enter, and theirs alone: the accumulator mustn't
-                // also submit a key left in the buffer (Group 57 review, round
-                // 5: Q, then 2, then Enter opened the swap AND put spool #2 in
-                // the scan buffer behind it). The standing order's idiom.
-                e.preventDefault();
-                e.stopImmediatePropagation();
-                if (window.clearScanBuffer) window.clearScanBuffer();
-                window.quickSwapTap(buttons[currentIdx]);
-            }
+            // Group 50.6: Enter presses the tile that has the focus. The
+            // highlight alone can be stale (left from the last toolhead's view,
+            // or from before the focus moved on), and it took the Enter meant
+            // for any other button in the window and opened a swap. With the
+            // focus on another button or control, that one's Enter is its own;
+            // with it on nothing (the window itself), the highlighted tile's.
+            if (!grid.getClientRects().length) return;   // its section is hidden: another view
+            const ae = document.activeElement;
+            const tile = buttons.includes(ae) ? ae
+                : ((!ae || ae === document.body || ae === modal) && currentIdx >= 0 ? buttons[currentIdx] : null);
+            if (!tile) return;
+            // A person's Enter, and theirs alone: the accumulator mustn't
+            // also submit a key left in the buffer (Group 57 review, round
+            // 5: Q, then 2, then Enter opened the swap AND put spool #2 in
+            // the scan buffer behind it). The standing order's idiom.
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            if (window.clearScanBuffer) window.clearScanBuffer();
+            // Its own click (a swap, or a deposit from the buffer); a disabled
+            // tile can't be clicked, so it says why.
+            if (tile.disabled) window.quickSwapTap(tile);
+            else tile.click();
         }
     });
 

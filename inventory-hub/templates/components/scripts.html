@@ -284,6 +284,33 @@
             }
             if (!queue.length && state.scanQueueTimer) { clearInterval(state.scanQueueTimer); state.scanQueueTimer = null; }
         }
+        // Group 50.6: a person's Enter presses the button, link or [role=button]
+        // it is on, as a click or Space does (it used to do nothing: every
+        // Enter was cancelled below). Only where a mouse could click it now:
+        // never a held key's repeat (Chrome clicks a focused button on each
+        // one, so a key held a moment too long answered the next dialog under
+        // it; a scanner never repeats), never while a scan read earlier still
+        // waits to go out, never behind the overlay on top or under the
+        // processing dim, never in a Bootstrap window fading out or covered by
+        // its own inline overlay (the delete flow's, data-fcc-cover), and in a
+        // gating dialog only once it is fully on screen.
+        function personMayPress(e, el) {
+            if (e.repeat || state.scanQueue.length) return false;
+            if (document.querySelector('[data-overlay-mount="1"]')) {
+                const root = el.closest('[data-overlay-mount="1"]');
+                if (!root || (window.isTopOverlay && !window.isTopOverlay(root))) return false;
+            } else if (scanFrozen()) {
+                return false;
+            }
+            const modal = el.closest('.modal');
+            if (modal && !modal.classList.contains('show')) return false;
+            if (modal && ['confirmModal', 'safetyModal', 'actionModal'].includes(modal.id)
+                && window.isGatingModalOnScreen && !window.isGatingModalOnScreen(modal.id)) return false;
+            const cover = modal && Array.from(modal.querySelectorAll('[data-fcc-cover="1"]'))
+                .find((c) => c.getClientRects().length);
+            if (cover && !cover.contains(el)) return false;
+            return !el.closest('.offcanvas.hiding');
+        }
         document.addEventListener('keydown', (e) => {
             // A field keeps its own keys. A checkbox can't hold typed text, so
             // a scan typed with the focus on one (the Quick-Weigh's Auto Archive
@@ -308,6 +335,18 @@
             if (e.ctrlKey || e.altKey || e.metaKey) return;
 
             if (e.key === 'Enter') {
+                // A person's Enter on a button is the button's (above); a scan's
+                // Enter (window.enterIsAScan) still ends the scan, wherever the
+                // focus is, and presses nothing. A key a person left in the
+                // buffer goes with their press, so it can't start the next scan.
+                if (t.matches && t.matches('button, a[href], [role="button"], summary')
+                    && !(window.enterIsAScan && window.enterIsAScan())) {
+                    state.scanBuffer = "";
+                    state.scanStartTime = 0;
+                    clearTimeout(state.bufferTimeout);
+                    if (!personMayPress(e, t)) e.preventDefault();
+                    return;
+                }
                 e.preventDefault();
                 if (state.scanBuffer.length > 0) {
                     const elapsed = Date.now() - state.scanStartTime;

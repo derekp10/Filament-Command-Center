@@ -2972,6 +2972,9 @@ const FCC_DELETE_OVERLAY_BASE_STYLE =
 const _renderDeleteOverlay = (overlay, { title, body, requireText, confirmLabel, onConfirm }) => {
     overlay.style.cssText = FCC_DELETE_OVERLAY_BASE_STYLE;
     overlay.style.display = 'flex';
+    // It covers its window but traps no Tab: while it shows, Enter presses no
+    // button of the window behind it (Group 50.6; the accumulator's rule).
+    overlay.dataset.fccCover = '1';
     const inputId = `${overlay.id}-input`;
     const errId = `${overlay.id}-err`;
     overlay.innerHTML = `
@@ -3013,6 +3016,7 @@ const _renderDeleteOverlay = (overlay, { title, body, requireText, confirmLabel,
     const close = () => {
         overlay.style.display = 'none';
         overlay.innerHTML = '';
+        delete overlay.dataset.fccCover;
         if (bsModalInst && bsModalInst._config && bsModalKeyboardWas !== null) {
             bsModalInst._config.keyboard = bsModalKeyboardWas;
         }
@@ -3458,6 +3462,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (ov) {
                 ov.style.display = 'none';
                 ov.innerHTML = '';
+                delete ov.dataset.fccCover;
             }
         });
         m.addEventListener('keydown', (e) => {
@@ -3573,7 +3578,12 @@ window.openVendorEditModal = (vendorId) => {
         });
 };
 
+// One save at a time (Group 50.6): a second press while the first was on its
+// way (a double click, or Enter now that it presses the focused Save) created
+// the manufacturer twice. The button stays disabled until the answer.
+let _vendorSaveInFlight = false;
 window.vendorEditSave = () => {
+    if (_vendorSaveInFlight) return;
     const vid = document.getElementById('vendoredit-id').value;
     const name = document.getElementById('vendoredit-name').value.trim();
     const website = document.getElementById('vendoredit-website').value.trim();
@@ -3626,6 +3636,9 @@ window.vendorEditSave = () => {
 
     const url = isCreate ? '/api/vendors' : `/api/vendors/${encodeURIComponent(vid)}`;
     const method = isCreate ? 'POST' : 'PATCH';
+    _vendorSaveInFlight = true;
+    const saveBtn = document.getElementById('vendoredit-save');
+    if (saveBtn) saveBtn.disabled = true;
     fetch(url, {
         method: method,
         headers: { 'Content-Type': 'application/json' },
@@ -3658,6 +3671,10 @@ window.vendorEditSave = () => {
         })
         .catch(e => {
             showErr(e.message || String(e));
+        })
+        .finally(() => {
+            _vendorSaveInFlight = false;
+            if (saveBtn) saveBtn.disabled = false;
         });
 };
 

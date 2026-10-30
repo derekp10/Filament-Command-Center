@@ -54,9 +54,9 @@ made-up pending reviews for them (the 🛑 N count). Pinned:
   - the collapsed strip keeps every chip inside the window at 1024 px, at
     1280 px at Extra Large and on a phone (F5: the INDX's last heads and its
     🛑 count ran off the right edge): a group wraps its own chips;
-  - Enter on a focused ▲ / ▼ moves the printer, past the dashboard's own scan
-    accumulator, which cancels every Enter outside a text field (F3: Enter did
-    nothing there), the focus staying on the moved printer's arrow; a scan
+  - Enter on a focused ▲ / ▼ moves the printer, through the dashboard's own scan
+    accumulator, which presses a focused button on a person's Enter since Group
+    50.6 (F3: Enter did nothing there), the focus staying on the moved printer's arrow; a scan
     typed onto a focused arrow still reaches processScan; a mouse click lets
     the focus go, as before;
   - a short laptop window (F2: 8 of 13 showed): on a 1280 x 800 laptop (a
@@ -292,24 +292,26 @@ def test_a_size_picked_in_settings_and_a_resize_lay_the_rows_out_again(page: Pag
     _all_placed(page, _layout(page), 800)
 
 
+# Each printer in the folded strip (Group 50.1): its parts in order, its 🛑
+# count's text and how many lines it takes.
 COLLAPSED_JS = r"""() => Array.from(document.querySelectorAll('#printer-status-widget .fcc-ps-header-chips .fcc-ps-printer-group'))
-    .map((g) => { const kids = Array.from(g.children); const chip = g.querySelector('.fcc-cr-chip');
+    .map((g) => { const chip = g.querySelector('.fcc-cr-chip');
         const tops = chip ? new Set(Array.from((() => { const r = document.createRange(); r.selectNodeContents(chip);
             return r.getClientRects(); })()).filter((x) => x.width > 0).map((x) => Math.round(x.top))) : new Set();
-        return { printer: g.dataset.printer, first: kids[0] && kids[0].classList.contains('fcc-ps-state-chip'),
-                 last: chip ? kids[kids.length - 1] === chip : null, text: chip ? chip.textContent : null,
-                 margin: chip ? getComputedStyle(chip).marginLeft : null, lines: tops.size }; })"""
+        return { printer: g.dataset.printer, parts: Array.from(g.children).map((k) => k.className),
+                 text: chip ? chip.textContent : null, lines: tops.size }; })"""
+STRIP_PARTS = ["fcc-ps-strip-name", "fcc-ps-strip-state", "fcc-ps-strip-count", "fcc-ps-strip-heads"]
 
 
 def test_collapse_reorder_and_a_repaint_keep_the_rows_even(page: Page, base_url: str):
     _open(page, base_url)
     page.evaluate("() => window.togglePrinterStatusWidget()")
     page.wait_for_function("() => document.getElementById('printer-status-widget').classList.contains('collapsed')")
-    # The collapsed strip as it was: each printer's state first, its 🛑 N last,
-    # 6 px from its last chip, on one line.
+    # The folded strip (Group 50.1, PIN UPDATED DELIBERATELY): each printer's
+    # name, its state, its 🛑 N on one line, then its heads.
     strip = page.evaluate(COLLAPSED_JS)
-    assert [(s["printer"], s["first"], s["last"], s["text"], s["margin"], s["lines"]) for s in strip] == [
-        (INDX, True, True, "🛑 3", "6px", 1), (XL, True, True, "🛑 1", "6px", 1)], strip
+    assert [(s["printer"], s["parts"], s["text"], s["lines"]) for s in strip] == [
+        (INDX, STRIP_PARTS, "🛑 3", 1), (XL, STRIP_PARTS, "🛑 1", 1)], strip
     page.set_viewport_size({"width": 1024, "height": 900})
     page.evaluate("() => window.togglePrinterStatusWidget()")
     _settled(page, {INDX: "4+4", XL: "5"})
@@ -346,24 +348,28 @@ def test_the_collapsed_strip_keeps_every_chip_on_screen(page: Page, base_url: st
     """Collapsed, a printer's group wider than the window ran off its right
     edge (the INDX's at 1024 px at every size and at 1280 px at Extra Large:
     its last heads and its 🛑 count, all a minimized widget shows of a
-    review). It wraps its own chips now: every chip inside the window, the
-    state first and the count last, the 🛑 with its number."""
+    review). PIN UPDATED DELIBERATELY (Group 50.1, 2026-10-29): each printer
+    is its name, its state, its 🛑 count, then its heads, and heads that don't
+    fit scroll sideways in their own box (Derek's fallback) instead of
+    wrapping: every part inside the window, the 🛑 with its number."""
     _open(page, base_url, size, width, 900, fleet=DEV_IDS, reviews={INDX: 3, XL: 12}, collapsed=True)
     got = page.evaluate(STRIP_JS)
     assert got["sw"] <= got["iw"], f"the page scrolls sideways: {got}"
-    assert [(g["printer"], g["chips"], g["count"], g["last"], g["state"], g["countLines"]) for g in got["groups"]] == [
-        (INDX, 10, "🛑 3", True, True, 1), (XL, 7, "🛑 12", True, True, 1)], got
+    assert [(g["printer"], g["parts"], g["heads"], g["count"], g["countLines"]) for g in got["groups"]] == [
+        (INDX, STRIP_PARTS, 8, "🛑 3", 1), (XL, STRIP_PARTS, 5, "🛑 12", 1)], got
     for g in got["groups"]:
-        assert g["left"] >= -0.5 and g["right"] <= got["iw"] + 0.5, f"a chip is off the screen: {width} {size} {g}"
+        assert g["left"] >= -0.5 and g["right"] <= got["iw"] + 0.5, f"a part is off the screen: {width} {size} {g}"
+    if width <= 412:
+        assert got["groups"][0]["scrolls"], f"the INDX's heads should scroll on a phone: {got}"
 
 
 # --- Enter on the arrows, past the dashboard's scan accumulator (F3) -------------
 
 def test_enter_on_a_focused_arrow_moves_the_printer_and_keeps_the_focus(page: Page, base_url: str):
-    """The dashboard's scan accumulator (scripts.html) cancels every Enter
+    """The dashboard's scan accumulator (scripts.html) cancelled every Enter
     outside a text field, so Enter on a focused ▲ / ▼ did nothing (Space
-    worked). The arrows answer it now, and the focus stays on the moved
-    printer's arrow (its ▲ once it is last), so Enter again moves it back."""
+    worked). It presses a focused button since Group 50.6, and the focus stays
+    on the moved printer's arrow (its ▲ once it is last), so Enter again moves it back."""
     _open(page, base_url, order=[INDX, XL])
     assert _order(page) == [INDX, XL]
     page.locator("#printer-status-widget .fcc-ps-row").first.locator("button.fcc-ps-reorder").focus()

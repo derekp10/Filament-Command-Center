@@ -2623,8 +2623,10 @@ const _installLocEditorEnterToSave = () => {
         }
         if (e.key !== 'Enter') return;
         // A held key repeats keydown, and the modal stays focusable for its
-        // ~150 ms fade after a successful save: neither may save again.
-        if (e.repeat || !modalEl.classList.contains('show')) return;
+        // ~150 ms fade after a successful save: neither may save again, nor
+        // press a focused button (Group 50.6: Enter presses one now), so the
+        // editor cancels it itself instead of leaning on the accumulator.
+        if (e.repeat || !modalEl.classList.contains('show')) { e.preventDefault(); return; }
         if (tag !== 'INPUT' && !ctl) return;
         if (ctl) {
             const keys = keysOn(e.target, now);
@@ -2942,6 +2944,14 @@ const _renderParentTreePicker = (rows, selfIdUpper, sel, locModalEl) => {
             e.preventDefault();
             e.stopImmediatePropagation();
             if (window.clearScanBuffer) window.clearScanBuffer();
+            // Group 50.6: Enter presses the button that has the focus (Cancel,
+            // or a node reached by Tab), as a click does; else the highlighted
+            // node, else the first. It picked a node even on a focused Cancel.
+            const ae = document.activeElement;
+            if (ae && panel.contains(ae) && ae.matches && ae.matches('button')) {
+                if (ae.matches('[data-tp="cancel"]')) { unregister(); if (handle) handle.cleanup(); return; }
+                if (ae.classList.contains('fcc-tp-node')) { pick(ae.dataset.tpVal); return; }
+            }
             const n = ns[cur] || ns[0]; if (n) pick(n.dataset.tpVal);
         }
     });

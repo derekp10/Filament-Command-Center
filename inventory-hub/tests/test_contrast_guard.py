@@ -597,13 +597,11 @@ def test_printer_status_on_a_phone_and_its_wrapped_strip_are_readable(page: Page
     page.locator("#printer-status-widget .fcc-ps-header-bar").click()
     expect(page.locator("#printer-status-widget .fcc-ps-header-chips")).to_be_visible(timeout=2000)
     page.set_viewport_size({"width": 700, "height": 900})
-    # The INDX's group is wider than 700 px: its chips wrap onto a second line.
-    lines = page.evaluate("""() => { const g = document.querySelector('#printer-status-widget .fcc-ps-printer-group');
-        const lines = [];
-        Array.from(g.children).forEach((c) => { const r = c.getBoundingClientRect(); const mid = (r.top + r.bottom) / 2;
-            if (!lines.some((m) => Math.abs(m - mid) < 6)) lines.push(mid); });
-        return lines.length; }""")
-    assert lines >= 2, f"the INDX's chips should wrap at 700 px: {lines} line(s)"
+    # The INDX's heads don't fit in 700 px: they scroll sideways in their own
+    # box (Group 50.1, Derek's fallback; they wrapped onto a second line before).
+    scrolls = page.evaluate("""() => { const box = document.querySelector('#printer-status-widget .fcc-ps-printer-group .fcc-ps-strip-heads');
+        return !!box && box.scrollWidth > box.clientWidth + 1; }""")
+    assert scrolls, "the INDX's heads should scroll sideways at 700 px"
     assert_contrast(widget)
     scored = [o["text"] for o in conftest.contrast_offenders(widget, min_ratio=100)]
     assert any(t.startswith("ZC-8") for t in scored) and "🛑 2" in scored, scored

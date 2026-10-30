@@ -13,6 +13,48 @@ console.log("🚀 Loaded Module: CONFIG");
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;');
 
+    // Group 50.6: a yes that changes many filaments asks here, opening on
+    // Cancel (Derek, 2026-10-29: "more resistance on really important
+    // things"). The browser's own confirm() opened on OK, and a held Enter
+    // pressed the button AND that OK: once Enter presses a focused button, one
+    // long press removed or purged a tag. Resolves true only for the yes.
+    const _dangerConfirm = ({ id, title, lines, yesLabel }) => new Promise((resolve) => {
+        const body = `
+            <div style="background:#181818; color:#fff; border:2px solid #dc3545; border-radius:6px;
+                        width:32.5rem; max-width:92vw; display:flex; flex-direction:column;">
+                <div class="px-3 py-2 fw-bold" style="background:#1a1a1a; border-bottom:1px solid #dc3545; color:#ff8a8a;">${_esc(title)}</div>
+                <div class="px-3 py-2" style="color:rgba(255,255,255,0.85); line-height:1.45;">
+                    ${lines.map((l) => `<p class="mb-2">${_esc(l)}</p>`).join('')}
+                </div>
+                <div class="d-flex justify-content-end gap-2 px-3 py-2" style="border-top:1px solid #333;">
+                    <button type="button" class="btn btn-sm btn-secondary" data-dc="no">Cancel</button>
+                    <button type="button" class="btn btn-sm btn-danger fw-bold" data-dc="yes">${_esc(yesLabel)}</button>
+                </div>
+            </div>`;
+        const host = document.getElementById('configModal');
+        let done = false;
+        let handle = null;
+        const onHostGone = () => answer(false);
+        const answer = (yes) => {
+            if (done) return;
+            done = true;
+            if (host) host.removeEventListener('hidden.bs.modal', onHostGone);
+            if (handle) handle.cleanup();
+            resolve(yes);
+        };
+        handle = window.mountOverlay({
+            id,
+            content: body,
+            tier: 'confirm',   // above the configModal
+            host: host || undefined,
+            initialFocus: '[data-dc="no"]',
+            onEscape: () => answer(false),
+        });
+        if (host) host.addEventListener('hidden.bs.modal', onHostGone);
+        handle.panel.querySelector('[data-dc="no"]').addEventListener('click', () => answer(false));
+        handle.panel.querySelector('[data-dc="yes"]').addEventListener('click', () => answer(true));
+    });
+
     window.openConfigModal = () => {
         const el = document.getElementById('configModal');
         if (!el) return;
@@ -291,9 +333,8 @@ console.log("🚀 Loaded Module: CONFIG");
         });
 
         // Schema-side: remove a choice from the field. Server gates with
-        // a confirmation step when usage > 0 — we surface that as a
-        // browser confirm() dialog rather than a SweetAlert/mountOverlay
-        // here, since the Admin modal already owns the modal stack.
+        // a confirmation step when usage > 0; it asks in _dangerConfirm's
+        // overlay (above the Admin modal, opening on Cancel).
         host.querySelectorAll('.config-attrs-rm-choice').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -305,15 +346,17 @@ console.log("🚀 Loaded Module: CONFIG");
                 // tag fired a ~150-record schema migration with NO confirmation
                 // at all. Hiding is cheap and reversible, but the user should
                 // still know the tag leaves every record that carries it.
-                const ok = confirm(
-                    `Remove tag "${c}"?\n\n` +
-                    (usage > 0
-                        ? `It will be stripped from ${usage} filament(s) and hidden from FCC.\n`
-                        : `No filament currently uses it. It will be hidden from FCC.\n`) +
-                    `Spoolman's schema is NOT modified, and you can unhide it at any time.`
-                );
-                if (!ok) return;
-                window.configAttrsRemoveChoice(c, true);
+                _dangerConfirm({
+                    id: 'fcc-attr-remove-confirm',
+                    title: `Remove tag "${c}"?`,
+                    lines: [
+                        usage > 0
+                            ? `It will be stripped from ${usage} filament(s) and hidden from FCC.`
+                            : `No filament currently uses it. It will be hidden from FCC.`,
+                        `Spoolman's schema is NOT modified, and you can unhide it at any time.`,
+                    ],
+                    yesLabel: 'Remove tag',
+                }).then((ok) => { if (ok) window.configAttrsRemoveChoice(c, true); });
             });
         });
 
@@ -331,17 +374,19 @@ console.log("🚀 Loaded Module: CONFIG");
                 if (!c) return;
                 // State the real cost. This is the one path that still runs the
                 // destructive DELETE + recreate + restore-every-record cycle.
-                const ok = confirm(
-                    `Permanently delete "${c}" from Spoolman's schema?\n\n` +
-                    `Spoolman cannot remove a single option from a choice field, so FCC has to ` +
-                    `delete and recreate the whole field, then rewrite all ${affectedRecords} ` +
-                    `filament(s) that carry attributes.\n\n` +
-                    `A recovery snapshot is written to disk first, and failed writes are retried ` +
-                    `and reported by filament id — but this is still the heaviest operation in the app.\n\n` +
-                    `Hiding it (already done) costs nothing. Purge only if you need it gone from Spoolman itself.`
-                );
-                if (!ok) return;
-                window.configAttrsPurgeChoice(c);
+                _dangerConfirm({
+                    id: 'fcc-attr-purge-confirm',
+                    title: `Permanently delete "${c}" from Spoolman's schema?`,
+                    lines: [
+                        `Spoolman cannot remove a single option from a choice field, so FCC has to ` +
+                        `delete and recreate the whole field, then rewrite all ${affectedRecords} ` +
+                        `filament(s) that carry attributes.`,
+                        `A recovery snapshot is written to disk first, and failed writes are retried ` +
+                        `and reported by filament id — but this is still the heaviest operation in the app.`,
+                        `Hiding it (already done) costs nothing. Purge only if you need it gone from Spoolman itself.`,
+                    ],
+                    yesLabel: 'Delete it from Spoolman',
+                }).then((ok) => { if (ok) window.configAttrsPurgeChoice(c); });
             });
         });
     };
@@ -651,7 +696,9 @@ console.log("🚀 Loaded Module: CONFIG");
             content: body,
             tier: 'confirm',  // sits above the configModal
             host: configModal,  // cleanup on host close
-            initialFocus: '#sweep-overlay-commit',
+            // Opens on Cancel (Group 50.6): the sweep rewrites every filament
+            // record, so a stray or held Enter must not start it.
+            initialFocus: '#sweep-overlay-cancel',
             occlude: ['select'],
         });
         const root = handle.panel;

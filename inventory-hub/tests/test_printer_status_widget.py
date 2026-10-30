@@ -526,12 +526,20 @@ def _label_tile(page: Page, toolhead: str):
 
 @pytest.mark.usefixtures("require_server")
 @pytest.mark.parametrize("mode,loaded,empty", [
-    (None, "ZZ-3", "ZZ-1"), ("XL-3", "ZZ-3", "ZZ-1"), ("3", "3", "1"), ("Tool 3", "Tool 3", "Tool 1"),
+    (None, "ZZ-3", "ZZ-1"), ("By ID", "ZZ-3", "ZZ-1"), ("By number", "3", "1"),
+    ("By Tool + number", "Tool 3", "Tool 1"),
+    # A browser's pick from before Group 50.1 (one of Derek's own heads as a choice's name), rewritten at load.
+    ("XL-3", "ZZ-3", "ZZ-1"), ("3", "3", "1"), ("Tool 3", "Tool 3", "Tool 1"),
 ])
 def test_toolhead_label_setting(page: Page, base_url, mode, loaded, empty):
-    """46.3 (Derek's "Tool 1", counting from 1 like the printer's screen). Only
-    the tile's visible label changes: data-toolhead, the tooltip and the
-    collapsed strip keep the full id. HEAD proof: every mode showed the full id."""
+    """46.3 (Derek's "Tool 1", counting from 1 like the printer's screen). The
+    tile's visible label changes, and since Group 50.1 the folded strip's ring
+    follows it too (Derek, 2026-10-25: he expected the setting to reach the
+    strip); data-toolhead and the tooltip keep the full id. HEAD proof (46.3):
+    every mode showed the full id. PIN UPDATED DELIBERATELY (Group 50.1,
+    2026-10-29): the strip kept the full id until then, and the choices were
+    named after one of Derek's heads (XL-3 / 3 / Tool 3) until Derek asked for
+    plain words."""
     _stub_label_printer(page)
     if mode is not None:
         page.add_init_script(f"try {{ localStorage.setItem({json.dumps(_LABEL_KEY)}, {json.dumps(mode)}); }} catch (e) {{}}")
@@ -540,9 +548,9 @@ def test_toolhead_label_setting(page: Page, base_url, mode, loaded, empty):
     expect(tile.locator(".fcc-ps-th-id")).to_have_text(loaded, timeout=10000)
     assert "ZZ-3" in (tile.get_attribute("title") or ""), "the tooltip keeps the full id"
     expect(_label_tile(page, "ZZ-1").locator(".fcc-ps-th-id")).to_have_text(empty, timeout=4000)
-    chip = page.locator(
-        "#printer-status-widget .fcc-ps-header-chips .fcc-ps-mini[data-toolhead='ZZ-3'] .fcc-ps-mini-id").first
-    assert (chip.text_content() or "").strip() == "ZZ-3", "the collapsed strip keeps the full id"
+    ring = page.locator(
+        "#printer-status-widget .fcc-ps-header-chips .fcc-ps-mini[data-toolhead='ZZ-3'] .fcc-ps-ring").first
+    assert (ring.text_content() or "").strip() == loaded, "the folded strip follows the label setting"
 
 
 @pytest.mark.usefixtures("require_server")
@@ -554,7 +562,7 @@ def test_changing_the_label_mode_repaints_the_same_data(page: Page, base_url):
     page.goto(base_url)
     label = _label_tile(page, "ZZ-3").locator(".fcc-ps-th-id")
     expect(label).to_have_text("ZZ-3", timeout=10000)
-    page.evaluate("(k) => localStorage.setItem(k, 'Tool 3')", _LABEL_KEY)
+    page.evaluate("(k) => localStorage.setItem(k, 'By Tool + number')", _LABEL_KEY)
     page.evaluate("() => window.refreshPrinterStatusWidget()")
     expect(label).to_have_text("Tool 3", timeout=5000)
 

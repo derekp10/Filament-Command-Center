@@ -39,6 +39,25 @@ let state = {
     pendingSafety: null
 };
 
+// --- A HELD ENTER PRESSES ONCE (Group 50.6) ---
+// Chrome clicks a focused button again on every auto-repeat of a held Enter,
+// and a dialog's own Enter handler answers each repeat too, so a key held a
+// moment too long answered the NEXT dialog under it: "Continue Anyway" on a
+// printing head, a Quick-Swap, the slot picker's ⭐, a slot bound from the
+// bind picker's first row. A scanner never auto-repeats, so a repeated Enter
+// is always a person's held key, and outside a text area (where it types new
+// lines) it does nothing at all. On window in the capture phase, registered
+// before any other key listener, so no handler on the page sees it. (A page
+// with no window events, such as the tests' node harness, has nothing to guard.)
+if (typeof window.addEventListener === 'function') {
+    window.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' || !e.repeat) return;
+        if (e.target && e.target.tagName === 'TEXTAREA') return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+    }, true);
+}
+
 // --- SCAN-IN-FLIGHT (the one canonical definition) ---
 // "Is a barcode scanner mid-payload right now?" A scanner types its payload as
 // ordinary keydowns, so ANY key handler that fires on a bare letter, or that
@@ -292,9 +311,11 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
           + `<button type="button" ${idAttr(ids.no)}class="btn btn-secondary btn-sm fcc-apc-no" style="min-width:100px;">Cancel</button>`
         : `<button type="button" ${idAttr(ids.yes)}class="btn btn-warning btn-sm fcc-apc-yes" style="min-width:120px;">Continue Anyway</button>
                 <button type="button" ${idAttr(ids.no)}class="btn btn-secondary btn-sm fcc-apc-no" style="min-width:120px;">Cancel</button>`;
-    const extras = threeWay
-        ? `<div class="fcc-apc-hint" style="font-size:var(--fcc-fs-small); color:#ccc; margin-top:8px;">Enter ${hasStore ? 'stores it' : 'cancels'} · Esc cancels</div>`
-        : '';
+    // The yes / no (a printer is printing) opens on Cancel (Derek, 2026-10-29:
+    // "I don't want an accidental double press to mess things up"), as the
+    // three-way opens on its safe answer: Continue Anyway takes a deliberate
+    // Tab or click.
+    const extras = `<div class="fcc-apc-hint" style="font-size:var(--fcc-fs-small); color:#ccc; margin-top:8px;">Enter ${hasStore ? 'stores it' : 'cancels'} · Esc cancels</div>`;
     const status = threeWay
         ? `<div class="fcc-apc-status" role="alert" style="display:none; margin-bottom:10px; padding:6px 10px; border-radius:6px; background:#4a3200; color:#ffd27a; border:1px solid #ffb74d; font-weight:bold; text-align:left;"></div>`
         : '';
@@ -354,7 +375,7 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         content,
         tier: 'confirm',
         host: host || undefined,
-        initialFocus: threeWay ? (hasStore ? '.fcc-apc-store' : '.fcc-apc-no') : '.fcc-apc-yes',
+        initialFocus: hasStore ? '.fcc-apc-store' : '.fcc-apc-no',
         onEscape: no,
     });
     _openMoveConfirms[overlayId] = superseded;

@@ -39,9 +39,9 @@ Hermetic, and it RUNS under --offline: `isolated_page` (a chromium with no
 route to any network) with the real static/css/global.css, text_size.js,
 ui_builder.js, inv_core.js, inv_printer_status.js and cancel_review.js, a few
 lines standing in for the Bootstrap classes the widget uses (Bootstrap comes
-from a CDN), and a few standing in for the dashboard's scan accumulator
-(templates/components/scripts.html, which cancels every Enter outside a text
-field; a canary below holds it to that). The widget is fed made-up fleets
+from a CDN), and the dashboard's own scan accumulator, lifted from
+templates/components/scripts.html (since Group 50.6 a person's Enter on a
+focused button presses it; a scan's Enter ends the scan). The widget is fed made-up fleets
 through refreshPrinterStatusWidgetFromAggregate, as the heartbeat feeds it,
 and the review count comes from cancel_review.js's own poll, answered in the
 page. Pinned:
@@ -145,7 +145,6 @@ this file was 76 of 121 red.)
 """
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import pytest
@@ -213,29 +212,26 @@ window.fetch = (url) => (String(url).indexOf('/api/cancel_deduct/pending') !== -
 })();
 """
 
-# The dashboard's scan accumulator (scripts.html), as far as a focused button
-# sees it: a key outside a text field with no Ctrl / Alt / Meta goes into
-# state.scanBuffer, and EVERY Enter is cancelled, a button's own press
-# included; the characters before it are a scan (window.__scans here, where
-# the page hands them to processScan). Added after the modules, as the
-# dashboard's own listener is (its DOMContentLoaded handler).
-ACCUMULATOR = r"""
-window.__scans = [];
-document.addEventListener('keydown', (e) => {
-    const t = e.target;
-    if (t.tagName === 'TEXTAREA' || (t.tagName === 'INPUT' && t.type !== 'checkbox')) return;
-    if (e.ctrlKey || e.altKey || e.metaKey) return;
-    if (e.key === 'Enter') {
-        e.preventDefault();
-        if (state.scanBuffer.length > 0) window.__scans.push(state.scanBuffer);
-        state.scanBuffer = '';
-        state.scanStartTime = 0;
-    } else if (e.key.length === 1) {
-        if (state.scanBuffer.length === 0) state.scanStartTime = Date.now();
-        state.scanBuffer += e.key;
-    }
-});
-"""
+def _real_accumulator():
+    """The dashboard's scan accumulator (scripts.html's keydown block), lifted
+    as it is (test_slow_scan_slash_js.py's way): since Group 50.6 a person's
+    Enter on a focused button presses it, and a scan's Enter still ends the
+    scan. The scans it hands to processScan land in window.__scans here."""
+    src = SCRIPTS_HTML.read_text(encoding="utf-8")
+    a = src.index("state.scanStartTime = 0;")
+    b = src.index("// L206", a)
+    block = src[a:b]
+    assert "processScan(state.scanBuffer" in block and "function personMayPress" in block, block[:300]
+    return block
+
+
+# Added after the modules, as the dashboard's own listener is (its
+# DOMContentLoaded handler).
+ACCUMULATOR = (
+    "window.__scans = [];\n"
+    "window.processScan = function (buf) { window.__scans.push(buf); };\n"
+    + _real_accumulator()
+)
 
 INDX = "ZZ Even INDX"
 XL = "ZZ Even XL"
@@ -1217,8 +1213,8 @@ def test_a_repaint_a_reorder_and_collapsing_keep_the_rows_even(widget):
     page.evaluate("(n) => window.movePrinterStatusRow(n, 1)", INDX)
     assert page.locator(".fcc-ps-row").first.get_attribute("data-printer") == XL
     assert (_layout(page)[INDX]["rows"], _layout(page)[XL]["rows"]) == ("8", "5")
-    # By keyboard too: the first printer's ▼ (its only arrow), Enter, with the
-    # accumulator in the page cancelling every Enter, as the dashboard's does.
+    # By keyboard too: the first printer's ▼ (its only arrow), Enter, through
+    # the dashboard's own accumulator.
     page.locator(".fcc-ps-row").first.locator("button.fcc-ps-reorder").focus()
     page.keyboard.press("Enter")
     assert page.locator(".fcc-ps-row").first.get_attribute("data-printer") == INDX
@@ -1242,23 +1238,18 @@ FOCUS_JS = r"""() => { const a = document.activeElement; const row = a && a.clos
              printer: row ? row.dataset.printer : null }; }"""
 
 
-def test_the_dashboard_s_accumulator_cancels_every_enter_outside_a_text_field():
-    """The stand-in above is the dashboard's: its key handler skips text
-    fields and modifier combos, then cancels every Enter (a scan ends in
-    Enter), which is why the arrows answer Enter themselves. If the
-    accumulator ever leaves a button's Enter alone, this fails: change the
-    stand-in with it."""
-    src = SCRIPTS_HTML.read_text(encoding="utf-8")
-    handler = src[src.index("document.addEventListener('keydown', (e) => {"):]
-    assert re.search(r"const t = e\.target;\s*if \(t\.tagName === 'TEXTAREA' \|\| \(t\.tagName === 'INPUT' && t\.type !== 'checkbox'\)\) return;", handler)
-    assert re.search(r"if \(e\.ctrlKey \|\| e\.altKey \|\| e\.metaKey\) return;", handler)
-    assert re.search(r"if \(e\.key === 'Enter'\) \{\s*e\.preventDefault\(\);", handler)
+def test_the_arrows_have_no_enter_handler_of_their_own():
+    """Group 50.6: the accumulator presses a focused button on a person's
+    Enter, so the arrows' own Enter handler (2026-10-23 review) went. The
+    Enter tests below pass only through the real accumulator."""
+    src = (MODULES / "inv_printer_status.js").read_text(encoding="utf-8")
+    assert "closest('button.fcc-ps-reorder')" not in src
 
 
 def test_enter_on_a_focused_arrow_moves_its_printer_and_keeps_the_focus(widget):
-    """Enter on a focused ▲ / ▼ moves the printer, as a click does, with the
-    accumulator cancelling every Enter (it did nothing on the dashboard: only
-    Space moved a printer). The rows are drawn again, and the focus stays on
+    """Enter on a focused ▲ / ▼ moves the printer, as a click does, through the
+    dashboard's own accumulator (it did nothing there before the 2026-10-23
+    review: only Space moved a printer). The rows are drawn again, and the focus stays on
     the moved printer's arrow: its other one when it no longer has the same
     (the INDX moved to the bottom has only ▲), so Enter again moves it back."""
     page = widget

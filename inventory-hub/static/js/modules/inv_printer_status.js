@@ -905,12 +905,11 @@
             const tid = el.dataset.toolhead;
             if (tid && window.openManage) window.openManage(tid);
         });
-        // Enter on a focused ▲ / ▼ moves the printer, as a click does (review,
-        // 2026-10-23). The dashboard's scan accumulator (scripts.html) cancels
-        // every Enter outside a text field, a button's own press included, so
-        // Enter never reached the arrows there (Space did). A scan ends in
-        // Enter too: one still arriving (window.enterIsAScan) is left to the
-        // accumulator, and the press clears the scan buffer it consumed.
+        // Enter on a focused ▲ / ▼ moves the printer as a click does: the
+        // scan accumulator (scripts.html) lets a person's Enter press a button
+        // since Group 50.6 (the arrows pressed themselves until then, 2026-10-23
+        // review). The heads below are [role=button] spans and tiles, which
+        // the browser never presses on Enter, so they answer it here.
         widget.addEventListener('keydown', (e) => {
             if (e.ctrlKey || e.altKey || e.metaKey) return;
             // Group 50.3 (the keyboard standing order): a head reached by Tab, a
@@ -933,17 +932,7 @@
                 if (typeof window.clearScanBuffer === 'function') window.clearScanBuffer();
                 const tid = head.dataset.toolhead;
                 if (tid && window.openManage) window.openManage(tid);
-                return;
             }
-            if (e.key !== 'Enter' || e.shiftKey) return;
-            const btn = e.target && typeof e.target.closest === 'function'
-                ? e.target.closest('button.fcc-ps-reorder') : null;
-            if (!btn || !widget.contains(btn)) return;
-            if (typeof window.enterIsAScan === 'function' && window.enterIsAScan()) return;
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            if (typeof window.clearScanBuffer === 'function') window.clearScanBuffer();
-            btn.click();
         });
     };
 
