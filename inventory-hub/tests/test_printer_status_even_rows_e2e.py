@@ -127,8 +127,8 @@ from playwright.sync_api import Page
 
 from conftest import stub_printer_fleet
 from test_printer_status_even_rows import (APOS, ARROWS_JS, FOCUS_JS, HEADER_JS, LAYOUT_JS, LONG_NAME, STRIP_JS,
-                                           _apart, _drawn_as_recorded, _lined_up, _name_then_info, _placed, _stepped,
-                                           _tiles_lined_up)
+                                           TALL, _apart, _drawn_as_recorded, _lined_up, _name_then_info, _placed,
+                                           _stepped, _tiles_lined_up)
 from test_text_size_guard import _read_only
 
 pytestmark = pytest.mark.usefixtures("require_server")
@@ -266,7 +266,7 @@ def test_on_derek_s_window_each_printer_s_tiles_sit_under_its_name(page: Page, b
     (1366, "Extra Large", "4+4", "5", False),
 ])
 def test_narrower_windows_keep_the_name_the_info_line_and_even_rows(page: Page, base_url: str, width, size, indx, xl, edge):
-    _open(page, base_url, size, width, 900)
+    _open(page, base_url, size, width, TALL)
     got = _layout(page)
     assert (got[INDX]["rows"], got[XL]["rows"], got[INDX]["edge"], got[XL]["edge"]) == (indx, xl, edge, edge), (
         width, size, got)
@@ -426,11 +426,11 @@ VISIBLE_JS = r"""() => { const q = (s) => document.querySelector(s);
              root: parseFloat(getComputedStyle(document.documentElement).fontSize) }; }"""
 
 
-@pytest.mark.parametrize("width, height, size, whole", [(1280, 800, "Small", True), (1280, 800, "Standard", True),
-                                                        (1280, 800, "Large", False), (1366, 768, "Small", False),
-                                                        (1366, 768, "Standard", False)])
+@pytest.mark.parametrize("width, height, size, tight", [(1280, 800, "Small", False), (1280, 800, "Standard", False),
+                                                        (1280, 800, "Large", True), (1366, 768, "Small", True),
+                                                        (1366, 768, "Standard", True)])
 def test_on_a_short_laptop_window_both_printers_show_or_scroll_into_view(page: Page, base_url: str, width, height,
-                                                                         size, whole):
+                                                                         size, tight):
     """The name's own line made the open widget taller, and at 1280 x 800 (a
     Framework 12 at 150 %) or 1366 x 768 its limit, then 40 % of the window,
     hid the second printer's tiles (8 of 13 showed). The gap between printers
@@ -439,14 +439,18 @@ def test_on_a_short_laptop_window_both_printers_show_or_scroll_into_view(page: P
     show without scrolling; at 1280 x 800 at Large and 1366 x 768 at Small
     and Standard the widget stops at its limit and scrolls inside itself,
     the first printer whole and the second scrolled to. Either way the deck
-    and a 7rem strip of the log and the buffer stay on screen."""
+    and a 7rem strip of the log and the buffer stay on screen.
+
+    PIN UPDATED DELIBERATELY (Group 50.7, Derek's pick of four, 2026-10-30):
+    where it scrolled, the widget takes its short-window step instead (each
+    printer's state beside its name, each material in its tile's colour band)
+    and all 13 heads show without scrolling; where it fit, nothing changes."""
     _open(page, base_url, size, width, height, fleet=DEV_LIKE)
     got = page.evaluate(VISIBLE_JS)
     assert got["tiles"] == 13, got
-    if whole:
-        assert got["shown"] == 13 and got["sh"] <= got["ch"] + 1, (width, height, size, got)
-    else:
-        assert got["firstWhole"] and got["shown"] >= 8 and got["atEnd"] >= 5, (width, height, size, got)
+    assert got["shown"] == 13 and got["sh"] <= got["ch"] + 1, (width, height, size, got)
+    assert page.evaluate("() => document.getElementById('printer-status-widget').classList.contains('fcc-ps-tight')") \
+        is tight, (width, height, size)
     assert got["deckBottom"] <= got["vh"] + 0.5 and got["lowest"] <= got["vh"] + 0.5, got
     assert got["strip"] >= 7 * got["root"] - 2, got
 
@@ -462,7 +466,7 @@ THREE = {INDX: _indx(), MIDDLE: {"state": {"state": "PRINTING", "is_active": Tru
 
 @pytest.mark.parametrize("width", [1600, 390])
 def test_a_printer_between_two_others_has_the_same_name_line(page: Page, base_url: str, width):
-    _open(page, base_url, "Standard", width, 1100, fleet=THREE, reviews={MIDDLE: 2}, order=[INDX, MIDDLE, XL])
+    _open(page, base_url, "Standard", width, TALL, fleet=THREE, reviews={MIDDLE: 2}, order=[INDX, MIDDLE, XL])
     rows = page.evaluate(ARROWS_JS)
     assert [(r["printer"], r["n"]) for r in rows] == [(INDX, 1), (MIDDLE, 2), (XL, 1)], rows
     for gap in ("nameToInfo", "infoToTile"):
@@ -519,12 +523,12 @@ def test_a_60_character_name_neither_overlaps_nor_shifts_the_tiles(page: Page, b
     context = page.context
     short = context.new_page()
     try:
-        _open(short, base_url, "Standard", width, 1100, fleet={INDX: _indx("PRINTING"), XL: FLEET[XL]},
+        _open(short, base_url, "Standard", width, TALL, fleet={INDX: _indx("PRINTING"), XL: FLEET[XL]},
               reviews={INDX: 12})
         before = short.evaluate(TILES_JS, INDX)
     finally:
         short.close()
-    _open(page, base_url, "Standard", width, 1100, fleet={LONG_NAME: _indx("PRINTING"), XL: FLEET[XL]},
+    _open(page, base_url, "Standard", width, TALL, fleet={LONG_NAME: _indx("PRINTING"), XL: FLEET[XL]},
           reviews={LONG_NAME: 12})
     after = page.evaluate(TILES_JS, LONG_NAME)
     assert after == before, f"the long name moved the info line or the tiles: {before} -> {after}"
@@ -561,7 +565,7 @@ def test_the_states_the_counts_and_the_names_line_up_down_the_left(page: Page, b
     the next, each printer's tiles under its name, every printer a step in
     under the title."""
     reviews = {"ZZ Align Printing": 2, "ZZ Align Attention": 12}
-    _open(page, base_url, size, width, 1100, fleet=STATES, reviews=reviews, order=list(STATES))
+    _open(page, base_url, size, width, TALL, fleet=STATES, reviews=reviews, order=list(STATES))
     head = _headers(page, size, reviews)
     assert [head[n]["badgeText"] for n in STATES] == ["IDLE", "PRINTING", "ATTENTION", "ERROR"], head
     _all_placed(page, _layout(page), (width, size))
