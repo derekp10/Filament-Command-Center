@@ -1599,9 +1599,9 @@ REQUIRED_SPOOL_EXTRAS = [
     # 18.2 Part A — note planted when an audit parks an unscanned spool at
     # UNKNOWN: where FCC last had it. Nothing reads it to route a spool home.
     # Must be in REQUIRED_SPOOL_EXTRAS so app startup self-heals against
-    # a Spoolman that's missing it; without this, the auto-park PATCH 400s
+    # a Spoolman that's missing it; without this, the park's PATCH 400s
     # ("Unknown extra field fcc_pre_audit_location") and missing spools stay
-    # at their stale location (silent failure surfaces as red Activity Log).
+    # where they were (each one a red Activity Log line).
     ("fcc_pre_audit_location", "Pre-Audit Location (system)", "text"),
     # Group 42.6 — every Undo and Smart Load snapshot writes the
     # SYSTEM_MANAGED_EXTRAS, and Spoolman rejects a whole PATCH carrying an

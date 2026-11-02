@@ -363,6 +363,10 @@ SAMPLE_AUDIT = {"active": True, "audit_id": "boot-1", "location_id": "LR-MDB-1",
                            "remaining_weight": 605, "slot": "1", "where": "XL-4", "found": True,
                            "label_status": False, "label_read": True, "flagged_here": False}]}
 SAMPLE_AUDIT["last_found"] = SAMPLE_AUDIT["expected"][0]
+# The session before a place is scanned (both pinned to the route in
+# test_audit_page_58_js).
+SAMPLE_AUDIT_EMPTY = dict(SAMPLE_AUDIT, location_id=None, note="", last_found=None, expected=[], rogue=[], trail=[],
+                          stats={"total_expected": 0, "found": 0, "missing": 0, "rogue": 0, "trail": 0})
 # /api/identify_scan's audit_done_question (pinned in test_audit_question_dialog_58_js).
 SAMPLE_QUESTION = {
     "type": "audit_done_question", "audit_id": "boot-1", "location": "LR-MDB-1", "found": 2, "expected": 18,
@@ -431,6 +435,44 @@ def test_review_audit_and_bulk_move_panels_text_is_readable(page: Page, base_url
     assert_text_size(page.locator("#fcc-bulkmove-body"))
 
 
+def hold_audit_session(page: Page):
+    """The panel's polls wait on window.__answer(session): until then it shows its
+    first line. Install once the page has loaded."""
+    page.evaluate("""() => { const plain = window.fetchT;
+        window.__session = new Promise((resolve) => { window.__answer = resolve; });
+        window.fetchT = (url, ...rest) => (String(url).includes('/api/audit_session')
+            ? window.__session.then(s => ({ json: () => Promise.resolve(s) })) : plain(url, ...rest)); }""")
+
+
+def walk_empty_audit_panel(page: Page, panel, check):
+    """Group 58: the panel's three plain lines, which no sample with tiles draws:
+    before its first answer, before a place is scanned, and at a place with nothing
+    filed. `check` runs on the panel at each."""
+    from playwright.sync_api import expect
+    hold_audit_session(page)
+    page.evaluate("() => { state.auditActive = true; window.updateAuditVisuals(); }")
+    body = panel.locator("#fcc-audit-panel-body")
+    expect(body).to_contain_text("Loading audit state")
+    check(panel)
+    page.evaluate("(s) => { window.__answer(s); }", SAMPLE_AUDIT_EMPTY)
+    expect(body).to_contain_text("Scan a location's label to start.")
+    check(panel)
+    page.evaluate("(s) => { window.__session = Promise.resolve(s); window.refreshAuditSession(); }",
+                  dict(SAMPLE_AUDIT_EMPTY, location_id="LR-MDB-1"))
+    expect(body).to_contain_text("Nothing is filed here.")
+    check(panel)
+
+
+def test_audit_panel_with_nothing_to_list_text_is_readable(page: Page, base_url: str, assert_text_size):
+    from conftest import quiet_heartbeat
+    _read_only(page)
+    quiet_heartbeat(page)               # after: the newest route answers first
+    page.goto(base_url, wait_until="domcontentloaded")
+    page.wait_for_function("() => typeof window.openAuditPanel === 'function' && typeof window.fetchT === 'function'",
+                           timeout=45_000)
+    walk_empty_audit_panel(page, page.locator("#fcc-audit-panel-overlay"), assert_text_size)
+
+
 def test_audit_done_question_text_is_readable(page: Page, base_url: str, assert_text_size):
     """Group 58: Done's question, its lists and captions, and its hold-off's line."""
     from conftest import quiet_heartbeat
@@ -448,8 +490,23 @@ def test_audit_done_question_text_is_readable(page: Page, base_url: str, assert_
     assert_text_size(page.locator("#fcc-audit-done-question"))
 
 
+def draw_lost_cards(page: Page):
+    """The two lost-spool cards no screen here opens by itself, the search panel's
+    and the Unknown list's, drawn by the real builder from the routes' shape, on the
+    page and over everything. Answers their box."""
+    page.evaluate("""(item) => {
+        const box = document.createElement('div');
+        box.id = 'fcc-test-lost-cards';
+        box.style.cssText = 'position:fixed; top:1rem; left:1rem; width:40rem; z-index:1040; background:#1e1e1e;';
+        box.innerHTML = SpoolCardBuilder.buildCard(item, 'search', {})
+            + SpoolCardBuilder.buildCard(item, 'loc_list', { locId: 'UNKNOWN', index: 0 });
+        document.body.appendChild(box); }""", SAMPLE_LOST)
+    return page.locator("#fcc-test-lost-cards")
+
+
 def test_lost_spools_text_is_readable(page: Page, base_url: str, assert_text_size):
-    """Group 58: the buffer card's badge, and the sentence in the spool window."""
+    """Group 58: the buffer card's badge, the search and Unknown list cards' and the
+    sentence in the spool window."""
     from conftest import own_the_buffer
     _read_only(page, extra_get={"/api/spool_details": SAMPLE_LOST_DETAILS})
     own_the_buffer(page, [SAMPLE_LOST])  # after: the newest route answers first
@@ -458,6 +515,10 @@ def test_lost_spools_text_is_readable(page: Page, base_url: str, assert_text_siz
     card = page.locator(f".buffer-item[data-spool-id='{SAMPLE_LOST['id']}']")
     card.wait_for()
     assert_text_size(card.locator(".badge.bg-warning").first.locator(".."))
+    cards = draw_lost_cards(page)
+    assert cards.locator(".badge.bg-warning", has_text="Lost: LR-MDB-1 slot 2").count() == 2
+    assert_text_size(cards)
+    cards.evaluate("(box) => box.remove()")
     _shown(page, "spoolModal", "(sid) => { openSpoolDetails(sid); }", SAMPLE_LOST["id"])
     assert "Marked lost" in page.inner_text("#detail-location-badge")
     assert_text_size(page.locator("#detail-location-badge").locator(".."))

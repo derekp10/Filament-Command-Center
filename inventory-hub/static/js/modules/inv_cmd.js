@@ -113,9 +113,8 @@ window.resetCommandModes = () => { state.dropMode = false; state.ejectMode = fal
 // running (_auditScanAnswer), and the heartbeat (_syncAuditSignal, inv_core.js).
 // Nothing flips it by negation: a toggle turned a double press into a new audit,
 // and a failed Cancel into a press that did nothing.
-const _auditChanged = () => {
-    state.auditChangedAt = window.fccPageClock ? window.fccPageClock() : Date.now();
-};
+const _auditClock = () => (window.fccPageClock ? window.fccPageClock() : Date.now());
+const _auditChanged = () => { state.auditChangedAt = _auditClock(); };
 
 // This page's own requests on their way: a scan, a start, a Cancel (and the
 // question's Yes). `delta`: +1 as one goes out, -1 once it is answered. While any
@@ -180,6 +179,13 @@ const toggleAudit = () => {
         .finally(() => window.auditRequestOut(-1));
 };
 
+// A refusal, at the 7 s every refusal gets. The toast layer is under the panel, so
+// the panel says it too.
+const _auditSay = (msg, kind = 'error') => {
+    showToast(msg, kind, 7000);
+    if (window.auditPanelNotice) window.auditPanelNotice(msg);
+};
+
 // The panel's ❌: always CMD:CANCEL, whatever the page believes. Reads the answer,
 // and a Cancel that didn't land says so with the audit still up.
 let _auditCancelOut = false;
@@ -187,10 +193,6 @@ window.cancelAudit = () => {
     if (_auditCancelOut) return;
     _auditCancelOut = true;
     if (window.auditPanelBusy) window.auditPanelBusy(true);
-    const failed = (msg) => {
-        showToast(msg, 'error', 7000);
-        if (window.auditPanelNotice) window.auditPanelNotice(msg);
-    };
     window.auditRequestOut(1);
     window.fetchT('/api/identify_scan', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -199,11 +201,11 @@ window.cancelAudit = () => {
         .then(r => r.json())
         .then((res) => {
             if (res && res.audit_ended) { window.noteAuditEnded(res.audit_ended); return; }
-            if (res && res.type === 'error') { failed(res.msg || "Cancel didn't go through."); return; }
+            if (res && res.type === 'error') { _auditSay(res.msg || "Cancel didn't go through."); return; }
             // No audit took it, so none was running: the server says why.
             if (typeof updateLogState === 'function') updateLogState(true);
         })
-        .catch(() => failed("Cancel didn't go through: FCC didn't answer, so the audit is still running."))
+        .catch(() => _auditSay("Cancel didn't go through: FCC didn't answer, so the audit is still running."))
         .finally(() => { _auditCancelOut = false; window.auditRequestOut(-1); });
 };
 
@@ -211,9 +213,7 @@ window.cancelAudit = () => {
 // goes through it says so here.
 const _auditDialogBehind = () => {
     if (!state.activeModal) return false;
-    const msg = 'A dialog behind this panel is still open: press Hide and answer it first.';
-    showToast(msg, 'warning', 7000);
-    if (window.auditPanelNotice) window.auditPanelNotice(msg);
+    _auditSay('A dialog behind this panel is still open: press Hide and answer it first.', 'warning');
     return true;
 };
 
@@ -1265,13 +1265,6 @@ window.commitBulkMove = () => {
         `;
     };
 
-    // A press's answer. The toast layer is under the panel, so a refusal is said on
-    // it too.
-    const _pressRefused = (msg) => {
-        showToast(msg, 'error', 7000);
-        window.auditPanelNotice(msg);
-    };
-
     const _pressAnswered = (res) => {
         if (res && res.success) {
             window.auditPanelNotice('');
@@ -1279,7 +1272,7 @@ window.commitBulkMove = () => {
             window.refreshAuditSession();
             return;
         }
-        _pressRefused((res && res.msg) || "That didn't go through.");
+        _auditSay((res && res.msg) || "That didn't go through.");
         // The audit has gone: the heartbeat says why.
         if (res && res.stale && typeof updateLogState === 'function') updateLogState(true);
     };
@@ -1288,7 +1281,7 @@ window.commitBulkMove = () => {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     }, PRESS_TIMEOUT_MS)
         .then(r => r.json())
-        .then(_pressAnswered, () => _pressRefused("That press didn't go through: FCC didn't answer. Press it again."));
+        .then(_pressAnswered, () => _auditSay("That press didn't go through: FCC didn't answer. Press it again."));
 
     // A tile's press says what the tile showed, never "the other one". A second press
     // of one tile under 700 ms is a double press and does nothing, as on the 🛑 review's
@@ -1477,7 +1470,7 @@ window.commitBulkMove = () => {
         if (_pollInflight) { _pollPending = true; return; }
         _pollInflight = true;
         const gen = _panelGen;
-        const sentAt = window.fccPageClock ? window.fccPageClock() : Date.now();
+        const sentAt = _auditClock();
         try {
             // Explicit timeout: a wedged request would leave _pollInflight stuck
             // true and the panel frozen.
@@ -1665,12 +1658,11 @@ window.commitBulkMove = () => {
         if (done && done.focus) done.focus();
     };
 
-    // Said on the panel as well: the toast layer is under it. `show`: a hidden panel
-    // comes back for this, or nothing on screen would say the audit still runs.
+    // `show`: a hidden panel comes back for this, or nothing on screen would say the
+    // audit still runs.
     const _parkRefused = (msg, show = true) => {
-        showToast(msg, 'error', 7000);
         if (show) window.openAuditPanel();
-        window.auditPanelNotice(msg);
+        _auditSay(msg);
     };
 
     const _parkAnswered = (res) => {
@@ -2239,8 +2231,7 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
     // Group 58: the commands below never reach the server's audit gate.
     const auditRefusal = state.auditActive ? _auditCommandRefusal(upper) : '';
     if (auditRefusal) {
-        showToast(auditRefusal, 'warning', 7000);
-        if (window.auditPanelNotice) window.auditPanelNotice(auditRefusal);
+        _auditSay(auditRefusal, 'warning');
         if (window.logClientEvent) window.logClientEvent(`⚠️ Scan "${escLog(text)}" ignored: ${escLog(auditRefusal)}`, 'WARNING');
         return;
     }
@@ -2327,7 +2318,7 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
     // expected_feed), so a first slot scan stays prompt-free. `audit_ask` (Group
     // 58): this page can show Done's question; a page that doesn't say so hears
     // "reload" and nothing moves.
-    const scanSentAt = window.fccPageClock ? window.fccPageClock() : Date.now();
+    const scanSentAt = _auditClock();
     window.auditRequestOut(1);
     window.fetchT('/api/identify_scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: text, source: source, confirmed_fed_heads: [], audit_ask: true }) })
         .then(r => r.json())

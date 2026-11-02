@@ -279,12 +279,13 @@ def test_audit_panel_and_pill_are_readable(page: Page, base_url: str, assert_con
                       " ? Promise.resolve({ json: () => Promise.resolve(s) }) : plain(u, ...r); window.refreshAuditSession(); }", sample)
         expect(panel.locator("#fcc-audit-last-found [role=status]")).to_contain_text(line)
         assert_contrast(panel)
-    panel.locator("#fcc-audit-panel-needlabel").hover()
-    page.wait_for_timeout(200)          # Bootstrap's colour transition
-    assert_contrast(panel)
-    panel.locator("[data-audit-tile='99']").hover()
-    page.wait_for_timeout(200)
-    assert_contrast(panel)
+    # Every button that changes colour under the mouse, and a tile of each kind you can
+    # press (a bright brightness() on a tile would lift its dark band under its text).
+    for hovered in ("#fcc-audit-panel-needlabel", "#fcc-audit-panel-done", "#fcc-audit-panel-cancel",
+                    "#fcc-audit-panel-close", "[data-audit-tile='99']", "[data-audit-tile='57']"):
+        panel.locator(hovered).hover()
+        page.wait_for_timeout(200)      # Bootstrap's colour transition
+        assert_contrast(panel)
     page.mouse.move(0, 0)
     page.keyboard.press("Escape")
     pill = page.locator("#fcc-audit-pill")
@@ -293,6 +294,26 @@ def test_audit_panel_and_pill_are_readable(page: Page, base_url: str, assert_con
     assert "audit: LR-MDB-1" in " ".join(o.get("text", "") for o in conftest.contrast_offenders(pill, min_ratio=100))
     pill.hover()
     assert_contrast(pill)
+
+
+@pytest.mark.usefixtures("require_server")
+def test_audit_panel_with_nothing_to_list_is_readable(page: Page, base_url: str, assert_contrast):
+    """Group 58: the panel's plain lines, which no sample with tiles draws: before its
+    first answer, before a place is scanned, and at a place with nothing filed. Each
+    line is proved scored: the guard skips an element it can't read."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only, walk_empty_audit_panel
+    _read_only(page)
+    conftest.quiet_heartbeat(page)      # after: the newest route answers first
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openAuditPanel === 'function' && typeof state !== 'undefined'")
+    lines = iter(("Loading audit state", "Scan a location's label to start.", "Nothing is filed here."))
+
+    def check(panel):
+        assert_contrast(panel)
+        scored = " ".join(o.get("text", "") for o in conftest.contrast_offenders(panel, min_ratio=100))
+        assert next(lines) in scored, scored
+    walk_empty_audit_panel(page, page.locator("#fcc-audit-panel-overlay"), check)
 
 
 @pytest.mark.usefixtures("require_server")
@@ -340,7 +361,7 @@ def test_lost_spools_are_readable(page: Page, base_url: str, assert_contrast):
     on the search card, and the sentence in the spool window. Read-only: the spool is a
     sample of the routes' shape, and the buffer is this page's own."""
     import conftest   # local: keeps this file's header out of other branches' merges
-    from test_text_size_guard import SAMPLE_LOST, SAMPLE_LOST_DETAILS, _read_only
+    from test_text_size_guard import SAMPLE_LOST, SAMPLE_LOST_DETAILS, _read_only, draw_lost_cards
     _read_only(page, extra_get={"/api/spool_details": SAMPLE_LOST_DETAILS})
     conftest.own_the_buffer(page, [SAMPLE_LOST])    # after: the newest route answers first
     page.goto(base_url)
@@ -350,6 +371,11 @@ def test_lost_spools_are_readable(page: Page, base_url: str, assert_contrast):
     expect(badge).to_have_text("❓ Lost: LR-MDB-1 slot 2")
     assert_contrast(card)
     assert any("Lost: LR-MDB-1 slot 2" in o.get("text", "") for o in conftest.contrast_offenders(card, min_ratio=100))
+    cards = draw_lost_cards(page)       # the search card and the Unknown list's
+    assert_contrast(cards)
+    scored = [o.get("text", "") for o in conftest.contrast_offenders(cards, min_ratio=100)]
+    assert sum("Lost: LR-MDB-1 slot 2" in text for text in scored) == 2, scored
+    cards.evaluate("(box) => box.remove()")
     page.evaluate("(sid) => { openSpoolDetails(sid); }", SAMPLE_LOST["id"])
     window_badge = page.locator("#detail-location-badge")
     expect(window_badge).to_have_text("❓ Marked lost by the audit of LR-MDB-1 slot 2 on 2026-11-01")

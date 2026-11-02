@@ -1086,7 +1086,8 @@ def api_loose_spools():
     can't say what that is, so it is shown rather than hidden). Exact, never through
     spoolman_api's matcher, whose prefix match would pull a room's rows in, and
     whose trail match would count a spool that runs on a head. Unassigned and
-    UNKNOWN are lists of their own and stay out.
+    UNKNOWN are lists of their own and stay out, and so does a head with no row of
+    its own (Settings can make one): a loaded spool is as exact as a spool gets.
 
       {"read_ok": True, "read_error": None, "count": 54,
        "places": [{"id", "name", "type", "spools": [{"id", "display", "color",
@@ -1112,7 +1113,8 @@ def api_loose_spools():
         lid = str(row.get('LocationID', '')).strip().upper() if isinstance(row, dict) else ''
         if lid:
             by_id.setdefault(lid, row)
-    loose = locations_db.loose_place_ids(rows, locations_db.get_active_printer_map(rows))
+    heads = locations_db.get_active_printer_map(rows)
+    loose = locations_db.loose_place_ids(rows, heads)
 
     places = {}
     count = 0
@@ -1121,7 +1123,7 @@ def api_loose_spools():
             continue
         loc = str(s.get('location') or '').strip()
         lid = loc.upper()
-        if not lid or lid in ('UNASSIGNED', 'UNKNOWN'):
+        if not lid or lid in ('UNASSIGNED', 'UNKNOWN') or lid in heads:
             continue
         row = by_id.get(lid)
         if row is not None and lid not in loose:

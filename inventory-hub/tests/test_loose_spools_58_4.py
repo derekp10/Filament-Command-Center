@@ -252,6 +252,16 @@ def test_a_location_with_no_row_is_included():
     assert [s["id"] for s in body["places"][0]["spools"]] == [1, 2]
 
 
+def test_a_head_with_no_row_of_its_own_is_no_loose_place():
+    """Settings can give a printer a head with no location row, and FCC still loads
+    spools on it. A loaded spool is as exact as a spool gets: it isn't "not in
+    Locations", however its row is missing."""
+    rows = ROWS + [{"LocationID": "CORE", "Name": "Core", "Type": "Printer", "parent_id": "LR",
+                    "toolheads": [{"location_id": "CORE-1", "position": 0}]}]
+    body = _ask(_Spoolman([_wire(1, "CORE-1"), _wire(2, "LR")]), rows=rows).get_json()
+    assert _places(body) == {"LR": [2]} and body["count"] == 1
+
+
 def test_a_place_reads_as_its_row_says():
     body = _ask(_Spoolman([_wire(1, "cr-ct-1")])).get_json()
     place = body["places"][0]

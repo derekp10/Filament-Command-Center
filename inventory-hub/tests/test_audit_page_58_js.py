@@ -39,6 +39,7 @@ import state  # noqa: E402
 from test_audit_session_58 import add_spool, env, scan  # noqa: E402,F401  (env: the fixture)
 from test_core1_return_ejectall_js import pytestmark, run_js  # noqa: E402,F401  (pytestmark: skip without node)
 from test_head_load_confirm_js import PRELUDE, SCAN  # noqa: E402
+from test_text_size_guard import SAMPLE_AUDIT, SAMPLE_AUDIT_EMPTY  # noqa: E402
 
 # The panel, the pill and the heartbeat, on the stub DOM. `__session` is what
 # /api/audit_session answers, `__heartbeat` what /api/logs answers. A heartbeat in a
@@ -168,6 +169,20 @@ def test_the_session_above_is_the_routes_shape(real):
         assert set(want[key][0]) - {"lost_from"} <= set(got[key][0]) | {"rogue", "trail"}, key
     assert got["stats"] == {"total_expected": 2, "found": 1, "missing": 1, "rogue": 1, "trail": 1}
     assert got["rogue"][0]["where"] == "LR-MDB-2 slot 3" and got["trail"][0]["where"] == "XL-1"
+
+
+def test_the_guards_samples_are_the_routes_shape(real, env):
+    """The contrast and text-size guards draw these on the real dashboard, so a key a
+    tile reads can't be one the route doesn't send. Pins already-right code."""
+    got = real["session"]
+    assert set(SAMPLE_AUDIT) == set(got) and set(SAMPLE_AUDIT["stats"]) == set(got["stats"])
+    for key in ("expected", "rogue", "trail"):
+        for row in SAMPLE_AUDIT[key]:
+            assert set(row) - {"rogue", "trail"} <= set(got[key][0]), (key, row)
+    assert set(SAMPLE_AUDIT["last_found"]) <= set(got["expected"][0])
+    scan(env, "CMD:AUDIT")
+    before_a_place = app_module.app.test_client().get("/api/audit_session").get_json()
+    assert dict(before_a_place, audit_id="boot-1") == SAMPLE_AUDIT_EMPTY
 
 
 # --- the tile and a CMD:AUDIT scan ------------------------------------------------

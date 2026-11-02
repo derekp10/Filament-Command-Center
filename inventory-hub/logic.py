@@ -5260,6 +5260,21 @@ def _audit_refuse(msg):
     return {"status": "error", "msg": msg}
 
 
+def _audit_press_refused(msg):
+    """_audit_refuse for a press on the panel, whose route answers {success, msg}."""
+    return {"success": False, "msg": _audit_refuse(msg)["msg"]}
+
+
+def _audit_gone(session, audit_id, msg):
+    """A press or a Yes names the audit it was made for: the refusal when that isn't
+    the one running (`stale`, with a log line), else None. A page can outlive its
+    audit, and a Yes must never land on the audit that came after it."""
+    if session.get('active') and audit_id and str(session.get('audit_id')) == str(audit_id):
+        return None
+    state.add_log_entry(f"⚠️ {msg}", "WARNING", "ffaa00")
+    return {"success": False, "stale": True, "msg": msg}
+
+
 def _end_audit(why):
     """The one way an audit ends: says why for the heartbeat (`audit_end`), clears
     the session, logs it. `why` is done, cancel or idle. Call it holding the end
@@ -5540,10 +5555,8 @@ def _audit_unexpected_spool(session, sid):
         row['lost_from'] = lost
         row['where'] = f"Unknown (marked lost by {spoolman_api.audit_lost_words(lost)})"
     if str(extra.get('physical_source', '')).strip().replace('"', '').upper() == place:
-        loc_list = locations_db.load_locations_list() or []
-        loc_info_map = {str(r.get('LocationID', '')).strip().upper(): r
-                        for r in loc_list if isinstance(r, dict)}
-        if _holds_one_spool(sloc, locations_db.get_active_printer_map(loc_list), loc_info_map):
+        printer_map, loc_info_map = _audit_place_maps()
+        if _holds_one_spool(sloc, printer_map, loc_info_map):
             row['where'] = sloc
             row['slot'] = str(extra.get('physical_source_slot', '')).strip('"')
             rows[str(sid)] = row
@@ -5664,11 +5677,7 @@ def _audit_press_refusal(session, audit_id):
     check_audit_idle_timeout()
     if _AUDIT_END_LOCK.locked():
         return {"success": False, "busy": True, "msg": AUDIT_FINISHING_MSG}
-    if not session.get('active') or not audit_id or str(session.get('audit_id')) != str(audit_id):
-        msg = "That audit has already ended."
-        state.add_log_entry(f"⚠️ {msg}", "WARNING", "ffaa00")
-        return {"success": False, "stale": True, "msg": msg}
-    return None
+    return _audit_gone(session, audit_id, "That audit has already ended.")
 
 
 def _audit_spool_id(value):
@@ -5696,9 +5705,9 @@ def audit_mark_found(audit_id, sid, found):
     sid = _audit_spool_id(sid)
     expected = session.get('expected_items') or []
     if sid is None or sid not in expected:
-        return {"success": False, "msg": _audit_refuse(f"#{sid} isn't on this audit's list.")["msg"]}
+        return _audit_press_refused(f"#{sid} isn't on this audit's list.")
     if found is not True and found is not False:
-        return {"success": False, "msg": _audit_refuse("That press didn't say found or not found.")["msg"]}
+        return _audit_press_refused("That press didn't say found or not found.")
     scanned = session.setdefault('scanned_items', [])
     if found:
         if sid not in scanned:
@@ -5730,14 +5739,13 @@ def audit_undo_need_label(audit_id, sid):
     key = str(sid)
     flagged = session.get('label_flagged') or {}
     if key not in flagged:
-        return {"success": False, "msg": _audit_refuse(f"#{sid} wasn't marked in this audit: nothing to undo.")["msg"]}
+        return _audit_press_refused(f"#{sid} wasn't marked in this audit: nothing to undo.")
     rec, answered = spoolman_api.get_spool_answer(sid)
     if not answered or not isinstance(rec, dict):
-        return {"success": False, "msg": _audit_refuse(f"Couldn't read #{sid} from Spoolman, so its mark stands. "
-                                                       f"Try again in a moment.")["msg"]}
+        return _audit_press_refused(f"Couldn't read #{sid} from Spoolman, so its mark stands. Try again in a moment.")
     if rec.get('id') is None:    # Spoolman's 404 body is a truthy dict
         flagged.pop(key, None)
-        return {"success": False, "msg": _audit_refuse(f"Spool #{sid} not found")["msg"]}
+        return _audit_press_refused(f"Spool #{sid} not found")
     now = spoolman_api.label_flag(rec.get('extra'))
     if now is not True:
         flagged.pop(key, None)
@@ -5903,17 +5911,16 @@ def _audit_park_one(sid, place, today, printer_map, loc_info_map):
 def _audit_park_locked(audit_id, ids, today):
     """park_audit_missing's work, holding the end lock."""
     session = state.AUDIT_SESSION
-    if not session.get('active') or not audit_id or str(session.get('audit_id')) != str(audit_id):
-        msg = "That audit has already ended, so nothing was moved."
-        state.add_log_entry(f"⚠️ {msg}", "WARNING", "ffaa00")
-        return {"success": False, "stale": True, "msg": msg}
+    gone = _audit_gone(session, audit_id, "That audit has already ended, so nothing was moved.")
+    if gone:
+        return gone
     # A person pressed something: if this Yes is refused the audit runs on, and a
     # question that sat open mustn't time out a moment later.
     session['last_activity_ts'] = time.time()
     wanted = {str(s) for s in ids} if isinstance(ids, (list, tuple)) else set()
     if not wanted:
-        msg = "That Yes didn't say which spools it answers, so nothing was moved. Press Done again."
-        return {"success": False, "msg": _audit_refuse(msg)["msg"]}
+        return _audit_press_refused("That Yes didn't say which spools it answers, so nothing was moved. "
+                                    "Press Done again.")
     place = str(session.get('location_id') or '').strip().upper()
     plan = plan_audit_done(session)
     maps = None

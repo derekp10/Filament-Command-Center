@@ -2798,6 +2798,12 @@ button.fcc-audit-tile.kb-active {
     color: #ffe08a;
     font-weight: 600;
 }
+/* Cancel under the mouse: the app-wide .btn-outline-danger:hover is white on #ff4444,
+   3.41:1. Bootstrap's own danger red is 4.53:1. */
+#fcc-audit-panel-cancel:hover {
+    background-color: #dc3545;
+    border-color: #dc3545;
+}
 
 /* The Last found strip, above Done / Cancel: held in view while the tiles scroll, or
    a long list hides what "Needs a label" would mark. A window too short for that
