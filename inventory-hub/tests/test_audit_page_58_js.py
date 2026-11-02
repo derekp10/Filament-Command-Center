@@ -106,7 +106,7 @@ def _run(tmp_path, body, session=None, modules=SCAN):
 def _row(sid, slot, found=False, **more):
     return {"id": sid, "display": f"#{sid} Some Brand PLA (Red)", "color": "72071C", "color_direction": "longitudinal",
             "remaining_weight": 500.0, "slot": slot, "location": "LR-MDB-1", "where": f"LR-MDB-1 slot {slot}",
-            "found": found, **more}
+            "label_status": None, "label_read": False, "flagged_here": False, "found": found, **more}
 
 
 # /api/audit_session's shape, kept honest by test_the_session_above_is_the_routes_shape.
@@ -117,6 +117,7 @@ SESSION = {
     "expected": [_row(57, "1", found=True), _row(99, "2")],
     "rogue": [dict(_row(200, "3", found=True, rogue=True), location="LR-MDB-2", where="LR-MDB-2 slot 3")],
     "trail": [dict(_row(242, "4", found=True, trail=True), location="XL-1", where="XL-1")],
+    "last_found": None,
 }
 ENDED = {"active": False, "audit_end": None}
 LOG_KEYS = {"logs": [], "status": {"spoolman": True}}

@@ -262,8 +262,30 @@ def test_audit_panel_and_pill_are_readable(page: Page, base_url: str, assert_con
     scored = " ".join(o.get("text", "") for o in conftest.contrast_offenders(panel, min_ratio=100))
     for words in ("Already auditing", "is filed here", "Extra (found here", "Loaded from here", "#134", "#242",
                   "LR-MDB-2 slot 3", "on XL-4", "extra", "loaded", "scanned", "Asks before moving",
-                  "Ends it, nothing moves", "clears itself"):
+                  "Ends it, nothing moves", "clears itself",
+                  # Group 58.2: the Last found strip and what a tile says about a label.
+                  "Last found", "#57 is marked: it needs a label", "undo that", "Needs a label", "Scan to mark it",
+                  "found, no label read", "needs a label", "label status unknown", "No label to scan?"):
         assert words in scored, (words, scored)
+    panel.locator("#fcc-audit-label-undo").hover()
+    page.wait_for_timeout(200)          # Bootstrap's colour transition
+    assert_contrast(panel)
+    # The strip's other lines are that one's own element and class; each is drawn here.
+    for line, row in (("No label was read for #99", {"id": 99, "label_read": False, "flagged_here": False, "label_status": None}),
+                      ("#100 is still flagged for a new label", {"id": 100, "label_read": True, "flagged_here": False, "label_status": True}),
+                      ("#134's label was read", {"id": 134, "label_read": True, "flagged_here": False, "label_status": False})):
+        sample = dict(SAMPLE_AUDIT, last_found=dict(SAMPLE_AUDIT["last_found"], **row))
+        page.evaluate("(s) => { const plain = window.fetchT; window.fetchT = (u, ...r) => String(u).includes('/api/audit_session')"
+                      " ? Promise.resolve({ json: () => Promise.resolve(s) }) : plain(u, ...r); window.refreshAuditSession(); }", sample)
+        expect(panel.locator("#fcc-audit-last-found [role=status]")).to_contain_text(line)
+        assert_contrast(panel)
+    panel.locator("#fcc-audit-panel-needlabel").hover()
+    page.wait_for_timeout(200)          # Bootstrap's colour transition
+    assert_contrast(panel)
+    panel.locator("[data-audit-tile='99']").hover()
+    page.wait_for_timeout(200)
+    assert_contrast(panel)
+    page.mouse.move(0, 0)
     page.keyboard.press("Escape")
     pill = page.locator("#fcc-audit-pill")
     expect(pill).to_be_visible()

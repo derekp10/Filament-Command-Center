@@ -30,8 +30,10 @@ AUDIT_SESSION = {
     "rows": {},
     "start_note": "",     # What this audit doesn't check (the places inside it)
     # The label side of a found spool (Group 58.2).
-    "last_found": None,
-    "found_by": {},
+    "last_found": None,   # The spool ID "Needs a label" acts on
+    "found_by": {},       # str(spool id) -> logic.AUDIT_FOUND_BY_LABEL / AUDIT_FOUND_NO_LABEL
+    # str(spool id) -> the label status a mark in this audit replaced (False or
+    # None): what "undo that" puts back, and nothing else can.
     "label_flagged": {},
     # Idle-timeout watchdog. Updated on every audit-mode scan and on
     # audit start. logic.check_audit_idle_timeout() ends the session when

@@ -59,6 +59,7 @@ ROWS = [
 SPOOL_FIELDS = [{"key": key, "field_type": "text", "name": key} for key in (
     "container_slot", "physical_source", "physical_source_slot", "fcc_pre_archive_location",
     "fcc_pre_audit_location", "fcc_pre_box_location")]
+SPOOL_FIELDS.append({"key": "needs_label_print", "field_type": "boolean", "name": "Needs Label Print"})
 
 
 def _wire(extra):
@@ -99,9 +100,11 @@ def env(monkeypatch):
     state.reset_audit()
 
 
-def scan(env, text, source="barcode", ask=True):
+def scan(env, text, source="keyboard", ask=True):
     # A client of its own, so a scan can land in the middle of another's request.
     # `ask`: this page can show Done's question (`audit_ask`, on every scan).
+    # `source`: keyboard reads no label, so these tests see the audit and nothing
+    # else; a real label read is "barcode" (tests/test_audit_no_label_58.py).
     body = {"text": text, "source": source, "confirmed_fed_heads": []}
     if ask:
         body["audit_ask"] = True
@@ -377,7 +380,7 @@ def test_a_row_is_stored_from_the_match(env):
     assert row == {
         "id": 1, "display": "#1 Some Brand PLA (Galaxy Black)", "color": "72071C",
         "color_direction": "longitudinal", "remaining_weight": 500.0, "slot": "2",
-        "location": "LR-MDB-1", "where": "LR-MDB-1 slot 2",
+        "location": "LR-MDB-1", "where": "LR-MDB-1 slot 2", "label_status": None,
     }
 
 

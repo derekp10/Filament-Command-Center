@@ -1043,6 +1043,10 @@ def resolve_scan(text):
         # none of the patterns above (notably not CMD:EJECT/CMD:DONE).
         if "CMD:BULKMOVE" in upper_text: return {'type': 'command', 'cmd': 'bulkmove'}
 
+        # Group 58.2: the spool an audit found last needs a label. Holds none of
+        # the patterns above; api_identify_scan refuses it outside an audit.
+        if "CMD:NEEDLABEL" in upper_text: return {'type': 'command', 'cmd': 'needlabel'}
+
         return {'type': 'error', 'msg': 'Malformed Command'}
 
     # 3. [ALEX FIX] STANDARD LOCATION SCAN (LOC: Prefix)
@@ -5209,6 +5213,11 @@ AUDIT_FINISHING_MSG = "The audit is already finishing."
 AUDIT_WHERE_UNREAD = "couldn't read where FCC has it"
 AUDIT_GONE_WHY = "no longer in Spoolman"
 
+# How a spool was found (the session's `found_by`): by a real read of its label, or
+# by anything else (a typed id, an SPL: label, a bare number, a search card, a tile).
+AUDIT_FOUND_BY_LABEL = "label"
+AUDIT_FOUND_NO_LABEL = "no_label"
+
 # What other scans are told during an audit. A failed resolve_scan passes its own
 # words instead (`msg`). An ambiguous legacy label never gets here: it skips the
 # gate in api_identify_scan, so its picker opens over the panel and its pick comes
@@ -5392,6 +5401,9 @@ def _audit_row(item, where=None):
     row = {key: item.get(key) for key in
            ('id', 'display', 'color', 'color_direction', 'remaining_weight', 'slot', 'location')}
     row['where'] = audit_where(item.get('location'), item.get('slot')) if where is None else where
+    # True, False or None, as spoolman_api.label_flag reads it. A label read and a
+    # mark keep it current (audit_label_status), so a tile needs no read for it.
+    row['label_status'] = (item.get('details') or {}).get('needs_label_print')
     return row
 
 
@@ -5504,6 +5516,7 @@ def _audit_unexpected_spool(session, sid):
         return _audit_refuse("That audit has ended.")
     scanned = session.setdefault('scanned_items', [])
     if sid in scanned:
+        _audit_found(session, sid)
         return {"status": "success", "msg": "Already scanned"}
     rows = session.setdefault('rows', {})
 
@@ -5511,6 +5524,7 @@ def _audit_unexpected_spool(session, sid):
         rows[str(sid)] = _audit_row({'id': sid, 'display': f"#{sid}", 'color': '', 'slot': '', 'location': '',
                                      'color_direction': 'longitudinal'}, where=AUDIT_WHERE_UNREAD)
         scanned.append(sid)
+        _audit_found(session, sid)
         session.setdefault('rogue_items', []).append(sid)
         state.add_log_entry(f"⚠️ Extra: #{sid}: {AUDIT_WHERE_UNREAD}.", "WARNING", "ffaa00")
         return {"status": "success"}
@@ -5534,16 +5548,27 @@ def _audit_unexpected_spool(session, sid):
             row['slot'] = str(extra.get('physical_source_slot', '')).strip('"')
             rows[str(sid)] = row
             scanned.append(sid)
+            _audit_found(session, sid)
             session.setdefault('trail_items', []).append(sid)
             state.add_log_entry(f"🔗 Found #{sid}: loaded on {_audit_esc(sloc)} from here.", "INFO")
             return {"status": "success"}
 
     rows[str(sid)] = row
     scanned.append(sid)
+    _audit_found(session, sid)
     session.setdefault('rogue_items', []).append(sid)
     state.add_log_entry(f"⚠️ Extra: {_audit_esc(row['display'])}: FCC has it at {_audit_esc(row['where'])}.",
                         "WARNING", "ffaa00")
     return {"status": "success"}
+
+
+def _audit_found(session, sid):
+    """Every find comes through here, a re-scan too: it selects the spool again, so
+    "Needs a label" acts on the spool in the person's hand. Found with no label read
+    until the route says one was (routes_scan._audit_label_check), which the scan's
+    own text and source decide: process_audit_scan sees neither."""
+    session['last_found'] = sid
+    session.setdefault('found_by', {}).setdefault(str(sid), AUDIT_FOUND_NO_LABEL)
 
 
 def _audit_spool_scan(session, sid):
@@ -5551,14 +5576,193 @@ def _audit_spool_scan(session, sid):
         return _audit_refuse("Scan a Location first!")
     scanned = session.setdefault('scanned_items', [])
     if sid in scanned:
+        _audit_found(session, sid)
         return {"status": "success", "msg": "Already scanned"}
     expected = session.get('expected_items') or []
     if sid not in expected:
         return _audit_unexpected_spool(session, sid)
     scanned.append(sid)
-    left = sum(1 for item in expected if item not in scanned)
-    state.add_log_entry(f"✅ Found #{sid}" + (f" ({left} left)" if left else " (All found!)"), "INFO", "00ff00")
+    _audit_found(session, sid)
+    state.add_log_entry(f"✅ Found #{sid}" + _audit_left_words(session), "INFO", "00ff00")
     return {"status": "success"}
+
+
+def _audit_left_words(session):
+    """" (12 left)" or " (All found!)": the expected spools not yet scanned."""
+    scanned = session.get('scanned_items') or []
+    left = sum(1 for item in (session.get('expected_items') or []) if item not in scanned)
+    return f" ({left} left)" if left else " (All found!)"
+
+
+# --- "No label": a found spool's label (Group 58.2, on Derek's defaults (a) and (b))
+# A spool with no label can't be scanned, so a tile can be pressed instead, and the
+# last spool found can be marked as needing one (key N, the strip's button, its QR).
+# Each mark keeps the status it replaced in the session's `label_flagged`, because
+# nothing else can put that back: Mark Printed and a scan both write False,
+# "confirmed", on a spool that may have no label at all.
+
+def audit_label_status(sid, status):
+    """The row a tile draws follows the status FCC just read or wrote."""
+    row = (state.AUDIT_SESSION.get('rows') or {}).get(str(sid))
+    if isinstance(row, dict):
+        row['label_status'] = status
+
+
+def _audit_label_landed(sid, wanted):
+    """A write update_spool called failed may have landed anyway (its timeout is a
+    READ timeout), so the record is asked. False when it can't be read."""
+    rec, _answered = spoolman_api.get_spool_answer(sid)
+    return (isinstance(rec, dict) and rec.get('id') is not None
+            and spoolman_api.label_flag(rec.get('extra')) is wanted)
+
+
+def _audit_already_flagged(sid):
+    msg = f"#{sid} is already flagged for a new label."
+    state.add_log_entry(f"ℹ️ {msg}", "INFO", "00ccff")
+    return {"status": "success", "said": msg, "said_type": "info"}
+
+
+def _audit_need_label(session):
+    """CMD:NEEDLABEL: the last spool found needs a label. Never a toggle, so a double
+    read of its QR is one write. A partial write, as flag_spool_labels': the write
+    keeps the spool's other extras (update_spool's merge), and it carries no weight, so
+    it can't touch an archive edge. Refuses an archived spool: the Backlog can't show
+    it, so the mark would be seen nowhere."""
+    sid = session.get('last_found')
+    if sid is None:
+        return _audit_refuse("Nothing has been found yet: scan a spool or press its tile first.")
+    audit_id = session.get('audit_id')
+    rec, answered = spoolman_api.get_spool_answer(sid)
+    if session.get('audit_id') != audit_id:
+        return _audit_refuse("That audit has ended.")
+    if not answered or not isinstance(rec, dict):
+        return _audit_refuse(f"Couldn't read #{sid} from Spoolman, so nothing was marked. Try again in a moment.")
+    if rec.get('id') is None:    # Spoolman's 404 body is a truthy dict
+        return _audit_refuse(f"Spool #{sid} not found")
+    prior = spoolman_api.label_flag(rec.get('extra'))
+    if prior is True:
+        audit_label_status(sid, True)
+        return _audit_already_flagged(sid)
+    if rec.get('archived'):
+        return _audit_refuse(f"#{sid} is archived, so the label Backlog can't show it: nothing was marked.")
+    if not spoolman_api.update_spool(sid, {'extra': {'needs_label_print': True}}):
+        err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+        if not _audit_label_landed(sid, True):
+            msg = f"Couldn't mark #{sid}: {err}"
+            state.add_log_entry(f"❌ {_audit_esc(msg)}", "ERROR", "ff4444")
+            return {"status": "error", "msg": msg}
+    session.setdefault('label_flagged', {})[str(sid)] = prior
+    audit_label_status(sid, True)
+    msg = f"#{sid} is marked: it needs a label."
+    state.add_log_entry(f"🏷️ {_audit_esc(_audit_label(session, sid))}: marked as needing a label.", "INFO", "ffaa00")
+    return {"status": "success", "said": msg}
+
+
+def _audit_press_refusal(session, audit_id):
+    """Why a press on the panel can't act now, or None. The idle check comes first,
+    as at the scan gate: a press after 30 idle minutes finds no session."""
+    check_audit_idle_timeout()
+    if _AUDIT_END_LOCK.locked():
+        return {"success": False, "busy": True, "msg": AUDIT_FINISHING_MSG}
+    if not session.get('active') or not audit_id or str(session.get('audit_id')) != str(audit_id):
+        msg = "That audit has already ended."
+        state.add_log_entry(f"⚠️ {msg}", "WARNING", "ffaa00")
+        return {"success": False, "stale": True, "msg": msg}
+    return None
+
+
+def _audit_spool_id(value):
+    """A spool id from a page's JSON, or None."""
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def audit_mark_found(audit_id, sid, found):
+    """POST /api/audit/found: a tile's press, a person's and never a scan. `found`
+    True marks an expected spool found with no label read and makes it the last found;
+    False takes it back off the found list. It says which, never "the other one", so a
+    double press sent before the tile redrew can't flip it back. Writes nothing to
+    Spoolman. A label mark stays when its spool is un-found, and its "undo that" comes
+    back when the spool is found again."""
+    session = state.AUDIT_SESSION
+    refused = _audit_press_refusal(session, audit_id)
+    if refused:
+        return refused
+    session['last_activity_ts'] = time.time()
+    sid = _audit_spool_id(sid)
+    expected = session.get('expected_items') or []
+    if sid is None or sid not in expected:
+        return {"success": False, "msg": _audit_refuse(f"#{sid} isn't on this audit's list.")["msg"]}
+    if found is not True and found is not False:
+        return {"success": False, "msg": _audit_refuse("That press didn't say found or not found.")["msg"]}
+    scanned = session.setdefault('scanned_items', [])
+    if found:
+        if sid not in scanned:
+            scanned.append(sid)
+            state.add_log_entry(f"✅ Found #{sid} by hand, no label read" + _audit_left_words(session),
+                                "INFO", "00ff00")
+        _audit_found(session, sid)
+    elif sid in scanned:
+        scanned.remove(sid)
+        session.setdefault('found_by', {}).pop(str(sid), None)
+        if session.get('last_found') == sid:
+            session['last_found'] = None
+        state.add_log_entry(f"↩️ #{sid} is back on the not-scanned list.", "INFO", "ffaa00")
+    return {"success": True, "found": found}
+
+
+def audit_undo_need_label(audit_id, sid):
+    """POST /api/audit/needs_label_undo: the strip's "undo that", puts back the status
+    a mark replaced, through the delete sentinel when there was none. A person's press
+    with no QR, so a double read of the mark's own QR can't toggle it. A flag that isn't
+    up any more (a Backlog's Mark Printed since) is left as it is: that status is
+    newer than the one this would put back."""
+    session = state.AUDIT_SESSION
+    refused = _audit_press_refusal(session, audit_id)
+    if refused:
+        return refused
+    session['last_activity_ts'] = time.time()
+    sid = _audit_spool_id(sid)
+    key = str(sid)
+    flagged = session.get('label_flagged') or {}
+    if key not in flagged:
+        return {"success": False, "msg": _audit_refuse(f"#{sid} wasn't marked in this audit: nothing to undo.")["msg"]}
+    rec, answered = spoolman_api.get_spool_answer(sid)
+    if not answered or not isinstance(rec, dict):
+        return {"success": False, "msg": _audit_refuse(f"Couldn't read #{sid} from Spoolman, so its mark stands. "
+                                                       f"Try again in a moment.")["msg"]}
+    if rec.get('id') is None:    # Spoolman's 404 body is a truthy dict
+        flagged.pop(key, None)
+        return {"success": False, "msg": _audit_refuse(f"Spool #{sid} not found")["msg"]}
+    now = spoolman_api.label_flag(rec.get('extra'))
+    if now is not True:
+        flagged.pop(key, None)
+        audit_label_status(sid, now)
+        msg = f"#{sid}'s label status has changed since it was marked, so it was left as it is."
+        state.add_log_entry(f"ℹ️ {msg}", "INFO", "00ccff")
+        return {"success": True, "msg": msg}
+    prior = flagged[key]
+    value = spoolman_api.DELETE_EXTRA_SENTINEL if prior is None else prior
+    res = spoolman_api.update_spool(sid, {'extra': {'needs_label_print': value}})
+    if not res:
+        err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+        if not _audit_label_landed(sid, prior):
+            msg = f"Couldn't undo the mark on #{sid}: {err}"
+            state.add_log_entry(f"❌ {_audit_esc(msg)}", "ERROR", "ff4444")
+            return {"success": False, "msg": msg}
+    elif isinstance(res, dict) and res.get('fcc_uncleared_extras'):        # update_spool logged why
+        return {"success": False, "msg": res.get('fcc_uncleared_note')
+                or f"Couldn't undo the mark on #{sid}: Spoolman kept it."}
+    flagged.pop(key, None)
+    audit_label_status(sid, prior)
+    msg = (f"Undone: #{sid} has no label status again." if prior is None
+           else f"Undone: #{sid}'s label is confirmed again.")
+    state.add_log_entry(f"↩️ {msg}", "INFO", "ffaa00")
+    return {"success": True, "msg": msg}
 
 
 def _audit_spool_where(rec):
@@ -5811,7 +6015,9 @@ def process_audit_scan(scan_result):
     """Handles scans when in Audit Mode: returns a bare dict, and only
     {"status": "error"} reaches the scanner as a refusal. An answer that ended the
     audit carries `audit_ended`. Done with spools to park answers {"status": "ask",
-    ...} and ends nothing: the route turns that into its question (_audit_finish)."""
+    ...} and ends nothing: the route turns that into its question (_audit_finish).
+    `said` is a sentence for the person, `said_type` its toast's kind when it isn't
+    a success."""
     if _AUDIT_END_LOCK.locked():
         return _audit_refuse(AUDIT_FINISHING_MSG)
     session = state.AUDIT_SESSION
@@ -5821,6 +6027,8 @@ def process_audit_scan(scan_result):
     if kind == 'command':
         if scan.get('cmd') in ('done', 'cancel'):
             return _audit_finish(scan.get('cmd'))
+        if scan.get('cmd') == 'needlabel':
+            return _audit_need_label(session)
         return _audit_refuse("Command not allowed in Audit")
     if kind == 'location':
         return _audit_location_scan(session, scan.get('id'))

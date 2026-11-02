@@ -207,20 +207,32 @@ window.cancelAudit = () => {
         .finally(() => { _auditCancelOut = false; window.auditRequestOut(-1); });
 };
 
+// processScan stops a scan under a gating dialog without a word, so a press that
+// goes through it says so here.
+const _auditDialogBehind = () => {
+    if (!state.activeModal) return false;
+    const msg = 'A dialog behind this panel is still open: press Hide and answer it first.';
+    showToast(msg, 'warning', 7000);
+    if (window.auditPanelNotice) window.auditPanelNotice(msg);
+    return true;
+};
+
 // The panel's Done: the scan path, so the button and all three QRs share one
 // answer. Its source is 'keyboard': a press reads no label.
 window.auditDone = () => {
-    // processScan stops a scan under a gating dialog without a word.
-    if (state.activeModal) {
-        const msg = 'A dialog behind this panel is still open: press Hide and answer it first.';
-        showToast(msg, 'warning', 7000);
-        if (window.auditPanelNotice) window.auditPanelNotice(msg);
-        return;
-    }
+    if (_auditDialogBehind()) return;
     if (window.auditPanelBusy) window.auditPanelBusy(true);
     processScan('CMD:DONE', 'keyboard');
     // Stopped short of the server (an open question says why itself): no answer comes.
     if (!state.auditRequestsOut && window.auditPanelBusy) window.auditPanelBusy(false);
+};
+
+// "Needs a label" on the last spool found (Group 58.2): the strip's button and key N.
+// The scan path, as its QR is, in its turn behind any scan read before it: that
+// scan's spool is the one the person means.
+window.auditNeedLabel = () => {
+    if (_auditDialogBehind()) return;
+    (window.sendInScanOrder || processScan)('CMD:NEEDLABEL', 'keyboard');
 };
 
 // Commands the page runs itself never reach the server's audit gate, so it stops
@@ -250,7 +262,9 @@ const _auditCommandRefusal = (upper) => {
 // What a scan the audit took answers. `sentAt`: when the scan went out.
 const _auditScanAnswer = (res, sentAt) => {
     if (res.audit_ended) { window.noteAuditEnded(res.audit_ended); return; }
-    if (window.auditPanelNotice) window.auditPanelNotice('');
+    // `warning`: found, but its label couldn't be checked (toasted by the caller).
+    if (window.auditPanelNotice) window.auditPanelNotice(res.warning || '');
+    if (res.said) showToast(res.said, res.said_type || 'success', 4000);
     // An audit took it, so one runs, whatever this page believed: a scan right
     // after a reload lands before the first heartbeat.
     if (!state.auditActive && window._syncAuditSignal) window._syncAuditSignal({ audit_active: true }, { sentAt });
@@ -1133,6 +1147,8 @@ window.commitBulkMove = () => {
     // Done or Cancel is on its way (window.auditPanelBusy).
     let _busy = false;
     let _busyFocus = null;
+    // "undo that" is on its way.
+    let _undoOut = false;
     // What this panel put on top of itself, closed with it: no overlay outlives its
     // parent. Done's question (window.confirmActivePrint's handle) and the Loose
     // spools list. mountOverlay's `host` only hears a Bootstrap window closing.
@@ -1146,6 +1162,8 @@ window.commitBulkMove = () => {
     let _lastRenderHash = null;
     const _escapeHtml = (s) => String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const PRESS_TIMEOUT_MS = 20000;     // an undo reads and writes a spool
+    const DOUBLE_PRESS_MS = 700;
 
     const _TILES = {
         found: { bg: '#0a2a0a', border: '#0f0', badge: '<span style="color:#0f0; font-weight:bold;">✅ scanned</span>' },
@@ -1154,6 +1172,26 @@ window.commitBulkMove = () => {
         trail: { bg: '#0a2230', border: '#0cf', badge: '<span style="color:#7fe8ff; font-weight:bold;">🔗 loaded</span>' },
     };
 
+    // A spool's name as a tile and the strip show it. The server's rows already
+    // start with "#57" (a bare id is its fallback).
+    const _spoolName = (row) => {
+        const text = String(row.display == null ? '' : row.display);
+        return text.startsWith(`#${row.id}`) ? text : `#${row.id} ${text}`;
+    };
+
+    // What a tile says about a spool's label (Group 58.2). A missing status on a spool
+    // nobody has reached yet says nothing: that is most spools, as on the search cards
+    // (58.5). A found spool with a real label read and no status: the check failed.
+    const _labelWords = (row, found) => {
+        const words = [];
+        if (found && !row.label_read) words.push('✅ found, no label read');
+        if (row.label_status === true) words.push('🏷️ needs a label');
+        else if (found && row.label_read && row.label_status === null) words.push('label status unknown');
+        return words;
+    };
+
+    // Expected tiles are real buttons (window.personMayPress's rule, through the scan
+    // accumulator): a press finds a spool with nothing to scan, and takes that back.
     const _renderTile = (row, kind) => {
         const look = _TILES[kind];
         const swatchBg = (typeof window.makeSwatchHtml === 'function')
@@ -1161,25 +1199,113 @@ window.commitBulkMove = () => {
             : `<span style="display:inline-block;width:28px;height:28px;background:#${row.color || '333'};border-radius:4px;"></span>`;
         const weight = row.remaining_weight != null ? `${Math.round(row.remaining_weight)}g` : '';
         const slot = row.slot ? ` (slot ${_escapeHtml(row.slot)})` : '';
-        // The server's rows already start with "#57" (a bare id is its fallback).
-        const text = String(row.display == null ? '' : row.display);
-        const name = text.startsWith(`#${row.id}`) ? text : `#${row.id} ${text}`;
+        const name = _spoolName(row);
         // Where FCC has it: an Extra's filed place, a loaded spool's head.
         const where = !row.where ? ''
             : (kind === 'extra' ? `📍 ${row.where}` : (kind === 'trail' ? `🔗 on ${row.where}` : ''));
+        const found = kind !== 'missing';
+        const words = _labelWords(row, found);
+        const badge = (kind === 'found' && !row.label_read) ? '' : look.badge;
+        const pressable = kind === 'found' || kind === 'missing';
+        const tag = pressable ? 'button' : 'div';
+        const press = !pressable ? 'class="fcc-audit-tile-box"'
+            : `type="button" class="fcc-audit-tile-box fcc-audit-tile" data-audit-tile="${Number(row.id)}"
+               data-audit-found="${found ? 1 : 0}" aria-pressed="${found}"
+               title="${found ? 'Press if it isn\'t here after all' : 'Press if it\'s here with no label to scan'}"`;
         return `
-            <div style="display:flex; align-items:center; gap:10px; padding:8px;
-                        background:${look.bg}; border:1px solid ${look.border}; border-radius:6px;">
+            <${tag} ${press} style="background:${look.bg}; border:1px solid ${look.border};">
                 ${swatchBg}
-                <div style="flex:1; min-width:0;">
-                    <div class="text-truncate" style="color:#fff; font-weight:600; font-size:0.9rem;"
-                         title="${_escapeHtml(name)}">${_escapeHtml(name)}</div>
-                    <div style="font-size:var(--fcc-fs-small); color:rgba(255,255,255,0.75);">${_escapeHtml(weight)}${slot}</div>
-                    ${where ? `<div style="font-size:var(--fcc-fs-small); color:#fff; overflow-wrap:anywhere;">${_escapeHtml(where)}</div>` : ''}
+                <span style="display:block; flex:1; min-width:0;">
+                    <span class="text-truncate" style="display:block; color:#fff; font-weight:600; font-size:0.9rem;"
+                         title="${_escapeHtml(name)}">${_escapeHtml(name)}</span>
+                    <span style="display:block; font-size:var(--fcc-fs-small); color:rgba(255,255,255,0.75);">${_escapeHtml(weight)}${slot}</span>
+                    ${where ? `<span style="display:block; font-size:var(--fcc-fs-small); color:#fff; overflow-wrap:anywhere;">${_escapeHtml(where)}</span>` : ''}
+                    ${words.map(w => `<span class="fcc-audit-tile-word">${_escapeHtml(w)}</span>`).join('')}
+                </span>
+                ${badge ? `<span style="font-size:var(--fcc-fs-label); white-space:nowrap;">${badge}</span>` : ''}
+            </${tag}>
+        `;
+    };
+
+    // The Last found strip's line: what FCC knows about this spool's label.
+    const _stripLine = (row) => {
+        const tag = `#${row.id}`;
+        if (row.flagged_here) return `${tag} is marked: it needs a label`;
+        if (row.label_status === true) return `${tag} is still flagged for a new label`;
+        if (!row.label_read) return `No label was read for ${tag}`;
+        if (row.label_status === null) return `${tag}'s label was read, but FCC couldn't confirm it`;
+        return `${tag}'s label was read`;
+    };
+
+    // The spool "Needs a label" acts on, above Done / Cancel and held in view while
+    // the tiles scroll (global.css), so the button and its QR are there when the
+    // spool in the person's hand has no label worth scanning. "undo that" has no QR, so
+    // a double read of the mark's own QR can't toggle it.
+    const _renderStrip = (row) => {
+        if (!row) return '';
+        const swatch = (typeof window.makeSwatchHtml === 'function')
+            ? window.makeSwatchHtml(row.color, row.color_direction, { size: 28, borderColor: '#444' }) : '';
+        const name = _escapeHtml(_spoolName(row));
+        return `
+            <div id="fcc-audit-last-found" class="fcc-audit-strip">
+                <div class="fcc-audit-strip-main">
+                    <div class="fcc-audit-strip-title">Last found</div>
+                    <div class="fcc-audit-strip-spool">${swatch}<span class="text-truncate" title="${name}">${name}</span></div>
+                    <div class="fcc-audit-strip-status" role="status">
+                        <span>${_escapeHtml(_stripLine(row))}</span>
+                        ${row.flagged_here ? '<button type="button" id="fcc-audit-label-undo" class="btn btn-sm btn-outline-light">undo that</button>' : ''}
+                    </div>
                 </div>
-                <div style="font-size:var(--fcc-fs-label);">${look.badge}</div>
+                <div class="fcc-audit-strip-action">
+                    <button type="button" id="fcc-audit-panel-needlabel" class="btn btn-sm btn-warning fw-bold">🏷️ Needs a label</button>
+                    <div id="fcc-audit-panel-qr-needlabel" class="fcc-audit-strip-qr"></div>
+                    <div class="fcc-audit-strip-cap">📷 Scan to mark it</div>
+                </div>
             </div>
         `;
+    };
+
+    // A press's answer. The toast layer is under the panel, so a refusal is said on
+    // it too.
+    const _pressRefused = (msg) => {
+        showToast(msg, 'error', 7000);
+        window.auditPanelNotice(msg);
+    };
+
+    const _pressAnswered = (res) => {
+        if (res && res.success) {
+            window.auditPanelNotice('');
+            if (res.msg) showToast(res.msg, 'success', 4000);
+            window.refreshAuditSession();
+            return;
+        }
+        _pressRefused((res && res.msg) || "That didn't go through.");
+        // The audit has gone: the heartbeat says why.
+        if (res && res.stale && typeof updateLogState === 'function') updateLogState(true);
+    };
+
+    const _pressPost = (url, body) => window.fetchT(url, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    }, PRESS_TIMEOUT_MS)
+        .then(r => r.json())
+        .then(_pressAnswered, () => _pressRefused("That press didn't go through: FCC didn't answer. Press it again."));
+
+    // A tile's press says what the tile showed, never "the other one". A second press
+    // of one tile under 700 ms is a double press and does nothing, as on the 🛑 review's
+    // Discard: pressed apart, it takes the first one back.
+    const _pressedAt = new Map();
+    const _pressTile = (tile) => {
+        const id = Number(tile.dataset.auditTile);
+        const now = Date.now();
+        if (now - (_pressedAt.get(id) || 0) < DOUBLE_PRESS_MS) return;
+        _pressedAt.set(id, now);
+        _pressPost('/api/audit/found', { audit_id: state.auditId, id, found: tile.dataset.auditFound !== '1' });
+    };
+
+    // Delegated: the tiles are redrawn with the body.
+    const _bodyClick = (e) => {
+        const tile = e.target && e.target.closest ? e.target.closest('[data-audit-tile]') : null;
+        if (tile) _pressTile(tile);
     };
 
     const _applyBusy = () => {
@@ -1247,9 +1373,10 @@ window.commitBulkMove = () => {
         const grid = 'display:grid; grid-template-columns:repeat(auto-fill,minmax(16.25rem,1fr)); gap:6px;';
         // A note says it already when the place's spools are all in places inside it.
         const nothing = data.location_id ? (data.note ? '' : 'Nothing is filed here.') : "Scan a location's label to start.";
-        // A Done or Cancel the redraw is about to replace keeps the keyboard.
+        // A button or a tile the redraw is about to replace keeps the keyboard.
         const active = document.activeElement;
-        const refocus = (active && /^fcc-audit-panel-(done|cancel)$/.test(active.id || '')) ? active.id : null;
+        const refocus = (active && /^fcc-audit-(panel-(done|cancel|needlabel)|label-undo)$/.test(active.id || '')) ? active.id : null;
+        const refocusTile = (active && active.dataset) ? active.dataset.auditTile : null;
         body.innerHTML = `
             <div style="margin-bottom:10px; font-size:0.95rem;">
                 Auditing <b style="color:#0ff;">${loc}</b> —
@@ -1259,7 +1386,10 @@ window.commitBulkMove = () => {
                 <span style="color:#7fe8ff; font-weight:bold;">${s.trail}</span> loaded from here` : ''}
             </div>
             ${expected.length ? `
-                <div style="font-weight:bold; color:#0ff; margin-bottom:6px;">Expected here</div>
+                <div style="margin-bottom:6px;">
+                    <span style="font-weight:bold; color:#0ff;">Expected here</span>
+                    <span class="small" style="color:rgba(255,255,255,0.75); margin-left:8px;">No label to scan? Press its tile.</span>
+                </div>
                 <div style="${grid} margin-bottom:12px;">
                     ${expectedTiles}
                 </div>
@@ -1281,6 +1411,7 @@ window.commitBulkMove = () => {
                     ${trailTiles}
                 </div>
             ` : ''}
+            ${_renderStrip(data.last_found)}
             <!-- 18.2 Part B follow-up: surface DONE + CANCEL as explicit
                  click-targets AND QR codes so the user has both keyboard/
                  mouse and scanner exits. The deck tile only shows this panel. -->
@@ -1309,11 +1440,27 @@ window.commitBulkMove = () => {
         if (doneBtn) doneBtn.onclick = () => { if (!_busy) window.auditDone(); };
         const cancelBtn = body.querySelector('#fcc-audit-panel-cancel');
         if (cancelBtn) cancelBtn.onclick = () => { if (!_busy) window.cancelAudit(); };
+        const markBtn = body.querySelector('#fcc-audit-panel-needlabel');
+        if (markBtn) markBtn.onclick = () => window.auditNeedLabel();
+        const undoBtn = body.querySelector('#fcc-audit-label-undo');
+        if (undoBtn) {
+            // Not `disabled`: that drops the keyboard's focus, and it goes to the
+            // Needs a label button when this one leaves.
+            undoBtn.onclick = () => {
+                if (_undoOut) return;
+                _undoOut = true;
+                _pressPost('/api/audit/needs_label_undo', { audit_id: state.auditId, id: data.last_found.id })
+                    .finally(() => { _undoOut = false; });
+            };
+        }
         _applyBusy();
         if (refocus && !_busy) {
-            const again = body.querySelector(`#${refocus}`);
+            // "undo that" goes with the mark it undid: the keyboard goes to the button.
+            const again = body.querySelector(`#${refocus}`) || body.querySelector('#fcc-audit-panel-needlabel');
             if (again && again.focus) again.focus();
         }
+        const tile = refocusTile ? body.querySelector(`[data-audit-tile="${refocusTile}"]`) : null;
+        if (tile && tile.focus) tile.focus();
         // Generate QR codes after the placeholders are in the DOM.
         // `generateSafeQR` is a script-scope const in inv_core.js — accessible
         // by bare name (not on window). The wrong `window.generateSafeQR`
@@ -1322,6 +1469,7 @@ window.commitBulkMove = () => {
         if (typeof generateSafeQR === 'function') {
             generateSafeQR('fcc-audit-panel-qr-done', 'CMD:DONE', 90);
             generateSafeQR('fcc-audit-panel-qr-cancel', 'CMD:CANCEL', 90);
+            if (data.last_found) generateSafeQR('fcc-audit-panel-qr-needlabel', 'CMD:NEEDLABEL', 80);
         }
     };
 
@@ -1398,6 +1546,8 @@ window.commitBulkMove = () => {
         // Over the panel, so the confirm tier. A row opens nothing during an audit.
         const looseBtn = _handle.element.querySelector('#fcc-audit-panel-loose');
         if (looseBtn) looseBtn.onclick = () => { _loose = window.openLooseList({ tier: 'confirm' }); };
+        const bodyEl = _handle.element.querySelector('#fcc-audit-panel-body');
+        if (bodyEl) bodyEl.addEventListener('click', _bodyClick);
         // Initial render + start the 2s poll.
         _poll();
         _pollTimer = setInterval(_poll, 2000);
@@ -1426,6 +1576,71 @@ window.commitBulkMove = () => {
     // Poll once RIGHT NOW instead of waiting for the next 2s tick: called after a
     // scan lands, so its tile turns at once. Hidden, it still names the pill's place.
     window.refreshAuditSession = () => { _poll(); };
+
+    // --- The panel's keys (Group 58.2) --------------------------------------------
+    // N marks the last spool found, as the strip's button does; the arrows move
+    // between the tiles, and Enter presses the one with the focus (a real button).
+    // Only while the panel is on top: the question and the Loose spools list own their
+    // keys, and the shortcut list is read, not pressed through.
+    const NEED_LABEL_WAIT_MS = 50;      // slot_picker.js's HOTKEY_WAIT_MS
+
+    const _keyNeedLabel = (e) => {
+        // A held key's repeats are no second press, and no scanner sends one.
+        if (e.repeat) { e.preventDefault(); e.stopImmediatePropagation(); return; }
+        if (window.scanIsArriving && window.scanIsArriving()) return;
+        // The slot picker's rule. Left for the scan accumulator: a label may start with
+        // an N (an old bare location id), and only the key after it can tell, a
+        // scanner's within a few ms. Nothing followed: the person's, so it goes
+        // from the buffer, or it sits in front of the next scan.
+        const root = _handle.element;
+        const left = `${state.scanBuffer || ''}${e.key}`;
+        setTimeout(() => {
+            if (!_handle || _handle.element !== root || state.scanBuffer !== left) return;
+            if (window.isTopOverlay && !window.isTopOverlay(root)) return;
+            if (window.clearScanBuffer) window.clearScanBuffer();
+            window.auditNeedLabel();
+        }, NEED_LABEL_WAIT_MS);
+    };
+
+    const _keyArrow = (e) => {
+        const tiles = Array.from(_handle.element.querySelectorAll('.fcc-audit-tile'));
+        if (!tiles.length) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        const back = e.key === 'ArrowLeft' || e.key === 'ArrowUp';
+        const at = tiles.indexOf(document.activeElement);
+        const next = at < 0 ? (back ? tiles.length - 1 : 0) : (at + (back ? tiles.length - 1 : 1)) % tiles.length;
+        tiles.forEach(t => t.classList.remove('kb-active'));
+        tiles[next].classList.add('kb-active');
+        tiles[next].focus();
+    };
+
+    document.addEventListener('keydown', (e) => {
+        const isN = e.key === 'n' || e.key === 'N';
+        if (!_handle || !(isN || /^Arrow(Up|Down|Left|Right)$/.test(e.key))) return;
+        if (e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+        if (window.isTopOverlay && !window.isTopOverlay(_handle.element)) return;
+        const shortcuts = document.getElementById('fcc-shortcuts-overlay');
+        if (shortcuts && shortcuts.getClientRects().length) return;
+        const tag = ((e.target && e.target.tagName) || '').toUpperCase();
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (e.target && e.target.isContentEditable)) return;
+        if (isN) _keyNeedLabel(e); else _keyArrow(e);
+    }, true);
+
+    if (window.registerShortcut) {
+        window.registerShortcut({
+            id: 'audit-need-label', scope: 'Audit Panel', keys: ['N'],
+            description: 'The last spool found needs a label: raises it in the 🏷️ Backlog. "undo that" on the panel takes it back.',
+        });
+        window.registerShortcut({
+            id: 'audit-tiles', scope: 'Audit Panel', keys: ['↑', '↓', '←', '→'],
+            description: 'Move between the tiles of the spools expected here. Wraps at the ends.',
+        });
+        window.registerShortcut({
+            id: 'audit-tile-press', scope: 'Audit Panel', keys: ['Enter'],
+            description: 'On a tile: found, with no label read. Pressed again, it goes back to not scanned.',
+        });
+    }
 
     // --- Done's question (Group 58, Build spec section 7) -------------------------
     // Done moves nothing until a person says so. It is window.confirmActivePrint's

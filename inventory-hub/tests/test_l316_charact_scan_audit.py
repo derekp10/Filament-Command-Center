@@ -128,11 +128,12 @@ def test_cmd_audit_during_active_session_is_noop_preserves_state(client):
 
 def test_active_audit_hijacks_spool_scan_and_refreshes_watchdog(client):
     """With an active audit session, an ID:<n> scan must be handed to
-    logic.process_audit_scan and must NOT reach the normal spool branch —
-    even a 'barcode'-source ID: scan (which would otherwise flip the
-    needs_label_print flag via update_spool). The route also refreshes
-    last_activity_ts BEFORE delegating; when the handler reports an error the
-    route now surfaces it (28.C2) rather than answering as a scan it took."""
+    logic.process_audit_scan and must NOT reach the normal spool branch. The
+    route also refreshes last_activity_ts BEFORE delegating; when the handler
+    reports an error the route now surfaces it (28.C2) rather than answering as a
+    scan it took. An audit REFUSED this scan, so no label check runs: a real label
+    read runs one only once the audit has taken the spool (Group 58.2, the next
+    test)."""
     stale = time.time() - 999.0
     state.AUDIT_SESSION.update({
         "active": True,
@@ -160,6 +161,36 @@ def test_active_audit_hijacks_spool_scan_and_refreshes_watchdog(client):
     us.assert_not_called()   # label-verify write never ran
     ts = state.AUDIT_SESSION["last_activity_ts"]
     assert ts > stale and before <= ts <= after, "watchdog ts not refreshed"
+
+
+def test_active_audit_runs_the_label_check_once_it_has_taken_the_spool(client):
+    """Group 58.2: the success path of the test above. The audit still gets the scan
+    first and in the same one-argument call, then a real label read of a spool with
+    no status is confirmed: the same full-extras write as outside an audit. The rules
+    around it are tests/test_audit_no_label_58.py, on the real write functions."""
+    state.AUDIT_SESSION.update({
+        "active": True,
+        "location_id": "LR-MDB-1",
+        "expected_items": [10],
+        "scanned_items": [],
+        "rogue_items": [],
+        "last_activity_ts": time.time(),
+    })
+    with patch.object(app_module.logic, "process_audit_scan",
+                      return_value={"status": "success"}) as pas, \
+         patch.object(app_module.spoolman_api, "get_spool_answer",
+                      return_value=({"id": 10, "extra": {"container_slot": "2"}}, True)) as read, \
+         patch.object(app_module.spoolman_api, "update_spool", return_value={"id": 10}) as us, \
+         patch.object(app_module.state, "add_log_entry") as log:
+        r = client.post("/api/identify_scan",
+                        json={"text": "ID:10", "source": "barcode"})
+
+    assert r.get_json() == AUDIT_SCAN
+    pas.assert_called_once_with({"type": "spool", "id": 10})
+    read.assert_called_once_with(10)
+    us.assert_called_once_with(10, {"extra": {"container_slot": "2", "needs_label_print": False}})
+    log.assert_called_once_with("✔️ Spool #10 Label Verified", "SUCCESS", "00ff00")
+    assert state.AUDIT_SESSION["found_by"] == {"10": "label"}
 
 
 def test_active_audit_hijacks_location_scan(client):

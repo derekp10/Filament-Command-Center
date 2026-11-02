@@ -53,6 +53,11 @@ def api_audit_session():
     stored data is read (`_enrich`). `note` is the start note: what this audit
     doesn't check.
 
+    Group 58.2: each row says `label_status` (True, False or None), `label_read`
+    (it was found by a real read of its label) and `flagged_here` (it was marked
+    as needing a label in this audit, so it can be undone). `last_found` is the
+    row of the spool "Needs a label" acts on, or None.
+
     Cheap when no audit is active: {active: False, audit_end}, with no read.
     `audit_end` is the heartbeat's: this poll sees an end first, and the page
     says why from it (_syncAuditSignal).
@@ -71,6 +76,8 @@ def api_audit_session():
     rogue = list(sess.get('rogue_items') or [])
     trail = list(sess.get('trail_items') or [])
     stored = sess.get('rows') or {}
+    found_by = sess.get('found_by') or {}
+    flagged = sess.get('label_flagged') or {}
 
     def _enrich(sid):
         try:
@@ -91,11 +98,14 @@ def api_audit_session():
             "remaining_weight": sp.get('remaining_weight'),
             "slot": slot,
             "where": logic.audit_where(sp.get('location'), slot) if sp else '',
+            "label_status": spoolman_api.label_flag(sp.get('extra')),
         }
 
     def _row(sid):
-        row = stored.get(str(sid))
-        return dict(row) if row else _enrich(sid)
+        row = dict(stored.get(str(sid)) or _enrich(sid))
+        row['label_read'] = found_by.get(str(sid)) == logic.AUDIT_FOUND_BY_LABEL
+        row['flagged_here'] = str(sid) in flagged
+        return row
 
     expected_rows = []
     for sid in expected:
@@ -104,6 +114,8 @@ def api_audit_session():
         expected_rows.append(row)
     rogue_rows = [{**_row(sid), 'found': True, 'rogue': True} for sid in rogue]
     trail_rows = [{**_row(sid), 'found': True, 'trail': True} for sid in trail]
+    last_found = next((r for r in expected_rows + rogue_rows + trail_rows
+                       if r.get('found') and r.get('id') == sess.get('last_found')), None)
 
     return jsonify({
         "active": True,
@@ -118,6 +130,7 @@ def api_audit_session():
         "expected": expected_rows,
         "rogue": rogue_rows,
         "trail": trail_rows,
+        "last_found": last_found,
         "stats": {
             "total_expected": len(expected),
             "found": sum(1 for r in expected_rows if r['found']),

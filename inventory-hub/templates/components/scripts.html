@@ -64,7 +64,7 @@
 <!-- Group 58.4: the 🧺 Loose spools list, opened from the Locations window (and,
      with tier 'confirm', from the audit panel). -->
 <script src="{{ url_for('static', filename='js/modules/inv_loose.js') }}?v=1.1"></script>
-<script src="{{ url_for('static', filename='js/modules/inv_cmd.js') }}?v=1.6"></script>
+<script src="{{ url_for('static', filename='js/modules/inv_cmd.js') }}?v=1.7"></script>
 <script src="{{ url_for('static', filename='js/modules/inv_weigh_out.js') }}?v=2.2"></script>
 
 <!-- Phase 3: Quick-Swap + keyboard shortcuts registry. Must load after
@@ -77,7 +77,7 @@
 <script src="{{ url_for('static', filename='js/modules/inv_printer_status.js') }}?v=1.8"></script>
 <!-- Cancelled-print partial-deduct preview/confirm overlay (FilaBridge §9.7). -->
 <script src="{{ url_for('static', filename='js/modules/cancel_review.js') }}?v=1.1"></script>
-<script src="{{ url_for('static', filename='js/modules/shortcuts_registry.js') }}?v=1.1"></script>
+<script src="{{ url_for('static', filename='js/modules/shortcuts_registry.js') }}?v=1.2"></script>
 <!-- Shared drag-to-park engine for the search FAB + Activity-Log pill. Must load
      before fab_drag.js, which wires both affordances to window.makeDraggablePill. -->
 <script src="{{ url_for('static', filename='js/modules/draggable_pill.js') }}?v=1.2"></script>
@@ -287,6 +287,14 @@
             }
             if (!queue.length && state.scanQueueTimer) { clearInterval(state.scanQueueTimer); state.scanQueueTimer = null; }
         }
+        // A press that goes out as a scan and acts on the scan before it (the audit's
+        // "Needs a label" marks the last spool found) takes its turn as a scan read
+        // now would, or it reaches the server ahead of the spool it means.
+        window.sendInScanOrder = function (text, source) {
+            if (!scanFrozen() && !state.scanQueue.length) { processScan(text, source); return; }
+            state.scanQueue.push({ text, source, capturedAt: Date.now() });
+            if (!state.scanQueueTimer) state.scanQueueTimer = setInterval(drainScanQueue, 250);
+        };
         // Group 50.6: a person's Enter presses the button, link or [role=button]
         // it is on, as a click or Space does (it used to do nothing: every
         // Enter was cancelled below). Only where a mouse could click it now:

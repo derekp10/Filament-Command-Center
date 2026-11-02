@@ -346,15 +346,23 @@ SAMPLE_REVIEW = {"pending": [{
 SAMPLE_AUDIT = {"active": True, "audit_id": "boot-1", "location_id": "LR-MDB-1", "idle_timeout_min": 30,
                 "note": "1 is filed here. 2 more are in the places inside it, and this audit doesn't check those: "
                         "audit each of them.",
-                "stats": {"total_expected": 2, "found": 1, "missing": 1, "rogue": 1, "trail": 1},
+                "stats": {"total_expected": 3, "found": 2, "missing": 1, "rogue": 1, "trail": 1},
                 "expected": [{"id": 57, "display": "#57 Prusament PLA (Purple (Galaxy Purple))", "color": "453A72",
-                              "remaining_weight": 922, "slot": "", "where": "LR-MDB-1", "found": True},
+                              "remaining_weight": 922, "slot": "", "where": "LR-MDB-1", "found": True,
+                              "label_status": True, "label_read": False, "flagged_here": True},
                              {"id": 99, "display": "#99 Tecbears PETG (Clear)", "color": "C4C2C8",
-                              "remaining_weight": 19, "slot": "4", "where": "LR-MDB-1 slot 4", "found": False}],
+                              "remaining_weight": 19, "slot": "4", "where": "LR-MDB-1 slot 4", "found": False,
+                              "label_status": None, "label_read": False, "flagged_here": False},
+                             {"id": 100, "display": "#100 Tecbears PETG (Red)", "color": "C81E1E",
+                              "remaining_weight": 19, "slot": "2", "where": "LR-MDB-1 slot 2", "found": True,
+                              "label_status": None, "label_read": True, "flagged_here": False}],
                 "rogue": [{"id": 134, "display": "#134 Prusament PLA (Pearl White)", "color": "F0F0F0",
-                           "remaining_weight": 924, "slot": "3", "where": "LR-MDB-2 slot 3"}],
+                           "remaining_weight": 924, "slot": "3", "where": "LR-MDB-2 slot 3", "found": True,
+                           "label_status": False, "label_read": True, "flagged_here": False}],
                 "trail": [{"id": 242, "display": "#242 Prusament PLA (Galaxy Black)", "color": "111111",
-                           "remaining_weight": 605, "slot": "1", "where": "XL-4"}]}
+                           "remaining_weight": 605, "slot": "1", "where": "XL-4", "found": True,
+                           "label_status": False, "label_read": True, "flagged_here": False}]}
+SAMPLE_AUDIT["last_found"] = SAMPLE_AUDIT["expected"][0]
 # /api/identify_scan's audit_done_question (pinned in test_audit_question_dialog_58_js).
 SAMPLE_QUESTION = {
     "type": "audit_done_question", "audit_id": "boot-1", "location": "LR-MDB-1", "found": 2, "expected": 18,

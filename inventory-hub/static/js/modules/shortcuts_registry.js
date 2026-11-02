@@ -276,6 +276,11 @@
         description: 'Cancel without moving anything: an active audit (safe bail; opposite of CMD:DONE), the slot picker, or the load question on screen.'
     });
     window.registerShortcut({
+        id: 'scan-cmd-needlabel', scope: 'Scan Commands',
+        keys: ['CMD:NEEDLABEL'],
+        description: 'During an audit: the last spool found needs a label. Reading it twice marks it once.'
+    });
+    window.registerShortcut({
         id: 'scan-cmd-store', scope: 'Scan Commands',
         keys: ['CMD:STORE:<id>'],
         description: '"Just store it" on the load question on screen (scan its own QR): the spool goes in the slot and the toolhead is left alone.'
