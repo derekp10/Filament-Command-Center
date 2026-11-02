@@ -27,9 +27,9 @@ import pytest
 
 import app as app_module
 import state
-from test_audit_panel_58_js import CANCEL, DONE, NOTICE, PANEL, _on_top, audit  # noqa: F401  (audit: the fixture)
+from test_audit_panel_58_js import CANCEL, DONE, HUB, NOTICE, PANEL, _on_top, audit  # noqa: F401  (audit: the fixture)
 from test_audit_session_58 import ROWS, add_spool, env, scan, session, start  # noqa: F401  (env: the fixture)
-from test_scanner_safe_dialogs_61_js import page61  # noqa: F401  (page61: the fixture)
+from test_scanner_safe_dialogs_61_js import MODULES, page61  # noqa: F401  (page61: the fixture)
 from test_slow_scan_slash_js import _type
 
 LABEL = "needs_label_print"
@@ -143,6 +143,31 @@ def key_n(page):
     """A person's N, then the wait the panel gives a scan to go on."""
     _type(page, "n", 1, enter=False)
     page.wait_for_timeout(PAST_N)
+
+
+SHORTCUTS = "#fcc-shortcuts-overlay"
+# Bootstrap's own rules for the classes the list's markup leans on (no CDN here).
+BOOTSTRAP_POSITION = """.position-fixed { position: fixed !important; } .top-0 { top: 0 !important; }
+.start-0 { left: 0 !important; } .top-50 { top: 50% !important; } .start-50 { left: 50% !important; }
+.translate-middle { transform: translate(-50%, -50%) !important; } .w-100 { width: 100% !important; }
+.h-100 { height: 100% !important; }"""
+
+
+def real_shortcut_list(page):
+    """The ⌨️ list's own markup from dashboard.html and the real shortcuts_registry.js.
+    Before an overlay mounts, as on the page: its capture-phase Escape runs first."""
+    src = (HUB / "templates" / "dashboard.html").read_text(encoding="utf-8")
+    start_at = src.index('<div id="fcc-shortcuts-overlay-backdrop"')
+    page.add_style_tag(content=BOOTSTRAP_POSITION)
+    page.evaluate("(markup) => document.body.insertAdjacentHTML('beforeend', markup)",
+                  src[start_at:src.index("<!-- L184", start_at)])
+    page.add_script_tag(content=(MODULES / "shortcuts_registry.js").read_text(encoding="utf-8"))
+
+
+def show_shortcut_list(page):
+    """A person's real ?."""
+    page.keyboard.press("?")
+    page.wait_for_function("(s) => document.querySelector(s).style.display === 'block'", arg=SHORTCUTS)
 
 
 # --- the strip ------------------------------------------------------------------------
@@ -266,6 +291,87 @@ def test_a_flag_shows_before_the_scan_too(live, env):
     add_spool(env, 57, "LR-MDB-1", needs_label_print=True)
     begin(live, env)
     tile_says(live, 57, "needs a label")
+
+
+def test_an_extra_says_so_and_where_fcc_has_it_then_its_label(live, env):
+    """Finding 40. Its tile can be below the fold or under the strip, and a toast is under
+    the panel, so all the person saw change was the count. RED on 1f8e03a."""
+    two(env)
+    add_spool(env, 200, "LR-MDB-2", container_slot="3")
+    begin(live, env)
+    scanned(live, "ID:200")
+    strip_says(live, "Extra: FCC has #200 at LR-MDB-2 slot 3. No label was read for #200")
+    scanned(live, "ID:200", "barcode")
+    strip_says(live, "Extra: FCC has #200 at LR-MDB-2 slot 3. #200's label was read")
+
+
+def test_a_spool_loaded_from_here_says_what_its_on_then_its_label(live, env):
+    """RED on 1f8e03a."""
+    two(env)
+    add_spool(env, 242, "XL-1", physical_source="LR-MDB-1", physical_source_slot="4")
+    begin(live, env)
+    scanned(live, "ID:242")
+    strip_says(live, "#242 is loaded on XL-1 from here. No label was read for #242")
+
+
+def test_an_extra_spoolman_wouldnt_answer_for_reads_as_a_sentence(live, env):
+    """`where` holds logic.AUDIT_WHERE_UNREAD, and FCC "has it at" no such place. RED on
+    1f8e03a."""
+    two(env)
+    add_spool(env, 300, "LR-MDB-2")
+    begin(live, env)
+    env["fake"].down = True
+    scanned(live, "ID:300")
+    env["fake"].down = False
+    assert session()["rows"]["300"]["where"] == "couldn't read where FCC has it"
+    strip_says(live, "Extra: #300: couldn't read where FCC has it. No label was read for #300")
+    assert "FCC has #300" not in live.text_content(STATUS)
+
+
+@pytest.mark.parametrize("place, extra, words", [
+    ("", {}, "Extra: FCC has #300 at Unassigned."),
+    ("UNKNOWN", {"fcc_pre_audit_location": "LR-MDB-2:3@2026-11-01"},
+     "Extra: FCC has #300 at Unknown (marked lost by the audit of LR-MDB-2 slot 3 on 2026-11-01)."),
+    ("A<b>C", {}, "Extra: FCC has #300 at A<b>C."),
+], ids=["unassigned", "lost-by-an-audit", "a-place-that-is-html"])
+def test_each_place_an_extra_can_be_at_reads_as_a_sentence(live, env, place, extra, words):
+    """RED on 1f8e03a."""
+    two(env)
+    add_spool(env, 300, place, **extra)
+    begin(live, env)
+    scanned(live, "ID:300")
+    strip_says(live, words)
+
+
+def test_a_spool_the_list_expected_says_only_its_label(live, env):
+    """A pin: the kind's words are for a spool that isn't on the list."""
+    two(env)
+    begin(live, env)
+    scanned(live, "ID:57")
+    strip_says(live, "No label was read for #57")
+    assert live.text_content(STATUS).strip() == "No label was read for #57"
+
+
+@pytest.mark.parametrize("size", ["standard", "large", "xlarge"])
+def test_the_longest_line_stays_inside_the_strip_at_every_text_size(live, env, size):
+    """A place with nowhere to break, at the sizes the text-size guard reads, on a small
+    laptop: the line wraps inside the strip, and the button and its QR stay in view."""
+    live.set_viewport_size({"width": 1366, "height": 768})
+    live.evaluate("(s) => { document.documentElement.dataset.fccTextSize = s; }", size)
+    two(env)
+    add_spool(env, 300, "UNKNOWN", fcc_pre_audit_location=f"{'X' * 120}:3@2026-11-01")
+    begin(live, env)
+    scanned(live, "ID:300")
+    strip_says(live, "Extra: FCC has #300 at Unknown (marked lost by the audit of XXX")
+    boxes = live.evaluate("""([strip, status, body]) => {
+        const box = (s) => document.querySelector(s).getBoundingClientRect();
+        const b = document.querySelector(body);
+        const line = document.querySelector(status).firstElementChild.getBoundingClientRect();
+        return { line: [line.left, line.right], strip: [box(strip).left, box(strip).right],
+                 widened: b.scrollWidth - b.clientWidth }; }""", [STRIP, STATUS, BODY])
+    assert boxes["strip"][0] <= boxes["line"][0] and boxes["line"][1] <= boxes["strip"][1], boxes
+    assert boxes["widened"] <= 0, boxes
+    assert _on_top(live, BUTTON) and _on_top(live, "#fcc-audit-panel-qr-needlabel")
 
 
 def test_a_failed_label_check_is_said_on_the_panel_and_a_good_scan_clears_it(live, env):
@@ -498,11 +604,13 @@ def test_n_under_dones_question_marks_nothing(live, env):
 
 
 def test_n_under_the_shortcut_list_marks_nothing(live, env):
+    """The real list, opened by a real ?: test_audit_stacking_58_js.py has what follows."""
+    real_shortcut_list(live)
     two(env)
     begin(live, env)
     scanned(live, "ID:57")
     live.wait_for_selector(BUTTON)
-    live.evaluate("() => document.body.insertAdjacentHTML('beforeend', '<div id=\"fcc-shortcuts-overlay\">the list</div>')")
+    show_shortcut_list(live)
     key_n(live)
     assert wire(env, 57) is None
 
@@ -761,18 +869,119 @@ def test_the_strip_stays_in_view_however_long_the_list_is(live, env, height):
     assert _on_top(live, BUTTON) and _on_top(live, "#fcc-audit-panel-qr-needlabel")
 
 
-def test_a_tile_the_arrows_reach_isnt_under_the_strip(live, env):
-    live.set_viewport_size({"width": 1366, "height": 768})
-    for sid in range(1000, 1060):
+def a_long_list(page, env, rows=30, found=True):
+    """`rows` tiles on a small laptop, more than the panel shows, the view at the top of
+    the list. `found`: the first of them scanned, so the strip is up."""
+    ids = list(range(1000, 1000 + rows))
+    for sid in ids:
         add_spool(env, sid, "LR-MDB-1")
-    begin(live, env)
-    scanned(live, "ID:1000")
+    page.set_viewport_size({"width": 1366, "height": 768})
+    begin(page, env)
+    page.wait_for_selector(tile(ids[-1]))
+    if found:
+        scanned(page, f"ID:{ids[0]}")
+        page.wait_for_selector(BUTTON)
+    page.evaluate("(s) => { document.querySelector(s).scrollTop = 0; }", BODY)
+    return ids
+
+
+# The tile and its focus ring (2 px, 1 px out) inside the box the strip leaves.
+RING_CLEAR = r"""([sel, body, strip]) => {
+    const t = document.querySelector(sel).getBoundingClientRect();
+    const b = document.querySelector(body).getBoundingClientRect();
+    const s = document.querySelector(strip);
+    const floor = s ? Math.min(b.bottom, s.getBoundingClientRect().top) : b.bottom;
+    return t.top - 3 >= b.top && t.bottom + 3 <= floor;
+}"""
+
+
+def walked(page, key, steps):
+    """Each tile `key` lands on, and whether it is seen: its centre can be hit, and the
+    whole of it and its ring clear the strip and the body's top edge. A tile under the
+    strip has the keyboard on it with no highlight or name to see."""
+    seen = []
+    for _ in range(steps):
+        page.keyboard.press(key)
+        sid = page.evaluate("document.activeElement.dataset.auditTile")
+        seen.append((int(sid), _on_top(page, tile(sid)) and page.evaluate(RING_CLEAR, [tile(sid), BODY, STRIP])))
+    return seen
+
+
+@pytest.mark.parametrize("key", ["ArrowRight", "ArrowLeft"], ids=["forward", "back"])
+def test_every_tile_the_arrows_reach_is_in_view(live, env, key):
+    """Finding 37. A tile under the sticky strip is already inside the scrolling box, so
+    neither focus() nor scrollIntoView moved it, and Enter or Space then found a spool
+    nobody could see. Past the far end too, where the walk wraps. RED on 1f8e03a."""
+    ids = a_long_list(live, env)
+    seen = walked(live, key, len(ids) + 1)
+    assert {sid for sid, _ in seen} == set(ids)
+    assert [sid for sid, shown in seen if not shown] == []
+
+
+@pytest.mark.parametrize("key, first", [("Tab", 0), ("Shift+Tab", -1)], ids=["forward", "back"])
+def test_every_tile_tab_reaches_is_in_view(live, env, key, first):
+    """The same gap for Tab, whose focus no key handler sees: a capture-phase `focus`
+    listener, because mountOverlay's guard stops focusin at the document. RED on
+    1f8e03a."""
+    ids = a_long_list(live, env)
+    live.focus(tile(ids[first]))
+    seen = walked(live, key, len(ids) - 1)
+    assert sorted(sid for sid, _ in seen) == sorted(set(ids) - {ids[first]})
+    assert [sid for sid, shown in seen if not shown] == []
+
+
+def test_on_a_window_too_short_for_a_sticky_strip_every_tile_still_shows(live, env):
+    """Under 34rem the strip stays in the flow, below the tiles (global.css): only the
+    body's edges are left to clear. A pin: the browser's own focus scroll does this."""
+    ids = a_long_list(live, env)
+    live.set_viewport_size({"width": 1366, "height": 500})
+    assert live.evaluate("(s) => getComputedStyle(document.querySelector(s)).position", STRIP) == "static"
+    seen = walked(live, "ArrowRight", len(ids))
+    assert [sid for sid, shown in seen if not shown] == []
+
+
+def test_a_strip_that_appears_doesnt_cover_the_keyboards_tile(live, env):
+    """The first find draws the strip over the tiles, and the redraw keeps the keyboard
+    on its tile. RED on 1f8e03a."""
+    ids = a_long_list(live, env, found=False)
+    box = live.evaluate("""(s) => { const b = document.querySelector(s).getBoundingClientRect();
+        return { top: b.top, bottom: b.bottom }; }""", BODY)
+    lowest = live.evaluate("""([sel, bottom]) => Array.from(document.querySelectorAll(sel))
+        .filter((t) => t.getBoundingClientRect().bottom < bottom).pop().dataset.auditTile""",
+                           [".fcc-audit-tile", box["bottom"]])
+    live.focus(tile(lowest))
+    scanned(live, f"ID:{ids[0]}")
     live.wait_for_selector(BUTTON)
-    live.evaluate("(s) => { document.querySelector(s).scrollTop = 0; }", BODY)
-    for _ in range(30):
-        live.keyboard.press("ArrowRight")
-    assert live.evaluate("document.activeElement.dataset.auditTile") == "1029"
-    assert _on_top(live, tile(1029))
+    assert live.evaluate("document.activeElement.dataset.auditTile") == lowest
+    assert _on_top(live, tile(lowest))
+
+
+@pytest.mark.parametrize("edge", ["strip", "top"])
+def test_a_click_on_a_tile_half_out_of_view_still_presses_it(live, env, edge):
+    """A click's mousedown focuses the tile. Pressed this close to the edge, a tile scrolled
+    clear of it leaves the pointer in the gap between tiles, the mouseup lands there, and
+    the click reaches no tile. A pin: proved on a copy with no :focus-visible test in the
+    panel's `focus` listener."""
+    a_long_list(live, env)
+    live.wait_for_timeout(PAST_A_DOUBLE_PRESS)
+    # A tile with 12 px of it showing, at the strip's top edge or the body's, and the
+    # pointer 3 px from that edge.
+    aim = live.evaluate("""([body, strip, edge]) => {
+        const b = document.querySelector(body);
+        const line = edge === 'strip' ? document.querySelector(strip).getBoundingClientRect().top
+                                      : b.getBoundingClientRect().top;
+        const tiles = Array.from(document.querySelectorAll('.fcc-audit-tile'));
+        const t = tiles.find((el) => el.getBoundingClientRect().top > line + 200);
+        const r = t.getBoundingClientRect();
+        b.scrollTop += edge === 'strip' ? r.top + 12 - line : r.bottom - 12 - line;
+        const now = t.getBoundingClientRect();
+        return { id: t.dataset.auditTile, x: now.left + now.width / 2, line,
+                 hit: edge === 'strip' ? now.top - line : now.bottom - line,
+                 y: edge === 'strip' ? now.top + 9 : now.bottom - 9 }; }""", [BODY, STRIP, edge])
+    assert aim["hit"] == pytest.approx(-12 if edge == "strip" else 12, abs=1)    # it really straddles the edge
+    press(live, (aim["x"], aim["y"]))
+    tile_says(live, aim["id"], "found, no label read")
+    assert [b["id"] for b in sent(live, FOUND_URL)] == [int(aim["id"])]
 
 
 def test_a_long_name_stays_on_one_line_and_the_panel_doesnt_widen(live, env):
@@ -1213,6 +1422,77 @@ def test_a_double_click_on_back_that_brings_a_hidden_panel_back_lands_on_nothing
     live.wait_for_timeout(150)
     assert "CMD:CANCEL" not in sent(live) and session()["active"] is True
     assert live.is_visible(PANEL)
+
+
+def hide_then_ask(page, env):
+    """The panel hidden, and Done's question up from a scan, as the Location Manager's QR
+    or the FINISH tile's asks it."""
+    three(env)
+    begin(page, env)
+    scanned(page, "ID:57")
+    page.wait_for_selector(BUTTON)
+    page.click(HIDE)
+    page.wait_for_selector(PANEL, state="detached")
+    scanned(page, "CMD:DONE")
+    page.wait_for_function("(s) => document.activeElement === document.querySelector(s)", arg=BACK)
+
+
+# The panel's polls wait until window.__letPollsGo(): it mounts with no Done to focus.
+HOLD_POLLS = r"""() => {
+    const plain = window.fetchT;
+    let go;
+    const held = new Promise((resolve) => { go = resolve; });
+    window.__letPollsGo = go;
+    window.fetchT = (u, o, ms) => (String(u).indexOf('/api/audit_session') !== -1
+        ? held.then(() => plain(u, o, ms)) : plain(u, o, ms));
+}"""
+
+
+@pytest.mark.parametrize("answer", ["Enter", "Escape", "click"])
+def test_back_with_the_panel_hidden_hands_the_keyboard_to_done(live, env, answer):
+    """Finding 41. A panel brought back mounts empty, and its body comes with the first
+    poll, so there was no Done to focus: the keyboard fell to the page, and Enter did
+    nothing. RED on 1f8e03a."""
+    hide_then_ask(live, env)
+    if answer == "click":
+        live.click(BACK)
+    else:
+        live.keyboard.press(answer)
+    live.wait_for_selector(QUESTION, state="detached")
+    live.wait_for_selector(DONE)
+    live.wait_for_function("(s) => document.activeElement === document.querySelector(s)", arg=DONE)
+    live.wait_for_timeout(PAST_A_DOUBLE_PRESS)
+    live.keyboard.press("Enter")
+    live.wait_for_selector(QUESTION)
+
+
+def test_done_leaves_a_keyboard_that_moved_on_while_the_panel_drew(live, env):
+    """The person has gone somewhere on the panel since: Done doesn't take the focus. A pin
+    of the test in _render: proved on a copy without it."""
+    hide_then_ask(live, env)
+    live.evaluate(HOLD_POLLS)
+    live.keyboard.press("Enter")
+    live.wait_for_selector(HIDE)
+    live.keyboard.press("Tab")                  # the panel's trap: its first control
+    assert live.evaluate("document.activeElement.id") == LOOSE_BTN[1:]
+    live.evaluate("window.__letPollsGo()")
+    live.wait_for_selector(DONE)
+    assert live.evaluate("document.activeElement.id") == LOOSE_BTN[1:]
+
+
+def test_a_panel_hidden_again_before_it_drew_forgets_the_keyboard(live, env):
+    """Hide has the last word: the next time the panel comes up, nothing is owed to Done.
+    A pin of the flag's reset: proved on a copy without it."""
+    hide_then_ask(live, env)
+    live.evaluate(HOLD_POLLS)
+    live.keyboard.press("Enter")
+    live.wait_for_selector(HIDE)
+    live.evaluate("window.closeAuditPanel()")
+    live.wait_for_selector(PANEL, state="detached")
+    live.evaluate("() => { window.openAuditPanel(); window.__letPollsGo(); }")
+    live.wait_for_selector(DONE)
+    live.wait_for_timeout(100)
+    assert live.evaluate("document.activeElement.id") != DONE[1:]
 
 
 def test_a_double_enter_on_back_doesnt_ask_again(live, env):

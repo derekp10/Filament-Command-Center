@@ -424,6 +424,15 @@ def test_review_audit_and_bulk_move_panels_text_is_readable(page: Page, base_url
     page.evaluate("() => window.auditPanelNotice('Already auditing LR-MDB-1. Finish first!')")
     assert page.is_visible("#fcc-audit-panel-notice") and page.is_visible("#fcc-audit-panel-note")
     assert_text_size(page.locator("#fcc-audit-panel-overlay"))
+    # Group 58's review: the strip's longest line, an Extra an earlier audit lost.
+    lost = dict(SAMPLE_AUDIT["rogue"][0], rogue=True,
+                where="Unknown (marked lost by the audit of LR-MDB-2 slot 3 on 2026-11-01)")
+    page.evaluate("(s) => { const plain = window.fetchT; window.fetchT = (u, ...r) => String(u).includes('/api/audit_session')"
+                  " ? Promise.resolve({ json: () => Promise.resolve(s) }) : plain(u, ...r); window.refreshAuditSession(); }",
+                  dict(SAMPLE_AUDIT, last_found=lost))
+    page.wait_for_function("() => (document.querySelector('#fcc-audit-last-found [role=status]') || {}).textContent"
+                           " && document.querySelector('#fcc-audit-last-found [role=status]').textContent.includes('marked lost')")
+    assert_text_size(page.locator("#fcc-audit-last-found"))
     page.evaluate("() => window.closeAuditPanel()")
     page.wait_for_timeout(400)
     if not page.evaluate("() => window.FCC_BULK_MOVE_ENABLED === true && typeof window.openBulkMovePanel === 'function'"):

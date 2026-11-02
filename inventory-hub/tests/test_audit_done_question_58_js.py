@@ -919,6 +919,58 @@ return { open, closed, shell: shell() };
 
 # --- Undo --------------------------------------------------------------------------
 
+UNDO_NOT_ANSWERED = "FCC didn't answer, so the Undo may not have finished. Check the Activity Log before pressing it again."
+
+
+def test_undo_waits_as_long_as_a_big_park_takes_it(tmp_path, asked):
+    """A park's Undo reads and writes every spool in it, one strict read per box too, so it
+    is the slowest request FCC makes. It used no timeout at all. RED on 1f8e03a: plain
+    fetch, so the timeout seen here was none."""
+    res = _q(tmp_path, """
+const timeouts = [];
+const plain = window.fetchT;
+window.fetchT = (u, o, ms) => { if (u === '/api/undo') timeouts.push(ms); return plain(u, o, ms); };
+answerWith('/api/undo', [ALL]);
+triggerUndo({ confirm: true, undoId: 'x', heads: [] });
+await __settle(40);
+return { timeouts, toasts: timed() };
+""", ALL=asked["undo_all"])
+    assert res["timeouts"] == [120000]
+    assert res["toasts"] == [{"msg": asked["undo_all"]["msg"], "type": "success", "ms": 4000}]
+
+
+@pytest.mark.parametrize("failing", ["Promise.reject(new Error('The operation timed out'))",
+                                     "Promise.resolve({ json: () => Promise.reject(new SyntaxError('Unexpected token <')) })"],
+                         ids=["no-answer-in-time", "an-error-page"])
+def test_no_answer_to_an_undo_says_it_may_not_have_finished(tmp_path, failing):
+    """Past the timeout the server may well still be putting spools back, and "Undo failed"
+    invites a second press. The log line is what the toast sends the person to. RED on
+    1f8e03a."""
+    res = _q(tmp_path, """
+window.fetchT = () => %s;
+triggerUndo({ confirm: true, undoId: 'x', heads: [] });
+await __settle(40);
+return { toasts: timed(), logs: logLines() };
+""" % failing)
+    assert res["toasts"] == [{"msg": UNDO_NOT_ANSWERED, "type": "error", "ms": 7000}]
+    assert any(UNDO_NOT_ANSWERED in line for line in res["logs"]), res["logs"]
+
+
+def test_an_exception_after_an_undos_answer_doesnt_read_as_no_answer(tmp_path, asked):
+    """The answer landed, so the words would be false: the park's rule, which has the same
+    test. RED on 1f8e03a, in the old words: "Undo failed: no answer from the server"."""
+    res = _q(tmp_path, """
+answerWith('/api/undo', [ALL]);
+window.fetchLocations = () => { throw new Error('a bug after the answer'); };
+const errors = [];
+console.error = (e) => errors.push(String(e));
+triggerUndo({ confirm: true, undoId: 'x', heads: [] });
+await __settle(40);
+return { toasts: timed(), errors };
+""", ALL=asked["undo_all"])
+    assert res["toasts"] == [] and res["errors"]
+
+
 def test_an_undo_that_left_a_spool_alone_stays_up_long_enough_to_read(tmp_path, asked):
     """Its sentence names where the spool went, and the rest of the batch is back."""
     res = _q(tmp_path, """

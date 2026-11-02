@@ -18,12 +18,14 @@ console.log("🚀 Loaded Module: LOOSE SPOOLS");
 //         button passes #locMgrModal.
 //
 // Keyboard (standing order): ↑ / ↓ move the .kb-active row (wrapping), Enter opens
-// the row's place, Escape closes the list only (mountOverlay owns Escape). During
-// an audit a row opens nothing, by Enter or a click: the place would open behind
-// the audit panel. A scan's Enter is left to the scan accumulator (scripts.html),
-// and a scan passes on as ever: this list answers none. A window a scan opens
-// meanwhile closes the list, which would otherwise sit over it (the Low stock
-// list's rule).
+// the row's place, Escape closes the list only (mountOverlay owns Escape), and Tab
+// stays inside the list (mountOverlay's trapTab), between ✕ and the highlighted row.
+// During an audit a row opens nothing, by Enter or a click: the place would open
+// behind the audit panel. A scan's Enter is left to the scan accumulator
+// (scripts.html), and a scan passes on as ever: this list answers none. A window a
+// scan opens meanwhile closes the list, which would otherwise sit over it (the Low
+// stock list's rule). The legacy picker a scan can open mounts over it instead (same
+// tier, last mounted), and the list's keys stand down while it is up.
 
 (function () {
     const OVERLAY_ID = 'fcc-loose-list';
@@ -148,11 +150,16 @@ ${P} .fcc-loose-foot { color:#ccc; font-size:var(--fcc-fs-small); margin-top:8px
 
     function _highlight(handle, idx) {
         const rows = _rows(handle);
-        rows.forEach((r) => { r.classList.remove('kb-active'); r.setAttribute('aria-current', 'false'); });
+        rows.forEach((r) => {
+            r.classList.remove('kb-active');
+            r.setAttribute('aria-current', 'false');
+            r.tabIndex = -1;
+        });
         const row = rows[idx];
         if (!row) return;
         row.classList.add('kb-active');
         row.setAttribute('aria-current', 'true');
+        row.tabIndex = 0;       // the one row Tab stops at, or Tab could never come back to the list
         try { row.focus({ preventScroll: true }); } catch (_) { /* noop */ }
         try { row.scrollIntoView({ block: 'nearest' }); } catch (_) { /* noop */ }
     }
@@ -371,6 +378,7 @@ ${P} .fcc-loose-foot { color:#ccc; font-size:var(--fcc-fs-small); margin-top:8px
             tier: o.tier === 'confirm' ? 'confirm' : 'standard',
             content: _shellHtml(),
             host: o.host || undefined,
+            trapTab: true,
             // No initialFocus: _load takes it now. mountOverlay's comes a tick later,
             // and would take it back from the row a quick answer had highlighted.
             // Not the second click of a double click on the button that opened it.

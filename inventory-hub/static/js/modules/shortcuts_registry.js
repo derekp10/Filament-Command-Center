@@ -120,6 +120,16 @@
             e.preventDefault();
             e.stopImmediatePropagation();
             window.toggleShortcutsOverlay();
+        } else if (e.key === 'Enter' && ov.style.display === 'block' && !ov.contains(e.target)
+                   && !(window.enterIsAScan && window.enterIsAScan())) {
+            // The list is read, not pressed through. It sits above every overlay, so a
+            // person's Enter here can't be meant for what it covers, and a dialog's
+            // own Enter handler would answer a question they can't see (Group 58
+            // review: a Yes with the focus on it). A scan's Enter goes on: scans work
+            // under the list.
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            if (window.clearScanBuffer) window.clearScanBuffer();
         }
     }, true);  // capture phase — beats Bootstrap's bubble-phase handler
 

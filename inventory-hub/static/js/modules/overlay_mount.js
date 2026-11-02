@@ -19,6 +19,7 @@
 //       backdrop: true,                // dark backdrop (default true)
 //       backdropDismiss: false,        // click-outside cancels (default false)
 //       focusGuard: true,              // capture-phase focusin neutralizer (default true)
+//       trapTab: false,                // Tab stays inside it while it is on top (default false)
 //       initialFocus: '#my-input',     // selector or HTMLElement
 //       onEscape: () => handle.cleanup(),  // default = handle.cleanup()
 //       onBackdropClick: () => {},
@@ -34,7 +35,16 @@
 //   - Z-index ladder: 20000 (standard) / 20100 (confirm). Anything in the app
 //     that needs to sit above a Bootstrap modal/offcanvas uses one of these.
 //     Toast layer (11000) intentionally sits below — toasts shouldn't occlude
-//     a confirm overlay.
+//     a confirm overlay. The ⌨️ shortcut list (dashboard.html) sits above both
+//     (backdrop 20200, list 20201): it is read over whatever is open, and the
+//     keys of what is under it stand down while it is up.
+//   - Tab: `trapTab: true` keeps Tab and Shift+Tab inside the overlay while it is on
+//     top, wrapping at the ends, and brings a focus left outside it to its first
+//     control. Group 58 review: Tab walked out of the Loose spools list onto the
+//     audit panel's buttons, where a mouse can't reach and nobody sees the focus,
+//     and Space pressed Cancel Audit. It stops only Tab, with stopPropagation, so
+//     the document's other capture listeners (the legacy picker's, which reads a
+//     Tab as a person's key) still hear it.
 //   - Focus guard: capture-phase focusin listener on document that
 //     stopImmediatePropagation's events targeting the overlay subtree. Defeats
 //     Bootstrap's modal _enforceFocus trap without subtree mounting.
@@ -92,6 +102,24 @@
         return !!root && top === root;
     }
 
+    // What Tab can land on right now: in the tab order, enabled and on screen.
+    const TAB_CANDIDATES = 'a[href], button, input, select, textarea, summary, [tabindex], [contenteditable="true"]';
+    function _tabStops(root) {
+        return Array.from(root.querySelectorAll(TAB_CANDIDATES)).filter((el) => (
+            el.tabIndex >= 0 && !el.matches(':disabled') && !el.closest('[inert]')
+            && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden'));
+    }
+
+    // The stop Tab goes to next. From a focused element that is no stop itself (a list
+    // row out of the tab order, the panel), the nearest stop that way.
+    function _nextTabStop(stops, from, back) {
+        const at = stops.indexOf(from);
+        if (at !== -1) return stops[(at + (back ? stops.length - 1 : 1)) % stops.length];
+        const side = back ? Node.DOCUMENT_POSITION_PRECEDING : Node.DOCUMENT_POSITION_FOLLOWING;
+        const near = stops.filter((el) => from.compareDocumentPosition(el) & side);
+        return (back ? near[near.length - 1] || stops[stops.length - 1] : near[0] || stops[0]);
+    }
+
     function mountOverlay(opts) {
         const o = opts || {};
         const id = o.id;
@@ -101,6 +129,7 @@
         const backdrop = o.backdrop !== false;
         const backdropDismiss = o.backdropDismiss === true;
         const focusGuard = o.focusGuard !== false;
+        const trapTab = o.trapTab === true;
         const className = o.className || '';
         const occludeList = Array.isArray(o.occlude)
             ? o.occlude
@@ -175,6 +204,22 @@
         };
         document.addEventListener('keydown', onKey, true);
         disposers.push(() => document.removeEventListener('keydown', onKey, true));
+
+        if (trapTab) {
+            const onTab = (e) => {
+                if (e.key !== 'Tab' || e.ctrlKey || e.altKey || e.metaKey) return;
+                if (!isTopOverlay(root)) return;       // an overlay over this one owns the keys
+                e.preventDefault();
+                e.stopPropagation();
+                const stops = _tabStops(root);
+                if (!stops.length) return;
+                const from = document.activeElement;
+                const next = (from && root.contains(from)) ? _nextTabStop(stops, from, e.shiftKey) : stops[0];
+                next.focus();
+            };
+            document.addEventListener('keydown', onTab, true);
+            disposers.push(() => document.removeEventListener('keydown', onTab, true));
+        }
 
         if (focusGuard) {
             const guard = (e) => {

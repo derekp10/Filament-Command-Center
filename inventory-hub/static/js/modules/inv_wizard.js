@@ -3939,8 +3939,9 @@ window.wizardSubmit = async () => {
                 // user didn't touch says nothing. Sent as drawn, it wrote "confirmed"
                 // on a filament with no status at every Save (Group 58.5), and kept a
                 // new filament out of the Backlog (the server flags one only when
-                // the key is left out).
-                if (key === 'needs_label_print' && !wizardExtraTouched('fil', key)) return;
+                // the key is left out). The swatch status is the same: "No" on a
+                // filament whose status is "unknown" (Group 58 review).
+                if (['needs_label_print', 'sample_printed'].includes(key) && !wizardExtraTouched('fil', key)) return;
 
                 if (el.type === 'checkbox') {
                     f_payload.extra[key] = el.checked;

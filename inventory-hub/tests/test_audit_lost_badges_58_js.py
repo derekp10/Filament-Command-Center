@@ -215,10 +215,19 @@ def test_the_spool_window_says_it_in_words_for_a_screen_with_no_hover(tmp_path, 
     assert '<span class="fcc-keep-whole">slot 2</span>' in res["html"]
 
 
+def test_the_spool_windows_tooltip_agrees_with_its_badge(tmp_path, lost):
+    """Finding 45. The badge named the audit and the tooltip said "last known location
+    unknown": the cards' badges were changed for this and this one wasn't. RED on
+    1f8e03a."""
+    res = _js(tmp_path, _OPEN, modules=DETAILS, DETAILS=lost["details"])
+    assert res["title"] == f"Marked lost by {BY}. Click to open the Unknown list."
+
+
 def test_the_spool_window_of_a_spool_no_audit_lost_is_as_it_was(tmp_path, lost):
     """Pins what was right."""
     res = _js(tmp_path, _OPEN, modules=DETAILS, DETAILS=lost["details_plain"])
     assert res["text"] == "❓ Unknown" and res["cls"] == "badge bg-warning text-dark ms-2 me-1"
+    assert res["title"] == "Physically lost — last known location unknown. Click to open the Unknown bucket."
 
 
 def test_an_older_note_reads_right_in_the_spool_window(tmp_path, lost):

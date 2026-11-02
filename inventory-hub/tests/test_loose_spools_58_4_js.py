@@ -350,6 +350,42 @@ def test_the_second_click_of_a_double_click_does_not_close_it(loose):
     assert page.locator(OVERLAY).count() == 1
 
 
+def _focused(page):
+    return page.evaluate("""() => { const a = document.activeElement;
+        return a.classList.contains('fcc-loose-row') ? a.dataset.spool
+            : (a.hasAttribute('data-loose-close') ? 'close' : (a.hasAttribute('data-loose-retry') ? 'retry' : a.id || a.tagName)); }""")
+
+
+@pytest.mark.parametrize("key", ["Tab", "Shift+Tab"])
+def test_tab_stays_in_the_list(loose, key):
+    """Group 58's review, finding 27: from the Locations window too, Tab walked out of the
+    list onto what lies under it. It goes between ✕ and the highlighted row, which is
+    the one row in the tab order, or Tab could never come back to the list."""
+    page, open_list = loose
+    open_list(_answer(LOOSE))
+    _wait_state(page, "ready")
+    page.keyboard.press("ArrowDown")
+    assert page.locator(ROW + "[tabindex='0']").count() == 1
+    assert page.locator(ACTIVE).get_attribute("tabindex") == "0"
+    walk = []
+    for _ in range(4):
+        page.keyboard.press(key)
+        walk.append(_focused(page))
+    assert walk == ["close", "15", "close", "15"]
+
+
+def test_tab_walks_a_failed_read_too(loose):
+    """✕ and Try again: with no rows, Tab has only those."""
+    page, open_list = loose
+    open_list(_answer(DOWN))
+    _wait_state(page, "error")
+    walk = []
+    for _ in range(3):
+        page.keyboard.press("Shift+Tab")
+        walk.append(_focused(page))
+    assert walk == ["close", "retry", "close"]
+
+
 def test_a_scans_enter_is_the_scan_paths(loose):
     """Keys in the scan buffer: the Enter ends that scan, it opens nothing."""
     page, open_list = loose

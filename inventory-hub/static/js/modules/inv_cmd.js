@@ -1210,6 +1210,8 @@ window.commitBulkMove = () => {
     let _stripSpool = null;
     // When Done's question was last answered: see _shieldClick.
     let _questionClosedAt = 0;
+    // Back brought a hidden panel back: Done takes the keyboard once it exists.
+    let _focusDoneNext = false;
     // What this panel put on top of itself, closed with it: no overlay outlives its
     // parent. Done's question (window.confirmActivePrint's handle) and the Loose
     // spools list. mountOverlay's `host` only hears a Bootstrap window closing.
@@ -1288,14 +1290,34 @@ window.commitBulkMove = () => {
         `;
     };
 
-    // The Last found strip's line: what FCC knows about this spool's label.
-    const _stripLine = (row) => {
+    // A spool found here that isn't on the list, in a sentence: its tile can be below
+    // the fold or under this strip, and a toast is under the panel. Nothing for a
+    // spool the list expected. An Extra Spoolman wouldn't answer for has `where`
+    // saying so (logic.AUDIT_WHERE_UNREAD), and FCC "has it at" no such place.
+    const WHERE_UNREAD = "couldn't read where FCC has it";
+    const _stripFoundHere = (row) => {
+        const tag = `#${row.id}`;
+        const where = String(row.where == null ? '' : row.where);
+        if (row.trail) return where ? `${tag} is loaded on ${where} from here` : `${tag} is loaded from here`;
+        if (!row.rogue) return '';
+        if (!where) return `Extra: ${tag}`;
+        return where === WHERE_UNREAD ? `Extra: ${tag}: ${where}` : `Extra: FCC has ${tag} at ${where}`;
+    };
+
+    // What FCC knows about this spool's label.
+    const _stripLabel = (row) => {
         const tag = `#${row.id}`;
         if (row.flagged_here) return `${tag} is marked: it needs a label`;
         if (row.label_status === true) return `${tag} is still flagged for a new label`;
         if (!row.label_read) return `No label was read for ${tag}`;
         if (row.label_status === null) return `${tag}'s label was read, but FCC couldn't confirm it`;
         return `${tag}'s label was read`;
+    };
+
+    // The Last found strip's line.
+    const _stripLine = (row) => {
+        const here = _stripFoundHere(row);
+        return here ? `${here}. ${_stripLabel(row)}` : _stripLabel(row);
     };
 
     // The spool "Needs a label" acts on, above Done / Cancel and held in view while
@@ -1540,6 +1562,11 @@ window.commitBulkMove = () => {
         }
         const tile = refocusTile ? body.querySelector(`[data-audit-tile="${refocusTile}"]`) : null;
         if (tile && tile.focus) tile.focus();
+        // Unless the person has gone somewhere on the panel since.
+        if (_focusDoneNext) {
+            _focusDoneNext = false;
+            if (!root.contains(document.activeElement)) _focusDone();
+        }
         // Generate QR codes after the placeholders are in the DOM.
         // `generateSafeQR` is a script-scope const in inv_core.js — accessible
         // by bare name (not on window). The wrong `window.generateSafeQR`
@@ -1619,6 +1646,7 @@ window.commitBulkMove = () => {
             tier: 'standard',
             backdrop: true,
             backdropDismiss: false,  // Audit is in progress; Hide is the explicit dismiss
+            trapTab: true,           // the page behind it is out of reach, as for the mouse
             onEscape: () => window.closeAuditPanel(),
         });
         // Each time the panel opens: Back brings a hidden one back, under the pointer.
@@ -1629,7 +1657,12 @@ window.commitBulkMove = () => {
         const looseBtn = _handle.element.querySelector('#fcc-audit-panel-loose');
         if (looseBtn) looseBtn.onclick = () => { _loose = window.openLooseList({ tier: 'confirm' }); };
         const bodyEl = _handle.element.querySelector('#fcc-audit-panel-body');
-        if (bodyEl) bodyEl.addEventListener('click', _bodyClick);
+        if (bodyEl) {
+            bodyEl.addEventListener('click', _bodyClick);
+            // `focus` in the capture phase: mountOverlay's focus guard stops focusin at
+            // the document, before it reaches anything inside the overlay.
+            bodyEl.addEventListener('focus', _tileFocused, true);
+        }
         // Initial render + start the 2s poll.
         _poll();
         _pollTimer = setInterval(_poll, 2000);
@@ -1639,6 +1672,7 @@ window.commitBulkMove = () => {
     // left up would answer a question about an audit that has gone.
     window.closeAuditPanel = () => {
         _panelGen += 1;
+        _focusDoneNext = false;
         if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
         if (_question) {
             const open = _question;
@@ -1686,6 +1720,33 @@ window.commitBulkMove = () => {
         }, NEED_LABEL_WAIT_MS);
     };
 
+    // A tile the keyboard reaches is seen whole: clear of the Last found strip, which
+    // stays stuck to the body's bottom edge over the tiles, and of the body's top edge.
+    // The browser's own focus scroll won't do it: a tile under the strip is already
+    // inside the scrolling box, so neither focus() nor scrollIntoView moves it, whatever
+    // scroll-margin says.
+    const TILE_AIR_PX = 6;              // the focus ring (2 px + 1 px offset) and a little
+    const _tileClear = (tile) => {
+        const body = _handle && _handle.element.querySelector('#fcc-audit-panel-body');
+        if (!body || !tile) return;
+        const box = body.getBoundingClientRect();
+        const strip = body.querySelector('#fcc-audit-last-found');
+        const floor = strip ? Math.min(box.bottom, strip.getBoundingClientRect().top) : box.bottom;
+        const under = tile.getBoundingClientRect().bottom + TILE_AIR_PX - floor;
+        if (under > 0) body.scrollTop += under;
+        const over = box.top + TILE_AIR_PX - tile.getBoundingClientRect().top;
+        if (over > 0) body.scrollTop -= over;
+    };
+
+    // Tab into a tile, and the keyboard's tile drawn again under a strip that has just
+    // appeared. Not a mouse's focus: a click's own mousedown focuses the tile, and a
+    // tile pressed near the edge and scrolled out from under the pointer would lose the
+    // click to the gap its mouseup lands in.
+    const _tileFocused = (e) => {
+        const tile = e.target;
+        if (tile && tile.matches && tile.matches('.fcc-audit-tile:focus-visible')) _tileClear(tile);
+    };
+
     const _keyArrow = (e) => {
         const tiles = Array.from(_handle.element.querySelectorAll('.fcc-audit-tile'));
         if (!tiles.length) return;
@@ -1697,6 +1758,7 @@ window.commitBulkMove = () => {
         tiles.forEach(t => t.classList.remove('kb-active'));
         tiles[next].classList.add('kb-active');
         tiles[next].focus();
+        _tileClear(tiles[next]);
     };
 
     document.addEventListener('keydown', (e) => {
@@ -1841,9 +1903,11 @@ window.commitBulkMove = () => {
                 _questionClosedAt = Date.now();
                 showToast('Back to the audit: nothing moved.', 'info', 4000);
                 if (window.logClientEvent) window.logClientEvent(`ℹ️ Done's question: back to the audit of ${window.escHtml(res.location)}, nothing moved`, 'INFO');
-                // Hidden, the words on the button still have to be true.
+                // Hidden, the words on the button still have to be true. A panel just
+                // brought back has no Done yet: its body comes with the first poll.
+                _focusDoneNext = !_handle;
                 window.openAuditPanel();
-                _focusDone();
+                if (!_focusDoneNext) _focusDone();
             },
         });
         _question = asked;
@@ -3452,10 +3516,24 @@ window._placeBufferWithPicker = _placeBufferWithPicker;
 // it called out as printing (the shared confirm), else the plain yes/no dialog
 // (Claude's call 9). The toast says what really went back; a failure names the
 // spool at 7 s; "Nothing to undo" is an info toast.
+const UNDO_TIMEOUT_MS = 120000;     // a big park's Undo reads and writes every spool in it
+
+// Past the timeout the server may well still be putting spools back, and a second
+// press would ask about whatever it hasn't reached. Only for no answer: an exception
+// after an answer must not read as this.
+const _undoNotAnswered = () => {
+    const msg = "FCC didn't answer, so the Undo may not have finished. Check the Activity Log before pressing it again.";
+    showToast(msg, 'error', 7000);
+    if (window.logClientEvent) window.logClientEvent(`⚠️ ${msg}`, 'WARNING');
+    if (typeof updateLogState === 'function') updateLogState(true);
+};
+
 const triggerUndo = (opts = {}) => {
     const body = {};
     if (opts.confirm) { body.confirm = true; body.undo_id = opts.undoId; body.confirmed_toolheads = opts.heads || []; }
-    fetch('/api/undo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    window.fetchT('/api/undo', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    }, UNDO_TIMEOUT_MS)
         .then(r => r.json())
         .then((res) => {
             if (res && res.requires_confirm) {
@@ -3487,8 +3565,8 @@ const triggerUndo = (opts = {}) => {
             if (res && res.success) showToast(res.msg || '↩️ Undone', 'success', (res.left_alone || []).length ? 7000 : 4000);
             else if (res && res.nothing) showToast(res.msg, 'info', 4000);
             else showToast((res && res.msg) || 'Undo failed', 'error', 7000);
-        })
-        .catch(() => showToast('Undo failed: no answer from the server', 'error', 7000));
+        }, _undoNotAnswered)
+        .catch(e => console.error(e));
 };
 
 const printLabel = (sid) => {

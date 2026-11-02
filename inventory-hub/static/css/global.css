@@ -2771,7 +2771,7 @@ body:has(.cmd-deck) #fcc-audit-pill {
 
 /* The audit panel's tiles (Group 58.2). An expected spool's tile is a real button:
    a press finds a spool with no label to scan. Its colours are each kind's own,
-   inline. Clear of the Last found strip below when the arrows scroll one into view. */
+   inline. */
 .fcc-audit-tile-box {
     display: flex;
     align-items: center;
@@ -2783,7 +2783,6 @@ body:has(.cmd-deck) #fcc-audit-pill {
     color: #fff;
     font: inherit;
     text-align: left;
-    scroll-margin-bottom: 11rem;
 }
 button.fcc-audit-tile { cursor: pointer; }
 button.fcc-audit-tile:hover { filter: brightness(1.3); }
@@ -2850,14 +2849,21 @@ button.fcc-audit-tile.kb-active {
     font-size: var(--fcc-fs-small);
     color: #ffe08a;
 }
+.fcc-audit-strip-status > span { min-width: 0; overflow-wrap: anywhere; }
 .fcc-audit-strip-action {
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 0.25rem;
 }
+/* The QR draws two frames after each redraw, 80 px in px as generateSafeQR is asked for
+   it. The box holds that size meanwhile: an empty one left the strip short for those
+   frames, and the tile just scrolled clear of it went under it when it grew. */
 .fcc-audit-strip-qr {
     display: inline-block;
+    box-sizing: border-box;
+    min-width: 88px;
+    min-height: 88px;
     background: #fff;
     padding: 4px;
     border-radius: 4px;

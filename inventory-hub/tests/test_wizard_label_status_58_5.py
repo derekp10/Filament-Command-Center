@@ -12,6 +12,11 @@ The rule now: the box is sent only when the user changed it
 (`wizardExtraTouched('fil', 'needs_label_print')`), and a deliberate untick still
 sends false, which the server honours (test_print_queue.py).
 
+`sample_printed` is its twin (Group 58's review; reproduced the same way on
+2026-11-02: an untouched box sent `sample_printed: false`). The filament window reads
+it in three states too (Yes / No / unknown), so every Save turned "unknown" into "No"
+on a filament nobody had looked at. The same gate, and the same cases.
+
 Hermetic and page-level: the REAL modals_wizard.html, overlay_mount.js, inv_core.js,
 choice_validation.js, weight_utils.js, empty_weight_field.js and inv_wizard.js in
 `isolated_page` (no network), so it runs under --offline. Clicks are real clicks on
@@ -222,15 +227,88 @@ def test_the_next_wizard_session_forgets_a_touch(wizard):
     assert "needs_label_print" not in extra, extra
 
 
-def test_the_rule_is_only_the_label_status(wizard):
-    """Control: the box beside it still sends what it did, so this fix changes the
-    one key the study named. (Its own false write is a filed follow-up, not this
-    slice.)"""
+def test_an_edit_of_a_filament_with_no_swatch_status_sends_none(wizard):
+    """The twin's case 1, the reproduction: nothing touched, nothing written. RED on
+    1f8e03a: `sample_printed: false`, "No" on a filament whose status is unknown."""
+    _open_edit(wizard, {"filament_attributes": ["Matte"]})
+    assert wizard.locator(SAMPLE_BOX).is_checked() is False
+    extra = _save(wizard, EDIT)["filament_data"]["extra"]
+    assert "sample_printed" not in extra, extra
+
+
+def test_a_new_filament_writes_no_swatch_status(wizard):
+    """The twin's case 2: nobody has said, so the filament window reads "unknown". RED on
+    1f8e03a: false."""
+    _open_new_filament(wizard)
+    data = _save(wizard, CREATE)["filament_data"]
+    assert data["name"] == "Test Red"
+    assert "sample_printed" not in data["extra"], data["extra"]
+
+
+def test_ticking_the_swatch_box_sends_true(wizard):
+    """The twin's case 3. A pin: proved on a copy that never sends the box."""
+    _open_edit(wizard, {})
+    wizard.locator(SAMPLE_BOX).check()
+    assert _touched(wizard) == ["fil:sample_printed"]
+    assert _save(wizard, EDIT)["filament_data"]["extra"]["sample_printed"] is True
+
+
+def test_ticking_then_unticking_the_swatch_box_sends_false(wizard):
+    """The twin's case 4: a deliberate "no swatch" stays possible. A pin, as above."""
+    _open_edit(wizard, {})
+    wizard.locator(SAMPLE_BOX).check()
+    wizard.locator(SAMPLE_BOX).uncheck()
+    assert _touched(wizard) == ["fil:sample_printed"]
+    assert _save(wizard, EDIT)["filament_data"]["extra"]["sample_printed"] is False
+
+
+def test_a_new_filament_can_still_say_either_about_its_swatch(wizard):
+    """Cases 3 and 4 on a create. A pin, as above."""
+    _open_new_filament(wizard)
+    wizard.locator(SAMPLE_BOX).check()
+    assert _save(wizard, CREATE)["filament_data"]["extra"]["sample_printed"] is True
+
+
+@pytest.mark.parametrize("stored,ticked", [(True, True), ("true", True), (False, False), ("false", False)])
+def test_an_edit_leaves_a_stored_swatch_status_alone(wizard, stored, ticked):
+    """A status on record is drawn as it stands, and an untouched box leaves it. A key left
+    out is kept by the server's read-merge and by Spoolman 0.26+."""
+    _open_edit(wizard, {"sample_printed": stored})
+    assert wizard.locator(SAMPLE_BOX).is_checked() is ticked
+    extra = _save(wizard, EDIT)["filament_data"]["extra"]
+    assert "sample_printed" not in extra, extra
+
+
+def test_unticking_a_stored_swatch_status_sends_false(wizard):
+    """The box drawn ticked, unticked by a person: the swatch is gone. A pin, as above."""
+    _open_edit(wizard, {"sample_printed": True})
+    wizard.locator(SAMPLE_BOX).uncheck()
+    assert _save(wizard, EDIT)["filament_data"]["extra"]["sample_printed"] is False
+
+
+def test_a_touch_of_one_box_says_nothing_about_the_other(wizard):
+    """Each box answers for itself. A pin, as above."""
     _open_edit(wizard, {})
     wizard.locator(SAMPLE_BOX).check()
     extra = _save(wizard, EDIT)["filament_data"]["extra"]
     assert extra["sample_printed"] is True, extra
     assert "needs_label_print" not in extra, extra
+
+
+def test_the_rule_is_only_the_three_state_boxes(wizard):
+    """Control: an extra with two states of its own still goes out as drawn, and so does
+    the spool's own boolean, so this changes the two keys it names. A pin: proved on a
+    copy that gates every box."""
+    fields = json.loads(json.dumps(FIELDS))
+    fields["fields"]["filament"].append({"entity_type": "filament", "field_type": "boolean", "key": "fcc_test_flag",
+                                         "name": "A test flag", "order": 16})
+    fields["fields"]["spool"].append({"entity_type": "spool", "field_type": "boolean", "key": "is_refill",
+                                      "name": "Is Refill", "order": 8})
+    wizard.evaluate("(a) => { window.__answers['/api/external/fields'] = a; }", fields)
+    _open_edit(wizard, {})
+    body = _save(wizard, EDIT)
+    assert body["filament_data"]["extra"]["fcc_test_flag"] is False, body
+    assert body["spool_data"]["extra"]["is_refill"] is False, body
 
 
 @pytest.mark.usefixtures("require_server")
@@ -255,10 +333,12 @@ def test_the_real_page_sends_no_status_for_an_untouched_box(page, base_url):
     page.wait_for_function("() => wizardState.mode === 'edit_spool' && !!document.getElementById('wiz_fil_ef_needs_label_print')"
                            " && !document.getElementById('btn-wiz-submit').disabled", timeout=15_000)
     assert page.locator(BOX).is_checked() is False
+    assert page.locator(SAMPLE_BOX).is_checked() is False
     page.locator("#btn-wiz-submit").click()
     page.wait_for_timeout(500)
     assert len(seen) == 1, seen
     assert "needs_label_print" not in seen[0]["filament_data"]["extra"], seen[0]
+    assert "sample_printed" not in seen[0]["filament_data"]["extra"], seen[0]
 
 
 def test_the_new_filament_payload_is_flagged_by_the_real_server_rule():

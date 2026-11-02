@@ -16,9 +16,18 @@ console.log("🚀 Loaded Module: DUPLICATE PICKER");
 // opts.onAbort(): called when the user cancels OR queues a label (no further
 //                 scan flow — the re-labeling route disambiguates from here).
 //
-// Inline overlay (no nested Swal — see CLAUDE.md "Project Conventions").
+// Inline overlay (no nested Swal — see CLAUDE.md "Project Conventions"), at the
+// confirm tier always: it opens from a scan, so it can open over anything that
+// lets a scan through, the 🧺 Loose spools list included (Group 58 review: at the
+// standard tier it opened behind that list, and every later scan went dead with
+// nothing on screen saying why). An open question holds scans off, so no question
+// can need to sit above it: same tier, last mounted wins.
 // Keyboard: Enter activates focused button (defaults to "Use selected"),
-// Escape cancels.
+// Escape cancels, Tab stays inside it (trapTab). The list opens with no spool
+// picked, on purpose: a stray Enter finds nothing. Until one is picked, "Use
+// selected" and "Print new label" say so and the picker stays up (Group 58
+// review: Enter closed it with no spool and no word, and an audit went on to
+// offer the spool in the person's hand for parking).
 // Scans (Group 61; Derek, 2026-10-29: "hold until answered … or if the ID
 // matches a spool for the group, than maybe select that spool"): a scan never
 // presses a button here. Its Enter and any Space inside it are the scan's, so
@@ -106,6 +115,8 @@ window.showLegacySpoolPicker = (payload, opts = {}) => {
     const handle = window.mountOverlay({
         id: 'fcc-legacy-picker-overlay',
         content: panelHtml,
+        tier: 'confirm',
+        trapTab: true,
         focusGuard: true,
         initialFocus: '#fcc-legacy-picker-use',
         onEscape: () => { cleanup(); onAbort(); },
@@ -123,17 +134,24 @@ window.showLegacySpoolPicker = (payload, opts = {}) => {
         return id == null ? null : (candidates.find(c => c.id === id) || null);
     };
 
+    // Nothing picked: the question stays up and says so, the keyboard in the list.
+    const askForPick = () => {
+        flash('Pick a spool first');
+        const list = sel();
+        if (list) list.focus();
+    };
+
     const onUseClick = () => {
         const id = chosenId();
+        if (id == null) { askForPick(); return; }
         cleanup();
-        if (id != null) onSelect(id, 'keyboard');
-        else onAbort();
+        onSelect(id, 'keyboard');
     };
 
     const onPrintClick = () => {
         const c = chosenCandidate();
+        if (!c) { askForPick(); return; }
         cleanup();
-        if (!c) { onAbort(); return; }
         if (window.addToQueue) {
             const ok = window.addToQueue({
                 id: c.id,

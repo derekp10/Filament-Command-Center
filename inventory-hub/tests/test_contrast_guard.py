@@ -273,7 +273,12 @@ def test_audit_panel_and_pill_are_readable(page: Page, base_url: str, assert_con
     # The strip's other lines are that one's own element and class; each is drawn here.
     for line, row in (("No label was read for #99", {"id": 99, "label_read": False, "flagged_here": False, "label_status": None}),
                       ("#100 is still flagged for a new label", {"id": 100, "label_read": True, "flagged_here": False, "label_status": True}),
-                      ("#134's label was read", {"id": 134, "label_read": True, "flagged_here": False, "label_status": False})):
+                      ("#134's label was read", {"id": 134, "label_read": True, "flagged_here": False, "label_status": False}),
+                      # Group 58's review: what a spool off the list is, on the same line.
+                      ("Extra: FCC has #134 at LR-MDB-2 slot 3", {"id": 134, "label_read": True, "flagged_here": False,
+                                                                  "label_status": False, "rogue": True, "where": "LR-MDB-2 slot 3"}),
+                      ("#242 is loaded on XL-4 from here", {"id": 242, "label_read": False, "flagged_here": False,
+                                                            "label_status": None, "trail": True, "where": "XL-4"})):
         sample = dict(SAMPLE_AUDIT, last_found=dict(SAMPLE_AUDIT["last_found"], **row))
         page.evaluate("(s) => { const plain = window.fetchT; window.fetchT = (u, ...r) => String(u).includes('/api/audit_session')"
                       " ? Promise.resolve({ json: () => Promise.resolve(s) }) : plain(u, ...r); window.refreshAuditSession(); }", sample)

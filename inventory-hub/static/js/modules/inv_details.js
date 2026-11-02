@@ -121,7 +121,10 @@ const openSpoolDetails = (id, silent = false) => {
                     else locBadge.innerText = '❓ Unknown';
                     locBadge.className = `badge bg-warning text-dark ms-2 me-1${lost ? ' text-wrap text-start' : ''}`;
                     locBadge.style.cursor = "pointer";
-                    locBadge.title = "Physically lost — last known location unknown. Click to open the Unknown bucket.";
+                    // Its tooltip can't say the place is unknown under a badge naming it.
+                    locBadge.title = lost
+                        ? `Marked lost by ${lost.by}. Click to open the Unknown list.`
+                        : "Physically lost — last known location unknown. Click to open the Unknown bucket.";
                     locBadge.onclick = () => {
                         if (typeof modals !== 'undefined' && modals.spoolModal) modals.spoolModal.hide();
                         if (window.openManage) window.openManage('UNKNOWN');
