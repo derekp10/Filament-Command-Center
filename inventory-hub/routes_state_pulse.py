@@ -396,7 +396,9 @@ def _pulse_section_printer_status(spools=None):
     from concurrent.futures import ThreadPoolExecutor
 
     cfg = config_loader.load_config()
-    printer_map = locations_db.get_active_printer_map()  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
+    # Group 50.1: one read of the rows serves the map and each printer's id.
+    loc_rows = locations_db.load_locations_list()
+    printer_map = locations_db.get_active_printer_map(loc_rows)  # L271 P4 step 2: Printer-row toolheads[] (dual-read)
     _, fb_url = config_loader.get_api_urls()
     grouped = {}
     for loc_id, info in printer_map.items():
@@ -423,7 +425,9 @@ def _pulse_section_printer_status(spools=None):
     # (direct location + physical_source ghost).
     all_tids = [str(loc_id).upper() for loc_id in printer_map.keys()]
     if spools is None:
-        spools_by_tid = spoolman_api.bucket_spools_by_location(all_tids)
+        # The read bucket_spools_by_location would make itself, kept for the
+        # stored spools below (Group 50.4).
+        tick_list = spoolman_api.get_all_spools(allow_archived=False)
     else:
         # Group 52.1a: the tick's shared list. A failed read buckets nothing,
         # every head empty, as the fail-open read did before; answering
@@ -431,12 +435,42 @@ def _pulse_section_printer_status(spools=None):
         # (one more whole-list read per head) just when Spoolman is slow. The
         # pulse says the read failed in its sibling `spool_read` key (reads-1),
         # so the widget keeps the tiles it drew instead of drawing these empties.
-        spools_by_tid = spoolman_api.bucket_spools_by_location(all_tids, spools=spools.get() or [])
+        tick_list = spools.get() or []
+    spools_by_tid = spoolman_api.bucket_spools_by_location(all_tids, spools=tick_list)
+
+    def stored_for(feeds, box_items):
+        """Group 50.4 ("stored, not loaded"): the spools stored in a box slot
+        that feeds this head and not loaded on it, as a mid-print "Just store
+        it" leaves one (Derek, 2026-10-30: every such spool, a slot prepped on
+        purpose included). Only a multi-slot box's own slot: a single-slot box's
+        slot-1 binding follows its spool onto the head (Group 42), and a
+        Printer Pool slot feeds no one head (not listed here). A spool counts
+        only while its own record files it in that very slot (a deployed
+        spool's trail there is a ghost, and an archived one waits for no load)."""
+        out = []
+        for b in feeds:
+            box = str(b.get('box', '')).strip().upper()
+            slot = logic._norm_slot(b.get('slot'))
+            if not box or not slot:
+                continue
+            for it in box_items.get(box, []):
+                if it.get('is_ghost') or it.get('archived'):
+                    continue
+                if str(it.get('location') or '').strip().upper() != box or logic._norm_slot(it.get('slot')) != slot:
+                    continue
+                out.append({'id': it.get('id'), 'display': it.get('display'), 'box': str(b.get('box', '')).strip(),
+                            'slot': slot})
+        return out
 
     def fetch_for_printer(item):
         name, entries = item
         bindings_result = locations_db.get_bindings_for_machine(name, printer_map)
         bindings = bindings_result.get('toolheads', {})
+        # Group 50.4: the multi-slot box slots feeding each head, and their
+        # boxes' spools from the same list (one pass, no read of its own).
+        feeds = {tid: [b for b in (bindings.get(tid) or []) if not b.get('single_slot')] for tid in bindings}
+        feed_boxes = sorted({str(b.get('box', '')).strip().upper() for lst in feeds.values() for b in lst} - {''})
+        box_items = (spoolman_api.bucket_spools_by_location(feed_boxes, spools=tick_list) if feed_boxes else {})
         toolheads = []
         for entry in entries:
             tid = entry['location_id']
@@ -458,6 +492,9 @@ def _pulse_section_printer_status(spools=None):
             }
             if len(direct) > 1:
                 th_out['loaded_ids'] = [c.get('id') for c in direct]
+            waiting = stored_for(feeds.get(tid, []), box_items)
+            if waiting:
+                th_out['waiting'] = waiting
             toolheads.append(th_out)
         toolheads.sort(key=lambda t: (t['position'], t['id']))
         # Direct PrusaLink probe — runs regardless of dryer-box bindings,
@@ -469,7 +506,12 @@ def _pulse_section_printer_status(spools=None):
             state_info = prusalink_api.get_printer_state(fb_url, name)
         except Exception:
             state_info = None
-        return name, {'toolheads': toolheads, 'state': state_info}
+        # Group 50.1: the printer's own id (its Printer row's LocationID), for
+        # the folded strip's "By ID" setting. The row that lists the printer's
+        # first head decides, so two rows sharing a Name still give one id;
+        # '' when no row lists it (the strip then shows the name).
+        printer_id = locations_db.printer_owning_toolhead(loc_rows, entries[0]['location_id']) if entries else None
+        return name, {'toolheads': toolheads, 'state': state_info, 'id': printer_id or ''}
 
     out = {}
     max_workers = max(1, min(8, len(grouped)))

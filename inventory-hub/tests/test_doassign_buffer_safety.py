@@ -182,10 +182,10 @@ def test_doassign_swap_pushes_displaced_on_success(page: Page):
 # Active-print confirm overlay: keyboard contract.
 # ---------------------------------------------------------------------------
 #
-# The dialog focuses Continue Anyway by default so keyboard users get the
-# standard "Enter activates the default action" UX. Cancel is one Tab away,
-# Escape always cancels. Native <button> Enter-activation handles Enter on
-# the focused button — no document-level keyHandler override.
+# The dialog focuses Cancel by default (Group 50.6; Derek, 2026-10-29: an
+# accidental double press must not disrupt a print); Continue Anyway is one
+# Tab away, Escape always cancels. It focused Continue Anyway before, the
+# keyboard-accept default he had asked for earlier.
 #
 # Earlier history: a document-capture keyHandler unconditionally mapped
 # Enter → proceed, which meant Enter on a focused Cancel button still
@@ -249,29 +249,37 @@ def _setup_active_print_overlay(page: Page):
     page.wait_for_selector("#fcc-apc-yes", state="attached", timeout=3_000)
 
 
-def test_active_print_confirm_continue_focused_by_default(page: Page):
-    """Restored keyboard-accept UX: Continue Anyway is focused on dialog
-    open so keyboard users get the standard 'press Enter to accept the
-    default action' behavior. Cancel is one Tab away."""
+def test_active_print_confirm_cancel_focused_by_default(page: Page):
+    """Cancel is focused on dialog open (Group 50.6; Derek, 2026-10-29: "Yes,
+    please move it to cancel, I don't want an accidental double press to mess
+    things up"). It used to be Continue Anyway, a keyboard-accept default he
+    had asked for earlier; Continue Anyway is now one Tab away."""
     _setup_active_print_overlay(page)
     focused_id = page.evaluate("() => document.activeElement && document.activeElement.id")
-    assert focused_id == "fcc-apc-yes", (
-        f"Expected #fcc-apc-yes (Continue Anyway) focused on dialog open; "
-        f"got {focused_id!r}. Default focus drives Enter-to-accept."
+    assert focused_id == "fcc-apc-no", (
+        f"Expected #fcc-apc-no (Cancel) focused on dialog open; got {focused_id!r}."
     )
 
 
-def test_active_print_confirm_enter_default_focus_assigns(page: Page):
-    """Keyboard accept: with default focus on Continue, pressing Enter
-    activates Continue and the assign goes through. This is the UX the
-    user explicitly asked to restore."""
+def test_active_print_confirm_enter_on_the_default_cancels(page: Page):
+    """Enter on the default (Cancel) assigns nothing and closes the dialog."""
     _setup_active_print_overlay(page)
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(400)
+    assert page.evaluate("() => window.__assignHits") == 0
+    assert page.locator("#fcc-active-print-confirm-overlay").count() == 0
+
+
+def test_active_print_confirm_tab_then_enter_on_continue_assigns_once(page: Page):
+    """Tab to Continue Anyway, then Enter: ONE assign."""
+    _setup_active_print_overlay(page)
+    page.keyboard.press("Tab")
+    assert page.evaluate("() => document.activeElement.id") == "fcc-apc-yes"
     page.keyboard.press("Enter")
     page.wait_for_timeout(400)
     assigns = page.evaluate("() => window.__assignHits")
     assert assigns == 1, (
-        f"Enter on the default-focused Continue button should fire ONE assign POST. "
-        f"Saw {assigns}. Native <button> Enter-activation isn't firing onclick."
+        f"Enter on a focused Continue button should fire ONE assign POST. Saw {assigns}."
     )
 
 
@@ -309,26 +317,26 @@ def test_active_print_confirm_tab_cycles_between_buttons(page: Page):
     back to Continue. Focus never escapes the overlay to the page behind
     (or to browser chrome)."""
     _setup_active_print_overlay(page)
-    # Default focus: Continue.
+    # Default focus: Cancel (Group 50.6).
+    assert page.evaluate("() => document.activeElement.id") == "fcc-apc-no"
+    # Tab → wrap to Continue.
+    page.keyboard.press("Tab")
     assert page.evaluate("() => document.activeElement.id") == "fcc-apc-yes"
     # Tab → Cancel.
     page.keyboard.press("Tab")
     assert page.evaluate("() => document.activeElement.id") == "fcc-apc-no"
-    # Tab → wrap back to Continue.
-    page.keyboard.press("Tab")
-    assert page.evaluate("() => document.activeElement.id") == "fcc-apc-yes"
 
 
 def test_active_print_confirm_shift_tab_reverses(page: Page):
     """Shift+Tab wraps from Continue back to Cancel, then to Continue."""
     _setup_active_print_overlay(page)
-    assert page.evaluate("() => document.activeElement.id") == "fcc-apc-yes"
-    # Shift+Tab from Continue → wrap to Cancel.
-    page.keyboard.press("Shift+Tab")
     assert page.evaluate("() => document.activeElement.id") == "fcc-apc-no"
     # Shift+Tab from Cancel → Continue.
     page.keyboard.press("Shift+Tab")
     assert page.evaluate("() => document.activeElement.id") == "fcc-apc-yes"
+    # Shift+Tab from Continue → wrap to Cancel.
+    page.keyboard.press("Shift+Tab")
+    assert page.evaluate("() => document.activeElement.id") == "fcc-apc-no"
 
 
 def test_active_print_confirm_tab_reels_in_stray_focus(page: Page):

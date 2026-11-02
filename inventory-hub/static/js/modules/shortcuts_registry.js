@@ -149,6 +149,11 @@
         description: 'Cancel the active confirm overlay.'
     });
     window.registerShortcut({
+        id: 'bind-picker-unbind', scope: 'Quick-Swap',
+        keys: ['Shift', 'Del'],
+        description: 'In "Bind a Slot": clear the highlighted slot\'s binding.'
+    });
+    window.registerShortcut({
         id: 'force-loc-arrows', scope: 'Force Location Modal',
         keys: ['↑', '↓'],
         description: 'Navigate matching locations; Enter selects, Esc prompts before closing.'

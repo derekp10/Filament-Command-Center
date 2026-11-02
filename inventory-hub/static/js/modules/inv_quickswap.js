@@ -144,6 +144,10 @@
         if (grid) clearKbActive(grid);
         btn.classList.add('kb-active');
         btn.focus({ preventScroll: true });
+        // A disabled tile takes no focus: the last tile keeps it, and Enter would
+        // press that one, not the one highlighted (Group 50 review). Let it go,
+        // so Enter answers the highlight (it says why the slot can't be used).
+        if (document.activeElement !== btn && document.activeElement) document.activeElement.blur();
     };
 
     // Track the currently-viewed location so bindings edit / return-to-slot
@@ -690,7 +694,14 @@
             content: panelHtml,
             tier: 'confirm',  // sits above the Location Manager modal
             focusGuard: true,
-            initialFocus: '#fcc-quickswap-yes',
+            // On a printing head it opens on "No, cancel", as the printing
+            // yes / no does (Group 50.6; Derek, 2026-10-29: "I don't want an
+            // accidental double press to mess things up"): a swap that disrupts
+            // the print takes a deliberate Tab or click. So does a head FCC can't
+            // vouch for (the note: the printer didn't answer, and the server's
+            // own probe fails open; Group 50 review). An idle head's swap keeps
+            // Yes first (Undo covers it).
+            initialFocus: (stateInfo || note) ? '#fcc-quickswap-no' : '#fcc-quickswap-yes',
             onEscape: close,
         });
         const ov = handle.element;
@@ -750,13 +761,16 @@
     // refreshManageView has a content-hash cache for anti-wiggle polling;
     // we bust it explicitly here because we *know* the contents changed.
     const _refreshAfterMove = () => {
-        if (!currentLoc) return;
-        const id = currentLoc.LocationID;
+        // No head's view opened yet (Printer Status's "I loaded it"): nothing to
+        // redraw here, but the rest of the page still hears of the move.
+        const id = currentLoc ? currentLoc.LocationID : null;
         const doRefresh = () => {
-            try { if (typeof state !== 'undefined') state.lastLocRenderHash = null; } catch (e) { /* noop */ }
-            if (window.refreshManageView) window.refreshManageView(id);
-            if (window.renderQuickSwapSection && currentLoc) {
-                window.renderQuickSwapSection(currentLoc);
+            if (id) {
+                try { if (typeof state !== 'undefined') state.lastLocRenderHash = null; } catch (e) { /* noop */ }
+                if (window.refreshManageView) window.refreshManageView(id);
+                if (window.renderQuickSwapSection && currentLoc) {
+                    window.renderQuickSwapSection(currentLoc);
+                }
             }
             document.dispatchEvent(new CustomEvent('inventory:locations-changed'));
         };
@@ -1187,8 +1201,12 @@
         showConfirmOverlay({
             ...opts,
             title: `Load ${opts.box} slot ${opts.slot} into ${opts.toolhead}?`,
+            // Escaped (Group 50.4): a spool's name is free text, and the
+            // label is plain text wherever it comes from (the card's
+            // data-spool-label, the tile's innerText, Printer Status's
+            // "I loaded it").
             body: (spoolLabel
-                    ? `<div class="text-warning fw-bold mb-2">Spool: ${spoolLabel}</div>`
+                    ? `<div class="text-warning fw-bold mb-2">Spool: ${_escapeHtml(spoolLabel)}</div>`
                     : '')
                 + 'This moves that spool onto <b>' + opts.toolhead + '</b>. '
                 + 'Any spool currently on the toolhead goes back to <em>its own</em> recorded source box — '
@@ -1519,7 +1537,7 @@
             // the full Feeds editor just to clear a slot.
             const unbindBtn = s.target
                 ? `<button type="button" class="fcc-bind-picker-unbind btn btn-sm btn-outline-warning fw-bold ms-2"
-                        data-idx="${i}" title="Clear this slot's binding without rebinding it">
+                        data-idx="${i}" tabindex="-1" title="Clear this slot's binding without rebinding it">
                         🔗✖ Unbind
                     </button>`
                 : '';
@@ -1787,6 +1805,13 @@
             } else if (e.key === 'Enter') {
                 e.preventDefault();
                 _pickerCommit();
+            } else if (e.key === 'Delete' && e.shiftKey) {
+                // Unbind by keyboard, a deliberate chord: the row's button left
+                // the Tab order, since search, Tab, Enter (Enter now presses a
+                // focused button) cleared a slot that may feed another head,
+                // under text saying Enter selects (Group 50 review).
+                e.preventDefault();
+                _pickerUnbind();
             }
         };
         close.onclick = window.closeBindSlotPicker;
@@ -1900,16 +1925,36 @@
             // confirm, and the next such scan answered it).
             if (window.enterIsAScan ? window.enterIsAScan()
                 : (window.isScanInFlight && window.isScanInFlight())) return;
-            if (currentIdx >= 0) {
-                // A person's Enter, and theirs alone: the accumulator mustn't
-                // also submit a key left in the buffer (Group 57 review, round
-                // 5: Q, then 2, then Enter opened the swap AND put spool #2 in
-                // the scan buffer behind it). The standing order's idiom.
+            // Group 50.6: Enter presses the tile that has the focus. The
+            // highlight alone can be stale (left from the last toolhead's view,
+            // or from before the focus moved on), and it took the Enter meant
+            // for any other button in the window and opened a swap. With the
+            // focus on another button or control, that one's Enter is its own;
+            // with it on nothing (the window itself), the highlighted tile's.
+            if (!grid.getClientRects().length) return;   // its section is hidden: another view
+            const ae = document.activeElement;
+            const tile = buttons.includes(ae) ? ae
+                : ((!ae || ae === document.body || ae === modal) && currentIdx >= 0 ? buttons[currentIdx] : null);
+            if (!tile) return;
+            // Only where a mouse could click it now (the accumulator's rule;
+            // this handler runs first and stops the event).
+            if (window.personMayPress && !window.personMayPress(e, tile)) {
                 e.preventDefault();
                 e.stopImmediatePropagation();
                 if (window.clearScanBuffer) window.clearScanBuffer();
-                window.quickSwapTap(buttons[currentIdx]);
+                return;
             }
+            // A person's Enter, and theirs alone: the accumulator mustn't
+            // also submit a key left in the buffer (Group 57 review, round
+            // 5: Q, then 2, then Enter opened the swap AND put spool #2 in
+            // the scan buffer behind it). The standing order's idiom.
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            if (window.clearScanBuffer) window.clearScanBuffer();
+            // Its own click (a swap, or a deposit from the buffer); a disabled
+            // tile can't be clicked, so it says why.
+            if (tile.disabled) window.quickSwapTap(tile);
+            else tile.click();
         }
     });
 

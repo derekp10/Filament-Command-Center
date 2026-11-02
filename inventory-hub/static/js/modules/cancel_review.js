@@ -330,11 +330,11 @@
                 </div>
                 ${rows}
                 ${shortfallLinesHtml(rec)}
-                <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
+                <div style="display:flex;flex-direction:row-reverse;justify-content:flex-start;gap:8px;margin-top:10px;">
+                    <button type="button" class="btn btn-sm btn-success fw-bold fcc-cr-confirm">Apply to the picked spool(s)</button>
                     <button type="button" class="btn btn-sm btn-outline-secondary fcc-cr-discard"
                             data-armed="0"
                             title="Permanently drop this review — these grams stay uncharged">🗑️ Discard</button>
-                    <button type="button" class="btn btn-sm btn-success fw-bold fcc-cr-confirm">Apply to the picked spool(s)</button>
                 </div>
             </div>`;
     }
@@ -413,11 +413,11 @@
                     ${banner}
                 </div>
                 ${lines}
-                <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
+                <div style="display:flex;flex-direction:row-reverse;justify-content:flex-start;gap:8px;margin-top:10px;">
+                    ${applyBtn}
                     <button type="button" class="btn btn-sm btn-outline-secondary fcc-cr-discard"
                             data-armed="0"
                             title="Permanently drop this review — the spool is NOT deducted">🗑️ Discard</button>
-                    ${applyBtn}
                 </div>
             </div>`;
     }
@@ -491,11 +491,11 @@
                 </div>
                 ${rows}
                 ${unresolvedLinesHtml(rec)}
-                <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
+                <div style="display:flex;flex-direction:row-reverse;justify-content:flex-start;gap:8px;margin-top:10px;">
+                    <button type="button" class="btn btn-sm btn-success fw-bold fcc-cr-confirm">Confirm deduct</button>
                     <button type="button" class="btn btn-sm btn-outline-secondary fcc-cr-discard"
                             data-armed="0"
                             title="Permanently drop this review — the spool is NOT deducted">🗑️ Discard</button>
-                    <button type="button" class="btn btn-sm btn-success fw-bold fcc-cr-confirm">Confirm deduct</button>
                 </div>
             </div>`;
     }
@@ -604,9 +604,16 @@
         });
         // Minimized/collapsed view: onto each printer's group in the header chip
         // strip — the only thing visible when the widget is minimized (Derek
-        // 2026-06-12, "in case the activity log isn't always visible").
-        document.querySelectorAll('.fcc-ps-header-chips .fcc-ps-printer-group[data-printer]')
-            .forEach((grp) => apply(grp, grp.getAttribute('data-printer')));
+        // 2026-06-12, "in case the activity log isn't always visible"). Since
+        // Group 50.1 in the group's own count slot, after the printer's name and
+        // state; a count that comes or goes measures the strip again (it may no
+        // longer fit beside the title, or fit again).
+        let stripChanged = false;
+        document.querySelectorAll('.fcc-ps-header-chips .fcc-ps-printer-group[data-printer]').forEach((grp) => {
+            const host = grp.querySelector('.fcc-ps-strip-count') || grp;
+            if (apply(host, grp.getAttribute('data-printer'))) stripChanged = true;
+        });
+        if (stripChanged && typeof window.fitPrinterStatusStrip === 'function') window.fitPrinterStatusStrip();
         return changed;
     }
     async function refreshBadge() {
@@ -783,10 +790,17 @@
 
         function disarmDiscard(btn) {
             btn.dataset.armed = '0';
+            btn.dataset.armedAt = '';
             btn.textContent = '🗑️ Discard';
             btn.classList.remove('btn-outline-danger');
             btn.classList.add('btn-outline-secondary');
         }
+
+        // Leaving an armed Discard disarms it (Group 50 review).
+        body.addEventListener('focusout', (e) => {
+            const btn = e.target;
+            if (btn && btn.classList && btn.classList.contains('fcc-cr-discard') && btn.dataset.armed === '1') disarmDiscard(btn);
+        });
 
         body.addEventListener('click', async (e) => {
             const card = e.target.closest('.fcc-cr-card');
@@ -929,9 +943,14 @@
                 const btn = e.target;
                 // First click ARMS (no backend call); second click within 4s
                 // discards. Guards an accidental click from a permanent drop.
+                // A second press under 700 ms is a double press, not a decision
+                // (Group 50 review; Derek: "I don't want an accidental double
+                // press to mess things up"), by mouse, Enter or Space.
+                if (btn.dataset.armed === '1' && Date.now() - Number(btn.dataset.armedAt || 0) < 700) return;
                 if (btn.dataset.armed !== '1') {
                     body.querySelectorAll('.fcc-cr-discard[data-armed="1"]').forEach(disarmDiscard);
                     btn.dataset.armed = '1';
+                    btn.dataset.armedAt = String(Date.now());
                     btn.textContent = '⚠️ Confirm discard';
                     btn.classList.remove('btn-outline-secondary');
                     btn.classList.add('btn-outline-danger');

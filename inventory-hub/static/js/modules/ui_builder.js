@@ -72,7 +72,7 @@ const SpoolCardBuilder = {
         try {
             styles = getFilamentStyle(item.color, item.color_direction || 'longitudinal');
         } catch (e) {
-            styles = { frame: '#' + (item.color || '555555'), inner: `rgba(0,0,0,0.6)`, border: '1px solid #333' };
+            styles = { frame: '#' + (item.color || '555555'), inner: `rgba(0,0,0,0.6)`, border: '1px solid #333', text: 'text-pop' };
         }
 
         // Setup outer container wrapping and specific interaction overrides (clicks / classes)
@@ -324,13 +324,17 @@ const SpoolCardBuilder = {
             // details modal. Material is already in the pulse payload as
             // item.details.material (no backend change).
             const material = (item.details && item.details.material) || '';
+            // Escaped (2026-10-30, with Group 50.4): the name and the
+            // material are Spoolman's free text, and this returns HTML.
+            const escText = window.escHtml || ((s) => String(s == null ? '' : s)
+                .replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])));
             const matLine = material
-                ? `<div class="fcc-ps-chip-mat text-truncate">${material}</div>`
+                ? `<div class="fcc-ps-chip-mat text-truncate">${escText(material)}</div>`
                 : '';
             return `
                 <div class="fcc-ps-chip" style="font-size:0.85rem; line-height:1.2;">
                     <div class="d-flex align-items-center gap-2">
-                        <span class="text-light fw-bold text-truncate">${compactName}</span>
+                        <span class="text-light fw-bold text-truncate">${escText(compactName)}</span>
                         <span class="ms-auto fw-bold" style="color:${weightColor};">${weightStr}</span>
                     </div>
                     ${matLine}
@@ -356,14 +360,14 @@ const SpoolCardBuilder = {
             return `
                 <div class="fcc-sp-spool-card" data-spool-id="${esc(item.id)}" style="background:${styles.frame}; border-radius:6px; padding:1px; text-align:left;">
                     <div style="${inner}">
-                        <div class="d-flex justify-content-between align-items-center" style="font-size:var(--fcc-fs-small); color:#ddd;">
+                        <div class="d-flex justify-content-between align-items-center ${styles.text}" style="font-size:var(--fcc-fs-small); color:#ddd;">
                             <span class="fw-bold">#${esc(item.id)}</span>
                             <span class="fw-bold">${weightStr ? '⚖️ ' + esc(weightStr) : ''}</span>
                         </div>
-                        <div class="d-flex align-items-center gap-1" style="font-size:0.92rem; color:#fff;">
+                        <div class="d-flex align-items-center gap-1 ${styles.text}" style="font-size:0.92rem; color:#fff;">
                             ${swatch}<span class="fw-bold text-truncate" style="max-width:9.375rem;">${esc(name)}</span>
                         </div>
-                        <div style="font-size:var(--fcc-fs-small); color:#ddd; opacity:0.9;">${esc(info.line2)}</div>
+                        <div class="${styles.text}" style="font-size:var(--fcc-fs-small); color:#ddd; opacity:0.9;">${esc(info.line2)}</div>
                         ${deployed}
                     </div>
                 </div>`;
@@ -412,7 +416,7 @@ const SpoolCardBuilder = {
                      onclick="${handler}"
                      title="${titleAttr}">
                     <div style="${innerBg}">
-                        <div class="px-2 pt-2 pb-1">
+                        <div class="px-2 pt-2 pb-1 ${styles.text}">
                             <div class="d-flex justify-content-between align-items-center mb-1">
                                 <div class="text-warning fw-bold" style="font-size:0.95rem;">Slot ${slot}</div>
                                 <div class="text-light" style="font-size:var(--fcc-fs-small); opacity:0.75;">#${item.id}</div>

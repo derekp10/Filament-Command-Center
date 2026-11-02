@@ -39,9 +39,9 @@ Hermetic, and it RUNS under --offline: `isolated_page` (a chromium with no
 route to any network) with the real static/css/global.css, text_size.js,
 ui_builder.js, inv_core.js, inv_printer_status.js and cancel_review.js, a few
 lines standing in for the Bootstrap classes the widget uses (Bootstrap comes
-from a CDN), and a few standing in for the dashboard's scan accumulator
-(templates/components/scripts.html, which cancels every Enter outside a text
-field; a canary below holds it to that). The widget is fed made-up fleets
+from a CDN), and the dashboard's own scan accumulator, lifted from
+templates/components/scripts.html (since Group 50.6 a person's Enter on a
+focused button presses it; a scan's Enter ends the scan). The widget is fed made-up fleets
 through refreshPrinterStatusWidgetFromAggregate, as the heartbeat feeds it,
 and the review count comes from cancel_review.js's own poll, answered in the
 page. Pinned:
@@ -145,7 +145,6 @@ this file was 76 of 121 red.)
 """
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import pytest
@@ -154,6 +153,12 @@ HUB = Path(__file__).resolve().parent.parent
 MODULES = HUB / "static" / "js" / "modules"
 GLOBAL_CSS = HUB / "static" / "css" / "global.css"
 SCRIPTS_HTML = HUB / "templates" / "components" / "scripts.html"
+
+# A window tall enough that the open widget never needs its short-window step
+# (Group 50.7: the state beside the name, the material in the colour band),
+# whatever the width and Text size here: these tests pin the layout it has when
+# it fits. The step has its own: tests/test_printer_status_waiting_tight_50.py.
+TALL = 6000
 
 # The Bootstrap rules the widget's markup leans on, so the layout here is the
 # page's (box-sizing, and the utility classes on the arrows and the chip).
@@ -184,7 +189,7 @@ PAGE = """<!doctype html><html data-fcc-text-size="standard"><head><meta charset
             <span class="fcc-ps-title">🖨️ Printer Status</span>
             <span class="fcc-ps-hint">click to collapse</span>
         </div>
-        <div class="fcc-ps-header-chips d-flex flex-wrap align-items-center gap-1 ms-3"></div>
+        <div class="fcc-ps-header-chips"></div>
     </div>
     <div class="fcc-ps-body">
         <div class="fcc-ps-skeleton">Loading printer status…</div>
@@ -213,29 +218,26 @@ window.fetch = (url) => (String(url).indexOf('/api/cancel_deduct/pending') !== -
 })();
 """
 
-# The dashboard's scan accumulator (scripts.html), as far as a focused button
-# sees it: a key outside a text field with no Ctrl / Alt / Meta goes into
-# state.scanBuffer, and EVERY Enter is cancelled, a button's own press
-# included; the characters before it are a scan (window.__scans here, where
-# the page hands them to processScan). Added after the modules, as the
-# dashboard's own listener is (its DOMContentLoaded handler).
-ACCUMULATOR = r"""
-window.__scans = [];
-document.addEventListener('keydown', (e) => {
-    const t = e.target;
-    if (t.tagName === 'TEXTAREA' || (t.tagName === 'INPUT' && t.type !== 'checkbox')) return;
-    if (e.ctrlKey || e.altKey || e.metaKey) return;
-    if (e.key === 'Enter') {
-        e.preventDefault();
-        if (state.scanBuffer.length > 0) window.__scans.push(state.scanBuffer);
-        state.scanBuffer = '';
-        state.scanStartTime = 0;
-    } else if (e.key.length === 1) {
-        if (state.scanBuffer.length === 0) state.scanStartTime = Date.now();
-        state.scanBuffer += e.key;
-    }
-});
-"""
+def _real_accumulator():
+    """The dashboard's scan accumulator (scripts.html's keydown block), lifted
+    as it is (test_slow_scan_slash_js.py's way): since Group 50.6 a person's
+    Enter on a focused button presses it, and a scan's Enter still ends the
+    scan. The scans it hands to processScan land in window.__scans here."""
+    src = SCRIPTS_HTML.read_text(encoding="utf-8")
+    a = src.index("state.scanStartTime = 0;")
+    b = src.index("// L206", a)
+    block = src[a:b]
+    assert "processScan(state.scanBuffer" in block and "function personMayPress" in block, block[:300]
+    return block
+
+
+# Added after the modules, as the dashboard's own listener is (its
+# DOMContentLoaded handler).
+ACCUMULATOR = (
+    "window.__scans = [];\n"
+    "window.processScan = function (buf) { window.__scans.push(buf); };\n"
+    + _real_accumulator()
+)
 
 INDX = "ZZ Even INDX"
 XL = "ZZ Even XL"
@@ -662,7 +664,7 @@ PHONES = {
 @pytest.mark.parametrize("width", list(PHONES))
 def test_a_phone_too_narrow_for_two_under_the_name_starts_them_at_the_row_s_edge(widget, width):
     page = widget
-    page.set_viewport_size({"width": width, "height": 900})
+    page.set_viewport_size({"width": width, "height": TALL})
     _feed(page)
     got = _layout(page)
     indx, xl, edge = PHONES[width]
@@ -712,7 +714,7 @@ def test_the_name_then_the_info_line_with_the_dot_and_its_count_together(widget,
     effect on the red notification dot"). 12 reviews for the INDX at its
     widest (PRINTING) on a phone at Extra Large is the fullest info line."""
     page = widget
-    page.set_viewport_size({"width": width, "height": 1300})
+    page.set_viewport_size({"width": width, "height": TALL})
     _size(page, size)
     fleet = {INDX: _printer("ZE", 8, "PRINTING", loaded=(0, 3)), XL: _printer("ZX", 5, loaded=(1, 2))}
     _feed(page, fleet)
@@ -755,7 +757,7 @@ def test_the_names_the_states_the_counts_and_the_tiles_line_up_down_the_page(wid
     state and its reviews, in one column. A printer whose state isn't known
     yet keeps the empty slot."""
     page = widget
-    page.set_viewport_size({"width": width, "height": 1300})
+    page.set_viewport_size({"width": width, "height": TALL})
     _size(page, size)
     _feed(page, ALIGN)
     _reviews(page, ALIGN_REVIEWS)
@@ -910,7 +912,7 @@ def test_a_printer_between_two_others_has_the_same_name_line(widget, width, size
     above, of the info line beside them and of every tile, on a phone whose
     tiles start at the row's edge too (390 px at Standard, 430 px at Large)."""
     page = widget
-    page.set_viewport_size({"width": width, "height": 1300})
+    page.set_viewport_size({"width": width, "height": TALL})
     _size(page, size)
     _feed(page, THREE)
     rows = page.evaluate(ARROWS_JS)
@@ -1012,7 +1014,7 @@ def test_a_60_character_name_neither_overlaps_nor_shifts_the_tiles(widget, width
     and the info line, its badge and its count, and every tile sit exactly
     where they sit under a short name."""
     page = widget
-    page.set_viewport_size({"width": width, "height": 1300})
+    page.set_viewport_size({"width": width, "height": TALL})
     _size(page, size)
     tiles_js = """() => { const row = document.querySelector('#printer-status-widget .fcc-ps-row');
         const r0 = row.getBoundingClientRect();
@@ -1158,6 +1160,8 @@ def test_at_a_110_percent_display_scale_it_counts_what_really_fits(scaled_chromi
         _build(page)
         cdp = context.new_cdp_session(page)
         wid = cdp.send("Browser.getWindowForTarget")["windowId"]
+        # These five printers scroll inside the widget here, short-window step or not
+        # (Group 50.7): the trap was found with the widget's scrollbar there.
         cdp.send("Browser.setWindowBounds", {"windowId": wid, "bounds": {"width": window, "height": 1300}})
         page.wait_for_function("(w) => Math.abs(innerWidth - w) <= 2", arg=window, timeout=5000)
         _feed(page, TRAP_FLEET)
@@ -1217,15 +1221,15 @@ def test_a_repaint_a_reorder_and_collapsing_keep_the_rows_even(widget):
     page.evaluate("(n) => window.movePrinterStatusRow(n, 1)", INDX)
     assert page.locator(".fcc-ps-row").first.get_attribute("data-printer") == XL
     assert (_layout(page)[INDX]["rows"], _layout(page)[XL]["rows"]) == ("8", "5")
-    # By keyboard too: the first printer's ▼ (its only arrow), Enter, with the
-    # accumulator in the page cancelling every Enter, as the dashboard's does.
+    # By keyboard too: the first printer's ▼ (its only arrow), Enter, through
+    # the dashboard's own accumulator.
     page.locator(".fcc-ps-row").first.locator("button.fcc-ps-reorder").focus()
     page.keyboard.press("Enter")
     assert page.locator(".fcc-ps-row").first.get_attribute("data-printer") == INDX
     # Collapsed, the window and the size change; opened again, it measures again.
     page.evaluate("() => window.togglePrinterStatusWidget()")
     assert page.evaluate("() => document.getElementById('printer-status-widget').classList.contains('collapsed')")
-    page.set_viewport_size({"width": 1024, "height": 900})
+    page.set_viewport_size({"width": 1024, "height": TALL})
     _size(page, "Extra Large")
     page.evaluate("() => window.togglePrinterStatusWidget()")
     _settled(page, {INDX: "4+4", XL: "3+2"})
@@ -1242,23 +1246,18 @@ FOCUS_JS = r"""() => { const a = document.activeElement; const row = a && a.clos
              printer: row ? row.dataset.printer : null }; }"""
 
 
-def test_the_dashboard_s_accumulator_cancels_every_enter_outside_a_text_field():
-    """The stand-in above is the dashboard's: its key handler skips text
-    fields and modifier combos, then cancels every Enter (a scan ends in
-    Enter), which is why the arrows answer Enter themselves. If the
-    accumulator ever leaves a button's Enter alone, this fails: change the
-    stand-in with it."""
-    src = SCRIPTS_HTML.read_text(encoding="utf-8")
-    handler = src[src.index("document.addEventListener('keydown', (e) => {"):]
-    assert re.search(r"const t = e\.target;\s*if \(t\.tagName === 'TEXTAREA' \|\| \(t\.tagName === 'INPUT' && t\.type !== 'checkbox'\)\) return;", handler)
-    assert re.search(r"if \(e\.ctrlKey \|\| e\.altKey \|\| e\.metaKey\) return;", handler)
-    assert re.search(r"if \(e\.key === 'Enter'\) \{\s*e\.preventDefault\(\);", handler)
+def test_the_arrows_have_no_enter_handler_of_their_own():
+    """Group 50.6: the accumulator presses a focused button on a person's
+    Enter, so the arrows' own Enter handler (2026-10-23 review) went. The
+    Enter tests below pass only through the real accumulator."""
+    src = (MODULES / "inv_printer_status.js").read_text(encoding="utf-8")
+    assert "closest('button.fcc-ps-reorder')" not in src
 
 
 def test_enter_on_a_focused_arrow_moves_its_printer_and_keeps_the_focus(widget):
-    """Enter on a focused ▲ / ▼ moves the printer, as a click does, with the
-    accumulator cancelling every Enter (it did nothing on the dashboard: only
-    Space moved a printer). The rows are drawn again, and the focus stays on
+    """Enter on a focused ▲ / ▼ moves the printer, as a click does, through the
+    dashboard's own accumulator (it did nothing there before the 2026-10-23
+    review: only Space moved a printer). The rows are drawn again, and the focus stays on
     the moved printer's arrow: its other one when it no longer has the same
     (the INDX moved to the bottom has only ▲), so Enter again moves it back."""
     page = widget
@@ -1291,7 +1290,9 @@ def test_a_scan_typed_onto_a_focused_arrow_stays_a_scan(widget):
     page.keyboard.press("Enter")
     assert _order(page) == [FIRST, MIDDLE, LAST]
     assert page.evaluate("window.__scans") == ["LOC:ZZ-SCAN-1"]
-    # A person's Enter afterwards is a press again.
+    # A person's Enter afterwards is a press again (under 100 ms it would be a
+    # scanner's second Enter).
+    page.wait_for_timeout(120)
     page.keyboard.press("Enter")
     assert _order(page) == [MIDDLE, FIRST, LAST]
     assert page.evaluate("window.__scans") == ["LOC:ZZ-SCAN-1"]
@@ -1319,22 +1320,22 @@ BODY_JS = r"""() => { const body = document.querySelector('#printer-status-widge
 DEV_LIKE = {INDX: _printer("RCOI", 8), XL: _printer("XL", 5, loaded=(3, 4))}
 
 
-@pytest.mark.parametrize("width, height, size, whole", [(1280, 800, "Small", True), (1280, 800, "Standard", True),
-                                                        (1280, 800, "Large", False), (1366, 768, "Small", False),
-                                                        (1366, 768, "Standard", False)])
-def test_on_a_short_laptop_window_every_tile_shows_or_scrolls_into_view(widget, width, height, size, whole):
+@pytest.mark.parametrize("width, height, size, tight", [(1280, 800, "Small", False), (1280, 800, "Standard", False),
+                                                        (1280, 800, "Large", True), (1366, 768, "Small", True),
+                                                        (1366, 768, "Standard", True)])
+def test_on_a_short_laptop_window_every_tile_shows(widget, width, height, size, tight):
     """Each printer's name on its own line made the open widget taller, and
     at 1280 x 800 (a Framework 12 at 150 %) or 1366 x 768 the body's limit,
     then 40 % of the window, hid the second printer's tiles under its fold (8
     of 13 showed). The limit is 45 % now, with no gap between printers (the
     rows' padding puts the divider half way). The info line under each name
     (2026-10-24) adds a line per printer: at 1280 x 800 at Small and
-    Standard dev's two printers (8 and 5 heads) still show whole and the body
-    doesn't scroll; at 1280 x 800 at Large and 1366 x 768 at Small and
-    Standard they are taller than the body may be, so it stops at its limit
-    (the deck and a 7rem strip of the log and the buffer keep their room) and
-    scrolls inside itself, every tile showing once scrolled to. The rows are
-    the same either way: 4 + 4 and 5."""
+    Standard dev's two printers (8 and 5 heads) still show whole. At 1280 x 800
+    at Large and 1366 x 768 at Small and Standard they would be taller than the
+    body may be, so the widget takes the tight step (Group 50.7), and every tile
+    shows with no scrolling there too. The body never passes its limit (the
+    deck and a 7rem strip of the log and the buffer keep their room), and the
+    rows are the same either way: 4 + 4 and 5."""
     page = widget
     page.set_viewport_size({"width": width, "height": height})
     _size(page, size)
@@ -1345,40 +1346,37 @@ def test_on_a_short_laptop_window_every_tile_shows_or_scrolls_into_view(widget, 
     # bar) and the 10.5rem the widget's header and the 7rem strip need leave.
     assert got["maxH"] == pytest.approx(min(0.45 * got["vh"], max(5 * got["root"], got["vh"] - 260 - 10.5 * got["root"])),
                                         abs=0.5), got
-    if whole:
-        assert got["shown"] == 13 and got["sh"] <= got["ch"] + 1, (width, height, size, got)
-    else:
-        # It may scroll: the first printer's tiles show whole without
-        # scrolling, and scrolled to its end the second printer's do.
-        whole_rows = page.evaluate("""() => { const body = document.querySelector('#printer-status-widget .fcc-ps-body');
-            const b = body.getBoundingClientRect();
-            return Array.from(body.querySelectorAll('.fcc-ps-row')).map((row) => Array.from(row.querySelectorAll('.fcc-ps-th'))
-                .every((t) => { const r = t.getBoundingClientRect(); return r.top >= b.top - 0.5 && r.bottom <= b.bottom + 0.5; })); }""")
-        assert whole_rows[0] and got["shown"] >= 8 and got["atEnd"] >= 5, (width, height, size, got, whole_rows)
+    assert got["shown"] == 13 and got["sh"] <= got["ch"] + 1, (width, height, size, got)
+    took = page.evaluate("() => document.getElementById('printer-status-widget').classList.contains('fcc-ps-tight')")
+    assert took == tight, (width, height, size, got)
     assert (_layout(page)[INDX]["rows"], _layout(page)[XL]["rows"]) == ("4+4", "5")
 
 
 # --- the collapsed strip (review, 2026-10-23, F5) ----------------------------------
 
-# Per printer group of the collapsed strip: its chips' right edges against the
-# window, its 🛑 count's text, whether the count is its last chip, how many
-# lines the count's own text takes, and the page's sideways scroll.
+# Per printer group of the folded strip (Group 50.1): its parts in order, their
+# edges against the window, its 🛑 count's text and how many lines it takes, its
+# heads (a box that scrolls sideways when they don't fit), and the page's
+# sideways scroll.
 STRIP_JS = r"""() => ({ iw: innerWidth, sw: document.documentElement.scrollWidth,
     groups: Array.from(document.querySelectorAll('#printer-status-widget .fcc-ps-header-chips .fcc-ps-printer-group')).map((g) => {
         const kids = Array.from(g.children); const chip = g.querySelector('.fcc-cr-chip');
+        const box = g.querySelector('.fcc-ps-strip-heads');
         const lines = (el) => { const r = document.createRange(); r.selectNodeContents(el);
             const tops = []; Array.from(r.getClientRects()).filter((x) => x.width > 0).forEach((x) => {
                 if (!tops.some((t) => Math.abs(t - x.top) < 3)) tops.push(x.top); }); return tops.length; };
-        return { printer: g.dataset.printer, chips: kids.length,
+        return { printer: g.dataset.printer, parts: kids.map((k) => k.className),
                  right: Math.max(...kids.map((k) => k.getBoundingClientRect().right)),
                  left: Math.min(...kids.map((k) => k.getBoundingClientRect().left)),
-                 count: chip ? chip.textContent : null, last: chip ? kids[kids.length - 1] === chip : null,
-                 countLines: chip ? lines(chip) : 0, state: kids[0] && kids[0].classList.contains('fcc-ps-state-chip') }; }) })"""
+                 count: chip ? chip.textContent : null, countLines: chip ? lines(chip) : 0,
+                 heads: box ? box.querySelectorAll('.fcc-ps-strip-head').length : 0,
+                 scrolls: !!box && box.scrollWidth > box.clientWidth + 1 }; }) })"""
 
 
-# Dev's own head ids (RCOI-1 .. RCOI-8, XL-1 .. XL-5): the strip's chips are as
+# Dev's own head ids (RCOI-1 .. RCOI-8, XL-1 .. XL-5): the strip's heads are as
 # wide as dev's.
 STRIP_FLEET = {INDX: _printer("RCOI", 8, loaded=(0, 3)), XL: _printer("XL", 5, "PRINTING", loaded=(1, 2))}
+STRIP_PARTS = ["fcc-ps-strip-name", "fcc-ps-strip-state", "fcc-ps-strip-count", "fcc-ps-strip-heads"]
 
 
 @pytest.mark.parametrize("width, size", [(1024, "Small"), (1024, "Standard"), (1024, "Large"), (1024, "Extra Large"),
@@ -1388,9 +1386,14 @@ def test_the_collapsed_strip_keeps_every_chip_on_screen(widget, width, size):
     count rides on it "in case the activity log isn't always visible"). A
     printer's group wider than the window ran off its right edge, taking its
     last heads and its 🛑 count with it (the INDX's 8 heads at 1024 px at every
-    size, at 1280 px at Extra Large, and on a phone). Now a group wraps its own
-    chips: every chip inside the window, the state first and the count last,
-    the 🛑 never parted from its number."""
+    size, at 1280 px at Extra Large, and on a phone).
+
+    PIN UPDATED DELIBERATELY (Group 50.1, 2026-10-29): each printer is now its
+    name, its state, its 🛑 count and then its heads (it was the state, the
+    heads, then the count), and a printer whose heads don't fit even on a line
+    of their own scrolls them sideways inside their own box (Derek's fallback,
+    2026-10-19) instead of wrapping them. Still: every part inside the window,
+    the page never scrolls sideways, the 🛑 never parted from its number."""
     page = widget
     page.set_viewport_size({"width": width, "height": 900})
     _size(page, size)
@@ -1403,10 +1406,13 @@ def test_the_collapsed_strip_keeps_every_chip_on_screen(widget, width, size):
                            timeout=3000)
     got = page.evaluate(STRIP_JS)
     assert got["sw"] <= got["iw"], f"the page scrolls sideways: {got}"
-    assert [(g["printer"], g["chips"], g["count"], g["last"], g["state"], g["countLines"]) for g in got["groups"]] == [
-        (INDX, 10, "🛑 3", True, True, 1), (XL, 7, "🛑 12", True, True, 1)], got
+    assert [(g["printer"], g["parts"], g["heads"], g["count"], g["countLines"]) for g in got["groups"]] == [
+        (INDX, STRIP_PARTS, 8, "🛑 3", 1), (XL, STRIP_PARTS, 5, "🛑 12", 1)], got
     for g in got["groups"]:
-        assert g["left"] >= -0.5 and g["right"] <= got["iw"] + 0.5, f"a chip is off the screen: {width} {size} {g}"
+        assert g["left"] >= -0.5 and g["right"] <= got["iw"] + 0.5, f"a part is off the screen: {width} {size} {g}"
+    # On a phone the INDX's eight heads don't fit beside its name: they scroll.
+    if width <= 412:
+        assert got["groups"][0]["scrolls"], got
 
 
 @pytest.mark.parametrize("size", SIZES)

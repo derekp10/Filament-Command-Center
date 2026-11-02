@@ -70,10 +70,13 @@ def test_a_failed_read_says_so_beside_sections_of_the_same_shape(client):
     assert "Spoolman didn't answer" in read["error"] and "timed out" in read["error"], read
 
     # A sibling key: printer_status keeps only printer names, each the usual
-    # {toolheads, state}, every head empty because nothing was read.
+    # {toolheads, state, id}, every head empty because nothing was read.
+    # PIN UPDATED DELIBERATELY (Group 50.1, 2026-10-29): `id` is the
+    # printer's own ID for the folded strip's "By ID" setting (a key inside
+    # the printer's object, never a new top-level key).
     ps = body["printer_status"]
     assert set(ps) == {"Test Printer"}, ps
-    assert set(ps["Test Printer"]) == {"toolheads", "state"}, ps
+    assert set(ps["Test Printer"]) == {"toolheads", "state", "id"}, ps
     assert ps["Test Printer"]["toolheads"] == [
         {"id": "TSTP-1", "position": 0, "item": None, "unbound": False, "loaded_count": 0}], ps
 

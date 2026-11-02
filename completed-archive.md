@@ -1,5 +1,34 @@
 # **Done**
 
+* **[2026-11-01 — 🖨️ Group 50 Printer Status Polish (50.1, 50.3, 50.4, 50.6, 50.7, 50.8) → `feature/group-50-printer-status-polish` (merged to `dev`)]** — built 2026-10-29 and 30 from Derek's picks of the samples ([task file](docs/agent_docs/tasks/50-printer-status-polish.md)); one review 2026-11-01 (`wf_122f9e1c-2f4`: 8 agents, 35 findings, 26 after duplicates, none refuted, every one fixed or filed); full sweep 5803 / 0 after one expected picture. `main` held. Not built: 50.2 (in the oven, standalone), 50.5 (with the phone view, Group 60); (d) parked.
+  * ✅ **50.1, the folded strip reads per printer (absorbs the follow-ups' (e) and the 8-toolhead wrap).** Each printer is its name (or ID), its state, its 🛑 count, then a ring per head (the label on the spool's colours, ringed in the weight colour, the grams beside or under it, or only in its tooltip); three live settings in This Browser, with no setup's own names; beside the title while it fits, else under it, else a printer's heads scroll sideways.
+    > * **Printer Status: with 8 toolheads in a small window, the toolhead list wraps to a second line.** _(Derek,
+    >   2026-10-19.)_ It looks odd on the collapsed version, the small one meant to be read at a glance. Part of a Printer
+    >   Status redesign Derek wants. _(→ **Group 50.1**. Derek, 2026-10-19: head numbers with a coloured ring (cyan fine,
+    >   amber under 100 g, red empty; grams in the hover text), no pipe between printers; if it still doesn't fit, one row
+    >   per printer when it's longer than the window, with sideways scrolling as the fallback he also likes.)_
+  * ✅ **50.3, heads by keyboard.** Tiles and strip heads take Tab, Enter and Space, scan-safe, and their tooltips say what the click does.
+  * ✅ **50.4, "stored, not loaded".** The heartbeat's `waiting`; the tile's "📦 #93 waits in slot 2" with "✓ I loaded it"; the strip's amber dot, in the tooltip and the accessible name too; no print-end notice.
+    > * **🟡 A spool "just stored" in a bound slot mid-print leaves a load to remember after the print.** _(Derek,
+    >   2026-10-14, while answering Group 40.3's questions.)_ Mid-print you can't load a toolhead, so a slot-label scan
+    >   into a bound slot gets stored (Enter = Just store it). After the print you load the head physically (from the
+    >   laptop at the XL), and must ALSO remember to tell FCC (scan the slot again or Quick-Swap). Forget either half and
+    >   FCC and the printer disagree, and FCC can't warn the way the slicer does. Ideas, none decided: offer the pending
+    >   load when the print ends; mark the slot "stored, waiting to load" on its Quick-Swap tile; or auto-load the head
+    >   after the print. Needs a design pass with Derek. _(→ **Group 50.4**. Derek, 2026-10-19: no notice at every print
+    >   end and no "Load now" that locks him in (*"I may have a few prints I'm trying to do before I might have a chance
+    >   to load it"*); instead the head's tile quietly shows a spool is stored for it but not loaded, with a way to
+    >   confirm "I loaded it". Open to other ideas, since the collapsed strip has little room.)_
+  * ✅ **50.6, Enter presses a focused button (the follow-ups' (b) and the app-wide item).** Only where a mouse could click it; a scan's Enter stays the scan's; a held Enter presses once; hard-to-undo dialogs open on their safe answer (Derek: *"I don't want an accidental double press to mess things up"*).
+    > * **Enter on a focused button inside a window does nothing (app-wide).** _(→ **Group 50.6**, with the Printer Status follow-ups' (b): the same root cause)_ _(Found 2026-10-19 while building Group
+    >   48.2.)_ Tab to a button in the spool window (its ✏️ or 🖨️, or the new "(from the filament)" link) and press Enter:
+    >   nothing happens; Space works. The scan accumulator in `templates/components/scripts.html` calls `preventDefault` on
+    >   every Enter outside a text field, so a scanner's Enter never presses whatever has focus. Fix idea: let Enter through on
+    >   a focused button or link unless `window.enterIsAScan()` says a scan is arriving (the rule the dialogs already use).
+  * ✅ **50.7, short windows (the follow-ups' (c)).** A measured tight step instead of a scroll: state and 🛑 count beside the name, the material in the colour band; all 13 heads show on the short laptop windows.
+  * ✅ **50.8, text on a filament's colour has one look.** `--fcc-text-halo`, named by `getFilamentStyle(...).text` (Derek: *"Changes should be made there"*).
+  * ✅ **The review's fixes.** A scan's Space pressed "I loaded it" (the red); a scanner's second Enter; heads and the grid ask the press rule; the Quick-Swap confirm opens on No when FCC can't tell if the printer prints; Discard ignores a double press; the bind picker's Unbind left the Tab order (Shift+Del); the waiting mark survives the fan-out and a failed read; a slot stored as "04" can be loaded; every test gap. Filed: Audit's Done on Enter, in Group 58's decision.
+
 * **[2026-10-29 — 🧹 Branch cleanup (the ⏸️ PENDING DEREK branch-cleanup item)]** — Derek, 2026-10-29: *"If were done with them, and don't need them to address a pending item for me, then we can probably clean them up"*, then *"delete them on github, If we aren't using them, there's no more need for them if they're merged."* Two independent checks found all 35 branches wholly on `dev` (every commit, the GitHub copies too), none in a worktree, stash or tag, and none needed by a pending item or a design (the Bulk Moves and mid-print tests run on the released app). The 35 were deleted on Derek's PC, then the 26 GitHub copies after his OK, each re-checked first (unchanged since the check, and inside `origin/dev`); GitHub keeps `main`, `dev` and the branch in progress. Each name and commit is in `review-samples/branches-deleted-2026-10-29.txt` (git-ignored), and every one is in `dev`'s history. **So they don't pile up again:** a branch is deleted here and on GitHub in the same step that merges it (CLAUDE.md, "Branches: delete at merge"; `/project:finish-group` and `finish-task` do it, and `/project:work-group` starts by catching any a hand-merge left).
   * ✅ The branches: the 11 of 2026-10-08 (`feature/bulk-move-panel-affordance`, `feature/bulk-moves-l298`, `feature/bulk-moves-l298-p1`, `feature/group-34-location-tree-cluster`, `feature/group-36-attribute-force-reset-data-loss`, `feature/group-38-hermeticity-residuals`, `fix/active-print-chain-confirm`, `fix/locations-json-write-lock`, `fix/scan-path-and-bindings-2026-08-03`, `fix/update-spool-request-timeout`, `hotfix/indx-printer-setup`), Group 40's six, the 2026-10-19 bundle's seven, 2026-10-21's four, the five found 2026-10-25 (`feat/readability-2026-10-21`, `fix/backlog-label-filter` and Groups 41, 42 and 45's) and Groups 57 and 61's.
 
