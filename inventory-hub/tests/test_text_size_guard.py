@@ -355,6 +355,28 @@ SAMPLE_AUDIT = {"active": True, "audit_id": "boot-1", "location_id": "LR-MDB-1",
                            "remaining_weight": 924, "slot": "3", "where": "LR-MDB-2 slot 3"}],
                 "trail": [{"id": 242, "display": "#242 Prusament PLA (Galaxy Black)", "color": "111111",
                            "remaining_weight": 605, "slot": "1", "where": "XL-4"}]}
+# /api/identify_scan's audit_done_question (pinned in test_audit_question_dialog_58_js).
+SAMPLE_QUESTION = {
+    "type": "audit_done_question", "audit_id": "boot-1", "location": "LR-MDB-1", "found": 2, "expected": 18,
+    "park": [{"id": 134, "display": "#134 Prusament PLA (Pearl White)", "where": "LR-MDB-1 slot 2", "slot": "2"},
+             {"id": 99, "display": "#99 Tecbears PETG (Clear)", "where": "LR-MDB-1", "slot": ""},
+             {"id": 57, "display": "#57 Prusament PLA (Purple (Galaxy Purple))", "where": "LR-MDB-1 slot 4",
+              "slot": "4"}],
+    "stays": [{"id": 242 + n, "display": f"#{242 + n} Prusament PLA (Galaxy Black)", "where": where, "why": why}
+              for n, (where, why) in enumerate([("XL-4", "moved to XL-4"), ("", "no longer in Spoolman")] * 6)]}
+# A lost spool as /api/identify_scan and /api/spool_details answer it, from the real
+# park (test_audit_lost_badges_58_js pins both).
+SAMPLE_LOST = {"id": 8099, "type": "spool", "display": "#8099 Prusament PLA (Galaxy Black)", "color": "111111",
+               "color_direction": "longitudinal", "remaining_weight": 605, "archived": False, "location": "UNKNOWN",
+               "is_ghost": False, "slot": "", "deployed_to": None,
+               "details": {"id": 8099, "brand": "Prusament", "material": "PLA", "color_name": "Galaxy Black",
+                           "weight": 605, "temp": "", "needs_label_print": False,
+                           "lost_from": {"place": "LR-MDB-1", "slot": "2", "on": "2026-11-01"}}}
+SAMPLE_LOST_DETAILS = {"id": 8099, "location": "UNKNOWN", "archived": False, "extra": {}, "initial_weight": 1000,
+                       "used_weight": 395, "remaining_weight": 605, "comment": "",
+                       "filament": {"id": 8100, "name": "Galaxy Black", "material": "PLA", "color_hex": "111111",
+                                    "extra": {}, "vendor": {"id": 1, "name": "Prusament"}},
+                       "lost_from": {"place": "LR-MDB-1", "slot": "2", "on": "2026-11-01"}}
 SAMPLE_BULK = {"active": True, "stage": "preview", "source_id": "LR-MDB-1", "dest_id": "CR-CT-1-R1",
                "preview": {"ok": True, "msg": "", "stats": {"movable": 2, "skipped": 1}, "source_feeds": ["XL-1"],
                            "movable": [{"id": 57, "display": "#57 Prusament PLA (Purple (Galaxy Purple))",
@@ -399,6 +421,38 @@ def test_review_audit_and_bulk_move_panels_text_is_readable(page: Page, base_url
                            timeout=10_000)
     page.wait_for_timeout(800)
     assert_text_size(page.locator("#fcc-bulkmove-body"))
+
+
+def test_audit_done_question_text_is_readable(page: Page, base_url: str, assert_text_size):
+    """Group 58: Done's question, its lists and captions, and its hold-off's line."""
+    from conftest import quiet_heartbeat
+    _read_only(page, extra_get={"/api/audit_session": SAMPLE_AUDIT})
+    quiet_heartbeat(page)               # after: the newest route answers first
+    page.goto(base_url, wait_until="domcontentloaded")
+    page.wait_for_function("() => typeof window.askAuditDone === 'function'", timeout=45_000)
+    page.evaluate("() => { state.auditActive = true; window.updateAuditVisuals(); }")
+    page.wait_for_selector("#fcc-audit-panel-done")
+    assert_text_size(page.locator("#fcc-audit-panel-overlay"))        # with its Loose spools button
+    page.evaluate("(q) => window.askAuditDone(q)", SAMPLE_QUESTION)
+    page.wait_for_selector("#fcc-audit-done-question .fcc-confirm-qr-row")
+    page.evaluate("() => window.processScan('CMD:DONE', 'barcode')")
+    page.wait_for_selector("#fcc-audit-done-question .fcc-apc-status", state="visible")
+    assert_text_size(page.locator("#fcc-audit-done-question"))
+
+
+def test_lost_spools_text_is_readable(page: Page, base_url: str, assert_text_size):
+    """Group 58: the buffer card's badge, and the sentence in the spool window."""
+    from conftest import own_the_buffer
+    _read_only(page, extra_get={"/api/spool_details": SAMPLE_LOST_DETAILS})
+    own_the_buffer(page, [SAMPLE_LOST])  # after: the newest route answers first
+    page.goto(base_url, wait_until="domcontentloaded")
+    page.wait_for_function("() => typeof openSpoolDetails === 'function' && state.heldSpools.length === 1", timeout=45_000)
+    card = page.locator(f".buffer-item[data-spool-id='{SAMPLE_LOST['id']}']")
+    card.wait_for()
+    assert_text_size(card.locator(".badge.bg-warning").first.locator(".."))
+    _shown(page, "spoolModal", "(sid) => { openSpoolDetails(sid); }", SAMPLE_LOST["id"])
+    assert "Marked lost" in page.inner_text("#detail-location-badge")
+    assert_text_size(page.locator("#detail-location-badge").locator(".."))
 
 
 def test_audit_pill_text_is_readable(page: Page, base_url: str, assert_text_size):

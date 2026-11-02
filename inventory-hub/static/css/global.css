@@ -1520,6 +1520,54 @@ body {
     max-height: calc(100dvh - 16px);
     overflow-y: auto;
 }
+/* The lists under a question's words (confirmActivePrint's `sections`, Group 58):
+   side by side where the window has the room, one above the other on a phone.
+   Each line is one row, its full text in its title, so the question's height is
+   known, and what a line says about a spool stays whole while its name gives way. */
+.fcc-apc-sections {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(19rem, 100%), 1fr));
+    gap: 0.5rem 1.25rem;
+    margin-bottom: 14px;
+    text-align: left;
+}
+.fcc-apc-section {
+    min-width: 0;
+}
+.fcc-apc-section-head {
+    font-size: var(--fcc-fs-row);
+    font-weight: bold;
+    color: #fff;
+    margin-bottom: 2px;
+}
+.fcc-apc-line {
+    display: flex;
+    gap: 0.5rem;
+    align-items: baseline;
+    font-size: var(--fcc-fs-row);
+    line-height: 1.4;
+}
+.fcc-apc-line-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.fcc-apc-line-where {
+    flex: 0 0 auto;
+    max-width: 75%;
+    color: #ffd27a;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.fcc-apc-more {
+    font-size: var(--fcc-fs-row);
+    line-height: 1.4;
+    color: #ddd;
+}
 
 /* --- RED ZONE: NAV DECK --- */
 #loc-mgr-nav-deck {

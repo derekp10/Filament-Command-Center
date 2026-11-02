@@ -274,6 +274,69 @@ def test_audit_panel_and_pill_are_readable(page: Page, base_url: str, assert_con
 
 
 @pytest.mark.usefixtures("require_server")
+@pytest.mark.parametrize("size", ["Standard", "Extra Large"])
+def test_audit_done_question_is_readable(page: Page, base_url: str, assert_contrast, size):
+    """Group 58: Done's question over the panel: its two lists, each line's reason, "and
+    N more", the hold-off's line, the QR captions in the buttons' tones, and the
+    panel's Loose spools button, hovered. Drawn from the route's shape with nothing
+    sent, and answered with Escape."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import SAMPLE_AUDIT, SAMPLE_QUESTION, _read_only
+    page.add_init_script("(() => { try { localStorage.setItem('fcc.textSize', %r); } catch (e) {} })();" % size)
+    _read_only(page, extra_get={"/api/audit_session": SAMPLE_AUDIT})
+    conftest.quiet_heartbeat(page)      # after: the newest route answers first
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.askAuditDone === 'function' && typeof state !== 'undefined'")
+    page.evaluate("() => { state.auditActive = true; window.updateAuditVisuals(); }")
+    panel = page.locator("#fcc-audit-panel-overlay")
+    expect(panel.locator("#fcc-audit-panel-done")).to_be_visible()
+    assert_contrast(panel)
+    assert "Loose spools" in " ".join(o.get("text", "") for o in conftest.contrast_offenders(panel, min_ratio=100))
+    panel.locator("#fcc-audit-panel-loose").hover()
+    page.wait_for_timeout(200)          # Bootstrap's colour transition
+    assert_contrast(panel)
+    page.mouse.move(0, 0)
+    page.evaluate("(q) => window.askAuditDone(q)", SAMPLE_QUESTION)
+    overlay = page.locator("#fcc-audit-done-question")
+    expect(overlay.locator(".fcc-confirm-qr-row")).to_be_visible()
+    page.evaluate("() => window.processScan('CMD:DONE', 'barcode')")      # the hold-off's line
+    expect(overlay.locator(".fcc-apc-status")).to_be_visible()
+    assert_contrast(overlay)
+    scored = " ".join(o.get("text", "") for o in conftest.contrast_offenders(overlay, min_ratio=100))
+    for words in ("Park 3 spools at Unknown?", "Not scanned", "Left where they are", "#134", "slot 2", "moved to XL-4",
+                  "no longer in Spoolman", "and 4 more", "Park them", "Back to the audit", "Answer the question",
+                  "Enter goes back"):
+        assert words in scored, (words, scored)
+    assert sum("SCAN" in t.upper() for t in [o["text"] for o in conftest.contrast_offenders(overlay, min_ratio=100)]) >= 2
+    page.keyboard.press("Escape")
+    expect(overlay).to_have_count(0)
+
+
+@pytest.mark.usefixtures("require_server")
+def test_lost_spools_are_readable(page: Page, base_url: str, assert_contrast):
+    """Group 58: a lost spool's badge on the buffer card (over its filament's colours),
+    on the search card, and the sentence in the spool window. Read-only: the spool is a
+    sample of the routes' shape, and the buffer is this page's own."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import SAMPLE_LOST, SAMPLE_LOST_DETAILS, _read_only
+    _read_only(page, extra_get={"/api/spool_details": SAMPLE_LOST_DETAILS})
+    conftest.own_the_buffer(page, [SAMPLE_LOST])    # after: the newest route answers first
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openLooseList === 'function' && state.heldSpools.length === 1")
+    card = page.locator(f".buffer-item[data-spool-id='{SAMPLE_LOST['id']}']")
+    badge = card.locator(".badge.bg-warning").first
+    expect(badge).to_have_text("❓ Lost: LR-MDB-1 slot 2")
+    assert_contrast(card)
+    assert any("Lost: LR-MDB-1 slot 2" in o.get("text", "") for o in conftest.contrast_offenders(card, min_ratio=100))
+    page.evaluate("(sid) => { openSpoolDetails(sid); }", SAMPLE_LOST["id"])
+    window_badge = page.locator("#detail-location-badge")
+    expect(window_badge).to_have_text("❓ Marked lost by the audit of LR-MDB-1 slot 2 on 2026-11-01")
+    row = window_badge.locator("..")    # the guard scores a root's descendants
+    assert_contrast(row)
+    assert any("Marked lost" in o.get("text", "") for o in conftest.contrast_offenders(row, min_ratio=100))
+
+
+@pytest.mark.usefixtures("require_server")
 def test_low_stock_title_bar_button_is_readable(page: Page, base_url: str, assert_contrast):
     """Group 57.2 — the ⚠️ count in the title bar (Bootstrap's outline-warning
     on the dark bar): out of the box Low and Out in count pills (57.3: white on

@@ -20,6 +20,21 @@ const SpoolCardBuilder = {
     },
 
     /**
+     * The yellow caution badge of a spool at Unknown (18.1), which says which
+     * audit lost it when one did (Group 58, Derek: "if one is found, it's apparent
+     * that this was filed away because we didn't know where it went"). No note,
+     * no audit: the plain badge. `onclick`: what a click runs, left out for a card
+     * already in that list.
+     */
+    unknownBadge(item, onclick = '') {
+        const lost = window.auditLostWords(item.details && item.details.lost_from);
+        const label = lost ? `❓ Lost: ${lost.where}` : '❓ Unknown';
+        const title = lost ? `Marked lost by ${lost.by}` : 'Physically lost — last known location unknown';
+        const click = onclick ? `onclick="${onclick}" ` : '';
+        return `<span class="badge bg-warning text-dark loc-badge-hover" ${click}style="cursor:${onclick ? 'pointer' : 'default'}; font-size: 1.1rem;" title="${escHtml(title)}">${escHtml(label)}</span>`;
+    },
+
+    /**
      * Reusable formatter for rich data extraction.
      */
     getRichInfo(item) {
@@ -154,7 +169,7 @@ const SpoolCardBuilder = {
                 // used up under the old spreadsheet system without a
                 // proper update — this badge makes them easy to spot.
                 if (String(item.location).toUpperCase() === 'UNKNOWN') {
-                    locBadgeHTML = `<span class="badge bg-warning text-dark loc-badge-hover" onclick="${badgeClick}" style="cursor:pointer; font-size: 1.1rem;" title="Physically lost — last known location unknown">❓ Unknown</span>`;
+                    locBadgeHTML = this.unknownBadge(item, badgeClick);
                 }
                 else if (item.is_ghost) locBadgeHTML = `<span class="badge bg-warning text-dark loc-badge-hover" onclick="${badgeClick}" style="cursor:pointer; font-size: 1.1rem;" title="Jump to Location">📍 Deployed: ${item.location} (Slot ${item.slot})</span>`;
                 else locBadgeHTML = `<span class="badge bg-info text-dark loc-badge-hover" onclick="${badgeClick}" style="cursor:pointer; font-size: 1.1rem;" title="Jump to Location">📍 ${item.location}</span>`;
@@ -206,6 +221,9 @@ const SpoolCardBuilder = {
                     </div>`;
             } else {
                 // Normal slotted item in List View
+
+                // The Unknown list: each spool says which audit lost it (Group 58).
+                if (item.details && item.details.lost_from) locBadgeHTML = this.unknownBadge(item);
 
                 // Add Row 4 for Physical QR scanning + large button interactions.
                 row4FooterHTML = `
@@ -466,7 +484,7 @@ const SpoolCardBuilder = {
                 const badgeClick = `event.stopPropagation(); if(window.openManage) window.openManage('${item.location}')`;
                 // 18.1 — UNKNOWN bucket badge (yellow caution, same shape as search mode).
                 if (String(item.location).toUpperCase() === 'UNKNOWN') {
-                    locBadgeHTML = `<span class="badge bg-warning text-dark loc-badge-hover" onclick="${badgeClick}" style="cursor:pointer; font-size: 1.1rem;" title="Physically lost — last known location unknown">❓ Unknown</span>`;
+                    locBadgeHTML = this.unknownBadge(item, badgeClick);
                 } else if (item.is_ghost) {
                     locBadgeHTML = `<span class="badge bg-warning text-dark loc-badge-hover" onclick="${badgeClick}" style="cursor:pointer; font-size: 1.1rem;" title="Jump to Location">📍 Deployed: ${item.location}${item.slot ? ` (Slot ${item.slot})` : ''}</span>`;
                 } else {

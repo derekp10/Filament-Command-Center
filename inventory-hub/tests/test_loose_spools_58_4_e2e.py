@@ -124,8 +124,8 @@ def test_a_scan_passes_the_list_by(page: Page, base_url: str):
 
 
 def test_over_the_real_audit_panel(page: Page, base_url: str):
-    """The way in slice s5 wires: tier confirm, above the audit panel. Enter opens
-    nothing there, and Escape leaves the panel up."""
+    """The panel's own button: tier confirm, above the audit panel. Enter opens nothing
+    there, and Escape leaves the panel up."""
     _read_only(page, extra_get={"/api/audit_session": SAMPLE_AUDIT})
     _serve(page, SAMPLE_LOOSE)
     quiet_heartbeat(page)               # after: the newest route answers first
@@ -135,7 +135,7 @@ def test_over_the_real_audit_panel(page: Page, base_url: str):
     page.evaluate("() => { state.auditActive = true; window.openAuditPanel(); }")
     page.wait_for_function("() => { const b = document.getElementById('fcc-audit-panel-body');"
                            " return !!b && /Auditing/.test(b.innerText); }", timeout=10_000)
-    page.evaluate("() => { window.openLooseList({ tier: 'confirm' }); }")
+    page.click("#fcc-audit-panel-loose")
     expect(page.locator(ROW + ".kb-active")).to_have_count(1)
     assert _on_top(page, PANEL)
     assert "Enter" not in page.locator(OVERLAY + " [data-loose-foot]").inner_text()

@@ -505,20 +505,6 @@ return { modal: state.activeModal, pending: !!state.pendingConfirm, scans: scans
     assert res["scans"] == ["LOC:LR-MDB-1", "ID:57", "ID:99"] and res["held"] == [57]
 
 
-def test_the_question_for_now_is_a_plain_warning_that_moves_nothing(tmp_path, real):
-    """Until the next slice lands its question: nothing moves, and the page says so."""
-    res = _run(tmp_path, """
-answerWith('/api/identify_scan', [%s]);
-await running(SESSION);
-window.processScan('CMD:DONE', 'barcode');
-await __settle(60);
-return { active: state.auditActive, up: panelUp(), notice: noticeText(), warnings: warnings(),
-         parks: posts('/api/audit/park') };
-""" % json.dumps(real["question"]))
-    assert res["active"] is True and res["up"] is True and res["parks"] == []
-    assert "1 spool at LR-MDB-1 wasn't scanned" in res["notice"] and res["warnings"] == [res["notice"]]
-
-
 def test_a_location_scan_after_the_audit_ended_moves_nothing(tmp_path):
     """The server has no audit (it answered a plain location) and the page hasn't
     heard. In an audit a second location is refused; left to run on it filed the

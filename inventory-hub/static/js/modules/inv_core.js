@@ -242,6 +242,14 @@ window.unionConfirmFedHeads = unionConfirmFedHeads;
 // mounted on the same id over an unanswered one replaces it, and the older one
 // is settled as superseded (`onCancel({superseded: true})`), so its host
 // listener, QR session and scan hold-off never outlive its DOM.
+// The three-way's words can be a door's own (Group 58, the audit's Done; left out,
+// each is the default above): `cancelLabel` and `cancelVerb`, the Cancel button and
+// what the hint says Enter and Esc do on it; `loadVerb`, the same for the yes;
+// `loadCaption` and `cancelCaption`, the QRs' captions. `sections`
+// ([{heading, lines: [{text, where}], more}]) are lists under `msg`, escaped here.
+// A line never wraps and `more` counts the lines left out, so a door names a few
+// and a count: fccFitQuestion scrolls the whole question, QRs included, and a
+// scanner can't read a QR that has scrolled away.
 const _openMoveConfirms = {};
 
 // --- KEEP A BOX ID WHOLE (review, 2026-10-22) ---
@@ -302,11 +310,27 @@ window.fccFitQuestion = fccFitQuestion;
 window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', host = null,
                                ids = {}, onConfirm = null, onCancel = null,
                                title = '', onStore = null, storeLabel = '', loadLabel = '',
-                               printing = null, noLoad = false, hint = '' } = {}) => {
+                               printing = null, noLoad = false, hint = '',
+                               cancelLabel = '', cancelVerb = '', loadVerb = '',
+                               loadCaption = '', cancelCaption = '', sections = null } = {}) => {
     const esc = (s) => String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     const threeWay = !!title;
+    const noVerb = (threeWay && cancelVerb) || 'cancels';
+    const lists = (threeWay && Array.isArray(sections)) ? sections : [];
+    const sectionHtml = ({ heading = '', lines = [], more = 0 }) => `<div class="fcc-apc-section">`
+        + `<div class="fcc-apc-section-head">${esc(heading)}</div>`
+        + lines.map(({ text = '', where = '' }) => `<div class="fcc-apc-line" title="${esc(where ? `${text} · ${where}` : text)}">`
+            + `<span class="fcc-apc-line-text">${esc(text)}</span>`
+            + `${where ? `<span class="fcc-apc-line-where">${esc(where)}</span>` : ''}</div>`).join('')
+        + `${more > 0 ? `<div class="fcc-apc-more">and ${esc(more)} more</div>` : ''}</div>`;
+    const listsHtml = lists.length ? `<div class="fcc-apc-sections">${lists.map(sectionHtml).join('')}</div>` : '';
+    // Two lists sit side by side where the window has the room, so the height a
+    // question takes is one list's, and its QRs stay in view.
+    const width = lists.length
+        ? `width:min(${lists.length > 1 ? 50 : 35}rem, calc(100vw - 16px)); box-sizing:border-box;`
+        : `max-width:${threeWay ? 35 : 30}rem;`;
     const first = activePrint || (Array.isArray(activePrints) && activePrints[0]) || {};
     const isPrinting = printing != null ? !!printing
         : !!(activePrint || (Array.isArray(activePrints) && activePrints.length));
@@ -323,21 +347,21 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
     const buttons = threeWay
         ? (hasLoad ? `<button type="button" ${idAttr(ids.yes)}class="btn btn-warning btn-sm fcc-apc-yes" style="min-width:120px;">${fccKeepWhole(esc(loadLabel || 'Load it instead'))}</button>` : '')
           + (hasStore ? `<button type="button" ${idAttr(ids.store)}class="btn btn-info btn-sm fcc-apc-store" style="min-width:120px;">${fccKeepWhole(esc(storeLabel || 'Just store it'))}</button>` : '')
-          + `<button type="button" ${idAttr(ids.no)}class="btn btn-secondary btn-sm fcc-apc-no" style="min-width:100px;">Cancel</button>`
+          + `<button type="button" ${idAttr(ids.no)}class="btn btn-secondary btn-sm fcc-apc-no" style="min-width:100px;">${esc(cancelLabel || 'Cancel')}</button>`
         : `<button type="button" ${idAttr(ids.yes)}class="btn btn-warning btn-sm fcc-apc-yes" style="min-width:120px;">Continue Anyway</button>
                 <button type="button" ${idAttr(ids.no)}class="btn btn-secondary btn-sm fcc-apc-no" style="min-width:120px;">Cancel</button>`;
     // The yes / no (a printer is printing) opens on Cancel (Derek, 2026-10-29:
     // "I don't want an accidental double press to mess things up"), as the
     // three-way opens on its safe answer: Continue Anyway takes a deliberate
     // Tab or click.
-    const extras = `<div class="fcc-apc-hint" style="font-size:var(--fcc-fs-small); color:#ccc; margin-top:8px;">Enter ${hasStore ? 'stores it' : 'cancels'} · Esc cancels</div>`;
+    const extras = `<div class="fcc-apc-hint" style="font-size:var(--fcc-fs-small); color:#ccc; margin-top:8px;">Enter ${hasStore ? 'stores it' : noVerb} · Esc ${noVerb}</div>`;
     const status = threeWay
         ? `<div class="fcc-apc-status" role="alert" style="display:none; margin-bottom:10px; padding:6px 10px; border-radius:6px; background:#4a3200; color:#ffd27a; border:1px solid #ffb74d; font-weight:bold; text-align:left;"></div>`
         : '';
     const content = `
-        <div class="fcc-apc-panel" style="background:#1e1e1e; color:#fff; border:2px solid ${border}; border-radius:8px; padding:20px min(24px, 4vw); max-width:${threeWay ? 35 : 30}rem; text-align:center;">
+        <div class="fcc-apc-panel" style="background:#1e1e1e; color:#fff; border:2px solid ${border}; border-radius:8px; padding:20px min(24px, 4vw); ${width} text-align:center;">
             <div class="fcc-apc-title" style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">${header}</div>
-            <div class="fcc-apc-msg" style="color:#ffc; margin-bottom:14px;${threeWay ? ' text-align:left;' : ''}">${esc(bodyText)}</div>
+            <div class="fcc-apc-msg" style="color:#ffc; margin-bottom:14px;${threeWay ? ' text-align:left;' : ''}">${esc(bodyText)}</div>${listsHtml}
             ${status}
             <div class="fcc-apc-btns" style="display:flex; gap:10px; justify-content:center;${threeWay ? ' flex-wrap:wrap;' : ''}">${buttons}</div>
             ${extras}
@@ -408,9 +432,9 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         // `focus` in the capture phase: mountOverlay's focus guard stops focusin
         // at the document, before it reaches anything inside the overlay.
         ov.addEventListener('focus', (e) => {
-            const does = e.target === yesBtn ? (threeWay ? 'loads it' : 'continues')
-                : (e.target === storeBtn ? 'stores it' : (e.target === noBtn ? 'cancels' : ''));
-            if (does) hintEl.textContent = `Enter ${does} · Esc cancels`;
+            const does = e.target === yesBtn ? (threeWay ? (loadVerb || 'loads it') : 'continues')
+                : (e.target === storeBtn ? 'stores it' : (e.target === noBtn ? noVerb : ''));
+            if (does) hintEl.textContent = `Enter ${does} · Esc ${noVerb}`;
         }, true);
     }
     // mountOverlay removes the DOM when the host closes; the answer must close
@@ -478,10 +502,11 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
                 confirmTone: 'warning', cancelTone: 'secondary' }
             : hasLoad
                 ? { host: handle.panel, alignTo, onConfirm: yes, onCancel: no, onStore: hasStore ? store : undefined,
-                    confirmLabel: 'Scan to Load', storeLabel: 'Scan to Store', cancelLabel: 'Scan to Cancel', theme,
+                    confirmLabel: loadCaption || 'Scan to Load', storeLabel: 'Scan to Store',
+                    cancelLabel: cancelCaption || 'Scan to Cancel', theme,
                     confirmTone: 'warning', storeTone: 'info', cancelTone: 'secondary' }
                 : { host: handle.panel, alignTo, onConfirm: store, onCancel: no,
-                    confirmLabel: 'Scan to Store', cancelLabel: 'Scan to Cancel', theme,
+                    confirmLabel: 'Scan to Store', cancelLabel: cancelCaption || 'Scan to Cancel', theme,
                     confirmTone: 'info', cancelTone: 'secondary' });
     }
     // Fitted to the screen: box ids whole where they fit, and a question
@@ -494,7 +519,7 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         // the toast layer (z 11000) sits under this dialog.
         // What a held-off scan is told (processScan): the buttons on screen
         // (Group 40 review, BD-6: a question with no store said "Just store it").
-        const said = [hasLoad ? (loadLabel || 'Load it instead') : '', hasStore ? 'Just store it' : '', 'Cancel']
+        const said = [hasLoad ? (loadLabel || 'Load it instead') : '', hasStore ? 'Just store it' : '', cancelLabel || 'Cancel']
             .filter(Boolean);
         question = {
             title,
@@ -2773,6 +2798,24 @@ const _renderLogsPayload = (d, force = false, opts = null) => {
 const _pageClock = () => ((typeof performance !== 'undefined' && performance && typeof performance.now === 'function')
     ? performance.now() : Date.now());
 window.fccPageClock = _pageClock;
+
+// The page's own date, for a mark the server stamps with a day: its clock may be
+// UTC, where the evening is already tomorrow.
+window.fccLocalDay = () => {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+
+// Which audit lost a spool (Group 58, spoolman_api.audit_lost_from's answer: `lost_from`,
+// {place, slot, on}; `slot` and `on` are '' on an older note) in the words every
+// surface shows: `where` ("LR-MDB-1 slot 2") and `by` ("the audit of LR-MDB-1 slot 2
+// on 2026-11-01", spoolman_api.audit_lost_words' twin). null when none did.
+window.auditLostWords = (lost) => {
+    if (!lost || !lost.place) return null;
+    const where = lost.slot ? `${lost.place} slot ${lost.slot}` : String(lost.place);
+    return { where, by: `the audit of ${where}${lost.on ? ` on ${lost.on}` : ''}` };
+};
 
 // An audit this page believed in is gone, and none of its own requests ended
 // it. Says why from the server's word: audit_end names how the last audit ended,

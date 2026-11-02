@@ -354,6 +354,11 @@ ${P} .fcc-loose-foot { color:#ccc; font-size:var(--fcc-fs-small); margin-top:8px
         _openPlace(handle, row.dataset.place);
     }
 
+    // The audit panel's own list goes with it, as a `host` window's does.
+    window.closeLooseList = function (handle) {
+        if (handle && handle === _current) _close(handle, { keepFocus: true });
+    };
+
     window.openLooseList = function (opts) {
         if (typeof window.mountOverlay !== 'function') return null;
         const o = opts || {};
