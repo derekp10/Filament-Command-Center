@@ -67,6 +67,7 @@ EXPECTED_ROUTES = [
     ("/api/locations", "POST", "api_save_location"),
     ("/api/log_event", "POST", "api_log_event"),
     ("/api/logs", "GET", "api_get_logs_route"),
+    ("/api/loose_spools", "GET", "api_loose_spools"),  # Group 58.4 Loose spools list
     ("/api/machine/<path:printer_name>/toolhead_slots", "GET", "api_machine_toolhead_slots"),
     ("/api/manage_contents", "POST", "api_manage_contents"),
     ("/api/materials", "GET", "api_materials"),

@@ -254,6 +254,7 @@ from routes_locations import (  # noqa: E402,F401
     api_get_locations, api_save_location, api_delete_location,
     api_delete_spool, api_delete_filament, api_merge_filament,
     api_undo, api_get_contents_route, api_spool_details, api_filament_details,
+    api_loose_spools,
 )
 
 # (scan pipeline + update_filament + manage_contents moved to routes_scan.py — L316 step 6)

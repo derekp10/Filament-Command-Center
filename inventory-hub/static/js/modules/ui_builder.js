@@ -119,8 +119,9 @@ const SpoolCardBuilder = {
                 else if (window.processScan) actionTarget = `processScan('ID:${item.id}', 'search')`;
                 else actionTarget = `openSpoolDetails(${item.id})`;
                 
-                // needs_label_print is surfaced from format_spool_display's details block.
-                // Only render the ✅ when we have an explicit false — missing details
+                // needs_label_print is surfaced from format_spool_display's details block
+                // (spoolman_api.label_flag: true, false, or null for no status on record).
+                // Only render the ✅ for an explicit false: a null or missing status
                 // means we can't be sure, so stay quiet rather than over-promising.
                 const labelFlagKnown = item.details && Object.prototype.hasOwnProperty.call(item.details, 'needs_label_print');
                 const labelConfirmed = labelFlagKnown && item.details.needs_label_print === false;

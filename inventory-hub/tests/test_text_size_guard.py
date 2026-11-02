@@ -521,6 +521,41 @@ def test_settings_and_list_windows_text_is_readable(page: Page, base_url: str, a
         _hide(page, modal)
 
 
+SAMPLE_LOOSE = {"read_ok": True, "read_error": None, "count": 3, "places": [
+    {"id": "ZQ", "name": "A Room", "type": "Room", "spools": [
+        {"id": 1, "display": "#1 Some Brand PLA (Gold)", "color": "F9E352", "color_direction": "longitudinal",
+         "remaining_weight": 912.5}]},
+    {"id": "ZQ-CT-1", "name": "A Cart", "type": "Cart", "spools": [
+        {"id": 2, "display": "#2 Some Brand PETG (Red Blue)", "color": "BA0C2F,0047BB", "color_direction": "coaxial",
+         "remaining_weight": None}]},
+    {"id": "Old Shelf", "name": "Old Shelf", "type": "", "spools": [
+        {"id": 3, "display": "#3 Some Brand PLA (White)", "color": "FFFFFF", "color_direction": "longitudinal",
+         "remaining_weight": 19}]}]}
+
+
+def test_loose_spools_list_text_is_readable(page: Page, base_url: str, assert_text_size):
+    """Group 58.4: the 🧺 Loose spools list, drawn from a sample, and its yellow
+    notice; the Locations window around its button is measured by
+    test_locations_and_search_text_is_readable."""
+    import json as _json
+    _read_only(page)
+    answers = [SAMPLE_LOOSE, {"read_ok": False, "read_error": "couldn't read Spoolman (test)", "count": 0, "places": []}]
+    page.route("**/api/loose_spools", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=_json.dumps(answers.pop(0))))
+    _ready(page, base_url)
+    _shown(page, "locMgrModal", "() => window.openLocationsModal()")
+    page.click("#loc-loose-list-btn")
+    panel = page.locator("#fcc-loose-list .fcc-loose-panel")
+    page.wait_for_function("() => document.querySelectorAll('#fcc-loose-list .fcc-loose-row').length === 3")
+    assert_text_size(panel)
+    # The rows are what the rule calls list rows: --fcc-fs-row, 14.4 px at Standard.
+    assert page.evaluate("() => parseFloat(getComputedStyle(document.querySelector('#fcc-loose-list .fcc-loose-row'))"
+                         ".fontSize)") == pytest.approx(14.4)
+    page.evaluate("() => { window.openLooseList(); }")
+    page.wait_for_selector("#fcc-loose-list [data-loose-notice]")
+    assert_text_size(panel)
+
+
 # ---------------------------------------------------------------------------
 # QR codes take their button's colour (Derek, 2026-10-21): "so it's clear at a
 # glance what QR code matches the button". The hermetic proof of the shared

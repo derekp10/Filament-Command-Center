@@ -2843,8 +2843,9 @@ const _maybePromptLabelReprint = (filId, displayName, changed, dirtyExtras, rawE
     // --- Spool labels (LIGHT, no prompt): Brand/Type/Color-NAME also print on
     // the spool labels of this filament's physical spools, so those go stale
     // when changed. Hex/RGB are NOT on the spool label, so a hex-only change is
-    // excluded. Flag the filament's spools' needs_label_print so the spool
-    // details badge + print queue surface them (Derek: a heads-up is enough).
+    // excluded. Flag the filament's spools' needs_label_print so the 🏷️ Backlog
+    // lists them (Derek: a heads-up is enough; the spool window has no label
+    // badge, only the filament window does).
     const spoolLabelChanged = has(changed, 'name') || has(changed, 'material')
         || has(changed, 'vendor_id') || has(dirtyExtras, 'original_color')
         || has(dirtyExtras, 'filament_attributes');
@@ -2927,7 +2928,8 @@ const _showLabelReprintPrompt = (filId, displayName, changedLabels) => {
     const no = panel.querySelector('#fcc-label-reprint-no');
     if (yes) yes.addEventListener('click', () => {
         // addToQueue both raises needs_label_print (surfaces the staleness in the
-        // pending list + Details badge) AND queues the label for the P-touch batch.
+        // 🏷️ Backlog and the filament window's badge) AND queues the label for the
+        // P-touch batch.
         const queued = (typeof window.addToQueue === 'function')
             ? window.addToQueue({ id: filId, type: 'filament', display: `Filament #${filId}` })
             : false;

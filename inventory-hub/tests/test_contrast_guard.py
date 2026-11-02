@@ -187,6 +187,62 @@ def test_low_stock_panel_has_no_gray_on_gray_text(page: Page, base_url: str, ass
 
 
 @pytest.mark.usefixtures("require_server")
+def test_loose_spools_list_has_no_gray_on_gray_text(page: Page, base_url: str, assert_contrast):
+    """Group 58.4 — the 🧺 Loose spools list over the real dashboard: its button in
+    the Locations window, its rows (one highlighted) with their place headings and
+    tags, a place with no row, its yellow notice, Try again hovered, and the good
+    empty read. /api/loose_spools is stubbed, so no dev data is read, and the list
+    writes nothing. (Hermetic twin: test_loose_spools_58_4_js.py.)"""
+    import json as _json
+    import conftest   # local: keeps this file's header out of other branches' merges
+    answers = [
+        {"read_ok": True, "read_error": None, "count": 3, "places": [
+            {"id": "ZQ", "name": "A Room", "type": "Room", "spools": [
+                {"id": 1, "display": "#1 Some Brand PLA (Gold)", "color": "F9E352",
+                 "color_direction": "longitudinal", "remaining_weight": 912.5}]},
+            {"id": "ZQ-CT-1", "name": "A Cart", "type": "Cart", "spools": [
+                {"id": 2, "display": "#2 Some Brand PETG (Red Blue)", "color": "BA0C2F,0047BB",
+                 "color_direction": "coaxial", "remaining_weight": None}]},
+            {"id": "Old Shelf", "name": "Old Shelf", "type": "", "spools": [
+                {"id": 3, "display": "#3 Some Brand PLA (White)", "color": "FFFFFF",
+                 "color_direction": "longitudinal", "remaining_weight": 19}]}]},
+        {"read_ok": False, "read_error": "couldn't read Spoolman (test)", "count": 0, "places": []},
+        {"read_ok": True, "read_error": None, "count": 0, "places": []},
+    ]
+
+    def _answer(route):
+        route.fulfill(status=200, content_type="application/json",
+                      body=_json.dumps(answers.pop(0) if len(answers) > 1 else answers[0]))
+    page.route("**/api/loose_spools", _answer)
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openLooseList === 'function' && typeof state !== 'undefined'")
+    page.evaluate("window.openLocationsModal()")
+    button = page.locator("#loc-loose-list-btn")
+    expect(button).to_be_visible()
+    # The guard scores a root's descendants, so the row of buttons is the root,
+    # and the button is shown to be among what it scores.
+    row = button.locator("..")
+    assert_contrast(row)
+    assert any("Loose spools" in o.get("text", "") for o in conftest.contrast_offenders(row, min_ratio=100))
+    button.hover()
+    assert_contrast(row)
+    button.click()
+    panel = page.locator("#fcc-loose-list .fcc-loose-panel")
+    expect(panel.locator(".fcc-loose-row.kb-active")).to_have_count(1)
+    assert_contrast(panel)
+    page.keyboard.press("ArrowDown")
+    assert_contrast(panel)
+    page.evaluate("window.openLooseList({ host: document.getElementById('locMgrModal') })")      # the notice
+    expect(panel.locator("[data-loose-notice]")).to_be_visible()
+    assert_contrast(panel)
+    panel.locator("[data-loose-retry]").hover()
+    assert_contrast(panel)
+    panel.locator("[data-loose-retry]").click()                                                 # the good empty read
+    expect(panel.locator("[data-loose-state='empty']")).to_be_visible()
+    assert_contrast(panel)
+
+
+@pytest.mark.usefixtures("require_server")
 def test_low_stock_title_bar_button_is_readable(page: Page, base_url: str, assert_contrast):
     """Group 57.2 — the ⚠️ count in the title bar (Bootstrap's outline-warning
     on the dark bar): out of the box Low and Out in count pills (57.3: white on

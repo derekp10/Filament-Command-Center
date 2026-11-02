@@ -1991,6 +1991,29 @@ def update_extra_field_choices(entity_type, key, new_choices):
         state.logger.error(f"API Error updating field choices: {e}")
         return {"success": False, "msg": str(e)}
 
+def label_flag(extra):
+    """A record's label status from its extras (Group 58.5): True (a label needs
+    printing), False (its label is confirmed), None (no status on record: the key
+    is absent, null or blank, or holds something that isn't a yes or a no).
+
+    The absent case is real and common: Spoolman leaves a record's unset extra
+    out of `extra`, it never answers false for it, and spools imported before the
+    field existed have never had one. Reading that as False drew a green "label
+    confirmed" tick on a spool nobody had checked.
+
+    Works on raw and parsed extras alike: Spoolman's "true" / "false", a boolean,
+    1 / 0, or a value still in its JSON quotes."""
+    value = extra.get('needs_label_print') if isinstance(extra, dict) else None
+    if value is None:
+        return None
+    text = str(value).strip().strip('"').strip().lower()
+    if text in ('true', '1'):
+        return True
+    if text in ('false', '0'):
+        return False
+    return None
+
+
 def format_spool_display(spool_data):
     """Creates the text and color for the UI."""
     try:
@@ -2065,9 +2088,9 @@ def format_spool_display(spool_data):
                 "color_name": col_name,
                 "weight": rem,
                 "temp": f"{fil.get('settings_extruder_temp', '')}°C" if fil.get('settings_extruder_temp') else "",
-                # Spoolman stores needs_label_print loosely (bool, 'true'/'false' string, or missing).
-                # Normalize to a strict bool so the card can branch without re-checking types.
-                "needs_label_print": str(extra.get('needs_label_print', '')).lower() in ('true', '1'),
+                # True, False or None (no status on record), so a card's "label
+                # confirmed" tick means a label someone confirmed (label_flag).
+                "needs_label_print": label_flag(extra),
             }
         }
 

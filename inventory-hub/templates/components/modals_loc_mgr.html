@@ -25,7 +25,9 @@
             <div class="modal-body p-0">
                 <div class="d-flex justify-content-between align-items-center p-3 border-bottom bg-dark">
                     <span id="loc-count" class="text-info fw-bold fcc-loc-count">Loading...</span>
-                    <div class="d-flex gap-2">
+                    <div class="d-flex flex-wrap justify-content-end gap-2">
+                        <!-- Group 58.4: every spool filed at a room or a cart itself, in one list -->
+                        <button id="loc-loose-list-btn" class="btn btn-outline-info" onclick="window.openLooseList({ host: document.getElementById('locMgrModal') })" title="Every spool filed at a room or a cart itself, with no more exact place">🧺 Loose spools</button>
                         <!-- L271 Phase 3.5: float printers to a pinned top group of the tree -->
                         <button id="loc-pin-printers-btn" class="btn btn-outline-warning" onclick="window.toggleLocPinPrinters()" aria-pressed="false" title="Float printers to the top of the tree for quick access (when sorting by ID)">📌 Pin Printers</button>
                         <button class="btn btn-success" onclick="openAddModal()">➕ Add Location</button>
