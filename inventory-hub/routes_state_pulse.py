@@ -45,7 +45,8 @@ def api_audit_session():
     audit panel. Returns the location being audited plus its expected, Extra
     (`rogue`) and loaded-from-here (`trail`) spools, each row with the spool's
     display label, color, remaining weight, slot and where FCC has it (`where`),
-    so the frontend can render a grid of tiles without per-id lookups.
+    so the frontend can render a grid of tiles without per-id lookups. An Extra
+    an earlier audit lost also carries `lost_from`, and its `where` says so.
 
     Group 58: the rows are the ones the session stored at each scan, so a 2 s
     poll reads no Spoolman and a blip can't blank a tile. Only a row with no

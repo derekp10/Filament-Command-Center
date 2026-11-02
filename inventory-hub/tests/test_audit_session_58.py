@@ -10,8 +10,8 @@ Derek's rule (2026-11-01): a spool has one location. An audit expects the spools
 whose OWN location is exactly the place scanned. A spool loaded from the place,
 or filed in a place inside it, isn't on the list.
 
-Done's park still runs here at once, as it always has, on the new list: its plan
-and its question are the next slice.
+Done's plan, its question, the park and its Undo are in
+tests/test_audit_auto_park_unknown.py and tests/test_audit_undo_58.py.
 """
 from __future__ import annotations
 
@@ -99,10 +99,26 @@ def env(monkeypatch):
     state.reset_audit()
 
 
-def scan(env, text, source="barcode"):
+def scan(env, text, source="barcode", ask=True):
     # A client of its own, so a scan can land in the middle of another's request.
-    res = app_module.app.test_client().post(
-        "/api/identify_scan", json={"text": text, "source": source, "confirmed_fed_heads": []})
+    # `ask`: this page can show Done's question (`audit_ask`, on every scan).
+    body = {"text": text, "source": source, "confirmed_fed_heads": []}
+    if ask:
+        body["audit_ask"] = True
+    res = app_module.app.test_client().post("/api/identify_scan", json=body)
+    assert res.status_code == 200, res.get_data(as_text=True)
+    return res.get_json()
+
+
+def park(env, ids=None, audit_id=None, today=None):
+    """The Yes to Done's question: asks, then says yes to every spool it named,
+    or to `ids` for the audit `audit_id` when the test has its own answer."""
+    if ids is None:
+        question = scan(env, "CMD:DONE")
+        assert question["type"] == "audit_done_question", question
+        ids, audit_id = [row["id"] for row in question["park"]], question["audit_id"]
+    res = app_module.app.test_client().post("/api/audit/park", json={"audit_id": audit_id, "ids": ids,
+                                                                     "today": today})
     assert res.status_code == 200, res.get_data(as_text=True)
     return res.get_json()
 
@@ -804,9 +820,9 @@ def test_every_scan_is_refused_while_the_audit_is_finishing(env, text):
     assert any("already finishing" in m for m in log_text(env))
 
 
-def test_a_second_done_during_the_first_parks_nothing_more(env, monkeypatch):
-    """A second press or a scanned Done while the first is writing used to run the
-    whole list again, and report twice."""
+def test_a_second_done_during_the_park_parks_nothing_more(env, monkeypatch):
+    """A second press or a scanned Done while the first was writing used to run
+    the whole list again, and report twice."""
     for sid in (1, 2, 3):
         add_spool(env, sid, "LR-MDB-1")
     start(env, "LR-MDB-1")
@@ -818,13 +834,28 @@ def test_a_second_done_during_the_first_parks_nothing_more(env, monkeypatch):
         return real(url, json=json, timeout=timeout, **kw)
 
     monkeypatch.setattr(spoolman_api.requests, "patch", patch_then_press_done)
-    assert "audit_ended" in scan(env, "CMD:DONE")
+    assert "audit_ended" in park(env)
     assert sorted(p[1] for p in env["fake"].patches) == [1, 2, 3]
     assert answers == [{"type": "error", "msg": "The audit is already finishing."}] * 3
     assert len([m for m in log_text(env) if "Audit Report" in m]) == 1
 
 
-def test_cancel_during_a_done_doesnt_end_it_twice(env, monkeypatch):
+def test_a_second_done_during_the_first_ones_read_is_refused(env, monkeypatch):
+    add_spool(env, 1, "LR-MDB-1")
+    start(env, "LR-MDB-1")
+    real = spoolman_api.get_all_spools_strict
+    answers = []
+
+    def read_then_press_done(*a, **k):
+        answers.append(scan(env, "CMD:DONE"))
+        return real(*a, **k)
+
+    monkeypatch.setattr(spoolman_api, "get_all_spools_strict", read_then_press_done)
+    assert scan(env, "CMD:DONE")["type"] == "audit_done_question"
+    assert answers == [{"type": "error", "msg": "The audit is already finishing."}]
+
+
+def test_cancel_during_a_park_doesnt_end_it_twice(env, monkeypatch):
     add_spool(env, 1, "LR-MDB-1")
     start(env, "LR-MDB-1")
     audit_id = session()["audit_id"]
@@ -836,7 +867,7 @@ def test_cancel_during_a_done_doesnt_end_it_twice(env, monkeypatch):
         return real(url, json=json, timeout=timeout, **kw)
 
     monkeypatch.setattr(spoolman_api.requests, "patch", patch_then_cancel)
-    scan(env, "CMD:DONE")
+    park(env)
     assert answers == [{"type": "error", "msg": "The audit is already finishing."}]
     assert state.AUDIT_LAST_END == {"id": audit_id, "why": "done", "location": "LR-MDB-1"}
 
@@ -871,7 +902,7 @@ def test_done_moves_only_the_new_rules_list_on_the_real_write(env):
     add_spool(env, 4, "XL-2", physical_source="LR-MDB-1")           # a prefix hit
     start(env, "LR")
     scan(env, "ID:1")
-    assert "audit_ended" in scan(env, "CMD:DONE")
+    assert "audit_ended" in park(env)
     assert [p[1] for p in env["fake"].patches] == [2]
     spools = env["fake"].records["spool"]
     assert spools[2]["location"] == "UNKNOWN"
@@ -919,7 +950,7 @@ def test_the_report_is_written_after_everything_but_the_end(env):
     for sid in (1, 2):
         add_spool(env, sid, "LR-MDB-1")
     start(env, "LR-MDB-1")
-    scan(env, "CMD:DONE")
+    park(env)
     lines = log_text(env)
     assert "Audit Report" in lines[-2] and lines[-1] == "Audit Mode Ended."
     assert sum("moved Spool" in m for m in lines) == 2
@@ -937,7 +968,7 @@ def test_the_report_says_what_was_parked_and_what_failed(env, monkeypatch):
         return real(url, json=json, timeout=timeout, **kw)
 
     monkeypatch.setattr(spoolman_api.requests, "patch", refuse_spool_2)
-    scan(env, "CMD:DONE")
+    park(env)
     line = report(env)
     assert "<b>Parked at Unknown:</b> #1" in line
     assert "<b>Failed:</b> #2" in line
@@ -1022,7 +1053,7 @@ def test_outside_text_in_every_audit_line_is_escaped(env, monkeypatch):
         return real(url, json=json, timeout=timeout, **kw)
 
     monkeypatch.setattr(spoolman_api.requests, "patch", refuse_spool_2)
-    scan(env, "CMD:DONE")
+    park(env)
     joined = "\n".join(log_text(env))
     for piece in ("&lt;B&gt;BOX", "&lt;B&gt;BIN", "&lt;I&gt;Red", "&lt;I&gt;Stray", "&lt;script&gt;nope"):
         assert piece in joined, joined

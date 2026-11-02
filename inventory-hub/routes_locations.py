@@ -1154,7 +1154,13 @@ def api_loose_spools():
 def api_spool_details():
     sid = request.args.get('id')
     if not sid: return jsonify({})
-    return jsonify(spoolman_api.get_spool(sid))
+    rec = spoolman_api.get_spool(sid)
+    if isinstance(rec, dict):
+        # Group 58, section 8: the spool window says which audit lost it.
+        lost = spoolman_api.audit_lost_from(rec.get('location'), rec.get('extra'))
+        if lost:
+            rec['lost_from'] = lost
+    return jsonify(rec)
 
 @app.route('/api/filament_details', methods=['GET'])
 def api_filament_details():

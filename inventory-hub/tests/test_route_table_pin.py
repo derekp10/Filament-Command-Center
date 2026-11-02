@@ -17,6 +17,7 @@ import app as app_module
 
 EXPECTED_ROUTES = [
     ("/", "GET", "dashboard"),
+    ("/api/audit/park", "POST", "api_audit_park"),  # Group 58: the Yes to Done's question
     ("/api/audit_session", "GET", "api_audit_session"),
     ("/api/backfill_spool_weights/<int:fid>", "POST", "api_backfill_spool_weights"),
     ("/api/buffer/clear", "POST", "api_buffer_clear"),

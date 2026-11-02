@@ -50,8 +50,9 @@ JSON_STRING_FIELDS = [
     "prusament_manufacturing_date", "sheet_link", "slicer_profile",
     # Vendor extras (Group 6 — Edit Modal new panels):
     "website",
-    # Group 42.6: a location id is text even when it looks like a number.
-    "fcc_pre_box_location",
+    # Group 42.6: a location id is text even when it looks like a number. Group 58:
+    # so is an audit's note, which an older FCC wrote as a bare location id.
+    "fcc_pre_box_location", "fcc_pre_audit_location",
     # Excluded from Low and Out (stock_report.py): a note such as "123" or "true"
     # must stay text.
     "fcc_stock_excluded", "fcc_stock_excluded_note", "fcc_stock_excluded_at",
@@ -822,9 +823,10 @@ SYSTEM_MANAGED_EXTRAS = frozenset({
     # Owned by _auto_archive_on_empty / _auto_unarchive_on_refill.
     "fcc_pre_archive_location",
     # 18.2 Part A — set when an audit parks a spool it didn't find at
-    # UNKNOWN: where FCC last had it. A note for a person: nothing reads it
-    # back to send a spool home, no "recovery scan" exists. Never
-    # user-editable (would lose the note).
+    # UNKNOWN: <PLACE>[:<slot>]@<YYYY-MM-DD>, where FCC last had it (Group 58;
+    # an older note is the bare place). A note for a person, shown by
+    # audit_lost_from: nothing reads it back to send a spool home, no
+    # "recovery scan" exists. Never user-editable (would lose the note).
     "fcc_pre_audit_location",
     # Group 42.6 — where a spool sat before it went into a single-slot box
     # (a PolyDryer), so ejecting it out of the box puts it back there.
@@ -2014,6 +2016,36 @@ def label_flag(extra):
     return None
 
 
+# fcc_pre_audit_location as an audit writes it: <PLACE>[:<slot>]@<YYYY-MM-DD>.
+_AUDIT_NOTE_RE = re.compile(r'^(?P<place>.+?)(?::(?P<slot>[^:@]+))?(?:@(?P<on>\d{4}-\d{2}-\d{2}))?$')
+
+
+def audit_lost_from(location, extra):
+    """Which audit lost a spool (Group 58, Derek's note: if one is found, it should
+    be apparent that it was filed away because FCC didn't know where it went):
+    {place, slot, on} for a spool at UNKNOWN with an audit's note, else None. A
+    spool anywhere else is lost by nobody, whatever old note it carries. `slot` and
+    `on` are '' when the note doesn't say: an older FCC wrote the bare place."""
+    if str(location or '').strip().upper() != 'UNKNOWN' or not isinstance(extra, dict):
+        return None
+    note = str(extra.get('fcc_pre_audit_location') or '').strip().strip('"').strip()
+    hit = _AUDIT_NOTE_RE.match(note)
+    if not hit:
+        return None
+    return {"place": hit.group('place'), "slot": hit.group('slot') or '', "on": hit.group('on') or ''}
+
+
+def audit_lost_words(lost):
+    """"the audit of LR-MDB-1 slot 2 on 2026-11-01", from audit_lost_from's answer."""
+    where = f"{lost['place']} slot {lost['slot']}" if lost.get('slot') else lost['place']
+    return f"the audit of {where}" + (f" on {lost['on']}" if lost.get('on') else "")
+
+
+def audit_turned_up_msg(sid, lost):
+    """What a scan of a lost spool says, outside an audit."""
+    return f"#{sid} turned up. It was marked lost by {audit_lost_words(lost)}. Scan where it goes."
+
+
 def format_spool_display(spool_data):
     """Creates the text and color for the UI."""
     try:
@@ -2091,6 +2123,8 @@ def format_spool_display(spool_data):
                 # True, False or None (no status on record), so a card's "label
                 # confirmed" tick means a label someone confirmed (label_flag).
                 "needs_label_print": label_flag(extra),
+                # {place, slot, on} for a spool an audit lost, else None.
+                "lost_from": audit_lost_from(spool_data.get('location'), extra),
             }
         }
 

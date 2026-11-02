@@ -24,6 +24,7 @@ Preserved semantics (do not 'fix' in a move — see the carve plan):
 Python 3.9 runtime (the container image) — keep syntax 3.9-safe.
 """
 from flask import request, jsonify  # type: ignore
+import html
 import time
 
 import state  # type: ignore
@@ -1032,6 +1033,29 @@ def _handle_prusament_url_scan(res):
 _AUDIT_SCAN_ANSWER = {"type": "command", "cmd": "audit_scan"}
 
 
+def _audit_done_answer(ask):
+    """Done found spools to park (logic.plan_audit_done). A page that can show the
+    question says so on every scan (`audit_ask: true`) and gets it; a page loaded
+    before there was one would drop it with no sign, so it hears "reload" and
+    nothing moves, as for a page older than Groups 39 and 40's questions."""
+    if (request.json or {}).get('audit_ask') is True:
+        return jsonify({"type": "audit_done_question",
+                         **{key: value for key, value in ask.items() if key != 'status'}})
+    msg = "This page is out of date, so Done did nothing. Reload the page (Ctrl+F5) and press Done again."
+    state.add_log_entry(f"⚠️ {msg}", "WARNING", "ffaa00")
+    return jsonify({"type": "error", "stale_page": True, "msg": msg})
+
+
+@app.route('/api/audit/park', methods=['POST'])
+def api_audit_park():
+    """The Yes to Done's question: {audit_id, ids, today}, the spools it showed and
+    the page's own date (the note's day). Answers logic.park_audit_missing's dict."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        data = {}
+    return jsonify(logic.park_audit_missing(data.get('audit_id'), data.get('ids'), today=data.get('today')))
+
+
 @app.route('/api/identify_scan', methods=['POST'])
 def api_identify_scan():
     text = request.json.get('text', '')
@@ -1093,6 +1117,8 @@ def api_identify_scan():
                     "type": "error",
                     "msg": audit_res.get('msg') or "Scan not allowed during audit.",
                 })
+            if isinstance(audit_res, dict) and audit_res.get('status') == 'ask':
+                return _audit_done_answer(audit_res)
             answer = dict(_AUDIT_SCAN_ANSWER)
             if isinstance(audit_res, dict) and audit_res.get('audit_ended'):
                 answer['audit_ended'] = audit_res['audit_ended']
@@ -1231,7 +1257,7 @@ def api_identify_scan():
             if is_ghost and ghost_slot:
                 final_slot = ghost_slot
 
-            return jsonify({
+            answer = {
                 "type": "spool",
                 "id": int(sid),
                 "display": info['text'],
@@ -1245,7 +1271,16 @@ def api_identify_scan():
                 "slot": final_slot,
                 "deployed_to": sloc if is_ghost else None,
                 "label_already_verified": label_already_verified
-            })
+            }
+            # Group 58, section 8: a lost spool has turned up. It joins the buffer
+            # as any scanned spool does, so the next scan says where it goes; the
+            # page toasts `lost_msg` for 7 s. (In an audit it is an Extra.)
+            lost = spoolman_api.audit_lost_from(sloc, extra)
+            if lost:
+                answer['lost_from'] = lost
+                answer['lost_msg'] = spoolman_api.audit_turned_up_msg(int(sid), lost)
+                state.add_log_entry(f"❓ {html.escape(answer['lost_msg'], quote=False)}", "WARNING", "ffaa00")
+            return jsonify(answer)
 
         # 27.10 — unknown/deleted spool id (get_spool -> None): the branch above
         # was skipped, so return a renderable scan-failure payload (the frontend
