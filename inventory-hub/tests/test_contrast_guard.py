@@ -243,6 +243,37 @@ def test_loose_spools_list_has_no_gray_on_gray_text(page: Page, base_url: str, a
 
 
 @pytest.mark.usefixtures("require_server")
+def test_audit_panel_and_pill_are_readable(page: Page, base_url: str, assert_contrast):
+    """Group 58: the audit panel had no guard. Every kind of tile, the refusal
+    notice, the note, the buttons, and the pill the panel leaves behind on the
+    dark page, hovered too. Read-only: the session is a sample, and the heartbeat
+    is stopped so nothing closes the panel."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import SAMPLE_AUDIT, _read_only
+    _read_only(page, extra_get={"/api/audit_session": SAMPLE_AUDIT})
+    conftest.quiet_heartbeat(page)      # after: the newest route answers first
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openAuditPanel === 'function' && typeof state !== 'undefined'")
+    page.evaluate("() => { state.auditActive = true; window.updateAuditVisuals(); }")
+    panel = page.locator("#fcc-audit-panel-overlay")
+    expect(panel.locator("#fcc-audit-panel-done")).to_be_visible()
+    page.evaluate("() => window.auditPanelNotice('Already auditing LR-MDB-1. Finish first!')")
+    assert_contrast(panel)
+    scored = " ".join(o.get("text", "") for o in conftest.contrast_offenders(panel, min_ratio=100))
+    for words in ("Already auditing", "is filed here", "Extra (found here", "Loaded from here", "#134", "#242",
+                  "LR-MDB-2 slot 3", "on XL-4", "extra", "loaded", "scanned", "Asks before moving",
+                  "Ends it, nothing moves", "clears itself"):
+        assert words in scored, (words, scored)
+    page.keyboard.press("Escape")
+    pill = page.locator("#fcc-audit-pill")
+    expect(pill).to_be_visible()
+    assert_contrast(pill)
+    assert "audit: LR-MDB-1" in " ".join(o.get("text", "") for o in conftest.contrast_offenders(pill, min_ratio=100))
+    pill.hover()
+    assert_contrast(pill)
+
+
+@pytest.mark.usefixtures("require_server")
 def test_low_stock_title_bar_button_is_readable(page: Page, base_url: str, assert_contrast):
     """Group 57.2 — the ⚠️ count in the title bar (Bootstrap's outline-warning
     on the dark bar): out of the box Low and Out in count pills (57.3: white on

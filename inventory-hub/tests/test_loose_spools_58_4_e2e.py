@@ -126,9 +126,9 @@ def test_a_scan_passes_the_list_by(page: Page, base_url: str):
 def test_over_the_real_audit_panel(page: Page, base_url: str):
     """The way in slice s5 wires: tier confirm, above the audit panel. Enter opens
     nothing there, and Escape leaves the panel up."""
-    quiet_heartbeat(page)
     _read_only(page, extra_get={"/api/audit_session": SAMPLE_AUDIT})
     _serve(page, SAMPLE_LOOSE)
+    quiet_heartbeat(page)               # after: the newest route answers first
     page.goto(base_url, wait_until="domcontentloaded")
     page.wait_for_function("() => typeof window.openAuditPanel === 'function' && typeof window.openLooseList === 'function'",
                            timeout=45_000)

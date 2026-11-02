@@ -29,9 +29,18 @@ def _isolated_audit_session():
     state.reset_audit()
 
 
-def test_audit_session_inactive_returns_active_false(client):
+def test_audit_session_inactive_returns_active_false(client, monkeypatch):
+    """PIN UPDATED DELIBERATELY (Group 58): the panel's poll sees an end before any
+    heartbeat, so its answer says how the last audit ended, as the heartbeat does."""
+    monkeypatch.setattr(state, "AUDIT_LAST_END", None)
     r = client.get("/api/audit_session")
-    assert r.get_json() == {"active": False}
+    assert r.get_json() == {"active": False, "audit_end": None}
+
+
+def test_audit_session_inactive_says_how_the_last_audit_ended(client, monkeypatch):
+    end = {"id": "boot-1", "why": "idle", "location": "LR-MDB-1"}
+    monkeypatch.setattr(state, "AUDIT_LAST_END", end)
+    assert client.get("/api/audit_session").get_json() == {"active": False, "audit_end": end}
 
 
 def test_audit_session_active_returns_enriched_rows(client):

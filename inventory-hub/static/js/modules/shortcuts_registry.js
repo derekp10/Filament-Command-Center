@@ -208,7 +208,7 @@
     window.registerShortcut({
         id: 'scan-cmd-audit', scope: 'Scan Commands',
         keys: ['CMD:AUDIT'],
-        description: 'Enter audit mode — scan locations to reconcile their contents.'
+        description: 'Enter audit mode — scan locations to reconcile their contents. During an audit it shows the panel.'
     });
     window.registerShortcut({
         id: 'scan-cmd-bulkmove', scope: 'Scan Commands',
@@ -268,7 +268,7 @@
     window.registerShortcut({
         id: 'scan-cmd-done', scope: 'Scan Commands',
         keys: ['CMD:DONE'],
-        description: 'Close the open location manager OR commit an audit (missing spools → Unknown).'
+        description: 'Close the open location manager, or finish an audit: it asks before moving anything.'
     });
     window.registerShortcut({
         id: 'scan-cmd-cancel', scope: 'Scan Commands',

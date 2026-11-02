@@ -53,7 +53,9 @@ def api_audit_session():
     stored data is read (`_enrich`). `note` is the start note: what this audit
     doesn't check.
 
-    Cheap when no audit is active (returns {active: False} immediately).
+    Cheap when no audit is active: {active: False, audit_end}, with no read.
+    `audit_end` is the heartbeat's: this poll sees an end first, and the page
+    says why from it (_syncAuditSignal).
 
     Runs the idle-timeout watchdog first so even a direct poll heals a
     stale session — the dashboard's heartbeat hits /api/logs every 5s,
@@ -62,7 +64,7 @@ def api_audit_session():
     _check_audit_idle_timeout()
     sess = state.AUDIT_SESSION
     if not sess.get('active'):
-        return jsonify({"active": False})
+        return jsonify({"active": False, "audit_end": state.AUDIT_LAST_END})
 
     expected = list(sess.get('expected_items') or [])
     scanned = set(sess.get('scanned_items') or [])

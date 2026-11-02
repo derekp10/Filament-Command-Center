@@ -17,7 +17,8 @@
  * Ctrl/Cmd+K and '/' (there was none before) — so "search always available"
  * doesn't depend on finding the button.
  *
- * Storage: localStorage 'fcc.fab.pos' / 'fcc.logPill.pos' = {left, bottom} px.
+ * Storage: localStorage 'fcc.fab.pos' / 'fcc.logPill.pos' / 'fcc.bulkMovePill.pos'
+ * / 'fcc.auditPill.pos' = {left, bottom} px.
  * See the CLAUDE.md "User preferences (pre-Config-system)" table.
  */
 (function () {
@@ -81,6 +82,28 @@
                 draggingClass: 'fcc-bulkmove-pill-dragging',
                 resetToast: '🔀 Bulk-move pill reset to default position',
                 onTap: () => { if (window.openBulkMovePanel) window.openBulkMovePanel({ user: true }); },
+            });
+        }
+
+        // --- Draggable 🕵️ AUDIT pill (Group 58) -------------------------------
+        // Bulk Move's: shown for exactly as long as an audit runs, so a hidden
+        // panel can never be lost. Visibility + label are owned by
+        // updateAuditPill (inv_cmd.js). An audit and a bulk move never run
+        // together, so it can share the bulk pill's lane.
+        const auditPill = document.getElementById('fcc-audit-pill');
+        if (auditPill && mk) {
+            mk(auditPill, {
+                key: 'fcc.auditPill.pos',
+                defaultPos: () => {
+                    const w = auditPill.offsetWidth || 150;
+                    const onDeck = !!document.querySelector('.cmd-deck');
+                    return { left: Math.max(30, window.innerWidth - w - 30), bottom: onDeck ? 320 : 170 };
+                },
+                fallbackW: 150,   // representative width while hidden (offsetWidth 0)
+                fallbackH: 44,
+                draggingClass: 'fcc-audit-pill-dragging',
+                resetToast: '🕵️ Audit pill reset to default position',
+                onTap: () => { if (window.openAuditPanel) window.openAuditPanel(); },
             });
         }
 

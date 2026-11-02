@@ -2682,6 +2682,45 @@ body:has(.cmd-deck) #fcc-bulkmove-pill {
 #fcc-bulkmove-pill:active { cursor: grabbing; }
 #fcc-bulkmove-pill.fcc-bulkmove-pill-dragging { animation: none !important; cursor: grabbing; }
 
+/* Group 58 — AUDIT pill. The bulk-move pill's shape, in the audit's magenta, and
+   its lane (the two sessions never run together). Shown for as long as an audit
+   runs: a hidden audit still takes every scan. A rem cap, so a long place name
+   can't push it off a small screen. */
+#fcc-audit-pill {
+    display: none;
+    position: fixed;
+    right: 30px;
+    bottom: 170px;
+    z-index: 1080;
+    background: #ff7eff;
+    color: #2b062b;
+    font-weight: 900;
+    border: 2px solid #b000b0;
+    border-radius: 999px;
+    padding: 0.5rem 0.9rem;
+    font-size: 0.95rem;
+    box-shadow: 0 0 12px rgba(255, 126, 255, 0.45);
+    cursor: grab;
+    user-select: none;
+    touch-action: none;   /* Pointer Events own the drag */
+    white-space: nowrap;
+    max-width: min(24rem, 90vw);
+}
+#fcc-audit-pill-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+body:has(.cmd-deck) #fcc-audit-pill {
+    bottom: 320px;
+}
+#fcc-audit-pill:hover {
+    background: #ff9dff;
+    box-shadow: 0 0 18px rgba(255, 126, 255, 0.8);
+}
+#fcc-audit-pill:active { cursor: grabbing; }
+#fcc-audit-pill.fcc-audit-pill-dragging { animation: none !important; cursor: grabbing; }
+
 /* L202 — Edit Filament > Import-from-External collapse panel.
    Bug: during the 350ms Bootstrap height transition, the Source <select>
    (top child of the panel) stays visible inside the animating height

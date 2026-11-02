@@ -29,8 +29,10 @@ SENDS = "sends"
 # file -> [(top-level function header, class, expected door calls, reason for an exemption)]
 TABLE = {
     "inv_cmd.js": [
-        ("const toggleAudit = ", "exempt", 1, "CMD:AUDIT / CMD:CANCEL: a command, never a slot label"),
-        ("window.commitAuditWithAutoPark = ", "exempt", 1, "CMD:DONE: a command"),
+        # PIN UPDATED DELIBERATELY (Group 58): the tile only ever starts an audit,
+        # Cancel has its own door, and Done goes through processScan's POST.
+        ("const toggleAudit = ", "exempt", 1, "CMD:AUDIT: a command, never a slot label"),
+        ("window.cancelAudit = ", "exempt", 1, "CMD:CANCEL: a command, never a slot label"),
         ("const processScan = ", SENDS, 2, None),           # the scan POST and a question's replay
         ("const performContextAssign = ", SENDS, 1, None),
     ],

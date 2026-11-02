@@ -19,6 +19,18 @@ let state = {
     lastScannedLoc: null,
     auditActive: false,
     lastAuditState: null,
+    // Group 58: what this page knows of the audit beside the flag above, which
+    // _syncAuditSignal and the page's own requests own (inv_cmd.js): the place
+    // ('' until one is scanned), its id and idle limit (the panel's poll), the
+    // last audit this page's own request ended, how many of its requests are
+    // on their way, and when it last changed its mind (page clock), so an
+    // answer sent before that can't undo it.
+    auditLocation: '',
+    auditId: null,
+    auditIdleMin: null,
+    auditEndedHere: null,
+    auditRequestsOut: 0,
+    auditChangedAt: 0,
     // L298 Phase 2 — bulk-move scan session. `bulkMoveActive` mirrors the
     // backend's session flag from the /api/logs heartbeat; `bulkMoveStage`
     // (idle | awaiting_source | awaiting_dest | preview) drives the deck QR's
@@ -2714,8 +2726,12 @@ window.openLogPillOverlay = () => {
 // L206: render path extracted to _renderLogsPayload so the bulk-pulse
 // dispatcher can hand pre-fetched data directly into the renderer without
 // triggering another /api/logs round-trip.
-const _renderLogsPayload = (d, force = false) => {
+// `opts.sentAt`: when this answer was asked for, on the page's own clock.
+const _renderLogsPayload = (d, force = false, opts = null) => {
     if (!d) return;
+    // Above the hash check, so an answer it dropped as stale can't leave the
+    // next one, the same text, unread (Group 58).
+    _syncAuditSignal(d, opts);
     // --- NO WIGGLE CHECK ---
     const contentHash = JSON.stringify(d);
     if (!force && state.lastLogHash === contentHash) return;
@@ -2749,14 +2765,71 @@ const _renderLogsPayload = (d, force = false) => {
         if (sSpool) sSpool.className = `status-dot ${d.status.spoolman ? 'status-on' : 'status-off'}`;
     }
 
-    if (d.audit_active !== undefined && d.audit_active !== state.lastAuditState) {
-        state.lastAuditState = d.audit_active;
-        state.auditActive = d.audit_active;
-        if (window.updateAuditVisuals) window.updateAuditVisuals();
-    }
-
     _syncBulkMoveSignal(d);
 };
+
+// The page's own clock, which a wall-clock step can't move (the heartbeat's
+// sentAt, Group 57 review).
+const _pageClock = () => ((typeof performance !== 'undefined' && performance && typeof performance.now === 'function')
+    ? performance.now() : Date.now());
+window.fccPageClock = _pageClock;
+
+// An audit this page believed in is gone, and none of its own requests ended
+// it. Says why from the server's word: audit_end names how the last audit ended,
+// and None, or another audit's id, is a restart (the session lives in FCC's
+// memory). An audit that ended under the page matters: the scans it was taking
+// go to the buffer now, and the next location label moves the buffer.
+const _sayAuditEndedUnderPage = (end) => {
+    if (end && end.id != null && end.id === state.auditEndedHere) return;
+    const same = !!end && (state.auditId == null || end.id === state.auditId);
+    const idle = state.auditIdleMin ? `idle for ${state.auditIdleMin} minutes` : 'left idle';
+    const how = !same ? 'FCC restarted' : (end.why === 'idle' ? idle : 'elsewhere');
+    const place = (same && end.location) || state.auditLocation || '';
+    const msg = `The audit${place ? ` of ${place}` : ''} ended (${how}): scans go to the buffer again.`;
+    showToast(msg, 'warning', 7000);
+    if (window.logClientEvent) window.logClientEvent(`⚠️ ${window.escHtml ? window.escHtml(msg) : msg}`, 'WARNING');
+};
+
+// Group 58: the one owner of what the heartbeat says about an audit, for both
+// its shapes (/api/logs and a paused log's `status`) and the panel's own poll,
+// which sees an end first. It compares against what this page believes, not
+// against the last heartbeat, so a wrong belief heals at the next tick: a refused
+// start used to sit there until a reload, turning the tile into a disguised
+// Cancel. `opts.sentAt` (page clock): an answer asked for before this page last
+// changed its mind says nothing about now, and a heartbeat takes seconds. While
+// one of this page's own requests is out, the "none" may be its own Done or
+// Cancel and its answer will say so: warning here would cry wolf on every
+// scanned Done, because the panel's 2 s poll can land before that answer.
+const _syncAuditSignal = (src, opts = null) => {
+    if (!src) return;
+    const said = src.audit_active !== undefined ? src.audit_active : src.active;
+    if (said === undefined) return;
+    const active = !!said;
+    const sentAt = opts ? opts.sentAt : null;
+    if (sentAt != null && sentAt < state.auditChangedAt) return;
+    if (!active && state.auditActive && state.auditRequestsOut > 0) return;
+    const first = state.lastAuditState === null;
+    state.lastAuditState = active;
+    if (active && src.audit_location !== undefined && (src.audit_location || '') !== state.auditLocation) {
+        state.auditLocation = src.audit_location || '';
+        if (window.updateAuditPill) window.updateAuditPill();
+    }
+    if (active === state.auditActive) {
+        if (first && window.updateAuditVisuals) window.updateAuditVisuals();
+        return;
+    }
+    state.auditActive = active;
+    // Two answers can pass each other: the older one mustn't change it back
+    // and have the next tick warn a second time.
+    state.auditChangedAt = sentAt != null ? sentAt : _pageClock();
+    if (!active) {
+        _sayAuditEndedUnderPage(src.audit_end);
+        state.auditLocation = '';
+        state.auditId = null;
+    }
+    if (window.updateAuditVisuals) window.updateAuditVisuals();
+};
+window._syncAuditSignal = _syncAuditSignal;
 
 // L298 Phase 2/3 — sync the bulk-move session so a session started/ended
 // ANYWHERE (another tab, a page reload, the idle watchdog) repaints this tab's
@@ -2795,7 +2868,8 @@ const updateLogState = (force = false) => {
     // Load is unchanged — this is the rate an unpaused dashboard already polls.
     if (_updateLogStateInflight) return;
     _updateLogStateInflight = true;
-    fetch('/api/logs').then(r => r.json()).then(d => _renderLogsPayload(d, force))
+    const sentAt = _pageClock();
+    fetch('/api/logs').then(r => r.json()).then(d => _renderLogsPayload(d, force, { sentAt }))
         .catch(e => console.warn("updateLogState failed:", e))
         .finally(() => { _updateLogStateInflight = false; });
 };
@@ -3151,16 +3225,12 @@ const _dashboardPulseTick = () => {
 
             // logs / status renderer — handles status dots + audit visuals + log entries
             if (payload.logs) {
-                _renderLogsPayload(payload.logs);
+                _renderLogsPayload(payload.logs, false, { sentAt });
             } else if (payload.status) {
                 // No log entries but still got status — repaint the dot only.
                 const sSpool = document.getElementById('st-spoolman');
                 if (sSpool) sSpool.className = `status-dot ${payload.status.spoolman ? 'status-on' : 'status-off'}`;
-                if (payload.status.audit_active !== undefined && payload.status.audit_active !== state.lastAuditState) {
-                    state.lastAuditState = payload.status.audit_active;
-                    state.auditActive = payload.status.audit_active;
-                    if (window.updateAuditVisuals) window.updateAuditVisuals();
-                }
+                _syncAuditSignal(payload.status, { sentAt });
                 // Same bulk-move sync the logs branch runs — this is the branch a
                 // PAUSED Activity Log takes, and it's the only bulk-move signal
                 // such a tab receives (updateLogState early-returns while paused).

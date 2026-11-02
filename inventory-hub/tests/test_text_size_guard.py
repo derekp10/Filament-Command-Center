@@ -343,14 +343,18 @@ SAMPLE_REVIEW = {"pending": [{
                 "remaining_before": 900, "ambiguous": True, "unconfirmed_write": True, "runout": True, "color": "453A72"},
                {"sid": 99, "display": "#99 Tecbears PETG (Clear)", "toolhead": "XL-2", "grams": 4.1,
                 "remaining_before": 19, "color": "C4C2C8"}]}]}
-SAMPLE_AUDIT = {"active": True, "location_id": "LR-MDB-1", "idle_timeout_min": 30,
-                "stats": {"total_expected": 2, "found": 1, "missing": 1, "rogue": 1},
-                "expected": [{"id": 57, "display": "Prusament PLA (Purple (Galaxy Purple))", "color": "453A72",
-                              "remaining_weight": 922, "slot": "", "found": True},
-                             {"id": 99, "display": "Tecbears PETG (Clear)", "color": "C4C2C8",
-                              "remaining_weight": 19, "slot": "4", "found": False}],
-                "rogue": [{"id": 134, "display": "Prusament PLA (Pearl White)", "color": "F0F0F0",
-                           "remaining_weight": 924, "slot": "3"}]}
+SAMPLE_AUDIT = {"active": True, "audit_id": "boot-1", "location_id": "LR-MDB-1", "idle_timeout_min": 30,
+                "note": "1 is filed here. 2 more are in the places inside it, and this audit doesn't check those: "
+                        "audit each of them.",
+                "stats": {"total_expected": 2, "found": 1, "missing": 1, "rogue": 1, "trail": 1},
+                "expected": [{"id": 57, "display": "#57 Prusament PLA (Purple (Galaxy Purple))", "color": "453A72",
+                              "remaining_weight": 922, "slot": "", "where": "LR-MDB-1", "found": True},
+                             {"id": 99, "display": "#99 Tecbears PETG (Clear)", "color": "C4C2C8",
+                              "remaining_weight": 19, "slot": "4", "where": "LR-MDB-1 slot 4", "found": False}],
+                "rogue": [{"id": 134, "display": "#134 Prusament PLA (Pearl White)", "color": "F0F0F0",
+                           "remaining_weight": 924, "slot": "3", "where": "LR-MDB-2 slot 3"}],
+                "trail": [{"id": 242, "display": "#242 Prusament PLA (Galaxy Black)", "color": "111111",
+                           "remaining_weight": 605, "slot": "1", "where": "XL-4"}]}
 SAMPLE_BULK = {"active": True, "stage": "preview", "source_id": "LR-MDB-1", "dest_id": "CR-CT-1-R1",
                "preview": {"ok": True, "msg": "", "stats": {"movable": 2, "skipped": 1}, "source_feeds": ["XL-1"],
                            "movable": [{"id": 57, "display": "#57 Prusament PLA (Purple (Galaxy Purple))",
@@ -382,6 +386,10 @@ def test_review_audit_and_bulk_move_panels_text_is_readable(page: Page, base_url
                            " return !!b && /Auditing/.test(b.innerText); }", timeout=10_000)
     page.wait_for_timeout(800)
     assert_text_size(page.locator("#fcc-audit-panel-body"))
+    # Group 58: the notice and the note sit outside the body.
+    page.evaluate("() => window.auditPanelNotice('Already auditing LR-MDB-1. Finish first!')")
+    assert page.is_visible("#fcc-audit-panel-notice") and page.is_visible("#fcc-audit-panel-note")
+    assert_text_size(page.locator("#fcc-audit-panel-overlay"))
     page.evaluate("() => window.closeAuditPanel()")
     page.wait_for_timeout(400)
     if not page.evaluate("() => window.FCC_BULK_MOVE_ENABLED === true && typeof window.openBulkMovePanel === 'function'"):
@@ -391,6 +399,20 @@ def test_review_audit_and_bulk_move_panels_text_is_readable(page: Page, base_url
                            timeout=10_000)
     page.wait_for_timeout(800)
     assert_text_size(page.locator("#fcc-bulkmove-body"))
+
+
+def test_audit_pill_text_is_readable(page: Page, base_url: str, assert_text_size):
+    """Group 58: the pill a hidden audit leaves on screen, with its place and without."""
+    from conftest import quiet_heartbeat
+    _read_only(page, extra_get={"/api/audit_session": SAMPLE_AUDIT})
+    quiet_heartbeat(page)               # after: the newest route answers first
+    page.goto(base_url, wait_until="domcontentloaded")
+    page.wait_for_function("() => typeof window.openAuditPanel === 'function'", timeout=45_000)
+    page.evaluate("() => { state.auditActive = true; window.updateAuditVisuals(); window.closeAuditPanel(); }")
+    assert page.is_visible("#fcc-audit-pill")
+    assert_text_size(page.locator("#fcc-audit-pill"))
+    page.evaluate("() => { state.auditLocation = 'LR-MDB-1'; window.updateAuditPill(); }")
+    assert_text_size(page.locator("#fcc-audit-pill"))
 
 
 def _open_picker(page: Page, loc: str, spool: int):

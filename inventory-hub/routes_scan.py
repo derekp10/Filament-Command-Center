@@ -1025,7 +1025,7 @@ def _handle_prusament_url_scan(res):
     })
 
 
-# Group 58: what a scan the audit took answers. The page does nothing for it. It
+# Group 58: what a scan the audit took answers. The page only redraws its panel. It
 # used to be cmd 'clear', which raised "Clear entire Buffer?" behind the audit
 # panel whenever a spool was buffered, and that hidden prompt ate every later scan;
 # a page guard would still miss the moments after a reload, before its first

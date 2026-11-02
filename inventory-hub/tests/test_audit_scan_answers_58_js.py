@@ -69,7 +69,8 @@ def test_the_routes_audit_answers_raise_nothing_and_stop_nothing(tmp_path, monke
     assert res["modal"] is None and res["pending"] is False, res
     assert res["scans"] == SCANS, res
     assert res["held"] == [57], res                  # the buffer is kept
-    assert res["toasts"] == [], res
+    # Group 58, section 7: the third answer is an end, and an end says so.
+    assert res["toasts"] == ["Audit cancelled: nothing moved."], res
 
 
 def test_the_old_answer_really_did_swallow_the_scans(tmp_path):
