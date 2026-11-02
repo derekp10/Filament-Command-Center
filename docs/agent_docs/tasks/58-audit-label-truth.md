@@ -9,6 +9,18 @@
 > **Until 58.1 ships: end audits with Cancel** (a full report, nothing moves).
 > Code anchors were read on `dev` @ `d4b1ad7` (2026-10-25). Line numbers drift, so re-grep before editing.
 
+## Derek's steer of 2026-11-01 (read this first; it overrides the study where they differ)
+
+Derek's backstory: Audit predates labelled rows. It was an earlier AI's idea, meant for big places (the dining room cart, the small carts before they had rows), never for a 4-slot dryer box: scan a place, scan what is there, then do something about what was listed and not scanned. It may need a redesign, or a decision on whether to keep it (**not decided yet: keep or retire is his call, asked 2026-11-01**).
+
+**His rule:** a spool has one location. If its own record says it is somewhere known (a toolhead, a dryer box), it stays there: an audit of another place doesn't touch it, and shouldn't count it as being in that place.
+
+**What that means in the code:** the audit's list comes from `get_spools_at_location`, the same reader that draws a place's contents, and that reader also returns spools with only a trail there (deployed from a box) and, for a Room or a Printer, every spool under its first segment. So the fix is one rule at the location scan: **expected = spools whose own `location` is exactly this place**. It replaces the study's "left where they are" list, the "on XL-4" tile and the separate count: those spools are simply not on the list. Done's re-read before any write stays (a spool can move during an audit).
+- Dev, read 2026-11-01 (`/api/get_contents`): auditing Room CR lists 86 spools, 7 filed at the room; DR 55, 9 filed; LR 10, 5 filed (2 on heads by trail); Printer XL 2, none filed. Today's Done on CR parks the other 79. DR-CT-1, the biggest single place, has 19 filed directly; every other place has 9 or fewer. 0 spools are parked at UNKNOWN on dev and 0 carry `fcc_pre_audit_location`; nothing reads that note (the "recovery scan" its comment promises was never built). Prod not read.
+- **The wrinkle (Claude's call):** a spool loaded from a bound dryer box physically sits in that box, feeding the head. So a scanned spool that isn't on the list but whose trail names this place is a quiet "found, loaded on XL-4 from here", not an Extra. A scanned spool filed anywhere else is an Extra, and says where FCC has it.
+- **His forgotten-spool case stays on the list:** a spool auto-returned to a place on record and physically put somewhere else is filed here and isn't here. That is the audit's real job, and the rule keeps it.
+- **His lost spools** (no idea where they are; maybe empty and never updated, or a wrong figure from the source spreadsheet) are the group's real customer: see 58.4 and Low stock's parked-spool item.
+
 ## The study of 2026-11-01 (read this before the sections below)
 
 Read-only, on `dev` `2235f5b`: `wf_149c184b-793` (4 readers + 1 checker, 1.8M tokens, 32 min, no agent errors). 20 key claims re-verified, 10 details corrected, prod not touched. The full reports, with every anchor: `review-samples/2026-11-01-audit/g58_study.json` (git-ignored). **Where this section disagrees with the sections below, this one is right:** they were read on `d4b1ad7`, and their line numbers, the estimates and the confirm route are out of date.
