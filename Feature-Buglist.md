@@ -140,7 +140,7 @@
   definitive answer. (Which may just come after I've figured out how I want to handle the USS dryboxes and the
   INBXX.)"* So box-system work is built as slated. What was queued on 2026-10-29, for the sit-down to look at (none of
   it held):
-  - Group 50.4, a head's "stored, not loaded" mark with "I loaded it";
+  - Group 50.4, a head's "stored, not loaded" mark with "I loaded it" (built, merged to `dev` 2026-11-01);
   - Group 59.1 / 59.2, the slot picker's printer-mode layout and its Swap / Overwrite / Back panel;
   - Group 37.5, a "Spool Holder" type (storage on the printer), and 37.7, a Return chooser across two boxes feeding
     one head;
@@ -234,22 +234,7 @@
 * **🟡 A card's legacy-ID line shows "[Legacy:" instead of the ID (found 2026-10-30, Group 50.8's picture).** `SpoolCardBuilder`'s main card (ui_builder.js, its weight row, `.fcc-subtext`) shows `info.line1.split(' ')[1]`, and `line1` is "#77 [Legacy: L-12]", so a spool with a legacy id reads "[Legacy:". Show the id itself (`item.details.external_id`), and pin it. **Standalone.**
 
 * **🟡 Card text from Spoolman goes into several cards as HTML, unescaped (found 2026-10-30, building Group 50.4).** `SpoolCardBuilder` (ui_builder.js) puts a spool's colour name or display (`info.line3`) straight into the markup in its other modes (the buffer and search cards, the Location Manager's list and grid, around lines 253, 279 and 543), so a filament named with a `<` would be read as HTML. Group 50.4 escaped the two places it touched (the Printer Status tile's chip and the Quick-Swap confirm's spool label). Fix: escape with `window.escHtml` where text is interpolated, check the cards still read the same, and pin it with a name holding `<b>`. **Standalone.**
-
-* **🖨️ Printer Status follow-ups (Derek, 2026-10-24).** _(→ **Group 50**, 2026-10-25: (a) **50.5**, (b) **50.6** with the ⌨️ Enter item, (c) **50.7**, (e) folded into **50.1**, sample first; (d) parked)_ Done before the merge: the printers step in under the title,
-  each one's name comes first with its state and 🛑 count on an info line under it, the tiles lost their colour dot,
-  and a printer named with an apostrophe gets its count. Left: (a) **a richer hover card for a tile** (a small spool
-  card, easier to read, especially in collapsed mode), and **a tap that opens the same card on a touchscreen**, where
-  there is no mouse to hover ("how a user who doesn't have a mouse could see that detail, that gets truncated"): design
-  it with the phone view, sample first; (b) the scan accumulator in `scripts.html` cancels Enter on every focused
-  dashboard button except the ▲▼; (c) on short windows (1280×800 at Large, 1366×768 at Small / Standard) the open
-  widget scrolls inside itself; (d) long term, a customizable layout (tiles per row, style) for printers with many
-  spools ("with AMS units on the bambu side, things could get crazy"). (e) **The collapsed strip needs the same clean-up
-  (Derek, 2026-10-25, on prod):** "I know what is what, but it kind of reads as just a mess of toolheads. Because I
-  follow a naming convention, I can tell what's what, but if anyone else doesn't, then it gets confusing fast." He
-  found it when the Settings → This Browser "Printer Status toolhead labels" choice (XL-3 / 3 / Tool 3) changed only
-  the expanded tiles: he expected the strip to follow it too (Group 46.3 kept the strip on the full id on purpose,
-  so that is a decision to revisit). Give the strip a clear per-printer grouping like the expanded view's (the name
-  first, its state and 🛑 count, then its heads), sample first. **Standalone.**
+* **🖨️ Printer Status follow-ups (Derek, 2026-10-24).** _(→ (a) is **Group 50.5**, with the phone view, [Group 60](docs/agent_docs/tasks/60-phone-and-tags.md); (d) parked. (b), (c) and (e) shipped with Group 50 on 2026-11-01: see `completed-archive.md`.)_ Left: (a) **a richer hover card for a tile** (a small spool card, easier to read, especially in collapsed mode), and **a tap that opens the same card on a touchscreen**, where there is no mouse to hover ("how a user who doesn't have a mouse could see that detail, that gets truncated"): design it with the phone view, sample first; (d) long term, a customizable layout (tiles per row, style) for printers with many spools ("with AMS units on the bambu side, things could get crazy"). **Standalone.**
 * **🐞 A print re-mapped to another head on the printer is charged to the wrong spool (found 2026-10-23).** _(→ **Group 56.6**, gated: a printer and a real print)_ FCC charges
   the file's tool N to head N (`print_deduct.py`, "the tool index IS the toolhead position"). Derek re-maps at print
   start (job 1104 was sliced for head 1 and run on head 2, Group 43.3), and firmware 7.0's sticky and Smart mapping
@@ -477,24 +462,14 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
 * **One mark for "might not be current", used everywhere (Derek, 2026-10-28).** A count FCC couldn't refresh keeps its number with a "?" and a dashed border (Group 57), and he is fine with it for now, but the dashed border also means "no box feeds this toolhead" (the dashed "no bound slot" tiles in Printer Status and Quick-Swap), so it can read as a missing box instead of a missing connection. Wanted: one definitive mark for out of sync / couldn't read / might not be current, used by the stale counts, Group 52's "couldn't read" notices and Printer Status' "? not read" tiles alike. "I might want to change it later if I feel it gives the wrong impression." A sample first.
 * Refactor the longer "strip" cards used in the Location Manager window. Merge the horizontal layout with modern grid card features without cramping the text or making the button layout look weird. _(→ **Group 59.5**, 2026-10-25)_ _(2026-10-19 refresh: still standalone. It needs Derek to pick from a mock-up, which Claude can build on a real cart, e.g. `CR-CT-2-R1`, whenever he wants to look: two variants, one row per spool with all three QR badges or with one, both keeping Group 40.6's ↩️ RETURN footer. Its double LABEL handler is tidied in Group 48.1.)_
 * ✅ **High-Contrast Pop everywhere** — now a CLAUDE.md standing order (Derek, 2026-10-19): readable contrast in everything new, reusing looks he has approved, and never an app-wide restyle without showing him a sample first. Archived 2026-10-19 (see `completed-archive.md`).
-* **Printer Status: with 8 toolheads in a small window, the toolhead list wraps to a second line.** _(Derek,
-  2026-10-19.)_ It looks odd on the collapsed version, the small one meant to be read at a glance. Part of a Printer
-  Status redesign Derek wants. _(→ **Group 50.1**. Derek, 2026-10-19: head numbers with a coloured ring (cyan fine,
-  amber under 100 g, red empty; grams in the hover text), no pipe between printers; if it still doesn't fit, one row
-  per printer when it's longer than the window, with sideways scrolling as the fallback he also likes.)_
 * **Printer Status: an easier way to reach the spool on a toolhead.** _(Derek, 2026-10-19: "perhaps this just needs
   more time in the oven".)_ Clicking a toolhead tile opens that toolhead in the Location Manager (its assignments,
   `inv_printer_status.js` → `openManage`), the most useful default, which should stay. But sometimes you just want the
   spool loaded there, and getting to it is clunky. Ideas, none decided: a right-click or long-press, or a small spool
-  button on the tile. _(→ **Group 50.2**, still in the oven: the group ships without it.)_
+  button on the tile. _(Was Group 50.2: Group 50 shipped without it on 2026-11-01, and it stays in the oven. **Standalone.**)_
 
 ## ⌨️ Keyboard Navigation
 * ✅ **Keyboard navigation everywhere** — now a CLAUDE.md standing order (Derek, 2026-10-19): keyboard navigation in everything new, where it makes sense, following the existing idiom. Archived 2026-10-19 (see `completed-archive.md`). Its one concrete gap, the Printer Status tiles, is **Group 50.3**.
-* **Enter on a focused button inside a window does nothing (app-wide).** _(→ **Group 50.6**, with the Printer Status follow-ups' (b): the same root cause)_ _(Found 2026-10-19 while building Group
-  48.2.)_ Tab to a button in the spool window (its ✏️ or 🖨️, or the new "(from the filament)" link) and press Enter:
-  nothing happens; Space works. The scan accumulator in `templates/components/scripts.html` calls `preventDefault` on
-  every Enter outside a text field, so a scanner's Enter never presses whatever has focus. Fix idea: let Enter through on
-  a focused button or link unless `window.enterIsAScan()` says a scan is arriving (the rule the dialogs already use).
 
 ## 🗂️ Modals & Add Inventory Wizard
 * Help button to provide information on how to use a modal, and to try and store information about how things work in the code. _(→ **Group 55.3**, as in-app help, not folded into the README. Derek, 2026-10-19: *"no one really reads documentation… keeping the information available at a quick click is important"*; part of an eventual documentation overhaul.)_
@@ -541,16 +516,6 @@ https://github.com/prusa3d/Prusa-Firmware-Buddy/blob/master/doc%2Fmetrics.md
 
 * Location Manager not syncing status across browser instances? _[ON HOLD — requires a real-time transport (SSE / WebSocket) on the backend. Current architecture is pull-only via `/api/locations` polling. Non-trivial; revisit after mobile mode since that work will establish the multi-client baseline anyway.]_
 
-* **🟡 A spool "just stored" in a bound slot mid-print leaves a load to remember after the print.** _(Derek,
-  2026-10-14, while answering Group 40.3's questions.)_ Mid-print you can't load a toolhead, so a slot-label scan
-  into a bound slot gets stored (Enter = Just store it). After the print you load the head physically (from the
-  laptop at the XL), and must ALSO remember to tell FCC (scan the slot again or Quick-Swap). Forget either half and
-  FCC and the printer disagree, and FCC can't warn the way the slicer does. Ideas, none decided: offer the pending
-  load when the print ends; mark the slot "stored, waiting to load" on its Quick-Swap tile; or auto-load the head
-  after the print. Needs a design pass with Derek. _(→ **Group 50.4**. Derek, 2026-10-19: no notice at every print
-  end and no "Load now" that locks him in (*"I may have a few prints I'm trying to do before I might have a chance
-  to load it"*); instead the head's tile quietly shows a spool is stored for it but not loaded, with a way to
-  confirm "I loaded it". Open to other ideas, since the collapsed strip has little room.)_
 * **🟡 Assigning spools to INDX heads (and printer spool holders) without printed labels is clunky.** _(Derek,
   2026-10-14.)_ Force Location is meant as a last resort, but without a label per INDX head it's often the easy way.
   Group 40.4 / 40.5's pickers (Force Location or `LOC:RCOI` → pick a head) cover part of it (built 2026-10-19:
