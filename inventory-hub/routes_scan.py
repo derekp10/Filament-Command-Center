@@ -1024,11 +1024,23 @@ def _handle_prusament_url_scan(res):
     })
 
 
+# Group 58: what a scan the audit took answers. The page does nothing for it. It
+# used to be cmd 'clear', which raised "Clear entire Buffer?" behind the audit
+# panel whenever a spool was buffered, and that hidden prompt ate every later scan;
+# a page guard would still miss the moments after a reload, before its first
+# heartbeat says an audit runs.
+_AUDIT_SCAN_ANSWER = {"type": "command", "cmd": "audit_scan"}
+
+
 @app.route('/api/identify_scan', methods=['POST'])
 def api_identify_scan():
     text = request.json.get('text', '')
     source = request.json.get('source', '')
     res = logic.resolve_scan(text)
+
+    # Group 58: BEFORE anything below refreshes the timestamp, so a scan after 30
+    # idle minutes finds no session instead of reviving the one nobody was at.
+    logic.check_audit_idle_timeout()
 
     if res and res.get('type') == 'command' and res.get('cmd') == 'audit':
         if state.AUDIT_SESSION.get('active'):
@@ -1040,7 +1052,7 @@ def api_identify_scan():
             state.add_log_entry(
                 "🕵️‍♀️ Audit already in progress — scan a Location to continue, "
                 "or CMD:CANCEL to end.", "INFO", "ff00ff")
-            return jsonify({"type": "command", "cmd": "clear"})
+            return jsonify(_AUDIT_SCAN_ANSWER)
         # L298 Phase 2 — audit and bulk move are mutually exclusive scan modes
         # (they share CMD:DONE / CMD:CANCEL, and this audit gate runs FIRST, so
         # an audit started over an armed bulk move would leave the bulk session
@@ -1053,6 +1065,7 @@ def api_identify_scan():
             return jsonify({"type": "error", "msg": _msg})
         state.reset_audit()
         state.AUDIT_SESSION['active'] = True
+        state.AUDIT_SESSION['audit_id'] = logic.new_audit_id()
         state.AUDIT_SESSION['last_activity_ts'] = time.time()
         state.add_log_entry("🕵️‍♀️ <b>AUDIT MODE STARTED</b>", "INFO", "ff00ff")
         # Set the expiry expectation here too, so the log and the panel agree
@@ -1060,25 +1073,30 @@ def api_identify_scan():
         state.add_log_entry(
             f"Scan a Location label to begin checking. (Clears itself after "
             f"{state.AUDIT_IDLE_TIMEOUT_SECONDS // 60} min idle.)", "INFO")
-        return jsonify({"type": "command", "cmd": "clear"})
+        return jsonify(_AUDIT_SCAN_ANSWER)
 
     if state.AUDIT_SESSION.get('active'):
         # Refresh the watchdog timestamp on every audit-mode scan so the
-        # idle-timeout in _check_audit_idle_timeout() only fires after a
+        # idle-timeout in logic.check_audit_idle_timeout() only fires after a
         # real abandonment. Updating BEFORE process_audit_scan so an
         # explicit CMD:DONE/CMD:CANCEL still ends the session cleanly.
         state.AUDIT_SESSION['last_activity_ts'] = time.time()
-        audit_res = logic.process_audit_scan(res)
-        # 28.C2 — propagate an audit-scan error to the scanner UI (the frontend
-        # toasts res.type=='error') instead of always answering cmd:clear and
-        # leaving the failure in the Activity Log only. A successful audit scan
-        # still returns the buffer-clear signal.
-        if isinstance(audit_res, dict) and audit_res.get('status') == 'error':
-            return jsonify({
-                "type": "error",
-                "msg": audit_res.get('msg') or "Scan not allowed during audit.",
-            })
-        return jsonify({"type": "command", "cmd": "clear"})
+        # Group 58: a legacy label several spools share skips the audit: its
+        # picker opens over the panel, and its pick comes back here as ID:<n>.
+        if not (res and res.get('type') == 'ambiguous'):
+            audit_res = logic.process_audit_scan(res)
+            # 28.C2 — propagate an audit-scan error to the scanner UI (the frontend
+            # toasts res.type=='error') instead of leaving the failure in the
+            # Activity Log only.
+            if isinstance(audit_res, dict) and audit_res.get('status') == 'error':
+                return jsonify({
+                    "type": "error",
+                    "msg": audit_res.get('msg') or "Scan not allowed during audit.",
+                })
+            answer = dict(_AUDIT_SCAN_ANSWER)
+            if isinstance(audit_res, dict) and audit_res.get('audit_ended'):
+                answer['audit_ended'] = audit_res['audit_ended']
+            return jsonify(answer)
 
     # --- L298 Phase 2: CMD:BULKMOVE start interceptor ----------------------
     # Mirrors the audit pattern: the START command is handled BEFORE the

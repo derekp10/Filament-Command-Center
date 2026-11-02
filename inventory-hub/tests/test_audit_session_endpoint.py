@@ -60,8 +60,9 @@ def test_audit_session_active_returns_enriched_rows(client):
     body = r.get_json()
     assert body["active"] is True
     assert body["location_id"] == "LR-MDB-1"
-    # Stats are derived from the lists.
-    assert body["stats"] == {"total_expected": 3, "found": 1, "missing": 2, "rogue": 1}
+    # Stats are derived from the lists. PIN UPDATED DELIBERATELY (Group 58): the
+    # spools found here that are loaded on a head from here count apart.
+    assert body["stats"] == {"total_expected": 3, "found": 1, "missing": 2, "rogue": 1, "trail": 0}
     # Per-row enrichment: each expected entry carries display + found flag.
     expected_by_id = {row["id"]: row for row in body["expected"]}
     assert expected_by_id[101]["found"] is True

@@ -1,3 +1,4 @@
+import html
 import itertools
 import re
 import threading
@@ -5016,131 +5017,442 @@ def perform_undo(expected_id=None):
     return {"success": True, "msg": f"↩️ Undo: {'; '.join(parts)}" if parts else "↩️ Undone",
             "restored": restored + restored_ejections + restored_displaced, "unbuffered": unbuffered}
 
-def process_audit_scan(scan_result):
-    """Handles scans when in Audit Mode."""
+# --- AUDIT (Group 58) ---------------------------------------------------------
+# One audit at a time, in state.AUDIT_SESSION. Its one rule (Derek, 2026-11-01): a
+# spool has one location, so an audit expects the spools whose OWN location is
+# exactly the place scanned, and nothing else. A spool loaded from the place
+# (only a trail here) or filed in a place inside it stays out of the list.
+
+_AUDIT_IDS = itertools.count(1)
+
+# Taken by every end of an audit: Done, the park, Cancel and the idle watchdog.
+# Non-blocking: the loser is refused, never queued, because queuing would end the
+# same audit twice. While it is held every scan is refused and the watchdog stays
+# away, as _BULK_MOVE_COMMIT_LOCK does for a bulk commit.
+_AUDIT_END_LOCK = threading.Lock()
+
+AUDIT_FINISHING_MSG = "The audit is already finishing."
+AUDIT_WHERE_UNREAD = "couldn't read where FCC has it"
+
+# What other scans are told during an audit. A failed resolve_scan passes its own
+# words instead (`msg`). An ambiguous legacy label never gets here: it skips the
+# gate in api_identify_scan, so its picker opens over the panel and its pick comes
+# back as ID:<n>.
+_AUDIT_OTHER_SCANS = {
+    'assignment': "That's a slot label: scan the box's own label to audit it, or a spool's label",
+    'filament': "That's a filament label, not a spool",
+    'prusament_url': "Scan a spool's FCC label",
+}
+
+
+def new_audit_id():
+    """A name for an audit that a restart can't reuse: the process's own token,
+    as _push_undo's, then a count. A page or a dialog can outlive the process
+    that started its audit, and a bare number would name a different audit."""
+    return f"{_UNDO_EPOCH}-{next(_AUDIT_IDS)}"
+
+
+def _audit_esc(value):
+    """Activity Log messages are HTML; every audit line carries outside text
+    (a place's id, a spool's name, Spoolman's words) through this."""
+    return html.escape(str(value), quote=False)
+
+
+def audit_where(location, slot=''):
+    """Where FCC has a spool, in words: "LR-MDB-1 slot 2", and a blank location
+    reads Unassigned."""
+    loc = str(location or '').strip()
+    if not loc or loc.upper() == 'UNASSIGNED':
+        return "Unassigned"
+    if loc.upper() == 'UNKNOWN':
+        return "Unknown"
+    slot_text = str(slot or '').strip().strip('"')
+    return f"{loc} slot {slot_text}" if slot_text else loc
+
+
+def _audit_refuse(msg):
+    """A scan the audit won't take: a log line, and `msg` for the scanner."""
+    state.add_log_entry(f"⚠️ {_audit_esc(msg)}", "WARNING", "ffaa00")
+    return {"status": "error", "msg": msg}
+
+
+def _end_audit(why):
+    """The one way an audit ends: says why for the heartbeat (`audit_end`), clears
+    the session, logs it. `why` is done, cancel or idle. Call it holding the end
+    lock, after the report (the report needs the session). An idle end logs
+    nothing more here: the watchdog's one line already says it ended."""
     session = state.AUDIT_SESSION
-    
-    # 1. COMMANDS
-    if scan_result['type'] == 'command':
-        cmd = scan_result['cmd']
-        if cmd == 'done' or cmd == 'cancel':
-            # Generate Report
-            missing = [sid for sid in session['expected_items'] if sid not in session['scanned_items']]
-            expected_loc = session.get('location_id') or ''
+    ended = {"id": session.get('audit_id'), "why": why, "location": session.get('location_id') or ''}
+    state.AUDIT_LAST_END = ended
+    state.reset_audit()
+    if why != 'idle':
+        state.add_log_entry("Audit Mode Ended.", "INFO")
+    return ended
 
-            # 18.2 follow-up — bare spool IDs aren't useful in the Activity
-            # Log report ("Missing: 101, 102, 103" doesn't tell the user
-            # which spools to look for). Resolve each id to a display label
-            # via format_spool_display; fall back to "#N" on any lookup
-            # miss so a missing record can't break the report.
-            def _label(sid):
-                try:
-                    sd = spoolman_api.get_spool(sid)
-                    if sd:
-                        info = spoolman_api.format_spool_display(sd) or {}
-                        text = info.get('text') or ''
-                        if text:
-                            return f"#{sid} {text}"
-                except Exception:
-                    pass
-                return f"#{sid}"
 
-            summary = "📝 <b>Audit Report:</b><br>"
-            if not missing and not session['rogue_items']:
-                summary += "✅ Perfect Match! All items accounted for."
-                color = "00ff00" # Green
+def _audit_tally(session):
+    """(expected, missing, extras, loaded from here): ids only, no read."""
+    expected = list(session.get('expected_items') or [])
+    scanned = set(session.get('scanned_items') or [])
+    return (expected, [sid for sid in expected if sid not in scanned],
+            list(session.get('rogue_items') or []), list(session.get('trail_items') or []))
+
+
+def check_audit_idle_timeout():
+    """End an audit nobody has touched for AUDIT_IDLE_TIMEOUT_SECONDS.
+
+    A closed tab or a crashed browser leaves AUDIT_SESSION active with nobody
+    behind it, and the panel would open on every later dashboard load. (A restart
+    can't: the session lives in this process.) Runs on every heartbeat and every
+    /api/audit_session poll, and at the scan gate BEFORE a scan refreshes the
+    timestamp, so a scan after the window finds no session instead of reviving it.
+
+    Writes one line, from the session's ids alone (the heartbeat reads nothing
+    from Spoolman for it), so an audit that timed out keeps its results."""
+    session = state.AUDIT_SESSION
+    if not session.get('active') or _AUDIT_END_LOCK.locked():
+        return
+    last = float(session.get('last_activity_ts') or 0.0)
+    if last <= 0:
+        # No timestamp at all: the timer starts NOW, no end on a first sight.
+        session['last_activity_ts'] = time.time()
+        return
+    if (time.time() - last) <= state.AUDIT_IDLE_TIMEOUT_SECONDS:
+        return
+    # The lock only once the window has passed: a scan arriving in the instant
+    # it is held would be told the audit is finishing.
+    if not _AUDIT_END_LOCK.acquire(False):
+        return
+    try:
+        # A scan or another end may have landed since the check above.
+        last = float(session.get('last_activity_ts') or 0.0)
+        if not session.get('active') or (time.time() - last) <= state.AUDIT_IDLE_TIMEOUT_SECONDS:
+            return
+        place = session.get('location_id') or ''
+        line = (f"🕒 Audit auto-cancelled after {state.AUDIT_IDLE_TIMEOUT_SECONDS // 60} min of inactivity"
+                + (f" (was on {_audit_esc(place)})" if place else "")
+                + " — no spools moved.")
+        if place:
+            expected, missing, extras, trail = _audit_tally(session)
+            parts = [f"found {len(expected) - len(missing)} of {len(expected)}"]
+            for words, ids in (("missing", missing), ("extra", extras), ("loaded from here", trail)):
+                if ids:
+                    parts.append(f"{words} " + ", ".join(f"#{sid}" for sid in ids))
+            line += " Report: " + "; ".join(parts) + "."
+        state.add_log_entry(line, "WARNING", "ffaa00")
+        _end_audit('idle')
+    finally:
+        _AUDIT_END_LOCK.release()
+
+
+def _audit_label(session, sid):
+    """"#57 Brand PLA (Black)" from the row stored at the scan; a row with no
+    stored data (a session built by hand) is read, and falls back to "#57" so a
+    missing record can't break a report."""
+    text = str(((session.get('rows') or {}).get(str(sid)) or {}).get('display') or '').strip()
+    if not text:
+        try:
+            rec = spoolman_api.get_spool(sid)
+            if isinstance(rec, dict) and rec.get('id') is not None:
+                text = str((spoolman_api.format_spool_display(rec) or {}).get('text') or '').strip()
+        except Exception:
+            text = ''
+    if not text:
+        return f"#{sid}"
+    return text if text.startswith(f"#{sid}") else f"#{sid} {text}"
+
+
+def _audit_with_where(session, sid):
+    """A report's "#57 Brand PLA (Black) → LR-MDB-2 slot 1"."""
+    where = str(((session.get('rows') or {}).get(str(sid)) or {}).get('where') or '')
+    label = _audit_label(session, sid)
+    return f"{label} → {where}" if where else label
+
+
+def _audit_report(session, parked=(), stays=(), failed=()):
+    """The audit's report: ONE entry naming the place, written after anything else
+    the end logs, so a long audit's own lines can't push it out of the 50-line log.
+    `parked` and `failed` are ids; `stays` are the spools a Done left where they are
+    ({id, display, where, why}). "Perfect Match" takes an audited place, something
+    expected, all of it found, and no extra."""
+    place = session.get('location_id') or ''
+    if not place:
+        state.add_log_entry(
+            "📝 <b>Audit Report:</b> Audit ended before a location was scanned: nothing was checked.",
+            "INFO", "ffaa00")
+        return
+    expected, missing, extras, trail = _audit_tally(session)
+    perfect = bool(expected) and not missing and not extras
+    if expected:
+        first = f"Found {len(expected) - len(missing)} of {len(expected)}."
+        if perfect:
+            first += " ✅ Perfect Match! All items accounted for."
+    elif extras or trail:
+        first = "Nothing was filed here."
+    else:
+        first = "Nothing was filed here and nothing was scanned."
+    lines = [f"📝 <b>Audit Report: {_audit_esc(place)}</b>", first]
+    if missing:
+        lines.append("❌ <b>Missing:</b> " + ", ".join(_audit_esc(_audit_label(session, s)) for s in missing))
+    if extras:
+        lines.append("⚠️ <b>Extra:</b> " + ", ".join(_audit_esc(_audit_with_where(session, s)) for s in extras))
+    if trail:
+        lines.append("🔗 <b>Loaded from here:</b> "
+                     + ", ".join(_audit_esc(_audit_with_where(session, s)) for s in trail))
+    if parked:
+        lines.append("❓ <b>Parked at Unknown:</b> " + ", ".join(f"#{s}" for s in parked))
+    if stays:
+        lines.append("📌 <b>Left alone:</b> " + ", ".join(
+            _audit_esc(f"{s.get('display') or _audit_label(session, s.get('id'))} → "
+                       f"{s.get('why') or s.get('where') or ''}") for s in stays))
+    if failed:
+        lines.append("🛑 <b>Failed:</b> " + ", ".join(f"#{s}" for s in failed))
+    state.add_log_entry("<br>".join(lines), "INFO", "00ff00" if perfect else "ffaa00")
+
+
+def _audit_row(item, where=None):
+    """The row stored for a spool, from a spoolman_api._build_location_match hit:
+    what a tile draws, so /api/audit_session reads no Spoolman for it."""
+    row = {key: item.get(key) for key in
+           ('id', 'display', 'color', 'color_direction', 'remaining_weight', 'slot', 'location')}
+    row['where'] = audit_where(item.get('location'), item.get('slot')) if where is None else where
+    return row
+
+
+def _audit_places_inside(place, spools, loc_list):
+    """One entry per spool filed in a place inside `place`, its location id, from
+    the audit's own list. `is_descendant`, never the matcher: this is the tree,
+    the matcher's location-string query mustn't become one (see
+    _build_location_match). A Printer row's heads count whatever their ids spell."""
+    if place in locations_db.PSEUDO_ROOM_PREFIXES:
+        return []
+    parent_map = locations_db.build_parent_map(loc_list)
+    heads = set(locations_db.printer_row_toolheads(loc_list, place))
+    inside = []
+    for spool in spools:
+        loc = str((spool.get('location') if isinstance(spool, dict) else '') or '').strip().upper()
+        if loc and loc != place and (loc in heads or locations_db.is_descendant(loc, place, parent_map)):
+            inside.append(loc)
+    return inside
+
+
+def _audit_start_note(place, filed, inside, loc_list):
+    """What this audit doesn't check, in a sentence, or '' when nothing is inside."""
+    if not inside:
+        return ""
+    if not filed:
+        first = "Nothing is filed here itself."
+    elif filed == 1:
+        first = "1 is filed here."
+    else:
+        first = f"{filed} are filed here."
+    named = ""
+    if locations_db.printer_row_toolheads(loc_list, place):
+        named = " (" + ", ".join(sorted(set(inside))) + ")"
+    if len(inside) == 1:
+        return (f"{first} 1 more is in a place inside it{named}, and this audit doesn't check it: "
+                f"audit that place too.")
+    return (f"{first} {len(inside)} more are in the places inside it{named}, and this audit "
+            f"doesn't check those: audit each of them.")
+
+
+def _audit_location_scan(session, loc_id):
+    """The place to audit. Nothing is stored until a good read: a blip, a list or
+    a place that doesn't exist refuses, and the same audit can scan again."""
+    place = str(loc_id or '').strip().upper()
+    if session.get('location_id'):
+        return _audit_refuse(f"Already auditing {session['location_id']}. Finish first!")
+    if place in ('UNKNOWN', 'UNASSIGNED'):
+        return _audit_refuse(f"{place.title()} is a list, not a place you can audit.")
+
+    audit_id = session.get('audit_id')
+    try:
+        spools = spoolman_api.get_all_spools_strict()
+        if not isinstance(spools, list):
+            raise ValueError("Spoolman's answer wasn't a list")
+    except Exception as e:
+        state.logger.warning(f"Audit: couldn't read {place}: {e}")
+        return _audit_refuse(f"Couldn't read {place} from Spoolman, so the audit hasn't started. "
+                             f"Scan it again in a moment.")
+
+    expected, rows = [], {}
+    for spool in spools:
+        if not isinstance(spool, dict):
+            continue
+        item = spoolman_api._build_location_match(spool, place)
+        if item is None or item.get('is_ghost'):
+            continue
+        if str(item.get('location') or '').strip().upper() != place:
+            continue
+        expected.append(item['id'])
+        rows[str(item['id'])] = _audit_row(item)
+
+    loc_list = locations_db.load_locations_list() or []
+    inside = _audit_places_inside(place, spools, loc_list)
+    known = any(isinstance(r, dict) and str(r.get('LocationID', '')).strip().upper() == place
+                for r in loc_list)
+    if not expected and not inside and not known:
+        return _audit_refuse(f"{place} isn't a place FCC knows.")
+
+    # The read took a moment, and scans aren't serial: this audit may have ended,
+    # or another scan may have picked its place.
+    if session.get('audit_id') != audit_id:
+        return _audit_refuse("That audit has ended.")
+    if session.get('location_id'):
+        return _audit_refuse(f"Already auditing {session['location_id']}. Finish first!")
+
+    note = _audit_start_note(place, len(expected), inside, loc_list)
+    session['expected_items'] = expected
+    session['rows'] = rows
+    session['start_note'] = note
+    session['location_id'] = place
+    items = "item" if len(expected) == 1 else "items"
+    state.add_log_entry(
+        f"🧐 Auditing <b>{_audit_esc(place)}</b>. expecting {len(expected)} {items}. Start scanning!"
+        + (f" {_audit_esc(note)}" if note else ""), "INFO", "00aaff")
+    return {"status": "success"}
+
+
+def _audit_unexpected_spool(session, sid):
+    """A scanned spool that isn't on the list. Read BEFORE anything is recorded:
+    a spool that doesn't exist leaves no mark, and one Spoolman won't answer for
+    is still a spool found here (never a 500).
+
+    A spool on a head whose trail names this place physically sits in this box,
+    feeding that head, so it is a quiet find. Anything else is an Extra (the
+    session's `rogue_items`), and says where FCC has it."""
+    place = str(session.get('location_id') or '').strip().upper()
+    audit_id = session.get('audit_id')
+    rec, _answered = spoolman_api.get_spool_answer(sid)
+    if session.get('audit_id') != audit_id:
+        return _audit_refuse("That audit has ended.")
+    scanned = session.setdefault('scanned_items', [])
+    if sid in scanned:
+        return {"status": "success", "msg": "Already scanned"}
+    rows = session.setdefault('rows', {})
+
+    if not isinstance(rec, dict):
+        rows[str(sid)] = _audit_row({'id': sid, 'display': f"#{sid}", 'color': '', 'slot': '', 'location': '',
+                                     'color_direction': 'longitudinal'}, where=AUDIT_WHERE_UNREAD)
+        scanned.append(sid)
+        session.setdefault('rogue_items', []).append(sid)
+        state.add_log_entry(f"⚠️ Extra: #{sid}: {AUDIT_WHERE_UNREAD}.", "WARNING", "ffaa00")
+        return {"status": "success"}
+    if rec.get('id') is None:    # Spoolman's 404 body is a truthy dict
+        return _audit_refuse(f"Spool #{sid} not found")
+
+    sloc = str(rec.get('location') or '').strip()
+    # Matched at its own location: the matcher's display row for a spool anywhere.
+    row = _audit_row(spoolman_api._build_location_match(rec, sloc.upper(), check_unassigned=not sloc))
+    extra = rec.get('extra') or {}
+    if str(extra.get('physical_source', '')).strip().replace('"', '').upper() == place:
+        loc_list = locations_db.load_locations_list() or []
+        loc_info_map = {str(r.get('LocationID', '')).strip().upper(): r
+                        for r in loc_list if isinstance(r, dict)}
+        if _holds_one_spool(sloc, locations_db.get_active_printer_map(loc_list), loc_info_map):
+            row['where'] = sloc
+            row['slot'] = str(extra.get('physical_source_slot', '')).strip('"')
+            rows[str(sid)] = row
+            scanned.append(sid)
+            session.setdefault('trail_items', []).append(sid)
+            state.add_log_entry(f"🔗 Found #{sid}: loaded on {_audit_esc(sloc)} from here.", "INFO")
+            return {"status": "success"}
+
+    rows[str(sid)] = row
+    scanned.append(sid)
+    session.setdefault('rogue_items', []).append(sid)
+    state.add_log_entry(f"⚠️ Extra: {_audit_esc(row['display'])}: FCC has it at {_audit_esc(row['where'])}.",
+                        "WARNING", "ffaa00")
+    return {"status": "success"}
+
+
+def _audit_spool_scan(session, sid):
+    if not session.get('location_id'):
+        return _audit_refuse("Scan a Location first!")
+    scanned = session.setdefault('scanned_items', [])
+    if sid in scanned:
+        return {"status": "success", "msg": "Already scanned"}
+    expected = session.get('expected_items') or []
+    if sid not in expected:
+        return _audit_unexpected_spool(session, sid)
+    scanned.append(sid)
+    left = sum(1 for item in expected if item not in scanned)
+    state.add_log_entry(f"✅ Found #{sid}" + (f" ({left} left)" if left else " (All found!)"), "INFO", "00ff00")
+    return {"status": "success"}
+
+
+def _audit_park_now(session):
+    """Done's park, as it has run since 18.2: every spool on the list that wasn't
+    scanned goes to UNKNOWN at once, with a note of where FCC expected it. Group
+    58's question and its re-checks take its place; only the list is new, the
+    audit's one rule. Answers (parked ids, failed ids)."""
+    place = session.get('location_id') or ''
+    parked, failed = [], []
+    if not place:
+        return parked, failed
+    _expected, missing, _extras, _trail = _audit_tally(session)
+    for sid in missing:
+        try:
+            existing = spoolman_api.get_spool(sid) or {}
+            cur_extra = dict(existing.get('extra') or {})
+            # A note for a person: nothing reads it back (no recovery scan
+            # exists). SYSTEM_MANAGED_EXTRAS keeps edit surfaces off it.
+            cur_extra['fcc_pre_audit_location'] = place
+            ok = spoolman_api.update_spool(sid, {"location": "UNKNOWN", "extra": cur_extra})
+            display = _audit_esc(_audit_label(session, sid))
+            if ok:
+                parked.append(sid)
+                state.add_log_entry(
+                    f"❓ Audit: moved Spool {display} → UNKNOWN "
+                    f"(was expected at {_audit_esc(place)}, not scanned)", "WARNING", "ffaa00")
             else:
-                color = "ffaa00" # Orange
-                if missing: summary += f"❌ <b>Missing:</b> {', '.join(_label(sid) for sid in missing)}<br>"
-                if session['rogue_items']: summary += f"⚠️ <b>Extra:</b> {', '.join(_label(sid) for sid in session['rogue_items'])}"
+                failed.append(sid)
+                err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+                state.add_log_entry(
+                    f"❌ Audit: failed to park Spool {display} at UNKNOWN: {_audit_esc(err)}", "ERROR", "ff4444")
+        except Exception as e:
+            failed.append(sid)
+            state.logger.error(f"Audit auto-park failed for #{sid}: {e}")
+    return parked, failed
 
-            state.add_log_entry(summary, "INFO", color)
 
-            # 18.2 Part A — on `done` (not `cancel` — cancel is the user
-            # explicitly bailing out, e.g. they realized they were
-            # auditing the wrong location), auto-park each missing spool
-            # at the virtual UNKNOWN bucket. Plant the audited location
-            # on extra.fcc_pre_audit_location so a recovery scan can
-            # route the spool home. SYSTEM_MANAGED_EXTRAS protects the
-            # key from being clobbered by user-driven edit surfaces.
-            if cmd == 'done' and missing and expected_loc:
-                for sid in missing:
-                    try:
-                        existing = spoolman_api.get_spool(sid) or {}
-                        cur_extra = dict(existing.get('extra') or {})
-                        cur_extra['fcc_pre_audit_location'] = expected_loc
-                        ok = spoolman_api.update_spool(
-                            sid,
-                            {"location": "UNKNOWN", "extra": cur_extra},
-                        )
-                        # 18.2 follow-up — log with the spool's display label
-                        # so the Activity Log line is actually readable
-                        # ("moved Spool #102 Hatchbox PLA Black → UNKNOWN"
-                        # vs the prior bare "moved Spool #102 → UNKNOWN").
-                        display = _label(sid)
-                        if ok:
-                            state.add_log_entry(
-                                f"❓ Audit: moved Spool {display} → UNKNOWN "
-                                f"(was expected at {expected_loc}, not scanned)",
-                                "WARNING",
-                                "ffaa00",
-                            )
-                        else:
-                            err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
-                            state.add_log_entry(
-                                f"❌ Audit: failed to park Spool {display} at UNKNOWN: {err}",
-                                "ERROR",
-                                "ff4444",
-                            )
-                    except Exception as _e:
-                        state.logger.error(f"Audit auto-park failed for #{sid}: {_e}")
+def _audit_finish(cmd):
+    """Done or Cancel: the report, then the end, under the end lock. Cancel writes
+    nothing to Spoolman."""
+    session = state.AUDIT_SESSION
+    if not _AUDIT_END_LOCK.acquire(False):
+        return _audit_refuse(AUDIT_FINISHING_MSG)
+    try:
+        parked, failed = _audit_park_now(session) if cmd == 'done' else ([], [])
+        _audit_report(session, parked=parked, failed=failed)
+        ended = _end_audit(cmd)
+    finally:
+        _AUDIT_END_LOCK.release()
+    return {"status": "success", "msg": "Audit Complete",
+            "audit_ended": {"id": ended['id'], "why": ended['why']}}
 
-            state.reset_audit()
-            state.add_log_entry("Audit Mode Ended.", "INFO")
-            return {"status": "success", "msg": "Audit Complete"}
 
-        return {"status": "error", "msg": "Command not allowed in Audit"}
+def process_audit_scan(scan_result):
+    """Handles scans when in Audit Mode: returns a bare dict, and only
+    {"status": "error"} reaches the scanner as a refusal. An answer that ended the
+    audit carries `audit_ended`."""
+    if _AUDIT_END_LOCK.locked():
+        return _audit_refuse(AUDIT_FINISHING_MSG)
+    session = state.AUDIT_SESSION
+    scan = scan_result or {}
+    kind = scan.get('type')
 
-    # 2. LOCATION SCAN
-    if scan_result['type'] == 'location':
-        loc_id = scan_result['id']
-        if session['location_id']:
-            state.add_log_entry(f"⚠️ Already auditing {session['location_id']}. Finish first!", "WARNING")
-            return {"status": "error"}
-            
-        session['location_id'] = loc_id
-        expected = spoolman_api.get_spools_at_location(loc_id)
-        session['expected_items'] = expected
-        state.add_log_entry(f"🧐 Auditing <b>{loc_id}</b>. expecting {len(expected)} items. Start scanning!", "INFO", "00aaff")
-        return {"status": "success"}
-
-    # 3. SPOOL SCAN
-    if scan_result['type'] == 'spool':
-        if not session['location_id']:
-            state.add_log_entry("⚠️ Scan a Location first!", "WARNING")
-            return {"status": "error"}
-            
-        spool_id = scan_result['id']
-        if spool_id in session['scanned_items']:
-            return {"status": "success", "msg": "Already scanned"}
-            
-        session['scanned_items'].append(spool_id)
-        
-        if spool_id in session['expected_items']:
-            rem = len(session['expected_items']) - len(session['scanned_items'])
-            msg = f"✅ Found #{spool_id}"
-            if rem > 0: msg += f" ({rem} left)"
-            else: msg += " (All found!)"
-            state.add_log_entry(msg, "INFO", "00ff00")
-        else:
-            session['rogue_items'].append(spool_id)
-            data = spoolman_api.get_spool(spool_id)
-            curr_loc = data.get('location', 'Unknown')
-            state.add_log_entry(f"⚠️ Found #{spool_id}! (DB says: {curr_loc})", "WARNING")
-            
-        return {"status": "success"}
-
-    return {"status": "error", "msg": "Unknown scan type"}
+    if kind == 'command':
+        if scan.get('cmd') in ('done', 'cancel'):
+            return _audit_finish(scan.get('cmd'))
+        return _audit_refuse("Command not allowed in Audit")
+    if kind == 'location':
+        return _audit_location_scan(session, scan.get('id'))
+    if kind == 'spool':
+        return _audit_spool_scan(session, scan.get('id'))
+    if kind == 'error':
+        return _audit_refuse(scan.get('msg') or "Unknown scan type")
+    return _audit_refuse(_AUDIT_OTHER_SCANS.get(kind) or "Unknown scan type")
 
 def get_live_spools_data(spool_ids, spools=None):
     """

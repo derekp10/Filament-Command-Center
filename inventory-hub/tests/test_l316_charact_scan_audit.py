@@ -47,10 +47,17 @@ def _isolated_audit_session():
 # 1. /api/identify_scan — CMD:AUDIT activation.
 # ---------------------------------------------------------------------------
 
-def test_cmd_audit_activates_session_and_returns_clear(client):
+# PIN UPDATED DELIBERATELY (Group 58, 2026-11-02): every audit answer that was
+# {'cmd':'clear'} is now AUDIT_SCAN, on which the page does nothing. 'clear' raised
+# "Clear entire Buffer?" behind the audit panel whenever a spool was buffered, and
+# that hidden prompt ate every later scan, a scanned Done included.
+AUDIT_SCAN = {"type": "command", "cmd": "audit_scan"}
+
+
+def test_cmd_audit_activates_session_and_answers_audit_scan(client):
     """CMD:AUDIT flips AUDIT_SESSION.active on, stamps the idle-watchdog
     timestamp, logs the two kickoff Activity-Log lines, and answers the
-    scanner with {'type':'command','cmd':'clear'} (buffer-wipe signal).
+    scanner with AUDIT_SCAN.
     A pure-move that drops the timestamp stamp would break the 30-min
     idle-timeout watchdog with nothing else going red."""
     before = time.time()
@@ -60,7 +67,7 @@ def test_cmd_audit_activates_session_and_returns_clear(client):
     after = time.time()
 
     assert r.status_code == 200
-    assert r.get_json() == {"type": "command", "cmd": "clear"}
+    assert r.get_json() == AUDIT_SCAN
     assert state.AUDIT_SESSION["active"] is True
     ts = state.AUDIT_SESSION["last_activity_ts"]
     assert before <= ts <= after, f"watchdog ts not stamped fresh: {ts}"
@@ -88,7 +95,7 @@ def test_cmd_audit_during_active_session_is_noop_preserves_state(client):
     in-progress scanned/expected/rogue state. It's a no-op that refreshes the
     idle watchdog and logs an 'already in progress' info line; the user ends the
     audit explicitly via CMD:CANCEL/CMD:DONE. process_audit_scan is NOT called
-    (no delegation) and the response is still {'cmd':'clear'}."""
+    (no delegation) and the response is AUDIT_SCAN."""
     state.AUDIT_SESSION.update({
         "active": True,
         "location_id": "LR-MDB-1",
@@ -103,7 +110,7 @@ def test_cmd_audit_during_active_session_is_noop_preserves_state(client):
         r = client.post("/api/identify_scan",
                         json={"text": "CMD:AUDIT", "source": "barcode"})
 
-    assert r.get_json() == {"type": "command", "cmd": "clear"}
+    assert r.get_json() == AUDIT_SCAN
     pas.assert_not_called()  # no-op, not delegation
     sess = state.AUDIT_SESSION
     assert sess["active"] is True
@@ -125,7 +132,7 @@ def test_active_audit_hijacks_spool_scan_and_refreshes_watchdog(client):
     even a 'barcode'-source ID: scan (which would otherwise flip the
     needs_label_print flag via update_spool). The route also refreshes
     last_activity_ts BEFORE delegating; when the handler reports an error the
-    route now surfaces it (28.C2) rather than answering a bare cmd:clear."""
+    route now surfaces it (28.C2) rather than answering as a scan it took."""
     stale = time.time() - 999.0
     state.AUDIT_SESSION.update({
         "active": True,
@@ -146,7 +153,7 @@ def test_active_audit_hijacks_spool_scan_and_refreshes_watchdog(client):
 
     # 28.C2 FIX — the audit handler's error status is now propagated to the
     # scanner UI as a renderable {'type':'error'} payload (the frontend toasts
-    # it) instead of being discarded behind a bare cmd:clear.
+    # it) instead of being discarded behind a bare command answer.
     assert r.get_json() == {"type": "error", "msg": "not allowed"}
     pas.assert_called_once_with({"type": "spool", "id": 10})
     gs.assert_not_called()   # normal spool branch never ran
@@ -169,7 +176,7 @@ def test_active_audit_hijacks_location_scan(client):
         r = client.post("/api/identify_scan",
                         json={"text": "LOC:LR-MDB-1", "source": "barcode"})
 
-    assert r.get_json() == {"type": "command", "cmd": "clear"}
+    assert r.get_json() == AUDIT_SCAN
     pas.assert_called_once_with({"type": "location", "id": "LR-MDB-1"})
     gl.assert_not_called()
 
@@ -203,9 +210,12 @@ def test_cmd_cancel_during_audit_ends_session_cleanly(client):
     delegation into the REAL process_audit_scan, which emits the Audit
     Report + 'Audit Mode Ended.' log lines and reset_audit()s. The route's
     pre-delegation timestamp refresh is deliberately ordered BEFORE the
-    handler so the reset wins — final last_activity_ts is back to 0.0."""
+    handler so the reset wins — final last_activity_ts is back to 0.0.
+    PIN UPDATED DELIBERATELY (Group 58): the answer that ended the audit says
+    so (`audit_ended`), so the page can tell its own end from anyone else's."""
     state.AUDIT_SESSION.update({
         "active": True,
+        "audit_id": "boot-7",
         "location_id": "LR-MDB-1",
         "expected_items": [],
         "scanned_items": [],
@@ -220,7 +230,7 @@ def test_cmd_cancel_during_audit_ends_session_cleanly(client):
         r = client.post("/api/identify_scan",
                         json={"text": "CMD:CANCEL", "source": "barcode"})
 
-    assert r.get_json() == {"type": "command", "cmd": "clear"}
+    assert r.get_json() == {**AUDIT_SCAN, "audit_ended": {"id": "boot-7", "why": "cancel"}}
     assert state.AUDIT_SESSION["active"] is False
     assert state.AUDIT_SESSION["last_activity_ts"] == 0.0
     assert any("Audit Report" in c[0] for c in log_calls)

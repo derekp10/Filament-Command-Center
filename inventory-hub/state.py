@@ -17,17 +17,36 @@ GLOBAL_QUEUE = []
 # Stores the current audit session
 AUDIT_SESSION = {
     "active": False,
+    # Names this audit (Group 58). Unique across restarts: logic.new_audit_id,
+    # set when the audit starts in api_identify_scan.
+    "audit_id": None,
     "location_id": None,
-    "expected_items": [], # List of Spool IDs supposed to be there
-    "scanned_items": [],  # List of Spool IDs we actually found
-    "rogue_items": [],    # Spools we found that belong elsewhere
+    "expected_items": [], # Spool IDs whose own location is exactly this place
+    "scanned_items": [],  # Every spool ID scanned, on the list or not
+    "rogue_items": [],    # Extras: scanned here, filed elsewhere ("Extra" on screen)
+    "trail_items": [],    # Scanned here, loaded on a head from this very place
+    # str(spool id) -> the row /api/audit_session draws, stored at the scan,
+    # so a poll reads no Spoolman and a blip can't blank a tile.
+    "rows": {},
+    "start_note": "",     # What this audit doesn't check (the places inside it)
+    # The label side of a found spool (Group 58.2).
+    "last_found": None,
+    "found_by": {},
+    "label_flagged": {},
     # Idle-timeout watchdog. Updated on every audit-mode scan and on
-    # audit start. _check_audit_idle_timeout() in logic.py force-cancels
-    # the session when stale, so a closed-tab / browser-crash / docker-
-    # restart-during-audit can't leave the panel auto-opening on every
-    # subsequent dashboard load.
+    # audit start. logic.check_audit_idle_timeout() ends the session when
+    # stale, so a closed tab or a crashed browser can't leave the panel
+    # auto-opening on every later dashboard load. (The session lives in
+    # this process only: a restart ends it, and leaves no trace of it.)
     "last_activity_ts": 0.0,
 }
+
+# How the last audit ended (Group 58): None, or {id, why, location}, `why` being
+# done, cancel or idle. Written by logic._end_audit and kept past reset_audit and
+# past the next audit's start: a heartbeat's `audit_end` is how a page that
+# believed an audit was running learns why it no longer is. None after a restart
+# is itself the answer: a page still believing in an audit lost it to the restart.
+AUDIT_LAST_END = None
 
 # Audit auto-cancel threshold. 30 minutes is long enough that someone
 # can pause mid-audit to physically chase a spool down without losing
@@ -137,10 +156,17 @@ def reset_audit():
     global AUDIT_SESSION
     AUDIT_SESSION.update({
         "active": False,
+        "audit_id": None,
         "location_id": None,
         "expected_items": [],
         "scanned_items": [],
         "rogue_items": [],
+        "trail_items": [],
+        "rows": {},
+        "start_note": "",
+        "last_found": None,
+        "found_by": {},
+        "label_flagged": {},
         "last_activity_ts": 0.0,
     })
 

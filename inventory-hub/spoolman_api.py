@@ -821,10 +821,10 @@ SYSTEM_MANAGED_EXTRAS = frozenset({
     "physical_source_slot",
     # Owned by _auto_archive_on_empty / _auto_unarchive_on_refill.
     "fcc_pre_archive_location",
-    # 18.2 Part A — set when audit-mode auto-parks an unconfirmed spool
-    # at UNKNOWN. Carries the location the spool was expected at so a
-    # recovery scan can route it home; never user-editable (would lose
-    # the breadcrumb).
+    # 18.2 Part A — set when an audit parks a spool it didn't find at
+    # UNKNOWN: where FCC last had it. A note for a person: nothing reads it
+    # back to send a spool home, no "recovery scan" exists. Never
+    # user-editable (would lose the note).
     "fcc_pre_audit_location",
     # Group 42.6 — where a spool sat before it went into a single-slot box
     # (a PolyDryer), so ejecting it out of the box puts it back there.
@@ -1594,8 +1594,8 @@ REQUIRED_SPOOL_EXTRAS = [
     # without the UI being misleading.
     ("prusament_manufacturing_date", "Manufacturing Date", "text"),
     ("prusament_length_m", "Length (m)", "text"),
-    # 18.2 Part A — breadcrumb planted when audit auto-parks an unscanned
-    # spool at UNKNOWN. Recovery scans read it to route the spool home.
+    # 18.2 Part A — note planted when an audit parks an unscanned spool at
+    # UNKNOWN: where FCC last had it. Nothing reads it to route a spool home.
     # Must be in REQUIRED_SPOOL_EXTRAS so app startup self-heals against
     # a Spoolman that's missing it; without this, the auto-park PATCH 400s
     # ("Unknown extra field fcc_pre_audit_location") and missing spools stay

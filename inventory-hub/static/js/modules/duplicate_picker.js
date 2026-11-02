@@ -161,6 +161,11 @@ window.showLegacySpoolPicker = (payload, opts = {}) => {
     const onAddNewClick = () => {
         cleanup();
         if (parentFilamentId != null && typeof window.openNewSpoolFromFilamentWizard === 'function') {
+            // Group 58: during an audit this picker opens over the audit's
+            // panel, and the wizard (a Bootstrap window) would open behind it
+            // with nothing to show for the click. Hide the panel as its own Hide
+            // does; the audit keeps running.
+            if (window.closeAuditPanel) window.closeAuditPanel();
             window.openNewSpoolFromFilamentWizard(parentFilamentId);
         } else if (window.showToast) {
             window.showToast('Add-new path unavailable (missing filament id)', 'error', 5000);
