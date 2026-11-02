@@ -1249,8 +1249,15 @@ def _ghost_trail_from(current_loc, current_extra, printer_map, loc_info_map):
     The slot is '' for a spool with no `container_slot`, never None: update_spool
     drops a None (it means "keep"), so a stale `physical_source_slot` from an
     earlier trail survived under the new place (2026-10-21).
+
+    Unknown is never that place either (Group 58 review): it is the list of spools
+    FCC has lost, not somewhere a spool lives. A trail naming it listed the loaded
+    spool as a ghost in that list and sent its eject back there with no prompt,
+    where the audit's old note then said the audit had lost it again. With no
+    trail, the 13.6 reverse-binding and the eject's unassign prompt apply.
     """
-    if _is_single_occupancy(current_loc, printer_map, loc_info_map):
+    if (_is_single_occupancy(current_loc, printer_map, loc_info_map)
+            or str(current_loc or '').strip().strip('"').upper() == 'UNKNOWN'):
         return "", ""
     return current_loc, current_extra.get('container_slot') or ""
 
@@ -4158,8 +4165,9 @@ def _eject_destination(spool_data, printer_map, homeless_destination=None):
     {"home", "slot", "target", "needs_unassign_confirm"}:
       - `home`: the saved source (physical_source) when it is a real home, with
         `slot` its saved slot; None when there is none. Not a home: the place the
-        spool sits now (the loop), anywhere beneath it (a room's own box), or a
-        toolhead (a stale head -> head trail).
+        spool sits now (the loop), anywhere beneath it (a room's own box), a
+        toolhead (a stale head -> head trail), or Unknown (a trail written before
+        _ghost_trail_from stopped naming it).
       - `target`: where a homeless spool goes: the caller-decided
         `homeless_destination`, else '' off a printer (a printer is not a Room),
         else its Room, else '' (Unassigned).
@@ -4204,6 +4212,10 @@ def _eject_destination(spool_data, printer_map, homeless_destination=None):
                 for r in (locations_db.load_locations_list() or [])}):
             state.logger.info(
                 f"🛑 Stale ghost trail: #{spool_data.get('id')}'s saved source {_src} is a toolhead — not returning there.")
+            saved_source = None
+        elif _src == 'UNKNOWN':
+            state.logger.info(f"🛑 Stale ghost trail: #{spool_data.get('id')}'s saved source is Unknown, "
+                              f"the lost list, not a home — not returning there.")
             saved_source = None
 
     if saved_source:
@@ -4657,6 +4669,7 @@ def perform_force_unassign(spool_id, confirm_active_print=False):
     return False
 
 NOTHING_TO_UNDO_MSG = "Nothing to undo (Undo Last Move reverts spool moves only)."
+UNDO_SPOOL_UNREAD = "could not be read from Spoolman"
 
 
 def peek_undo():
@@ -4700,7 +4713,9 @@ def _undo_items(record, printer_map):
 def _undo_guard_read(sid, only_if_at):
     """Where a spool of a guarded record (`only_if_at`: an audit's park) stands now:
       ('here', rec)        still at `only_if_at`, so Undo may put it back;
-      ('moved_on', rec)    somewhere else: someone found it, so Undo leaves it;
+      ('moved_on', rec)    somewhere else: someone found it, so Undo leaves it; or
+                           archived, wherever it is: someone wrote it off, and the
+                           list reads that check a slot can't see an archived spool;
       ('deleted', None)    Spoolman answered and has no such spool (its 404 body
                            is a truthy dict), so there is nothing to put back;
       ('unreadable', None) no answer: nothing can be said, and nothing is written."""
@@ -4709,22 +4724,63 @@ def _undo_guard_read(sid, only_if_at):
         return 'unreadable', None
     if rec.get('id') is None:
         return 'deleted', None
+    if rec.get('archived'):
+        return 'moved_on', rec
     here = str(rec.get('location') or '').strip().strip('"').upper()
     return ('here' if here == only_if_at else 'moved_on'), rec
 
 
+def _undo_place_gone(record, loc, rows):
+    """True when a guarded record's place had a locations.json row at the park and
+    has none now. Undo leaves those spools at Unknown, with the note that says where
+    they were: written to a deleted id they would sit in a place nothing can show,
+    clear or delete. A place that never had a row can be audited, so it is checked
+    like any other. No rows at all is a list that couldn't be read, never a place gone."""
+    if not record.get('place_had_row') or not rows:
+        return False
+    return str(loc or '').strip().strip('"').upper() not in rows
+
+
+def _undo_guard_kind(record, sid, loc, rows):
+    """_undo_guard_read, plus 'place_gone' for a spool still at `only_if_at` whose
+    place has gone: the one sort, for Undo's question and for its write."""
+    kind, rec = _undo_guard_read(sid, str(record.get('only_if_at') or '').strip().upper())
+    return ('place_gone' if kind == 'here' and _undo_place_gone(record, loc, rows) else kind), rec
+
+
+def _undo_left_where(rec):
+    """Where a spool Undo leaves alone is, in words. An archived spool says so: it
+    can be sitting at Unknown, which wouldn't explain why it stays."""
+    where = _audit_spool_where(rec)
+    return f"{where} (archived)" if rec.get('archived') else where
+
+
 def _undo_guard(record):
-    """Every spool of a guarded record, sorted by _undo_guard_read for Undo's
+    """Every spool of a guarded record, sorted by _undo_guard_kind for Undo's
     question: {here: [ids], moved_on: [{id, where}], deleted: [ids], unreadable:
-    [ids]}. The question and perform_undo read alike, so what it offers is what
-    Undo does (a spool that moved between the two is left alone and said so)."""
-    only_if_at = str(record.get('only_if_at') or '').strip().upper()
+    [ids], place_gone: [ids]}. The question and perform_undo read alike, so what it
+    offers is what Undo does (a spool that moved between the two is left alone and
+    said so)."""
+    rows = {str(r.get('LocationID', '')).strip().upper(): r
+            for r in (locations_db.load_locations_list() or []) if isinstance(r, dict)}
     guard: typing.Dict[str, typing.List[typing.Any]] = {
-        "here": [], "moved_on": [], "deleted": [], "unreadable": []}
-    for sid in (record.get('moves') or {}):
-        kind, rec = _undo_guard_read(sid, only_if_at)
-        guard[kind].append({"id": sid, "where": _audit_spool_where(rec)} if kind == 'moved_on' else sid)
+        "here": [], "moved_on": [], "deleted": [], "unreadable": [], "place_gone": []}
+    for sid, loc in (record.get('moves') or {}).items():
+        kind, rec = _undo_guard_kind(record, sid, loc, rows)
+        guard[kind].append({"id": sid, "where": _undo_left_where(rec)} if kind == 'moved_on' else sid)
     return guard
+
+
+def _undo_names(sids):
+    """"#1, #2 and #3", or "12 spools": a batch of 30 is a sentence, not a list."""
+    return f"{len(sids)} spools" if len(sids) > 3 else _and_list(f"#{sid}" for sid in sids)
+
+
+def _undo_place_gone_words(record, sids):
+    """"LR-MDB-1 is gone from Locations, so #1 and #2 stay at Unknown.": said once,
+    however many spools it holds back."""
+    stay = 'stays' if len(sids) == 1 else 'stay'
+    return f"{_undo_audit_places(record)} is gone from Locations, so {_undo_names(sids)} {stay} at Unknown."
 
 
 def _undo_left_alone_words(left_alone):
@@ -4746,6 +4802,7 @@ def _describe_guarded_undo(record, printer_map, guard):
     have moved on or gone since, so the question counts past three and says what
     stays. `guard` is _undo_guard's answer; with none, every spool counts."""
     moved_on = (guard or {}).get('moved_on') or []
+    gone = (guard or {}).get('place_gone') or []
     here = None if guard is None else {str(sid) for sid in guard.get('here') or ()}
     items = [(sid, place) for sid, place in _undo_items(record, printer_map)
              if here is None or str(sid) in here]
@@ -4753,9 +4810,14 @@ def _describe_guarded_undo(record, printer_map, guard):
         text = f"Undo: put {len(items)} spools back in {_undo_audit_places(record)} (parked at Unknown by its audit)?"
     elif items:
         text = "Undo: put " + _and_list(f"#{sid} back {place}" for sid, place in items) + "?"
+    elif gone:
+        text = "Undo: nothing from this audit can go back. Clear it from Undo?"
     else:
         text = "Undo: nothing from this audit is at Unknown any more, so nothing goes back. Clear it from Undo?"
-    return f"{text} {_undo_left_alone_words(moved_on)}" if moved_on else text
+    tail = [_undo_left_alone_words(moved_on)] if moved_on else []
+    if gone:
+        tail.append(_undo_place_gone_words(record, gone))
+    return " ".join([text] + tail)
 
 
 def describe_undo(record, printer_map, guard=None):
@@ -4822,6 +4884,7 @@ def undo_confirm_answer(record, confirmed_heads=None):
         names = _and_list(f"#{sid}" for sid in unreadable)
         doubt = "whether this undo changes a printing head"
         if guard is not None:      # a park's Undo changes no head; where each spool is decides
+            names = _undo_names(unreadable)
             doubt = "where it is now" if len(unreadable) == 1 else "where they are now"
         msg = f"Couldn't read {names} from Spoolman, so FCC can't tell {doubt}. Nothing was undone; try again in a moment."
         state.add_log_entry(f"❌ Undo not asked: {msg}", "ERROR", "ff4444")
@@ -4864,9 +4927,13 @@ def perform_undo(expected_id=None):
     Group 58: a record with `only_if_at` (an audit's park, which can be 30 spools
     nobody has looked at for a while) restores a spool only while it is still
     there. Right before each write: a deleted spool is dropped, one that has moved
-    on is left alone and named, neither counting as restored or failed; one that
-    can't be read isn't written and counts as failed, and so does one whose slot
-    another spool claims now. Ordinary records don't take this path."""
+    on or been archived is left alone and named, and one whose place has gone from
+    Locations stays at Unknown, none of them counting as restored or failed. One
+    whose slot another spool claims now counts as failed, and that is final for
+    this record. One that failed for a reason that says nothing about it (it or its
+    box couldn't be read, its write isn't proved landed) counts as failed too, and
+    goes back on the stack in a copy of the record holding only such spools, so the
+    next Undo Last Move offers exactly those. Ordinary records don't take this path."""
     if not state.UNDO_STACK:
         state.add_log_entry(f"↩️ {NOTHING_TO_UNDO_MSG}", "INFO")
         return {"success": False, "nothing": True, "msg": NOTHING_TO_UNDO_MSG}
@@ -4875,6 +4942,7 @@ def perform_undo(expected_id=None):
         state.add_log_entry(f"⚠️ Undo refused: {msg}", "WARNING", "ffaa00")
         return {"success": False, "stale": True, "msg": msg}
     last = state.UNDO_STACK.pop()
+    stack_place = len(state.UNDO_STACK)      # a retry goes back here, under anything newer
     moves = last['moves']
     target = last.get('target')
     origin = last.get('origin', '')
@@ -4897,6 +4965,28 @@ def perform_undo(expected_id=None):
     undo_rows = {str(r.get('LocationID', '')).strip().upper(): r
                  for r in (locations_db.load_locations_list() or []) if isinstance(r, dict)}
 
+    only_if_at = str(last.get('only_if_at') or '').strip().upper()
+    # A guarded record's outcomes, beyond restored and failed (see the docstring).
+    left_alone: typing.List[typing.Dict[str, typing.Any]] = []
+    dropped: typing.List[typing.Any] = []
+    place_gone: typing.List[typing.Any] = []
+    retry: typing.Dict[typing.Any, typing.Any] = {}             # sid -> its place
+    retry_why: typing.Dict[str, typing.List[typing.Any]] = {}   # each reason -> its spools
+    box_reads: typing.Dict[str, typing.Any] = {}
+    unread_places: typing.Dict[str, str] = {}                   # place -> why it couldn't be read
+
+    def _retry_later(sid, loc, why):
+        """A guarded spool not put back for a reason that says nothing about it: it
+        stays on the stack. Each reason is said once, in the answer and its one ERROR
+        line, however many of a batch it stopped: a box that can't be read is the same
+        sentence for all 30 of its spools, and the log keeps only 50 lines."""
+        retry[sid] = loc
+        retry_why.setdefault(why, []).append(sid)
+
+    def _unread(loc, why):
+        """True when `why` is this Undo's read of `loc` having failed."""
+        return bool(why) and why == unread_places.get(str(loc or '').strip().strip('"').upper())
+
     def _blocked(sid, loc):
         """Why `sid` can't go back onto `loc`, or ''. A one-spool head must
         really be free: the incoming spool's restore may have been rejected, or
@@ -4904,18 +4994,24 @@ def perform_undo(expected_id=None):
         edit) may have loaded something since; restoring blind stacked two
         spools on one head (2026-09-12 review for a Smart Load's resident;
         Group 42.3b, I5-10, for a moved spool). Logged at ERROR. One-spool is
-        the engine's rule: a multi-head Printer row holds many (Group 42 review)."""
+        the engine's rule: a multi-head Printer row holds many (Group 42 review).
+        A guarded record asks a place that can't be read once, and says so once."""
         if not loc or not _holds_one_spool(loc, printer_map, undo_rows):
             return ""
         head = str(loc).strip().strip('"').upper()
+        if only_if_at and head in unread_places:
+            return unread_places[head]
         try:
             occupants = strict_direct_occupants(head, exclude=[sid])
             why = ("it holds " + ", ".join(f"#{o}" for o in occupants)) if occupants else ""
         except Exception as _occ_err:
+            if only_if_at:
+                unread_places[head] = f"{head} could not be read from Spoolman ({_occ_err})"
+                return unread_places[head]
             why = f"it could not be read from Spoolman ({_occ_err})"
         if why:
-            state.add_log_entry(f"❌ Undo: not putting Spool #{sid} back on {head} — {why}",
-                                "ERROR", "ff4444")
+            line = f"❌ Undo: not putting Spool #{sid} back on {head} — {why}"
+            state.add_log_entry(_audit_esc(line) if only_if_at else line, "ERROR", "ff4444")
         return why
 
     released = last.get('released') or {}
@@ -4941,30 +5037,29 @@ def perform_undo(expected_id=None):
         except Exception as _ae:
             state.logger.warning(f"42.3b undo re-attach skipped: {_ae}")
 
-    only_if_at = str(last.get('only_if_at') or '').strip().upper()
-    left_alone: typing.List[typing.Dict[str, typing.Any]] = []
-    dropped: typing.List[typing.Any] = []
-    box_reads: typing.Dict[str, typing.Any] = {}
-
-    def _slot_taken(sid, loc, snap):
-        """Which spool claims the slot `sid` would go back to, as words, or ''. One
-        strict read per box (a batch can hold a box's every slot, and a Spoolman
+    def _slot_taken(sid, loc):
+        """Which spool claims the slot `sid` would go back to, as words, or ''. The
+        slot is the one the park recorded (`slots`): a blank slot means "1" only for
+        a single-slot box's sole occupant, and a count of the box now can't tell
+        that spool from a second one put in beside a spool loaded from the box.
+        One strict read per box (a batch can hold a box's every slot, and a Spoolman
         that isn't answering must not cost its timeout per spool), by the one slot
         rule. Only spools filed at, or loaded from, exactly this place count: a
         Room's read lists its rows' spools too, with their own slots."""
         box = str(loc or '').strip().strip('"').upper()
         row = undo_rows.get(box)
-        slot = _norm_slot(locations_db.effective_slot(row, (snap or {}).get('container_slot')))
+        slot = _norm_slot(_undo_get(last.get('slots'), sid))
         if not box or not slot:
             return ""
         if box not in box_reads:
             try:
-                box_reads[box] = (spoolman_api.get_spools_at_location_detailed_strict(box) or [], None)
+                box_reads[box] = spoolman_api.get_spools_at_location_detailed_strict(box) or []
             except Exception as _b_err:
-                box_reads[box] = (None, _b_err)
-        items, read_err = box_reads[box]
+                box_reads[box] = None
+                unread_places[box] = f"{box} could not be read from Spoolman ({_b_err})"
+        items = box_reads[box]
         if items is None:
-            return f"{box} could not be read from Spoolman ({read_err})"
+            return unread_places[box]
         filed = [i for i in items if str(i.get('location') or '').strip().upper() == box]
         holders = box_slot_claims(row, box, filed, [sid])[0].get(slot) or []
         return f"{box} slot {slot} holds " + ", ".join(f"#{h}" for h in holders) if holders else ""
@@ -4979,14 +5074,23 @@ def perform_undo(expected_id=None):
             snap = extras_by_sid.get(str(sid))
         cur: typing.Dict[str, typing.Any] = {}
         if only_if_at:
-            kind, rec = _undo_guard_read(sid, only_if_at)
+            kind, rec = _undo_guard_kind(last, sid, loc, undo_rows)
             if kind == 'deleted':
                 dropped.append(sid)
                 continue
             if kind == 'moved_on':
-                left_alone.append({"id": sid, "where": _audit_spool_where(rec)})
+                left_alone.append({"id": sid, "where": _undo_left_where(rec)})
                 continue
-            why = "it could not be read from Spoolman" if kind == 'unreadable' else _slot_taken(sid, loc, snap)
+            if kind == 'place_gone':
+                place_gone.append(sid)
+                continue
+            if kind == 'unreadable':
+                _retry_later(sid, loc, UNDO_SPOOL_UNREAD)
+                continue
+            why = _slot_taken(sid, loc)
+            if _unread(loc, why):
+                _retry_later(sid, loc, why)
+                continue
             if why:
                 failed.append(f"#{sid} ({why})")
                 state.add_log_entry(_audit_esc(f"❌ Undo: not putting Spool #{sid} back "
@@ -5003,10 +5107,25 @@ def perform_undo(expected_id=None):
                 merged[k] = snap.get(k, '')
             payload["extra"] = merged
         why = _blocked(sid, loc)
+        if only_if_at and _unread(loc, why):
+            _retry_later(sid, loc, why)
+            continue
         if why:
             failed.append(f"#{sid} ({why})")
             continue
-        if spoolman_api.update_spool(sid, payload):
+        raised = None
+        if only_if_at:
+            # The park's own write, for the park's own reason: update_spool's timeout
+            # is a READ timeout, so a failed answer is re-read before it is believed,
+            # and a restore that landed isn't offered again (the retry would find it
+            # "moved on"). A raise here must not take the rest of the batch's Undo.
+            try:
+                landed = _move_write(sid, loc, payload.get('extra') or {})
+            except Exception as _w_err:
+                landed, raised = False, str(_w_err)
+        else:
+            landed = spoolman_api.update_spool(sid, payload)
+        if landed:
             restored.append(sid)
             # Group 42.1 / 42.3b: leaving a head releases its own single-slot
             # box (an undone PolyDryer deploy lets go of the head)...
@@ -5015,11 +5134,13 @@ def perform_undo(expected_id=None):
                 _release_single_slot_box(sid, _now, cur.get('extra') or {}, printer_map)
             # ...and going back onto one brings back what the move released.
             _reattach(loc, released.get(str(sid)))
+        elif only_if_at:
+            _retry_later(sid, loc, raised or spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error")
         else:
             err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
             failed.append(f"#{sid} ({err})")
-            line = f"❌ Undo: failed to restore Spool #{sid} → {loc or 'UNASSIGNED'}: {err}"
-            state.add_log_entry(_audit_esc(line) if only_if_at else line, "ERROR", "ff4444")
+            state.add_log_entry(f"❌ Undo: failed to restore Spool #{sid} → {loc or 'UNASSIGNED'}: {err}",
+                                "ERROR", "ff4444")
     # [ALEX FIX] Revert Smart Ejections — same canonical write surface so a
     # rejection is surfaced rather than silently dropped (a location-only PATCH
     # was always accepted, but consistency + failure-visibility matter here too).
@@ -5159,7 +5280,14 @@ def perform_undo(expected_id=None):
         # Legacy / no-move record: its summary already reads "Moved N -> target".
         parts.append(last.get('summary', f"moved -> {target}"))
     if only_if_at:
-        return _guarded_undo_answer(parts, failed, left_alone, dropped,
+        if retry:
+            # The same record, id and all, holding only those spools: the next Undo
+            # Last Move offers exactly them. A spool whose slot another spool really
+            # claims stays out, or this record would bury every older one for as long
+            # as that spool held the slot. Back in its own place on the stack, under
+            # a move that landed while this Undo ran.
+            state.UNDO_STACK.insert(stack_place, dict(last, moves=retry))
+        return _guarded_undo_answer(last, parts, failed, retry_why, left_alone, dropped, place_gone,
                                     restored + restored_ejections + restored_displaced, unbuffered)
     if parts:
         state.add_log_entry(f"↩️ Undo: {'; '.join(parts)}", "WARNING")
@@ -5172,20 +5300,34 @@ def perform_undo(expected_id=None):
             "restored": restored + restored_ejections + restored_displaced, "unbuffered": unbuffered}
 
 
-def _guarded_undo_answer(parts, failed, left_alone, dropped, restored, unbuffered):
+def _guarded_undo_answer(record, parts, failed, retry_why, left_alone, dropped, place_gone, restored, unbuffered):
     """The end of an audit record's Undo: it says what went back, what stayed and
     what is gone, and `success` is true when nothing failed. A spool left alone or
-    dropped never counts as failed. Its log lines are escaped (a label holds a
-    filament's name, and Spoolman's words are outside text)."""
+    dropped, or held at Unknown because its place has gone, never counts as failed.
+    `failed` is final ("#1 (LR-MDB-1 slot 1 holds #9)"); `retry_why` ({why: [ids]})
+    stays on the stack, each reason said once, and the words say to press again.
+    `left_alone` lists a spool held at Unknown too, as it was left where it is (the
+    page gives such an answer the longer toast). Its log lines are escaped (a label
+    holds a filament's name, and Spoolman's words are outside text)."""
     tail = []
     if left_alone:
         tail.append(_undo_left_alone_words(left_alone))
+    if place_gone:
+        tail.append(_undo_place_gone_words(record, place_gone))
     if dropped:
         names = _and_list(f"#{sid}" for sid in dropped)
         tail.append(f"{names} {'is' if len(dropped) == 1 else 'are'} no longer in Spoolman.")
-    extras = {"restored": restored, "unbuffered": unbuffered, "left_alone": left_alone, "dropped": dropped}
-    if failed:
-        msg = " ".join([f"Undo could not put back {', '.join(failed)}."] + tail)
+    retry = [sid for sids in retry_why.values() for sid in sids]
+    extras = {"restored": restored, "unbuffered": unbuffered, "dropped": dropped, "place_gone": place_gone,
+              "left_alone": left_alone + [{"id": sid, "where": "Unknown"} for sid in place_gone],
+              "retry": retry}
+    if failed or retry:
+        said = failed + [f"{_undo_names(sids)} ({why})" for why, sids in retry_why.items()]
+        words = [f"Undo could not put back {', '.join(said)}."]
+        if retry:
+            names = _undo_names(retry) if failed else ('it' if len(retry) == 1 else 'them')
+            words.append(f"Press Undo Last Move again to try {names} again.")
+        msg = " ".join(words + tail)
         if parts:
             state.add_log_entry(_audit_esc(f"↩️ Undo: {'; '.join(parts)}"), "WARNING")
         state.add_log_entry(_audit_esc(f"⚠️ Undo partly failed: {msg}"), "ERROR", "ff4444")
@@ -5800,13 +5942,17 @@ def plan_audit_done(session):
     """What Done would do with the spools on the list that weren't scanned, read
     fresh: a spool can move during an audit. Writes nothing.
 
-      {read_ok, read_error, park: [{id, display, where, slot}],
+      {read_ok, read_error, occupants, park: [{id, display, where, slot}],
        stays: [{id, display, where, why}]}
 
     Reads the whole list strictly, archived spools included, so an id it doesn't
     hold is a deleted spool, and one read answers for all of them. No missing
-    spool, or no place, reads nothing."""
-    plan: typing.Dict[str, typing.Any] = {"read_ok": True, "read_error": None, "park": [], "stays": []}
+    spool, or no place, reads nothing. `occupants` is how many spools the place
+    holds as a read of it lists them, a spool loaded from it included and an archived
+    one not, the count box_slot_claims and effective_slot go by: the park records
+    each spool's slot from it."""
+    plan: typing.Dict[str, typing.Any] = {"read_ok": True, "read_error": None, "occupants": 0,
+                                          "park": [], "stays": []}
     place = str(session.get('location_id') or '').strip().upper()
     _expected, missing, _extras, _trail = _audit_tally(session)
     if not place or not missing:
@@ -5821,6 +5967,8 @@ def plan_audit_done(session):
         plan.update(read_ok=False, read_error=str(e))
         return plan
     records = {str(s.get('id')): s for s in spools if isinstance(s, dict)}
+    plan['occupants'] = sum(1 for s in records.values() if not s.get('archived')
+                            and spoolman_api._build_location_match(s, place) is not None)
     for sid in missing:
         rec = records.get(str(sid))
         if rec is None:
@@ -5873,11 +6021,13 @@ def _audit_finish(cmd):
 
 
 def _audit_park_note(place, slot, today):
-    """What fcc_pre_audit_location holds: <PLACE>[:<slot>]@<YYYY-MM-DD>, the day
-    from the page's `today` by the Excluded mark's rule (a container's clock is
-    often UTC). spoolman_api.audit_lost_from reads it back. A note for a person:
-    nothing sends a spool home from it; a park's Undo comes from its record."""
-    return f"{place}{':' + slot if slot else ''}@{stock_report._exclusion_day(today)}"
+    """What fcc_pre_audit_location holds: <PLACE>:<slot>@<YYYY-MM-DD>, the slot
+    possibly empty, the ':' always there, because a LocationID can hold a ':' and
+    the note must not read BIN:2 as slot 2 of BIN. The day is the page's `today` by
+    the Excluded mark's rule (a container's clock is often UTC). spoolman_api.
+    audit_lost_from reads it back. A note for a person: nothing sends a spool home
+    from it; a park's Undo comes from its record."""
+    return f"{place}:{slot or ''}@{stock_report._exclusion_day(today)}"
 
 
 def _audit_park_one(sid, place, today, printer_map, loc_info_map):
@@ -5939,6 +6089,7 @@ def _audit_park_locked(audit_id, ids, today):
     moves: typing.Dict[typing.Any, str] = {}
     extras: typing.Dict[typing.Any, typing.Dict[str, typing.Any]] = {}
     labels: typing.Dict[typing.Any, str] = {}
+    slots: typing.Dict[typing.Any, str] = {}
     for row in plan['park']:
         sid, display = row['id'], row['display']
         if str(sid) not in wanted:
@@ -5962,17 +6113,33 @@ def _audit_park_locked(audit_id, ids, today):
         moves[sid] = str(rec.get('location') or '').strip()
         extras[sid] = {k: (rec.get('extra') or {}).get(k, '') for k in spoolman_api.SYSTEM_MANAGED_EXTRAS}
         labels[sid] = display
+        # The slot the spool held, as the engine reads it from the box's occupants at
+        # the plan, before any write here: only then can Undo tell a sole occupant's
+        # blank slot ("1") from a second spool put in unslotted.
+        slots[sid] = _norm_slot(locations_db.effective_slot(loc_info_map.get(place),
+                                                            (rec.get('extra') or {}).get('container_slot'),
+                                                            occupants=plan['occupants']))
         state.add_log_entry(f"❓ Audit: moved Spool {_audit_esc(display)} → UNKNOWN (was expected at "
                             f"{_audit_esc(row['where'])}, not scanned)", "WARNING", "ffaa00")
 
+    # Nothing landed, so there is no record to protect and no reason to end: the
+    # audit's scans are the whole point (_audit_finish), and Done can be pressed again.
+    if failed and not moves:
+        msg = f"{_audit_park_msg(parked, stayed, failed)} The audit is still open, so you can press Done again."
+        state.add_log_entry(f"⚠️ {_audit_esc(msg)}", "WARNING", "ffaa00")
+        return {"success": False, "parked": parked, "stayed": stayed, "failed": failed, "msg": msg}
+
     # Only what landed, in one record: one Undo Last Move puts the batch back.
-    # `only_if_at` keeps that Undo off a spool found and moved on since (perform_undo).
+    # `only_if_at` keeps that Undo off a spool found and moved on since, `slots` and
+    # `place_had_row` say what the place was then (perform_undo).
     if moves:
         _push_undo({"target": "UNKNOWN", "moves": moves, "extras": extras, "labels": labels, "released": {},
                     "ejections": {}, "ejection_extras": {}, "ejection_released": {}, "displaced": {},
                     "summary": f"Parked {len(moves)} at Unknown by the audit of {place}",
-                    "origin": "audit", "only_if_at": "UNKNOWN"})
-    # The audit ends even on a partial failure: Undo is refused while one runs.
+                    "origin": "audit", "only_if_at": "UNKNOWN", "slots": slots,
+                    "place_had_row": place in loc_info_map})
+    # The audit ends even on a partial failure: Undo is refused while one runs, and
+    # that record is what puts the spools that landed back.
     _audit_report(session, parked=parked, stays=stayed, failed=[f['id'] for f in failed])
     ended = _end_audit('done')
     return {"success": not failed, "parked": parked, "stayed": stayed, "failed": failed,
@@ -6007,8 +6174,10 @@ def park_audit_missing(audit_id, ids, today=None):
       {success, parked: [ids], stayed: [{id, display, where, why}],
        failed: [{id, display, why}], msg, audit_ended: {id, why}}
 
-    `success` only when nothing failed. Refusals: {success: False, msg}, with
-    `busy` or `stale` when one applies, and the audit runs on unless it had ended."""
+    `success` only when nothing failed. No write landed and at least one failed: the
+    same answer with no `audit_ended`, and the audit runs on, so Done can be pressed
+    again. Refusals: {success: False, msg}, with `busy` or `stale` when one applies,
+    and the audit runs on unless it had ended."""
     if not _AUDIT_END_LOCK.acquire(False):
         state.add_log_entry(f"⚠️ {AUDIT_FINISHING_MSG}", "WARNING", "ffaa00")
         return {"success": False, "busy": True, "msg": AUDIT_FINISHING_MSG}

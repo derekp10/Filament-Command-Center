@@ -481,6 +481,25 @@ def test_an_extra_spoolman_wont_answer_for_is_recorded_and_never_a_500(env):
     assert any("couldn't read where FCC has it" in m and c == "WARNING" for m, c, _ in env["logs"]), env["logs"]
 
 
+def test_a_5xx_with_a_json_body_is_an_extra_not_a_spool_that_doesnt_exist(env, monkeypatch):
+    """Its error body read as a truthy dict with no id: "Spool #N not found", and a
+    spool in the person's hand left no mark."""
+    add_spool(env, 1, "LR-MDB-1")
+    add_spool(env, 2, "SHELF-1")
+    start(env, "LR-MDB-1")
+    real_get = env["fake"].get
+
+    def get(url, timeout=None, **kw):
+        if url.rstrip("/").endswith("/spool/2"):
+            return _Resp(500, {"message": "database is locked (test)"})
+        return real_get(url, timeout=timeout, **kw)
+
+    monkeypatch.setattr(spoolman_api.requests, "get", get)
+    assert scan(env, "ID:2") == AUDIT_SCAN
+    assert session()["rogue_items"] == [2]
+    assert session()["rows"]["2"]["where"] == "couldn't read where FCC has it"
+
+
 def test_a_body_that_isnt_json_is_an_extra_too(env, monkeypatch):
     add_spool(env, 1, "LR-MDB-1")
     start(env, "LR-MDB-1")

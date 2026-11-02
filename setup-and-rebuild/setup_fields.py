@@ -328,7 +328,8 @@ create_field("spool", "physical_source_slot", "Physical Source Slot", "text")
 create_field("spool", "fcc_pre_archive_location", "Pre-Archive Location (system)", "text")
 # Note planted by an audit's park (logic.park_audit_missing) when a spool
 # expected at an audited location wasn't found and the person said Yes to
-# moving it to the virtual UNKNOWN bucket: <PLACE>[:<slot>]@<YYYY-MM-DD>.
+# moving it to the virtual UNKNOWN bucket: <PLACE>:<slot>@<YYYY-MM-DD>, the slot
+# possibly empty.
 # System-managed; see spoolman_api.SYSTEM_MANAGED_EXTRAS. App startup self-heals
 # via ensure_required_extras() too, so this entry is the canonical-rebuild path.
 create_field("spool", "fcc_pre_audit_location", "Pre-Audit Location (system)", "text")

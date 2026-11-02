@@ -3,6 +3,7 @@ import state # type: ignore
 import config_loader # type: ignore
 import locations_db # type: ignore  # L271 Phase 2: single hierarchy resolver
 import attr_migration # type: ignore  # Group 36: shared force_reset safety layer
+import datetime
 import html
 import json
 import re
@@ -103,12 +104,21 @@ def get_spool_answer(sid):
     round 2): (what get_spool returns, True) when it answered, a body that isn't
     JSON included (None then: a record Spoolman can't send); (None, False) when
     it didn't (no connection, a timeout). The dashboard's buffer refresh stops
-    reading one spool at a time only on the second kind."""
+    reading one spool at a time only on the second kind.
+
+    A 5xx is the first kind whatever its body says (Group 58 review): "answered,
+    not a spool". Its JSON error body used to read as a truthy dict with no id, which
+    every caller here takes for a deleted spool, and Undo dropped the spool for
+    good. It stays True, never False: one broken record must not stop the refresh
+    of the spools after it."""
     sm_url, _ = config_loader.get_api_urls()
     try:
         resp = requests.get(f"{sm_url}/api/v1/spool/{sid}", timeout=3)
     except Exception:
         return None, False
+    status = getattr(resp, 'status_code', None)
+    if isinstance(status, int) and status >= 500:
+        return None, True
     try:
         return parse_inbound_data(resp.json()), True
     except Exception:
@@ -823,10 +833,11 @@ SYSTEM_MANAGED_EXTRAS = frozenset({
     # Owned by _auto_archive_on_empty / _auto_unarchive_on_refill.
     "fcc_pre_archive_location",
     # 18.2 Part A — set when an audit parks a spool it didn't find at
-    # UNKNOWN: <PLACE>[:<slot>]@<YYYY-MM-DD>, where FCC last had it (Group 58;
-    # an older note is the bare place). A note for a person, shown by
-    # audit_lost_from: nothing reads it back to send a spool home, no
-    # "recovery scan" exists. Never user-editable (would lose the note).
+    # UNKNOWN: <PLACE>:<slot>@<YYYY-MM-DD>, where FCC last had it, the slot
+    # possibly empty (Group 58; an older note is the bare place). A note for
+    # a person, shown by audit_lost_from: nothing reads it back to send a
+    # spool home, no "recovery scan" exists. Never user-editable (would lose
+    # the note).
     "fcc_pre_audit_location",
     # Group 42.6 — where a spool sat before it went into a single-slot box
     # (a PolyDryer), so ejecting it out of the box puts it back there.
@@ -2016,23 +2027,37 @@ def label_flag(extra):
     return None
 
 
-# fcc_pre_audit_location as an audit writes it: <PLACE>[:<slot>]@<YYYY-MM-DD>.
-_AUDIT_NOTE_RE = re.compile(r'^(?P<place>.+?)(?::(?P<slot>[^:@]+))?(?:@(?P<on>\d{4}-\d{2}-\d{2}))?$')
+def _is_note_day(text):
+    """True for a real date written YYYY-MM-DD, on every Python this runs on (3.11
+    and newer read more shapes than that)."""
+    try:
+        return datetime.date.fromisoformat(text).isoformat() == text
+    except ValueError:
+        return False
 
 
 def audit_lost_from(location, extra):
     """Which audit lost a spool (Group 58, Derek's note: if one is found, it should
     be apparent that it was filed away because FCC didn't know where it went):
     {place, slot, on} for a spool at UNKNOWN with an audit's note, else None. A
-    spool anywhere else is lost by nobody, whatever old note it carries. `slot` and
-    `on` are '' when the note doesn't say: an older FCC wrote the bare place."""
+    spool anywhere else is lost by nobody, whatever old note it carries.
+
+    An audit writes <PLACE>:<slot>@<YYYY-MM-DD>, the slot possibly empty: read from
+    the right, so a LocationID can hold a ':' or an '@'. A note with no real date
+    after its last '@' is an older FCC's, which wrote the bare place: its whole text
+    is the place, and `slot` and `on` are ''."""
     if str(location or '').strip().upper() != 'UNKNOWN' or not isinstance(extra, dict):
         return None
     note = str(extra.get('fcc_pre_audit_location') or '').strip().strip('"').strip()
-    hit = _AUDIT_NOTE_RE.match(note)
-    if not hit:
+    if not note:
         return None
-    return {"place": hit.group('place'), "slot": hit.group('slot') or '', "on": hit.group('on') or ''}
+    before, at, day = note.rpartition('@')
+    if not at or not before or not _is_note_day(day):
+        return {"place": note, "slot": "", "on": ""}
+    place, colon, slot = before.rpartition(':')
+    if not colon or not place:
+        return {"place": before, "slot": "", "on": day}
+    return {"place": place, "slot": slot, "on": day}
 
 
 def audit_lost_words(lost):

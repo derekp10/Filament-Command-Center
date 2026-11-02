@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 import app as app_module  # noqa: E402
 import logic  # noqa: E402
+import spoolman_api  # noqa: E402
 import state  # noqa: E402
 import stock_report  # noqa: E402
 from test_audit_auto_park_unknown import _refuse  # noqa: E402
@@ -113,6 +114,10 @@ def asked(env, monkeypatch):
     env["fake"].list_reads_fail = True
     out["read_failed"] = yes()
     env["fake"].list_reads_fail = False
+    real_patch = spoolman_api.requests.patch
+    _refuse(env, monkeypatch, *ids)
+    out["nothing_landed"] = yes()
+    monkeypatch.setattr(spoolman_api.requests, "patch", real_patch)
     assert logic._AUDIT_END_LOCK.acquire(False)
     out["busy"] = yes()
     logic._AUDIT_END_LOCK.release()
@@ -741,9 +746,12 @@ return { during, warnings: warnings(), active: state.auditActive };
     ("no_ids", "didn't say which spools"),
     ("read_failed", "Couldn't read LR-MDB-1 from Spoolman"),
     ("busy", "already finishing"),
+    ("nothing_landed", "The audit is still open, so you can press Done again."),
 ])
 def test_a_refused_yes_keeps_the_audit_and_says_so_on_the_panel(tmp_path, asked, key, words):
-    """The real route's refusals, nothing written. The toast sits under the panel."""
+    """The real route's refusals, nothing written. The toast sits under the panel.
+    A Yes whose every write failed reads the same (it pins page code that was already
+    right): Done is pressable again, as its words say."""
     assert words in asked[key]["msg"] and "audit_ended" not in asked[key]
     res = _q(tmp_path, """
 __park = ANSWER;
@@ -857,3 +865,26 @@ return { toasts: timed() };
 """, LEFT=asked["undo_left_alone"], ALL=asked["undo_all"])
     assert res["toasts"] == [{"msg": asked["undo_left_alone"]["msg"], "type": "success", "ms": 7000},
                              {"msg": asked["undo_all"]["msg"], "type": "success", "ms": 4000}]
+
+
+def test_an_undo_held_back_by_a_place_thats_gone_stays_up_long_enough_to_read(tmp_path, env, monkeypatch):
+    """The real route's answer. Those spools count as left alone (`left_alone`), which
+    is what gives the page's toast its 7 s: nothing went back, and this says why."""
+    monkeypatch.setattr(state, "UNDO_STACK", [])
+    add_spool(env, 1, "LR-MDB-1", container_slot="1")
+    start(env, "LR-MDB-1")
+    question = scan(env, "CMD:DONE")
+    client = app_module.app.test_client()
+    client.post("/api/audit/park", json={"audit_id": question["audit_id"], "ids": [1], "today": "2026-11-02"})
+    env["rows"][:] = [r for r in env["rows"] if r["LocationID"] != "LR-MDB-1"]
+    undo = client.post("/api/undo", json={}).get_json()
+    answer = client.post("/api/undo", json={"confirm": True, "undo_id": undo["undo_id"],
+                                            "confirmed_toolheads": []}).get_json()
+    assert answer["success"] is True and answer["place_gone"] == [1]
+    res = _q(tmp_path, """
+answerWith('/api/undo', [ANSWER]);
+triggerUndo({ confirm: true, undoId: 'x', heads: [] });
+await __settle(40);
+return { toasts: timed() };
+""", ANSWER=answer)
+    assert res["toasts"] == [{"msg": answer["msg"], "type": "success", "ms": 7000}]

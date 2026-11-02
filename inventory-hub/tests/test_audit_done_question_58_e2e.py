@@ -311,7 +311,7 @@ def test_a_real_audit_through_the_question_a_real_park_and_its_undo(
 
         for sid, slot in ((first, slots[0]), (second, slots[1])):
             rec = _extra(spoolman, sid)
-            note = f"{place}:{slot}@{today}" if slot else f"{place}@{today}"
+            note = f"{place}:{slot}@{today}"
             assert rec["location"] == "UNKNOWN" and rec["fcc_pre_audit_location"] == note, rec
             assert rec.get("container_slot", "") == "", rec
         assert _extra(spoolman, found)["location"] == place

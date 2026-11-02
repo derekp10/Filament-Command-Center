@@ -222,7 +222,7 @@ def test_the_plans_own_shape(env):
     start(env, "LR-MDB-1")
     del spools(env)[2]
     assert logic.plan_audit_done(session()) == {
-        "read_ok": True, "read_error": None,
+        "read_ok": True, "read_error": None, "occupants": 1,
         "park": [{"id": 1, "display": "#1 Some Brand PLA (Red)", "where": "LR-MDB-1 slot 2", "slot": "2"}],
         "stays": [{"id": 2, "display": "#2 Some Brand PLA (Red)", "where": "", "why": "no longer in Spoolman"}],
     }
@@ -384,8 +384,9 @@ def test_its_other_extras_are_kept(env):
     assert extra_of(env, 1)["spool_temp"] == "220"
 
 
-@pytest.mark.parametrize("slot, note", [("", "LR-MDB-1@2026-11-02"), ("3", "LR-MDB-1:3@2026-11-02")])
-def test_the_note_has_the_slot_only_when_it_had_one(env, slot, note):
+@pytest.mark.parametrize("slot, note", [("", "LR-MDB-1:@2026-11-02"), ("3", "LR-MDB-1:3@2026-11-02")])
+def test_the_notes_slot_is_empty_when_it_had_none(env, slot, note):
+    """The ':' is always there: a LocationID can hold one (finding 8)."""
     add_spool(env, 1, "LR-MDB-1", container_slot=slot)
     start(env, "LR-MDB-1")
     park(env)
@@ -403,14 +404,14 @@ def test_the_notes_day_is_the_pages_by_the_excluded_marks_rule(env, today, day):
     add_spool(env, 1, "LR-MDB-1")
     start(env, "LR-MDB-1")
     park(env, today=today)
-    assert extra_of(env, 1)["fcc_pre_audit_location"] == f"LR-MDB-1@{day}"
+    assert extra_of(env, 1)["fcc_pre_audit_location"] == f"LR-MDB-1:@{day}"
 
 
 def test_a_room_audits_note_names_the_room_a_spool_was_filed_at(env):
     add_spool(env, 1, "lr")
     start(env, "LR")
     park(env)
-    assert extra_of(env, 1)["fcc_pre_audit_location"] == "LR@2026-11-02"
+    assert extra_of(env, 1)["fcc_pre_audit_location"] == "LR:@2026-11-02"
 
 
 def test_a_parked_spool_stops_being_listed_in_its_box(env):
@@ -454,6 +455,7 @@ def test_the_park_makes_one_undo_record(env):
     assert record["extras"][1]["fcc_pre_audit_location"] == ""
     assert record["labels"] == {1: "#1 Some Brand PLA (Red)", 2: "#2 Some Brand PLA (Red)"}
     assert record["origin"] == "audit" and record["only_if_at"] == "UNKNOWN" and record["target"] == "UNKNOWN"
+    assert record["slots"] == {1: "2", 2: ""} and record["place_had_row"] is True
     for key in ("released", "ejections", "ejection_extras", "ejection_released", "displaced"):
         assert record[key] == {}, key
 
@@ -486,10 +488,11 @@ def _lands_but_times_out(env, monkeypatch, *sids):
 
 
 def test_a_rejected_write_is_listed_and_the_spool_stays(env, monkeypatch):
+    """Nothing landed, so nothing ended (finding 2, a pin changed on purpose): this
+    test used to pin the audit's end, and with it the loss of every scan."""
     _two_missing(env)
     _refuse(env, monkeypatch, 2, 3)
     env["logs"].clear()
-    audit_id = session()["audit_id"]
     result = park(env)
     assert result["success"] is False and result["parked"] == []
     assert [(f["id"], f["display"]) for f in result["failed"]] == [(2, "#2 Some Brand PLA (Red)"),
@@ -500,9 +503,72 @@ def test_a_rejected_write_is_listed_and_the_spool_stays(env, monkeypatch):
     assert any("failed to park Spool #2" in m and "nope (test)" in m and c == "ERROR"
                for m, c, _ in env["logs"]), env["logs"]
     assert state.UNDO_STACK == []                         # nothing landed, nothing to undo
+    assert "audit_ended" not in result
+    assert session()["active"] is True and state.AUDIT_LAST_END is None
+    assert result["msg"] == ("Nothing was parked. Couldn't park #2 and #3. "
+                             "The audit is still open, so you can press Done again.")
+    assert not any("Audit Report" in m for m in log_text(env)), log_text(env)
+    assert any(result["msg"] in m and c == "WARNING" for m, c, _ in env["logs"]), env["logs"]
+
+
+def test_a_yes_where_nothing_landed_keeps_the_scans_and_done_works_again(env, monkeypatch):
+    _two_missing(env)
+    audit_id = session()["audit_id"]
+    real = spoolman_api.requests.patch
+    _refuse(env, monkeypatch, 2, 3)
+    park(env)
+    assert session()["scanned_items"] == [1] and session()["audit_id"] == audit_id
+    assert not logic._AUDIT_END_LOCK.locked()
+
+    monkeypatch.setattr(spoolman_api.requests, "patch", real)
+    env["logs"].clear()
+    env["fake"].patches.clear()
+    result = park(env)
+    assert result["success"] is True and result["parked"] == [2, 3]
     assert result["audit_ended"] == {"id": audit_id, "why": "done"}
-    assert session()["active"] is False
-    assert result["msg"] == "Nothing was parked. Couldn't park #2 and #3."
+    assert session()["active"] is False and len(state.UNDO_STACK) == 1
+    assert "Found 1 of 3." in report(env)                # the first scan survived
+
+
+def test_an_outage_right_after_the_plan_keeps_the_audit_too(env, monkeypatch):
+    """Spoolman stops answering between the plan's list read and the first spool's
+    last look: nothing is written, and the audit isn't lost with it."""
+    _two_missing(env)
+    _q, ids, audit_id = _asked(env)
+    real = spoolman_api.get_spool_answer
+
+    def down_from_here(sid):
+        env["fake"].down = True
+        return real(sid)
+
+    monkeypatch.setattr(spoolman_api, "get_spool_answer", down_from_here)
+    result = park(env, ids, audit_id)
+    assert result["success"] is False and [f["id"] for f in result["failed"]] == [2, 3]
+    assert "audit_ended" not in result and session()["active"] is True
+    assert no_writes(env) and state.UNDO_STACK == []
+
+
+def test_a_failure_with_stays_says_both_and_keeps_the_audit(env, monkeypatch):
+    _two_missing(env)
+    _q, ids, audit_id = _asked(env)
+    spools(env)[3]["location"] = "LR-MDB-2"
+    _refuse(env, monkeypatch, 2)
+    result = park(env, ids, audit_id)
+    assert result["msg"] == ("Nothing was parked. 1 left where it is. Couldn't park #2. "
+                             "The audit is still open, so you can press Done again.")
+    assert [s["id"] for s in result["stayed"]] == [3] and session()["active"] is True
+
+
+def test_one_landed_write_still_ends_the_audit(env, monkeypatch):
+    """A true partial failure: its record exists, and Undo is refused while an audit
+    runs, so it ends."""
+    _two_missing(env)
+    audit_id = session()["audit_id"]
+    _refuse(env, monkeypatch, 2)
+    result = park(env)
+    assert result["parked"] == [3] and [f["id"] for f in result["failed"]] == [2]
+    assert result["audit_ended"] == {"id": audit_id, "why": "done"}
+    assert session()["active"] is False and len(state.UNDO_STACK) == 1
 
 
 def test_a_write_that_landed_but_reported_failure_counts_as_parked(env, monkeypatch):

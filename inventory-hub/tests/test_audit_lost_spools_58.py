@@ -4,8 +4,8 @@ Derek's note (2026-11-01): he wants lost spools apart from Unassigned's many spo
 and easy to find, assign or clear later: "if one is found, it's apparent that this
 was filed away because we didn't know where it went". UNKNOWN already is that list,
 so each spool in it says which audit lost it and when, from fcc_pre_audit_location:
-<PLACE>[:<slot>]@<YYYY-MM-DD>, no new field. A hand move into UNKNOWN blanks the
-note, so a note is only ever an audit's.
+<PLACE>:<slot>@<YYYY-MM-DD>, the slot possibly empty, no new field. A hand move into
+UNKNOWN blanks the note, so a note is only ever an audit's.
 
 The cards, the spool window's badge and the toast are the page half.
 """
@@ -52,8 +52,17 @@ def note_of(env, sid):
 
 @pytest.mark.parametrize("note, want", [
     ("LR-MDB-1:2@2026-11-01", {"place": "LR-MDB-1", "slot": "2", "on": "2026-11-01"}),
-    ("LR-MDB-1@2026-11-01", {"place": "LR-MDB-1", "slot": "", "on": "2026-11-01"}),
+    ("LR-MDB-1:@2026-11-01", {"place": "LR-MDB-1", "slot": "", "on": "2026-11-01"}),    # no slot
     ("LR-MDB-1", {"place": "LR-MDB-1", "slot": "", "on": ""}),          # an older FCC's note
+    ("A:B", {"place": "A:B", "slot": "", "on": ""}),                    # older still: no '@', so all place
+    ("A@B", {"place": "A@B", "slot": "", "on": ""}),                    # an '@' that is no day: all place
+    ("A:B@C", {"place": "A:B@C", "slot": "", "on": ""}),
+    ("X@2026-13-45", {"place": "X@2026-13-45", "slot": "", "on": ""}),  # shaped like a day, but isn't one
+    ("X:1@20261101", {"place": "X:1@20261101", "slot": "", "on": ""}),  # read as a day by Python 3.11+ only
+    ("BIN:2:@2026-11-01", {"place": "BIN:2", "slot": "", "on": "2026-11-01"}),    # a place holding a ':'
+    ("BIN:2:3@2026-11-01", {"place": "BIN:2", "slot": "3", "on": "2026-11-01"}),
+    ("A@B:2@2026-11-01", {"place": "A@B", "slot": "2", "on": "2026-11-01"}),      # a place holding an '@'
+    ("LR-MDB-1@2026-11-01", {"place": "LR-MDB-1", "slot": "", "on": "2026-11-01"}),   # a day and no ':' at all
     ('"LR-MDB-1:2@2026-11-01"', {"place": "LR-MDB-1", "slot": "2", "on": "2026-11-01"}),    # still wrapped
     ("LR", {"place": "LR", "slot": "", "on": ""}),
     ("BIN@2", {"place": "BIN@2", "slot": "", "on": ""}),                # an @ that is no day
@@ -257,3 +266,174 @@ def test_a_parked_spool_is_in_the_unknown_list_with_its_note(env):
     park(env, today="2026-11-01")
     (row,) = env["client"].get("/api/get_contents?id=UNKNOWN").get_json()
     assert row["id"] == 1 and row["slot"] == "" and row["details"]["lost_from"] == LOST
+
+
+# ---------------------------------------------------------------------------
+# Unknown is never a home (finding 3)
+# ---------------------------------------------------------------------------
+
+def _extra(env, sid):
+    return {k: json.loads(v) for k, v in env["fake"].extra("spool", sid).items()}
+
+
+def _turned_up_onto_a_head(env, head="XL-1"):
+    """Parked by an audit, found by a real scan, and put straight on a head: the
+    natural answer to "Scan where it goes"."""
+    add_spool(env, 1, "LR-MDB-1", container_slot="1")
+    start(env, "LR-MDB-1")
+    park(env, today="2026-11-01")
+    assert scan(env, "ID:1", source="keyboard")["lost_msg"]
+    res = env["client"].post("/api/smart_move", json={
+        "location": head, "spools": [1], "origin": "buffer", "confirmed_toolheads": [],
+        "confirmed_fed_heads": []}).get_json()
+    assert res["status"] == "success", res
+    assert spools(env)[1]["location"] == head
+    return res
+
+
+def test_a_spool_off_unknown_has_no_trail_and_no_ghost_in_the_unknown_list(env):
+    """The trail named UNKNOWN: it ran on a head while the Unknown list showed it."""
+    _turned_up_onto_a_head(env)
+    extra = _extra(env, 1)
+    assert extra["physical_source"] == "" and extra["physical_source_slot"] == ""
+    assert env["client"].get("/api/get_contents?id=UNKNOWN").get_json() == []
+
+
+def test_its_eject_asks_and_never_goes_back_to_unknown(env):
+    """It went back with no prompt, in the person's hand, and the badge said the audit
+    had lost it again."""
+    _turned_up_onto_a_head(env)
+    env["fake"].patches.clear()
+    assert logic.perform_smart_eject(1) == "REQUIRE_CONFIRM"
+    assert env["fake"].patches == [] and spools(env)[1]["location"] == "XL-1"
+    assert logic.perform_smart_eject(1, confirmed_unassign=True) is True
+    assert spools(env)[1]["location"] == ""
+    assert scan(env, "ID:1", source="keyboard").get("lost_from") is None
+
+
+def test_the_eject_door_asks_the_same(env):
+    _turned_up_onto_a_head(env)
+    res = env["client"].post("/api/manage_contents", json={"action": "remove", "spool_id": 1}).get_json()
+    assert res["require_confirm"] is True and res["confirm_types"] == ["unassign"]
+    assert spools(env)[1]["location"] == "XL-1"
+
+
+def test_the_reverse_binding_gives_it_the_one_free_feed_slot(env):
+    """With no trail, the 13.6 rule applies, and an eject has a real home."""
+    env["rows"].append({"LocationID": "LR-MDB-3", "Type": "Dryer Box", "Max Spools": "2", "parent_id": "LR",
+                        "extra": {"slot_targets": {"1": "XL-1"}}})
+    res = _turned_up_onto_a_head(env)
+    assert res["recorded_source"] == "LR-MDB-3:1"
+    extra = _extra(env, 1)
+    assert extra["physical_source"] == "LR-MDB-3" and extra["physical_source_slot"] == "1"
+    assert logic.perform_smart_eject(1) is True
+    assert spools(env)[1]["location"] == "LR-MDB-3" and _extra(env, 1)["container_slot"] == "1"
+
+
+def test_any_spool_at_unknown_goes_onto_a_head_with_no_trail(env):
+    """The engine's own rule, with no audit behind it: a stale slot isn't a home either."""
+    add_spool(env, 1, "UNKNOWN", container_slot="4")
+    assert logic.perform_smart_move("XL-1", [1], origin="manual")["status"] == "success"
+    extra = _extra(env, 1)
+    assert extra["physical_source"] == "" and extra["physical_source_slot"] == ""
+
+
+@pytest.mark.parametrize("trail", ["UNKNOWN", "unknown", ' "UNKNOWN" '])
+def test_a_trail_already_written_is_no_home_either(env, trail):
+    """FCC wrote such trails before: one may sit on a head today."""
+    add_spool(env, 1, "XL-1", physical_source=trail, physical_source_slot="", fcc_pre_audit_location=NOTE)
+    dest = logic._eject_destination(spoolman_api.get_spool(1), {"XL-1": {}, "XL-2": {}})
+    assert dest["home"] is None and dest["needs_unassign_confirm"] is True and dest["target"] == ""
+    assert logic.perform_smart_eject(1) == "REQUIRE_CONFIRM"
+    assert spools(env)[1]["location"] == "XL-1"
+
+
+def test_smart_load_unloads_such_a_spool_to_the_printers_room(env):
+    """A Smart Load's resident with no home keeps the printer's Room rule."""
+    add_spool(env, 1, "XL-1", physical_source="UNKNOWN", physical_source_slot="")
+    add_spool(env, 2, "SHELF-1")
+    res = logic.perform_smart_move("XL-1", [2], origin="manual", confirm_active_print=True)
+    assert res["status"] == "success", res
+    assert spools(env)[2]["location"] == "XL-1" and spools(env)[1]["location"] == "LR"
+
+
+def test_the_trail_rule_says_no_place_for_unknown():
+    assert logic._ghost_trail_from("UNKNOWN", {"container_slot": "2"}, {}, {}) == ("", "")
+    assert logic._ghost_trail_from("unknown", {}, {}, {}) == ("", "")
+    assert logic._ghost_trail_from("SHELF-1", {"container_slot": "2"}, {}, {}) == ("SHELF-1", "2")
+
+
+# ---------------------------------------------------------------------------
+# A place holding a ':' (finding 8)
+# ---------------------------------------------------------------------------
+
+def test_a_place_holding_a_colon_reads_as_that_place(env):
+    """A real audit of a row BIN:2: the badge and the toast said "BIN slot 2", a place
+    that doesn't exist."""
+    env["rows"].append({"LocationID": "BIN:2", "Type": "Cart"})
+    add_spool(env, 1, "BIN:2")
+    start(env, "BIN:2")
+    park(env, today="2026-11-01")
+    assert note_of(env, 1) == "BIN:2:@2026-11-01"
+    ans = scan(env, "ID:1", source="keyboard")
+    assert ans["lost_from"] == {"place": "BIN:2", "slot": "", "on": "2026-11-01"}
+    assert ans["lost_msg"] == "#1 turned up. It was marked lost by the audit of BIN:2 on 2026-11-01. Scan where it goes."
+
+
+def test_a_place_holding_a_colon_keeps_its_slot_too(env):
+    env["rows"].append({"LocationID": "BIN:2", "Type": "Dryer Box", "Max Spools": "4"})
+    add_spool(env, 1, "BIN:2", container_slot="3")
+    start(env, "BIN:2")
+    park(env, today="2026-11-01")
+    assert note_of(env, 1) == "BIN:2:3@2026-11-01"
+    assert scan(env, "ID:1", source="keyboard")["lost_from"] == {"place": "BIN:2", "slot": "3", "on": "2026-11-01"}
+
+
+# ---------------------------------------------------------------------------
+# /api/spool/update into UNKNOWN (item 10)
+# ---------------------------------------------------------------------------
+
+def _direct(env, **updates):
+    res = env["client"].post("/api/spool/update", json={"id": 1, "updates": updates}).get_json()
+    assert res["status"] == "success", res
+    return res
+
+
+def test_a_direct_write_into_unknown_blanks_an_old_note(env):
+    add_spool(env, 1, "SHELF-1", fcc_pre_audit_location=NOTE)
+    _direct(env, location="UNKNOWN")
+    assert spools(env)[1]["location"] == "UNKNOWN" and note_of(env, 1) == ""
+    assert scan(env, "ID:1", source="keyboard").get("lost_from") is None
+
+
+def test_a_direct_write_into_unknown_blanks_it_with_the_others_trail(env):
+    add_spool(env, 1, "LR-MDB-1", container_slot="2", fcc_pre_audit_location=NOTE)
+    _direct(env, location="unknown")
+    extra = _extra(env, 1)
+    assert extra["container_slot"] == "" and extra["fcc_pre_audit_location"] == ""
+
+
+def test_a_direct_write_elsewhere_keeps_the_note(env):
+    """Narrow, as the engine's rule is: only UNKNOWN reads it."""
+    add_spool(env, 1, "SHELF-1", fcc_pre_audit_location=NOTE)
+    _direct(env, location="CR-CT-1")
+    assert note_of(env, 1) == NOTE
+
+
+def test_a_direct_write_off_unknown_keeps_the_note(env):
+    add_spool(env, 1, "UNKNOWN", fcc_pre_audit_location=NOTE)
+    _direct(env, location="SHELF-1")
+    assert note_of(env, 1) == NOTE
+
+
+def test_a_direct_write_at_unknown_that_doesnt_move_keeps_the_note(env):
+    """No move happened: it is still the spool that audit lost."""
+    add_spool(env, 1, "UNKNOWN", fcc_pre_audit_location=NOTE)
+    _direct(env, location="UNKNOWN", comment="x")
+    assert note_of(env, 1) == NOTE
+
+
+def test_a_note_the_caller_sent_itself_is_written_as_sent(env):
+    add_spool(env, 1, "SHELF-1", fcc_pre_audit_location=NOTE)
+    _direct(env, location="UNKNOWN", extra={"fcc_pre_audit_location": "CR-CT-1:@2026-11-02"})
+    assert note_of(env, 1) == "CR-CT-1:@2026-11-02"
