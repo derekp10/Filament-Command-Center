@@ -11,19 +11,24 @@ test_audit_no_label_58.py has the server's rules; test_audit_no_label_58_e2e.py 
 real dashboard, with Bootstrap and real QR codes.
 
 Keys go on a fake clock (test_slow_scan_slash_js.TYPE_JS) where a scanner's speed is
-the point, all in one tick, so the 50 ms key N waits really is "more keys came";
+the point, all in one tick, so the wait key N takes really is "more keys came";
 the real keyboard where a browser's own press is what is tested (a synthetic Enter
-clicks nothing).
+clicks nothing), and on real timers where that wait itself is.
 
-RED on 39b0d1a unless a test says it pins what was already right.
+The sections from "the scans around an audit's end" on are Group 58's review, on the
+same page: the real accumulator, a real keyboard, a real mouse.
+
+RED on 39b0d1a unless a test says it pins what was already right; the review's say
+what they were red on.
 """
 from __future__ import annotations
 
 import pytest
 
 import app as app_module
-from test_audit_panel_58_js import DONE, NOTICE, PANEL, _on_top, audit  # noqa: F401  (audit: the fixture)
-from test_audit_session_58 import add_spool, env, scan, session, start  # noqa: F401  (env: the fixture)
+import state
+from test_audit_panel_58_js import CANCEL, DONE, NOTICE, PANEL, _on_top, audit  # noqa: F401  (audit: the fixture)
+from test_audit_session_58 import ROWS, add_spool, env, scan, session, start  # noqa: F401  (env: the fixture)
 from test_scanner_safe_dialogs_61_js import page61  # noqa: F401  (page61: the fixture)
 from test_slow_scan_slash_js import _type
 
@@ -35,6 +40,15 @@ BUTTON = "#fcc-audit-panel-needlabel"
 UNDO = "#fcc-audit-label-undo"
 FOUND_URL = "/api/audit/found"
 QUESTION = "#fcc-audit-done-question"
+SHEET = QUESTION + " .fcc-apc-panel"
+YES = QUESTION + " .fcc-apc-yes"
+BACK = QUESTION + " .fcc-apc-no"
+PARK_URL = "/api/audit/park"
+UNDO_URL = "/api/audit/needs_label_undo"
+HIDE = "#fcc-audit-panel-close"
+LOOSE_BTN = "#fcc-audit-panel-loose"
+PAST_N = 220            # NEED_LABEL_WAIT_MS (inv_cmd.js) and a little: a check that nothing was marked
+PAST_A_DOUBLE_PRESS = 720                       # DOUBLE_PRESS_MS (inv_cmd.js) and a little
 
 
 def tile(sid):
@@ -128,7 +142,7 @@ def toasts(page):
 def key_n(page):
     """A person's N, then the wait the panel gives a scan to go on."""
     _type(page, "n", 1, enter=False)
-    page.wait_for_timeout(120)
+    page.wait_for_timeout(PAST_N)
 
 
 # --- the strip ------------------------------------------------------------------------
@@ -405,7 +419,7 @@ def test_n_inside_a_scan_marks_nothing_and_leaves_the_scan_whole(live, env, text
     before = len(sent(live))
     _type(live, text, ms)
     live.wait_for_function("(n) => window.__sent.filter((p) => p.url.indexOf('identify_scan') !== -1).length > n", arg=before)
-    live.wait_for_timeout(120)
+    live.wait_for_timeout(PAST_N)
     assert sent(live)[before:] == [text]
     assert wire(env, 57) is None
 
@@ -418,17 +432,17 @@ def test_a_stall_before_an_n_in_a_label_marks_nothing(live, env):
     before = len(sent(live))
     _type(live, "loc:north", 1, pauses={4: 900})     # a whole label's own pause, right before the 'n'
     live.wait_for_function("(n) => window.__sent.filter((p) => p.url.indexOf('identify_scan') !== -1).length > n", arg=before)
-    live.wait_for_timeout(120)
+    live.wait_for_timeout(PAST_N)
     assert sent(live)[before:] == ["loc:north"] and wire(env, 57) is None
 
 
-def test_n_then_an_enter_under_50_ms_is_a_scan_of_n(live, env):
+def test_n_then_an_enter_before_its_wait_is_up_is_a_scan_of_n(live, env):
     two(env)
     begin(live, env)
     scanned(live, "ID:57")
     live.wait_for_selector(BUTTON)
     _type(live, "n", 1)
-    live.wait_for_timeout(120)
+    live.wait_for_timeout(PAST_N)
     assert wire(env, 57) is None
 
 
@@ -455,7 +469,7 @@ def test_held_n_marks_once(live, env):
     live.keyboard.down("n")
     live.keyboard.up("n")
     live.wait_for_selector(UNDO)
-    live.wait_for_timeout(120)
+    live.wait_for_timeout(PAST_N)
     assert sent(live).count("CMD:NEEDLABEL") == 1
     assert live.evaluate("state.scanBuffer") == ""
 
@@ -468,7 +482,7 @@ def test_n_with_a_modifier_is_not_the_key(live, env, mod):
     live.wait_for_selector(BUTTON)
     live.evaluate("""(mod) => { document.body.dispatchEvent(new KeyboardEvent('keydown',
         { key: 'n', [mod]: true, bubbles: true, cancelable: true })); }""", mod)
-    live.wait_for_timeout(120)
+    live.wait_for_timeout(PAST_N)
     assert wire(env, 57) is None
 
 
@@ -770,3 +784,655 @@ def test_a_long_name_stays_on_one_line_and_the_panel_doesnt_widen(live, env):
         const p = document.querySelector(panel).querySelector('div').getBoundingClientRect();
         return { sr: s.right, pr: p.right }; }""", [STRIP, PANEL])
     assert boxes["sr"] <= boxes["pr"], boxes
+
+
+# --- the scans around an audit's end (Group 58 review) --------------------------------
+# A scan read during an audit waits in the queue while FCC is busy, and the queue used
+# to send it on once the audit was over: the dim holds it for the whole park, and
+# neither guard could see it (the page's location guard reads the flag as the answer
+# lands, by which time the end has cleared it, and the server's "already finishing"
+# never fired, because the scan never reached it).
+
+BUFFERED = 7            # in the scan buffer, on the page and on the server
+FLAGGED = 8             # flagged for a new label, and in nobody's buffer
+# Each would act if it went out: a cart's own label files the whole buffer there, a slot
+# label loads it, and a flagged spool's label outside an audit clears its flag.
+LABELS = {"location": "LOC:CR-CT-1", "slot": "LOC:LR-MDB-2:SLOT:2", "flagged-label": f"ID:{FLAGGED}"}
+
+# Answers one request's way: holds the park, and the moves go to the real routes.
+WATCH_MOVES = r"""() => {
+    window.__moves = [];
+    const f = window.fetch;
+    window.fetch = async (url, opts) => {
+        const u = String(url);
+        if (u.indexOf('/api/audit/park') !== -1 && window.__holdPark) {
+            await new Promise((r) => { window.__parkGo = r; });
+            return f(url, opts);
+        }
+        if (/\/api\/(smart_move|manage_contents)/.test(u)) {
+            const text = await window.__fcc(u, 'POST', opts.body);
+            window.__moves.push({ url: u, body: JSON.parse(opts.body) });
+            return { ok: true, status: 200, json: async () => JSON.parse(text), text: async () => text };
+        }
+        return f(url, opts);
+    };
+}"""
+
+
+def real_scan(page, text):
+    """A scanner: the real keyboard, through the real accumulator."""
+    page.keyboard.type(text, delay=2)
+    page.keyboard.press("Enter")
+
+
+def queued(page):
+    return page.evaluate("state.scanQueue.map((q) => q.text)")
+
+
+def at(env, sid):
+    return env["fake"].records["spool"][sid]["location"]
+
+
+def a_buffer(page, env):
+    add_spool(env, BUFFERED, "CR-CT-1-R1", name="Held")
+    add_spool(env, FLAGGED, "CR-CT-1-R2", name="Flagged", needs_label_print=True)
+    state.GLOBAL_BUFFER.append({"id": BUFFERED, "display": "#7 Held"})
+    page.evaluate(WATCH_MOVES)
+    page.evaluate("""([rows, id]) => { state.allLocations = rows;
+        state.heldSpools = [{ id, display: '#' + id + ' Held', color: '888888' }]; }""", [ROWS, BUFFERED])
+
+
+def in_flight(page, text):
+    """`text` out, with its answer held until window.__release(). Only its."""
+    page.evaluate("() => { window.__held = true; }")
+    real_scan(page, text)
+    page.wait_for_function("() => typeof window.__release === 'function' && state.processing")
+    page.evaluate("() => { window.__held = false; }")
+
+
+def question_up(page):
+    page.click(DONE)
+    page.wait_for_selector(YES)
+
+
+def to_the_park(page, env):
+    """#57 found and #99 not: Done, Yes, and the park on its way."""
+    two(env)
+    begin(page, env)
+    scanned(page, "ID:57")
+    page.evaluate("() => { window.__holdPark = true; }")
+    question_up(page)
+    page.wait_for_timeout(PAST_A_DOUBLE_PRESS)
+    page.click(YES)
+    page.wait_for_function("() => typeof window.__parkGo === 'function'")
+    assert page.evaluate("state.processing") is True and page.evaluate("state.auditActive") is True
+
+
+def during_the_park(page, env, label):
+    to_the_park(page, env)
+    real_scan(page, label)
+    assert queued(page) == [label]
+    page.evaluate("() => window.__parkGo()")
+
+
+def after_a_nothing_to_park_done(page, env, label):
+    add_spool(env, 57, "LR-MDB-1", container_slot="1")
+    begin(page, env)
+    scanned(page, "ID:57")
+    in_flight(page, "CMD:DONE")
+    real_scan(page, label)
+    assert queued(page) == [label]
+    page.evaluate("() => window.__release()")
+
+
+def behind_a_cancel(page, env, label):
+    """The panel stays pressable while a scan is answered, and Cancel goes straight
+    out, the safe bail, so it leaves what is queued behind it."""
+    two(env)
+    begin(page, env)
+    in_flight(page, "ID:57")
+    real_scan(page, label)
+    assert queued(page) == [label]
+    page.click(CANCEL)
+    page.wait_for_function("() => state.auditActive === false")
+    page.evaluate("() => window.__release()")
+
+
+ENDS = {"during-the-park": during_the_park, "after-a-nothing-to-park-done": after_a_nothing_to_park_done,
+        "behind-a-cancel": behind_a_cancel}
+
+
+@pytest.mark.parametrize("label", LABELS.values(), ids=LABELS.keys())
+@pytest.mark.parametrize("end", ENDS.values(), ids=ENDS.keys())
+def test_a_scan_read_as_an_audit_ends_never_runs_after_it(live, env, end, label):
+    """Findings 22 and 36, and 30's Cancel half. RED on 8373ecd: the location label
+    moved the buffered spool to the cart, the slot label loaded it into the slot, and
+    the flagged label cleared the flag and joined the buffer, all after the audit."""
+    a_buffer(live, env)
+    end(live, env, label)
+    live.wait_for_function("() => state.auditActive === false && !state.scanQueue.length && !state.processing")
+    live.wait_for_timeout(120)              # a move's answer, if one had gone out
+    assert label not in sent(live)
+    assert live.evaluate("window.__moves") == []
+    assert at(env, BUFFERED) == "CR-CT-1-R1" and wire(env, FLAGGED) == "true"
+    assert live.evaluate("state.heldSpools.map((s) => s.id)") == [BUFFERED]
+    assert [b["id"] for b in state.GLOBAL_BUFFER] == [BUFFERED]
+    words = f"The audit has ended, so {label} did nothing. Scan it again if you meant it."
+    assert {"msg": words, "kind": "warning"} in toasts(live)
+    assert 7000 in live.evaluate("window.__toastMs")
+    assert f"⚠️ {words}" in live.evaluate("window.__logs")
+
+
+def test_scanned_again_after_the_audit_it_acts(live, env):
+    """"Scan it again if you meant it": the drop leaves no second-read memory. A pin:
+    proved on a copy that notes the dropped label as read."""
+    a_buffer(live, env)
+    during_the_park(live, env, "LOC:CR-CT-1")
+    live.wait_for_function("() => state.auditActive === false && !state.scanQueue.length && !state.processing")
+    real_scan(live, "LOC:CR-CT-1")
+    live.wait_for_function("() => window.__moves.length > 0")
+    assert at(env, BUFFERED) == "CR-CT-1"
+
+
+def test_a_scan_read_during_a_park_that_was_refused_still_counts(live, env):
+    """The audit runs on, so the scan is the audit's. A pin: proved on a copy that
+    drops whatever it held during a park."""
+    a_buffer(live, env)
+    to_the_park(live, env)
+    real_scan(live, "ID:99")
+    env["fake"].list_reads_fail = True      # Done's plan can't be read again: nothing moves
+    live.evaluate("() => window.__parkGo()")
+    live.wait_for_function("(s) => document.querySelector(s).textContent.includes('Try Done again')", arg=NOTICE)
+    env["fake"].list_reads_fail = False
+    live.wait_for_function("() => !state.scanQueue.length && !state.processing")
+    live.wait_for_function("() => state.auditRequestsOut === 0")
+    assert sent(live)[-1] == "ID:99" and 99 in session()["scanned_items"]
+    assert live.evaluate("state.auditActive") is True
+
+
+def test_cmd_audit_read_during_the_park_starts_the_next_audit(live, env):
+    """Its one exemption. A pin of what the drop leaves alone: proved on a copy with no
+    exemption."""
+    a_buffer(live, env)
+    during_the_park(live, env, "CMD:AUDIT")
+    live.wait_for_function("() => state.auditActive === true && !state.scanQueue.length && !state.processing")
+    live.wait_for_function("() => state.auditRequestsOut === 0")
+    assert sent(live)[-1] == "CMD:AUDIT" and session()["active"] is True
+    assert live.is_visible(PANEL)
+
+
+def test_a_slot_label_the_page_sent_after_an_idle_end_loads_nothing(live, env):
+    """The stamp on the wire: the page hasn't heard the audit ended (a hidden panel has
+    no poll), so nothing here can stop it, and the server does. RED on 8373ecd: the
+    buffered spool went into the slot."""
+    a_buffer(live, env)
+    two(env)
+    begin(live, env)
+    live.click(HIDE)
+    live.wait_for_selector(PANEL, state="detached")
+    state.reset_audit()                     # the watchdog's end, as far as this page knows
+    real_scan(live, "LOC:LR-MDB-2:SLOT:2")
+    words = "The audit has ended, so LOC:LR-MDB-2:SLOT:2 did nothing. Scan it again if you meant it."
+    live.wait_for_function("(w) => Array.from(document.querySelectorAll('#toast-container .toast-msg'))"
+                           ".some((e) => e.innerText === w)", arg=words)
+    assert at(env, BUFFERED) == "CR-CT-1-R1" and [b["id"] for b in state.GLOBAL_BUFFER] == [BUFFERED]
+    assert live.evaluate("state.heldSpools.map((s) => s.id)") == [BUFFERED]
+
+
+# --- Done, in its turn ---------------------------------------------------------------
+
+def three(env):
+    two(env)
+    add_spool(env, 134, "LR-MDB-1", container_slot="3")
+
+
+def buttons_down(page):
+    return page.evaluate("""([d, c]) => [document.querySelector(d).disabled, document.querySelector(c).disabled]""",
+                         [DONE, CANCEL])
+
+
+@pytest.mark.parametrize("press", ["click", "space"])
+def test_done_takes_its_turn_behind_the_scans_already_read(live, env, press):
+    """Findings 29, 30 and 38. One scan in flight, one queued. Enter on Done is already
+    held there (personMayPress); a click and a Space weren't. RED on 8373ecd: CMD:DONE
+    went out ahead of ID:99, the question listed #99 as not scanned and refused its
+    scan, and a Yes parked the spool in the person's hand."""
+    three(env)
+    begin(live, env)
+    live.wait_for_selector(DONE)
+    if press == "space":
+        live.focus(DONE)
+    in_flight(live, "ID:57")
+    real_scan(live, "ID:99")
+    assert queued(live) == ["ID:99"]
+    if press == "click":
+        live.click(DONE)
+    else:
+        live.keyboard.press(" ")
+    assert queued(live) == ["ID:99", "CMD:DONE"]
+    assert buttons_down(live) == [True, True]
+    live.evaluate("() => window.__release()")
+    live.wait_for_selector(SHEET)
+    assert sent(live) == ["ID:57", "ID:99", "CMD:DONE"]
+    text = live.text_content(SHEET)
+    assert "#134" in text and "#57" not in text and "#99" not in text
+    assert "(Ignored" not in text
+
+
+def test_a_second_press_of_a_queued_done_queues_nothing(live, env):
+    """The buttons stay down until it has gone out and been answered: the answer to the
+    scan ahead of it mustn't let them up. RED on 8373ecd, where Done went straight out."""
+    three(env)
+    begin(live, env)
+    live.wait_for_selector(DONE)
+    in_flight(live, "ID:57")
+    real_scan(live, "ID:99")
+    live.click(DONE)
+    live.evaluate("() => { window.__held = true; window.__release(); }")     # ID:57's answer
+    live.wait_for_function("() => state.scanQueue.map((q) => q.text).join() === 'CMD:DONE'")
+    assert buttons_down(live) == [True, True]
+    live.click(DONE, force=True)
+    assert queued(live) == ["CMD:DONE"]
+    live.evaluate("() => { window.__held = false; window.__release(); }")    # ID:99's
+    live.wait_for_selector(SHEET)
+    assert sent(live).count("CMD:DONE") == 1 and live.locator(SHEET).count() == 1
+
+
+def test_a_queued_done_the_audit_outlived_frees_the_buttons(live, env):
+    """Dropped, it has no answer to come. A scanned Cancel ahead of it ends the audit, and
+    the next audit's Done still has to be pressable. RED on 8373ecd, where Done went
+    straight out."""
+    three(env)
+    begin(live, env)
+    live.wait_for_selector(DONE)
+    in_flight(live, "ID:57")
+    real_scan(live, "CMD:CANCEL")
+    live.click(DONE)
+    assert queued(live) == ["CMD:CANCEL", "CMD:DONE"]
+    live.evaluate("() => window.__release()")
+    live.wait_for_function("() => state.auditActive === false && !state.scanQueue.length && !state.processing")
+    assert "CMD:DONE" not in sent(live)
+    assert any("so CMD:DONE did nothing" in t["msg"] for t in toasts(live))
+    live.wait_for_timeout(PAST_A_DOUBLE_PRESS)
+    begin(live, env)
+    live.wait_for_selector(DONE)
+    assert buttons_down(live) == [False, False]
+
+
+def test_a_queued_done_stopped_short_of_the_server_frees_the_buttons(live, env):
+    """An open question holds it off and says why, so no answer comes: a press behind
+    the scanned Done that opened it. RED on 8373ecd, where Done went straight out."""
+    three(env)
+    begin(live, env)
+    scanned(live, "ID:57")
+    live.wait_for_selector(DONE)
+    in_flight(live, "CMD:DONE")             # opens the question once it is answered
+    live.click(DONE)
+    assert queued(live) == ["CMD:DONE"] and buttons_down(live) == [True, True]
+    live.evaluate("() => window.__release()")
+    live.wait_for_selector(SHEET)
+    live.wait_for_function("(s) => document.querySelector(s).textContent.includes('(Ignored: CMD:DONE)')", arg=SHEET)
+    assert sent(live).count("CMD:DONE") == 1
+    assert buttons_down(live) == [False, False]
+
+
+def test_a_keyboard_on_done_comes_back_after_its_turn(live, env):
+    """A disabled button drops the focus, and it comes back with the answer: here the
+    refusal of a Done that waited its turn. RED on 8373ecd, where Done went straight out
+    and the plan it read found nothing wrong."""
+    three(env)
+    begin(live, env)
+    live.wait_for_selector(DONE)
+    live.focus(DONE)
+    in_flight(live, "ID:57")
+    live.keyboard.press(" ")
+    env["fake"].list_reads_fail = True      # Done's answer: "try again"
+    live.evaluate("() => window.__release()")
+    live.wait_for_function("(s) => document.querySelector(s).textContent.includes('Try Done again')", arg=NOTICE)
+    env["fake"].list_reads_fail = False
+    live.wait_for_function("(s) => !document.querySelector(s).disabled", arg=DONE)
+    assert live.evaluate("document.activeElement.id") == DONE[1:]
+
+
+# --- a double click ---------------------------------------------------------------------
+# With no Bootstrap here the sizes where a question's button really lies over the
+# panel's can't be met, so a test lays one over the other; the real sizes are
+# test_audit_done_question_58_e2e.py's, on the real dashboard.
+
+LAY_OVER = r"""([top, under]) => {
+    const r = document.querySelector(under).getBoundingClientRect();
+    const st = document.createElement('style');
+    st.textContent = `${top} { position: fixed !important; margin: 0 !important; left: ${r.left}px !important;
+        top: ${r.top}px !important; width: ${r.width}px !important; height: ${r.height}px !important; }`;
+    document.head.appendChild(st);
+    return [r.left + r.width / 2, r.top + r.height / 2];
+}"""
+HIT = r"""([x, y]) => { const e = document.elementFromPoint(x, y);
+    const b = e && e.closest('button');
+    return b ? (b.id || b.dataset.auditTile || b.className) : (e && (e.id || e.tagName)); }"""
+
+
+def lay_over(page, top, under):
+    """`top` will open exactly over `under`. Answers the middle of them."""
+    return page.evaluate(LAY_OVER, [top, under])
+
+
+def press(page, at_xy, second=False):
+    """One press of a real mouse; `second`: a double click's."""
+    page.mouse.move(*at_xy)
+    page.mouse.down(click_count=2 if second else 1)
+    page.mouse.up(click_count=2 if second else 1)
+
+
+def test_a_double_click_on_done_answers_no_question(live, env):
+    """Finding 34. The question opens with Park under the pointer, and the second click
+    answered it: every spool parked, and nobody had read a word. RED on 8373ecd: #99
+    went to Unknown."""
+    two(env)
+    begin(live, env)
+    scanned(live, "ID:57")
+    live.wait_for_selector(DONE)
+    xy = lay_over(live, YES, DONE)
+    press(live, xy)
+    live.wait_for_selector(YES)
+    assert "fcc-apc-yes" in live.evaluate(HIT, xy)
+    press(live, xy, second=True)
+    live.wait_for_timeout(150)
+    assert live.is_visible(YES) and sent(live, PARK_URL) == [] and at(env, 99) == "LR-MDB-1"
+    live.wait_for_timeout(PAST_A_DOUBLE_PRESS)
+    press(live, xy)                         # a person who has read it
+    live.wait_for_selector(PANEL, state="detached")
+    assert len(sent(live, PARK_URL)) == 1 and at(env, 99) == "UNKNOWN"
+
+
+UNDER_BACK = {"cancel-audit": (CANCEL, CANCEL[1:]), "a-tile": (tile(99), "99"), "done": (DONE, DONE[1:]),
+              "needs-a-label": (BUTTON, BUTTON[1:]), "undo-that": (UNDO, UNDO[1:]), "hide": (HIDE, HIDE[1:]),
+              "loose-spools": (LOOSE_BTN, LOOSE_BTN[1:])}
+
+
+@pytest.mark.parametrize("under, hit", UNDER_BACK.values(), ids=UNDER_BACK.keys())
+def test_a_double_click_on_back_changes_nothing_under_it(live, env, under, hit):
+    """Findings 35 and 26. The question closes on the first click, and the second lands
+    on the panel. RED on 8373ecd: Cancel Audit ended the audit, a tile found a spool
+    nobody touched, and each of the others did what it does."""
+    three(env)
+    live.evaluate("() => { window.__loose = 0; window.openLooseList = () => { window.__loose += 1; return null; }; }")
+    begin(live, env)
+    scanned(live, "ID:57")
+    live.wait_for_selector(BUTTON)
+    live.click(BUTTON)
+    live.wait_for_selector(UNDO)
+    env["fake"].patches.clear()
+    xy = lay_over(live, BACK, under)
+    question_up(live)
+    live.wait_for_selector(BACK)
+    press(live, xy)
+    live.wait_for_selector(QUESTION, state="detached")
+    assert live.evaluate(HIT, xy) == hit
+    before = (sent(live), sent(live, FOUND_URL), sent(live, UNDO_URL), list(session()["scanned_items"]))
+    press(live, xy, second=True)
+    live.wait_for_timeout(150)
+    assert (sent(live), sent(live, FOUND_URL), sent(live, UNDO_URL), list(session()["scanned_items"])) == before
+    assert env["fake"].patches == [] and session()["active"] is True
+    assert live.is_visible(DONE) and not live.locator(QUESTION).count()
+    assert live.evaluate("window.__loose") == 0
+
+
+def test_the_panel_takes_clicks_again_once_a_double_press_is_past(live, env):
+    """A press after it is meant. A pin: proved on a copy that never lifts the shield."""
+    three(env)
+    begin(live, env)
+    live.wait_for_selector(tile(99))
+    xy = lay_over(live, BACK, tile(99))
+    question_up(live)
+    live.wait_for_selector(BACK)
+    press(live, xy)
+    live.wait_for_selector(QUESTION, state="detached")
+    live.wait_for_timeout(PAST_A_DOUBLE_PRESS)
+    press(live, xy)
+    tile_says(live, 99, "found, no label read")
+
+
+def test_a_double_click_on_back_that_brings_a_hidden_panel_back_lands_on_nothing(live, env):
+    """The panel opens under the pointer, so the guard has to come with it. RED on
+    8373ecd: the second click cancelled the audit it had just shown."""
+    three(env)
+    begin(live, env)
+    scanned(live, "ID:57")
+    live.wait_for_selector(BUTTON)
+    xy = lay_over(live, BACK, CANCEL)
+    live.click(HIDE)
+    live.wait_for_selector(PANEL, state="detached")
+    scanned(live, "CMD:DONE")
+    live.wait_for_selector(BACK)
+    press(live, xy)
+    live.wait_for_selector(QUESTION, state="detached")
+    live.wait_for_selector(CANCEL)
+    assert live.evaluate(HIT, xy) == CANCEL[1:]
+    press(live, xy, second=True)
+    live.wait_for_timeout(150)
+    assert "CMD:CANCEL" not in sent(live) and session()["active"] is True
+    assert live.is_visible(PANEL)
+
+
+def test_a_double_enter_on_back_doesnt_ask_again(live, env):
+    """The keyboard lands on Done when the question goes, so the second Enter pressed it
+    and the question came straight back. The panel's guard covers a button's click
+    however it was pressed. RED on 8373ecd."""
+    three(env)
+    begin(live, env)
+    live.wait_for_selector(DONE)
+    live.focus(DONE)
+    live.keyboard.press("Enter")
+    live.wait_for_function("(s) => document.activeElement === document.querySelector(s)", arg=BACK)
+    live.keyboard.press("Enter")
+    live.wait_for_selector(QUESTION, state="detached")
+    live.wait_for_function("(s) => document.activeElement === document.querySelector(s)", arg=DONE)
+    live.keyboard.press("Enter")
+    live.wait_for_timeout(150)
+    assert sent(live).count("CMD:DONE") == 1 and not live.locator(QUESTION).count()
+
+
+def test_a_scan_of_back_doesnt_stop_a_scan(live, env):
+    """A scan is no click: what the guard stops is the second click of a double click.
+    A pin: proved on a copy that gates scans on it too."""
+    three(env)
+    begin(live, env)
+    question_up(live)
+    live.wait_for_timeout(50)
+    live.keyboard.type("CMD:CANCEL", delay=2)
+    live.keyboard.press("Enter")
+    live.wait_for_selector(QUESTION, state="detached")
+    real_scan(live, "ID:57")
+    live.wait_for_function("() => window.__sent.filter((p) => p.body.text === 'ID:57').length === 1")
+    live.wait_for_function("() => !state.processing")
+    assert 57 in session()["scanned_items"]
+
+
+# --- "undo that" ------------------------------------------------------------------------
+
+def marked(page, env):
+    """#57 found and marked, the keyboard on "undo that"."""
+    two(env)
+    begin(page, env)
+    scanned(page, "ID:57")
+    page.wait_for_selector(BUTTON)
+    page.click(BUTTON)
+    page.wait_for_selector(UNDO)
+    page.focus(UNDO)
+
+
+def test_a_double_enter_on_undo_that_doesnt_mark_it_again(live, env):
+    """Findings 23 and 44, on a real clock. The keyboard lands on Needs a label when
+    "undo that" leaves, as the pin above says, and the second Enter pressed it. RED on
+    8373ecd: the mark was back, the undo undone."""
+    marked(live, env)
+    live.keyboard.press("Enter")
+    live.wait_for_selector(UNDO, state="detached")
+    assert live.evaluate("document.activeElement.id") == BUTTON[1:]
+    live.keyboard.press("Enter")
+    live.wait_for_timeout(150)
+    assert sent(live).count("CMD:NEEDLABEL") == 1
+    assert LABEL not in env["fake"].extra("spool", 57)
+
+
+def test_the_button_is_itself_again_once_a_double_press_is_past(live, env):
+    """A second Enter meant as one marks. A pin: proved on a copy that never lifts it."""
+    marked(live, env)
+    live.keyboard.press("Enter")
+    live.wait_for_selector(UNDO, state="detached")
+    live.wait_for_timeout(PAST_A_DOUBLE_PRESS)
+    live.keyboard.press("Enter")
+    live.wait_for_selector(UNDO)
+    assert wire(env, 57) == "true"
+
+
+def test_a_second_press_of_undo_that_before_the_redraw_is_no_refusal(live, env):
+    """Between its answer and the redraw the button is still there, and a second Enter
+    asked the server to undo what it had just undone. RED on 8373ecd: "wasn't marked in
+    this audit: nothing to undo", on a press that had worked."""
+    marked(live, env)
+    live.evaluate("""() => { const f = window.fetch;
+        window.fetch = async (url, opts) => {
+            if (String(url).indexOf('/api/audit_session') !== -1 && window.__slowPoll) {
+                await new Promise((r) => setTimeout(r, 400));
+            }
+            return f(url, opts);
+        }; window.__slowPoll = true; }""")
+    live.keyboard.press("Enter")
+    live.wait_for_function("() => window.__sent.filter((p) => p.url.indexOf('needs_label_undo') !== -1).length === 1")
+    live.wait_for_timeout(100)              # answered, not redrawn
+    assert live.is_visible(UNDO)
+    live.keyboard.press("Enter")
+    live.wait_for_selector(UNDO, state="detached")
+    assert len(sent(live, UNDO_URL)) == 1 and not live.text_content(NOTICE)
+
+
+def test_a_poll_that_beats_the_undos_own_answer_doesnt_free_the_button(live, env):
+    """The server has undone it, a poll has redrawn the strip, and the keyboard is on
+    Needs a label with the answer still on its way, so there is no answer to time from.
+    RED on 8373ecd: the second Enter put the mark back."""
+    marked(live, env)
+    live.evaluate("""() => { const f = window.fetch;
+        window.fetch = async (url, opts) => {
+            const answer = await f(url, opts);
+            if (String(url).indexOf('needs_label_undo') !== -1) await new Promise((r) => { window.__undoAnswer = r; });
+            return answer;
+        }; }""")
+    live.keyboard.press("Enter")
+    live.wait_for_function("() => typeof window.__undoAnswer === 'function'")
+    live.evaluate("() => window.refreshAuditSession()")
+    live.wait_for_selector(UNDO, state="detached")
+    assert live.evaluate("document.activeElement.id") == BUTTON[1:]
+    live.keyboard.press("Enter")
+    live.wait_for_timeout(150)
+    live.evaluate("() => window.__undoAnswer()")
+    assert sent(live).count("CMD:NEEDLABEL") == 1
+    assert LABEL not in env["fake"].extra("spool", 57)
+
+
+def test_a_scan_landing_on_undo_that_leaves_the_next_spool_alone(live, env):
+    """The strip moves to the scanned spool, and the keyboard fell to Needs a label, now
+    for that spool: an Enter meant for #57 marked #99. RED on 8373ecd."""
+    marked(live, env)
+    scanned(live, "ID:99")
+    strip_says(live, "#99")
+    assert live.evaluate("document.activeElement.id") != BUTTON[1:]
+    live.wait_for_timeout(150)
+    live.keyboard.press("Enter")
+    live.wait_for_timeout(150)
+    assert wire(env, 99) is None and wire(env, 57) == "true"
+    assert sent(live).count("CMD:NEEDLABEL") == 1
+
+
+def test_a_scan_landing_on_undo_that_doesnt_hand_it_to_the_next_mark(live, env):
+    """The strip moves to a spool with a mark of its own, which has an "undo that" too:
+    the same id, so the keyboard stayed on it, and an Enter meant for #99 undid #57's
+    mark. RED on 8373ecd."""
+    two(env)
+    begin(live, env)
+    scanned(live, "ID:57")
+    live.wait_for_selector(BUTTON)
+    live.click(BUTTON)
+    live.wait_for_selector(UNDO)
+    scanned(live, "ID:99")
+    strip_says(live, "#99")
+    live.wait_for_selector(BUTTON)
+    live.click(BUTTON)
+    live.wait_for_selector(UNDO)
+    live.focus(UNDO)
+    scanned(live, "ID:57")
+    strip_says(live, "#57")
+    assert live.evaluate("document.activeElement.id") != UNDO[1:]
+    live.wait_for_timeout(150)
+    live.keyboard.press("Enter")
+    live.wait_for_timeout(150)
+    assert sent(live, UNDO_URL) == [] and wire(env, 57) == "true" and wire(env, 99) == "true"
+
+
+def test_the_keys_still_work_with_the_focus_gone(live, env):
+    """"Nothing focused is fine": N and the arrows answer on the panel. A pin of the
+    two listeners, whatever has the focus: proved on a copy that asks for a focused
+    button."""
+    marked(live, env)
+    scanned(live, "ID:99")
+    strip_says(live, "#99")
+    live.keyboard.press("n")
+    live.wait_for_selector(UNDO)
+    assert wire(env, 99) == "true"
+    live.keyboard.press("ArrowRight")
+    assert live.evaluate("document.activeElement.dataset.auditTile") == "57"
+
+
+def test_undo_that_left_alone_is_said_on_the_panel(live, env):
+    """Finding 32's page half. A status newer than the mark stands (a Backlog's Mark
+    Printed), and the answer is a success, so the panel just dropped "undo that", which
+    read as an undo that worked. The toast layer is under the panel. RED on 8373ecd."""
+    marked(live, env)
+    env["fake"].records["spool"][57]["extra"][LABEL] = "false"
+    live.keyboard.press("Enter")
+    words = "#57's label status has changed since it was marked, so it was left as it is."
+    live.wait_for_function("([s, w]) => document.querySelector(s).textContent === w", arg=[NOTICE, words])
+    assert _on_top(live, NOTICE)
+    assert {"msg": words, "kind": "success"} in toasts(live)
+    assert wire(env, 57) == "false"
+
+
+def test_an_undo_that_worked_clears_the_panels_notice(live, env):
+    """A pin: proved on a copy that says every success there."""
+    marked(live, env)
+    live.evaluate("() => window.auditPanelNotice('An old refusal')")
+    live.keyboard.press("Enter")
+    live.wait_for_selector(UNDO, state="detached")
+    assert live.text_content(NOTICE) == ""
+
+
+# --- key N, on real timers ---------------------------------------------------------------
+
+@pytest.mark.parametrize("ms", [60, 100])
+def test_a_slow_scanners_label_starting_with_an_n_goes_out_whole(live, env, ms):
+    """Finding 28, on real timers (the fake clock runs every key in one tick, so it
+    can't meet the timer). N waits out the accumulator's burst figure. RED on 8373ecd:
+    the 50 ms wait sent CMD:NEEDLABEL, wrote the flag on #57 and left "ook-1"."""
+    two(env)
+    begin(live, env)
+    scanned(live, "ID:57")
+    live.wait_for_selector(BUTTON)
+    before = len(sent(live))
+    live.keyboard.type("nook-1", delay=ms)
+    live.keyboard.press("Enter")
+    live.wait_for_function("(n) => window.__sent.filter((p) => p.url.indexOf('identify_scan') !== -1).length > n", arg=before)
+    live.wait_for_timeout(PAST_N)
+    assert sent(live)[before:] == ["nook-1"]
+    assert wire(env, 57) is None
+
+
+def test_a_persons_n_still_marks_on_real_timers(live, env):
+    """A pin: proved on a copy whose wait never ends."""
+    two(env)
+    begin(live, env)
+    scanned(live, "ID:57")
+    live.wait_for_selector(BUTTON)
+    live.keyboard.press("n")
+    live.wait_for_selector(UNDO)
+    assert wire(env, 57) == "true" and live.evaluate("state.scanBuffer") == ""

@@ -102,27 +102,49 @@ const nextBuffer = () => { if (state.heldSpools.length > 1) { state.heldSpools.p
 const prevBuffer = () => { if (state.heldSpools.length > 1) { state.heldSpools.unshift(state.heldSpools.pop()); renderBuffer(); } };
 
 // --- MODES ---
-const toggleDropMode = () => { state.dropMode = !state.dropMode; state.ejectMode = false; updateDeckVisuals(); };
-const toggleEjectMode = () => { state.ejectMode = !state.ejectMode; state.dropMode = false; updateDeckVisuals(); };
+// Armed during an audit, a mode would outlive it, and eject the first spool scanned
+// after it. Turning one off is always fine.
+const toggleDropMode = () => {
+    if (!state.dropMode && window.auditPressRefused('CMD:DROP')) return;
+    state.dropMode = !state.dropMode; state.ejectMode = false; updateDeckVisuals();
+};
+const toggleEjectMode = () => {
+    if (!state.ejectMode && window.auditPressRefused('CMD:EJECT')) return;
+    state.ejectMode = !state.ejectMode; state.dropMode = false; updateDeckVisuals();
+};
 window.resetCommandModes = () => { state.dropMode = false; state.ejectMode = false; updateDeckVisuals(); };
 
 // --- AUDIT: the page's side (Group 58) --------------------------------------
-// The session lives on the server. state.auditActive is what this page believes,
-// and it changes in four places only: a start's answer (toggleAudit), an answer
-// that ended the audit (window.noteAuditEnded), an answer that proves one is
-// running (_auditScanAnswer), and the heartbeat (_syncAuditSignal, inv_core.js).
+// The session lives on the server. state.auditActive is what this page believes.
+// toggleAudit believes a start from the press and takes it back on a refusal, so a
+// double read or a second press only shows the panel. Everything else changes it
+// from an answer (window.noteAuditEnded when one ended the audit, _auditScanAnswer
+// when one proves it runs) or from the heartbeat (_syncAuditSignal, inv_core.js).
 // Nothing flips it by negation: a toggle turned a double press into a new audit,
 // and a failed Cancel into a press that did nothing.
 const _auditClock = () => (window.fccPageClock ? window.fccPageClock() : Date.now());
 const _auditChanged = () => { state.auditChangedAt = _auditClock(); };
+
+// Done goes out in its turn, so it can sit in the scan queue behind scans already read
+// (window.auditDone). Its buttons stay down until it has gone out and been answered,
+// or a second press queues a second Done.
+const _auditDoneQueued = () => (state.scanQueue || [])
+    .some(q => String(q.text).trim().toUpperCase() === 'CMD:DONE');
+const _auditButtonsFree = () => {
+    if (!state.auditRequestsOut && !_auditDoneQueued() && window.auditPanelBusy) window.auditPanelBusy(false);
+};
 
 // This page's own requests on their way: a scan, a start, a Cancel (and the
 // question's Yes). `delta`: +1 as one goes out, -1 once it is answered. While any
 // is out, _syncAuditSignal won't call a "no audit" someone else's doing.
 window.auditRequestOut = (delta) => {
     state.auditRequestsOut = Math.max(0, (state.auditRequestsOut || 0) + delta);
-    if (!state.auditRequestsOut && window.auditPanelBusy) window.auditPanelBusy(false);
+    _auditButtonsFree();
 };
+
+// scripts.html, after each queued scan: a queued Done that was dropped, or stopped
+// short of the server, has no answer coming to free the buttons.
+window.auditQueueMoved = _auditButtonsFree;
 
 // A request of this page's own ended the audit (`audit_ended`: {id, why}): the
 // server's word, so the panel closes now, and the heartbeat that follows stays
@@ -218,13 +240,15 @@ const _auditDialogBehind = () => {
 };
 
 // The panel's Done: the scan path, so the button and all three QRs share one
-// answer. Its source is 'keyboard': a press reads no label.
+// answer. Its source is 'keyboard': a press reads no label. In its turn behind any
+// scan read before it: sent at once, the plan still had that spool as not scanned,
+// the question listed it, and a Yes parked the spool in the person's hand.
 window.auditDone = () => {
     if (_auditDialogBehind()) return;
     if (window.auditPanelBusy) window.auditPanelBusy(true);
-    processScan('CMD:DONE', 'keyboard');
+    (window.sendInScanOrder || processScan)('CMD:DONE', 'keyboard');
     // Stopped short of the server (an open question says why itself): no answer comes.
-    if (!state.auditRequestsOut && window.auditPanelBusy) window.auditPanelBusy(false);
+    _auditButtonsFree();
 };
 
 // "Needs a label" on the last spool found (Group 58.2): the strip's button and key N.
@@ -259,6 +283,33 @@ const _auditCommandRefusal = (upper) => {
     return '';
 };
 
+// A press that does what `cmd` does, and is refused with its words during an audit: a
+// deck tile, and the Location Manager's pickup (the buffer is kept during an audit, so
+// a press must not count as a find). True when it was refused.
+window.auditPressRefused = (cmd) => {
+    if (!state.auditActive) return false;
+    _auditSay(_AUDIT_REFUSES.get(cmd), 'warning');
+    return true;
+};
+
+// A scan read during an audit never runs as a scan after that audit (Group 58
+// review). The dim holds a scan read during the park, behind a Done or behind the
+// scan a Cancel overtook, and the queue sent it on once the audit was over: a location
+// label filed the whole buffer there, a slot label loaded it, and an ID: label cleared
+// a reprint flag. `q`: a queued scan, stamped `auditOf` as it was read (scripts.html).
+// True when that audit has gone, and the scan stops here. CMD:AUDIT goes on: it means
+// the next audit.
+window.auditScanOutlived = (q) => {
+    const text = String(q.text).trim();
+    if (!q.auditOf || text.toUpperCase() === 'CMD:AUDIT') return false;
+    const another = q.auditOf !== true && state.auditId != null && q.auditOf !== state.auditId;
+    if (state.auditActive && !another) return false;
+    const msg = `The audit has ended, so ${text} did nothing. Scan it again if you meant it.`;
+    _auditSay(msg, 'warning');
+    if (window.logClientEvent) window.logClientEvent(`⚠️ ${window.escHtml ? window.escHtml(msg) : msg}`, 'WARNING');
+    return true;
+};
+
 // What a scan the audit took answers. `sentAt`: when the scan went out.
 const _auditScanAnswer = (res, sentAt) => {
     if (res.audit_ended) { window.noteAuditEnded(res.audit_ended); return; }
@@ -268,11 +319,15 @@ const _auditScanAnswer = (res, sentAt) => {
     // An audit took it, so one runs, whatever this page believed: a scan right
     // after a reload lands before the first heartbeat.
     if (!state.auditActive && window._syncAuditSignal) window._syncAuditSignal({ audit_active: true }, { sentAt });
+    // Every scan outcome is owed a toast, and the panel that shows this one is hidden.
+    // Asked after the line above, which can bring the panel up.
+    if (res.heard && !(window.isAuditPanelOpen && window.isAuditPanelOpen())) showToast(res.heard, 'info', 4000);
     if (window.refreshAuditSession) window.refreshAuditSession();
 };
 
 // An answer no running audit gives: the audit this page believes in has gone.
-const _AUDIT_NEVER_ANSWERS = ['location', 'spool', 'assignment', 'filament', 'prusament_matched', 'prusament_new'];
+const _AUDIT_NEVER_ANSWERS = ['location', 'spool', 'assignment', 'filament', 'prusament_matched', 'prusament_new',
+    'audit_gone'];
 const _noAuditAnswered = (res) => _AUDIT_NEVER_ANSWERS.includes(res.type)
     || (res.type === 'command' && res.cmd !== 'audit_scan');
 
@@ -1149,6 +1204,12 @@ window.commitBulkMove = () => {
     let _busyFocus = null;
     // "undo that" is on its way.
     let _undoOut = false;
+    // When "undo that" was last answered (_undoJustPressed), and which spool the strip
+    // showed last (_render, for where the keyboard goes).
+    let _undoAnsweredAt = 0;
+    let _stripSpool = null;
+    // When Done's question was last answered: see _shieldClick.
+    let _questionClosedAt = 0;
     // What this panel put on top of itself, closed with it: no overlay outlives its
     // parent. Done's question (window.confirmActivePrint's handle) and the Loose
     // spools list. mountOverlay's `host` only hears a Bootstrap window closing.
@@ -1267,7 +1328,10 @@ window.commitBulkMove = () => {
 
     const _pressAnswered = (res) => {
         if (res && res.success) {
-            window.auditPanelNotice('');
+            // `left_alone`: the press didn't do what it was asked, so the panel says so
+            // too. The toast layer is under the panel, and the strip alone reads as an
+            // undo that worked.
+            window.auditPanelNotice(res.left_alone ? res.msg : '');
             if (res.msg) showToast(res.msg, 'success', 4000);
             window.refreshAuditSession();
             return;
@@ -1282,6 +1346,10 @@ window.commitBulkMove = () => {
     }, PRESS_TIMEOUT_MS)
         .then(r => r.json())
         .then(_pressAnswered, () => _auditSay("That press didn't go through: FCC didn't answer. Press it again."));
+
+    // A double press of "undo that" must not mark the spool straight back: the keyboard
+    // lands on Needs a label when "undo that" leaves, so its second Enter pressed that.
+    const _undoJustPressed = () => _undoOut || Date.now() - _undoAnsweredAt < DOUBLE_PRESS_MS;
 
     // A tile's press says what the tile showed, never "the other one". A second press
     // of one tile under 700 ms is a double press and does nothing, as on the 🛑 review's
@@ -1299,6 +1367,16 @@ window.commitBulkMove = () => {
     const _bodyClick = (e) => {
         const tile = e.target && e.target.closest ? e.target.closest('[data-audit-tile]') : null;
         if (tile) _pressTile(tile);
+    };
+
+    // Done's question closes on the first click of a double click, and the second lands
+    // on whatever lies under its button: Cancel Audit, or a tile (a spool found that
+    // nobody touched). "Back to the audit" should only go back. On the panel's root in
+    // the capture phase, so it covers every button on it in one place.
+    const _shieldClick = (e) => {
+        if (Date.now() - _questionClosedAt >= DOUBLE_PRESS_MS) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
     };
 
     const _applyBusy = () => {
@@ -1370,6 +1448,9 @@ window.commitBulkMove = () => {
         const active = document.activeElement;
         const refocus = (active && /^fcc-audit-(panel-(done|cancel|needlabel)|label-undo)$/.test(active.id || '')) ? active.id : null;
         const refocusTile = (active && active.dataset) ? active.dataset.auditTile : null;
+        const stripSpool = data.last_found ? data.last_found.id : null;
+        const stripMoved = stripSpool !== _stripSpool;
+        _stripSpool = stripSpool;
         body.innerHTML = `
             <div style="margin-bottom:10px; font-size:0.95rem;">
                 Auditing <b style="color:#0ff;">${loc}</b> —
@@ -1434,22 +1515,27 @@ window.commitBulkMove = () => {
         const cancelBtn = body.querySelector('#fcc-audit-panel-cancel');
         if (cancelBtn) cancelBtn.onclick = () => { if (!_busy) window.cancelAudit(); };
         const markBtn = body.querySelector('#fcc-audit-panel-needlabel');
-        if (markBtn) markBtn.onclick = () => window.auditNeedLabel();
+        if (markBtn) markBtn.onclick = () => { if (!_undoJustPressed()) window.auditNeedLabel(); };
         const undoBtn = body.querySelector('#fcc-audit-label-undo');
         if (undoBtn) {
             // Not `disabled`: that drops the keyboard's focus, and it goes to the
             // Needs a label button when this one leaves.
             undoBtn.onclick = () => {
-                if (_undoOut) return;
+                if (_undoJustPressed()) return;
                 _undoOut = true;
                 _pressPost('/api/audit/needs_label_undo', { audit_id: state.auditId, id: data.last_found.id })
-                    .finally(() => { _undoOut = false; });
+                    .finally(() => { _undoOut = false; _undoAnsweredAt = Date.now(); });
             };
         }
         _applyBusy();
         if (refocus && !_busy) {
             // "undo that" goes with the mark it undid: the keyboard goes to the button.
-            const again = body.querySelector(`#${refocus}`) || body.querySelector('#fcc-audit-panel-needlabel');
+            // Not when another spool took the strip: an Enter meant for the old spool
+            // must write nothing on the new one, so the keyboard stays on the panel,
+            // where N and the arrows still work.
+            const fromUndo = refocus === 'fcc-audit-label-undo';
+            const again = (fromUndo && stripMoved) ? null
+                : (body.querySelector(`#${refocus}`) || body.querySelector('#fcc-audit-panel-needlabel'));
             if (again && again.focus) again.focus();
         }
         const tile = refocusTile ? body.querySelector(`[data-audit-tile="${refocusTile}"]`) : null;
@@ -1485,8 +1571,9 @@ window.commitBulkMove = () => {
             }
             state.auditId = d.audit_id != null ? d.audit_id : state.auditId;
             state.auditIdleMin = d.idle_timeout_min || state.auditIdleMin;
-            if (state.auditActive && (d.location_id || '') !== state.auditLocation) {
+            if (state.auditActive && (d.location_id || '') !== state.auditLocation && !(sentAt < state.auditLocationAt)) {
                 state.auditLocation = d.location_id || '';
+                state.auditLocationAt = sentAt;
                 window.updateAuditPill();
             }
             _render(d);
@@ -1534,6 +1621,8 @@ window.commitBulkMove = () => {
             backdropDismiss: false,  // Audit is in progress; Hide is the explicit dismiss
             onEscape: () => window.closeAuditPanel(),
         });
+        // Each time the panel opens: Back brings a hidden one back, under the pointer.
+        _handle.element.addEventListener('click', _shieldClick, true);
         const closeBtn = _handle.element.querySelector('#fcc-audit-panel-close');
         if (closeBtn) closeBtn.onclick = () => window.closeAuditPanel();
         // Over the panel, so the confirm tier. A row opens nothing during an audit.
@@ -1575,16 +1664,18 @@ window.commitBulkMove = () => {
     // between the tiles, and Enter presses the one with the focus (a real button).
     // Only while the panel is on top: the question and the Loose spools list own their
     // keys, and the shortcut list is read, not pressed through.
-    const NEED_LABEL_WAIT_MS = 50;      // slot_picker.js's HOTKEY_WAIT_MS
+    const NEED_LABEL_WAIT_MS = 150;     // the scan accumulator's burst figure (scripts.html)
 
     const _keyNeedLabel = (e) => {
         // A held key's repeats are no second press, and no scanner sends one.
         if (e.repeat) { e.preventDefault(); e.stopImmediatePropagation(); return; }
         if (window.scanIsArriving && window.scanIsArriving()) return;
-        // The slot picker's rule. Left for the scan accumulator: a label may start with
-        // an N (an old bare location id), and only the key after it can tell, a
-        // scanner's within a few ms. Nothing followed: the person's, so it goes
-        // from the buffer, or it sits in front of the next scan.
+        // The slot picker's rule, with a longer wait: its key only moves a highlight, and
+        // this one writes. Left for the scan accumulator: a label may start with an N
+        // (an old bare location id), and only the key after it can tell, a slow
+        // scanner's up to the burst figure later (at the picker's 50 ms, 60 ms a key
+        // marked the last spool and lost the label's first letter). Nothing followed:
+        // the person's, so it goes from the buffer, or it sits in front of the next scan.
         const root = _handle.element;
         const left = `${state.scanBuffer || ''}${e.key}`;
         setTimeout(() => {
@@ -1640,7 +1731,9 @@ window.commitBulkMove = () => {
     // three-way, the one dialog that draws above this panel (#confirmModal is z 1100
     // and the panel 20000) and holds every other scan off until it is answered. It
     // opens on Back to the audit, and Enter goes back: a scanner's Enter, a double
-    // press and a held key all lose nothing.
+    // press and a held key all lose nothing. A mouse's double click loses nothing
+    // either: the yes takes no click for DOUBLE_PRESS_MS (`armAfterMs`), and the panel
+    // takes none for as long after the question goes (_shieldClick).
     const QUESTION_ID = 'fcc-audit-done-question';
     const QUESTION_LINES = 8;           // per list; the rest are counted
     const PARK_TIMEOUT_MS = 120000;     // about six Spoolman calls a spool
@@ -1733,8 +1826,10 @@ window.commitBulkMove = () => {
             cancelLabel: 'Back to the audit',
             cancelVerb: 'goes back',
             cancelCaption: 'Scan to go back',
+            armAfterMs: DOUBLE_PRESS_MS,
             onConfirm: () => {
                 _question = null;
+                _questionClosedAt = Date.now();
                 _park(res.audit_id, park.map(r => r.id));
             },
             onCancel: (info) => {
@@ -1743,6 +1838,7 @@ window.commitBulkMove = () => {
                 const answered = _question === asked && !(info && info.superseded);
                 if (_question === asked) _question = null;
                 if (!answered) return;
+                _questionClosedAt = Date.now();
                 showToast('Back to the audit: nothing moved.', 'info', 4000);
                 if (window.logClientEvent) window.logClientEvent(`ℹ️ Done's question: back to the audit of ${window.escHtml(res.location)}, nothing moved`, 'INFO');
                 // Hidden, the words on the button still have to be true.
@@ -2114,7 +2210,9 @@ let _questionCancelledAt = 0;
 // `weighRead`: the weigh-out list's mark for this scan, made as it was read
 // when the scan accumulator queued it behind another (weighOutScanStart); it
 // is ended by the queue if the scan never goes out (Group 57 review, round 9).
-const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = null) => {
+// `auditOf`: the audit the queue's scan was read for, stamped as it was read
+// (scripts.html; left out, a scan read now). It goes out as `audit_seen`.
+const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = null, auditOf = undefined) => {
     // Blanks around a scan are nobody's (the server strips them too); kept,
     // the exact matches below missed (Group 57 review, round 5).
     text = String(text == null ? '' : text).trim();
@@ -2214,11 +2312,13 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
             : '⚠️ Stale confirm QR scanned (its dialog had closed) — ignored', 'WARNING');
         return;
     }
-    // Group 58: a stale CMD:CANCEL:<sid> is safe everywhere but in a session, where the
-    // server reads any text holding CMD:CANCEL as that session's own Cancel: "Scan to
-    // go back" read twice cancelled the whole audit, every scan in it. So did a bare
-    // CMD:CANCEL read twice, its first read having only closed the question. That one
-    // can be meant, so it goes after the window a double read takes (LOC_REPEAT_MS).
+    // Group 58: a stale CMD:CANCEL:<sid> is safe everywhere but in a session: "Scan to
+    // go back" read twice cancelled the whole audit, every scan in it, until the
+    // server's gate stopped it too (logic.is_closed_dialogs_cancel; here it says so in
+    // a word, and asks nothing of the server). A bare CMD:CANCEL read twice did the
+    // same, its first read having only closed a question or a gating dialog, and the
+    // server can't tell that one: it is the session's own Cancel. It can be meant, so
+    // it goes after the window a double read takes (LOC_REPEAT_MS).
     const staleCancel = /CMD:CANCEL:\S/.test(upper);
     const secondCancel = upper === 'CMD:CANCEL' && (capturedAt || Date.now()) - _questionCancelledAt < LOC_REPEAT_MS;
     if ((staleCancel || secondCancel) && (state.auditActive || state.bulkMoveActive)) {
@@ -2287,6 +2387,19 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
         if (window.logClientEvent) window.logClientEvent(`⚠️ Confirm scan ignored: ${why}`, 'WARNING');
     };
     const onScreen = (id) => !!(window.isGatingModalOnScreen && window.isGatingModalOnScreen(id));
+    // Group 58 review: the audit's panel (z 20000) covers a gating dialog (z 1100), so
+    // a scan the dialog would swallow without a word is said on the panel. With the
+    // panel hidden the dialog is on screen, and says it all itself. CONFIRM and CANCEL
+    // still reach it. Its CANCEL counts as a question's, or a second read of it, with
+    // no dialog left to take it, would be sent on and end the audit.
+    if ((state.activeModal === 'safety' || state.activeModal === 'confirm')
+        && !upper.includes('CONFIRM') && !upper.includes('CANCEL')
+        && window.isAuditPanelOpen && window.isAuditPanelOpen()) {
+        _auditDialogBehind();
+        if (window.logClientEvent) window.logClientEvent(`⚠️ Scan "${escLog(text)}" ignored: a dialog behind the audit panel is still open`, 'WARNING');
+        return;
+    }
+    if (state.activeModal && upper.includes('CANCEL')) _questionCancelledAt = Date.now();
     if (state.activeModal === 'safety') return upper.includes('CONFIRM') ? (onScreen('safetyModal') ? confirmSafety(true) : ignoredConfirm('safetyModal', !!state.pendingSafety)) : (upper.includes('CANCEL') ? confirmSafety(false) : null);
     if (state.activeModal === 'confirm') return upper.includes('CONFIRM') ? (onScreen('confirmModal') ? confirmAction(true) : ignoredConfirm('confirmModal', !!state.pendingConfirm)) : (upper.includes('CANCEL') ? confirmAction(false) : null);
     if (state.activeModal === 'action') { if (upper.includes('CANCEL')) { closeModal('actionModal'); return; } if (upper.startsWith('CMD:MODAL:')) { if (!onScreen('actionModal')) { ignoredConfirm('actionModal', true); return; } closeModal('actionModal'); state.modalCallbacks[parseInt(upper.split(':')[2])](); return; } }
@@ -2317,10 +2430,13 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
     // has confirmed nothing yet. A blind scan never names a feed (no
     // expected_feed), so a first slot scan stays prompt-free. `audit_ask` (Group
     // 58): this page can show Done's question; a page that doesn't say so hears
-    // "reload" and nothing moves.
+    // "reload" and nothing moves. `audit_seen`: the audit this scan was read for, left
+    // out with none. If it has gone the server moves nothing: a page can believe in an
+    // audit that ended under it, and a slot label would load the buffered spool.
     const scanSentAt = _auditClock();
+    const auditSeen = auditOf !== undefined ? auditOf : (state.auditActive ? (state.auditId || true) : null);
     window.auditRequestOut(1);
-    window.fetchT('/api/identify_scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: text, source: source, confirmed_fed_heads: [], audit_ask: true }) })
+    window.fetchT('/api/identify_scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: text, source: source, confirmed_fed_heads: [], audit_ask: true, audit_seen: auditSeen || undefined }) })
         .then(r => r.json())
         .then(res => {
             locDone();
@@ -2489,8 +2605,9 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
                 }
             } else if (res.type === 'location') {
                 // Group 58: a location label in an audit moves nothing, and this
-                // one was scanned as part of an audit the server no longer has.
-                // Left to run on, it would file the whole buffer there, unasked.
+                // one was scanned as part of an audit the server no longer has, or
+                // answered after one started here. Left to run on, it would file
+                // the whole buffer there, unasked.
                 if (state.auditActive) {
                     const msg = `The audit has ended, so ${res.id} did nothing. Scan it again if you meant it.`;
                     showToast(msg, 'warning', 7000);
@@ -2694,6 +2811,10 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
                 if (!state.auditActive && window._syncAuditSignal) window._syncAuditSignal({ audit_active: true }, { sentAt: scanSentAt });
                 if (window.auditPanelNotice) window.auditPanelNotice('');
                 window.askAuditDone(res);
+            } else if (res.type === 'audit_gone') {
+                // The audit this scan was read for has gone, and the server moved
+                // nothing and logged it. The heartbeat asked for above says why.
+                _auditSay(res.msg, 'warning');
             } else if (res.type === 'error') {
                 showToast(res.msg, 'error', 7000);
                 // The toast sits under the panel.

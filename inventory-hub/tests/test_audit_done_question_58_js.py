@@ -45,14 +45,6 @@ BACK = "Back to the audit"
 ENDED_HERE = {"active": False, "audit_end": {"id": "boot-1", "why": "done", "location": "LR-MDB-1"}}
 
 QUESTION_PRELUDE = r"""
-// The toast's own timer says how long it stays up (the real showToast's `dismiss`).
-const __plainTimeout = window.setTimeout;
-window.setTimeout = (fn, ms, ...rest) => {
-  if (fn && fn.name === 'dismiss') { const c = document.getElementById('toast-container').children; c[c.length - 1].ms = ms; }
-  return __plainTimeout(fn, ms, ...rest);
-};
-const timed = () => (document.getElementById('toast-container').children || [])
-  .map(c => ({ msg: c.innerText, type: String(c.className).replace('toast-msg toast-', ''), ms: c.ms }));
 let __park = null;      // what /api/audit/park answers
 const __plainExtra = window.__extra;
 window.__extra = (url) => (url === '/api/audit/park' ? { body: __park } : __plainExtra(url));
@@ -69,6 +61,13 @@ const ask = async (answer) => {
   await running(SESSION);
   doneBtn().onclick();
   await __settle(60);
+};
+// A click on the yes, on the clock's far side of the 700 ms it takes no click after
+// the question opens (`armAfterMs`). PIN UPDATED DELIBERATELY (Group 58 review).
+const parkThem = async () => {
+  const plain = Date.now;
+  Date.now = () => plain() + 700;
+  await click('.fcc-apc-yes');
 };
 """
 
@@ -249,6 +248,67 @@ return { first, second: html().pop() };
 """)
     assert "width:min(35rem, calc(100vw - 16px));" in res["first"]
     assert "width:min(50rem, calc(100vw - 16px));" in res["second"]
+
+
+# --- `armAfterMs`: the second click of a double click (Group 58 review) ----------------
+
+def test_the_yes_takes_no_click_until_it_is_armed(tmp_path):
+    """The question can open with its yes under the pointer. RED on 8373ecd: the click
+    answered it, and a double click on Done parked a batch nobody had read about."""
+    res = run_js(tmp_path, CORE, PRELUDE + r"""
+let yes = 0;
+let no = 0;
+window.confirmActivePrint({ title: 'T', msg: 'B', armAfterMs: 700, onConfirm() { yes += 1; }, onCancel() { no += 1; } });
+btn('.fcc-apc-yes').onclick();
+const early = yes;
+const plain = Date.now;
+Date.now = () => plain() + 700;
+btn('.fcc-apc-yes').onclick();
+btn('.fcc-apc-yes').onclick();
+return { early, yes, no, open: !!window._fccOpenMoveQuestion };
+""")
+    assert res["early"] == 0 and res["yes"] == 1 and res["no"] == 0 and res["open"] is False
+
+
+def test_a_door_that_doesnt_ask_for_it_takes_a_click_at_once(tmp_path):
+    """Every other door, as it was. A pin: proved on a copy that arms every yes."""
+    res = run_js(tmp_path, CORE, PRELUDE + r"""
+let yes = 0;
+window.confirmActivePrint({ title: 'T', msg: 'B', onConfirm() { yes += 1; } });
+btn('.fcc-apc-yes').onclick();
+window.confirmActivePrint({ activePrint: { printer_name: 'XL', state: 'PRINTING' }, onConfirm() { yes += 1; } });
+btn('.fcc-apc-yes').onclick();
+return { yes };
+""")
+    assert res["yes"] == 2
+
+
+def test_enter_and_the_qrs_are_no_second_click(tmp_path):
+    """They don't wait: only a click can land there by accident. A pin: proved on a copy
+    that arms the answer, not the click."""
+    res = run_js(tmp_path, CORE, PRELUDE + r"""
+let yes = 0;
+const open = () => window.confirmActivePrint({ title: 'T', msg: 'B', armAfterMs: 700, onConfirm() { yes += 1; } });
+open();
+document.activeElement = btn('.fcc-apc-yes');
+await key('Enter');
+const entered = yes;
+open();
+window.routeConfirmScan('CMD:CONFIRM:' + sidOf());
+return { entered, yes };
+""")
+    assert res["entered"] == 1 and res["yes"] == 2
+
+
+def test_dones_question_takes_no_click_for_as_long_as_a_double_press(tmp_path, asked):
+    """RED on 8373ecd: the park went out."""
+    res = _q(tmp_path, """
+__park = PARKED;
+await ask(QUESTION);
+await click('.fcc-apc-yes');
+return { parks: parks(), up: questionUp(), active: state.auditActive };
+""", QUESTION=asked["question"], PARKED=asked["parked"])
+    assert res["parks"] == [] and res["up"] is True and res["active"] is True
 
 
 # --- the question, from the real answer ---------------------------------------------
@@ -650,7 +710,7 @@ const timeouts = [];
 const plain = window.fetchT;
 window.fetchT = (u, o, ms) => { if (u === '/api/audit/park') timeouts.push(ms); return plain(u, o, ms); };
 await ask(QUESTION);
-await click('.fcc-apc-yes');
+await parkThem();
 return { parks: parks(), timeouts };
 """, QUESTION=asked["question"], PARKED=asked["parked"])
     assert len(res["parks"]) == 1
@@ -667,7 +727,7 @@ __park = PARKED;
 const RealDate = Date;
 window.Date = class extends RealDate { constructor(...a) { super(...(a.length ? a : [2026, 10, 2, 23, 30])); } };
 await ask(QUESTION);
-await click('.fcc-apc-yes');
+await parkThem();
 return { today: parks()[0].today };
 """, QUESTION=asked["question"], PARKED=asked["parked"])
     assert res["today"] == "2026-11-02"
@@ -677,7 +737,7 @@ def test_a_park_that_landed_ends_the_audit_and_says_so(tmp_path, asked):
     res = _q(tmp_path, """
 __park = PARKED;
 await ask(QUESTION);
-await click('.fcc-apc-yes');
+await parkThem();
 return { up: questionUp(), panel: panelUp(), active: state.auditActive, here: state.auditEndedHere, toasts: timed(),
          events: __events, processing: state.processing, out: state.auditRequestsOut, pill: pill().style.display };
 """, QUESTION=asked["question"], PARKED=asked["parked"])
@@ -693,7 +753,7 @@ def test_a_park_with_a_failure_stays_up_for_7_seconds_and_the_audit_is_over(tmp_
     res = _q(tmp_path, """
 __park = PARTIAL;
 await ask(QUESTION);
-await click('.fcc-apc-yes');
+await parkThem();
 return { panel: panelUp(), active: state.auditActive, toasts: timed(), events: __events };
 """, QUESTION=asked["question"], PARTIAL=asked["partial"])
     assert res["panel"] is False and res["active"] is False
@@ -711,7 +771,7 @@ const plain = window.fetchT;
 window.fetchT = (u, o, ms) => (u === '/api/audit/park' ? held.then(() => plain(u, o, ms)) : plain(u, o, ms));
 __park = PARKED;
 await ask(QUESTION);
-await click('.fcc-apc-yes');
+await parkThem();
 const during = { processing: state.processing, done: doneBtn().disabled, cancel: cancelBtn().disabled,
                  notice: noticeText(), out: state.auditRequestsOut, up: questionUp() };
 release();
@@ -733,7 +793,7 @@ const plain = window.fetchT;
 window.fetchT = (u, o, ms) => (u === '/api/audit/park' ? held.then(() => plain(u, o, ms)) : plain(u, o, ms));
 __park = PARKED;
 await ask(QUESTION);
-await click('.fcc-apc-yes');
+await parkThem();
 __session = ENDED;
 window.refreshAuditSession();
 await __settle(40);
@@ -762,7 +822,7 @@ def test_a_refused_yes_keeps_the_audit_and_says_so_on_the_panel(tmp_path, asked,
     res = _q(tmp_path, """
 __park = ANSWER;
 await ask(QUESTION);
-await click('.fcc-apc-yes');
+await parkThem();
 return { active: state.auditActive, panel: panelUp(), notice: noticeText(), toasts: timed(), done: doneBtn().disabled,
          processing: state.processing, events: __events };
 """, QUESTION=asked["question"], ANSWER=asked[key])
@@ -788,7 +848,7 @@ await __settle(20);
 const reads = () => __rec.fetches.filter(f => f.url.startsWith('/api/logs') || f.url.startsWith('/api/dashboard_pulse')).length;
 const before = reads();
 const panelsBefore = panelCount();
-await click('.fcc-apc-yes');
+await parkThem();
 return { asked: reads() - before, panels: panelCount() - panelsBefore, toasts: timed().filter(t => t.msg === ANSWER.msg),
          active: state.auditActive };
 """, QUESTION=asked["question"], ANSWER=asked[key], LOG_KEYS=LOG_KEYS)
@@ -802,7 +862,7 @@ def test_a_yes_with_no_answer_says_the_park_may_not_have_finished(tmp_path, aske
     res = _q(tmp_path, """
 await ask(QUESTION);
 window.fetchT = () => Promise.reject(new Error('The operation timed out'));
-await click('.fcc-apc-yes');
+await parkThem();
 return { active: state.auditActive, panel: panelUp(), notice: noticeText(), toasts: timed(), processing: state.processing,
          out: state.auditRequestsOut, logs: logLines() };
 """, QUESTION=asked["question"])
@@ -816,7 +876,7 @@ def test_a_yes_the_server_answered_with_an_error_page_says_the_same(tmp_path, as
     res = _q(tmp_path, """
 await ask(QUESTION);
 window.fetchT = () => Promise.resolve({ json: () => Promise.reject(new SyntaxError('Unexpected token <')) });
-await click('.fcc-apc-yes');
+await parkThem();
 return { notice: noticeText(), processing: state.processing };
 """, QUESTION=asked["question"])
     assert "may not have finished" in res["notice"] and res["processing"] is False
@@ -831,7 +891,7 @@ const plain = window.noteAuditEnded;
 window.noteAuditEnded = () => { throw new Error('a bug after the write'); };
 const errors = [];
 console.error = (e) => errors.push(String(e));
-await click('.fcc-apc-yes');
+await parkThem();
 return { toasts: timed(), errors, processing: state.processing, out: state.auditRequestsOut };
 """, QUESTION=asked["question"], PARKED=asked["parked"])
     assert not any("may not have finished" in t["msg"] for t in res["toasts"])

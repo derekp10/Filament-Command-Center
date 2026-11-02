@@ -1839,6 +1839,10 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedH
 
 window.ejectSpool = (sid, loc, pickup) => {
     if (pickup) {
+        // Group 58 review: the buffer is kept during an audit, and this door's ID: goes
+        // to the audit as a scan, so a press would count as finding the spool. The
+        // CMD:CLEAR refusal's words, with no request.
+        if (window.auditPressRefused && window.auditPressRefused('CMD:CLEAR')) return;
         if (window._pickInFlight) return;   // no stacked identify_scan on a double-click (UI-lockout family)
         window._pickInFlight = true;
         window.fetchT('/api/identify_scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: "ID:" + sid, source: 'keyboard' }) })
@@ -1980,8 +1984,10 @@ window.manualAddSpool = () => {
     // is a scan, so it takes the scan path: the same questions (a slot whose
     // toolhead runs a spool from elsewhere asks first) and the same outcome
     // toasts. It used to post as a manual entry, so a slot move that landed
-    // still toasted "Invalid Code". Only ids are looked up here.
-    if (/^(LOC|CMD):/i.test(val) && typeof window.processScan === 'function') {
+    // still toasted "Invalid Code". Only ids are looked up here. So does an id during
+    // an audit (Group 58 review): the audit answers it, which this door read as
+    // "Invalid Code" too.
+    if ((state.auditActive || /^(LOC|CMD):/i.test(val)) && typeof window.processScan === 'function') {
         const input = document.getElementById('manual-spool-id');
         input.value = '';
         input.focus();

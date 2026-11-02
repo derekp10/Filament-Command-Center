@@ -144,7 +144,7 @@ def test_n_inside_a_scan_marks_nothing_and_the_scan_arrives_whole(page: Page, ba
     server.answers["loc:north"] = {"type": "error", "msg": "Already auditing LR-MDB-1. Finish first!"}
     _scan_keys(page, "loc:north")
     expect(page.locator("#fcc-audit-panel-notice")).to_contain_text("Already auditing")
-    page.wait_for_timeout(120)
+    page.wait_for_timeout(220)                  # past the wait key N takes
     assert server.scans == ["CMD:AUDIT", "loc:north"]
 
 

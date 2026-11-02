@@ -36,7 +36,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 import app as app_module  # noqa: E402
 import state  # noqa: E402
-from test_audit_session_58 import add_spool, env, scan  # noqa: E402,F401  (env: the fixture)
+from test_audit_session_58 import add_spool, env, scan, scan_answer, session, start  # noqa: E402,F401  (env: the fixture)
 from test_core1_return_ejectall_js import pytestmark, run_js  # noqa: E402,F401  (pytestmark: skip without node)
 from test_head_load_confirm_js import PRELUDE, SCAN  # noqa: E402
 from test_text_size_guard import SAMPLE_AUDIT, SAMPLE_AUDIT_EMPTY  # noqa: E402
@@ -69,6 +69,7 @@ window.openLocationsModal = () => { __rec.opened = (__rec.opened || []).concat('
 window.openWeighOutModal = () => { __rec.opened = (__rec.opened || []).concat('weigh'); };
 window.printLabel = (id) => { __rec.opened = (__rec.opened || []).concat('print:' + id); };
 window.triggerEjectAll = (loc) => { __rec.opened = (__rec.opened || []).concat('ejectall:' + loc); };
+const __realEjectSpool = window.ejectSpool;       // inv_loc_mgr.js's, where the test loads it
 window.ejectSpool = (id) => { __rec.opened = (__rec.opened || []).concat('eject:' + id); };
 const panelUp = () => __rec.overlays.some(o => o.id === 'fcc-audit-panel-overlay' && !o.closed);
 const panelCount = () => __rec.overlays.filter(o => o.id === 'fcc-audit-panel-overlay').length;
@@ -94,6 +95,14 @@ const running = async (session) => {
   await __settle(40);
 };
 const heartbeat = async (src, opts) => { window._renderLogsPayload(src, false, opts); await __settle(40); };
+// The toast's own timer says how long it stays up (the real showToast's `dismiss`).
+const __plainTimeout = window.setTimeout;
+window.setTimeout = (fn, ms, ...rest) => {
+  if (fn && fn.name === 'dismiss') { const c = document.getElementById('toast-container').children; c[c.length - 1].ms = ms; }
+  return __plainTimeout(fn, ms, ...rest);
+};
+const timed = () => (document.getElementById('toast-container').children || [])
+  .map(c => ({ msg: c.innerText, type: String(c.className).replace('toast-msg toast-', ''), ms: c.ms }));
 """
 
 
@@ -132,12 +141,13 @@ def real(env):
     add_spool(env, 200, "LR-MDB-2", container_slot="3")
     add_spool(env, 242, "XL-1", physical_source="LR-MDB-1", physical_source_slot="4")
     add_spool(env, 300, "LR", container_slot="")
-    answers = {"start": scan(env, "CMD:AUDIT"), "again": scan(env, "CMD:AUDIT"), "no_place": scan(env, "ID:57"),
+    client = app_module.app.test_client()
+    answers = {"start": scan(env, "CMD:AUDIT"), "heartbeat_no_place": client.get("/api/logs").get_json(),
+               "again": scan(env, "CMD:AUDIT"), "no_place": scan(env, "ID:57"),
                "place": scan(env, "LOC:LR-MDB-1"), "second_place": scan(env, "LOC:LR-MDB-2"),
                "slot_label": scan(env, "LOC:LR-MDB-1:SLOT:1"), "filament": scan(env, "FIL:1057"),
                "found": scan(env, "ID:57"), "extra": scan(env, "ID:200"), "loaded": scan(env, "ID:242"),
                "not_there": scan(env, "ID:999999")}
-    client = app_module.app.test_client()
     answers["session"] = client.get("/api/audit_session").get_json()
     answers["question"] = scan(env, "CMD:DONE")
     answers["heartbeat_active"] = client.get("/api/logs").get_json()
@@ -316,7 +326,7 @@ return { up: panelUp(), active: state.auditActive, here: state.auditEndedHere, t
          pill: pill().style.display, id: state.auditId, place: state.auditLocation };
 """ % json.dumps(real["cancel"]))
     assert res["up"] is False and res["active"] is False and res["pill"] == "none"
-    assert res["id"] is None and res["place"] == ""      # kept, the next audit's end reads as a restart
+    assert res["id"] is None and res["place"] == ""      # kept, every later scan would be stamped with it
     assert res["here"] == real["cancel"]["audit_ended"]["id"]
     assert res["toasts"] == [{"msg": "Audit cancelled: nothing moved.", "type": "info"}]
 
@@ -366,7 +376,8 @@ return { active: state.auditActive, warnings: warnings() };
 
 def test_done_is_the_scan_path_with_no_label_read(tmp_path, real):
     """RED on 25738af: the button posted a bare CMD:DONE itself, flipped the flag
-    first, and never read the answer, and a bare CMD:DONE hears "reload" now."""
+    first, and never read the answer, and a bare CMD:DONE hears "reload" now. PIN
+    UPDATED DELIBERATELY (Group 58 review): it says which audit it was pressed for."""
     res = _run(tmp_path, """
 answerWith('/api/identify_scan', [%s]);
 await running(SESSION);
@@ -375,7 +386,8 @@ await __settle(60);
 return { posts: posts('/api/identify_scan'), committed: typeof window.commitAuditWithAutoPark,
          active: state.auditActive };
 """ % json.dumps(real["question"]))
-    assert res["posts"] == [{"text": "CMD:DONE", "source": "keyboard", "confirmed_fed_heads": [], "audit_ask": True}]
+    assert res["posts"] == [{"text": "CMD:DONE", "source": "keyboard", "confirmed_fed_heads": [], "audit_ask": True,
+                             "audit_seen": SESSION["audit_id"]}]
     assert res["committed"] == "undefined"
     assert res["active"] is True           # the question's answer ended nothing
 
@@ -583,7 +595,12 @@ return { active: state.auditActive, warnings: warnings(), held: state.heldSpools
     (None, "The audit of LR-MDB-1 ended (FCC restarted): scans go to the buffer again."),
     ({"id": "boot2-1", "why": "cancel", "location": "DR"},
      "The audit of LR-MDB-1 ended (FCC restarted): scans go to the buffer again."),
-], ids=["watchdog", "cancelled-elsewhere", "done-elsewhere", "restarted", "another-boots-audit"])
+    ({"id": "boot-2", "why": "cancel", "location": "DR"},
+     "The audit of LR-MDB-1 ended (elsewhere): scans go to the buffer again."),
+    ({"id": "boot-2", "why": "idle", "location": "DR"},
+     "The audit of LR-MDB-1 ended (elsewhere): scans go to the buffer again."),
+], ids=["watchdog", "cancelled-elsewhere", "done-elsewhere", "restarted", "another-boots-audit",
+        "a-later-audit-of-this-run", "a-later-audit-of-this-run-left-idle"])
 def test_an_audit_ended_without_this_page_warns_once_and_logs_it(tmp_path, end, words):
     """RED on 25738af: the panel just closed. The next location label then moved
     the whole buffer with no question."""
@@ -603,6 +620,29 @@ return { warnings: warnings(), log: logLines(), active: state.auditActive, up: p
     assert res["log"] == [f"⚠️ {words}"]
     assert res["active"] is False and res["up"] is False and res["pill"] == "none"
     assert res["tile"] == "AUDIT"
+
+
+def test_a_later_audit_of_this_run_ending_is_no_restart(tmp_path, env):
+    """On the real ids and the real heartbeat: this page's audit ended and another
+    started and ended inside one heartbeat, with its panel hidden. Nothing restarted,
+    and the two ids share their boot token. RED on 8373ecd: "FCC restarted"."""
+    add_spool(env, 57, "LR-MDB-1", container_slot="1")
+    add_spool(env, 58, "LR-MDB-2", container_slot="1")
+    start(env, "LR-MDB-1")
+    first = session()["audit_id"]
+    scan(env, "CMD:CANCEL")
+    start(env, "LR-MDB-2")
+    second = session()["audit_id"]
+    scan(env, "CMD:CANCEL")
+    beat = app_module.app.test_client().get("/api/logs").get_json()
+    assert beat["audit_end"]["id"] == second != first
+    res = _run(tmp_path, """
+await running(Object.assign({}, SESSION, { audit_id: %s }));
+panel().querySelector('#fcc-audit-panel-close').onclick();
+await heartbeat(%s);
+return { warnings: warnings() };
+""" % (json.dumps(first), json.dumps(beat)))
+    assert res["warnings"] == ["The audit of LR-MDB-1 ended (elsewhere): scans go to the buffer again."]
 
 
 def test_an_audit_with_no_place_yet_says_so_in_fewer_words(tmp_path):
@@ -859,6 +899,125 @@ return { active: state.auditActive, up: panelUp(), warnings: warnings() };
     assert res["active"] is True and res["up"] is True and res["warnings"] == []
 
 
+def _two_audits(env):
+    """An audit that has ended, the real heartbeat of the one running after it, and
+    that one's id."""
+    add_spool(env, 57, "LR-MDB-1", container_slot="1")
+    add_spool(env, 58, "LR-MDB-2", container_slot="1")
+    start(env, "LR-MDB-1")
+    first = session()["audit_id"]
+    scan(env, "CMD:CANCEL")
+    start(env, "LR-MDB-2")
+    return first, app_module.app.test_client().get("/api/logs").get_json(), session()["audit_id"]
+
+
+def test_the_heartbeat_keeps_a_hidden_panels_id_current(tmp_path, env):
+    """A hidden panel has no poll. With the old id every scan would be stamped with an
+    audit that has gone, and refused while another runs. RED on 8373ecd."""
+    first, beat, second = _two_audits(env)
+    assert beat["audit_id"] == second != first
+    res = _run(tmp_path, """
+await running(Object.assign({}, SESSION, { audit_id: %s }));
+panel().querySelector('#fcc-audit-panel-close').onclick();
+const beat = %s;
+__session = Object.assign({}, SESSION, { audit_id: beat.audit_id });
+await heartbeat(beat);
+answerWith('/api/identify_scan', [{ type: 'command', cmd: 'audit_scan' }]);
+window.processScan('ID:58', 'barcode');
+await __settle(40);
+return { id: state.auditId, seen: posts('/api/identify_scan')[0].audit_seen, warnings: warnings() };
+""" % (json.dumps(first), json.dumps(beat)))
+    assert res["id"] == second and res["seen"] == second and res["warnings"] == []
+
+
+@pytest.mark.parametrize("section", ["logs", "status"])
+def test_both_heartbeat_shapes_carry_the_id(tmp_path, section):
+    """Each section's own keys, as routes_state_pulse.py sends them, through the real
+    tick. RED on 8373ecd."""
+    res = _run(tmp_path, """
+await running(SESSION);
+panel().querySelector('#fcc-audit-panel-close').onclick();
+const part = { audit_active: true, audit_id: 'boot-2', audit_location: 'LR-MDB-1', audit_end: null, spoolman: true, logs: [] };
+const pulse = %s === 'logs' ? { logs: part } : { status: part };
+const before = window.__extra;
+window.__extra = (url) => (url.startsWith('/api/dashboard_pulse') ? { body: pulse } : before(url));
+window._dashboardPulseTickOnce();
+await __settle(60);
+return { id: state.auditId };
+""" % json.dumps(section))
+    assert res["id"] == "boot-2"
+
+
+def test_a_heartbeat_sent_before_the_page_changed_its_mind_leaves_the_id_alone(tmp_path):
+    """The id goes after the heartbeat's sentAt check, or an old one would name the
+    audit this page has just heard the end of. A pin of the order: proved on a copy with
+    the id above the check."""
+    res = _run(tmp_path, """
+await running(SESSION);
+const sentAt = window.fccPageClock() - 1;
+state.auditChangedAt = window.fccPageClock();
+await heartbeat({ logs: [], status: {}, audit_active: true, audit_id: 'boot-0', audit_location: 'LR-MDB-1', audit_end: null }, { sentAt });
+return { id: state.auditId };
+""")
+    assert res["id"] == SESSION["audit_id"]
+
+
+def test_an_older_heartbeat_cant_take_the_place_back(tmp_path, real):
+    """The heartbeat's real shape, from before the place was scanned. It takes seconds
+    (printer probes run after the keys are read), and it lands after the scan's own
+    answer. RED on 8373ecd: the pill read "scan a location" again, and a person who
+    scanned the place again was refused."""
+    beat = real["heartbeat_no_place"]
+    assert beat["audit_active"] is True and beat["audit_location"] == ""
+    res = _run(tmp_path, """
+answerWith('/api/identify_scan', [%s]);
+await running(Object.assign({}, SESSION, { location_id: null }));
+panel().querySelector('#fcc-audit-panel-close').onclick();
+const sentAt = window.fccPageClock();
+await __settle(5);
+__session = SESSION;
+window.processScan('LOC:LR-MDB-1', 'barcode');
+await __settle(60);
+const learned = pillText();
+await heartbeat(%s, { sentAt });
+return { learned, pill: pillText(), place: state.auditLocation };
+""" % (json.dumps(real["place"]), json.dumps(beat)))
+    assert res == {"learned": "audit: LR-MDB-1", "pill": "audit: LR-MDB-1", "place": "LR-MDB-1", "unhandled": []}
+
+
+def test_a_heartbeat_sent_after_the_place_was_learned_still_counts(tmp_path):
+    """The control. A pin: proved on a copy where a learned place never changes."""
+    res = _run(tmp_path, """
+await running(SESSION);
+panel().querySelector('#fcc-audit-panel-close').onclick();
+await __settle(5);
+await heartbeat({ logs: [], status: {}, audit_active: true, audit_id: 'boot-1', audit_location: 'LR-MDB-2', audit_end: null },
+                { sentAt: window.fccPageClock() });
+return { pill: pillText() };
+""")
+    assert res["pill"] == "audit: LR-MDB-2"
+
+
+def test_an_older_poll_cant_take_back_a_place_a_newer_heartbeat_learned(tmp_path):
+    """The other half: the panel's own poll, with the same stamp. RED on 8373ecd."""
+    res = _run(tmp_path, """
+await running(Object.assign({}, SESSION, { location_id: null }));
+let release;
+const held = new Promise((r) => { release = r; });
+const plain = window.fetchT;
+window.fetchT = (u, o, ms) => (u === '/api/audit_session' ? held.then(() => plain(u, o, ms)) : plain(u, o, ms));
+window.refreshAuditSession();
+await __settle(5);
+await heartbeat({ logs: [], status: {}, audit_active: true, audit_id: 'boot-1', audit_location: 'LR-MDB-1', audit_end: null },
+                { sentAt: window.fccPageClock() });
+const learned = state.auditLocation;
+release();
+await __settle(40);
+return { learned, place: state.auditLocation, pill: pillText() };
+""")
+    assert res == {"learned": "LR-MDB-1", "place": "LR-MDB-1", "pill": "audit: LR-MDB-1", "unhandled": []}
+
+
 def test_the_first_heartbeat_paints_the_tile(tmp_path):
     """Pins what was already right: a page's first word from the server paints the
     deck, audit or no audit."""
@@ -936,6 +1095,413 @@ return { active: state.auditActive, warnings: warnings() };
 """ % json.dumps(section))
     assert res["active"] is False
     assert res["warnings"] == ["The audit of LR-MDB-1 ended (idle for 30 minutes): scans go to the buffer again."]
+
+
+# --- which audit a scan was read for (Group 58 review) ---------------------------------
+
+def test_a_scan_says_which_audit_it_was_read_for(tmp_path):
+    """`audit_seen`, logic.audit_seen_gone's question: true while the page has no id
+    yet. RED on 8373ecd: nothing was sent, so a slot label read at a hidden panel after
+    an idle end loaded the buffered spool."""
+    res = _run(tmp_path, """
+answerWith('/api/identify_scan', [{ type: 'error', msg: 'whatever' }]);
+await running(SESSION);
+window.processScan('ID:57', 'barcode');
+await __settle(40);
+state.auditId = null;
+window.processScan('ID:57', 'barcode');
+await __settle(40);
+return { seen: posts('/api/identify_scan').map(p => p.audit_seen) };
+""")
+    assert res["seen"] == [SESSION["audit_id"], True]
+
+
+def test_a_queued_scan_goes_out_with_the_stamp_it_was_read_with(tmp_path):
+    """Not what the page believes by then. One read with no audit running asks no
+    check at all. RED on 8373ecd."""
+    res = _run(tmp_path, """
+answerWith('/api/identify_scan', [{ type: 'error', msg: 'whatever' }]);
+await running(SESSION);
+window.processScan('ID:57', 'barcode', null, null, 'boot-0');
+await __settle(40);
+window.processScan('ID:57', 'barcode', null, null, null);
+await __settle(40);
+return { posts: posts('/api/identify_scan') };
+""")
+    assert res["posts"][0]["audit_seen"] == "boot-0" and "audit_seen" not in res["posts"][1]
+
+
+def test_with_no_audit_a_scan_says_nothing_of_one(tmp_path):
+    """The key is left out, so the server checks nothing and a request is as it was,
+    byte for byte. A pin: proved on a copy that sends a null."""
+    res = _run(tmp_path, """
+answerWith('/api/identify_scan', [{ type: 'error', msg: 'whatever' }]);
+window.processScan('ID:57', 'barcode');
+await __settle(40);
+return { posts: posts('/api/identify_scan') };
+""")
+    assert "audit_seen" not in res["posts"][0]
+
+
+def _gone_answer(env, text):
+    """The real route's answer to a scan read for an audit that has ended."""
+    add_spool(env, 57, "LR-MDB-1", container_slot="1")
+    start(env, "LR-MDB-1")
+    audit_id = session()["audit_id"]
+    scan(env, "CMD:CANCEL")
+    answer = scan(env, text, audit_seen=audit_id)
+    assert answer["type"] == "audit_gone"
+    return answer, audit_id
+
+
+def test_the_servers_audit_gone_is_said_for_7_seconds_on_the_panel_too(tmp_path, env):
+    """The toast layer is under the panel. "Log nothing more": the server logged it.
+    RED on 8373ecd: no branch read it, so the scan did nothing without a word."""
+    answer, audit_id = _gone_answer(env, "LOC:LR-MDB-2:SLOT:2")
+    res = _run(tmp_path, """
+answerWith('/api/identify_scan', [%s]);
+await running(Object.assign({}, SESSION, { audit_id: %s }));
+window.processScan('LOC:LR-MDB-2:SLOT:2', 'barcode');
+await __settle(60);
+return { toasts: timed(), notice: noticeText(), log: logLines(), held: state.heldSpools.map(s => s.id) };
+""" % (json.dumps(answer), json.dumps(audit_id)))
+    words = "The audit has ended, so LOC:LR-MDB-2:SLOT:2 did nothing. Scan it again if you meant it."
+    assert answer["msg"] == words
+    assert res["toasts"] == [{"msg": words, "type": "warning", "ms": 7000}]
+    assert res["notice"] == words and res["log"] == [] and res["held"] == [57]
+
+
+def test_the_servers_audit_gone_asks_the_heartbeat_why_at_once(tmp_path, env):
+    """The panel is up to 2 s behind, and a hidden one has no poll. RED on 8373ecd."""
+    answer, audit_id = _gone_answer(env, "ID:57")
+    beat = app_module.app.test_client().get("/api/logs").get_json()
+    res = _run(tmp_path, """
+answerWith('/api/identify_scan', [%s]);
+__heartbeat = %s;
+await running(Object.assign({}, SESSION, { audit_id: %s }));
+window.processScan('ID:57', 'barcode');
+await __settle(80);
+return { active: state.auditActive, up: panelUp(), warnings: warnings() };
+""" % (json.dumps(answer), json.dumps(beat), json.dumps(audit_id)))
+    assert res["active"] is False and res["up"] is False
+    assert "The audit of LR-MDB-1 ended (elsewhere): scans go to the buffer again." in res["warnings"]
+
+
+OUTLIVED = [
+    # (stamp, the page believes in an audit, its id, the scan's text), gone
+    ((None, False, None, "LOC:LR-MDB-1"), False),         # read with no audit running
+    ((None, True, "boot-2", "LOC:LR-MDB-1"), False),      # read before this one started
+    (("boot-1", True, "boot-1", "LOC:LR-MDB-1"), False),  # still running
+    (("boot-1", True, None, "LOC:LR-MDB-1"), False),      # no id to tell by: the server has it
+    ((True, True, None, "LOC:LR-MDB-1"), False),
+    ((True, True, "boot-1", "LOC:LR-MDB-1"), False),      # read before the id was heard
+    (("boot-1", False, None, "LOC:LR-MDB-1"), True),
+    ((True, False, None, "LOC:LR-MDB-1"), True),
+    (("boot-1", True, "boot-2", "LOC:LR-MDB-1"), True),   # another audit runs now
+    (("boot-1", False, None, "CMD:AUDIT"), False),        # it means the next audit
+    (("boot-1", False, None, " cmd:audit "), False),
+    (("boot-1", False, None, "CMD:DONE"), True),
+]
+
+
+@pytest.mark.parametrize("case, gone", OUTLIVED)
+def test_which_queued_scans_have_outlived_their_audit(tmp_path, case, gone):
+    """The rule of window.auditScanOutlived, and what a drop says and leaves behind. RED
+    on 8373ecd: it doesn't exist. test_audit_no_label_58_js has it on the real routes."""
+    stamp, active, audit_id, text = case
+    res = _run(tmp_path, """
+state.auditActive = %s; state.auditId = %s;
+const gone = window.auditScanOutlived({ text: %s, auditOf: %s });
+await __settle(10);
+return { gone, toasts: timed(), log: logLines(), scans: scans() };
+""" % (json.dumps(active), json.dumps(audit_id), json.dumps(text), json.dumps(stamp)))
+    assert res["gone"] is gone and res["scans"] == []
+    if gone:
+        words = f"The audit has ended, so {text.strip()} did nothing. Scan it again if you meant it."
+        assert res["toasts"] == [{"msg": words, "type": "warning", "ms": 7000}]
+        assert res["log"] == [f"⚠️ {words}"]
+    else:
+        assert res["toasts"] == [] and res["log"] == []
+
+
+def test_a_dropped_scans_text_reaches_the_log_escaped(tmp_path):
+    """The Activity Log draws its lines as HTML. RED on 8373ecd."""
+    res = _run(tmp_path, """
+state.auditActive = false;
+window.auditScanOutlived({ text: 'LOC:<b>X', auditOf: 'boot-1' });
+await __settle(10);
+return { log: logLines() };
+""")
+    assert "LOC:&lt;b&gt;X" in res["log"][0] and "<b>" not in res["log"][0]
+
+
+# --- a hidden panel, and what a scan did ------------------------------------------------
+
+def _audit_answers(env):
+    """The real route's answers to the first two scans of an audit: `heard` kept."""
+    add_spool(env, 57, "LR-MDB-1", container_slot="1")
+    add_spool(env, 99, "LR-MDB-1", container_slot="2")
+    scan(env, "CMD:AUDIT")
+    return [scan_answer("LOC:LR-MDB-1"), scan_answer("ID:57")]
+
+
+def test_a_hidden_panel_hears_what_each_scan_did(tmp_path, env):
+    """Every scan outcome is owed a toast, and the panel that shows this one is hidden.
+    RED on 8373ecd: the page ignored `heard`."""
+    res = _run(tmp_path, """
+answerWith('/api/identify_scan', %s);
+await running(Object.assign({}, SESSION, { location_id: null }));
+panel().querySelector('#fcc-audit-panel-close').onclick();
+window.processScan('LOC:LR-MDB-1', 'barcode');
+await __settle(40);
+window.processScan('ID:57', 'barcode');
+await __settle(40);
+return { toasts: timed(), up: panelUp() };
+""" % json.dumps(_audit_answers(env)))
+    assert res["up"] is False
+    assert res["toasts"] == [{"msg": "Auditing LR-MDB-1: 2 expected", "type": "info", "ms": 4000},
+                             {"msg": "Found #57 (1 left)", "type": "info", "ms": 4000}]
+
+
+def test_a_panel_on_screen_shows_it_itself(tmp_path, env):
+    """A toast there would sit under it. A pin: proved on a copy that always toasts."""
+    res = _run(tmp_path, """
+answerWith('/api/identify_scan', %s);
+await running(Object.assign({}, SESSION, { location_id: null }));
+window.processScan('LOC:LR-MDB-1', 'barcode');
+await __settle(40);
+window.processScan('ID:57', 'barcode');
+await __settle(40);
+return { toasts: timed() };
+""" % json.dumps(_audit_answers(env)))
+    assert res["toasts"] == []
+
+
+def test_a_scan_that_brings_the_panel_up_toasts_nothing_either(tmp_path, env):
+    """Right after a reload: the answer proves an audit runs, and the panel opens on
+    it. Asked first, the page would call that panel hidden. A pin of the order: proved
+    on a copy that asks before the sync."""
+    res = _run(tmp_path, """
+answerWith('/api/identify_scan', %s);
+__session = SESSION;
+window.processScan('LOC:LR-MDB-1', 'barcode');
+await __settle(40);
+return { toasts: timed(), up: panelUp() };
+""" % json.dumps(_audit_answers(env)))
+    assert res["up"] is True and res["toasts"] == []
+
+
+# --- a gating dialog behind the panel ---------------------------------------------------
+
+GATED = {"confirm": "pendingConfirm", "safety": "pendingSafety"}
+
+
+@pytest.mark.parametrize("modal", ["confirm", "safety", "action"])
+def test_the_cancel_that_closes_a_gating_dialog_read_twice_leaves_the_audit_running(tmp_path, modal):
+    """Its second read had no dialog left to take it, and a bare CMD:CANCEL is the
+    audit's real Cancel. RED on 8373ecd: it went out, and every scan was gone."""
+    res = _run(tmp_path, """
+await running(SESSION);
+state.activeModal = %s;
+const read = Date.now();
+window.processScan('CMD:CANCEL', 'barcode', read);
+const closed = state.activeModal;
+window.processScan('CMD:CANCEL', 'barcode', read + 40);
+await __settle(60);
+return { closed, scans: scans(), active: state.auditActive, up: panelUp(), toasts: toasts() };
+""" % json.dumps(modal))
+    assert res["closed"] is None and res["scans"] == []
+    assert res["active"] is True and res["up"] is True
+    assert {"msg": "Ignored a second read of CMD:CANCEL", "type": "info"} in res["toasts"]
+
+
+def test_a_cancel_scanned_after_a_double_reads_window_is_meant(tmp_path):
+    """Derek's rule: guard only the accidental case. A pin: proved on a copy with a
+    longer window."""
+    res = _run(tmp_path, """
+answerWith('/api/identify_scan', [{ type: 'command', cmd: 'audit_scan', audit_ended: { id: 'boot-1', why: 'cancel' } }]);
+await running(SESSION);
+state.activeModal = 'confirm';
+window.processScan('CMD:CANCEL', 'barcode', Date.now());
+window.processScan('CMD:CANCEL', 'barcode', Date.now() + 1600);
+await __settle(60);
+return { scans: scans(), active: state.auditActive };
+""")
+    assert res["scans"] == ["CMD:CANCEL"] and res["active"] is False
+
+
+@pytest.mark.parametrize("modal", GATED)
+@pytest.mark.parametrize("text", ["ID:57", "LOC:LR-MDB-2", "CMD:DONE", "57"])
+def test_a_scan_a_gating_dialog_would_swallow_says_so_on_the_panel(tmp_path, modal, text):
+    """#confirmModal draws at z 1100 and the panel at 20000: the scan vanished, with
+    nothing on screen to say why. RED on 8373ecd."""
+    res = _run(tmp_path, """
+await running(SESSION);
+state.activeModal = %s;
+window.processScan(%s, 'barcode');
+await __settle(60);
+return { scans: scans(), notice: noticeText(), toasts: toasts(), log: logLines(), modal: state.activeModal };
+""" % (json.dumps(modal), json.dumps(text)))
+    words = "A dialog behind this panel is still open: press Hide and answer it first."
+    assert res["scans"] == [] and res["notice"] == words and res["modal"] == modal
+    assert res["toasts"] == [{"msg": words, "type": "warning"}]
+    assert len(res["log"]) == 1 and text in res["log"][0]
+
+
+@pytest.mark.parametrize("modal", GATED)
+def test_with_the_panel_hidden_the_dialog_is_on_screen_and_says_it_itself(tmp_path, modal):
+    """Today's behaviour stands. A pin: proved on a copy with no panel test."""
+    res = _run(tmp_path, """
+await running(SESSION);
+panel().querySelector('#fcc-audit-panel-close').onclick();
+state.activeModal = %s;
+window.processScan('ID:57', 'barcode');
+await __settle(60);
+return { scans: scans(), toasts: toasts(), log: logLines() };
+""" % json.dumps(modal))
+    assert res == {"scans": [], "toasts": [], "log": [], "unhandled": []}
+
+
+@pytest.mark.parametrize("modal, slot", GATED.items())
+def test_confirm_and_cancel_still_reach_the_dialog(tmp_path, modal, slot):
+    """A pin: proved on a copy that refuses them too."""
+    res = _run(tmp_path, """
+await running(SESSION);
+window.isGatingModalOnScreen = () => true;
+let said = 0;
+state.activeModal = %s; state[%s] = () => { said += 1; };
+window.processScan('CMD:CONFIRM', 'barcode');
+await __settle(40);
+const yes = { said, modal: state.activeModal, notice: noticeText() };
+state.activeModal = %s; state[%s] = () => { said += 1; };
+window.processScan('CMD:CANCEL', 'barcode', Date.now() + 2000);
+await __settle(40);
+return { yes, said, modal: state.activeModal, scans: scans() };
+""" % (json.dumps(modal), json.dumps(slot), json.dumps(modal), json.dumps(slot)))
+    assert res["yes"] == {"said": 1, "modal": None, "notice": ""}
+    assert res["said"] == 1 and res["modal"] is None and res["scans"] == []
+
+
+def test_with_no_audit_a_gating_dialog_swallows_as_it_did(tmp_path):
+    """The control. A pin: proved on a copy with no test of the panel."""
+    res = _run(tmp_path, """
+state.activeModal = 'confirm';
+window.processScan('ID:57', 'barcode');
+await __settle(40);
+return { scans: scans(), toasts: toasts(), log: logLines(), panels: panelCount() };
+""")
+    assert res == {"scans": [], "toasts": [], "log": [], "panels": 0, "unhandled": []}
+
+
+# --- the deck's tiles and the Location Manager ------------------------------------------
+
+TILES = {"toggleDropMode": ("dropMode", "Drop mode waits until the audit is finished or cancelled."),
+         "toggleEjectMode": ("ejectMode", "Eject mode waits until the audit is finished or cancelled.")}
+
+
+@pytest.mark.parametrize("hidden", [False, True], ids=["panel-up", "panel-hidden"])
+@pytest.mark.parametrize("tile", TILES)
+def test_a_deck_tile_cant_arm_a_mode_during_an_audit(tmp_path, tile, hidden):
+    """Only the scan was refused: armed by a press, a mode outlived the audit, and
+    ejected the first spool scanned after it. RED on 8373ecd."""
+    mode, words = TILES[tile]
+    res = _run(tmp_path, """
+await running(SESSION);
+if (%s) panel().querySelector('#fcc-audit-panel-close').onclick();
+%s();
+await __settle(10);
+return { mode: !!state[%s], toasts: timed(), notice: panelUp() ? noticeText() : null };
+""" % (json.dumps(hidden), tile, json.dumps(mode)))
+    assert res["mode"] is False
+    assert res["toasts"] == [{"msg": words, "type": "warning", "ms": 7000}]
+    assert res["notice"] == (None if hidden else words)
+
+
+@pytest.mark.parametrize("tile", TILES)
+def test_a_mode_armed_before_the_audit_can_still_be_turned_off(tmp_path, tile):
+    """Refusing that would strand it. A pin: proved on a copy that refuses both ways."""
+    mode, words = TILES[tile]
+    res = _run(tmp_path, """
+state[%s] = true;
+await running(SESSION);
+%s();
+await __settle(10);
+return { mode: !!state[%s], notice: noticeText() };
+""" % (json.dumps(mode), tile, json.dumps(mode)))
+    assert res["mode"] is False and res["notice"] == ""
+
+
+@pytest.mark.parametrize("tile", TILES)
+def test_with_no_audit_a_tile_arms_its_mode(tmp_path, tile):
+    """The control. A pin."""
+    mode, _words = TILES[tile]
+    res = _run(tmp_path, """
+%s();
+await __settle(10);
+return { mode: !!state[%s] };
+""" % (tile, json.dumps(mode)))
+    assert res["mode"] is True
+
+
+LM = SCAN + ["inv_loc_mgr.js"]
+
+
+def test_a_typed_id_in_the_location_manager_is_a_scan_of_the_audit(tmp_path, env):
+    """The real answer. It posted as a manual entry and read that as "Invalid Code",
+    though the audit had taken it. RED on 8373ecd."""
+    answers = _audit_answers(env)
+    res = _run(tmp_path, """
+answerWith('/api/identify_scan', [%s]);
+await running(SESSION);
+panel().querySelector('#fcc-audit-panel-close').onclick();
+document.getElementById('manual-spool-id').value = '57';
+window.manualAddSpool();
+await __settle(60);
+return { posts: posts('/api/identify_scan'), toasts: toasts(), field: document.getElementById('manual-spool-id').value,
+         held: state.heldSpools.map(s => s.id) };
+""" % json.dumps(answers[1]), modules=LM)
+    assert [(p["text"], p["source"], p.get("audit_ask")) for p in res["posts"]] == [("57", "keyboard", True)]
+    assert res["toasts"] == [{"msg": answers[1]["heard"], "type": "info"}] and res["held"] == [57]
+    assert res["field"] == ""
+
+
+def test_with_no_audit_a_typed_id_is_looked_up_as_it_was(tmp_path):
+    """The control. A pin: proved on a copy that sends every id through processScan."""
+    res = _run(tmp_path, """
+answerWith('/api/identify_scan', [{ type: 'spool', id: 99, display: '#99', color: '123456' }]);
+document.getElementById('manual-spool-id').value = '99';
+window.manualAddSpool();
+await __settle(60);
+return { posts: posts('/api/identify_scan'), held: state.heldSpools.map(s => s.id) };
+""", modules=LM)
+    assert res["posts"] == [{"text": "99", "source": "keyboard"}] and sorted(res["held"]) == [57, 99]
+
+
+@pytest.mark.parametrize("hidden", [False, True], ids=["panel-up", "panel-hidden"])
+def test_the_managers_pickup_is_refused_during_an_audit_and_sends_nothing(tmp_path, hidden):
+    """The buffer is kept during an audit, and the pickup's ID: went to the audit as a
+    scan, so a press counted as finding the spool. RED on 8373ecd."""
+    res = _run(tmp_path, """
+await running(SESSION);
+if (%s) panel().querySelector('#fcc-audit-panel-close').onclick();
+__realEjectSpool(99, 'LR-MDB-1', true);
+await __settle(40);
+return { scans: scans(), toasts: timed(), held: state.heldSpools.map(s => s.id), flying: !!window._pickInFlight };
+""" % json.dumps(hidden), modules=LM)
+    words = "The buffer is kept during an audit: finish or cancel it first."
+    assert res["scans"] == [] and res["held"] == [57] and res["flying"] is False
+    assert res["toasts"] == [{"msg": words, "type": "warning", "ms": 7000}]
+
+
+def test_with_no_audit_the_pickup_works_as_it_did(tmp_path):
+    """The control. A pin."""
+    res = _run(tmp_path, """
+answerWith('/api/identify_scan', [{ type: 'spool', id: 99, display: '#99', color: '123456' }]);
+__realEjectSpool(99, 'LR-MDB-1', true);
+await __settle(60);
+return { scans: scans(), held: state.heldSpools.map(s => s.id) };
+""", modules=LM)
+    assert res["scans"] == ["ID:99"] and sorted(res["held"]) == [57, 99]
 
 
 # --- the guard: commands the page runs itself -------------------------------------

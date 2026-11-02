@@ -54,7 +54,8 @@ class Server:
         route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
 
     def _payload(self):
-        return {"logs": [], "status": {"spoolman": True}, **self.beat}
+        audit_id = self.session.get("audit_id") if self.beat["audit_active"] else None
+        return {"logs": [], "status": {"spoolman": True}, "audit_id": audit_id, **self.beat}
 
     def _logs(self, route):
         self._json(route, self._payload())

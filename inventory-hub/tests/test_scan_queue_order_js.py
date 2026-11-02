@@ -17,6 +17,14 @@ focus guard holds scans the same way; a queued scan that throws doesn't hold
 up the ones after it; a queued scan answered without going out ends its
 weigh-out read; a scan read with nothing busy and nothing queued goes out at
 once, with no poll, as before.
+
+Group 58 review: a queued scan is stamped with the audit it was read for, as it
+is read, in both pushes; a scan that audit has outlived (window.auditScanOutlived,
+inv_cmd.js) never goes out, and still ends its weigh-out read; the stamp goes out
+with a scan that does; and window.auditQueueMoved hears of every queued scan, sent
+or not. Each passes with neither hook defined: the block is lifted as it is here.
+The hooks themselves are in test_audit_page_58_js.py, on the real routes in
+test_audit_no_label_58_js.py.
 """
 from __future__ import annotations
 
@@ -36,8 +44,10 @@ window.__instant = false;
 // processScan, as the real one behaves for a scan the server answers: busy at
 // once, until the test answers it (window.__answer()). __instant: answered
 // without going out (a dialog's own QR, a second read dropped).
-window.processScan = function (text) {
+window.__stamps = [];
+window.processScan = function (text, source, capturedAt, weighRead, auditOf) {
     window.__sent.push(text);
+    window.__stamps.push(auditOf);
     if (window.__throwOn === text) throw new Error('boom');
     if (!window.__instant) state.processing = true;
 };
@@ -171,3 +181,91 @@ def test_a_scan_read_with_nothing_busy_goes_out_at_once(q):
     _scan(q, "ID:57")
     assert _sent(q) == ["ID:57"]
     assert q.evaluate("() => window.__ivs.length") == 0, "no poll when nothing waits"
+
+
+# --- the audit a scan was read for (Group 58 review) ---------------------------------
+
+def _believing(page, active, audit_id):
+    page.evaluate("([a, i]) => { state.auditActive = a; state.auditId = i; }", [active, audit_id])
+
+
+@pytest.mark.parametrize("active, audit_id, stamp", [(True, "boot-1", "boot-1"), (True, None, True), (False, None, None),
+                                                     (False, "boot-1", None)],
+                         ids=["known", "id-not-heard-yet", "no-audit", "no-audit-a-stale-id"])
+def test_a_queued_scan_is_stamped_with_the_audit_it_was_read_for(q, active, audit_id, stamp):
+    """In both pushes: the accumulator's and a press's. RED on 8373ecd: no stamp, so
+    nothing could tell a scan read during an audit from one read after it."""
+    _scan(q, "LOC:FIRST")                         # busy
+    _believing(q, active, audit_id)
+    _scan(q, "ID:57")
+    q.evaluate("() => window.sendInScanOrder('CMD:DONE', 'keyboard')")
+    assert q.evaluate("() => state.scanQueue.map((s) => s.auditOf)") == [stamp, stamp]
+
+
+def test_the_stamp_is_taken_as_it_is_read_and_goes_out_with_it(q):
+    """Not as it goes out: the audit can be over by then, or another one running. RED
+    on 8373ecd."""
+    _scan(q, "LOC:FIRST")
+    _believing(q, True, "boot-1")
+    _scan(q, "ID:57")
+    _believing(q, True, "boot-2")
+    _answer(q)
+    _advance(q, 250)
+    assert _sent(q) == ["LOC:FIRST", "ID:57"]
+    assert q.evaluate("() => window.__stamps[1]") == "boot-1"
+
+
+def test_a_scan_with_no_queue_goes_out_with_no_stamp_of_its_own(q):
+    """processScan stamps a scan read now itself (`auditOf` left out), so the two can
+    never differ. A pin: RED only on a copy that passes one here."""
+    q.evaluate("() => { window.__instant = true; }")
+    _believing(q, True, "boot-1")
+    _scan(q, "ID:57")
+    assert q.evaluate("() => window.__stamps.length") == 1
+    assert q.evaluate("() => window.__stamps[0] === undefined")
+
+
+def test_a_scan_its_audit_outlived_never_goes_out_and_ends_its_weigh_out_read(q):
+    """RED on 8373ecd: the queue sent it. window.auditScanOutlived's own rule and its
+    words are test_audit_page_58_js's."""
+    q.evaluate("""() => { window.__reads = []; window.__done = []; window.__asked = [];
+        window.weighOutScanStart = () => { const r = { sent: false, i: window.__reads.length };
+            window.__reads.push(r); return r; };
+        window.weighOutScanDone = (r) => window.__done.push(r.i);
+        window.auditScanOutlived = (s) => { window.__asked.push(s.text); return s.text === 'LOC:LR-MDB-1'; };
+        const send = window.processScan;
+        window.processScan = (t, s, c, w, a) => { if (w) w.sent = true; send(t, s, c, w, a); };
+        state.processing = true; }""")
+    _scan(q, "LOC:LR-MDB-1")
+    _scan(q, "ID:57")
+    q.evaluate("() => { state.processing = false; }")
+    _advance(q, 250)
+    assert _sent(q) == ["ID:57"]
+    assert q.evaluate("() => window.__asked") == ["LOC:LR-MDB-1", "ID:57"]
+    assert q.evaluate("() => window.__done") == [0]         # the dropped one's, and only its
+
+
+def test_the_page_hears_of_every_queued_scan_sent_or_not(q):
+    """window.auditQueueMoved frees the panel's buttons for a queued Done that never
+    went out: no answer will. After the scan, so it can read the queue without it. RED
+    on 8373ecd."""
+    q.evaluate("""() => { window.__moved = [];
+        window.auditScanOutlived = (s) => s.text === 'GONE';
+        window.auditQueueMoved = () => window.__moved.push(state.scanQueue.map((s) => s.text));
+        window.__instant = true; state.processing = true; }""")
+    for text in ("ID:57", "GONE", "ID:99"):
+        _scan(q, text)
+    q.evaluate("() => { state.processing = false; }")
+    _advance(q, 250)
+    assert q.evaluate("() => window.__moved") == [["GONE", "ID:99"], ["ID:99"], []]
+    assert _sent(q) == ["ID:57", "ID:99"]
+
+
+def test_a_press_in_its_turn_is_heard_of_too_when_it_throws(q):
+    """The hook is in the `finally`: a scan that throws can't leave the buttons down."""
+    q.evaluate("""() => { window.__moved = 0; window.auditQueueMoved = () => { window.__moved += 1; };
+        window.__instant = true; window.__throwOn = 'BAD'; state.processing = true; }""")
+    q.evaluate("() => window.sendInScanOrder('BAD', 'keyboard')")
+    q.evaluate("() => { state.processing = false; }")
+    _advance(q, 250)
+    assert q.evaluate("() => window.__moved") == 1

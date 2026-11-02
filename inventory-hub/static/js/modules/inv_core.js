@@ -21,11 +21,14 @@ let state = {
     lastAuditState: null,
     // Group 58: what this page knows of the audit beside the flag above, which
     // _syncAuditSignal and the page's own requests own (inv_cmd.js): the place
-    // ('' until one is scanned), its id and idle limit (the panel's poll), the
+    // ('' until one is scanned) and when it was last learned (page clock: the
+    // sentAt of the answer that said so, so an answer sent before that can't take
+    // it back), its id (the heartbeat and the panel's poll) and idle limit, the
     // last audit this page's own request ended, how many of its requests are
     // on their way, and when it last changed its mind (page clock), so an
     // answer sent before that can't undo it.
     auditLocation: '',
+    auditLocationAt: 0,
     auditId: null,
     auditIdleMin: null,
     auditEndedHere: null,
@@ -250,6 +253,11 @@ window.unionConfirmFedHeads = unionConfirmFedHeads;
 // A line never wraps and `more` counts the lines left out, so a door names a few
 // and a count: fccFitQuestion scrolls the whole question, QRs included, and a
 // scanner can't read a QR that has scrolled away.
+// `armAfterMs` (Group 58 review; default 0, every other door as it was): the yes
+// button's CLICK does nothing until that long after the mount. The question can open
+// with its yes under the pointer, and the second click of a double click on the
+// button that asked it then answered a question nobody had read (a whole batch
+// parked). Enter and the QRs are no second click, so they don't wait.
 const _openMoveConfirms = {};
 
 // --- KEEP A BOX ID WHOLE (review, 2026-10-22) ---
@@ -312,7 +320,8 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
                                title = '', onStore = null, storeLabel = '', loadLabel = '',
                                printing = null, noLoad = false, hint = '',
                                cancelLabel = '', cancelVerb = '', loadVerb = '',
-                               loadCaption = '', cancelCaption = '', sections = null } = {}) => {
+                               loadCaption = '', cancelCaption = '', sections = null,
+                               armAfterMs = 0 } = {}) => {
     const esc = (s) => String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -422,7 +431,8 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
     const yesBtn = hasLoad ? ov.querySelector('.fcc-apc-yes') : null;
     const storeBtn = hasStore ? ov.querySelector('.fcc-apc-store') : null;
     const noBtn = ov.querySelector('.fcc-apc-no');
-    if (yesBtn) yesBtn.onclick = yes;
+    const armedAt = Date.now() + armAfterMs;
+    if (yesBtn) yesBtn.onclick = armAfterMs > 0 ? () => { if (Date.now() >= armedAt) yes(); } : yes;
     if (storeBtn) storeBtn.onclick = store;
     if (noBtn) noBtn.onclick = no;
     // The hint says what Enter does on the button that has the focus (Group 50
@@ -2817,16 +2827,27 @@ window.auditLostWords = (lost) => {
     return { where, by: `the audit of ${where}${lost.on ? ` on ${lost.on}` : ''}` };
 };
 
+// Which run of FCC an audit's id belongs to: logic.new_audit_id is <boot token>-<n>.
+const _auditRun = (id) => {
+    const text = String(id);
+    const at = text.lastIndexOf('-');
+    return at < 0 ? text : text.slice(0, at);
+};
+
 // An audit this page believed in is gone, and none of its own requests ended
-// it. Says why from the server's word: audit_end names how the last audit ended,
-// and None, or another audit's id, is a restart (the session lives in FCC's
-// memory). An audit that ended under the page matters: the scans it was taking
-// go to the buffer now, and the next location label moves the buffer.
+// it. Says why from the server's word: audit_end names how the last audit ended.
+// None, or an id from another run of FCC, is a restart (the session lives in FCC's
+// memory). A later audit's id from this same run is no restart: the one this page
+// believed in ended elsewhere, and that one after it (a hidden panel hears only
+// the heartbeat, and both can fall between two ticks). An audit that ended under
+// the page matters: the scans it was taking go to the buffer now, and the next
+// location label moves the buffer.
 const _sayAuditEndedUnderPage = (end) => {
     if (end && end.id != null && end.id === state.auditEndedHere) return;
     const same = !!end && (state.auditId == null || end.id === state.auditId);
+    const sameRun = same || (!!end && _auditRun(end.id) === _auditRun(state.auditId));
     const idle = state.auditIdleMin ? `idle for ${state.auditIdleMin} minutes` : 'left idle';
-    const how = !same ? 'FCC restarted' : (end.why === 'idle' ? idle : 'elsewhere');
+    const how = !sameRun ? 'FCC restarted' : (same && end.why === 'idle' ? idle : 'elsewhere');
     const place = (same && end.location) || state.auditLocation || '';
     const msg = `The audit${place ? ` of ${place}` : ''} ended (${how}): scans go to the buffer again.`;
     showToast(msg, 'warning', 7000);
@@ -2843,6 +2864,11 @@ const _sayAuditEndedUnderPage = (end) => {
 // one of this page's own requests is out, the "none" may be its own Done or
 // Cancel and its answer will say so: warning here would cry wolf on every
 // scanned Done, because the panel's 2 s poll can land before that answer.
+// Which audit runs, and where, comes from here too (a hidden panel has no poll): a
+// scan is stamped with the id (inv_cmd.js), so an old one would have every scan
+// refused while another audit runs. An answer sent before the place was last learned
+// says nothing about it, or about the id: a heartbeat can take seconds, and a slow one
+// took the place back off the pill.
 const _syncAuditSignal = (src, opts = null) => {
     if (!src) return;
     const said = src.audit_active !== undefined ? src.audit_active : src.active;
@@ -2853,9 +2879,13 @@ const _syncAuditSignal = (src, opts = null) => {
     if (!active && state.auditActive && state.auditRequestsOut > 0) return;
     const first = state.lastAuditState === null;
     state.lastAuditState = active;
-    if (active && src.audit_location !== undefined && (src.audit_location || '') !== state.auditLocation) {
-        state.auditLocation = src.audit_location || '';
-        if (window.updateAuditPill) window.updateAuditPill();
+    if (active && !(sentAt != null && sentAt < state.auditLocationAt)) {
+        if (src.audit_id != null) state.auditId = src.audit_id;
+        if (src.audit_location !== undefined && (src.audit_location || '') !== state.auditLocation) {
+            state.auditLocation = src.audit_location || '';
+            state.auditLocationAt = sentAt != null ? sentAt : _pageClock();
+            if (window.updateAuditPill) window.updateAuditPill();
+        }
     }
     if (active === state.auditActive) {
         if (first && window.updateAuditVisuals) window.updateAuditVisuals();

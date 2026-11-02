@@ -38,7 +38,7 @@
 <script src="{{ url_for('static', filename='js/NoSleep.min.js') }}"></script>
 <script src="{{ url_for('static', filename='js/modules/overlay_mount.js') }}?v=1.0"></script>
 <script src="{{ url_for('static', filename='js/modules/choice_validation.js') }}?v=1.0"></script>
-<script src="{{ url_for('static', filename='js/modules/inv_core.js') }}?v=2.0"></script>
+<script src="{{ url_for('static', filename='js/modules/inv_core.js') }}?v=2.1"></script>
 <script src="{{ url_for('static', filename='js/modules/ui_builder.js') }}?v=2.3"></script>
 <script src="{{ url_for('static', filename='js/modules/weight_utils.js') }}?v=2"></script>
 <script src="{{ url_for('static', filename='js/modules/empty_weight_field.js') }}?v=1"></script>
@@ -55,7 +55,7 @@
      the picker's "🖨️ Print new label" path can call window.addToQueue. -->
 <script src="{{ url_for('static', filename='js/modules/duplicate_picker.js') }}?v=1.4"></script>
 
-<script src="{{ url_for('static', filename='js/modules/inv_loc_mgr.js') }}?v=1.3"></script>
+<script src="{{ url_for('static', filename='js/modules/inv_loc_mgr.js') }}?v=1.4"></script>
 
 <script src="{{ url_for('static', filename='js/modules/inv_search.js') }}?v=1.1"></script>
 <!-- Group 49.2a: the ⚠️ Low-stock list, opened by the title bar's ⚠️ count
@@ -64,7 +64,7 @@
 <!-- Group 58.4: the 🧺 Loose spools list, opened from the Locations window (and,
      with tier 'confirm', from the audit panel). -->
 <script src="{{ url_for('static', filename='js/modules/inv_loose.js') }}?v=1.1"></script>
-<script src="{{ url_for('static', filename='js/modules/inv_cmd.js') }}?v=1.8"></script>
+<script src="{{ url_for('static', filename='js/modules/inv_cmd.js') }}?v=1.9"></script>
 <script src="{{ url_for('static', filename='js/modules/inv_weigh_out.js') }}?v=2.2"></script>
 
 <!-- Phase 3: Quick-Swap + keyboard shortcuts registry. Must load after
@@ -276,23 +276,31 @@
                 const q = queue.shift();
                 console.log("UI unfrozen, processing queued scan:", q.text);
                 try {
-                    processScan(q.text, q.source, q.capturedAt, q.weighRead);
+                    // A scan read during an audit never runs as a scan after it
+                    // (Group 58 review; `auditOf`, stamped as it was read).
+                    if (!window.auditScanOutlived || !window.auditScanOutlived(q)) {
+                        processScan(q.text, q.source, q.capturedAt, q.weighRead, q.auditOf);
+                    }
                 } catch (err) {
                     console.error("Queued scan failed:", q.text, err);
                 } finally {
                     // Answered without going out (a second read dropped,
                     // a dialog's own QR): nothing to wait for.
                     if (q.weighRead && !q.weighRead.sent && window.weighOutScanDone) window.weighOutScanDone(q.weighRead);
+                    // A queued Done that never went out has no answer to come.
+                    if (window.auditQueueMoved) window.auditQueueMoved();
                 }
             }
             if (!queue.length && state.scanQueueTimer) { clearInterval(state.scanQueueTimer); state.scanQueueTimer = null; }
         }
         // A press that goes out as a scan and acts on the scan before it (the audit's
-        // "Needs a label" marks the last spool found) takes its turn as a scan read
-        // now would, or it reaches the server ahead of the spool it means.
+        // "Needs a label" marks the last spool found; its Done plans from the scans
+        // so far) takes its turn as a scan read now would, or it reaches the server
+        // ahead of the spool it means.
         window.sendInScanOrder = function (text, source) {
             if (!scanFrozen() && !state.scanQueue.length) { processScan(text, source); return; }
-            state.scanQueue.push({ text, source, capturedAt: Date.now() });
+            state.scanQueue.push({ text, source, capturedAt: Date.now(),
+                auditOf: state.auditActive ? (state.auditId || true) : null });
             if (!state.scanQueueTimer) state.scanQueueTimer = setInterval(drainScanQueue, 250);
         };
         // Group 50.6: a person's Enter presses the button, link or [role=button]
@@ -385,7 +393,11 @@
                         // the earlier scan's answer counted as the latest, moved
                         // the focus and took the reading typed for this one.
                         const weighRead = window.weighOutScanStart ? window.weighOutScanStart() : null;
-                        state.scanQueue.push({ text: state.scanBuffer, source, capturedAt, weighRead });
+                        // `auditOf`: the audit it is read for, now: it may be over
+                        // by the time this goes out (a park holds a scan for as
+                        // long as it takes).
+                        state.scanQueue.push({ text: state.scanBuffer, source, capturedAt, weighRead,
+                            auditOf: state.auditActive ? (state.auditId || true) : null });
                         if (!state.scanQueueTimer) state.scanQueueTimer = setInterval(drainScanQueue, 250);
                         // Not busy any more (the queue only held scans its poll
                         // hadn't sent yet): those go now, then this one.

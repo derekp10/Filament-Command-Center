@@ -103,6 +103,19 @@ def _closed(page):
     page.wait_for_selector(QUESTION, state="detached")
 
 
+def _past_a_double_press(page):
+    """DOUBLE_PRESS_MS (inv_cmd.js): the question's yes takes no click that long after
+    it opens, and the panel none that long after it goes."""
+    page.wait_for_timeout(720)
+
+
+def _yes(page):
+    """A person who has read the question. PIN UPDATED DELIBERATELY (Group 58 review):
+    a click right after it opened was the second click of a double click on Done."""
+    _past_a_double_press(page)
+    page.click(YES)
+
+
 def test_the_question_draws_above_the_panel(dialog):
     """Hit tests. #confirmModal would have drawn behind it (z 1100 against 20000)."""
     _ask(dialog)
@@ -199,7 +212,7 @@ def test_the_qrs_answer_it(dialog):
     dialog.keyboard.press("Enter")
     _closed(dialog)
     assert dialog.evaluate("window.__parks") == [] and dialog.is_visible(DONE)
-    dialog.wait_for_timeout(120)                 # past the scanner's CR LF window
+    _past_a_double_press(dialog)                 # and the scanner's CR LF window
     _ask(dialog)
     sid = dialog.evaluate("Object.keys(window._fccActiveConfirms).pop()")
     dialog.keyboard.type(f"CMD:CONFIRM:{sid}", delay=0)
@@ -260,7 +273,7 @@ def test_a_refused_yes_hands_the_keyboard_back_to_done_and_says_why_on_top(dialo
     words = "Couldn't read LR-MDB-1 from Spoolman, so nothing was moved. Try Done again in a moment."
     dialog.evaluate("(msg) => { window.__park = { success: false, msg }; }", words)
     _ask(dialog)
-    dialog.click(YES)
+    _yes(dialog)
     dialog.wait_for_function("([sel, words]) => document.querySelector(sel).textContent === words", arg=[NOTICE, words])
     assert _on_top(dialog, NOTICE)
     dialog.wait_for_function("(sel) => !document.querySelector(sel).disabled", arg=DONE)
@@ -271,7 +284,7 @@ def test_a_refused_yes_hands_the_keyboard_back_to_done_and_says_why_on_top(dialo
 
 def test_a_park_that_landed_leaves_no_panel_no_question_and_no_dim(dialog):
     _ask(dialog)
-    dialog.click(YES)
+    _yes(dialog)
     dialog.wait_for_selector(PANEL, state="detached")
     assert not dialog.locator(QUESTION).count()
     assert dialog.evaluate("state.processing") is False and dialog.evaluate("state.auditActive") is False

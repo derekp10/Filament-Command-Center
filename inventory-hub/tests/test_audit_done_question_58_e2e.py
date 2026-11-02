@@ -18,8 +18,8 @@ import requests
 from playwright.sync_api import Page, expect
 
 import conftest
-from test_audit_page_58_e2e import DONE, PANEL, PILL, TILE, Server, _dashboard, _start, _toasts
-from test_audit_page_58_js import SESSION
+from test_audit_page_58_e2e import CANCEL, DONE, PANEL, PILL, TILE, Server, _dashboard, _start, _toasts
+from test_audit_page_58_js import SESSION, _row
 from test_audit_question_dialog_58_js import _question
 
 pytestmark = pytest.mark.usefixtures("require_server")
@@ -32,6 +32,8 @@ STATUS = QUESTION + " .fcc-apc-status"
 QRS = QUESTION + " .fcc-confirm-qr-row"
 AUDIT_ID = SESSION["audit_id"]
 PARKED_MSG = "Parked 3 spools at Unknown. Undo Last Move puts them back."
+PAST_A_DOUBLE_PRESS = 750       # DOUBLE_PRESS_MS (inv_cmd.js) and a little: the yes takes no click
+#                                 that long after the question opens, nor the panel after it goes
 
 
 class Asked(Server):
@@ -137,7 +139,7 @@ def test_the_qrs_answer_it(page: Page, base_url: str):
     _scan_keys(page, f"CMD:CANCEL:{sid}")
     expect(page.locator(QUESTION)).to_have_count(0)
     assert server.parks == []
-    page.wait_for_timeout(120)                  # past a scanner's CR LF window
+    page.wait_for_timeout(PAST_A_DOUBLE_PRESS)  # and a scanner's CR LF window
     _ask(page)
     sid = page.evaluate("Object.keys(window._fccActiveConfirms).pop()")
     _scan_keys(page, f"CMD:CONFIRM:{sid}")
@@ -152,6 +154,7 @@ def test_a_yes_ends_the_audit_with_no_warning_from_the_heartbeat(page: Page, bas
     _dashboard(page, base_url)
     _start(page)
     _ask(page)
+    page.wait_for_timeout(PAST_A_DOUBLE_PRESS)
     page.click(YES)
     expect(page.locator(PANEL)).to_have_count(0)
     page.wait_for_function("(m) => Array.from(document.querySelectorAll('#toast-container .toast-msg'))"
@@ -236,6 +239,156 @@ def test_the_panels_header_keeps_both_its_buttons_on_a_phone(page: Page, base_ur
     assert all(b["left"] >= 0 and b["right"] <= 360 for b in boxes), boxes
 
 
+# --- a real double click, at the sizes where it lands on something (Group 58 review) --
+
+RECT = """(sel) => { const r = document.querySelector(sel).getBoundingClientRect();
+    return { left: r.left, top: r.top, right: r.right, bottom: r.bottom }; }"""
+# What a click at (x, y) would hit with the question out of the way, or on it.
+BENEATH = """([x, y]) => { const q = document.querySelector('#fcc-audit-done-question');
+    for (const e of document.elementsFromPoint(x, y)) {
+        if (q && q.contains(e)) continue;
+        const b = e.closest('button');
+        return b ? (b.dataset.auditTile ? 'tile' : b.id) : (e.id || e.tagName);
+    } }"""
+ON_TOP = """([x, y]) => { const b = document.elementFromPoint(x, y).closest('button');
+    return b ? (b.id || b.className) : ''; }"""
+
+
+def _long_session(rows: int, found: int = 2) -> dict:
+    """/api/audit_session's shape: `rows` expected, the first `found` of them found."""
+    expected = [_row(100 + n, str(n + 1), found=n < found) for n in range(rows)]
+    return dict(SESSION, expected=expected, rogue=[], trail=[], note="",
+                stats={"total_expected": rows, "found": found, "missing": rows - found, "rogue": 0, "trail": 0},
+                last_found=dict(expected[0], label_read=True, flagged_here=False))
+
+
+def _long_audit(page: Page, base_url: str, width: int, height: int, rows: int = 18) -> Asked:
+    """A place of `rows` spools, its panel up, with the tiles and the strip drawn."""
+    page.set_viewport_size({"width": width, "height": height})
+    server = Asked(page, _question(park=rows - 2))
+    server.found = []
+    page.route("**/api/audit/found", lambda route: (server.found.append(route.request.post_data_json),
+                                                    server._json(route, {"success": True, "found": True})))
+    _dashboard(page, base_url)
+    _start(page)
+    server.session = _long_session(rows)
+    page.evaluate("window.refreshAuditSession()")
+    page.wait_for_function("(n) => document.querySelectorAll('.fcc-audit-tile').length === n", arg=rows)
+    return server
+
+
+def _scrolled_to_done(page: Page):
+    page.wait_for_timeout(200)                  # the panel's QR codes draw two frames later
+    page.evaluate("() => { const b = document.querySelector('#fcc-audit-panel-body'); b.scrollTop = b.scrollHeight; }")
+
+
+def _asked_and_drawn(page: Page):
+    """The question with its QR codes in: they draw two frames later, and it moves."""
+    _ask(page)
+    expect(page.locator(QRS)).to_be_visible()
+    page.wait_for_timeout(200)
+
+
+def _press(page: Page, x: float, y: float, second: bool = False):
+    """One press of the real mouse; `second`: a double click's."""
+    count = 2 if second else 1
+    page.mouse.move(x, y)
+    page.mouse.down(click_count=count)
+    page.mouse.up(click_count=count)
+
+
+def test_a_real_double_click_on_done_where_park_opens_under_it_answers_nothing(page: Page, base_url: str):
+    """Finding 34: at 1366 x 640 the question opens with Park over the right of Done.
+    Measured here, with the real Bootstrap. RED before the review's fix: every spool
+    parked, and nobody had read a word."""
+    server = _long_audit(page, base_url, 1366, 640)
+    _scrolled_to_done(page)
+    _asked_and_drawn(page)
+    done, yes = page.evaluate(RECT, DONE), page.evaluate(RECT, YES)
+    left, right = max(done["left"], yes["left"]), min(done["right"], yes["right"])
+    top, bottom = max(done["top"], yes["top"]), min(done["bottom"], yes["bottom"])
+    assert right > left and bottom > top, (done, yes)
+    x, y = (left + right) / 2, (top + bottom) / 2
+    page.keyboard.press("Escape")
+    expect(page.locator(QUESTION)).to_have_count(0)
+    page.wait_for_timeout(PAST_A_DOUBLE_PRESS)
+    _scrolled_to_done(page)
+
+    _press(page, x, y)
+    expect(page.locator(QRS)).to_be_visible()
+    page.wait_for_timeout(120)                  # a double click's gap, and the question settled
+    assert "fcc-apc-yes" in page.evaluate(ON_TOP, [x, y])
+    _press(page, x, y, second=True)
+    page.wait_for_timeout(150)
+    expect(page.locator(QUESTION)).to_have_count(1)
+    assert server.parks == []
+
+    page.wait_for_timeout(PAST_A_DOUBLE_PRESS)
+    _press(page, x, y)                          # a person who has read it
+    expect(page.locator(PANEL)).to_have_count(0)
+    assert len(server.parks) == 1
+
+
+def test_a_label_read_during_the_park_moves_nothing_after_it(page: Page, base_url: str):
+    """Finding 36, with the real dim, the real heartbeat and a buffer of the page's own:
+    the park takes a while, the panel stays up over it, and the queue holds what is
+    read meanwhile. The park's answer waits here for the test to give it. RED before the
+    review's fix: once the audit was over the label filed the buffered spool there."""
+    server = Asked(page)
+    parking, moves = [], []
+    page.route("**/api/audit/park", lambda route: parking.append(route))
+    page.route("**/api/smart_move", lambda route: (moves.append(route.request.post_data_json),
+                                                   server._json(route, {"status": "success"})))
+    conftest.own_the_buffer(page, [{"id": 8057, "display": "#8057 A buffered spool", "color": "72071C"}])
+    _dashboard(page, base_url)
+    page.wait_for_function("() => state.heldSpools.length === 1", timeout=15_000)
+    _start(page)
+    _ask(page)
+    page.wait_for_timeout(PAST_A_DOUBLE_PRESS)
+    page.click(YES)
+    page.wait_for_function("() => state.processing")
+    page.wait_for_function("(n) => document.querySelector('#fcc-audit-panel-notice').textContent.startsWith(n)", arg="Parking")
+    assert len(parking) == 1
+    _scan_keys(page, "LOC:A-CART")
+    assert page.evaluate("state.scanQueue.map((q) => q.text)") == ["LOC:A-CART"]
+    server._park(parking[0])
+    expect(page.locator(PANEL)).to_have_count(0)
+    page.wait_for_function("() => !state.scanQueue.length && !state.processing")
+    page.wait_for_timeout(200)
+    assert moves == [] and "LOC:A-CART" not in server.scans
+    assert page.evaluate("state.heldSpools.map((s) => s.id)") == [8057]
+    assert "The audit has ended, so LOC:A-CART did nothing. Scan it again if you meant it." in _toasts(page)
+
+
+@pytest.mark.parametrize("width, height, rows, lies_under", [(1366, 640, 18, CANCEL[1:]), (1600, 1300, 19, "tile")],
+                         ids=["cancel-audit", "a-tile"])
+def test_a_real_double_click_on_back_changes_nothing_under_it(page: Page, base_url: str, width, height, rows, lies_under):
+    """Finding 35 and 26, at sizes the review measured. The list is scrolled until what
+    the finding names lies under Back. RED before the review's fix: Cancel Audit ended
+    the audit, and a tile found a spool nobody had touched."""
+    server = _long_audit(page, base_url, width, height, rows)
+    _scrolled_to_done(page)
+    _asked_and_drawn(page)
+    back = page.evaluate(RECT, BACK)
+    x, y = (back["left"] + back["right"]) / 2, (back["top"] + back["bottom"]) / 2
+    got = page.evaluate("""([x, y, want, beneath]) => { const under = eval(beneath);
+        const body = document.querySelector('#fcc-audit-panel-body');
+        for (let top = body.scrollHeight - body.clientHeight; top >= 0; top -= 8) {
+            body.scrollTop = top;
+            const hit = under([x, y]);
+            if (hit === want) return hit;
+        }
+        return under([x, y]); }""", [x, y, lies_under, BENEATH])
+    assert got == lies_under
+    _press(page, x, y)
+    expect(page.locator(QUESTION)).to_have_count(0)
+    _press(page, x, y, second=True)
+    page.wait_for_timeout(200)
+    assert server.scans == ["CMD:AUDIT", "CMD:DONE"] and server.found == []
+    expect(page.locator(PANEL)).to_be_visible()
+    assert page.evaluate("state.auditActive") is True
+
+
 # --- no stubs ------------------------------------------------------------------------
 
 def _empty_box(api_base_url: str, spoolman: str):
@@ -301,7 +454,9 @@ def test_a_real_audit_through_the_question_a_real_park_and_its_undo(
         expect(page.locator(QUESTION)).to_have_count(0)
         assert _extra(spoolman, first)["location"] == place
 
+        page.wait_for_timeout(PAST_A_DOUBLE_PRESS)
         _ask(page)
+        page.wait_for_timeout(PAST_A_DOUBLE_PRESS)
         page.click(YES)
         expect(page.locator(PANEL)).to_have_count(0, timeout=30_000)
         expect(page.locator(PILL)).to_be_hidden()

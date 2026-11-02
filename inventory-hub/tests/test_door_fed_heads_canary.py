@@ -41,7 +41,8 @@ TABLE = {
         ("window.ejectSpool = ", "exempt", 1, "the ✋ pickup: an ID: scan never moves a spool"),
         ("window.doEject = ", "exempt", 1, "action remove: an eject"),
         ("window.manualAddSpool = ", "exempt", 1,
-         "ids only: LOC: / CMD: text goes through processScan (pinned in test_head_load_confirm_js)"),
+         "ids only, with no audit running: LOC: / CMD: text, and an id during an audit, go through "
+         "processScan (pinned in test_head_load_confirm_js and test_audit_page_58_js)"),
         ("window.triggerEjectAll = ", "exempt", 1, "action clear_location (check_only)"),
         ("const _runEjectAll = ", "exempt", 1, "action clear_location"),
     ],
