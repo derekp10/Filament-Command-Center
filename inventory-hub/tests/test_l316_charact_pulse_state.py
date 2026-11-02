@@ -326,7 +326,7 @@ def test_pulse_logs_dispatch_passthrough(monkeypatch):
 def test_pulse_status_derived_from_single_logs_call(monkeypatch):
     """include=status (alone) still runs _pulse_section_logs once (the
     health check lives there) but emits ONLY the derived 'status' section:
-    {spoolman, audit_active, audit_location, audit_end, undo_available,
+    {spoolman, audit_active, audit_id, audit_location, audit_end, undo_available,
     bulk_move_active, bulk_move_stage}
     — no 'filabridge' key (retired in Phase E Slice 4) and no 'logs' slot.
 
@@ -340,10 +340,14 @@ def test_pulse_status_derived_from_single_logs_call(monkeypatch):
     PIN UPDATED DELIBERATELY (Group 58, 2026-11-02): audit_location and
     audit_end, for the same reason: a tab with a paused Activity Log must still
     learn which place is being audited, and why an audit it believed in is gone.
+
+    PIN UPDATED DELIBERATELY (Group 58 review, 2026-11-02): audit_id. A page stamps
+    each scan with the audit it believes in, and a hidden panel has no poll, so the
+    heartbeat is what keeps that id current, on a paused Activity Log's tab too.
     """
     audit_end = {"id": "boot-3", "why": "idle", "location": "LR-MDB-1"}
     logs_payload = {"logs": [{"msg": "x"}], "status": {"spoolman": True},
-                    "audit_active": True, "undo_available": False,
+                    "audit_active": True, "undo_available": False, "audit_id": "boot-4",
                     "audit_location": "LR-MDB-2", "audit_end": audit_end,
                     "bulk_move_active": True, "bulk_move_stage": "awaiting_dest"}
     calls = []
@@ -354,7 +358,7 @@ def test_pulse_status_derived_from_single_logs_call(monkeypatch):
     r = client.get("/api/dashboard_pulse?include=status")
     body = r.get_json()
     assert body == {"status": {
-        "spoolman": True, "audit_active": True, "undo_available": False,
+        "spoolman": True, "audit_active": True, "undo_available": False, "audit_id": "boot-4",
         "audit_location": "LR-MDB-2", "audit_end": audit_end,
         "bulk_move_active": True, "bulk_move_stage": "awaiting_dest",
     }}
@@ -372,8 +376,8 @@ def test_pulse_status_defaults_false_on_sparse_logs_payload(monkeypatch):
     r = client.get("/api/dashboard_pulse?include=status")
     assert r.get_json() == {"status": {
         "spoolman": False, "audit_active": False, "undo_available": False,
-        # Group 58: no place, and no last end, rather than a KeyError.
-        "audit_location": "", "audit_end": None,
+        # Group 58: no id, no place, and no last end, rather than a KeyError.
+        "audit_id": None, "audit_location": "", "audit_end": None,
         # L298 Phase 3 — the bulk-move signal defaults to a SAFE idle rather
         # than KeyError-ing or implying an armed session.
         "bulk_move_active": False, "bulk_move_stage": "idle",

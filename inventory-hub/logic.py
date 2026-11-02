@@ -1172,6 +1172,15 @@ def resolve_scan(text):
         
     return {'type': 'error', 'msg': 'Unknown Code'}
 
+def is_closed_dialogs_cancel(text):
+    """A scan resolve_scan reads as cancel that a running session must not take
+    (Group 58). resolve_scan finds CMD:CANCEL anywhere in the text, so a closed
+    dialog's CMD:CANCEL:<sid>, on a page that hasn't heard a session runs, read as
+    the audit's or the bulk move's own Cancel. Only text ending in the bare command
+    cancels a session: a QR is read at the end of a scan, so a key left in front
+    (qCMD:CANCEL) never stops "Scan to Cancel"."""
+    return not str(text or '').strip().strip('"').strip("'").upper().endswith('CMD:CANCEL')
+
 def smart_move_failure(move_result, spool_id):
     """Why perform_smart_move did not move `spool_id`, or '' when it did.
 
@@ -5352,6 +5361,8 @@ _AUDIT_IDS = itertools.count(1)
 _AUDIT_END_LOCK = threading.Lock()
 
 AUDIT_FINISHING_MSG = "The audit is already finishing."
+AUDIT_ENDED_MSG = "That audit has ended."
+AUDIT_LOCATIONS_UNREAD = "Couldn't read the locations file, so nothing was recorded. Scan it again in a moment."
 AUDIT_WHERE_UNREAD = "couldn't read where FCC has it"
 AUDIT_GONE_WHY = "no longer in Spoolman"
 
@@ -5417,6 +5428,21 @@ def _audit_gone(session, audit_id, msg):
     return {"success": False, "stale": True, "msg": msg}
 
 
+def audit_seen_gone(seen):
+    """Has the audit a page believed in as it read a scan gone? `seen` is that
+    audit's id, True when the page believed in one and didn't know its id yet, and
+    absent or None otherwise (a page from before the release, or no belief: no
+    check). Gone means no audit runs, or an id and a different audit running: the
+    scan was meant for an audit, and must not land on the buffer or the next audit.
+    Ask after check_audit_idle_timeout, so a scan after 30 idle minutes counts."""
+    if not seen:
+        return False
+    session = state.AUDIT_SESSION
+    if not session.get('active'):
+        return True
+    return seen is not True and str(seen) != str(session.get('audit_id'))
+
+
 def _end_audit(why):
     """The one way an audit ends: says why for the heartbeat (`audit_end`), clears
     the session, logs it. `why` is done, cancel or idle. Call it holding the end
@@ -5476,7 +5502,8 @@ def check_audit_idle_timeout():
         if place:
             expected, missing, extras, trail = _audit_tally(session)
             parts = [f"found {len(expected) - len(missing)} of {len(expected)}"]
-            for words, ids in (("missing", missing), ("extra", extras), ("loaded from here", trail)):
+            for words, ids in (("missing", missing), ("extra", extras), ("loaded from here", trail),
+                               ("needs a label", list(session.get('label_flagged') or {}))):
                 if ids:
                     parts.append(f"{words} " + ", ".join(f"#{sid}" for sid in ids))
             line += " Report: " + "; ".join(parts) + "."
@@ -5540,6 +5567,9 @@ def _audit_report(session, parked=(), stays=(), failed=()):
     if trail:
         lines.append("🔗 <b>Loaded from here:</b> "
                      + ", ".join(_audit_esc(_audit_with_where(session, s)) for s in trail))
+    marked = list(session.get('label_flagged') or {})
+    if marked:
+        lines.append("🏷️ <b>Needs a label:</b> " + ", ".join(_audit_esc(_audit_label(session, s)) for s in marked))
     if parked:
         lines.append("❓ <b>Parked at Unknown:</b> " + ", ".join(f"#{s}" for s in parked)
                      + f" (Undo Last Move puts {'it' if len(parked) == 1 else 'them'} back)")
@@ -5632,7 +5662,11 @@ def _audit_location_scan(session, loc_id):
         expected.append(item['id'])
         rows[str(item['id'])] = _audit_row(item)
 
-    loc_list = locations_db.load_locations_list() or []
+    try:
+        loc_list = locations_db.load_locations_list() or []
+    except Exception as e:
+        state.logger.warning(f"Audit: couldn't read the locations file for {place}: {e}")
+        return _audit_refuse(AUDIT_LOCATIONS_UNREAD)
     inside = _audit_places_inside(place, spools, loc_list)
     known = any(isinstance(r, dict) and str(r.get('LocationID', '')).strip().upper() == place
                 for r in loc_list)
@@ -5642,7 +5676,7 @@ def _audit_location_scan(session, loc_id):
     # The read took a moment, and scans aren't serial: this audit may have ended,
     # or another scan may have picked its place.
     if session.get('audit_id') != audit_id:
-        return _audit_refuse("That audit has ended.")
+        return _audit_refuse(AUDIT_ENDED_MSG)
     if session.get('location_id'):
         return _audit_refuse(f"Already auditing {session['location_id']}. Finish first!")
 
@@ -5655,7 +5689,29 @@ def _audit_location_scan(session, loc_id):
     state.add_log_entry(
         f"🧐 Auditing <b>{_audit_esc(place)}</b>. expecting {len(expected)} {items}. Start scanning!"
         + (f" {_audit_esc(note)}" if note else ""), "INFO", "00aaff")
-    return {"status": "success"}
+    return {"status": "success", "heard": f"Auditing {place}: {len(expected)} expected"}
+
+
+def _audit_row_unread(session, sid):
+    """Its stored row was recorded while Spoolman wasn't answering."""
+    row = (session.get('rows') or {}).get(str(sid))
+    return isinstance(row, dict) and row.get('where') == AUDIT_WHERE_UNREAD
+
+
+def _audit_take_out(session, sid):
+    """Off the found lists: a row recorded unread, which this read replaces."""
+    for key in ('scanned_items', 'rogue_items'):
+        if sid in (session.get(key) or []):
+            session[key].remove(sid)
+
+
+def _audit_forget(session, sid):
+    """No mark left: the spool doesn't exist, so nothing about it was found."""
+    _audit_take_out(session, sid)
+    for key in ('rows', 'found_by', 'label_flagged'):
+        (session.get(key) or {}).pop(str(sid), None)
+    if session.get('last_found') == sid:
+        session['last_found'] = None
 
 
 def _audit_unexpected_spool(session, sid):
@@ -5665,27 +5721,34 @@ def _audit_unexpected_spool(session, sid):
 
     A spool on a head whose trail names this place physically sits in this box,
     feeding that head, so it is a quiet find. Anything else is an Extra (the
-    session's `rogue_items`), and says where FCC has it."""
+    session's `rogue_items`), and says where FCC has it.
+
+    A row recorded while Spoolman wasn't answering comes back here when the spool
+    is scanned again, and this read replaces it, only once it has answered: while
+    Spoolman still won't, the row stays as it is and nothing more is logged. So a
+    blip can't leave a loaded spool an Extra for good, or a mistyped id on the
+    report."""
     place = str(session.get('location_id') or '').strip().upper()
     audit_id = session.get('audit_id')
     rec, _answered = spoolman_api.get_spool_answer(sid)
     if session.get('audit_id') != audit_id:
-        return _audit_refuse("That audit has ended.")
+        return _audit_refuse(AUDIT_ENDED_MSG)
     scanned = session.setdefault('scanned_items', [])
-    if sid in scanned:
-        _audit_found(session, sid)
-        return {"status": "success", "msg": "Already scanned"}
+    if sid in scanned and not _audit_row_unread(session, sid):
+        return _audit_already_scanned(session, sid)
     rows = session.setdefault('rows', {})
 
     if not isinstance(rec, dict):
-        rows[str(sid)] = _audit_row({'id': sid, 'display': f"#{sid}", 'color': '', 'slot': '', 'location': '',
-                                     'color_direction': 'longitudinal'}, where=AUDIT_WHERE_UNREAD)
-        scanned.append(sid)
+        if sid not in scanned:
+            rows[str(sid)] = _audit_row({'id': sid, 'display': f"#{sid}", 'color': '', 'slot': '', 'location': '',
+                                         'color_direction': 'longitudinal'}, where=AUDIT_WHERE_UNREAD)
+            scanned.append(sid)
+            session.setdefault('rogue_items', []).append(sid)
+            state.add_log_entry(f"⚠️ Extra: #{sid}: {AUDIT_WHERE_UNREAD}.", "WARNING", "ffaa00")
         _audit_found(session, sid)
-        session.setdefault('rogue_items', []).append(sid)
-        state.add_log_entry(f"⚠️ Extra: #{sid}: {AUDIT_WHERE_UNREAD}.", "WARNING", "ffaa00")
-        return {"status": "success"}
+        return {"status": "success", "heard": f"Extra: #{sid}: {AUDIT_WHERE_UNREAD}"}
     if rec.get('id') is None:    # Spoolman's 404 body is a truthy dict
+        _audit_forget(session, sid)
         return _audit_refuse(f"Spool #{sid} not found")
 
     sloc = str(rec.get('location') or '').strip()
@@ -5696,25 +5759,30 @@ def _audit_unexpected_spool(session, sid):
     if lost:
         row['lost_from'] = lost
         row['where'] = f"Unknown (marked lost by {spoolman_api.audit_lost_words(lost)})"
+    loaded_from_here = False
     if str(extra.get('physical_source', '')).strip().replace('"', '').upper() == place:
-        printer_map, loc_info_map = _audit_place_maps()
-        if _holds_one_spool(sloc, printer_map, loc_info_map):
-            row['where'] = sloc
-            row['slot'] = str(extra.get('physical_source_slot', '')).strip('"')
-            rows[str(sid)] = row
-            scanned.append(sid)
-            _audit_found(session, sid)
-            session.setdefault('trail_items', []).append(sid)
-            state.add_log_entry(f"🔗 Found #{sid}: loaded on {_audit_esc(sloc)} from here.", "INFO")
-            return {"status": "success"}
+        try:
+            printer_map, loc_info_map = _audit_place_maps()
+        except Exception as e:
+            state.logger.warning(f"Audit: couldn't read the locations file for #{sid}: {e}")
+            return _audit_refuse(AUDIT_LOCATIONS_UNREAD)
+        loaded_from_here = _holds_one_spool(sloc, printer_map, loc_info_map)
 
+    _audit_take_out(session, sid)
     rows[str(sid)] = row
     scanned.append(sid)
     _audit_found(session, sid)
+    if loaded_from_here:
+        row['where'] = sloc
+        row['slot'] = str(extra.get('physical_source_slot', '')).strip('"')
+        session.setdefault('trail_items', []).append(sid)
+        state.add_log_entry(f"🔗 Found #{sid}: loaded on {_audit_esc(sloc)} from here.", "INFO")
+        return {"status": "success", "heard": f"Found #{sid}: loaded on {sloc} from here"}
+
     session.setdefault('rogue_items', []).append(sid)
     state.add_log_entry(f"⚠️ Extra: {_audit_esc(row['display'])}: FCC has it at {_audit_esc(row['where'])}.",
                         "WARNING", "ffaa00")
-    return {"status": "success"}
+    return {"status": "success", "heard": f"Extra: FCC has #{sid} at {row['where']}"}
 
 
 def _audit_found(session, sid):
@@ -5726,20 +5794,30 @@ def _audit_found(session, sid):
     session.setdefault('found_by', {}).setdefault(str(sid), AUDIT_FOUND_NO_LABEL)
 
 
+def _audit_already_scanned(session, sid):
+    """A double read: no read, no log line. It selects the spool again."""
+    _audit_found(session, sid)
+    return {"status": "success", "msg": "Already scanned", "heard": f"#{sid} is already scanned"}
+
+
 def _audit_spool_scan(session, sid):
+    """A spool scan. `heard`, on these and the location scan's answers, is what the
+    scan did in a sentence: the panel shows it, and it may be hidden."""
     if not session.get('location_id'):
         return _audit_refuse("Scan a Location first!")
     scanned = session.setdefault('scanned_items', [])
     if sid in scanned:
-        _audit_found(session, sid)
-        return {"status": "success", "msg": "Already scanned"}
+        if _audit_row_unread(session, sid):
+            return _audit_unexpected_spool(session, sid)
+        return _audit_already_scanned(session, sid)
     expected = session.get('expected_items') or []
     if sid not in expected:
         return _audit_unexpected_spool(session, sid)
     scanned.append(sid)
     _audit_found(session, sid)
-    state.add_log_entry(f"✅ Found #{sid}" + _audit_left_words(session), "INFO", "00ff00")
-    return {"status": "success"}
+    heard = f"Found #{sid}" + _audit_left_words(session)
+    state.add_log_entry(f"✅ {heard}", "INFO", "00ff00")
+    return {"status": "success", "heard": heard}
 
 
 def _audit_left_words(session):
@@ -5789,7 +5867,7 @@ def _audit_need_label(session):
     audit_id = session.get('audit_id')
     rec, answered = spoolman_api.get_spool_answer(sid)
     if session.get('audit_id') != audit_id:
-        return _audit_refuse("That audit has ended.")
+        return _audit_refuse(AUDIT_ENDED_MSG)
     if not answered or not isinstance(rec, dict):
         return _audit_refuse(f"Couldn't read #{sid} from Spoolman, so nothing was marked. Try again in a moment.")
     if rec.get('id') is None:    # Spoolman's 404 body is a truthy dict
@@ -5894,7 +5972,8 @@ def audit_undo_need_label(audit_id, sid):
         audit_label_status(sid, now)
         msg = f"#{sid}'s label status has changed since it was marked, so it was left as it is."
         state.add_log_entry(f"ℹ️ {msg}", "INFO", "00ccff")
-        return {"success": True, "msg": msg}
+        # `left_alone`: the press didn't do what it was asked, so the panel says so.
+        return {"success": True, "msg": msg, "left_alone": True}
     prior = flagged[key]
     value = spoolman_api.DELETE_EXTRA_SENTINEL if prior is None else prior
     res = spoolman_api.update_spool(sid, {'extra': {'needs_label_print': value}})
@@ -6001,6 +6080,10 @@ def _audit_finish(cmd):
     if not _AUDIT_END_LOCK.acquire(False):
         return _audit_refuse(AUDIT_FINISHING_MSG)
     try:
+        # Another end may have run since process_audit_scan looked: ending it again
+        # would write a second report and lose the real end's id.
+        if not session.get('active'):
+            return _audit_refuse(AUDIT_ENDED_MSG)
         stays: typing.List[typing.Dict[str, typing.Any]] = []
         if cmd == 'done':
             plan = plan_audit_done(session)
@@ -6197,6 +6280,10 @@ def process_audit_scan(scan_result):
     if _AUDIT_END_LOCK.locked():
         return _audit_refuse(AUDIT_FINISHING_MSG)
     session = state.AUDIT_SESSION
+    # The gate saw an audit, and another request may have ended it since. A reset
+    # session has no id, so the checks after each read wouldn't see the difference.
+    if not session.get('active'):
+        return _audit_refuse(AUDIT_ENDED_MSG)
     scan = scan_result or {}
     kind = scan.get('type')
 

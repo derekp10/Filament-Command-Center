@@ -16,6 +16,7 @@ tests/test_audit_auto_park_unknown.py and tests/test_audit_undo_58.py.
 from __future__ import annotations
 
 import copy
+import html
 import json
 import os
 import sys
@@ -100,17 +101,30 @@ def env(monkeypatch):
     state.reset_audit()
 
 
-def scan(env, text, source="keyboard", ask=True):
+def scan_answer(text, source="keyboard", ask=True, **more):
+    """The route's whole answer. `more`: other keys of the request (`audit_seen`)."""
     # A client of its own, so a scan can land in the middle of another's request.
     # `ask`: this page can show Done's question (`audit_ask`, on every scan).
     # `source`: keyboard reads no label, so these tests see the audit and nothing
     # else; a real label read is "barcode" (tests/test_audit_no_label_58.py).
-    body = {"text": text, "source": source, "confirmed_fed_heads": []}
+    body = {"text": text, "source": source, "confirmed_fed_heads": [], **more}
     if ask:
         body["audit_ask"] = True
     res = app_module.app.test_client().post("/api/identify_scan", json=body)
     assert res.status_code == 200, res.get_data(as_text=True)
     return res.get_json()
+
+
+def scan(env, text, source="keyboard", ask=True, **more):
+    """A scan, with `heard` taken out of an answer the audit took. PIN UPDATED
+    DELIBERATELY (Group 58 review): `heard` is the sentence for a hidden panel,
+    pinned on its own below through scan_answer, so the exact pins in these files
+    stay exact on every other key. Any other answer keeps it: a refusal that grew
+    one fails them."""
+    answer = scan_answer(text, source=source, ask=ask, **more)
+    if answer.get("cmd") == "audit_scan":
+        answer.pop("heard", None)
+    return answer
 
 
 def park(env, ids=None, audit_id=None, today=None):
@@ -176,7 +190,8 @@ def test_a_session_of_only_some_keys_still_takes_scans():
     state.AUDIT_SESSION.clear()
     state.AUDIT_SESSION.update({"active": True, "location_id": "LR-MDB-1", "expected_items": [5]})
     try:
-        assert logic.process_audit_scan({"type": "spool", "id": 5}) == {"status": "success"}
+        assert logic.process_audit_scan({"type": "spool", "id": 5}) == {"status": "success",
+                                                                        "heard": "Found #5 (All found!)"}
         assert state.AUDIT_SESSION["scanned_items"] == [5]
     finally:
         state.AUDIT_SESSION.clear()
@@ -349,6 +364,26 @@ def test_a_nested_printers_heads_are_inside_its_room_but_not_on_its_list(env):
     start(env, "LR")
     assert session()["expected_items"] == [1]
     assert session()["start_note"].startswith("1 is filed here. 1 more is in a place inside it")
+
+
+@pytest.mark.parametrize("head_row", [
+    {"LocationID": "HEAD-A", "Name": "Head", "Type": "Tool Head", "Max Spools": "1", "parent_id": None},
+    {"LocationID": "HEAD-A", "Name": "Head", "Type": "Tool Head", "Max Spools": "1"},
+    None,                                            # no row of its own at all
+])
+def test_a_printers_head_is_inside_it_whatever_its_own_row_says(env, head_row):
+    """The Printer row's toolheads[] says which heads it owns. XL-1 and XL-2 above
+    have parent_id XL, so the tree answers for them and that list never decides:
+    this head's id doesn't spell its printer, and nothing but the list names it."""
+    env["rows"].append({"LocationID": "MK4", "Name": "Another Printer", "Type": "Printer", "Max Spools": "0",
+                        "toolheads": [{"location_id": "HEAD-A", "position": 0}]})
+    if head_row:
+        env["rows"].append(head_row)
+    add_spool(env, 1, "HEAD-A")
+    scan(env, "CMD:AUDIT")
+    assert scan(env, "LOC:MK4") == AUDIT_SCAN
+    assert session()["start_note"] == ("Nothing is filed here itself. 1 more is in a place inside it (HEAD-A), "
+                                       "and this audit doesn't check it: audit that place too.")
 
 
 def test_a_trail_alone_is_not_a_place_inside(env):
@@ -628,6 +663,245 @@ def test_a_double_read_of_an_extra_records_it_once(env, monkeypatch):
     assert session()["rogue_items"] == [9] and session()["scanned_items"] == [9]
 
 
+# --- a row recorded while Spoolman wasn't answering ---------------------------
+
+UNREAD = "couldn't read where FCC has it"
+
+
+def scanned_in_a_blip(env, sid, source="keyboard"):
+    env["fake"].down = True
+    scan(env, f"ID:{sid}", source=source)
+    env["fake"].down = False
+    assert session()["rows"][str(sid)]["where"] == UNREAD
+    env["logs"].clear()
+    env["fake"].gets.clear()
+
+
+def test_a_spool_scanned_in_a_blip_reads_as_loaded_from_here_when_scanned_again(env):
+    """Derek's #242 again. It was an Extra for good: the re-scan answered "Already
+    scanned" with no read, and the report lost its Perfect Match to a blip."""
+    add_spool(env, 1, "LR-MDB-2", container_slot="2")
+    add_spool(env, 242, "XL-1", physical_source="LR-MDB-2", physical_source_slot="1")
+    start(env, "LR-MDB-2")
+    scan(env, "ID:1")
+    scanned_in_a_blip(env, 242)
+    assert scan(env, "ID:242") == AUDIT_SCAN
+    assert session()["rogue_items"] == [] and session()["trail_items"] == [242]
+    assert session()["scanned_items"] == [1, 242]
+    row = session()["rows"]["242"]
+    assert (row["where"], row["slot"], row["display"]) == ("XL-1", "1", "#242 Some Brand PLA (Red)")
+    assert [c for _m, c, _ in env["logs"]] == ["INFO"], env["logs"]
+    env["logs"].clear()
+    scan(env, "CMD:CANCEL")
+    line = report(env)
+    assert "Perfect Match" in line and "Loaded from here" in line and "Extra" not in line, line
+
+
+def test_a_spool_scanned_in_a_blip_reads_as_an_extra_with_its_real_place(env):
+    add_spool(env, 1, "LR-MDB-1")
+    add_spool(env, 9, "CR-CT-1-R2", name="Stray", container_slot="3")
+    start(env, "LR-MDB-1")
+    scanned_in_a_blip(env, 9)
+    assert scan(env, "ID:9") == AUDIT_SCAN
+    assert session()["rogue_items"] == [9] and session()["scanned_items"] == [9]
+    assert session()["rows"]["9"]["where"] == "CR-CT-1-R2 slot 3"
+    assert session()["rows"]["9"]["display"] == "#9 Some Brand PLA (Stray)"
+    assert log_text(env) == ["⚠️ Extra: #9 Some Brand PLA (Stray): FCC has it at CR-CT-1-R2 slot 3."]
+
+
+@pytest.mark.parametrize("how", ["down", "5xx"])
+def test_a_spool_scanned_in_a_blip_stays_as_it_is_while_spoolman_wont_answer(env, monkeypatch, how):
+    """Quiet: nothing changed, so nothing more is logged, and the scan still selects
+    it. And it can be read again after that."""
+    add_spool(env, 1, "LR-MDB-1")
+    add_spool(env, 9, "CR")
+    start(env, "LR-MDB-1")
+    scanned_in_a_blip(env, 9)
+    scan(env, "ID:1")
+    env["logs"].clear()
+    real_get = env["fake"].get
+    if how == "down":
+        env["fake"].down = True
+    else:
+        monkeypatch.setattr(spoolman_api.requests, "get", lambda url, timeout=None, **kw:
+                            _Resp(500, {"message": "database is locked (test)"}))
+    assert scan(env, "ID:9") == AUDIT_SCAN
+    assert session()["rogue_items"] == [9] and session()["scanned_items"] == [9, 1]
+    assert session()["rows"]["9"]["where"] == UNREAD
+    assert session()["last_found"] == 9
+    assert env["logs"] == []
+
+    env["fake"].down = False
+    monkeypatch.setattr(spoolman_api.requests, "get", real_get)
+    assert scan(env, "ID:9") == AUDIT_SCAN
+    assert session()["rows"]["9"]["where"] == "CR"
+
+
+def test_a_mistyped_id_scanned_in_a_blip_leaves_no_mark_once_spoolman_answers(env):
+    """It stayed on the report as an Extra, and only Cancel or Done cleared it."""
+    add_spool(env, 1, "LR-MDB-1")
+    start(env, "LR-MDB-1")
+    scan(env, "ID:1")
+    scanned_in_a_blip(env, 9999)
+    assert session()["last_found"] == 9999 and "9999" in session()["found_by"]
+    assert scan(env, "ID:9999") == {"type": "error", "msg": "Spool #9999 not found"}
+    assert session()["rogue_items"] == [] and session()["scanned_items"] == [1]
+    assert "9999" not in session()["rows"] and "9999" not in session()["found_by"]
+    assert session()["last_found"] is None
+    env["logs"].clear()
+    scan(env, "CMD:CANCEL")
+    assert "Perfect Match" in report(env)
+
+
+def test_a_mistyped_id_gone_leaves_the_last_spool_found_alone(env):
+    add_spool(env, 1, "LR-MDB-1")
+    start(env, "LR-MDB-1")
+    scanned_in_a_blip(env, 9999)
+    scan(env, "ID:1")
+    scan(env, "ID:9999")
+    assert session()["last_found"] == 1
+
+
+def test_a_spool_deleted_after_it_was_marked_leaves_no_mark_either(env):
+    """Marked once Spoolman answered, then gone: the report mustn't name it."""
+    add_spool(env, 1, "LR-MDB-1")
+    add_spool(env, 9, "CR")
+    start(env, "LR-MDB-1")
+    scanned_in_a_blip(env, 9)
+    assert scan(env, "CMD:NEEDLABEL")["said"] == "#9 is marked: it needs a label."
+    assert session()["label_flagged"] == {"9": None}
+    del env["fake"].records["spool"][9]
+    scan(env, "ID:9")
+    assert session()["label_flagged"] == {}
+
+
+def test_a_read_again_keeps_the_label_read_it_had(env):
+    """Its label was read in the blip, and a typed id doesn't take that back, as for
+    any other spool."""
+    add_spool(env, 1, "LR-MDB-1")
+    add_spool(env, 9, "CR")
+    start(env, "LR-MDB-1")
+    scanned_in_a_blip(env, 9, source="barcode")
+    assert session()["found_by"]["9"] == logic.AUDIT_FOUND_BY_LABEL
+    scan(env, "ID:9")
+    assert session()["found_by"]["9"] == logic.AUDIT_FOUND_BY_LABEL
+    assert session()["rows"]["9"]["where"] == "CR"
+
+
+def test_only_the_unread_row_reads_again(env):
+    """A row that has its place stays a double read: the rest of this section's
+    rule is about that one row, and a shelf's worth of double reads reads nothing."""
+    add_spool(env, 1, "LR-MDB-1")
+    add_spool(env, 9, "CR")
+    start(env, "LR-MDB-1")
+    scanned_in_a_blip(env, 9)
+    scan(env, "ID:9")
+    env["fake"].gets.clear()
+    env["logs"].clear()
+    assert scan(env, "ID:9") == AUDIT_SCAN
+    assert env["fake"].gets == [] and env["logs"] == []
+
+
+def test_a_double_read_of_a_row_being_read_again_records_it_once(env, monkeypatch):
+    add_spool(env, 1, "LR-MDB-1")
+    add_spool(env, 9, "CR")
+    start(env, "LR-MDB-1")
+    scanned_in_a_blip(env, 9)
+    real = spoolman_api.get_spool_answer
+
+    def read_twice(sid):
+        answer = real(sid)
+        monkeypatch.setattr(spoolman_api, "get_spool_answer", real)
+        scan(env, "ID:9")           # the second read lands first
+        return answer
+
+    monkeypatch.setattr(spoolman_api, "get_spool_answer", read_twice)
+    assert scan(env, "ID:9") == AUDIT_SCAN
+    assert session()["rogue_items"] == [9] and session()["scanned_items"] == [9]
+    assert len(env["logs"]) == 1, env["logs"]
+
+
+def test_a_row_being_read_again_stays_on_the_panel_until_the_read_answers(env, monkeypatch):
+    """The read takes a moment, and a poll or a Done can land in it."""
+    add_spool(env, 1, "LR-MDB-1")
+    add_spool(env, 9, "CR")
+    start(env, "LR-MDB-1")
+    scanned_in_a_blip(env, 9)
+    real = spoolman_api.get_spool_answer
+    during = []
+
+    def look_during_the_read(sid):
+        during.append((list(session()["rogue_items"]), list(session()["scanned_items"])))
+        return real(sid)
+
+    monkeypatch.setattr(spoolman_api, "get_spool_answer", look_during_the_read)
+    scan(env, "ID:9")
+    assert during == [([9], [9])]
+
+
+# --- the locations file ---------------------------------------------------------
+
+LOCATIONS_WORDS = "Couldn't read the locations file, so nothing was recorded. Scan it again in a moment."
+
+
+def locations_file_breaks(monkeypatch):
+    """A hand edit gone wrong: what load_locations_list raises for it."""
+    good = locations_db.load_locations_list
+
+    def corrupt():
+        raise locations_db.LocationsCorruptError("data/locations.json",
+                                                 json.JSONDecodeError("Expecting value (test)", "{", 1))
+
+    monkeypatch.setattr(locations_db, "load_locations_list", corrupt)
+    return lambda: monkeypatch.setattr(locations_db, "load_locations_list", good)
+
+
+def test_a_broken_locations_file_refuses_a_location_scan_in_words(env, monkeypatch):
+    """An HTML 500, and the panel said FCC didn't answer. The same scan outside an
+    audit answers 200, so this was the audit's own."""
+    add_spool(env, 1, "LR-MDB-1")
+    scan(env, "CMD:AUDIT")
+    env["logs"].clear()
+    mended = locations_file_breaks(monkeypatch)
+    assert scan(env, "LOC:LR-MDB-1") == {"type": "error", "msg": LOCATIONS_WORDS}
+    assert session()["active"] is True and session()["location_id"] is None
+    assert session()["expected_items"] == [] and session()["rows"] == {}
+    assert [(m, c) for m, c, _ in env["logs"]] == [(f"⚠️ {LOCATIONS_WORDS}", "WARNING")]
+    mended()
+    assert scan(env, "LOC:LR-MDB-1") == AUDIT_SCAN
+    assert session()["expected_items"] == [1]
+
+
+def test_a_broken_locations_file_records_nothing_for_a_spool_loaded_from_here(env, monkeypatch):
+    """Only the file can say the spool is on a head. An Extra here would be a guess,
+    so the person scans it again."""
+    add_spool(env, 1, "LR-MDB-2")
+    add_spool(env, 242, "XL-1", physical_source="LR-MDB-2", physical_source_slot="1")
+    start(env, "LR-MDB-2")
+    mended = locations_file_breaks(monkeypatch)
+    assert scan(env, "ID:242") == {"type": "error", "msg": LOCATIONS_WORDS}
+    assert session()["scanned_items"] == [] and session()["rogue_items"] == [] and session()["trail_items"] == []
+    assert "242" not in session()["rows"] and session()["found_by"] == {} and session()["last_found"] is None
+    assert [c for _m, c, _ in env["logs"]] == ["WARNING"], env["logs"]
+    mended()
+    assert scan(env, "ID:242") == AUDIT_SCAN
+    assert session()["trail_items"] == [242]
+
+
+def test_a_broken_locations_file_leaves_a_row_being_read_again_as_it_was(env, monkeypatch):
+    add_spool(env, 1, "LR-MDB-2")
+    add_spool(env, 242, "XL-1", physical_source="LR-MDB-2", physical_source_slot="1")
+    start(env, "LR-MDB-2")
+    scanned_in_a_blip(env, 242)
+    mended = locations_file_breaks(monkeypatch)
+    assert scan(env, "ID:242") == {"type": "error", "msg": LOCATIONS_WORDS}
+    assert session()["rogue_items"] == [242] and session()["scanned_items"] == [242]
+    assert session()["rows"]["242"]["where"] == UNREAD
+    mended()
+    scan(env, "ID:242")
+    assert session()["rogue_items"] == [] and session()["trail_items"] == [242]
+
+
 # ---------------------------------------------------------------------------
 # 4. Other scans and commands
 # ---------------------------------------------------------------------------
@@ -668,6 +942,20 @@ def test_a_shared_legacy_label_skips_the_gate_and_its_pick_counts(env, monkeypat
 
     assert scan(env, "ID:2", source="keyboard") == AUDIT_SCAN
     assert session()["scanned_items"] == [2]
+
+
+@pytest.mark.parametrize("audit_running", [True, False])
+def test_a_shared_legacy_labels_log_line_escapes_the_label(env, monkeypatch, audit_running):
+    """Activity Log messages are HTML, and this text is what was scanned."""
+    add_spool(env, 1, "LR-MDB-1")
+    add_spool(env, 2, "LR-MDB-1")
+    if audit_running:
+        start(env, "LR-MDB-1")
+    records = [env["fake"].records["spool"][sid] for sid in (1, 2)]
+    monkeypatch.setattr(spoolman_api, "find_spools_by_legacy_id", lambda legacy: copy.deepcopy(records))
+    ans = scan(env, "LEG:<B>77")
+    assert ans["type"] == "ambiguous" and ans["legacy_id"] == "<B>77"
+    assert log_text(env)[-1] == "⚠️ Legacy ID &lt;B&gt;77 matches 2 spools — pick one to continue"
 
 
 def test_cmd_audit_during_an_audit_keeps_the_27_5_answer(env):
@@ -910,6 +1198,59 @@ def test_two_ends_at_once_only_one_wins(env):
     logic._AUDIT_END_LOCK.release()
     assert not worker.is_alive(), "the loser waited for the lock"
     assert results == [{"status": "error", "msg": "The audit is already finishing."}]
+
+
+# --- a scan past the gate as the audit ends -----------------------------------
+
+ENDED = {"type": "error", "msg": "That audit has ended."}
+
+
+def ended_just_past_the_gate(env, monkeypatch, name="process_audit_scan"):
+    """A whole other request ends the audit in the instant between the route's gate
+    and logic.`name`, as two presses a moment apart can. Two real threads hit it 8
+    times in 1500 at a 1 microsecond switch interval; this hits it every time."""
+    real = getattr(logic, name)
+
+    def ended_first(*args):
+        monkeypatch.setattr(logic, name, real)
+        assert "audit_ended" in scan(env, "CMD:CANCEL")
+        return real(*args)
+
+    monkeypatch.setattr(logic, name, ended_first)
+
+
+@pytest.mark.parametrize("name", ["process_audit_scan", "_audit_finish"])
+@pytest.mark.parametrize("second", ["CMD:CANCEL", "CMD:DONE"])
+def test_an_end_past_the_gate_ends_nothing_more(env, monkeypatch, second, name):
+    """It ran on the reset session: a second report ("nothing was checked"), a second
+    "Audit Mode Ended.", and AUDIT_LAST_END lost the real id, so another tab said
+    "FCC restarted" instead of "elsewhere"."""
+    add_spool(env, 1, "LR-MDB-1")
+    start(env, "LR-MDB-1")
+    scan(env, "ID:1")
+    audit_id = session()["audit_id"]
+    env["logs"].clear()
+    ended_just_past_the_gate(env, monkeypatch, name)
+    assert scan(env, second) == ENDED
+    assert state.AUDIT_LAST_END == {"id": audit_id, "why": "cancel", "location": "LR-MDB-1"}
+    assert sum("Audit Report" in m for m in log_text(env)) == 1, log_text(env)
+    assert log_text(env).count("Audit Mode Ended.") == 1, log_text(env)
+    assert not logic._AUDIT_END_LOCK.locked()
+
+
+@pytest.mark.parametrize("text", ["LOC:LR-MDB-1", "ID:1", "CMD:NEEDLABEL", "FIL:5"])
+def test_a_scan_past_the_gate_stores_nothing_on_an_ended_session(env, monkeypatch, text):
+    """A location stored location_id and expected_items on an inactive session: the
+    heartbeat then read audit_active false with an audit_location. The check after
+    each read can't see it, because a reset session's id is None on both sides."""
+    add_spool(env, 1, "LR-MDB-1")
+    scan(env, "CMD:AUDIT")
+    ended_just_past_the_gate(env, monkeypatch)
+    assert scan(env, text) == ENDED
+    got = session()
+    assert (got["location_id"], got["expected_items"], got["rows"], got["scanned_items"]) == (None, [], {}, [])
+    assert env["client"].get("/api/logs").get_json()["audit_location"] == ""
+    assert env["fake"].patches == []
 
 
 # --- Done, for now, and Cancel ----------------------------------------------
@@ -1201,3 +1542,325 @@ def test_the_heartbeat_says_why_the_audit_ended(env, end):
     for payload in _heartbeats(env):      # the watchdog rides the heartbeat
         assert payload["audit_active"] is False and payload["audit_location"] == ""
         assert payload["audit_end"] == want
+
+
+def test_the_heartbeat_says_which_audit_runs(env):
+    """A hidden panel has no poll, so this keeps the id a page stamps its scans with
+    current, in both shapes."""
+    for payload in _heartbeats(env):
+        assert payload["audit_id"] is None
+    scan(env, "CMD:AUDIT")
+    audit_id = session()["audit_id"]
+    assert audit_id
+    for payload in _heartbeats(env):
+        assert payload["audit_id"] == audit_id
+    scan(env, "CMD:CANCEL")
+    for payload in _heartbeats(env):
+        assert payload["audit_id"] is None
+
+
+# ---------------------------------------------------------------------------
+# A scan says which audit it was read for (`audit_seen`)
+# ---------------------------------------------------------------------------
+
+def gone(text):
+    return {"type": "audit_gone", "msg": f"The audit has ended, so {text} did nothing. Scan it again if you meant it."}
+
+
+@pytest.fixture
+def one_in_the_buffer(env, monkeypatch):
+    """A spool on the list, and another buffered, which a slot label would load."""
+    add_spool(env, 1, "LR-MDB-1", container_slot="1")
+    add_spool(env, 5, "CR-CT-1", name="Buffered")
+    monkeypatch.setattr(state, "GLOBAL_BUFFER", [{"id": 5, "display": "#5"}])
+    return env
+
+
+# What a page sends once its audit has gone. Each would act, and three would write.
+SCANS_MEANT_FOR_AN_AUDIT = [("LOC:LR-MDB-2:SLOT:2", "barcode"), ("LOC:LR-MDB-2", "barcode"),
+                            ("ID:1", "barcode"), ("CMD:DONE", "barcode")]
+
+
+def assert_did_nothing(env, before, text):
+    """No write, no move, the buffer as it was, and one line saying so."""
+    assert env["fake"].patches == []
+    assert env["fake"].records["spool"] == before
+    assert state.GLOBAL_BUFFER == [{"id": 5, "display": "#5"}]
+    lines = [(m, c) for m, c, _ in env["logs"] if "The audit has ended" in m]
+    assert lines == [(f"⚠️ {html.escape(gone(text)['msg'], quote=False)}", "WARNING")]
+
+
+@pytest.mark.parametrize("text, source", SCANS_MEANT_FOR_AN_AUDIT)
+@pytest.mark.parametrize("ended_by", ["CMD:CANCEL", "idle"])
+def test_a_scan_for_an_audit_that_has_gone_does_nothing(one_in_the_buffer, text, source, ended_by):
+    """It fell through to the normal paths: a slot label scanned at a hidden panel
+    after an idle end loaded the buffered spool into that slot."""
+    env = one_in_the_buffer
+    start(env, "LR-MDB-1")
+    seen = session()["audit_id"]
+    if ended_by == "idle":
+        _go_stale()             # the scan itself finds this out, before it refreshes anything
+    else:
+        scan(env, ended_by)
+    env["logs"].clear()
+    before = copy.deepcopy(env["fake"].records["spool"])
+    assert scan(env, text, source=source, audit_seen=seen) == gone(text)
+    assert_did_nothing(env, before, text)
+    assert session()["active"] is False
+
+
+@pytest.mark.parametrize("text, source", SCANS_MEANT_FOR_AN_AUDIT)
+def test_a_scan_for_an_audit_that_gave_way_to_another_leaves_that_one_alone(one_in_the_buffer, text, source):
+    """It would have landed on the next audit: a Done there, or a spool found there
+    that nobody read for it."""
+    env = one_in_the_buffer
+    start(env, "LR-MDB-1")
+    seen = session()["audit_id"]
+    scan(env, "CMD:CANCEL")
+    start(env, "LR-MDB-1")
+    running = session()["audit_id"]
+    assert running != seen
+    before = copy.deepcopy(env["fake"].records["spool"])
+    assert scan(env, text, source=source, audit_seen=seen) == gone(text)
+    assert_did_nothing(env, before, text)
+    got = session()
+    assert (got["active"], got["audit_id"], got["location_id"], got["scanned_items"]) == (
+        True, running, "LR-MDB-1", [])
+
+
+def test_with_no_stamp_those_scans_act_as_they_always_did(one_in_the_buffer):
+    """A page from before the release sends none, so there is no check. And this is
+    what the stamp stops, on the real engine: a label read that writes, and a slot
+    label that loads the buffered spool."""
+    env = one_in_the_buffer
+    assert scan(env, "ID:1", source="barcode")["type"] == "spool"
+    assert [p[1] for p in env["fake"].patches] == [1]
+    ans = scan(env, "LOC:LR-MDB-2:SLOT:2")
+    assert ans["type"] == "assignment" and ans["moved"] == 5, ans
+    assert env["fake"].records["spool"][5]["location"] == "LR-MDB-2"
+
+
+def test_the_right_id_is_an_ordinary_audit_scan(env):
+    add_spool(env, 1, "LR-MDB-1")
+    start(env, "LR-MDB-1")
+    assert scan(env, "ID:1", audit_seen=session()["audit_id"]) == AUDIT_SCAN
+    assert session()["scanned_items"] == [1]
+
+
+def test_a_page_with_no_id_yet_is_fine_while_an_audit_runs(env):
+    """The moment after it started one, before the heartbeat told it the id."""
+    add_spool(env, 1, "LR-MDB-1")
+    start(env, "LR-MDB-1")
+    assert scan(env, "ID:1", audit_seen=True) == AUDIT_SCAN
+    assert session()["scanned_items"] == [1]
+
+
+def test_a_page_with_no_id_yet_is_told_when_none_runs(env):
+    add_spool(env, 1, "LR-MDB-1")
+    assert scan(env, "ID:1", audit_seen=True) == gone("ID:1")
+
+
+@pytest.mark.parametrize("seen", [None, False, ""])
+def test_no_belief_is_no_check(env, seen):
+    add_spool(env, 1, "LR-MDB-1")
+    assert scan(env, "ID:1", audit_seen=seen)["type"] == "spool"
+
+
+def test_the_stamp_is_read_after_the_idle_check(env):
+    """A scan after 30 idle minutes counts as gone, so it can't refresh the audit it
+    was meant for, and the page hears why."""
+    add_spool(env, 1, "LR-MDB-1")
+    start(env, "LR-MDB-1")
+    seen = session()["audit_id"]
+    _go_stale()
+    assert scan(env, "ID:1", audit_seen=seen) == gone("ID:1")
+    assert state.AUDIT_LAST_END == {"id": seen, "why": "idle", "location": "LR-MDB-1"}
+
+
+def test_the_gone_line_escapes_what_was_scanned(env):
+    """Activity Log messages are HTML, and the toast draws plain text."""
+    text = "LOC:<B>BOX"
+    assert scan(env, text, audit_seen=True)["msg"] == gone(text)["msg"]
+    assert log_text(env) == ["⚠️ The audit has ended, so LOC:&lt;B&gt;BOX did nothing. Scan it again if you meant it."]
+
+
+@pytest.mark.parametrize("active, running, seen, want", [
+    (False, None, "boot-1", True),      # no audit runs
+    (False, None, True, True),
+    (True, "boot-2", "boot-1", True),   # a different one runs
+    (True, "boot-1", "boot-1", False),
+    (True, "boot-1", True, False),
+    (True, "boot-1", None, False),      # no belief: no check
+    (False, None, None, False),
+])
+def test_audit_seen_gone(active, running, seen, want):
+    state.reset_audit()
+    state.AUDIT_SESSION.update(active=active, audit_id=running)
+    try:
+        assert logic.audit_seen_gone(seen) is want
+    finally:
+        state.reset_audit()
+
+
+# ---------------------------------------------------------------------------
+# A closed dialog's cancel QR, at the gates
+# ---------------------------------------------------------------------------
+
+STALE_CANCEL = "That cancel QR belongs to a dialog that has closed — ignored"
+CLOSED_DIALOG_QRS = ["CMD:CANCEL:ab12cd", "cmd:cancel:ab12cd", "qCMD:CANCEL:ab12cd"]
+BARE_CANCELS = ["CMD:CANCEL", "cmd:cancel", "qCMD:CANCEL", '"CMD:CANCEL"', "  CMD:CANCEL  "]
+
+
+@pytest.fixture
+def bulk_move():
+    state.BULK_MOVE_SESSION.update(active=True, stage="awaiting_dest", source_id="LR-MDB-1",
+                                   last_activity_ts=time.time())
+    yield state.BULK_MOVE_SESSION
+    state.reset_bulk_move()
+
+
+@pytest.mark.parametrize("text", CLOSED_DIALOG_QRS)
+def test_a_closed_dialogs_cancel_qr_ends_no_audit(env, text):
+    """resolve_scan finds CMD:CANCEL anywhere in the text, so "Scan to go back" read
+    after its question closed, on a page that hadn't heard an audit runs, threw away
+    every scan in it."""
+    add_spool(env, 1, "LR-MDB-1")
+    start(env, "LR-MDB-1")
+    scan(env, "ID:1")
+    env["logs"].clear()
+    assert scan(env, text) == {"type": "error", "msg": STALE_CANCEL}
+    assert session()["active"] is True and session()["scanned_items"] == [1]
+    assert state.AUDIT_LAST_END is None
+    assert [(m, c) for m, c, _ in env["logs"]] == [(f"⚠️ {STALE_CANCEL}", "WARNING")]
+
+
+@pytest.mark.parametrize("text", CLOSED_DIALOG_QRS)
+def test_a_closed_dialogs_cancel_qr_cancels_no_bulk_move(env, bulk_move, text):
+    assert scan(env, text) == {"type": "error", "msg": STALE_CANCEL}
+    assert bulk_move["active"] is True and bulk_move["stage"] == "awaiting_dest"
+    assert [(m, c) for m, c, _ in env["logs"]] == [(f"⚠️ {STALE_CANCEL}", "WARNING")]
+
+
+@pytest.mark.parametrize("text", BARE_CANCELS)
+def test_the_bare_command_cancels_an_audit_with_or_without_a_stray_key(env, text):
+    """A QR is read at the end of a scan, so a key left in front never stops "Scan to
+    Cancel". Pins what was already right; proved on a copy with the gate on every
+    scan that isn't exactly CMD:CANCEL."""
+    add_spool(env, 1, "LR-MDB-1")
+    start(env, "LR-MDB-1")
+    assert "audit_ended" in scan(env, text)
+    assert session()["active"] is False
+
+
+@pytest.mark.parametrize("text", BARE_CANCELS)
+def test_the_bare_command_cancels_a_bulk_move_with_or_without_a_stray_key(env, bulk_move, text):
+    scan(env, text)
+    assert bulk_move["active"] is False
+
+
+@pytest.mark.parametrize("text", CLOSED_DIALOG_QRS + BARE_CANCELS)
+def test_outside_a_session_a_cancel_answers_as_it_always_did(env, text):
+    assert scan(env, text) == {"type": "command", "cmd": "cancel"}
+    assert env["logs"] == []
+
+
+# ---------------------------------------------------------------------------
+# `heard`: what a scan did, for a hidden panel
+# ---------------------------------------------------------------------------
+
+def test_a_location_scan_is_heard(env):
+    for sid in (1, 2):
+        add_spool(env, sid, "LR-MDB-1")
+    scan(env, "CMD:AUDIT")
+    assert scan_answer("LOC:LR-MDB-1") == {**AUDIT_SCAN, "heard": "Auditing LR-MDB-1: 2 expected"}
+
+
+def test_a_spool_on_the_list_is_heard_with_what_is_left(env):
+    for sid in (1, 2):
+        add_spool(env, sid, "LR-MDB-1")
+    start(env, "LR-MDB-1")
+    assert scan_answer("ID:1") == {**AUDIT_SCAN, "heard": "Found #1 (1 left)"}
+    assert scan_answer("ID:2") == {**AUDIT_SCAN, "heard": "Found #2 (All found!)"}
+
+
+def test_a_double_read_is_heard(env):
+    add_spool(env, 1, "LR-MDB-1")
+    add_spool(env, 9, "CR")
+    start(env, "LR-MDB-1")
+    scan(env, "ID:1")
+    scan(env, "ID:9")
+    assert scan_answer("ID:1") == {**AUDIT_SCAN, "heard": "#1 is already scanned"}
+    assert scan_answer("ID:9") == {**AUDIT_SCAN, "heard": "#9 is already scanned"}
+
+
+def test_a_double_read_that_lost_the_race_is_heard_too(env, monkeypatch):
+    add_spool(env, 1, "LR-MDB-1")
+    add_spool(env, 9, "CR")
+    start(env, "LR-MDB-1")
+    real = spoolman_api.get_spool_answer
+
+    def read_twice(sid):
+        answer = real(sid)
+        monkeypatch.setattr(spoolman_api, "get_spool_answer", real)
+        scan(env, "ID:9")
+        return answer
+
+    monkeypatch.setattr(spoolman_api, "get_spool_answer", read_twice)
+    assert scan_answer("ID:9")["heard"] == "#9 is already scanned"
+
+
+def test_an_extra_is_heard_with_where_fcc_has_it(env):
+    add_spool(env, 1, "LR-MDB-1")
+    add_spool(env, 9, "CR-CT-1-R2", container_slot="3")
+    start(env, "LR-MDB-1")
+    assert scan_answer("ID:9") == {**AUDIT_SCAN, "heard": "Extra: FCC has #9 at CR-CT-1-R2 slot 3"}
+
+
+def test_an_extra_spoolman_wont_answer_for_is_heard_in_its_own_words(env):
+    add_spool(env, 1, "LR-MDB-1")
+    start(env, "LR-MDB-1")
+    env["fake"].down = True
+    assert scan_answer("ID:9") == {**AUDIT_SCAN, "heard": "Extra: #9: couldn't read where FCC has it"}
+    assert scan_answer("ID:9") == {**AUDIT_SCAN, "heard": "Extra: #9: couldn't read where FCC has it"}
+
+
+def test_a_lost_spool_is_heard_saying_which_audit_lost_it(env):
+    add_spool(env, 1, "LR-MDB-1")
+    add_spool(env, 9, "UNKNOWN", fcc_pre_audit_location="LR-MDB-2:2@2026-11-01")
+    start(env, "LR-MDB-1")
+    assert scan_answer("ID:9")["heard"] == (
+        "Extra: FCC has #9 at Unknown (marked lost by the audit of LR-MDB-2 slot 2 on 2026-11-01)")
+
+
+def test_a_spool_loaded_from_here_is_heard(env):
+    add_spool(env, 1, "LR-MDB-2")
+    add_spool(env, 242, "XL-1", physical_source="LR-MDB-2", physical_source_slot="1")
+    start(env, "LR-MDB-2")
+    assert scan_answer("ID:242") == {**AUDIT_SCAN, "heard": "Found #242: loaded on XL-1 from here"}
+
+
+def test_a_row_read_again_is_heard_as_what_it_turned_out_to_be(env):
+    add_spool(env, 1, "LR-MDB-2")
+    add_spool(env, 242, "XL-1", physical_source="LR-MDB-2", physical_source_slot="1")
+    start(env, "LR-MDB-2")
+    scanned_in_a_blip(env, 242)
+    assert scan_answer("ID:242")["heard"] == "Found #242: loaded on XL-1 from here"
+
+
+@pytest.mark.parametrize("text, msg", [("LOC:LR-TYPO", "LR-TYPO isn't a place FCC knows."),
+                                       ("ID:999999", "Spool #999999 not found")])
+def test_a_refusal_has_no_heard(env, text, msg):
+    """A refusal has its own toast. On the whole answer: scan() leaves these alone."""
+    add_spool(env, 1, "LR-MDB-1")
+    if text.startswith("LOC:"):
+        scan(env, "CMD:AUDIT")
+    else:
+        start(env, "LR-MDB-1")
+    assert scan_answer(text) == {"type": "error", "msg": msg}
+
+
+def test_a_command_has_no_heard(env):
+    add_spool(env, 1, "LR-MDB-1")
+    assert scan_answer("CMD:AUDIT") == AUDIT_SCAN
+    assert scan_answer("CMD:AUDIT") == AUDIT_SCAN
+    assert set(scan_answer("CMD:CANCEL")) == {"type", "cmd", "audit_ended"}

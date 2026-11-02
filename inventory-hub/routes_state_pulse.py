@@ -254,9 +254,12 @@ def api_get_logs_route():
         "logs": state.RECENT_LOGS,
         "undo_available": len(state.UNDO_STACK) > 0,
         "audit_active": state.AUDIT_SESSION.get('active', False),
-        # Group 58: the place being audited ('' until one is scanned), and how
-        # the last audit ended ({id, why, location}, None since a restart), so a
-        # page still believing in an audit can say why it is gone.
+        # Group 58: which audit runs (None when none does): a hidden panel has no
+        # poll, and this keeps the id a page stamps its scans with current.
+        "audit_id": state.AUDIT_SESSION.get('audit_id'),
+        # The place being audited ('' until one is scanned), and how the last
+        # audit ended ({id, why, location}, None since a restart), so a page
+        # still believing in an audit can say why it is gone.
         "audit_location": state.AUDIT_SESSION.get('location_id') or '',
         "audit_end": state.AUDIT_LAST_END,
         "bulk_move_active": state.BULK_MOVE_SESSION.get('active', False),
@@ -611,6 +614,7 @@ def api_dashboard_pulse():
                     'audit_active': logs_payload.get('audit_active', False),
                     # Group 58: as the bulk-move signal below, or a tab with a
                     # paused Activity Log can't say why its audit is gone.
+                    'audit_id': logs_payload.get('audit_id'),
                     'audit_location': logs_payload.get('audit_location', ''),
                     'audit_end': logs_payload.get('audit_end'),
                     'undo_available': logs_payload.get('undo_available', False),

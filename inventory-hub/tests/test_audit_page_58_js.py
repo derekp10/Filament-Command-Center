@@ -767,7 +767,10 @@ return { id: state.auditId, place: state.auditLocation, up: panelUp(), active: s
 
 
 def test_a_scans_answer_landing_after_the_end_cant_bring_the_audit_back(tmp_path, real):
-    """Scans aren't serial. "An audit took it" was true when the scan was sent."""
+    """Scans aren't serial. "An audit took it" was true when the scan was sent. The
+    wait between the two is the clock's: node's vm has no `performance`, so the page's
+    clock is whole milliseconds here, the scan and the Cancel's answer can tie, and a
+    tie reads as "not older". No real answer comes back inside its own millisecond."""
     res = _run(tmp_path, """
 answerWith('/api/identify_scan', [%s, %s]);
 await running(SESSION);
@@ -781,6 +784,7 @@ window.fetchT = (u, o) => {
   return held.then(() => answer);
 };
 window.processScan('ID:57', 'barcode');
+await __settle(5);
 window.processScan('CMD:CANCEL', 'barcode');
 await __settle(40);
 const ended = state.auditActive;

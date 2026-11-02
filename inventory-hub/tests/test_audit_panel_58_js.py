@@ -190,12 +190,13 @@ def test_the_pill_answers_a_persons_enter_and_not_a_scans(audit):
 
 
 def test_a_long_place_stays_on_screen(audit):
-    """A rem cap, and the words clipped: the pill is the way back to the panel."""
+    """A rem cap, and the words clipped: the pill is the way back to the panel. It
+    re-clamps on its ResizeObserver, so at the next frame: a box read before that has
+    the new width at the old left (1406 + 384 on a busy run), and is gone a frame on."""
     audit.click("#fcc-audit-panel-close")
     audit.evaluate("() => { state.auditLocation = 'A-PLACE-WITH-A-VERY-LONG-NAME-'.repeat(6); window.updateAuditPill(); }")
-    box = audit.locator(PILL).bounding_box()
-    viewport = audit.viewport_size
-    assert box["x"] >= 0 and box["x"] + box["width"] <= viewport["width"]
+    audit.wait_for_function("""(sel) => { const box = document.querySelector(sel).getBoundingClientRect();
+        return box.width > 300 && box.left >= 0 && box.right <= window.innerWidth; }""", arg=PILL)
 
 
 def test_enter_on_done_presses_it_once(audit):

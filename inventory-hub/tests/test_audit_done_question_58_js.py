@@ -546,11 +546,17 @@ return { back, parks: parks().length, up: questionUp(), active: state.auditActiv
     assert res["parks"] == 1 and res["up"] is False and res["active"] is False
 
 
-def test_the_server_reads_any_text_holding_cmd_cancel_as_the_audits_own_cancel(env):
-    """Pins why the page stops a stale one: a session's QR, sent on, ends the audit."""
+def test_the_gate_stops_what_the_resolver_reads_as_cancel(env):
+    """Why the page stops a stale one: resolve_scan reads any text holding CMD:CANCEL
+    as cancel. PIN UPDATED DELIBERATELY (Group 58 review): sent on, a session's QR
+    ended the audit. The server now stops it too, for a page that hasn't heard an
+    audit runs (tests/test_audit_session_58.py has the gate)."""
     add_spool(env, 57, "LR-MDB-1")
     start(env, "LR-MDB-1")
-    assert scan(env, "CMD:CANCEL:fcc-cqr-9-x")["audit_ended"]["why"] == "cancel"
+    assert logic.resolve_scan("CMD:CANCEL:fcc-cqr-9-x") == {"type": "command", "cmd": "cancel"}
+    assert scan(env, "CMD:CANCEL:fcc-cqr-9-x") == {
+        "type": "error", "msg": "That cancel QR belongs to a dialog that has closed — ignored"}
+    assert state.AUDIT_SESSION["active"] is True
 
 
 def test_a_go_back_qr_read_twice_leaves_the_audit_running(tmp_path, asked):

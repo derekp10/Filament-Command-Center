@@ -29,7 +29,7 @@ import logic  # noqa: E402
 import spoolman_api  # noqa: E402
 import state  # noqa: E402
 from spoolman_extra_fake import _Resp  # noqa: E402
-from test_audit_session_58 import add_spool, env, log_text, park, scan, session, start  # noqa: E402,F401
+from test_audit_session_58 import add_spool, env, log_text, park, report, scan, session, start  # noqa: E402,F401
 
 AUDIT_SCAN = {"type": "command", "cmd": "audit_scan"}
 LABEL = "needs_label_print"
@@ -583,6 +583,97 @@ def test_the_end_clears_the_marks_and_leaves_the_flag(env):
     assert wire(env, 5) == "true"
 
 
+def test_a_mark_that_loses_a_race_with_the_end_writes_nothing(env, monkeypatch):
+    """Its read was out when the audit ended: the mark would stand on the record with
+    no audit left to undo it. Pins what was already right; proved on a copy with the
+    check after the read taken out."""
+    add_spool(env, 5, "LR-MDB-1")
+    start(env, "LR-MDB-1")
+    scan(env, "5")
+    real = spoolman_api.get_spool_answer
+
+    def ended_meanwhile(sid):
+        answer = real(sid)
+        monkeypatch.setattr(spoolman_api, "get_spool_answer", real)
+        assert "audit_ended" in scan(env, "CMD:CANCEL")
+        return answer
+
+    monkeypatch.setattr(spoolman_api, "get_spool_answer", ended_meanwhile)
+    assert scan(env, MARK) == {"type": "error", "msg": "That audit has ended."}
+    assert session()["active"] is False
+    assert writes(env) == [] and wire(env, 5) is None
+
+
+def test_the_report_names_the_spools_marked_as_needing_a_label(env):
+    """A mark's spool is on the Backlog, and the report is what is left of an audit:
+    with no read, from the rows stored at each scan."""
+    add_spool(env, 1, "LR-MDB-1", name="Red")
+    add_spool(env, 2, "LR-MDB-1", name="Blue")
+    add_spool(env, 7, "CR", name="Stray")
+    start(env, "LR-MDB-1")
+    for spool in ("1", "ID:7"):
+        scan(env, spool)
+        scan(env, MARK)
+    scan(env, "2")
+    env["logs"].clear()
+    env["fake"].gets.clear()
+    scan(env, "CMD:CANCEL")
+    line = report(env)
+    assert "<b>Needs a label:</b> #1 Some Brand PLA (Red), #7 Some Brand PLA (Stray)" in line
+    assert env["fake"].gets == []
+
+
+def test_a_mark_undone_isnt_in_the_report(env):
+    """Green with no such line at all; proved on a copy that keeps an undone mark in
+    label_flagged."""
+    add_spool(env, 1, "LR-MDB-1")
+    start(env, "LR-MDB-1")
+    scan(env, "1")
+    scan(env, MARK)
+    undo(env, 1)
+    env["logs"].clear()
+    scan(env, "CMD:CANCEL")
+    assert "Needs a label" not in report(env)
+
+
+def test_with_no_marks_the_report_has_no_such_line(env):
+    """The line is this audit's marks, never the flags already up. Green with no such
+    line at all; proved on a copy whose report reads the rows' flags."""
+    add_spool(env, 1, "LR-MDB-1", needs_label_print=True)
+    start(env, "LR-MDB-1")
+    scan(env, "1")
+    scan(env, MARK)                                 # already flagged: not this audit's mark
+    env["logs"].clear()
+    scan(env, "CMD:CANCEL")
+    assert "Needs a label" not in report(env)
+
+
+def test_the_reports_marks_are_escaped(env):
+    add_spool(env, 1, "LR-MDB-1", name="<b>Red</b>")
+    start(env, "LR-MDB-1")
+    scan(env, "1")
+    scan(env, MARK)
+    env["logs"].clear()
+    scan(env, "CMD:CANCEL")
+    line = report(env).lower()
+    assert "<b>red" not in line and "&lt;b&gt;red" in line
+
+
+def test_the_idle_line_names_the_marks_with_no_read(env):
+    add_spool(env, 1, "LR-MDB-1")
+    add_spool(env, 2, "LR-MDB-1")
+    start(env, "LR-MDB-1")
+    scan(env, "1")
+    scan(env, MARK)
+    env["logs"].clear()
+    env["fake"].gets.clear()
+    session()["last_activity_ts"] = time.time() - state.AUDIT_IDLE_TIMEOUT_SECONDS - 5
+    app_module._check_audit_idle_timeout()
+    (msg, _cat, _color), = env["logs"]
+    assert "found 1 of 2; missing #2; needs a label #1." in msg
+    assert env["fake"].gets == []
+
+
 def test_a_mark_while_the_audit_is_finishing_is_refused(env):
     """Pins process_audit_scan's rule on the new command; proved on a copy with the
     lock check taken out."""
@@ -716,6 +807,7 @@ def test_undo_leaves_a_status_newer_than_the_mark(env):
     env["fake"].patches.clear()
     ans = undo(env, 5)
     assert ans["success"] is True and "left as it is" in ans["msg"]
+    assert ans["left_alone"] is True           # the press didn't do what it asked: the panel says so
     assert writes(env) == [] and wire(env, 5) == "false"
     assert session()["label_flagged"] == {} and row(env, 5)["label_status"] is False
 

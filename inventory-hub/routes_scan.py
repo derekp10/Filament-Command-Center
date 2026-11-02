@@ -1173,6 +1173,25 @@ def api_identify_scan():
     # idle minutes finds no session instead of reviving the one nobody was at.
     logic.check_audit_idle_timeout()
 
+    # Group 58: a page says which audit it believed in as the scan was read
+    # (`audit_seen`). Gone, the scan was meant for that audit: with nothing here it
+    # would fall through to the normal paths, and a slot label would load the
+    # buffered spool. A page from before the release sends nothing: no check.
+    if logic.audit_seen_gone(request.json.get('audit_seen')):
+        _msg = f"The audit has ended, so {text} did nothing. Scan it again if you meant it."
+        state.add_log_entry(f"⚠️ {html.escape(_msg, quote=False)}", "WARNING", "ffaa00")
+        return jsonify({"type": "audit_gone", "msg": _msg})
+
+    # Group 58: above both session gates, because resolve_scan reads any text holding
+    # CMD:CANCEL as cancel. Outside a session a closed dialog's QR is as harmless as
+    # ever; in one it would end the session (logic.is_closed_dialogs_cancel).
+    if (res and res.get('type') == 'command' and res.get('cmd') == 'cancel'
+            and (state.AUDIT_SESSION.get('active') or state.BULK_MOVE_SESSION.get('active'))
+            and logic.is_closed_dialogs_cancel(text)):
+        _msg = "That cancel QR belongs to a dialog that has closed — ignored"
+        state.add_log_entry(f"⚠️ {_msg}", "WARNING", "ffaa00")
+        return jsonify({"type": "error", "msg": _msg})
+
     if res and res.get('type') == 'command' and res.get('cmd') == 'audit':
         if state.AUDIT_SESSION.get('active'):
             # 27.5 — re-scanning CMD:AUDIT mid-audit must NOT silently
@@ -1233,6 +1252,10 @@ def api_identify_scan():
                 answer['said'] = audit_res['said']
                 if audit_res.get('said_type'):
                     answer['said_type'] = audit_res['said_type']
+            # What a location or spool scan did, in a sentence: a hidden panel can't
+            # show it, and every scan outcome is owed a toast.
+            if isinstance(audit_res, dict) and audit_res.get('heard'):
+                answer['heard'] = audit_res['heard']
             # Group 58.2: the gate used to answer before the label check, so an ID:
             # scan in an audit confirmed nothing. `warning` is the page's 7 s toast.
             if res and res.get('type') == 'spool':
@@ -1303,7 +1326,7 @@ def api_identify_scan():
     # for the chosen spool (helps unwind the ambiguity over time).
     if res['type'] == 'ambiguous':
         state.add_log_entry(
-            f"⚠️ Legacy ID {res.get('legacy_id', '?')} matches "
+            f"⚠️ Legacy ID {html.escape(str(res.get('legacy_id', '?')), quote=False)} matches "
             f"{len(res.get('candidates') or [])} spools — pick one to continue",
             "WARNING", "ffaa00",
         )
