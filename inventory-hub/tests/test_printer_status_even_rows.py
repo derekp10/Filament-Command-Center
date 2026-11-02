@@ -1290,7 +1290,9 @@ def test_a_scan_typed_onto_a_focused_arrow_stays_a_scan(widget):
     page.keyboard.press("Enter")
     assert _order(page) == [FIRST, MIDDLE, LAST]
     assert page.evaluate("window.__scans") == ["LOC:ZZ-SCAN-1"]
-    # A person's Enter afterwards is a press again.
+    # A person's Enter afterwards is a press again (under 100 ms it would be a
+    # scanner's second Enter).
+    page.wait_for_timeout(120)
     page.keyboard.press("Enter")
     assert _order(page) == [MIDDLE, FIRST, LAST]
     assert page.evaluate("window.__scans") == ["LOC:ZZ-SCAN-1"]
@@ -1318,22 +1320,22 @@ BODY_JS = r"""() => { const body = document.querySelector('#printer-status-widge
 DEV_LIKE = {INDX: _printer("RCOI", 8), XL: _printer("XL", 5, loaded=(3, 4))}
 
 
-@pytest.mark.parametrize("width, height, size, whole", [(1280, 800, "Small", True), (1280, 800, "Standard", True),
-                                                        (1280, 800, "Large", False), (1366, 768, "Small", False),
-                                                        (1366, 768, "Standard", False)])
-def test_on_a_short_laptop_window_every_tile_shows_or_scrolls_into_view(widget, width, height, size, whole):
+@pytest.mark.parametrize("width, height, size, tight", [(1280, 800, "Small", False), (1280, 800, "Standard", False),
+                                                        (1280, 800, "Large", True), (1366, 768, "Small", True),
+                                                        (1366, 768, "Standard", True)])
+def test_on_a_short_laptop_window_every_tile_shows(widget, width, height, size, tight):
     """Each printer's name on its own line made the open widget taller, and
     at 1280 x 800 (a Framework 12 at 150 %) or 1366 x 768 the body's limit,
     then 40 % of the window, hid the second printer's tiles under its fold (8
     of 13 showed). The limit is 45 % now, with no gap between printers (the
     rows' padding puts the divider half way). The info line under each name
     (2026-10-24) adds a line per printer: at 1280 x 800 at Small and
-    Standard dev's two printers (8 and 5 heads) still show whole and the body
-    doesn't scroll; at 1280 x 800 at Large and 1366 x 768 at Small and
-    Standard they are taller than the body may be, so it stops at its limit
-    (the deck and a 7rem strip of the log and the buffer keep their room) and
-    scrolls inside itself, every tile showing once scrolled to. The rows are
-    the same either way: 4 + 4 and 5."""
+    Standard dev's two printers (8 and 5 heads) still show whole. At 1280 x 800
+    at Large and 1366 x 768 at Small and Standard they would be taller than the
+    body may be, so the widget takes the tight step (Group 50.7), and every tile
+    shows with no scrolling there too. The body never passes its limit (the
+    deck and a 7rem strip of the log and the buffer keep their room), and the
+    rows are the same either way: 4 + 4 and 5."""
     page = widget
     page.set_viewport_size({"width": width, "height": height})
     _size(page, size)
@@ -1344,16 +1346,9 @@ def test_on_a_short_laptop_window_every_tile_shows_or_scrolls_into_view(widget, 
     # bar) and the 10.5rem the widget's header and the 7rem strip need leave.
     assert got["maxH"] == pytest.approx(min(0.45 * got["vh"], max(5 * got["root"], got["vh"] - 260 - 10.5 * got["root"])),
                                         abs=0.5), got
-    if whole:
-        assert got["shown"] == 13 and got["sh"] <= got["ch"] + 1, (width, height, size, got)
-    else:
-        # It may scroll: the first printer's tiles show whole without
-        # scrolling, and scrolled to its end the second printer's do.
-        whole_rows = page.evaluate("""() => { const body = document.querySelector('#printer-status-widget .fcc-ps-body');
-            const b = body.getBoundingClientRect();
-            return Array.from(body.querySelectorAll('.fcc-ps-row')).map((row) => Array.from(row.querySelectorAll('.fcc-ps-th'))
-                .every((t) => { const r = t.getBoundingClientRect(); return r.top >= b.top - 0.5 && r.bottom <= b.bottom + 0.5; })); }""")
-        assert whole_rows[0] and got["shown"] >= 8 and got["atEnd"] >= 5, (width, height, size, got, whole_rows)
+    assert got["shown"] == 13 and got["sh"] <= got["ch"] + 1, (width, height, size, got)
+    took = page.evaluate("() => document.getElementById('printer-status-widget').classList.contains('fcc-ps-tight')")
+    assert took == tight, (width, height, size, got)
     assert (_layout(page)[INDX]["rows"], _layout(page)[XL]["rows"]) == ("4+4", "5")
 
 

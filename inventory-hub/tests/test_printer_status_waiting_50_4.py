@@ -34,12 +34,14 @@ PRINTER_MAP = {
     'ZX-2': {'printer_name': 'ZZ XL', 'position': 1},
     'ZX-3': {'printer_name': 'ZZ XL', 'position': 2},
     'ZX-4': {'printer_name': 'ZZ XL', 'position': 3},
+    'ZX-5': {'printer_name': 'ZZ XL', 'position': 4},
 }
 BINDINGS = {
     'ZX-1': [{'box': 'ZZ-BOX-A', 'slot': '1'}, {'box': 'ZZ-BOX-B', 'slot': '4'}, {'box': 'ZZ-BOX-A', 'slot': '3'}],
     'ZX-2': [{'box': 'ZZ-BOX-A', 'slot': '2'}],
     'ZX-3': [{'box': 'ZZ-PD-1', 'slot': '1', 'single_slot': True}],
     'ZX-4': [],
+    'ZX-5': [{'box': 'ZZBOX', 'slot': '1'}],
 }
 
 
@@ -58,6 +60,8 @@ SPOOLS = [
     _spool(71, 'ZZ-BOX-A', '3', archived=True),                                 # archived: waits for no load
     _spool(70, 'ZZ-PD-1', '1'),                                                 # a single-slot box's own spool
     _spool(75, 'ZZ-BOX-A-SUB', '2'),                                            # inside the box's id, not in the box
+    _spool(78, 'ZZBOX-1', '1'),                                                 # inside a dash-less box's id: the list
+                                                                                # match lets it through, so the record decides
     _spool(76, 'ZZ-BOX-A'),                                                     # in the box, no slot
     _spool(77, 'ZZ-BOX-A', '5'),                                                # a slot that feeds no head here
 ]
@@ -113,7 +117,7 @@ def test_nothing_else_waits():
     box's own spool, a place inside the box's id, a spool with no slot, a slot
     that feeds no head here, a head with no feed: no `waiting` key at all."""
     heads, _reads = _run(spools=_TickList(SPOOLS))
-    assert 'waiting' not in heads['ZX-3'] and 'waiting' not in heads['ZX-4']
+    assert 'waiting' not in heads['ZX-3'] and 'waiting' not in heads['ZX-4'] and 'waiting' not in heads['ZX-5']
     ids = {w['id'] for th in heads.values() for w in th.get('waiting', [])}
     assert ids == {93, 74}, ids
 
@@ -132,3 +136,19 @@ def test_a_failed_read_waits_for_nothing():
     before (the widget keeps its tiles, reads-1), and nothing waits."""
     heads, reads = _run(spools=_TickList(None))
     assert reads == [] and all('waiting' not in th and th['item'] is None for th in heads.values())
+
+
+def test_a_zero_padded_slot_that_shows_as_waiting_can_be_loaded():
+    """Group 50 review: the mark compares slots in one form, so "04" waits in slot
+    4; "I loaded it" posts slot 4, and the door's own lookup didn't normalise
+    ("04" != "4"), so it answered that slot 4 was empty while the mark stayed."""
+    import logic
+    items = [{'id': 74, 'slot': '04', 'location': 'ZZ-BOX-B'}]
+    with patch.object(app.spoolman_api, 'get_spools_at_location_detailed', return_value=items), \
+         patch.object(app.locations_db, 'load_locations_list',
+                      return_value=[{'LocationID': 'ZZ-BOX-B', 'Type': 'Dryer Box', 'Max Spools': '4'}]):
+        assert logic.spools_in_slot('ZZ-BOX-B', '4') == [74]
+        assert logic.spools_in_slot('ZZ-BOX-B', 4) == [74]
+        assert logic.spools_in_slot('ZZ-BOX-B', '04') == [74]
+        assert logic.spools_in_slot('ZZ-BOX-B', '3') == []
+        assert logic.find_spool_in_slot('ZZ-BOX-B', '4') == 74

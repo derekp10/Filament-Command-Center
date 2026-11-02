@@ -58,9 +58,12 @@ body { margin: 0; font-family: sans-serif; }
 <button id="plain" onclick="window.__hit('plain')">Plain</button>
 <a id="link" href="#nowhere" onclick="window.__hit('link'); return false;">A link</a>
 <button id="opener">Open a question</button>
-<input id="box" type="text"><textarea id="area"></textarea>
+<input id="box" type="text"><textarea id="area"></textarea><input id="check" type="checkbox">
+<div id="fcc-shortcuts-overlay" style="display:none"><button id="in-shortcuts" onclick="window.__hit('inShortcuts')">Close the list</button></div>
 <div id="someModal" class="modal show" style="display:block"><div class="modal-content">
   <button id="in-modal" onclick="window.__hit('inModal')">In the window</button>
+  <button id="btn-spool-delete">Delete</button><span id="detail-id" style="display:none">57</span>
+  <div id="fcc-spool-delete-overlay" style="display:none"></div>
   <div id="cover" data-fcc-cover="1" style="display:none"><button id="in-cover" onclick="window.__hit('inCover')">In the cover</button></div>
 </div></div>
 <div id="confirmModal" class="modal show" style="display:block"><div class="modal-content">
@@ -164,7 +167,9 @@ def test_a_scan_typed_onto_a_button_presses_nothing_and_reaches_the_scan_path_wh
     page.keyboard.press("Enter")
     assert _hits(page) == {}
     assert page.evaluate("window.__scans") == ["LOC:BIN-2"]
-    # A person's Enter afterwards is a press again.
+    # A person's Enter afterwards is a press again (under 100 ms it would be a
+    # scanner's second Enter).
+    page.wait_for_timeout(120)
     page.keyboard.press("Enter")
     assert _hits(page) == {"plain": 1}
 
@@ -455,3 +460,307 @@ def test_backing_out_of_an_import_with_nothing_to_change_says_nothing(page50):
     page.wait_for_timeout(50)
     assert page.locator("#fcc-config-import-overlay").count() == 0
     assert page.evaluate("window.__toasts") == []
+
+
+# --- the Group 50 review ---------------------------------------------------------------
+
+FREEZE = "() => { window.__now = Date.now(); Date.now = () => window.__now; }"
+
+
+@pytest.mark.parametrize("delay", [0, 150], ids=["scanner", "slower-scanner"])
+@pytest.mark.parametrize("target", ["#plain", "#check"])
+def test_a_space_inside_a_scan_stays_in_the_scan_and_presses_nothing(page50, target, delay):
+    """A LocationID may hold a Space. The accumulator read it into the scan, and
+    the browser pressed the focused button or ticked the box too, on its keyup
+    (RED on f4f3b23: "LOC:Bin 2" pressed "I loaded it")."""
+    page = page50
+    _focus(page, target)
+    page.keyboard.type("LOC:Bin 2", delay=delay)
+    page.keyboard.press("Enter")
+    assert _hits(page) == {}
+    assert page.evaluate("() => document.getElementById('check').checked") is False
+    assert page.evaluate("window.__scans") == ["LOC:Bin 2"]
+
+
+def test_a_persons_space_still_presses_and_ticks(page50):
+    page = page50
+    _focus(page, "#plain")
+    page.keyboard.press(" ")
+    _focus(page, "#check")
+    page.keyboard.press(" ")
+    assert _hits(page) == {"plain": 1}
+    assert page.evaluate("() => document.getElementById('check').checked") is True
+    assert page.evaluate("window.__scans") == []
+
+
+def test_a_scanners_second_enter_presses_nothing(page50):
+    """A scanner set to end with CR LF sends two Enters. The first ended the
+    scan and emptied the buffer, so the second read as a person's and pressed
+    the focused button. Under 100 ms it is the scan's; after that Enter is a
+    person's again. The clock stands still here, so a busy machine can't slide
+    the second Enter past the 100 ms."""
+    page = page50
+    page.evaluate(FREEZE)
+    _focus(page, "#plain")
+    page.keyboard.type("CMD:UNDO")
+    page.keyboard.press("Enter")
+    page.keyboard.press("Enter")
+    assert _hits(page) == {}
+    assert page.evaluate("window.__scans") == ["CMD:UNDO"]
+    page.evaluate("() => { window.__now += 150; }")
+    page.keyboard.press("Enter")
+    assert _hits(page) == {"plain": 1}
+
+
+def test_a_scanners_second_enter_presses_no_overlay_button_and_answers_no_question(page50):
+    page = page50
+    page.evaluate(FREEZE)
+    page.evaluate("""() => { window.__ov = window.mountOverlay({ id: 'fcc-test-q',
+        content: '<button id="ov-btn" onclick="window.__hit(\\'ovBtn\\')">Yes</button>' }); }""")
+    _focus(page, "#ov-btn")
+    page.keyboard.type("ID:57")
+    page.keyboard.press("Enter")
+    page.keyboard.press("Enter")
+    assert _hits(page) == {}
+    page.evaluate("() => { window.__now += 150; window.__ov.cleanup(); window.__said = null; }")
+    page.evaluate("""() => window.confirmActivePrint({ activePrint: { printer_name: 'Printer A', state: 'PRINTING' },
+        msg: 'Load #57 onto T-1?', onConfirm: () => { window.__said = 'yes'; }, onCancel: () => { window.__said = 'no'; } })""")
+    page.wait_for_function("() => document.activeElement && document.activeElement.classList.contains('fcc-apc-no')")
+    page.keyboard.type("ID:58")
+    page.keyboard.press("Enter")
+    page.keyboard.press("Enter")
+    assert page.evaluate("window.__said") is None
+
+
+def test_enter_presses_nothing_behind_the_shortcut_list(page50):
+    """The ? list covers the page but is no mountOverlay and takes no focus:
+    Enter pressed the hidden button, whose window opened under the list."""
+    page = page50
+    page.evaluate("() => { document.getElementById('fcc-shortcuts-overlay').style.display = 'block'; }")
+    _focus(page, "#plain")
+    page.keyboard.press("Enter")
+    assert _hits(page) == {}
+    _focus(page, "#in-shortcuts")
+    page.keyboard.press("Enter")
+    assert _hits(page) == {"inShortcuts": 1}
+    page.evaluate("() => { document.getElementById('fcc-shortcuts-overlay').style.display = 'none'; }")
+    _focus(page, "#plain")
+    page.keyboard.press("Enter")
+    assert _hits(page) == {"inShortcuts": 1, "plain": 1}
+
+
+def test_the_grid_presses_no_tile_where_a_mouse_could_not(page50):
+    """The grid's Enter runs first and stops the event, so the accumulator's
+    rule never heard of it: behind an overlay, under the dim or with a scan
+    waiting, the tile was pressed. Its Enter asks the rule itself now."""
+    page = page50
+    page.evaluate("() => { window.__ov = window.mountOverlay({ id: 'fcc-test-cover', content: '<div>Over it</div>' }); }")
+    _focus(page, "#tile-a")
+    page.keyboard.press("Enter")
+    assert _hits(page) == {}
+    page.evaluate("() => { window.__ov.cleanup(); state.processing = true; }")
+    _focus(page, "#tile-a")
+    page.keyboard.press("Enter")
+    assert _hits(page) == {}
+    page.evaluate("() => { state.processing = false; state.scanQueue.push({ text: 'ID:57', source: 'barcode', capturedAt: Date.now() }); }")
+    page.keyboard.press("Enter")
+    assert _hits(page) == {}
+    page.evaluate("() => { state.scanQueue.length = 0; }")
+    page.keyboard.press("Enter")
+    assert _hits(page) == {"tileA": 1}
+
+
+def test_an_arrow_onto_a_disabled_tile_leaves_no_other_tile_to_press(page50):
+    """A disabled button takes no focus, so the focus stayed on the last tile
+    and Enter pressed that one, not the tile highlighted: a swap of a slot
+    nobody was looking at. Enter on the highlight says why it can't be used."""
+    page = page50
+    page.evaluate("""() => { document.getElementById('tile-b').disabled = true;
+        window.__tapped = []; window.quickSwapTap = (t) => window.__tapped.push(t.id); }""")
+    _focus(page, "#tile-a")
+    page.keyboard.press("ArrowRight")        # nothing highlighted yet: the first tile
+    page.keyboard.press("ArrowRight")
+    assert page.evaluate("() => document.getElementById('tile-b').classList.contains('kb-active')")
+    page.keyboard.press("Enter")
+    assert _hits(page) == {}
+    assert page.evaluate("window.__tapped") == ["tile-b"]       # quickSwapTap's toast says why
+
+
+def test_the_hint_says_what_enter_does_on_the_focused_button(page50):
+    """"Enter cancels" stayed up with the focus on Continue Anyway, where Enter
+    disrupts the print."""
+    page = page50
+    page.evaluate("""() => window.confirmActivePrint({ activePrint: { printer_name: 'Printer A', state: 'PRINTING' },
+        msg: 'Load #57 onto T-1?', onConfirm: () => {}, onCancel: () => {} })""")
+    page.wait_for_function("() => document.activeElement && document.activeElement.classList.contains('fcc-apc-no')")
+    hint = page.locator("#fcc-active-print-confirm-overlay .fcc-apc-hint")
+    assert hint.inner_text() == "Enter cancels · Esc cancels"
+    page.keyboard.press("Tab")
+    assert page.evaluate("() => document.activeElement.classList.contains('fcc-apc-yes')")
+    assert hint.inner_text() == "Enter continues · Esc cancels"
+    page.keyboard.press("Tab")
+    assert hint.inner_text() == "Enter cancels · Esc cancels"
+
+
+def test_the_three_way_hint_follows_the_focus_too(page50):
+    page = page50
+    page.evaluate("""() => window.confirmActivePrint({ title: 'XL-1 runs #99', msg: 'Load #57?', onConfirm: () => {},
+        onStore: () => {}, onCancel: () => {} })""")
+    page.wait_for_function("() => document.activeElement && document.activeElement.classList.contains('fcc-apc-store')")
+    hint = page.locator("#fcc-active-print-confirm-overlay .fcc-apc-hint")
+    assert hint.inner_text() == "Enter stores it · Esc cancels"
+    page.evaluate("() => document.querySelector('#fcc-active-print-confirm-overlay .fcc-apc-yes').focus()")
+    assert hint.inner_text() == "Enter loads it · Esc cancels"
+    page.evaluate("() => document.querySelector('#fcc-active-print-confirm-overlay .fcc-apc-no').focus()")
+    assert hint.inner_text() == "Enter cancels · Esc cancels"
+
+
+def _swap_confirm(page, detail):
+    page.evaluate("(d) => { window.checkPrinterForHead = () => Promise.resolve(d); }", detail)
+    page.evaluate("() => window.quickSwapTap(document.getElementById('tile-a'))")
+    page.wait_for_selector("#fcc-quickswap-no")
+    page.wait_for_function("() => document.activeElement && ['fcc-quickswap-no', 'fcc-quickswap-yes'].includes(document.activeElement.id)")
+    return page.evaluate("() => document.activeElement.id"), page.locator("#fcc-quickswap-confirm-body").inner_text()
+
+
+@pytest.mark.parametrize("detail, words", [
+    ({"known": False, "active": False, "reason": "timeout", "printer_name": "P1"}, "Couldn't reach P1"),
+    ({"known": False, "active": False, "reason": "unreachable", "printer_name": "P1"}, "Couldn't reach P1"),
+    ({"known": False, "active": False, "reason": "no_credentials", "printer_name": "P1"}, "no login for P1"),
+], ids=["timeout", "unreachable", "no-login"])
+def test_the_quick_swap_confirm_opens_on_no_when_fcc_cant_tell_if_the_printer_prints(page50, detail, words):
+    """The printer may be printing and FCC can't tell, and the server's own
+    probe fails open: one Enter on Yes took the resident off a printing head
+    with no question. The deposit and Return share this overlay."""
+    focused, body = _swap_confirm(page50, detail)
+    assert focused == "fcc-quickswap-no" and words in body, (focused, body)
+
+
+def test_the_quick_swap_confirm_opens_on_yes_on_a_printer_known_to_be_idle(page50):
+    focused, _body = _swap_confirm(page50, {"known": True, "active": False, "state": "IDLE", "printer_name": "P1"})
+    assert focused == "fcc-quickswap-yes"
+
+
+def test_the_quick_swap_confirm_shows_a_spools_name_as_text(page50):
+    page = page50
+    page.evaluate("""() => { document.getElementById('tile-a').dataset.spoolLabel = '#7 <i id="evil">Bold</i> PLA'; }""")
+    _focused, body = _swap_confirm(page, {"known": True, "active": False, "state": "IDLE", "printer_name": "P1"})
+    assert page.locator("#evil").count() == 0
+    assert '#7 <i id="evil">Bold</i> PLA' in body
+
+
+# --- the 🛑 review's Discard (Derek: "I don't want an accidental double press to mess things up") -----
+
+def _pending(kind):
+    base = {"printer_name": "XL", "job_id": f"J-{kind}", "filename": "t.gcode", "progress": 0.4, "total_grams": 20.0,
+            "spools": [{"sid": 100, "toolhead": "XL-1", "position": 0, "grams": 20.0, "current_used": 100.0,
+                        "initial_weight": 1000.0, "remaining_before": 900.0, "remaining_after": 880.0,
+                        "display": "#100", "color": "ff0000"}]}
+    if kind == "no_spool":
+        base.update({"kind": "no_spool", "spools": [], "usage_map": {"0": 20.0}, "reason": "no_spool"})
+    if kind == "shortfall":
+        base.update({"kind": "shortfall", "rev": 1, "spools": [], "unresolved_usage": [{"position": 0, "grams": 5.0}]})
+    return base
+
+
+def _review(page, kind="partial"):
+    page.add_script_tag(content=(MODULES / "cancel_review.js").read_text(encoding="utf-8"))
+    page.evaluate("""(pending) => {
+        window.__answer = (url) => (url.includes('/api/cancel_deduct/pending') ? { pending: [pending] } : { status: 'dismissed' });
+        window.openCancelReview(); }""", _pending(kind))
+    page.wait_for_selector("#fcc-cancel-review-overlay .fcc-cr-card .fcc-cr-discard")
+
+
+def _dismissed(page):
+    return [f for f in page.evaluate("window.__fetches") if "/api/cancel_deduct/dismiss" in f["url"]]
+
+
+@pytest.mark.parametrize("key", ["Enter", " "], ids=["enter", "space"])
+def test_a_double_press_on_discard_discards_nothing(page50, key):
+    page = page50
+    _review(page)
+    page.locator(".fcc-cr-discard").focus()
+    page.keyboard.press(key)
+    page.keyboard.press(key)
+    page.wait_for_timeout(50)
+    assert _dismissed(page) == []
+    assert page.evaluate("() => document.querySelector('.fcc-cr-discard').dataset.armed") == "1"
+    page.wait_for_timeout(750)
+    page.keyboard.press(key)
+    page.wait_for_function("() => window.__fetches.some((f) => f.url.includes('/api/cancel_deduct/dismiss'))")
+
+
+def test_a_double_click_on_discard_discards_nothing(page50):
+    page = page50
+    _review(page)
+    page.locator(".fcc-cr-discard").dblclick()
+    page.wait_for_timeout(50)
+    assert _dismissed(page) == []
+
+
+def test_leaving_an_armed_discard_disarms_it(page50):
+    page = page50
+    _review(page)
+    page.locator(".fcc-cr-discard").focus()
+    page.keyboard.press("Enter")
+    assert page.evaluate("() => document.querySelector('.fcc-cr-discard').dataset.armed") == "1"
+    page.keyboard.press("Shift+Tab")
+    assert page.evaluate("() => document.querySelector('.fcc-cr-discard').dataset.armed") == "0"
+    assert "Confirm discard" not in page.locator(".fcc-cr-discard").inner_text()
+
+
+@pytest.mark.parametrize("kind", ["partial", "no_spool", "shortfall"])
+def test_tab_reaches_the_cards_yes_before_discard_and_the_look_stays(page50, kind):
+    """Discard came first in the Tab order on all three cards, so a Tab too few
+    from the grams box landed on it. The row keeps its look: Discard on the
+    left of the yes, both at the right-hand edge."""
+    page = page50
+    _review(page, kind)
+    got = page.evaluate("""() => { const d = document.querySelector('.fcc-cr-discard'); const y = document.querySelector('.fcc-cr-confirm');
+        const row = d.parentElement; const r = row.getBoundingClientRect(); const yr = y.getBoundingClientRect();
+        return { yesFirst: !!(y.compareDocumentPosition(d) & Node.DOCUMENT_POSITION_FOLLOWING), discardLeft: d.getBoundingClientRect().right <= yr.left,
+                 atEdge: Math.abs(r.right - yr.right) < 1 }; }""")
+    assert got == {"yesFirst": True, "discardLeft": True, "atEdge": True}, (kind, got)
+
+
+# --- inv_details.js: the delete overlay and the manufacturer save ---------------------------
+
+def _load_details(page):
+    """The page's load has passed, so inv_details.js's ready handler (it wires
+    the delete button) runs by hand, alone."""
+    page.evaluate("""() => { window.__add = document.addEventListener; window.__ready = [];
+        document.addEventListener = function (t, f, o) {
+            if (t === 'DOMContentLoaded') window.__ready.push(f); else window.__add.call(document, t, f, o); }; }""")
+    page.add_script_tag(content=(MODULES / "inv_details.js").read_text(encoding="utf-8"))
+    page.evaluate("() => { document.addEventListener = window.__add; window.__ready.forEach((f) => f()); }")
+
+
+def test_a_double_press_on_the_manufacturer_save_saves_once(page50):
+    """Enter presses the focused Save now, and two presses created a manufacturer
+    twice: the save holds one request at a time (Group 50.6)."""
+    page = page50
+    _load_details(page)
+    page.evaluate("""() => { document.body.insertAdjacentHTML('beforeend',
+        ['id', 'name', 'website', 'external-id', 'empty-weight', 'comment'].map((k) =>
+            `<input id="vendoredit-${k}" value="${k === 'name' ? 'Acme' : ''}">`).join('')
+        + '<div id="vendoredit-error"></div><button id="vendoredit-save">Save</button>');
+        window.__answer = () => ({ success: true, vendor: { id: 9 } });
+        window.vendorEditSave(); window.vendorEditSave(); }""")
+    assert len([f for f in page.evaluate("window.__fetches") if "/api/vendors" in f["url"]]) == 1
+
+
+def test_the_real_delete_overlay_covers_its_window(page50):
+    """_renderDeleteOverlay sets data-fcc-cover, which the test above stands in
+    for: while it shows, Enter presses no button of the window behind it."""
+    page = page50
+    _load_details(page)
+    page.evaluate("() => document.getElementById('btn-spool-delete').click()")
+    page.wait_for_function("() => document.getElementById('fcc-spool-delete-overlay').dataset.fccCover === '1'")
+    _focus(page, "#in-modal")
+    page.keyboard.press("Enter")
+    assert _hits(page) == {}
+    page.evaluate("() => document.querySelector('[data-fcc-delete-cancel]').click()")
+    assert page.evaluate("() => document.getElementById('fcc-spool-delete-overlay').dataset.fccCover") is None
+    _focus(page, "#in-modal")
+    page.keyboard.press("Enter")
+    assert _hits(page) == {"inModal": 1}

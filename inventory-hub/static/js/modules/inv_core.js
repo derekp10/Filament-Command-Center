@@ -138,10 +138,13 @@ window.isScannerBurst = isScannerBurst;
 // scan payload. A person's Enter on a focused button finds the buffer empty.
 // The slot picker's rule (slot_picker.js, D1). Blanks are nobody's scan: two
 // Spaces a button press left made a person's Enter a scan of "  " (Group 57
-// review, round 5).
+// review, round 5). Also the Enter right behind a scan's own (under 100 ms): a
+// scanner set to end with CR LF sends two, and the second pressed the focused
+// button (Group 50 review, with Enter now pressing buttons).
 const enterIsAScan = () => {
     const st = (typeof state !== 'undefined') ? state : window.state;
     const buf = st && typeof st.scanBuffer === 'string' ? st.scanBuffer : '';
+    if (st && st.lastScanEnterAt && Date.now() - st.lastScanEnterAt < 100) return true;
     if (buf.trim().length >= 2) return true;
     if (isScanInFlight() || isScannerBurst()) return true;
     return !!(buf && window.looksLikeScanPayload && window.looksLikeScanPayload(buf));
@@ -386,6 +389,18 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
     if (yesBtn) yesBtn.onclick = yes;
     if (storeBtn) storeBtn.onclick = store;
     if (noBtn) noBtn.onclick = no;
+    // The hint says what Enter does on the button that has the focus (Group 50
+    // review: "Enter cancels" stayed up with the focus on Continue Anyway).
+    const hintEl = ov.querySelector('.fcc-apc-hint');
+    if (hintEl) {
+        // `focus` in the capture phase: mountOverlay's focus guard stops focusin
+        // at the document, before it reaches anything inside the overlay.
+        ov.addEventListener('focus', (e) => {
+            const does = e.target === yesBtn ? (threeWay ? 'loads it' : 'continues')
+                : (e.target === storeBtn ? 'stores it' : (e.target === noBtn ? 'cancels' : ''));
+            if (does) hintEl.textContent = `Enter ${does} · Esc cancels`;
+        }, true);
+    }
     // mountOverlay removes the DOM when the host closes; the answer must close
     // too, or its QR session stays armed and a late CMD:CONFIRM still moves.
     if (host && typeof host.addEventListener === 'function') {

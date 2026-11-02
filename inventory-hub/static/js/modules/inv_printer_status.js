@@ -877,6 +877,13 @@
                 || !el.classList || !(el.classList.contains('fcc-ps-th') || el.classList.contains('fcc-ps-mini'))) return null;
             return { id: el.dataset.toolhead, strip: el.classList.contains('fcc-ps-mini') };
         })();
+        // ... and so does "I loaded it", on the same head's button for the same
+        // spool, else on its tile (the spool was loaded, or left the slot).
+        const keptLoaded = (() => {
+            const el = document.activeElement;
+            if (!el || !widget.contains(el) || !el.classList || !el.classList.contains('fcc-ps-loaded-it')) return null;
+            return { id: el.dataset.toolhead, spool: el.dataset.spoolId };
+        })();
         body.innerHTML = printerNames
             .map((name, idx) => _renderRow(name, rows[name], idx, printerNames.length))
             .join('');
@@ -892,10 +899,15 @@
         // its name, state, 🛑 count and heads (_renderStripGroup); the weights
         // setting picks where the grams go (global.css).
         const headerChips = widget.querySelector('.fcc-ps-header-chips');
+        const stripScroll = {};   // a printer's heads scrolled sideways stay where they were
         if (headerChips) {
             const weight = _pref('weight');
             headerChips.classList.toggle('fcc-ps-strip-wt-beside', weight === 'Beside each toolhead');
             headerChips.classList.toggle('fcc-ps-strip-wt-under', weight === 'Under each toolhead');
+            headerChips.querySelectorAll('.fcc-ps-printer-group').forEach((g) => {
+                const box = g.querySelector('.fcc-ps-strip-heads');
+                if (box && box.scrollLeft) stripScroll[g.dataset.printer] = box.scrollLeft;
+            });
             headerChips.innerHTML = printerNames.map(name => _renderStripGroup(name, rows[name])).join('');
         }
         // Delegated click handler — bound ONCE on the stable widget root
@@ -909,6 +921,19 @@
         // strip is measured (a count takes room).
         if (window.cancelReviewDecorate) window.cancelReviewDecorate();
         _fitStrip();
+        if (headerChips) {
+            headerChips.querySelectorAll('.fcc-ps-printer-group').forEach((g) => {
+                const left = stripScroll[g.dataset.printer];
+                const box = g.querySelector('.fcc-ps-strip-heads');
+                if (left && box) box.scrollLeft = left;
+            });
+        }
+        if (keptLoaded) {
+            const all = Array.from(widget.querySelectorAll('.fcc-ps-loaded-it'));
+            const same = all.find((el) => el.dataset.toolhead === keptLoaded.id && el.dataset.spoolId === keptLoaded.spool);
+            const tile = same || Array.from(widget.querySelectorAll('.fcc-ps-th')).find((el) => el.dataset.toolhead === keptLoaded.id);
+            if (tile) tile.focus();
+        }
         if (keptHead) {
             const again = Array.from(widget.querySelectorAll(keptHead.strip ? '.fcc-ps-mini' : '.fcc-ps-th'))
                 .find((el) => el.dataset.toolhead === keptHead.id);
@@ -1019,6 +1044,15 @@
                 if (e.shiftKey) return;
                 if (!isSpace && typeof window.enterIsAScan === 'function' && window.enterIsAScan()) return;
                 if (isSpace && typeof window.scanIsArriving === 'function' && window.scanIsArriving()) return;
+                // Only where a mouse could click it now, once per press (the
+                // accumulator's rule, Group 50 review): under the dim openManage
+                // lifted the dim and the next scan passed the queue, behind an
+                // overlay it opened the head underneath, and a held Space opened
+                // it on every repeat.
+                if (e.repeat || (typeof window.personMayPress === 'function' && !window.personMayPress(e, head))) {
+                    e.preventDefault();
+                    return;
+                }
                 e.preventDefault();
                 e.stopImmediatePropagation();
                 if (typeof window.clearScanBuffer === 'function') window.clearScanBuffer();
@@ -1067,6 +1101,9 @@
                         head.item = p.item || null;
                         head.loaded_count = p.loaded_count || 0;
                         if (p.loaded_ids) head.loaded_ids = p.loaded_ids;
+                        // 50.4: the mark stays with the kept tile: it goes only
+                        // when a read says the spool was loaded or left the slot.
+                        if (p.waiting) head.waiting = p.waiting;
                         delete head.unread;
                     } else {
                         unread++;
@@ -1133,6 +1170,17 @@
                 if (cached && cached.state !== undefined && rows[name].state === undefined) {
                     rows[name].state = cached.state;
                 }
+                // Group 50.4: likewise `waiting`, which only the heartbeat works
+                // out: without it every local change wiped the marks until a
+                // heartbeat past the 15 s settle. A head keeps its last, less a
+                // spool the fan-out now finds loaded on it.
+                const lastHeads = new Map(((cached && cached.toolheads) || []).map(th => [th && th.id, th]));
+                (rows[name].toolheads || []).forEach(th => {
+                    const last = lastHeads.get(th.id);
+                    if (!last || !last.waiting) return;
+                    const left = last.waiting.filter(w => !(th.item && String(th.item.id) === String(w.id)));
+                    if (left.length) th.waiting = left;
+                });
             });
             // reads-1: a head whose strict read failed keeps its last tile.
             const anyUnread = Object.keys(rows).some(name => {

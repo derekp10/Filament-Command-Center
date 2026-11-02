@@ -2528,8 +2528,9 @@ body {
        whole border, style included. */
     border: 3px solid var(--fcc-ring, rgba(255,255,255,0.5));
     /* The filament colour stops inside the border, so a dashed ring's gaps
-       show the strip, not the colour. */
-    background-clip: padding-box;
+       show the strip, not the colour. !important: the head's inline
+       background: shorthand resets the clip. */
+    background-clip: padding-box !important;
     font-size: var(--fcc-fs-label);
     font-weight: 800;
     line-height: 1;

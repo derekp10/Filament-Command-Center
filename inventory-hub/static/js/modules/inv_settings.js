@@ -327,7 +327,7 @@
         if (!host) return;
         let html = `<div class="small mb-2" style="color:rgba(255,255,255,0.55);">
             Toolheads keyed by LocationID. Add new ones (e.g. an MMU / indxx upgrade) or edit a name / position.
-            A printer's toolheads share its ID prefix (RCOI-1 … RCOI-8 belong to printer RCOI); each toolhead gets its
+            A printer's toolheads share its ID prefix (PRINTER-1 … PRINTER-8 belong to printer PRINTER); each toolhead gets its
             Location Manager row automatically, and renaming the printer on one row renames it on all of them.
             Existing LocationIDs can't be renamed; removing one a dryer-box slot or spool still uses is blocked.
         </div>`;

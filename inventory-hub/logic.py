@@ -5226,7 +5226,7 @@ def spools_in_slot(box_loc_id, slot):
     """
     if not box_loc_id or not str(slot).strip():
         return []
-    wanted = str(slot).strip().strip('"')
+    wanted = _norm_slot(slot)
     items = spoolman_api.get_spools_at_location_detailed(box_loc_id) or []
     # Group 42.2: a single-slot box's lone spool is in slot 1 even when its slot
     # was stored blank (a legacy PolyDryer row), so Quick-Swap can find it.
@@ -5234,7 +5234,7 @@ def spools_in_slot(box_loc_id, slot):
     row = next((r for r in (locations_db.load_locations_list() or [])
                 if isinstance(r, dict) and str(r.get('LocationID', '')).strip().upper() == box_up), None)
     return [int(item['id']) for item in items
-            if locations_db.effective_slot(row, item.get('slot', ''), occupants=len(items)) == wanted]
+            if _norm_slot(locations_db.effective_slot(row, item.get('slot', ''), occupants=len(items))) == wanted]
 
 
 def find_spool_in_slot(box_loc_id, slot, claimants=None):

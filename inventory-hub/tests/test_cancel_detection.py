@@ -901,6 +901,7 @@ def test_pulse_no_longer_drives_detection():
          patch.object(app_module.locations_db, "get_bindings_for_machine",
                       return_value={"printer_name": "XL", "toolheads": {}, "printer_pool": []}), \
          patch.object(app_module.spoolman_api, "bucket_spools_by_location", return_value={}), \
+         patch.object(app_module.spoolman_api, "get_all_spools", return_value=[]), \
          patch.object(app_module.prusalink_api, "get_printer_state", return_value=_state("PRINTING")):
         app_module._pulse_section_printer_status()
     assert tpe.call_count == 0, "dashboard pulse must not drive cancel detection (daemon-only)"

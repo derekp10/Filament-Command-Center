@@ -1029,6 +1029,30 @@ def test_a_persons_enter_in_the_tree_picker_still_picks(page61):
     assert not t["open"] and t["parent"] == "__auto__", t
 
 
+def test_a_persons_enter_on_the_tree_pickers_focused_cancel_cancels(page61):
+    """Group 50.6: Enter presses the button that has the focus; here it picked
+    the highlighted node even on a focused Cancel."""
+    _clock(page61)
+    before = _tree(page61)["parent"]
+    _open_tree(page61)
+    page61.keyboard.press("ArrowDown")                     # the highlight off the value it holds: a pick would show
+    page61.evaluate("""() => document.querySelector("#fcc-parent-tree-picker [data-tp='cancel']").focus()""")
+    _type(page61, "", 0)
+    t = _tree(page61)
+    assert not t["open"] and t["parent"] == before, t
+
+
+def test_a_persons_enter_on_a_tree_node_reached_by_tab_picks_that_node(page61):
+    _clock(page61)
+    _open_tree(page61)
+    val = page61.evaluate("""() => { const all = document.querySelectorAll('#fcc-parent-tree-picker .fcc-tp-node');
+        const last = all[all.length - 1]; last.focus(); return last.dataset.tpVal; }""")
+    assert val and val != "__auto__", val
+    _type(page61, "", 0)
+    t = _tree(page61)
+    assert not t["open"] and t["parent"] == val, t
+
+
 # --- 61.3 the wizard header, the pill, "Close without saving?" --------------------
 
 @pytest.mark.parametrize("ms", [1, 26, 150])

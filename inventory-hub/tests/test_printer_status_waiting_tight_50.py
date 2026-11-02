@@ -80,16 +80,17 @@ window.openManage = (id) => window.__opened.push(id);
 """
 
 
-def _build(page, width=1600, height=1300, size="Standard", stored=None):
+def _build(page, width=1600, height=1300, size="Standard", stored=None, real_swap=False):
     page.set_viewport_size({"width": width, "height": height})
     page.set_content(PAGE.format(standin=BOOTSTRAP_STANDIN, css=GLOBAL_CSS.read_text(encoding="utf-8")))
     page.add_script_tag(content=PRELUDE)
     page.evaluate("(s) => { for (const k in s) localStorage.setItem(k, s[k]); }",
                   {"fcc.printerStatus.order": json.dumps([XL, INDX]), **(stored or {})})
-    for name in ("inv_core.js", "ui_builder.js", "inv_printer_status.js", "text_size.js", "cancel_review.js"):
+    modules = ("inv_core.js", "ui_builder.js", "inv_printer_status.js", "text_size.js", "cancel_review.js")
+    for name in (("overlay_mount.js",) + modules + ("inv_quickswap.js",) if real_swap else modules):
         page.add_script_tag(content=(MODULES / name).read_text(encoding="utf-8"))
     page.add_script_tag(content=ACCUMULATOR)
-    page.add_script_tag(content=STUBS)
+    page.add_script_tag(content="window.__opened = []; window.openManage = (id) => window.__opened.push(id);" if real_swap else STUBS)
     _size(page, size)
 
 
@@ -163,6 +164,11 @@ def test_i_loaded_it_by_keyboard_presses_once_and_a_scan_onto_it_stays_a_scan(wp
     page.keyboard.press("Enter")
     assert len(page.evaluate("window.__taps")) == 1
     assert page.evaluate("window.__scans") == ["LOC:ZZ-BIN-2"]
+    # Group 50 review (red): a label holding a Space, the Space stays the scan's.
+    page.keyboard.type("LOC:Bin 2")
+    page.keyboard.press("Enter")
+    assert len(page.evaluate("window.__taps")) == 1
+    assert page.evaluate("window.__scans") == ["LOC:ZZ-BIN-2", "LOC:Bin 2"]
 
 
 def test_several_stored_spools_show_their_count_and_the_tile_opens_the_head(wpage):
@@ -218,6 +224,36 @@ def test_the_waiting_line_is_readable(wpage):
 
 # --- 50.4: the folded strip --------------------------------------------------------------
 
+@pytest.mark.parametrize("key", ["Enter", " "], ids=["enter", "space"])
+def test_a_head_opens_only_where_a_mouse_could_click_it_and_once_per_press(wpage, key):
+    """A head answers its own keys and stops the event, so the accumulator's
+    rule never heard of it (Group 50 review): under the dim it opened the head,
+    and openManage's own setProcessing(false) lifted the dim while a scan was
+    still unanswered, so the next scan passed the queue; behind an overlay it
+    opened the head underneath; and a held Space opened it on every repeat, each
+    a whole-list Spoolman read."""
+    page = wpage
+    _build(page)
+    _feed(page, _fleet())
+    page.locator('#printer-status-widget .fcc-ps-th[data-toolhead="ZX-2"]').focus()
+    page.evaluate("() => { state.processing = true; }")
+    page.keyboard.press(key)
+    assert page.evaluate("window.__opened") == []
+    page.evaluate("() => { state.processing = false; state.scanQueue.push({ text: 'ID:57', source: 'barcode', capturedAt: Date.now() }); }")
+    page.keyboard.press(key)
+    assert page.evaluate("window.__opened") == []
+    page.evaluate("""() => { state.scanQueue.length = 0;
+        document.body.insertAdjacentHTML('beforeend', '<div id="zz-cover" data-overlay-mount="1"></div>'); }""")
+    page.keyboard.press(key)
+    assert page.evaluate("window.__opened") == []
+    page.evaluate("() => { document.getElementById('zz-cover').remove(); }")
+    page.keyboard.down(key)
+    page.keyboard.down(key)
+    page.keyboard.down(key)
+    page.keyboard.up(key)
+    assert page.evaluate("window.__opened") == ["ZX-2"]
+
+
 def test_the_folded_strip_marks_the_head_with_an_amber_dot_and_says_why(wpage):
     page = wpage
     _build(page)
@@ -233,6 +269,10 @@ def test_the_folded_strip_marks_the_head_with_an_amber_dot_and_says_why(wpage):
     assert empty["dot"] and "Stored for ZX-3, not loaded: #95 Teal PETG in ZZ-BOX-1 slot 3." in empty["aria"], empty
     quiet = page.evaluate(HEAD_JS, "ZX-1")
     assert not quiet["dot"] and "Stored for" not in quiet["title"] and quiet["aria"] == quiet["title"], quiet
+    # The colour stops inside the ring, so a dashed ring's gaps show the strip
+    # (the head's inline background: shorthand reset the stylesheet's clip).
+    assert page.evaluate("""() => Array.from(document.querySelectorAll('#printer-status-widget .fcc-ps-ring'))
+        .map((r) => getComputedStyle(r).backgroundClip)""") == ["padding-box"] * 13
     # The dot sits on the ring: the head is as wide as it was without it.
     _feed(page, _fleet())
     assert abs(page.evaluate(HEAD_JS, "ZX-2")["width"] - loaded["width"]) < 0.5
@@ -242,6 +282,86 @@ def test_the_folded_strip_marks_the_head_with_an_amber_dot_and_says_why(wpage):
     page.locator('#printer-status-widget .fcc-ps-header-chips .fcc-ps-strip-head[data-toolhead="ZX-2"]').focus()
     page.keyboard.press("Enter")
     assert page.evaluate("window.__opened") == ["ZX-2", "ZX-2"]
+
+
+def test_i_loaded_it_keeps_the_focus_through_a_repaint(wpage):
+    """Any heartbeat that changed the widget dropped the focus to the page: Enter
+    then pressed nothing and Tab started from the top (Group 50 review)."""
+    page = wpage
+    _build(page)
+    _feed(page, _fleet(waiting_xl={1: [W93]}))
+    page.locator('#printer-status-widget .fcc-ps-th[data-toolhead="ZX-2"] .fcc-ps-loaded-it').focus()
+    rows = _fleet(waiting_xl={1: [W93]})
+    rows[XL]["toolheads"][0]["item"]["remaining_weight"] = 123
+    _feed(page, rows)
+    assert page.evaluate("""() => { const a = document.activeElement;
+        return [a.classList.contains('fcc-ps-loaded-it'), a.dataset.toolhead, a.dataset.spoolId]; }""") == [True, "ZX-2", "93"]
+    # The spool was loaded, or left the slot: the button is gone, the focus goes to its head.
+    _feed(page, _fleet())
+    assert page.evaluate("""() => { const a = document.activeElement;
+        return [a.classList.contains('fcc-ps-th'), a.dataset.toolhead]; }""") == [True, "ZX-2"]
+
+
+def test_a_repaint_keeps_the_strips_sideways_scroll(wpage):
+    """Folded on a narrow window a printer's heads scroll sideways; a repaint
+    put them back at the first head (Group 50 review)."""
+    page = wpage
+    _build(page, 620, 900)
+    rows = _fleet(indx_unbound=True)
+    _feed(page, rows)
+    page.evaluate("() => window.togglePrinterStatusWidget()")
+    page.wait_for_function("() => document.getElementById('printer-status-widget').classList.contains('collapsed')")
+    set_left = """([name, left]) => { const g = Array.from(document.querySelectorAll('.fcc-ps-printer-group'))
+        .find((x) => x.dataset.printer === name); const box = g.querySelector('.fcc-ps-strip-heads');
+        if (left !== null) box.scrollLeft = left; return [box.scrollLeft, box.scrollWidth - box.clientWidth]; }"""
+    left, room = page.evaluate(set_left, [INDX, 40])
+    assert room > 40 and left == 40, (left, room)
+    rows[XL]["toolheads"][0]["item"]["remaining_weight"] = 123
+    _feed(page, rows)
+    assert page.evaluate(set_left, [INDX, None])[0] == 40
+
+
+def test_a_review_count_that_comes_or_goes_measures_the_strip_again(wpage):
+    """The 🛑 count sits in the strip, which may stop fitting beside the title, or
+    fit again (Group 50.1; cancel_review.js calls the widget's measure)."""
+    page = wpage
+    _build(page)
+    _feed(page, _fleet())
+    page.evaluate("() => window.togglePrinterStatusWidget()")
+    page.wait_for_function("() => document.getElementById('printer-status-widget').classList.contains('collapsed')")
+    page.evaluate("""() => { const real = window.fitPrinterStatusStrip; window.__fits = 0;
+        window.fitPrinterStatusStrip = () => { window.__fits += 1; real(); }; }""")
+    pending = [{"printer_name": XL, "job_id": "J-1", "kind": "partial", "spools": [], "total_grams": 1}]
+    page.evaluate("(p) => { window.__pending = p; return window.refreshCancelReviewBadge(); }", pending)
+    assert page.evaluate("window.__fits") == 1
+    page.evaluate("(p) => { window.__pending = p; return window.refreshCancelReviewBadge(); }", pending)
+    assert page.evaluate("window.__fits") == 1           # nothing changed: nothing to measure
+    page.evaluate("(p) => { window.__pending = p; return window.refreshCancelReviewBadge(); }", [])
+    assert page.evaluate("window.__fits") == 2
+
+
+def test_i_loaded_it_with_no_head_view_opened_tells_the_page_of_the_move(wpage):
+    """On a page where no toolhead's view has been opened (the Quick-Swap
+    module's currentLoc is empty), the real tap's success refreshed nothing: the
+    tile went on saying the spool waits, and the widget's settle guard wasn't
+    armed (Group 50 review). The real inv_quickswap.js, from the widget's button."""
+    page = wpage
+    _build(page, real_swap=True)
+    _feed(page, _fleet(waiting_xl={1: [W93]}))
+    page.evaluate("""() => {
+        window.__changed = 0; window.__posts = [];
+        document.addEventListener('inventory:locations-changed', () => { window.__changed += 1; });
+        window.checkPrinterForHead = () => Promise.resolve({ known: true, active: false, state: 'IDLE', printer_name: 'ZZ' });
+        window.fetch = (url, opts) => { window.__posts.push(String(url));
+            return Promise.resolve(new Response(JSON.stringify({ action: 'quickswap_done', moved: 93 }),
+                                                { status: 200, headers: { 'Content-Type': 'application/json' } })); };
+    }""")
+    page.locator('#printer-status-widget .fcc-ps-th[data-toolhead="ZX-2"] .fcc-ps-loaded-it').click()
+    page.wait_for_selector("#fcc-quickswap-yes")
+    page.locator("#fcc-quickswap-yes").click()
+    page.wait_for_function("() => window.__changed >= 2", timeout=3000)     # now, and again as Spoolman settles
+    assert any("/api/quickswap" in u for u in page.evaluate("window.__posts"))
+    assert page.evaluate("window.__opened") == []
 
 
 # --- 50.7: a short window --------------------------------------------------------------

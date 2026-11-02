@@ -292,10 +292,15 @@
         // it; a scanner never repeats), never while a scan read earlier still
         // waits to go out, never behind the overlay on top or under the
         // processing dim, never in a Bootstrap window fading out or covered by
-        // its own inline overlay (the delete flow's, data-fcc-cover), and in a
-        // gating dialog only once it is fully on screen.
+        // its own inline overlay (the delete flow's, data-fcc-cover) or by the
+        // shortcut list, and in a gating dialog only once it is fully on screen.
+        // On window: a [role=button] that answers its own keys (a Printer Status
+        // head, a Quick-Swap tile) asks it too, or its press under the dim lifts
+        // the dim and lets the next scan past the queue (Group 50 review).
         function personMayPress(e, el) {
             if (e.repeat || state.scanQueue.length) return false;
+            const shortcuts = document.getElementById('fcc-shortcuts-overlay');
+            if (shortcuts && shortcuts.getClientRects().length && !shortcuts.contains(el)) return false;
             if (document.querySelector('[data-overlay-mount="1"]')) {
                 const root = el.closest('[data-overlay-mount="1"]');
                 if (!root || (window.isTopOverlay && !window.isTopOverlay(root))) return false;
@@ -311,6 +316,7 @@
             if (cover && !cover.contains(el)) return false;
             return !el.closest('.offcanvas.hiding');
         }
+        window.personMayPress = personMayPress;
         document.addEventListener('keydown', (e) => {
             // A field keeps its own keys. A checkbox can't hold typed text, so
             // a scan typed with the focus on one (the Quick-Weigh's Auto Archive
@@ -356,6 +362,10 @@
                     // location label read again while the first read was still being
                     // handled, which a queued scan replays only afterwards.
                     const capturedAt = Date.now();
+                    // A scanner set to end with CR LF sends two Enters: the
+                    // second finds the buffer empty and must not read as a
+                    // person's (enterIsAScan, Group 50 review).
+                    state.lastScanEnterAt = capturedAt;
 
                     if (scanFrozen() || state.scanQueue.length) {
                         console.warn("UI busy, queuing scan:", state.scanBuffer);
@@ -384,6 +394,14 @@
                 // made a person's Enter in a dialog a scan of "  " (Group 57
                 // review, rounds 2 and 5).
                 if (e.key === ' ' && !state.scanBuffer) return;
+                // A Space inside a scan (a LocationID may hold one) is the scan's:
+                // the browser would press the button or tick the box it lands on
+                // (Group 50 review: "LOC:Bin 2" pressed "I loaded it"). Kept
+                // from the browser only: it still joins the buffer below.
+                if (e.key === ' ' && t.matches && window.scanIsArriving && window.scanIsArriving()
+                    && t.matches('button, a[href], [role="button"], summary, input[type="checkbox"]')) {
+                    e.preventDefault();
+                }
                 if (state.scanBuffer.length === 0) {
                     state.scanStartTime = Date.now();
                 }

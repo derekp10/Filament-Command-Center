@@ -410,7 +410,8 @@ def test_space_on_the_button_leaves_no_space_for_the_next_scan(bar):
     label scanned meanwhile arrived as " CMD:WEIGH", "Malformed Command"
     (Group 57 review, round 2). The button took that space back out; since
     round 5 the REAL accumulator skips a Space while it holds nothing, so every
-    button is covered. A buffer that holds a scan keeps it."""
+    button is covered. A buffer that holds a scan keeps it, and since Group 50's
+    review that Space is the scan's alone: it presses no button."""
     from test_slow_scan_slash_js import _accumulator          # that module imports this one
     bar.add_script_tag(content=_accumulator())
     bar.evaluate("(a) => { window.__answers = a; }", [_answer(REPORT)] * 3)
@@ -419,9 +420,11 @@ def test_space_on_the_button_leaves_no_space_for_the_next_scan(bar):
     bar.wait_for_selector(PANEL)
     assert bar.evaluate("() => state.scanBuffer") == ""
     bar.keyboard.press("Escape")
+    bar.wait_for_selector(PANEL, state="hidden")
     bar.evaluate("() => { state.scanBuffer = 'ID:5'; document.getElementById('btn-low-stock-count').focus(); }")
     bar.keyboard.press("Space")
-    bar.wait_for_selector(PANEL)
+    bar.wait_for_timeout(100)
+    assert not bar.locator(PANEL).is_visible()
     assert bar.evaluate("() => state.scanBuffer") == "ID:5 "
 
 

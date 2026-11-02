@@ -330,6 +330,64 @@ def test_the_fan_out_reads_strictly_and_keeps_a_head_it_couldnt_read(pg):
     assert _shown(second["notice"]) and "These tiles are from its last answer" in second["notice"]["text"], second
 
 
+# --- Group 50.4: the "stored, not loaded" mark, through a failed read and the fan-out -------
+
+W93 = {"id": 93, "display": "#93 Waits", "box": "ZZ-BOX", "slot": "2"}
+
+
+def _with_waiting(status, head=1, waiting=(W93,)):
+    out = {name: dict(info, toolheads=[dict(th) for th in info["toolheads"]]) for name, info in status.items()}
+    out[PRINTER]["toolheads"][head]["waiting"] = list(waiting)
+    return out
+
+
+def _marks(page):
+    return page.evaluate("""() => Array.from(document.querySelectorAll('#printer-status-widget .fcc-ps-th'))
+        .filter((t) => t.querySelector('.fcc-ps-th-waiting')).map((t) => t.dataset.toolhead)""")
+
+
+def test_a_failed_read_keeps_the_waiting_mark_with_its_tile(pg):
+    """The mark going away says the spool was loaded or left the slot, and a
+    failed read said neither, under a notice saying the tiles are the last
+    answer (reads-1's rule; Group 50 review)."""
+    pg.evaluate("(a) => window.refreshPrinterStatusWidgetFromAggregate(a[0], a[1])", [_with_waiting(GOOD), UP])
+    assert _marks(pg) == ["ZR-2"]
+    pg.evaluate("(a) => window.refreshPrinterStatusWidgetFromAggregate(a[0], a[1])", [FAILED, DOWN])
+    assert _marks(pg) == ["ZR-2"]
+    # A good read that doesn't list it says it left.
+    pg.evaluate("(a) => window.refreshPrinterStatusWidgetFromAggregate(a[0], a[1])", [GOOD, UP])
+    assert _marks(pg) == []
+
+
+def test_the_fan_out_keeps_the_waiting_mark(pg):
+    """Only the heartbeat works `waiting` out: every local change's fan-out wiped
+    the line, "I loaded it" and the amber dot for up to 15 s (Group 50 review)."""
+    pg.evaluate("(a) => window.refreshPrinterStatusWidgetFromAggregate(a[0], a[1])", [_with_waiting(GOOD), UP])
+    pg.evaluate("(a) => { window.__answers = a; }", FANOUT)
+    pg.evaluate(_REFRESH)
+    assert _marks(pg) == ["ZR-2"]
+
+
+def test_the_fan_out_drops_a_mark_whose_spool_it_finds_on_the_head(pg):
+    pg.evaluate("(a) => window.refreshPrinterStatusWidgetFromAggregate(a[0], a[1])", [_with_waiting(GOOD), UP])
+    answers = dict(FANOUT)
+    answers["/api/get_contents?id=ZR-2&strict=1"] = [{"body": [_item(93)]}]
+    pg.evaluate("(a) => { window.__answers = a; }", answers)
+    pg.evaluate(_REFRESH)
+    assert _marks(pg) == []
+
+
+def test_the_fan_out_gives_each_printer_its_id(pg):
+    """The folded strip's "By ID" reads it, and the fan-out builds its own rows."""
+    answers = dict(FANOUT)
+    answers["/api/printer_map"] = [{"body": dict(FANOUT["/api/printer_map"][0]["body"],
+                                                 printer_rows=[{"name": PRINTER, "location_id": "ZRP"}])}]
+    pg.evaluate("(a) => { window.__answers = a; }", answers)
+    pg.evaluate(_REFRESH)
+    got = pg.evaluate("() => document.querySelector('#printer-status-widget .fcc-ps-strip-name').title")
+    assert got == f"{PRINTER} · ID ZRP", got
+
+
 # --- the Locations table -------------------------------------------------------
 
 def test_a_failed_tick_keeps_the_counts_without_a_redraw_and_says_so(pg):
