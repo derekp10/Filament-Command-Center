@@ -150,7 +150,7 @@
     });
     window.registerShortcut({
         id: 'bind-picker-unbind', scope: 'Quick-Swap',
-        keys: ['Shift+Del'],
+        keys: ['Shift', 'Del'],
         description: 'In "Bind a Slot": clear the highlighted slot\'s binding.'
     });
     window.registerShortcut({
