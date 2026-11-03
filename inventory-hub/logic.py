@@ -5980,10 +5980,12 @@ def _audit_spool_id(value):
 def audit_mark_found(audit_id, sid, found):
     """POST /api/audit/found: a tile's press, a person's and never a scan. `found`
     True marks an expected spool found with no label read and makes it the last found;
-    False takes it back off the found list. It says which, never "the other one", so a
-    double press sent before the tile redrew can't flip it back. Writes nothing to
-    Spoolman. A label mark stays when its spool is un-found, and its "undo that" comes
-    back when the spool is found again."""
+    False takes it back off the found list, and takes an Extra back too (Derek's A3,
+    _audit_take_back_extra). It says which, never "the other one", so a double press
+    sent before the tile redrew can't flip it back. Writes nothing to Spoolman. A label
+    mark stays when its spool is un-found, and its "undo that" comes back when the
+    spool is found again. `found` True for a spool not on the list stays refused: a
+    press never makes an Extra."""
     session = state.AUDIT_SESSION
     refused = _audit_press_refusal(session, audit_id)
     if refused:
@@ -5991,6 +5993,8 @@ def audit_mark_found(audit_id, sid, found):
     session['last_activity_ts'] = time.time()
     sid = _audit_spool_id(sid)
     expected = session.get('expected_items') or []
+    if found is False and sid is not None and sid not in expected:
+        return _audit_take_back_extra(session, sid)
     if sid is None or sid not in expected:
         return _audit_press_refused(f"#{sid} isn't on this audit's list.")
     if found is not True and found is not False:
@@ -6005,6 +6009,26 @@ def audit_mark_found(audit_id, sid, found):
             session['last_found'] = None
         state.add_log_entry(f"↩️ #{sid} is back on the not-scanned list.", "INFO", "ffaa00")
     return {"success": True, "found": found}
+
+
+def _audit_take_back_extra(session, sid):
+    """An Extra's tile pressed (Derek, 2026-11-03, A3): it isn't here after all. Done
+    files the Extras here, so one scanned or picked by mistake must be undoable before
+    Done. It comes off every found list (scanned_items, rogue_items, found_by, and
+    last_found when it is that one); its stored row and any label mark stay, as an
+    Expected tile's un-find keeps a mark, and a scan of it again finds it again. A
+    second press of a tile already taken back is the same press, so it is answered
+    quietly. A spool loaded from here isn't an Extra, and its tile is no button."""
+    if sid in (session.get('rogue_items') or []):
+        _audit_take_out(session, sid)
+        (session.get('found_by') or {}).pop(str(sid), None)
+        if session.get('last_found') == sid:
+            session['last_found'] = None
+        state.add_log_entry(f"↩️ #{sid} is off the Extra list: it isn't here after all.", "INFO", "ffaa00")
+        return {"success": True, "found": False}
+    if str(sid) in (session.get('rows') or {}) and sid not in (session.get('scanned_items') or []):
+        return {"success": True, "found": False}
+    return _audit_press_refused(f"#{sid} isn't on this audit's list.")
 
 
 def audit_undo_need_label(audit_id, sid):

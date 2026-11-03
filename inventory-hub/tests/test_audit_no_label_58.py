@@ -1019,14 +1019,99 @@ def test_a_press_for_a_spool_not_on_the_list_is_refused(env, sid):
     assert session()["scanned_items"] == []
 
 
-def test_an_extra_cant_be_unfound_by_a_press(env):
-    """Only the Expected tiles are buttons, and the server holds to that too."""
+def test_an_extra_is_taken_back_by_a_press(env):
+    """PIN UPDATED DELIBERATELY (Derek, 2026-11-03, A3): Done files the Extras here
+    now, so one scanned or picked by mistake must be undoable before Done. It was
+    refused ("Only the Expected tiles are buttons"). RED on 296e2a7."""
     add_spool(env, 5, "LR-MDB-1")
     add_spool(env, 7, "CR")
     start(env, "LR-MDB-1")
     scan(env, "ID:7")
-    assert press(env, 7, found=False)["success"] is False
-    assert session()["rogue_items"] == [7] and 7 in session()["scanned_items"]
+    assert session()["last_found"] == 7 and session()["found_by"] == {"7": logic.AUDIT_FOUND_NO_LABEL}
+    env["logs"].clear()
+    assert press(env, 7, found=False) == {"success": True, "found": False}
+    assert session()["rogue_items"] == [] and session()["scanned_items"] == []
+    assert session()["found_by"] == {} and session()["last_found"] is None
+    body = live(env)
+    assert body["rogue"] == [] and body["stats"]["rogue"] == 0 and body["last_found"] is None
+    assert log_text(env) == ["↩️ #7 is off the Extra list: it isn't here after all."]
+    assert writes(env) == []
+
+
+def test_taking_back_an_extra_keeps_another_last_found(env):
+    """RED on 296e2a7."""
+    add_spool(env, 5, "LR-MDB-1")
+    add_spool(env, 7, "CR")
+    start(env, "LR-MDB-1")
+    scan(env, "ID:7")
+    scan(env, "ID:5")
+    assert press(env, 7, found=False)["success"] is True
+    assert session()["last_found"] == 5 and session()["scanned_items"] == [5]
+
+
+def test_a_double_press_on_an_extra_is_one_take_back(env):
+    """The second press, sent before the tile redrew, is answered quietly: a double
+    press does what one press does. RED on 296e2a7."""
+    add_spool(env, 5, "LR-MDB-1")
+    add_spool(env, 7, "CR")
+    start(env, "LR-MDB-1")
+    scan(env, "ID:7")
+    env["logs"].clear()
+    assert press(env, 7, found=False) == {"success": True, "found": False}
+    assert press(env, 7, found=False) == {"success": True, "found": False}
+    assert len(log_text(env)) == 1 and session()["rogue_items"] == []
+
+
+def test_an_extra_taken_back_and_scanned_again_is_an_extra_again(env):
+    """Its row stays, so nothing about it is lost; a scan reads it again. RED on 296e2a7."""
+    add_spool(env, 5, "LR-MDB-1")
+    add_spool(env, 7, "CR")
+    start(env, "LR-MDB-1")
+    scan(env, "ID:7")
+    press(env, 7, found=False)
+    assert scan_answer("ID:7")["heard"] == "Extra: FCC has #7 at CR"
+    assert session()["rogue_items"] == [7] and session()["last_found"] == 7
+
+
+def test_a_label_mark_stays_when_its_extra_is_taken_back(env):
+    """As an Expected tile's un-find keeps its mark: "undo that" comes back with the
+    spool. RED on 296e2a7."""
+    add_spool(env, 5, "LR-MDB-1")
+    add_spool(env, 7, "CR")
+    start(env, "LR-MDB-1")
+    scan(env, "ID:7")
+    scan(env, MARK)
+    press(env, 7, found=False)
+    assert session()["rogue_items"] == []
+    assert wire(env, 7) == "true" and session()["label_flagged"] == {"7": None}
+    scan(env, "ID:7")
+    assert live(env)["last_found"]["flagged_here"] is True
+
+
+def test_a_press_never_makes_an_extra_or_finds_one_again(env):
+    """found: true on a spool not on the list stays refused, an Extra included."""
+    add_spool(env, 5, "LR-MDB-1")
+    add_spool(env, 7, "CR")
+    add_spool(env, 8, "CR")
+    start(env, "LR-MDB-1")
+    scan(env, "ID:7")
+    press(env, 7, found=False)
+    for sid in (7, 8):
+        ans = press(env, sid)
+        assert ans["success"] is False and "isn't on this audit's list" in ans["msg"]
+    assert session()["rogue_items"] == [] and session()["scanned_items"] == []
+
+
+def test_a_spool_loaded_from_here_cant_be_taken_back(env):
+    """Its tile stays a plain tile, and the server holds to that too. Pins what was
+    already right."""
+    add_spool(env, 5, "LR-MDB-1")
+    add_spool(env, 242, "XL-1", physical_source="LR-MDB-1", physical_source_slot="1")
+    start(env, "LR-MDB-1")
+    scan(env, "ID:242")
+    assert session()["trail_items"] == [242]
+    assert press(env, 242, found=False)["success"] is False
+    assert session()["trail_items"] == [242] and 242 in session()["scanned_items"]
 
 
 @pytest.mark.parametrize("found", [None, "true", 1])
