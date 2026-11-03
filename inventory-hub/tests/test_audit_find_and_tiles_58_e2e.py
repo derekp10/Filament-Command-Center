@@ -227,6 +227,32 @@ def test_a_wide_windows_rows_keep_their_tag_beside_the_name(page: Page, base_url
     assert server.writes == []
 
 
+# --- The keyboard stays in Find (review of 7e3720f, P-7) ----------------------------------
+
+def test_a_legacy_label_scanned_into_finds_box_and_its_picker_cancelled_leaves_the_keyboard_in_find(
+        page: Page, base_url: str):
+    """The legacy picker the scan opens, over Find, and its Escape: the keyboard goes
+    back to Find's box, and letters typed next land there, not in the scan buffer (which
+    the next Enter would send as a scan). RED on 80ef514: BODY, and "glow" went to the
+    scan buffer."""
+    server = _running(page, base_url)
+    server.answers["LEG:120"] = LEGACY
+    page.click(FIND_BTN)
+    expect(page.locator(FIND_BOX)).to_be_focused()
+    page.keyboard.type("LEG:120", delay=5)
+    page.keyboard.press("Enter")
+    expect(page.locator(PICKER)).to_be_visible()
+    expect(page.locator("#fcc-legacy-picker-use")).to_be_focused()
+    page.keyboard.press("Escape")
+    expect(page.locator(PICKER)).to_have_count(0)
+    expect(page.locator(FIND_BOX)).to_be_focused()
+    page.keyboard.type("glow", delay=30)
+    expect(page.locator(FIND_BOX)).to_have_value("glow")
+    assert page.evaluate("state.scanBuffer") == ""
+    expect(page.locator(f"{FIND} .fcc-find-row")).to_have_count(len(SEARCH_ROWS))
+    assert server.writes == []
+
+
 # --- '/' and Ctrl+K under what sits over the panel (review of 7e3720f, P-2) ---------------
 # The audit's '/' opens Find while the panel is on top. With something over the panel, the
 # global search's own '/' (fab_drag.js) opened #offcanvasSearch behind everything (z 1045

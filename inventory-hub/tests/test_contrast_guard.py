@@ -331,8 +331,8 @@ def test_audit_panel_and_pill_are_readable(page: Page, base_url: str, assert_con
 def test_audit_find_window_is_readable(page: Page, base_url: str, assert_contrast):
     """Derek's answers of 2026-11-03, A2: 🔎 Find a spool over the audit panel. Its box and
     hint, each kind of row (every "where", both tags) with the highlighted one and a
-    hovered one, the panel's refusal said on it, a failed search with Try again hovered,
-    and "No spool matches". The session and the search are the routes' shapes, served to
+    hovered one, the panel's refusal said on it, "Searching…" over older rows (review of
+    7e3720f, P-7), a failed search with Try again hovered, and "No spool matches". The session and the search are the routes' shapes, served to
     this browser alone; nothing is picked."""
     import conftest   # local: keeps this file's header out of other branches' merges
     from test_audit_find_and_tiles_58_js import SEARCH_ROWS
@@ -364,6 +364,15 @@ def test_audit_find_window_is_readable(page: Page, base_url: str, assert_contras
     find.locator(".fcc-find-row[data-find-id='200']").hover()
     page.wait_for_timeout(200)
     assert_contrast(find)
+    # A newer search on its way over the older rows: "Searching…" at the box's end (review
+    # of 7e3720f, P-7). Its answer never comes here.
+    page.mouse.move(0, 0)
+    page.evaluate("() => { const plain = window.fetchT; window.fetchT = (u, ...r) => String(u).includes('/api/search')"
+                  " ? new Promise(() => {}) : plain(u, ...r); }")
+    find.locator("[data-find-box]").fill("glow blue")
+    expect(find.locator("[data-find-busy]")).to_have_text("Searching…")
+    assert_contrast(find)
+    assert "Searching…" in " ".join(o.get("text", "") for o in conftest.contrast_offenders(find, min_ratio=100))
     # A failed search, and one that matches nothing.
     page.evaluate("() => { const plain = window.fetchT; window.fetchT = (u, ...r) => String(u).includes('/api/search')"
                   " ? Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ success: false,"

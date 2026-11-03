@@ -599,6 +599,97 @@ def test_after_try_again_a_keyboards_pick_and_a_later_click_still_pick(live, env
     assert scans_with_source(live)[-1] == (f"ID:{sid}", "search")
 
 
+BUSY = FIND + " [data-find-busy]"
+
+
+def _typed_on_over(live, env, words):
+    """"glow" answered and drawn, then `words` typed with its search held: the person
+    goes on typing, and the old rows stay while the newer search is on its way."""
+    glow(env)
+    begin(live, env)
+    open_find(live)
+    search(live, "glow")
+    live.evaluate("() => { window.__holdSearch = true; }")
+    live.fill(FIND_BOX, words)
+    live.wait_for_function("() => window.__searches.length === 2")
+
+
+def _release_the_newer(live):
+    live.evaluate("() => window.__searches[1].release()")
+    live.wait_for_function("() => window.__searches.every((s) => s.answered)")
+    live.wait_for_function("(s) => document.querySelector(s).textContent === ''", arg=BUSY)
+
+
+def test_an_answer_that_drops_the_row_the_keyboard_is_on_gives_it_to_the_box(live, env):
+    """↓ to a row of the old list, then the newer answer, which doesn't list that spool:
+    the keyboard goes to the box, where Enter searches and picks nothing, never to a row
+    the person didn't reach. Review of 7e3720f, P-7: RED there, where it fell to the
+    page (BODY) and the Enter did nothing at all."""
+    _typed_on_over(live, env, "glow blue")
+    live.keyboard.press("ArrowDown")
+    old = rows(live)[0]
+    assert focus_is(live, row(old))
+    _release_the_newer(live)
+    assert old not in rows(live) and rows(live) == [99]
+    assert focus_is(live, FIND_BOX)
+    live.keyboard.press("Enter")                     # in the box: search now, no pick
+    live.wait_for_timeout(300)
+    assert scans(live) == [] and live.locator(FIND).count() == 1
+
+
+def test_an_answer_that_still_lists_the_row_the_keyboard_is_on_keeps_it_there(live, env):
+    """The keyboard on #99's row of the old list, and the newer answer lists #99 too: it
+    stays on #99, highlighted, and Enter picks it. RED on 7e3720f (BODY, nothing sent)."""
+    _typed_on_over(live, env, "glow bl")
+    live.keyboard.press("ArrowDown")
+    while not focus_is(live, row(99)):
+        live.keyboard.press("ArrowUp")
+    _release_the_newer(live)
+    assert rows(live) == [99] and focus_is(live, row(99))
+    assert live.get_attribute(row(99), "class").split().count("kb-active") == 1
+    live.keyboard.press("Enter")
+    live.wait_for_selector(FIND, state="detached")
+    assert scans_with_source(live) == [("ID:99", "search")]
+
+
+def test_searching_shows_while_a_newer_search_is_on_its_way_over_an_older_list(live, env):
+    """The old rows stay (nothing moves under the pointer) with "Searching…" at the box's
+    end, a role=status line, until the newer answer paints. RED on 7e3720f: no sign."""
+    _typed_on_over(live, env, "glow blue")
+    assert live.text_content(BUSY) == "Searching…" and live.get_attribute(BUSY, "role") == "status"
+    assert len(rows(live)) == 7                      # the older list, still there
+    _release_the_newer(live)
+    assert rows(live) == [99] and live.text_content(BUSY) == ""
+    assert live.evaluate("(s) => getComputedStyle(document.querySelector(s)).display", BUSY) == "none"
+
+
+def test_after_try_again_the_keyboard_is_in_the_box(live, env):
+    """↻ Try again's own press takes it from the page (the button is gone): the box has
+    it. RED on 7e3720f (BODY)."""
+    xy = _retry_up(live, env)
+    live.mouse.click(*xy)
+    live.wait_for_function("(s) => document.querySelector(s).dataset.findState === 'ready'", arg=FIND_BODY)
+    assert focus_is(live, FIND_BOX)
+
+
+def test_the_legacy_picker_over_find_gives_the_keyboard_back_to_its_box_when_it_closes(live, env):
+    """A legacy label scanned into the box opens the picker over Find (processScan's
+    answer to an ambiguous label, LEGACY's). Its Escape gives the keyboard to nothing:
+    Find takes it back, so the person's letters go into its box, not into the scan
+    buffer. RED on 7e3720f: BODY, and "glow" went to the scan buffer."""
+    from test_scanner_safe_dialogs_61_js import LEGACY
+    glow(env)
+    begin(live, env)
+    open_find(live)
+    live.evaluate("(p) => window.showLegacySpoolPicker(p, {})", LEGACY)
+    live.wait_for_function("() => document.activeElement && document.activeElement.id === 'fcc-legacy-picker-use'")
+    live.keyboard.press("Escape")
+    live.wait_for_selector("#fcc-legacy-picker-overlay", state="detached")
+    live.wait_for_function("(s) => document.activeElement === document.querySelector(s)", arg=FIND_BOX)
+    live.keyboard.type("glow", delay=30)
+    assert live.input_value(FIND_BOX) == "glow" and live.evaluate("state.scanBuffer") == ""
+
+
 def test_a_search_that_matches_nothing_says_so_and_an_empty_box_shows_the_hint(live, env):
     glow(env)
     begin(live, env)

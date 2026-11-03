@@ -506,8 +506,8 @@ def test_audit_done_question_text_is_readable(page: Page, base_url: str, assert_
 
 def test_audit_find_window_text_is_readable(page: Page, base_url: str, assert_text_size):
     """Derek's answers of 2026-11-03, A2: 🔎 Find a spool, its rows (each "where" and both
-    tags), its notice and a failed search; and the panel with a tile's QR and the strip's
-    🖨️ (A1, B), at Standard."""
+    tags), its notice, "Searching…" over older rows (review of 7e3720f, P-7) and a failed
+    search; and the panel with a tile's QR and the strip's 🖨️ (A1, B), at Standard."""
     from conftest import quiet_heartbeat
     from test_audit_find_and_tiles_58_js import SEARCH_ROWS
     _read_only(page, extra_get={"/api/audit_session": SAMPLE_AUDIT,
@@ -526,6 +526,12 @@ def test_audit_find_window_text_is_readable(page: Page, base_url: str, assert_te
     page.wait_for_function("(n) => document.querySelectorAll('#fcc-audit-find .fcc-find-row').length === n",
                            arg=len(SEARCH_ROWS))
     page.evaluate("() => window.auditPanelNotice('Already auditing LR-MDB-1. Finish first!')")
+    assert_text_size(page.locator("#fcc-audit-find"))
+    # "Searching…" over the older rows, a newer search on its way (review of 7e3720f, P-7).
+    page.evaluate("() => { const plain = window.fetchT; window.fetchT = (u, ...r) => String(u).includes('/api/search')"
+                  " ? new Promise(() => {}) : plain(u, ...r); }")
+    page.fill("#fcc-audit-find [data-find-box]", "glow blue")
+    page.wait_for_function("() => document.querySelector('#fcc-audit-find [data-find-busy]').textContent === 'Searching…'")
     assert_text_size(page.locator("#fcc-audit-find"))
     page.evaluate("() => { const plain = window.fetchT; window.fetchT = (u, ...r) => String(u).includes('/api/search')"
                   " ? Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ success: false,"

@@ -32,6 +32,12 @@ console.log("🚀 Loaded Module: AUDIT FIND");
 // scanner's digits-only label typed there is a person's text, and its Enter (or the
 // second Enter of a scanner set to CR LF) must not pick whatever the list shows. / goes
 // back to the box. Escape closes only this window (mountOverlay owns it).
+// The keyboard stays in this window (review of 7e3720f, P-7): an answer that redraws the
+// list keeps it on the same spool's row while the new list holds it, else gives it to
+// the box, never to a row the person didn't reach; "Searching…" shows at the box's end
+// while a newer search is on its way over an older list; and a window over this one
+// (the legacy picker a scan opens) that closes with the keyboard on the page gives it
+// back to the box.
 // A label scanned into the box goes to the scan path and never into the search
 // (installFieldScanCapture), and the box gets its text back. The audit panel closes this
 // on a scan the audit takes, and with itself; a Bootstrap window that opens meanwhile
@@ -82,6 +88,12 @@ ${P} .fcc-find-box { flex:0 0 auto; box-sizing:border-box; width:100%; backgroun
     border:1px solid #777; border-radius:6px; padding:6px 10px; font-size:var(--fcc-fs-row); outline:none; }
 ${P} .fcc-find-box::placeholder { color:#bbb; opacity:1; }
 ${P} .fcc-find-box:focus { border-color:#0dcaf0; box-shadow:0 0 0 2px rgba(13,202,240,.45); }
+/* "Searching…" while a newer search is on its way and the rows of an older one stay, at
+   the box's end: nothing moves under the pointer (review of 7e3720f, P-7). */
+${P} .fcc-find-boxline { position:relative; flex:0 0 auto; }
+${P} .fcc-find-busy { position:absolute; right:10px; top:50%; transform:translateY(-50%); padding-left:8px;
+    background:#111; color:#ddd; font-size:var(--fcc-fs-small); pointer-events:none; white-space:nowrap; }
+${P} .fcc-find-busy:empty { display:none; }
 ${P} .fcc-find-notice { flex:0 0 auto; margin-top:8px; padding:6px 10px; border-radius:6px; background:#4a3200;
     color:#ffd27a; border:1px solid #ffb74d; font-weight:bold; font-size:var(--fcc-fs-row); overflow-wrap:anywhere; }
 ${P} .fcc-find-notice[hidden] { display:none; }
@@ -157,8 +169,11 @@ ${P} .fcc-find-foot { color:#ccc; font-size:var(--fcc-fs-small); margin-top:8px;
                 <button type="button" class="fcc-find-close" data-find-close aria-label="Close">✕</button>
             </div>
             <div class="fcc-find-sub">A spool here with no label to scan: find it, and pick it. It counts as found here, with no label read.</div>
-            <input type="text" class="fcc-find-box" data-find-box autocomplete="off" spellcheck="false"
-                   placeholder="${esc(HINT)}" aria-label="Find a spool by its name, colour, brand or number">
+            <div class="fcc-find-boxline">
+                <input type="text" class="fcc-find-box" data-find-box autocomplete="off" spellcheck="false"
+                       placeholder="${esc(HINT)}" aria-label="Find a spool by its name, colour, brand or number">
+                <span class="fcc-find-busy" role="status" data-find-busy></span>
+            </div>
             <div class="fcc-find-notice" role="alert" data-find-notice hidden></div>
             <div class="fcc-find-body" data-find-body data-find-state="hint">
                 <div class="fcc-find-state">${esc(HINT)}</div>
@@ -172,15 +187,42 @@ ${P} .fcc-find-foot { color:#ccc; font-size:var(--fcc-fs-small); margin-top:8px;
     const _box = (handle) => handle.panel.querySelector('[data-find-box]');
     const _rows = (handle) => Array.from(_body(handle).querySelectorAll('.fcc-find-row'));
 
+    // The body's content replaced: an answer, "Searching…", a failure, the hint. The
+    // keyboard that was in it stays in Find (review of 7e3720f, P-7: it fell to the
+    // page, so the person's Enter picked nothing and their typing went to the scan
+    // buffer). Answers where it was: `{row}`, the spool whose row had it, for _paint to
+    // keep it on that spool while it is still listed; else _keysBack gives it to the box.
+    // A row the person never reached gets no keyboard: an Enter there would pick a spool
+    // nobody highlighted.
     function _setBody(handle, html, stateName) {
         const body = _body(handle);
+        const a = document.activeElement;
+        const was = (a && body.contains(a))
+            ? { row: (a.classList && a.classList.contains('fcc-find-row')) ? a.dataset.findId : null } : null;
         body.innerHTML = html;
         body.dataset.findState = stateName;
-        return body;
+        return was;
+    }
+
+    function _keysBack(handle, was) {
+        if (was) _focusBox(handle);
+    }
+
+    // "Searching…" at the box's end while a newer search is on its way (its wait for
+    // more keys, or its request) and the rows of an older one stay (review of 7e3720f,
+    // P-7: nothing said they weren't the answer to what the box says). An empty list
+    // says it in its own body instead.
+    function _busy(handle) {
+        const el = handle.panel.querySelector('[data-find-busy]');
+        if (!el) return;
+        const coming = !!handle._timer || (!!handle._inflight && handle._inflight === handle._seq);
+        const text = coming && _rows(handle).length ? 'Searching…' : '';
+        if (el.textContent !== text) el.textContent = text;
     }
 
     // One row highlighted, and the list's one stop in the Tab order. `focus`: the
-    // keyboard goes to it (an arrow); a fresh answer only marks it, the box keeps it.
+    // keyboard goes to it (an arrow, or a fresh answer that still lists the spool the
+    // keyboard was on); otherwise a fresh answer only marks it, the box keeps it.
     function _highlight(handle, idx, focus) {
         const rows = _rows(handle);
         rows.forEach((r) => {
@@ -279,14 +321,14 @@ ${P} .fcc-find-foot { color:#ccc; font-size:var(--fcc-fs-small); margin-top:8px;
     }
 
     function _showHint(handle) {
-        _setBody(handle, `<div class="fcc-find-state">${esc(HINT)}</div>`, 'hint');
+        _keysBack(handle, _setBody(handle, `<div class="fcc-find-state">${esc(HINT)}</div>`, 'hint'));
     }
 
     function _fail(handle, why) {
-        _setBody(handle, `<div class="fcc-find-fail" role="alert" data-find-fail>
+        _keysBack(handle, _setBody(handle, `<div class="fcc-find-fail" role="alert" data-find-fail>
                 <div>⚠️ Couldn't search: ${esc(why)}</div>
                 <button type="button" class="fcc-find-retry" data-find-retry>↻ Try again</button>
-            </div>`, 'error');
+            </div>`, 'error'));
     }
 
     function _paint(handle, raw, results) {
@@ -297,35 +339,43 @@ ${P} .fcc-find-foot { color:#ccc; font-size:var(--fcc-fs-small); margin-top:8px;
         live.sort((a, b) => Number(String(b.id) === want) - Number(String(a.id) === want));
         const shown = live.slice(0, MAX_ROWS);
         if (!shown.length) {
-            _setBody(handle, `<div class="fcc-find-state" role="status">No spool matches “${esc(raw)}”.</div>`, 'empty');
+            _keysBack(handle, _setBody(handle, `<div class="fcc-find-state" role="status">No spool matches “${esc(raw)}”.</div>`, 'empty'));
             return;
         }
         const more = live.length - shown.length;
-        _setBody(handle, shown.map((r) => _rowHtml(handle, r)).join('')
+        const was = _setBody(handle, shown.map((r) => _rowHtml(handle, r)).join('')
             + (more > 0 ? `<div class="fcc-find-more">and ${more} more: type more to narrow it</div>` : ''), 'ready');
+        // The keyboard on a row stays on its spool while the new list still holds it.
+        const keep = was && was.row != null ? _rows(handle).findIndex((r) => r.dataset.findId === was.row) : -1;
+        if (keep >= 0) { _highlight(handle, keep, true); return; }
         _highlight(handle, 0, false);
+        _keysBack(handle, was);
     }
 
     function _run(handle, raw) {
         handle._seq += 1;
         const seq = handle._seq;
+        handle._inflight = seq;
         const q = raw.replace(/#(\d)/g, '$1');
-        if (!_rows(handle).length) _setBody(handle, '<div class="fcc-find-state" role="status">Searching…</div>', 'loading');
+        if (!_rows(handle).length) _keysBack(handle, _setBody(handle, '<div class="fcc-find-state" role="status">Searching…</div>', 'loading'));
+        _busy(handle);
         const params = new URLSearchParams({ q, type: 'spool', strict: '1' });
         window.fetchT(`/api/search?${params.toString()}`, { cache: 'no-store' }, SEARCH_TIMEOUT_MS)
             .then((res) => res.json().then((data) => ({ res, data }), () => ({ res, data: null })))
             .then(({ res, data }) => {
                 if (seq !== handle._seq || !_alive(handle)) return;
-                if (!res.ok) { _fail(handle, `FCC answered with an error (HTTP ${res.status}).`); return; }
-                if (!data || typeof data !== 'object') { _fail(handle, "FCC's answer couldn't be read."); return; }
-                if (data.success !== true || !Array.isArray(data.results)) {
+                handle._inflight = 0;
+                if (!res.ok) _fail(handle, `FCC answered with an error (HTTP ${res.status}).`);
+                else if (!data || typeof data !== 'object') _fail(handle, "FCC's answer couldn't be read.");
+                else if (data.success !== true || !Array.isArray(data.results)) {
                     _fail(handle, String(data.msg || data.error || 'the search went wrong.'));
-                    return;
-                }
-                _paint(handle, raw, data.results);
+                } else _paint(handle, raw, data.results);
+                _busy(handle);
             }, () => {
                 if (seq !== handle._seq || !_alive(handle)) return;
+                handle._inflight = 0;
                 _fail(handle, "FCC didn't answer.");
+                _busy(handle);
             });
     }
 
@@ -337,12 +387,32 @@ ${P} .fcc-find-foot { color:#ccc; font-size:var(--fcc-fs-small); margin-top:8px;
         if (!raw) {
             handle._seq += 1;      // an answer still out paints nothing
             _showHint(handle);
+            _busy(handle);
             return;
         }
         // A label on its way to the scan path (its Enter gives the box its text back).
-        if (window.fccIsLabel && window.fccIsLabel(raw)) return;
+        if (window.fccIsLabel && window.fccIsLabel(raw)) { _busy(handle); return; }
         if (now) _run(handle, raw);
-        else handle._timer = setTimeout(() => { handle._timer = null; if (_alive(handle)) _run(handle, raw); }, DEBOUNCE_MS);
+        else {
+            handle._timer = setTimeout(() => { handle._timer = null; if (_alive(handle)) _run(handle, raw); }, DEBOUNCE_MS);
+            _busy(handle);
+        }
+    }
+
+    // A window over this one that closes with the keyboard left on the page (the legacy
+    // picker a scan into the box opens: its close gives the keyboard to nothing) gives it
+    // back to the box (review of 7e3720f, P-7: the person's next letters went into the
+    // scan buffer, and their Enter would have sent them as a scan). Each overlay mounts
+    // at the end of <body> and goes from there, so a change to <body>'s children is
+    // when to look.
+    function _takeKeysBack(handle) {
+        if (!_alive(handle)) return;
+        const a = document.activeElement;
+        if (a && a !== document.body && a.isConnected) return;
+        if (typeof window.isTopOverlay === 'function' && !window.isTopOverlay(handle.element)) return;
+        const shortcuts = document.getElementById('fcc-shortcuts-overlay');
+        if (shortcuts && shortcuts.getClientRects().length) return;
+        _focusBox(handle);
     }
 
     function _unlisten(handle) {
@@ -354,6 +424,10 @@ ${P} .fcc-find-foot { color:#ccc; font-size:var(--fcc-fs-small); margin-top:8px;
             document.removeEventListener('show.bs.modal', handle._findShows);
             document.removeEventListener('show.bs.offcanvas', handle._findShows);
             handle._findShows = null;
+        }
+        if (handle._findBack) {
+            handle._findBack.disconnect();
+            handle._findBack = null;
         }
         if (_current === handle) _current = null;
     }
@@ -501,6 +575,7 @@ ${P} .fcc-find-foot { color:#ccc; font-size:var(--fcc-fs-small); margin-top:8px;
         handle._onClose = typeof o.onClose === 'function' ? o.onClose : null;
         handle._seq = 0;
         handle._timer = null;
+        handle._inflight = 0;
         handle._closed = false;
         handle._retryPress = null;
         const box = _box(handle);
@@ -520,6 +595,10 @@ ${P} .fcc-find-foot { color:#ccc; font-size:var(--fcc-fs-small); margin-top:8px;
         handle._findShows = () => _close(handle, { keepFocus: true });
         document.addEventListener('show.bs.modal', handle._findShows);
         document.addEventListener('show.bs.offcanvas', handle._findShows);
+        if (typeof MutationObserver === 'function') {
+            handle._findBack = new MutationObserver(() => _takeKeysBack(handle));
+            handle._findBack.observe(document.body, { childList: true });
+        }
         // Now: mountOverlay's initialFocus comes a tick later.
         try { box.focus({ preventScroll: true }); } catch (_) { /* noop */ }
         return handle;
