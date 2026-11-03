@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+import conftest
 from test_audit_page_58_js import SESSION
 from test_scanner_safe_dialogs_61_js import MODULES, page61  # noqa: F401  (page61: the fixture)
 
@@ -197,6 +198,23 @@ def test_a_long_place_stays_on_screen(audit):
     audit.evaluate("() => { state.auditLocation = 'A-PLACE-WITH-A-VERY-LONG-NAME-'.repeat(6); window.updateAuditPill(); }")
     audit.wait_for_function("""(sel) => { const box = document.querySelector(sel).getBoundingClientRect();
         return box.width > 300 && box.left >= 0 && box.right <= window.innerWidth; }""", arg=PILL)
+    box = audit.locator(PILL).bounding_box()
+    assert box["x"] >= 0 and box["x"] + box["width"] <= audit.viewport_size["width"]
+
+
+def test_the_contrast_guard_sees_a_real_tiles_hover(audit):
+    """Findings 14 and 43: a tile's whole hover is `filter: brightness(1.3)`, and the
+    guard read no filter, so the hovers in test_contrast_guard.py's audit test could
+    not fail. The real tile under the real rule scores clean; brightness(40), white on
+    white, is an offender. RED before the guard read `filter`: no offender at 40."""
+    tile = "[data-audit-tile='99']"
+    audit.hover(tile)
+    assert audit.evaluate("(sel) => getComputedStyle(document.querySelector(sel)).filter", tile) == "brightness(1.3)"
+    assert conftest.contrast_offenders(audit.locator(tile)) == []
+    audit.add_style_tag(content="button.fcc-audit-tile:hover { filter: brightness(40) !important; }")
+    offenders = conftest.contrast_offenders(audit.locator(tile))
+    assert any("#99" in o["text"] for o in offenders), offenders
+    assert all(o["bg"] == "rgb(255, 255, 255)" for o in offenders), offenders
 
 
 def test_enter_on_done_presses_it_once(audit):

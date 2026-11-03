@@ -285,7 +285,9 @@ def test_audit_panel_and_pill_are_readable(page: Page, base_url: str, assert_con
         expect(panel.locator("#fcc-audit-last-found [role=status]")).to_contain_text(line)
         assert_contrast(panel)
     # Every button that changes colour under the mouse, and a tile of each kind you can
-    # press (a bright brightness() on a tile would lift its dark band under its text).
+    # press: a tile's hover is a filter, and a brighter one would lift its dark band under
+    # its light text. The guard reads brightness() (test_contrast_guard_compositing.py,
+    # and test_audit_panel_58_js.py on a real tile).
     for hovered in ("#fcc-audit-panel-needlabel", "#fcc-audit-panel-done", "#fcc-audit-panel-cancel",
                     "#fcc-audit-panel-close", "[data-audit-tile='99']", "[data-audit-tile='57']"):
         panel.locator(hovered).hover()

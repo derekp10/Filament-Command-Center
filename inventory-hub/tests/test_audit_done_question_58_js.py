@@ -165,6 +165,8 @@ DEFAULTS = {
     "{ title: 'T', msg: 'B', printing: true, onConfirm() {}, onCancel() {}, onStore() {} }": "39e7b1bf82ca",
     "{ title: 'T', msg: 'B', noLoad: true, onConfirm() {}, onStore() {},"
     " ids: { overlay: 'q', yes: 'y', no: 'n', store: 's' } }": "f6b9f311f5c5",
+    # An empty list of sections is no list: the same bytes as the same call with none.
+    "{ title: 'Load #57 onto XL-1?', msg: 'Body.', onConfirm() {}, onCancel() {}, sections: [] }": "33850cae1760",
 }
 
 
@@ -219,6 +221,20 @@ return { html: html().pop(), qrs, hold: window._fccOpenMoveQuestion.hint, focus:
     assert res["hold"] == "Answer the question on screen first: Park them or Back to <it>"
     assert (res["yes"], res["no"]) == ("Enter parks them · Esc goes back", "Enter goes back · Esc goes back")
     assert res["focus"] == ".fcc-apc-no"
+
+
+def test_a_question_that_can_only_store_takes_the_doors_cancel_caption_too(tmp_path):
+    """Finding 19(c). No door asks this yet. Pins what was right: proved on a copy that
+    drops `cancelCaption` from the no-load path."""
+    res = run_js(tmp_path, CORE, PRELUDE + r"""
+const qrs = [];
+const attach = window.attachConfirmQRs;
+window.attachConfirmQRs = (o) => { qrs.push({ c: o.confirmLabel, x: o.cancelLabel }); return attach(o); };
+window.confirmActivePrint({ title: 'T', msg: 'B', noLoad: true, onStore() {}, onCancel() {},
+  cancelCaption: 'Scan to go back' });
+return { qrs };
+""")
+    assert res["qrs"] == [{"c": "Scan to Store", "x": "Scan to go back"}]
 
 
 def test_sections_sit_under_the_message_escaped_and_a_count_says_what_was_left_out(tmp_path):

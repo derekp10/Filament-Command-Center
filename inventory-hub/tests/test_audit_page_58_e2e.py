@@ -172,9 +172,8 @@ def test_a_refused_start_leaves_the_page_truthful(page: Page, base_url: str):
     expect(page.locator(PANEL)).to_have_count(0)
     expect(page.locator(PILL)).to_be_hidden()
     expect(page.locator(TILE)).to_contain_text("AUDIT")
-    page.click(TILE)
-    page.wait_for_function("() => document.querySelectorAll('#toast-container .toast-msg').length >= 1")
-    page.wait_for_timeout(200)
+    with page.expect_response("**/api/identify_scan"):      # a toast would be the first press's, still up
+        page.click(TILE)
     assert server.scans == ["CMD:AUDIT", "CMD:AUDIT"]
 
 

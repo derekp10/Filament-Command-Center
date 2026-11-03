@@ -261,14 +261,14 @@ def test_a_refused_start_leaves_the_page_truthful(tmp_path, real):
 answerWith('/api/identify_scan', [%s]);
 toggleAudit();
 await __settle(60);
-const first = { active: state.auditActive, up: panelUp(), toasts: toasts(), pill: pill().style.display };
+const first = { active: state.auditActive, up: panelUp(), toasts: timed(), pill: pill().style.display };
 toggleAudit();
 await __settle(60);
 return { first, scans: scans() };
 """ % json.dumps(real["refused_start"]))
     first = res["first"]
     assert first["active"] is False and first["up"] is False and first["pill"] == "none"
-    assert {"msg": real["refused_start"]["msg"], "type": "error"} in first["toasts"]
+    assert {"msg": real["refused_start"]["msg"], "type": "error", "ms": 7000} in first["toasts"]
     assert res["scans"] == ["CMD:AUDIT", "CMD:AUDIT"]
 
 
@@ -544,12 +544,13 @@ await running(SESSION);
 window.processScan('LOC:LR-MDB-1', 'barcode');
 await __settle(80);
 return { moves: posts('/api/manage_contents'), smart: posts('/api/smart_move'), held: state.heldSpools.map(s => s.id),
-         active: state.auditActive, warnings: warnings() };
+         active: state.auditActive, toasts: timed() };
 """ % json.dumps(LOG_KEYS))
     assert res["moves"] == [] and res["smart"] == [] and res["held"] == [57]
     assert res["active"] is False          # the answer sent the page to ask why
-    assert any("LR-MDB-1 did nothing" in w for w in res["warnings"])
-    assert any("ended (elsewhere)" in w for w in res["warnings"])
+    warned = {t["msg"]: t["ms"] for t in res["toasts"] if t["type"] == "warning"}
+    assert warned == {"The audit has ended, so LR-MDB-1 did nothing. Scan it again if you meant it.": 7000,
+                      "The audit of LR-MDB-1 ended (elsewhere): scans go to the buffer again.": 7000}
 
 
 def test_a_done_on_a_panel_the_server_has_no_audit_for_asks_why_at_once(tmp_path):
@@ -611,11 +612,11 @@ const beat = { logs: [], status: {}, audit_active: false, audit_end: end };
 __session = { active: false, audit_end: end };
 await heartbeat(beat);
 await heartbeat(Object.assign({}, beat, { logs: [{ time: '1', msg: 'next tick', type: 'info' }] }));
-return { warnings: warnings(), log: logLines(), active: state.auditActive, up: panelUp(),
+return { toasts: timed(), log: logLines(), active: state.auditActive, up: panelUp(),
          pill: pill().style.display, tile: document.getElementById('lbl-audit').innerText,
          id: state.auditId, place: state.auditLocation };
 """ % json.dumps(end))
-    assert res["warnings"] == [words]
+    assert res["toasts"] == [{"msg": words, "type": "warning", "ms": 7000}]
     assert res["id"] is None and res["place"] == ""
     assert res["log"] == [f"⚠️ {words}"]
     assert res["active"] is False and res["up"] is False and res["pill"] == "none"

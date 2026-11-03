@@ -334,8 +334,8 @@ def test_the_real_page_sends_no_status_for_an_untouched_box(page, base_url):
                            " && !document.getElementById('btn-wiz-submit').disabled", timeout=15_000)
     assert page.locator(BOX).is_checked() is False
     assert page.locator(SAMPLE_BOX).is_checked() is False
-    page.locator("#btn-wiz-submit").click()
-    page.wait_for_timeout(500)
+    with page.expect_response("**/api/edit_spool_wizard"):
+        page.locator("#btn-wiz-submit").click()
     assert len(seen) == 1, seen
     assert "needs_label_print" not in seen[0]["filament_data"]["extra"], seen[0]
     assert "sample_printed" not in seen[0]["filament_data"]["extra"], seen[0]

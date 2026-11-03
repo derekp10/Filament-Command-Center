@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 import app as app_module  # noqa: E402
 import state  # noqa: E402
+from test_audit_page_58_js import SESSION as ROUTES_SESSION, _row  # noqa: E402
 from test_core1_return_ejectall_js import pytestmark, run_js  # noqa: E402,F401  (pytestmark: skip without node)
 from test_head_load_confirm_js import PRELUDE, SCAN  # noqa: E402
 from test_scanner_safe_dialogs_61_js import _open_picker, page61  # noqa: E402,F401  (page61: the fixture)
@@ -88,17 +89,10 @@ def test_an_answer_that_ended_the_audit_asks_nothing_of_the_page_either(tmp_path
 
 # --- the legacy picker, over the real panel ---------------------------------------
 
-SESSION = {
-    "active": True, "audit_id": "boot-1", "location_id": "LR-MDB-1", "note": "", "idle_timeout_min": 30,
-    "stats": {"total_expected": 2, "found": 0, "missing": 2, "rogue": 0, "trail": 0},
-    "expected": [{"id": 134, "display": "#134 Brand PLA (Black)", "color": "111111",
-                  "color_direction": "longitudinal", "remaining_weight": 800, "slot": "1",
-                  "location": "LR-MDB-1", "where": "LR-MDB-1 slot 1", "found": False},
-                 {"id": 135, "display": "#135 Brand PLA (Black)", "color": "111111",
-                  "color_direction": "longitudinal", "remaining_weight": 10, "slot": "2",
-                  "location": "LR-MDB-1", "where": "LR-MDB-1 slot 2", "found": False}],
-    "rogue": [], "trail": [],
-}
+# The route's shape, from the sample and the row test_the_session_above_is_the_routes_shape
+# pins to it.
+SESSION = dict(ROUTES_SESSION, note="", rogue=[], trail=[], expected=[_row(134, "1"), _row(135, "2")],
+               stats={"total_expected": 2, "found": 0, "missing": 2, "rogue": 0, "trail": 0})
 
 
 @pytest.fixture

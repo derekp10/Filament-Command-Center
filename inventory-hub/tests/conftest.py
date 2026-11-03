@@ -1684,6 +1684,16 @@ def _cleanup_orphan_test_records(request):
 #
 # Only `background-color` is read. Gradients / images (e.g. .fcc-ps-widget's
 # linear-gradient) count as transparent and the walk continues past them.
+#
+# A computed `filter: brightness(n)` is read too (Group 58's review: a tile's only
+# hover change is one, so the guard scored a white-on-white tile as if it were
+# unlit). A filter acts on its element's whole group, the element's own background
+# and everything inside it, so each background layer goes through the filter of the
+# element that paints it and of every ancestor of that element, and the text through
+# its own element's and every ancestor's. That leaves a filter on a descendant off a
+# background behind it, as a browser does. Each step clamps at 255, as a filter's
+# output does. Any other filter function (contrast(), drop-shadow(), ...) and
+# `opacity` are not modelled.
 CONTRAST_GUARD_JS = r"""
 (root, opts) => {
     const { minRatio, skipEmpty } = opts;
@@ -1715,6 +1725,24 @@ CONTRAST_GUARD_JS = r"""
         b: top.b * top.a + bottom.b * (1 - top.a),
         a: 1,
     });
+    // An element's computed `filter`, as a brightness: several multiply.
+    const brightnessOf = (el) => {
+        let out = 1;
+        const found = String(getComputedStyle(el).filter).matchAll(/brightness\(\s*([\d.]+)(%?)\s*\)/g);
+        for (const m of found) out *= parseFloat(m[1]) / (m[2] ? 100 : 1);
+        return out;
+    };
+    // A colour `owner` paints, as the filters over it leave it: `owner`'s, then each
+    // ancestor's, inside out, clamped at each step. Alpha is left alone.
+    const filtered = (c, owner) => {
+        let out = c;
+        for (let cur = owner; cur; cur = cur.parentElement) {
+            const b = brightnessOf(cur);
+            if (b === 1) continue;
+            out = { r: Math.min(255, out.r * b), g: Math.min(255, out.g * b), b: Math.min(255, out.b * b), a: out.a };
+        }
+        return out;
+    };
     // The colour actually painted behind `el`'s text.
     const effectiveBg = (el) => {
         const translucent = [];   // nearest ancestor first
@@ -1722,12 +1750,12 @@ CONTRAST_GUARD_JS = r"""
         for (let cur = el; cur && cur !== document.documentElement; cur = cur.parentElement) {
             const bg = parseColor(getComputedStyle(cur).backgroundColor);
             if (!bg || bg.a <= 0.01) continue;
-            if (bg.a >= OPAQUE) { ground = bg; break; }
-            translucent.push(bg);
+            if (bg.a >= OPAQUE) { ground = filtered(bg, cur); break; }
+            translucent.push(filtered(bg, cur));
         }
         if (!ground) {
             const htmlBg = parseColor(getComputedStyle(document.documentElement).backgroundColor);
-            ground = (htmlBg && htmlBg.a >= OPAQUE) ? htmlBg : DEFAULT_GROUND;
+            ground = (htmlBg && htmlBg.a >= OPAQUE) ? filtered(htmlBg, document.documentElement) : DEFAULT_GROUND;
         }
         let out = { r: ground.r, g: ground.g, b: ground.b, a: 1 };
         for (let i = translucent.length - 1; i >= 0; i--) out = over(translucent[i], out);
@@ -1752,7 +1780,8 @@ CONTRAST_GUARD_JS = r"""
         if (!fg) continue;
         const { color: bg, layers } = effectiveBg(el);
         // Translucent text is seen as painted over that background.
-        const fgPaint = fg.a >= OPAQUE ? fg : over(fg, bg);
+        const fgLit = filtered(fg, el);
+        const fgPaint = fg.a >= OPAQUE ? fgLit : over(fgLit, bg);
         const r = ratio(relLum(fgPaint.r, fgPaint.g, fgPaint.b), relLum(bg.r, bg.g, bg.b));
         if (r < minRatio) {
             offenders.push({

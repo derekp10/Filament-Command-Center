@@ -19,6 +19,7 @@ import json
 from playwright.sync_api import Page, expect
 
 import conftest
+from test_audit_page_58_js import SESSION
 
 
 def _goto(page: Page) -> None:
@@ -52,12 +53,9 @@ def _last_qr_for(page: Page, slot_id: str):
     )
 
 
-# What /api/audit_session answers while an audit runs (routes_state_pulse.py).
-_ACTIVE_AUDIT = {
-    "active": True, "location_id": "FCC-TEST-AUDIT", "idle_timeout_min": 10,
-    "expected": [], "rogue": [],
-    "stats": {"total_expected": 0, "found": 0, "missing": 0, "rogue": 0},
-}
+# What /api/audit_session answers while an audit runs (routes_state_pulse.py), from
+# the sample test_the_session_above_is_the_routes_shape pins to the route.
+_ACTIVE_AUDIT = dict(SESSION, location_id="FCC-TEST-AUDIT")
 
 
 def test_audit_slot_shapeshifts_between_states(page: Page):
