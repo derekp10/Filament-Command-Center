@@ -19,11 +19,6 @@
 > Derek's standing ask: *surface this section whenever he asks what's pending, even if he's asked
 > about something else.* He'll get to it; he doesn't know when.
 
-* **⏸️ PENDING DEREK — put the INDX hotfix on prod: run the TrueNAS update (`main` `626a10e`, released 2026-11-03).**
-  Until then, a cancelled print sliced with the current INDX profile is charged too little and logs "FCC's G-code
-  walk … against the slicer's …" warnings (job 1134 was carded 0.05 g; the right charge, 0.13 g, is what you
-  applied). Finished prints are charged right either way. Tell Claude once it's done: Claude checks prod's files
-  (read-only), as on 2026-10-26, and then removes this item.
 * **⏸️ PENDING DEREK — if the Activity Log ever shows "FCC's G-code walk of … came to … against the slicer's …",
   tell Claude: FCC may be misreading that file.** (That warning is how the INDX profile's new tags were caught on
   2026-11-02. Nothing to set up.)
