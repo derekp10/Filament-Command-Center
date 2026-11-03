@@ -2125,10 +2125,14 @@ window.commitBulkMove = () => {
     const PARK_TIMEOUT_MS = 120000;     // about six Spoolman calls a spool
     const _spools = (n) => `${n} spool${n === 1 ? '' : 's'}`;
 
+    // `wrap` (Derek's C; review of 7e3720f, P-3): a stay's reason and a spool's name can
+    // be long, and a line cut at its column's edge is whole only in its title, which a
+    // touch screen can't show. A line that fits stays one row.
     const _section = (heading, rows, line) => ({
         heading,
         lines: rows.slice(0, QUESTION_LINES).map(line),
         more: Math.max(0, rows.length - QUESTION_LINES),
+        wrap: true,
     });
 
     // Where the keyboard goes when the question leaves: its window has gone with it.

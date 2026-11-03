@@ -249,10 +249,13 @@ window.unionConfirmFedHeads = unionConfirmFedHeads;
 // each is the default above): `cancelLabel` and `cancelVerb`, the Cancel button and
 // what the hint says Enter and Esc do on it; `loadVerb`, the same for the yes;
 // `loadCaption` and `cancelCaption`, the QRs' captions. `sections`
-// ([{heading, lines: [{text, where}], more}]) are lists under `msg`, escaped here.
+// ([{heading, lines: [{text, where}], more, wrap}]) are lists under `msg`, escaped here.
 // A line never wraps and `more` counts the lines left out, so a door names a few
 // and a count: fccFitQuestion scrolls the whole question, QRs included, and a
-// scanner can't read a QR that has scrolled away.
+// scanner can't read a QR that has scrolled away. A list whose lines can be long asks
+// to wrap (`wrap: true`; Done's question, Derek's C, review of 7e3720f P-3): a line
+// that fits is drawn as one row still, and one that doesn't keeps its name whole and
+// puts its `where` under it, nothing cut (a touch screen can't read a line's title).
 // `armAfterMs` (Group 58 review; default 0, every other door as it was): the yes
 // button's CLICK does nothing until that long after the mount. The question can open
 // with its yes under the pointer, and the second click of a double click on the
@@ -328,7 +331,7 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
     const threeWay = !!title;
     const noVerb = (threeWay && cancelVerb) || 'cancels';
     const lists = (threeWay && Array.isArray(sections)) ? sections : [];
-    const sectionHtml = ({ heading = '', lines = [], more = 0 }) => `<div class="fcc-apc-section">`
+    const sectionHtml = ({ heading = '', lines = [], more = 0, wrap = false }) => `<div class="fcc-apc-section${wrap ? ' fcc-apc-section-wrap' : ''}">`
         + `<div class="fcc-apc-section-head">${esc(heading)}</div>`
         + lines.map(({ text = '', where = '' }) => `<div class="fcc-apc-line" title="${esc(where ? `${text} · ${where}` : text)}">`
             + `<span class="fcc-apc-line-text">${esc(text)}</span>`

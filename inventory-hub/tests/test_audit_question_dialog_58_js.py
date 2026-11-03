@@ -56,11 +56,34 @@ PARKED = {"success": True, "parked": [100, 101, 102], "filed": [], "stayed": [],
           "msg": "Parked 3 spools at Unknown. Undo Last Move puts them back.",
           "audit_ended": {"id": "boot-1", "why": "done"}}
 
+# Derek's C (review of 7e3720f, P-3): a question with long names in every list and C's
+# real reasons, in the route's shape (its keys are _question's, pinned below).
+HEAD_WHY = "loaded on XL-1: an audit never takes a spool off a printer"
+LONG_QUESTION = {
+    "type": "audit_done_question", "audit_id": "boot-1", "location": "LR-MDB-1", "found": 2, "expected": 4,
+    "park": [{"id": 101, "display": "#101 Another Maker PETG (Transparent Orange Glow)", "where": "LR-MDB-1 slot 2",
+              "slot": "2"},
+             {"id": 102, "display": "#102 Some Brand PLA (Galaxy Black)", "where": "LR-MDB-1 slot 3", "slot": "3"}],
+    "file": [{"id": 201, "display": "#201 Some Brand PLA (Glow Teal)", "where": "LR-MDB-2 slot 3"},
+             {"id": 202, "display": "#202 Another Maker PETG (Transparent Orange)", "where": "Unassigned"}],
+    "stays": [{"id": 301, "display": "#301 Some Brand PETG (Clear)", "where": "XL-1", "why": HEAD_WHY},
+              {"id": 302, "display": "#302 Some Brand PLA (Red)", "where": "LR-MDB-2 slot 2",
+               "why": "FCC has it in LR-MDB-2 slot 2, inside LR"},
+              {"id": 303, "display": "#303 Some Brand ASA (Grey)", "where": "PM-DB-1",
+               "why": "PM-DB-1 holds one spool, and #10 is there"},
+              {"id": 304, "display": "#304 Some Brand PLA (White)", "where": "CR-CT-1", "why": "in the scan buffer"}],
+    "file_note": "They go in with no slot: scan each one, then its slot's label, to set it.",
+}
+# Every name or reason the question cuts: what it shows against what it needs.
+CUT = """(q) => Array.from(document.querySelectorAll(q + ' .fcc-apc-line-text, ' + q + ' .fcc-apc-line-where'))
+    .filter((el) => el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1)
+    .map((el) => ({ text: el.textContent, shown: el.clientWidth, needs: el.scrollWidth }))"""
+
 
 def test_the_samples_shape_is_the_routes(asked):
     """Pins the samples, here and in the guards, to the real route's answers."""
     real = asked["question"]
-    for sample in (_question(stays=1), SAMPLE_QUESTION):
+    for sample in (_question(stays=1), SAMPLE_QUESTION, LONG_QUESTION):
         assert set(sample) == set(real) and sample["type"] == real["type"]
         assert set(sample["park"][0]) == set(real["park"][0]) and set(sample["stays"][0]) == set(real["stays"][0])
     assert set(PARKED) == set(asked["parked"])
@@ -360,19 +383,44 @@ def test_a_question_taller_than_a_phone_scrolls_whole_and_never_sideways(dialog)
     assert m["qrBottom"] <= m["vh"], m
 
 
-def test_a_long_name_stays_on_one_line_and_its_reason_stays_whole(dialog):
-    """The name gives way, and its full text is in the line's title."""
+def test_a_long_name_wraps_whole_and_its_reason_stays_whole(dialog):
+    """PIN UPDATED DELIBERATELY (review of 7e3720f, P-3; was ..._stays_on_one_line_...): the
+    name gave way, its full text only in the line's title, which a touch screen can't show.
+    Done's lists wrap now: the name reads whole on its own lines, its reason under it, and
+    the title stays for a mouse. The question is no wider for it."""
     name = "#300 " + "A very long maker's name " * 6 + "PETG (Clear)"
     question = _question(1, 1)
     question["stays"][0].update(display=name, why="moved to LR-MDB-2 slot 3")
     dialog.evaluate("(q) => window.askAuditDone(q)", question)
     dialog.wait_for_selector(QRS)
     line = dialog.evaluate("""() => { const l = document.querySelectorAll('#fcc-audit-done-question .fcc-apc-line')[1];
-        const w = l.querySelector('.fcc-apc-line-where');
-        return { high: l.getBoundingClientRect().height, title: l.title, whole: w.scrollWidth <= w.clientWidth,
+        const t = l.querySelector('.fcc-apc-line-text'), w = l.querySelector('.fcc-apc-line-where');
+        return { high: l.getBoundingClientRect().height, title: l.title, name: t.scrollWidth <= t.clientWidth + 1,
+                 whole: w.scrollWidth <= w.clientWidth + 1, under: w.getBoundingClientRect().top >= t.getBoundingClientRect().bottom - 1,
                  sheetWide: document.querySelector('#fcc-audit-done-question .fcc-apc-panel').getBoundingClientRect().width }; }""")
-    assert line["high"] < 30 and line["whole"] and line["title"] == f"{name} · moved to LR-MDB-2 slot 3"
+    assert line["high"] > 30 and line["name"] and line["whole"] and line["under"], line
+    assert line["title"] == f"{name} · moved to LR-MDB-2 slot 3"
     assert line["sheetWide"] == 800              # the two-list width: the name didn't widen it
+
+
+@pytest.mark.parametrize("width, height", [(1366, 768), (390, 844)])
+def test_c_long_names_and_reasons_are_never_cut(dialog, width, height):
+    """Review of 7e3720f, P-3: C's stays carry long reasons and its question a third list;
+    each line was one row that never wrapped, so names and reasons were cut at every size.
+    Nothing is cut now, the question never scrolls sideways, and the Yes, Back and both QRs
+    stay reachable, in view or by the question's own scroll."""
+    dialog.set_viewport_size({"width": width, "height": height})
+    dialog.evaluate("(q) => window.askAuditDone(q)", LONG_QUESTION)
+    dialog.wait_for_selector(QRS)
+    dialog.wait_for_timeout(120)                 # the QR codes draw two frames later
+    assert dialog.evaluate(CUT, QUESTION) == []
+    m = _measure(dialog)
+    assert m["left"] >= 0 and m["right"] <= m["vw"] and not m["wide"], m
+    if m["scrolls"]:
+        dialog.evaluate("(sel) => { const p = document.querySelector(sel); p.scrollTop = p.scrollHeight; }", SHEET)
+        m = _measure(dialog)
+    assert m["qrTop"] >= 0 and m["qrBottom"] <= m["vh"], m
+    assert _on_top(dialog, BACK) and _on_top(dialog, YES)
 
 
 # --- the Loose spools list, from the panel ------------------------------------------

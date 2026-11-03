@@ -1577,6 +1577,32 @@ body {
     line-height: 1.4;
     color: #ddd;
 }
+/* A list whose lines can be long asks to wrap (`wrap: true`, its section's
+   .fcc-apc-section-wrap): Done's question (Derek's C, 2026-11-03; review of 7e3720f, P-3:
+   its stays' reasons and spools' names were cut at every size, whole only in the line's
+   title, which a touch screen can't show). A line that fits is drawn as above, its
+   reason at its end, so a short question is no taller. One that doesn't keeps its name
+   whole and puts its reason on the next row, indented: the line's padding, which the
+   name's own margin takes back. A list alone in the grid's last row takes its width. */
+.fcc-apc-section-wrap .fcc-apc-line {
+    flex-wrap: wrap;
+    row-gap: 0;
+    padding-left: 1rem;
+}
+.fcc-apc-section-wrap .fcc-apc-line-text {
+    margin-left: -1rem;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+.fcc-apc-section-wrap .fcc-apc-line-where {
+    flex: 0 1 auto;
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+.fcc-apc-sections > .fcc-apc-section-wrap:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+}
 
 /* --- RED ZONE: NAV DECK --- */
 #loc-mgr-nav-deck {
