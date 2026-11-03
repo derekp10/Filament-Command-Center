@@ -930,10 +930,14 @@ def test_a_filed_spool_goes_back_to_unassigned_or_unknown_with_its_note(env, at,
     assert extra_of(env, 20).get("fcc_pre_audit_location", "") == extra.get("fcc_pre_audit_location", "")
 
 
-def test_a_slot_taken_since_is_final_and_the_parked_group_still_goes_back(places):
+def test_a_slot_taken_since_is_final_and_the_parked_spool_is_held_back(places):
+    """#20's old slot is taken, so #20 stays in PM-DB-1 for good, and #10 can't go back
+    in beside it (_undo_hold_parked). Review of 7e3720f, S-6: renamed from
+    ..._and_the_parked_group_still_goes_back, which said the opposite of what it checks,
+    and its no-op `spools(env)[20]["location"] = "PM-DB-1"` is the precondition it is."""
     env = places
     _filed_and_parked(env)
-    spools(env)[20]["location"] = "PM-DB-1"          # still filed here
+    assert spools(env)[20]["location"] == "PM-DB-1"   # still filed here
     add_spool(env, 30, "LR-MDB-2", container_slot="3")
     done = yes_undo(env)
     assert done["success"] is False
@@ -946,8 +950,10 @@ def test_a_slot_taken_since_is_final_and_the_parked_group_still_goes_back(places
     assert state.UNDO_STACK == []                     # final: no retry copy
 
 
-def test_a_slot_taken_since_in_a_box_with_room_leaves_the_parked_group_alone(env):
-    """A filed spool has no slot, so in a multi-slot box it claims none."""
+def test_a_slot_taken_since_in_a_box_with_room_the_parked_group_still_goes_back(env):
+    """A filed spool has no slot, so in a multi-slot box it claims none: #2 goes back while
+    #20 stays. Review of 7e3720f, S-6: renamed from ..._leaves_the_parked_group_alone,
+    which read as if #2 stayed."""
     add_spool(env, 2, "LR-MDB-1", container_slot="2")
     _extra_here(env, at="LR-MDB-2", container_slot="3")
     yes(env)
