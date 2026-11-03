@@ -133,7 +133,7 @@ def test_over_the_real_audit_panel(page: Page, base_url: str):
     page.wait_for_function("() => typeof window.openAuditPanel === 'function' && typeof window.openLooseList === 'function'",
                            timeout=45_000)
     page.evaluate("() => { state.auditActive = true; window.openAuditPanel(); }")
-    page.wait_for_function("() => { const b = document.getElementById('fcc-audit-panel-body');"
+    page.wait_for_function("() => { const b = document.getElementById('fcc-audit-panel-tally');"   # above the list (2026-11-03)
                            " return !!b && /Auditing/.test(b.innerText); }", timeout=10_000)
     page.click("#fcc-audit-panel-loose")
     expect(page.locator(ROW + ".kb-active")).to_have_count(1)

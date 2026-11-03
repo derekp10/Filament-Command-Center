@@ -127,6 +127,36 @@ def test_the_note_stays_in_view_however_long_the_list_is(audit):
     assert audit.is_visible(NOTE) and _on_top(audit, NOTE)
 
 
+TALLY = "#fcc-audit-panel-tally"
+
+
+def test_the_tally_stays_in_view_above_the_list_however_long_it_is(audit):
+    """Derek, 2026-11-03 (sample 2a): "persistent status up top". The tally is the body's
+    first line no more: above the scrolling list, outside it, with its same words and
+    colours, and drawn again at every redraw. RED on 04188db: it scrolled away with the
+    tiles."""
+    audit.evaluate("""() => { const row = window.__session.expected[0];
+        window.__session = Object.assign({}, window.__session, {
+            expected: Array.from({ length: 200 }, (_, i) => Object.assign({}, row, { id: 1000 + i, display: '#' + (1000 + i) })) });
+        window.refreshAuditSession(); }""")
+    audit.wait_for_function("() => document.querySelectorAll('#fcc-audit-panel-body .fcc-audit-tile').length >= 200")
+    audit.evaluate("() => { document.getElementById('fcc-audit-panel-body').scrollTop = 100000; }")
+    assert audit.is_visible(TALLY) and _on_top(audit, TALLY)
+    got = audit.evaluate("""(sel) => { const t = document.querySelector(sel);
+        return { text: t.innerText.replace(/\\s+/g, ' ').trim(),
+                 inBody: document.getElementById('fcc-audit-panel-body').contains(t),
+                 colours: Array.from(t.querySelectorAll('b, span')).map((e) => [e.textContent.trim(), getComputedStyle(e).color]) }; }""",
+                         TALLY)
+    assert got["text"] == "Auditing LR-MDB-1 — 1/2 found, 1 missing, 1 extra, 1 loaded from here"
+    assert got["inBody"] is False
+    assert got["colours"] == [["LR-MDB-1", "rgb(0, 255, 255)"], ["1/2", "rgb(0, 255, 0)"],
+                              ["1", "rgba(255, 255, 255, 0.75)"], ["1", "rgb(255, 204, 0)"], ["1", "rgb(127, 232, 255)"]]
+    # A redraw draws it again: a scan's answer changes the counts.
+    audit.evaluate("""() => { window.__session = Object.assign({}, window.__session,
+        { stats: Object.assign({}, window.__session.stats, { found: 2, missing: 0 }) }); window.refreshAuditSession(); }""")
+    audit.wait_for_function("(sel) => document.querySelector(sel).innerText.includes('2/2 found, 0 missing')", arg=TALLY)
+
+
 def test_the_deck_tile_stays_audit_while_an_audit_runs(audit):
     """Derek, 2026-11-03: "drop the finish swap". During an audit the deck's tile keeps its
     AUDIT label and its CMD:AUDIT QR, lit purple (btn-audit-active / label-active-audit),

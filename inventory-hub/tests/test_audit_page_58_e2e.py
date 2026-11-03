@@ -252,7 +252,7 @@ def test_a_real_audit_from_the_tile_to_cancel(page: Page, base_url: str, api_bas
         page.click(TILE)
         page.wait_for_selector(DONE)
         page.evaluate("(p) => { window.processScan('LOC:' + p, 'barcode'); }", places[0])
-        expect(page.locator("#fcc-audit-panel-body")).to_contain_text(f"Auditing {places[0]}")
+        expect(page.locator("#fcc-audit-panel-tally")).to_contain_text(f"Auditing {places[0]}")   # above the list (2026-11-03)
         expect(page.locator(PILL)).to_contain_text(places[0], use_inner_text=True, timeout=5_000)
         page.evaluate("(p) => { window.processScan('LOC:' + p, 'barcode'); }", places[1])
         expect(page.locator("#fcc-audit-panel-notice")).to_have_text(f"Already auditing {places[0]}. Finish first!")

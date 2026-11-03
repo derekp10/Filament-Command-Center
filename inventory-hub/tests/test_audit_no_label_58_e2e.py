@@ -214,7 +214,7 @@ def test_a_real_audit_press_mark_undo_label_read(page: Page, base_url: str, api_
         page.click(TILE)
         page.wait_for_selector(DONE)
         page.evaluate("(p) => { window.processScan('LOC:' + p, 'keyboard'); }", place)
-        expect(page.locator(BODY)).to_contain_text(f"Auditing {place}")
+        expect(page.locator("#fcc-audit-panel-tally")).to_contain_text(f"Auditing {place}")   # above the list (2026-11-03)
 
         target = page.locator(tile(pressed))
         target.click()

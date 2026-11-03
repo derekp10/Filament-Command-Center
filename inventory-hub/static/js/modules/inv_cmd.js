@@ -1710,14 +1710,19 @@ window.commitBulkMove = () => {
         const stripSpool = data.last_found ? data.last_found.id : null;
         const stripMoved = stripSpool !== _stripSpool;
         _stripSpool = stripSpool;
-        body.innerHTML = `
-            <div style="margin-bottom:10px; font-size:0.95rem;">
+        // The tally, above the scrolling list and always in view (Derek, 2026-11-03,
+        // sample 2a: "persistent status up top"), in the words and colours it had as the
+        // body's first line.
+        const tally = root.querySelector('#fcc-audit-panel-tally');
+        if (tally) {
+            tally.innerHTML = `
                 Auditing <b style="color:#0ff;">${loc}</b> —
                 <span style="color:#0f0; font-weight:bold;">${s.found}/${s.total_expected}</span> found,
                 <span style="color:rgba(255,255,255,0.75); font-weight:bold;">${s.missing}</span> missing,
                 <span style="color:#fc0; font-weight:bold;">${s.rogue}</span> extra${s.trail ? `,
-                <span style="color:#7fe8ff; font-weight:bold;">${s.trail}</span> loaded from here` : ''}
-            </div>
+                <span style="color:#7fe8ff; font-weight:bold;">${s.trail}</span> loaded from here` : ''}`;
+        }
+        body.innerHTML = `
             ${expected.length ? `
                 <div style="margin-bottom:6px;">
                     <span style="font-weight:bold; color:#0ff;">Expected here</span>
@@ -1891,6 +1896,7 @@ window.commitBulkMove = () => {
                             color:#ffd27a; border:1px solid #ffb74d; font-weight:bold; overflow-wrap:anywhere;"></div>
                 <div id="fcc-audit-panel-note"
                      style="display:none; margin-bottom:8px; font-size:var(--fcc-fs-row); color:#ffe08a;"></div>
+                <div id="fcc-audit-panel-tally" style="flex:0 0 auto; margin-bottom:8px; font-size:0.95rem;"></div>
                 <div id="fcc-audit-panel-body" style="overflow-y:auto; flex:1 1 auto;">
                     <div class="small" style="color:rgba(255,255,255,0.7);">Loading audit state…</div>
                 </div>

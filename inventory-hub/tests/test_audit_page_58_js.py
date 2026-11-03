@@ -75,6 +75,8 @@ const panelUp = () => __rec.overlays.some(o => o.id === 'fcc-audit-panel-overlay
 const panelCount = () => __rec.overlays.filter(o => o.id === 'fcc-audit-panel-overlay').length;
 const panel = () => __mounts.filter(m => m.opts.id === 'fcc-audit-panel-overlay').pop().el;
 const bodyHtml = () => panel().querySelector('#fcc-audit-panel-body').innerHTML;
+// The tally, above the scrolling body since Derek's 2026-11-03 look (sample 2a).
+const tallyHtml = () => panel().querySelector('#fcc-audit-panel-tally').innerHTML;
 const shell = () => __rec.overlays.filter(o => o.id === 'fcc-audit-panel-overlay').pop().content;
 const noticeText = () => panel().querySelector('#fcc-audit-panel-notice').textContent;
 const noteText = () => panel().querySelector('#fcc-audit-panel-note').textContent;
@@ -1719,14 +1721,16 @@ def test_the_panel_says_extra_and_loaded_from_here_each_with_where(tmp_path, rea
     """On the route's own session. RED on 25738af: "rogue", no where, no group."""
     res = _run(tmp_path, """
 await running(SESSION);
-return { body: bodyHtml() };
+return { body: bodyHtml(), tally: tallyHtml() };
 """, session=real["session"])
     text = _text(res["body"])
     assert "Extra (found here, filed elsewhere)" in text and "Loaded from here" in text
     assert "📍 LR-MDB-2 slot 3" in text
     assert "🔗 on XL-1" in text
-    assert "1 extra" in text and "1 loaded from here" in text
-    assert "rogue" not in text.lower()
+    # The tally sits above the body since Derek's 2026-11-03 look (PIN UPDATED DELIBERATELY).
+    tally = _text(res["tally"])
+    assert "1 extra" in tally and "1 loaded from here" in tally
+    assert "rogue" not in text.lower() and "rogue" not in tally.lower()
 
 
 def test_an_extras_tile_says_a_lost_spool_is_one(tmp_path):

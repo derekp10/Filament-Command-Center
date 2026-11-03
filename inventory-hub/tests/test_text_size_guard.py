@@ -428,7 +428,8 @@ def test_review_audit_and_bulk_move_panels_text_is_readable(page: Page, base_url
     page.keyboard.press("Escape")
     page.wait_for_function("() => !document.getElementById('fcc-cr-title')", timeout=5000)
     page.evaluate("() => window.openAuditPanel()")
-    page.wait_for_function("() => { const b = document.getElementById('fcc-audit-panel-body');"
+    # The tally sits above the body since Derek's 2026-11-03 look (sample 2a).
+    page.wait_for_function("() => { const b = document.getElementById('fcc-audit-panel-tally');"
                            " return !!b && /Auditing/.test(b.innerText); }", timeout=10_000)
     page.wait_for_timeout(800)
     assert_text_size(page.locator("#fcc-audit-panel-body"))

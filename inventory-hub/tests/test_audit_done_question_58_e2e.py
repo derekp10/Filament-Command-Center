@@ -439,9 +439,9 @@ def test_a_real_audit_through_the_question_a_real_park_and_its_undo(
         page.click(TILE)
         page.wait_for_selector(DONE)
         page.evaluate("(p) => { window.processScan('LOC:' + p, 'keyboard'); }", place)
-        expect(page.locator("#fcc-audit-panel-body")).to_contain_text(f"Auditing {place}")
+        expect(page.locator("#fcc-audit-panel-tally")).to_contain_text(f"Auditing {place}")   # above the list (2026-11-03)
         page.evaluate("(sid) => { window.processScan('ID:' + sid, 'keyboard'); }", found)
-        expect(page.locator("#fcc-audit-panel-body")).to_contain_text("1/3")
+        expect(page.locator("#fcc-audit-panel-tally")).to_contain_text("1/3")
 
         _ask(page)
         sheet = page.locator(SHEET)
