@@ -1060,6 +1060,16 @@ def api_audit_park():
                                             file_ids=data.get('file_ids'), file_where=data.get('file_where')))
 
 
+@app.route('/api/audit/report', methods=['GET'])
+def api_audit_report():
+    """An ended audit's report as data, for the report window (Group 58; Derek,
+    2026-11-03): ?id=<audit id>, from the 📝 Read the report button on the report's
+    Activity Log line (its data-audit-report). Answers logic.audit_report's dict:
+    {success: true, report} for one of the last 10 audits, else {success: false, msg}.
+    Reads nothing from Spoolman."""
+    return jsonify(logic.audit_report(request.args.get('id')))
+
+
 @app.route('/api/audit/found', methods=['POST'])
 def api_audit_found():
     """A tile's press: {audit_id, id, found}. Found with no label read, or back off
@@ -1277,6 +1287,10 @@ def api_identify_scan():
             answer = dict(_AUDIT_SCAN_ANSWER)
             if isinstance(audit_res, dict) and audit_res.get('audit_ended'):
                 answer['audit_ended'] = audit_res['audit_ended']
+            # A Done that ended the audit with no question carries its report as
+            # data, for the window that opens where the panel was (Derek, 2026-11-03).
+            if isinstance(audit_res, dict) and audit_res.get('report'):
+                answer['report'] = audit_res['report']
             if isinstance(audit_res, dict) and audit_res.get('said'):
                 answer['said'] = audit_res['said']
                 if audit_res.get('said_type'):

@@ -363,6 +363,9 @@ def test_the_yes_parks_with_the_note_and_clears_slot_and_trail(env):
     audit_id = session()["audit_id"]
     result = park(env, today="2026-11-01")
     # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, C4): the answer says what was filed.
+    # And again (H S3): it carries the report as data, pinned on its own in
+    # tests/test_audit_tiles_and_report_58.py.
+    assert result.pop("report")["audit_id"] == audit_id
     assert result == {
         "success": True, "parked": [1], "filed": [], "stayed": [], "failed": [],
         "msg": "Parked 1 spool at Unknown. Undo Last Move puts it back.",

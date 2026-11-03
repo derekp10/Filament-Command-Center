@@ -21,6 +21,7 @@ EXPECTED_ROUTES = [
     ("/api/audit/needs_label", "POST", "api_audit_needs_label"),  # Group 58 H S4: a found tile's 🏷️
     ("/api/audit/needs_label_undo", "POST", "api_audit_needs_label_undo"),  # Group 58.2: "undo that"
     ("/api/audit/park", "POST", "api_audit_park"),  # Group 58: the Yes to Done's question
+    ("/api/audit/report", "GET", "api_audit_report"),  # Group 58 H S3: an ended audit's report as data
     ("/api/audit_session", "GET", "api_audit_session"),
     ("/api/backfill_spool_weights/<int:fid>", "POST", "api_backfill_spool_weights"),
     ("/api/buffer/clear", "POST", "api_buffer_clear"),

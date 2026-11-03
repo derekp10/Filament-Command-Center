@@ -5823,6 +5823,10 @@ def check_audit_idle_timeout():
         line = (f"🕒 Audit auto-cancelled after {state.AUDIT_IDLE_TIMEOUT_SECONDS // 60} min of inactivity"
                 + (f" (was on {_audit_esc(place)})" if place else "")
                 + " — no spools moved.")
+        # The report as data too, from the session alone, for this line's button.
+        report = _audit_report_data(session, 'idle')
+        _keep_audit_report(report)
+        meta = None
         if place:
             expected, missing, extras, trail = _audit_tally(session)
             parts = [f"found {len(expected) - len(missing)} of {len(expected)}"]
@@ -5830,8 +5834,9 @@ def check_audit_idle_timeout():
                                ("needs a label", list(session.get('label_flagged') or {}))):
                 if ids:
                     parts.append(f"{words} " + ", ".join(f"#{sid}" for sid in ids))
-            line += " Report: " + "; ".join(parts) + "."
-        state.add_log_entry(line, "WARNING", "ffaa00")
+            line += " Report: " + "; ".join(parts) + "." + _audit_report_button(report['audit_id'])
+            meta = _audit_report_meta(report['audit_id'])
+        state.add_log_entry(line, "WARNING", "ffaa00", meta=meta)
         _end_audit('idle')
     finally:
         _AUDIT_END_LOCK.release()
@@ -5878,32 +5883,193 @@ def _audit_with_look(session, rows, keys=None):
     return [dict({k: row[k] for k in keys} if keys else row, **_audit_look(session, row['id'])) for row in rows]
 
 
-def _audit_report(session, parked=(), stays=(), failed=(), filed=()):
+def _audit_perfect(session):
+    """"Perfect Match" takes an audited place, something expected, all of it found,
+    and no extra."""
+    expected, missing, extras, _trail = _audit_tally(session)
+    return bool(session.get('location_id')) and bool(expected) and not missing and not extras
+
+
+def _audit_summary(session, filed=()):
+    """The report's first line, in words (no HTML): the Activity Log entry's and the
+    report window's (`summary`)."""
+    if not session.get('location_id'):
+        return "Audit ended before a location was scanned: nothing was checked."
+    expected, missing, extras, trail = _audit_tally(session)
+    if expected:
+        first = f"Found {len(expected) - len(missing)} of {len(expected)}."
+        return first + (" ✅ Perfect Match! All items accounted for." if _audit_perfect(session) else "")
+    if extras or trail:
+        # With Extras filed here by Done (C), "Nothing was filed here." above its own
+        # "Filed here" line read as a contradiction (review of 7e3720f, R-4's note).
+        return "Nothing was filed here when the audit began." if filed else "Nothing was filed here."
+    return "Nothing was filed here and nothing was scanned."
+
+
+# --- The report as data (Group 58; Derek, 2026-11-03): the window that opens after
+# Done's Yes, and later from the report's line in the Activity Log (its 📝 Read the
+# report button), lists each spool once, under what the end did with it, as colour
+# tiles. Kept for the last AUDIT_REPORTS_KEPT audits, by audit id, in this process
+# only, as the session is: a restart forgets them, and the line says the same in words.
+
+AUDIT_REPORTS_KEPT = 10
+_AUDIT_REPORTS: typing.Dict[str, typing.Dict[str, typing.Any]] = {}      # oldest first
+_AUDIT_REPORTS_LOCK = threading.Lock()
+AUDIT_REPORT_GONE = ("FCC no longer has that audit's report: it keeps the last 10, and a restart clears them. "
+                     "Its line in the Activity Log has the same report in words.")
+AUDIT_REPORT_UNNAMED = "No audit was named, so there is no report to show."
+
+
+def _audit_report_button(audit_id):
+    """The 📝 Read the report button the report's Activity Log entry carries, for the
+    page to open the report window from (GET /api/audit/report?id=<its data-audit-
+    report>), as the cancelled-print review's line carries its 🛑 Review. In the entry
+    itself, so every view of the log has it. No id, no report to open: ''."""
+    if not audit_id:
+        return ""
+    return (' <button type="button" class="btn btn-sm btn-outline-info ms-2 py-0 px-1 fcc-audit-report-open" '
+            f'data-audit-report="{html.escape(str(audit_id), quote=True)}">📝 Read the report</button>')
+
+
+def _audit_report_meta(audit_id):
+    """The report entry's `meta` (state.add_log_entry), as the cancelled-print review's
+    line carries `{type: cancel_deduct_pending}`: the page can find the entry by it."""
+    return {"type": "audit_report", "audit_id": audit_id} if audit_id else None
+
+
+def _audit_report_row(session, sid, display='', where=None, why=''):
+    """A report row: {id, display, color, color_direction, remaining_weight, where, why,
+    needs_label}, from the row the session stored at the spool's scan, the end's own
+    words over it (`display` read fresh by Done, `where` as the end saw it, `why` it
+    stayed or failed). No Spoolman read. `needs_label`: marked as needing a label in
+    this audit."""
+    stored = (session.get('rows') or {}).get(str(sid)) or {}
+    text = str(display or stored.get('display') or '').strip() or f"#{sid}"
+    if not text.startswith(f"#{sid}"):
+        text = f"#{sid} {text}"
+    return {"id": sid, "display": text, **_audit_look(session, sid),
+            "where": str(stored.get('where') or '') if where is None else str(where or ''),
+            "why": str(why or ''), "needs_label": str(sid) in (session.get('label_flagged') or {})}
+
+
+def _audit_report_data(session, why, parked=(), stays=(), failed=(), filed=(), yes=False):
+    """The audit's report as data, for the report window. No Spoolman read: rows come
+    from the session's stored rows and the end's own results.
+
+      {audit_id, place, why, summary, found, expected, extras, loaded, perfect,
+       groups: [{kind, title, rows: [_audit_report_row]}]}
+
+    `why` is the end's: done, cancel or idle. Each spool is in ONE group, under what
+    the end did with it. A Yes to Done's question (`yes`): parked (Parked at Unknown,
+    `where` it had been filed), filed (Filed in <place>, `where` FCC had it), stayed
+    (Left where they are, `where` it is now and `why`, an Extra FCC has here already
+    included) and failed (Couldn't be moved, `why`). An end that moved nothing (a
+    Cancel, an idle end, a Done with nothing to park or file): missing (Not scanned)
+    and extra (Extra (filed elsewhere)), each with `where` FCC has it, and for a Done
+    the `why` it stays. Then, for either: trail (Loaded from <place>, `where` its
+    head) and needs_label (Needs a label): a spool marked in this audit is flagged on
+    its own row wherever it is (`needs_label`), and this group holds only the marked
+    spools no other group lists (a spool found on the list). Empty groups are left
+    out, and an end with no place has none."""
+    place = str(session.get('location_id') or '')
+    expected, missing, extras, trail = _audit_tally(session)
+    report: typing.Dict[str, typing.Any] = {
+        "audit_id": session.get('audit_id'), "place": place, "why": why,
+        "summary": _audit_summary(session, filed), "found": len(expected) - len(missing),
+        "expected": len(expected), "extras": len(extras), "loaded": len(trail),
+        "perfect": _audit_perfect(session), "groups": []}
+    if not place:
+        return report
+    listed: typing.Set[str] = set()
+
+    def group(kind, title, rows):
+        rows = [r for r in rows if str(r['id']) not in listed]
+        if rows:
+            name = title if isinstance(title, str) else title[0 if len(rows) == 1 else 1]
+            report['groups'].append({"kind": kind, "title": name, "rows": rows})
+            listed.update(str(r['id']) for r in rows)
+
+    def row(sid, display='', where=None, why_=''):
+        return _audit_report_row(session, sid, display, where, why_)
+
+    here_already = (audit_where(place), _audit_here_already(place))
+    if yes:
+        named = {str(r.get('id')) for r in list(parked) + list(filed) + list(stays) + list(failed)}
+        group('parked', "Parked at Unknown", [row(p['id'], p.get('display'), p.get('where')) for p in parked])
+        group('filed', f"Filed in {place}", [row(f['id'], f.get('display'), f.get('from')) for f in filed])
+        # An Extra the Yes neither filed nor left with a why: its plan left it out, as
+        # FCC has it here already (_audit_extra_fate's 'here').
+        group('stayed', ("Left where it is", "Left where they are"),
+              [row(s['id'], s.get('display'), s.get('where'), s.get('why')) for s in stays]
+              + [row(sid, '', *here_already) for sid in extras if str(sid) not in named])
+        group('failed', "Couldn't be moved", [row(f['id'], f.get('display'), None, f.get('why')) for f in failed])
+    else:
+        left = {str(s.get('id')): s for s in stays}
+
+        def as_left(sid):
+            s = left.get(str(sid))
+            if s:
+                return row(sid, s.get('display'), s.get('where'), s.get('why'))
+            # A Done with nothing to park or file left an Extra out of its plan only
+            # when FCC has it here already.
+            return row(sid, '', *here_already) if why == 'done' and sid in extras else row(sid)
+
+        group('missing', "Not scanned", [as_left(sid) for sid in missing])
+        group('extra', "Extra (filed elsewhere)", [as_left(sid) for sid in extras])
+    group('trail', f"Loaded from {place}", [row(sid) for sid in trail])
+    marked = [_audit_spool_id(key) for key in (session.get('label_flagged') or {})]
+    group('needs_label', "Needs a label", [row(sid) for sid in marked if sid is not None])
+    return report
+
+
+def _keep_audit_report(report):
+    """Keep `report` for GET /api/audit/report, the newest AUDIT_REPORTS_KEPT by audit id."""
+    key = str(report.get('audit_id') or '').strip().lower()
+    if not key:
+        return
+    with _AUDIT_REPORTS_LOCK:
+        _AUDIT_REPORTS.pop(key, None)
+        _AUDIT_REPORTS[key] = report
+        while len(_AUDIT_REPORTS) > AUDIT_REPORTS_KEPT:
+            _AUDIT_REPORTS.pop(next(iter(_AUDIT_REPORTS)))
+
+
+def audit_report(audit_id):
+    """GET /api/audit/report?id=<audit id>: {success: True, report} for one of the last
+    AUDIT_REPORTS_KEPT audits (the id compared without case), else {success: False,
+    msg}, in words a person can act on (AUDIT_REPORT_GONE: the Activity Log's line has
+    the report in words)."""
+    key = str(audit_id or '').strip().lower()
+    if not key:
+        return {"success": False, "msg": AUDIT_REPORT_UNNAMED}
+    with _AUDIT_REPORTS_LOCK:
+        report = _AUDIT_REPORTS.get(key)
+    if report is None:
+        return {"success": False, "msg": AUDIT_REPORT_GONE}
+    return {"success": True, "report": report}
+
+
+def _audit_report(session, why, parked=(), stays=(), failed=(), filed=(), yes=False):
     """The audit's report: ONE entry naming the place, written after anything else
     the end logs, so a long audit's own lines can't push it out of the 50-line log.
-    `parked` and `failed` are ids; `stays` are the spools a Done left where they are
-    ({id, display, where, why}); `filed` the Extras Done filed here ({id, display,
-    from}, C4). "Perfect Match" takes an audited place, something expected, all of
-    it found, and no extra."""
-    place = session.get('location_id') or ''
+    `parked` are the spools a Yes parked ({id, display, where}); `failed` the ones it
+    couldn't park or file ({id, display, why}); `stays` the spools a Done left where
+    they are ({id, display, where, why}); `filed` the Extras Done filed here ({id,
+    display, from}, C4). `why`: the end's (done or cancel), and `yes` for a Yes to
+    Done's question. The entry carries a 📝 Read the report button after its heading
+    (_audit_report_button) and the report as data is kept for that window
+    (_audit_report_data, _keep_audit_report): answered here, for Done's answers."""
+    data = _audit_report_data(session, why, parked, stays, failed, filed, yes)
+    _keep_audit_report(data)
+    place = data['place']
     if not place:
         state.add_log_entry(
             "📝 <b>Audit Report:</b> Audit ended before a location was scanned: nothing was checked.",
             "INFO", "ffaa00")
-        return
-    expected, missing, extras, trail = _audit_tally(session)
-    perfect = bool(expected) and not missing and not extras
-    if expected:
-        first = f"Found {len(expected) - len(missing)} of {len(expected)}."
-        if perfect:
-            first += " ✅ Perfect Match! All items accounted for."
-    elif extras or trail:
-        # With Extras filed here by Done (C), "Nothing was filed here." above its own
-        # "Filed here" line read as a contradiction (review of 7e3720f, R-4's note).
-        first = "Nothing was filed here when the audit began." if filed else "Nothing was filed here."
-    else:
-        first = "Nothing was filed here and nothing was scanned."
-    lines = [f"📝 <b>Audit Report: {_audit_esc(place)}</b>", first]
+        return data
+    _expected, missing, extras, trail = _audit_tally(session)
+    lines = [f"📝 <b>Audit Report: {_audit_esc(place)}</b>{_audit_report_button(data['audit_id'])}",
+             _audit_esc(data['summary'])]
     if missing:
         lines.append("❌ <b>Missing:</b> " + ", ".join(_audit_esc(_audit_label(session, s)) for s in missing))
     if extras:
@@ -5915,7 +6081,7 @@ def _audit_report(session, parked=(), stays=(), failed=(), filed=()):
     if marked:
         lines.append("🏷️ <b>Needs a label:</b> " + ", ".join(_audit_esc(_audit_label(session, s)) for s in marked))
     if parked:
-        lines.append("❓ <b>Parked at Unknown:</b> " + ", ".join(f"#{s}" for s in parked)
+        lines.append("❓ <b>Parked at Unknown:</b> " + ", ".join(f"#{p['id']}" for p in parked)
                      + f" (Undo Last Move puts {'it' if len(parked) == 1 else 'them'} back)")
     if filed:
         lines.append("📥 <b>Filed here:</b> " + ", ".join(
@@ -5926,8 +6092,10 @@ def _audit_report(session, parked=(), stays=(), failed=(), filed=()):
             _audit_esc(f"{s.get('display') or _audit_label(session, s.get('id'))} → "
                        f"{s.get('why') or s.get('where') or ''}") for s in stays))
     if failed:
-        lines.append("🛑 <b>Failed:</b> " + ", ".join(f"#{s}" for s in failed))
-    state.add_log_entry("<br>".join(lines), "INFO", "00ff00" if perfect else "ffaa00")
+        lines.append("🛑 <b>Failed:</b> " + ", ".join(f"#{f['id']}" for f in failed))
+    state.add_log_entry("<br>".join(lines), "INFO", "00ff00" if data['perfect'] else "ffaa00",
+                        meta=_audit_report_meta(data['audit_id']))
+    return data
 
 
 def _audit_row(item, where=None):
@@ -6758,12 +6926,17 @@ def _audit_finish(cmd):
                         "file_note": plan['file_note'],
                         "found": len(expected) - len(missing), "expected": len(expected)}
             stays = plan['stays']
-        _audit_report(session, stays=stays)
+        report = _audit_report(session, cmd, stays=stays)
         ended = _end_audit(cmd)
     finally:
         _AUDIT_END_LOCK.release()
-    return {"status": "success", "msg": "Audit Complete",
-            "audit_ended": {"id": ended['id'], "why": ended['why']}}
+    answer = {"status": "success", "msg": "Audit Complete",
+              "audit_ended": {"id": ended['id'], "why": ended['why']}}
+    # The report as data, for the window that opens after a Done (Derek, 2026-11-03).
+    # A Cancel's is kept too, for its log line's button, but opens nothing.
+    if cmd == 'done':
+        answer['report'] = report
+    return answer
 
 
 def _audit_park_note(place, slot, today):
@@ -6882,6 +7055,7 @@ def _audit_park_locked(audit_id, ids, today, file_ids=None, file_where=None):
     printer_map, loc_info_map = maps
 
     parked: typing.List[typing.Any] = []
+    parked_rows: typing.List[typing.Dict[str, typing.Any]] = []     # the report's, {id, display, where}
     failed: typing.List[typing.Dict[str, typing.Any]] = []
     stayed = list(plan['stays'])
     moves: typing.Dict[typing.Any, str] = {}
@@ -6908,6 +7082,7 @@ def _audit_park_locked(audit_id, ids, today, file_ids=None, file_where=None):
                                 f"{_audit_esc(fail_why)}", "ERROR", "ff4444")
             continue
         parked.append(sid)
+        parked_rows.append({"id": sid, "display": display, "where": row['where']})
         moves[sid] = str(rec.get('location') or '').strip()
         extras[sid] = {k: (rec.get('extra') or {}).get(k, '') for k in spoolman_api.SYSTEM_MANAGED_EXTRAS}
         labels[sid] = display
@@ -6955,13 +7130,13 @@ def _audit_park_locked(audit_id, ids, today, file_ids=None, file_where=None):
         _push_undo(record)
     # The audit ends even on a partial failure: Undo is refused while one runs, and
     # that record is what puts the spools that landed back.
-    _audit_report(session, parked=parked, stays=stayed, failed=[f['id'] for f in failed + file_failed],
-                  filed=filed_from)
+    report = _audit_report(session, 'done', parked=parked_rows, stays=stayed, failed=failed + file_failed,
+                           filed=filed_from, yes=True)
     ended = _end_audit('done')
     return {"success": not (failed or file_failed), "parked": parked, "filed": filed, "stayed": stayed,
             "failed": failed + file_failed,
             "msg": _audit_park_msg(place, parked, stayed, failed, filed, file_failed, bool(file_wanted)),
-            "audit_ended": {"id": ended['id'], "why": ended['why']}}
+            "audit_ended": {"id": ended['id'], "why": ended['why']}, "report": report}
 
 
 def _audit_file_dropped(session, plan, file_wanted, place):
@@ -7095,10 +7270,12 @@ def park_audit_missing(audit_id, ids, today=None, file_ids=None, file_where=None
     and an Extra it names with no `file_where` entry files nothing either.
 
       {success, parked: [ids], filed: [ids], stayed: [{id, display, where, why}],
-       failed: [{id, display, why}], msg, audit_ended: {id, why}}
+       failed: [{id, display, why}], msg, audit_ended: {id, why}, report}
 
-    `success` only when nothing failed. No write landed and at least one failed: the
-    same answer with no `audit_ended`, and the audit runs on, so Done can be pressed
+    `success` only when nothing failed. `report` is the ended audit's report as data,
+    for the window that opens where the panel was (_audit_report_data; Derek,
+    2026-11-03). No write landed and at least one failed: the same answer with no
+    `audit_ended` and no `report`, and the audit runs on, so Done can be pressed
     again. Refusals: {success: False, msg}, with `busy` or `stale` when one applies,
     and the audit runs on unless it had ended."""
     if not _AUDIT_END_LOCK.acquire(False):
@@ -7113,7 +7290,8 @@ def park_audit_missing(audit_id, ids, today=None, file_ids=None, file_where=None
 def process_audit_scan(scan_result, how=None):
     """Handles scans when in Audit Mode: returns a bare dict, and only
     {"status": "error"} reaches the scanner as a refusal. An answer that ended the
-    audit carries `audit_ended`. Done with spools to park answers {"status": "ask",
+    audit carries `audit_ended`, and a Done's its `report` as data (_audit_report_data).
+    Done with spools to park answers {"status": "ask",
     ...} and ends nothing: the route turns that into its question (_audit_finish).
     `said` is a sentence for the person, `said_type` its toast's kind when it isn't
     a success. `how`, for a spool scan: how it found its spool when it read no label

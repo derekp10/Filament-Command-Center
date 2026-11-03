@@ -60,9 +60,18 @@ def _question(park=3, stays=0, file=0):
             "file_note": note}
 
 
+# The Yes's answer. PIN UPDATED DELIBERATELY (Derek, 2026-11-03, H S3): it carries the
+# report as data, for the window that opens after it (its shape pinned to the route's
+# below, as the question's is).
 PARKED = {"success": True, "parked": [100, 101, 102], "filed": [], "stayed": [], "failed": [],
           "msg": "Parked 3 spools at Unknown. Undo Last Move puts them back.",
-          "audit_ended": {"id": "boot-1", "why": "done"}}
+          "audit_ended": {"id": "boot-1", "why": "done"},
+          "report": {"audit_id": "boot-1", "place": "LR-MDB-1", "why": "done", "summary": "Found 2 of 5.",
+                     "found": 2, "expected": 5, "extras": 0, "loaded": 0, "perfect": False,
+                     "groups": [{"kind": "parked", "title": "Parked at Unknown",
+                                 "rows": [{"id": 100 + n, "display": f"#{100 + n} Some Brand PLA (Red {n})",
+                                           "where": f"LR-MDB-1 slot {n + 1}", "why": "", "needs_label": False,
+                                           **_look("C0392B")} for n in range(3)]}]}}
 
 # Derek's C (review of 7e3720f, P-3): a question with long names in every list and C's
 # real reasons, in the route's shape (its keys are _question's, pinned below).
@@ -99,6 +108,10 @@ def test_the_samples_shape_is_the_routes(asked):
         assert set(sample) == set(real) and sample["type"] == real["type"]
         assert set(sample["park"][0]) == set(real["park"][0]) and set(sample["stays"][0]) == set(real["stays"][0])
     assert set(PARKED) == set(asked["parked"])
+    sample, real_report = PARKED["report"], asked["parked"]["report"]
+    assert set(sample) == set(real_report)
+    assert set(sample["groups"][0]) == set(real_report["groups"][0])
+    assert set(sample["groups"][0]["rows"][0]) == set(real_report["groups"][0]["rows"][0])
 
 
 def test_the_samples_file_rows_are_the_routes(env):

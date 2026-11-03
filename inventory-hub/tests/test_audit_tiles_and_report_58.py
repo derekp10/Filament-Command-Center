@@ -7,6 +7,10 @@ S1 Done's question draws its spools as the panel's tiles do: every row of `park`
 S2 A find with no label read says so, in its Activity Log line and in `heard`: a
    🔎 Find a spool pick "Found #1 with Find a spool, no label read (2 left)", any
    other "Found #1, no label read (2 left)"; a real label read keeps "Found #1 (2 left)".
+S3 The report as data, for the report window: each spool once, under what the end
+   did with it, from the stored rows and the end's own results; kept for the last 10
+   audits (GET /api/audit/report?id=), and opened from a 📝 Read the report button on
+   the report's Activity Log line, which keeps every word it had.
 S4 A found tile's own 🏷️ (POST /api/audit/needs_label {audit_id, id}) marks the
    spool it names as needing a label, by the strip's rules and through its helper,
    and leaves the last found alone; the strip's "undo that" takes it back.
@@ -537,3 +541,273 @@ def test_a_mark_made_on_a_tile_is_in_the_report(env):
     env["logs"].clear()
     scan(env, "CMD:CANCEL")
     assert "<b>Needs a label:</b> #5 Some Brand PLA (Red)" in report(env)
+
+
+# ---------------------------------------------------------------------------
+# S3: the report as data, and its button on the Activity Log line
+# ---------------------------------------------------------------------------
+
+HEAD_WHY = "loaded on XL-1: an audit never takes a spool off a printer"
+GONE = ("FCC no longer has that audit's report: it keeps the last 10, and a restart clears them. "
+        "Its line in the Activity Log has the same report in words.")
+BUTTON = ('<button type="button" class="btn btn-sm btn-outline-info ms-2 py-0 px-1 fcc-audit-report-open" '
+          'data-audit-report="{}">📝 Read the report</button>')
+
+
+@pytest.fixture(autouse=True)
+def _own_reports(monkeypatch):
+    monkeypatch.setattr(logic, "_AUDIT_REPORTS", {}, raising=False)
+
+
+def get_report(audit_id):
+    res = app_module.app.test_client().get("/api/audit/report", query_string={"id": audit_id})
+    assert res.status_code == 200, res.get_data(as_text=True)
+    return res.get_json()
+
+
+def kinds(report_data):
+    return [(g["kind"], [r["id"] for r in g["rows"]]) for g in report_data["groups"]]
+
+
+def _cart_row(env, monkeypatch=None):
+    """An audit of the cart row CR-CT-1-R1, every spool its own colour:
+      #1 found by its label; #2 found, then marked as needing a label (the strip);
+      #3 not scanned (Done parks it); #4 not scanned and moved to CR-CT-1 since (Done
+      leaves it); #5 not scanned, whose park Spoolman refuses when `monkeypatch` is
+      given; Extra #20 from LR-MDB-2 slot 3 (Done files it), marked from its tile;
+      Extra #21 on XL-1 (Done leaves it); #7 on XL-2, loaded from this row."""
+    for sid, hex_ in ((1, "010101"), (2, "020202"), (3, "030303"), (4, "040404"), (5, "050505")):
+        add_spool(env, sid, PLACE)
+        look(env, sid, hex_, remaining=100.0 + sid)
+    add_spool(env, 20, "LR-MDB-2", container_slot="3")
+    look(env, 20, "202020", remaining=120.0)
+    add_spool(env, 21, "XL-1")
+    look(env, 21, "212121", remaining=121.0)
+    add_spool(env, 7, "XL-2", physical_source=PLACE, physical_source_slot="")
+    look(env, 7, "070707", remaining=107.0)
+    start(env, PLACE)
+    scan(env, "ID:1", source="barcode")
+    scan(env, "ID:2")
+    scan(env, "CMD:NEEDLABEL")
+    for sid in (20, 21, 7):
+        scan(env, f"ID:{sid}")
+    assert tile_mark(20)["success"] is True
+    spools(env)[4]["location"] = "CR-CT-1"
+    if monkeypatch is not None:
+        real = env["fake"].patch
+
+        def refuse_5(url, json=None, timeout=None, **kw):  # noqa: A002
+            if url.rstrip("/").endswith("/spool/5"):
+                return _Resp(400, {"message": "nope (test)"})
+            return real(url, json=json, timeout=timeout, **kw)
+
+        monkeypatch.setattr(spoolman_api.requests, "patch", refuse_5)
+    env["logs"].clear()
+
+
+def _row(sid, hex_, grams, where, why="", needs_label=False, display=None):
+    return {"id": sid, "display": display or f"#{sid} Some Brand PLA (Red)", "color": hex_,
+            "color_direction": "longitudinal", "remaining_weight": grams, "where": where, "why": why,
+            "needs_label": needs_label}
+
+
+def test_a_yes_answers_the_report_each_spool_once_under_what_done_did(env, monkeypatch):
+    _cart_row(env, monkeypatch)
+    audit_id = session()["audit_id"]
+    result = yes(env, question(env))
+    got = result["report"]
+    assert {k: got[k] for k in ("audit_id", "place", "why", "summary", "found", "expected", "extras", "loaded",
+                                "perfect")} == {
+        "audit_id": audit_id, "place": PLACE, "why": "done", "summary": "Found 2 of 5.", "found": 2,
+        "expected": 5, "extras": 2, "loaded": 1, "perfect": False}
+    assert got["groups"] == [
+        {"kind": "parked", "title": "Parked at Unknown", "rows": [_row(3, "030303", 103.0, PLACE)]},
+        {"kind": "filed", "title": f"Filed in {PLACE}",
+         "rows": [_row(20, "202020", 120.0, "LR-MDB-2 slot 3", needs_label=True)]},
+        {"kind": "stayed", "title": "Left where they are",
+         "rows": [_row(4, "040404", 104.0, "CR-CT-1", "moved to CR-CT-1"),
+                  _row(21, "212121", 121.0, "XL-1", HEAD_WHY)]},
+        {"kind": "failed", "title": "Couldn't be moved",
+         "rows": [_row(5, "050505", 105.0, PLACE, 'HTTP 400: {"message": "nope (test)"}')]},   # Spoolman's words
+        {"kind": "trail", "title": f"Loaded from {PLACE}", "rows": [_row(7, "070707", 107.0, "XL-2")]},
+        {"kind": "needs_label", "title": "Needs a label", "rows": [_row(2, "020202", 102.0, PLACE, needs_label=True)]},
+    ]
+    ids = [r["id"] for g in got["groups"] for r in g["rows"]]
+    assert sorted(ids) == [2, 3, 4, 5, 7, 20, 21] and len(ids) == len(set(ids))      # each once; #1 isn't listed
+    assert get_report(audit_id) == {"success": True, "report": got}
+
+
+def test_a_cancel_reports_what_wasnt_scanned_and_the_extras_and_opens_nothing(env):
+    _cart_row(env)
+    audit_id = session()["audit_id"]
+    env["fake"].gets.clear()
+    answer = scan_answer("CMD:CANCEL")
+    assert answer == {**AUDIT_SCAN, "audit_ended": {"id": audit_id, "why": "cancel"}}      # no report on it
+    got = get_report(audit_id)["report"]
+    assert got["why"] == "cancel" and got["summary"] == "Found 2 of 5."
+    assert got["groups"] == [
+        {"kind": "missing", "title": "Not scanned", "rows": [_row(3, "030303", 103.0, PLACE),
+                                                             _row(4, "040404", 104.0, PLACE),
+                                                             _row(5, "050505", 105.0, PLACE)]},
+        {"kind": "extra", "title": "Extra (filed elsewhere)",
+         "rows": [_row(20, "202020", 120.0, "LR-MDB-2 slot 3", needs_label=True), _row(21, "212121", 121.0, "XL-1")]},
+        {"kind": "trail", "title": f"Loaded from {PLACE}", "rows": [_row(7, "070707", 107.0, "XL-2")]},
+        {"kind": "needs_label", "title": "Needs a label", "rows": [_row(2, "020202", 102.0, PLACE, needs_label=True)]},
+    ]
+    assert env["fake"].gets == []                           # the stored rows: no read
+
+
+def test_an_idle_end_keeps_its_report_and_its_line_carries_the_button(env):
+    _cart_row(env)
+    audit_id = session()["audit_id"]
+    env["fake"].gets.clear()
+    session()["last_activity_ts"] = time.time() - state.AUDIT_IDLE_TIMEOUT_SECONDS - 5
+    app_module._check_audit_idle_timeout()
+    (line,) = log_text(env)
+    assert line.endswith("needs a label #2, #20. " + BUTTON.format(audit_id)), line
+    got = get_report(audit_id)["report"]
+    assert got["why"] == "idle" and [k for k, _ in kinds(got)] == ["missing", "extra", "trail", "needs_label"]
+    assert env["fake"].gets == []
+
+
+def test_a_done_with_nothing_to_park_answers_its_report_with_why_each_stays(env):
+    """Nothing to park or file, so no question: the report says why each stays."""
+    add_spool(env, 1, PLACE)
+    add_spool(env, 2, PLACE)
+    add_spool(env, 21, "XL-1")
+    add_spool(env, 22, "CR-CT-1")
+    start(env, PLACE)
+    for sid in (1, 21, 22):
+        scan(env, f"ID:{sid}")
+    spools(env)[2]["location"] = "CR-CT-1"           # moved on since the location scan
+    spools(env)[22]["location"] = PLACE              # filed here since its scan
+    audit_id = session()["audit_id"]
+    answer = scan_answer("CMD:DONE")
+    assert answer["audit_ended"] == {"id": audit_id, "why": "done"}
+    got = answer["report"]
+    assert kinds(got) == [("missing", [2]), ("extra", [21, 22])]
+    rows = {r["id"]: r for g in got["groups"] for r in g["rows"]}
+    assert (rows[2]["where"], rows[2]["why"]) == ("CR-CT-1", "moved to CR-CT-1")
+    assert rows[21]["why"] == HEAD_WHY
+    assert (rows[22]["where"], rows[22]["why"]) == (PLACE, f"FCC has it in {PLACE} already")
+    assert get_report(audit_id)["report"] == got
+
+
+def test_an_extra_a_yes_didnt_name_because_fcc_has_it_here_is_left_where_it_is(env):
+    """Filed in this place before Done, so the question didn't show it: the report
+    still lists it once."""
+    add_spool(env, 1, PLACE)
+    add_spool(env, 2, PLACE)
+    add_spool(env, 22, "CR-CT-1")
+    start(env, PLACE)
+    scan(env, "ID:1")
+    scan(env, "ID:22")
+    spools(env)[22]["location"] = PLACE
+    got = yes(env, question(env))["report"]
+    assert kinds(got) == [("parked", [2]), ("stayed", [22])]
+    assert got["groups"][1]["title"] == "Left where it is"
+    assert got["groups"][1]["rows"][0]["why"] == f"FCC has it in {PLACE} already"
+
+
+def test_a_yes_that_leaves_the_audit_open_answers_no_report(env, monkeypatch):
+    """Nothing landed, so the audit runs on and there is no report yet."""
+    add_spool(env, 1, PLACE)
+    add_spool(env, 5, PLACE)
+    start(env, PLACE)
+    scan(env, "ID:1")
+    real = env["fake"].patch
+    monkeypatch.setattr(spoolman_api.requests, "patch", lambda url, json=None, timeout=None, **kw:
+                        _Resp(400, {"message": "nope (test)"}) if url.rstrip("/").endswith("/spool/5")
+                        else real(url, json=json, timeout=timeout, **kw))
+    audit_id = session()["audit_id"]
+    result = yes(env, question(env))
+    assert "report" not in result and "audit_ended" not in result and session()["active"] is True
+    assert get_report(audit_id)["success"] is False
+
+
+def test_the_report_line_carries_the_button_after_its_heading(env, monkeypatch):
+    """Derek likes the line as it is: it keeps every word, with the button after its
+    heading, and says what it is in its `meta`, as the 🛑 Review's line does."""
+    seen = []
+    monkeypatch.setattr(state, "add_log_entry", lambda msg, cat="INFO", color=None, meta=None:
+                        seen.append((msg, cat, color, meta)))
+    for sid in (1, 2):
+        add_spool(env, sid, "LR-MDB-2", name=f"Filed {sid}")
+    add_spool(env, 9, "CR-CT-1-R2", name="Stray", container_slot="3")
+    add_spool(env, 7, "XL-1", name="Running", physical_source="LR-MDB-2")
+    start(env, "LR-MDB-2")
+    for sid in (1, 9, 7):
+        scan(env, f"ID:{sid}")
+    audit_id = session()["audit_id"]
+    seen.clear()
+    scan(env, "CMD:CANCEL")
+    (msg, cat, color, meta), = [entry for entry in seen if "Audit Report" in entry[0]]
+    assert msg == ("📝 <b>Audit Report: LR-MDB-2</b> " + BUTTON.format(audit_id) + "<br>Found 1 of 2.<br>"
+                   "❌ <b>Missing:</b> #2 Some Brand PLA (Filed 2)<br>"
+                   "⚠️ <b>Extra:</b> #9 Some Brand PLA (Stray) → CR-CT-1-R2 slot 3<br>"
+                   "🔗 <b>Loaded from here:</b> #7 Some Brand PLA (Running) → XL-1")
+    assert (cat, color, meta) == ("INFO", "ffaa00", {"type": "audit_report", "audit_id": audit_id})
+
+
+def test_the_buttons_audit_id_is_escaped(env):
+    """An id is FCC's own (new_audit_id), but it goes into an HTML attribute."""
+    add_spool(env, 1, PLACE)
+    state.AUDIT_SESSION.update({"active": True, "audit_id": 'x"><b>-1', "location_id": PLACE,
+                                "expected_items": [1], "scanned_items": []})
+    scan(env, "CMD:CANCEL")
+    line = report(env)
+    assert 'data-audit-report="x&quot;&gt;&lt;b&gt;-1"' in line and '"><b>' not in line
+    assert get_report('X"><B>-1')["success"] is True                  # an id is read without case
+
+
+def test_an_end_with_no_place_has_no_button_and_an_empty_report(env):
+    scan(env, "CMD:AUDIT")
+    audit_id = session()["audit_id"]
+    answer = scan_answer("CMD:DONE")
+    assert answer["report"] == {"audit_id": audit_id, "place": "", "why": "done",
+                                "summary": "Audit ended before a location was scanned: nothing was checked.",
+                                "found": 0, "expected": 0, "extras": 0, "loaded": 0, "perfect": False,
+                                "groups": []}
+    assert report(env) == ("📝 <b>Audit Report:</b> Audit ended before a location was scanned: "
+                           "nothing was checked.")
+
+
+def test_a_perfect_match_says_so_in_the_report(env):
+    add_spool(env, 1, PLACE)
+    start(env, PLACE)
+    scan(env, "ID:1")
+    got = scan_answer("CMD:DONE")["report"]
+    assert got["perfect"] is True and got["summary"] == "Found 1 of 1. ✅ Perfect Match! All items accounted for."
+    assert got["groups"] == []
+
+
+def test_fcc_keeps_the_last_ten_reports(env):
+    ids = []
+    for _ in range(11):
+        start(env, "SHELF-1")
+        ids.append(session()["audit_id"])
+        scan(env, "CMD:CANCEL")
+    assert get_report(ids[0]) == {"success": False, "msg": GONE}
+    assert all(get_report(i)["success"] for i in ids[1:])
+
+
+@pytest.mark.parametrize("query, msg", [
+    ({"id": "boot-1"}, "gone"),           # never one of FCC's, or from before a restart
+    ({}, "unnamed"),
+    ({"id": "  "}, "unnamed"),
+])
+def test_a_report_fcc_doesnt_have_says_so_in_words(env, query, msg):
+    words = {"gone": GONE, "unnamed": "No audit was named, so there is no report to show."}[msg]
+    res = app_module.app.test_client().get("/api/audit/report", query_string=query)
+    assert res.status_code == 200 and res.get_json() == {"success": False, "msg": words}
+
+
+def test_the_report_reads_nothing_even_with_spoolman_down(env):
+    """Its rows are the session's stored rows and the end's own results."""
+    _cart_row(env)
+    env["fake"].down = True
+    env["fake"].gets.clear()
+    got = logic._audit_report_data(session(), "cancel")
+    assert env["fake"].gets == []
+    assert {r["id"]: r["color"] for g in got["groups"] for r in g["rows"]} == {
+        3: "030303", 4: "040404", 5: "050505", 20: "202020", 21: "212121", 7: "070707", 2: "020202"}

@@ -241,7 +241,7 @@ from routes_scan import (  # noqa: E402,F401
     _PM_TEMP_LABELS, _PM_WEIGHT_TOL,
     _pm_num, _pm_first_pos, _compute_prusament_spool_weight_diff,
     _handle_prusament_url_scan, api_identify_scan, api_buffer_clear, api_audit_park,
-    api_audit_found, api_audit_needs_label, api_audit_needs_label_undo,
+    api_audit_report, api_audit_found, api_audit_needs_label, api_audit_needs_label_undo,
 )
 
 # (external-parser search + /api/search moved to routes_inventory.py — L316 step 5)

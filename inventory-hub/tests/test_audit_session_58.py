@@ -120,10 +120,13 @@ def scan(env, text, source="keyboard", ask=True, **more):
     DELIBERATELY (Group 58 review): `heard` is the sentence for a hidden panel,
     pinned on its own below through scan_answer, so the exact pins in these files
     stay exact on every other key. Any other answer keeps it: a refusal that grew
-    one fails them."""
+    one fails them. And again (Derek, 2026-11-03, H S3): `report`, the report as
+    data a Done that ended the audit carries, is taken out the same way, and pinned
+    on its own in tests/test_audit_tiles_and_report_58.py."""
     answer = scan_answer(text, source=source, ask=ask, **more)
     if answer.get("cmd") == "audit_scan":
         answer.pop("heard", None)
+        answer.pop("report", None)
     return answer
 
 
