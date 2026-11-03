@@ -509,8 +509,10 @@ def test_a_rejected_write_is_listed_and_the_spool_stays(env, monkeypatch):
     assert state.UNDO_STACK == []                         # nothing landed, nothing to undo
     assert "audit_ended" not in result
     assert session()["active"] is True and state.AUDIT_LAST_END is None
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, the toast): it says where to read why.
     assert result["msg"] == ("Nothing was parked. Couldn't park #2 and #3. "
-                             "The audit is still open, so you can press Done again.")
+                             "The audit is still open, so you can press Done again. "
+                             "The Activity Log says what went wrong.")
     assert not any("Audit Report" in m for m in log_text(env)), log_text(env)
     assert any(result["msg"] in m and c == "WARNING" for m, c, _ in env["logs"]), env["logs"]
 
@@ -558,8 +560,10 @@ def test_a_failure_with_stays_says_both_and_keeps_the_audit(env, monkeypatch):
     spools(env)[3]["location"] = "LR-MDB-2"
     _refuse(env, monkeypatch, 2)
     result = park(env, ids, audit_id)
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, the toast): it says where to read why.
     assert result["msg"] == ("Nothing was parked. 1 left where it is. Couldn't park #2. "
-                             "The audit is still open, so you can press Done again.")
+                             "The audit is still open, so you can press Done again. "
+                             "The Activity Log says what went wrong.")
     assert [s["id"] for s in result["stayed"]] == [3] and session()["active"] is True
 
 
@@ -631,8 +635,9 @@ def test_a_mixed_batch_names_every_spool_and_only_what_landed_goes_in_the_undo(e
     assert result["parked"] == [1, 3]
     assert [f["id"] for f in result["failed"]] == [2]
     assert {s["id"]: s["why"] for s in result["stayed"]} == {4: "in the scan buffer", 5: "no longer in Spoolman"}
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, the toast): it points to the report.
     assert result["msg"] == ("Parked 2 spools at Unknown. 2 left where they are. Couldn't park #2. "
-                             "Undo Last Move puts them back.")
+                             "Undo Last Move puts them back. The Activity Log lists each spool.")
     assert set(state.UNDO_STACK[0]["moves"]) == {1, 3}
     line = report(env)
     assert "<b>Parked at Unknown:</b> #1, #3" in line and "<b>Failed:</b> #2" in line
@@ -650,6 +655,68 @@ def test_outside_text_in_the_parks_lines_is_escaped(env, monkeypatch):
     joined = "\n".join(log_text(env))
     assert "<script>" not in joined and "<I>" not in joined, joined
     assert "&lt;script&gt;" in joined and "&lt;I&gt;Red" in joined
+
+
+# ---------------------------------------------------------------------------
+# The toast (Derek, 2026-11-03): "Things like that toast will get pretty complicated
+# depending on if there's a high number of moves", and the report "helps address the
+# '64 placed here' ambiguity". The toast stays short however big the audit: every list
+# in it names three spools at most and counts past that, and when it counted a group,
+# or anything stayed or failed, it ends by pointing to the Activity Log, which names
+# every spool. A shelf is 10 spools or more.
+# ---------------------------------------------------------------------------
+
+def _missing(env, n, place="CR-CT-1"):
+    """An audit of `place` (a cart, no slots) with #1 found and #2 to #n+1 not scanned."""
+    for sid in range(1, n + 2):
+        add_spool(env, sid, place)
+    start(env, place)
+    scan(env, "ID:1")
+    return list(range(2, n + 2))
+
+
+@pytest.mark.parametrize("n, msg", [
+    (1, "Parked 1 spool at Unknown. Undo Last Move puts it back."),
+    (3, "Parked 3 spools at Unknown. Undo Last Move puts them back."),
+    (4, "Parked 4 spools at Unknown. Undo Last Move puts them back. The Activity Log lists each spool."),
+    (12, "Parked 12 spools at Unknown. Undo Last Move puts them back. The Activity Log lists each spool."),
+])
+def test_a_park_past_three_points_to_the_report_that_names_each_spool(env, n, msg):
+    """RED on 5afeb8b past three: the toast never said where to see which spools went.
+    Up to three it reads as it did (those pin what was already right)."""
+    ids = _missing(env, n)
+    result = park(env)
+    assert result["parked"] == ids and result["msg"] == msg
+    assert "<b>Parked at Unknown:</b> " + ", ".join(f"#{s}" for s in ids) in report(env)
+
+
+def test_failures_past_three_are_counted_and_each_one_is_in_the_activity_log(env, monkeypatch):
+    """"Couldn't park" named every id: a shelf Spoolman refused made a toast of a dozen
+    numbers. Past three it counts them, and the report names each one, under the ERROR
+    line that says why. RED on 5afeb8b."""
+    ids = _missing(env, 5)
+    _refuse(env, monkeypatch, *ids[:4])
+    env["logs"].clear()
+    result = park(env)
+    assert result["parked"] == [6] and [f["id"] for f in result["failed"]] == [2, 3, 4, 5]
+    assert result["msg"] == ("Parked 1 spool at Unknown. Couldn't park 4 spools. Undo Last Move puts it back. "
+                             "The Activity Log lists each spool.")
+    assert "<b>Failed:</b> #2, #3, #4, #5" in report(env)
+    assert sum(1 for m, c, _ in env["logs"] if c == "ERROR" and "failed to park Spool" in m) == 4
+
+
+def test_a_yes_where_every_write_failed_points_to_the_failure_lines(env, monkeypatch):
+    """Nothing landed, so the audit stays open and there is no report yet: the toast
+    points to the ERROR lines, one per spool, which say what went wrong. RED on 5afeb8b."""
+    ids = _missing(env, 4)
+    _refuse(env, monkeypatch, *ids)
+    env["logs"].clear()
+    result = park(env)
+    assert "audit_ended" not in result and session()["active"] is True
+    assert result["msg"] == ("Nothing was parked. Couldn't park 4 spools. The audit is still open, so you can "
+                             "press Done again. The Activity Log says what went wrong.")
+    assert sum(1 for m, c, _ in env["logs"] if c == "ERROR" and "failed to park Spool" in m) == 4
+    assert not any("Audit Report" in m for m in log_text(env))
 
 
 # ---------------------------------------------------------------------------
@@ -886,7 +953,8 @@ def test_a_yes_that_finds_nothing_left_to_park_ends_the_audit(env):
     spools(env)[3]["location"] = "LR-MDB-2"
     result = park(env, ids, audit_id)
     assert result["success"] is True and result["parked"] == []
-    assert result["msg"] == "Nothing was parked. 2 left where they are."
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, the toast): it points to the report.
+    assert result["msg"] == "Nothing was parked. 2 left where they are. The Activity Log lists each spool."
     assert session()["active"] is False and state.UNDO_STACK == []
 
 

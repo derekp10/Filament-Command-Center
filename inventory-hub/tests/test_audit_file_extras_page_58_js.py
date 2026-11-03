@@ -72,7 +72,8 @@ def test_with_only_an_extra_to_file_done_asks_to_file_it_here(live, env):
     sent = posts(live, "/api/audit/park")
     assert [(p["audit_id"], p["ids"], p["file_ids"]) for p in sent] == [(aid, [], [200])]
     assert record(env, 200)["location"] == "LR-MDB-1"
-    assert any("Filed #200 here" in t["msg"] for t in toasts(live))
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, the toast): it names the place, not "here".
+    assert any("Filed #200 in LR-MDB-1." in t["msg"] for t in toasts(live))
 
 
 def test_a_place_with_nothing_filed_asks_to_file_without_a_tally(live, env):

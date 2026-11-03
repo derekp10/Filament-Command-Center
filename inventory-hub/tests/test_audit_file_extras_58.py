@@ -516,8 +516,9 @@ def test_the_yes_files_it_here_with_no_slot_and_clears_its_trail_and_notes(env):
                 fcc_pre_box_location="CR-CT-1-R1", fcc_pre_archive_location="SHELF-1", needs_label_print=True)
     audit_id = session()["audit_id"]
     result = yes(env)
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, the toast): it names the place, not "here".
     assert result == {"success": True, "parked": [], "filed": [20], "stayed": [], "failed": [],
-                      "msg": "Filed #20 here. Undo Last Move puts it back.",
+                      "msg": "Filed #20 in LR-MDB-1. Undo Last Move puts it back.",
                       "audit_ended": {"id": audit_id, "why": "done"}}
     assert spools(env)[20]["location"] == "LR-MDB-1"
     got = extra_of(env, 20)
@@ -570,7 +571,8 @@ def test_the_parks_come_first_and_one_toast_says_both(places):
     scan(env, "ID:20")
     result = yes(env)
     assert result["parked"] == [10] and result["filed"] == [20] and result["success"] is True
-    assert result["msg"] == "Parked 1 spool at Unknown. Filed #20 here. Undo Last Move puts them back."
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, the toast): it names the place, not "here".
+    assert result["msg"] == "Parked 1 spool at Unknown. Filed #20 in PM-DB-1. Undo Last Move puts them back."
     assert patched(env) == [10, 20]
     assert spools(env)[10]["location"] == "UNKNOWN" and spools(env)[20]["location"] == "PM-DB-1"
 
@@ -718,8 +720,9 @@ def test_a_rejected_write_is_an_error_line_with_spoolmans_words(env, monkeypatch
     assert any(c == "ERROR" and "failed to file Spool #20" in m and "nope (test)" in m for m, c, _ in env["logs"])
     # One park landed, so the audit ends (Undo is refused while one runs).
     assert result["audit_ended"]["why"] == "done"
-    assert result["msg"] == ("Parked 1 spool at Unknown. Couldn't file #20 here. "
-                             "Undo Last Move puts it back.")
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, the toast): the place, and the report.
+    assert result["msg"] == ("Parked 1 spool at Unknown. Couldn't file #20 in LR-MDB-1. "
+                             "Undo Last Move puts it back. The Activity Log lists each spool.")
 
 
 def test_a_yes_where_only_a_file_was_tried_and_it_failed_keeps_the_audit(env, monkeypatch):
@@ -727,8 +730,10 @@ def test_a_yes_where_only_a_file_was_tried_and_it_failed_keeps_the_audit(env, mo
     _refuse(env, monkeypatch, 20)
     result = yes(env)
     assert result["success"] is False and "audit_ended" not in result and session()["active"] is True
-    assert result["msg"] == ("Nothing was moved. Couldn't file #20 here. "
-                             "The audit is still open, so you can press Done again.")
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, the toast): the place, and where to read why.
+    assert result["msg"] == ("Nothing was moved. Couldn't file #20 in LR-MDB-1. "
+                             "The audit is still open, so you can press Done again. "
+                             "The Activity Log says what went wrong.")
     assert state.UNDO_STACK == []
 
 
@@ -789,7 +794,8 @@ def test_a_file_only_yes_that_files_nothing_says_nothing_was_moved_and_why(env, 
     env["logs"].clear()
     result = yes(env, asked)
     assert result["filed"] == [] and result["parked"] == []
-    assert result["msg"] == "Nothing was moved. 1 left where it is."
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, the toast): it points to the report.
+    assert result["msg"] == "Nothing was moved. 1 left where it is. The Activity Log lists each spool."
     assert result["stayed"] == [_stay(20, why, where)]
     assert f"#20 {RED} → {why}" in report(env)
     assert 20 not in patched(env) and result["audit_ended"]["why"] == "done"
@@ -806,7 +812,9 @@ def test_a_file_only_yes_whose_one_spool_place_filled_meanwhile_says_nothing_was
     assert asked["park"] == [] and [r["id"] for r in asked["file"]] == [20]
     add_spool(env, 21, "PM-DB-1")
     result = yes(env, asked)
-    assert result["filed"] == [] and result["msg"] == "Nothing was moved. 1 left where it is."
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, the toast): it points to the report.
+    assert result["filed"] == [] and result["msg"] == ("Nothing was moved. 1 left where it is. "
+                                                       "The Activity Log lists each spool.")
     assert result["stayed"] == [_stay(20, "PM-DB-1 holds one spool, and #21 is there", "LR-MDB-2 slot 3")]
 
 
@@ -819,7 +827,8 @@ def test_a_yes_that_does_both_and_moves_nothing_says_nothing_was_moved(env):
     _move(env, 20, "LR-MDB-1")
     result = yes(env, asked)
     assert result["parked"] == [] and result["filed"] == []
-    assert result["msg"] == "Nothing was moved. 2 left where they are."
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, the toast): it points to the report.
+    assert result["msg"] == "Nothing was moved. 2 left where they are. The Activity Log lists each spool."
     assert [(s["id"], s["why"]) for s in result["stayed"]] == [(2, "moved to SHELF-1"), (20, "FCC has it here already")]
 
 
@@ -866,6 +875,74 @@ def test_the_report_of_a_place_with_nothing_filed_and_nothing_filed_by_done_is_a
     env["logs"].clear()
     assert scan(env, "CMD:DONE")["audit_ended"]["why"] == "done"      # the Extra stays: no question
     assert "<br>Nothing was filed here.<br>" in report(env)
+
+
+def test_a_small_audits_toast_reads_as_before_with_the_place_named(env):
+    """Derek, 2026-11-03: "Filed #64 here." read as 64 spools placed here. The toast names
+    the audited place instead of "here", and a small audit's reads as before otherwise.
+    RED on 5afeb8b."""
+    for sid in (1, 2, 3):
+        add_spool(env, sid, "LR-MDB-1", container_slot=str(sid))
+    add_spool(env, 64, "LR-MDB-2", container_slot="2")
+    start(env, "LR-MDB-1")
+    scan(env, "ID:1")
+    scan(env, "ID:64")
+    result = yes(env)
+    assert result["parked"] == [2, 3] and result["filed"] == [64]
+    assert result["msg"] == "Parked 2 spools at Unknown. Filed #64 in LR-MDB-1. Undo Last Move puts them back."
+
+
+@pytest.mark.parametrize("extras, filed", [
+    ((20, 21, 22), "#20, #21 and #22"),
+    ((20, 21, 22, 23), "4 spools"),
+])
+def test_the_toast_names_three_filed_spools_at_most_and_points_to_the_report_past_that(env, extras, filed):
+    """Past three the filed are counted, and the toast points to the report, which names
+    each one and where FCC had it. RED on 5afeb8b ("Filed ... here.")."""
+    add_spool(env, 1, "CR-CT-1")
+    for sid in extras:
+        add_spool(env, sid, "LR-MDB-2", container_slot=str(sid - 19))
+    start(env, "CR-CT-1")
+    scan(env, "ID:1")
+    for sid in extras:
+        scan(env, f"ID:{sid}")
+    env["logs"].clear()
+    result = yes(env)
+    assert result["filed"] == list(extras)
+    tail = " The Activity Log lists each spool." if len(extras) > 3 else ""
+    assert result["msg"] == f"Filed {filed} in CR-CT-1. Undo Last Move puts them back.{tail}"
+    line = report(env)
+    for sid in extras:
+        assert f"#{sid} {RED} (FCC had it at LR-MDB-2 slot {sid - 19})" in line
+
+
+def test_a_large_audits_toast_counts_each_group_and_the_report_names_every_spool(env, monkeypatch):
+    """A cart of 13: #1 found, #100 to #111 not scanned (#105's write is refused), and five
+    Extras found there, four from LR-MDB-2 and #204 on a head (it stays). The toast says
+    each group in a few words, whatever its size, and points to the report. RED on
+    5afeb8b ("Filed 4 spools here.", and no word of where to see which)."""
+    add_spool(env, 1, "CR-CT-1")
+    for sid in range(100, 112):
+        add_spool(env, sid, "CR-CT-1")
+    for sid in range(200, 204):
+        add_spool(env, sid, "LR-MDB-2", container_slot=str(sid - 199))
+    add_spool(env, 204, "XL-1")
+    start(env, "CR-CT-1")
+    for sid in (1, 200, 201, 202, 203, 204):
+        scan(env, f"ID:{sid}")
+    _refuse(env, monkeypatch, 105)
+    env["logs"].clear()
+    result = yes(env)
+    parked = [sid for sid in range(100, 112) if sid != 105]
+    assert result["parked"] == parked and result["filed"] == [200, 201, 202, 203]
+    assert [s["id"] for s in result["stayed"]] == [204] and [f["id"] for f in result["failed"]] == [105]
+    assert result["msg"] == ("Parked 11 spools at Unknown. Filed 4 spools in CR-CT-1. 1 left where it is. "
+                             "Couldn't park #105. Undo Last Move puts them back. The Activity Log lists each spool.")
+    line = report(env)
+    assert "<b>Parked at Unknown:</b> " + ", ".join(f"#{sid}" for sid in parked) in line
+    for sid in range(200, 204):
+        assert f"#{sid} {RED} (FCC had it at LR-MDB-2 slot {sid - 199})" in line
+    assert f"#204 {RED} → {HEAD_WHY}" in line and "<b>Failed:</b> #105" in line
 
 
 def test_outside_text_in_the_filing_lines_is_escaped(env, monkeypatch):

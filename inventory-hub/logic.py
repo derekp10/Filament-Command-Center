@@ -6837,8 +6837,7 @@ def _audit_park_locked(audit_id, ids, today, file_ids=None, file_where=None):
     # Nothing landed, so there is no record to protect and no reason to end: the
     # audit's scans are the whole point (_audit_finish), and Done can be pressed again.
     if (failed or file_failed) and not moves and not filed_moves:
-        msg = (f"{_audit_park_msg(parked, stayed, failed, filed, file_failed, bool(file_wanted))} "
-               f"The audit is still open, so you can press Done again.")
+        msg = _audit_park_msg(place, parked, stayed, failed, filed, file_failed, bool(file_wanted), still_open=True)
         state.add_log_entry(f"⚠️ {_audit_esc(msg)}", "WARNING", "ffaa00")
         return {"success": False, "parked": parked, "filed": filed, "stayed": stayed,
                 "failed": failed + file_failed, "msg": msg}
@@ -6867,7 +6866,7 @@ def _audit_park_locked(audit_id, ids, today, file_ids=None, file_where=None):
     ended = _end_audit('done')
     return {"success": not (failed or file_failed), "parked": parked, "filed": filed, "stayed": stayed,
             "failed": failed + file_failed,
-            "msg": _audit_park_msg(parked, stayed, failed, filed, file_failed, bool(file_wanted)),
+            "msg": _audit_park_msg(place, parked, stayed, failed, filed, file_failed, bool(file_wanted)),
             "audit_ended": {"id": ended['id'], "why": ended['why']}}
 
 
@@ -6941,28 +6940,47 @@ def _audit_file_extras(plan, place, file_wanted, stayed, labels, printer_map, lo
     return filed, filed_from, failed, moves
 
 
-def _audit_park_msg(parked, stayed, failed, filed=(), file_failed=(), file_asked=False):
-    """A park's toast, and the filing's (C4): "Parked 3 spools at Unknown. Filed #57
-    here. Undo Last Move puts them back." It promises only Undo Last Move: another
-    move on top of the record buries it, and it doesn't survive a restart. With
-    nothing moved, a Yes that asked to file (`file_asked`: it named Extras) hears
-    "Nothing was moved.", never of a park nobody asked for (review of 7e3720f, S-5)."""
+AUDIT_REPORT_POINTER = "The Activity Log lists each spool."
+AUDIT_FAILURES_POINTER = "The Activity Log says what went wrong."
+
+
+def _audit_park_msg(place, parked, stayed, failed, filed=(), file_failed=(), file_asked=False, still_open=False):
+    """A park's toast, and the filing's (C4): "Parked 2 spools at Unknown. Filed #64 in
+    LR-MDB-1. Undo Last Move puts them back." It names the audited place, never "here"
+    ("Filed #64 here." read as 64 spools placed here; Derek, 2026-11-03), and it stays
+    short however big the audit ("Things like that toast will get pretty complicated
+    depending on if there's a high number of moves"): every list in it names three
+    spools at most and counts past that (_undo_names: "Couldn't park 5 spools."), and
+    the park is a count, as it always was. When it counted a group of more than three,
+    or anything stayed or failed, it ends by pointing to the Activity Log, which names
+    every spool: the audit's report (_audit_report), written as the audit ends. A Yes
+    that leaves the audit open (`still_open`: nothing landed, so there is no report
+    yet) says so and points to the ERROR line each failed write left. It promises only
+    Undo Last Move: another move on top of the record buries it, and it doesn't survive
+    a restart. With nothing moved, a Yes that asked to file (`file_asked`: it named
+    Extras) hears "Nothing was moved.", never of a park nobody asked for (review of
+    7e3720f, S-5)."""
     n, k = len(parked), len(filed)
     words = []
     if n:
         words.append(f"Parked {n} spool{'' if n == 1 else 's'} at Unknown.")
     if k:
-        words.append(f"Filed {_undo_names(filed)} here.")
+        words.append(f"Filed {_undo_names(list(filed))} in {place}.")
     if not n and not k:
         words.append("Nothing was moved." if (file_failed or file_asked) else "Nothing was parked.")
     if stayed:
         words.append(f"{len(stayed)} left where {'it is' if len(stayed) == 1 else 'they are'}.")
     if failed:
-        words.append("Couldn't park " + _and_list(f"#{f['id']}" for f in failed) + ".")
+        words.append(f"Couldn't park {_undo_names([f['id'] for f in failed])}.")
     if file_failed:
-        words.append("Couldn't file " + _and_list(f"#{f['id']}" for f in file_failed) + " here.")
+        words.append(f"Couldn't file {_undo_names([f['id'] for f in file_failed])} in {place}.")
     if n + k:
         words.append(f"Undo Last Move puts {'it' if n + k == 1 else 'them'} back.")
+    if still_open:
+        words.append("The audit is still open, so you can press Done again.")
+        words.append(AUDIT_FAILURES_POINTER)
+    elif stayed or failed or file_failed or any(len(group) > 3 for group in (parked, filed)):
+        words.append(AUDIT_REPORT_POINTER)
     return " ".join(words)
 
 
