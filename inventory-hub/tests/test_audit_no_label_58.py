@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 import app as app_module  # noqa: E402
 import logic  # noqa: E402
+import routes_print_queue  # noqa: E402
 import spoolman_api  # noqa: E402
 import state  # noqa: E402
 from spoolman_extra_fake import _Resp  # noqa: E402
@@ -1389,3 +1390,79 @@ def test_with_a_bulk_move_armed_a_tiles_qr_says_the_same_and_leaves_the_session_
         assert state.BULK_MOVE_SESSION["stage"] == "awaiting_source"
     finally:
         state.reset_bulk_move()
+
+
+# ---------------------------------------------------------------------------
+# Derek, 2026-11-03: "We should make sure that scanning the QR code in the UI
+# doesn't count as a confirmed label in the backlog and in the tagging of an
+# unconfirmed label field."
+# No door that finds a spool with no label read touches its label status: its
+# tile's QR read by a scanner, its tile pressed, a pick in 🔎 Find a spool. Nor does
+# Done's Yes, which parks the spools not found and files the Extras found here.
+# Nothing is written; the record keeps its status; the Backlog's own test, its list
+# and the count the heartbeat gives its 🏷️ button stay as they were; the row says no
+# label was read. Pins what was already right on 5afeb8b. The commit names the copies
+# of each door that confirm or flag the label, and the cases each one turns red.
+# ---------------------------------------------------------------------------
+
+STATUSES = {"no status": {}, "flagged": {LABEL: True}, "confirmed": {LABEL: False}}
+ROW_STATUS = {"no status": None, "flagged": True, "confirmed": False}
+
+
+def find_with_no_label_read(env, door, sid):
+    """A find with no label read, as the page sends each door."""
+    if door == "tile QR":
+        return scan_answer(tile_qr(sid), source="barcode")      # a scanner reading the QR off the screen
+    if door == "press":
+        return press(env, sid)
+    return scan_answer(f"ID:{sid}", source="search")            # inv_audit_find.js's pick
+
+
+def label_side(env, *sids):
+    """What FCC says of these spools' labels: each record's status as Spoolman holds it
+    and by the Backlog's own test, the Backlog's list (/api/print_queue/pending), and
+    the count the heartbeat gives its 🏷️ button (routes_print_queue.backlog_count)."""
+    client = app_module.app.test_client()
+    pending = client.get("/api/print_queue/pending?filter=spool").get_json()
+    button = client.get("/api/dashboard_pulse?include=label_backlog").get_json()["label_backlog"]
+    assert pending["success"] is True and button["read_ok"] is True, (pending, button)
+    records = env["fake"].records["spool"]
+    return {"status": {sid: wire(env, sid) for sid in sids},
+            "the backlog's test": {sid: routes_print_queue._needs_label(records[sid]) for sid in sids},
+            "the backlog": sorted(item["id"] for item in pending["items"]),
+            "its button": button["count"]}
+
+
+@pytest.mark.parametrize("status", list(STATUSES))
+@pytest.mark.parametrize("door", ["tile QR", "press", "Find pick"])
+def test_a_find_with_no_label_read_never_touches_its_label_or_the_backlog(env, door, status):
+    """#5 is found by the door, #6 isn't found (Done parks it), and #7, an Extra FCC has in
+    LR-MDB-2, is picked in Find (Done files it here), all three with the same status."""
+    for sid, at, slot in ((5, "LR-MDB-1", "1"), (6, "LR-MDB-1", "2"), (7, "LR-MDB-2", "3")):
+        add_spool(env, sid, at, container_slot=slot, **STATUSES[status])
+    start_with_id(env, "LR-MDB-1")
+    before = label_side(env, 5, 6, 7)
+    flagged = status == "flagged"
+    assert before["the backlog"] == ([5, 6, 7] if flagged else []) and before["its button"] == (3 if flagged else 0)
+
+    found = find_with_no_label_read(env, door, 5)
+    assert found.get("found") is True or found.get("cmd") == "audit_scan", found
+    assert session()["scanned_items"] == [5] and session()["found_by"] == {"5": logic.AUDIT_FOUND_NO_LABEL}
+    assert writes(env) == [] and label_side(env, 5, 6, 7) == before
+    got = row(env, 5)
+    assert got["found"] is True and got["label_read"] is False and got["label_status"] is ROW_STATUS[status]
+
+    assert scan_answer("ID:7", source="search")["cmd"] == "audit_scan"
+    assert session()["rogue_items"] == [7] and session()["found_by"]["7"] == logic.AUDIT_FOUND_NO_LABEL
+    assert writes(env) == [] and label_side(env, 5, 6, 7) == before
+    assert row(env, 7)["label_read"] is False
+
+    asked = scan(env, "CMD:DONE")
+    assert [r["id"] for r in asked["park"]] == [6] and [r["id"] for r in asked["file"]] == [7]
+    done = post("/api/audit/park", {"audit_id": asked["audit_id"], "ids": [6], "file_ids": [7],
+                                    "file_where": {"7": asked["file"][0]["where"]}, "today": "2026-11-03"})
+    assert done["success"] is True and done["parked"] == [6] and done["filed"] == [7]
+    records = env["fake"].records["spool"]
+    assert records[6]["location"] == "UNKNOWN" and records[7]["location"] == "LR-MDB-1"
+    assert label_side(env, 5, 6, 7) == before
+    assert "Needs a label" not in report(env)
