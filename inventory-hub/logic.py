@@ -5688,11 +5688,15 @@ def _resolve_found_qr(upper_text):
     left in front, or a double read glued on, can't change which spool it names. The
     audit id comes back lower case, the way new_audit_id writes it, and is compared
     without case (_audit_found_by_qr): a scanner set to upper case, or Caps Lock,
-    sends it upper-cased. A malformed one is an error a scanner user can act on."""
+    sends it upper-cased. A malformed one is an error a scanner user can act on.
+    An audit id never holds a ':' or a space (new_audit_id: a boot token, '-', a
+    count), so one that does is another label glued on after the QR ("…:57ID:58"):
+    that reads as unread, never as another audit's QR naming #58 (review of
+    7e3720f, S-3)."""
     rest = upper_text[upper_text.rfind("CMD:FOUND") + len("CMD:FOUND"):]
     audit, _sep, sid = rest[1:].rpartition(':') if rest.startswith(':') else ('', '', '')
     audit, sid = audit.strip(), sid.strip()
-    if audit and re.fullmatch(r'[0-9]+', sid):
+    if audit and not re.search(r'[:\s]', audit) and re.fullmatch(r'[0-9]+', sid):
         return {'type': 'command', 'cmd': 'found', 'audit': audit.lower(), 'id': int(sid)}
     return {'type': 'error', 'msg': AUDIT_FOUND_QR_UNREAD}
 

@@ -1244,7 +1244,11 @@ def test_a_real_audit_id_reads_back_whole_and_no_other_command_takes_it():
 
 @pytest.mark.parametrize("text", ["CMD:FOUND", "CMD:FOUND:", "CMD:FOUND:57", "CMD:FOUND::57",
                                   "CMD:FOUND:a1b2c3d4-3:", "CMD:FOUND:a1b2c3d4-3:5x",
-                                  "CMD:FOUND:a1b2c3d4-3:-5", "CMD:FOUND:a1b2c3d4-3:²"])
+                                  "CMD:FOUND:a1b2c3d4-3:-5", "CMD:FOUND:a1b2c3d4-3:²",
+                                  # Another label glued on after the QR (review of 7e3720f, S-3:
+                                  # RED there, read as another audit's QR naming #58 or #9).
+                                  "CMD:FOUND:a1b2c3d4-3:57ID:58", "CMD:FOUND:a1b2c3d4-3:57 ID:58",
+                                  "CMD:FOUND:a1b2c3d4-3:57SPL:58", "CMD:FOUND:a1b2c3d4-3:57FIL:9"])
 def test_a_malformed_tile_qr_says_what_to_do(text):
     assert logic.resolve_scan(text) == {"type": "error", "msg": logic.AUDIT_FOUND_QR_UNREAD}
     assert "scan it again, or press the tile" in logic.AUDIT_FOUND_QR_UNREAD
@@ -1315,6 +1319,21 @@ def test_a_malformed_qr_in_an_audit_marks_nothing_and_says_what_to_do(env):
     start_with_id(env, "LR-MDB-1")
     assert scan(env, "CMD:FOUND:5") == {"type": "error", "msg": logic.AUDIT_FOUND_QR_UNREAD}
     assert session()["scanned_items"] == []
+
+
+@pytest.mark.parametrize("glued", ["ID:6", " ID:6", "SPL:6", "FIL:9"])
+def test_a_tiles_qr_with_another_label_glued_on_says_it_didnt_read_right(env, glued):
+    """Two scans can arrive glued (a scanner's read, then the next one's): the label after
+    the QR is not part of its audit id. Review of 7e3720f, S-3: RED there, where the scan
+    answered "That tile's QR is from another audit", which points at a stale QR that
+    isn't one."""
+    add_spool(env, 5, "LR-MDB-1")
+    add_spool(env, 6, "LR-MDB-1")
+    start_with_id(env, "LR-MDB-1")
+    assert scan_answer(f"{tile_qr(5)}{glued}", source="barcode") == {"type": "error",
+                                                                      "msg": logic.AUDIT_FOUND_QR_UNREAD}
+    assert session()["scanned_items"] == [] and session()["last_found"] is None
+    assert writes(env) == []
 
 
 def test_a_double_read_selects_the_spool_again_logs_nothing_and_never_takes_it_back(env):
