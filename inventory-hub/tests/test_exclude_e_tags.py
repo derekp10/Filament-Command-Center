@@ -51,6 +51,10 @@ import state  # noqa: E402
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _HUB = os.path.abspath(os.path.join(_HERE, ".."))
 _FLEXI = os.path.join(_HUB, "..", ".captures", "indx-flexi-2026-11-02", "flexi_resliced.bgcode")
+# The copy the printer ran for job 1134 ('/usb/FLEXI-~1.BGC'), pulled read-only off
+# its USB stick on 2026-11-03: prod's code walked it to the three logged WARNINGs
+# (+150.5% / +160.2% / +150.1%) and the 0.05 g card.
+_FLEXI_PRINTED = os.path.join(_HUB, "..", ".captures", "indx-flexi-2026-11-02", "flexi_printed.bgcode")
 
 
 @pytest.fixture
@@ -218,27 +222,36 @@ def test_a_pick_up_walk_lands_on_its_footer_so_no_warning_is_logged(logs):
     assert [m for m, a, k in logs if "G-code walk" in m] == []
 
 
-@pytest.mark.skipif(not os.path.isfile(_FLEXI),
-                    reason="the flexi-fox capture is git-ignored (only on Derek's PC)")
-def test_the_flexi_fox_capture_walks_to_its_footer_and_its_2pct_cancel_charges_the_share(logs):
-    """The real 2.5.14-profile file (a local re-slice of job 1134's project; its
-    footer is the slicer's): every tool walks to its footer within 1% (it was
-    2.5x to 3.1x; what is left is each tool's last retract, which the file never
-    recovers), and a cancel at the printer's 2% charges 0.13 g, not 0.05 g."""
-    with open(_FLEXI, "rb") as fh:
+@pytest.mark.parametrize("path, footer, early_want", [
+    # a local re-slice of job 1134's project (2.5.14 profile, PrusaSlicer 2.9.7)
+    pytest.param(_FLEXI, {0: 2.18, 1: 1.35, 2: 0.34, 3: 0.22},
+                 {0: 0.030, 1: 0.033, 3: 0.068}, id="resliced"),
+    # the file the printer ran: the card Derek re-applied by hand was 0.03 / 0.03 / 0.07
+    pytest.param(_FLEXI_PRINTED, {0: 2.17, 1: 1.34, 2: 0.34, 3: 0.22},
+                 {0: 0.0297, 1: 0.0328, 3: 0.0680}, id="printed"),
+])
+def test_the_flexi_fox_capture_walks_to_its_footer_and_its_2pct_cancel_charges_the_share(
+        logs, path, footer, early_want):
+    """The real 2.5.14-profile file (its footer is the slicer's): every tool walks
+    to its footer within 1% (it was 2.5x to 3.1x; what is left is each tool's last
+    retract, which the file never recovers), and a cancel at the printer's 2%
+    charges 0.13 g, not 0.05 g."""
+    if not os.path.isfile(path):
+        pytest.skip("the flexi-fox captures are git-ignored (only on Derek's PC)")
+    with open(path, "rb") as fh:
         dec = bgcode_decode.decode_bgcode(fh.read())
     g = dec["gcode"]
     at_2pct = bgcode_decode.progress_to_decoded_fraction(dec, 0.02)
     measured = prusalink_api.measure_filament_usage(g, [at_2pct, 1.0])
-    assert measured["footer"] == {0: 2.18, 1: 1.35, 2: 0.34, 3: 0.22}
+    assert measured["footer"] == footer
     for t, want in measured["footer"].items():
         assert abs(measured["whole"][t] - want) <= 0.01 * want, (t, measured["whole"])
     assert measured["partials"][1] == measured["footer"]
     early = measured["partials"][0]
-    assert set(early) == {0, 1, 3}, early                    # T2 hadn't printed yet
-    assert early[0] == pytest.approx(0.030, abs=0.002), early
-    assert early[1] == pytest.approx(0.033, abs=0.002), early
-    assert early[3] == pytest.approx(0.068, abs=0.002), early
+    assert set(early) == set(early_want), early              # T2 hadn't printed yet
+    for t, want in early_want.items():
+        assert early[t] == pytest.approx(want, abs=0.002), early
+    assert round(sum(early.values()), 2) == 0.13, early
     pm = {f"RCOI-{n + 1}": {"printer_name": "INDX", "position": n} for n in range(8)}
     with patch.object(print_deduct.locations_db, "get_active_printer_map", return_value=pm):
         print_deduct._warn_parse_gap("INDX", "FLEXI-~1.BGC", measured)
