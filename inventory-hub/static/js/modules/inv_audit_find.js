@@ -71,7 +71,7 @@ console.log("🚀 Loaded Module: AUDIT FIND");
 ${P} .fcc-find-panel { background:#1e1e1e; color:#fff; border:2px solid #0dcaf0; border-radius:8px;
     padding:14px 16px 10px; width:min(40rem, 94vw); height:min(36rem, 86vh); box-sizing:border-box;
     display:flex; flex-direction:column; box-shadow:0 10px 40px rgba(0,0,0,.6); font-size:1rem;
-    outline:none; text-align:left; }
+    outline:none; text-align:left; container:fcc-find-panel / inline-size; }
 ${P} .fcc-find-head { display:flex; align-items:center; justify-content:space-between; gap:8px; flex:0 0 auto; }
 ${P} .fcc-find-title { font-size:1.2em; font-weight:700; color:#fff; }
 ${P} .fcc-find-close { background:transparent; border:1px solid #777; color:#fff; border-radius:6px;
@@ -93,9 +93,11 @@ ${P} .fcc-find-row:hover { border-color:#777; }
 ${P} .fcc-find-row.kb-active { border-color:#0dcaf0; box-shadow:0 0 0 2px rgba(13,202,240,.55); background:#16333a; }
 ${P} .fcc-find-swatch { display:inline-block; width:18px; height:18px; border-radius:50%; flex:0 0 18px;
     border:1px solid #888; }
-${P} .fcc-find-main { flex:1 1 auto; min-width:0; display:block; }
-${P} .fcc-find-name { display:block; font-weight:600; color:#fff; white-space:nowrap; overflow:hidden;
-    text-overflow:ellipsis; }
+${P} .fcc-find-main { flex:1 1 0; min-width:0; display:block; }
+/* The name wraps, never cut: its colour is what tells two spools apart, and a touch
+   screen can't show the row's title (review of 7e3720f, P-4: "#260 … (Glow G…" and
+   "#270 … (Glow Gr…" on a phone). */
+${P} .fcc-find-name { display:block; font-weight:600; color:#fff; overflow-wrap:anywhere; }
 ${P} .fcc-find-where { display:block; color:#ddd; font-size:var(--fcc-fs-small); overflow-wrap:anywhere; }
 ${P} .fcc-find-tag { flex:0 0 auto; border-radius:10px; padding:0 7px; font-size:var(--fcc-fs-label); font-weight:600;
     white-space:nowrap; }
@@ -110,6 +112,12 @@ ${P} .fcc-find-retry { margin-top:10px; background:transparent; color:#ffd54a; b
 ${P} .fcc-find-retry:hover, ${P} .fcc-find-retry:focus-visible { background:#ffd54a; color:#111; outline:none; }
 ${P} .fcc-find-foot { color:#ccc; font-size:var(--fcc-fs-small); margin-top:8px; border-top:1px solid #333;
     padding-top:6px; flex:0 0 auto; }
+/* A narrow window (a phone): the tag goes under the name, which keeps the row's width.
+   In rem, so it comes at the same point at every Text size. */
+@container fcc-find-panel (max-width: 30rem) {
+    ${P} .fcc-find-row { flex-wrap:wrap; row-gap:2px; }
+    ${P} .fcc-find-row [data-find-tag]:not(:empty) { flex:1 0 100%; padding-left:26px; }
+}
 /* A very short window (a phone on its side): the list keeps room for its rows. */
 @media (max-height: 480px) {
     ${P} .fcc-find-sub, ${P} .fcc-find-foot { display:none; }

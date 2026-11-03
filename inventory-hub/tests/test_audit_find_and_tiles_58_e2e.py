@@ -21,7 +21,7 @@ import pytest
 from playwright.sync_api import Page, expect
 
 import conftest
-from test_audit_find_and_tiles_58_js import SEARCH_ROWS
+from test_audit_find_and_tiles_58_js import SEARCH_ROWS, search_row
 from test_audit_no_label_58_e2e import SCANNER, Marks, tile
 from test_audit_page_58_e2e import PANEL, _dashboard, _start
 from test_audit_question_dialog_58_js import _question
@@ -154,6 +154,76 @@ def test_nothing_scrolls_sideways(page: Page, base_url: str, width, height):
         return { out: r.left < -0.5 || r.right > innerWidth + 0.5, body: body.scrollWidth > body.clientWidth + 1 }; }""")
     assert got == {"out": False, "body": False}
     assert page.evaluate("() => document.documentElement.scrollWidth > innerWidth") is False
+    assert server.writes == []
+
+
+# --- A phone's rows (review of 7e3720f, P-4) ----------------------------------------------
+# Names as long as dev's ("Sunlu PETG (Red (Glow In The Dark Red))"), with each tag: #99 is
+# on this audit's list, #57 and #200 found already (SESSION).
+LONG_ROWS = [search_row(99, "Red (Glow In The Dark Red)", "LR-MDB-1", "2"),
+             search_row(57, "Transparent Orange Glow", "LR-MDB-1", "1"),
+             search_row(200, "Galaxy Black Sparkle", "LR-MDB-2", "3"),
+             search_row(260, "Glow Gold Silk Dual Colour", "UNKNOWN",
+                        lost_from={"place": "CR-CT-1", "slot": "2", "on": "2026-11-01"}),
+             search_row(270, "Glow Grey Matte", "")]
+
+# Every row's name and place, and its tag: whole (no text cut, nothing past the row's edge).
+ROWS_CUT = """() => {
+    const cut = [];
+    document.querySelectorAll('#fcc-audit-find .fcc-find-row').forEach((row) => {
+        const r = row.getBoundingClientRect();
+        row.querySelectorAll('.fcc-find-name, .fcc-find-where, .fcc-find-tag').forEach((el) => {
+            const b = el.getBoundingClientRect();
+            const block = getComputedStyle(el).display !== 'inline';
+            if ((block && (el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1))
+                    || b.left < r.left - 0.5 || b.right > r.right + 0.5 || b.bottom > r.bottom + 0.5) {
+                cut.push(row.dataset.findId + ': ' + el.className + ' ' + el.textContent);
+            }
+        });
+    });
+    return cut;
+}"""
+
+
+@pytest.mark.parametrize("size", ["Standard", "Large", "Extra Large"])
+def test_a_phones_rows_cut_no_name_and_keep_their_tags(page: Page, base_url: str, size):
+    """At 390 x 844: the name wraps (its colour tells two spools apart, and a touch screen
+    can't show the row's title), and the tag goes under it. RED on e7886e9: every tagged
+    row's name was cut at Standard, and every row's at Extra Large."""
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.add_init_script("(() => { try { localStorage.setItem('fcc.textSize', %r); } catch (e) {} })();" % size)
+    server = _running(page, base_url)
+    page.route("**/api/search*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=json.dumps({"success": True, "results": LONG_ROWS})))
+    page.click(FIND_BTN)
+    page.fill(FIND_BOX, "glow")
+    expect(page.locator(f"{FIND} .fcc-find-row")).to_have_count(len(LONG_ROWS))
+    expect(page.locator(f"{FIND} .fcc-find-row[data-find-id='99'] [data-find-tag]")).to_have_text("on the list")
+    expect(page.locator(f"{FIND} .fcc-find-row[data-find-id='57'] [data-find-tag]")).to_have_text("✅ found")
+    assert page.evaluate(ROWS_CUT) == []
+    got = page.evaluate("""() => { const p = document.querySelector('#fcc-audit-find .fcc-find-panel');
+        const body = p.querySelector('[data-find-body]'); const r = p.getBoundingClientRect();
+        return { out: r.left < -0.5 || r.right > innerWidth + 0.5, body: body.scrollWidth > body.clientWidth + 1 }; }""")
+    assert got == {"out": False, "body": False}
+    assert server.writes == []
+
+
+def test_a_wide_windows_rows_keep_their_tag_beside_the_name(page: Page, base_url: str):
+    """Where the window is wide the tag stays at the row's end, on the name's line, as
+    before, and nothing is cut. Pins what was already right beside P-4's change."""
+    page.set_viewport_size({"width": 1366, "height": 768})
+    server = _running(page, base_url)
+    page.route("**/api/search*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=json.dumps({"success": True, "results": LONG_ROWS})))
+    page.click(FIND_BTN)
+    page.fill(FIND_BOX, "glow")
+    expect(page.locator(f"{FIND} .fcc-find-row")).to_have_count(len(LONG_ROWS))
+    assert page.evaluate(ROWS_CUT) == []
+    beside = page.evaluate("""() => { const row = document.querySelector("#fcc-audit-find .fcc-find-row[data-find-id='99']");
+        const n = row.querySelector('.fcc-find-name').getBoundingClientRect();
+        const t = row.querySelector('.fcc-find-tag').getBoundingClientRect();
+        return t.left >= n.right - 0.5 && t.top < n.bottom; }""")
+    assert beside is True
     assert server.writes == []
 
 
