@@ -17,6 +17,14 @@
   "check 56.7": it reads prod's deduct records itself; nothing for you to compare. (3) If the
   Activity Log ever shows "FCC's G-code walk of … came to … against the slicer's …", tell Claude: FCC may be
   misreading that file.
+* **⏸️ PENDING DEREK — Group 58's three calls on Audit, built on their defaults (2026-11-02; nothing here blocks a release).**
+  Claude walks them with you one at a time, with pictures, before the merge; if you never answer, they stay as built.
+  (1) **A spool with no label (Decision 2):** a press on its tile on the audit panel finds it with no label read, and
+  its label status stays as it was; there is no QR per tile (built as (a)). (2) **A flagged spool's scan (Decision 3):**
+  a real label read during an audit confirms only a missing status, and a spool already flagged for a reprint stays
+  flagged, with the panel saying so (built as (b)). (3) **The deck's audit tile during an audit (Decision 5):** it
+  shows the panel and sends nothing, so it can't end an audit by accident (built; yours to veto). Claude removes this
+  item once you have said yes or changed them.
 * **⏸️ PENDING DEREK — Bulk Moves (L298) hands-on pass.** Built, merged to `dev`, covered by the
   automated suite, and **shipped OFF behind `fcc.bulkMove.enabled`** (schema default `False`, so
   prod is dark; dev's own `config.json` has it `True`). Derek, 2026-10-08: *"I'm so unexcited about
