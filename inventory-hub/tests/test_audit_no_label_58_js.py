@@ -167,9 +167,12 @@ def real_shortcut_list(page):
 
 
 def show_shortcut_list(page):
-    """A person's real ?."""
+    """A person's real ?. Its handler clears the scan buffer now and again a tick later
+    (window.clearScanBuffer), and the browser may run the next key before that tick, so
+    wait one timer turn: else a key typed next could be wiped (a sweep flake, 2026-11-02)."""
     page.keyboard.press("?")
     page.wait_for_function("(s) => document.querySelector(s).style.display === 'block'", arg=SHORTCUTS)
+    page.evaluate("() => new Promise((done) => setTimeout(done, 0))")
 
 
 # --- the strip ------------------------------------------------------------------------
