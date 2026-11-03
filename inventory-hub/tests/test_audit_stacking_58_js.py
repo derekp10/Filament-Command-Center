@@ -488,7 +488,9 @@ def test_tab_stays_on_the_panel_and_never_reaches_the_page_behind(live, env):
     begin(live, env)
     scanned(live, "ID:57")
     live.wait_for_selector(BUTTON)
-    stops = ["fcc-audit-panel-loose", "fcc-audit-panel-close", "57", "99", BUTTON[1:], DONE[1:], CANCEL[1:]]
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, A2): 🔎 Find a spool is the header's first stop.
+    stops = ["fcc-audit-panel-find", "fcc-audit-panel-loose", "fcc-audit-panel-close", "57", "99", BUTTON[1:],
+             DONE[1:], CANCEL[1:]]
     live.focus(CANCEL)
     walk = []
     for _ in range(len(stops) * 2):
@@ -502,7 +504,8 @@ def test_shift_tab_stays_on_the_panel_too(live, env):
     two(env)
     begin(live, env)
     live.wait_for_selector(tile(99))
-    live.focus("#fcc-audit-panel-loose")
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, A2): 🔎 Find a spool is the header's first stop.
+    live.focus("#fcc-audit-panel-find")
     live.keyboard.press("Shift+Tab")
     assert active(live) == CANCEL[1:]
 
@@ -512,8 +515,9 @@ def test_a_focus_left_on_the_page_comes_to_the_panels_first_control(live, env):
     begin(live, env)
     live.wait_for_selector(tile(99))
     live.evaluate("() => document.activeElement.blur()")
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, A2): 🔎 Find a spool is the header's first stop.
     live.keyboard.press("Tab")
-    assert active(live) == "fcc-audit-panel-loose"
+    assert active(live) == "fcc-audit-panel-find"
 
 
 def test_tab_leaves_done_while_it_is_down(live, env):
@@ -524,10 +528,11 @@ def test_tab_leaves_done_while_it_is_down(live, env):
     live.evaluate("() => window.auditPanelBusy(true)")
     live.focus(tile(99))
     walk = []
-    for _ in range(4):
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, A2): 🔎 Find a spool is the header's first stop.
+    for _ in range(5):
         live.keyboard.press("Tab")
         walk.append(active(live))
-    assert walk == ["134", LOOSE_BTN[1:], HIDE[1:], "57"]
+    assert walk == ["134", "fcc-audit-panel-find", LOOSE_BTN[1:], HIDE[1:], "57"]
 
 
 def test_the_panels_trap_stands_down_under_the_question(live, env):

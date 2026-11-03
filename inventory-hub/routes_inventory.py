@@ -1567,6 +1567,10 @@ def api_search_inventory():
     # Sort axis. Currently filament-only: 'spools_desc' / 'spools_asc'.
     # Empty / unknown tokens fall through to the default sort path.
     sort = request.args.get('sort', '').strip().lower()
+    # Group 58 (the audit's 🔎 Find a spool): a search that couldn't be made
+    # answers success: false, never an empty list (spoolman_api.SearchUnreadable).
+    # Passed only when asked, so the search panel's call is the one it was.
+    strict = {'strict': True} if request.args.get('strict', '').strip().lower() in ('1', 'true') else {}
 
     try:
         results = spoolman_api.search_inventory(
@@ -1581,6 +1585,7 @@ def api_search_inventory():
             max_weight=max_weight,
             deployed_state=deployed_state,
             sort=sort,
+            **strict,
         )
         return jsonify({"success": True, "results": results})
     except Exception as e:

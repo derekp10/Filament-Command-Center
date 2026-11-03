@@ -752,7 +752,10 @@ def test_a_scans_enter_on_a_tile_presses_nothing(live, env):
     assert sent(live, FOUND_URL) == [] and sent(live) == ["ID:99"]
 
 
-def test_extra_and_loaded_tiles_arent_buttons(live, env):
+def test_an_extra_tile_is_a_button_and_a_loaded_one_isnt(live, env):
+    """PIN UPDATED DELIBERATELY (Derek, 2026-11-03, A3): an Extra's tile is a button now,
+    a press taking it back (test_audit_find_and_tiles_58_js.py); a loaded-from-here tile
+    stays a plain tile."""
     two(env)
     add_spool(env, 200, "LR-MDB-2", container_slot="3")
     add_spool(env, 242, "XL-1", physical_source="LR-MDB-1", physical_source_slot="4")
@@ -760,7 +763,7 @@ def test_extra_and_loaded_tiles_arent_buttons(live, env):
     scanned(live, "ID:200")
     scanned(live, "ID:242")
     live.wait_for_function("(s) => document.querySelector(s).textContent.includes('Loaded from here')", arg=BODY)
-    assert live.evaluate("() => Array.from(document.querySelectorAll('button[data-audit-tile]')).map((b) => b.dataset.auditTile)") == ["57", "99"]
+    assert live.evaluate("() => Array.from(document.querySelectorAll('button[data-audit-tile]')).map((b) => b.dataset.auditTile)") == ["57", "99", "200"]
     text = live.text_content(BODY)
     assert text.count("found, no label read") == 2         # the Extra and the loaded spool
 
@@ -1708,16 +1711,17 @@ def test_back_with_the_panel_hidden_hands_the_keyboard_to_done(live, env, answer
 
 def test_done_leaves_a_keyboard_that_moved_on_while_the_panel_drew(live, env):
     """The person has gone somewhere on the panel since: Done doesn't take the focus. A pin
-    of the test in _render: proved on a copy without it."""
+    of the test in _render: proved on a copy without it. PIN UPDATED DELIBERATELY (Derek,
+    2026-11-03, A2): the header's first control is 🔎 Find a spool now, before 🧺."""
     hide_then_ask(live, env)
     live.evaluate(HOLD_POLLS)
     live.keyboard.press("Enter")
     live.wait_for_selector(HIDE)
     live.keyboard.press("Tab")                  # the panel's trap: its first control
-    assert live.evaluate("document.activeElement.id") == LOOSE_BTN[1:]
+    assert live.evaluate("document.activeElement.id") == "fcc-audit-panel-find"
     live.evaluate("window.__letPollsGo()")
     live.wait_for_selector(DONE)
-    assert live.evaluate("document.activeElement.id") == LOOSE_BTN[1:]
+    assert live.evaluate("document.activeElement.id") == "fcc-audit-panel-find"
 
 
 def test_a_panel_hidden_again_before_it_drew_forgets_the_keyboard(live, env):

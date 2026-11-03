@@ -503,6 +503,37 @@ def test_audit_done_question_text_is_readable(page: Page, base_url: str, assert_
     assert_text_size(page.locator("#fcc-audit-done-question"))
 
 
+def test_audit_find_window_text_is_readable(page: Page, base_url: str, assert_text_size):
+    """Derek's answers of 2026-11-03, A2: 🔎 Find a spool, its rows (each "where" and both
+    tags), its notice and a failed search; and the panel with a tile's QR and the strip's
+    🖨️ (A1, B), at Standard."""
+    from conftest import quiet_heartbeat
+    from test_audit_find_and_tiles_58_js import SEARCH_ROWS
+    _read_only(page, extra_get={"/api/audit_session": SAMPLE_AUDIT,
+                                "/api/search": {"success": True, "results": SEARCH_ROWS}})
+    quiet_heartbeat(page)               # after: the newest route answers first
+    page.goto(base_url, wait_until="domcontentloaded")
+    page.wait_for_function("() => typeof window.openAuditFind === 'function'", timeout=45_000)
+    page.evaluate("() => { state.auditActive = true; window.updateAuditVisuals(); }")
+    page.wait_for_selector("[data-audit-tile='99'] .fcc-audit-tile-qr")
+    page.wait_for_selector("#fcc-audit-label-queue")
+    assert_text_size(page.locator("#fcc-audit-panel-overlay"))
+    page.click("#fcc-audit-panel-find")
+    page.wait_for_selector("#fcc-audit-find [data-find-box]")
+    assert_text_size(page.locator("#fcc-audit-find"))
+    page.fill("#fcc-audit-find [data-find-box]", "glow")
+    page.wait_for_function("(n) => document.querySelectorAll('#fcc-audit-find .fcc-find-row').length === n",
+                           arg=len(SEARCH_ROWS))
+    page.evaluate("() => window.auditPanelNotice('Already auditing LR-MDB-1. Finish first!')")
+    assert_text_size(page.locator("#fcc-audit-find"))
+    page.evaluate("() => { const plain = window.fetchT; window.fetchT = (u, ...r) => String(u).includes('/api/search')"
+                  " ? Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ success: false,"
+                  " msg: \"Spoolman didn't answer (timed out).\" }) }) : plain(u, ...r); }")
+    page.fill("#fcc-audit-find [data-find-box]", "glow b")
+    page.wait_for_selector("#fcc-audit-find [data-find-retry]")
+    assert_text_size(page.locator("#fcc-audit-find"))
+
+
 def draw_lost_cards(page: Page):
     """The two lost-spool cards no screen here opens by itself, the search panel's
     and the Unknown list's, drawn by the real builder from the routes' shape, on the

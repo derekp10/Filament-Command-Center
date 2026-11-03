@@ -16,6 +16,12 @@ request that isn't a GET is answered here and recorded, so nothing a stray press
 reaches dev, and dev's own audit stays idle. A page per window size: each case puts the
 page back as it was. The logic is pinned hermetically by test_audit_no_label_58_js.py's
 double-click twins and test_audit_stacking_58_js.py's covers.
+
+Derek's answers of 2026-11-03 add three: an Extra's tile, which a press takes back (A3,
+`an-extra-tile`), the panel's 🔎 Find a spool, which a press opens over the panel (A2,
+`find-open`), and a row of it, which a pick closes (`find-row`); and the panel's 🔎 button
+among those a first click on the FINISH tile can bring up. Their
+hermetic twins are in test_audit_find_and_tiles_58_js.py.
 """
 from __future__ import annotations
 
@@ -28,6 +34,7 @@ from playwright.sync_api import Page
 import conftest
 from test_audit_page_58_e2e import _dashboard
 from test_audit_page_58_js import SESSION, _row
+from test_audit_find_and_tiles_58_js import search_row
 from test_audit_question_dialog_58_js import _question
 from test_scanner_safe_dialogs_61_js import LEGACY
 
@@ -36,7 +43,7 @@ pytestmark = pytest.mark.usefixtures("require_server")
 SIZES = [(1366, 640), (1366, 768), (1280, 800), (1600, 900), (1600, 1300)]
 LENGTHS = [3, 6, 10, 14, 24]
 CONTROLS = ["done-ends", "done-asks", "cancel-audit", "hide", "needs-a-label", "a-tile", "undo-that",
-            "back", "park", "deck-tile"]
+            "back", "park", "deck-tile", "an-extra-tile", "find-open"]
 GAP_MS = 120                 # a person's double click (p12.py's)
 SHIELD_S = 0.75              # DOUBLE_PRESS_MS (inv_cmd.js) and a little: a case starts past it
 
@@ -48,9 +55,10 @@ CONTROL_SEL = {
     "cancel-audit": "#fcc-audit-panel-cancel", "hide": "#fcc-audit-panel-close",
     "needs-a-label": "#fcc-audit-panel-needlabel", "undo-that": "#fcc-audit-label-undo",
     "back": QUESTION + " .fcc-apc-no", "park": QUESTION + " .fcc-apc-yes", "deck-tile": "#btn-deck-audit",
+    "find-open": "#fcc-audit-panel-find",
 }
 # The panel's buttons a first click on the FINISH tile can bring up under the second.
-PANEL_BUTTONS = ["#fcc-audit-panel-loose", "#fcc-audit-panel-close", "#fcc-audit-panel-done",
+PANEL_BUTTONS = ["#fcc-audit-panel-find", "#fcc-audit-panel-loose", "#fcc-audit-panel-close", "#fcc-audit-panel-done",
                  "#fcc-audit-panel-cancel", "#fcc-audit-panel-needlabel", ".fcc-audit-tile"]
 
 # What one click leaves: the requests it sends ((path, scan text)), the overlays up, and
@@ -66,6 +74,10 @@ ONE_CLICK = {
     "back": ([("/api/log_event", None)], [PANEL[1:]], "fcc-audit-panel-done"),
     "park": ([("/api/audit/park", None)], [], "BODY"),
     "deck-tile": ([], [PANEL[1:]], "BODY"),
+    # Taken back, its tile goes: the keyboard is nowhere, as after any tile that goes.
+    "an-extra-tile": ([("/api/audit/found", None)], [PANEL[1:]], "BODY"),
+    # Find opens over the panel, its box takes the keyboard, and the second click finds it there.
+    "find-open": ([], [PANEL[1:], "fcc-audit-find"], "find-box"),
 }
 
 # What sits over the panel (item 2f): its first click closes it, and the second lands on
@@ -73,14 +85,19 @@ ONE_CLICK = {
 # 🧺 button and the ⌨️ list's ✕ on Hide, at every length; the legacy picker's buttons on the
 # strip, or on tiles (1280 x 800 with 10 spools or more). A row of the 🧺 list opens nothing
 # during an audit, so the list stays and takes the second click too.
-COVERS = ["loose-close", "loose-row", "shortcut-close", "picker-use", "picker-print", "picker-cancel"]
+COVERS = ["loose-close", "loose-row", "shortcut-close", "picker-use", "picker-print", "picker-cancel", "find-row"]
 COVER_LENGTHS = [6, 14]
 LOOSE_LIST = "#fcc-loose-list"
 PICKER = "#fcc-legacy-picker-overlay"
+FIND = "#fcc-audit-find"
+FIND_BOX = FIND + " [data-find-box]"
+PICKED = 101                 # the first spool not found in every audit below: a Find row picks it
+EXTRA = 900                  # the first Extra
 COVER_CONTROL = {
     "loose-close": LOOSE_LIST + " [data-loose-close]", "loose-row": LOOSE_LIST + " .fcc-loose-row",
     "shortcut-close": "#fcc-shortcuts-overlay .btn-close", "picker-use": "#fcc-legacy-picker-use",
     "picker-print": "#fcc-legacy-picker-print", "picker-cancel": "#fcc-legacy-picker-cancel",
+    "find-row": f"{FIND} .fcc-find-row[data-find-id='{PICKED}']",
 }
 # One click's requests (None: Print new label's, the label queue's own, which it skips for a
 # spool already queued), overlays and keyboard.
@@ -91,6 +108,8 @@ COVER_CLICK = {
     "picker-use": ([("/api/identify_scan", "ID:134")], [PANEL[1:]], "BODY"),
     "picker-print": (None, [PANEL[1:]], "BODY"),
     "picker-cancel": ([], [PANEL[1:]], "BODY"),
+    # The pick, and the keyboard back on 🔎, which opened Find.
+    "find-row": ([("/api/identify_scan", f"ID:{PICKED}")], [PANEL[1:]], "fcc-audit-panel-find"),
 }
 LABEL_QUEUE = {"/api/print_queue/set_flag", "/api/state/queue"}
 LOOSE_SPOOLS = {"read_ok": True, "read_error": None, "count": 1, "places": [
@@ -99,16 +118,19 @@ LOOSE_SPOOLS = {"read_ok": True, "read_error": None, "count": 1, "places": [
          "color_direction": "longitudinal", "remaining_weight": 912}]}]}
 
 
-def _session(audit_id, rows, found, last=None, flagged=False):
+def _session(audit_id, rows, found, last=None, flagged=False, extras=0):
     """/api/audit_session's shape: `rows` expected, the first `found` found, and the Last
-    found strip on row `last` (`flagged`: marked in this audit, so it shows undo that)."""
+    found strip on row `last` (`flagged`: marked in this audit, so it shows undo that).
+    `extras`: Extras found here, filed in another box."""
     expected = [_row(100 + n, str(n + 1), found=n < found) for n in range(rows)]
+    rogue = [dict(_row(EXTRA + n, str(n + 1), found=True, rogue=True), location="LR-MDB-2",
+                  where=f"LR-MDB-2 slot {n + 1}", at_done={"files": True}) for n in range(extras)]
     last_found = None
     if last is not None:
         last_found = dict(expected[last], label_read=True, flagged_here=flagged,
                           label_status=True if flagged else None)
-    return dict(SESSION, audit_id=audit_id, expected=expected, rogue=[], trail=[], note="",
-                stats={"total_expected": rows, "found": found, "missing": rows - found, "rogue": 0, "trail": 0},
+    return dict(SESSION, audit_id=audit_id, expected=expected, rogue=rogue, trail=[], note="",
+                stats={"total_expected": rows, "found": found, "missing": rows - found, "rogue": extras, "trail": 0},
                 last_found=last_found)
 
 
@@ -132,6 +154,7 @@ class Sweep:
         page.route("**/api/audit/needs_label_undo", self._undo_that)
         page.route("**/api/audit/park", self._park)
         page.route("**/api/loose_spools*", lambda route: self._json(route, LOOSE_SPOOLS))
+        page.route("**/api/search*", self._search)
 
     @staticmethod
     def _json(route, body):
@@ -173,22 +196,44 @@ class Sweep:
             answer = dict(answer, audit_ended=self._end("cancel"))
         elif text == "LEG:120":                         # a legacy label two spools share
             answer = LEGACY
+        elif text.startswith("ID:") and self.session.get("active"):   # a Find pick: found, the last found
+            self._turn(int(text[3:]), True)
         elif text == "CMD:NEEDLABEL" and self.session.get("last_found"):
             self.session = dict(self.session, last_found=dict(self.session["last_found"], flagged_here=True,
                                                               label_status=True))
             answer = dict(answer, said=f"#{self.session['last_found']['id']} needs a label: it is in the Backlog.")
         self._json(route, answer)
 
+    def _turn(self, sid, found):
+        """A spool found or taken back, as the routes turn the session: an Extra taken back
+        leaves the Extras (and the strip, if it was there)."""
+        rogue = self.session.get("rogue") or []
+        if any(r["id"] == sid for r in rogue):
+            if not found:
+                rogue = [r for r in rogue if r["id"] != sid]
+                last = self.session.get("last_found")
+                self.session = dict(self.session, rogue=rogue, stats=dict(self.session["stats"], rogue=len(rogue)),
+                                    last_found=None if last and last["id"] == sid else last)
+            return
+        if not any(r["id"] == sid for r in self.session.get("expected") or []):
+            return                                      # off the list (the legacy picker's #134): as it was
+        rows = [dict(r, found=found) if r["id"] == sid else r for r in self.session["expected"]]
+        hit = next(r for r in rows if r["id"] == sid)
+        n = sum(1 for r in rows if r["found"])
+        self.session = dict(self.session, expected=rows, last_found=dict(hit, label_read=False, flagged_here=False),
+                            stats=dict(self.session["stats"], found=n, missing=len(rows) - n))
+
     def _found(self, route):
         self._record(route)
         body = route.request.post_data_json or {}
-        rows = [dict(r, found=bool(body.get("found"))) if r["id"] == body.get("id") else r
-                for r in self.session["expected"]]
-        hit = next(r for r in rows if r["id"] == body.get("id"))
-        found = sum(1 for r in rows if r["found"])
-        self.session = dict(self.session, expected=rows, last_found=dict(hit, label_read=False, flagged_here=False),
-                            stats=dict(self.session["stats"], found=found, missing=len(rows) - found))
+        self._turn(body.get("id"), bool(body.get("found")))
         self._json(route, {"success": True, "found": bool(body.get("found"))})
+
+    def _search(self, route):
+        """/api/search's answer on its real shape: every spool of the audit, newest first."""
+        rows = [search_row(r["id"], f"Red {r['id']}", "LR-MDB-1", r["slot"])
+                for r in (self.session.get("expected") or [])]
+        self._json(route, {"success": True, "results": sorted(rows, key=lambda r: -r["id"])})
 
     def _undo_that(self, route):
         self._record(route)
@@ -275,7 +320,8 @@ AFTER = r"""() => {
     const focus = !a || a === document.body ? 'BODY'
         : (a.classList.contains('fcc-apc-no') ? 'back' : (a.classList.contains('fcc-apc-yes') ? 'park'
         : (a.classList.contains('fcc-loose-row') ? 'loose-row'
-        : (a.dataset && a.dataset.auditTile ? 'tile:' + a.dataset.auditTile : (a.id || a.tagName)))));
+        : (a.matches('[data-find-box]') ? 'find-box'
+        : (a.dataset && a.dataset.auditTile ? 'tile:' + a.dataset.auditTile : (a.id || a.tagName))))));
     const list = document.getElementById('fcc-shortcuts-overlay');
     return {
         overlays: Array.from(document.querySelectorAll('[data-overlay-mount="1"]')).map((e) => e.id),
@@ -329,17 +375,17 @@ class Board:
         self.page.mouse.click(*xy)
         self.pressed = time.monotonic()
 
-    def begin(self, rows, found, last=None, flagged=False, asks=False):
-        """A new audit of `rows` spools, its panel up and drawn."""
+    def begin(self, rows, found, last=None, flagged=False, asks=False, extras=0):
+        """A new audit of `rows` spools (and `extras` Extras), its panel up and drawn."""
         page, server = self.page, self.server
         self.settle()
         page.evaluate(RESET)
         self.cases += 1
         server.audit_id = f"boot-{self.cases}"
         server.asks = asks
-        server.session = _session(server.audit_id, rows, found, last, flagged)
+        server.session = _session(server.audit_id, rows, found, last, flagged, extras)
         page.evaluate(START, [server.audit_id])
-        page.wait_for_function("(n) => document.querySelectorAll('.fcc-audit-tile').length === n", arg=rows)
+        page.wait_for_function("(n) => document.querySelectorAll('.fcc-audit-tile').length === n", arg=rows + extras)
         if last is not None:
             page.wait_for_selector("#fcc-audit-last-found")
         page.wait_for_timeout(120)              # the panel's QR codes draw two frames later
@@ -492,6 +538,12 @@ def test_a_real_double_click_does_what_one_click_does(board, rows, control):
     elif control == "undo-that":
         board.begin(rows, 1, last=0, flagged=True)
         xy = page.evaluate(POINT, CONTROL_SEL[control])
+    elif control == "find-open":                    # A2: its first press opens Find over the panel
+        board.begin(rows, 1, last=0)
+        xy = page.evaluate(POINT, CONTROL_SEL[control])
+    elif control == "an-extra-tile":                # A3: its first press takes it back
+        board.begin(rows, 1, last=0, extras=2)
+        xy = _scrolled_into_view(page, f"[data-audit-tile='{EXTRA}']")
     else:                                       # cancel-audit, hide, needs-a-label
         board.begin(rows, 1, last=0)
         xy = _scrolled_into_view(page, CONTROL_SEL[control])
@@ -510,6 +562,13 @@ def _cover_up(board, cover):
     if cover.startswith("loose"):
         board.click(page.evaluate(POINT, "#fcc-audit-panel-loose"))
         page.wait_for_selector(LOOSE_LIST + " .fcc-loose-row")
+        board.pressed = time.monotonic()        # past the press that opened it
+        board.settle()
+    elif cover == "find-row":                       # A2: a pick closes it
+        board.click(page.evaluate(POINT, "#fcc-audit-panel-find"))
+        page.wait_for_selector(FIND_BOX)
+        page.fill(FIND_BOX, str(PICKED))          # its number: its row comes first (the search finds them all)
+        page.wait_for_selector(COVER_CONTROL[cover])
         board.pressed = time.monotonic()        # past the press that opened it
         board.settle()
     elif cover == "shortcut-close":

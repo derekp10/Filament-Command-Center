@@ -2524,7 +2524,12 @@ def filament_attribute_list(fil):
     return out
 
 
-def search_inventory(query="", material="", vendor="", color_hex="", only_in_stock=False, empty=False, target_type="spool", min_weight="", max_weight="", deployed_state="", sort=""):
+class SearchUnreadable(Exception):
+    """search_inventory(strict=True) couldn't search: Spoolman didn't answer, or
+    the search itself went wrong. Its text says which, for a person."""
+
+
+def search_inventory(query="", material="", vendor="", color_hex="", only_in_stock=False, empty=False, target_type="spool", min_weight="", max_weight="", deployed_state="", sort="", strict=False):
     """
     Searches Spoolman inventory objects (spools or filaments) based on fuzzy attributes and color closeness.
     Returns a sorted list of dictionaries matching the criteria.
@@ -2532,6 +2537,11 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
     `deployed_state` (spool-only): '' or 'any' = no filter, 'deployed' = only
     spools currently on a toolhead (location ∈ printer_map) OR with a ghost
     physical_source set, 'undeployed' = the inverse. Filaments ignore this.
+
+    `strict` (Group 58, the audit's 🔎 Find a spool): a search that couldn't be
+    made raises SearchUnreadable instead of answering [], so a Spoolman that
+    didn't answer reads as "Couldn't search", never as "No matches" (Group 52's
+    rule). Left out, the search panel's [] stands as it was.
     """
     sm_url, _ = config_loader.get_api_urls()
     results = []
@@ -2568,8 +2578,10 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
             
         if not resp.ok:
             state.logger.error(f"Failed to fetch {target_type}s for search: {resp.status_code}")
+            if strict:
+                raise SearchUnreadable(f"Spoolman answered HTTP {resp.status_code}.")
             return []
-            
+
         all_items = parse_inbound_data(resp.json())
         
         # Build quick lookup for spool counts if we are answering a filament search
@@ -2769,7 +2781,11 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
                 results.sort(key=lambda x: -x['id'])
 
         return results
-        
+
+    except SearchUnreadable:
+        raise
     except Exception as e:
         state.logger.error(f"Search Spools API Error: {e}")
+        if strict:
+            raise SearchUnreadable(f"Spoolman didn't answer ({e}).")
         return []

@@ -265,11 +265,34 @@ def test_audit_panel_and_pill_are_readable(page: Page, base_url: str, assert_con
                   "Ends it, nothing moves", "clears itself",
                   # Group 58.2: the Last found strip and what a tile says about a label.
                   "Last found", "#57 is marked: it needs a label", "undo that", "Needs a label", "Scan to mark it",
-                  "found, no label read", "needs a label", "label status unknown", "No label to scan?"):
+                  "found, no label read", "needs a label", "label status unknown", "No label to scan?",
+                  # Derek's answers of 2026-11-03: a tile's QR (its badge under its name), an
+                  # Extra taken back, the strip's 🖨️ and 🔎 Find a spool.
+                  "or scan its QR", "not scanned", "Not here after all?", "Add to print queue", "Find a spool"):
         assert words in scored, (words, scored)
+    # The tile with a QR: the QR's white box holds no text, and its badge moved under the name.
+    assert panel.locator("[data-audit-tile='99'] .fcc-audit-tile-qr").count() == 1
     panel.locator("#fcc-audit-label-undo").hover()
     page.wait_for_timeout(200)          # Bootstrap's colour transition
     assert_contrast(panel)
+    # The strip's 🖨️ (2026-11-03, B), for #57, flagged here: under the mouse, then once the
+    # label is queued, when it says so and its hover looks like no press. The queue's own
+    # 2 s read is answered here with the same queue, so dev's can't change it.
+    import json
+    panel.locator("#fcc-audit-label-queue").hover()
+    page.wait_for_timeout(200)
+    assert_contrast(panel)
+    queued = [{"id": 57, "type": "spool", "display": "#57"}]
+    page.route("**/api/state/queue", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=json.dumps(queued) if route.request.method == "GET" else "{}"))
+    page.mouse.move(0, 0)
+    page.evaluate("(q) => { window.labelQueue.push(q); window.updateQueueUI(); }", queued[0])
+    expect(panel.locator("#fcc-audit-label-queue")).to_contain_text("In the print queue")
+    assert_contrast(panel)
+    panel.locator("#fcc-audit-label-queue").hover()
+    page.wait_for_timeout(200)
+    assert_contrast(panel)
+    page.mouse.move(0, 0)
     # The strip's other lines are that one's own element and class; each is drawn here.
     for line, row in (("No label was read for #99", {"id": 99, "label_read": False, "flagged_here": False, "label_status": None}),
                       ("#100 is still flagged for a new label", {"id": 100, "label_read": True, "flagged_here": False, "label_status": True}),
@@ -289,11 +312,12 @@ def test_audit_panel_and_pill_are_readable(page: Page, base_url: str, assert_con
     # its light text. The guard reads brightness() (test_contrast_guard_compositing.py,
     # and test_audit_panel_58_js.py on a real tile).
     for hovered in ("#fcc-audit-panel-needlabel", "#fcc-audit-panel-done", "#fcc-audit-panel-cancel",
-                    "#fcc-audit-panel-close", "[data-audit-tile='99']", "[data-audit-tile='57']"):
+                    "#fcc-audit-panel-close", "[data-audit-tile='99']", "[data-audit-tile='57']",
+                    # 2026-11-03: an Extra's tile is a button now, and the panel's 🔎.
+                    "[data-audit-tile='134']", "#fcc-audit-panel-find"):
         panel.locator(hovered).hover()
         page.wait_for_timeout(200)      # Bootstrap's colour transition
         assert_contrast(panel)
-    page.mouse.move(0, 0)
     page.keyboard.press("Escape")
     pill = page.locator("#fcc-audit-pill")
     expect(pill).to_be_visible()
@@ -301,6 +325,64 @@ def test_audit_panel_and_pill_are_readable(page: Page, base_url: str, assert_con
     assert "audit: LR-MDB-1" in " ".join(o.get("text", "") for o in conftest.contrast_offenders(pill, min_ratio=100))
     pill.hover()
     assert_contrast(pill)
+
+
+@pytest.mark.usefixtures("require_server")
+def test_audit_find_window_is_readable(page: Page, base_url: str, assert_contrast):
+    """Derek's answers of 2026-11-03, A2: 🔎 Find a spool over the audit panel. Its box and
+    hint, each kind of row (every "where", both tags) with the highlighted one and a
+    hovered one, the panel's refusal said on it, a failed search with Try again hovered,
+    and "No spool matches". The session and the search are the routes' shapes, served to
+    this browser alone; nothing is picked."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_audit_find_and_tiles_58_js import SEARCH_ROWS
+    from test_text_size_guard import SAMPLE_AUDIT, _read_only
+    _read_only(page, extra_get={"/api/audit_session": SAMPLE_AUDIT,
+                                "/api/search": {"success": True, "results": SEARCH_ROWS}})
+    conftest.quiet_heartbeat(page)      # after: the newest route answers first
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openAuditFind === 'function' && typeof state !== 'undefined'")
+    page.evaluate("() => { state.auditActive = true; window.updateAuditVisuals(); }")
+    panel = page.locator("#fcc-audit-panel-overlay")
+    expect(panel.locator("#fcc-audit-panel-done")).to_be_visible()
+    panel.locator("#fcc-audit-panel-find").click()
+    find = page.locator("#fcc-audit-find")
+    expect(find.locator("[data-find-box]")).to_be_focused()
+    assert_contrast(find)
+    scored = " ".join(o.get("text", "") for o in conftest.contrast_offenders(find, min_ratio=100))
+    for words in ("Find a spool", "A spool here with no label", "Type a name, colour, brand or number.", "Esc closes"):
+        assert words in scored, (words, scored)
+    find.locator("[data-find-box]").fill("glow")
+    expect(find.locator(".fcc-find-row")).to_have_count(len(SEARCH_ROWS))
+    page.keyboard.press("ArrowDown")                 # the highlighted row, with the keyboard on it
+    page.evaluate("() => window.auditPanelNotice('Already auditing LR-MDB-1. Finish first!')")
+    assert_contrast(find)
+    scored = " ".join(o.get("text", "") for o in conftest.contrast_offenders(find, min_ratio=100))
+    for words in ("#99 Some Brand PLA (Glow Blue)", "📍 LR-MDB-1 slot 2", "on the list", "✅ found",
+                  "🔗 loaded from LR-MDB-2 slot 4", "❓ Lost: CR-CT-1 slot 2", "Unassigned", "Already auditing"):
+        assert words in scored, (words, scored)
+    find.locator(".fcc-find-row[data-find-id='200']").hover()
+    page.wait_for_timeout(200)
+    assert_contrast(find)
+    # A failed search, and one that matches nothing.
+    page.evaluate("() => { const plain = window.fetchT; window.fetchT = (u, ...r) => String(u).includes('/api/search')"
+                  " ? Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ success: false,"
+                  " msg: \"Spoolman didn't answer (timed out).\" }) }) : plain(u, ...r); }")
+    find.locator("[data-find-box]").fill("glow b")
+    expect(find.locator("[data-find-retry]")).to_be_visible()
+    find.locator("[data-find-retry]").hover()
+    page.wait_for_timeout(200)
+    assert_contrast(find)
+    assert "Couldn't search" in " ".join(o.get("text", "") for o in conftest.contrast_offenders(find, min_ratio=100))
+    page.evaluate("() => { const plain = window.fetchT; window.fetchT = (u, ...r) => String(u).includes('/api/search')"
+                  " ? Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ success: true, results: [] }) })"
+                  " : plain(u, ...r); }")
+    page.mouse.move(0, 0)
+    find.locator("[data-find-box]").fill("nothing like it")
+    expect(find).to_contain_text("No spool matches")
+    assert_contrast(find)
+    page.keyboard.press("Escape")
+    expect(find).to_have_count(0)
 
 
 @pytest.mark.usefixtures("require_server")

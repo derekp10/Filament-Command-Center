@@ -184,12 +184,13 @@ def test_the_walk_from_the_review_stays_in_the_loose_list(page: Page, base_url: 
 
 def test_tab_stays_on_the_real_panel(page: Page, base_url: str):
     """The page behind has hundreds of stops, and the mouse can't reach one of them. RED
-    before the fix: past Cancel Audit the keyboard went out to the page."""
+    before the fix: past Cancel Audit the keyboard went out to the page. PIN UPDATED
+    DELIBERATELY (Derek, 2026-11-03, A2): 🔎 Find a spool is the panel's first stop."""
     _running(page, base_url)
     page.locator(CANCEL).scroll_into_view_if_needed()
     page.focus(CANCEL)
     page.keyboard.press("Tab")
-    expect(page.locator("#fcc-audit-panel-loose")).to_be_focused()
+    expect(page.locator("#fcc-audit-panel-find")).to_be_focused()
     page.keyboard.press("Shift+Tab")
     expect(page.locator(CANCEL)).to_be_focused()
 

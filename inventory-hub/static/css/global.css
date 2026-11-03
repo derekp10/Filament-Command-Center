@@ -2806,6 +2806,35 @@ button.fcc-audit-tile.kb-active {
     color: #ffe08a;
     font-weight: 600;
 }
+/* A tile's QR (Derek, 2026-11-03, A1): scanning it finds the spool as a press does.
+   72 px, the size the confirm dialogs' QRs of the same length read at, on a white
+   quiet zone; in px, as qrcode.js draws it. It takes the badge's place at the tile's
+   end and reaches into the tile's padding, so the tile grows by as little as it can.
+   No caption of its own (aria-hidden): the tile's words and title say it. */
+.fcc-audit-tile-qr {
+    flex: 0 0 auto;
+    display: block;
+    box-sizing: border-box;
+    width: 78px;
+    height: 78px;
+    margin: -4px 0;
+    padding: 3px;
+    background: #fff;
+    border-radius: 4px;
+    line-height: 0;
+}
+.fcc-audit-tile-qr-code { display: block; width: 72px; height: 72px; overflow: hidden; }
+.fcc-audit-tile-qr-code img, .fcc-audit-tile-qr-code canvas { width: 72px; height: 72px; }
+/* The Last found strip's 🖨️ (B). Once the label is queued it says so and does
+   nothing: calm, and no hover that reads as a press. */
+.fcc-audit-queue[aria-disabled="true"],
+.fcc-audit-queue[aria-disabled="true"]:hover,
+.fcc-audit-queue[aria-disabled="true"]:active {
+    color: #a8f0b0;
+    background-color: transparent;
+    border-color: #3f9a4a;
+    cursor: default;
+}
 /* Cancel under the mouse: the app-wide .btn-outline-danger:hover is white on #ff4444,
    3.41:1. Bootstrap's own danger red is 4.53:1. */
 #fcc-audit-panel-cancel:hover {
