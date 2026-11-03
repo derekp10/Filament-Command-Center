@@ -160,6 +160,22 @@ _E_RE = re.compile(r'E(-?\d*\.?\d+)')
 # tool's filament on arcs (the raccoon INDX print: 48.43 g counted against a
 # 52.27 g footer without them, 52.26 g with them).
 _EXTRUDING_MOVE_RE = re.compile(r'^G0*[0-3](?![0-9])')
+# PrusaSlicer 2.9.6's `;EXCLUDE_E_START` / `;EXCLUDE_E_END` custom G-code tags:
+# moves between them "aren't incorporated into filament consumption" (its
+# release notes), so the slicer's footer leaves them out and the walk must too.
+# The Core One INDX profile (2.5.12 on) wraps the park (`G27 ... R8`: the firmware
+# pulls the filament back 8 mm, and no E move in the file says so) and, each time
+# a tool already used is picked up again, the tool lock (`G1 E1.6 ; Final lock
+# tool`) and the restore of those 8 mm (`; Restore filament retracted by G27 R on
+# park`); with a wipe tower, `G1 E2.0` and the rest of the restore. A tool's first
+# pick-up primes 1.6 mm outside the tags, and counts. Counted, the lock and the
+# restore made a small four-colour print walk to ~2.5x its footer (job 1134,
+# hotfix 2026-11-02). Read as the slicer reads it (GCodeProcessor::process_gcode_line
+# / process_tags): a whole-line comment, blanks before the ';' trimmed, the tag
+# right after the ';' as a prefix, case as written. An older INDX profile wrote the
+# words as bare lines with no ';' (the raccoon capture): the slicer counted those
+# moves, so a bare line is no tag.
+_EXCLUDE_E_TAG_RE = re.compile(r'\s*;EXCLUDE_E_(START|END)')
 
 
 def _walk_extrusion(gcode_content: str, cut_bytes: List[int], default_tool: int):
@@ -174,6 +190,13 @@ def _walk_extrusion(gcode_content: str, cut_bytes: List[int], default_tool: int)
     Handles absolute (M82, default) and relative (M83) extrusion, ``G92 E<n>``
     extruder-origin resets, per-tool absolute-E context across ``T<n>`` changes
     (each tool changer head has its own E coordinate), and inline ``;`` comments.
+    A move between the slicer's ``;EXCLUDE_E_START`` / ``;EXCLUDE_E_END`` tags
+    adds no filament, as in the slicer's own count (`_EXCLUDE_E_TAG_RE`), but it
+    still moves E: in absolute E the high-water mark moves by the move's own
+    delta, so a retract before it is still owed and E past the moved mark counts
+    (the slicer's count, for any excluded move). Tool changes and ``G92`` inside
+    the tags act as anywhere else; a START with no END leaves out the rest of the
+    file and an END with no START does nothing, as in the slicer.
     """
     order = sorted(range(len(cut_bytes)), key=lambda i: cut_bytes[i])
     cuts = [None] * len(cut_bytes)
@@ -181,8 +204,10 @@ def _walk_extrusion(gcode_content: str, cut_bytes: List[int], default_tool: int)
     active_tool = default_tool
     relative_e = False           # M82 absolute (default) vs M83 relative
     e_high: Dict[int, float] = {}   # per-tool high-water E since last G92 reset
+    e_last: Dict[int, float] = {}   # per-tool absolute E after its last move or G92
     extruded_mm: Dict[int, float] = {}
     saw_tool = False
+    exclude_e = False            # between ;EXCLUDE_E_START and ;EXCLUDE_E_END
     consumed = 0
 
     for line in gcode_content.splitlines(keepends=True):
@@ -193,6 +218,12 @@ def _walk_extrusion(gcode_content: str, cut_bytes: List[int], default_tool: int)
             nxt += 1
         code = line.split(';', 1)[0].strip()
         if not code:
+            # A whole-line comment (or a blank line): only a tag acts here. The
+            # substring test keeps the regex off the many lines that can't be one.
+            if 'EXCLUDE_E_' in line:
+                tag = _EXCLUDE_E_TAG_RE.match(line)
+                if tag:
+                    exclude_e = tag.group(1) == 'START'
             continue
         upper = code.upper()
 
@@ -212,12 +243,12 @@ def _walk_extrusion(gcode_content: str, cut_bytes: List[int], default_tool: int)
             if em:
                 # G92 E<v> redefines the E origin: reset the high-water mark so
                 # extrusion past <v> counts (filament already used stays counted).
-                e_high[active_tool] = float(em.group(1))
+                e_high[active_tool] = e_last[active_tool] = float(em.group(1))
             else:
                 # Bare G92 (no params) resets all axes incl. E to 0 (RepRap) —
                 # reset the high-water mark too. (PrusaSlicer emits `G92 E0`
                 # explicitly, so this only guards hand/odd gcode.)
-                e_high[active_tool] = 0.0
+                e_high[active_tool] = e_last[active_tool] = 0.0
             continue
         if _EXTRUDING_MOVE_RE.match(upper):
             em = _E_RE.search(upper)
@@ -226,15 +257,22 @@ def _walk_extrusion(gcode_content: str, cut_bytes: List[int], default_tool: int)
             e = float(em.group(1))
             if relative_e:
                 # Net extrusion: a retract (negative) and its later re-prime
-                # cancel, so signed accumulation matches the slicer's count.
-                extruded_mm[active_tool] = extruded_mm.get(active_tool, 0.0) + e
+                # cancel, so signed accumulation matches the slicer's count (all
+                # but a last retract the file never recovers, which the slicer
+                # still counts as used: a fraction of a mm per tool).
+                if not exclude_e:
+                    extruded_mm[active_tool] = extruded_mm.get(active_tool, 0.0) + e
             else:
                 # High-water mark: only E that EXCEEDS the running max is new
                 # filament (a retract + re-prime below the max adds nothing).
                 hi = e_high.get(active_tool, 0.0)
-                if e > hi:
+                if exclude_e:
+                    # Not filament, but E moves: the mark moves by the same delta.
+                    e_high[active_tool] = hi + (e - e_last.get(active_tool, 0.0))
+                elif e > hi:
                     extruded_mm[active_tool] = extruded_mm.get(active_tool, 0.0) + (e - hi)
                     e_high[active_tool] = e
+                e_last[active_tool] = e
 
     whole = (dict(extruded_mm), saw_tool)
     for i in order[nxt:]:

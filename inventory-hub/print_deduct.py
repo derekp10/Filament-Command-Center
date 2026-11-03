@@ -1129,7 +1129,10 @@ def _compute_cancel_usage(printer_name, filename, job_id, reached_fraction,
 
 # Group 56.2 — how far a cancel's whole-file G-code walk may drift from the
 # slicer's footer, per head, before FCC says so. Arcs counted, real files land
-# within ~1.4% (the Core One fixture) or ~0.01% (the raccoon INDX print).
+# within ~1.4% (the Core One fixture), ~0.01% (the raccoon INDX print) or ~0.9%
+# (the flexi-fox INDX print, its ;EXCLUDE_E moves left out as the slicer leaves
+# them out: counted, they walked to ~2.5x its footer; hotfix 2026-11-02; what is
+# left is each tool's last retract, which the slicer counts and the walk nets).
 _PARSE_GAP_PCT = 2.0
 # ... and by at least this many grams: a Core One MMU3-profile file's start G-code
 # walks a fixed ~29 mm (~0.09 g) the slicer doesn't count, which is over 2% of any
