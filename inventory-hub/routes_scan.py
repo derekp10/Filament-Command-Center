@@ -1271,6 +1271,13 @@ def api_identify_scan():
         _msg = "No audit is running, so nothing was marked: \"Needs a label\" works during an audit."
         state.add_log_entry(f"⚠️ {html.escape(_msg, quote=False)}", "WARNING", "ffaa00")
         return jsonify({"type": "error", "msg": _msg})
+    # Group 58 (Derek, 2026-11-03, A1): a tile's QR (CMD:FOUND:<audit id>:<spool id>)
+    # names a spool on its audit's list, so with no audit running it marks nothing.
+    # Here for the same reason as the line above.
+    if res and res.get('type') == 'command' and res.get('cmd') == 'found':
+        _msg = "No audit is running, so nothing was marked: a tile's QR works only during its audit."
+        state.add_log_entry(f"⚠️ {html.escape(_msg, quote=False)}", "WARNING", "ffaa00")
+        return jsonify({"type": "error", "msg": _msg})
 
     # --- L298 Phase 2: CMD:BULKMOVE start interceptor ----------------------
     # Mirrors the audit pattern: the START command is handled BEFORE the

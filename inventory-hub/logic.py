@@ -1047,6 +1047,10 @@ def resolve_scan(text):
         # the patterns above; api_identify_scan refuses it outside an audit.
         if "CMD:NEEDLABEL" in upper_text: return {'type': 'command', 'cmd': 'needlabel'}
 
+        # Group 58 (Derek, 2026-11-03, A1): an Expected tile's QR. Holds none of the
+        # patterns above, and its payload can't (an audit id is hex, a '-' and a count).
+        if "CMD:FOUND" in upper_text: return _resolve_found_qr(upper_text)
+
         return {'type': 'error', 'msg': 'Malformed Command'}
 
     # 3. [ALEX FIX] STANDARD LOCATION SCAN (LOC: Prefix)
@@ -5395,6 +5399,24 @@ _AUDIT_OTHER_SCANS = {
 }
 
 
+AUDIT_FOUND_QR_UNREAD = "That tile's QR didn't read right, so nothing was marked: scan it again, or press the tile."
+
+
+def _resolve_found_qr(upper_text):
+    """resolve_scan's CMD:FOUND:<audit id>:<spool id>, an Expected tile's QR (Group 58,
+    Derek's A1). The last one in the text is read, as a scan's last label is: a key
+    left in front, or a double read glued on, can't change which spool it names. The
+    audit id comes back lower case, the way new_audit_id writes it, and is compared
+    without case (_audit_found_by_qr): a scanner set to upper case, or Caps Lock,
+    sends it upper-cased. A malformed one is an error a scanner user can act on."""
+    rest = upper_text[upper_text.rfind("CMD:FOUND") + len("CMD:FOUND"):]
+    audit, _sep, sid = rest[1:].rpartition(':') if rest.startswith(':') else ('', '', '')
+    audit, sid = audit.strip(), sid.strip()
+    if audit and re.fullmatch(r'[0-9]+', sid):
+        return {'type': 'command', 'cmd': 'found', 'audit': audit.lower(), 'id': int(sid)}
+    return {'type': 'error', 'msg': AUDIT_FOUND_QR_UNREAD}
+
+
 def new_audit_id():
     """A name for an audit that a restart can't reuse: the process's own token,
     as _push_undo's, then a count. A page or a dialog can outlive the process
@@ -5813,6 +5835,38 @@ def _audit_already_scanned(session, sid):
     return {"status": "success", "msg": "Already scanned", "heard": f"#{sid} is already scanned"}
 
 
+def _audit_find_listed(session, sid, how):
+    """A spool on the list found with no label read, by its tile: a press (`how` "by
+    hand", audit_mark_found) or its QR ("by its tile's QR", _audit_found_by_qr). One
+    find, two doors. Logged the first time, and its words answered; a second time it
+    only selects the spool again and answers ''."""
+    scanned = session.setdefault('scanned_items', [])
+    words = ''
+    if sid not in scanned:
+        scanned.append(sid)
+        words = f"Found #{sid} {how}, no label read" + _audit_left_words(session)
+        state.add_log_entry(f"✅ {_audit_esc(words)}", "INFO", "00ff00")
+    _audit_found(session, sid)
+    return words
+
+
+def _audit_found_by_qr(session, scan):
+    """CMD:FOUND:<audit id>:<spool id>, an Expected tile's QR (Derek, 2026-11-03, A1):
+    what a press of the tile does, through the same helper. It never takes a find
+    back, only a press does: a double read answers "already scanned" and selects the
+    spool again, logging nothing more. Another audit's QR, or a spool that isn't on
+    this audit's list, marks nothing and says so. Reads and writes no Spoolman: the
+    tile came from this audit's own list."""
+    if str(scan.get('audit') or '').strip().lower() != str(session.get('audit_id') or '').strip().lower():
+        return _audit_refuse("That tile's QR is from another audit, so nothing was marked.")
+    sid = scan.get('id')
+    if sid not in (session.get('expected_items') or []):
+        return _audit_refuse(f"#{sid} isn't on this audit's list, so nothing was marked.")
+    if sid in (session.get('scanned_items') or []):
+        return _audit_already_scanned(session, sid)
+    return {"status": "success", "heard": _audit_find_listed(session, sid, "by its tile's QR")}
+
+
 def _audit_spool_scan(session, sid):
     """A spool scan. `heard`, on these and the location scan's answers, is what the
     scan did in a sentence: the panel shows it, and it may be hidden."""
@@ -5943,11 +5997,7 @@ def audit_mark_found(audit_id, sid, found):
         return _audit_press_refused("That press didn't say found or not found.")
     scanned = session.setdefault('scanned_items', [])
     if found:
-        if sid not in scanned:
-            scanned.append(sid)
-            state.add_log_entry(f"✅ Found #{sid} by hand, no label read" + _audit_left_words(session),
-                                "INFO", "00ff00")
-        _audit_found(session, sid)
+        _audit_find_listed(session, sid, "by hand")
     elif sid in scanned:
         scanned.remove(sid)
         session.setdefault('found_by', {}).pop(str(sid), None)
@@ -6305,6 +6355,8 @@ def process_audit_scan(scan_result):
             return _audit_finish(scan.get('cmd'))
         if scan.get('cmd') == 'needlabel':
             return _audit_need_label(session)
+        if scan.get('cmd') == 'found':
+            return _audit_found_by_qr(session, scan)
         return _audit_refuse("Command not allowed in Audit")
     if kind == 'location':
         return _audit_location_scan(session, scan.get('id'))

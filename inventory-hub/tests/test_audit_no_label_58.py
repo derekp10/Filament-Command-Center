@@ -29,7 +29,9 @@ import logic  # noqa: E402
 import spoolman_api  # noqa: E402
 import state  # noqa: E402
 from spoolman_extra_fake import _Resp  # noqa: E402
-from test_audit_session_58 import add_spool, env, log_text, park, report, scan, session, start  # noqa: E402,F401
+from test_audit_session_58 import (  # noqa: E402,F401
+    add_spool, env, log_text, park, report, scan, scan_answer, session, start,
+)
 
 AUDIT_SCAN = {"type": "command", "cmd": "audit_scan"}
 LABEL = "needs_label_print"
@@ -1111,3 +1113,154 @@ def test_a_row_with_no_stored_data_still_says_its_status(env):
                                 "scanned_items": [5], "last_found": 5, "last_activity_ts": time.time()})
     body = live(env)
     assert body["last_found"]["label_status"] is True
+
+
+# ---------------------------------------------------------------------------
+# A tile's QR (Derek, 2026-11-03, A1): CMD:FOUND:<audit id>:<spool id>
+# A spool with no label can be found by the QR its Expected tile shows, for a
+# scanner-only screen. It does what pressing the tile does, through one helper, and
+# never takes a find back. Every test here is RED on 296e2a7, where the QR read as
+# "Malformed Command", unless it says it pins what was already right.
+# ---------------------------------------------------------------------------
+
+AUDIT_ID = "a1b2c3d4-7"       # hex letters in it, so an upper-cased read differs
+
+
+def tile_qr(sid, audit_id=AUDIT_ID):
+    return f"CMD:FOUND:{audit_id}:{sid}"
+
+
+def start_with_id(env, place):
+    """start(), with an audit id that holds letters: a real one may be all digits."""
+    start(env, place)
+    state.AUDIT_SESSION["audit_id"] = AUDIT_ID
+
+
+FOUND_57 = {"type": "command", "cmd": "found", "audit": "a1b2c3d4-3", "id": 57}
+
+
+@pytest.mark.parametrize("text", [
+    "CMD:FOUND:a1b2c3d4-3:57",
+    "cmd:found:A1B2C3D4-3:57",                              # a scanner set to upper case reads the same
+    "qCMD:FOUND:a1b2c3d4-3:57",                             # a key left in front
+    "CMD:FOUND:a1b2c3d4-3:56CMD:FOUND:a1b2c3d4-3:57",       # a double read glued on: the last label
+    " CMD:FOUND:a1b2c3d4-3: 57 ",
+])
+def test_a_tiles_qr_is_a_command_naming_its_audit_and_spool(text):
+    assert logic.resolve_scan(text) == FOUND_57
+
+
+def test_a_real_audit_id_reads_back_whole_and_no_other_command_takes_it():
+    """The substring ladder: nothing above CMD:FOUND matches its payload."""
+    aid = logic.new_audit_id()
+    assert logic.resolve_scan(f"CMD:FOUND:{aid}:5") == {"type": "command", "cmd": "found", "audit": aid, "id": 5}
+    assert logic.resolve_scan(f"CMD:FOUND:{aid.upper()}:5")["audit"] == aid
+
+
+@pytest.mark.parametrize("text", ["CMD:FOUND", "CMD:FOUND:", "CMD:FOUND:57", "CMD:FOUND::57",
+                                  "CMD:FOUND:a1b2c3d4-3:", "CMD:FOUND:a1b2c3d4-3:5x",
+                                  "CMD:FOUND:a1b2c3d4-3:-5", "CMD:FOUND:a1b2c3d4-3:²"])
+def test_a_malformed_tile_qr_says_what_to_do(text):
+    assert logic.resolve_scan(text) == {"type": "error", "msg": logic.AUDIT_FOUND_QR_UNREAD}
+    assert "scan it again, or press the tile" in logic.AUDIT_FOUND_QR_UNREAD
+
+
+def test_a_tiles_qr_finds_its_spool_as_a_press_does_and_reads_no_label(env):
+    """Found here, no label read, the last found: a picture of the tile, never the
+    spool's label, so even a scanner's read confirms no label status (rule (b) would
+    confirm a missing one)."""
+    add_spool(env, 5, "LR-MDB-1")
+    add_spool(env, 6, "LR-MDB-1")
+    start_with_id(env, "LR-MDB-1")
+    ans = scan_answer(tile_qr(5), source="barcode")
+    assert ans == {**AUDIT_SCAN, "heard": "Found #5 by its tile's QR, no label read (1 left)"}
+    assert session()["scanned_items"] == [5] and session()["last_found"] == 5
+    assert session()["found_by"] == {"5": logic.AUDIT_FOUND_NO_LABEL}
+    assert log_text(env) == ["✅ Found #5 by its tile's QR, no label read (1 left)"]
+    assert env["fake"].gets == [] and writes(env) == [] and wire(env, 5) is None
+    assert row(env, 5)["found"] is True and row(env, 5)["label_read"] is False
+
+
+def test_the_press_and_the_qr_are_one_find(env):
+    """Both doors go through logic._audit_find_listed: the same session, one line each."""
+    add_spool(env, 5, "LR-MDB-1")
+    add_spool(env, 6, "LR-MDB-1")
+    start_with_id(env, "LR-MDB-1")
+    press(env, 5)
+    scan(env, tile_qr(6))
+    assert log_text(env) == ["✅ Found #5 by hand, no label read (1 left)",
+                             "✅ Found #6 by its tile's QR, no label read (All found!)"]
+    assert session()["found_by"] == {"5": "no_label", "6": "no_label"} and session()["last_found"] == 6
+
+
+def test_an_upper_case_read_finds_its_spool(env):
+    """Caps Lock, or a scanner set to upper case: the audit id is compared without case."""
+    add_spool(env, 5, "LR-MDB-1")
+    start_with_id(env, "LR-MDB-1")
+    assert scan_answer(tile_qr(5).upper())["heard"] == "Found #5 by its tile's QR, no label read (All found!)"
+    assert session()["scanned_items"] == [5]
+
+
+def test_another_audits_qr_marks_nothing_and_says_so(env):
+    add_spool(env, 5, "LR-MDB-1")
+    start_with_id(env, "LR-MDB-1")
+    ans = scan(env, tile_qr(5, audit_id="0000ffff-9"))
+    assert ans == {"type": "error", "msg": "That tile's QR is from another audit, so nothing was marked."}
+    assert session()["scanned_items"] == [] and session()["last_found"] is None
+    assert any(c == "WARNING" and "another audit" in m for m, c, _ in env["logs"])
+
+
+@pytest.mark.parametrize("sid", [7, 999])
+def test_a_qr_for_a_spool_not_on_the_list_marks_nothing(env, sid):
+    """#7 is an Extra here: found, but not on the list. A QR never makes one, and an
+    Extra's tile has none."""
+    add_spool(env, 5, "LR-MDB-1")
+    add_spool(env, 7, "CR")
+    start_with_id(env, "LR-MDB-1")
+    scan(env, "ID:5")
+    scan(env, "ID:7")
+    ans = scan(env, tile_qr(sid))
+    assert ans == {"type": "error", "msg": f"#{sid} isn't on this audit's list, so nothing was marked."}
+    assert session()["scanned_items"] == [5, 7] and session()["rogue_items"] == [7]
+    assert session()["last_found"] == 7
+
+
+def test_a_malformed_qr_in_an_audit_marks_nothing_and_says_what_to_do(env):
+    add_spool(env, 5, "LR-MDB-1")
+    start_with_id(env, "LR-MDB-1")
+    assert scan(env, "CMD:FOUND:5") == {"type": "error", "msg": logic.AUDIT_FOUND_QR_UNREAD}
+    assert session()["scanned_items"] == []
+
+
+def test_a_double_read_selects_the_spool_again_logs_nothing_and_never_takes_it_back(env):
+    add_spool(env, 5, "LR-MDB-1")
+    add_spool(env, 6, "LR-MDB-1")
+    start_with_id(env, "LR-MDB-1")
+    scan(env, tile_qr(5))
+    scan(env, "ID:6")
+    env["logs"].clear()
+    assert scan_answer(tile_qr(5)) == {**AUDIT_SCAN, "heard": "#5 is already scanned"}
+    assert scan_answer(tile_qr(5)) == {**AUDIT_SCAN, "heard": "#5 is already scanned"}
+    assert session()["scanned_items"] == [5, 6] and session()["last_found"] == 5
+    assert log_text(env) == [] and writes(env) == []
+
+
+def test_outside_an_audit_a_tiles_qr_marks_nothing_and_says_why(env):
+    add_spool(env, 5, "LR-MDB-1")
+    ans = scan(env, tile_qr(5), source="barcode")
+    assert ans == {"type": "error",
+                   "msg": "No audit is running, so nothing was marked: a tile's QR works only during its audit."}
+    assert writes(env) == [] and env["fake"].gets == [] and wire(env, 5) is None
+    assert any(c == "WARNING" and "No audit is running" in m for m, c, _ in env["logs"])
+
+
+def test_with_a_bulk_move_armed_a_tiles_qr_says_the_same_and_leaves_the_session_alone(env):
+    """Above the bulk gates, as "Needs a label" is: they would call it a scan out of place."""
+    state.BULK_MOVE_SESSION["active"] = True
+    state.BULK_MOVE_SESSION["stage"] = "awaiting_source"
+    try:
+        ans = scan(env, tile_qr(5))
+        assert ans["type"] == "error" and "No audit is running" in ans["msg"]
+        assert state.BULK_MOVE_SESSION["stage"] == "awaiting_source"
+    finally:
+        state.reset_bulk_move()
