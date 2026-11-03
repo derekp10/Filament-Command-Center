@@ -633,6 +633,70 @@ def test_a_yes_for_a_spool_the_plan_doesnt_file_files_nothing(env):
     assert result["filed"] == [20] and patched(env) == [20]
 
 
+def _taken_back(env, sid=20):
+    res = app_module.app.test_client().post("/api/audit/found", json={
+        "audit_id": session()["audit_id"], "id": sid, "found": False}).get_json()
+    assert res["success"] is True, res
+
+
+@pytest.mark.parametrize("change, why, where", [
+    (lambda env: _move(env, 20, "LR-MDB-1"), "FCC has it here already", "LR-MDB-1"),
+    (_taken_back, "isn't an Extra any more", "LR-MDB-2 slot 3"),
+    (lambda env: _move(env, 20, "XL-1"), HEAD_WHY, "XL-1"),
+])
+def test_a_file_only_yes_that_files_nothing_says_nothing_was_moved_and_why(env, change, why, where):
+    """Review of 7e3720f, S-5: the question asked only to file #20. Filed here by another
+    tab, taken back, or put on a head before the Yes, it isn't filed, and the answer said
+    "Nothing was parked.", naming no spool in the first two cases. It says nothing was
+    moved, counts #20 as left where it is, and the report says why."""
+    _extra_here(env, at="LR-MDB-2", container_slot="3")
+    asked = question(env)
+    change(env)
+    env["logs"].clear()
+    result = yes(env, asked)
+    assert result["filed"] == [] and result["parked"] == []
+    assert result["msg"] == "Nothing was moved. 1 left where it is."
+    assert result["stayed"] == [_stay(20, why, where)]
+    assert f"#20 {RED} → {why}" in report(env)
+    assert 20 not in patched(env) and result["audit_ended"]["why"] == "done"
+
+
+def test_a_file_only_yes_whose_one_spool_place_filled_meanwhile_says_nothing_was_moved(places):
+    """S-5 and R-2: a spool put in the one-spool place before the Yes keeps the Extra out,
+    and the answer doesn't talk of a park nobody asked for."""
+    env = places
+    add_spool(env, 20, "LR-MDB-2", container_slot="3")
+    start(env, "PM-DB-1")
+    scan(env, "ID:20")
+    asked = question(env)
+    assert asked["park"] == [] and [r["id"] for r in asked["file"]] == [20]
+    add_spool(env, 21, "PM-DB-1")
+    result = yes(env, asked)
+    assert result["filed"] == [] and result["msg"] == "Nothing was moved. 1 left where it is."
+    assert result["stayed"] == [_stay(20, "PM-DB-1 holds one spool, and #21 is there", "LR-MDB-2 slot 3")]
+
+
+def test_a_yes_that_does_both_and_moves_nothing_says_nothing_was_moved(env):
+    """S-5: a park and a filing that both stayed."""
+    add_spool(env, 2, "LR-MDB-1", container_slot="2")
+    _extra_here(env, at="LR-MDB-2", container_slot="3")
+    asked = question(env)
+    _move(env, 2, "SHELF-1")
+    _move(env, 20, "LR-MDB-1")
+    result = yes(env, asked)
+    assert result["parked"] == [] and result["filed"] == []
+    assert result["msg"] == "Nothing was moved. 2 left where they are."
+    assert [(s["id"], s["why"]) for s in result["stayed"]] == [(2, "moved to SHELF-1"), (20, "FCC has it here already")]
+
+
+def test_an_id_the_audit_never_had_adds_no_stay(env):
+    """Pins what was already right: a Yes naming a spool this audit never saw says
+    nothing of it."""
+    _extra_here(env)
+    result = yes(env, ids=[], file_ids=[20, 999])
+    assert result["filed"] == [20] and result["stayed"] == []
+
+
 def test_string_ids_count_as_the_same_spools(env):
     _extra_here(env)
     assert yes(env, ids=[], file_ids=["20"])["filed"] == [20]

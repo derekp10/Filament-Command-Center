@@ -6772,11 +6772,12 @@ def _audit_park_locked(audit_id, ids, today, file_ids=None, file_where=None):
     asked_where = ({str(k): str(v) for k, v in file_where.items()} if isinstance(file_where, dict) else {})
     filed, filed_from, file_failed, filed_moves = _audit_file_extras(plan, place, file_wanted, stayed, labels,
                                                                       printer_map, loc_info_map, asked_where)
+    stayed.extend(_audit_file_dropped(session, plan, file_wanted, place))
 
     # Nothing landed, so there is no record to protect and no reason to end: the
     # audit's scans are the whole point (_audit_finish), and Done can be pressed again.
     if (failed or file_failed) and not moves and not filed_moves:
-        msg = (f"{_audit_park_msg(parked, stayed, failed, filed, file_failed)} "
+        msg = (f"{_audit_park_msg(parked, stayed, failed, filed, file_failed, bool(file_wanted))} "
                f"The audit is still open, so you can press Done again.")
         state.add_log_entry(f"⚠️ {_audit_esc(msg)}", "WARNING", "ffaa00")
         return {"success": False, "parked": parked, "filed": filed, "stayed": stayed,
@@ -6805,8 +6806,34 @@ def _audit_park_locked(audit_id, ids, today, file_ids=None, file_where=None):
                   filed=filed_from)
     ended = _end_audit('done')
     return {"success": not (failed or file_failed), "parked": parked, "filed": filed, "stayed": stayed,
-            "failed": failed + file_failed, "msg": _audit_park_msg(parked, stayed, failed, filed, file_failed),
+            "failed": failed + file_failed,
+            "msg": _audit_park_msg(parked, stayed, failed, filed, file_failed, bool(file_wanted)),
             "audit_ended": {"id": ended['id'], "why": ended['why']}}
+
+
+def _audit_file_dropped(session, plan, file_wanted, place):
+    """Stay rows for the Extras a Yes names that its plan neither files nor leaves with
+    a why (review of 7e3720f, S-5): one FCC has here already, which the plan leaves out,
+    and one taken back off the Extras since the question (A3; its stored row stays).
+    Without them, a Yes that asked only to file answered "Nothing was parked." and
+    named nothing. An id this audit never had is nothing to say."""
+    listed = {str(r['id']) for r in plan['file']} | {str(r['id']) for r in plan['stays']}
+    wanted = {key for key in file_wanted if key not in listed}
+    if not wanted:
+        return []
+    # Still an Extra, and left out of the plan: its fate was 'here'.
+    extras = [sid for sid in (session.get('rogue_items') or []) if str(sid) in wanted]
+    out = [{"id": sid, "display": _audit_label(session, sid), "where": audit_where(place),
+            "why": "FCC has it here already"} for sid in extras]
+    said = {str(sid) for sid in extras}
+    # A stored row that is no Extra, on no list: a find taken back since the question.
+    on_list = {str(s) for s in list(session.get('expected_items') or []) + list(session.get('trail_items') or [])}
+    for key, row in (session.get('rows') or {}).items():
+        if key in wanted and key not in said and key not in on_list:
+            sid = (row or {}).get('id', key)
+            out.append({"id": sid, "display": _audit_label(session, sid), "where": str((row or {}).get('where') or ''),
+                        "why": "isn't an Extra any more"})
+    return out
 
 
 def _audit_file_extras(plan, place, file_wanted, stayed, labels, printer_map, loc_info_map, asked_where=None):
@@ -6854,10 +6881,12 @@ def _audit_file_extras(plan, place, file_wanted, stayed, labels, printer_map, lo
     return filed, filed_from, failed, moves
 
 
-def _audit_park_msg(parked, stayed, failed, filed=(), file_failed=()):
+def _audit_park_msg(parked, stayed, failed, filed=(), file_failed=(), file_asked=False):
     """A park's toast, and the filing's (C4): "Parked 3 spools at Unknown. Filed #57
     here. Undo Last Move puts them back." It promises only Undo Last Move: another
-    move on top of the record buries it, and it doesn't survive a restart."""
+    move on top of the record buries it, and it doesn't survive a restart. With
+    nothing moved, a Yes that asked to file (`file_asked`: it named Extras) hears
+    "Nothing was moved.", never of a park nobody asked for (review of 7e3720f, S-5)."""
     n, k = len(parked), len(filed)
     words = []
     if n:
@@ -6865,7 +6894,7 @@ def _audit_park_msg(parked, stayed, failed, filed=(), file_failed=()):
     if k:
         words.append(f"Filed {_undo_names(filed)} here.")
     if not n and not k:
-        words.append("Nothing was moved." if file_failed else "Nothing was parked.")
+        words.append("Nothing was moved." if (file_failed or file_asked) else "Nothing was parked.")
     if stayed:
         words.append(f"{len(stayed)} left where {'it is' if len(stayed) == 1 else 'they are'}.")
     if failed:
