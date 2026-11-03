@@ -629,6 +629,26 @@ def test_each_row_says_where_fcc_has_it_and_what_the_audit_says_of_it(live, env)
     assert got["270"]["where"] == "Unassigned"
 
 
+def test_a_head_the_locations_list_lacks_reads_from_the_printers_heads(live, env):
+    """No Locations list yet (the first seconds after a load, or a head not in it): the
+    printers' heads, state.printerMap in /api/printer_map's shape (inv_loc_mgr.js's
+    fetchPrinterMap: printer name to its heads), say #250 is on a head. Review of
+    7e3720f, P-6: RED there, where the map's keys, printer names, were read as head ids
+    and the row read "📍 XL-2"."""
+    glow(env)
+    begin(live, env)
+    live.evaluate("""() => { state.printerMap = { 'Some Printer': [{ location_id: 'XL-1', position: 0 },
+                                                                   { location_id: 'xl-2', position: 1 }] };
+                             state.allLocations = []; }""")
+    open_find(live)
+    search(live, "glow pink")
+    assert rows(live) == [250]
+    assert live.text_content(row(250) + " .fcc-find-where") == "🔗 loaded on XL-2"
+    live.evaluate("() => { state.printerMap = { 'XL-2': [{ location_id: 'XL-1', position: 0 }] }; }")
+    search(live, "glow")                             # a printer named like the head is no head
+    assert live.text_content(row(250) + " .fcc-find-where") == "📍 XL-2"
+
+
 def test_the_number_typed_comes_first(live, env):
     add_spool(env, 57, "LR-MDB-1", container_slot="1")
     add_spool(env, 157, "LR-MDB-2", container_slot="1")

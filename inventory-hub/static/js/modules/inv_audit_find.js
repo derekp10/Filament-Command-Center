@@ -212,14 +212,19 @@ ${P} .fcc-find-foot { color:#ccc; font-size:var(--fcc-fs-small); margin-top:8px;
     }
 
     // A place the page knows as a toolhead (the Locations list, or the printers' heads).
+    // state.printerMap is /api/printer_map's `printers`, {"<printer name>": [{location_id,
+    // position}, ...]}: its keys are printer names, so the heads are its entries' ids
+    // (review of 7e3720f, P-6: the keys were read, and a head missing from the Locations
+    // list read "📍 XL-1", not "🔗 loaded on XL-1").
     function _isHead(loc) {
         const want = String(loc).toUpperCase();
         const st = (typeof state !== 'undefined' && state) ? state : null;
         const rows = st && Array.isArray(st.allLocations) ? st.allLocations : [];
         const row = rows.find((l) => l && String(l.LocationID).toUpperCase() === want);
         if (row) return TOOLHEAD_TYPES.includes(row.Type);
-        const heads = st && st.printerMap ? Object.keys(st.printerMap) : [];
-        return heads.some((k) => String(k).toUpperCase() === want);
+        const map = st && st.printerMap && typeof st.printerMap === 'object' ? st.printerMap : {};
+        return Object.values(map).some((heads) => Array.isArray(heads)
+            && heads.some((h) => h && String(h.location_id).toUpperCase() === want));
     }
 
     // Where FCC has it, from the search's own row: `location` is the spool's own, or
