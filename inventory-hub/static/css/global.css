@@ -2832,6 +2832,14 @@ button.fcc-audit-tile.kb-active {
     color: #ffe08a;
     font-weight: 600;
 }
+/* "Not scanned (N)" over the spools still to find, then "Found (M)" (Derek, 2026-11-03,
+   sample 5a(i)): under "Expected here", each with its count. */
+.fcc-audit-subhead {
+    font-size: var(--fcc-fs-row);
+    font-weight: bold;
+    color: rgba(255, 255, 255, 0.85);
+    margin: 0.125rem 0 0.375rem;
+}
 /* A tile's QR (Derek, 2026-11-03, A1): scanning it finds the spool as a press does.
    72 px, the size the confirm dialogs' QRs of the same length read at, on a white
    quiet zone; in px, as qrcode.js draws it. It takes the badge's place at the tile's

@@ -268,7 +268,9 @@ def test_audit_panel_and_pill_are_readable(page: Page, base_url: str, assert_con
                   "found, no label read", "needs a label", "label status unknown", "No label to scan?",
                   # Derek's answers of 2026-11-03: a tile's QR (its badge under its name), an
                   # Extra taken back, the strip's 🖨️ and 🔎 Find a spool.
-                  "or scan its QR", "not scanned", "Not here after all?", "Add to print queue", "Find a spool"):
+                  "or scan its QR", "not scanned", "Not here after all?", "Add to print queue", "Find a spool",
+                  # His second look (sample 5a(i)): the spools still to find first, each group headed.
+                  "Not scanned (1)", "Found (2)"):
         assert words in scored, (words, scored)
     # The tile with a QR: the QR's white box holds no text, and its badge moved under the name.
     assert panel.locator("[data-audit-tile='99'] .fcc-audit-tile-qr").count() == 1

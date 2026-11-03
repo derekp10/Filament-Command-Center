@@ -934,9 +934,14 @@ def test_every_tile_tab_reaches_is_in_view(live, env, key, first):
     listener, because mountOverlay's guard stops focusin at the document. RED on
     1f8e03a."""
     ids = a_long_list(live, env)
-    live.focus(tile(ids[first]))
+    # From the first tile drawn, or the last: the spools still to find come first since
+    # Derek's 2026-11-03 look (sample 5a(i)), so the one found is drawn last. PIN UPDATED
+    # DELIBERATELY (it started from ids[first], the shelf's order).
+    order = live.evaluate("() => Array.from(document.querySelectorAll('.fcc-audit-tile')).map((t) => Number(t.dataset.auditTile))")
+    assert sorted(order) == ids and order[-1] == ids[0]
+    live.focus(tile(order[first]))
     seen = walked(live, key, len(ids) - 1)
-    assert sorted(sid for sid, _ in seen) == sorted(set(ids) - {ids[first]})
+    assert sorted(sid for sid, _ in seen) == sorted(set(ids) - {order[first]})
     assert [sid for sid, shown in seen if not shown] == []
 
 

@@ -1696,11 +1696,23 @@ window.commitBulkMove = () => {
         const expected = data.expected || [];
         const extras = data.rogue || [];
         const trail = data.trail || [];
-        const expectedTiles = expected.map(r => _renderTile(r, r.found ? 'found' : 'missing')).join('');
         const extraTiles = extras.map(r => _renderTile(r, 'extra')).join('');
         const trailTiles = trail.map(r => _renderTile(r, 'trail')).join('');
         const loc = _escapeHtml(data.location_id || '(scan a location to start)');
         const grid = 'display:grid; grid-template-columns:repeat(auto-fill,minmax(16.25rem,1fr)); gap:6px;';
+        // Not scanned first (Derek, 2026-11-03, sample 5a(i): "keeping of unfound items at
+        // the top"): the spools still to find, with their QRs, then the ones found, each
+        // in the order the server sends (shelf order). A group with nothing in it has no
+        // heading. A press moves a tile from one group to the other and the keyboard
+        // goes with it (its tile is found by its id below), never to the tile that slid
+        // into its place, whose next Enter would find a spool nobody pressed.
+        const group = (key, title, rows, kind, gap) => (rows.length ? `
+                <div class="fcc-audit-subhead">${title} (${rows.length})</div>
+                <div data-audit-group="${key}" style="${grid} margin-bottom:${gap}px;">
+                    ${rows.map(r => _renderTile(r, kind)).join('')}
+                </div>` : '');
+        const expectedTiles = group('missing', 'Not scanned', expected.filter(r => !r.found), 'missing', 10)
+            + group('found', 'Found', expected.filter(r => r.found), 'found', 12);
         // A note says it already when the place's spools are all in places inside it.
         const nothing = data.location_id ? (data.note ? '' : 'Nothing is filed here.') : "Scan a location's label to start.";
         // A button or a tile the redraw is about to replace keeps the keyboard.
@@ -1728,9 +1740,7 @@ window.commitBulkMove = () => {
                     <span style="font-weight:bold; color:#0ff;">Expected here</span>
                     <span class="small" style="color:rgba(255,255,255,0.75); margin-left:8px;">No label to scan? ${state.auditId && expected.some(r => !r.found) ? 'Press its tile, or scan its QR.' : 'Press its tile.'}</span>
                 </div>
-                <div style="${grid} margin-bottom:12px;">
-                    ${expectedTiles}
-                </div>
+                ${expectedTiles}
             ` : (nothing ? `<div class="small" style="color:rgba(255,255,255,0.7);">${nothing}</div>` : '')}
             ${data.idle_timeout_min ? `
                 <div class="small" style="color:rgba(255,255,255,0.55); margin-top:8px;">
@@ -1742,13 +1752,13 @@ window.commitBulkMove = () => {
                     <span style="font-weight:bold; color:#fc0;">Extra (found here, filed elsewhere)</span>
                     <span class="small" style="color:rgba(255,255,255,0.75); margin-left:8px;">Not here after all? Press its tile.</span>
                 </div>
-                <div style="${grid}">
+                <div data-audit-group="extra" style="${grid}">
                     ${extraTiles}
                 </div>
             ` : ''}
             ${trail.length ? `
                 <div style="font-weight:bold; color:#7fe8ff; margin:8px 0 6px;">Loaded from here</div>
-                <div style="${grid}">
+                <div data-audit-group="trail" style="${grid}">
                     ${trailTiles}
                 </div>
             ` : ''}
