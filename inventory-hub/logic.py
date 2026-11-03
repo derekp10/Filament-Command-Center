@@ -6667,9 +6667,12 @@ def _audit_file_one(sid, place, was, printer_map, loc_info_map):
 
     Not perform_smart_move, which could load or unload a head. The write files the
     spool here with NO slot (FCC never guesses one; in a multi-slot box the question
-    says to scan its slot label afterwards), and writes the slot, the trail and both
-    notes "", never popped (the extras merge keeps a key that is left out): any trail
-    is stale, and a lost spool's note has done its job."""
+    says how to set one), and writes the trail and both notes "", never popped (the
+    extras merge keeps a key that is left out): any trail is stale, and a lost spool's
+    note has done its job. A single-slot dryer box is the one place with a slot to
+    know: its only slot, "1", as the engine writes it (Group 42.2), so a second spool
+    put in later can't leave neither reading as slot 1. Its 'one' fate has just read
+    the box and found it free (review of 7e3720f, S-9)."""
     rec, answered = spoolman_api.get_spool_answer(sid)
     if not answered or not isinstance(rec, dict):
         return "", AUDIT_WHERE_UNREAD, None
@@ -6692,7 +6695,8 @@ def _audit_file_one(sid, place, was, printer_map, loc_info_map):
             return "", f"couldn't read {place} from Spoolman ({e})", rec
         if there:
             return _audit_one_spool_why(place, there), "", rec
-    new_extra = dict(rec.get('extra') or {}, container_slot="", physical_source="", physical_source_slot="",
+    slot = "1" if locations_db._is_single_slot_dryer_box((loc_info_map or {}).get(place)) else ""
+    new_extra = dict(rec.get('extra') or {}, container_slot=slot, physical_source="", physical_source_slot="",
                      fcc_pre_box_location="", fcc_pre_audit_location="")
     if _move_write(sid, place, new_extra):
         return "", "", rec

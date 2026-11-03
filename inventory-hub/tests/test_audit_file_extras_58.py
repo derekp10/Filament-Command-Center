@@ -428,6 +428,34 @@ def test_a_lost_spool_found_here_loses_its_note(env):
     assert spools(env)[20]["location"] == "LR-MDB-1" and extra_of(env, 20)["fcc_pre_audit_location"] == ""
 
 
+@pytest.mark.parametrize("place", ["PM-DB-1", "PM-DB-0"])
+def test_a_spool_filed_in_a_single_slot_box_takes_its_one_slot(places, place):
+    """Review of 7e3720f, S-9: a single-slot dryer box's spool is in slot "1", as the
+    engine writes it (Group 42.2). Written blank, a second spool put in later went in
+    unslotted, and then neither read as slot 1 (the 42.2 symptom: Quick-Swap reads the
+    box as empty)."""
+    env = places
+    add_spool(env, 20, "LR-MDB-2", container_slot="3")
+    start(env, place)
+    scan(env, "ID:20")
+    assert yes(env)["filed"] == [20]
+    assert spools(env)[20]["location"] == place and extra_of(env, 20)["container_slot"] == "1"
+    add_spool(env, 40, "SHELF-1")
+    assert logic.perform_smart_move(place, [40], origin="test")["status"] == "success"
+    assert [str(s) for s in logic.spools_in_slot(place, "1")] == ["20"]
+
+
+def test_a_spool_filed_on_a_one_spool_holder_has_no_slot(places):
+    """Pins what was already right: a Max Spools 1 row that isn't a dryer box has no
+    slots, so nothing is written there."""
+    env = places
+    add_spool(env, 20, "LR-MDB-2", container_slot="3")
+    start(env, "SPOT-1")
+    scan(env, "ID:20")
+    assert yes(env)["filed"] == [20]
+    assert spools(env)[20]["location"] == "SPOT-1" and extra_of(env, 20)["container_slot"] == ""
+
+
 def test_the_parks_come_first_and_one_toast_says_both(places):
     env = places
     add_spool(env, 10, "PM-DB-1", container_slot="1")
