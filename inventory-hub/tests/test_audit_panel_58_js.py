@@ -127,8 +127,33 @@ def test_the_note_stays_in_view_however_long_the_list_is(audit):
     assert audit.is_visible(NOTE) and _on_top(audit, NOTE)
 
 
+def test_the_deck_tile_stays_audit_while_an_audit_runs(audit):
+    """Derek, 2026-11-03: "drop the finish swap". During an audit the deck's tile keeps its
+    AUDIT label and its CMD:AUDIT QR, lit purple (btn-audit-active / label-active-audit),
+    and a click or a scan only shows the panel; only the panel ends an audit. RED on
+    4b201a3: the tile read FINISH over a CMD:DONE QR."""
+    audit.evaluate("""() => { window.__deckQrs = [];
+        window.QRCode = function (el, o) { window.__deckQrs.push({ id: el.id, text: o.text }); };
+        window.QRCode.CorrectLevel = { L: 1 };
+        window.updateAuditVisuals(); }""")
+    audit.wait_for_function("() => window.__deckQrs.some((c) => c.id === 'qr-audit')")
+    got = audit.evaluate("""() => ({ label: document.getElementById('lbl-audit').innerText,
+        qr: window.__deckQrs.filter((c) => c.id === 'qr-audit').map((c) => c.text),
+        lit: document.getElementById('btn-deck-audit').classList.contains('btn-audit-active'),
+        labelLit: document.getElementById('lbl-audit').classList.contains('label-active-audit') })""")
+    assert got == {"label": "AUDIT", "qr": ["CMD:AUDIT"], "lit": True, "labelLit": True}
+    audit.click("#fcc-audit-panel-close")
+    audit.wait_for_selector(PANEL, state="detached")
+    audit.click(TILE)                                   # its click only shows the panel
+    audit.wait_for_selector(DONE)
+    audit.evaluate("window.processScan('CMD:AUDIT', 'barcode')")    # and so does its QR, scanned
+    audit.wait_for_timeout(100)
+    assert audit.evaluate("window.__ids") == [] and audit.evaluate("state.auditActive") is True
+    assert audit.inner_text("#lbl-audit") == "AUDIT"
+
+
 def test_hide_then_the_tile_brings_it_back_and_sends_nothing(audit):
-    """The tile read FINISH, and a click on it sent CMD:CANCEL."""
+    """A click on the tile sent CMD:CANCEL (when it read FINISH, before Decision 5)."""
     audit.click("#fcc-audit-panel-close")
     audit.wait_for_selector(PANEL, state="detached")
     audit.click(TILE)

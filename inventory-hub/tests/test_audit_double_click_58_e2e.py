@@ -5,7 +5,7 @@ with Bootstrap.
 A press that takes away, or brings, what lies under the pointer hands the second press of
 a double click to whatever lies beneath: the deck behind the panel (Drop or Eject mode
 armed, Undo asked, the weigh window, a new audit), the panel's own Cancel Audit under the
-FINISH tile, the Last found strip's Needs a label under a tile. For every control, the
+deck's AUDIT tile, the Last found strip's Needs a label under a tile. For every control, the
 first click must do what one click does and the second nothing at all: the only request
 sent is the first click's own, no command mode is armed, no window opened, and the
 keyboard is where one click leaves it.
@@ -20,7 +20,7 @@ double-click twins and test_audit_stacking_58_js.py's covers.
 Derek's answers of 2026-11-03 add three: an Extra's tile, which a press takes back (A3,
 `an-extra-tile`), the panel's 🔎 Find a spool, which a press opens over the panel (A2,
 `find-open`), and a row of it, which a pick closes (`find-row`); and the panel's 🔎 button
-among those a first click on the FINISH tile can bring up. The review of 7e3720f adds
+among those a first click on the deck's AUDIT tile can bring up. The review of 7e3720f adds
 Find's ↻ Try again (`try-again`, P-1), whose answer paints the rows under the pointer.
 Their hermetic twins are in test_audit_find_and_tiles_58_js.py.
 """
@@ -58,7 +58,7 @@ CONTROL_SEL = {
     "back": QUESTION + " .fcc-apc-no", "park": QUESTION + " .fcc-apc-yes", "deck-tile": "#btn-deck-audit",
     "find-open": "#fcc-audit-panel-find",
 }
-# The panel's buttons a first click on the FINISH tile can bring up under the second.
+# The panel's buttons a first click on the deck's AUDIT tile can bring up under the second.
 PANEL_BUTTONS = ["#fcc-audit-panel-find", "#fcc-audit-panel-loose", "#fcc-audit-panel-close", "#fcc-audit-panel-done",
                  "#fcc-audit-panel-cancel", "#fcc-audit-panel-needlabel", ".fcc-audit-tile"]
 
@@ -288,7 +288,7 @@ START = r"""([id]) => {
     state.auditLocation = 'LR-MDB-1';
     window.updateAuditVisuals();
 }"""
-# The same audit with its panel hidden (Hide), the FINISH tile and the pill showing.
+# The same audit with its panel hidden (Hide), the AUDIT tile lit and the pill showing.
 HIDDEN = r"""([id]) => {
     state.auditActive = true;
     state.lastAuditState = true;
@@ -476,7 +476,7 @@ def _tile_under_the_strip(board, rows):
 
 
 def _deck_bands(board, rows):
-    """Where the panel's buttons land on the FINISH tile when the panel comes up: the band
+    """Where the panel's buttons land on the deck's AUDIT tile when the panel comes up: the band
     of each that overlaps it, as {name: (x, y)}, with the panel hidden again."""
     page = board.page
     tile = page.evaluate("""() => { const r = document.querySelector('#btn-deck-audit').getBoundingClientRect();
@@ -530,7 +530,7 @@ def test_a_real_double_click_does_what_one_click_does(board, rows, control):
         board.begin(rows, 1, last=0)
         bands = _deck_bands(board, rows)
         if not bands:
-            pytest.skip(f"{what}: no button of the panel lands on the FINISH tile here")
+            pytest.skip(f"{what}: no button of the panel lands on the AUDIT tile here")
         for name, xy in bands.items():
             board.settle()
             page.evaluate(RESET)

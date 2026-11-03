@@ -521,7 +521,8 @@ return { open, after: questionsUp(), toasts: toasts(), held: (window._fccOpenMov
 
 
 def test_a_done_scanned_behind_a_hidden_panel_asks_and_back_shows_the_panel(tmp_path, asked):
-    """"Back to the audit" has to be true. Scanned from the deck's FINISH tile."""
+    """"Back to the audit" has to be true. Scanned from a printed CMD:DONE label (the
+    deck's tile read FINISH over one until Derek's 2026-11-03 look)."""
     res = _q(tmp_path, """
 answerWith('/api/identify_scan', [QUESTION]);
 await running(SESSION);

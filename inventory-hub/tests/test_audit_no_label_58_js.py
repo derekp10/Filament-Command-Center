@@ -1671,7 +1671,7 @@ def test_a_touch_double_tap_is_a_double_click_too(live, env):
 
 def hide_then_ask(page, env):
     """The panel hidden, and Done's question up from a scan, as the Location Manager's QR
-    or the FINISH tile's asks it."""
+    or a printed CMD:DONE label asks it."""
     three(env)
     begin(page, env)
     scanned(page, "ID:57")

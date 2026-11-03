@@ -2,9 +2,10 @@
 (generalizes the Audit slot, Derek 2026-06-07).
 
 Two guarantees:
-  1. The Audit slot, now migrated onto the helper, still shapeshifts EXACTLY as
-     before: idle = CMD:AUDIT / "AUDIT" / no active class / panel closed;
-     active = CMD:DONE / "FINISH" / active classes / panel open.
+  1. The Audit slot, migrated onto the helper: idle = CMD:AUDIT / "AUDIT" / no
+     active class / panel closed; active = CMD:AUDIT / "AUDIT" / active classes /
+     panel open (Derek, 2026-11-03: "drop the finish swap"; it read FINISH over a
+     CMD:DONE QR until then, PIN UPDATED DELIBERATELY).
   2. The generic factory works on any slot: it re-encodes the QR command,
      rewrites the label, and swaps active classes (union-clearing so switching
      states removes the previous state's class).
@@ -72,18 +73,21 @@ def test_audit_slot_shapeshifts_between_states(page: Page):
     page.evaluate(_STUB_QRCODE)
 
     # --- ACTIVE state ---
+    # Derek, 2026-11-03: "drop the finish swap". The tile keeps AUDIT and its CMD:AUDIT
+    # QR, lit purple, and only shows the panel. PIN UPDATED DELIBERATELY (FINISH / CMD:DONE).
     page.evaluate("state.auditActive = true; window.updateAuditVisuals();")
-    expect(page.locator("#lbl-audit")).to_have_text("FINISH")
+    expect(page.locator("#lbl-audit")).to_have_text("AUDIT")
     assert page.evaluate("document.getElementById('btn-deck-audit').classList.contains('btn-audit-active')") is True
     assert page.evaluate("document.getElementById('lbl-audit').classList.contains('label-active-audit')") is True
     # onEnter opened the visual audit panel.
     expect(page.locator("#fcc-audit-panel-overlay")).to_be_visible(timeout=3_000)
-    # QR re-encoded to CMD:DONE (wait for the double-rAF generateSafeQR to flush).
+    # The QR redrawn with CMD:AUDIT still (wait for the double-rAF generateSafeQR to flush).
     page.wait_for_function(
-        "() => (window.__qrCalls || []).some(c => c.id === 'qr-audit' && c.text === 'CMD:DONE')",
+        "() => (window.__qrCalls || []).some(c => c.id === 'qr-audit' && c.text === 'CMD:AUDIT')",
         timeout=3_000,
     )
-    assert _last_qr_for(page, "qr-audit") == "CMD:DONE"
+    assert _last_qr_for(page, "qr-audit") == "CMD:AUDIT"
+    assert not any(c["text"] == "CMD:DONE" for c in page.evaluate("window.__qrCalls") if c["id"] == "qr-audit")
 
     # --- IDLE state ---
     page.evaluate("state.auditActive = false; window.updateAuditVisuals();")

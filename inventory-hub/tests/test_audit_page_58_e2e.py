@@ -13,6 +13,7 @@ a real heartbeat and a real panel can get in the way.
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 import requests
@@ -115,7 +116,10 @@ def test_hide_then_the_tile_or_the_pill_brings_it_back(page: Page, base_url: str
     _start(page)
     page.click(HIDE)
     expect(page.locator(PANEL)).to_have_count(0)
-    expect(page.locator(TILE)).to_contain_text("FINISH")
+    # Derek, 2026-11-03: "drop the finish swap": the tile keeps AUDIT, lit, during an
+    # audit. PIN UPDATED DELIBERATELY (it read FINISH).
+    expect(page.locator("#lbl-audit")).to_have_text("AUDIT")
+    expect(page.locator(TILE)).to_have_class(re.compile(r"\bbtn-audit-active\b"))
     page.click(TILE)
     expect(page.locator(PANEL)).to_be_visible()
     page.keyboard.press("Escape")

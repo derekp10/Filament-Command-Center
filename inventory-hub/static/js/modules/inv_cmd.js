@@ -356,8 +356,10 @@ const updateDeckVisuals = () => {
 // --- Reusable "shapeshift" deck QR (generalizes the Audit slot) -------------
 // A single .deck-qr slot whose ENCODED command, label text, and active CSS
 // classes change IN PLACE between named states, driven by a mode flag. The
-// Audit slot is the reference (idle: CMD:AUDIT/"AUDIT"  <->  active:
-// CMD:DONE/"FINISH"). This factory lets a future multi-state deck command
+// Audit slot was the reference (idle: CMD:AUDIT/"AUDIT"  <->  active:
+// CMD:DONE/"FINISH"); since Derek's 2026-11-03 look its two states differ only
+// in their lit look (see auditShapeshift). Bulk Move's slot below is the one that
+// still changes its command. This factory lets a multi-state deck command
 // (e.g. the backlog's Bulk Moves: arm -> set-dest -> commit) reuse the exact
 // same recipe instead of hand-rolling another updateAuditVisuals.
 //
@@ -432,24 +434,26 @@ window.registerShapeshiftQR = (config) => {
     return { set, reset: () => set(cfg.default), current: () => currentName };
 };
 
-// Audit slot migrated onto the shapeshift helper — behavior is identical to the
-// former hand-rolled updateAuditVisuals (CMD:AUDIT/"AUDIT" <-> CMD:DONE/"FINISH"
-// + the btn-audit-active / label-active-audit classes). The onEnter hooks
-// preserve 18.2 Part B's visual audit panel: open it when the session is
-// active, close it when it ends — additive to the Activity Log, not a
-// replacement (Derek 2026-05-15: "I still like the idea of having the activity
-// log reference"). NOTE: audit is deliberately NOT wired into
-// resetCommandModes — an audit session must survive opening other modals,
-// unlike the drop/eject danger modes. The static idle QR is still seeded once
-// in scripts.html; the first updateAuditVisuals() call (from the backend poll
+// Audit slot on the shapeshift helper. During an audit the tile keeps its AUDIT label
+// and its CMD:AUDIT QR (Derek, 2026-11-03: "drop the finish swap"), lit purple
+// (btn-audit-active / label-active-audit), and its click or scan only shows the panel
+// (toggleAudit): only the panel ends an audit, its Done… and Cancel Audit with their
+// own QRs. It used to read FINISH over CMD:DONE, a second Done a person could scan
+// from across the room with the panel hidden. The onEnter hooks preserve 18.2
+// Part B's visual audit panel: open it when the session is active, close it when it
+// ends — additive to the Activity Log, not a replacement (Derek 2026-05-15: "I still
+// like the idea of having the activity log reference"). NOTE: audit is deliberately
+// NOT wired into resetCommandModes — an audit session must survive opening other
+// modals, unlike the drop/eject danger modes. The static idle QR is still seeded
+// once in scripts.html; the first updateAuditVisuals() call (from the backend poll
 // or toggleAudit) paints the correct state.
 const auditShapeshift = window.registerShapeshiftQR({
     slot: 'audit',
     size: 85,
     default: 'idle',
     states: {
-        idle:   { cmd: "CMD:AUDIT", label: "AUDIT",  btnClass: '',                 labelClass: '',                   onEnter: () => { if (typeof window.closeAuditPanel === 'function') window.closeAuditPanel(); } },
-        active: { cmd: "CMD:DONE",  label: "FINISH", btnClass: 'btn-audit-active', labelClass: 'label-active-audit', onEnter: () => { if (typeof window.openAuditPanel  === 'function') window.openAuditPanel();  } },
+        idle:   { cmd: "CMD:AUDIT", label: "AUDIT", btnClass: '',                 labelClass: '',                   onEnter: () => { if (typeof window.closeAuditPanel === 'function') window.closeAuditPanel(); } },
+        active: { cmd: "CMD:AUDIT", label: "AUDIT", btnClass: 'btn-audit-active', labelClass: 'label-active-audit', onEnter: () => { if (typeof window.openAuditPanel  === 'function') window.openAuditPanel();  } },
     },
 });
 
