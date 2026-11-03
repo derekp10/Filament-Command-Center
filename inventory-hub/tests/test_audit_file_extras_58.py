@@ -434,7 +434,8 @@ def test_a_one_spool_place_with_two_extras_files_neither(places):
     scan(env, "ID:20")
     scan(env, "ID:21")
     got = plan()
-    why = "PM-DB-1 holds one spool, and 2 were found here"
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, H S5): a stay names the place, never "here".
+    why = "PM-DB-1 holds one spool, and 2 were found in it"
     assert got["file"] == [] and got["stays"] == [_stay(20, why, "LR-MDB-2 slot 3"), _stay(21, why, "CR-CT-1")]
 
 
@@ -629,7 +630,8 @@ def test_a_one_spool_place_it_cant_read_before_the_write_is_a_failure(places, mo
     (lambda env: spools(env)[20].update(location="XL-1"), HEAD_WHY),
     (lambda env: setattr(state, "GLOBAL_BUFFER", [{"id": 20}]), "in the scan buffer"),
     (lambda env: spools(env).pop(20), logic.AUDIT_GONE_WHY),
-    (lambda env: spools(env)[20].update(location="LR-MDB-1"), "FCC has it here already"),
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, H S5): the stay names the place.
+    (lambda env: spools(env)[20].update(location="LR-MDB-1"), "FCC has it in LR-MDB-1 already"),
 ])
 def test_a_change_at_the_last_look_is_a_stay_never_a_write(env, monkeypatch, change, why):
     add_spool(env, 2, "LR-MDB-1", container_slot="2")
@@ -782,7 +784,8 @@ def _taken_back(env, sid=20):
 
 
 @pytest.mark.parametrize("change, why, where", [
-    (lambda env: _move(env, 20, "LR-MDB-1"), "FCC has it here already", "LR-MDB-1"),
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, H S5): the stay names the place.
+    (lambda env: _move(env, 20, "LR-MDB-1"), "FCC has it in LR-MDB-1 already", "LR-MDB-1"),
     (_taken_back, "isn't an Extra any more", "LR-MDB-2 slot 3"),
     (lambda env: _move(env, 20, "XL-1"), HEAD_WHY, "XL-1"),
 ])
@@ -832,7 +835,9 @@ def test_a_yes_that_does_both_and_moves_nothing_says_nothing_was_moved(env):
     assert result["parked"] == [] and result["filed"] == []
     # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, the toast): it points to the report.
     assert result["msg"] == "Nothing was moved. 2 left where they are. The Activity Log lists each spool."
-    assert [(s["id"], s["why"]) for s in result["stayed"]] == [(2, "moved to SHELF-1"), (20, "FCC has it here already")]
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, H S5): the stay names the place.
+    assert [(s["id"], s["why"]) for s in result["stayed"]] == [(2, "moved to SHELF-1"),
+                                                               (20, "FCC has it in LR-MDB-1 already")]
 
 
 def test_an_id_the_audit_never_had_adds_no_stay(env):

@@ -6458,13 +6458,22 @@ def _audit_holds_one(place, loc_info_map):
 
 def _audit_one_spool_why(place, holders=(), found=1):
     """Why an Extra isn't filed in a place that holds one spool: something is there
-    (`holders`, its ids), or more than one Extra was found here."""
+    (`holders`, its ids), or more than one Extra was found in it. A stay's reason is
+    read away from the panel (Done's question, the report, a toast), so it names the
+    place, never "here" (Derek, 2026-11-03)."""
     if holders:
         names = _and_list(f"#{h}" for h in holders)
         return f"{place} holds one spool, and {names} {'is' if len(holders) == 1 else 'are'} there"
     if found > 1:
-        return f"{place} holds one spool, and {found} were found here"
+        return f"{place} holds one spool, and {found} were found in it"
     return f"{place} holds one spool"
+
+
+def _audit_here_already(place):
+    """The reason an Extra isn't filed: FCC has it at the audited place already (filed
+    there since its scan). It names the place: "FCC has it here already" read as
+    wherever the reader was, in the question, the report and the strip."""
+    return f"FCC has it in {place} already"
 
 
 def _audit_extra_fate(rec, place, loc_list, printer_map, loc_info_map, buffer_ids):
@@ -6518,7 +6527,7 @@ def _audit_at_done(rec, place):
         return {"files": True}
     if fate == 'one':
         return {"files": None, "why": f"{why}, so Done files it here only if nothing else is there"}
-    return {"files": False, "why": why or "FCC has it here already"}
+    return {"files": False, "why": why or _audit_here_already(place)}
 
 
 def _audit_file_note(place, loc_info_map, count, left=()):
@@ -6775,7 +6784,7 @@ def _audit_file_one(sid, place, was, printer_map, loc_info_map):
     fate, why = _audit_extra_fate(rec, place, list(loc_info_map.values()), printer_map, loc_info_map,
                                   _scan_buffer_ids())
     if fate == 'here':
-        return "FCC has it here already", "", rec
+        return _audit_here_already(place), "", rec
     if fate == 'stay':
         return why, "", rec
     now = _audit_spool_where(rec)
@@ -6921,7 +6930,7 @@ def _audit_file_dropped(session, plan, file_wanted, place):
     # Still an Extra, and left out of the plan: its fate was 'here'.
     extras = [sid for sid in (session.get('rogue_items') or []) if str(sid) in wanted]
     out = [{"id": sid, "display": _audit_label(session, sid), "where": audit_where(place),
-            "why": "FCC has it here already"} for sid in extras]
+            "why": _audit_here_already(place)} for sid in extras]
     said = {str(sid) for sid in extras}
     # A stored row that is no Extra, on no list: a find taken back since the question.
     on_list = {str(s) for s in list(session.get('expected_items') or []) + list(session.get('trail_items') or [])}

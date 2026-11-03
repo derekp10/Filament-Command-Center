@@ -7,6 +7,10 @@ S1 Done's question draws its spools as the panel's tiles do: every row of `park`
 S2 A find with no label read says so, in its Activity Log line and in `heard`: a
    🔎 Find a spool pick "Found #1 with Find a spool, no label read (2 left)", any
    other "Found #1, no label read (2 left)"; a real label read keeps "Found #1 (2 left)".
+S5 The reasons Done gives for leaving a spool where it is name the audited place,
+   never "here": they are read in the question, the report and a toast, away from
+   the panel ("FCC has it in LR-MDB-1 already", "PM-DB-1 holds one spool, and 2 were
+   found in it").
 
 All of it through the Flask test client and the real session, on the real read and
 write functions over tests/spoolman_extra_fake.SpoolmanHTTPFake, never a mocked
@@ -24,6 +28,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 import app as app_module  # noqa: E402
 import logic  # noqa: E402
+import spoolman_api  # noqa: E402
 import state  # noqa: E402
 import stock_report  # noqa: E402
 from test_audit_session_58 import (  # noqa: E402,F401
@@ -206,3 +211,85 @@ def test_a_direct_call_that_doesnt_say_how_keeps_a_label_reads_words(env):
     _box(env)
     assert logic.process_audit_scan({"type": "spool", "id": 1}) == {"status": "success",
                                                                      "heard": "Found #1 (2 left)"}
+
+
+# ---------------------------------------------------------------------------
+# S5: the reasons name the audited place, never "here"
+# ---------------------------------------------------------------------------
+
+HERE_ALREADY = "FCC has it in LR-MDB-1 already"
+
+
+def yes(env, asked):
+    """The Yes to Done's question, for everything it showed (where it showed each Extra)."""
+    body = {"audit_id": asked["audit_id"], "today": "2026-11-03", "ids": [r["id"] for r in asked["park"]],
+            "file_ids": [r["id"] for r in asked["file"]],
+            "file_where": {str(r["id"]): r["where"] for r in asked["file"]}}
+    res = app_module.app.test_client().post("/api/audit/park", json=body)
+    assert res.status_code == 200, res.get_data(as_text=True)
+    return res.get_json()
+
+
+def _extra_from_box_2(env):
+    """An audit of LR-MDB-1 with #1 filed there, and Extra #20 from LR-MDB-2 slot 3."""
+    add_spool(env, 1, "LR-MDB-1", container_slot="1")
+    add_spool(env, 20, "LR-MDB-2", container_slot="3")
+    start(env, "LR-MDB-1")
+    scan(env, "ID:1")
+    scan(env, "ID:20")
+
+
+def test_an_extra_filed_here_at_the_last_look_says_where_fcc_has_it(env, monkeypatch):
+    """The question showed #20 to be filed; another tab filed it in LR-MDB-1 in the
+    moment between the Yes's plan and its last look (_audit_file_one)."""
+    _extra_from_box_2(env)
+    asked = question(env)
+    real = spoolman_api.get_spool_answer
+
+    def filed_meanwhile(sid):
+        if sid == 20:
+            spools(env)[20].update(location="LR-MDB-1")
+        return real(sid)
+
+    monkeypatch.setattr(spoolman_api, "get_spool_answer", filed_meanwhile)
+    result = yes(env, asked)
+    assert [(s["id"], s["why"]) for s in result["stayed"]] == [(20, HERE_ALREADY)]
+    assert f"#20 Some Brand PLA (Red) → {HERE_ALREADY}" in report(env)
+
+
+def test_an_extra_the_yes_names_and_the_plan_left_out_says_where_fcc_has_it(env):
+    """Filed in LR-MDB-1 while the question sat open, so the Yes's own plan leaves it
+    out (_audit_file_dropped)."""
+    _extra_from_box_2(env)
+    asked = question(env)
+    spools(env)[20].update(location="LR-MDB-1", extra=dict(spools(env)[20]["extra"], container_slot='"2"'))
+    result = yes(env, asked)
+    assert result["stayed"] == [{"id": 20, "display": "#20 Some Brand PLA (Red)", "where": "LR-MDB-1",
+                                 "why": HERE_ALREADY}]
+
+
+def test_the_strips_hint_for_an_extra_fcc_has_here_already_names_the_place(env):
+    """Filed in LR-MDB-1 after the location scan, so it isn't on the list: an Extra
+    whose hint says why Done leaves it (the strip reads it, C6)."""
+    add_spool(env, 1, "LR-MDB-1", container_slot="1")
+    add_spool(env, 20, "LR-MDB-2", container_slot="3")
+    start(env, "LR-MDB-1")
+    spools(env)[20].update(location="LR-MDB-1")
+    scan(env, "ID:20")
+    (row,) = live()["rogue"]
+    assert row["at_done"] == {"files": False, "why": HERE_ALREADY}
+
+
+def test_a_one_spool_place_with_two_extras_says_they_were_found_in_it(env):
+    env["rows"].append({"LocationID": "PM-DB-1", "Name": "Dryer 1", "Type": "Dryer Box", "Max Spools": "1",
+                        "parent_id": "CR"})
+    add_spool(env, 20, "LR-MDB-2", container_slot="3")
+    add_spool(env, 21, "CR-CT-1")
+    start(env, "PM-DB-1")
+    scan(env, "ID:20")
+    scan(env, "ID:21")
+    why = "PM-DB-1 holds one spool, and 2 were found in it"
+    assert [(s["id"], s["why"]) for s in logic.plan_audit_done(session())["stays"]] == [(20, why), (21, why)]
+    env["logs"].clear()
+    assert "audit_ended" in scan(env, "CMD:DONE")          # nothing to park or file: Done ends
+    assert f"#20 Some Brand PLA (Red) → {why}" in report(env)
