@@ -330,6 +330,17 @@ def test_the_reverse_binding_gives_it_the_one_free_feed_slot(env):
     assert spools(env)[1]["location"] == "LR-MDB-3" and _extra(env, 1)["container_slot"] == "1"
 
 
+def test_a_slot_named_for_a_spool_from_unknown_is_recorded(env):
+    """The page asks where it came from, and the answer lands: Unknown is no trail to keep."""
+    env["rows"].append({"LocationID": "LR-MDB-3", "Type": "Dryer Box", "Max Spools": "2", "parent_id": "LR",
+                        "extra": {"slot_targets": {"1": "XL-1", "2": "XL-1"}}})
+    add_spool(env, 1, "UNKNOWN")
+    res = logic.perform_smart_move("XL-1", [1], origin="manual", record_source={"box": "LR-MDB-3", "slot": "2"})
+    assert res["status"] == "success" and not res.get("record_source_ignored"), res
+    extra = _extra(env, 1)
+    assert extra["physical_source"] == "LR-MDB-3" and extra["physical_source_slot"] == "2"
+
+
 def test_any_spool_at_unknown_goes_onto_a_head_with_no_trail(env):
     """The engine's own rule, with no audit behind it: a stale slot isn't a home either."""
     add_spool(env, 1, "UNKNOWN", container_slot="4")

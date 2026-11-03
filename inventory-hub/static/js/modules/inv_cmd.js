@@ -3194,7 +3194,9 @@ const _askRecordSource = (pick, sid, host) => {
     if (pick.spool_keeps_trail) return Promise.resolve(undefined);
     const fromRow = (state.allLocations || []).find(l => String(l.LocationID || '').toUpperCase() === from);
     const headTypes = ['Tool Head', 'MMU Slot', 'No MMU Direct Load', 'Printer'];
-    if (from && !(fromRow && headTypes.includes(fromRow.Type))) return Promise.resolve(undefined);
+    // Unknown is a list, never a place a spool comes from (Group 58): the engine
+    // gives a spool leaving it no trail, so it is asked about like one from Unassigned.
+    if (from && from !== 'UNKNOWN' && !(fromRow && headTypes.includes(fromRow.Type))) return Promise.resolve(undefined);
     const feeds = (Array.isArray(pick.feeds) ? pick.feeds : []).filter(f => f && f.box);
     const free = feeds.filter(f => f.free);
     if (!free.length) return Promise.resolve('');
