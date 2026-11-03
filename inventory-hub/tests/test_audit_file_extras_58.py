@@ -802,6 +802,29 @@ def test_the_report_names_each_filed_spool_and_where_fcc_had_it(env):
     assert any("filed Spool #20" in m and c == "INFO" for m, c, _ in env["logs"])
 
 
+def test_the_report_of_a_place_with_nothing_filed_says_when_before_what_done_filed(env):
+    """Review of 7e3720f, R-4's note: an audit of a place FCC had nothing filed at opened
+    its report with "Nothing was filed here." above its own "Filed here" line."""
+    add_spool(env, 20, "LR-MDB-2", container_slot="3")
+    start(env, "LR-MDB-1")
+    scan(env, "ID:20")
+    env["logs"].clear()
+    assert yes(env)["filed"] == [20]
+    line = report(env)
+    assert "<br>Nothing was filed here when the audit began.<br>" in line
+    assert "📥 <b>Filed here:</b>" in line
+
+
+def test_the_report_of_a_place_with_nothing_filed_and_nothing_filed_by_done_is_as_it_was(env):
+    """Pins what was already right: with nothing filed by Done, the line is the park's own."""
+    add_spool(env, 20, "XL-1", physical_source="CR-CT-1")
+    start(env, "LR-MDB-1")
+    scan(env, "ID:20")
+    env["logs"].clear()
+    assert scan(env, "CMD:DONE")["audit_ended"]["why"] == "done"      # the Extra stays: no question
+    assert "<br>Nothing was filed here.<br>" in report(env)
+
+
 def test_outside_text_in_the_filing_lines_is_escaped(env, monkeypatch):
     _extra_here(env, at="CR-CT-1")
     spools(env)[20]["filament"]["name"] = "<b>Bold</b>"

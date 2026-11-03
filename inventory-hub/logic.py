@@ -5872,7 +5872,9 @@ def _audit_report(session, parked=(), stays=(), failed=(), filed=()):
         if perfect:
             first += " ✅ Perfect Match! All items accounted for."
     elif extras or trail:
-        first = "Nothing was filed here."
+        # With Extras filed here by Done (C), "Nothing was filed here." above its own
+        # "Filed here" line read as a contradiction (review of 7e3720f, R-4's note).
+        first = "Nothing was filed here when the audit began." if filed else "Nothing was filed here."
     else:
         first = "Nothing was filed here and nothing was scanned."
     lines = [f"📝 <b>Audit Report: {_audit_esc(place)}</b>", first]

@@ -75,6 +75,21 @@ def test_with_only_an_extra_to_file_done_asks_to_file_it_here(live, env):
     assert any("Filed #200 here" in t["msg"] for t in toasts(live))
 
 
+def test_a_place_with_nothing_filed_asks_to_file_without_a_tally(live, env):
+    """Review of 7e3720f, R-4: before C, Done asked only when something was missing, so
+    `expected` was at least 1. An audit of a place FCC had nothing filed at now asks to
+    file its Extra, and its question opened with "0 of 0 found at LR-MDB-1."."""
+    add_spool(env, 200, "LR-MDB-2", container_slot="1")
+    begin(live, env)
+    scanned(live, "ID:200")
+    ask(live)
+    assert live.text_content(TITLE).strip().endswith("File #200 here?")
+    msg = live.text_content(MSG)
+    assert "0 of 0" not in msg and "found at" not in msg
+    assert msg == (f"The one found here that FCC had elsewhere is filed in LR-MDB-1. {NOTE_ONE} "
+                   "Undo Last Move puts it back.")
+
+
 def test_with_spools_to_park_and_an_extra_to_file_the_yes_does_both(live, env):
     add_spool(env, 1, "LR-MDB-1", container_slot="1")
     add_spool(env, 2, "LR-MDB-1", container_slot="2")

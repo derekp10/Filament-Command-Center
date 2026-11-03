@@ -2204,8 +2204,10 @@ window.commitBulkMove = () => {
         const parks = n ? ` ${n === 1 ? 'The one not scanned goes' : `The ${n} not scanned go`} to Unknown, to find or clear later.` : '';
         const files = m ? ` ${m === 1 ? 'The one found here that FCC had elsewhere is' : `The ${m} found here that FCC had elsewhere are`}`
             + ` filed in ${res.location}.${res.file_note ? ` ${res.file_note}` : ''}` : '';
-        const msg = `${res.found} of ${res.expected} found at ${res.location}.${parks}${files}`
-            + ` Undo Last Move puts ${n + m === 1 ? 'it' : 'them'} back.`;
+        // A place FCC had nothing filed at asks only to file: "0 of 0 found" said
+        // nothing (review of 7e3720f, R-4), so the tally is left out.
+        const tally = res.expected ? `${res.found} of ${res.expected} found at ${res.location}.` : '';
+        const msg = `${tally}${parks}${files} Undo Last Move puts ${n + m === 1 ? 'it' : 'them'} back.`.trim();
         if (!m) {
             return { msg, title: `Park ${_spools(n)} at Unknown?`, yes: n === 1 ? 'Park it' : 'Park them',
                 verb: n === 1 ? 'parks it' : 'parks them', caption: 'Scan to Park' };
