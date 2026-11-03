@@ -364,6 +364,27 @@ def test_with_nothing_found_yet_it_refuses(env):
     assert any(c == "WARNING" and "Nothing has been found" in m for m, c, _ in env["logs"])
 
 
+@pytest.mark.parametrize("taken_back", [7, 6], ids=["an-extra", "an-expected-tile"])
+def test_with_the_last_find_taken_back_it_says_no_spool_is_selected(env, taken_back):
+    """#5 was found, then the last find was taken back (A3's Extra tile, or an Expected
+    tile pressed again): the selection is gone, the finds before it aren't. Review of
+    7e3720f, S-8: RED there, where it answered "Nothing has been found yet" with #5
+    found."""
+    add_spool(env, 5, "LR-MDB-1")
+    add_spool(env, 6, "LR-MDB-1")
+    add_spool(env, 7, "CR")
+    start(env, "LR-MDB-1")
+    scan(env, "ID:5")
+    scan(env, f"ID:{taken_back}")
+    assert press(env, taken_back, found=False)["success"] is True
+    assert session()["last_found"] is None and 5 in session()["scanned_items"]
+    env["fake"].patches.clear()
+    ans = scan(env, MARK)
+    assert ans == {"type": "error", "msg": "No spool is selected: scan a spool or press its tile first."}
+    assert writes(env) == []
+    assert any(c == "WARNING" and "No spool is selected" in m for m, c, _ in env["logs"])
+
+
 def test_it_marks_the_last_spool_found_and_keeps_its_siblings(env):
     """routes_print_queue.py's partial write: the merge keeps every other extra."""
     add_spool(env, 5, "LR-MDB-1", container_slot="2", physical_source="CR-CT-1", physical_source_slot="3")

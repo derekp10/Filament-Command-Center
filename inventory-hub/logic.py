@@ -6227,6 +6227,10 @@ def _audit_need_label(session):
     it, so the mark would be seen nowhere."""
     sid = session.get('last_found')
     if sid is None:
+        # A find taken back (an Expected tile pressed again, or an Extra's, A3) clears
+        # the selection, not the finds before it (review of 7e3720f, S-8).
+        if session.get('scanned_items'):
+            return _audit_refuse("No spool is selected: scan a spool or press its tile first.")
         return _audit_refuse("Nothing has been found yet: scan a spool or press its tile first.")
     audit_id = session.get('audit_id')
     rec, answered = spoolman_api.get_spool_answer(sid)
