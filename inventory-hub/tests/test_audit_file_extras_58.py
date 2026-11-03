@@ -36,7 +36,11 @@ from test_audit_session_58 import (  # noqa: E402,F401
 RED = "Some Brand PLA (Red)"
 HEAD_WHY = "loaded on XL-1: an audit never takes a spool off a printer"
 PRINTER_WHY = "an audit never loads a printer"
-ONE_SLOT = "It goes in with no slot: scan its slot label afterwards to set one."
+# PIN UPDATED DELIBERATELY (review of 7e3720f, S-7): the note names the gesture that sets
+# a slot (the spool's label, then the slot's); "scan its slot label afterwards" picked up
+# the slot's own spool, or moved a buffered one in.
+ONE_SLOT = "It goes in with no slot: scan it, then its slot's label, to set one."
+MORE_SLOTS = "They go in with no slot: scan each one, then its slot's label, to set it."
 _ALL = object()
 
 
@@ -210,7 +214,66 @@ def test_two_extras_into_a_multi_slot_box_are_told_so(env):
     scan(env, "ID:21")
     got = plan()
     assert [r["id"] for r in got["file"]] == [20, 21]
-    assert got["file_note"] == "They go in with no slot: scan each one's slot label afterwards to set it."
+    assert got["file_note"] == MORE_SLOTS          # PIN UPDATED DELIBERATELY (S-7): the gesture's words
+
+
+def _box_of_four(env, found, missing=(), extras=((20, "CR-CT-1"),)):
+    """LR-MDB-1 (4 slots): `found` in their own slots and scanned, `missing` slotted and
+    not scanned (Done parks them), and Extras from elsewhere."""
+    for sid in list(found) + list(missing):
+        add_spool(env, sid, "LR-MDB-1", container_slot=str(sid))
+    for sid, at in extras:
+        add_spool(env, sid, at)
+    start(env, "LR-MDB-1")
+    for sid in list(found) + [sid for sid, _at in extras]:
+        scan(env, f"ID:{sid}")
+
+
+@pytest.mark.parametrize("found, missing, extras, note", [
+    # 1 stays, 3 come in: 4 in 4 slots.
+    ((1,), (), ((20, "CR-CT-1"), (21, "SHELF-1"), (22, "")), MORE_SLOTS),
+    # 3 stay, #4 is parked, 3 come in: 6 in a box of 4, one slot free (the dev run's).
+    ((1, 2, 3), (4,), ((20, "CR-CT-1"), (21, "SHELF-1"), (22, "")),
+     "LR-MDB-1 has 4 slots, and filing these makes 6 spools there, so only 1 of them can have a slot. "
+     "They go in with no slot: scan one, then a free slot's label, to set it."),
+    # Full, and one comes in.
+    ((1, 2, 3, 4), (), ((20, "CR-CT-1"),),
+     "LR-MDB-1 has 4 slots, and filing it makes 5 spools there: it goes in with no slot, and no slot is free."),
+    ((1, 2, 3, 4), (), ((20, "CR-CT-1"), (21, "SHELF-1")),
+     "LR-MDB-1 has 4 slots, and filing these makes 6 spools there: they go in with no slot, and no slot is "
+     "free."),
+])
+def test_the_note_counts_the_free_slots_after_the_park(env, found, missing, extras, note):
+    """Review of 7e3720f, R-3: Done filled a 4-slot box to 6 with no word, and the note
+    promised each Extra a slot. It counts the slots left free once the park is done."""
+    _box_of_four(env, found, missing, extras)
+    asked = question(env)
+    assert [r["id"] for r in asked["park"]] == list(missing)
+    assert [r["id"] for r in asked["file"]] == [sid for sid, _at in extras]
+    assert asked["file_note"] == note
+
+
+def test_done_still_files_every_extra_into_a_full_box(env):
+    """Pins what was already right: the note says the box goes over its slots, and Done
+    files them all the same (whether to stop at the free slots is Derek's call)."""
+    _box_of_four(env, (1, 2, 3), (4,), ((20, "CR-CT-1"), (21, "SHELF-1"), (22, "")))
+    assert yes(env)["filed"] == [20, 21, 22]
+    assert sorted(s["id"] for s in spools(env).values() if s["location"] == "LR-MDB-1") == [1, 2, 3, 20, 21, 22]
+
+
+def test_the_gesture_the_note_names_sets_the_filed_spools_slot(env):
+    """S-7: "scan it, then its slot's label" is the gesture: a spool's scan puts it at the
+    front of the scan buffer (the page's), and a slot label sets the buffer's first spool.
+    Pins that the gesture works on the real route, with another spool buffered behind."""
+    add_spool(env, 30, "SHELF-1")
+    _extra_here(env, at="LR-MDB-2", container_slot="3")
+    assert yes(env)["filed"] == [20] and extra_of(env, 20)["container_slot"] == ""
+    state.GLOBAL_BUFFER = [{"id": 20}, {"id": 30}]     # #20 scanned: the front of the buffer
+    res = app_module.app.test_client().post("/api/identify_scan", json={
+        "text": "LOC:LR-MDB-1:SLOT:4", "source": "barcode", "confirmed_fed_heads": [], "confirmed_toolheads": []})
+    assert res.status_code == 200, res.get_data(as_text=True)
+    assert spools(env)[20]["location"] == "LR-MDB-1" and extra_of(env, 20)["container_slot"] == "4"
+    assert spools(env)[30]["location"] == "SHELF-1"
 
 
 def test_one_deleted_since_stays(env):

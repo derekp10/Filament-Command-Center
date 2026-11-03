@@ -6473,15 +6473,33 @@ def _audit_at_done(rec, place):
     return {"files": False, "why": why or "FCC has it here already"}
 
 
-def _audit_file_note(place, loc_info_map, count):
+def _audit_file_note(place, loc_info_map, count, left=0):
     """The question's words for Extras filed in a multi-slot box: FCC never guesses a
-    slot, so each goes in with none."""
+    slot, so each goes in with none, and the words name the gesture that sets one: the
+    spool's label, then the slot's (a slot label sets the scan buffer's first spool, and
+    scanning the spool puts it there; review of 7e3720f, S-7: "scan its slot label
+    afterwards" picked up the slot's own spool, or moved a buffered one in).
+
+    `left`: the spools still there after the park. When the box can't give every one
+    of them and the `count` filed a slot, the words say so (R-3: a 4-slot box was
+    filed to 6 with no word). Done files them all the same: whether to stop at the
+    free slots is Derek's call."""
     row = (loc_info_map or {}).get(place)
-    if not count or not (_is_dryer_box_row(row) and _place_capacity(row) > 1):
+    slots = _place_capacity(row)
+    if not count or not (_is_dryer_box_row(row) and slots > 1):
         return ""
-    if count == 1:
-        return "It goes in with no slot: scan its slot label afterwards to set one."
-    return "They go in with no slot: scan each one's slot label afterwards to set it."
+    total = left + count
+    if total <= slots:
+        if count == 1:
+            return "It goes in with no slot: scan it, then its slot's label, to set one."
+        return "They go in with no slot: scan each one, then its slot's label, to set it."
+    these = "it" if count == 1 else "these"
+    head = f"{place} has {slots} slots, and filing {these} makes {total} spools there"
+    free = slots - left
+    if free <= 0:
+        return f"{head}: {'it goes' if count == 1 else 'they go'} in with no slot, and no slot is free."
+    return (f"{head}, so only {free} of them can have a slot. They go in with no slot: scan one, "
+            f"then a free slot's label, to set it.")
 
 
 def plan_audit_done(session):
@@ -6504,7 +6522,8 @@ def plan_audit_done(session):
     the ones that stay join `stays`, and one FCC has here already is left out. A
     place that holds one spool takes an Extra only when the park leaves
     nothing else there and only one qualifies. `file_note` is the question's words
-    for a multi-slot box (no slot)."""
+    for a multi-slot box (no slot, how to set one, and whether the box has a free
+    slot for each: _audit_file_note)."""
     plan: typing.Dict[str, typing.Any] = {"read_ok": True, "read_error": None, "occupants": 0,
                                           "park": [], "stays": [], "file": [], "file_note": ""}
     place = str(session.get('location_id') or '').strip().upper()
@@ -6575,16 +6594,17 @@ def _audit_plan_extras(session, plan, place, extras, records, holders, printer_m
                                                               (rec.get('extra') or {}).get('container_slot'),
                                                               occupants=there))}
         (ones if fate == 'one' else plan['file']).append(row)
+    # What the place still holds once the park is done.
+    parked = {str(r['id']) for r in plan['park']}
+    left = [h for h in holders if str(h) not in parked]
     if ones:
-        parked = {str(r['id']) for r in plan['park']}
-        left = [h for h in holders if str(h) not in parked]
         if len(ones) == 1 and not left:
             plan['file'].append(ones[0])
         else:
             why = _audit_one_spool_why(place, left, len(ones))
             plan['stays'].extend({"id": r['id'], "display": r['display'], "where": r['where'], "why": why}
                                  for r in ones)
-    plan['file_note'] = _audit_file_note(place, loc_info_map, len(plan['file']))
+    plan['file_note'] = _audit_file_note(place, loc_info_map, len(plan['file']), len(left))
 
 
 def _audit_read_refusal(place):

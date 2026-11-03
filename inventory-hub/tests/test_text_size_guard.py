@@ -377,9 +377,10 @@ SAMPLE_QUESTION = {
               "slot": "4"}],
     "stays": [{"id": 242 + n, "display": f"#{242 + n} Prusament PLA (Galaxy Black)", "where": where, "why": why}
               for n, (where, why) in enumerate([("XL-4", "moved to XL-4"), ("", "no longer in Spoolman")] * 6)],
-    # Derek's C3: the Extras Done files here, and the words for a multi-slot box.
+    # Derek's C3: the Extras Done files here, and the words for a multi-slot box (PIN
+    # UPDATED DELIBERATELY, review of 7e3720f, S-7: they name the real gesture).
     "file": [{"id": 500, "display": "#500 Tecbears PETG (Clear)", "where": "LR-MDB-2 slot 3"}],
-    "file_note": "It goes in with no slot: scan its slot label afterwards to set one."}
+    "file_note": "It goes in with no slot: scan it, then its slot's label, to set one."}
 # A lost spool as /api/identify_scan and /api/spool_details answer it, from the real
 # park (test_audit_lost_badges_58_js pins both).
 SAMPLE_LOST = {"id": 8099, "type": "spool", "display": "#8099 Prusament PLA (Galaxy Black)", "color": "111111",

@@ -24,7 +24,8 @@ TITLE = QUESTION + " .fcc-apc-title"
 MSG = QUESTION + " .fcc-apc-msg"
 YES = QUESTION + " .fcc-apc-yes"
 PAST_THE_ARMING = 760                      # armAfterMs (DOUBLE_PRESS_MS, inv_cmd.js) and a little
-NOTE_ONE = "It goes in with no slot: scan its slot label afterwards to set one."
+# PIN UPDATED DELIBERATELY (review of 7e3720f, S-7): the note names the real gesture.
+NOTE_ONE = "It goes in with no slot: scan it, then its slot's label, to set one."
 STAYS_ON_A_HEAD = "loaded on XL-1: an audit never takes a spool off a printer"
 
 

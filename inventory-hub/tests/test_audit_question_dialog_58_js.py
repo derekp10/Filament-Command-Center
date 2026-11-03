@@ -37,9 +37,10 @@ LOOSE = "#fcc-loose-list"
 def _question(park=3, stays=0, file=0):
     """/api/identify_scan's audit_done_question, as pinned by
     test_the_samples_shape_is_the_routes below. `file`: how many Extras Done files
-    here (Derek's C3), from LR-MDB-2, so the multi-slot box's words come with them."""
-    note = {0: "", 1: "It goes in with no slot: scan its slot label afterwards to set one."}.get(
-        file, "They go in with no slot: scan each one's slot label afterwards to set it.")
+    here (Derek's C3), from LR-MDB-2, so the multi-slot box's words come with them.
+    PIN UPDATED DELIBERATELY (review of 7e3720f, S-7): the words name the real gesture."""
+    note = {0: "", 1: "It goes in with no slot: scan it, then its slot's label, to set one."}.get(
+        file, "They go in with no slot: scan each one, then its slot's label, to set it.")
     return {"type": "audit_done_question", "audit_id": "boot-1", "location": "LR-MDB-1", "found": 2,
             "expected": 2 + park + stays,
             "park": [{"id": 100 + n, "display": f"#{100 + n} Some Brand PLA (Red {n})",
