@@ -4,10 +4,135 @@
 **Estimated effort:** MEDIUM–LARGE (~6–12 h, 1–2 sessions), after Derek's decisions. 58.1 ~2–4 h · 58.2 ~1–2 h · 58.3 ~2–4 h (about ten small traps) · 58.4 ~1 h · 58.5 ~0.5–1 h · 58.6 depends on his pick (a scanning pass is his time, not code).
 **Risk:** **MEDIUM.** Audit's Done moves spools, including off a head, with no undo today; any change to it is a write path. 58.6 touches prod data (read-only until Derek picks a repair).
 
+> **2026-11-03: building Derek's answers (the section right below): tile QRs, 🔎 Find a spool, an Extra taken back, 🖨️ Add to print queue, and Done filing the Extras (for his look). Then a review, fixes, the sweep, and the morning walk with pictures.**
 > **Status: `IN PROGRESS` on `feature/group-58-audit-label-truth` (2026-11-02), not merged. Built and fixed after the group's review and its re-review (2026-11-02: a double click's second press reaches nothing, a Space after a stray key presses only where a mouse could, toasts over the ⌨️ list, the list gives the keyboard back, Undo's words), every section of the build spec below: 58.1 (an audit expects only what is filed exactly there, Done asks first, one Undo for the batch, lost spools say which audit lost them), 58.2 on the defaults (a) and (b), 58.3's traps, 58.4 (the 🧺 Loose spools list) and 58.5 (no false tick, no false "confirmed" from the filament wizard). Next: the full browser sweep, then Derek's OK to merge. Waits on Derek: Decision 2 (no label) and Decision 3 (a flagged spool's scan) are built on their defaults and Decision 5 (the deck tile shows the panel) is built for his veto, all three to confirm. Decision 4 is closed: no prod contact, so 58.6 waits. 58.7 stays on hold. CLAUDE.md's part, "Owed to CLAUDE.md at the merge" below, is applied on the branch (2026-11-02) and reaches `dev` with the merge.**
 > Derek's once-over relies on Audit, and labels are how FCC knows a spool is what it says: make Done safe, give Audit a notion of "no label", and make the label status honest (on the cards and in prod's data).
 > **Until 58.1 ships: end audits with Cancel** (a full report, nothing moves).
 > Code anchors were read on `dev` @ `d4b1ad7` (2026-10-25). Line numbers drift, so re-grep before editing.
+
+## Derek's answers of 2026-11-03 (read this first; it overrides everything below)
+
+Derek answered late in the evening, tired ("It's a bit late, and I'm having trouble following the ask/scenario"). Decisions 2 and 3 are settled. "File the extras here" (C) is built on Claude's safe defaults for him to judge **from pictures** in the morning, never from a written scenario, and comes out if he says no, so its server and page changes go in **commits of their own**. Decision 5 stays as built until he answers it. Nothing here merges without his OK.
+
+### A. Decision 2 = a mix of (a+) and his own (b)
+Derek: "I'm thinking a mix of a+ and b. I can't confirm, but I think some spools are in the system, with a location, but no barcode. So the b part would be a way to manually search for the spool and select it for that location."
+
+**A1. A QR on every tile not yet found.** Each Expected tile not yet found shows a QR of `CMD:FOUND:<audit_id>:<spool id>`. Scanning it does what pressing the tile does (found here, no label read, the last found). It never takes a find back: only a press does. Found tiles, Extras and loaded-from-here tiles show none.
+- `logic.resolve_scan`: `CMD:FOUND:` → `{'type': 'command', 'cmd': 'found', 'audit': <id>, 'id': <int>}`. A malformed one is an error whose words a scanner user can act on. Mind the substring ladder: never a name holding `CMD:AUDIT` (read as the audit toggle) or any earlier pattern. The page's session-QR guards (`/CMD:(CONFIRM|STORE):\S/` in inv_cmd.js, `CMD:(CONFIRM|CANCEL|STORE):` in inv_core.js) don't match it; keep it that way.
+- `api_identify_scan`: outside an audit it is refused with a WARNING line, as `needlabel` is ("No audit is running, so nothing was marked"), above the bulk gates. In an audit, `process_audit_scan` handles it:
+  - The audit id must be the running one, compared case-insensitively: a scanner set to upper case, or Caps Lock, sends `CMD:FOUND:A1B2C3D4-3:57`. Another audit's QR does nothing and says so.
+  - A spool not on the list is refused.
+  - A spool already found answers "already scanned" and selects it again, as a double read must.
+  - `heard` says what it did ("Found #57 by its tile's QR, no label read (12 left)"). It logs as the press does.
+- The page:
+  - It draws the QR only when `state.auditId` is known, with the shared QR helper, cached by payload: every scan changes the panel's hash and redraws it.
+  - The QR is `aria-hidden` and has no caption of its own; the tile says it.
+  - Size: as small as a handheld scanner reliably reads off a screen (try about 72 px; the strip's is 88 px), placed so the tile grows as little as possible.
+  - **Derek sees a picture before the merge** (standing order: a new look is shown first).
+
+**A2. 🔎 Find a spool.**
+- **Opening it:** a button in the panel's header beside 🧺 Loose spools, and the key `/` (only when `window.scanIsArriving()` says no; registered with `window.registerShortcut`). It opens a window over the panel: `mountOverlay`, tier `confirm`, `trapTab`, closed with the panel as `_loose` is, with Escape closing only it. The window holds a text box, focused on open, and a list.
+- **Searching:** typing searches `/api/search?q=…&type=spool`, debounced. Only the newest answer paints, by the page's own sequence.
+  - A failed search (`success: false`, an error page, or no answer) says "Couldn't search: …", never "No matches".
+  - An empty box shows a hint ("Type a name, colour, brand or number").
+  - Archived spools aren't listed.
+- **Each row shows:**
+  - the swatch and "#id name";
+  - where FCC has it: its place and slot, "loaded on XL-1", Unassigned, or the ❓ Lost words for a spool at Unknown (`window.auditLostWords`);
+  - a tag when it is on this audit's list ("on the list") or already found ("✅ found").
+- **A pick** (Enter on the `.kb-active` row, a click or a tap) closes the window and sends `ID:<id>` with source `search` through `window.sendInScanOrder`, taking its turn behind scans already read. The audit's own spool path then makes it found (on the list) or an Extra (not), with no label read, as the last found: exactly what a search card's click does today. Nothing is new on the server for this part.
+- **Keyboard:** the arrows move `.kb-active` among the rows (wrapping), the active row stays in the Tab order, Enter picks, and Tab moves between the box and the list.
+- **Scanner:**
+  - The box uses `installFieldScanCapture`, so a label scanned into it goes to processScan and never into the search. The audit takes it as a scan, and the window closes.
+  - A scan's Enter is never a pick (`enterIsAScan`).
+  - A Space inside a scan presses nothing.
+- **Double click:** the pick closes the window, and the second click of a double click must not reach what lies beneath (a tile would be found or taken back). The window joins what sits over the panel for the panel's second-press shield (`_shieldPage` / `_shieldClick`), as Done's question and the 🧺 list do.
+- **Dropped:** the old (b), where a typed id was flagged automatically.
+
+**A3. An Extra can be taken back.** Done now files Extras (C), so a spool picked or scanned by mistake must be undoable before Done.
+- An Extra's tile becomes a button, like a found Expected tile ("Press if it isn't here after all").
+- `/api/audit/found` with `found: false` takes an Extra back off the found lists: `scanned_items`, `rogue_items`, its `found_by`, and `last_found` if it is that one.
+- `found: true` on a spool not on the list stays refused: a tile press never makes an Extra.
+- A loaded-from-here tile stays a plain tile.
+
+### B. Decision 3 = (b), plus "Add to print queue"
+Derek: "b. But add an option/button to possibly add that label to the print queue. Just in case I decide to do some updating while I'm auditing the row."
+- (b) stands as built: an audit's label read confirms only a missing status, and a flag stays up.
+- **The button:** the strip gets **🖨️ Add to print queue** (`#fcc-audit-label-queue`) whenever its spool's label status is `true` (flagged before the audit, or marked "Needs a label" in it).
+- **A press** calls `window.addToQueue({id, type: 'spool', display})`. That is inv_queue.js's 🛒 Queue, shared through `/api/state/queue`; its `set_flag` is a no-op here, since the spool is already flagged.
+  - The toast says "Added #57's label to the print queue.", or "#57's label is already in the print queue." when `addToQueue` answers false.
+  - Once queued, the button reads "✓ In the print queue" (from `window.labelQueue`) and a press does nothing.
+  - A second press under 700 ms does nothing.
+- **Keyboard:** reachable by Tab, and pressed by Enter and Space through the accumulator's rules.
+- **No QR** (Claude's call): printing happens at the desk, and on a scanner-only screen "Needs a label" already puts the spool on the 🏷️ Backlog, which the desk queues from.
+- **"undo that"** leaves the print queue alone. If the spool is queued, its answer says so ("#57 is still in the print queue").
+- **Look:** it passes the contrast guard, uses the named text sizes (no hand-typed size), and wraps at phone width.
+
+### C. "Select it for that location": Done files the Extras here
+Derek: "I think I want …". It is built for his morning look, in **commits of its own**, so it can come out.
+
+A spool found here that FCC has somewhere else (an Extra, scanned or picked in Find) is moved here by Done's Yes, in the same question as the park and the same Undo. These are Claude's safe defaults:
+
+**C1. Who is filed.** `plan_audit_done` plans it from the same one strict read, archived spools included. The Yes plans again and files only what both the plan and the Yes name. Each spool gets a last look right before its write, and any change since is a stay, never a write, as in `_audit_park_one`.
+
+| The Extra, or the audited place | What Done does |
+|---|---|
+| Deleted since | Stays (`AUDIT_GONE_WHY`) |
+| Archived | Stays ("archived") |
+| Already filed here now | Nothing to do; left out of the question |
+| On a head or deployed (a ghost, a head, a one-slot printer: `_left_in_place_reason`'s rules) | Stays: "loaded on XL-1: an audit never takes a spool off a printer" |
+| In the scan buffer | Stays: "in the scan buffer" |
+| Filed in a place **inside** this one (`locations_db.is_descendant`, as `_audit_places_inside` reads it) | Stays: "FCC has it in LR-MDB-1, inside LR". An audit of a room must not pull a spool out of its box. |
+| The audited place is a head or a Printer row | Every Extra stays: "an audit never loads a printer" |
+| The audited place holds one spool (a Max Spools 1 row, a single-slot box) | Filed only when nothing else is filed there after the park and only one Extra qualifies; otherwise they stay ("<place> holds one spool") |
+| Anything else (another place, a box slot elsewhere, Unassigned, Unknown) | Filed here |
+
+**C2. The write.** `_audit_file_one`, beside `_audit_park_one`, calls `_move_write(sid, place, extra)` and never `perform_smart_move`, which could load or unload a head.
+- `container_slot`, `physical_source`, `physical_source_slot`, `fcc_pre_box_location` and `fcc_pre_audit_location` are written `""`, because the extras merge keeps a popped key. So the spool is filed here with **no slot**: FCC never guesses one, and in a multi-slot box the question says "no slot: scan its slot label afterwards to set one". Any trail is stale, and a lost spool's note has done its job.
+- The park's writes come first, so a one-spool place frees before an Extra goes in.
+- A failed write is an ERROR line with `LAST_SPOOLMAN_ERROR`, listed under `failed`. One that reported failure but landed counts (`_move_write`'s re-read).
+
+**C3. Done asks** when there is anything to park **or** to file (today it ends at once when nothing is missing).
+- `audit_done_question` carries `file: [{id, display, where}]`, with `where` being where FCC has it now. The Extras that stay go in `stays`, each with its why.
+- The page's question:
+  - The title says what it does: "Park 3 at Unknown and file 1 here?", or "File #57 here?".
+  - A new section, "Found here, FCC had them elsewhere", lists each with "from LR-MDB-2 slot 3".
+  - The Yes is labelled to match ("Do both", "File it here", or as today), and the question still opens on Back to the audit (`armAfterMs`).
+- The Yes sends `file_ids` beside `ids`. A Yes without `file_ids` (an older page) files nothing.
+
+**C4. The answer and the report.**
+- The answer is `{success, parked, filed, stayed, failed, msg, audit_ended}`.
+- The toast reads "Parked 3 at Unknown. Filed #57 here. Undo Last Move puts them back."
+- The Activity Log report names each filed spool and where FCC had it.
+- The ending rules are the park's: a Yes where nothing landed and something failed keeps the audit open.
+
+**C5. One Undo.** The park's record gains `filed: {sid: {location, extras, slot, place_had_row}}` and `filed_at: <place>`. The parked group's `moves` and `only_if_at: 'UNKNOWN'`, and their code, stay exactly as they are; `moves` may now be empty. `perform_undo` restores the filed group FIRST, then the parked group. For each filed spool:
+- It goes back to its old location, slot and system extras (the snapshot) only while it is still at `filed_at` and not archived or deleted. Otherwise it is left alone and named (`left_alone`).
+- It goes back into its old slot, or its old one-spool place, only while a strict read shows no other spool claims it. Otherwise it fails with an ERROR line, and that is final for this record, as the park's `_slot_taken` is.
+- If its old place's locations.json row is gone, it stays here, and the question says so once.
+- An unreadable spool, or a write that failed and isn't proved landed, goes in the retry copy with the parked ones.
+
+`describe_undo` names both groups: "Undo: put 3 spools back in A-CART (parked at Unknown by its audit) and #57 back in LR-MDB-2 slot 3 (filed in A-CART by the same audit)?". `_undo_current_heads` asks about no head: the filed group never touches one. Every existing park-Undo test keeps passing unchanged.
+
+**C6. Words.** A picked or scanned Extra's strip says what Done will do with it ("Extra: FCC has #57 at LR-MDB-2 slot 3; Done files it here") or why not ("…; it stays: loaded on XL-1"). It reads from the session's stored row, so a poll makes no read; a stay that depends on a fresh read is said at Done.
+
+### D. Not changed tonight
+Decision 5 (the FINISH tile shows the panel) stays as built until Derek answers. Decision 4 stays closed: no prod contact.
+
+### E. How it is checked
+- **Server tests** use the real write functions over `SpoolmanHTTPFake`, never a mocked `update_spool`. They cover:
+  - the tile QR: upper case, another audit's, not on the list, outside an audit, during a bulk move, and a double read;
+  - an Extra taken back;
+  - every filing rule in C1: each stay, the inside-this-place rule, and one-spool places with and without a park;
+  - the last look, the writes and their extras;
+  - Done asking with only Extras, and the Yes's `file_ids`;
+  - the combined Undo: the filed group first, a slot taken since, a place gone, unreadable spools going to the retry copy, and an Extra that moved on since.
+
+  Each new behaviour gets a test that fails on `275818c`.
+- **Page tests:**
+  - the node-vm `_js.py` family covers the QR payload and its cache, Find's ordering and its failed-search words, the strip's queue button, and the question's sections and Yes payload;
+  - Playwright `_e2e.py` runs on the real dashboard with routes answered in the browser (the family's `Server` / `Marks` harness). It covers a tile QR scanned as keys, Find by keyboard and by mouse, a double click on a Find row and on an Extra tile at the five window sizes of `test_audit_double_click_58_e2e.py`, and the contrast and text-size guards on the new surfaces.
+- **Reviewers** work from `docs/agent_docs/review-checklist.md`.
 
 ## Derek's steer of 2026-11-01 (read this first; it overrides the study where they differ)
 

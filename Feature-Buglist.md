@@ -17,14 +17,15 @@
   "check 56.7": it reads prod's deduct records itself; nothing for you to compare. (3) If the
   Activity Log ever shows "FCC's G-code walk of … came to … against the slicer's …", tell Claude: FCC may be
   misreading that file.
-* **⏸️ PENDING DEREK — Group 58's three calls on Audit, built on their defaults (2026-11-02; nothing here blocks a release).**
-  Claude walks them with you one at a time, with pictures, before the merge; if you never answer, they stay as built.
-  (1) **A spool with no label (Decision 2):** a press on its tile on the audit panel finds it with no label read, and
-  its label status stays as it was; there is no QR per tile (built as (a)). (2) **A flagged spool's scan (Decision 3):**
-  a real label read during an audit confirms only a missing status, and a spool already flagged for a reprint stays
-  flagged, with the panel saying so (built as (b)). (3) **The deck's audit tile during an audit (Decision 5):** it
-  shows the panel and sends nothing, so it can't end an audit by accident (built; yours to veto). Claude removes this
-  item once you have said yes or changed them.
+* **⏸️ PENDING DEREK — Group 58: two looks and one call on Audit (2026-11-03; nothing here blocks a release).**
+  Your answers of 2026-11-03 are being built: a QR on each tile, 🔎 Find a spool, and 🖨️ Add to print queue on the
+  strip. Claude walks you through what's left, one at a time with pictures, before the merge:
+  (1) **Done files a spool found here that FCC has somewhere else** ("select it for that location"; you said you think
+  you want it). It's built on safe defaults so you can say yes or no from the pictures, and it comes out without your yes.
+  (2) **The tiles with their QRs:** a new look, so you see it first.
+  (3) **The deck's audit tile during an audit (Decision 5):** it shows the panel and sends nothing, so it can't end an
+  audit by accident. It's built, and yours to veto.
+  Claude removes this item once you've answered.
 * **⏸️ PENDING DEREK — Bulk Moves (L298) hands-on pass.** Built, merged to `dev`, covered by the
   automated suite, and **shipped OFF behind `fcc.bulkMove.enabled`** (schema default `False`, so
   prod is dark; dev's own `config.json` has it `True`). Derek, 2026-10-08: *"I'm so unexcited about
