@@ -23,11 +23,13 @@ what they were red on.
 """
 from __future__ import annotations
 
+import time
+
 import pytest
 
 import app as app_module
 import state
-from test_audit_panel_58_js import CANCEL, DONE, HUB, NOTICE, PANEL, _on_top, audit  # noqa: F401  (audit: the fixture)
+from test_audit_panel_58_js import CANCEL, DONE, HUB, NOTICE, PANEL, PILL, TILE, _on_top, audit  # noqa: F401  (audit: the fixture)
 from test_audit_session_58 import ROWS, add_spool, env, scan, session, start  # noqa: F401  (env: the fixture)
 from test_scanner_safe_dialogs_61_js import MODULES, page61  # noqa: F401  (page61: the fixture)
 from test_slow_scan_slash_js import _type
@@ -1375,6 +1377,9 @@ def test_a_double_click_on_back_changes_nothing_under_it(live, env, under, hit):
     xy = lay_over(live, BACK, under)
     question_up(live)
     live.wait_for_selector(BACK)
+    # A person's press on Back. Under 700 ms after Done's, at its spot ("done"), it is
+    # Done's own double click, which reaches nothing (the re-review's shield).
+    live.wait_for_timeout(PAST_A_DOUBLE_PRESS)
     press(live, xy)
     live.wait_for_selector(QUESTION, state="detached")
     assert live.evaluate(HIT, xy) == hit
@@ -1422,6 +1427,238 @@ def test_a_double_click_on_back_that_brings_a_hidden_panel_back_lands_on_nothing
     live.wait_for_timeout(150)
     assert "CMD:CANCEL" not in sent(live) and session()["active"] is True
     assert live.is_visible(PANEL)
+
+
+# --- a double click whose first press takes the panel away, or brings it (re-review) ------
+# The panel's root is gone by the second press, or wasn't there for the first, so no shield
+# on it could help. Under the panel here is a button of the test's own that counts every
+# event reaching it, where the deck, the buffer or a pill would be on the page.
+# test_audit_double_click_58_e2e.py has every control at the real sizes, on the real page.
+
+BEHIND = r"""(sel) => {
+    const r = document.querySelector(sel).getBoundingClientRect();
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.id = 'fcc-test-behind';
+    b.textContent = 'behind';
+    b.style.cssText = `position:fixed; margin:0; left:${r.left}px; top:${r.top}px;
+        width:${r.width}px; height:${r.height}px; z-index:5;`;
+    window.__behind = [];
+    ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(
+        (t) => b.addEventListener(t, () => window.__behind.push(t)));
+    document.body.appendChild(b);
+    return [r.left + r.width / 2, r.top + r.height / 2];
+}"""
+DOUBLE_CLICK_S = 0.68      # the shield's 700 ms, and a little room
+
+
+def behind(page, sel):
+    """A button of the test's own under `sel`, below the panel. Answers its middle."""
+    return page.evaluate(BEHIND, sel)
+
+
+def double_click(page, xy, then=None, state="visible"):
+    """A real double click at `xy`: two presses of the real mouse, the second a double
+    click's. `then`: a selector to wait for between them (`state`), so the first press's
+    effect is on screen, as with a quick answer; else a person's 120 ms."""
+    started = time.monotonic()
+    press(page, xy)
+    if then:
+        page.wait_for_selector(then, state=state, timeout=650)
+    else:
+        page.wait_for_timeout(120)
+    assert time.monotonic() - started < DOUBLE_CLICK_S, "the first press took too long to be a double click's"
+    press(page, xy, second=True)
+
+
+def reached(page):
+    return {"behind": page.evaluate("window.__behind"),
+            "focus": page.evaluate("document.activeElement.id || document.activeElement.tagName")}
+
+
+TAKES_IT_AWAY = {"cancel-audit": CANCEL, "done-with-nothing-to-park": DONE, "hide": HIDE}
+
+
+@pytest.mark.parametrize("button", TAKES_IT_AWAY.values(), ids=TAKES_IT_AWAY.keys())
+def test_a_double_click_that_takes_the_panel_away_reaches_nothing_under_it(live, env, button):
+    """Re-review finding 6. The panel goes with the first click, and the second landed on
+    the page: on the real one, the deck under Done armed Drop mode, and under Cancel Audit
+    Eject mode or a new audit. RED on 681232a: the button under it took the click and the
+    keyboard."""
+    add_spool(env, 57, "LR-MDB-1", container_slot="1")     # one, found: Done parks nothing
+    begin(live, env)
+    scanned(live, "ID:57")
+    live.wait_for_selector(STRIP)
+    xy = behind(live, button)
+    double_click(live, xy, then=PANEL, state="detached")
+    live.wait_for_timeout(150)
+    assert reached(live) == {"behind": [], "focus": "BODY"}
+    ended = {CANCEL: "CMD:CANCEL", DONE: "CMD:DONE"}.get(button)
+    assert sent(live) == ["ID:57"] + ([ended] if ended else [])
+    assert session()["active"] is (button == HIDE)
+
+
+def test_a_double_click_on_park_that_answers_fast_reaches_nothing_under_the_panel(live, env):
+    """Re-review finding 6's park: the question and the panel both go before the second
+    click when FCC answers quickly. RED on 681232a."""
+    two(env)
+    begin(live, env)
+    scanned(live, "ID:57")
+    question_up(live)
+    live.wait_for_timeout(PAST_A_DOUBLE_PRESS)              # its yes takes a click now
+    xy = behind(live, YES)
+    double_click(live, xy, then=PANEL, state="detached")
+    live.wait_for_timeout(150)
+    assert reached(live) == {"behind": [], "focus": "BODY"}
+    assert len(sent(live, PARK_URL)) == 1 and at(env, 99) == "UNKNOWN"
+
+
+BRINGS_IT_UP = {"deck-tile": TILE, "pill": PILL}
+
+
+@pytest.mark.parametrize("opener", BRINGS_IT_UP.values(), ids=BRINGS_IT_UP.keys())
+def test_a_double_click_that_brings_the_panel_up_presses_nothing_on_it(live, env, opener):
+    """Re-review finding 7. With the panel hidden the first click shows it (Decision 5),
+    and its Cancel Audit can lie under the second: the audit ended and every find went
+    with it. Laid over here; the real band is the e2e sweep's. RED on 681232a."""
+    two(env)
+    begin(live, env)
+    scanned(live, "ID:57")
+    live.evaluate("window.closeAuditPanel()")              # hidden, by no press
+    live.wait_for_selector(PANEL, state="detached")
+    xy = lay_over(live, CANCEL, opener)
+    double_click(live, xy, then=CANCEL)
+    live.wait_for_timeout(150)
+    assert "CMD:CANCEL" not in sent(live) and session()["active"] is True
+    assert live.is_visible(PANEL) and live.evaluate(HIT, xy) == CANCEL[1:]
+
+
+def test_a_double_click_on_a_tile_finds_it_once_and_marks_nothing(live, env):
+    """Re-review finding 8. The first find brings the Last found strip up over the tiles,
+    and its Needs a label lay under the second click: the flag went up on a spool nobody
+    asked about. The keyboard stays on the tile, as a single click leaves it. RED on
+    681232a."""
+    two(env)
+    begin(live, env)
+    live.wait_for_selector(tile(99))
+    xy = lay_over(live, BUTTON, tile(99))
+    double_click(live, xy, then=BUTTON)
+    live.wait_for_timeout(150)
+    assert [p["id"] for p in sent(live, FOUND_URL)] == [99]
+    assert "CMD:NEEDLABEL" not in sent(live) and wire(env, 99) is None
+    assert live.evaluate("document.activeElement.dataset.auditTile") == "99"
+
+
+def test_a_double_click_on_needs_a_label_marks_once(live, env):
+    """Its own double press, as a tile's: the second asked again, and was told the spool is
+    already marked. RED on 681232a: two marks went out."""
+    two(env)
+    begin(live, env)
+    scanned(live, "ID:57")
+    live.wait_for_selector(BUTTON)
+    xy = live.evaluate("(s) => { const r = document.querySelector(s).getBoundingClientRect(); "
+                       "return [r.left + r.width / 2, r.top + r.height / 2]; }", BUTTON)
+    double_click(live, xy, then=UNDO)
+    live.wait_for_timeout(150)
+    live.wait_for_function("() => !state.processing && !state.scanQueue.length")
+    assert sent(live).count("CMD:NEEDLABEL") == 1 and wire(env, 57) == "true"
+
+
+UNDER_BACK_KEYS = {"cancel-audit": CANCEL, "a-tile": tile(99)}
+
+
+@pytest.mark.parametrize("under", UNDER_BACK_KEYS.values(), ids=UNDER_BACK_KEYS.keys())
+def test_a_double_click_on_back_leaves_the_keyboard_on_done(live, env, under):
+    """Re-review finding 9. The second click was stopped, but its mousedown had already put
+    the keyboard on what lay under Back, with no ring to say so: a person's Enter then
+    ended the audit, or found a spool nobody touched. Back gives Done the keyboard, and
+    Enter asks again. RED on 681232a."""
+    three(env)
+    begin(live, env)
+    live.wait_for_selector(tile(99))
+    xy = lay_over(live, BACK, under)
+    question_up(live)
+    live.wait_for_selector(BACK)
+    live.wait_for_timeout(PAST_A_DOUBLE_PRESS)              # a person's press on Back
+    double_click(live, xy, then=QUESTION, state="detached")
+    live.wait_for_timeout(150)
+    assert live.evaluate("document.activeElement.id") == DONE[1:]
+    live.wait_for_timeout(PAST_A_DOUBLE_PRESS)
+    live.keyboard.press("Enter")
+    live.wait_for_selector(QUESTION)
+    assert "CMD:CANCEL" not in sent(live) and sent(live, FOUND_URL) == [] and session()["active"] is True
+
+
+def test_a_double_click_on_back_that_brings_the_panel_back_leaves_the_keyboard_on_done(live, env):
+    """Finding 9's hidden panel: Back brings it up under the pointer, its Cancel Audit took
+    the second mousedown, and the keyboard stayed there once the panel drew. RED on
+    681232a."""
+    three(env)
+    begin(live, env)
+    scanned(live, "ID:57")
+    live.wait_for_selector(BUTTON)
+    xy = lay_over(live, BACK, CANCEL)       # where Cancel Audit will be, measured while it is up
+    live.evaluate("window.closeAuditPanel()")
+    live.wait_for_selector(PANEL, state="detached")
+    scanned(live, "CMD:DONE")
+    live.wait_for_selector(BACK)
+    live.wait_for_timeout(PAST_A_DOUBLE_PRESS)
+    double_click(live, xy, then=CANCEL)
+    live.wait_for_timeout(150)
+    assert "CMD:CANCEL" not in sent(live) and session()["active"] is True
+    live.wait_for_function("(s) => document.activeElement === document.querySelector(s)", arg=DONE)
+
+
+def test_a_key_press_right_after_the_panel_goes_still_presses(live, env):
+    """The shield takes a pointer's second press only: a click from the keyboard (detail 0)
+    is no double click, and Space or Enter on what has the keyboard does what it says. A
+    pin: proved on a copy whose shield takes the keyboard's click too."""
+    add_spool(env, 57, "LR-MDB-1", container_slot="1")
+    begin(live, env)
+    xy = behind(live, HIDE)
+    press(live, xy)                                         # Hide
+    live.wait_for_selector(PANEL, state="detached")
+    live.focus("#fcc-test-behind")
+    live.keyboard.press("Enter")
+    assert live.evaluate("window.__behind") == ["click"]
+
+
+def test_a_press_elsewhere_right_after_the_panel_goes_still_presses(live, env):
+    """A person's next press at another spot is no double click, however soon. A pin:
+    proved on a copy that takes the next press wherever it lands."""
+    add_spool(env, 57, "LR-MDB-1", container_slot="1")
+    begin(live, env)
+    hide = live.evaluate("(s) => { const r = document.querySelector(s).getBoundingClientRect(); "
+                         "return [r.left + r.width / 2, r.top + r.height / 2]; }", HIDE)
+    press(live, hide)
+    live.wait_for_selector(PANEL, state="detached")
+    live.click(TILE)                                        # the deck tile: shows the panel
+    live.wait_for_selector(PANEL)
+
+
+def test_a_touch_double_tap_is_a_double_click_too(live, env):
+    """A finger's two taps arrive as two presses and two clicks, and the shield takes the
+    second. Real touches, through the browser's own touch emulation. RED on 681232a."""
+    add_spool(env, 57, "LR-MDB-1", container_slot="1")
+    begin(live, env)
+    scanned(live, "ID:57")
+    live.wait_for_selector(STRIP)
+    xy = behind(live, CANCEL)
+    cdp = live.context.new_cdp_session(live)
+    cdp.send("Emulation.setTouchEmulationEnabled", {"enabled": True, "maxTouchPoints": 1})
+
+    def tap():
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": xy[0], "y": xy[1]}]})
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+
+    started = time.monotonic()
+    tap()
+    live.wait_for_selector(PANEL, state="detached", timeout=650)
+    assert time.monotonic() - started < DOUBLE_CLICK_S
+    tap()
+    live.wait_for_timeout(200)
+    assert live.evaluate("window.__behind") == []
+    assert sent(live) == ["ID:57", "CMD:CANCEL"] and session()["active"] is False
 
 
 def hide_then_ask(page, env):

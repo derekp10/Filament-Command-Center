@@ -4735,8 +4735,12 @@ def _undo_guard_read(sid, only_if_at):
         return 'deleted', None
     if rec.get('archived'):
         return 'moved_on', rec
-    here = str(rec.get('location') or '').strip().strip('"').upper()
-    return ('here' if here == only_if_at else 'moved_on'), rec
+    return ('here' if _undo_record_at(rec) == only_if_at else 'moved_on'), rec
+
+
+def _undo_record_at(rec):
+    """A spool record's own location, as a guarded record's `only_if_at` reads."""
+    return str(rec.get('location') or '').strip().strip('"').upper()
 
 
 def _undo_place_gone(record, loc, rows):
@@ -4766,17 +4770,24 @@ def _undo_left_where(rec):
 
 def _undo_guard(record):
     """Every spool of a guarded record, sorted by _undo_guard_kind for Undo's
-    question: {here: [ids], moved_on: [{id, where}], deleted: [ids], unreadable:
-    [ids], place_gone: [ids]}. The question and perform_undo read alike, so what it
-    offers is what Undo does (a spool that moved between the two is left alone and
-    said so)."""
+    question: {here: [ids], moved_on: [{id, where, held}], deleted: [ids],
+    unreadable: [ids], place_gone: [ids]}. The question and perform_undo read alike,
+    so what it offers is what Undo does (a spool that moved between the two is left
+    alone and said so). `held`: a spool left alone that is still at `only_if_at`
+    (archived there), read from its record: it hasn't left Unknown, so the question
+    mustn't say that nothing is there any more."""
     rows = {str(r.get('LocationID', '')).strip().upper(): r
             for r in (locations_db.load_locations_list() or []) if isinstance(r, dict)}
+    only_if_at = str(record.get('only_if_at') or '').strip().upper()
     guard: typing.Dict[str, typing.List[typing.Any]] = {
         "here": [], "moved_on": [], "deleted": [], "unreadable": [], "place_gone": []}
     for sid, loc in (record.get('moves') or {}).items():
         kind, rec = _undo_guard_kind(record, sid, loc, rows)
-        guard[kind].append({"id": sid, "where": _undo_left_where(rec)} if kind == 'moved_on' else sid)
+        if kind == 'moved_on':
+            guard[kind].append({"id": sid, "where": _undo_left_where(rec),
+                                "held": _undo_record_at(rec) == only_if_at})
+        else:
+            guard[kind].append(sid)
     return guard
 
 
@@ -4819,7 +4830,9 @@ def _describe_guarded_undo(record, printer_map, guard):
         text = f"Undo: put {len(items)} spools back in {_undo_audit_places(record)} (parked at Unknown by its audit)?"
     elif items:
         text = "Undo: put " + _and_list(f"#{sid} back {place}" for sid, place in items) + "?"
-    elif gone:
+    elif gone or any(s.get('held') for s in moved_on):
+        # A spool still at Unknown (archived there, or its place gone): "nothing is at
+        # Unknown any more" would be false, and the line after it would name it there.
         text = "Undo: nothing from this audit can go back. Clear it from Undo?"
     else:
         text = "Undo: nothing from this audit is at Unknown any more, so nothing goes back. Clear it from Undo?"

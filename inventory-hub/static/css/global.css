@@ -889,6 +889,15 @@ body {
     pointer-events: none;
 }
 
+/* While the ⌨️ shortcut list is up (20200 / 20201, above every overlay; the class is
+   shortcuts_registry.js's), a scan's toast is drawn over it: scans work under the list,
+   and a failed one's 7 s toast went by unseen behind it (Group 58 re-review). Only
+   then: everywhere else toasts stay under the overlays, so a confirm isn't drowned out
+   by toast noise. */
+.fcc-shortcuts-up #toast-container {
+    z-index: 20300;
+}
+
 .toast-msg {
     background: rgba(0, 0, 0, 0.95);
     color: #fff;

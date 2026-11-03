@@ -944,6 +944,36 @@ def test_a_spool_archived_somewhere_else_says_that_too(env):
     assert spools(env)[1]["location"] == "SHELF-1"
 
 
+def test_the_only_spool_archived_at_unknown_isnt_said_to_have_left(env):
+    """Re-review finding 1. Archived where the park left it (by hand, through the real
+    write: weighed to 0 the archive edge would move it to Unassigned), so the park is
+    still the top record. The question said "nothing from this audit is at Unknown any
+    more", then named the spool at Unknown. RED on 681232a."""
+    _park_box(env, 1)
+    assert spoolman_api.update_spool(1, {"archived": True})
+    assert spools(env)[1]["location"] == "UNKNOWN" and spools(env)[1]["archived"] is True
+    asked = ask_undo(env)
+    assert asked["msg"] == ("Undo: nothing from this audit can go back. Clear it from Undo? "
+                            "Left where it is now: #1 at Unknown (archived).")
+    env["fake"].patches.clear()
+    done = yes_undo(env, asked)
+    assert done["success"] is True and done["restored"] == [] and env["fake"].patches == []
+    assert done["msg"] == "↩️ Undo: nothing went back. Left where it is now: #1 at Unknown (archived)."
+    assert extra_of(env, 1)["fcc_pre_audit_location"] == "LR-MDB-1:1@2026-11-02"
+
+
+def test_one_archived_at_unknown_and_one_gone_elsewhere_say_nothing_can_go_back(env):
+    """Spools that really left keep their sentence (test_every_spool_moved_on_still_clears_
+    the_record); with one still at Unknown the true reason is that nothing can go back.
+    RED on 681232a."""
+    _park_box(env, 2)
+    assert spoolman_api.update_spool(1, {"archived": True})
+    spools(env)[2].update(location="SHELF-1")
+    asked = ask_undo(env)
+    assert asked["msg"] == ("Undo: nothing from this audit can go back. Clear it from Undo? "
+                            "Left where they are now: #1 at Unknown (archived) and #2 at SHELF-1.")
+
+
 # ---------------------------------------------------------------------------
 # A place that has gone (finding 4)
 # ---------------------------------------------------------------------------

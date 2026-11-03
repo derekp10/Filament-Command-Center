@@ -49,14 +49,35 @@
         el.innerHTML = html;
     };
 
+    // What had the keyboard when the list opened (Group 58 re-review): a click on its ✕
+    // or its backdrop takes the focus off it, and Done's question, whose keys sit on its
+    // own overlay, then heard nothing, its Enter dead with its hint still saying what
+    // Enter does.
+    let _focusBefore = null;
     window.toggleShortcutsOverlay = function () {
         const ov = document.getElementById('fcc-shortcuts-overlay');
         if (!ov) return;
         const bd = document.getElementById('fcc-shortcuts-overlay-backdrop');
         const hidden = ov.style.display === 'none' || !ov.style.display;
         renderList();  // refresh in case new shortcuts were registered post-load
+        if (hidden) _focusBefore = document.activeElement;
         ov.style.display = hidden ? 'block' : 'none';
         if (bd) bd.style.display = hidden ? 'block' : 'none';
+        // A scan's outcome is still read over the list (global.css): its toast is 7 s
+        // when it fails, and every scan outcome is owed one. The class on <body>, so a
+        // toast container made later (showToast makes it on first use) is in it too.
+        if (document.body) document.body.classList.toggle('fcc-shortcuts-up', hidden);
+        if (!hidden) {
+            const back = _focusBefore;
+            const now = document.activeElement;
+            _focusBefore = null;
+            // Only where the list left it nowhere: the ✕ (inside the list) or the page
+            // (a click on the backdrop). A focus put somewhere since stays there.
+            if (back && back.isConnected && back !== document.body && typeof back.focus === 'function'
+                && (!now || now === document.body || ov.contains(now))) {
+                back.focus();
+            }
+        }
     };
 
     // Bind `?` globally + `Escape` to close the overlay.

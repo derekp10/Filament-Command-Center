@@ -501,6 +501,9 @@ def test_a_real_audit_through_the_question_a_real_park_and_its_undo(
         page.evaluate("() => window.openManage('UNKNOWN')")
         listed = page.locator(f"#manageModal .manage-list-item[data-spool-id='{second}'] .badge.bg-warning").first
         expect(listed).to_contain_text("❓ Lost:", timeout=15_000)
+        # Past its show transition: Bootstrap drops a hide() while a modal fades in, and a
+        # quick list read closed it inside the fade (the re-review's sweep, twice).
+        conftest.wait_modal_settled(page, "manageModal")
         page.evaluate("() => { window.manageNavStack = []; closeManage(); }")
         page.wait_for_function("() => !document.getElementById('manageModal').classList.contains('show')")
         conftest.wait_modal_settled(page, "manageModal")

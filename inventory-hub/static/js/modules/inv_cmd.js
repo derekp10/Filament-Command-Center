@@ -1210,6 +1210,20 @@ window.commitBulkMove = () => {
     let _stripSpool = null;
     // When Done's question was last answered: see _shieldClick.
     let _questionClosedAt = 0;
+    // A double click's second press (see _shieldPage and _shieldClick). `_press`: the last
+    // primary pointer press, anywhere {at, x, y, slop}. `_panelPress`: the last one made
+    // while the panel was up, and whether it landed on something over the panel (`cover`:
+    // Done's question, the 🧺 list, the legacy picker, the ⌨️ list) or on a tile or the
+    // Last found strip (`strip`), with the spool the strip showed then (`stripWas`) and the
+    // tile's (`tile`). `_eatPress`: when the press now under way began, if it is the
+    // second of a double click and must reach nothing on the panel.
+    let _press = null;
+    let _panelPress = null;
+    let _eatPress = 0;
+    // The press the panel (or what it put up) went or came under, armed by _shieldPage.
+    let _pageShield = null;
+    // When the press now under way began, if the page shield took it whole.
+    let _pageEating = 0;
     // Back brought a hidden panel back: Done takes the keyboard once it exists.
     let _focusDoneNext = false;
     // What this panel put on top of itself, closed with it: no overlay outlives its
@@ -1227,6 +1241,9 @@ window.commitBulkMove = () => {
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     const PRESS_TIMEOUT_MS = 20000;     // an undo reads and writes a spool
     const DOUBLE_PRESS_MS = 700;
+    // How far a double click's second press can land from its first: a mouse stays within
+    // a few pixels, a finger's second tap less so.
+    const DOUBLE_PRESS_SLOP_PX = { mouse: 16, other: 40 };
 
     const _TILES = {
         found: { bg: '#0a2a0a', border: '#0f0', badge: '<span style="color:#0f0; font-weight:bold;">✅ scanned</span>' },
@@ -1391,15 +1408,107 @@ window.commitBulkMove = () => {
         if (tile) _pressTile(tile);
     };
 
+    // --- A double click's second press (Group 58 re-review) --------------------------
+    // A press that takes away, or brings, what lies under the pointer hands the second
+    // press of a double click to whatever lies beneath. A second press is one that starts
+    // under DOUBLE_PRESS_MS after the last primary press, at its spot (within its slop): a
+    // press elsewhere is a person's next press, and goes on.
+    const _isSecondPress = (first, e, now) => !!first && now - first.at < DOUBLE_PRESS_MS
+        && Math.abs(first.x - e.clientX) <= first.slop && Math.abs(first.y - e.clientY) <= first.slop;
+    const _pressEaten = () => !!_eatPress && Date.now() - _eatPress < 2000;
+
     // Done's question closes on the first click of a double click, and the second lands
     // on whatever lies under its button: Cancel Audit, or a tile (a spool found that
     // nobody touched). "Back to the audit" should only go back. On the panel's root in
-    // the capture phase, so it covers every button on it in one place.
+    // the capture phase, so it covers every button on it in one place. Any click for
+    // DOUBLE_PRESS_MS after the question is answered, the keyboard's too (the keyboard
+    // lands on Done, and a double Enter asked again). And a pointer's second press
+    // (_eatPress), wherever on the panel it lands: one at the spot of a press on what sat
+    // over the panel (Done's question, the 🧺 list, the legacy picker, the ⌨️ list, gone
+    // with the first press), or of a press on a tile or the Last found strip, which move
+    // what lies under the pointer: a first find brings the strip up over the tiles (a
+    // tile's double click pressed Needs a label, and a spool nobody asked about was
+    // flagged), or grows a short panel, which centres itself again (the second press
+    // landed beside the tile and took the keyboard off it); and the strip's own button
+    // marked twice.
     const _shieldClick = (e) => {
-        if (Date.now() - _questionClosedAt >= DOUBLE_PRESS_MS) return;
+        const eat = Date.now() - _questionClosedAt < DOUBLE_PRESS_MS || (e.detail > 0 && _pressEaten());
+        if (e.detail > 0) _eatPress = 0;
+        if (!eat) return;
         e.preventDefault();
         e.stopImmediatePropagation();
     };
+
+    // The same press's mousedown would move the keyboard to what lies under it, with no
+    // ring to say so, and the next Enter pressed that (Cancel Audit, or a tile): Done
+    // keeps the keyboard Back gave it.
+    const _shieldMouse = (e) => {
+        if (Date.now() - _questionClosedAt < DOUBLE_PRESS_MS || _pressEaten()) e.preventDefault();
+    };
+
+    // The panel went, or came, under the pointer (Done with nothing to park, Cancel
+    // Audit, Hide, a park that answered fast; the deck tile or the 🕵️ pill bringing a
+    // hidden panel up, its Cancel Audit under the tile's second click; Done's question or
+    // the 🧺 list opening there). The second press would land on what lies under it now:
+    // the deck behind the panel armed Drop or Eject mode, asked Undo, opened the weigh
+    // window or started a new audit, and the panel's own Cancel Audit ended the audit
+    // the tile had just shown. Armed only while the press that did it is under
+    // DOUBLE_PRESS_MS old, so an audit ended from another window, a scan or the heartbeat
+    // takes nobody's click. The next press that starts at its spot in DOUBLE_PRESS_MS then
+    // reaches nothing, on the document: the panel's root is gone, or wasn't there for the
+    // first press. Its pointerdown and pointerup too, which the floating pills act on. A
+    // click from the keyboard (detail 0) is no double click, and goes on.
+    const _shieldPage = () => {
+        const now = Date.now();
+        if (_press && now - _press.at < DOUBLE_PRESS_MS) _pageShield = Object.assign({}, _press, { at: now });
+    };
+
+    // Registered once. A primary press only: mouse, touch, pen.
+    document.addEventListener('pointerdown', (e) => {
+        if (e.button > 0) return;
+        const now = Date.now();
+        const shield = _pageShield;
+        _pageShield = null;             // one press: this one, or one elsewhere ends it
+        _pageEating = 0;
+        _eatPress = 0;
+        if (_isSecondPress(shield, e, now)) {
+            _pageEating = now;
+            e.stopImmediatePropagation();
+            return;
+        }
+        const slop = e.pointerType === 'mouse' ? DOUBLE_PRESS_SLOP_PX.mouse : DOUBLE_PRESS_SLOP_PX.other;
+        _press = { at: now, x: e.clientX, y: e.clientY, slop };
+        if (!_handle) { _panelPress = null; return; }
+        const t = e.target;
+        const onPanel = !!(t && t.nodeType === 1 && _handle.element.contains(t));
+        const first = _panelPress;
+        // The strip moved to a spool the first press didn't bring (neither the tile's, nor
+        // what it showed then): a scan read between them, so this press is a person's
+        // next one (they mark #57, scan #99 and mark that one too, quickly).
+        const moved = !!first && _stripSpool != null && _stripSpool !== first.stripWas && _stripSpool !== first.tile;
+        if (onPanel && _isSecondPress(first, e, now) && (first.cover || (first.strip && !moved))) _eatPress = now;
+        const tileEl = onPanel ? t.closest('[data-audit-tile]') : null;
+        _panelPress = Object.assign({}, _press, {
+            cover: !onPanel,
+            strip: onPanel && !!(tileEl || t.closest('#fcc-audit-last-found')),
+            stripWas: _stripSpool,
+            tile: tileEl ? Number(tileEl.dataset.auditTile) : null,
+        });
+    }, true);
+    ['mousedown', 'pointerup', 'mouseup', 'click', 'dblclick'].forEach((type) => {
+        document.addEventListener(type, (e) => {
+            if (!_pageEating || Date.now() - _pageEating > 2000) return;
+            if (type === 'click' && !e.detail) return;      // a key's click: not this press
+            if (e.button > 0) return;
+            if (type !== 'pointerup') e.preventDefault();  // mousedown: the keyboard stays put
+            e.stopImmediatePropagation();
+            if (type === 'click') {
+                const was = _pageEating;
+                setTimeout(() => { if (_pageEating === was) _pageEating = 0; }, 0);   // and its dblclick
+            }
+        }, true);
+    });
+    document.addEventListener('pointercancel', () => { _pageEating = 0; }, true);
 
     const _applyBusy = () => {
         if (!_handle) return;
@@ -1651,11 +1760,15 @@ window.commitBulkMove = () => {
         });
         // Each time the panel opens: Back brings a hidden one back, under the pointer.
         _handle.element.addEventListener('click', _shieldClick, true);
+        _handle.element.addEventListener('mousedown', _shieldMouse, true);
+        // Brought up under the pointer (the deck tile, the 🕵️ pill, Back): its Cancel
+        // Audit can lie under the second click.
+        _shieldPage();
         const closeBtn = _handle.element.querySelector('#fcc-audit-panel-close');
         if (closeBtn) closeBtn.onclick = () => window.closeAuditPanel();
         // Over the panel, so the confirm tier. A row opens nothing during an audit.
         const looseBtn = _handle.element.querySelector('#fcc-audit-panel-loose');
-        if (looseBtn) looseBtn.onclick = () => { _loose = window.openLooseList({ tier: 'confirm' }); };
+        if (looseBtn) looseBtn.onclick = () => { _loose = window.openLooseList({ tier: 'confirm' }); _shieldPage(); };
         const bodyEl = _handle.element.querySelector('#fcc-audit-panel-body');
         if (bodyEl) {
             bodyEl.addEventListener('click', _bodyClick);
@@ -1671,6 +1784,8 @@ window.commitBulkMove = () => {
     // An audit that ends, or a panel that goes, takes what sits on it along: a Yes
     // left up would answer a question about an audit that has gone.
     window.closeAuditPanel = () => {
+        // Gone from under the pointer: what lies beneath it must not take the second click.
+        if (_handle) _shieldPage();
         _panelGen += 1;
         _focusDoneNext = false;
         if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
@@ -1911,6 +2026,9 @@ window.commitBulkMove = () => {
             },
         });
         _question = asked;
+        // Opened under the pointer that pressed Done: its second click lands on the
+        // question, where a mousedown off the buttons takes the keyboard from Back.
+        _shieldPage();
     };
 })();
 
@@ -3530,6 +3648,15 @@ const _undoNotAnswered = () => {
     if (typeof updateLogState === 'function') updateLogState(true);
 };
 
+// The first press only asks the question, and writes nothing: with no answer to it,
+// nothing was undone and nothing began (Group 58 re-review: it said the Undo "may not
+// have finished", and sent the person to an Activity Log that holds nothing about it).
+const _undoNotAsked = () => {
+    const msg = "FCC didn't answer, so nothing was undone. Try again in a moment.";
+    showToast(msg, 'error', 7000);
+    if (window.logClientEvent) window.logClientEvent(`⚠️ ${msg}`, 'WARNING');
+};
+
 const triggerUndo = (opts = {}) => {
     const body = {};
     if (opts.confirm) { body.confirm = true; body.undo_id = opts.undoId; body.confirmed_toolheads = opts.heads || []; }
@@ -3567,7 +3694,7 @@ const triggerUndo = (opts = {}) => {
             if (res && res.success) showToast(res.msg || '↩️ Undone', 'success', (res.left_alone || []).length ? 7000 : 4000);
             else if (res && res.nothing) showToast(res.msg, 'info', 4000);
             else showToast((res && res.msg) || 'Undo failed', 'error', 7000);
-        }, _undoNotAnswered)
+        }, opts.confirm ? _undoNotAnswered : _undoNotAsked)
         .catch(e => console.error(e));
 };
 

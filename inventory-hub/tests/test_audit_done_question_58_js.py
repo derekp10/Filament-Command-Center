@@ -972,6 +972,29 @@ return { toasts: timed(), logs: logLines() };
     assert any(UNDO_NOT_ANSWERED in line for line in res["logs"]), res["logs"]
 
 
+UNDO_NOT_ASKED = "FCC didn't answer, so nothing was undone. Try again in a moment."
+
+
+@pytest.mark.parametrize("failing", ["Promise.reject(new Error('The operation timed out'))",
+                                     "Promise.resolve({ json: () => Promise.reject(new SyntaxError('Unexpected token <')) })"],
+                         ids=["no-answer-in-time", "an-error-page"])
+def test_no_answer_to_undos_question_says_nothing_was_undone(tmp_path, failing):
+    """Re-review finding 5. The first press only asks the question (its body is {}, and
+    the route writes nothing for it), so with no answer nothing had begun: "may not have
+    finished" sent the person to an Activity Log holding nothing about it. The Yes keeps
+    its words (the test above). RED on 681232a."""
+    res = _q(tmp_path, """
+const bodies = [];
+window.fetchT = (u, o) => { bodies.push(JSON.parse(o.body)); return %s; };
+triggerUndo();
+await __settle(40);
+return { toasts: timed(), logs: logLines(), bodies };
+""" % failing)
+    assert res["bodies"] == [{}]
+    assert res["toasts"] == [{"msg": UNDO_NOT_ASKED, "type": "error", "ms": 7000}]
+    assert any(UNDO_NOT_ASKED in line for line in res["logs"]), res["logs"]
+
+
 def test_an_exception_after_an_undos_answer_doesnt_read_as_no_answer(tmp_path, asked):
     """The answer landed, so the words would be false: the park's rule, which has the same
     test. RED on 1f8e03a, in the old words: "Undo failed: no answer from the server"."""

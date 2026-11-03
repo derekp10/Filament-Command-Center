@@ -24,9 +24,11 @@ from __future__ import annotations
 
 import pytest
 
-from test_audit_no_label_58_js import (BUTTON, DONE, HIDE, LOOSE_BTN, MODULES, PANEL, PARK_URL, PAST_N, QUESTION, SHORTCUTS,  # noqa: F401
-                                       UNDO, YES, _on_top, audit, begin, env, live, page61, question_up, real_shortcut_list,
-                                       scanned, sent, session, show_shortcut_list, three, tile, tile_says, two, wire)
+from test_audit_no_label_58_js import (BACK, BUTTON, DONE, FOUND_URL, HIDE, HIT, LOOSE_BTN, MODULES, PANEL,  # noqa: F401
+                                       PARK_URL, PAST_A_DOUBLE_PRESS, PAST_N, QUESTION, SHORTCUTS, UNDO, YES, _on_top,
+                                       audit, begin, double_click, env, lay_over, live, page61, question_up,
+                                       real_shortcut_list, scanned, sent, session, show_shortcut_list, three, tile,
+                                       tile_says, two, wire)
 from test_audit_panel_58_js import CANCEL
 from test_audit_session_58 import add_spool
 
@@ -573,4 +575,205 @@ def test_use_selected_with_nothing_picked_finds_no_spool_and_says_so(live, env):
     live.wait_for_function("() => window.__sent.some((p) => p.body.text === 'ID:57')")
     live.wait_for_function("() => !state.processing")
     live.wait_for_selector(PICKER, state="detached")
+    assert session()["scanned_items"] == [57]
+
+
+# --- a Space after a key left in the scan buffer (re-review finding 2) ----------------------
+
+STRAY_MS = 600          # past the 500 ms a scan's first key counts as one in flight
+SPACE_ON = {"cancel-audit": CANCEL, "park": YES, "a-tile": tile(57)}
+
+
+@pytest.mark.parametrize("target", SPACE_ON.values(), ids=SPACE_ON.keys())
+def test_a_space_after_a_stray_key_presses_nothing_under_the_list(live, env, target):
+    """Re-review finding 2. The rule ran only with an empty scan buffer. The list teaches N,
+    which stands down under it and stays in the buffer for 2 s, and a Space then pressed
+    the hidden button: Cancel Audit ended the audit and its scans, Park sent the spools to
+    Unknown unseen, and a tile found a spool nobody had. RED on 681232a."""
+    real_shortcut_list(live)
+    three(env)
+    begin(live, env)
+    live.wait_for_selector(tile(57))
+    if target == YES:
+        question_up(live)
+        live.wait_for_timeout(PAST_A_DOUBLE_PRESS)          # its yes takes a press now
+    live.focus(target)
+    show_shortcut_list(live)
+    live.keyboard.press("n")
+    live.wait_for_timeout(STRAY_MS)
+    assert live.evaluate("state.scanBuffer") == "n"
+    before = (list(sent(live)), list(sent(live, PARK_URL)), list(sent(live, FOUND_URL)))
+    live.keyboard.press(" ")
+    live.wait_for_timeout(150)
+    assert (sent(live), sent(live, PARK_URL), sent(live, FOUND_URL)) == before
+    assert session()["active"] is True and list_is_up(live)
+
+
+def test_a_space_after_a_stray_key_presses_nothing_under_the_dim(live, env):
+    """Finding 2's last case: with no overlay up, the processing dim is what no mouse gets
+    past. RED on 681232a: the button behind it took the press."""
+    live.focus("#loc-cancel")
+    live.evaluate("() => { state.processing = true; }")
+    try:
+        live.keyboard.press("x")
+        live.wait_for_timeout(STRAY_MS)
+        live.keyboard.press(" ")
+        live.wait_for_timeout(100)
+        assert live.evaluate("window.__clicks.cancel") == 0
+    finally:
+        live.evaluate("() => { state.processing = false; }")
+
+
+def test_a_stray_key_then_a_space_where_a_mouse_could_click_still_presses(live, env):
+    """A Space after a stray key on an uncovered button presses it, as it always did, and a
+    press that waits takes its turn. A pin: proved on a copy that refuses every Space with
+    a key in the buffer."""
+    three(env)
+    begin(live, env)
+    live.focus(DONE)
+    live.keyboard.press("x")
+    live.wait_for_timeout(STRAY_MS)
+    live.keyboard.press(" ")
+    live.wait_for_selector(QUESTION)
+    assert sent(live).count("CMD:DONE") == 1
+
+
+# --- a scan's toast over the list (re-review finding 3) -------------------------------------
+
+TOAST_ON_TOP = r"""(list) => {
+    const c = document.getElementById('toast-container');
+    const t = c && c.querySelector('.toast-msg');
+    if (!t) return null;
+    // Toasts take no pointer, so elementFromPoint can't see them: hit-testable for this look.
+    c.style.pointerEvents = 'auto';
+    t.style.pointerEvents = 'auto';
+    const r = t.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + 8);
+    c.style.pointerEvents = '';
+    t.style.pointerEvents = '';
+    const l = document.querySelector(list).getBoundingClientRect();
+    return { onTop: t.contains(hit),
+             overlaps: r.left < l.right && r.right > l.left && r.top < l.bottom && r.bottom > l.top };
+}"""
+
+
+def test_a_scans_toast_reads_over_the_shortcut_list(live, env):
+    """Re-review finding 3. The list draws over every overlay, and toasts under them: a scan
+    read under the list (scans work there) toasted behind it, a failed one's 7 s included,
+    and was gone before the list closed. Over the list only while it is up. RED on
+    681232a."""
+    real_shortcut_list(live)
+    two(env)
+    begin(live, env)
+    show_shortcut_list(live)
+    scan_keys(live, "LOC:LR-MDB-2")                         # refused: an audit is running
+    live.wait_for_selector("#toast-container .toast-msg")
+    assert live.evaluate(TOAST_ON_TOP, SHORTCUTS) == {"onTop": True, "overlaps": True}
+    live.keyboard.press("Escape")
+    assert live.evaluate("getComputedStyle(document.getElementById('toast-container')).zIndex") == "11000"
+
+
+# --- the list gives the keyboard back (re-review finding 4) ---------------------------------
+
+@pytest.mark.parametrize("close", ["backdrop", "its-close-button", "escape"])
+def test_closing_the_list_gives_the_keyboard_back_to_the_question(live, env, close):
+    """Re-review finding 4. Done's question was up with the keyboard on Back, its hint saying
+    Enter goes back. A click on the list's ✕ or its backdrop took the focus to the page,
+    and the question's keys, on its own overlay, heard nothing: Enter did nothing, with the
+    question still up. RED on 681232a for the backdrop and the ✕; Escape kept the focus (a
+    pin)."""
+    real_shortcut_list(live)
+    three(env)
+    begin(live, env)
+    question_up(live)
+    live.wait_for_function("(s) => document.activeElement === document.querySelector(s)", arg=BACK)
+    show_shortcut_list(live)
+    if close == "backdrop":
+        live.mouse.click(4, 4)
+    elif close == "its-close-button":
+        live.click(SHORTCUTS + " .btn-close")
+    else:
+        live.keyboard.press("Escape")
+    assert not list_is_up(live)
+    assert live.evaluate("(s) => document.activeElement === document.querySelector(s)", BACK)
+    live.keyboard.press("Enter")
+    live.wait_for_selector(QUESTION, state="detached")
+    assert sent(live, PARK_URL) == [] and session()["active"] is True
+
+
+def test_closing_the_list_leaves_a_keyboard_put_somewhere_since(live, env):
+    """Only where the list left the keyboard nowhere (the page, or the list itself). A pin:
+    proved on a copy that always gives it back."""
+    real_shortcut_list(live)
+    two(env)
+    begin(live, env)
+    live.wait_for_selector(tile(99))
+    live.focus(tile(57))
+    show_shortcut_list(live)
+    live.evaluate("(s) => document.querySelector(s).focus()", tile(99))
+    live.keyboard.press("Escape")
+    assert active(live) == "99"
+
+
+# --- a double click on what sits over the panel (re-review, item f) -------------------------
+# Its first click closes it, and the second lands on the panel under it. Here Cancel Audit is
+# laid under the control; test_audit_double_click_58_e2e.py has the real page's own spots.
+
+def _cancel_under(page, control):
+    """Cancel Audit moved under `control` (measured where it is now), above the rest of the
+    panel (a spool the control finds brings the Last found strip up there). Answers its
+    middle."""
+    page.add_style_tag(content=f"{CANCEL} {{ z-index: 50 !important; }}")
+    return lay_over(page, CANCEL, control)
+
+
+def test_a_double_click_on_the_loose_lists_close_presses_nothing_on_the_panel(live, env):
+    """RED on 681232a: the second click ended the audit."""
+    up_with_the_loose_list(live, env)
+    live.wait_for_timeout(PAST_A_DOUBLE_PRESS)              # past the press that opened it
+    xy = _cancel_under(live, LOOSE_CLOSE)
+    double_click(live, xy, then=LOOSE, state="detached")
+    live.wait_for_timeout(150)
+    assert live.evaluate(HIT, xy) == CANCEL[1:]
+    assert "CMD:CANCEL" not in sent(live) and session()["active"] is True and live.is_visible(PANEL)
+
+
+def test_a_double_click_on_a_loose_row_presses_nothing_on_the_panel(live, env):
+    """During an audit a row opens nothing, so the list stays and takes the second click too.
+    A pin: proved on a copy whose row closes the list."""
+    up_with_the_loose_list(live, env)
+    live.wait_for_timeout(PAST_A_DOUBLE_PRESS)
+    xy = _cancel_under(live, LOOSE_ROW)
+    double_click(live, xy)
+    live.wait_for_timeout(150)
+    assert live.is_visible(LOOSE) and "CMD:CANCEL" not in sent(live) and session()["active"] is True
+
+
+def test_a_double_click_on_the_shortcut_lists_close_presses_nothing_on_the_panel(live, env):
+    """On the real page its ✕ lands on or beside the panel's Hide. RED on 681232a: the second
+    click ended the audit."""
+    real_shortcut_list(live)
+    two(env)
+    begin(live, env)
+    show_shortcut_list(live)
+    xy = _cancel_under(live, SHORTCUTS + " .btn-close")
+    double_click(live, xy, then=SHORTCUTS, state="hidden")
+    live.wait_for_timeout(150)
+    assert live.evaluate(HIT, xy) == CANCEL[1:]
+    assert "CMD:CANCEL" not in sent(live) and session()["active"] is True and live.is_visible(PANEL)
+
+
+def test_a_double_click_on_the_pickers_use_selected_presses_nothing_on_the_panel(live, env):
+    """It closes the picker and finds the spool picked; the second click lands on the panel.
+    RED on 681232a: the second click ended the audit."""
+    shared_label(env)
+    begin(live, env)
+    picker_up(live)
+    live.select_option(PICKER_LIST, "57")
+    xy = _cancel_under(live, PICKER_USE)
+    double_click(live, xy, then=PICKER, state="detached")
+    live.wait_for_function("() => !state.processing")
+    live.wait_for_timeout(150)
+    assert live.evaluate(HIT, xy) == CANCEL[1:]
+    assert "CMD:CANCEL" not in sent(live) and session()["active"] is True
     assert session()["scanned_items"] == [57]
