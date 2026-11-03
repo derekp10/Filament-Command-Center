@@ -1240,6 +1240,8 @@ window.commitBulkMove = () => {
     let _findPickedAt = 0;
     // The session the panel drew last: Find tags its rows from it.
     let _lastData = null;
+    // Watches the scrolling body's size for _fitStrip while the panel is up.
+    let _stripFit = null;
     // Each tile's QR (Derek, 2026-11-03, A1), drawn once and kept by its text: a scan
     // changes the panel's hash, and the body is drawn again. For one audit only.
     const _tileQrs = new Map();
@@ -1769,6 +1771,9 @@ window.commitBulkMove = () => {
         // Now, not two frames later: the tile is its full size before the keyboard's
         // tile is brought into view, and a QR already drawn doesn't flicker.
         _placeTileQrs(body);
+        // And the strip stuck over the tiles only where it leaves them room, before the
+        // keyboard's tile is brought clear of it.
+        _fitStrip();
         const doneBtn = body.querySelector('#fcc-audit-panel-done');
         if (doneBtn) doneBtn.onclick = () => { if (!_busy) window.auditDone(); };
         const cancelBtn = body.querySelector('#fcc-audit-panel-cancel');
@@ -1915,6 +1920,11 @@ window.commitBulkMove = () => {
             // `focus` in the capture phase: mountOverlay's focus guard stops focusin at
             // the document, before it reaches anything inside the overlay.
             bodyEl.addEventListener('focus', _tileFocused, true);
+            // A window resized, or a notice above the body that comes or goes.
+            if (typeof ResizeObserver === 'function') {
+                _stripFit = new ResizeObserver(() => _fitStrip());
+                _stripFit.observe(bodyEl);
+            }
         }
         // Initial render + start the 2s poll.
         _poll();
@@ -1944,6 +1954,7 @@ window.commitBulkMove = () => {
             _find = null;
             if (window.closeAuditFind) window.closeAuditFind(find);
         }
+        if (_stripFit) { _stripFit.disconnect(); _stripFit = null; }
         if (_handle) { try { _handle.cleanup(); } catch (_) { /* noop */ } _handle = null; }
     };
 
@@ -2049,6 +2060,25 @@ window.commitBulkMove = () => {
         const tile = e.target;
         if (tile && tile.matches && tile.matches('.fcc-audit-tile:focus-visible')) _tileClear(tile);
     };
+
+    // The Last found strip stays stuck over the tiles only while it leaves them room
+    // (review of 7e3720f, P-5). On a phone its words, "undo that", the 🖨️, Needs a label
+    // and its QR wrap onto many rows, and the header's buttons take some of the window
+    // too: at 390 x 844 it stood over 62% of the scrolling body, and at Extra Large it
+    // was taller than the body, so no tile could be seen or pressed and its own QR was
+    // cut. Taller than STRIP_SHARE of the body, it goes back in the flow, after the tiles
+    // (.fcc-audit-strip-flow), as a window under 34rem tall already puts it (global.css).
+    // Measured after each render, as the body changes size (a resize, a notice above it)
+    // and on a Text size change; a sticky strip and a flowing one are the same height,
+    // so the measure never flips back by itself.
+    const STRIP_SHARE = 0.45;
+    const _fitStrip = () => {
+        const body = _handle && _handle.element.querySelector('#fcc-audit-panel-body');
+        const strip = body && body.querySelector('#fcc-audit-last-found');
+        if (!strip) return;
+        strip.classList.toggle('fcc-audit-strip-flow', strip.offsetHeight > STRIP_SHARE * body.clientHeight);
+    };
+    document.addEventListener('fcc:text-size', () => _fitStrip());
 
     const _keyArrow = (e) => {
         const tiles = Array.from(_handle.element.querySelectorAll('.fcc-audit-tile'));

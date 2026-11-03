@@ -2889,6 +2889,10 @@ button.fcc-audit-tile.kb-active {
 @media (max-height: 34rem) {
     .fcc-audit-strip { position: static; }
 }
+/* So does a strip taller than 45 % of the scrolling body (a phone, at Large or Extra
+   Large text), which would hide most of the tiles, or all of them: inv_cmd.js's
+   _fitStrip measures it (review of 7e3720f, P-5). */
+.fcc-audit-strip.fcc-audit-strip-flow { position: static; }
 .fcc-audit-strip-main { flex: 1 1 14rem; min-width: 0; }
 .fcc-audit-strip-title {
     font-size: var(--fcc-fs-label);

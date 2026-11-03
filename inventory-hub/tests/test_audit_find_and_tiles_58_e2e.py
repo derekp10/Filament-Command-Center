@@ -24,6 +24,7 @@ import conftest
 from test_audit_find_and_tiles_58_js import SEARCH_ROWS, search_row
 from test_audit_no_label_58_e2e import SCANNER, Marks, tile
 from test_audit_page_58_e2e import PANEL, _dashboard, _start
+from test_audit_page_58_js import SESSION
 from test_audit_question_dialog_58_js import _question
 from test_scanner_safe_dialogs_61_js import LEGACY
 
@@ -154,6 +155,76 @@ def test_nothing_scrolls_sideways(page: Page, base_url: str, width, height):
         return { out: r.left < -0.5 || r.right > innerWidth + 0.5, body: body.scrollWidth > body.clientWidth + 1 }; }""")
     assert got == {"out": False, "body": False}
     assert page.evaluate("() => document.documentElement.scrollWidth > innerWidth") is False
+    assert server.writes == []
+
+
+# --- The Last found strip leaves the tiles room (review of 7e3720f, P-5) -------------------
+# Sticky over the tiles, the strip wrapped onto many rows on a phone (its words, "undo
+# that", the 🖨️, Needs a label and its QR) and stood over most of the scrolling body, or
+# all of it at Extra Large, so no tile could be seen or pressed.
+
+STRIP_FIT = """() => { const s = document.getElementById('fcc-audit-last-found');
+    const b = document.getElementById('fcc-audit-panel-body');
+    return { strip: s.getBoundingClientRect().height, body: b.clientHeight, position: getComputedStyle(s).position }; }"""
+# Each tile, scrolled into the body's view as far as it goes: can its middle be pressed?
+TILES_PRESSABLE = """() => { const b = document.getElementById('fcc-audit-panel-body');
+    return Array.from(b.querySelectorAll('.fcc-audit-tile')).map((t) => {
+        t.scrollIntoView({ block: 'center' });
+        const r = t.getBoundingClientRect();
+        const e = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return !!e && t.contains(e); }); }"""
+
+
+def _flagged_last_found(page: Page, server):
+    """#99 found and marked "Needs a label" here: the strip with "undo that" and the 🖨️."""
+    flagged = dict(SESSION["expected"][1], found=True, label_status=True, flagged_here=True, label_read=False)
+    server.session = dict(SESSION, expected=[SESSION["expected"][0], flagged], last_found=flagged)
+    page.evaluate("() => window.refreshAuditSession()")
+    page.wait_for_selector("#fcc-audit-label-queue")
+    page.wait_for_timeout(300)                       # its QR draws two frames later
+
+
+def _leaves_room(page: Page, what: str):
+    got = page.evaluate(STRIP_FIT)
+    assert got["position"] == "static" or got["strip"] <= 0.45 * got["body"] + 1, (what, got)
+    assert all(page.evaluate(TILES_PRESSABLE)), (what, got)
+    return got
+
+
+@pytest.mark.parametrize("width, height, size, sticky", [
+    (390, 844, "Standard", None), (390, 844, "Large", None), (390, 844, "Extra Large", False),
+    (1366, 768, "Standard", True), (1366, 768, "Large", True), (1600, 1300, "Standard", True)])
+def test_the_strip_leaves_the_tiles_room(page: Page, base_url: str, width, height, size, sticky):
+    """Stuck over the tiles only while it is at most 45% of the scrolling body, else in the
+    flow, and every tile can be brought into view and pressed. A laptop's strip stays
+    stuck. RED on 0f0128e at 390 x 844 Extra Large: sticky and taller than the body, and
+    no tile could be pressed."""
+    page.set_viewport_size({"width": width, "height": height})
+    page.add_init_script("(() => { try { localStorage.setItem('fcc.textSize', %r); } catch (e) {} })();" % size)
+    server = _running(page, base_url)
+    _flagged_last_found(page, server)
+    got = _leaves_room(page, f"{width}x{height} {size}")
+    if sticky is not None:
+        assert (got["position"] == "sticky") is sticky, got
+    assert server.writes == []
+
+
+def test_the_strip_follows_a_text_size_change(page: Page, base_url: str):
+    """A Text size picked with the panel up (Settings, no reload): the strip is measured
+    again and goes in the flow when it no longer leaves room, and back when it does."""
+    page.set_viewport_size({"width": 390, "height": 844})
+    server = _running(page, base_url)
+    _flagged_last_found(page, server)
+    resize = "(s) => { document.documentElement.setAttribute('data-fcc-text-size', s);" \
+             " document.dispatchEvent(new CustomEvent('fcc:text-size', { detail: { name: s } })); }"
+    page.evaluate(resize, "xlarge")
+    page.wait_for_timeout(200)
+    assert page.evaluate(STRIP_FIT)["position"] == "static"
+    _leaves_room(page, "after Extra Large")
+    page.set_viewport_size({"width": 1366, "height": 768})
+    page.evaluate(resize, "standard")
+    page.wait_for_timeout(200)
+    assert page.evaluate(STRIP_FIT)["position"] == "sticky"
     assert server.writes == []
 
 
