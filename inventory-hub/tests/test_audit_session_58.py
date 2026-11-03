@@ -479,9 +479,11 @@ def test_left_counts_the_list_and_never_subtracts_an_extra(env):
     scan(env, "ID:9")
     scan(env, "ID:1")
     scan(env, "ID:2")
-    assert log_text(env)[-1] == "✅ Found #2 (1 left)"
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, H S2): these are typed ids, which
+    # read no label, and the line says so.
+    assert log_text(env)[-1] == "✅ Found #2, no label read (1 left)"
     scan(env, "ID:3")
-    assert log_text(env)[-1] == "✅ Found #3 (All found!)"
+    assert log_text(env)[-1] == "✅ Found #3, no label read (All found!)"
 
 
 def test_a_spool_already_scanned_answers_quietly(env):
@@ -572,7 +574,10 @@ def test_a_spool_loaded_from_here_is_a_quiet_find(env):
     assert session()["trail_items"] == [242] and session()["rogue_items"] == []
     assert session()["scanned_items"] == [242]
     assert session()["rows"]["242"]["where"] == "XL-1" and session()["rows"]["242"]["slot"] == "1"
-    assert [(m, c) for m, c, _ in env["logs"]] == [("🔗 Found #242: loaded on XL-1 from here.", "INFO")]
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, H S2): a typed id reads no label,
+    # and the line says so (a real label read keeps "Found #242: loaded on …").
+    assert [(m, c) for m, c, _ in env["logs"]] == [("🔗 Found #242, no label read: loaded on XL-1 from here.",
+                                                    "INFO")]
 
 
 def test_a_printer_that_is_its_own_head_counts_as_a_head(env):
@@ -1211,10 +1216,11 @@ def ended_just_past_the_gate(env, monkeypatch, name="process_audit_scan"):
     times in 1500 at a 1 microsecond switch interval; this hits it every time."""
     real = getattr(logic, name)
 
-    def ended_first(*args):
+    # **kwargs: the route passes process_audit_scan the find's `how` (Group 58 H S2).
+    def ended_first(*args, **kwargs):
         monkeypatch.setattr(logic, name, real)
         assert "audit_ended" in scan(env, "CMD:CANCEL")
-        return real(*args)
+        return real(*args, **kwargs)
 
     monkeypatch.setattr(logic, name, ended_first)
 
@@ -1779,8 +1785,10 @@ def test_a_spool_on_the_list_is_heard_with_what_is_left(env):
     for sid in (1, 2):
         add_spool(env, sid, "LR-MDB-1")
     start(env, "LR-MDB-1")
-    assert scan_answer("ID:1") == {**AUDIT_SCAN, "heard": "Found #1 (1 left)"}
-    assert scan_answer("ID:2") == {**AUDIT_SCAN, "heard": "Found #2 (All found!)"}
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, H S2): a typed id reads no label,
+    # and `heard` says so; a real read of the label keeps the old words.
+    assert scan_answer("ID:1") == {**AUDIT_SCAN, "heard": "Found #1, no label read (1 left)"}
+    assert scan_answer("ID:2", source="barcode") == {**AUDIT_SCAN, "heard": "Found #2 (All found!)"}
 
 
 def test_a_double_read_is_heard(env):
@@ -1836,7 +1844,9 @@ def test_a_spool_loaded_from_here_is_heard(env):
     add_spool(env, 1, "LR-MDB-2")
     add_spool(env, 242, "XL-1", physical_source="LR-MDB-2", physical_source_slot="1")
     start(env, "LR-MDB-2")
-    assert scan_answer("ID:242") == {**AUDIT_SCAN, "heard": "Found #242: loaded on XL-1 from here"}
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, H S2): a real read of the label keeps
+    # these words; a typed id's say no label was read (test_audit_tiles_and_report_58).
+    assert scan_answer("ID:242", source="barcode") == {**AUDIT_SCAN, "heard": "Found #242: loaded on XL-1 from here"}
 
 
 def test_a_row_read_again_is_heard_as_what_it_turned_out_to_be(env):
@@ -1844,7 +1854,8 @@ def test_a_row_read_again_is_heard_as_what_it_turned_out_to_be(env):
     add_spool(env, 242, "XL-1", physical_source="LR-MDB-2", physical_source_slot="1")
     start(env, "LR-MDB-2")
     scanned_in_a_blip(env, 242)
-    assert scan_answer("ID:242")["heard"] == "Found #242: loaded on XL-1 from here"
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, H S2): a typed id reads no label.
+    assert scan_answer("ID:242")["heard"] == "Found #242, no label read: loaded on XL-1 from here"
 
 
 @pytest.mark.parametrize("text, msg", [("LOC:LR-TYPO", "LR-TYPO isn't a place FCC knows."),

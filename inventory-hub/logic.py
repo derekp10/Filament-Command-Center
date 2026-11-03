@@ -6062,14 +6062,15 @@ def _audit_forget(session, sid):
         session['last_found'] = None
 
 
-def _audit_unexpected_spool(session, sid):
+def _audit_unexpected_spool(session, sid, how=None):
     """A scanned spool that isn't on the list. Read BEFORE anything is recorded:
     a spool that doesn't exist leaves no mark, and one Spoolman won't answer for
     is still a spool found here (never a 500).
 
     A spool on a head whose trail names this place physically sits in this box,
-    feeding that head, so it is a quiet find. Anything else is an Extra (the
-    session's `rogue_items`), and says where FCC has it.
+    feeding that head, so it is a quiet find, said as any find is (_audit_found_words
+    with `how`: "Found #7, no label read: loaded on XL-1 from here"). Anything else is
+    an Extra (the session's `rogue_items`), and says where FCC has it.
 
     A row recorded while Spoolman wasn't answering comes back here when the spool
     is scanned again, and this read replaces it, only once it has answered: while
@@ -6130,8 +6131,9 @@ def _audit_unexpected_spool(session, sid):
         row['where'] = sloc
         row['slot'] = str(extra.get('physical_source_slot', '')).strip('"')
         session.setdefault('trail_items', []).append(sid)
-        state.add_log_entry(f"🔗 Found #{sid}: loaded on {_audit_esc(sloc)} from here.", "INFO")
-        return {"status": "success", "heard": f"Found #{sid}: loaded on {sloc} from here"}
+        heard = f"{_audit_found_words(sid, how)}: loaded on {sloc} from here"
+        state.add_log_entry(f"🔗 {_audit_esc(heard)}.", "INFO")
+        return {"status": "success", "heard": heard}
 
     session.setdefault('rogue_items', []).append(sid)
     state.add_log_entry(f"⚠️ Extra: {_audit_esc(row['display'])}: FCC has it at {_audit_esc(row['where'])}.",
@@ -6143,7 +6145,8 @@ def _audit_found(session, sid):
     """Every find comes through here, a re-scan too: it selects the spool again, so
     "Needs a label" acts on the spool in the person's hand. Found with no label read
     until the route says one was (routes_scan._audit_label_check), which the scan's
-    own text and source decide: process_audit_scan sees neither."""
+    own text and source decide: process_audit_scan sees neither, only the words the
+    route picked for the find from them (`how`, routes_scan._audit_find_how)."""
     session['last_found'] = sid
     session.setdefault('found_by', {}).setdefault(str(sid), AUDIT_FOUND_NO_LABEL)
 
@@ -6154,16 +6157,31 @@ def _audit_already_scanned(session, sid):
     return {"status": "success", "msg": "Already scanned", "heard": f"#{sid} is already scanned"}
 
 
+def _audit_found_words(sid, how):
+    """How a find is said, in the Activity Log and in `heard`: "Found #57" for a real
+    read of its label (`how` None), else it says that no label was read, and how the
+    spool was found when that is known: "Found #57 by hand, no label read", "Found #57
+    by its tile's QR, no label read", "Found #57 with Find a spool, no label read", and
+    "Found #57, no label read" for a typed id, an SPL: label or the legacy picker's
+    pick (`how` ''). A find with no label read used to read as a label read, "Found
+    #57 (12 left)" (Derek, 2026-11-03: a find on screen must never pass for a label)."""
+    if how is None:
+        return f"Found #{sid}"
+    return f"Found #{sid}{' ' + how if how else ''}, no label read"
+
+
 def _audit_find_listed(session, sid, how):
-    """A spool on the list found with no label read, by its tile: a press (`how` "by
-    hand", audit_mark_found) or its QR ("by its tile's QR", _audit_found_by_qr). One
-    find, two doors. Logged the first time, and its words answered; a second time it
-    only selects the spool again and answers ''."""
+    """A spool on the list found: by a real read of its label (`how` None), or with no
+    label read, said how (_audit_found_words): by its tile, a press ("by hand",
+    audit_mark_found) or its QR ("by its tile's QR", _audit_found_by_qr), or by a scan
+    that read no label (routes_scan._audit_find_how: "with Find a spool", or '').
+    One find, every door. Logged the first time, and its words answered; a second time
+    it only selects the spool again and answers ''."""
     scanned = session.setdefault('scanned_items', [])
     words = ''
     if sid not in scanned:
         scanned.append(sid)
-        words = f"Found #{sid} {how}, no label read" + _audit_left_words(session)
+        words = _audit_found_words(sid, how) + _audit_left_words(session)
         state.add_log_entry(f"✅ {_audit_esc(words)}", "INFO", "00ff00")
     _audit_found(session, sid)
     return words
@@ -6186,24 +6204,22 @@ def _audit_found_by_qr(session, scan):
     return {"status": "success", "heard": _audit_find_listed(session, sid, "by its tile's QR")}
 
 
-def _audit_spool_scan(session, sid):
+def _audit_spool_scan(session, sid, how=None):
     """A spool scan. `heard`, on these and the location scan's answers, is what the
-    scan did in a sentence: the panel shows it, and it may be hidden."""
+    scan did in a sentence: the panel shows it, and it may be hidden. `how`: how the
+    scan found the spool when it read no label (_audit_found_words), None for a real
+    read of its label; the log line and `heard` say the same."""
     if not session.get('location_id'):
         return _audit_refuse("Scan a Location first!")
     scanned = session.setdefault('scanned_items', [])
     if sid in scanned:
         if _audit_row_unread(session, sid):
-            return _audit_unexpected_spool(session, sid)
+            return _audit_unexpected_spool(session, sid, how)
         return _audit_already_scanned(session, sid)
     expected = session.get('expected_items') or []
     if sid not in expected:
-        return _audit_unexpected_spool(session, sid)
-    scanned.append(sid)
-    _audit_found(session, sid)
-    heard = f"Found #{sid}" + _audit_left_words(session)
-    state.add_log_entry(f"✅ {heard}", "INFO", "00ff00")
-    return {"status": "success", "heard": heard}
+        return _audit_unexpected_spool(session, sid, how)
+    return {"status": "success", "heard": _audit_find_listed(session, sid, how)}
 
 
 def _audit_left_words(session):
@@ -7038,13 +7054,15 @@ def park_audit_missing(audit_id, ids, today=None, file_ids=None, file_where=None
         _AUDIT_END_LOCK.release()
 
 
-def process_audit_scan(scan_result):
+def process_audit_scan(scan_result, how=None):
     """Handles scans when in Audit Mode: returns a bare dict, and only
     {"status": "error"} reaches the scanner as a refusal. An answer that ended the
     audit carries `audit_ended`. Done with spools to park answers {"status": "ask",
     ...} and ends nothing: the route turns that into its question (_audit_finish).
     `said` is a sentence for the person, `said_type` its toast's kind when it isn't
-    a success."""
+    a success. `how`, for a spool scan: how it found its spool when it read no label
+    (routes_scan._audit_find_how), None for a real read of its label, which a caller
+    that doesn't say gets: the find's log line and `heard` say which."""
     if _AUDIT_END_LOCK.locked():
         return _audit_refuse(AUDIT_FINISHING_MSG)
     session = state.AUDIT_SESSION
@@ -7066,7 +7084,7 @@ def process_audit_scan(scan_result):
     if kind == 'location':
         return _audit_location_scan(session, scan.get('id'))
     if kind == 'spool':
-        return _audit_spool_scan(session, scan.get('id'))
+        return _audit_spool_scan(session, scan.get('id'), how)
     if kind == 'error':
         return _audit_refuse(scan.get('msg') or "Unknown scan type")
     return _audit_refuse(_AUDIT_OTHER_SCANS.get(kind) or "Unknown scan type")

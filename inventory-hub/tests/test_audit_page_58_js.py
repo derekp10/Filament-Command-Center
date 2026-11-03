@@ -1242,11 +1242,14 @@ return { log: logLines() };
 # --- a hidden panel, and what a scan did ------------------------------------------------
 
 def _audit_answers(env):
-    """The real route's answers to the first two scans of an audit: `heard` kept."""
+    """The real route's answers to the first two scans of an audit: `heard` kept.
+    PIN UPDATED DELIBERATELY (Derek, 2026-11-03, H S2): the page below reads both as a
+    scanner's ('barcode'), so the route is asked the same way; a typed id's `heard`
+    now says no label was read."""
     add_spool(env, 57, "LR-MDB-1", container_slot="1")
     add_spool(env, 99, "LR-MDB-1", container_slot="2")
     scan(env, "CMD:AUDIT")
-    return [scan_answer("LOC:LR-MDB-1"), scan_answer("ID:57")]
+    return [scan_answer("LOC:LR-MDB-1", source="barcode"), scan_answer("ID:57", source="barcode")]
 
 
 def test_a_hidden_panel_hears_what_each_scan_did(tmp_path, env):

@@ -156,7 +156,9 @@ def test_active_audit_hijacks_spool_scan_and_refreshes_watchdog(client):
     # scanner UI as a renderable {'type':'error'} payload (the frontend toasts
     # it) instead of being discarded behind a bare command answer.
     assert r.get_json() == {"type": "error", "msg": "not allowed"}
-    pas.assert_called_once_with({"type": "spool", "id": 10})
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, Group 58 H S2): the route also says how
+    # the scan found its spool (routes_scan._audit_find_how): None for a real label read.
+    pas.assert_called_once_with({"type": "spool", "id": 10}, how=None)
     gs.assert_not_called()   # normal spool branch never ran
     us.assert_not_called()   # label-verify write never ran
     ts = state.AUDIT_SESSION["last_activity_ts"]
@@ -165,7 +167,7 @@ def test_active_audit_hijacks_spool_scan_and_refreshes_watchdog(client):
 
 def test_active_audit_runs_the_label_check_once_it_has_taken_the_spool(client):
     """Group 58.2: the success path of the test above. The audit still gets the scan
-    first and in the same one-argument call, then a real label read of a spool with
+    first, in the same call (plus `how`, Group 58 H S2), then a real label read of a spool with
     no status is confirmed: the same full-extras write as outside an audit. The rules
     around it are tests/test_audit_no_label_58.py, on the real write functions."""
     state.AUDIT_SESSION.update({
@@ -186,7 +188,8 @@ def test_active_audit_runs_the_label_check_once_it_has_taken_the_spool(client):
                         json={"text": "ID:10", "source": "barcode"})
 
     assert r.get_json() == AUDIT_SCAN
-    pas.assert_called_once_with({"type": "spool", "id": 10})
+    # PIN UPDATED DELIBERATELY (Group 58 H S2): `how` None, a real label read.
+    pas.assert_called_once_with({"type": "spool", "id": 10}, how=None)
     read.assert_called_once_with(10)
     us.assert_called_once_with(10, {"extra": {"container_slot": "2", "needs_label_print": False}})
     log.assert_called_once_with("✔️ Spool #10 Label Verified", "SUCCESS", "00ff00")
@@ -208,7 +211,9 @@ def test_active_audit_hijacks_location_scan(client):
                         json={"text": "LOC:LR-MDB-1", "source": "barcode"})
 
     assert r.get_json() == AUDIT_SCAN
-    pas.assert_called_once_with({"type": "location", "id": "LR-MDB-1"})
+    # PIN UPDATED DELIBERATELY (Group 58 H S2): the route says how every scan found a
+    # spool; a location scan reads no label, and its `how` goes unused.
+    pas.assert_called_once_with({"type": "location", "id": "LR-MDB-1"}, how="")
     gl.assert_not_called()
 
 

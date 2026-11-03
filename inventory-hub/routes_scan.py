@@ -1088,6 +1088,19 @@ def _is_label_read(source, text):
     return source == 'barcode' and text.strip().upper().startswith('ID:')
 
 
+def _audit_find_how(source, text):
+    """How a spool scan the audit takes found its spool, for the find's Activity Log
+    line and `heard` (logic._audit_found_words): None for a real read of its label
+    (_is_label_read), "with Find a spool" for a pick in the panel's 🔎 Find a spool
+    (source 'search', inv_audit_find.js; a search card's click sends it too), and ''
+    for any other find, which read no label either (a typed id, an SPL: label, a bare
+    number, the legacy picker's pick). Group 58, Derek, 2026-11-03: a find with no
+    label read logged "Found #110 (5 left)", the words of a label read."""
+    if _is_label_read(source, str(text or '')):
+        return None
+    return "with Find a spool" if source == 'search' else ""
+
+
 def _verify_spool_label(sid, data, source, text, quiet=False):
     """A real label read confirms the label: 'verified', 'failed' (Spoolman said no,
     with an ERROR line), 'already' (it was confirmed before this read), or None when
@@ -1238,7 +1251,7 @@ def api_identify_scan():
         # Group 58: a legacy label several spools share skips the audit: its
         # picker opens over the panel, and its pick comes back here as ID:<n>.
         if not (res and res.get('type') == 'ambiguous'):
-            audit_res = logic.process_audit_scan(res)
+            audit_res = logic.process_audit_scan(res, how=_audit_find_how(source, text))
             # 28.C2 — propagate an audit-scan error to the scanner UI (the frontend
             # toasts res.type=='error') instead of leaving the failure in the
             # Activity Log only.

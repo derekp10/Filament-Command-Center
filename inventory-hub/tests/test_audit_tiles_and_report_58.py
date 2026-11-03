@@ -4,6 +4,9 @@
 S1 Done's question draws its spools as the panel's tiles do: every row of `park`,
    `file` and `stays` carries its colour and grams, from the rows the session stored
    at each scan (what the tiles draw), never a read of its own.
+S2 A find with no label read says so, in its Activity Log line and in `heard`: a
+   🔎 Find a spool pick "Found #1 with Find a spool, no label read (2 left)", any
+   other "Found #1, no label read (2 left)"; a real label read keeps "Found #1 (2 left)".
 
 All of it through the Flask test client and the real session, on the real read and
 write functions over tests/spoolman_extra_fake.SpoolmanHTTPFake, never a mocked
@@ -141,3 +144,65 @@ def test_a_row_with_no_stored_data_draws_a_plain_swatch(env):
     assert asked["park"][0]["id"] == 5
     assert {k: asked["park"][0][k] for k in ("color", "color_direction", "remaining_weight")} == \
         {"color": "", "color_direction": "longitudinal", "remaining_weight": None}
+
+
+# ---------------------------------------------------------------------------
+# S2: a find with no label read says so
+# ---------------------------------------------------------------------------
+
+def _box(env):
+    """An audit of LR-MDB-1 with #1, #2 and #3 filed there."""
+    for sid in (1, 2, 3):
+        add_spool(env, sid, "LR-MDB-1", container_slot=str(sid))
+    start(env, "LR-MDB-1")
+
+
+@pytest.mark.parametrize("text, source, words, found_by", [
+    ("ID:1", "search", "Found #1 with Find a spool, no label read (2 left)", "no_label"),   # 🔎 Find a spool
+    ("ID:1", "keyboard", "Found #1, no label read (2 left)", "no_label"),   # a typed id; the legacy picker
+    ("SPL:1", "barcode", "Found #1, no label read (2 left)", "no_label"),   # a scanner, but no ID: label
+    ("ID:1", "barcode", "Found #1 (2 left)", "label"),                      # a real read of its label
+], ids=["find-a-spool", "typed", "spl-label", "label-read"])
+def test_a_finds_line_says_whether_a_label_was_read(env, text, source, words, found_by):
+    """It read "Found #1 (2 left)" whatever found the spool, the words of a label read.
+    The line and `heard` say the same, and so does the tile (`found_by`)."""
+    _box(env)
+    assert scan_answer(text, source=source) == {**AUDIT_SCAN, "heard": words}
+    assert log_text(env)[0] == f"✅ {words}"
+    assert session()["found_by"] == {"1": found_by}
+
+
+@pytest.mark.parametrize("source, words", [
+    ("search", "Found #7 with Find a spool, no label read: loaded on XL-1 from here"),
+    ("keyboard", "Found #7, no label read: loaded on XL-1 from here"),
+    ("barcode", "Found #7: loaded on XL-1 from here"),
+], ids=["find-a-spool", "typed", "label-read"])
+def test_a_spool_loaded_from_here_says_whether_a_label_was_read(env, source, words):
+    add_spool(env, 1, "LR-MDB-1")
+    add_spool(env, 7, "XL-1", physical_source="LR-MDB-1", physical_source_slot="2")
+    start(env, "LR-MDB-1")
+    assert scan_answer("ID:7", source=source) == {**AUDIT_SCAN, "heard": words}
+    assert log_text(env)[0] == f"🔗 {words}."
+
+
+def test_a_row_read_again_is_said_as_the_scan_that_read_it_found_it(env):
+    """A spool scanned while Spoolman wasn't answering is read again by its next scan,
+    and that scan's words are the find's."""
+    add_spool(env, 1, "LR-MDB-1")
+    add_spool(env, 7, "XL-1", physical_source="LR-MDB-1", physical_source_slot="2")
+    start(env, "LR-MDB-1")
+    env["fake"].down = True
+    scan(env, "ID:7")
+    env["fake"].down = False
+    env["logs"].clear()
+    heard = "Found #7 with Find a spool, no label read: loaded on XL-1 from here"
+    assert scan_answer("ID:7", source="search")["heard"] == heard
+    assert log_text(env) == [f"🔗 {heard}."]
+
+
+def test_a_direct_call_that_doesnt_say_how_keeps_a_label_reads_words(env):
+    """Pins what was already right: process_audit_scan's own callers (a test, an old
+    caller) that pass no `how` get the words they always had."""
+    _box(env)
+    assert logic.process_audit_scan({"type": "spool", "id": 1}) == {"status": "success",
+                                                                     "heard": "Found #1 (2 left)"}
