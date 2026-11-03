@@ -2171,8 +2171,10 @@ window.commitBulkMove = () => {
 
     // The Yes. Every id the question counted, not only the lines it drew: the spools it
     // parks, and (Derek's C, 2026-11-03, for his look) the Extras it files here, sent
-    // as `file_ids` ([] files nothing).
-    const _park = (auditId, ids, fileIds = []) => {
+    // as `file_ids` ([] files nothing) with where the question showed each,
+    // `file_where` ({id: where}): a move sends what its screen showed, so one that
+    // moved while the question sat open stays where it went.
+    const _park = (auditId, ids, fileIds = [], fileWhere = {}) => {
         const words = (ids.length && fileIds.length) ? `Parking ${_spools(ids.length)} and filing ${fileIds.length}…`
             : (fileIds.length ? `Filing ${_spools(fileIds.length)}…` : `Parking ${_spools(ids.length)}…`);
         setProcessing(true, { label: `⏳ ${words}` });      // under the panel, when it is up
@@ -2184,7 +2186,8 @@ window.commitBulkMove = () => {
         window.auditRequestOut(1);
         window.fetchT('/api/audit/park', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ audit_id: auditId, ids, file_ids: fileIds, today: window.fccLocalDay() }),
+            body: JSON.stringify({ audit_id: auditId, ids, file_ids: fileIds, file_where: fileWhere,
+                today: window.fccLocalDay() }),
         }, PARK_TIMEOUT_MS)
             .then(r => r.json())
             .then(_parkAnswered, _parkNotAnswered)
@@ -2247,7 +2250,8 @@ window.commitBulkMove = () => {
             onConfirm: () => {
                 _question = null;
                 _questionClosedAt = Date.now();
-                _park(res.audit_id, park.map(r => r.id), file.map(r => r.id));
+                _park(res.audit_id, park.map(r => r.id), file.map(r => r.id),
+                    Object.fromEntries(file.map(r => [String(r.id), String(r.where || '')])));
             },
             onCancel: (info) => {
                 // Closed with the panel, or replaced by a newer Done's question

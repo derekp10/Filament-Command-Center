@@ -82,9 +82,13 @@ def question(env):
     return asked
 
 
-def yes(env, asked=None, ids=None, file_ids=_ALL, today="2026-11-03", audit_id=None):
+def yes(env, asked=None, ids=None, file_ids=_ALL, today="2026-11-03", audit_id=None, file_where=_ALL):
     """The Yes to Done's question: every spool it showed, or what the test says.
-    `file_ids` left out of the body when the test passes None (a page from before C)."""
+    `file_ids` left out of the body when the test passes None (a page from before C).
+    `file_where`, as the page sends it: where the question showed each Extra ({id:
+    where}), sent with `file_ids`; None leaves it out, a dict is sent as it is.
+    PIN UPDATED DELIBERATELY (review of 7e3720f, R-1): the page sends it, and the
+    server checks each Extra against it."""
     asked = asked or question(env)
     body = {"audit_id": audit_id or asked["audit_id"], "today": today,
             "ids": [r["id"] for r in asked["park"]] if ids is None else ids}
@@ -92,6 +96,11 @@ def yes(env, asked=None, ids=None, file_ids=_ALL, today="2026-11-03", audit_id=N
         body["file_ids"] = [r["id"] for r in asked["file"]]
     elif file_ids is not None:
         body["file_ids"] = file_ids
+    if file_where is _ALL:
+        if file_ids is not None:
+            body["file_where"] = {str(r["id"]): r["where"] for r in asked["file"]}
+    elif file_where is not None:
+        body["file_where"] = file_where
     res = app_module.app.test_client().post("/api/audit/park", json=body)
     assert res.status_code == 200, res.get_data(as_text=True)
     return res.get_json()
@@ -492,6 +501,64 @@ def test_a_change_at_the_last_look_is_a_stay_never_a_write(env, monkeypatch, cha
     assert result["parked"] == [2] and result["filed"] == []
     assert [(s["id"], s["why"]) for s in result["stayed"]] == [(20, why)]
     assert 20 not in patched(env)
+
+
+def _move(env, sid, location, slot=""):
+    """Someone files the spool elsewhere while Done's question is open: Spoolman's own
+    page, or the wizard, Quick-Swap or Force Location in another tab, none of which
+    asks the audit."""
+    rec = spools(env)[sid]
+    rec["location"] = location
+    rec["extra"]["container_slot"] = json.dumps(slot)
+
+
+@pytest.mark.parametrize("to, slot, why", [
+    ("CR-CT-1", "", "moved to CR-CT-1"),
+    ("PM-DB-2", "", "moved to PM-DB-2"),             # into a PolyDryer
+    ("LR-MDB-2", "4", "moved to LR-MDB-2 slot 4"),   # another slot of the same box
+])
+def test_an_extra_moved_while_the_question_was_open_stays_where_it_went(places, to, slot, why):
+    """Review of 7e3720f, R-1 (and S-1): the last look compared the record with the Yes's
+    own plan, which already saw the move, so the Extra was pulled out of its new place.
+    It is checked against where the question showed it (`file_where`)."""
+    env = places
+    add_spool(env, 2, "LR-MDB-1", container_slot="2")
+    _extra_here(env, at="LR-MDB-2", container_slot="3")
+    asked = question(env)
+    assert asked["file"][0]["where"] == "LR-MDB-2 slot 3"
+    _move(env, 20, to, slot)
+    env["logs"].clear()
+    result = yes(env, asked)
+    assert result["parked"] == [2] and result["filed"] == []
+    assert [(s["id"], s["why"]) for s in result["stayed"]] == [(20, why)]
+    assert 20 not in patched(env)
+    assert spools(env)[20]["location"] == to and extra_of(env, 20)["container_slot"] == slot
+    (record,) = state.UNDO_STACK
+    assert "filed" not in record and record["moves"] == {2: "LR-MDB-1"}
+    assert f"#20 {RED} → {why}" in report(env) and "Filed here" not in report(env)
+
+
+@pytest.mark.parametrize("file_where", [None, {}, {"21": "LR-MDB-2 slot 3"}, "LR-MDB-2 slot 3"])
+def test_a_yes_naming_an_extra_without_where_it_was_shown_files_nothing(env, file_where):
+    """R-1: an Extra the Yes names with no `file_where` entry (none sent, another
+    spool's, or not a dict at all) can't be checked against its question, so it stays."""
+    _extra_here(env, at="LR-MDB-2", container_slot="3")
+    asked = question(env)
+    result = yes(env, asked, file_where=file_where)
+    assert result["filed"] == []
+    assert result["stayed"] == [_stay(20, "wasn't in the question you answered", "LR-MDB-2 slot 3")]
+    assert patched(env) == [] and spools(env)[20]["location"] == "LR-MDB-2"
+
+
+def test_the_yes_still_files_an_extra_that_is_where_its_question_showed_it(env):
+    """Pins what was already right, with `file_where` now sent: an Extra that didn't move
+    is filed, and the report and the log say where the question showed it."""
+    _extra_here(env, at="LR-MDB-2", container_slot="3")
+    env["logs"].clear()
+    assert yes(env)["filed"] == [20]
+    assert spools(env)[20]["location"] == "LR-MDB-1"
+    assert "(FCC had it at LR-MDB-2 slot 3)" in report(env)
+    assert any("filed Spool #20" in m and "(FCC had it at LR-MDB-2 slot 3)" in m for m, _c, _ in env["logs"])
 
 
 def test_one_it_cant_read_at_the_last_look_isnt_written_and_counts_as_failed(env, monkeypatch):

@@ -96,6 +96,26 @@ def test_with_spools_to_park_and_an_extra_to_file_the_yes_does_both(live, env):
     assert record(env, 2)["location"] == "UNKNOWN" and record(env, 200)["location"] == "LR-MDB-1"
 
 
+def test_the_yes_sends_where_the_question_showed_each_extra(live, env):
+    """Review of 7e3720f, R-1: a move sends what its screen showed. The Yes sends each
+    Extra's `where` as the question showed it (`file_where`, {id: where}), and an Extra
+    filed elsewhere while the question sat open stays where it went."""
+    add_spool(env, 1, "LR-MDB-1", container_slot="1")
+    add_spool(env, 200, "LR-MDB-2", container_slot="1")
+    begin(live, env)
+    scanned(live, "ID:1")
+    scanned(live, "ID:200")
+    ask(live)
+    record(env, 200)["location"] = "CR-CT-1"          # another tab files it on the cart
+    record(env, 200)["extra"]["container_slot"] = '""'
+    say_yes(live)
+    live.wait_for_function("() => !state.auditActive")
+    sent = posts(live, "/api/audit/park")
+    assert [(p["file_ids"], p["file_where"]) for p in sent] == [([200], {"200": "LR-MDB-2 slot 1"})]
+    assert record(env, 200)["location"] == "CR-CT-1"
+    assert not any("Filed #200" in t["msg"] for t in toasts(live))
+
+
 def test_with_nothing_to_file_the_question_is_the_parks_and_the_yes_files_nothing(live, env):
     """The park's words, as before; its Yes now says `file_ids: []` (a Yes without the key
     files nothing on the server either, an older page's)."""

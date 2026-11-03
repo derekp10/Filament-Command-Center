@@ -6657,8 +6657,11 @@ def _audit_park_one(sid, place, today, printer_map, loc_info_map):
 def _audit_file_one(sid, place, was, printer_map, loc_info_map):
     """One Extra filed here (Derek's C2), after a last look at it: (stay why, fail
     why, record), as _audit_park_one, both blank meaning it landed. `was` is where the
-    plan has it: any change since is a stay, never a write, and so is anything the
-    fate rule now says stays (_audit_extra_fate). A place that holds one spool is
+    question the Yes answers showed it (the page sends it back, `file_where`): any
+    change since that question is a stay, never a write, and so is anything the fate
+    rule now says stays (_audit_extra_fate). The Yes's own plan can't be the yardstick:
+    a spool moved while the question sat open reads the same in that plan and in this
+    look, and would be pulled out of its new place. A place that holds one spool is
     read strictly right before the write, and anything there is a stay: the park's
     writes came first, and one that failed leaves its spool there.
 
@@ -6696,7 +6699,7 @@ def _audit_file_one(sid, place, was, printer_map, loc_info_map):
     return "", spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error", rec
 
 
-def _audit_park_locked(audit_id, ids, today, file_ids=None):
+def _audit_park_locked(audit_id, ids, today, file_ids=None, file_where=None):
     """park_audit_missing's work, holding the end lock."""
     session = state.AUDIT_SESSION
     gone = _audit_gone(session, audit_id, "That audit has already ended, so nothing was moved.")
@@ -6764,9 +6767,11 @@ def _audit_park_locked(audit_id, ids, today, file_ids=None):
                             f"{_audit_esc(row['where'])}, not scanned)", "WARNING", "ffaa00")
 
     # C2: the Extras, after every park, so a place that holds one spool is free before
-    # one goes in (the write reads it first).
+    # one goes in (the write reads it first). Each is checked against where the
+    # question showed it (`file_where`, {id: where}).
+    asked_where = ({str(k): str(v) for k, v in file_where.items()} if isinstance(file_where, dict) else {})
     filed, filed_from, file_failed, filed_moves = _audit_file_extras(plan, place, file_wanted, stayed, labels,
-                                                                      printer_map, loc_info_map)
+                                                                      printer_map, loc_info_map, asked_where)
 
     # Nothing landed, so there is no record to protect and no reason to end: the
     # audit's scans are the whole point (_audit_finish), and Done can be pressed again.
@@ -6804,10 +6809,12 @@ def _audit_park_locked(audit_id, ids, today, file_ids=None):
             "audit_ended": {"id": ended['id'], "why": ended['why']}}
 
 
-def _audit_file_extras(plan, place, file_wanted, stayed, labels, printer_map, loc_info_map):
+def _audit_file_extras(plan, place, file_wanted, stayed, labels, printer_map, loc_info_map, asked_where=None):
     """The Yes's filing (C2): only what the plan files and the Yes names, each after a
-    last look (_audit_file_one). Appends the ones that stay to `stayed` and their
-    labels to `labels`. Answers (filed ids, [{id, display, from}] for the report,
+    last look (_audit_file_one) against where the question showed it (`asked_where`,
+    {str id: where}, the Yes's `file_where`): an Extra named with no such entry files
+    nothing, as one the Yes doesn't name. Appends the ones that stay to `stayed` and
+    their labels to `labels`. Answers (filed ids, [{id, display, from}] for the report,
     failed [{id, display, why}], and the Undo record's `filed`: {sid: {location,
     extras, slot, place_had_row}}, the snapshot Undo puts back)."""
     filed: typing.List[typing.Any] = []
@@ -6816,12 +6823,13 @@ def _audit_file_extras(plan, place, file_wanted, stayed, labels, printer_map, lo
     moves: typing.Dict[typing.Any, typing.Dict[str, typing.Any]] = {}
     for row in plan['file']:
         sid, display = row['id'], row['display']
-        if str(sid) not in file_wanted:
+        was = (asked_where or {}).get(str(sid))
+        if str(sid) not in file_wanted or was is None:
             stayed.append({"id": sid, "display": display, "where": row['where'],
                            "why": "wasn't in the question you answered"})
             continue
         try:
-            stay_why, fail_why, rec = _audit_file_one(sid, place, row['where'], printer_map, loc_info_map)
+            stay_why, fail_why, rec = _audit_file_one(sid, place, was, printer_map, loc_info_map)
         except Exception as e:
             stay_why, fail_why, rec = "", str(e), None
         if stay_why:
@@ -6834,14 +6842,15 @@ def _audit_file_extras(plan, place, file_wanted, stayed, labels, printer_map, lo
                                 f"{_audit_esc(fail_why)}", "ERROR", "ff4444")
             continue
         filed.append(sid)
-        filed_from.append({"id": sid, "display": display, "from": row['where']})
+        # `was`: where the question showed it, which the last look found it still is.
+        filed_from.append({"id": sid, "display": display, "from": was})
         labels[sid] = display
         moves[sid] = {"location": str(rec.get('location') or '').strip(),
                       "extras": {k: (rec.get('extra') or {}).get(k, '') for k in spoolman_api.SYSTEM_MANAGED_EXTRAS},
                       "slot": row['slot'],
                       "place_had_row": str(rec.get('location') or '').strip().upper() in loc_info_map}
         state.add_log_entry(f"📥 Audit: filed Spool {_audit_esc(display)} in {_audit_esc(place)} (FCC had it at "
-                            f"{_audit_esc(row['where'])})", "INFO", "00ccff")
+                            f"{_audit_esc(was)})", "INFO", "00ccff")
     return filed, filed_from, failed, moves
 
 
@@ -6868,7 +6877,7 @@ def _audit_park_msg(parked, stayed, failed, filed=(), file_failed=()):
     return " ".join(words)
 
 
-def park_audit_missing(audit_id, ids, today=None, file_ids=None):
+def park_audit_missing(audit_id, ids, today=None, file_ids=None, file_where=None):
     """The Yes to Done's question (POST /api/audit/park): parks the spools it asked
     about and files the Extras it showed here (`file_ids`, Derek's C3), in one Undo,
     and ends the audit.
@@ -6878,8 +6887,11 @@ def park_audit_missing(audit_id, ids, today=None, file_ids=None):
     It plans again and parks only what that plan and the Yes both name, each spool
     checked once more right before its write (_audit_park_one), so a spool that
     moved, was deleted or was archived since the question stays put and is listed.
-    Then it files the Extras the same way (_audit_file_one), after every park; a
-    Yes with no `file_ids` (a page from before C) files none.
+    Then it files the Extras the same way (_audit_file_one), after every park, each
+    checked against where the question showed it (`file_where`, {id: where}, sent
+    back by the page as a move sends what its screen showed): one that moved since
+    stays where it went. A Yes with no `file_ids` (a page from before C) files none,
+    and an Extra it names with no `file_where` entry files nothing either.
 
       {success, parked: [ids], filed: [ids], stayed: [{id, display, where, why}],
        failed: [{id, display, why}], msg, audit_ended: {id, why}}
@@ -6892,7 +6904,7 @@ def park_audit_missing(audit_id, ids, today=None, file_ids=None):
         state.add_log_entry(f"⚠️ {AUDIT_FINISHING_MSG}", "WARNING", "ffaa00")
         return {"success": False, "busy": True, "msg": AUDIT_FINISHING_MSG}
     try:
-        return _audit_park_locked(audit_id, ids, today, file_ids)
+        return _audit_park_locked(audit_id, ids, today, file_ids, file_where)
     finally:
         _AUDIT_END_LOCK.release()
 
