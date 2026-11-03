@@ -1372,8 +1372,23 @@ window.commitBulkMove = () => {
         const where = String(row.where == null ? '' : row.where);
         if (row.trail) return where ? `${tag} is loaded on ${where} from here` : `${tag} is loaded from here`;
         if (!row.rogue) return '';
-        if (!where) return `Extra: ${tag}`;
-        return where === WHERE_UNREAD ? `Extra: ${tag}: ${where}` : `Extra: FCC has ${tag} at ${where}`;
+        if (!where) return `Extra: ${tag}${_atDoneWords(row.at_done)}`;
+        return where === WHERE_UNREAD ? `Extra: ${tag}: ${where}` : `Extra: FCC has ${tag} at ${where}${_atDoneWords(row.at_done)}`;
+    };
+
+    // What Done will do with an Extra (Derek's C6, 2026-11-03, for his look): the row's
+    // `at_done`, worked out by Done's own rule when the spool was scanned, so a poll
+    // reads nothing. `files` true: filed here; false: it stays, and why; null: a fresh
+    // read at Done decides (a place that holds one spool), and the sentence says so. No
+    // key, or null (Spoolman didn't answer at the scan): nothing is said of Done. A stay
+    // that depends on a fresh read is said at Done, in its question, never here.
+    const _atDoneWords = (at) => {
+        if (!at || typeof at !== 'object') return '';
+        const why = String(at.why == null ? '' : at.why).trim();
+        if (at.files === true) return '; Done files it here';
+        if (at.files === false && why) return `; it stays: ${why}`;
+        if (at.files === null && why) return `; ${why}`;
+        return '';
     };
 
     // What FCC knows about this spool's label.
@@ -2154,9 +2169,12 @@ window.commitBulkMove = () => {
         if (typeof updateLogState === 'function') updateLogState(true);
     };
 
-    // The Yes. Every id the question counted, not only the lines it drew.
-    const _park = (auditId, ids) => {
-        const words = `Parking ${_spools(ids.length)}…`;
+    // The Yes. Every id the question counted, not only the lines it drew: the spools it
+    // parks, and (Derek's C, 2026-11-03, for his look) the Extras it files here, sent
+    // as `file_ids` ([] files nothing).
+    const _park = (auditId, ids, fileIds = []) => {
+        const words = (ids.length && fileIds.length) ? `Parking ${_spools(ids.length)} and filing ${fileIds.length}…`
+            : (fileIds.length ? `Filing ${_spools(fileIds.length)}…` : `Parking ${_spools(ids.length)}…`);
         setProcessing(true, { label: `⏳ ${words}` });      // under the panel, when it is up
         // On Done, so a refusal hands the keyboard back there (auditPanelBusy).
         _focusDone();
@@ -2166,12 +2184,36 @@ window.commitBulkMove = () => {
         window.auditRequestOut(1);
         window.fetchT('/api/audit/park', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ audit_id: auditId, ids, today: window.fccLocalDay() }),
+            body: JSON.stringify({ audit_id: auditId, ids, file_ids: fileIds, today: window.fccLocalDay() }),
         }, PARK_TIMEOUT_MS)
             .then(r => r.json())
             .then(_parkAnswered, _parkNotAnswered)
             .catch(e => console.error(e))
             .finally(() => { setProcessing(false); window.auditRequestOut(-1); });
+    };
+
+    // What the question says, and its Yes: the park's words as they were; with Extras to
+    // file here (Derek's C, 2026-11-03, for his look; `file`, and `file_note` for a box
+    // whose slot FCC never guesses) the filing's, or both.
+    const _doneWords = (res, park, file) => {
+        const n = park.length;
+        const m = file.length;
+        const parks = n ? ` ${n === 1 ? 'The one not scanned goes' : `The ${n} not scanned go`} to Unknown, to find or clear later.` : '';
+        const files = m ? ` ${m === 1 ? 'The one found here that FCC had elsewhere is' : `The ${m} found here that FCC had elsewhere are`}`
+            + ` filed in ${res.location}.${res.file_note ? ` ${res.file_note}` : ''}` : '';
+        const msg = `${res.found} of ${res.expected} found at ${res.location}.${parks}${files}`
+            + ` Undo Last Move puts ${n + m === 1 ? 'it' : 'them'} back.`;
+        if (!m) {
+            return { msg, title: `Park ${_spools(n)} at Unknown?`, yes: n === 1 ? 'Park it' : 'Park them',
+                verb: n === 1 ? 'parks it' : 'parks them', caption: 'Scan to Park' };
+        }
+        if (!n) {
+            return { msg, title: m === 1 ? `File #${Number(file[0].id)} here?` : `File ${_spools(m)} here?`,
+                yes: m === 1 ? 'File it here' : 'File them here', verb: m === 1 ? 'files it' : 'files them',
+                caption: 'Scan to File' };
+        }
+        return { msg, title: `Park ${n} at Unknown and file ${m} here?`, yes: 'Do both', verb: 'does both',
+            caption: 'Scan to Do both' };
     };
 
     // `res`: the route's audit_done_question answer. Nothing has moved yet.
@@ -2180,22 +2222,24 @@ window.commitBulkMove = () => {
         window.closeAuditFindForScan();
         const park = Array.isArray(res.park) ? res.park : [];
         const stays = Array.isArray(res.stays) ? res.stays : [];
-        const one = park.length === 1;
-        const sections = [_section('Not scanned', park, (r) => ({ text: r.display, where: r.slot ? `slot ${r.slot}` : '' }))];
+        const file = Array.isArray(res.file) ? res.file : [];
+        const words = _doneWords(res, park, file);
+        const sections = [];
+        if (park.length) sections.push(_section('Not scanned', park, (r) => ({ text: r.display, where: r.slot ? `slot ${r.slot}` : '' })));
+        // Where FCC has each now: Done moves it here.
+        if (file.length) sections.push(_section('Found here, FCC had them elsewhere', file, (r) => ({ text: r.display, where: r.where ? `from ${r.where}` : '' })));
         // `why`, not `where`: a deleted spool is nowhere.
         if (stays.length) sections.push(_section('Left where they are', stays, (r) => ({ text: r.display, where: r.why })));
         if (res.audit_id != null) state.auditId = res.audit_id;
         const asked = window.confirmActivePrint({
-            title: `Park ${_spools(park.length)} at Unknown?`,
-            msg: `${res.found} of ${res.expected} found at ${res.location}. `
-                + `${one ? 'The one not scanned goes' : `The ${park.length} not scanned go`} to Unknown, to find or clear later. `
-                + `Undo Last Move puts ${one ? 'it' : 'them'} back.`,
+            title: words.title,
+            msg: words.msg,
             sections,
             printing: true,
             ids: { overlay: QUESTION_ID },
-            loadLabel: one ? 'Park it' : 'Park them',
-            loadVerb: one ? 'parks it' : 'parks them',
-            loadCaption: 'Scan to Park',
+            loadLabel: words.yes,
+            loadVerb: words.verb,
+            loadCaption: words.caption,
             cancelLabel: 'Back to the audit',
             cancelVerb: 'goes back',
             cancelCaption: 'Scan to go back',
@@ -2203,7 +2247,7 @@ window.commitBulkMove = () => {
             onConfirm: () => {
                 _question = null;
                 _questionClosedAt = Date.now();
-                _park(res.audit_id, park.map(r => r.id));
+                _park(res.audit_id, park.map(r => r.id), file.map(r => r.id));
             },
             onCancel: (info) => {
                 // Closed with the panel, or replaced by a newer Done's question

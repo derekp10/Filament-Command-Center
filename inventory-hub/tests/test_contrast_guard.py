@@ -435,9 +435,12 @@ def test_audit_done_question_is_readable(page: Page, base_url: str, assert_contr
     expect(overlay.locator(".fcc-apc-status")).to_be_visible()
     assert_contrast(overlay)
     scored = " ".join(o.get("text", "") for o in conftest.contrast_offenders(overlay, min_ratio=100))
-    for words in ("Park 3 spools at Unknown?", "Not scanned", "Left where they are", "#134", "slot 2", "moved to XL-4",
-                  "no longer in Spoolman", "and 4 more", "Park them", "Back to the audit", "Answer the question",
-                  "Enter goes back"):
+    # PIN UPDATED DELIBERATELY (Derek's C, 2026-11-03, for his look): the sample files an
+    # Extra here too, so its title and its Yes say both, and its own section lists it.
+    for words in ("Park 3 at Unknown and file 1 here?", "Not scanned", "Left where they are", "#134", "slot 2",
+                  "moved to XL-4", "no longer in Spoolman", "and 4 more", "Do both", "Back to the audit",
+                  "Answer the question", "Enter goes back", "Found here, FCC had them elsewhere", "#500",
+                  "from LR-MDB-2 slot 3"):
         assert words in scored, (words, scored)
     assert sum("SCAN" in t.upper() for t in [o["text"] for o in conftest.contrast_offenders(overlay, min_ratio=100)]) >= 2
     page.keyboard.press("Escape")

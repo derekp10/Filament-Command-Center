@@ -300,14 +300,15 @@ def test_a_flag_shows_before_the_scan_too(live, env):
 
 def test_an_extra_says_so_and_where_fcc_has_it_then_its_label(live, env):
     """Finding 40. Its tile can be below the fold or under the strip, and a toast is under
-    the panel, so all the person saw change was the count. RED on 1f8e03a."""
+    the panel, so all the person saw change was the count. RED on 1f8e03a. PIN UPDATED
+    DELIBERATELY (Derek's C6, 2026-11-03, for his look): it says what Done does with it."""
     two(env)
     add_spool(env, 200, "LR-MDB-2", container_slot="3")
     begin(live, env)
     scanned(live, "ID:200")
-    strip_says(live, "Extra: FCC has #200 at LR-MDB-2 slot 3. No label was read for #200")
+    strip_says(live, "Extra: FCC has #200 at LR-MDB-2 slot 3; Done files it here. No label was read for #200")
     scanned(live, "ID:200", "barcode")
-    strip_says(live, "Extra: FCC has #200 at LR-MDB-2 slot 3. #200's label was read")
+    strip_says(live, "Extra: FCC has #200 at LR-MDB-2 slot 3; Done files it here. #200's label was read")
 
 
 def test_a_spool_loaded_from_here_says_what_its_on_then_its_label(live, env):
@@ -334,13 +335,14 @@ def test_an_extra_spoolman_wouldnt_answer_for_reads_as_a_sentence(live, env):
 
 
 @pytest.mark.parametrize("place, extra, words", [
-    ("", {}, "Extra: FCC has #300 at Unassigned."),
+    ("", {}, "Extra: FCC has #300 at Unassigned; Done files it here."),
     ("UNKNOWN", {"fcc_pre_audit_location": "LR-MDB-2:3@2026-11-01"},
-     "Extra: FCC has #300 at Unknown (marked lost by the audit of LR-MDB-2 slot 3 on 2026-11-01)."),
-    ("A<b>C", {}, "Extra: FCC has #300 at A<b>C."),
+     "Extra: FCC has #300 at Unknown (marked lost by the audit of LR-MDB-2 slot 3 on 2026-11-01); Done files it here."),
+    ("A<b>C", {}, "Extra: FCC has #300 at A<b>C; Done files it here."),
 ], ids=["unassigned", "lost-by-an-audit", "a-place-that-is-html"])
 def test_each_place_an_extra_can_be_at_reads_as_a_sentence(live, env, place, extra, words):
-    """RED on 1f8e03a."""
+    """RED on 1f8e03a. PIN UPDATED DELIBERATELY (Derek's C6, 2026-11-03, for his look): it
+    says what Done does with it (C1: Unassigned, Unknown and another place are filed here)."""
     two(env)
     add_spool(env, 300, place, **extra)
     begin(live, env)
