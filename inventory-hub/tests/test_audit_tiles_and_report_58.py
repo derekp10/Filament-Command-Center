@@ -7,6 +7,9 @@ S1 Done's question draws its spools as the panel's tiles do: every row of `park`
 S2 A find with no label read says so, in its Activity Log line and in `heard`: a
    🔎 Find a spool pick "Found #1 with Find a spool, no label read (2 left)", any
    other "Found #1, no label read (2 left)"; a real label read keeps "Found #1 (2 left)".
+S4 A found tile's own 🏷️ (POST /api/audit/needs_label {audit_id, id}) marks the
+   spool it names as needing a label, by the strip's rules and through its helper,
+   and leaves the last found alone; the strip's "undo that" takes it back.
 S5 The reasons Done gives for leaving a spool where it is name the audited place,
    never "here": they are read in the question, the report and a toast, away from
    the panel ("FCC has it in LR-MDB-1 already", "PM-DB-1 holds one spool, and 2 were
@@ -20,6 +23,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 
 import pytest
 
@@ -31,6 +35,7 @@ import logic  # noqa: E402
 import spoolman_api  # noqa: E402
 import state  # noqa: E402
 import stock_report  # noqa: E402
+from spoolman_extra_fake import _Resp  # noqa: E402
 from test_audit_session_58 import (  # noqa: E402,F401
     AUDIT_SCAN, add_spool, env, log_text, report, scan, scan_answer, session, start,
 )
@@ -293,3 +298,242 @@ def test_a_one_spool_place_with_two_extras_says_they_were_found_in_it(env):
     env["logs"].clear()
     assert "audit_ended" in scan(env, "CMD:DONE")          # nothing to park or file: Done ends
     assert f"#20 Some Brand PLA (Red) → {why}" in report(env)
+
+
+# ---------------------------------------------------------------------------
+# S4: a found tile's own 🏷️
+# ---------------------------------------------------------------------------
+
+LABEL = "needs_label_print"
+
+
+def post(path, body):
+    res = app_module.app.test_client().post(path, json=body)
+    assert res.status_code == 200, res.get_data(as_text=True)
+    return res.get_json()
+
+
+def tile_mark(sid, audit_id=None):
+    """A found tile's 🏷️ pressed."""
+    return post("/api/audit/needs_label", {"audit_id": audit_id or session()["audit_id"], "id": sid})
+
+
+def undo_mark(sid, audit_id=None):
+    return post("/api/audit/needs_label_undo", {"audit_id": audit_id or session()["audit_id"], "id": sid})
+
+
+def wire(env, sid):
+    """The label status as Spoolman holds it: 'true', 'false', or None for none."""
+    return env["fake"].extra("spool", sid).get(LABEL)
+
+
+def writes(env):
+    return [p[1] for p in env["fake"].patches]
+
+
+def tile(sid):
+    return next(r for key in ("expected", "rogue", "trail") for r in live()[key] if r["id"] == sid)
+
+
+def _found_two(env):
+    """LR-MDB-1 with #5 and #6, both found (#6 last), and #7 not scanned."""
+    for sid in (5, 6, 7):
+        add_spool(env, sid, "LR-MDB-1", container_slot=str(sid - 4))
+    start(env, "LR-MDB-1")
+    scan(env, "ID:5")
+    scan(env, "ID:6")
+    env["logs"].clear()
+    env["fake"].patches.clear()
+    env["fake"].gets.clear()
+
+
+def test_a_tiles_mark_marks_that_spool_and_leaves_the_last_found_alone(env):
+    _found_two(env)
+    before = env["fake"].extra("spool", 5)
+    assert tile_mark(5) == {"success": True, "msg": "#5 is marked: it needs a label."}
+    assert wire(env, 5) == "true" and writes(env) == [5]
+    assert {k: v for k, v in env["fake"].extra("spool", 5).items() if k != LABEL} == before   # siblings kept
+    assert session()["last_found"] == 6 and live()["last_found"]["id"] == 6
+    assert session()["label_flagged"] == {"5": None}
+    got = tile(5)
+    assert got["label_status"] is True and got["flagged_here"] is True
+    assert log_text(env) == ["🏷️ #5 Some Brand PLA (Red): marked as needing a label."]
+
+
+def test_an_extras_tile_marks_it_too(env):
+    add_spool(env, 1, "LR-MDB-1")
+    add_spool(env, 20, "CR-CT-1")
+    start(env, "LR-MDB-1")
+    scan(env, "ID:20")
+    scan(env, "ID:1")
+    assert tile_mark(20)["success"] is True
+    assert wire(env, 20) == "true" and session()["last_found"] == 1
+    assert tile(20)["flagged_here"] is True
+
+
+def test_a_spool_loaded_from_here_can_be_marked_as_the_strip_marks_it(env):
+    """The strip's rule: any spool this audit found."""
+    add_spool(env, 1, "LR-MDB-1")
+    add_spool(env, 7, "XL-1", physical_source="LR-MDB-1", physical_source_slot="2")
+    start(env, "LR-MDB-1")
+    scan(env, "ID:7")
+    scan(env, "ID:1")
+    assert tile_mark(7)["success"] is True and wire(env, 7) == "true"
+
+
+def test_a_second_tap_takes_the_mark_back_on_a_spool_that_isnt_the_last_found(env):
+    _found_two(env)
+    tile_mark(5)
+    assert undo_mark(5) == {"success": True, "msg": "Undone: #5 has no label status again."}
+    assert wire(env, 5) is None and session()["label_flagged"] == {}
+    assert session()["last_found"] == 6
+    assert tile(5)["flagged_here"] is False and tile(5)["label_status"] is None
+
+
+def test_a_mark_on_a_confirmed_label_is_undone_to_confirmed(env):
+    add_spool(env, 5, "LR-MDB-1", needs_label_print=False)
+    add_spool(env, 6, "LR-MDB-1")
+    start(env, "LR-MDB-1")
+    scan(env, "ID:5")
+    scan(env, "ID:6")
+    tile_mark(5)
+    assert session()["label_flagged"] == {"5": False} and wire(env, 5) == "true"
+    assert undo_mark(5)["msg"] == "Undone: #5's label is confirmed again."
+    assert wire(env, 5) == "false"
+
+
+def test_a_flag_already_up_says_so_and_writes_nothing(env):
+    add_spool(env, 5, "LR-MDB-1", needs_label_print=True)
+    start(env, "LR-MDB-1")
+    scan(env, "ID:5")
+    env["fake"].patches.clear()
+    assert tile_mark(5) == {"success": True, "already": True, "msg": "#5 is already flagged for a new label."}
+    assert writes(env) == [] and session()["label_flagged"] == {}
+
+
+def test_a_double_tap_is_one_write(env):
+    _found_two(env)
+    tile_mark(5)
+    assert tile_mark(5)["already"] is True
+    assert writes(env) == [5] and session()["label_flagged"] == {"5": None}
+
+
+@pytest.mark.parametrize("sid, words", [
+    (7, "#7 hasn't been found in this audit, so nothing was marked."),     # on the list, not scanned
+    (99, "#99 hasn't been found in this audit, so nothing was marked."),   # not this audit's at all
+    ("x", "That press didn't name a spool, so nothing was marked."),
+], ids=["not-scanned", "not-this-audits", "no-id"])
+def test_a_spool_this_audit_hasnt_found_is_refused(env, sid, words):
+    _found_two(env)
+    add_spool(env, 99, "CR-CT-1")
+    assert tile_mark(sid) == {"success": False, "msg": words}
+    assert writes(env) == [] and env["fake"].gets == [] and session()["label_flagged"] == {}
+    assert any(c == "WARNING" and words in m for m, c, _ in env["logs"]), env["logs"]
+
+
+@pytest.mark.parametrize("sid", [5, 20], ids=["an-expected-tile-pressed-again", "an-extra-taken-back"])
+def test_a_find_taken_back_is_refused(env, sid):
+    _found_two(env)
+    add_spool(env, 20, "CR-CT-1")
+    scan(env, "ID:20")
+    assert post("/api/audit/found", {"audit_id": session()["audit_id"], "id": sid, "found": False})["success"]
+    env["fake"].patches.clear()
+    assert tile_mark(sid)["success"] is False and writes(env) == []
+
+
+def test_another_audits_tile_marks_nothing(env):
+    _found_two(env)
+    assert tile_mark(5, audit_id="x-99") == {"success": False, "stale": True, "msg": "That audit has already ended."}
+    assert writes(env) == [] and session()["label_flagged"] == {}
+
+
+def test_with_no_audit_it_marks_nothing(env):
+    _found_two(env)
+    audit_id = session()["audit_id"]
+    scan(env, "CMD:CANCEL")
+    env["fake"].patches.clear()
+    assert tile_mark(5, audit_id=audit_id) == {"success": False, "stale": True,
+                                                "msg": "That audit has already ended."}
+    assert writes(env) == []
+
+
+def test_while_the_audit_is_finishing_it_marks_nothing(env):
+    _found_two(env)
+    assert logic._AUDIT_END_LOCK.acquire(False)
+    try:
+        ans = tile_mark(5)
+    finally:
+        logic._AUDIT_END_LOCK.release()
+    assert ans == {"success": False, "busy": True, "msg": logic.AUDIT_FINISHING_MSG}
+    assert writes(env) == []
+
+
+def test_an_archived_spool_is_refused(env):
+    """The Backlog can't show it, so the mark would be seen nowhere."""
+    _found_two(env)
+    spools(env)[5]["archived"] = True
+    ans = tile_mark(5)
+    assert ans["success"] is False and "archived" in ans["msg"] and "Backlog" in ans["msg"]
+    assert writes(env) == [] and session()["label_flagged"] == {}
+
+
+def test_a_spool_spoolman_wont_answer_for_is_refused(env):
+    _found_two(env)
+    env["fake"].down = True
+    ans = tile_mark(5)
+    assert ans["success"] is False and "Couldn't read #5" in ans["msg"]
+    assert writes(env) == [] and session()["label_flagged"] == {}
+
+
+def test_a_rejected_write_surfaces_spoolmans_words_and_leaves_no_mark(env, monkeypatch):
+    _found_two(env)
+
+    def refused(url, json=None, timeout=None, **kw):  # noqa: A002
+        return _Resp(500, {"message": "<i>nope</i>"})
+
+    monkeypatch.setattr(spoolman_api.requests, "patch", refused)
+    ans = tile_mark(5)
+    assert ans["success"] is False and "Couldn't mark #5" in ans["msg"] and "<i>nope</i>" in ans["msg"]
+    assert session()["label_flagged"] == {}
+    errors = [m for m, c, _ in env["logs"] if c == "ERROR"]
+    assert len(errors) == 1 and "&lt;i&gt;nope&lt;/i&gt;" in errors[0], errors
+
+
+def test_a_write_reported_failed_that_landed_counts(env, monkeypatch):
+    """update_spool's timeout is a READ timeout: refused, the mark would stand on the
+    record with no way to undo it."""
+    _found_two(env)
+
+    def late(url, json=None, timeout=None, **kw):  # noqa: A002
+        env["fake"].patch(url, json=json, timeout=timeout)
+        raise TimeoutError("read timed out (test)")
+
+    monkeypatch.setattr(spoolman_api.requests, "patch", late)
+    assert tile_mark(5) == {"success": True, "msg": "#5 is marked: it needs a label."}
+    assert wire(env, 5) == "true" and session()["label_flagged"] == {"5": None}
+
+
+def test_a_tiles_mark_refreshes_the_idle_timer(env):
+    """A person pressed something: a mark made near the end of the idle window must
+    not see the audit end a moment later."""
+    _found_two(env)
+    a_while_ago = time.time() - 60
+    session()["last_activity_ts"] = a_while_ago
+    assert tile_mark(5)["success"] is True
+    assert session()["last_activity_ts"] > a_while_ago
+
+
+def test_the_strips_mark_still_marks_the_last_found(env):
+    """One helper behind both: CMD:NEEDLABEL acts on the last found, a tile on its own."""
+    _found_two(env)
+    assert scan(env, "CMD:NEEDLABEL") == {**AUDIT_SCAN, "said": "#6 is marked: it needs a label."}
+    assert tile_mark(5)["success"] is True
+    assert session()["label_flagged"] == {"6": None, "5": None} and session()["last_found"] == 6
+
+
+def test_a_mark_made_on_a_tile_is_in_the_report(env):
+    _found_two(env)
+    tile_mark(5)
+    env["logs"].clear()
+    scan(env, "CMD:CANCEL")
+    assert "<b>Needs a label:</b> #5 Some Brand PLA (Red)" in report(env)

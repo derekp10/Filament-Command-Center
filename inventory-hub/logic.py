@@ -6254,15 +6254,11 @@ def _audit_label_landed(sid, wanted):
 def _audit_already_flagged(sid):
     msg = f"#{sid} is already flagged for a new label."
     state.add_log_entry(f"ℹ️ {msg}", "INFO", "00ccff")
-    return {"status": "success", "said": msg, "said_type": "info"}
+    return {"status": "success", "said": msg, "said_type": "info", "already": True}
 
 
 def _audit_need_label(session):
-    """CMD:NEEDLABEL: the last spool found needs a label. Never a toggle, so a double
-    read of its QR is one write. A partial write, as flag_spool_labels': the write
-    keeps the spool's other extras (update_spool's merge), and it carries no weight, so
-    it can't touch an archive edge. Refuses an archived spool: the Backlog can't show
-    it, so the mark would be seen nowhere."""
+    """CMD:NEEDLABEL: the last spool found needs a label (_audit_mark_label)."""
     sid = session.get('last_found')
     if sid is None:
         # A find taken back (an Expected tile pressed again, or an Extra's, A3) clears
@@ -6270,6 +6266,23 @@ def _audit_need_label(session):
         if session.get('scanned_items'):
             return _audit_refuse("No spool is selected: scan a spool or press its tile first.")
         return _audit_refuse("Nothing has been found yet: scan a spool or press its tile first.")
+    return _audit_mark_label(session, sid)
+
+
+def _audit_mark_label(session, sid):
+    """Spool `sid`, found in this audit, needs a label: the one helper behind "Needs a
+    label" (CMD:NEEDLABEL on the last spool found, _audit_need_label) and a found
+    tile's own 🏷️ (POST /api/audit/needs_label on the spool it names,
+    audit_mark_needs_label; Derek, 2026-11-03). It never changes the last found.
+
+    Never a toggle, so a double read of its QR is one write. A partial write, as
+    flag_spool_labels': the write keeps the spool's other extras (update_spool's
+    merge), and it carries no weight, so it can't touch an archive edge. A flag already
+    up writes nothing and says so (`already`). Refuses an archived spool: the Backlog
+    can't show it, so the mark would be seen nowhere. The status it replaced is kept in
+    the session's `label_flagged`, which "undo that" puts back. Answers
+    process_audit_scan's shape: {status: success, said[, said_type, already]} or
+    {status: error, msg}."""
     audit_id = session.get('audit_id')
     rec, answered = spoolman_api.get_spool_answer(sid)
     if session.get('audit_id') != audit_id:
@@ -6370,12 +6383,46 @@ def _audit_take_back_extra(session, sid):
     return _audit_press_refused(f"#{sid} isn't on this audit's list.")
 
 
+def audit_mark_needs_label(audit_id, sid):
+    """POST /api/audit/needs_label: a found tile's own 🏷️ (Derek, 2026-11-03): the spool
+    it names needs a label, by the strip's rules and through its helper
+    (_audit_mark_label), and the last found stays as it was, so the strip doesn't jump
+    to it. A person's press, as a tile's is. Only a spool this audit found (on the list
+    and found, an Extra, or one loaded from here, the strip's rule): any other spool,
+    another audit's id or no audit writes nothing and says why. Its undo is the strip's,
+    POST /api/audit/needs_label_undo, which names its spool too.
+
+      {success: True, msg}                   marked
+      {success: True, already: True, msg}    a flag already up: nothing written
+      {success: False, msg}                  refused or failed: nothing marked
+      {success: False, busy | stale: True, msg}   the audit is finishing, or isn't this one"""
+    session = state.AUDIT_SESSION
+    refused = _audit_press_refusal(session, audit_id)
+    if refused:
+        return refused
+    session['last_activity_ts'] = time.time()
+    sid = _audit_spool_id(sid)
+    if sid is None:
+        return _audit_press_refused("That press didn't name a spool, so nothing was marked.")
+    if sid not in (session.get('scanned_items') or []):
+        return _audit_press_refused(f"#{sid} hasn't been found in this audit, so nothing was marked.")
+    res = _audit_mark_label(session, sid)
+    if res.get('status') == 'error':
+        return {"success": False, "msg": res.get('msg') or "Nothing was marked."}
+    out = {"success": True, "msg": res.get('said') or ''}
+    if res.get('already'):
+        out['already'] = True
+    return out
+
+
 def audit_undo_need_label(audit_id, sid):
-    """POST /api/audit/needs_label_undo: the strip's "undo that", puts back the status
-    a mark replaced, through the delete sentinel when there was none. A person's press
-    with no QR, so a double read of the mark's own QR can't toggle it. A flag that isn't
-    up any more (a Backlog's Mark Printed since) is left as it is: that status is
-    newer than the one this would put back."""
+    """POST /api/audit/needs_label_undo: the strip's "undo that", and a found tile's 🏷️
+    pressed again (audit_mark_needs_label's mark), puts back the status a mark replaced,
+    through the delete sentinel when there was none. It names its spool, which needn't
+    be the last found, and leaves the last found alone. A person's press with no QR, so
+    a double read of the mark's own QR can't toggle it. A flag that isn't up any more
+    (a Backlog's Mark Printed since) is left as it is: that status is newer than the one
+    this would put back."""
     session = state.AUDIT_SESSION
     refused = _audit_press_refusal(session, audit_id)
     if refused:

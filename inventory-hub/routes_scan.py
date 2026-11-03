@@ -1071,10 +1071,22 @@ def api_audit_found():
     return jsonify(logic.audit_mark_found(data.get('audit_id'), data.get('id'), data.get('found')))
 
 
+@app.route('/api/audit/needs_label', methods=['POST'])
+def api_audit_needs_label():
+    """A found tile's own 🏷️ (Group 58; Derek, 2026-11-03): {audit_id, id}. Marks that
+    spool as needing a label, as the strip's "Needs a label" marks the last found, and
+    leaves the last found alone. Answers logic.audit_mark_needs_label's dict; a second
+    press takes the mark back through /api/audit/needs_label_undo."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        data = {}
+    return jsonify(logic.audit_mark_needs_label(data.get('audit_id'), data.get('id')))
+
+
 @app.route('/api/audit/needs_label_undo', methods=['POST'])
 def api_audit_needs_label_undo():
-    """The Last found strip's "undo that": {audit_id, id}. Answers
-    logic.audit_undo_need_label's dict."""
+    """The Last found strip's "undo that", and a found tile's 🏷️ pressed again:
+    {audit_id, id}. Answers logic.audit_undo_need_label's dict."""
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         data = {}
