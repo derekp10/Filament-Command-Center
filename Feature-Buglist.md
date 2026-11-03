@@ -1,5 +1,47 @@
 # **New and Unsorted Features/Bugs**
 
+* **🔎 Catch print-file changes early: a per-printer print-file watch, and the 2% walk check on finished prints too
+  (Derek, 2026-11-03).** _(Standalone. Scoped 2026-11-03 in `docs/agent_docs/scoping-2026-11-03-change-detection.md`: hook points, the replay on his real files, the tag
+  lists, tests. No decision needed to start.)_ Derek: *"Is there any way to have FCC find and flag any bgcode that uses
+  something new … I'd like to try to prevent changes in how the systems perform from sneaking up on us like this in the
+  future."* The INDX `;EXCLUDE_E` problem (hotfix `main` `626a10e`) was caught only by Group 56.2's walk-vs-footer
+  WARNING, which runs on cancels alone. **Step 1 (S, ~3–4 h):** in `print_deduct._compute_cancel_usage`, where every
+  print file FCC reads already arrives decoded, (a) run the whole-file walk on finished prints too and log the same
+  2% / 0.1 g warning, never changing the charge, and (b) scan the body for slicer tags FCC doesn't know and for tag words
+  written without their ';'. Replayed on 71 of Derek's real files it stays silent except where it should speak: (b)
+  would have flagged the old INDX profile's bare `EXCLUDE_E` words on the INDX's first print (job 1095, 2026-09-30), a
+  month before job 1134 surfaced the problem. **Step 2 (M, ~7–10 h):** a per-printer fingerprint (slicer version and a
+  hash of only the template lines that can move filament) in `data/print_file_watch.json`, with one notice when either
+  changes. It would have said on 2026-10-22 (job 1130) that the INDX's tool-change G-code changed and uses `;EXCLUDE_E`
+  tags. The replay gave 6 notices across 84 files in five months, with no false alarm.
+* **⚖️ Weigh-in drift: each weighing says what FCC expected, and weighed spools become a per-printer accuracy check
+  (Derek, 2026-11-03).** _(Standalone. Feeds the Phase 2 "Unified weight-entry component" item and must not route
+  around it. Scoped 2026-11-03 in the same file, with open questions and their defaults.)_ It is the only check that
+  catches the slicer's own accounting being wrong, as the old INDX profile's was: a weighing compares what FCC expected
+  a spool to hold with what the scale says. **Step 1 (S, ~3–4 h):** Quick Weigh and the weigh-out list send what they
+  did with the save (source, mode, reading, empty-spool weight, a skipped tare), and the Activity Log says it:
+  "⚖️ Weighed — Spool #57: 655.0 g left (scale 875 g − empty spool 220 g). FCC expected 654.7 g: 0.3 g heavier.",
+  or "✏️ Weight edited by hand …" for Additive / Set Used; a request without it keeps today's line. The two empty-spool
+  prompts say to take off any clip, cap or edge guards first. **Step 2 (M):** a drift record per weighing, shared with
+  the history item below, and a per-printer report, with a WARNING when a printer's weighed spools drift past ±5% over
+  200 g charged and 3 weighings. **Step 3 (after Derek weighs the parts, and a picture):** known add-on weights
+  ("Cap and clip", "Edge guards") set once in Settings, with "On the spool" toggles in the weight window. Derek's note
+  (2026-11-03): a shelved spool sometimes carries a printed cap on the filament's end and a clip, and some cardboard
+  spools wear printed edge guards; he tries to take them off before weighing, but not always. They can't touch the 2%
+  file check (both its numbers come from the file), but a weighing counts them as filament: 3 g is 0.3% of a full spool
+  and 6% of a 50 g remnant.
+* **🗂️ Keep the history longer: a 100 MB `hub.log` now, then a permanent spool-history journal (Derek, 2026-11-03).**
+  _(Standalone. Scoped 2026-11-03 in the same file.)_ Derek: *"I didn't realize how handy those logs are, and I'm
+  beginning to wonder if we shouldn't keep them longer."* `hub.log` is a 6 MB rolling buffer (`state.py`'s
+  `RotatingFileHandler('hub.log', maxBytes=1000000, backupCount=5)`). At 2026's normal ~66 KB a month that is years, but
+  four of prod's five old files hold one February burst (2026-02-16 to 18), which pushed out everything before it.
+  **Step 1 (S, ~1 h):** 20 files of 5 MB (100 MB; a February-size burst would take ~38 days to roll it), with one pinned
+  test. **Step 2 (M, ~8–10 h):** an append-only, never-rotated `data/history/<year>.jsonl`, one JSON line per change FCC
+  makes to a spool (written in `spoolman_api.update_spool` / `create_spool` / `delete_spool`, plus each print's charge
+  beside the ledger write), each tagged with what made it; about 1 MB a year on prod. A spool's history and the drift
+  check then never depend on reading log text, as the 2026-11-03 corrections had to. **Later:** an hourly comparison that
+  records changes made outside FCC (an edit straight in Spoolman: the corrections' "unexplained jumps"), and a History
+  section in the spool window. Spoolman keeps no change history of its own (checked on 0.27.1).
 * **📉 FCC's G-code walk leaves out a tool's last retract, which the slicer's footer counts (found 2026-11-02 by the INDX
   hotfix's review).** _(Standalone; pre-existing, every printer, tiny.)_ In relative E, `_walk_extrusion` nets every
   retract against the next un-retract, so a retract the file never takes back (each tool's last one, and the park's at a
@@ -228,6 +270,18 @@
   prod's #76 (Bambu PLA Green Matte, DR-CT-1) has none, #75 (Beige) isn't where FCC says, and a Bambu support spool may
   be in the to-be-labelled pile. (A Prusament OpenPrintTag spool passed this test on 2026-10-21: `Serial Number:
   6f:c4:ed:18:09:01:04:e0`, `Records: (2)`.)
+* **⏸️ PENDING DEREK — weigh the spool add-ons once (for the weigh-in drift item; nothing waits on it).** Weigh the
+  filament-end cap, each clip version, and one spool's set of edge guards. Weigh 5–10 of one kind together and divide,
+  since the scale reads whole grams, and check the scale with a known weight (10 US nickels are 50 g). Paste the numbers
+  here or tell Claude. While you're at it, tell Claude: which mode Quick Weigh opens in for you; in the weigh-out list,
+  whether a Net reading means you took the empty spool off in your head or used the scale's TARE; whether you ever change
+  a weight in Spoolman's own page; and whether the cap and clip usually go on before or after you weigh a spool you shelve.
+* **⏸️ PENDING DEREK — does TrueNAS keep snapshots of App_Data? (about 5 minutes in the TrueNAS web page; for the history
+  item; nothing waits on it.)** In TrueNAS, Data Protection → Periodic Snapshot Tasks: is there a task on the App_Data
+  dataset (or on its pool with Recursive ticked)? Note how often it runs and how long it keeps them. Then Datasets →
+  App_Data → Data Protection → Manage Snapshots: note the oldest one's date. Tell Claude what you see: if snapshots exist,
+  Claude can read old copies of the log there, read-only. If there are none, adding one is your call (it would also
+  protect FCC's data folder).
 
 ## 🗒️ Notes and standalone items
 
