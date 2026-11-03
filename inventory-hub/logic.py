@@ -5011,9 +5011,14 @@ def _undo_hold_parked(record, filed_out, rows, retry_later, failed):
     the question sorts it (review of 7e3720f, S-2: one that moved on, was archived or
     was deleted was called a failure the question had said it would leave alone). The
     rest go on to the park's own loop, which leaves them alone, drops them or retries
-    them, and says so. While a filed spool stays for good, one that can't be read is
-    held back too: whatever it is now, Undo can never put it back in a place taken for
-    good, and in the retry copy, which no longer carries that filed spool, it could be."""
+    them, and says so. One that can't be read is held back too, whatever the filed
+    spool's case: while it stays for good, Undo can never put it back in a place taken
+    for good, and in the retry copy, which no longer carries that filed spool, it could
+    be; while it waits, the parked spool waits with it, as one that couldn't be read
+    (UNDO_SPOOL_UNREAD). Sent on to the park's loop, its next read could answer and
+    find the filed spool still in the place (the re-check of 12644ce): in a single-slot
+    box it failed for good, with nothing left to put it back, and on a row with no slot
+    to check it was written in on top of the filed spool."""
     moves = record.get('moves') or {}
     if not moves or not _audit_holds_one(str(record.get('filed_at') or '').strip().upper(), rows):
         return moves
@@ -5021,8 +5026,8 @@ def _undo_hold_parked(record, filed_out, rows, retry_later, failed):
     waiting = [sid for sid in filed_out.get('retry') or {}]
     if not stuck and not waiting:
         return moves
-    hold = ('here', 'unreadable') if stuck else ('here',)
-    held = {sid: loc for sid, loc in moves.items() if _undo_guard_kind(record, sid, loc, rows)[0] in hold}
+    kinds = {sid: _undo_guard_kind(record, sid, loc, rows)[0] for sid, loc in moves.items()}
+    held = {sid: loc for sid, loc in moves.items() if kinds[sid] in ('here', 'unreadable')}
     rest = {sid: loc for sid, loc in moves.items() if sid not in held}
     if not held:
         return rest
@@ -5035,7 +5040,7 @@ def _undo_hold_parked(record, filed_out, rows, retry_later, failed):
                             "ERROR", "ff4444")
     else:
         for sid, loc in held.items():
-            retry_later(sid, loc, why)
+            retry_later(sid, loc, UNDO_SPOOL_UNREAD if kinds[sid] == 'unreadable' else why)
     return rest
 
 

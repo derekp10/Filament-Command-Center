@@ -909,11 +909,12 @@ def test_a_park_with_nothing_filed_is_the_parks_own_record(env):
 # C5: one Undo, the filed group first
 # ---------------------------------------------------------------------------
 
-def _filed_and_parked(env):
-    """PM-DB-1: #10 not scanned (parked), #20 found there from LR-MDB-2 slot 3 (filed)."""
-    add_spool(env, 10, "PM-DB-1", container_slot="1")
+def _filed_and_parked(env, place="PM-DB-1"):
+    """`place` (PM-DB-1 unless a test says): #10 not scanned (parked), #20 found there
+    from LR-MDB-2 slot 3 (filed)."""
+    add_spool(env, 10, place, container_slot="1" if place.startswith("PM") else "")
     add_spool(env, 20, "LR-MDB-2", container_slot="3", physical_source="CR-CT-1", physical_source_slot="4")
-    start(env, "PM-DB-1")
+    start(env, place)
     scan(env, "ID:20")
     assert yes(env)["filed"] == [20]
     env["fake"].patches.clear()
@@ -1165,6 +1166,55 @@ def test_an_unreadable_filed_spool_waits_in_the_retry_copy_and_so_does_the_parke
     again = yes_undo(env)
     assert again["success"] is True and again["restored"] == [20, 10]
     assert spools(env)[20]["location"] == "LR-MDB-2" and spools(env)[10]["location"] == "PM-DB-1"
+    assert state.UNDO_STACK == []
+
+
+@pytest.mark.parametrize("place", ["PM-DB-1", "SPOT-1"])
+def test_a_parked_spool_whose_read_fails_once_waits_with_an_unreadable_filed_one(places, monkeypatch, place):
+    """The re-check of 12644ce (S-2's fix): #20 can't be read at the Undo, so it waits in
+    the retry copy, and the Undo's first read of #10 failed too. Only the parked spools
+    still at Unknown were held back, so #10 went on to the park's own loop, whose next read
+    answered: in PM-DB-1 it failed #10 for good ("PM-DB-1 slot 1 holds #20"), and the retry
+    copy held only #20, so nothing could put #10 back any more; on SPOT-1, which has no
+    slot to check, it wrote #10 in on top of #20. A parked spool that can't be read waits
+    with the filed one, as on 7e3720f. RED on 5afeb8b."""
+    env = places
+    _filed_and_parked(env, place)
+    asked = ask_undo(env)
+    real_undo = logic.perform_undo
+    real_read = spoolman_api.get_spool_answer
+    reads_of_10 = []
+
+    def blips(sid):
+        if int(sid) == 20:
+            return None, False                    # never answers in this Undo
+        if int(sid) == 10:
+            reads_of_10.append(sid)
+            if len(reads_of_10) == 1:
+                return None, False                # its first read fails, the next ones answer
+        return real_read(sid)
+
+    def undo_with_blips(expected_id=None):
+        monkeypatch.setattr(spoolman_api, "get_spool_answer", blips)
+        try:
+            return real_undo(expected_id=expected_id)
+        finally:
+            monkeypatch.setattr(spoolman_api, "get_spool_answer", real_read)
+
+    monkeypatch.setattr(logic, "perform_undo", undo_with_blips)
+    env["logs"].clear()
+    done = yes_undo(env, asked)
+    assert done["success"] is False and done["restored"] == [] and done["retry"] == [10, 20]
+    assert done["msg"] == ("Undo could not put back #10 and #20 (could not be read from Spoolman). "
+                           "Press Undo Last Move again to try them again.")
+    assert patched(env) == [] and spools(env)[10]["location"] == "UNKNOWN"
+    assert not any(c == "ERROR" and "not putting Spool #10" in m for m, c, _ in env["logs"])
+    (copy,) = state.UNDO_STACK
+    assert copy["id"] == asked["undo_id"] and copy["moves"] == {10: place} and set(copy["filed"]) == {20}
+    monkeypatch.setattr(logic, "perform_undo", real_undo)
+    again = yes_undo(env)
+    assert again["success"] is True and again["restored"] == [20, 10]
+    assert spools(env)[20]["location"] == "LR-MDB-2" and spools(env)[10]["location"] == place
     assert state.UNDO_STACK == []
 
 
