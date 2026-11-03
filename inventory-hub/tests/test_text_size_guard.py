@@ -358,7 +358,8 @@ SAMPLE_AUDIT = {"active": True, "audit_id": "boot-1", "location_id": "LR-MDB-1",
                               "label_status": None, "label_read": True, "flagged_here": False}],
                 "rogue": [{"id": 134, "display": "#134 Prusament PLA (Pearl White)", "color": "F0F0F0",
                            "remaining_weight": 924, "slot": "3", "where": "LR-MDB-2 slot 3", "found": True,
-                           "label_status": False, "label_read": True, "flagged_here": False}],
+                           "label_status": False, "label_read": True, "flagged_here": False,
+                           "at_done": {"files": True}}],
                 "trail": [{"id": 242, "display": "#242 Prusament PLA (Galaxy Black)", "color": "111111",
                            "remaining_weight": 605, "slot": "1", "where": "XL-4", "found": True,
                            "label_status": False, "label_read": True, "flagged_here": False}]}
@@ -375,7 +376,10 @@ SAMPLE_QUESTION = {
              {"id": 57, "display": "#57 Prusament PLA (Purple (Galaxy Purple))", "where": "LR-MDB-1 slot 4",
               "slot": "4"}],
     "stays": [{"id": 242 + n, "display": f"#{242 + n} Prusament PLA (Galaxy Black)", "where": where, "why": why}
-              for n, (where, why) in enumerate([("XL-4", "moved to XL-4"), ("", "no longer in Spoolman")] * 6)]}
+              for n, (where, why) in enumerate([("XL-4", "moved to XL-4"), ("", "no longer in Spoolman")] * 6)],
+    # Derek's C3: the Extras Done files here, and the words for a multi-slot box.
+    "file": [{"id": 500, "display": "#500 Tecbears PETG (Clear)", "where": "LR-MDB-2 slot 3"}],
+    "file_note": "It goes in with no slot: scan its slot label afterwards to set one."}
 # A lost spool as /api/identify_scan and /api/spool_details answer it, from the real
 # park (test_audit_lost_badges_58_js pins both).
 SAMPLE_LOST = {"id": 8099, "type": "spool", "display": "#8099 Prusament PLA (Galaxy Black)", "color": "111111",

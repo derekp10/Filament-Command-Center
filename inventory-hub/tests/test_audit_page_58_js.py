@@ -125,7 +125,9 @@ SESSION = {
     "note": "1 is filed here. 2 more are in the places inside it, and this audit doesn't check those: audit each of them.",
     "stats": {"total_expected": 2, "found": 1, "missing": 1, "rogue": 1, "trail": 1},
     "expected": [_row(57, "1", found=True), _row(99, "2")],
-    "rogue": [dict(_row(200, "3", found=True, rogue=True), location="LR-MDB-2", where="LR-MDB-2 slot 3")],
+    # `at_done` (Derek's C6): what Done will do with this Extra, from its scan's read.
+    "rogue": [dict(_row(200, "3", found=True, rogue=True), location="LR-MDB-2", where="LR-MDB-2 slot 3",
+                   at_done={"files": True})],
     "trail": [dict(_row(242, "4", found=True, trail=True), location="XL-1", where="XL-1")],
     "last_found": None,
 }
@@ -179,6 +181,7 @@ def test_the_session_above_is_the_routes_shape(real):
         assert set(want[key][0]) - {"lost_from"} <= set(got[key][0]) | {"rogue", "trail"}, key
     assert got["stats"] == {"total_expected": 2, "found": 1, "missing": 1, "rogue": 1, "trail": 1}
     assert got["rogue"][0]["where"] == "LR-MDB-2 slot 3" and got["trail"][0]["where"] == "XL-1"
+    assert got["rogue"][0]["at_done"] == want["rogue"][0]["at_done"]
 
 
 def test_the_guards_samples_are_the_routes_shape(real, env):

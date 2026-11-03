@@ -51,7 +51,7 @@ class Asked(Server):
         end = {"id": AUDIT_ID, "why": "done", "location": "LR-MDB-1"}
         self.session = {"active": False, "audit_end": end}
         self.beat.update(audit_active=False, audit_location="", audit_end=end)
-        self._json(route, {"success": True, "parked": [100, 101, 102], "stayed": [], "failed": [],
+        self._json(route, {"success": True, "parked": [100, 101, 102], "filed": [], "stayed": [], "failed": [],
                            "msg": PARKED_MSG, "audit_ended": {"id": AUDIT_ID, "why": "done"}})
 
 

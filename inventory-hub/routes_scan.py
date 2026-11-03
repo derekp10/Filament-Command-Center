@@ -1048,12 +1048,15 @@ def _audit_done_answer(ask):
 
 @app.route('/api/audit/park', methods=['POST'])
 def api_audit_park():
-    """The Yes to Done's question: {audit_id, ids, today}, the spools it showed and
-    the page's own date (the note's day). Answers logic.park_audit_missing's dict."""
+    """The Yes to Done's question: {audit_id, ids, file_ids, today}, the spools it
+    showed to park, the Extras it showed to file here (Group 58, Derek's C3; a page
+    from before that sends none and files none) and the page's own date (the note's
+    day). Answers logic.park_audit_missing's dict."""
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         data = {}
-    return jsonify(logic.park_audit_missing(data.get('audit_id'), data.get('ids'), today=data.get('today')))
+    return jsonify(logic.park_audit_missing(data.get('audit_id'), data.get('ids'), today=data.get('today'),
+                                            file_ids=data.get('file_ids')))
 
 
 @app.route('/api/audit/found', methods=['POST'])

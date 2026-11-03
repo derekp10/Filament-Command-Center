@@ -34,18 +34,24 @@ LOOSE_BTN = "#fcc-audit-panel-loose"
 LOOSE = "#fcc-loose-list"
 
 
-def _question(park=3, stays=0):
+def _question(park=3, stays=0, file=0):
     """/api/identify_scan's audit_done_question, as pinned by
-    test_the_samples_shape_is_the_routes below."""
+    test_the_samples_shape_is_the_routes below. `file`: how many Extras Done files
+    here (Derek's C3), from LR-MDB-2, so the multi-slot box's words come with them."""
+    note = {0: "", 1: "It goes in with no slot: scan its slot label afterwards to set one."}.get(
+        file, "They go in with no slot: scan each one's slot label afterwards to set it.")
     return {"type": "audit_done_question", "audit_id": "boot-1", "location": "LR-MDB-1", "found": 2,
             "expected": 2 + park + stays,
             "park": [{"id": 100 + n, "display": f"#{100 + n} Some Brand PLA (Red {n})",
                       "where": f"LR-MDB-1 slot {n + 1}", "slot": str(n + 1)} for n in range(park)],
             "stays": [{"id": 300 + n, "display": f"#{300 + n} Some Brand PETG (Clear {n})", "where": "XL-4",
-                       "why": "moved to XL-4"} for n in range(stays)]}
+                       "why": "moved to XL-4"} for n in range(stays)],
+            "file": [{"id": 200 + n, "display": f"#{200 + n} Some Brand PLA (Blue {n})",
+                      "where": f"LR-MDB-2 slot {n + 1}"} for n in range(file)],
+            "file_note": note}
 
 
-PARKED = {"success": True, "parked": [100, 101, 102], "stayed": [], "failed": [],
+PARKED = {"success": True, "parked": [100, 101, 102], "filed": [], "stayed": [], "failed": [],
           "msg": "Parked 3 spools at Unknown. Undo Last Move puts them back.",
           "audit_ended": {"id": "boot-1", "why": "done"}}
 
@@ -57,6 +63,22 @@ def test_the_samples_shape_is_the_routes(asked):
         assert set(sample) == set(real) and sample["type"] == real["type"]
         assert set(sample["park"][0]) == set(real["park"][0]) and set(sample["stays"][0]) == set(real["stays"][0])
     assert set(PARKED) == set(asked["parked"])
+
+
+def test_the_samples_file_rows_are_the_routes(env):
+    """Derek's C3: the question's Extras, from a real Done, against both samples.
+    Pins the shape C added."""
+    from test_audit_session_58 import add_spool, scan, start
+    add_spool(env, 1, "LR-MDB-1", container_slot="1")
+    add_spool(env, 200, "LR-MDB-2", container_slot="1")
+    start(env, "LR-MDB-1")
+    scan(env, "ID:1")
+    scan(env, "ID:200")
+    real = scan(env, "CMD:DONE")
+    assert real["file"] == [{"id": 200, "display": "#200 Some Brand PLA (Red)", "where": "LR-MDB-2 slot 1"}]
+    for sample in (_question(file=1), SAMPLE_QUESTION):
+        assert set(sample["file"][0]) == set(real["file"][0])
+        assert sample["file_note"] == real["file_note"]
 
 
 @pytest.fixture

@@ -1360,6 +1360,16 @@ def _is_dryer_box_row(row):
     return isinstance(row, dict) and str(row.get('Type', '')).strip() == locations_db.DRYER_BOX_TYPE
 
 
+def _place_capacity(row):
+    """How many spools a place holds by its Max Spools: Bulk Move's capacity rule
+    (D3), whose 0 for a blank or unreadable value is no cap (a Room, a shelf, a cart).
+    An audit's Done reads a place that holds one from it too (_audit_holds_one)."""
+    try:
+        return int(str((row or {}).get('Max Spools', '0')).strip() or '0')
+    except (TypeError, ValueError):
+        return 0
+
+
 def _pre_box_plain(note, loc_info_map):
     """The last plain place a note remembers (a place with no slots: never a
     dryer box), or ''."""
@@ -3614,10 +3624,7 @@ def plan_bulk_move(source, dest):
     # ghost home) so a deployed spool still reserves its slot. Fail-closed too:
     # an unverifiable capacity blocks rather than risking an overflow. Ordered
     # before the active-print confirm so we never prompt only to then refuse.
-    try:
-        max_spools = int(str(dest_row.get('Max Spools', '0')).strip() or '0')
-    except (TypeError, ValueError):
-        max_spools = 0
+    max_spools = _place_capacity(dest_row)
     if max_spools > 0:
         try:
             occupancy = len(spoolman_api.get_spools_at_location_detailed_strict(dest) or [])
@@ -4792,7 +4799,231 @@ def _undo_guard(record):
                                 "held": _undo_record_at(rec) == only_if_at})
         else:
             guard[kind].append(sid)
+    if record.get('filed'):
+        # C5: the filed group, under its own key; its unreadable spools keep the
+        # question from being asked, as the parked group's do (_undo_current_heads).
+        guard['filed'] = _undo_filed_guard(record, rows)
+        guard['filed']['stuck'] = _undo_filed_stuck(record, guard['filed'], rows)
+        guard['unreadable'] = guard['unreadable'] + guard['filed']['unreadable']
     return guard
+
+
+# --- C5 (Derek, 2026-11-03): an audit record's filed group --------------------------
+# Done files the Extras here in the same record as its park: `filed` {sid: {location,
+# extras, slot, place_had_row}}, the snapshot of where each was, and `filed_at`, the
+# audited place. Undo puts that group back FIRST, then the parked group, whose code
+# above and in perform_undo is the park's own: a spool filed into a place that holds
+# one spool leaves it before a parked spool goes back in.
+
+def _undo_filed_kind(record, sid, snap, rows):
+    """_undo_guard_read for a filed spool, which goes back only while it is still at
+    `filed_at` (not archived, not deleted), plus 'place_gone' when its old place had a
+    locations.json row and has none now (_undo_place_gone's rule, on its snapshot): it
+    stays here then, where something can show it."""
+    kind, rec = _undo_guard_read(sid, str(record.get('filed_at') or '').strip().upper())
+    if kind == 'here' and _undo_place_gone(snap or {}, (snap or {}).get('location'), rows):
+        kind = 'place_gone'
+    return kind, rec
+
+
+def _undo_filed_guard(record, rows):
+    """The filed group sorted for Undo's question, as _undo_guard sorts the parked:
+    {here, moved_on: [{id, where}], deleted, unreadable, place_gone}. _undo_guard
+    adds `stuck` (_undo_filed_stuck)."""
+    guard: typing.Dict[str, typing.List[typing.Any]] = {
+        "here": [], "moved_on": [], "deleted": [], "unreadable": [], "place_gone": []}
+    for sid, snap in (record.get('filed') or {}).items():
+        kind, rec = _undo_filed_kind(record, sid, snap, rows)
+        if kind == 'moved_on':
+            guard[kind].append({"id": sid, "where": _undo_left_where(rec)})
+        else:
+            guard[kind].append(sid)
+    return guard
+
+
+def _undo_filed_place(snap, printer_map):
+    """'in LR-MDB-2 slot 3', 'in Unassigned', 'at Unknown': where a filed spool goes back."""
+    loc = str((snap or {}).get('location') or '').strip().strip('"')
+    if loc.upper() == 'UNKNOWN':
+        return "at Unknown"
+    return _undo_place(loc, ((snap or {}).get('extras') or {}).get('container_slot'), printer_map)
+
+
+def _undo_filed_gone_words(record, sids):
+    """"LR-MDB-2 is gone from Locations, so #57 stays in A-CART.": said once."""
+    filed = record.get('filed') or {}
+    places = sorted({str((_undo_get(filed, sid) or {}).get('location') or '').strip().upper() for sid in sids})
+    stay = 'stays' if len(sids) == 1 else 'stay'
+    return (f"{_and_list(places)} {'is' if len(places) == 1 else 'are'} gone from Locations, so "
+            f"{_undo_names(sids)} {stay} in {str(record.get('filed_at') or '').strip().upper()}.")
+
+
+def _describe_filed_undo(record, printer_map, guard):
+    """describe_undo for an audit record that filed Extras too: both groups, "Undo:
+    put #1 and #2 back in A-CART (parked at Unknown by its audit) and #57 back in
+    LR-MDB-2 slot 3 (filed in A-CART by the same audit)?", then what stays, once.
+    `guard` is _undo_guard's answer; with none, every spool counts."""
+    filed_at = str(record.get('filed_at') or '').strip().upper()
+    fguard = (guard or {}).get('filed')
+    here = None if guard is None else {str(sid) for sid in guard.get('here') or ()}
+    fhere = None if fguard is None else {str(sid) for sid in fguard.get('here') or ()}
+    parked = [sid for sid in (record.get('moves') or {}) if here is None or str(sid) in here]
+    filed = [(sid, snap) for sid, snap in (record.get('filed') or {}).items() if fhere is None or str(sid) in fhere]
+    # A place that holds one spool, with a filed spool staying in it: Undo puts no
+    # parked spool back in there (_undo_hold_parked), so the question offers none.
+    stuck = list((fguard or {}).get('stuck') or [])
+    held, parked = (parked, []) if stuck else ([], parked)
+    phrases = []
+    if parked:
+        phrases.append(f"{_undo_names(parked)} back in {_undo_audit_places(record)} (parked at Unknown by its audit)")
+    if filed:
+        by = "the same audit" if parked else "its audit"
+        if len(filed) > 3:
+            phrases.append(f"{len(filed)} spools back where they were (filed in {filed_at} by {by})")
+        else:
+            phrases.append(_and_list(f"#{sid} back {_undo_filed_place(snap, printer_map)}" for sid, snap in filed)
+                           + f" (filed in {filed_at} by {by})")
+    text = ("Undo: put " + " and ".join(phrases) + "?" if phrases
+            else "Undo: nothing from this audit can go back. Clear it from Undo?")
+    moved_on = list((guard or {}).get('moved_on') or []) + list((fguard or {}).get('moved_on') or [])
+    tail = [_undo_left_alone_words(moved_on)] if moved_on else []
+    if (guard or {}).get('place_gone'):
+        tail.append(_undo_place_gone_words(record, guard['place_gone']))
+    if (fguard or {}).get('place_gone'):
+        tail.append(_undo_filed_gone_words(record, fguard['place_gone']))
+    if held:
+        tail.append(f"{_audit_one_spool_why(filed_at, stuck)}, so {_undo_names(held)} "
+                    f"{'stays' if len(held) == 1 else 'stay'} at Unknown.")
+    return " ".join([text] + tail)
+
+
+def _undo_filed_taken(sid, snap, rows, reads):
+    """(why, unread): which spool claims the slot a filed spool would go back to, or
+    its old place when that holds one spool (_audit_holds_one), as words, or ''.
+    `unread` when the place couldn't be read: that says nothing about the spool, so it
+    is retried. One strict read per place; only spools filed at, or loaded from,
+    exactly that place count, as the park's _slot_taken counts."""
+    box = str((snap or {}).get('location') or '').strip().strip('"').upper()
+    slot = _norm_slot((snap or {}).get('slot'))
+    if not box or box == 'UNKNOWN' or not (slot or _audit_holds_one(box, rows)):
+        return "", False
+    if box not in reads:
+        try:
+            reads[box] = spoolman_api.get_spools_at_location_detailed_strict(box) or []
+        except Exception as e:
+            reads[box] = f"{box} could not be read from Spoolman ({e})"
+    if isinstance(reads[box], str):
+        return reads[box], True
+    there = [i for i in reads[box] if str(i.get('location') or '').strip().upper() == box]
+    if slot:
+        holders = box_slot_claims(rows.get(box), box, there, [sid])[0].get(slot) or []
+        return (f"{box} slot {slot} holds " + ", ".join(f"#{h}" for h in holders)) if holders else "", False
+    holders = [i.get('id') for i in there if str(i.get('id')) != str(sid)]
+    return (_audit_one_spool_why(box, holders) if holders else ""), False
+
+
+def _undo_filed(record, printer_map, rows):
+    """Put a guarded record's filed group back, before its parked group (C5). Each
+    spool goes back to its old place, slot and system extras (the snapshot) only while
+    it is still at `filed_at`: a deleted one is dropped, one that moved on or was
+    archived is left alone and named, and one whose old place's row has gone stays
+    here. Its old slot, or its old place when that holds one spool, must be free by a
+    strict read, else it fails with an ERROR line, and that is final for this record.
+    One that can't be read, whose place can't be read, or whose write failed and
+    isn't proved landed (_move_write re-reads) goes in the retry copy.
+
+      {restored, parts, failed: ["#57 (why)"], failed_ids, retry: {sid: snap},
+       retry_why: {why: [ids]}, left_alone: [{id, where}], dropped, place_gone}"""
+    filed_at = str(record.get('filed_at') or '').strip().upper()
+    labels = record.get('labels') or {}
+    out: typing.Dict[str, typing.Any] = {"restored": [], "parts": [], "failed": [], "failed_ids": [], "retry": {},
+                                         "retry_why": {}, "left_alone": [], "dropped": [], "place_gone": []}
+    reads: typing.Dict[str, typing.Any] = {}
+    segs = []
+
+    def _retry(sid, snap, why):
+        out['retry'][sid] = snap
+        out['retry_why'].setdefault(why, []).append(sid)
+
+    for sid, snap in (record.get('filed') or {}).items():
+        snap = snap or {}
+        kind, rec = _undo_filed_kind(record, sid, snap, rows)
+        if kind == 'deleted':
+            out['dropped'].append(sid)
+            continue
+        if kind == 'moved_on':
+            out['left_alone'].append({"id": sid, "where": _undo_left_where(rec)})
+            continue
+        if kind == 'place_gone':
+            out['place_gone'].append(sid)
+            continue
+        if kind == 'unreadable':
+            _retry(sid, snap, UNDO_SPOOL_UNREAD)
+            continue
+        why, unread = _undo_filed_taken(sid, snap, rows, reads)
+        if unread:
+            _retry(sid, snap, why)
+            continue
+        if why:
+            out['failed'].append(f"#{sid} ({why})")
+            out['failed_ids'].append(sid)
+            state.add_log_entry(_audit_esc(f"❌ Undo: not putting Spool #{sid} back "
+                                           f"{_undo_filed_place(snap, printer_map)} — {why}"), "ERROR", "ff4444")
+            continue
+        merged = dict(rec.get('extra') or {})
+        for k in spoolman_api.SYSTEM_MANAGED_EXTRAS:
+            merged[k] = (snap.get('extras') or {}).get(k, '')
+        try:
+            landed, raised = _move_write(sid, str(snap.get('location') or '').strip(), merged), None
+        except Exception as e:
+            landed, raised = False, str(e)
+        if landed:
+            out['restored'].append(sid)
+            label = labels.get(sid) or labels.get(str(sid)) or f"#{sid}"
+            segs.append(f"{label} is back {_undo_filed_place(snap, printer_map)}")
+        else:
+            _retry(sid, snap, raised or spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error")
+    if len(out['restored']) > 3:
+        out['parts'] = [f"{len(out['restored'])} spools are back where they were (filed in {filed_at} by its audit)"]
+    elif segs:
+        out['parts'] = [f"{_and_list(segs)} (filed in {filed_at} by its audit)"]
+    return out
+
+
+def _undo_filed_stuck(record, filed, rows):
+    """The filed spools that stay in the audited place for good, when that place
+    holds one spool: their old place has gone, or (`filed`, _undo_filed's answer, at
+    the Undo itself) their old slot is taken. [] anywhere else."""
+    if not _audit_holds_one(str(record.get('filed_at') or '').strip().upper(), rows):
+        return []
+    return list(filed.get('place_gone') or []) + list(filed.get('failed_ids') or [])
+
+
+def _undo_hold_parked(record, filed_out, rows, retry_later, failed):
+    """C5: the parked spools that may go back now, after the filed group. A place
+    that holds one spool still holding a filed spool takes none of them back, or two
+    spools would claim it: they fail for good while one stays there for good, and
+    wait in the retry copy while one only couldn't be read or written yet. Said once,
+    in one ERROR line or one retry reason. Anywhere else (a filed spool has no slot,
+    so it claims none) every parked spool goes on to the park's own Undo."""
+    moves = record.get('moves') or {}
+    if not moves or not _audit_holds_one(str(record.get('filed_at') or '').strip().upper(), rows):
+        return moves
+    stuck = _undo_filed_stuck(record, filed_out, rows)
+    waiting = [sid for sid in filed_out.get('retry') or {}]
+    if not stuck and not waiting:
+        return moves
+    place = str(record.get('filed_at') or '').strip().upper()
+    why = _audit_one_spool_why(place, stuck or waiting)
+    if stuck:
+        for sid in moves:
+            failed.append(f"#{sid} ({why})")
+        state.add_log_entry(_audit_esc(f"❌ Undo: not putting {_undo_names(list(moves))} back in {place} — {why}"),
+                            "ERROR", "ff4444")
+    else:
+        for sid, loc in moves.items():
+            retry_later(sid, loc, why)
+    return {}
 
 
 def _undo_names(sids):
@@ -4824,7 +5055,10 @@ def _undo_audit_places(record):
 def _describe_guarded_undo(record, printer_map, guard):
     """describe_undo for an audit's park: a batch can be 30 spools, and some can
     have moved on or gone since, so the question counts past three and says what
-    stays. `guard` is _undo_guard's answer; with none, every spool counts."""
+    stays. `guard` is _undo_guard's answer; with none, every spool counts. A record
+    that filed Extras too names both groups (_describe_filed_undo)."""
+    if record.get('filed'):
+        return _describe_filed_undo(record, printer_map, guard)
     moved_on = (guard or {}).get('moved_on') or []
     gone = (guard or {}).get('place_gone') or []
     here = None if guard is None else {str(sid) for sid in guard.get('here') or ()}
@@ -4959,7 +5193,10 @@ def perform_undo(expected_id=None):
     this record. One that failed for a reason that says nothing about it (it or its
     box couldn't be read, its write isn't proved landed) counts as failed too, and
     goes back on the stack in a copy of the record holding only such spools, so the
-    next Undo Last Move offers exactly those. Ordinary records don't take this path."""
+    next Undo Last Move offers exactly those. Ordinary records don't take this path.
+    C5: a record whose audit also filed Extras here (`filed`, `filed_at`) puts that
+    group back first, by the same rules from the other side (_undo_filed), and its
+    retries ride in the same copy."""
     if not state.UNDO_STACK:
         state.add_log_entry(f"↩️ {NOTHING_TO_UNDO_MSG}", "INFO")
         return {"success": False, "nothing": True, "msg": NOTHING_TO_UNDO_MSG}
@@ -5089,6 +5326,13 @@ def perform_undo(expected_id=None):
         filed = [i for i in items if str(i.get('location') or '').strip().upper() == box]
         holders = box_slot_claims(row, box, filed, [sid])[0].get(slot) or []
         return f"{box} slot {slot} holds " + ", ".join(f"#{h}" for h in holders) if holders else ""
+
+    # C5 (Derek, 2026-11-03): an audit record's filed group goes back FIRST, before
+    # the parked group below (whose code is the park's own), so a place that holds
+    # one spool is free again before a parked spool goes back into it.
+    filed_out = _undo_filed(last, printer_map, undo_rows) if only_if_at and last.get('filed') else None
+    if filed_out:
+        moves = _undo_hold_parked(last, filed_out, undo_rows, _retry_later, failed)
 
     # Where each spool really was before this undo (the record's target is not
     # always it: an auto-deploy loads the box slot's head), for the log line.
@@ -5302,19 +5546,34 @@ def perform_undo(expected_id=None):
             segs.append(f"#{sid} is back "
                         f"{_undo_place(d.get('location'), (d.get('extras') or {}).get('container_slot'), printer_map)}")
         parts.append(_and_list(segs))
-    if not moves and not ejections and not displaced:
+    if not moves and not ejections and not displaced and not last.get('filed'):
         # Legacy / no-move record: its summary already reads "Moved N -> target".
         parts.append(last.get('summary', f"moved -> {target}"))
     if only_if_at:
-        if retry:
+        filed_retry: typing.Dict[typing.Any, typing.Any] = {}
+        filed_restored: typing.List[typing.Any] = []
+        if filed_out:
+            # C5: the filed group's outcomes, said with the parked group's, its first.
+            parts[:0] = filed_out['parts']
+            failed[:0] = filed_out['failed']
+            for why, sids in filed_out['retry_why'].items():
+                retry_why.setdefault(why, []).extend(sids)
+            left_alone.extend(filed_out['left_alone'])
+            dropped.extend(filed_out['dropped'])
+            filed_retry, filed_restored = filed_out['retry'], filed_out['restored']
+        if retry or filed_retry:
             # The same record, id and all, holding only those spools: the next Undo
             # Last Move offers exactly them. A spool whose slot another spool really
             # claims stays out, or this record would bury every older one for as long
             # as that spool held the slot. Back in its own place on the stack, under
             # a move that landed while this Undo ran.
-            state.UNDO_STACK.insert(stack_place, dict(last, moves=retry))
+            copy = dict(last, moves=retry)
+            if 'filed' in last:
+                copy['filed'] = filed_retry
+            state.UNDO_STACK.insert(stack_place, copy)
         return _guarded_undo_answer(last, parts, failed, retry_why, left_alone, dropped, place_gone,
-                                    restored + restored_ejections + restored_displaced, unbuffered)
+                                    filed_restored + restored + restored_ejections + restored_displaced, unbuffered,
+                                    filed_gone=(filed_out or {}).get('place_gone') or [])
     if parts:
         state.add_log_entry(f"↩️ Undo: {'; '.join(parts)}", "WARNING")
     if failed:
@@ -5326,7 +5585,8 @@ def perform_undo(expected_id=None):
             "restored": restored + restored_ejections + restored_displaced, "unbuffered": unbuffered}
 
 
-def _guarded_undo_answer(record, parts, failed, retry_why, left_alone, dropped, place_gone, restored, unbuffered):
+def _guarded_undo_answer(record, parts, failed, retry_why, left_alone, dropped, place_gone, restored, unbuffered,
+                         filed_gone=()):
     """The end of an audit record's Undo: it says what went back, what stayed and
     what is gone, and `success` is true when nothing failed. A spool left alone or
     dropped, or held at Unknown because its place has gone, never counts as failed.
@@ -5334,18 +5594,25 @@ def _guarded_undo_answer(record, parts, failed, retry_why, left_alone, dropped, 
     stays on the stack, each reason said once, and the words say to press again.
     `left_alone` lists a spool held at Unknown too, as it was left where it is (the
     page gives such an answer the longer toast). Its log lines are escaped (a label
-    holds a filament's name, and Spoolman's words are outside text)."""
+    holds a filament's name, and Spoolman's words are outside text). `filed_gone`
+    (C5): filed spools held where they were filed because their old place has gone,
+    said once and listed in `place_gone` and `left_alone` too."""
     tail = []
     if left_alone:
         tail.append(_undo_left_alone_words(left_alone))
     if place_gone:
         tail.append(_undo_place_gone_words(record, place_gone))
+    if filed_gone:
+        tail.append(_undo_filed_gone_words(record, filed_gone))
     if dropped:
         names = _and_list(f"#{sid}" for sid in dropped)
         tail.append(f"{names} {'is' if len(dropped) == 1 else 'are'} no longer in Spoolman.")
     retry = [sid for sids in retry_why.values() for sid in sids]
-    extras = {"restored": restored, "unbuffered": unbuffered, "dropped": dropped, "place_gone": place_gone,
-              "left_alone": left_alone + [{"id": sid, "where": "Unknown"} for sid in place_gone],
+    filed_at = str(record.get('filed_at') or '').strip().upper()
+    extras = {"restored": restored, "unbuffered": unbuffered, "dropped": dropped,
+              "place_gone": list(place_gone) + list(filed_gone),
+              "left_alone": left_alone + [{"id": sid, "where": "Unknown"} for sid in place_gone]
+              + [{"id": sid, "where": filed_at} for sid in filed_gone],
               "retry": retry}
     if failed or retry:
         said = failed + [f"{_undo_names(sids)} ({why})" for why, sids in retry_why.items()]
@@ -5572,12 +5839,13 @@ def _audit_with_where(session, sid):
     return f"{label} → {where}" if where else label
 
 
-def _audit_report(session, parked=(), stays=(), failed=()):
+def _audit_report(session, parked=(), stays=(), failed=(), filed=()):
     """The audit's report: ONE entry naming the place, written after anything else
     the end logs, so a long audit's own lines can't push it out of the 50-line log.
     `parked` and `failed` are ids; `stays` are the spools a Done left where they are
-    ({id, display, where, why}). "Perfect Match" takes an audited place, something
-    expected, all of it found, and no extra."""
+    ({id, display, where, why}); `filed` the Extras Done filed here ({id, display,
+    from}, C4). "Perfect Match" takes an audited place, something expected, all of
+    it found, and no extra."""
     place = session.get('location_id') or ''
     if not place:
         state.add_log_entry(
@@ -5608,6 +5876,10 @@ def _audit_report(session, parked=(), stays=(), failed=()):
     if parked:
         lines.append("❓ <b>Parked at Unknown:</b> " + ", ".join(f"#{s}" for s in parked)
                      + f" (Undo Last Move puts {'it' if len(parked) == 1 else 'them'} back)")
+    if filed:
+        lines.append("📥 <b>Filed here:</b> " + ", ".join(
+            _audit_esc(f"{f.get('display') or _audit_label(session, f.get('id'))} (FCC had it at {f.get('from')})")
+            for f in filed) + f" (Undo Last Move puts {'it' if len(filed) == 1 else 'them'} back)")
     if stays:
         lines.append("📌 <b>Left alone:</b> " + ", ".join(
             _audit_esc(f"{s.get('display') or _audit_label(session, s.get('id'))} → "
@@ -5777,6 +6049,8 @@ def _audit_unexpected_spool(session, sid):
         if sid not in scanned:
             rows[str(sid)] = _audit_row({'id': sid, 'display': f"#{sid}", 'color': '', 'slot': '', 'location': '',
                                          'color_direction': 'longitudinal'}, where=AUDIT_WHERE_UNREAD)
+            # C6: nothing was read, so the strip says nothing of Done: its read decides.
+            rows[str(sid)]['at_done'] = None
             scanned.append(sid)
             session.setdefault('rogue_items', []).append(sid)
             state.add_log_entry(f"⚠️ Extra: #{sid}: {AUDIT_WHERE_UNREAD}.", "WARNING", "ffaa00")
@@ -5802,6 +6076,10 @@ def _audit_unexpected_spool(session, sid):
             state.logger.warning(f"Audit: couldn't read the locations file for #{sid}: {e}")
             return _audit_refuse(AUDIT_LOCATIONS_UNREAD)
         loaded_from_here = _holds_one_spool(sloc, printer_map, loc_info_map)
+    if not loaded_from_here:
+        # C6: what Done will do with this Extra, from the record just read, so the
+        # strip can say it with no read per poll.
+        row['at_done'] = _audit_at_done(rec, place)
 
     _audit_take_out(session, sid)
     rows[str(sid)] = row
@@ -6104,24 +6382,121 @@ def _audit_stay_why(rec, place, printer_map, loc_info_map):
     return _left_in_place_reason(rec, _scan_buffer_ids(), printer_map, loc_info_map)
 
 
+# --- Done files the Extras here (Derek, 2026-11-03, C: "Select it for that location").
+# Built on Claude's safe defaults for his look, in commits of their own so it can come
+# out: a spool found here that FCC has somewhere else is filed here by Done's Yes, in
+# the same question as the park and the same Undo.
+
+def _audit_holds_one(place, loc_info_map):
+    """A place that holds one spool: a single-slot dryer box (locations_db's 20.2 rule,
+    whose "0" counts too) or a row whose Max Spools is 1 (Bulk Move's capacity rule,
+    _place_capacity). Heads and Printer rows are asked about before this."""
+    row = (loc_info_map or {}).get(place)
+    return locations_db._is_single_slot_dryer_box(row) or _place_capacity(row) == 1
+
+
+def _audit_one_spool_why(place, holders=(), found=1):
+    """Why an Extra isn't filed in a place that holds one spool: something is there
+    (`holders`, its ids), or more than one Extra was found here."""
+    if holders:
+        names = _and_list(f"#{h}" for h in holders)
+        return f"{place} holds one spool, and {names} {'is' if len(holders) == 1 else 'are'} there"
+    if found > 1:
+        return f"{place} holds one spool, and {found} were found here"
+    return f"{place} holds one spool"
+
+
+def _audit_extra_fate(rec, place, loc_list, printer_map, loc_info_map, buffer_ids):
+    """What Done does with an Extra, from its record (C1): ('file', ''), ('here', '')
+    when FCC has it here already (nothing to do), ('stay', why), or ('one', why) when
+    this place holds one spool, so whether it is filed depends on what else is there
+    (plan_audit_done counts, and the write reads the place first). One rule for the
+    plan, the last look before the write, and the hint an Extra's row carries (C6).
+
+    Stays: archived; on a head or deployed (_left_in_place_reason's rules, its words
+    for the scan buffer, the audit's own for a head); filed in a place inside this one
+    (an audit of a room must not pull a spool out of its box); and every Extra when
+    this place is a head or a Printer row (an audit never loads a printer). A deleted
+    spool is the caller's: it has no record."""
+    if rec.get('archived'):
+        return 'stay', "archived"
+    loc = str(rec.get('location') or '').strip().strip('"').upper()
+    if loc == place:
+        return 'here', ''
+    why = _left_in_place_reason(rec, buffer_ids, printer_map, loc_info_map)
+    if why:
+        if _holds_one_spool(loc, printer_map, loc_info_map):
+            why = f"loaded on {loc}: an audit never takes a spool off a printer"
+        return 'stay', why
+    if _audit_places_inside(place, [rec], loc_list):
+        return 'stay', f"FCC has it in {_audit_spool_where(rec)}, inside {place}"
+    if (_holds_one_spool(place, printer_map, loc_info_map)
+            or locations_db.is_printer_row_not_head(place, (loc_info_map or {}).get(place), printer_map)):
+        return 'stay', "an audit never loads a printer"
+    if _audit_holds_one(place, loc_info_map):
+        return 'one', _audit_one_spool_why(place)
+    return 'file', ''
+
+
+def _audit_at_done(rec, place):
+    """C6: what Done will do with an Extra, worked out where it is recorded, from the
+    record its scan read, so the strip can say it and a poll reads nothing. A row's
+    `at_done`: {"files": True}; {"files": False, "why": <reason>}; {"files": None,
+    "why": <sentence>} when a fresh read decides (a place that holds one spool); or
+    None when the locations file can't be read. A stay that depends on a fresh read
+    (a spool deleted, archived or moved since, a place the park frees) is said at
+    Done, in its question."""
+    try:
+        printer_map, loc_info_map = _audit_place_maps()
+    except Exception as e:
+        state.logger.warning(f"Audit: couldn't read the locations file for #{rec.get('id')}'s hint: {e}")
+        return None
+    fate, why = _audit_extra_fate(rec, place, list(loc_info_map.values()), printer_map, loc_info_map,
+                                  _scan_buffer_ids())
+    if fate == 'file':
+        return {"files": True}
+    if fate == 'one':
+        return {"files": None, "why": f"{why}, so Done files it here only if nothing else is there"}
+    return {"files": False, "why": why or "FCC has it here already"}
+
+
+def _audit_file_note(place, loc_info_map, count):
+    """The question's words for Extras filed in a multi-slot box: FCC never guesses a
+    slot, so each goes in with none."""
+    row = (loc_info_map or {}).get(place)
+    if not count or not (_is_dryer_box_row(row) and _place_capacity(row) > 1):
+        return ""
+    if count == 1:
+        return "It goes in with no slot: scan its slot label afterwards to set one."
+    return "They go in with no slot: scan each one's slot label afterwards to set it."
+
+
 def plan_audit_done(session):
-    """What Done would do with the spools on the list that weren't scanned, read
-    fresh: a spool can move during an audit. Writes nothing.
+    """What Done would do with the spools on the list that weren't scanned, and with
+    the Extras (C1), read fresh: a spool can move during an audit. Writes nothing.
 
       {read_ok, read_error, occupants, park: [{id, display, where, slot}],
-       stays: [{id, display, where, why}]}
+       stays: [{id, display, where, why}],
+       file: [{id, display, where, location, slot}], file_note}
 
     Reads the whole list strictly, archived spools included, so an id it doesn't
     hold is a deleted spool, and one read answers for all of them. No missing
-    spool, or no place, reads nothing. `occupants` is how many spools the place
-    holds as a read of it lists them, a spool loaded from it included and an archived
-    one not, the count box_slot_claims and effective_slot go by: the park records
-    each spool's slot from it."""
+    spool and no Extra, or no place, reads nothing. `occupants` is how many spools
+    the place holds as a read of it lists them, a spool loaded from it included and
+    an archived one not, the count box_slot_claims and effective_slot go by: the park
+    records each spool's slot from it.
+
+    `file`: the Extras Done files here (_audit_extra_fate), each with where FCC has it
+    now, its `location` and its `slot` as the read reads them there (for the Undo);
+    the ones that stay join `stays`, and one FCC has here already is left out. A
+    place that holds one spool takes an Extra only when the park leaves
+    nothing else there and only one qualifies. `file_note` is the question's words
+    for a multi-slot box (no slot)."""
     plan: typing.Dict[str, typing.Any] = {"read_ok": True, "read_error": None, "occupants": 0,
-                                          "park": [], "stays": []}
+                                          "park": [], "stays": [], "file": [], "file_note": ""}
     place = str(session.get('location_id') or '').strip().upper()
-    _expected, missing, _extras, _trail = _audit_tally(session)
-    if not place or not missing:
+    _expected, missing, extras, _trail = _audit_tally(session)
+    if not place or not (missing or extras):
         return plan
     try:
         spools = spoolman_api.get_all_spools_strict(allow_archived=True)
@@ -6133,8 +6508,9 @@ def plan_audit_done(session):
         plan.update(read_ok=False, read_error=str(e))
         return plan
     records = {str(s.get('id')): s for s in spools if isinstance(s, dict)}
-    plan['occupants'] = sum(1 for s in records.values() if not s.get('archived')
-                            and spoolman_api._build_location_match(s, place) is not None)
+    holders = [s.get('id') for s in records.values() if not s.get('archived')
+               and spoolman_api._build_location_match(s, place) is not None]
+    plan['occupants'] = len(holders)
     for sid in missing:
         rec = records.get(str(sid))
         if rec is None:
@@ -6149,7 +6525,53 @@ def plan_audit_done(session):
         else:
             plan['park'].append({"id": sid, "display": display, "where": where,
                                  "slot": _norm_slot((rec.get('extra') or {}).get('container_slot'))})
+    if extras:
+        _audit_plan_extras(session, plan, place, extras, records, holders, printer_map, loc_info_map)
     return plan
+
+
+def _audit_plan_extras(session, plan, place, extras, records, holders, printer_map, loc_info_map):
+    """plan_audit_done's Extras (C1), from the same read: each is filed, stays (with
+    why), or is left out when FCC has it here already. In a place that holds one
+    spool, an Extra is filed only when every spool there is one the park takes and
+    no other Extra qualifies."""
+    loc_list = list(loc_info_map.values())
+    buffer_ids = _scan_buffer_ids()
+    ones: typing.List[typing.Dict[str, typing.Any]] = []
+    for sid in extras:
+        rec = records.get(str(sid))
+        if rec is None:
+            plan['stays'].append({"id": sid, "display": _audit_label(session, sid), "where": "",
+                                  "why": AUDIT_GONE_WHY})
+            continue
+        display = str((spoolman_api.format_spool_display(rec) or {}).get('text') or f"#{sid}")
+        where = _audit_spool_where(rec)
+        fate, why = _audit_extra_fate(rec, place, loc_list, printer_map, loc_info_map, buffer_ids)
+        if fate == 'here':
+            continue
+        if fate == 'stay':
+            plan['stays'].append({"id": sid, "display": display, "where": where, "why": why})
+            continue
+        loc = str(rec.get('location') or '').strip()
+        # The slot it holds where it is, by the one slot rule (a sole occupant's blank
+        # slot in a single-slot box is "1"): Undo puts it back there.
+        there = sum(1 for s in records.values() if not s.get('archived')
+                    and spoolman_api._build_location_match(s, loc.upper()) is not None) if loc else 0
+        row = {"id": sid, "display": display, "where": where, "location": loc,
+               "slot": _norm_slot(locations_db.effective_slot(loc_info_map.get(loc.upper()),
+                                                              (rec.get('extra') or {}).get('container_slot'),
+                                                              occupants=there))}
+        (ones if fate == 'one' else plan['file']).append(row)
+    if ones:
+        parked = {str(r['id']) for r in plan['park']}
+        left = [h for h in holders if str(h) not in parked]
+        if len(ones) == 1 and not left:
+            plan['file'].append(ones[0])
+        else:
+            why = _audit_one_spool_why(place, left, len(ones))
+            plan['stays'].extend({"id": r['id'], "display": r['display'], "where": r['where'], "why": why}
+                                 for r in ones)
+    plan['file_note'] = _audit_file_note(place, loc_info_map, len(plan['file']))
 
 
 def _audit_read_refusal(place):
@@ -6159,10 +6581,12 @@ def _audit_read_refusal(place):
 
 def _audit_finish(cmd):
     """Done or Cancel, under the end lock. Cancel reports and ends, writing nothing
-    to Spoolman. Done writes nothing either: with spools to park it answers `ask`
-    and the audit stays open (a Yes comes back through park_audit_missing); with
-    none it reports and ends. A read that fails keeps the audit open: its scans
-    are the whole point, and Done can be pressed again."""
+    to Spoolman. Done writes nothing either: with spools to park, or Extras to file
+    here (Derek's C3), it answers `ask` and the audit stays open (a Yes comes back
+    through park_audit_missing); with neither it reports and ends. A read that fails
+    keeps the audit open: its scans are the whole point, and Done can be pressed
+    again. The question's `file` rows are {id, display, where}, where FCC has each
+    now; `file_note` says a multi-slot box takes them with no slot ('' otherwise)."""
     session = state.AUDIT_SESSION
     if not _AUDIT_END_LOCK.acquire(False):
         return _audit_refuse(AUDIT_FINISHING_MSG)
@@ -6176,10 +6600,12 @@ def _audit_finish(cmd):
             plan = plan_audit_done(session)
             if not plan['read_ok']:
                 return _audit_read_refusal(session.get('location_id'))
-            if plan['park']:
+            if plan['park'] or plan['file']:
                 expected, missing, _extras, _trail = _audit_tally(session)
                 return {"status": "ask", "audit_id": session.get('audit_id'),
                         "location": session.get('location_id'), "park": plan['park'], "stays": plan['stays'],
+                        "file": [{key: row[key] for key in ('id', 'display', 'where')} for row in plan['file']],
+                        "file_note": plan['file_note'],
                         "found": len(expected) - len(missing), "expected": len(expected)}
             stays = plan['stays']
         _audit_report(session, stays=stays)
@@ -6228,7 +6654,49 @@ def _audit_park_one(sid, place, today, printer_map, loc_info_map):
     return "", spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error", rec
 
 
-def _audit_park_locked(audit_id, ids, today):
+def _audit_file_one(sid, place, was, printer_map, loc_info_map):
+    """One Extra filed here (Derek's C2), after a last look at it: (stay why, fail
+    why, record), as _audit_park_one, both blank meaning it landed. `was` is where the
+    plan has it: any change since is a stay, never a write, and so is anything the
+    fate rule now says stays (_audit_extra_fate). A place that holds one spool is
+    read strictly right before the write, and anything there is a stay: the park's
+    writes came first, and one that failed leaves its spool there.
+
+    Not perform_smart_move, which could load or unload a head. The write files the
+    spool here with NO slot (FCC never guesses one; in a multi-slot box the question
+    says to scan its slot label afterwards), and writes the slot, the trail and both
+    notes "", never popped (the extras merge keeps a key that is left out): any trail
+    is stale, and a lost spool's note has done its job."""
+    rec, answered = spoolman_api.get_spool_answer(sid)
+    if not answered or not isinstance(rec, dict):
+        return "", AUDIT_WHERE_UNREAD, None
+    if rec.get('id') is None:
+        return AUDIT_GONE_WHY, "", None
+    fate, why = _audit_extra_fate(rec, place, list(loc_info_map.values()), printer_map, loc_info_map,
+                                  _scan_buffer_ids())
+    if fate == 'here':
+        return "FCC has it here already", "", rec
+    if fate == 'stay':
+        return why, "", rec
+    now = _audit_spool_where(rec)
+    if now != was:
+        return f"moved to {now}", "", rec
+    if fate == 'one':
+        try:
+            there = [i.get('id') for i in (spoolman_api.get_spools_at_location_detailed_strict(place) or [])
+                     if str(i.get('id')) != str(sid)]
+        except Exception as e:
+            return "", f"couldn't read {place} from Spoolman ({e})", rec
+        if there:
+            return _audit_one_spool_why(place, there), "", rec
+    new_extra = dict(rec.get('extra') or {}, container_slot="", physical_source="", physical_source_slot="",
+                     fcc_pre_box_location="", fcc_pre_audit_location="")
+    if _move_write(sid, place, new_extra):
+        return "", "", rec
+    return "", spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error", rec
+
+
+def _audit_park_locked(audit_id, ids, today, file_ids=None):
     """park_audit_missing's work, holding the end lock."""
     session = state.AUDIT_SESSION
     gone = _audit_gone(session, audit_id, "That audit has already ended, so nothing was moved.")
@@ -6238,7 +6706,10 @@ def _audit_park_locked(audit_id, ids, today):
     # question that sat open mustn't time out a moment later.
     session['last_activity_ts'] = time.time()
     wanted = {str(s) for s in ids} if isinstance(ids, (list, tuple)) else set()
-    if not wanted:
+    # C3: the Extras the question showed to be filed here. A page from before this
+    # sends none, and so files none.
+    file_wanted = {str(s) for s in file_ids} if isinstance(file_ids, (list, tuple)) else set()
+    if not wanted and not file_wanted:
         return _audit_press_refused("That Yes didn't say which spools it answers, so nothing was moved. "
                                     "Press Done again.")
     place = str(session.get('location_id') or '').strip().upper()
@@ -6292,56 +6763,125 @@ def _audit_park_locked(audit_id, ids, today):
         state.add_log_entry(f"❓ Audit: moved Spool {_audit_esc(display)} → UNKNOWN (was expected at "
                             f"{_audit_esc(row['where'])}, not scanned)", "WARNING", "ffaa00")
 
+    # C2: the Extras, after every park, so a place that holds one spool is free before
+    # one goes in (the write reads it first).
+    filed, filed_from, file_failed, filed_moves = _audit_file_extras(plan, place, file_wanted, stayed, labels,
+                                                                      printer_map, loc_info_map)
+
     # Nothing landed, so there is no record to protect and no reason to end: the
     # audit's scans are the whole point (_audit_finish), and Done can be pressed again.
-    if failed and not moves:
-        msg = f"{_audit_park_msg(parked, stayed, failed)} The audit is still open, so you can press Done again."
+    if (failed or file_failed) and not moves and not filed_moves:
+        msg = (f"{_audit_park_msg(parked, stayed, failed, filed, file_failed)} "
+               f"The audit is still open, so you can press Done again.")
         state.add_log_entry(f"⚠️ {_audit_esc(msg)}", "WARNING", "ffaa00")
-        return {"success": False, "parked": parked, "stayed": stayed, "failed": failed, "msg": msg}
+        return {"success": False, "parked": parked, "filed": filed, "stayed": stayed,
+                "failed": failed + file_failed, "msg": msg}
 
     # Only what landed, in one record: one Undo Last Move puts the batch back.
     # `only_if_at` keeps that Undo off a spool found and moved on since, `slots` and
-    # `place_had_row` say what the place was then (perform_undo).
-    if moves:
-        _push_undo({"target": "UNKNOWN", "moves": moves, "extras": extras, "labels": labels, "released": {},
-                    "ejections": {}, "ejection_extras": {}, "ejection_released": {}, "displaced": {},
-                    "summary": f"Parked {len(moves)} at Unknown by the audit of {place}",
-                    "origin": "audit", "only_if_at": "UNKNOWN", "slots": slots,
-                    "place_had_row": place in loc_info_map})
+    # `place_had_row` say what the place was then (perform_undo). C5: the filed group
+    # rides in the same record (`filed`, `filed_at`), and its Undo goes first; a
+    # record with nothing filed is the park's own, key for key.
+    if moves or filed_moves:
+        record = {"target": "UNKNOWN", "moves": moves, "extras": extras, "labels": labels, "released": {},
+                  "ejections": {}, "ejection_extras": {}, "ejection_released": {}, "displaced": {},
+                  "summary": f"Parked {len(moves)} at Unknown by the audit of {place}",
+                  "origin": "audit", "only_if_at": "UNKNOWN", "slots": slots,
+                  "place_had_row": place in loc_info_map}
+        if filed_moves:
+            record.update(filed=filed_moves, filed_at=place,
+                          summary=(f"Parked {len(moves)} at Unknown and filed {len(filed_moves)} in {place} "
+                                   f"by the audit of {place}" if moves
+                                   else f"Filed {len(filed_moves)} in {place} by the audit of {place}"))
+        _push_undo(record)
     # The audit ends even on a partial failure: Undo is refused while one runs, and
     # that record is what puts the spools that landed back.
-    _audit_report(session, parked=parked, stays=stayed, failed=[f['id'] for f in failed])
+    _audit_report(session, parked=parked, stays=stayed, failed=[f['id'] for f in failed + file_failed],
+                  filed=filed_from)
     ended = _end_audit('done')
-    return {"success": not failed, "parked": parked, "stayed": stayed, "failed": failed,
-            "msg": _audit_park_msg(parked, stayed, failed),
+    return {"success": not (failed or file_failed), "parked": parked, "filed": filed, "stayed": stayed,
+            "failed": failed + file_failed, "msg": _audit_park_msg(parked, stayed, failed, filed, file_failed),
             "audit_ended": {"id": ended['id'], "why": ended['why']}}
 
 
-def _audit_park_msg(parked, stayed, failed):
-    """A park's toast. It promises only Undo Last Move: another move on top of the
-    record buries it, and it doesn't survive a restart."""
-    n = len(parked)
-    words = [f"Parked {n} spool{'' if n == 1 else 's'} at Unknown." if n else "Nothing was parked."]
+def _audit_file_extras(plan, place, file_wanted, stayed, labels, printer_map, loc_info_map):
+    """The Yes's filing (C2): only what the plan files and the Yes names, each after a
+    last look (_audit_file_one). Appends the ones that stay to `stayed` and their
+    labels to `labels`. Answers (filed ids, [{id, display, from}] for the report,
+    failed [{id, display, why}], and the Undo record's `filed`: {sid: {location,
+    extras, slot, place_had_row}}, the snapshot Undo puts back)."""
+    filed: typing.List[typing.Any] = []
+    filed_from: typing.List[typing.Dict[str, typing.Any]] = []
+    failed: typing.List[typing.Dict[str, typing.Any]] = []
+    moves: typing.Dict[typing.Any, typing.Dict[str, typing.Any]] = {}
+    for row in plan['file']:
+        sid, display = row['id'], row['display']
+        if str(sid) not in file_wanted:
+            stayed.append({"id": sid, "display": display, "where": row['where'],
+                           "why": "wasn't in the question you answered"})
+            continue
+        try:
+            stay_why, fail_why, rec = _audit_file_one(sid, place, row['where'], printer_map, loc_info_map)
+        except Exception as e:
+            stay_why, fail_why, rec = "", str(e), None
+        if stay_why:
+            stayed.append({"id": sid, "display": display,
+                           "where": _audit_spool_where(rec) if rec else "", "why": stay_why})
+            continue
+        if fail_why:
+            failed.append({"id": sid, "display": display, "why": fail_why})
+            state.add_log_entry(f"❌ Audit: failed to file Spool {_audit_esc(display)} in {_audit_esc(place)}: "
+                                f"{_audit_esc(fail_why)}", "ERROR", "ff4444")
+            continue
+        filed.append(sid)
+        filed_from.append({"id": sid, "display": display, "from": row['where']})
+        labels[sid] = display
+        moves[sid] = {"location": str(rec.get('location') or '').strip(),
+                      "extras": {k: (rec.get('extra') or {}).get(k, '') for k in spoolman_api.SYSTEM_MANAGED_EXTRAS},
+                      "slot": row['slot'],
+                      "place_had_row": str(rec.get('location') or '').strip().upper() in loc_info_map}
+        state.add_log_entry(f"📥 Audit: filed Spool {_audit_esc(display)} in {_audit_esc(place)} (FCC had it at "
+                            f"{_audit_esc(row['where'])})", "INFO", "00ccff")
+    return filed, filed_from, failed, moves
+
+
+def _audit_park_msg(parked, stayed, failed, filed=(), file_failed=()):
+    """A park's toast, and the filing's (C4): "Parked 3 spools at Unknown. Filed #57
+    here. Undo Last Move puts them back." It promises only Undo Last Move: another
+    move on top of the record buries it, and it doesn't survive a restart."""
+    n, k = len(parked), len(filed)
+    words = []
+    if n:
+        words.append(f"Parked {n} spool{'' if n == 1 else 's'} at Unknown.")
+    if k:
+        words.append(f"Filed {_undo_names(filed)} here.")
+    if not n and not k:
+        words.append("Nothing was moved." if file_failed else "Nothing was parked.")
     if stayed:
         words.append(f"{len(stayed)} left where {'it is' if len(stayed) == 1 else 'they are'}.")
     if failed:
         words.append("Couldn't park " + _and_list(f"#{f['id']}" for f in failed) + ".")
-    if n:
-        words.append(f"Undo Last Move puts {'it' if n == 1 else 'them'} back.")
+    if file_failed:
+        words.append("Couldn't file " + _and_list(f"#{f['id']}" for f in file_failed) + " here.")
+    if n + k:
+        words.append(f"Undo Last Move puts {'it' if n + k == 1 else 'them'} back.")
     return " ".join(words)
 
 
-def park_audit_missing(audit_id, ids, today=None):
+def park_audit_missing(audit_id, ids, today=None, file_ids=None):
     """The Yes to Done's question (POST /api/audit/park): parks the spools it asked
-    about, in one Undo, and ends the audit.
+    about and files the Extras it showed here (`file_ids`, Derek's C3), in one Undo,
+    and ends the audit.
 
     Takes the end lock: a loser (a double Yes, a Cancel, a second tab) is refused,
     never queued. A Yes for an audit that isn't the one running writes nothing.
     It plans again and parks only what that plan and the Yes both name, each spool
     checked once more right before its write (_audit_park_one), so a spool that
     moved, was deleted or was archived since the question stays put and is listed.
+    Then it files the Extras the same way (_audit_file_one), after every park; a
+    Yes with no `file_ids` (a page from before C) files none.
 
-      {success, parked: [ids], stayed: [{id, display, where, why}],
+      {success, parked: [ids], filed: [ids], stayed: [{id, display, where, why}],
        failed: [{id, display, why}], msg, audit_ended: {id, why}}
 
     `success` only when nothing failed. No write landed and at least one failed: the
@@ -6352,7 +6892,7 @@ def park_audit_missing(audit_id, ids, today=None):
         state.add_log_entry(f"⚠️ {AUDIT_FINISHING_MSG}", "WARNING", "ffaa00")
         return {"success": False, "busy": True, "msg": AUDIT_FINISHING_MSG}
     try:
-        return _audit_park_locked(audit_id, ids, today)
+        return _audit_park_locked(audit_id, ids, today, file_ids)
     finally:
         _AUDIT_END_LOCK.release()
 

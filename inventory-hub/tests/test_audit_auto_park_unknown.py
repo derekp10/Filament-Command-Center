@@ -85,9 +85,11 @@ def test_done_writes_nothing_and_asks(env):
     audit_id = session()["audit_id"]
     env["logs"].clear()
     question = scan(env, "CMD:DONE")
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, C3): the question carries the
+    # Extras Done files here (`file`, none here) and the words for a multi-slot box.
     assert question == {
         "type": "audit_done_question", "audit_id": audit_id, "location": "LR-MDB-1",
-        "found": 1, "expected": 3, "stays": [],
+        "found": 1, "expected": 3, "stays": [], "file": [], "file_note": "",
         "park": [{"id": 2, "display": "#2 Some Brand PLA (Red)", "where": "LR-MDB-1 slot 2", "slot": "2"},
                  {"id": 3, "display": "#3 Some Brand PLA (Red)", "where": "LR-MDB-1 slot 3", "slot": "3"}],
     }
@@ -221,8 +223,9 @@ def test_the_plans_own_shape(env):
     add_spool(env, 2, "LR-MDB-1")
     start(env, "LR-MDB-1")
     del spools(env)[2]
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, C1): the plan files the Extras too.
     assert logic.plan_audit_done(session()) == {
-        "read_ok": True, "read_error": None, "occupants": 1,
+        "read_ok": True, "read_error": None, "occupants": 1, "file": [], "file_note": "",
         "park": [{"id": 1, "display": "#1 Some Brand PLA (Red)", "where": "LR-MDB-1 slot 2", "slot": "2"}],
         "stays": [{"id": 2, "display": "#2 Some Brand PLA (Red)", "where": "", "why": "no longer in Spoolman"}],
     }
@@ -353,8 +356,9 @@ def test_the_yes_parks_with_the_note_and_clears_slot_and_trail(env):
     start(env, "LR-MDB-1")
     audit_id = session()["audit_id"]
     result = park(env, today="2026-11-01")
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, C4): the answer says what was filed.
     assert result == {
-        "success": True, "parked": [1], "stayed": [], "failed": [],
+        "success": True, "parked": [1], "filed": [], "stayed": [], "failed": [],
         "msg": "Parked 1 spool at Unknown. Undo Last Move puts it back.",
         "audit_ended": {"id": audit_id, "why": "done"},
     }
