@@ -1,5 +1,14 @@
 # **New and Unsorted Features/Bugs**
 
+* **📉 FCC's G-code walk leaves out a tool's last retract, which the slicer's footer counts (found 2026-11-02 by the INDX
+  hotfix's review).** _(Standalone; pre-existing, every printer, tiny.)_ In relative E, `_walk_extrusion` nets every
+  retract against the next un-retract, so a retract the file never takes back (each tool's last one, and the park's at a
+  cancel) comes off its walk, while PrusaSlicer's count is a high-water mark of the signed sum and keeps it. So a whole
+  walk lands 0.8 mm or so under its footer per tool: -0.01% on a big tool, up to -1.4% on a small one (FLEXI-~2's T2,
+  0.35 g, on 2026-11-03), never more than one retract in grams (about 0.005 g), and the 2% WARNING's 0.1 g floor keeps it
+  quiet. A high-water walk lands both INDX captures within 0.05 mm of their footers. Also pre-existing, found the same
+  day: in absolute E a `G92` forgets a retract still outstanding, and `G91` / `G90` are never read. Fix only with a test
+  on a real file (`.captures/indx-flexi-2026-11-02/flexi_printed.bgcode`).
 * **🧪 The E2E suite is LOAD-SENSITIVE: a busy machine turns a 2-red sweep into a 13–16-red one, with a different set each time.** _(→ **Group 45.1**)_ _(Quantified 2026-10-08. Derek: "Not sure I can make the machine quiet… If it's a re-occurring issue, we may need to dig further.")_ Two full `RUN_INTEGRATION` sweeps of near-identical code, back to back: **13 failed** then **16 failed**, but only **5 tests failed in BOTH** — 8 were unique to the first, 11 unique to the second, so **19 of 24 distinct failures did not reproduce**. Of the 5 common ones, 2 are the standing Group 37.1 pair and the other 3 all passed when re-run in isolation. Both runs took **33:40** against **26:17** for the same suite on a quiet machine — a ~30% slowdown, with ambient load from ordinary desktop use (118 Chrome processes, which are Derek's browser, NOT orphaned Playwright chromium — those live under `ms-playwright`). **Signature:** almost every failure is a `wait_for_function` / `expect` hitting a hard **3000 ms** timeout, so a 30% slower machine trips proportionally more of them. Note the suite is SERIAL (no xdist/randomly), so test-vs-test contention is impossible — the pressure is external. **What this costs:** a sweep can no longer be read at a glance; "is this red real?" needs an isolation re-run every time, which is ~30 extra minutes per release. **Directions, cheapest first:** (a) raise the 3 s waits to ~8–10 s — they are not asserting on latency, so the tight bound buys nothing; (b) add a conftest-level default timeout so individual tests stop hardcoding one; (c) have the harness print total wall-clock and warn when a run exceeds the quiet-machine baseline, so a noisy run is self-labelling; (d) auto-retry a failed browser test once and report it as flaky rather than failed. **Do NOT "fix" this by running sweeps only on a quiet machine** — Derek has said he can't guarantee one, so the suite has to tolerate a working desktop. **Progress 2026-10-13/14 (Group 45, overnight run):** (b) shipped: Playwright's `expect` waits 10 s by default. (c) shipped: every run ends `⏱️ M:SS for N tests` with a load factor against this PC's own recent times, saying BUSY RUN at 1.25× or more, and a failed browser test's report lists its slow requests and the dev-Spoolman timeouts during it. The biggest load turned out to be FCC's own (45.8): the Printer Status widget re-read the whole spool list once per toolhead on every heartbeat. With that gone, full sweeps take ~21 min (was 33–38) and the second one had 1 red, a latent race since fixed. (d) hasn't been needed. **Left:** (a) triage a 3 s wait only where a red keeps coming back, and see a sweep on a genuinely busy desktop, which the load line now labels. **Standalone.**
 
 ## ⏸️ PENDING DEREK — deferred hands-on work (grep `PENDING DEREK`)
@@ -10,13 +19,14 @@
 > Derek's standing ask: *surface this section whenever he asks what's pending, even if he's asked
 > about something else.* He'll get to it; he doesn't know when.
 
-* **⏸️ PENDING DEREK — after your next cancelled print, say "check 56.7" (the finished print checked out 2026-10-29; Group 56 is on prod since 2026-10-26; Claude removes this item once (2) is done).**
-  (1) ✅ Prod updated to `main` `1d9cae4` (Derek, 2026-10-26; prod's files checked the same evening). (2) ✅ **The
-  completed half, 2026-10-29:** the XL's first finished print since 8.0.0 and Group 56 (job 730) was charged right
-  (Claude read prod's ledger and log). Still to come: after your next **cancelled** print, tell Claude
-  "check 56.7": it reads prod's deduct records itself; nothing for you to compare. (3) If the
-  Activity Log ever shows "FCC's G-code walk of … came to … against the slicer's …", tell Claude: FCC may be
-  misreading that file.
+* **⏸️ PENDING DEREK — put the INDX hotfix on prod: run the TrueNAS update (`main` `626a10e`, released 2026-11-03).**
+  Until then, a cancelled print sliced with the current INDX profile is charged too little and logs "FCC's G-code
+  walk … against the slicer's …" warnings (job 1134 was carded 0.05 g; the right charge, 0.13 g, is what you
+  applied). Finished prints are charged right either way. Tell Claude once it's done: Claude checks prod's files
+  (read-only), as on 2026-10-26, and then removes this item.
+* **⏸️ PENDING DEREK — if the Activity Log ever shows "FCC's G-code walk of … came to … against the slicer's …",
+  tell Claude: FCC may be misreading that file.** (That warning is how the INDX profile's new tags were caught on
+  2026-11-02. Nothing to set up.)
 * **⏸️ PENDING DEREK — Bulk Moves (L298) hands-on pass.** Built, merged to `dev`, covered by the
   automated suite, and **shipped OFF behind `fcc.bulkMove.enabled`** (schema default `False`, so
   prod is dark; dev's own `config.json` has it `True`). Derek, 2026-10-08: *"I'm so unexcited about
@@ -244,15 +254,6 @@
   restart; a parked INDX reports no tool; plain UDP, so prod would need a UDP port on FCC's TrueNAS app. Next step when
   Derek wants it: a small listener on dev, then one short re-mapped print with metrics on (needs a printer and a real
   print). **Standalone.**
-* **⚠️ After a printer moves to firmware 8.0, check FCC's first completed and first cancelled deduct (noted
-  2026-10-23).** _(→ **Group 56.7**, gated: the first deducts after an upgrade)_ 8.0.0 (2026-10-22) also brings 7.0's changes to a printer that skipped it (the INDX was on 6.9.2 in
-  October): PrusaLink file downloads keep long file names (FCC downloads each job's file by the path PrusaLink reports,
-  and prod's ledger holds 8.3 names like `/usb/MAIN-B~1.BGC`), a Runout Reaction setting (FCC's run-out split keys off
-  the pause) and tool-mapping changes. PrusaLink's own status looks unchanged in 8.0 (likely, not checked live); 8.0's
-  new per-head usage data goes only to Prusa's cloud service, which has no public API. 8.0's OpenPrintTag reader is
-  CORE One / L only for now; it adds to a tag's `consumed_weight` every 5 minutes and at print end (cancels too) and
-  unload, so once a reader printer writes a tag, FCC's own tag writes must add deltas, never overwrite (an absolute
-  write is fine while none of Derek's printers write tags). **Standalone.** **2026-10-26:** every printer is on 8.0 (Derek), and prod's last deducts (to 2026-10-24) still show 8.3 names, so the next completed and cancelled prints are the first on 8.0, and they run Group 56's code (released `main` `1d9cae4`). Claude reads prod's ledger afterwards (read-only); nothing for Derek to compare. The run-out half is the ⏸️ PENDING DEREK swap item. **2026-10-29, the completed half checked (prod, read-only):** the XL's first finished print on 8.0.0, job 730 (`/usb/SPACER~1.BGC`, 10:42), was charged from its footer at completion, 179.6 g across XL-1 (#270, 68.8 g), XL-4 (#242, 98.2 g) and XL-5 (#230, 12.6 g), one ledger entry (scale 1.0), no WARNING. Each spool's weight at the start was exactly what the last logged write left (234.6, 284.2 and 163.2 g), and the grams are in line with the earlier spacer prints (job 729, 2026-10-22: 177.5 g on the same heads). The file is still reported by its **8.3 name**, so 8.0.0's long-name change didn't reach the path PrusaLink's job reports (`file.refs.download`), and FCC needed nothing; it also means an 8.3 name in the ledger doesn't tell which firmware a print ran on. If a long name ever shows up there, check the download: `prusalink_api._download_file_bytes` puts the path into the URL as it is, so a '#' or '?' in a name breaks it unless PrusaLink escapes the path itself. **The cancel half waits** for the next cancelled print (the 2026-10-22 INDX cancels, jobs 1130 to 1133, ran before Group 56 reached prod).
 * **📋 Other modules still put outside text into the Activity Log unescaped (found 2026-10-26 by Group 56's
   review).** Group 56.4 escaped every filename, exception and Spoolman error in the deduct and monitor lines
   (`print_deduct._esc`, an AST canary in `tests/test_deduct_accuracy_56.py`), but about 20 lines in
