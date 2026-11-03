@@ -14,13 +14,18 @@ test_contrast_guard.py and test_text_size_guard.py.
 """
 from __future__ import annotations
 
+import json
+import time
+
 import pytest
 from playwright.sync_api import Page, expect
 
 import conftest
 from test_audit_find_and_tiles_58_js import SEARCH_ROWS
 from test_audit_no_label_58_e2e import SCANNER, Marks, tile
-from test_audit_page_58_e2e import _dashboard, _start
+from test_audit_page_58_e2e import PANEL, _dashboard, _start
+from test_audit_question_dialog_58_js import _question
+from test_scanner_safe_dialogs_61_js import LEGACY
 
 pytestmark = pytest.mark.usefixtures("require_server")
 
@@ -149,4 +154,109 @@ def test_nothing_scrolls_sideways(page: Page, base_url: str, width, height):
         return { out: r.left < -0.5 || r.right > innerWidth + 0.5, body: body.scrollWidth > body.clientWidth + 1 }; }""")
     assert got == {"out": False, "body": False}
     assert page.evaluate("() => document.documentElement.scrollWidth > innerWidth") is False
+    assert server.writes == []
+
+
+# --- '/' and Ctrl+K under what sits over the panel (review of 7e3720f, P-2) ---------------
+# The audit's '/' opens Find while the panel is on top. With something over the panel, the
+# global search's own '/' (fab_drag.js) opened #offcanvasSearch behind everything (z 1045
+# under 20000), and its box took the keyboard 400 ms later: the next scan went into that
+# hidden box and never reached the audit. RED on e7886e9 (each case's first assertion).
+
+LOOSE = "#fcc-loose-list"
+LOOSE_ROW = LOOSE + " .fcc-loose-row.kb-active"
+LOOSE_ANSWER = {"read_ok": True, "read_error": None, "count": 1, "places": [
+    {"id": "A-ROOM", "name": "A Room", "type": "Room", "spools": [
+        {"id": 8001, "display": "#8001 Some Brand PLA (Gold)", "color": "F9E352",
+         "color_direction": "longitudinal", "remaining_weight": 912}]}]}
+PICKER = "#fcc-legacy-picker-overlay"
+SHORTCUTS = "#fcc-shortcuts-overlay"
+SEARCH_SHUT = "() => !document.getElementById('offcanvasSearch').classList.contains('show')"
+OVERLAYS = "() => Array.from(document.querySelectorAll('[data-overlay-mount=\"1\"]')).map((e) => e.id)"
+
+
+def _search_stays_shut(page: Page, keys: str = "/"):
+    page.keyboard.press(keys)
+    page.wait_for_timeout(900)                       # the offcanvas's show, and its box's 400 ms focus
+    assert page.evaluate(SEARCH_SHUT), "the global search opened behind the audit"
+    assert page.evaluate("() => document.getElementById('global-search-query') !== document.activeElement")
+
+
+def _reaches_fcc(page: Page, server, text: str = "ID:99"):
+    """A scan typed as a scanner types it reaches /api/identify_scan."""
+    before = len(getattr(server, "sources", []))
+    page.keyboard.type(text, delay=5)
+    page.keyboard.press("Enter")
+    deadline = time.monotonic() + 5
+    while len(getattr(server, "sources", [])) == before and time.monotonic() < deadline:
+        page.wait_for_timeout(50)
+    assert [t for t, _s in getattr(server, "sources", [])[before:]] == [text]
+
+
+def test_a_slash_under_the_loose_list_opens_no_search_and_the_next_scan_reaches_the_audit(page: Page, base_url: str):
+    server = _running(page, base_url)
+    page.route("**/api/loose_spools", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=json.dumps(LOOSE_ANSWER)))
+    page.click("#fcc-audit-panel-loose")
+    expect(page.locator(LOOSE_ROW)).to_be_focused()
+    page.wait_for_timeout(800)                       # past the 🔎/🧺 press's second-press window
+    _search_stays_shut(page)
+    expect(page.locator(LOOSE_ROW)).to_be_focused()  # the list kept it, and the keyboard
+    assert page.evaluate("state.scanBuffer") == ""   # the '/' joins no scan
+    _reaches_fcc(page, server)
+    assert server.writes == []
+
+
+def test_a_slash_under_dones_question_opens_no_search_and_its_qr_still_answers_it(page: Page, base_url: str):
+    server = _running(page, base_url)
+    page.evaluate("(q) => window.askAuditDone(q)", _question(park=1))
+    back = "#fcc-audit-done-question .fcc-apc-no"
+    expect(page.locator(back)).to_be_focused()
+    _search_stays_shut(page)
+    expect(page.locator(back)).to_be_focused()
+    sid = page.evaluate("Object.keys(window._fccActiveConfirms).pop()")
+    page.keyboard.type(f"CMD:CANCEL:{sid}", delay=0)
+    page.keyboard.press("Enter")
+    expect(page.locator("#fcc-audit-done-question")).to_have_count(0)
+    assert page.evaluate(OVERLAYS) == [PANEL[1:]]
+    assert server.writes == []
+
+
+def test_a_slash_on_the_legacy_picker_opens_no_search(page: Page, base_url: str):
+    server = _running(page, base_url)
+    server.answers["LEG:120"] = LEGACY
+    page.evaluate("() => window.processScan('LEG:120', 'barcode')")
+    use = "#fcc-legacy-picker-use"
+    expect(page.locator(use)).to_be_focused()
+    _search_stays_shut(page)
+    expect(page.locator(use)).to_be_focused()
+    page.keyboard.press("Escape")                    # the picker's own Cancel: only it goes
+    expect(page.locator(PICKER)).to_have_count(0)
+    assert page.evaluate(OVERLAYS) == [PANEL[1:]]
+
+
+def test_a_slash_with_the_shortcut_list_over_find_opens_no_search_and_escape_closes_only_the_list(
+        page: Page, base_url: str):
+    """The list says '/' is Find's "Back to the box": read, not pressed through. RED on
+    e7886e9, where the search opened behind, the next Escape hid the audit's panel (the
+    list's Escape skips a box's keys) and the scan went into the search's box."""
+    server = _running(page, base_url)
+    page.click(FIND_BTN)
+    expect(page.locator(FIND_BOX)).to_be_focused()
+    page.focus(FIND + " [data-find-close]")          # off the box, where '/' would be the box's own
+    page.keyboard.press("?")
+    expect(page.locator(SHORTCUTS)).to_be_visible()
+    _search_stays_shut(page)
+    page.keyboard.press("Escape")
+    expect(page.locator(SHORTCUTS)).to_be_hidden()
+    assert page.evaluate(OVERLAYS) == [PANEL[1:], FIND[1:]]
+    _reaches_fcc(page, server)
+
+
+def test_ctrl_k_during_an_audit_opens_no_search(page: Page, base_url: str):
+    """With the panel itself on top: Ctrl+K opened the search behind it (RED on e7886e9)."""
+    server = _running(page, base_url)
+    page.wait_for_timeout(600)
+    _search_stays_shut(page, "Control+k")
+    _reaches_fcc(page, server)
     assert server.writes == []

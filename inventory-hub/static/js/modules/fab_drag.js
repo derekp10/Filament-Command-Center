@@ -118,12 +118,26 @@
         // person left don't hold it off.
         const scanInFlight = () => !!(window.scanIsArriving ? window.scanIsArriving()
             : (window.isScanInFlight && window.isScanInFlight()));
+        // What sits on top owns the keys. The search is a Bootstrap offcanvas (z 1045),
+        // so with a mountOverlay up (z 20000 and over) it opened behind it, and its box
+        // took the keyboard 400 ms later: the next scan was typed into a box nobody
+        // could see (Group 58 review of 7e3720f, P-2: under the audit's 🧺 list, Done's
+        // question, the legacy picker, and Find under the ⌨️ shortcut list). So neither
+        // key opens it while an overlay is mounted or the shortcut list is up. A hidden
+        // audit panel mounts nothing: there '/' still opens the search, as Hide means.
+        const covered = () => {
+            if (document.querySelector('[data-overlay-mount="1"]')) return true;
+            const list = document.getElementById('fcc-shortcuts-overlay');
+            return !!(list && list.getClientRects().length);
+        };
         document.addEventListener('keydown', (e) => {
             const tag = (e.target && e.target.tagName) || '';
             const inField = tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable);
             // Ctrl/Cmd+K — safe even mid-scan (a modifier combo never appears in a scan stream).
             if ((e.key === 'k' || e.key === 'K') && (e.ctrlKey || e.metaKey)) {
-                e.preventDefault(); openSearch(); return;
+                e.preventDefault();
+                if (!covered()) openSearch();
+                return;
             }
             // '/' — the common "focus search" key. Skip while typing in a field
             // or while a scan stream is in flight (Prusament URL QRs contain '/').
@@ -144,7 +158,9 @@
                 // list's and its dialog's '/' take them (Group 57 review, round
                 // 5): kept, they started the next scan ("abLOC:…").
                 if (window.clearScanBuffer) window.clearScanBuffer();
-                openSearch();
+                // Taken from the scan buffer even when it opens nothing, or it
+                // would start the next scan ("/ID:99").
+                if (!covered()) openSearch();
             }
         });
 
