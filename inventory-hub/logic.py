@@ -6483,29 +6483,37 @@ def _audit_at_done(rec, place):
     return {"files": False, "why": why or "FCC has it here already"}
 
 
-def _audit_file_note(place, loc_info_map, count, left=0):
+def _audit_file_note(place, loc_info_map, count, left=()):
     """The question's words for Extras filed in a multi-slot box: FCC never guesses a
     slot, so each goes in with none, and the words name the gesture that sets one: the
     spool's label, then the slot's (a slot label sets the scan buffer's first spool, and
     scanning the spool puts it there; review of 7e3720f, S-7: "scan its slot label
     afterwards" picked up the slot's own spool, or moved a buffered one in).
 
-    `left`: the spools still there after the park. When they and the `count` filed
-    outnumber the box's slots (its Max Spools), the words say how many of the filed can
-    have a slot (R-3: a 4-slot box was filed to 6 with no word). Done files them all the
-    same: whether to stop at the free slots is Derek's call."""
+    `left`: the records of the spools still there after the park, as a read of the place
+    lists them (one loaded from it too). When the `count` filed outnumber the slots
+    those spools leave free, the words say how many of the filed can have a slot (R-3:
+    a 4-slot box was filed to 6 with no word). Done files them all the same (Derek,
+    2026-11-03, R-3's answer (a)). The free slots come from the slots the spools there
+    claim, by the one slot rule (box_slot_claims): a spool with no slot claims none,
+    and two in one slot claim one. Counting the spools instead (the re-check of
+    492f466) said "no slot is free" with slot 4 free, beside a spool an earlier Done
+    had filed with no slot."""
     row = (loc_info_map or {}).get(place)
     slots = _place_capacity(row)
     if not count or not (_is_dryer_box_row(row) and slots > 1):
         return ""
-    total = left + count
-    if total <= slots:
+    # Only spools filed at, or loaded from, exactly this box hold its slots.
+    there = [item for item in (spoolman_api._build_location_match(rec, place) for rec in left)
+             if item is not None and str(item.get('location') or '').strip().strip('"').upper() == place]
+    claims = box_slot_claims(row, place, there, ())[0]
+    free = sum(1 for n in range(1, slots + 1) if str(n) not in claims)
+    if count <= free:
         if count == 1:
             return "It goes in with no slot: scan it, then its slot's label, to set one."
         return "They go in with no slot: scan each one, then its slot's label, to set it."
     these = "it" if count == 1 else "these"
-    head = f"{place} has {slots} slots, and filing {these} makes {total} spools there"
-    free = slots - left
+    head = f"{place} has {slots} slots, and filing {these} makes {len(left) + count} spools there"
     if free <= 0:
         return f"{head}: {'it goes' if count == 1 else 'they go'} in with no slot, and no slot is free."
     return (f"{head}, so only {free} of them can have a slot. They go in with no slot: scan one, "
@@ -6614,7 +6622,7 @@ def _audit_plan_extras(session, plan, place, extras, records, holders, printer_m
             why = _audit_one_spool_why(place, left, len(ones))
             plan['stays'].extend({"id": r['id'], "display": r['display'], "where": r['where'], "why": why}
                                  for r in ones)
-    plan['file_note'] = _audit_file_note(place, loc_info_map, len(plan['file']), len(left))
+    plan['file_note'] = _audit_file_note(place, loc_info_map, len(plan['file']), [records[str(h)] for h in left])
 
 
 def _audit_read_refusal(place):

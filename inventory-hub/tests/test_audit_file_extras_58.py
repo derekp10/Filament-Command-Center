@@ -253,9 +253,52 @@ def test_the_note_counts_the_free_slots_after_the_park(env, found, missing, extr
     assert asked["file_note"] == note
 
 
+@pytest.mark.parametrize("held, note", [
+    # #5 has no slot, as C's own filing leaves a spool (a second audit of the box meets
+    # one), so slot 4 is free for one of the two.
+    ({1: "1", 2: "2", 3: "3", 5: ""},
+     "LR-MDB-1 has 4 slots, and filing these makes 6 spools there, so only 1 of them can have a slot. "
+     "They go in with no slot: scan one, then a free slot's label, to set it."),
+    # #1 and #2 both claim slot 1, so slots 2 and 4 are free: one for each.
+    ({1: "1", 2: "1", 3: "3"}, MORE_SLOTS),
+])
+def test_the_note_counts_the_slots_the_spools_there_claim(env, held, note):
+    """The re-check of 492f466 (R-3's fix): the note took the box's slots less the spools
+    left after the park, so a spool with no slot read as a slot taken ("...: they go in
+    with no slot, and no slot is free." while slot 4 was), and so did a doubled slot
+    ("only 1 of them can have a slot" while slots 2 and 4 were). It counts the slots those
+    spools claim, by the one slot rule (box_slot_claims). RED on 5afeb8b."""
+    for sid, slot in held.items():
+        add_spool(env, sid, "LR-MDB-1", container_slot=slot)
+    add_spool(env, 20, "CR-CT-1")
+    add_spool(env, 21, "SHELF-1")
+    start(env, "LR-MDB-1")
+    for sid in [*held, 20, 21]:
+        scan(env, f"ID:{sid}")
+    asked = question(env)
+    assert asked["park"] == [] and [r["id"] for r in asked["file"]] == [20, 21]
+    assert asked["file_note"] == note
+
+
+def test_a_spool_loaded_from_the_box_still_holds_its_slot_in_the_note(env):
+    """Pins what was already right: a spool on a head from slot 4 still sits in it,
+    feeding the head, so slot 4 isn't free (box_slot_claims counts the slot a deployed
+    spool came from), and it counts among the spools there."""
+    for sid in (1, 2, 3):
+        add_spool(env, sid, "LR-MDB-1", container_slot=str(sid))
+    add_spool(env, 6, "XL-1", physical_source="LR-MDB-1", physical_source_slot="4")
+    add_spool(env, 20, "CR-CT-1")
+    start(env, "LR-MDB-1")
+    for sid in (1, 2, 3, 20):
+        scan(env, f"ID:{sid}")
+    assert question(env)["file_note"] == ("LR-MDB-1 has 4 slots, and filing it makes 5 spools there: it goes in "
+                                          "with no slot, and no slot is free.")
+
+
 def test_done_still_files_every_extra_into_a_full_box(env):
     """Pins what was already right: the note says the box goes over its slots, and Done
-    files them all the same (whether to stop at the free slots is Derek's call)."""
+    files them all the same (Derek, 2026-11-03, R-3's answer (a): it files them all and
+    says so in the question)."""
     _box_of_four(env, (1, 2, 3), (4,), ((20, "CR-CT-1"), (21, "SHELF-1"), (22, "")))
     assert yes(env)["filed"] == [20, 21, 22]
     assert sorted(s["id"] for s in spools(env).values() if s["location"] == "LR-MDB-1") == [1, 2, 3, 20, 21, 22]
