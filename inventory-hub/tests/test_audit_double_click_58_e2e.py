@@ -20,8 +20,9 @@ double-click twins and test_audit_stacking_58_js.py's covers.
 Derek's answers of 2026-11-03 add three: an Extra's tile, which a press takes back (A3,
 `an-extra-tile`), the panel's 🔎 Find a spool, which a press opens over the panel (A2,
 `find-open`), and a row of it, which a pick closes (`find-row`); and the panel's 🔎 button
-among those a first click on the FINISH tile can bring up. Their
-hermetic twins are in test_audit_find_and_tiles_58_js.py.
+among those a first click on the FINISH tile can bring up. The review of 7e3720f adds
+Find's ↻ Try again (`try-again`, P-1), whose answer paints the rows under the pointer.
+Their hermetic twins are in test_audit_find_and_tiles_58_js.py.
 """
 from __future__ import annotations
 
@@ -85,7 +86,8 @@ ONE_CLICK = {
 # 🧺 button and the ⌨️ list's ✕ on Hide, at every length; the legacy picker's buttons on the
 # strip, or on tiles (1280 x 800 with 10 spools or more). A row of the 🧺 list opens nothing
 # during an audit, so the list stays and takes the second click too.
-COVERS = ["loose-close", "loose-row", "shortcut-close", "picker-use", "picker-print", "picker-cancel", "find-row"]
+COVERS = ["loose-close", "loose-row", "shortcut-close", "picker-use", "picker-print", "picker-cancel", "find-row",
+          "try-again"]
 COVER_LENGTHS = [6, 14]
 LOOSE_LIST = "#fcc-loose-list"
 PICKER = "#fcc-legacy-picker-overlay"
@@ -98,6 +100,7 @@ COVER_CONTROL = {
     "shortcut-close": "#fcc-shortcuts-overlay .btn-close", "picker-use": "#fcc-legacy-picker-use",
     "picker-print": "#fcc-legacy-picker-print", "picker-cancel": "#fcc-legacy-picker-cancel",
     "find-row": f"{FIND} .fcc-find-row[data-find-id='{PICKED}']",
+    "try-again": f"{FIND} [data-find-retry]",
 }
 # One click's requests (None: Print new label's, the label queue's own, which it skips for a
 # spool already queued), overlays and keyboard.
@@ -110,6 +113,9 @@ COVER_CLICK = {
     "picker-cancel": ([], [PANEL[1:]], "BODY"),
     # The pick, and the keyboard back on 🔎, which opened Find.
     "find-row": ([("/api/identify_scan", f"ID:{PICKED}")], [PANEL[1:]], "fcc-audit-panel-find"),
+    # Review of 7e3720f, P-1: the search again (a GET, not recorded), its rows painted
+    # where the button was, Find still up and the keyboard in its box.
+    "try-again": ([], [PANEL[1:], FIND[1:]], "find-box"),
 }
 LABEL_QUEUE = {"/api/print_queue/set_flag", "/api/state/queue"}
 LOOSE_SPOOLS = {"read_ok": True, "read_error": None, "count": 1, "places": [
@@ -145,6 +151,7 @@ class Sweep:
         self.audit_id = None
         self.session = {"active": False, "audit_end": None}
         self.asks = False
+        self.search_fails = False                       # Find's search answers success: false
         page.route("**/*", self._any)                   # first: the routes below win
         page.route("**/api/logs*", lambda route: self._json(route, self._payload()))
         page.route("**/api/dashboard_pulse*", lambda route: self._json(route, {"logs": self._payload()}))
@@ -230,7 +237,11 @@ class Sweep:
         self._json(route, {"success": True, "found": bool(body.get("found"))})
 
     def _search(self, route):
-        """/api/search's answer on its real shape: every spool of the audit, newest first."""
+        """/api/search's answer on its real shape: every spool of the audit, newest first.
+        `search_fails`: the strict search's answer when Spoolman didn't answer."""
+        if self.search_fails:
+            self._json(route, {"success": False, "msg": "Spoolman didn't answer (timed out)."})
+            return
         rows = [search_row(r["id"], f"Red {r['id']}", "LR-MDB-1", r["slot"])
                 for r in (self.session.get("expected") or [])]
         self._json(route, {"success": True, "results": sorted(rows, key=lambda r: -r["id"])})
@@ -367,6 +378,22 @@ class Board:
         self.page.mouse.down(click_count=1)
         self.page.mouse.up(click_count=1)
         self.page.wait_for_timeout(GAP_MS)
+        self.page.mouse.down(click_count=2)
+        self.page.mouse.up(click_count=2)
+        self.pressed = time.monotonic()
+
+    def double_click_over(self, xy, brought):
+        """A double click whose first press brings `brought` (a selector) under the
+        pointer: its second press waits for it to be there, as when an answer comes
+        inside a person's double click, and stays a double click by the clock too."""
+        x, y = xy
+        self.page.mouse.move(x, y)
+        start = time.monotonic()
+        self.page.mouse.down(click_count=1)
+        self.page.mouse.up(click_count=1)
+        self.page.wait_for_function("([x, y, sel]) => { const e = document.elementFromPoint(x, y);"
+                                    " return !!(e && e.closest(sel)); }", arg=[x, y, brought], timeout=600)
+        assert time.monotonic() - start < SHIELD_S - 0.1, "the second press came too late to be one"
         self.page.mouse.down(click_count=2)
         self.page.mouse.up(click_count=2)
         self.pressed = time.monotonic()
@@ -571,6 +598,15 @@ def _cover_up(board, cover):
         page.wait_for_selector(COVER_CONTROL[cover])
         board.pressed = time.monotonic()        # past the press that opened it
         board.settle()
+    elif cover == "try-again":                      # P-1: a search that failed, Spoolman back
+        board.server.search_fails = True
+        board.click(page.evaluate(POINT, "#fcc-audit-panel-find"))
+        page.wait_for_selector(FIND_BOX)
+        page.fill(FIND_BOX, str(PICKED))
+        page.wait_for_selector(COVER_CONTROL[cover])
+        board.server.search_fails = False
+        board.pressed = time.monotonic()
+        board.settle()
     elif cover == "shortcut-close":
         page.focus("#fcc-audit-panel-done")     # where the keyboard was: it comes back there
         page.keyboard.press("?")
@@ -588,7 +624,9 @@ def _cover_up(board, cover):
 def test_a_real_double_click_on_what_sits_over_the_panel_presses_nothing_on_it(board, rows, cover):
     """Item 2f. RED before the re-review's fix: the 🧺 list's ✕ opened the list again, the ⌨️
     list's ✕ hid the panel, and at 1280 x 800 the picker's buttons found a spool nobody
-    had touched."""
+    had touched. `try-again` (review of 7e3720f, P-1): Find's ↻ Try again, whose answer
+    paints the rows under the pointer before the second press; RED on e7886e9, where
+    that press picked the row (ID:<its spool>) and closed Find."""
     page, server = board.page, board.server
     requests, overlays, focus = COVER_CLICK[cover]
     what = f"{board.size[0]}x{board.size[1]}, {rows} spools, {cover}"
@@ -597,7 +635,12 @@ def test_a_real_double_click_on_what_sits_over_the_panel_presses_nothing_on_it(b
     xy = page.evaluate(POINT, COVER_CONTROL[cover])
     assert xy, f"{what}: the control can't be pressed"
     server.sent.clear()
-    board.double_click(xy)
+    if cover == "try-again":
+        board.double_click_over(xy, f"{FIND} .fcc-find-row")
+    else:
+        board.double_click(xy)
     _after(board, requests, overlays, focus, what)
+    if cover == "try-again":
+        assert page.evaluate("(s) => document.querySelectorAll(s).length", f"{FIND} .fcc-find-row") == rows, what
     assert page.evaluate("state.auditActive") is True, f"{what}: the audit ended"
     assert page.evaluate("() => document.querySelectorAll('.fcc-audit-tile').length") == rows

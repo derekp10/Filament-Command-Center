@@ -526,6 +526,79 @@ def test_a_search_that_fails_says_so_and_never_no_matches(live, env, how, why):
     assert 99 in rows(live)
 
 
+def _center(page, sel):
+    b = page.locator(sel).bounding_box()
+    return b["x"] + b["width"] / 2, b["y"] + b["height"] / 2
+
+
+def _retry_up(live, env):
+    """A search that failed, Spoolman answering again, and where ↻ Try again is."""
+    glow(env)
+    begin(live, env)
+    open_find(live)
+    env["fake"].down = True
+    search(live, "glow")
+    assert find_state(live) == "error"
+    env["fake"].down = False
+    return _center(live, FIND + " [data-find-retry]")
+
+
+def _row_under(page, xy):
+    return page.evaluate("""([x, y]) => { const e = document.elementFromPoint(x, y);
+        const r = e && e.closest('.fcc-find-row'); return r ? Number(r.dataset.findId) : null; }""", list(xy))
+
+
+@pytest.mark.parametrize("second", [2, 1], ids=["a-double-click", "a-slower-second-click"])
+def test_a_double_click_on_try_again_picks_nobody(live, env, second):
+    """The first click searches again, the answer paints the rows where the button was,
+    and the second click lands on a row: it picks nothing, and the keyboard goes to the
+    box (the row's mousedown took it, with no ring). `a-slower-second-click`: a mouse
+    slower than the system's double click, or a finger's second tap, which the browser
+    counts as a click of its own (detail 1). Review of 7e3720f, P-1: RED there, where the
+    second click sent ID:260 (a lost spool, made an Extra that Done files here) and
+    closed Find."""
+    xy = _retry_up(live, env)
+    live.mouse.move(*xy)
+    live.mouse.down(click_count=1)
+    live.mouse.up(click_count=1)
+    live.wait_for_function("(s) => document.querySelector(s).dataset.findState === 'ready'", arg=FIND_BODY)
+    assert _row_under(live, xy) is not None              # the rows painted under the pointer
+    live.mouse.down(click_count=second)
+    live.mouse.up(click_count=second)
+    live.wait_for_timeout(300)
+    assert scans(live) == [] and session()["scanned_items"] == []
+    assert live.locator(FIND).count() == 1 and len(rows(live)) > 1
+    assert focus_is(live, FIND_BOX)
+
+
+def test_after_try_again_a_keyboards_pick_and_a_later_click_still_pick(live, env):
+    """The rule stops only a pointer's second press: Enter on a row picks at once (a
+    keyboard's click, detail 0), and a click once the double press has gone by picks.
+    Pins what was already right (P-1's fix must not stop them)."""
+    xy = _retry_up(live, env)
+    live.mouse.click(*xy)
+    live.wait_for_function("(s) => document.querySelector(s).dataset.findState === 'ready'", arg=FIND_BODY)
+    live.keyboard.press("ArrowDown")
+    first = rows(live)[0]
+    live.keyboard.press("Enter")
+    live.wait_for_selector(FIND, state="detached")
+    assert scans_with_source(live) == [(f"ID:{first}", "search")]
+    live.wait_for_function("() => !state.processing")
+    live.wait_for_timeout(PAST_A_DOUBLE_PRESS)           # 🔎 takes no press just after a pick
+    open_find(live)                                      # again, and this time a click
+    env["fake"].down = True
+    search(live, "glow")
+    env["fake"].down = False
+    xy = _center(live, FIND + " [data-find-retry]")
+    live.mouse.click(*xy)
+    live.wait_for_function("(s) => document.querySelector(s).dataset.findState === 'ready'", arg=FIND_BODY)
+    live.wait_for_timeout(PAST_A_DOUBLE_PRESS)
+    sid = _row_under(live, xy)
+    live.mouse.click(*xy)
+    live.wait_for_selector(FIND, state="detached")
+    assert scans_with_source(live)[-1] == (f"ID:{sid}", "search")
+
+
 def test_a_search_that_matches_nothing_says_so_and_an_empty_box_shows_the_hint(live, env):
     glow(env)
     begin(live, env)

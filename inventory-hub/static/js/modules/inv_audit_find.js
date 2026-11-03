@@ -49,6 +49,10 @@ console.log("🚀 Loaded Module: AUDIT FIND");
     // The search reads every spool from Spoolman, and the route waits up to 10 s for it.
     const SEARCH_TIMEOUT_MS = 20000;
     const MAX_ROWS = 30;
+    // A double click's second press, inv_cmd.js's figures: under 700 ms after the
+    // first, at its spot (16 px for a mouse, 40 for a finger).
+    const DOUBLE_PRESS_MS = 700;
+    const DOUBLE_PRESS_SLOP_PX = { mouse: 16, other: 40 };
     const HINT = 'Type a name, colour, brand or number.';
     const TOOLHEAD_TYPES = ['Tool Head', 'MMU Slot', 'No MMU Direct Load'];
     let _current = null;
@@ -369,6 +373,33 @@ ${P} .fcc-find-foot { color:#ccc; font-size:var(--fcc-fs-small); margin-top:8px;
         (window.sendInScanOrder || window.processScan)(`ID:${sid}`, 'search');
     }
 
+    function _focusBox(handle) {
+        try { _box(handle).focus({ preventScroll: true }); } catch (_) { /* noop */ }
+    }
+
+    // ↻ Try again's press, for _secondPress: where and when, from a pointer.
+    function _noteRetry(handle, e) {
+        handle._retryPress = e.detail > 0
+            ? { at: Date.now(), x: e.clientX, y: e.clientY, slop: DOUBLE_PRESS_SLOP_PX[e.pointerType === 'mouse' ? 'mouse' : 'other'] }
+            : null;
+    }
+
+    // A row's click that is the second press of a double click picks nothing (review of
+    // 7e3720f, P-1). A row's own first click picks it and closes Find, so a second click
+    // only lands on a row the first click brought under the pointer: ↻ Try again's
+    // answer paints the rows where the button was, often inside a person's double click
+    // (a search answers in 85 to 190 ms), and the second click picked a spool nobody
+    // chose, found here or an Extra that Done files here. The browser counts the clicks
+    // (`detail`); a finger's second tap, or a mouse slower than the system's double
+    // click, is caught by the time and spot of the Try again press. A keyboard's click
+    // (detail 0) always picks.
+    function _secondPress(handle, e) {
+        if (e.detail > 1) return true;
+        const p = handle._retryPress;
+        if (!p || e.detail === 0 || Date.now() - p.at >= DOUBLE_PRESS_MS) return false;
+        return Math.abs(e.clientX - p.x) <= p.slop && Math.abs(e.clientY - p.y) <= p.slop;
+    }
+
     function _onKey(handle, e) {
         if (!_alive(handle)) { _unlisten(handle); return; }
         // Something over the window owns the keys (the ⌨️ list, a picker a scan opened).
@@ -458,13 +489,18 @@ ${P} .fcc-find-foot { color:#ccc; font-size:var(--fcc-fs-small); margin-top:8px;
         handle._seq = 0;
         handle._timer = null;
         handle._closed = false;
+        handle._retryPress = null;
         const box = _box(handle);
         box.addEventListener('input', () => _search(handle, false));
         handle.panel.addEventListener('click', (e) => {
             if (e.target.closest('[data-find-close]')) { _close(handle); return; }
-            if (e.target.closest('[data-find-retry]')) { _search(handle, true); return; }
+            if (e.target.closest('[data-find-retry]')) { _noteRetry(handle, e); _search(handle, true); return; }
             const row = e.target.closest('.fcc-find-row');
-            if (row) _pick(handle, row);
+            if (!row) return;
+            // Its mousedown put the keyboard on the row, which shows no ring until the
+            // arrows reach it: back to the box, where an Enter picks nothing.
+            if (_secondPress(handle, e)) { _focusBox(handle); return; }
+            _pick(handle, row);
         });
         handle._findKeys = (e) => _onKey(handle, e);
         document.addEventListener('keydown', handle._findKeys, true);
