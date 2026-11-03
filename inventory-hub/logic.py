@@ -6482,10 +6482,10 @@ def _audit_file_note(place, loc_info_map, count, left=0):
     scanning the spool puts it there; review of 7e3720f, S-7: "scan its slot label
     afterwards" picked up the slot's own spool, or moved a buffered one in).
 
-    `left`: the spools still there after the park. When the box can't give every one
-    of them and the `count` filed a slot, the words say so (R-3: a 4-slot box was
-    filed to 6 with no word). Done files them all the same: whether to stop at the
-    free slots is Derek's call."""
+    `left`: the spools still there after the park. When they and the `count` filed
+    outnumber the box's slots (its Max Spools), the words say how many of the filed can
+    have a slot (R-3: a 4-slot box was filed to 6 with no word). Done files them all the
+    same: whether to stop at the free slots is Derek's call."""
     row = (loc_info_map or {}).get(place)
     slots = _place_capacity(row)
     if not count or not (_is_dryer_box_row(row) and slots > 1):
