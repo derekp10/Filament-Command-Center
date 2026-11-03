@@ -108,8 +108,12 @@ def test_the_strip_its_button_and_a_real_qr_under_it(page: Page, base_url: str):
     page.wait_for_timeout(100)                  # the QR draws two frames later
     assert page.locator(QR).bounding_box()["height"] >= 80
     assert _on_top(page, BUTTON) and _on_top(page, QR)
-    assert page.evaluate("""([s, d]) => document.querySelector(s).getBoundingClientRect().bottom
-        <= document.querySelector(d).getBoundingClientRect().top""", [STRIP, DONE])
+    # In the dock under the list, beside Needs a label, Done and Cancel Audit (Derek,
+    # 2026-11-03, sample 1b). PIN UPDATED DELIBERATELY: the strip sat above Done.
+    assert page.evaluate("""([s, b, d, body]) => { const r = (x) => document.querySelector(x).getBoundingClientRect();
+        const dock = document.getElementById('fcc-audit-panel-dock');
+        return dock.contains(document.querySelector(s)) && r(s).right <= r(b).left && r(b).right <= r(d).left
+            && r(body).bottom <= dock.getBoundingClientRect().top; }""", [STRIP, BUTTON, DONE, BODY])
     assert server.pressed == [{"audit_id": "boot-1", "id": NOT_SCANNED, "found": True}]
 
 

@@ -172,9 +172,13 @@ def test_escape_closes_only_the_list_and_the_panels_keys_come_back(live, env):
 
     live.wait_for_timeout(520)                   # the n sits in the scan buffer, and an Enter
     #                                              under 500 ms would be a scan of it
-    live.keyboard.press("ArrowRight")            # the arrows
-    assert active(live) == "57"
+    # The arrows. #99, not scanned, is drawn before #57, found (Derek, 2026-11-03, sample
+    # 5a(i); PIN UPDATED DELIBERATELY: they went 57, then 99).
     live.keyboard.press("ArrowRight")
+    assert active(live) == "99"
+    live.keyboard.press("ArrowRight")
+    assert active(live) == "57"
+    live.keyboard.press("ArrowLeft")
     assert active(live) == "99"
     live.keyboard.press("Enter")                 # Enter on a tile
     tile_says(live, 99, "found, no label read")
@@ -531,10 +535,12 @@ def test_tab_leaves_done_while_it_is_down(live, env):
     live.focus(tile(99))
     walk = []
     # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, A2): 🔎 Find a spool is the header's first stop.
+    # And again (his second look, sample 1b): Needs a label is in the dock from the start,
+    # and stays a stop while Done and Cancel are down.
     for _ in range(5):
         live.keyboard.press("Tab")
         walk.append(active(live))
-    assert walk == ["134", "fcc-audit-panel-find", LOOSE_BTN[1:], HIDE[1:], "57"]
+    assert walk == ["134", BUTTON[1:], "fcc-audit-panel-find", LOOSE_BTN[1:], HIDE[1:]]
 
 
 def test_the_panels_trap_stands_down_under_the_question(live, env):

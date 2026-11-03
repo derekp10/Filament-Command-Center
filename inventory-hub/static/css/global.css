@@ -2876,32 +2876,111 @@ button.fcc-audit-tile.kb-active {
     border-color: #dc3545;
 }
 
-/* The Last found strip, above Done / Cancel: held in view while the tiles scroll, or
-   a long list hides what "Needs a label" would mark. A window too short for that
-   leaves it in the flow, or it would cover what is left of the tiles. */
-.fcc-audit-strip {
-    position: sticky;
-    bottom: 0;
-    z-index: 1;
+/* The audit panel (Derek, 2026-11-03, sample 1b): as tall as the window less 8 px above
+   and below, as a question that doesn't fit is. Its tiles scroll in the body; the dock
+   under them never does: the Last found box, then Needs a label, Done... and Cancel
+   Audit, each button over its QR, the three QRs in one row. */
+.fcc-audit-panel {
+    box-sizing: border-box;
+    max-height: calc(100vh - 16px);
+    max-height: calc(100dvh - 16px);
+}
+.fcc-audit-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
     display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem 1rem;
-    margin-top: 0.75rem;
+    flex-direction: column;
+    overflow: hidden;
+}
+.fcc-audit-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+}
+/* A window too short for the dock and a tile row (inv_cmd.js's _fitDock): the dock goes
+   in the flow after the tiles, and the list and the dock scroll as one. */
+.fcc-audit-scroll.fcc-audit-scroll-flow { overflow-y: auto; }
+.fcc-audit-scroll.fcc-audit-scroll-flow > .fcc-audit-body {
+    flex: 0 0 auto;
+    overflow: visible;
+}
+.fcc-audit-dock {
+    flex: 0 0 auto;
+    container-type: inline-size;
+    margin-top: 0.5rem;
+    padding-top: 0.625rem;
+    border-top: 1px solid #6c757d;
+}
+.fcc-audit-dock:empty { display: none; }   /* before the panel's first answer */
+.fcc-audit-dock-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) repeat(3, minmax(6.5rem, 9.5rem));
+    grid-template-rows: auto auto auto;
+    column-gap: 0.75rem;
+    row-gap: 0.25rem;
+}
+.fcc-audit-dock-info {
+    grid-column: 1;
+    grid-row: 1 / span 3;
+    display: flex;
+    min-width: 0;
+}
+.fcc-audit-dock-info > .fcc-audit-strip { flex: 1 1 auto; min-width: 0; }
+/* Each column is the grid's three rows (a subgrid), so its button, QR and caption line
+   up with the others': the three QRs in one row. */
+.fcc-audit-dock-col {
+    grid-row: 1 / span 3;
+    display: grid;
+    grid-template-rows: subgrid;
+    row-gap: 0.25rem;
+    justify-items: center;
+    align-items: start;
+    min-width: 0;
+    text-align: center;
+}
+.fcc-audit-dock-col > .btn { width: 100%; white-space: normal; }
+.fcc-audit-dock-need {
+    padding: 0.375rem;
+    background: #101d26;
+    border: 1px solid #0cf;
+    border-radius: 6px;
+}
+/* Done's and Cancel's QRs, 90 px as generateSafeQR draws them, on a 4 px white quiet
+   zone. The box holds that size before it draws, two frames later. */
+.fcc-audit-dock-qr {
+    display: inline-block;
+    box-sizing: border-box;
+    min-width: 98px;
+    min-height: 98px;
+    background: #fff;
+    padding: 4px;
+    border-radius: 4px;
+    line-height: 0;
+}
+.fcc-audit-dock-cap { color: rgba(255, 255, 255, 0.75); }
+/* A narrow dock (a phone; the same point at every Text size): the Last found words take
+   the first row and the three columns the second, their captions dropped (the button
+   over each QR says what it does). */
+@container (max-width: 36rem) {
+    .fcc-audit-dock-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-rows: auto auto auto auto;
+        column-gap: 0.5rem;
+    }
+    .fcc-audit-dock-info { grid-column: 1 / -1; grid-row: 1; }
+    .fcc-audit-dock-col { grid-row: 2 / span 3; }
+    .fcc-audit-dock-need { padding: 0.25rem 0.125rem; }
+    .fcc-audit-dock-col > .fcc-audit-strip-cap,
+    .fcc-audit-dock-col > .fcc-audit-dock-cap { display: none; }
+    .fcc-audit-dock-col > .btn { padding: 0.25rem 0.375rem; line-height: 1.25; }
+}
+/* The Last found box, in the dock. */
+.fcc-audit-strip {
     padding: 0.5rem 0.75rem;
     background: #101d26;
     border: 1px solid #0cf;
     border-radius: 6px;
 }
-@media (max-height: 34rem) {
-    .fcc-audit-strip { position: static; }
-}
-/* So does a strip taller than 45 % of the scrolling body (a phone, at Large or Extra
-   Large text), which would hide most of the tiles, or all of them: inv_cmd.js's
-   _fitStrip measures it (review of 7e3720f, P-5). */
-.fcc-audit-strip.fcc-audit-strip-flow { position: static; }
-.fcc-audit-strip-main { flex: 1 1 14rem; min-width: 0; }
 .fcc-audit-strip-title {
     font-size: var(--fcc-fs-label);
     font-weight: bold;
@@ -2909,13 +2988,16 @@ button.fcc-audit-tile.kb-active {
 }
 .fcc-audit-strip-spool {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 6px;
     min-width: 0;
     color: #fff;
     font-weight: 600;
     font-size: var(--fcc-fs-row);
 }
+/* The name wraps rather than being cut: the colour is the part cut, and a touch
+   screen can't show a title. */
+.fcc-audit-strip-name { min-width: 0; overflow-wrap: anywhere; }
 .fcc-audit-strip-status {
     display: flex;
     flex-wrap: wrap;
@@ -2926,15 +3008,9 @@ button.fcc-audit-tile.kb-active {
     color: #ffe08a;
 }
 .fcc-audit-strip-status > span { min-width: 0; overflow-wrap: anywhere; }
-.fcc-audit-strip-action {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.25rem;
-}
+.fcc-audit-strip-none .fcc-audit-strip-status { color: rgba(255, 255, 255, 0.85); }
 /* The QR draws two frames after each redraw, 80 px in px as generateSafeQR is asked for
-   it. The box holds that size meanwhile: an empty one left the strip short for those
-   frames, and the tile just scrolled clear of it went under it when it grew. */
+   it. The box holds that size meanwhile. */
 .fcc-audit-strip-qr {
     display: inline-block;
     box-sizing: border-box;
@@ -2948,7 +3024,6 @@ button.fcc-audit-tile.kb-active {
 .fcc-audit-strip-cap {
     font-size: var(--fcc-fs-label);
     color: rgba(255, 255, 255, 0.85);
-    white-space: nowrap;
 }
 
 /* L202 — Edit Filament > Import-from-External collapse panel.

@@ -48,14 +48,15 @@ AUDIT_PRELUDE = r"""
 let __session = { active: false, audit_end: null };
 let __heartbeat = null;
 // The stub DOM's querySelector hands each element its own fake child: the panel's
-// buttons are the body's, as they are on a real page.
+// buttons are the dock's, as they are on a real page (Derek, 2026-11-03, sample 1b;
+// they were the body's).
 const __mountPlain = window.mountOverlay;
 window.mountOverlay = (opts) => {
   const h = __mountPlain(opts);
   if (opts.id === 'fcc-audit-panel-overlay') {
     const own = h.element.querySelector.bind(h.element);
     h.element.querySelector = (sel) => (/-(done|cancel)$/.test(sel)
-      ? own('#fcc-audit-panel-body').querySelector(sel) : own(sel));
+      ? own('#fcc-audit-panel-dock').querySelector(sel) : own(sel));
   }
   return h;
 };
@@ -77,6 +78,9 @@ const panel = () => __mounts.filter(m => m.opts.id === 'fcc-audit-panel-overlay'
 const bodyHtml = () => panel().querySelector('#fcc-audit-panel-body').innerHTML;
 // The tally, above the scrolling body since Derek's 2026-11-03 look (sample 2a).
 const tallyHtml = () => panel().querySelector('#fcc-audit-panel-tally').innerHTML;
+// The dock under it (sample 1b): its columns, and the Last found box.
+const dockHtml = () => panel().querySelector('#fcc-audit-panel-dock').innerHTML;
+const foundBoxHtml = () => panel().querySelector('#fcc-audit-dock-found').innerHTML;
 const shell = () => __rec.overlays.filter(o => o.id === 'fcc-audit-panel-overlay').pop().content;
 const noticeText = () => panel().querySelector('#fcc-audit-panel-notice').textContent;
 const noteText = () => panel().querySelector('#fcc-audit-panel-note').textContent;
@@ -1755,10 +1759,14 @@ def test_a_tile_names_its_spool_once(tmp_path):
 def test_the_panels_words(tmp_path):
     """Done asks now, and the idle line no longer says "nothing is moved either
     way" just above a button that moves spools. RED on 25738af."""
-    res = _run(tmp_path, "await running(SESSION); return { body: bodyHtml(), shell: shell() };")
+    res = _run(tmp_path, "await running(SESSION); return { body: bodyHtml(), shell: shell(), dock: dockHtml() };")
     text = _text(res["body"])
-    assert "✅ Done…" in text and "Asks before moving anything" in text
-    assert "Ends it, nothing moves" in text
+    # Done and Cancel sit in the dock under the list since Derek's 2026-11-03 look
+    # (sample 1b). PIN UPDATED DELIBERATELY (they ended the body).
+    dock = _text(res["dock"])
+    assert "✅ Done…" in dock and "Asks before moving anything" in dock
+    assert "Ends it, nothing moves" in dock
+    assert "✅ Done…" not in text and "Cancel Audit" not in text
     assert "then clears itself with nothing moved." in text
     assert "Auto-Park" not in text and "Nothing is moved either way" not in text
     # Hide's tooltip used to send people to a tile that cancelled the audit.

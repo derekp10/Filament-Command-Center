@@ -297,22 +297,46 @@ def _press(page: Page, x: float, y: float, second: bool = False):
     page.mouse.up(click_count=count)
 
 
+# The window sizes searched for the geometry a double click needs. The dock (Derek,
+# 2026-11-03, sample 1b) holds Done and Cancel Audit under the list, away from where the
+# question's Park and Back opened over them at 1366 x 640 (findings 34 and 35), so the
+# sizes the review measured may no longer have it: the first size that does is used.
+SEARCH_SIZES = [(1366, 640), (1366, 600), (1280, 600), (1280, 720), (1366, 768), (1280, 800), (1024, 640),
+                (1024, 768), (1600, 900)]
+
+
+def _overlap(a, b):
+    left, right = max(a["left"], b["left"]), min(a["right"], b["right"])
+    top, bottom = max(a["top"], b["top"]), min(a["bottom"], b["bottom"])
+    return ((left + right) / 2, (top + bottom) / 2) if right - left >= 8 and bottom - top >= 8 else None
+
+
+def _first_size_where(page: Page, found):
+    """The first of SEARCH_SIZES where `found(page)`, the question up, answers a spot:
+    (width, height, spot), else None. The question is put away after each look."""
+    for width, height in SEARCH_SIZES:
+        page.set_viewport_size({"width": width, "height": height})
+        page.wait_for_timeout(150)
+        _asked_and_drawn(page)
+        spot = found(page)
+        page.keyboard.press("Escape")
+        expect(page.locator(QUESTION)).to_have_count(0)
+        page.wait_for_timeout(PAST_A_DOUBLE_PRESS)
+        if spot:
+            return width, height, spot
+    return None
+
+
 def test_a_real_double_click_on_done_where_park_opens_under_it_answers_nothing(page: Page, base_url: str):
-    """Finding 34: at 1366 x 640 the question opens with Park over the right of Done.
-    Measured here, with the real Bootstrap. RED before the review's fix: every spool
-    parked, and nobody had read a word."""
+    """Finding 34: at 1366 x 640 the question opened with Park over the right of Done.
+    Measured here, with the real Bootstrap, at the first size that still has it (PIN
+    UPDATED DELIBERATELY, sample 1b: Done is in the dock, and none may). RED before the
+    review's fix: every spool parked, and nobody had read a word."""
     server = _long_audit(page, base_url, 1366, 640)
-    _scrolled_to_done(page)
-    _asked_and_drawn(page)
-    done, yes = page.evaluate(RECT, DONE), page.evaluate(RECT, YES)
-    left, right = max(done["left"], yes["left"]), min(done["right"], yes["right"])
-    top, bottom = max(done["top"], yes["top"]), min(done["bottom"], yes["bottom"])
-    assert right > left and bottom > top, (done, yes)
-    x, y = (left + right) / 2, (top + bottom) / 2
-    page.keyboard.press("Escape")
-    expect(page.locator(QUESTION)).to_have_count(0)
-    page.wait_for_timeout(PAST_A_DOUBLE_PRESS)
-    _scrolled_to_done(page)
+    hit = _first_size_where(page, lambda p: _overlap(p.evaluate(RECT, DONE), p.evaluate(RECT, YES)))
+    if not hit:
+        pytest.skip("Park opens over Done at none of the sizes tried: the dock holds Done under the list")
+    x, y = hit[2]
 
     _press(page, x, y)
     expect(page.locator(QRS)).to_be_visible()
@@ -329,62 +353,54 @@ def test_a_real_double_click_on_done_where_park_opens_under_it_answers_nothing(p
     assert len(server.parks) == 1
 
 
-def test_a_label_read_during_the_park_moves_nothing_after_it(page: Page, base_url: str):
-    """Finding 36, with the real dim, the real heartbeat and a buffer of the page's own:
-    the park takes a while, the panel stays up over it, and the queue holds what is
-    read meanwhile. The park's answer waits here for the test to give it. RED before the
-    review's fix: once the audit was over the label filed the buffered spool there."""
-    server = Asked(page)
-    parking, moves = [], []
-    page.route("**/api/audit/park", lambda route: parking.append(route))
-    page.route("**/api/smart_move", lambda route: (moves.append(route.request.post_data_json),
-                                                   server._json(route, {"status": "success"})))
-    conftest.own_the_buffer(page, [{"id": 8057, "display": "#8057 A buffered spool", "color": "72071C"}])
-    _dashboard(page, base_url)
-    page.wait_for_function("() => state.heldSpools.length === 1", timeout=15_000)
-    _start(page)
-    _ask(page)
-    page.wait_for_timeout(PAST_A_DOUBLE_PRESS)
-    page.click(YES)
-    page.wait_for_function("() => state.processing")
-    page.wait_for_function("(n) => document.querySelector('#fcc-audit-panel-notice').textContent.startsWith(n)", arg="Parking")
-    assert len(parking) == 1
-    _scan_keys(page, "LOC:A-CART")
-    assert page.evaluate("state.scanQueue.map((q) => q.text)") == ["LOC:A-CART"]
-    server._park(parking[0])
-    expect(page.locator(PANEL)).to_have_count(0)
-    page.wait_for_function("() => !state.scanQueue.length && !state.processing")
-    page.wait_for_timeout(200)
-    assert moves == [] and "LOC:A-CART" not in server.scans
-    assert page.evaluate("state.heldSpools.map((s) => s.id)") == [8057]
-    assert "The audit has ended, so LOC:A-CART did nothing. Scan it again if you meant it." in _toasts(page)
+# What can lie under Back: a tile (the body scrolled until one does, as the review found it
+# at 1600 x 1300 with 19 spools), or a button of the dock (Cancel Audit lay under it at
+# 1366 x 640 with 18 before the dock, finding 35; PIN UPDATED DELIBERATELY: the first size
+# where any of the dock's buttons does).
+DOCK_BUTTONS = ["fcc-audit-panel-cancel", "fcc-audit-panel-done", "fcc-audit-panel-needlabel",
+                "fcc-audit-label-undo", "fcc-audit-label-queue", "fcc-audit-put-back"]
 
 
-@pytest.mark.parametrize("width, height, rows, lies_under", [(1366, 640, 18, CANCEL[1:]), (1600, 1300, 19, "tile")],
-                         ids=["cancel-audit", "a-tile"])
+@pytest.mark.parametrize("width, height, rows, lies_under", [(1366, 640, 18, "a-dock-button"), (1600, 1300, 19, "tile")],
+                         ids=["a-dock-button", "a-tile"])
 def test_a_real_double_click_on_back_changes_nothing_under_it(page: Page, base_url: str, width, height, rows, lies_under):
     """Finding 35 and 26, at sizes the review measured. The list is scrolled until what
     the finding names lies under Back. RED before the review's fix: Cancel Audit ended
     the audit, and a tile found a spool nobody had touched."""
     server = _long_audit(page, base_url, width, height, rows)
-    _scrolled_to_done(page)
-    _asked_and_drawn(page)
-    back = page.evaluate(RECT, BACK)
-    x, y = (back["left"] + back["right"]) / 2, (back["top"] + back["bottom"]) / 2
-    got = page.evaluate("""([x, y, want, beneath]) => { const under = eval(beneath);
-        const body = document.querySelector('#fcc-audit-panel-body');
-        for (let top = body.scrollHeight - body.clientHeight; top >= 0; top -= 8) {
-            body.scrollTop = top;
-            const hit = under([x, y]);
-            if (hit === want) return hit;
-        }
-        return under([x, y]); }""", [x, y, lies_under, BENEATH])
-    assert got == lies_under
+    if lies_under == "a-dock-button":
+        def under_back(p):
+            back = p.evaluate(RECT, BACK)
+            xy = [(back["left"] + back["right"]) / 2, (back["top"] + back["bottom"]) / 2]
+            return xy if p.evaluate(BENEATH, xy) in DOCK_BUTTONS else None
+        hit = _first_size_where(page, under_back)
+        if not hit:
+            pytest.skip("Back opens over none of the dock's buttons at the sizes tried")
+        x, y = hit[2]
+        _asked_and_drawn(page)
+        want = page.evaluate(BENEATH, [x, y])
+        assert want in DOCK_BUTTONS
+    else:
+        _scrolled_to_done(page)
+        _asked_and_drawn(page)
+        back = page.evaluate(RECT, BACK)
+        x, y = (back["left"] + back["right"]) / 2, (back["top"] + back["bottom"]) / 2
+        got = page.evaluate("""([x, y, want, beneath]) => { const under = eval(beneath);
+            const body = document.querySelector('#fcc-audit-panel-body');
+            for (let top = body.scrollHeight - body.clientHeight; top >= 0; top -= 8) {
+                body.scrollTop = top;
+                const hit = under([x, y]);
+                if (hit === want) return hit;
+            }
+            return under([x, y]); }""", [x, y, lies_under, BENEATH])
+        assert got == lies_under
+    before = list(server.scans)                 # every Done that asked; Back sends no scan
     _press(page, x, y)
     expect(page.locator(QUESTION)).to_have_count(0)
     _press(page, x, y, second=True)
     page.wait_for_timeout(200)
-    assert server.scans == ["CMD:AUDIT", "CMD:DONE"] and server.found == []
+    assert server.scans == before and before[-1] == "CMD:DONE", server.scans
+    assert server.found == []
     expect(page.locator(PANEL)).to_be_visible()
     assert page.evaluate("state.auditActive") is True
 

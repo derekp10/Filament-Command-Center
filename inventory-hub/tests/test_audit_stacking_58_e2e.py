@@ -210,7 +210,10 @@ def test_every_tile_the_keyboard_reaches_is_in_view_on_the_real_panel(page: Page
 
     assert hidden("ArrowRight", len(ids) + 1) == []
     assert hidden("ArrowLeft", len(ids) + 1) == []
-    page.focus(tile(ids[0]))
+    # From the first tile drawn: the spools still to find come first since Derek's
+    # 2026-11-03 look (sample 5a(i)). PIN UPDATED DELIBERATELY (it started at ids[0]).
+    first = page.evaluate("() => document.querySelector('.fcc-audit-tile').dataset.auditTile")
+    page.focus(tile(first))
     assert hidden("Tab", len(ids) - 1) == []
     assert hidden("Shift+Tab", len(ids) - 1) == []
 
@@ -218,12 +221,15 @@ def test_every_tile_the_keyboard_reaches_is_in_view_on_the_real_panel(page: Page
 def test_a_strip_that_appears_leaves_the_keyboards_tile_in_view(page: Page, base_url: str):
     """The first find draws the strip, and its QR comes two frames later: with an empty QR
     box the tile was scrolled clear of a strip 80 px short of its real size, and went
-    under it when the QR drew. RED with no size on the box."""
+    under it when the QR drew. RED with no size on the box. Since the dock (Derek,
+    2026-11-03, sample 1b) the box is under the list, and a first find can grow the dock
+    over the list's last row: the keyboard's tile is still seen. PIN UPDATED DELIBERATELY:
+    Needs a label is in the dock from the start, so the box is what appears."""
     server = _long_audit(page, base_url, 1366, 768, rows=30)
     found = server.session
     server.session = dict(found, last_found=None)
     page.evaluate("window.refreshAuditSession()")
-    expect(page.locator(BUTTON)).to_have_count(0)
+    expect(page.locator("#fcc-audit-last-found")).to_have_count(0)
     in_view = page.evaluate("""() => { const b = document.querySelector('#fcc-audit-panel-body').getBoundingClientRect();
         return Array.from(document.querySelectorAll('.fcc-audit-tile'))
             .filter((t) => t.getBoundingClientRect().bottom < b.bottom).length; }""")
@@ -231,7 +237,7 @@ def test_a_strip_that_appears_leaves_the_keyboards_tile_in_view(page: Page, base
     at = page.evaluate("document.activeElement.dataset.auditTile")
     server.session = found
     page.evaluate("window.refreshAuditSession()")
-    expect(page.locator(BUTTON)).to_be_visible()
+    expect(page.locator("#fcc-audit-last-found")).to_be_visible()
     page.wait_for_timeout(200)                  # the QR draws two frames later
     assert page.locator("#fcc-audit-panel-qr-needlabel").bounding_box()["height"] >= 80
     assert page.evaluate("document.activeElement.dataset.auditTile") == at
@@ -240,19 +246,21 @@ def test_a_strip_that_appears_leaves_the_keyboards_tile_in_view(page: Page, base
 
 def test_a_click_on_a_tile_half_under_the_strip_still_presses_it_on_the_real_panel(page: Page, base_url: str):
     """A pin: a tile pressed this close to the edge and scrolled clear of it between mousedown
-    and mouseup leaves the pointer in the gap between tiles, which is a click on no tile."""
+    and mouseup leaves the pointer in the gap between tiles, which is a click on no tile.
+    PIN UPDATED DELIBERATELY (Derek, 2026-11-03, sample 1b): the edge is the body's bottom,
+    where the dock begins; it was the sticky strip's top."""
     server = _long_audit(page, base_url, 1366, 768, rows=30)
     expect(page.locator(BUTTON)).to_be_visible()
     aim = page.evaluate("""([body, strip]) => {
         const b = document.querySelector(body);
-        const line = document.querySelector(strip).getBoundingClientRect().top;
+        const line = b.getBoundingClientRect().bottom;
         const t = Array.from(document.querySelectorAll('.fcc-audit-tile'))
             .find((el) => el.getBoundingClientRect().top > line + 200);
         b.scrollTop += t.getBoundingClientRect().top + 12 - line;
         const now = t.getBoundingClientRect();
         return { id: Number(t.dataset.auditTile), x: now.left + now.width / 2, y: now.top + 9, hit: now.top - line }; }""",
                         ["#fcc-audit-panel-body", "#fcc-audit-last-found"])
-    assert aim["hit"] == pytest.approx(-12, abs=1)      # it really is under the strip's edge
+    assert aim["hit"] == pytest.approx(-12, abs=1)      # it really straddles the body's edge
     page.mouse.click(aim["x"], aim["y"])
     page.wait_for_timeout(200)
     assert [p["id"] for p in server.found] == [aim["id"]]

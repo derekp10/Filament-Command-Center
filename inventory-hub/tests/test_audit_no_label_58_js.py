@@ -178,13 +178,18 @@ def show_shortcut_list(page):
 # --- the strip ------------------------------------------------------------------------
 
 def test_with_nothing_found_there_is_no_strip(live, env):
-    """A pin: no base has a strip. Proved on a copy that draws one for no spool."""
+    """A pin: no base has a strip. Proved on a copy that draws one for no spool. Since the
+    dock (Derek, 2026-11-03, sample 1b) its box says so instead, under its own id."""
     two(env)
     begin(live, env)
     assert not live.locator(STRIP).count()
+    assert "Nothing found yet" in live.text_content("#fcc-audit-last-none")
 
 
-def test_the_strip_names_the_spool_above_done_and_cancel(live, env):
+def test_the_strip_names_the_spool_in_the_dock_beside_done_and_cancel(live, env):
+    """PIN UPDATED DELIBERATELY (Derek, 2026-11-03, sample 1b): the strip sat above Done
+    and Cancel at the body's end; the dock under the list holds it at its start, then
+    Needs a label, Done and Cancel Audit, side by side on a laptop."""
     two(env)
     begin(live, env)
     scanned(live, "ID:57")
@@ -193,9 +198,13 @@ def test_the_strip_names_the_spool_above_done_and_cancel(live, env):
     assert "Last found" in text and "#57 Some Brand PLA (Red)" in text
     assert live.get_attribute(STATUS, "role") == "status"
     assert live.is_visible(BUTTON) and "Needs a label" in live.text_content(BUTTON)
-    above = live.evaluate("""([strip, done]) => document.querySelector(strip).getBoundingClientRect().bottom
-        <= document.querySelector(done).getBoundingClientRect().top""", [STRIP, DONE])
-    assert above is True
+    got = live.evaluate("""([strip, btn, done, cancel, body]) => { const r = (s) => document.querySelector(s).getBoundingClientRect();
+        const dock = document.getElementById('fcc-audit-panel-dock');
+        return { inDock: [strip, btn, done, cancel].every((s) => dock.contains(document.querySelector(s))),
+                 order: r(strip).right <= r(btn).left && r(btn).right <= r(done).left && r(done).right <= r(cancel).left,
+                 underTheList: r(body).bottom <= dock.getBoundingClientRect().top,
+                 outOfTheList: !document.querySelector(body).contains(dock) }; }""", [STRIP, BUTTON, DONE, CANCEL, BODY])
+    assert got == {"inDock": True, "order": True, "underTheList": True, "outOfTheList": True}
 
 
 def test_a_rescan_moves_the_strip_back(live, env):
@@ -219,8 +228,12 @@ def test_the_qr_under_the_button_holds_the_command_and_undo_has_none(live, env):
     assert below is True
     live.click(BUTTON)
     live.wait_for_selector(UNDO)
-    strip_qrs = live.evaluate("(s) => document.querySelector(s).querySelectorAll('[id*=qr]').length", STRIP)
-    assert strip_qrs == 1                    # "undo that" has no QR: a double read can't toggle it
+    # "undo that" has no QR, so a double read can't toggle it: the dock's three are Needs a
+    # label's, Done's and Cancel's, and the Last found box holds none (PIN UPDATED
+    # DELIBERATELY, sample 1b: Needs a label's QR was the strip's own).
+    qrs = live.evaluate("""(s) => ({ dock: Array.from(document.querySelectorAll('#fcc-audit-panel-dock [id*=qr]')).map((q) => q.id),
+        box: document.querySelector(s).querySelectorAll('[id*=qr]').length })""", STRIP)
+    assert qrs == {"dock": ["fcc-audit-panel-qr-needlabel", "fcc-audit-panel-qr-done", "fcc-audit-panel-qr-cancel"], "box": 0}
 
 
 # --- the nudge and the tile's words ---------------------------------------------------
@@ -971,29 +984,31 @@ def test_a_strip_that_appears_doesnt_cover_the_keyboards_tile(live, env):
     assert _on_top(live, tile(lowest))
 
 
-@pytest.mark.parametrize("edge", ["strip", "top"])
+@pytest.mark.parametrize("edge", ["bottom", "top"])
 def test_a_click_on_a_tile_half_out_of_view_still_presses_it(live, env, edge):
     """A click's mousedown focuses the tile. Pressed this close to the edge, a tile scrolled
     clear of it leaves the pointer in the gap between tiles, the mouseup lands there, and
     the click reaches no tile. A pin: proved on a copy with no :focus-visible test in the
-    panel's `focus` listener."""
+    panel's `focus` listener. PIN UPDATED DELIBERATELY (Derek, 2026-11-03, sample 1b): the
+    bottom edge is the body's own now, where the dock begins; it was the sticky strip's
+    top."""
     a_long_list(live, env)
     live.wait_for_timeout(PAST_A_DOUBLE_PRESS)
-    # A tile with 12 px of it showing, at the strip's top edge or the body's, and the
+    # A tile with 12 px of it showing, at the body's bottom edge or its top, and the
     # pointer 3 px from that edge.
-    aim = live.evaluate("""([body, strip, edge]) => {
+    aim = live.evaluate("""([body, edge]) => {
         const b = document.querySelector(body);
-        const line = edge === 'strip' ? document.querySelector(strip).getBoundingClientRect().top
-                                      : b.getBoundingClientRect().top;
+        const box = b.getBoundingClientRect();
+        const line = edge === 'bottom' ? box.bottom : box.top;
         const tiles = Array.from(document.querySelectorAll('.fcc-audit-tile'));
         const t = tiles.find((el) => el.getBoundingClientRect().top > line + 200);
         const r = t.getBoundingClientRect();
-        b.scrollTop += edge === 'strip' ? r.top + 12 - line : r.bottom - 12 - line;
+        b.scrollTop += edge === 'bottom' ? r.top + 12 - line : r.bottom - 12 - line;
         const now = t.getBoundingClientRect();
         return { id: t.dataset.auditTile, x: now.left + now.width / 2, line,
-                 hit: edge === 'strip' ? now.top - line : now.bottom - line,
-                 y: edge === 'strip' ? now.top + 9 : now.bottom - 9 }; }""", [BODY, STRIP, edge])
-    assert aim["hit"] == pytest.approx(-12 if edge == "strip" else 12, abs=1)    # it really straddles the edge
+                 hit: edge === 'bottom' ? now.top - line : now.bottom - line,
+                 y: edge === 'bottom' ? now.top + 9 : now.bottom - 9 }; }""", [BODY, edge])
+    assert aim["hit"] == pytest.approx(-12 if edge == "bottom" else 12, abs=1)    # it really straddles the edge
     press(live, (aim["x"], aim["y"]))
     tile_says(live, aim["id"], "found, no label read")
     assert [b["id"] for b in sent(live, FOUND_URL)] == [int(aim["id"])]
@@ -1547,15 +1562,18 @@ def test_a_double_click_that_brings_the_panel_up_presses_nothing_on_it(live, env
 
 
 def test_a_double_click_on_a_tile_finds_it_once_and_marks_nothing(live, env):
-    """Re-review finding 8. The first find brings the Last found strip up over the tiles,
+    """Re-review finding 8. The first find brought the Last found strip up over the tiles,
     and its Needs a label lay under the second click: the flag went up on a spool nobody
     asked about. The keyboard stays on the tile, as a single click leaves it. RED on
-    681232a."""
+    681232a. PIN UPDATED DELIBERATELY (Derek, 2026-11-03, sample 1b): Needs a label is in
+    the dock from the start now, and a first find can grow the dock over the tiles' last
+    row, so it is laid over the tile once a spool is in the Last found box."""
     two(env)
     begin(live, env)
     live.wait_for_selector(tile(99))
-    xy = lay_over(live, BUTTON, tile(99))
-    double_click(live, xy, then=BUTTON)
+    xy = lay_over(live, f"#fcc-audit-panel-dock:has({STRIP}) {BUTTON}", tile(99))
+    assert live.evaluate(HIT, xy) == "99"
+    double_click(live, xy, then=STRIP)
     live.wait_for_timeout(150)
     assert [p["id"] for p in sent(live, FOUND_URL)] == [99]
     assert "CMD:NEEDLABEL" not in sent(live) and wire(env, 99) is None

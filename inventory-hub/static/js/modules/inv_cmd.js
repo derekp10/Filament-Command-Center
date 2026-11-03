@@ -1244,8 +1244,10 @@ window.commitBulkMove = () => {
     let _findPickedAt = 0;
     // The session the panel drew last: Find tags its rows from it.
     let _lastData = null;
-    // Watches the scrolling body's size for _fitStrip while the panel is up.
-    let _stripFit = null;
+    // Watches the scrolling part's size for _fitDock while the panel is up.
+    let _dockFit = null;
+    // The dock's columns are drawn once per panel, at its first answer (_render).
+    let _dockDrawn = false;
     // Each tile's QR (Derek, 2026-11-03, A1), drawn once and kept by its text: a scan
     // changes the panel's hash, and the body is drawn again. For one audit only.
     const _tileQrs = new Map();
@@ -1433,10 +1435,12 @@ window.commitBulkMove = () => {
                 + ` title="Queue #${Number(row.id)}'s label to print at the desk">🖨️ Add to print queue</button>`;
     };
 
-    // The spool "Needs a label" acts on, above Done / Cancel and held in view while
-    // the tiles scroll (global.css), so the button and its QR are there when the
-    // spool in the person's hand has no label worth scanning. "undo that" has no QR, so
-    // a double read of the mark's own QR can't toggle it.
+    // The Last found box: the spool "Needs a label" acts on, in the dock under the
+    // scrolling list (Derek, 2026-11-03, sample 1b: "the placement of useful buttons and
+    // last found on the panel"), so its words and the dock's buttons and QRs are there
+    // however far the tiles scroll, when the spool in the person's hand has no label
+    // worth scanning. Its name wraps rather than being cut: a touch screen can't show a
+    // title. "undo that" has no QR, so a double read of the mark's own QR can't toggle it.
     const _renderStrip = (row) => {
         if (!row) return '';
         const swatch = (typeof window.makeSwatchHtml === 'function')
@@ -1444,23 +1448,58 @@ window.commitBulkMove = () => {
         const name = _escapeHtml(_spoolName(row));
         return `
             <div id="fcc-audit-last-found" class="fcc-audit-strip">
-                <div class="fcc-audit-strip-main">
-                    <div class="fcc-audit-strip-title">Last found</div>
-                    <div class="fcc-audit-strip-spool">${swatch}<span class="text-truncate" title="${name}">${name}</span></div>
-                    <div class="fcc-audit-strip-status" role="status">
-                        <span>${_escapeHtml(_stripLine(row))}</span>
-                        ${row.flagged_here ? '<button type="button" id="fcc-audit-label-undo" class="btn btn-sm btn-outline-light">undo that</button>' : ''}
-                        ${_queueButton(row)}
-                    </div>
-                </div>
-                <div class="fcc-audit-strip-action">
-                    <button type="button" id="fcc-audit-panel-needlabel" class="btn btn-sm btn-warning fw-bold">🏷️ Needs a label</button>
-                    <div id="fcc-audit-panel-qr-needlabel" class="fcc-audit-strip-qr"></div>
-                    <div class="fcc-audit-strip-cap">📷 Scan to mark it</div>
+                <div class="fcc-audit-strip-title">Last found</div>
+                <div class="fcc-audit-strip-spool">${swatch}<span class="fcc-audit-strip-name">${name}</span></div>
+                <div class="fcc-audit-strip-status" role="status">
+                    <span>${_escapeHtml(_stripLine(row))}</span>
+                    ${row.flagged_here ? '<button type="button" id="fcc-audit-label-undo" class="btn btn-sm btn-outline-light">undo that</button>' : ''}
+                    ${_queueButton(row)}
                 </div>
             </div>
         `;
     };
+
+    // The box with no spool in it: nothing found yet, or nothing selected (a find taken
+    // back that was the last found), so a press of Needs a label, or a scan of its QR,
+    // is answered by the server's "Nothing has been found yet" / "No spool is selected".
+    // Its own id: #fcc-audit-last-found means a spool is in the box.
+    const _renderNoStrip = (data) => {
+        const anyFound = (data.expected || []).some(r => r.found) || (data.rogue || []).length || (data.trail || []).length;
+        const words = anyFound ? 'Nothing is selected. The next spool you find shows here.'
+            : "Nothing found yet. Scan a spool's label, press its tile, or use 🔎 Find a spool.";
+        return `
+            <div id="fcc-audit-last-none" class="fcc-audit-strip fcc-audit-strip-none">
+                <div class="fcc-audit-strip-title">Last found</div>
+                <div class="fcc-audit-strip-status" role="status"><span>${words}</span></div>
+            </div>
+        `;
+    };
+
+    // The dock's three columns, each a button over its QR, the three QRs in one row
+    // (global.css lines them up): Needs a label beside the Last found box, then Done and
+    // Cancel Audit, the exits a scanner needs, always in view. Drawn once per panel, so
+    // their QRs never flicker at a redraw and the keyboard on one stays there; only the
+    // Last found box is drawn again.
+    const _dockHtml = () => `
+        <div class="fcc-audit-dock-grid">
+            <div id="fcc-audit-dock-found" class="fcc-audit-dock-info"></div>
+            <div class="fcc-audit-dock-col fcc-audit-dock-need">
+                <button type="button" id="fcc-audit-panel-needlabel" class="btn btn-sm btn-warning fw-bold">🏷️ Needs a label</button>
+                <div id="fcc-audit-panel-qr-needlabel" class="fcc-audit-strip-qr"></div>
+                <div class="fcc-audit-strip-cap">📷 Scan to mark it</div>
+            </div>
+            <div class="fcc-audit-dock-col fcc-audit-dock-done">
+                <button type="button" id="fcc-audit-panel-done" class="btn btn-success fw-bold">✅ Done…</button>
+                <div id="fcc-audit-panel-qr-done" class="fcc-audit-dock-qr"></div>
+                <div class="small fcc-audit-dock-cap">Asks before moving anything</div>
+            </div>
+            <div class="fcc-audit-dock-col fcc-audit-dock-cancel">
+                <button type="button" id="fcc-audit-panel-cancel" class="btn btn-outline-danger fw-bold">❌ Cancel Audit</button>
+                <div id="fcc-audit-panel-qr-cancel" class="fcc-audit-dock-qr"></div>
+                <div class="small fcc-audit-dock-cap">Ends it, nothing moves</div>
+            </div>
+        </div>
+    `;
 
     const _pressAnswered = (res) => {
         if (res && res.success) {
@@ -1545,12 +1584,13 @@ window.commitBulkMove = () => {
     // lands on Done, and a double Enter asked again). And a pointer's second press
     // (_eatPress), wherever on the panel it lands: one at the spot of a press on what sat
     // over the panel (Done's question, the 🧺 list, the legacy picker, the ⌨️ list, gone
-    // with the first press), or of a press on a tile or the Last found strip, which move
-    // what lies under the pointer: a first find brings the strip up over the tiles (a
-    // tile's double click pressed Needs a label, and a spool nobody asked about was
-    // flagged), or grows a short panel, which centres itself again (the second press
-    // landed beside the tile and took the keyboard off it); and the strip's own button
-    // marked twice.
+    // with the first press), or of a press on a tile or the dock, which move what lies
+    // under the pointer: a find moves its tile from Not scanned to Found and slides the
+    // next one into its place, and changes the Last found box, which can grow the dock
+    // over the tiles' last row (a tile's double click pressed Needs a label, and a
+    // spool nobody asked about was flagged), or grows a short panel, which centres
+    // itself again (the second press landed beside the tile and took the keyboard off
+    // it); and the dock's own Needs a label marked twice.
     const _shieldClick = (e) => {
         const eat = Date.now() - _questionClosedAt < DOUBLE_PRESS_MS || (e.detail > 0 && _pressEaten());
         if (e.detail > 0) _eatPress = 0;
@@ -1608,9 +1648,12 @@ window.commitBulkMove = () => {
         const moved = !!first && _stripSpool != null && _stripSpool !== first.stripWas && _stripSpool !== first.tile;
         if (onPanel && _isSecondPress(first, e, now) && (first.cover || (first.strip && !moved))) _eatPress = now;
         const tileEl = onPanel ? t.closest('[data-audit-tile]') : null;
+        // A press on the dock counts as one on the strip (Derek, 2026-11-03, sample 1b): its
+        // Needs a label sits in its own column there, outside the Last found box, and the
+        // box's words can grow the dock under the pointer, or shrink it.
         _panelPress = Object.assign({}, _press, {
             cover: !onPanel,
-            strip: onPanel && !!(tileEl || t.closest('#fcc-audit-last-found')),
+            strip: onPanel && !!(tileEl || t.closest('#fcc-audit-panel-dock')),
             stripWas: _stripSpool,
             tile: tileEl ? Number(tileEl.dataset.auditTile) : null,
         });
@@ -1715,9 +1758,11 @@ window.commitBulkMove = () => {
             + group('found', 'Found', expected.filter(r => r.found), 'found', 12);
         // A note says it already when the place's spools are all in places inside it.
         const nothing = data.location_id ? (data.note ? '' : 'Nothing is filed here.') : "Scan a location's label to start.";
-        // A button or a tile the redraw is about to replace keeps the keyboard.
+        // A button or a tile the redraw is about to replace keeps the keyboard. The dock's
+        // own columns (Needs a label, Done, Cancel Audit) are never replaced, so only the
+        // Last found box's buttons and the tiles need it.
         const active = document.activeElement;
-        const refocus = (active && /^fcc-audit-(panel-(done|cancel|needlabel)|label-(undo|queue))$/.test(active.id || '')) ? active.id : null;
+        const refocus = (active && /^fcc-audit-label-(undo|queue)$/.test(active.id || '')) ? active.id : null;
         const refocusTile = (active && active.dataset) ? active.dataset.auditTile : null;
         const stripSpool = data.last_found ? data.last_found.id : null;
         const stripMoved = stripSpool !== _stripSpool;
@@ -1762,44 +1807,38 @@ window.commitBulkMove = () => {
                     ${trailTiles}
                 </div>
             ` : ''}
-            ${_renderStrip(data.last_found)}
-            <!-- 18.2 Part B follow-up: surface DONE + CANCEL as explicit
-                 click-targets AND QR codes so the user has both keyboard/
-                 mouse and scanner exits. The deck tile only shows this panel. -->
-            <div class="d-flex justify-content-between align-items-stretch gap-3 mt-3 pt-3 border-top border-secondary">
-                <div style="flex:1; text-align:center;">
-                    <button id="fcc-audit-panel-done" class="btn btn-success fw-bold w-100 mb-2">
-                        ✅ Done…
-                    </button>
-                    <div id="fcc-audit-panel-qr-done" style="display:inline-block; background:#fff; padding:4px; border-radius:4px;"></div>
-                    <div class="small mt-1" style="color: rgba(255,255,255,0.75);">
-                        Asks before moving anything
-                    </div>
-                </div>
-                <div style="flex:1; text-align:center;">
-                    <button id="fcc-audit-panel-cancel" class="btn btn-outline-danger fw-bold w-100 mb-2">
-                        ❌ Cancel Audit
-                    </button>
-                    <div id="fcc-audit-panel-qr-cancel" style="display:inline-block; background:#fff; padding:4px; border-radius:4px;"></div>
-                    <div class="small mt-1" style="color: rgba(255,255,255,0.75);">
-                        Ends it, nothing moves
-                    </div>
-                </div>
-            </div>
         `;
         // Now, not two frames later: the tile is its full size before the keyboard's
         // tile is brought into view, and a QR already drawn doesn't flicker.
         _placeTileQrs(body);
-        // And the strip stuck over the tiles only where it leaves them room, before the
-        // keyboard's tile is brought clear of it.
-        _fitStrip();
-        const doneBtn = body.querySelector('#fcc-audit-panel-done');
-        if (doneBtn) doneBtn.onclick = () => { if (!_busy) window.auditDone(); };
-        const cancelBtn = body.querySelector('#fcc-audit-panel-cancel');
-        if (cancelBtn) cancelBtn.onclick = () => { if (!_busy) window.cancelAudit(); };
-        const markBtn = body.querySelector('#fcc-audit-panel-needlabel');
-        if (markBtn) markBtn.onclick = () => { if (!_undoJustPressed()) window.auditNeedLabel(); };
-        const undoBtn = body.querySelector('#fcc-audit-label-undo');
+        // The dock (Derek, 2026-11-03, sample 1b): its columns once per panel, the Last
+        // found box at every redraw.
+        const dock = root.querySelector('#fcc-audit-panel-dock');
+        if (dock && !_dockDrawn) {
+            _dockDrawn = true;
+            dock.innerHTML = _dockHtml();
+            const doneBtn = root.querySelector('#fcc-audit-panel-done');
+            if (doneBtn) doneBtn.onclick = () => { if (!_busy) window.auditDone(); };
+            const cancelBtn = root.querySelector('#fcc-audit-panel-cancel');
+            if (cancelBtn) cancelBtn.onclick = () => { if (!_busy) window.cancelAudit(); };
+            const markBtn = root.querySelector('#fcc-audit-panel-needlabel');
+            if (markBtn) markBtn.onclick = () => { if (!_undoJustPressed()) window.auditNeedLabel(); };
+            // `generateSafeQR` is a script-scope const in inv_core.js — accessible by bare
+            // name (not on window). The wrong `window.generateSafeQR` guard once silently
+            // dropped these calls, which is why no QR rendered (Derek 2026-05-16). Each box
+            // holds its QR's size until it draws, two frames later (global.css).
+            if (typeof generateSafeQR === 'function') {
+                generateSafeQR('fcc-audit-panel-qr-done', 'CMD:DONE', 90);
+                generateSafeQR('fcc-audit-panel-qr-cancel', 'CMD:CANCEL', 90);
+                generateSafeQR('fcc-audit-panel-qr-needlabel', 'CMD:NEEDLABEL', 80);
+            }
+        }
+        const found = root.querySelector('#fcc-audit-dock-found');
+        if (found) found.innerHTML = _renderStrip(data.last_found) || _renderNoStrip(data);
+        // The dock in the flow on a window too short for it, before the keyboard's tile
+        // is brought into view.
+        _fitDock();
+        const undoBtn = root.querySelector('#fcc-audit-label-undo');
         if (undoBtn) {
             // Not `disabled`: that drops the keyboard's focus, and it goes to the
             // Needs a label button when this one leaves.
@@ -1815,17 +1854,16 @@ window.commitBulkMove = () => {
                     .finally(() => { _undoOut = false; _undoAnsweredAt = Date.now(); });
             };
         }
-        const queueBtn = body.querySelector('#fcc-audit-label-queue');
+        const queueBtn = root.querySelector('#fcc-audit-label-queue');
         if (queueBtn) queueBtn.onclick = () => _queueLabel(data.last_found);
         _applyBusy();
         if (refocus && !_busy) {
-            // "undo that" goes with the mark it undid: the keyboard goes to the button.
-            // Not when another spool took the strip: an Enter meant for the old spool
-            // must write nothing on the new one (nor queue its label), so the keyboard
-            // stays on the panel, where N and the arrows still work.
-            const fromStrip = refocus === 'fcc-audit-label-undo' || refocus === 'fcc-audit-label-queue';
-            const again = (fromStrip && stripMoved) ? null
-                : (body.querySelector(`#${refocus}`) || body.querySelector('#fcc-audit-panel-needlabel'));
+            // "undo that" goes with the mark it undid: the keyboard goes to Needs a label.
+            // Not when another spool took the box: an Enter meant for the old spool must
+            // write nothing on the new one (nor queue its label), so the keyboard stays
+            // on the panel, where N and the arrows still work.
+            const again = stripMoved ? null
+                : (root.querySelector(`#${refocus}`) || root.querySelector('#fcc-audit-panel-needlabel'));
             if (again && again.focus) again.focus();
         }
         const tile = refocusTile ? body.querySelector(`[data-audit-tile="${refocusTile}"]`) : null;
@@ -1834,16 +1872,6 @@ window.commitBulkMove = () => {
         if (_focusDoneNext) {
             _focusDoneNext = false;
             if (!root.contains(document.activeElement)) _focusDone();
-        }
-        // Generate QR codes after the placeholders are in the DOM.
-        // `generateSafeQR` is a script-scope const in inv_core.js — accessible
-        // by bare name (not on window). The wrong `window.generateSafeQR`
-        // guard previously silently dropped these calls, which is why no
-        // QR rendered (Derek 2026-05-16).
-        if (typeof generateSafeQR === 'function') {
-            generateSafeQR('fcc-audit-panel-qr-done', 'CMD:DONE', 90);
-            generateSafeQR('fcc-audit-panel-qr-cancel', 'CMD:CANCEL', 90);
-            if (data.last_found) generateSafeQR('fcc-audit-panel-qr-needlabel', 'CMD:NEEDLABEL', 80);
         }
     };
 
@@ -1884,10 +1912,14 @@ window.commitBulkMove = () => {
         if (typeof window.mountOverlay !== 'function') return;
         _lastRenderHash = null;  // force first render after open
         _lastData = null;        // nothing drawn yet: Find tags nothing until the first answer
+        _dockDrawn = false;      // a new panel: its dock is drawn at the first answer
+        // As tall as the window less 8 px above and below (Derek, 2026-11-03, sample 1b),
+        // as a question that doesn't fit is: the dock under the list takes room, and the
+        // deck under the panel is behind its backdrop and only shows this panel.
         const content = `
-            <div style="background:#1e1e1e; color:#fff; border:2px solid #ff00ff;
+            <div class="fcc-audit-panel" style="background:#1e1e1e; color:#fff; border:2px solid #ff00ff;
                         border-radius:8px; padding:0.875rem 1rem;
-                        width:min(51.25rem,94vw); max-height:80vh; display:flex; flex-direction:column;">
+                        width:min(51.25rem,94vw); display:flex; flex-direction:column;">
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <div style="font-weight:bold; font-size:1.15em; color:#ff7eff;">
                         🕵️‍♀️ Audit in Progress
@@ -1907,8 +1939,13 @@ window.commitBulkMove = () => {
                 <div id="fcc-audit-panel-note"
                      style="display:none; margin-bottom:8px; font-size:var(--fcc-fs-row); color:#ffe08a;"></div>
                 <div id="fcc-audit-panel-tally" style="flex:0 0 auto; margin-bottom:8px; font-size:0.95rem;"></div>
-                <div id="fcc-audit-panel-body" style="overflow-y:auto; flex:1 1 auto;">
-                    <div class="small" style="color:rgba(255,255,255,0.7);">Loading audit state…</div>
+                <!-- The tiles scroll; the dock under them never does (global.css), unless the
+                     window is too short for both (_fitDock). -->
+                <div id="fcc-audit-panel-scroll" class="fcc-audit-scroll">
+                    <div id="fcc-audit-panel-body" class="fcc-audit-body">
+                        <div class="small" style="color:rgba(255,255,255,0.7);">Loading audit state…</div>
+                    </div>
+                    <div id="fcc-audit-panel-dock" class="fcc-audit-dock"></div>
                 </div>
             </div>
         `;
@@ -1940,11 +1977,12 @@ window.commitBulkMove = () => {
             // `focus` in the capture phase: mountOverlay's focus guard stops focusin at
             // the document, before it reaches anything inside the overlay.
             bodyEl.addEventListener('focus', _tileFocused, true);
-            // A window resized, or a notice above the body that comes or goes.
-            if (typeof ResizeObserver === 'function') {
-                _stripFit = new ResizeObserver(() => _fitStrip());
-                _stripFit.observe(bodyEl);
-            }
+        }
+        // A window resized, or a notice, the note or the tally above the list that grows.
+        const scrollEl = _handle.element.querySelector('#fcc-audit-panel-scroll');
+        if (scrollEl && typeof ResizeObserver === 'function') {
+            _dockFit = new ResizeObserver(() => _fitDock());
+            _dockFit.observe(scrollEl);
         }
         // Initial render + start the 2s poll.
         _poll();
@@ -1974,7 +2012,7 @@ window.commitBulkMove = () => {
             _find = null;
             if (window.closeAuditFind) window.closeAuditFind(find);
         }
-        if (_stripFit) { _stripFit.disconnect(); _stripFit = null; }
+        if (_dockFit) { _dockFit.disconnect(); _dockFit = null; }
         if (_handle) { try { _handle.cleanup(); } catch (_) { /* noop */ } _handle = null; }
     };
 
@@ -2054,51 +2092,68 @@ window.commitBulkMove = () => {
         }, NEED_LABEL_WAIT_MS);
     };
 
-    // A tile the keyboard reaches is seen whole: clear of the Last found strip, which
-    // stays stuck to the body's bottom edge over the tiles, and of the body's top edge.
-    // The browser's own focus scroll won't do it: a tile under the strip is already
-    // inside the scrolling box, so neither focus() nor scrollIntoView moves it, whatever
-    // scroll-margin says.
-    const TILE_AIR_PX = 6;              // the focus ring (2 px + 1 px offset) and a little
-    const _tileClear = (tile) => {
-        const body = _handle && _handle.element.querySelector('#fcc-audit-panel-body');
-        if (!body || !tile) return;
-        const box = body.getBoundingClientRect();
-        const strip = body.querySelector('#fcc-audit-last-found');
-        const floor = strip ? Math.min(box.bottom, strip.getBoundingClientRect().top) : box.bottom;
-        const under = tile.getBoundingClientRect().bottom + TILE_AIR_PX - floor;
-        if (under > 0) body.scrollTop += under;
-        const over = box.top + TILE_AIR_PX - tile.getBoundingClientRect().top;
-        if (over > 0) body.scrollTop -= over;
+    // What scrolls the tiles: the body, or with the dock in the flow (_fitDock) the part
+    // that holds the body and the dock.
+    const _scroller = () => {
+        const root = _handle && _handle.element;
+        if (!root) return null;
+        const wrap = root.querySelector('#fcc-audit-panel-scroll');
+        return (wrap && wrap.classList.contains('fcc-audit-scroll-flow')) ? wrap : root.querySelector('#fcc-audit-panel-body');
     };
 
-    // Tab into a tile, and the keyboard's tile drawn again under a strip that has just
-    // appeared. Not a mouse's focus: a click's own mousedown focuses the tile, and a
-    // tile pressed near the edge and scrolled out from under the pointer would lose the
-    // click to the gap its mouseup lands in.
+    // A tile the keyboard reaches is seen whole, its focus ring too: clear of the
+    // scrolling part's top and bottom edges. Nothing is drawn over the tiles since the
+    // dock (Derek, 2026-11-03, sample 1b), which sits under the list; the browser's own
+    // focus scroll would leave the ring cut at an edge.
+    const TILE_AIR_PX = 6;              // the focus ring (2 px + 1 px offset) and a little
+    const _tileClear = (tile) => {
+        const sc = _scroller();
+        if (!sc || !tile) return;
+        const box = sc.getBoundingClientRect();
+        const under = tile.getBoundingClientRect().bottom + TILE_AIR_PX - box.bottom;
+        if (under > 0) sc.scrollTop += under;
+        const over = box.top + TILE_AIR_PX - tile.getBoundingClientRect().top;
+        if (over > 0) sc.scrollTop -= over;
+    };
+
+    // Tab into a tile, and the keyboard's tile drawn again after a redraw. Not a mouse's
+    // focus: a click's own mousedown focuses the tile, and a tile pressed near the edge
+    // and scrolled out from under the pointer would lose the click to the gap its
+    // mouseup lands in.
     const _tileFocused = (e) => {
         const tile = e.target;
         if (tile && tile.matches && tile.matches('.fcc-audit-tile:focus-visible')) _tileClear(tile);
     };
 
-    // The Last found strip stays stuck over the tiles only while it leaves them room
-    // (review of 7e3720f, P-5). On a phone its words, "undo that", the 🖨️, Needs a label
-    // and its QR wrap onto many rows, and the header's buttons take some of the window
-    // too: at 390 x 844 it stood over 62% of the scrolling body, and at Extra Large it
-    // was taller than the body, so no tile could be seen or pressed and its own QR was
-    // cut. Taller than STRIP_SHARE of the body, it goes back in the flow, after the tiles
-    // (.fcc-audit-strip-flow), as a window under 34rem tall already puts it (global.css).
-    // Measured after each render, as the body changes size (a resize, a notice above it)
-    // and on a Text size change; a sticky strip and a flowing one are the same height,
-    // so the measure never flips back by itself.
-    const STRIP_SHARE = 0.45;
-    const _fitStrip = () => {
-        const body = _handle && _handle.element.querySelector('#fcc-audit-panel-body');
-        const strip = body && body.querySelector('#fcc-audit-last-found');
-        if (!strip) return;
-        strip.classList.toggle('fcc-audit-strip-flow', strip.offsetHeight > STRIP_SHARE * body.clientHeight);
+    // The dock stays under the list, out of the scroll, while it leaves the tiles room:
+    // at least DOCK_MIN_BODY_REM of the scrolling part (a tile row and its heading), or
+    // the whole list when it is shorter than that. On a window too short for both (a
+    // phone at Large or Extra Large text, a phone held sideways, a laptop window pulled
+    // short) it goes in the flow after the tiles (.fcc-audit-scroll-flow): the list and
+    // the dock scroll as one, and every tile can still be brought into view and pressed.
+    // It replaces the Last found strip's sticky rule (review of 7e3720f, P-5), which the
+    // dock retired. Measured after each render, as the scrolling part changes size (a
+    // resize, a notice, the note or the tally above it) and on a Text size change. The
+    // dock is the same height in the flow and out of it, and it comes back only with
+    // DOCK_SLACK_PX to spare, so the measure never flips back by itself.
+    const DOCK_MIN_BODY_REM = 7;
+    const DOCK_SLACK_PX = 8;
+    const _fitDock = () => {
+        const root = _handle && _handle.element;
+        if (!root || typeof window.getComputedStyle !== 'function') return;
+        const wrap = root.querySelector('#fcc-audit-panel-scroll');
+        const body = root.querySelector('#fcc-audit-panel-body');
+        const dock = root.querySelector('#fcc-audit-panel-dock');
+        if (!wrap || !body || !dock || !(wrap.clientHeight > 0)) return;
+        const flow = wrap.classList.contains('fcc-audit-scroll-flow');
+        const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+        const docked = dock.offsetHeight + (parseFloat(getComputedStyle(dock).marginTop) || 0);
+        const room = wrap.clientHeight - docked;        // what the list keeps with the dock docked
+        const need = Math.min(DOCK_MIN_BODY_REM * rem, body.scrollHeight);
+        const goFlow = flow ? room < need + DOCK_SLACK_PX : room < need;
+        if (goFlow !== flow) wrap.classList.toggle('fcc-audit-scroll-flow', goFlow);
     };
-    document.addEventListener('fcc:text-size', () => _fitStrip());
+    document.addEventListener('fcc:text-size', () => _fitDock());
 
     const _keyArrow = (e) => {
         const tiles = Array.from(_handle.element.querySelectorAll('.fcc-audit-tile'));

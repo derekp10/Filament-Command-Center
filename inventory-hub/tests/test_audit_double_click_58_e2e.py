@@ -448,8 +448,10 @@ def board(request, browser, base_url, require_server):
 
 
 def _scrolled_into_view(page, sel):
-    """Done and Cancel Audit end the panel's body: below the fold on a long list, so as a
-    person would, the body is scrolled to its end."""
+    """What can be pressed of `sel`, the body scrolled to its end first when nothing of it
+    can (as a person would): an Extra's tile below the fold. Done, Cancel Audit and Needs a
+    label sit in the dock under the list since Derek's 2026-11-03 look (sample 1b), in view
+    with no scroll; they ended the body before."""
     if page.evaluate(POINT, sel) is None:
         page.evaluate("(b) => { const e = document.querySelector(b); e.scrollTop = e.scrollHeight; }", BODY)
         page.wait_for_timeout(60)
@@ -457,8 +459,11 @@ def _scrolled_into_view(page, sel):
 
 
 def _tile_under_the_strip(board, rows):
-    """The tile where the Last found strip's Needs a label will land once a spool is found
-    (finding 8), else the last tile on screen; and where to press it: on that spot."""
+    """The tile where Needs a label will land once a spool is found (finding 8: the sticky
+    strip came up over the tiles), else the last tile on screen; and where to press it: on
+    that spot. In the dock (sample 1b) it lands on no tile, but a first find moves the
+    pressed tile to Found, slides the next one into its place and can grow the dock, so
+    the last tile on screen is where the second press lands on something new."""
     page = board.page
     board.redraw(rows, 1, last=0)
     mark = page.evaluate(POINT, CONTROL_SEL["needs-a-label"])
