@@ -918,6 +918,92 @@ def test_a_place_gone_in_a_one_spool_place_holds_the_parked_spool_back(places):
     assert state.UNDO_STACK == []
 
 
+def _filed_for_good(env, place="PM-DB-1"):
+    """`place` (one spool): #10 parked, #20 filed there from CR-CT-1-R2, whose row is
+    then deleted, so #20 stays in `place` for good."""
+    add_spool(env, 10, place, container_slot="1" if place.startswith("PM") else "")
+    add_spool(env, 20, "CR-CT-1-R2")
+    start(env, place)
+    scan(env, "ID:20")
+    assert yes(env)["filed"] == [20]
+    env["rows"][:] = [r for r in env["rows"] if r["LocationID"] != "CR-CT-1-R2"]
+
+
+def test_a_parked_spool_that_moved_on_is_left_alone_not_failed_while_the_filed_one_stays(places):
+    """Review of 7e3720f, S-2: #10 was found since and filed on SHELF-1. The question says
+    it is left where it is; the Undo called it a failure ("#10 (PM-DB-1 holds one spool,
+    and #20 is there)"), with an ERROR line, against its own question."""
+    env = places
+    _filed_for_good(env)
+    spools(env)[10]["location"] = "SHELF-1"
+    asked = ask_undo(env)
+    assert "Left where it is now: #10 at SHELF-1." in asked["msg"]
+    env["logs"].clear()
+    done = yes_undo(env, asked)
+    assert done["success"] is True and "#10 (" not in done["msg"]
+    assert {"id": 10, "where": "SHELF-1"} in done["left_alone"]
+    assert not any(c == "ERROR" and "#10" in m for m, c, _ in env["logs"])
+    assert spools(env)[10]["location"] == "SHELF-1" and state.UNDO_STACK == []
+
+
+def test_a_parked_spool_deleted_since_is_dropped_not_failed_while_the_filed_one_stays(places):
+    """S-2: deleted since, #10 is dropped, as for any guarded record."""
+    env = places
+    _filed_for_good(env)
+    del spools(env)[10]
+    done = yes_undo(env)
+    assert done["success"] is True and done["dropped"] == [10] and "#10 (" not in done["msg"]
+    assert "#10 is no longer in Spoolman." in done["msg"]
+
+
+def test_a_parked_spool_that_moved_on_doesnt_wait_with_an_unreadable_filed_one(places, monkeypatch):
+    """S-2, the waiting variant: #20 couldn't be read at the Undo, so it waits in the
+    retry copy, and #10, filed on SHELF-1 since, is left alone instead of waiting
+    with it for a reason that isn't its own."""
+    env = places
+    _filed_and_parked(env)
+    spools(env)[10]["location"] = "SHELF-1"
+    asked = ask_undo(env)
+    real_undo = logic.perform_undo
+    real_read = spoolman_api.get_spool_answer
+
+    def blip_in_the_undo(expected_id=None):
+        monkeypatch.setattr(spoolman_api, "get_spool_answer",
+                            lambda sid: (None, False) if sid == 20 else real_read(sid))
+        return real_undo(expected_id=expected_id)
+
+    monkeypatch.setattr(logic, "perform_undo", blip_in_the_undo)
+    done = yes_undo(env, asked)
+    assert done["retry"] == [20] and {"id": 10, "where": "SHELF-1"} in done["left_alone"]
+    assert "#10 (" not in done["msg"]
+    (copy,) = state.UNDO_STACK
+    assert set(copy["filed"]) == {20} and copy["moves"] == {}
+
+
+@pytest.mark.parametrize("place", ["PM-DB-1", "SPOT-1"])
+def test_a_parked_spool_unreadable_while_the_filed_one_stays_for_good_is_held_back(places, monkeypatch, place):
+    """Pins what was already right, kept by S-2's fix: whatever #10 is now, Undo can never
+    put it back in a place #20 stays in for good, so it isn't retried (the retry copy,
+    which no longer carries #20, could put it in on top of #20: on SPOT-1, which has no
+    slot to check, nothing else would stop it)."""
+    env = places
+    _filed_for_good(env, place)
+    asked = ask_undo(env)
+    real_undo = logic.perform_undo
+    real_read = spoolman_api.get_spool_answer
+
+    def blip_in_the_undo(expected_id=None):
+        monkeypatch.setattr(spoolman_api, "get_spool_answer",
+                            lambda sid: (None, False) if sid == 10 else real_read(sid))
+        return real_undo(expected_id=expected_id)
+
+    monkeypatch.setattr(logic, "perform_undo", blip_in_the_undo)
+    done = yes_undo(env, asked)
+    assert done["success"] is False and done["retry"] == []
+    assert f"#10 ({place} holds one spool, and #20 is there)" in done["msg"]
+    assert spools(env)[10]["location"] == "UNKNOWN" and state.UNDO_STACK == []
+
+
 def test_an_unreadable_filed_spool_waits_in_the_retry_copy_and_so_does_the_parked(places, monkeypatch):
     """#20 couldn't be read, so it is still in PM-DB-1 and #10 can't go back yet:
     both wait, and the next Undo Last Move puts both back."""

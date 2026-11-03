@@ -5005,7 +5005,15 @@ def _undo_hold_parked(record, filed_out, rows, retry_later, failed):
     spools would claim it: they fail for good while one stays there for good, and
     wait in the retry copy while one only couldn't be read or written yet. Said once,
     in one ERROR line or one retry reason. Anywhere else (a filed spool has no slot,
-    so it claims none) every parked spool goes on to the park's own Undo."""
+    so it claims none) every parked spool goes on to the park's own Undo.
+
+    Only a parked spool still at Unknown is held back, sorted by _undo_guard_kind as
+    the question sorts it (review of 7e3720f, S-2: one that moved on, was archived or
+    was deleted was called a failure the question had said it would leave alone). The
+    rest go on to the park's own loop, which leaves them alone, drops them or retries
+    them, and says so. While a filed spool stays for good, one that can't be read is
+    held back too: whatever it is now, Undo can never put it back in a place taken for
+    good, and in the retry copy, which no longer carries that filed spool, it could be."""
     moves = record.get('moves') or {}
     if not moves or not _audit_holds_one(str(record.get('filed_at') or '').strip().upper(), rows):
         return moves
@@ -5013,17 +5021,22 @@ def _undo_hold_parked(record, filed_out, rows, retry_later, failed):
     waiting = [sid for sid in filed_out.get('retry') or {}]
     if not stuck and not waiting:
         return moves
+    hold = ('here', 'unreadable') if stuck else ('here',)
+    held = {sid: loc for sid, loc in moves.items() if _undo_guard_kind(record, sid, loc, rows)[0] in hold}
+    rest = {sid: loc for sid, loc in moves.items() if sid not in held}
+    if not held:
+        return rest
     place = str(record.get('filed_at') or '').strip().upper()
     why = _audit_one_spool_why(place, stuck or waiting)
     if stuck:
-        for sid in moves:
+        for sid in held:
             failed.append(f"#{sid} ({why})")
-        state.add_log_entry(_audit_esc(f"❌ Undo: not putting {_undo_names(list(moves))} back in {place} — {why}"),
+        state.add_log_entry(_audit_esc(f"❌ Undo: not putting {_undo_names(list(held))} back in {place} — {why}"),
                             "ERROR", "ff4444")
     else:
-        for sid, loc in moves.items():
+        for sid, loc in held.items():
             retry_later(sid, loc, why)
-    return {}
+    return rest
 
 
 def _undo_names(sids):
