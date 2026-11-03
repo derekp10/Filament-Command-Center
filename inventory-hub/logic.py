@@ -5861,6 +5861,23 @@ def _audit_with_where(session, sid):
     return f"{label} → {where}" if where else label
 
 
+def _audit_look(session, sid):
+    """What a spool's tile is drawn with, its colour and its grams, from the row the
+    session stored at its scan: what the panel's tiles draw, so Done's question and the
+    report show each spool as the panel did, and no Spoolman read is made for it
+    (Derek, 2026-11-03: Done's question shows colour tiles like the panel's). A row
+    with no stored data (a session built by hand) draws a plain swatch."""
+    row = (session.get('rows') or {}).get(str(sid)) or {}
+    return {"color": row.get('color') or '', "color_direction": row.get('color_direction') or 'longitudinal',
+            "remaining_weight": row.get('remaining_weight')}
+
+
+def _audit_with_look(session, rows, keys=None):
+    """Done's question's rows, each with its tile's look (_audit_look); `keys` keeps
+    only those of a row's own keys."""
+    return [dict({k: row[k] for k in keys} if keys else row, **_audit_look(session, row['id'])) for row in rows]
+
+
 def _audit_report(session, parked=(), stays=(), failed=(), filed=()):
     """The audit's report: ONE entry naming the place, written after anything else
     the end logs, so a long audit's own lines can't push it out of the 50-line log.
@@ -6642,7 +6659,10 @@ def _audit_finish(cmd):
     through park_audit_missing); with neither it reports and ends. A read that fails
     keeps the audit open: its scans are the whole point, and Done can be pressed
     again. The question's `file` rows are {id, display, where}, where FCC has each
-    now; `file_note` says a multi-slot box takes them with no slot ('' otherwise)."""
+    now; `file_note` says a multi-slot box takes them with no slot ('' otherwise).
+    Every row of `park`, `file` and `stays` also carries its tile's look, `color`,
+    `color_direction` and `remaining_weight`, from the session's stored rows
+    (_audit_look): the question draws its spools as the panel's tiles do."""
     session = state.AUDIT_SESSION
     if not _AUDIT_END_LOCK.acquire(False):
         return _audit_refuse(AUDIT_FINISHING_MSG)
@@ -6659,8 +6679,10 @@ def _audit_finish(cmd):
             if plan['park'] or plan['file']:
                 expected, missing, _extras, _trail = _audit_tally(session)
                 return {"status": "ask", "audit_id": session.get('audit_id'),
-                        "location": session.get('location_id'), "park": plan['park'], "stays": plan['stays'],
-                        "file": [{key: row[key] for key in ('id', 'display', 'where')} for row in plan['file']],
+                        "location": session.get('location_id'),
+                        "park": _audit_with_look(session, plan['park']),
+                        "stays": _audit_with_look(session, plan['stays']),
+                        "file": _audit_with_look(session, plan['file'], ('id', 'display', 'where')),
                         "file_note": plan['file_note'],
                         "found": len(expected) - len(missing), "expected": len(expected)}
             stays = plan['stays']

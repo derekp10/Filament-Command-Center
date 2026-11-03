@@ -34,21 +34,29 @@ LOOSE_BTN = "#fcc-audit-panel-loose"
 LOOSE = "#fcc-loose-list"
 
 
+def _look(color, grams=500.0):
+    """A row's tile look, as the route gives every row of the question (Derek,
+    2026-11-03, H S1: from the rows stored at each scan)."""
+    return {"color": color, "color_direction": "longitudinal", "remaining_weight": grams}
+
+
 def _question(park=3, stays=0, file=0):
     """/api/identify_scan's audit_done_question, as pinned by
     test_the_samples_shape_is_the_routes below. `file`: how many Extras Done files
     here (Derek's C3), from LR-MDB-2, so the multi-slot box's words come with them.
-    PIN UPDATED DELIBERATELY (review of 7e3720f, S-7): the words name the real gesture."""
+    PIN UPDATED DELIBERATELY (review of 7e3720f, S-7): the words name the real gesture.
+    And again (H S1): every row carries its tile's look."""
     note = {0: "", 1: "It goes in with no slot: scan it, then its slot's label, to set one."}.get(
         file, "They go in with no slot: scan each one, then its slot's label, to set it.")
     return {"type": "audit_done_question", "audit_id": "boot-1", "location": "LR-MDB-1", "found": 2,
             "expected": 2 + park + stays,
             "park": [{"id": 100 + n, "display": f"#{100 + n} Some Brand PLA (Red {n})",
-                      "where": f"LR-MDB-1 slot {n + 1}", "slot": str(n + 1)} for n in range(park)],
+                      "where": f"LR-MDB-1 slot {n + 1}", "slot": str(n + 1), **_look("C0392B")}
+                     for n in range(park)],
             "stays": [{"id": 300 + n, "display": f"#{300 + n} Some Brand PETG (Clear {n})", "where": "XL-4",
-                       "why": "moved to XL-4"} for n in range(stays)],
+                       "why": "moved to XL-4", **_look("E8F1F2", 120.0)} for n in range(stays)],
             "file": [{"id": 200 + n, "display": f"#{200 + n} Some Brand PLA (Blue {n})",
-                      "where": f"LR-MDB-2 slot {n + 1}"} for n in range(file)],
+                      "where": f"LR-MDB-2 slot {n + 1}", **_look("1F5FBF", 845.5)} for n in range(file)],
             "file_note": note}
 
 
@@ -62,16 +70,20 @@ HEAD_WHY = "loaded on XL-1: an audit never takes a spool off a printer"
 LONG_QUESTION = {
     "type": "audit_done_question", "audit_id": "boot-1", "location": "LR-MDB-1", "found": 2, "expected": 4,
     "park": [{"id": 101, "display": "#101 Another Maker PETG (Transparent Orange Glow)", "where": "LR-MDB-1 slot 2",
-              "slot": "2"},
-             {"id": 102, "display": "#102 Some Brand PLA (Galaxy Black)", "where": "LR-MDB-1 slot 3", "slot": "3"}],
-    "file": [{"id": 201, "display": "#201 Some Brand PLA (Glow Teal)", "where": "LR-MDB-2 slot 3"},
-             {"id": 202, "display": "#202 Another Maker PETG (Transparent Orange)", "where": "Unassigned"}],
-    "stays": [{"id": 301, "display": "#301 Some Brand PETG (Clear)", "where": "XL-1", "why": HEAD_WHY},
+              "slot": "2", **_look("FF8C1A")},
+             {"id": 102, "display": "#102 Some Brand PLA (Galaxy Black)", "where": "LR-MDB-1 slot 3", "slot": "3",
+              **_look("1A1A1A")}],
+    "file": [{"id": 201, "display": "#201 Some Brand PLA (Glow Teal)", "where": "LR-MDB-2 slot 3", **_look("2EC4B6")},
+             {"id": 202, "display": "#202 Another Maker PETG (Transparent Orange)", "where": "Unassigned",
+              **_look("FF9F43")}],
+    "stays": [{"id": 301, "display": "#301 Some Brand PETG (Clear)", "where": "XL-1", "why": HEAD_WHY,
+               **_look("E8F1F2")},
               {"id": 302, "display": "#302 Some Brand PLA (Red)", "where": "LR-MDB-2 slot 2",
-               "why": "FCC has it in LR-MDB-2 slot 2, inside LR"},
+               "why": "FCC has it in LR-MDB-2 slot 2, inside LR", **_look("C0392B")},
               {"id": 303, "display": "#303 Some Brand ASA (Grey)", "where": "PM-DB-1",
-               "why": "PM-DB-1 holds one spool, and #10 is there"},
-              {"id": 304, "display": "#304 Some Brand PLA (White)", "where": "CR-CT-1", "why": "in the scan buffer"}],
+               "why": "PM-DB-1 holds one spool, and #10 is there", **_look("8E8E8E")},
+              {"id": 304, "display": "#304 Some Brand PLA (White)", "where": "CR-CT-1", "why": "in the scan buffer",
+               **_look("F5F5F5")}],
     "file_note": "They go in with no slot: scan each one, then its slot's label, to set it.",
 }
 # Every name or reason the question cuts: what it shows against what it needs.
@@ -99,7 +111,9 @@ def test_the_samples_file_rows_are_the_routes(env):
     scan(env, "ID:1")
     scan(env, "ID:200")
     real = scan(env, "CMD:DONE")
-    assert real["file"] == [{"id": 200, "display": "#200 Some Brand PLA (Red)", "where": "LR-MDB-2 slot 1"}]
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, H S1): the row carries its tile's look.
+    assert real["file"] == [{"id": 200, "display": "#200 Some Brand PLA (Red)", "where": "LR-MDB-2 slot 1",
+                             "color": "72071C", "color_direction": "longitudinal", "remaining_weight": 500.0}]
     for sample in (_question(file=1), SAMPLE_QUESTION):
         assert set(sample["file"][0]) == set(real["file"][0])
         assert sample["file_note"] == real["file_note"]

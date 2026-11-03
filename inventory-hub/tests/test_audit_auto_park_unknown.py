@@ -87,11 +87,14 @@ def test_done_writes_nothing_and_asks(env):
     question = scan(env, "CMD:DONE")
     # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, C3): the question carries the
     # Extras Done files here (`file`, none here) and the words for a multi-slot box.
+    # And again (Derek, 2026-11-03, H S1): each row carries its tile's look, from the
+    # row the session stored at the scan.
+    tile = {"color": "72071C", "color_direction": "longitudinal", "remaining_weight": 500.0}
     assert question == {
         "type": "audit_done_question", "audit_id": audit_id, "location": "LR-MDB-1",
         "found": 1, "expected": 3, "stays": [], "file": [], "file_note": "",
-        "park": [{"id": 2, "display": "#2 Some Brand PLA (Red)", "where": "LR-MDB-1 slot 2", "slot": "2"},
-                 {"id": 3, "display": "#3 Some Brand PLA (Red)", "where": "LR-MDB-1 slot 3", "slot": "3"}],
+        "park": [{"id": 2, "display": "#2 Some Brand PLA (Red)", "where": "LR-MDB-1 slot 2", "slot": "2", **tile},
+                 {"id": 3, "display": "#3 Some Brand PLA (Red)", "where": "LR-MDB-1 slot 3", "slot": "3", **tile}],
     }
     assert no_writes(env)
     assert session()["active"] is True and session()["scanned_items"] == [1]    # its scans are kept
@@ -250,8 +253,11 @@ def test_a_plain_spool_is_parked(env):
 def test_a_deleted_spool_stays_and_says_so(env):
     _plain_and(env)
     del spools(env)[2]
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, H S1): the row carries its tile's look,
+    # from the row the session stored at the location scan, so a deleted spool keeps it.
     assert _one_stay(env) == {"id": 2, "display": "#2 Some Brand PLA (Red)", "where": "",
-                              "why": "no longer in Spoolman"}
+                              "why": "no longer in Spoolman",
+                              "color": "72071C", "color_direction": "longitudinal", "remaining_weight": 500.0}
 
 
 def test_an_archived_spool_stays(env):

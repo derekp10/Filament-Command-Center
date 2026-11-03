@@ -369,17 +369,24 @@ SAMPLE_AUDIT["last_found"] = SAMPLE_AUDIT["expected"][0]
 SAMPLE_AUDIT_EMPTY = dict(SAMPLE_AUDIT, location_id=None, note="", last_found=None, expected=[], rogue=[], trail=[],
                           stats={"total_expected": 0, "found": 0, "missing": 0, "rogue": 0, "trail": 0})
 # /api/identify_scan's audit_done_question (pinned in test_audit_question_dialog_58_js).
+# Every row carries its tile's look (PIN UPDATED DELIBERATELY, Derek, 2026-11-03, H S1:
+# the question draws its spools as the panel's tiles do, from the rows stored at each scan).
+_QUESTION_LOOK = {"color_direction": "longitudinal", "remaining_weight": 605.0}
 SAMPLE_QUESTION = {
     "type": "audit_done_question", "audit_id": "boot-1", "location": "LR-MDB-1", "found": 2, "expected": 18,
-    "park": [{"id": 134, "display": "#134 Prusament PLA (Pearl White)", "where": "LR-MDB-1 slot 2", "slot": "2"},
-             {"id": 99, "display": "#99 Tecbears PETG (Clear)", "where": "LR-MDB-1", "slot": ""},
+    "park": [{"id": 134, "display": "#134 Prusament PLA (Pearl White)", "where": "LR-MDB-1 slot 2", "slot": "2",
+              "color": "F2F0E6", **_QUESTION_LOOK},
+             {"id": 99, "display": "#99 Tecbears PETG (Clear)", "where": "LR-MDB-1", "slot": "",
+              "color": "E8F1F2", **_QUESTION_LOOK},
              {"id": 57, "display": "#57 Prusament PLA (Purple (Galaxy Purple))", "where": "LR-MDB-1 slot 4",
-              "slot": "4"}],
-    "stays": [{"id": 242 + n, "display": f"#{242 + n} Prusament PLA (Galaxy Black)", "where": where, "why": why}
+              "slot": "4", "color": "4B2A6B", **_QUESTION_LOOK}],
+    "stays": [{"id": 242 + n, "display": f"#{242 + n} Prusament PLA (Galaxy Black)", "where": where, "why": why,
+               "color": "1A1A1A", **_QUESTION_LOOK}
               for n, (where, why) in enumerate([("XL-4", "moved to XL-4"), ("", "no longer in Spoolman")] * 6)],
     # Derek's C3: the Extras Done files here, and the words for a multi-slot box (PIN
     # UPDATED DELIBERATELY, review of 7e3720f, S-7: they name the real gesture).
-    "file": [{"id": 500, "display": "#500 Tecbears PETG (Clear)", "where": "LR-MDB-2 slot 3"}],
+    "file": [{"id": 500, "display": "#500 Tecbears PETG (Clear)", "where": "LR-MDB-2 slot 3",
+              "color": "E8F1F2", **_QUESTION_LOOK}],
     "file_note": "It goes in with no slot: scan it, then its slot's label, to set one."}
 # A lost spool as /api/identify_scan and /api/spool_details answer it, from the real
 # park (test_audit_lost_badges_58_js pins both).

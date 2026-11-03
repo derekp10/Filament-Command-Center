@@ -477,9 +477,12 @@ def test_done_asks_with_only_extras_and_writes_nothing(env):
     _extra_here(env, at="LR-MDB-2", container_slot="3")
     audit_id = session()["audit_id"]
     asked = scan(env, "CMD:DONE")
+    # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, H S1): each row carries its tile's
+    # look, from the row the session stored at the scan.
     assert asked == {"type": "audit_done_question", "audit_id": audit_id, "location": "LR-MDB-1",
                      "found": 1, "expected": 1, "park": [], "stays": [],
-                     "file": [{"id": 20, "display": f"#20 {RED}", "where": "LR-MDB-2 slot 3"}],
+                     "file": [{"id": 20, "display": f"#20 {RED}", "where": "LR-MDB-2 slot 3",
+                               "color": "72071C", "color_direction": "longitudinal", "remaining_weight": 500.0}],
                      "file_note": ONE_SLOT}
     assert patched(env) == [] and session()["active"] is True and state.UNDO_STACK == []
 
