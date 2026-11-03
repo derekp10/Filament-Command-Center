@@ -11,13 +11,15 @@ with no results (the without-strict pins say they were right already).
 from __future__ import annotations
 
 from unittest.mock import patch
+from urllib.parse import urlsplit
 
 import pytest
+import requests
 
 import app as app_module
 import config_loader
 import spoolman_api
-from spoolman_extra_fake import SpoolmanHTTPFake
+from spoolman_extra_fake import SpoolmanHTTPFake, _Resp
 
 
 @pytest.fixture
@@ -55,6 +57,73 @@ def test_a_strict_search_spoolman_didnt_answer_says_so(fake):
     fake.down = True
     got = _search("glow").get_json()
     assert got["success"] is False and got["msg"].startswith("Spoolman didn't answer (")
+
+
+class _NotJson(_Resp):
+    """A 200 whose body isn't JSON (a proxy's page), as requests reads one."""
+
+    def __init__(self, error):
+        super().__init__(200, None)
+        self._error = error
+
+    def json(self):
+        raise self._error
+
+
+def _answering(fake, monkeypatch, path, resp):
+    """Spoolman answering `resp` on one list path, the fake on every other."""
+    def get(url, timeout=None, **kw):
+        if urlsplit(str(url)).path.rstrip("/") == path:
+            fake.gets.append(path)
+            return resp(url, timeout) if callable(resp) else resp
+        return fake.get(url, timeout=timeout, **kw)
+    monkeypatch.setattr(spoolman_api.requests, "get", get)
+
+
+def _broken_record(fake):
+    """The list Spoolman sends, plus a spool FCC can't read (its filament null)."""
+    def answer(url, timeout):
+        rows = fake.get(url, timeout=timeout).json()
+        rows.append({"id": 58, "location": "", "extra": {}, "filament": None, "remaining_weight": 1.0})
+        return _Resp(200, rows)
+    return answer
+
+
+@pytest.mark.parametrize("how", ["requests-json-error", "value-error", "a-dict", "a-broken-record"])
+def test_a_strict_search_spoolman_answered_with_what_fcc_cant_read_says_so(fake, monkeypatch, how):
+    """Spoolman answered, so the words never say it didn't, and never show a Python
+    error. Review of 7e3720f, S-4: RED there, "Spoolman didn't answer ('NoneType'
+    object has no attribute 'get')." and the like."""
+    resp = {"requests-json-error": _NotJson(requests.exceptions.JSONDecodeError("Expecting value", "<html>", 0)),
+            "value-error": _NotJson(ValueError("Expecting value: line 1 column 1 (char 0)")),
+            "a-dict": _Resp(200, {"detail": "not a list"}),
+            "a-broken-record": _broken_record(fake)}[how]
+    _answering(fake, monkeypatch, "/api/v1/spool", resp)
+    assert _search("glow").get_json() == {"success": False, "msg": "Spoolman's answer couldn't be read."}
+
+
+def _filaments(query, strict=True):
+    client = app_module.app.test_client()
+    return client.get("/api/search", query_string=dict({"q": query, "type": "filament"},
+                                                         **({"strict": "1"} if strict else {})))
+
+
+@pytest.mark.parametrize("how, msg", [("503", "Spoolman answered HTTP 503."), ("down", "Spoolman didn't answer (")])
+def test_a_strict_filament_search_whose_spool_count_read_fails_says_it_couldnt_search(fake, monkeypatch, how, msg):
+    """The docstring's promise for a filament search: its spool counts aren't read as 0.
+    No page sends this today. Review of 7e3720f, S-4: RED there (success, every count 0)."""
+    fake.add("filament", 1057, {}, name="Glow Red", material="PLA", color_hex="72071C",
+             vendor={"id": 1, "name": "Some Brand"})
+
+    def failing(url, timeout):
+        if how == "down":
+            raise TimeoutError("Spoolman isn't answering (test)")
+        return _Resp(503, {"message": "unavailable (test)"})
+    _answering(fake, monkeypatch, "/api/v1/spool", failing)
+    got = _filaments("glow").get_json()
+    assert got["success"] is False and got["msg"].startswith(msg), got
+    plain = _filaments("glow", strict=False).get_json()            # the search panel's, as it was
+    assert plain["success"] is True and [(r["id"], r["spools_count"]) for r in plain["results"]] == [(1057, 0)]
 
 
 @pytest.mark.parametrize("how", ["list_reads_fail", "down"])

@@ -2529,6 +2529,24 @@ class SearchUnreadable(Exception):
     the search itself went wrong. Its text says which, for a person."""
 
 
+SEARCH_ANSWER_UNREAD = "Spoolman's answer couldn't be read."
+
+
+def _search_failure_words(e):
+    """What a strict search that raised says (review of 7e3720f, S-4): Spoolman that
+    didn't answer (no connection, a timeout), or an answer FCC couldn't read (a body
+    that isn't JSON, a list of the wrong shape, a record the search doesn't know),
+    never a Python error behind "didn't answer" when Spoolman did. requests'
+    JSONDecodeError is a RequestException, and so an OSError, as well as a
+    ValueError: it is tested first. The exception itself is logged by the caller."""
+    json_error = getattr(requests.exceptions, 'JSONDecodeError', None)
+    if json_error is not None and isinstance(e, json_error):
+        return SEARCH_ANSWER_UNREAD
+    if isinstance(e, (requests.exceptions.RequestException, OSError)):
+        return f"Spoolman didn't answer ({e})."
+    return SEARCH_ANSWER_UNREAD
+
+
 def search_inventory(query="", material="", vendor="", color_hex="", only_in_stock=False, empty=False, target_type="spool", min_weight="", max_weight="", deployed_state="", sort="", strict=False):
     """
     Searches Spoolman inventory objects (spools or filaments) based on fuzzy attributes and color closeness.
@@ -2541,7 +2559,9 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
     `strict` (Group 58, the audit's 🔎 Find a spool): a search that couldn't be
     made raises SearchUnreadable instead of answering [], so a Spoolman that
     didn't answer reads as "Couldn't search", never as "No matches" (Group 52's
-    rule). Left out, the search panel's [] stands as it was.
+    rule); a filament search's spool-count read too. Its words say which failure
+    it was (_search_failure_words). Left out, the search panel's [] stands as it
+    was.
     """
     sm_url, _ = config_loader.get_api_urls()
     results = []
@@ -2572,7 +2592,16 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
                 s_resp = requests.get(f"{sm_url}/api/v1/spool{archived_param}", timeout=10)
                 if s_resp.ok:
                     spools_for_count = parse_inbound_data(s_resp.json())
-            except: pass
+                elif strict:
+                    raise SearchUnreadable(f"Spoolman answered HTTP {s_resp.status_code}.")
+            except SearchUnreadable:
+                raise
+            except:
+                # The search panel counts 0 spools when this read fails; a strict search
+                # (Group 58) says it couldn't search instead, as its docstring promises
+                # (review of 7e3720f, S-4).
+                if strict:
+                    raise
         else:
             resp = requests.get(f"{sm_url}/api/v1/spool{archived_param}", timeout=10)
             
@@ -2787,5 +2816,5 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
     except Exception as e:
         state.logger.error(f"Search Spools API Error: {e}")
         if strict:
-            raise SearchUnreadable(f"Spoolman didn't answer ({e}).")
+            raise SearchUnreadable(_search_failure_words(e))
         return []
