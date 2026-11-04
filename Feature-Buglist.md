@@ -1,4 +1,5 @@
 # **New and Unsorted Features/Bugs**
+* **🔍 The legacy shared-label picker during an audit: look at it again some day (Derek, 2026-11-04).** Group 58 gave it the audit's tags (on this audit's list, not scanned yet / found already / found here as an Extra / loaded on a printer from here / not on the list; picture `review-samples/2026-11-01-audit/2026-11-03-built-7-old-label-picker.png`). Derek: "Something feels like it needs some work there, but I can't quite put my finger on it": it is almost impossible to tell spools apart in a list like that while some legacy spools still have no label of their own. He expects it to be rare and is fine with it as is for now. **Standalone.**
 
 * **📉 FCC's G-code walk leaves out a tool's last retract, which the slicer's footer counts (found 2026-11-02 by the INDX
   hotfix's review).** _(Standalone; pre-existing, every printer, tiny.)_ In relative E, `_walk_extrusion` nets every
@@ -322,6 +323,7 @@
   links in Spoolman 0.27's own tag table; an unknown Prusament spool opens the Add wizard filled from its tag (as the QR
   scan does); FCC's values stay and the tag fills blanks; Bambu next; OpenPrintTag for untagged spools too (he has ~40
   blank tags). Research: `review-samples/2026-10-21-phone-tags/`. Next: rewrite the step 3 plan doc's order.
+  _2026-11-04 (Derek, from Group 58's phone pictures, `review-samples/2026-11-01-audit/2026-11-03-built-10-*`):_ the gating dialogs' QR codes are too big on a phone, probably not needed there at all, and don't all fit; the floating 📡 log pill and the 🔎 search badge draw over a dialog's buttons (the pill stays visible on purpose: on a phone the Activity Log is barely readable in the current layout; moving the badges into the top bar is an option). "This image just hammers home how much redesign might be needed": start with the key features a phone needs and build out from there.
   **Standalone.**
 * **⚖️ SpoolmanScale that reads every tag and talks to FCC (Derek, 2026-10-21).** _(→ **Group 60.5**)_ His NFC scale project
   (github.com/Niko11111/SpoolmanScale; every part bought, case not printed): "set a spool on a scale, have it read out,
