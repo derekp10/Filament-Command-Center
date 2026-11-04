@@ -3013,33 +3013,159 @@ body:has(.cmd-deck) #fcc-audit-pill {
 #fcc-audit-pill:active { cursor: grabbing; }
 #fcc-audit-pill.fcc-audit-pill-dragging { animation: none !important; cursor: grabbing; }
 
-/* The audit panel's tiles (Group 58.2). An expected spool's tile is a real button:
-   a press finds a spool with no label to scan. Its colours are each kind's own,
-   inline. */
-.fcc-audit-tile-box {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    width: 100%;
+/* The audit panel's tiles (Group 58.2; laid out again on Derek's look of 2026-11-04: "move
+   some of the stuff on the sides to the top and bottom, like the label buttons, and the
+   scanned notifications. That would give us a little more room for the full name. Id also
+   say let it wrap too. but we'd have to try and keep the box size consistant among all of
+   them though. otherwise the grid will just look odd."). Each tile is a cell in its kind's
+   colours (--fcc-tile-bg, --fcc-tile-border, inline): on top its swatch, its name across the
+   tile's width, wrapping to two lines at most (the whole name in its title), its grams and
+   where FCC has it; under them a row saying what the audit knows of the spool, a found
+   tile's 🏷️ at that row's end. That row is no part of a found tile's press button: a tap a
+   little off the 🏷️ presses nothing (a press took the find back, and its label read). A tile
+   not yet found has no 🏷️: its whole tile is its press button, its QR at its side. Every tile
+   in a group's grid is one height (grid-auto-rows: 1fr), and the groups match: the name
+   keeps two lines and the row under it the 🏷️'s height, so a found tile and one not yet found
+   are the same height; an Extra and a spool loaded from here have a line more, where FCC
+   has them. */
+.fcc-audit-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(16.25rem, 1fr));
+    grid-auto-rows: 1fr;
+    gap: 6px;
+}
+.fcc-audit-tile-cell {
+    --fcc-audit-tag: 2rem;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: 1fr auto;
     min-width: 0;
-    padding: 8px;
+    box-sizing: border-box;
+    /* Two lines of name, the grams' line and the row under them, whatever the name: a short
+       name's tile is as tall as a long one's, its grams right under its name and its swatch
+       beside them. Its borders, the press area's top padding, the row's padding and the 🏷️
+       (or the row as tall), from the rules below. */
+    min-height: calc(18px + 0.375rem + 2.5 * var(--fcc-fs-row) + 1.5 * var(--fcc-fs-small) + var(--fcc-audit-tag));
+    border: 1px solid var(--fcc-tile-border, #555);
     border-radius: 6px;
+    background: var(--fcc-tile-bg, #1a1a1a);
+    color: #fff;
+    cursor: default;
+}
+/* A finger: the 🏷️ is a 44 px target at least (WCAG's size), and the row under the name as
+   tall, on every tile, so the tiles stay one height. */
+@media (pointer: coarse) {
+    .fcc-audit-tile-cell { --fcc-audit-tag: max(44px, 2.75rem); }
+}
+/* The press area: the swatch, the name, the grams, where FCC has it. A found tile's is the
+   cell's top row; a tile not yet found's is the whole cell, its row under the name and its
+   QR inside it. */
+.fcc-audit-tile-box {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas: "swatch text";
+    align-items: center;
+    align-content: start;
+    column-gap: 10px;
+    min-width: 0;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 8px 8px 0;
+    border: 0;
+    border-radius: 5px 5px 0 0;
+    background: var(--fcc-tile-bg, #1a1a1a);
     color: #fff;
     font: inherit;
+    line-height: 1.5;
     text-align: left;
+}
+.fcc-audit-tile-cell[data-audit-kind="missing"] > .fcc-audit-tile-box {
+    grid-row: 1 / -1;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: "swatch text qr" "status status qr";
+    align-content: space-between;
+    padding: 8px;
+    border-radius: 5px;
 }
 button.fcc-audit-tile { cursor: pointer; }
 button.fcc-audit-tile:hover { filter: brightness(1.3); }
-button.fcc-audit-tile:focus-visible,
-button.fcc-audit-tile.kb-active {
+/* The ring goes round the whole tile, its row under the name too. */
+button.fcc-audit-tile:focus-visible { outline: none; }
+.fcc-audit-tile-cell:has(> .fcc-audit-tile:focus-visible),
+.fcc-audit-tile-cell:has(> .fcc-audit-tile.kb-active) {
     outline: 2px solid #0ff;
     outline-offset: 1px;
 }
-.fcc-audit-tile-word {
+.fcc-audit-tile-swatch {
+    grid-area: swatch;
+    display: flex;
+    align-items: center;
+    line-height: 0;
+}
+.fcc-audit-tile-text {
+    grid-area: text;
     display: block;
+    min-width: 0;
+}
+.fcc-audit-tile-name {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    line-height: 1.25;
+    color: #fff;
+    font-weight: 600;
+    font-size: var(--fcc-fs-row);
+}
+.fcc-audit-tile-detail {
+    display: block;
+    font-size: var(--fcc-fs-small);
+    line-height: 1.5;
+    color: rgba(255, 255, 255, 0.75);
+}
+.fcc-audit-tile-where {
+    display: block;
+    font-size: var(--fcc-fs-small);
+    line-height: 1.5;
+    color: #fff;
+    overflow-wrap: anywhere;
+}
+/* The row under the name: the tile's state, and what a label needs ("found, no label read",
+   "needs a label"). As tall as the 🏷️ on every tile (content-box). */
+.fcc-audit-tile-status {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    align-content: center;
+    gap: 0.125rem 0.75rem;
+    min-width: 0;
+    box-sizing: content-box;
+    min-height: var(--fcc-audit-tag);
+    line-height: 1.25;
+}
+.fcc-audit-tile-cell > .fcc-audit-tile-status {
+    grid-column: 1;
+    grid-row: 2;
+    padding: 0.375rem 0.5rem 8px 8px;
+}
+.fcc-audit-tile-cell[data-audit-kind="trail"] > .fcc-audit-tile-status { grid-column: 1 / -1; }
+.fcc-audit-tile-box > .fcc-audit-tile-status {
+    grid-area: status;
+    padding-top: 0.375rem;
+}
+.fcc-audit-tile-badge {
+    font-size: var(--fcc-fs-label);
+    white-space: nowrap;
+}
+.fcc-audit-tile-word {
+    min-width: 0;
     font-size: var(--fcc-fs-small);
     color: #ffe08a;
     font-weight: 600;
+    overflow-wrap: anywhere;
 }
 /* An emoji on a light fill (a yellow or cyan button), on a small dark round backing
    (Derek, 2026-11-03, sample 4(ii)): measured, 87% of the 🏷️'s pixels on the yellow Needs
@@ -3062,28 +3188,20 @@ button.fcc-audit-tile.kb-active {
     line-height: 1;
     vertical-align: middle;
 }
-/* A found tile's own 🏷️ (Derek, 2026-11-03, (a)): its own button over the tile's right
-   end, beside the tile's press button in one grid cell, never inside it; the tile keeps
-   room for it. Marked here: the Needs a label yellow, the tag on its dark backing. A flag
-   up before the audit: a dashed yellow edge. */
-.fcc-audit-tile-cell {
-    position: relative;
-    display: flex;
-    min-width: 0;
-}
-.fcc-audit-tile-cell > .fcc-audit-tile { flex: 1 1 auto; }
-button.fcc-audit-tile.fcc-audit-tile-tagged { padding-right: 2.75rem; }
+/* A found tile's own 🏷️ (Derek, 2026-11-03, (a)): its own button, never inside the tile's,
+   at the end of the row under the name (2026-11-04). Marked here: the Needs a label yellow,
+   the tag on its dark backing. A flag up before the audit: a dashed yellow edge. */
 .fcc-audit-tile-tag {
-    position: absolute;
-    top: 50%;
-    right: 0.5rem;
-    transform: translateY(-50%);
+    grid-column: 2;
+    grid-row: 2;
+    align-self: center;
+    margin: 0.375rem 8px 8px 0.5rem;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     box-sizing: border-box;
-    width: 2rem;
-    height: 2rem;
+    width: var(--fcc-audit-tag);
+    height: var(--fcc-audit-tag);
     padding: 0;
     border: 1px solid rgba(255, 255, 255, 0.55);
     border-radius: 6px;
@@ -3111,16 +3229,16 @@ button.fcc-audit-tile.fcc-audit-tile-tagged { padding-right: 2.75rem; }
 }
 /* A tile's QR (Derek, 2026-11-03, A1): scanning it finds the spool as a press does.
    72 px, the size the confirm dialogs' QRs of the same length read at, on a white
-   quiet zone; in px, as qrcode.js draws it. It takes the badge's place at the tile's
-   end and reaches into the tile's padding, so the tile grows by as little as it can.
-   No caption of its own (aria-hidden): the tile's words and title say it. */
+   quiet zone; in px, as qrcode.js draws it. At the tile's side, the whole tile's height
+   (2026-11-04: the tile's words went under its name, so the name has the rest of the
+   width). No caption of its own (aria-hidden): the tile's words and title say it. */
 .fcc-audit-tile-qr {
-    flex: 0 0 auto;
+    grid-area: qr;
+    align-self: center;
     display: block;
     box-sizing: border-box;
     width: 78px;
     height: 78px;
-    margin: -4px 0;
     padding: 3px;
     background: #fff;
     border-radius: 4px;

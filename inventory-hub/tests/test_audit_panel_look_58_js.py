@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import app as app_module
 from test_audit_find_and_tiles_58_js import audit_id, begin, live, posts, scanned  # noqa: F401  (live: the fixture)
-from test_audit_no_label_58_js import BODY, LABEL, PAST_A_DOUBLE_PRESS, tile, tile_says, toasts, wire
+from test_audit_no_label_58_js import BODY, LABEL, PAST_A_DOUBLE_PRESS, cell, tile, tile_says, toasts, wire
 from test_audit_panel_58_js import NOTICE, audit  # noqa: F401  (the fixture `live` stands on)
 from test_audit_session_58 import add_spool, env, scan, session  # noqa: F401  (env: the fixture)
 from test_scanner_safe_dialogs_61_js import page61  # noqa: F401  (the fixture `audit` stands on)
@@ -438,7 +438,7 @@ def test_a_second_tap_apart_takes_the_mark_back_and_a_double_tap_is_one(live, en
     tag_is(live, 57, "none")
     assert posts(live, UNTAG_URL) == [{"audit_id": audit_id(), "id": 57}]
     assert LABEL not in env["fake"].extra("spool", 57)
-    assert "needs a label" not in live.text_content(tile(57))
+    assert "needs a label" not in live.text_content(cell(57))
 
 
 def test_a_spool_flagged_before_the_audit_shows_so_and_a_tap_says_so(live, env):

@@ -22,7 +22,7 @@ from playwright.sync_api import Page, expect
 
 import conftest
 from test_audit_find_and_tiles_58_js import SEARCH_ROWS, search_row
-from test_audit_no_label_58_e2e import SCANNER, Marks, tile
+from test_audit_no_label_58_e2e import SCANNER, Marks, cell, tile
 from test_audit_page_58_e2e import PANEL, _dashboard, _start
 from test_audit_page_58_js import SESSION
 from test_audit_question_dialog_58_js import _question
@@ -95,7 +95,7 @@ def test_a_real_tile_qr_scanned_as_a_scanners_keys_finds_the_spool(page: Page, b
     assert round(box["width"]) == 78 and round(box["height"]) == 78          # 72 px and its quiet zone
     assert page.locator(f"{tile(57)} .fcc-audit-tile-qr").count() == 0        # found: none
     page.evaluate(SCANNER, "CMD:FOUND:boot-1:99")
-    expect(page.locator(tile(NOT_SCANNED))).to_contain_text("found, no label read")
+    expect(page.locator(cell(NOT_SCANNED))).to_contain_text("found, no label read")
     expect(page.locator(qr)).to_have_count(0)
     assert ("CMD:FOUND:boot-1:99", "barcode") in server.sources
     assert server.writes == []
@@ -113,7 +113,7 @@ def test_find_by_keyboard(page: Page, base_url: str):
     page.keyboard.press("ArrowDown")
     page.keyboard.press("Enter")
     expect(page.locator(FIND)).to_have_count(0)
-    expect(page.locator(tile(NOT_SCANNED))).to_contain_text("found, no label read")
+    expect(page.locator(cell(NOT_SCANNED))).to_contain_text("found, no label read")
     assert ("ID:99", "audit_find") in server.sources      # PIN UPDATED DELIBERATELY (Q5: Find's own source)
     expect(page.locator(FIND_BTN)).to_be_focused()
 
@@ -128,7 +128,7 @@ def test_find_by_mouse(page: Page, base_url: str):
     expect(page.locator(f"{FIND} .fcc-find-row[data-find-id='270']")).to_contain_text("Unassigned")
     page.click(f"{FIND} .fcc-find-row[data-find-id='99']")
     expect(page.locator(FIND)).to_have_count(0)
-    expect(page.locator(tile(NOT_SCANNED))).to_contain_text("found, no label read")
+    expect(page.locator(cell(NOT_SCANNED))).to_contain_text("found, no label read")
     assert ("ID:99", "audit_find") in server.sources      # PIN UPDATED DELIBERATELY (Q5: Find's own source)
 
 

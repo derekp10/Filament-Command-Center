@@ -39,6 +39,13 @@ def tile(sid):
     return f"[data-audit-tile='{sid}']"
 
 
+def cell(sid):
+    """The whole tile of spool `sid`, the row under its name too: a found tile's words ("found,
+    no label read", "needs a label") sit there, outside its press button, since Derek's look
+    of 2026-11-04 (a tap a little off its 🏷️ presses nothing)."""
+    return f".fcc-audit-tile-cell:has(> [data-audit-tile='{sid}'])"
+
+
 def _found(row, **more):
     return dict(row, found=True, **more)
 
@@ -122,7 +129,7 @@ def test_the_button_marks_and_undo_that_takes_it_back(page: Page, base_url: str)
     page.click(tile(NOT_SCANNED))
     page.click(BUTTON)
     expect(page.locator(UNDO)).to_be_visible()
-    expect(page.locator(tile(NOT_SCANNED))).to_contain_text("needs a label")
+    expect(page.locator(cell(NOT_SCANNED))).to_contain_text("needs a label")
     assert server.scans == ["CMD:AUDIT", MARK]
     page.click(UNDO)
     expect(page.locator(UNDO)).to_have_count(0)
@@ -155,14 +162,15 @@ def test_n_inside_a_scan_marks_nothing_and_the_scan_arrives_whole(page: Page, ba
 def test_a_press_finds_a_second_press_unfinds_and_a_scan_never_does(page: Page, base_url: str):
     server = _running(page, base_url)
     target = page.locator(tile(NOT_SCANNED))
+    words = page.locator(cell(NOT_SCANNED))     # the row under the name too (T1)
     target.click()
-    expect(target).to_contain_text("found, no label read")
+    expect(words).to_contain_text("found, no label read")
     _scan_keys(page, f"ID:{NOT_SCANNED}")       # answered, and nothing turns
     page.wait_for_function("() => !state.processing")
-    expect(target).to_contain_text("found, no label read")
+    expect(words).to_contain_text("found, no label read")
     page.wait_for_timeout(750)                  # past a double press
     target.click()
-    expect(target).to_contain_text("not scanned")
+    expect(words).to_contain_text("not scanned")
     expect(page.locator(STRIP)).to_have_count(0)
     assert [(p["id"], p["found"]) for p in server.pressed] == [(NOT_SCANNED, True), (NOT_SCANNED, False)]
     assert server.scans == ["CMD:AUDIT", f"ID:{NOT_SCANNED}"]
@@ -172,7 +180,7 @@ def test_enter_presses_a_tile_through_the_real_accumulator(page: Page, base_url:
     server = _running(page, base_url)
     page.focus(tile(NOT_SCANNED))
     page.keyboard.press("Enter")
-    expect(page.locator(tile(NOT_SCANNED))).to_contain_text("found, no label read")
+    expect(page.locator(cell(NOT_SCANNED))).to_contain_text("found, no label read")
     assert len(server.pressed) == 1
 
 
@@ -222,7 +230,7 @@ def test_a_real_audit_press_mark_undo_label_read(page: Page, base_url: str, api_
 
         target = page.locator(tile(pressed))
         target.click()
-        expect(target).to_contain_text("found, no label read")
+        expect(page.locator(cell(pressed))).to_contain_text("found, no label read")
         expect(page.locator(STATUS)).to_contain_text(f"No label was read for #{pressed}")
         assert _extra(spoolman, pressed) == before
 

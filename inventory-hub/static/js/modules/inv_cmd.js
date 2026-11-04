@@ -1339,9 +1339,21 @@ window.commitBulkMove = () => {
     // An Extra's tile is one too (A3): a press takes it back off the found lists, for a
     // spool scanned or picked here by mistake, since Done acts on the Extras. A press
     // never makes an Extra, and a loaded-from-here tile stays a plain tile. A found tile,
-    // on the list or an Extra, has its own 🏷️ beside it (_tagButton).
+    // on the list or an Extra, has its own 🏷️ (_tagButton).
+    // Laid out again on Derek's look of 2026-11-04 ("move some of the stuff on the sides to
+    // the top and bottom, like the label buttons, and the scanned notifications. That would
+    // give us a little more room for the full name. Id also say let it wrap too. but we'd have
+    // to try and keep the box size consistant among all of them"): each tile is a cell in its
+    // kind's colours (global.css .fcc-audit-tile-cell); the name takes the tile's width and
+    // wraps, two lines at most (its whole name in its title); under the name and its grams,
+    // a row says what the audit knows of the spool (.fcc-audit-tile-status), a found tile's
+    // 🏷️ at its end. That row is no part of a found tile's press button, so a tap a little off
+    // the 🏷️ presses nothing: a press there took the find back, and its label read with it.
+    // A tile not yet found has no 🏷️, and its whole tile, its QR at its side, stays its press
+    // button. The grids give every tile in a group one height (global.css .fcc-audit-grid).
     const _renderTile = (row, kind) => {
         const look = _TILES[kind];
+        const id = Number(row.id);
         const swatchBg = (typeof window.makeSwatchHtml === 'function')
             ? window.makeSwatchHtml(row.color, row.color_direction, { size: 28, borderColor: '#444' })
             : `<span style="display:inline-block;width:28px;height:28px;background:#${row.color || '333'};border-radius:4px;"></span>`;
@@ -1358,31 +1370,29 @@ window.commitBulkMove = () => {
         const tagged = kind === 'found' || kind === 'extra';
         // Only a tile not yet found: a QR never takes a find back.
         const qr = kind === 'missing' ? _tileQrText(row) : '';
-        const tag = pressable ? 'button' : 'div';
         const title = kind === 'extra' ? 'Press if it isn\'t here after all: it comes off the Extras'
             : (found ? 'Press if it isn\'t here after all'
                 : (qr ? 'Press, or scan its QR, if it\'s here with no label to scan' : 'Press if it\'s here with no label to scan'));
-        const press = !pressable ? 'class="fcc-audit-tile-box"'
-            : `type="button" class="fcc-audit-tile-box fcc-audit-tile${tagged ? ' fcc-audit-tile-tagged' : ''}" data-audit-tile="${Number(row.id)}"
+        const statusId = `fcc-audit-tile-status-${id}`;
+        const status = `<span id="${statusId}" class="fcc-audit-tile-status">${badge ? `<span class="fcc-audit-tile-badge">${badge}</span>` : ''}`
+            + `${words.map(w => `<span class="fcc-audit-tile-word">${_escapeHtml(w)}</span>`).join('')}</span>`;
+        const text = `<span class="fcc-audit-tile-swatch">${swatchBg}</span>`
+            + '<span class="fcc-audit-tile-text">'
+            + `<span class="fcc-audit-tile-name" title="${_escapeHtml(name)}">${_escapeHtml(name)}</span>`
+            + `<span class="fcc-audit-tile-detail">${_escapeHtml(weight)}${slot}</span>`
+            + `${where ? `<span class="fcc-audit-tile-where">${_escapeHtml(where)}</span>` : ''}</span>`;
+        const press = `type="button" class="fcc-audit-tile-box fcc-audit-tile" data-audit-tile="${id}"
                data-audit-found="${found ? 1 : 0}" aria-pressed="${found}" title="${_escapeHtml(title)}"`;
-        // With a QR the badge goes under the name, and the QR takes the badge's place at
-        // the tile's end, so the tile grows by as little as it can.
-        const badgeHtml = badge ? `<span style="font-size:var(--fcc-fs-label); white-space:nowrap;${qr ? ' display:block;' : ''}">${badge}</span>` : '';
-        const tile = `
-            <${tag} ${press} style="background:${look.bg}; border:1px solid ${look.border};">
-                ${swatchBg}
-                <span style="display:block; flex:1; min-width:0;">
-                    <span class="text-truncate" style="display:block; color:#fff; font-weight:600; font-size:0.9rem;"
-                         title="${_escapeHtml(name)}">${_escapeHtml(name)}</span>
-                    <span style="display:block; font-size:var(--fcc-fs-small); color:rgba(255,255,255,0.75);">${_escapeHtml(weight)}${slot}</span>
-                    ${where ? `<span style="display:block; font-size:var(--fcc-fs-small); color:#fff; overflow-wrap:anywhere;">${_escapeHtml(where)}</span>` : ''}
-                    ${qr ? badgeHtml : ''}
-                    ${words.map(w => `<span class="fcc-audit-tile-word">${_escapeHtml(w)}</span>`).join('')}
-                </span>
-                ${qr ? `<span class="fcc-audit-tile-qr" aria-hidden="true" data-audit-qr="${_escapeHtml(qr)}"></span>` : badgeHtml}
-            </${tag}>
-        `;
-        return tagged ? `<div class="fcc-audit-tile-cell">${tile}${_tagButton(row)}</div>` : tile;
+        const cell = (inner) => `<div class="fcc-audit-tile-cell" data-audit-kind="${kind}"
+               style="--fcc-tile-bg:${look.bg}; --fcc-tile-border:${look.border};">${inner}</div>`;
+        if (kind === 'missing') {
+            return cell(`<button ${press}>${text}${status}`
+                + `${qr ? `<span class="fcc-audit-tile-qr" aria-hidden="true" data-audit-qr="${_escapeHtml(qr)}"></span>` : ''}</button>`);
+        }
+        // The press button says the row's words (aria-describedby): they sit outside it.
+        const top = pressable ? `<button ${press} aria-describedby="${statusId}">${text}</button>`
+            : `<div class="fcc-audit-tile-box">${text}</div>`;
+        return cell(`${top}${status}${tagged ? _tagButton(row) : ''}`);
     };
 
     // The QR codes the tiles hold, each drawn once (the shared library, as generateSafeQR
@@ -1829,7 +1839,6 @@ window.commitBulkMove = () => {
         const extraTiles = extras.map(r => _renderTile(r, 'extra')).join('');
         const trailTiles = trail.map(r => _renderTile(r, 'trail')).join('');
         const loc = _escapeHtml(data.location_id || '(scan a location to start)');
-        const grid = 'display:grid; grid-template-columns:repeat(auto-fill,minmax(16.25rem,1fr)); gap:6px;';
         // Not scanned first (Derek, 2026-11-03, sample 5a(i): "keeping of unfound items at
         // the top"): the spools still to find, with their QRs, then the ones found, each
         // in the order the server sends (shelf order). A group with nothing in it has no
@@ -1838,7 +1847,7 @@ window.commitBulkMove = () => {
         // into its place, whose next Enter would find a spool nobody pressed.
         const group = (key, title, rows, kind, gap) => (rows.length ? `
                 <div class="fcc-audit-subhead">${title} (${rows.length})</div>
-                <div data-audit-group="${key}" style="${grid} margin-bottom:${gap}px;">
+                <div data-audit-group="${key}" class="fcc-audit-grid" style="margin-bottom:${gap}px;">
                     ${rows.map(r => _renderTile(r, kind)).join('')}
                 </div>` : '');
         const expectedTiles = group('missing', 'Not scanned', expected.filter(r => !r.found), 'missing', 10)
@@ -1886,13 +1895,13 @@ window.commitBulkMove = () => {
                     <span style="font-weight:bold; color:#fc0;">Extra (found here, filed elsewhere)</span>
                     <span class="small" style="color:rgba(255,255,255,0.75); margin-left:8px;">Not here after all? Press its tile.</span>
                 </div>
-                <div data-audit-group="extra" style="${grid}">
+                <div data-audit-group="extra" class="fcc-audit-grid">
                     ${extraTiles}
                 </div>
             ` : ''}
             ${trail.length ? `
                 <div style="font-weight:bold; color:#7fe8ff; margin:8px 0 6px;">Loaded from here</div>
-                <div data-audit-group="trail" style="${grid}">
+                <div data-audit-group="trail" class="fcc-audit-grid">
                     ${trailTiles}
                 </div>
             ` : ''}
@@ -2236,11 +2245,12 @@ window.commitBulkMove = () => {
     // focus: a click's own mousedown focuses the tile, and a tile pressed near the edge
     // and scrolled out from under the pointer would lose the click to the gap its
     // mouseup lands in.
+    // The whole tile, its row under the name and its ring with it (the cell draws the ring).
+    const _cellOf = (el) => (el && el.closest && el.closest('.fcc-audit-tile-cell')) || el;
     const _tileFocused = (e) => {
         const tile = e.target;
         if (!tile || !tile.matches) return;
-        if (tile.matches('.fcc-audit-tile:focus-visible')) _tileClear(tile);
-        else if (tile.matches('.fcc-audit-tile-tag:focus-visible')) _tileClear(tile.closest('.fcc-audit-tile-cell') || tile);
+        if (tile.matches('.fcc-audit-tile:focus-visible, .fcc-audit-tile-tag:focus-visible')) _tileClear(_cellOf(tile));
     };
 
     // The dock stays under the list, out of the scroll, while it leaves the tiles room:
@@ -2290,7 +2300,7 @@ window.commitBulkMove = () => {
         tiles.forEach(t => t.classList.remove('kb-active'));
         tiles[next].classList.add('kb-active');
         tiles[next].focus();
-        _tileClear(tiles[next]);
+        _tileClear(_cellOf(tiles[next]));
     };
 
     // '/' opens Find a spool, as it opens the search elsewhere (fab_drag.js, which it

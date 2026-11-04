@@ -57,6 +57,13 @@ def tile(sid):
     return f"[data-audit-tile='{sid}']"
 
 
+def cell(sid):
+    """The whole tile of spool `sid`, the row under its name too: a found tile's words ("found,
+    no label read", "needs a label") sit there, outside its press button, since Derek's look
+    of 2026-11-04 (a tap a little off its 🏷️ presses nothing)."""
+    return f".fcc-audit-tile-cell:has(> [data-audit-tile='{sid}'])"
+
+
 FCC_ROUTES = r"""() => {
     window.closeAuditPanel();
     window.__sent = [];
@@ -132,8 +139,10 @@ def strip_says(page, words):
 
 
 def tile_says(page, sid, words):
+    """PIN UPDATED DELIBERATELY (Derek's look of 2026-11-04, T1): the whole tile's words, its
+    row under the name too (`cell`); they were all inside its press button."""
     page.wait_for_function("([sel, w]) => { const el = document.querySelector(sel); return !!el && el.textContent.includes(w); }",
-                           arg=[tile(sid), words])
+                           arg=[cell(sid), words])
 
 
 def toasts(page):
@@ -253,8 +262,8 @@ def test_a_label_read_isnt_nudged(live, env):
     _type(live, "ID:57", 1)                  # the real accumulator: a scanner's speed
     strip_says(live, "#57's label was read")
     assert "No label was read" not in live.text_content(STRIP)
-    assert "✅ scanned" in live.text_content(tile(57))
-    assert "no label read" not in live.text_content(tile(57))
+    assert "✅ scanned" in live.text_content(cell(57))
+    assert "no label read" not in live.text_content(cell(57))
     assert wire(env, 57) == "false"
 
 
@@ -282,7 +291,7 @@ def test_a_flag_a_label_read_left_up_is_said_on_the_strip_and_the_tile(live, env
     _type(live, "ID:57", 1)
     strip_says(live, "#57 is still flagged for a new label")
     tile_says(live, 57, "needs a label")
-    assert "✅ scanned" in live.text_content(tile(57))
+    assert "✅ scanned" in live.text_content(cell(57))
     assert wire(env, 57) == "true"
 
 
@@ -301,7 +310,7 @@ def test_a_spool_with_no_status_says_nothing_until_it_is_found(live, env):
     two(env)
     begin(live, env)
     live.wait_for_selector(tile(57))
-    text = live.text_content(tile(57))
+    text = live.text_content(cell(57))
     assert "label" not in text.lower() and "not scanned" in text
 
 
