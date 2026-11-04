@@ -253,9 +253,11 @@ window.unionConfirmFedHeads = unionConfirmFedHeads;
 // A line never wraps and `more` counts the lines left out, so a door names a few
 // and a count: fccFitQuestion scrolls the whole question, QRs included, and a
 // scanner can't read a QR that has scrolled away. A list whose lines can be long asks
-// to wrap (`wrap: true`; Done's question, Derek's C, review of 7e3720f P-3): a line
-// that fits is drawn as one row still, and one that doesn't keeps its name whole and
-// puts its `where` under it, nothing cut (a touch screen can't read a line's title).
+// to wrap (`wrap: true`; made for Done's question, Derek's C, review of 7e3720f P-3,
+// which has drawn colour tiles instead since his second look, so no door sends it
+// now): a line that fits is drawn as one row still, and one that doesn't keeps its
+// name whole and puts its `where` under it, nothing cut (a touch screen can't read a
+// line's title).
 // `armAfterMs` (Group 58 review; default 0, every other door as it was): the yes
 // button's CLICK does nothing until that long after the mount. The question can open
 // with its yes under the pointer, and the second click of a double click on the
