@@ -261,7 +261,39 @@ window.unionConfirmFedHeads = unionConfirmFedHeads;
 // with its yes under the pointer, and the second click of a double click on the
 // button that asked it then answered a question nobody had read (a whole batch
 // parked). Enter and the QRs are no second click, so they don't wait.
+// A list of every spool, as colour tiles (`tiles: true` on a section; Done's question,
+// Derek, 2026-11-03: "display the spools like we did in the audit window ... a vibrant
+// list of data where an out of place color might spark a memory"): its lines are
+// fccSpoolTileHtml's tiles ({text, detail, where, color, color_direction}), `tone` the
+// section's look, and none is left out. The lists sit one above the other, the tiles of
+// each in a grid where the question has the room and in one column on a phone. A
+// question too tall for the window scrolls its lists alone (.fcc-apc-lists-scroll), so
+// its title, words, buttons and QRs stay in view, and only then: a question that fits
+// is no scroller (fccFitQuestion's rule). Scrolling, the lists are a stop in the Tab
+// order that the arrow and page keys scroll, and Enter there does what the hint says.
 const _openMoveConfirms = {};
+
+// --- A SPOOL AS A COLOUR TILE (Group 58; Derek, 2026-11-03) ---
+// The audit panel's look for a spool in a list nobody presses: Done's question and the
+// audit's report window. Its swatch (makeSwatchHtml, as the panel's tiles), its name
+// (wrapping, never cut: a touch screen can't show a title), a small line (its grams and
+// slot), where it is or why it stays in amber, and a tag (a label it needs). Not a
+// button. `t`: {text, detail, where, tag, color, color_direction}; `tone`: its colours
+// (global.css .fcc-spool-tile[data-tone]: missing, found, extra, trail, stay, failed).
+// Every word is escaped here.
+const fccSpoolTileHtml = (t, tone = '') => {
+    const row = t || {};
+    const esc = (s) => String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    const swatch = (typeof window.makeSwatchHtml === 'function')
+        ? window.makeSwatchHtml(row.color, row.color_direction || 'longitudinal', { size: 28, borderColor: '#444' }) : '';
+    const line = (cls, text) => (text ? `<span class="${cls}">${esc(text)}</span>` : '');
+    return `<div class="fcc-spool-tile"${tone ? ` data-tone="${esc(tone)}"` : ''}>${swatch}`
+        + `<span class="fcc-spool-tile-text">${line('fcc-spool-tile-name', row.text)}${line('fcc-spool-tile-detail', row.detail)}`
+        + `${line('fcc-spool-tile-where', row.where)}${line('fcc-spool-tile-tag', row.tag)}</span></div>`;
+};
+window.fccSpoolTileHtml = fccSpoolTileHtml;
 
 // --- KEEP A BOX ID WHOLE (review, 2026-10-22) ---
 // A button label that wraps on a phone may break a line after any hyphen:
@@ -284,6 +316,13 @@ window.fccKeepWhole = fccKeepWhole;
 //    coming from…" was 667 px high on a 360 x 640 phone at Extra Large). Only
 //    then: a scroller draws its text without the screen's sub-pixel smoothing
 //    (greyscale, not ClearType), so a question that fits keeps it.
+//  - a question of tiles (confirmActivePrint's `tiles` sections, .fcc-apc-tiled)
+//    scrolls its lists alone instead (.fcc-apc-lists-scroll), its title, words,
+//    buttons and QRs in view, while that leaves the lists LISTS_MIN_REM at least
+//    (a row of tiles and its heading, or the whole list when shorter); on a window
+//    too short for even that (a phone held sideways) the whole question scrolls, as
+//    any question does.
+const LISTS_MIN_REM = 5;
 const _fitQuestionNow = (panel) => {
     if (!panel || !panel.classList || typeof panel.getBoundingClientRect !== 'function') return null;
     const vw = (document.documentElement && document.documentElement.clientWidth) || window.innerWidth || 0;
@@ -296,9 +335,21 @@ const _fitQuestionNow = (panel) => {
         if (off) panel.classList.add('fcc-keep-whole-off');
     }
     panel.classList.remove('fcc-question-scroll');
-    const scroll = panel.getBoundingClientRect().height > vh - 16 + 0.5;
+    const tiled = panel.classList.contains('fcc-apc-tiled');
+    if (tiled) panel.classList.remove('fcc-apc-lists-scroll');
+    let scroll = panel.getBoundingClientRect().height > vh - 16 + 0.5;
+    let lists = false;
+    if (scroll && tiled && typeof panel.querySelector === 'function') {
+        panel.classList.add('fcc-apc-lists-scroll');
+        const box = panel.querySelector('.fcc-apc-sections');
+        const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+        lists = !!box && panel.getBoundingClientRect().height <= vh - 16 + 0.5
+            && box.clientHeight + 0.5 >= Math.min(LISTS_MIN_REM * rem, box.scrollHeight);
+        if (lists) scroll = false;
+        else panel.classList.remove('fcc-apc-lists-scroll');
+    }
     if (scroll) panel.classList.add('fcc-question-scroll');
-    return { off, scroll };
+    return tiled ? { off, scroll, lists } : { off, scroll };
 };
 const fccFitQuestion = (panel) => {
     const now = _fitQuestionNow(panel);
@@ -331,17 +382,29 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
     const threeWay = !!title;
     const noVerb = (threeWay && cancelVerb) || 'cancels';
     const lists = (threeWay && Array.isArray(sections)) ? sections : [];
-    const sectionHtml = ({ heading = '', lines = [], more = 0, wrap = false }) => `<div class="fcc-apc-section${wrap ? ' fcc-apc-section-wrap' : ''}">`
+    // A question whose lists are tiles (Done's): see `tiles` above.
+    const tiled = lists.some(s => s && s.tiles);
+    const tileSectionHtml = ({ heading = '', lines = [], tone = '' }) => '<div class="fcc-apc-section fcc-apc-section-tiles">'
+        + `<div class="fcc-apc-section-head">${esc(heading)}</div>`
+        + `<div class="fcc-spool-tiles">${lines.map(l => fccSpoolTileHtml(l, tone)).join('')}</div></div>`;
+    const lineSectionHtml = ({ heading = '', lines = [], more = 0, wrap = false }) => `<div class="fcc-apc-section${wrap ? ' fcc-apc-section-wrap' : ''}">`
         + `<div class="fcc-apc-section-head">${esc(heading)}</div>`
         + lines.map(({ text = '', where = '' }) => `<div class="fcc-apc-line" title="${esc(where ? `${text} · ${where}` : text)}">`
             + `<span class="fcc-apc-line-text">${esc(text)}</span>`
             + `${where ? `<span class="fcc-apc-line-where">${esc(where)}</span>` : ''}</div>`).join('')
         + `${more > 0 ? `<div class="fcc-apc-more">and ${esc(more)} more</div>` : ''}</div>`;
-    const listsHtml = lists.length ? `<div class="fcc-apc-sections">${lists.map(sectionHtml).join('')}</div>` : '';
+    const sectionHtml = (s) => ((s && s.tiles) ? tileSectionHtml(s) : lineSectionHtml(s || {}));
+    // Tiled, the lists are one region that scrolls when the question doesn't fit
+    // (fccFitQuestion), and then a keyboard stop (`tabindex`; Tab reaches it only then).
+    const listsHtml = !lists.length ? ''
+        : (tiled ? '<div class="fcc-apc-sections fcc-apc-sections-tiles" tabindex="0" role="region" aria-label="The spools this question names">'
+            : '<div class="fcc-apc-sections">') + `${lists.map(sectionHtml).join('')}</div>`;
     // Two lists sit side by side where the window has the room, so the height a
-    // question takes is one list's, and its QRs stay in view.
+    // question takes is one list's, and its QRs stay in view. Tiles take the wide
+    // window for more than two of them: three to a row on a laptop.
+    const tileCount = tiled ? lists.reduce((n, s) => n + ((s && Array.isArray(s.lines)) ? s.lines.length : 0), 0) : 0;
     const width = lists.length
-        ? `width:min(${lists.length > 1 ? 50 : 35}rem, calc(100vw - 16px)); box-sizing:border-box;`
+        ? `width:min(${(lists.length > 1 || tileCount > 2) ? 50 : 35}rem, calc(100vw - 16px)); box-sizing:border-box;`
         : `max-width:${threeWay ? 35 : 30}rem;`;
     const first = activePrint || (Array.isArray(activePrints) && activePrints[0]) || {};
     const isPrinting = printing != null ? !!printing
@@ -371,7 +434,7 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         ? `<div class="fcc-apc-status" role="alert" style="display:none; margin-bottom:10px; padding:6px 10px; border-radius:6px; background:#4a3200; color:#ffd27a; border:1px solid #ffb74d; font-weight:bold; text-align:left;"></div>`
         : '';
     const content = `
-        <div class="fcc-apc-panel" style="background:#1e1e1e; color:#fff; border:2px solid ${border}; border-radius:8px; padding:20px min(24px, 4vw); ${width} text-align:center;">
+        <div class="fcc-apc-panel${tiled ? ' fcc-apc-tiled' : ''}" style="background:#1e1e1e; color:#fff; border:2px solid ${border}; border-radius:8px; padding:20px min(24px, 4vw); ${width} text-align:center;">
             <div class="fcc-apc-title" style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">${header}</div>
             <div class="fcc-apc-msg" style="color:#ffc; margin-bottom:14px;${threeWay ? ' text-align:left;' : ''}">${esc(bodyText)}</div>${listsHtml}
             ${status}
@@ -434,6 +497,12 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
     const yesBtn = hasLoad ? ov.querySelector('.fcc-apc-yes') : null;
     const storeBtn = hasStore ? ov.querySelector('.fcc-apc-store') : null;
     const noBtn = ov.querySelector('.fcc-apc-no');
+    // Tiled lists that scroll (fccFitQuestion's .fcc-apc-lists-scroll): a keyboard stop.
+    const listsEl = tiled ? ov.querySelector('.fcc-apc-sections') : null;
+    const listsScroll = () => !!(listsEl && handle && handle.panel && handle.panel.classList
+        && handle.panel.classList.contains('fcc-apc-lists-scroll'));
+    // What Enter does on the lists, as anywhere but a button: the hint says so there too.
+    const otherVerb = hasStore ? 'stores it' : noVerb;
     const armedAt = Date.now() + armAfterMs;
     if (yesBtn) yesBtn.onclick = armAfterMs > 0 ? () => { if (Date.now() >= armedAt) yes(); } : yes;
     if (storeBtn) storeBtn.onclick = store;
@@ -446,7 +515,8 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         // at the document, before it reaches anything inside the overlay.
         ov.addEventListener('focus', (e) => {
             const does = e.target === yesBtn ? (threeWay ? (loadVerb || 'loads it') : 'continues')
-                : (e.target === storeBtn ? 'stores it' : (e.target === noBtn ? noVerb : ''));
+                : (e.target === storeBtn ? 'stores it' : (e.target === noBtn ? noVerb
+                    : (listsEl && e.target === listsEl ? otherVerb : '')));
             if (does) hintEl.textContent = `Enter ${does} · Esc ${noVerb}`;
         }, true);
     }
@@ -490,7 +560,9 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         }
         const arrow = threeWay && (e.key === 'ArrowLeft' || e.key === 'ArrowRight');
         if (e.key === 'Tab' || arrow) {
-            const order = [yesBtn, storeBtn, noBtn].filter(Boolean);
+            // Tab reaches the tiles' lists while they scroll (their arrow and page keys
+            // scroll them); ← and → go between the buttons.
+            const order = ((e.key === 'Tab' && listsScroll()) ? [listsEl] : []).concat([yesBtn, storeBtn, noBtn].filter(Boolean));
             const back = e.key === 'ArrowLeft' || (e.key === 'Tab' && e.shiftKey);
             const idx = order.indexOf(document.activeElement);
             const next = idx === -1 ? (back ? order.length - 1 : 0)

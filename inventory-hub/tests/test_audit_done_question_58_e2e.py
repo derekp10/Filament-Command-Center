@@ -186,12 +186,33 @@ def test_close_audit_panel_closes_an_open_question_and_the_heartbeats_end_too(pa
     assert server.parks == []
 
 
-@pytest.mark.parametrize("size", ["Standard", "Large"])
+TILES_SEEN = """(lists) => { const box = document.querySelector(lists);
+    const tiles = Array.from(box.querySelectorAll('.fcc-spool-tile')); const seen = new Set();
+    for (let top = 0; ; top += Math.max(8, box.clientHeight / 2)) {
+        box.scrollTop = top; const r = box.getBoundingClientRect();
+        tiles.forEach((t, i) => { const b = t.getBoundingClientRect(); if (b.top >= r.top - 0.5 && b.bottom <= r.bottom + 0.5) seen.add(i); });
+        if (box.scrollTop + box.clientHeight >= box.scrollHeight - 1) break;
+    }
+    box.scrollTop = 0; return { tiles: tiles.length, seen: seen.size }; }"""
+FIT = """([sheet, qrs]) => { const p = document.querySelector(sheet);
+    const s = p.getBoundingClientRect(), q = document.querySelector(qrs).getBoundingClientRect();
+    return { top: s.top, bottom: s.bottom, qrTop: q.top, qrBottom: q.bottom, vh: innerHeight,
+             scrolls: p.classList.contains('fcc-question-scroll'), lists: p.classList.contains('fcc-apc-lists-scroll'),
+             wide: p.scrollWidth > p.clientWidth + 1 }; }"""
+
+
+@pytest.mark.parametrize("width, height, size", [(1366, 768, "Standard"), (1366, 768, "Large"), (1366, 768, "Extra Large"),
+                                                 (390, 844, "Standard"), (390, 844, "Extra Large"), (1600, 1300, "Standard")])
 @pytest.mark.parametrize("park, stays", [(20, 0), (10, 10), (20, 12)])
-def test_twenty_spools_fit_with_the_qrs_in_view_on_a_1366_by_768_window(page: Page, base_url: str, park, stays, size):
-    """With the real Bootstrap's buttons and line heights, at the Text sizes a laptop
-    is likely to run."""
-    page.set_viewport_size({"width": 1366, "height": 768})
+def test_every_spool_is_a_tile_with_the_words_buttons_and_qrs_in_view(page: Page, base_url: str, park, stays,
+                                                                         width, height, size):
+    """Derek, 2026-11-03: every spool as a colour tile, "scrolling inside the question while
+    its words, buttons and QRs stay in view", past 24 spools and on a phone. With the real
+    Bootstrap's buttons and line heights and the real QR codes. PIN UPDATED DELIBERATELY
+    (builder B, Q1; was test_twenty_spools_fit_with_the_qrs_in_view_on_a_1366_by_768_window:
+    8 lines a list). The question never scrolls as a whole here, and every tile can be
+    scrolled to in its lists."""
+    page.set_viewport_size({"width": width, "height": height})
     page.add_init_script("(() => { try { localStorage.setItem('fcc.textSize', %r); } catch (e) {} })();" % size)
     Asked(page, _question(park, stays))
     _dashboard(page, base_url)
@@ -199,13 +220,32 @@ def test_twenty_spools_fit_with_the_qrs_in_view_on_a_1366_by_768_window(page: Pa
     _ask(page)
     expect(page.locator(QRS)).to_be_visible()
     page.wait_for_timeout(200)                  # the QR codes draw two frames later
-    box = page.evaluate("""([sheet, qrs]) => { const p = document.querySelector(sheet);
-        const s = p.getBoundingClientRect(), q = document.querySelector(qrs).getBoundingClientRect();
-        return { top: s.top, bottom: s.bottom, qrBottom: q.bottom, vh: innerHeight,
-                 scrolls: p.classList.contains('fcc-question-scroll') }; }""", [SHEET, QRS])
-    assert not box["scrolls"] and box["top"] >= 0 and box["bottom"] <= box["vh"] and box["qrBottom"] <= box["vh"], box
-    assert _on_top(page, QRS + " .fcc-confirm-qr-cell[data-qr='confirm']")
-    assert _on_top(page, QRS + " .fcc-confirm-qr-cell[data-qr='cancel']")
+    box = page.evaluate(FIT, [SHEET, QRS])
+    assert not box["scrolls"] and not box["wide"] and box["top"] >= 0 and box["bottom"] <= box["vh"], box
+    assert box["qrTop"] >= 0 and box["qrBottom"] <= box["vh"], box
+    for sel in (YES, BACK, QUESTION + " .fcc-apc-title", QUESTION + " .fcc-apc-hint",
+                QRS + " .fcc-confirm-qr-cell[data-qr='confirm']", QRS + " .fcc-confirm-qr-cell[data-qr='cancel']"):
+        assert _on_top(page, sel), sel
+    assert page.evaluate(TILES_SEEN, QUESTION + " .fcc-apc-sections") == {"tiles": park + stays, "seen": park + stays}
+
+
+def test_on_a_phone_held_sideways_the_whole_question_scrolls_as_before(page: Page, base_url: str):
+    """844 x 390: the words, buttons and QRs take nearly the whole window, and the lists
+    would keep less than a row of tiles. The nearest safe thing: the whole question
+    scrolls, as any question too tall for its window does (fccFitQuestion), and its QRs
+    are reached at its end. Nothing scrolls sideways."""
+    page.set_viewport_size({"width": 844, "height": 390})
+    Asked(page, _question(20, 12))
+    _dashboard(page, base_url)
+    _start(page)
+    _ask(page)
+    expect(page.locator(QRS)).to_be_attached()
+    page.wait_for_timeout(200)
+    box = page.evaluate(FIT, [SHEET, QRS])
+    assert box["scrolls"] and not box["lists"] and not box["wide"], box
+    page.evaluate("(sel) => { const p = document.querySelector(sel); p.scrollTop = p.scrollHeight; }", SHEET)
+    box = page.evaluate(FIT, [SHEET, QRS])
+    assert box["qrTop"] >= 0 and box["qrBottom"] <= box["vh"], box
 
 
 def test_the_panels_loose_button_opens_the_list_on_top(page: Page, base_url: str):

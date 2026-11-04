@@ -36,10 +36,15 @@ def ask(page):
 
 
 def sections(page):
-    return page.evaluate("""(q) => Array.from(document.querySelectorAll(q + ' .fcc-apc-section')).map((s) => [
-        s.querySelector('.fcc-apc-section-head').textContent,
-        Array.from(s.querySelectorAll('.fcc-apc-line')).map((l) => [l.querySelector('.fcc-apc-line-text').textContent,
-            (l.querySelector('.fcc-apc-line-where') || { textContent: '' }).textContent])])""", QUESTION)
+    """Each list's heading and its tiles, [name, small line, where]. PIN UPDATED DELIBERATELY
+    (builder B, Q1: Derek, 2026-11-03, the question's spools are colour tiles, every one of
+    them, each heading counting them)."""
+    part = "(t, c) => (t.querySelector(c) || { textContent: '' }).textContent"
+    return page.evaluate("""([q, part]) => { const get = eval(part);
+        return Array.from(document.querySelectorAll(q + ' .fcc-apc-section')).map((s) => [
+            s.querySelector('.fcc-apc-section-head').textContent,
+            Array.from(s.querySelectorAll('.fcc-spool-tile')).map((t) => [get(t, '.fcc-spool-tile-name'),
+                get(t, '.fcc-spool-tile-detail'), get(t, '.fcc-spool-tile-where')])]); }""", [QUESTION, part])
 
 
 def say_yes(page):
@@ -53,7 +58,7 @@ def record(env, sid):
     return env["fake"].records["spool"][sid]
 
 
-def test_with_only_an_extra_to_file_done_asks_to_file_it_here(live, env):
+def test_with_only_an_extra_to_file_done_asks_to_file_it_in_the_audited_place(live, env):
     add_spool(env, 1, "LR-MDB-1", container_slot="1")
     add_spool(env, 200, "LR-MDB-2", container_slot="1")
     begin(live, env)
@@ -61,12 +66,16 @@ def test_with_only_an_extra_to_file_done_asks_to_file_it_here(live, env):
     scanned(live, "ID:1")
     scanned(live, "ID:200")
     ask(live)
-    assert live.text_content(TITLE).strip().endswith("File #200 here?")
-    assert sections(live) == [["Found here, FCC had them elsewhere", [["#200 Some Brand PLA (Red)", "from LR-MDB-2 slot 1"]]]]
+    # PIN UPDATED DELIBERATELY (builder B, Q1; Derek, 2026-11-03): the question names the
+    # audited place, never "here" ("File #64 here?" read as 64 spools), and its spool is a tile.
+    assert live.text_content(TITLE).strip().endswith("File #200 in LR-MDB-1?")
+    assert sections(live) == [["Found in LR-MDB-1, FCC had it elsewhere (1)",
+                               [["#200 Some Brand PLA (Red)", "500g", "from LR-MDB-2 slot 1"]]]]
     msg = live.text_content(MSG)
-    assert "1 of 1 found at LR-MDB-1." in msg and "filed in LR-MDB-1" in msg and NOTE_ONE in msg
-    assert "Undo Last Move puts it back." in msg and "Unknown" not in msg
-    assert live.text_content(YES) == "File it here"
+    assert "1 of 1 found at LR-MDB-1." in msg and "The one found in LR-MDB-1 that FCC had elsewhere is filed there." in msg
+    assert NOTE_ONE in msg and "Undo Last Move puts it back." in msg and "Unknown" not in msg
+    assert " here" not in live.text_content(TITLE) + msg
+    assert live.text_content(YES) == "File it"
     say_yes(live)
     live.wait_for_function("() => !state.auditActive")
     sent = posts(live, "/api/audit/park")
@@ -84,10 +93,10 @@ def test_a_place_with_nothing_filed_asks_to_file_without_a_tally(live, env):
     begin(live, env)
     scanned(live, "ID:200")
     ask(live)
-    assert live.text_content(TITLE).strip().endswith("File #200 here?")
+    assert live.text_content(TITLE).strip().endswith("File #200 in LR-MDB-1?")      # PIN UPDATED DELIBERATELY (Q1)
     msg = live.text_content(MSG)
     assert "0 of 0" not in msg and "found at" not in msg
-    assert msg == (f"The one found here that FCC had elsewhere is filed in LR-MDB-1. {NOTE_ONE} "
+    assert msg == (f"The one found in LR-MDB-1 that FCC had elsewhere is filed there. {NOTE_ONE} "
                    "Undo Last Move puts it back.")
 
 
@@ -99,11 +108,11 @@ def test_with_spools_to_park_and_an_extra_to_file_the_yes_does_both(live, env):
     scanned(live, "ID:1")
     scanned(live, "ID:200")
     ask(live)
-    assert live.text_content(TITLE).strip().endswith("Park 1 at Unknown and file 1 here?")
-    assert [s[0] for s in sections(live)] == ["Not scanned", "Found here, FCC had them elsewhere"]
-    assert sections(live)[0][1] == [["#2 Some Brand PLA (Red)", "slot 2"]]
+    assert live.text_content(TITLE).strip().endswith("Park 1 at Unknown and file 1 in LR-MDB-1?")   # PIN UPDATED DELIBERATELY (Q1)
+    assert [s[0] for s in sections(live)] == ["Not scanned (1)", "Found in LR-MDB-1, FCC had it elsewhere (1)"]
+    assert sections(live)[0][1] == [["#2 Some Brand PLA (Red)", "500g (slot 2)", ""]]
     msg = live.text_content(MSG)
-    assert "The one not scanned goes to Unknown" in msg and "filed in LR-MDB-1" in msg
+    assert "The one not scanned goes to Unknown" in msg and "found in LR-MDB-1 that FCC had elsewhere is filed there" in msg
     assert "Undo Last Move puts them back." in msg
     assert live.text_content(YES) == "Do both"
     say_yes(live)
@@ -142,7 +151,7 @@ def test_with_nothing_to_file_the_question_is_the_parks_and_the_yes_files_nothin
     scanned(live, "ID:1")
     ask(live)
     assert live.text_content(TITLE).strip().endswith("Park 1 spool at Unknown?")
-    assert [s[0] for s in sections(live)] == ["Not scanned"]
+    assert [s[0] for s in sections(live)] == ["Not scanned (1)"]                   # PIN UPDATED DELIBERATELY (Q1)
     assert live.text_content(YES) == "Park it"
     say_yes(live)
     live.wait_for_function("() => !state.auditActive")
@@ -160,8 +169,9 @@ def test_an_extra_on_a_head_stays_and_the_question_says_why(live, env):
     scanned(live, "ID:242")
     ask(live)
     got = dict((head, lines) for head, lines in sections(live))
-    assert got["Left where they are"] == [["#242 Some Brand PLA (Red)", STAYS_ON_A_HEAD]]
-    assert "Found here, FCC had them elsewhere" not in got
+    # PIN UPDATED DELIBERATELY (Q1): a tile, and one stay reads "Left where it is (1)".
+    assert got["Left where it is (1)"] == [["#242 Some Brand PLA (Red)", "500g", STAYS_ON_A_HEAD]]
+    assert not any(head.startswith("Found in") for head in got)
     assert live.text_content(YES) == "Park it"
 
 

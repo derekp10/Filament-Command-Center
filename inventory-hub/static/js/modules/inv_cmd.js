@@ -2312,18 +2312,29 @@ window.commitBulkMove = () => {
     // either: the yes takes no click for DOUBLE_PRESS_MS (`armAfterMs`), and the panel
     // takes none for as long after the question goes (_shieldClick).
     const QUESTION_ID = 'fcc-audit-done-question';
-    const QUESTION_LINES = 8;           // per list; the rest are counted
     const PARK_TIMEOUT_MS = 120000;     // about six Spoolman calls a spool
     const _spools = (n) => `${n} spool${n === 1 ? '' : 's'}`;
 
-    // `wrap` (Derek's C; review of 7e3720f, P-3): a stay's reason and a spool's name can
-    // be long, and a line cut at its column's edge is whole only in its title, which a
-    // touch screen can't show. A line that fits stays one row.
-    const _section = (heading, rows, line) => ({
-        heading,
-        lines: rows.slice(0, QUESTION_LINES).map(line),
-        more: Math.max(0, rows.length - QUESTION_LINES),
-        wrap: true,
+    // Each list's spools as the panel's tiles (Derek, 2026-11-03: "display the spools like
+    // we did in the audit window, that way a visual scan of the list isn't a tedious list
+    // of spools with very little context, but more of a vibrant list of data where an out
+    // of place color might spark a memory and help someone catch a possible mistake"):
+    // every one of them, never "and N more", the heading counting them. A tile is the
+    // spool's colour, its name, its grams (and slot, as the panel's tile says it), and
+    // where it comes from or why it stays (`where`). The rows carry their look (section
+    // H, S1: from the rows stored at each scan). Not pressable, no QR.
+    const _grams = (r) => (r.remaining_weight != null ? `${Math.round(r.remaining_weight)}g` : '');
+    const _tiles = (heading, rows, tone, where, slot = false) => ({
+        heading: `${heading} (${rows.length})`,
+        tiles: true,
+        tone,
+        lines: rows.map((r) => ({
+            text: _spoolName(r),
+            detail: `${_grams(r)}${slot && r.slot ? `${_grams(r) ? ' ' : ''}(slot ${r.slot})` : ''}`,
+            where: where(r),
+            color: r.color,
+            color_direction: r.color_direction,
+        })),
     });
 
     // Where the keyboard goes when the question leaves: its window has gone with it.
@@ -2391,28 +2402,31 @@ window.commitBulkMove = () => {
     };
 
     // What the question says, and its Yes: the park's words as they were; with Extras to
-    // file here (Derek's C, 2026-11-03, for his look; `file`, and `file_note` for a box
-    // whose slot FCC never guesses) the filing's, or both.
+    // file (Derek's C, 2026-11-03, for his look; `file`, and `file_note` for a box whose
+    // slot FCC never guesses) the filing's, or both. It names the audited place, never
+    // "here" (Derek, 2026-11-03: a question is read away from the panel, and "File #64
+    // here?" read as 64 spools): "File #57 in LR-MDB-1?".
     const _doneWords = (res, park, file) => {
         const n = park.length;
         const m = file.length;
+        const place = String(res.location == null ? '' : res.location);
         const parks = n ? ` ${n === 1 ? 'The one not scanned goes' : `The ${n} not scanned go`} to Unknown, to find or clear later.` : '';
-        const files = m ? ` ${m === 1 ? 'The one found here that FCC had elsewhere is' : `The ${m} found here that FCC had elsewhere are`}`
-            + ` filed in ${res.location}.${res.file_note ? ` ${res.file_note}` : ''}` : '';
+        const files = m ? ` ${m === 1 ? `The one found in ${place} that FCC had elsewhere is` : `The ${m} found in ${place} that FCC had elsewhere are`}`
+            + ` filed there.${res.file_note ? ` ${res.file_note}` : ''}` : '';
         // A place FCC had nothing filed at asks only to file: "0 of 0 found" said
         // nothing (review of 7e3720f, R-4), so the tally is left out.
-        const tally = res.expected ? `${res.found} of ${res.expected} found at ${res.location}.` : '';
+        const tally = res.expected ? `${res.found} of ${res.expected} found at ${place}.` : '';
         const msg = `${tally}${parks}${files} Undo Last Move puts ${n + m === 1 ? 'it' : 'them'} back.`.trim();
         if (!m) {
             return { msg, title: `Park ${_spools(n)} at Unknown?`, yes: n === 1 ? 'Park it' : 'Park them',
                 verb: n === 1 ? 'parks it' : 'parks them', caption: 'Scan to Park' };
         }
         if (!n) {
-            return { msg, title: m === 1 ? `File #${Number(file[0].id)} here?` : `File ${_spools(m)} here?`,
-                yes: m === 1 ? 'File it here' : 'File them here', verb: m === 1 ? 'files it' : 'files them',
+            return { msg, title: m === 1 ? `File #${Number(file[0].id)} in ${place}?` : `File ${_spools(m)} in ${place}?`,
+                yes: m === 1 ? 'File it' : 'File them', verb: m === 1 ? 'files it' : 'files them',
                 caption: 'Scan to File' };
         }
-        return { msg, title: `Park ${n} at Unknown and file ${m} here?`, yes: 'Do both', verb: 'does both',
+        return { msg, title: `Park ${n} at Unknown and file ${m} in ${place}?`, yes: 'Do both', verb: 'does both',
             caption: 'Scan to Do both' };
     };
 
@@ -2424,12 +2438,20 @@ window.commitBulkMove = () => {
         const stays = Array.isArray(res.stays) ? res.stays : [];
         const file = Array.isArray(res.file) ? res.file : [];
         const words = _doneWords(res, park, file);
+        const place = String(res.location == null ? '' : res.location);
         const sections = [];
-        if (park.length) sections.push(_section('Not scanned', park, (r) => ({ text: r.display, where: r.slot ? `slot ${r.slot}` : '' })));
-        // Where FCC has each now: Done moves it here.
-        if (file.length) sections.push(_section('Found here, FCC had them elsewhere', file, (r) => ({ text: r.display, where: r.where ? `from ${r.where}` : '' })));
+        // Its slot as the panel's tile says it ("500g (slot 2)"): Done parks it from there.
+        if (park.length) sections.push(_tiles('Not scanned', park, 'missing', () => '', true));
+        // Where FCC has each now: Done moves it to the audited place.
+        if (file.length) {
+            sections.push(_tiles(`Found in ${place}, FCC had ${file.length === 1 ? 'it' : 'them'} elsewhere`, file, 'extra',
+                (r) => (r.where ? `from ${r.where}` : '')));
+        }
         // `why`, not `where`: a deleted spool is nowhere.
-        if (stays.length) sections.push(_section('Left where they are', stays, (r) => ({ text: r.display, where: r.why })));
+        if (stays.length) {
+            sections.push(_tiles(stays.length === 1 ? 'Left where it is' : 'Left where they are', stays, 'stay',
+                (r) => String(r.why == null ? '' : r.why)));
+        }
         if (res.audit_id != null) state.auditId = res.audit_id;
         const asked = window.confirmActivePrint({
             title: words.title,

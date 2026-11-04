@@ -167,6 +167,11 @@ DEFAULTS = {
     " ids: { overlay: 'q', yes: 'y', no: 'n', store: 's' } }": "f6b9f311f5c5",
     # An empty list of sections is no list: the same bytes as the same call with none.
     "{ title: 'Load #57 onto XL-1?', msg: 'Body.', onConfirm() {}, onCancel() {}, sections: [] }": "33850cae1760",
+    # Lists of lines, as a door passed them before Q1's tiles (builder B): the same bytes on
+    # 9d1163f and now.
+    "{ title: 'Park 2 spools?', msg: 'B', printing: true, onConfirm() {}, onCancel() {}, sections: ["
+    "{ heading: 'Not scanned', lines: [{ text: '#1 A', where: 'slot 2' }, { text: '#2 B' }], more: 3, wrap: true },"
+    "{ heading: 'Left', lines: [{ text: '#3 C', where: 'moved to X' }] }] }": "51121acb581d",
 }
 
 
@@ -347,17 +352,29 @@ return { html: questionHtml(), tier: m.opts.tier, focus: m.opts.initialFocus, up
     assert res["title"] == "Park 12 spools at Unknown?"
 
 
-def test_at_most_eight_lines_a_list_then_the_count(tmp_path, asked):
+def test_every_spool_is_a_colour_tile_and_each_heading_counts_them(tmp_path, asked):
+    """Derek, 2026-11-03: "display the spools like we did in the audit window ... a vibrant
+    list of data where an out of place color might spark a memory", past 24 spools. PIN
+    UPDATED DELIBERATELY (builder B, Q1; was test_at_most_eight_lines_a_list_then_the_count:
+    8 lines, then "and 4 more", so the Yes parked spools nobody saw named). Every spool is a
+    tile: its swatch, its name, its grams with its slot, and a stay's why. RED on 9d1163f."""
     res = _q(tmp_path, """
 await ask(QUESTION);
 return { html: questionHtml() };
 """, QUESTION=asked["question"])
-    h = _text(res["html"])
-    for sid in range(100, 108):
-        assert f"#{sid} Some Brand" in h, sid
-    for sid in range(108, 112):
-        assert f"#{sid} " not in h, sid
-    assert "and 4 more" in h and h.count("Not scanned") == 1
+    h = res["html"]
+    text = _text(h)
+    for sid in range(100, 112):
+        assert f"#{sid} Some Brand PLA (Red)" in text, sid
+        assert f"500g (slot {sid - 98})" in text, sid           # the panel's tile: its grams, then its slot
+    assert "more" not in text and "fcc-apc-more" not in h and "fcc-apc-line" not in h
+    assert "Not scanned (12)" in text and "Left where they are (3)" in text
+    assert h.count('<div class="fcc-spool-tile" data-tone="missing">') == 12
+    assert h.count('<div class="fcc-spool-tile" data-tone="stay">') == 3
+    assert h.count("border-radius:50%") == 15                    # a swatch on each
+    assert 'class="fcc-apc-panel fcc-apc-tiled"' in h
+    assert 'class="fcc-apc-sections fcc-apc-sections-tiles" tabindex="0" role="region"' in h
+    assert "moved to LR-MDB-2" in text and "no longer in Spoolman" in text and "in the scan buffer" in text
 
 
 def test_the_second_list_says_why_each_stays(tmp_path, asked):
@@ -380,15 +397,43 @@ return { html: questionHtml() };
     assert "Left where they are" not in res["html"] and res["html"].count("fcc-apc-section-head") == 1
 
 
-def test_a_slot_shows_on_its_line_and_no_slot_shows_none(tmp_path, asked):
+def test_a_slot_shows_on_its_tile_and_no_slot_shows_none(tmp_path, asked):
+    """PIN UPDATED DELIBERATELY (Q1): the slot is on the tile's small line, as the panel's
+    tile says it, after the grams; a tile with no slot says only its grams."""
     question = _small_question(asked, 2)
     question["park"][1]["slot"] = ""
     res = _q(tmp_path, """
 await ask(QUESTION);
 return { html: questionHtml() };
 """, QUESTION=question)
-    assert res["html"].count('class="fcc-apc-line-where"') == 1
-    assert ">slot 2</span>" in res["html"]
+    assert res["html"].count('class="fcc-spool-tile-detail"') == 2
+    assert '<span class="fcc-spool-tile-detail">500g (slot 2)</span>' in res["html"]
+    assert '<span class="fcc-spool-tile-detail">500g</span>' in res["html"]
+    assert "fcc-spool-tile-where" not in res["html"]           # a spool to park says no more
+
+
+def test_a_section_of_tiles_draws_each_line_as_a_tile_with_every_word_escaped(tmp_path):
+    """Q1's option on window.confirmActivePrint (`tiles: true`, `tone`), which no other door
+    passes: each line a tile (inv_core.js fccSpoolTileHtml), every word escaped, the lists one
+    region with a place in the Tab order. RED on 9d1163f: lines, not tiles."""
+    res = run_js(tmp_path, CORE, PRELUDE + r"""
+window.confirmActivePrint({ title: 'T', msg: 'The words.', onConfirm() {}, sections: [
+  { heading: 'One <b>list</b> (2)', tiles: true, tone: 'extra', lines: [
+      { text: '#1 "A" <i>spool</i>', detail: '500g & more', where: 'from <X>', color: 'C0392B', color_direction: 'longitudinal' },
+      { text: '#2 B', color: '' }] }] });
+return { html: html().pop(), tile: window.fccSpoolTileHtml({ text: '#3 <C>', tag: '🏷️ needs a label' }) };
+""")
+    h = res["html"]
+    assert h.count('<div class="fcc-spool-tile" data-tone="extra">') == 2
+    assert "One &lt;b&gt;list&lt;/b&gt; (2)" in h and "#1 &quot;A&quot; &lt;i&gt;spool&lt;/i&gt;" in h
+    assert "500g &amp; more" in h and "from &lt;X&gt;" in h and "<i>" not in h and "<X>" not in h
+    assert h.count('class="fcc-spool-tile-detail"') == 1 and h.count('class="fcc-spool-tile-where"') == 1
+    assert h.count("border-radius:50%") == 2                     # each its swatch
+    assert 'role="region" aria-label="The spools this question names"' in h
+    assert "width:min(35rem, calc(100vw - 16px));" in h           # two tiles: the narrow window
+    assert res["tile"].startswith('<div class="fcc-spool-tile">')     # no tone: the plain look
+    assert '<span class="fcc-spool-tile-name">#3 &lt;C&gt;</span>' in res["tile"]
+    assert '<span class="fcc-spool-tile-tag">🏷️ needs a label</span>' in res["tile"]
 
 
 def test_one_spool_reads_as_one(tmp_path, asked):

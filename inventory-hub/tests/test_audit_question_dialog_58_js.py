@@ -29,6 +29,7 @@ YES = QUESTION + " .fcc-apc-yes"
 BACK = QUESTION + " .fcc-apc-no"
 STATUS = QUESTION + " .fcc-apc-status"
 HINT = QUESTION + " .fcc-apc-hint"
+TITLE = QUESTION + " .fcc-apc-title"
 QRS = QUESTION + " .fcc-confirm-qr-row"
 LOOSE_BTN = "#fcc-audit-panel-loose"
 LOOSE = "#fcc-loose-list"
@@ -95,10 +96,14 @@ LONG_QUESTION = {
                **_look("F5F5F5")}],
     "file_note": "They go in with no slot: scan each one, then its slot's label, to set it.",
 }
-# Every name or reason the question cuts: what it shows against what it needs.
-CUT = """(q) => Array.from(document.querySelectorAll(q + ' .fcc-apc-line-text, ' + q + ' .fcc-apc-line-where'))
+# Every name or reason the question cuts: what it shows against what it needs. PIN UPDATED
+# DELIBERATELY (builder B, Q1): the question's spools are colour tiles, and so are what it
+# reads (a line of the old kind would be counted too).
+CUT = """(q) => Array.from(document.querySelectorAll(q + ' .fcc-apc-line-text, ' + q + ' .fcc-apc-line-where, '
+        + q + ' .fcc-spool-tile-name, ' + q + ' .fcc-spool-tile-detail, ' + q + ' .fcc-spool-tile-where'))
     .filter((el) => el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1)
     .map((el) => ({ text: el.textContent, shown: el.clientWidth, needs: el.scrollWidth }))"""
+LISTS = QUESTION + " .fcc-apc-sections"
 
 
 def test_the_samples_shape_is_the_routes(asked):
@@ -369,12 +374,34 @@ def test_a_park_that_landed_leaves_no_panel_no_question_and_no_dim(dialog):
 # --- the window it has -------------------------------------------------------------
 
 def _measure(page):
+    """`scrolls`: the whole question scrolls; `lists`: its lists alone do (Q1's tiles), with
+    the lists' own overflow, height and content height."""
     return page.evaluate("""([sheet, qrs]) => { const p = document.querySelector(sheet);
         const s = p.getBoundingClientRect(), q = document.querySelector(qrs).getBoundingClientRect();
+        const l = p.querySelector('.fcc-apc-sections');
         return { top: s.top, bottom: s.bottom, left: s.left, right: s.right, qrTop: q.top, qrBottom: q.bottom,
                  vh: innerHeight, vw: document.documentElement.clientWidth,
-                 scrolls: p.classList.contains('fcc-question-scroll'), wide: p.scrollWidth > p.clientWidth + 1 }; }""",
+                 scrolls: p.classList.contains('fcc-question-scroll'), wide: p.scrollWidth > p.clientWidth + 1,
+                 lists: p.classList.contains('fcc-apc-lists-scroll'), overflow: l ? getComputedStyle(l).overflowY : '',
+                 listsHigh: l ? l.clientHeight : 0, listsContent: l ? l.scrollHeight : 0 }; }""",
                          [SHEET, QRS])
+
+
+def _every_tile_shows_in_the_lists(page):
+    """Scrolled through, each tile is whole inside the lists' box at some point: none sits
+    outside what the box can scroll to. The box goes back to its top."""
+    return page.evaluate("""(lists) => { const box = document.querySelector(lists);
+        const tiles = Array.from(box.querySelectorAll('.fcc-spool-tile'));
+        const seen = new Set();
+        for (let top = 0; ; top += Math.max(8, box.clientHeight / 2)) {
+            box.scrollTop = top;
+            const r = box.getBoundingClientRect();
+            tiles.forEach((t, i) => { const b = t.getBoundingClientRect();
+                if (b.top >= r.top - 0.5 && b.bottom <= r.bottom + 0.5) seen.add(i); });
+            if (box.scrollTop + box.clientHeight >= box.scrollHeight - 1) break;
+        }
+        box.scrollTop = 0;
+        return { tiles: tiles.length, seen: seen.size }; }""", LISTS)
 
 
 def _show(page, park, stays):
@@ -384,30 +411,120 @@ def _show(page, park, stays):
 
 
 @pytest.mark.parametrize("park, stays", [(20, 0), (10, 10), (20, 12), (40, 40)])
-def test_twenty_spools_fit_with_the_qrs_in_view_on_a_small_laptop(dialog, park, stays):
-    """A long list must stay short: a scanner can't read a QR that has scrolled away.
-    However the spools split between the lists, the height is one list's."""
+def test_every_spool_is_a_tile_and_the_lists_scroll_with_the_qrs_in_view_on_a_small_laptop(dialog, park, stays):
+    """Derek, 2026-11-03: every spool as a colour tile, past 24, "scrolling inside the question
+    while its words, buttons and QRs stay in view" (a scanner can't read a QR that has
+    scrolled away). PIN UPDATED DELIBERATELY (builder B, Q1; was
+    test_twenty_spools_fit_with_the_qrs_in_view_on_a_small_laptop: 8 lines a list, the lists
+    side by side). The lists sit one above the other, three tiles to a row, and they scroll
+    alone; the question as a whole never does. RED on 9d1163f: no tiles."""
     dialog.set_viewport_size({"width": 1366, "height": 768})
     _show(dialog, park, stays)
     m = _measure(dialog)
-    assert not m["scrolls"], m
+    assert not m["scrolls"] and m["lists"] and m["overflow"] == "auto", m
+    assert m["listsContent"] > m["listsHigh"] >= 80, m          # LISTS_MIN_REM, a row of tiles at least
     assert m["top"] >= 0 and m["bottom"] <= m["vh"], m
-    assert m["qrBottom"] <= m["vh"], m
-    assert _on_top(dialog, BACK) and _on_top(dialog, YES)
+    assert m["qrTop"] >= 0 and m["qrBottom"] <= m["vh"], m
+    assert _on_top(dialog, BACK) and _on_top(dialog, YES) and _on_top(dialog, TITLE) and _on_top(dialog, HINT)
+    assert _on_top(dialog, QRS + " .fcc-confirm-qr-cell[data-qr='confirm']")
+    assert _on_top(dialog, QRS + " .fcc-confirm-qr-cell[data-qr='cancel']")
+    assert _every_tile_shows_in_the_lists(dialog) == {"tiles": park + stays, "seen": park + stays}
     tops = dialog.evaluate("""() => Array.from(document.querySelectorAll('#fcc-audit-done-question .fcc-apc-section'))
         .map((s) => Math.round(s.getBoundingClientRect().top))""")
-    assert len(tops) == (2 if stays else 1) and len(set(tops)) == 1, tops     # side by side
+    assert len(tops) == (2 if stays else 1) and tops == sorted(tops) and len(set(tops)) == len(tops), tops   # one above the other
+    lefts = dialog.evaluate("""() => new Set(Array.from(document.querySelectorAll(
+        '#fcc-audit-done-question .fcc-apc-section:first-child .fcc-spool-tile')).map((t) => Math.round(t.getBoundingClientRect().left))).size""")
+    assert lefts == 3, lefts                                     # three to a row on a laptop
 
 
-def test_a_question_taller_than_a_phone_scrolls_whole_and_never_sideways(dialog):
-    """fccFitQuestion: top and bottom never cut. The lists go one above the other."""
+def test_a_question_that_fits_is_no_scroller_and_its_lists_take_no_tab(dialog):
+    """fccFitQuestion's rule, kept for the tiles: a scroller draws its text without the
+    screen's sub-pixel smoothing, so a question that fits has none, and its lists, with
+    nothing to scroll, are no stop for Tab (Back, Park them, Back)."""
+    _show(dialog, 3, 1)
+    m = _measure(dialog)
+    assert not m["scrolls"] and not m["lists"] and m["overflow"] == "visible", m
+    dialog.focus(BACK)
+    seen = []
+    for _ in range(3):
+        dialog.keyboard.press("Tab")
+        seen.append(dialog.evaluate("document.activeElement.className"))
+    assert all("fcc-apc-sections" not in c for c in seen), seen
+
+
+def test_the_scrolling_lists_are_a_keyboard_stop_and_enter_there_goes_back(dialog):
+    """The keyboard reaches the lists while they scroll (Tab from Back goes round to them),
+    the hint says what Enter does there, the arrow and page keys scroll them, and Enter
+    there does what the hint says: it goes back, as anywhere but on the yes. RED on 9d1163f."""
+    dialog.set_viewport_size({"width": 1366, "height": 768})
+    _show(dialog, 24, 0)
+    dialog.focus(BACK)
+    dialog.keyboard.press("Tab")                                 # Back is last: round to the lists
+    assert dialog.evaluate("(s) => document.activeElement === document.querySelector(s)", LISTS)
+    assert dialog.text_content(HINT) == "Enter goes back · Esc goes back"
+    assert dialog.evaluate("(s) => document.querySelector(s).scrollTop", LISTS) == 0
+    dialog.keyboard.press("ArrowDown")
+    dialog.wait_for_function("(s) => document.querySelector(s).scrollTop > 0", arg=LISTS)
+    dialog.keyboard.press("End")
+    dialog.wait_for_function("(s) => { const b = document.querySelector(s); return b.scrollTop + b.clientHeight >= b.scrollHeight - 1; }",
+                             arg=LISTS)
+    dialog.keyboard.press("PageUp")
+    dialog.wait_for_function("(s) => { const b = document.querySelector(s); return b.scrollTop + b.clientHeight < b.scrollHeight - 1; }",
+                             arg=LISTS)
+    dialog.keyboard.press("Tab")                                 # on to the yes, and back
+    assert dialog.evaluate("(sel) => document.activeElement === document.querySelector(sel)", YES)
+    dialog.keyboard.press("Shift+Tab")
+    assert dialog.evaluate("(s) => document.activeElement === document.querySelector(s)", LISTS)
+    dialog.keyboard.press("Enter")
+    _closed(dialog)
+    assert dialog.evaluate("window.__parks") == []
+    assert dialog.is_visible(DONE) and dialog.evaluate("state.auditActive") is True
+
+
+def test_a_scans_enter_on_the_lists_answers_nothing(dialog):
+    """A scanner's Enter with the keyboard on the lists is the scan's, which the open
+    question holds off."""
+    dialog.set_viewport_size({"width": 1366, "height": 768})
+    _show(dialog, 24, 0)
+    dialog.focus(LISTS)
+    dialog.keyboard.type("ID:57", delay=0)
+    dialog.keyboard.press("Enter")
+    dialog.wait_for_selector(STATUS, state="visible")
+    assert dialog.is_visible(QUESTION) and dialog.evaluate("window.__parks") == []
+    assert "(Ignored: ID:57)" in dialog.text_content(STATUS)
+
+
+def test_on_a_phone_the_lists_scroll_in_one_column_and_never_sideways(dialog):
+    """PIN UPDATED DELIBERATELY (builder B, Q1; was ..._scrolls_whole_...: the whole question
+    scrolled, QRs and all, on a phone). On a phone too the lists alone scroll, one tile to a
+    row, and the words, the buttons and the QRs stay in view. Nothing scrolls sideways."""
     dialog.set_viewport_size({"width": 360, "height": 640})
     _show(dialog, 20, 12)
     m = _measure(dialog)
-    assert m["scrolls"] and m["left"] >= 0 and m["right"] <= m["vw"] and not m["wide"], m
+    assert not m["scrolls"] and m["lists"], m
+    assert m["left"] >= 0 and m["right"] <= m["vw"] and not m["wide"], m
+    assert m["qrTop"] >= 0 and m["qrBottom"] <= m["vh"] and _on_top(dialog, BACK) and _on_top(dialog, YES), m
+    assert _every_tile_shows_in_the_lists(dialog) == {"tiles": 32, "seen": 32}
+    lefts = dialog.evaluate("""() => new Set(Array.from(document.querySelectorAll('#fcc-audit-done-question .fcc-spool-tile'))
+        .map((t) => Math.round(t.getBoundingClientRect().left))).size""")
+    assert lefts == 1, lefts
+    assert dialog.evaluate(CUT, QUESTION) == []
+
+
+def test_a_window_too_short_for_the_lists_scrolls_the_whole_question_as_before(dialog):
+    """A window whose words, buttons and QRs alone take nearly all of it, so the lists would
+    keep less than a row of tiles (LISTS_MIN_REM): the nearest safe thing, the whole
+    question scrolls (fccFitQuestion's rule for any question), its QRs reachable at its end.
+    300 px tall here: this page has no Bootstrap and no QR library, so its question is
+    shorter than the dashboard's, where a phone held sideways (844 x 390) does this
+    (test_audit_done_question_58_e2e.py)."""
+    dialog.set_viewport_size({"width": 844, "height": 300})
+    _show(dialog, 20, 12)
+    m = _measure(dialog)
+    assert m["scrolls"] and not m["lists"] and not m["wide"], str(m)
     dialog.evaluate("(sel) => { const p = document.querySelector(sel); p.scrollTop = p.scrollHeight; }", SHEET)
     m = _measure(dialog)
-    assert m["qrBottom"] <= m["vh"], m
+    assert m["qrTop"] >= 0 and m["qrBottom"] <= m["vh"], m
 
 
 def test_a_long_name_wraps_whole_and_its_reason_stays_whole(dialog):
@@ -415,19 +532,23 @@ def test_a_long_name_wraps_whole_and_its_reason_stays_whole(dialog):
     name gave way, its full text only in the line's title, which a touch screen can't show.
     Done's lists wrap now: the name reads whole on its own lines, its reason under it, and
     the title stays for a mouse. The question is no wider for it."""
+    # PIN UPDATED DELIBERATELY (builder B, Q1): its line is a tile now, the name on its
+    # lines, then the grams, then the reason, each whole; the tile has no title to need.
     name = "#300 " + "A very long maker's name " * 6 + "PETG (Clear)"
     question = _question(1, 1)
     question["stays"][0].update(display=name, why="moved to LR-MDB-2 slot 3")
     dialog.evaluate("(q) => window.askAuditDone(q)", question)
     dialog.wait_for_selector(QRS)
-    line = dialog.evaluate("""() => { const l = document.querySelectorAll('#fcc-audit-done-question .fcc-apc-line')[1];
-        const t = l.querySelector('.fcc-apc-line-text'), w = l.querySelector('.fcc-apc-line-where');
-        return { high: l.getBoundingClientRect().height, title: l.title, name: t.scrollWidth <= t.clientWidth + 1,
-                 whole: w.scrollWidth <= w.clientWidth + 1, under: w.getBoundingClientRect().top >= t.getBoundingClientRect().bottom - 1,
+    line = dialog.evaluate("""() => { const l = document.querySelectorAll('#fcc-audit-done-question .fcc-spool-tile')[1];
+        const t = l.querySelector('.fcc-spool-tile-name'), w = l.querySelector('.fcc-spool-tile-where');
+        return { high: l.getBoundingClientRect().height, text: t.textContent, name: t.scrollWidth <= t.clientWidth + 1,
+                 lines: Math.round(t.getBoundingClientRect().height / parseFloat(getComputedStyle(t).lineHeight)),
+                 why: w.textContent, whole: w.scrollWidth <= w.clientWidth + 1,
+                 under: w.getBoundingClientRect().top >= t.getBoundingClientRect().bottom - 1,
                  sheetWide: document.querySelector('#fcc-audit-done-question .fcc-apc-panel').getBoundingClientRect().width }; }""")
-    assert line["high"] > 30 and line["name"] and line["whole"] and line["under"], line
-    assert line["title"] == f"{name} · moved to LR-MDB-2 slot 3"
-    assert line["sheetWide"] == 800              # the two-list width: the name didn't widen it
+    assert line["text"] == name and line["name"] and line["lines"] >= 3, line
+    assert line["why"] == "moved to LR-MDB-2 slot 3" and line["whole"] and line["under"], line
+    assert line["sheetWide"] == 800              # the wide window: the name didn't widen it
 
 
 @pytest.mark.parametrize("width, height", [(1366, 768), (390, 844)])
