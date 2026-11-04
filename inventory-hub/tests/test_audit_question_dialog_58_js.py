@@ -367,7 +367,11 @@ def test_a_park_that_landed_leaves_no_panel_no_question_and_no_dim(dialog):
     assert not dialog.locator(QUESTION).count()
     assert dialog.evaluate("state.processing") is False and dialog.evaluate("state.auditActive") is False
     assert dialog.evaluate("getComputedStyle(document.getElementById('processing-overlay')).display") == "none"
-    assert PARKED["msg"] in dialog.evaluate(
+    # The report window says what the Yes did, in the panel's place. PIN UPDATED DELIBERATELY
+    # (Derek's look of 2026-11-04, T3): its 4 s success toast went, as it peeked out around
+    # a short report under the window.
+    dialog.wait_for_selector("#fcc-audit-report #fcc-audit-report-close")
+    assert PARKED["msg"] not in dialog.evaluate(
         "Array.from(document.querySelectorAll('#toast-container .toast-msg')).map((e) => e.textContent)")
 
 

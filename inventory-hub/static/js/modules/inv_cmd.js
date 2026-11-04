@@ -149,6 +149,7 @@ window.auditQueueMoved = _auditButtonsFree;
 // A request of this page's own ended the audit (`audit_ended`: {id, why}): the
 // server's word, so the panel closes now, and the heartbeat that follows stays
 // quiet. `opts.quiet`: the caller has its own words for it.
+const AUDIT_FINISHED_WORDS = 'Audit finished: its report is in the Activity Log.';
 window.noteAuditEnded = (ended, opts = {}) => {
     if (!ended) return;
     state.auditEndedHere = ended.id;
@@ -160,7 +161,7 @@ window.noteAuditEnded = (ended, opts = {}) => {
     window.updateAuditVisuals();
     if (!opts.quiet) {
         if (ended.why === 'cancel') showToast('Audit cancelled: nothing moved.', 'info', 4000);
-        else showToast('Audit finished: its report is in the Activity Log.', 'success', 4000);
+        else showToast(AUDIT_FINISHED_WORDS, 'success', 4000);
     }
     if (typeof updateLogState === 'function') updateLogState(true);
 };
@@ -313,12 +314,14 @@ window.auditScanOutlived = (q) => {
 // What a scan the audit took answers. `sentAt`: when the scan went out.
 const _auditScanAnswer = (res, sentAt) => {
     if (res.audit_ended) {
-        window.noteAuditEnded(res.audit_ended);
         // A Done that ended the audit with nothing to ask carries its report: the window
-        // opens where the panel was (Derek, 2026-11-03). A Cancel's doesn't.
-        if (res.report && res.audit_ended.why === 'done' && window.openAuditReport) {
-            window.openAuditReport(res.report, { after: true });
-        }
+        // opens where the panel was (Derek, 2026-11-03), once the panel has gone. It says
+        // what Done did, so it stands for the "Audit finished" toast, which peeked out
+        // around a short report (toasts sit under the overlays; Derek's look of
+        // 2026-11-04). A Cancel's carries none, and an idle end's isn't shown.
+        const report = !!res.report && res.audit_ended.why === 'done' && !!window.openAuditReport;
+        window.noteAuditEnded(res.audit_ended, { quiet: report });
+        if (report && !window.openAuditReport(res.report, { after: true })) showToast(AUDIT_FINISHED_WORDS, 'success', 4000);
         return;
     }
     // The audit took it: Find a spool, over the panel, would hide what it did.
@@ -2387,19 +2390,20 @@ window.commitBulkMove = () => {
 
     const _parkAnswered = (res) => {
         if (res && res.audit_ended) {
-            // The server's report is in the Activity Log; this says what happened.
-            // `success` is false only when a write failed: that is the 7 s one.
             window.noteAuditEnded(res.audit_ended, { quiet: true });
-            showToast(res.msg, res.success ? 'success' : 'warning', res.success ? 4000 : 7000);
             document.dispatchEvent(new CustomEvent('inventory:locations-changed'));
-            // And the report itself, where the panel was (Derek, 2026-11-03): after the
-            // panel has gone (noteAuditEnded), so it is the window on top. A Yes that
-            // couldn't move every spool says so in the 7 s warning above, whose layer is
-            // under the window: the window says it too.
-            if (res.report) {
-                window.openAuditReport(res.report, { after: true });
-                if (!res.success && res.msg && window.auditReportNotice) window.auditReportNotice(res.msg);
-            }
+            // The report itself, where the panel was (Derek, 2026-11-03): after the panel
+            // has gone (noteAuditEnded), so it is the window on top.
+            const shown = !!(res.report && window.openAuditReport(res.report, { after: true }));
+            // `success` is false only when a write failed: its 7 s warning goes, and its
+            // layer is under the window, so the window's notice line says it too. A Yes
+            // that moved every spool raises no toast when the window opens: the window
+            // says what it did, and the toast peeked out around a short report (Derek's
+            // look of 2026-11-04). With no window (an answer with no report), the toast
+            // says it, as before.
+            if (!res.success) showToast(res.msg, 'warning', 7000);
+            else if (!shown) showToast(res.msg, 'success', 4000);
+            if (shown && !res.success && res.msg && window.auditReportNotice) window.auditReportNotice(res.msg);
             return;
         }
         // Refused, with nothing written. The audit runs on (a failed read, a second

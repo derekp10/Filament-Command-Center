@@ -512,8 +512,11 @@ def test_a_real_audit_through_the_question_a_real_park_and_its_undo(
         expect(report).to_contain_text(f"#{first} ")
         expect(page.locator(PILL)).to_be_hidden()
         assert requests.get(f"{api_base_url}/api/audit_session", timeout=10).json()["active"] is False
-        page.wait_for_function("() => Array.from(document.querySelectorAll('#toast-container .toast-msg'))"
-                               ".some((e) => e.innerText.includes('Parked 2 spools at Unknown.'))")
+        # The window says what the Yes did. PIN UPDATED DELIBERATELY (Derek's look of
+        # 2026-11-04, T3): the Yes's success toast ("Parked 2 spools at Unknown.") went.
+        expect(report.locator(".fcc-audit-report-foot")).to_contain_text("Undo Last Move puts the parked spools back.")
+        assert not page.evaluate("() => Array.from(document.querySelectorAll('#toast-container .toast-msg'))"
+                                 ".some((e) => e.innerText.includes('Parked 2 spools at Unknown.'))")
 
         for sid, slot in ((first, slots[0]), (second, slots[1])):
             rec = _extra(spoolman, sid)

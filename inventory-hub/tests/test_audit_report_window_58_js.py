@@ -142,6 +142,49 @@ def test_a_done_with_nothing_to_ask_opens_its_report(dialog):
     assert "Every spool FCC had at SHELF-1 was found." in dialog.text_content(BODY)
 
 
+def test_the_window_stands_for_the_success_toast(dialog):
+    """Derek's look of 2026-11-04 (T3): the Yes's 4 s success toast ("Parked 3 spools at
+    Unknown. …") and a Done's "Audit finished" sat under the report window, toasts being
+    under the overlays, and peeked out around a short report. When the window opens for the
+    end, it says what the end did, and no success toast is raised. RED on 8e9fca2: both
+    toasts were raised."""
+    _yes(dialog)
+    _shown(dialog)
+    assert _toasts(dialog) == []
+    dialog.keyboard.press("Escape")
+    dialog.wait_for_selector(REPORT, state="detached")
+    dialog.evaluate("() => { state.auditActive = true; state.auditId = 'boot-1'; window.openAuditPanel(); }")
+    dialog.wait_for_selector(DONE)
+    _answer_done_with(dialog, {"type": "command", "cmd": "audit_scan", "audit_ended": {"id": "boot-1", "why": "done"},
+                               "report": PERFECT})
+    dialog.wait_for_timeout(PAST_THE_ARMING)
+    dialog.click(DONE)
+    _shown(dialog)
+    assert _toasts(dialog) == []
+
+
+def test_with_no_window_the_toast_still_says_it(dialog):
+    """An answer that carries no report opens no window, and its toast says what happened,
+    as before; a Cancel's says so. Pins what was right."""
+    dialog.evaluate("(a) => { window.__park = a; }", dict(PARKED, report=None))
+    _yes(dialog)
+    dialog.wait_for_selector(PANEL, state="detached")
+    dialog.wait_for_function("() => document.querySelectorAll('#toast-container .toast-msg').length > 0")
+    assert _toasts(dialog) == [["success", PARKED["msg"]]] and dialog.locator(REPORT).count() == 0
+    dialog.evaluate("() => { document.querySelectorAll('#toast-container .toast-msg').forEach((t) => t.remove()); }")
+    for why, words in (("done", ["success", "Audit finished: its report is in the Activity Log."]),
+                       ("cancel", ["info", "Audit cancelled: nothing moved."])):
+        dialog.evaluate("() => { state.auditActive = true; state.auditId = 'boot-1'; window.openAuditPanel(); }")
+        dialog.wait_for_selector(DONE)
+        _answer_done_with(dialog, {"type": "command", "cmd": "audit_scan", "audit_ended": {"id": "boot-1", "why": why}})
+        dialog.wait_for_timeout(PAST_THE_ARMING)
+        dialog.click(DONE)
+        dialog.wait_for_selector(PANEL, state="detached")
+        dialog.wait_for_function("() => document.querySelectorAll('#toast-container .toast-msg').length > 0")
+        assert _toasts(dialog) == [words] and dialog.locator(REPORT).count() == 0
+        dialog.evaluate("() => { document.querySelectorAll('#toast-container .toast-msg').forEach((t) => t.remove()); }")
+
+
 @pytest.mark.parametrize("why", ["cancel", "idle"])
 def test_a_cancel_or_an_idle_end_opens_no_report(dialog, why):
     """Their lines' button opens theirs: an end that wasn't Done shows no window. A
@@ -444,7 +487,9 @@ def test_a_yes_that_could_not_move_every_spool_says_so_on_the_report(dialog, lan
     else:
         dialog.wait_for_timeout(100)
         assert not dialog.is_visible(NOTICE)
-        assert ["success", PARKED["msg"]] in _toasts(dialog)
+        # PIN UPDATED DELIBERATELY (Derek's look of 2026-11-04, T3): the window stands for
+        # the Yes's 4 s success toast, which peeked out around a short report.
+        assert ["success", PARKED["msg"]] not in _toasts(dialog)
 
 
 # --- from the report's Activity Log line ------------------------------------------------------
