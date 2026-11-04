@@ -531,6 +531,26 @@ def test_audit_report_window_text_is_readable(page: Page, base_url: str, assert_
     assert_text_size(page.locator("#live-logs"))
 
 
+def test_legacy_picker_during_an_audit_text_is_readable(page: Page, base_url: str, assert_text_size):
+    """Group 58, Derek's second look (builder B, Q3): the legacy picker's line naming the
+    audit and its list of spools under where each stands in it."""
+    from conftest import quiet_heartbeat
+    _read_only(page, extra_get={"/api/audit_session": SAMPLE_AUDIT})
+    quiet_heartbeat(page)               # after: the newest route answers first
+    page.goto(base_url, wait_until="domcontentloaded")
+    page.wait_for_function("() => typeof window.showLegacySpoolPicker === 'function'", timeout=45_000)
+    page.evaluate("() => { state.auditActive = true; window.updateAuditVisuals(); }")
+    page.wait_for_function("() => (document.getElementById('fcc-audit-panel-tally') || {}).textContent"
+                           " && document.getElementById('fcc-audit-panel-tally').textContent.includes('Auditing')")
+    page.evaluate("""() => { const spool = (id, at) => ({ id, remaining_weight: 800, location: at, archived: false,
+            filament_id: 7, filament_name: 'Size Black', material: 'PLA', vendor_name: 'FCC Test', display: '#' + id });
+        window.showLegacySpoolPicker({ legacy_id: '999120', candidates: [spool(99, 'LR-MDB-1'), spool(57, 'LR-MDB-1'),
+            spool(999135, 'ZZ-SIZE-1')] }); }""")
+    page.wait_for_selector("#fcc-legacy-picker-audit")
+    assert_text_size(page.locator("#fcc-legacy-picker-overlay"))
+    page.click("#fcc-legacy-picker-cancel")
+
+
 def test_audit_find_window_text_is_readable(page: Page, base_url: str, assert_text_size):
     """Derek's answers of 2026-11-03, A2: 🔎 Find a spool, its rows (each "where" and both
     tags), its notice, "Searching…" over older rows (review of 7e3720f, P-7) and a failed

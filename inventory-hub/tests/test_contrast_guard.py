@@ -541,6 +541,33 @@ def test_audit_report_window_is_readable(page: Page, base_url: str, assert_contr
 
 
 @pytest.mark.usefixtures("require_server")
+def test_legacy_picker_during_an_audit_is_readable(page: Page, base_url: str, assert_contrast):
+    """Group 58, Derek's second look (builder B, Q3): the legacy shared-label picker over the
+    audit panel, its spools under where each stands in the audit, its line naming the
+    audit's place. The session is the route's shape, served to this browser alone; nothing
+    is picked."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import SAMPLE_AUDIT, _read_only
+    _read_only(page, extra_get={"/api/audit_session": SAMPLE_AUDIT})
+    conftest.quiet_heartbeat(page)      # after: the newest route answers first
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.showLegacySpoolPicker === 'function' && typeof state !== 'undefined'")
+    page.evaluate("() => { state.auditActive = true; window.updateAuditVisuals(); }")
+    expect(page.locator("#fcc-audit-panel-tally")).to_contain_text("Auditing LR-MDB-1")
+    page.evaluate("""() => { const spool = (id, at) => ({ id, remaining_weight: 800, location: at, archived: false,
+            filament_id: 7, filament_name: 'Contrast Black', material: 'PLA', vendor_name: 'FCC Test', display: '#' + id });
+        window.showLegacySpoolPicker({ legacy_id: '999120', candidates: [spool(99, 'LR-MDB-1'), spool(57, 'LR-MDB-1'),
+            spool(134, 'LR-MDB-2'), spool(242, 'XL-4'), spool(999135, 'ZZ-CONTRAST-1')] }); }""")
+    picker = page.locator("#fcc-legacy-picker-overlay")
+    expect(picker.locator("#fcc-legacy-picker-audit")).to_be_visible()
+    assert picker.locator("optgroup").count() == 5
+    assert_contrast(picker)
+    scored = " ".join(o.get("text", "") for o in conftest.contrast_offenders(picker, min_ratio=100))
+    assert "The audit of" in scored and "LR-MDB-1" in scored, scored
+    page.click("#fcc-legacy-picker-cancel")
+
+
+@pytest.mark.usefixtures("require_server")
 def test_lost_spools_are_readable(page: Page, base_url: str, assert_contrast):
     """Group 58: a lost spool's badge on the buffer card (over its filament's colours),
     on the search card, and the sentence in the spool window. Read-only: the spool is a

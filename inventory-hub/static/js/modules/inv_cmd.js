@@ -1255,6 +1255,9 @@ window.commitBulkMove = () => {
     let _findPickedAt = 0;
     // The session the panel drew last: Find tags its rows from it.
     let _lastData = null;
+    // The session this page read last, the panel up or hidden (every scan the audit takes
+    // reads it again, window.refreshAuditSession): the legacy picker's tags.
+    let _lastSession = null;
     // Watches the scrolling part's size for _fitDock while the panel is up.
     let _dockFit = null;
     // The dock's columns are drawn once per panel, at its first answer (_render).
@@ -1971,6 +1974,8 @@ window.commitBulkMove = () => {
             // true and the panel frozen.
             const r = await window.fetchT('/api/audit_session', {}, 8000);
             const d = await r.json();
+            // Read for a hidden panel too: the legacy picker tags its spools from it.
+            _lastSession = (d && d.active) ? d : null;
             if (gen !== _panelGen) return;   // the panel closed meanwhile
             if (!d || !d.active) {
                 // Seen here before any heartbeat, so the warning starts here too.
@@ -2000,6 +2005,7 @@ window.commitBulkMove = () => {
         if (window.closeAuditReport) window.closeAuditReport();
         _lastRenderHash = null;  // force first render after open
         _lastData = null;        // nothing drawn yet: Find tags nothing until the first answer
+        _lastSession = null;     // nor the legacy picker: it may be another audit's
         _dockDrawn = false;      // a new panel: its dock is drawn at the first answer
         // As tall as the window less 8 px above and below (Derek, 2026-11-03, sample 1b),
         // as a question that doesn't fit is: the dock under the list takes room, and the
@@ -2117,6 +2123,24 @@ window.commitBulkMove = () => {
         const listed = hit(d.expected);
         if (listed) return listed.found ? 'found' : 'listed';
         return (hit(d.rogue) || hit(d.trail)) ? 'found' : null;
+    };
+
+    // Where a spool stands in the audit that runs, for the legacy shared-label picker (Derek,
+    // 2026-11-03: it "says which candidates are on this audit's list and whether they're
+    // found yet"), from what the page already knows, the session it read last, with no
+    // request of its own: {standing, place}, `standing` one of 'listed' (on the list, not
+    // scanned yet), 'found' (on the list, found), 'extra' (found here, filed elsewhere),
+    // 'trail' (loaded on a head from here) or 'none' (not on its list). null with no audit,
+    // before its place is scanned, or when what the page read is another audit's.
+    window.auditStandingOf = (id) => {
+        const d = _lastSession;
+        if (!state.auditActive || !d || !d.active || !d.location_id) return null;
+        if (d.audit_id != null && String(d.audit_id) !== String(state.auditId)) return null;
+        const hit = (rows) => (rows || []).find(r => r && String(r.id) === String(id));
+        const listed = hit(d.expected);
+        const standing = listed ? (listed.found ? 'found' : 'listed')
+            : (hit(d.rogue) ? 'extra' : (hit(d.trail) ? 'trail' : 'none'));
+        return { standing, place: String(d.location_id) };
     };
 
     const _openFind = () => {

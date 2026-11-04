@@ -54,7 +54,7 @@ window.showLegacySpoolPicker = (payload, opts = {}) => {
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
-    const optsHtml = candidates.map((c) => {
+    const optionHtml = (c) => {
         const w = (c.remaining_weight != null) ? `${Math.round(c.remaining_weight)}g` : '?g';
         const loc = c.location || 'Unassigned';
         const arch = c.archived ? ' [ARCHIVED]' : '';
@@ -64,7 +64,34 @@ window.showLegacySpoolPicker = (payload, opts = {}) => {
         const headline = [vendor, mat, name].filter(Boolean).join(' ');
         const label = `#${c.id} — ${headline} (${w} @ ${loc})${arch}`;
         return `<option value="${c.id}">${escapeHtml(label)}</option>`;
-    }).join('');
+    };
+    // During an audit (Group 58; Derek, 2026-11-03: the picker "says which candidates are on
+    // this audit's list and whether they're found yet"): each spool under where it stands
+    // in that audit, from what the page already knows (window.auditStandingOf, the session
+    // it read last; no request of its own), each group a heading of the list that names it
+    // in words, the place named once above the list. Every option still starts with its
+    // number, so a person's jump ("#135") and the browser's own find work as before. With
+    // no audit, or one with no place yet, the list is as it always was.
+    const STANDINGS = [
+        ['listed', '⬜ Expected there, not scanned yet'],
+        ['found', '✅ Expected there, found already'],
+        ['extra', '⚠️ Found there as an Extra'],
+        ['trail', '🔗 Loaded on a printer from there'],
+        ['none', 'Not expected there'],
+    ];
+    const standings = candidates.map((c) => (typeof window.auditStandingOf === 'function'
+        ? window.auditStandingOf(c.id) : null));
+    const audit = standings.find(Boolean) || null;
+    const groups = audit ? STANDINGS.map(([key, words]) => [words, candidates.filter((c, i) => (standings[i]
+        ? standings[i].standing : 'none') === key)]).filter(([, group]) => group.length) : [];
+    const optsHtml = audit
+        ? groups.map(([words, group]) => `<optgroup label="${escapeHtml(words)}">${group.map(optionHtml).join('')}</optgroup>`).join('')
+        : candidates.map(optionHtml).join('');
+    // Its headings take rows of the list too.
+    const listRows = audit ? Math.min(8, candidates.length + groups.length) : Math.min(6, candidates.length);
+    const auditLine = audit
+        ? `<div id="fcc-legacy-picker-audit" style="color:#fff; margin-bottom:8px; font-size:var(--fcc-fs-row); overflow-wrap:anywhere;">🕵️ The audit of <b>${escapeHtml(audit.place)}</b> is running: the spools are listed by where each stands in it.</div>`
+        : '';
 
     // Group 17.4: derive a fallback parent-filament id for the "Add new" path.
     // All candidates share the same filament (legacy id resolves at the filament
@@ -85,7 +112,7 @@ window.showLegacySpoolPicker = (payload, opts = {}) => {
                 ${candidates.length} spools are attached to the filament with this legacy ID. Pick the right one to continue, queue a fresh <code style="color:#ffaa55;">ID:</code>-format label for the chosen spool, or add a new spool on this filament if none on the list is the right one.
             </div>
             <div id="fcc-legacy-picker-flash" role="alert" style="color:#ffc107; min-height:1.5em; margin-bottom:8px;"></div>
-            <select id="fcc-legacy-picker-sel" class="form-select form-select-sm bg-dark text-white border-secondary mb-3" size="${Math.min(6, candidates.length)}" style="width:100%;">${optsHtml}</select>
+            ${auditLine}<select id="fcc-legacy-picker-sel" class="form-select form-select-sm bg-dark text-white border-secondary mb-3" size="${listRows}" style="width:100%;">${optsHtml}</select>
             <div style="display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;">
                 <button id="fcc-legacy-picker-cancel" class="btn btn-secondary btn-sm" style="min-width:100px;">Cancel</button>
                 ${parentFilamentId != null
