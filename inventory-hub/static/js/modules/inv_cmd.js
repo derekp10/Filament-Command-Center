@@ -1786,7 +1786,8 @@ window.commitBulkMove = () => {
     // the Activity Log behind it. Outside #fcc-audit-panel-body, so a redraw keeps
     // it. '' clears it: a good scan means the refusal has been dealt with.
     window.auditPanelNotice = (msg) => {
-        if (!_handle) return;
+        // The panel gone and the report window up (a Done this page ended): it says it.
+        if (!_handle) { if (window.auditReportNotice) window.auditReportNotice(msg); return; }
         // Find, over the panel, would hide it: it says it too.
         if (_find && window.auditFindNotice) window.auditFindNotice(_find, msg);
         const el = _handle.element.querySelector('#fcc-audit-panel-notice');
@@ -2603,6 +2604,7 @@ window.commitBulkMove = () => {
                     <button type="button" id="fcc-audit-report-close" class="btn btn-sm btn-outline-light">Close</button>
                 </div>
                 <div class="fcc-audit-report-summary">${_escapeHtml(rep.summary || '')}</div>
+                <div id="fcc-audit-report-notice" class="fcc-audit-report-notice" role="alert" style="display:none;"></div>
                 <div class="fcc-audit-report-body" tabindex="-1" role="region" aria-label="Each spool, by what the audit did with it">
                     ${lists || `<div class="fcc-audit-report-empty">${_escapeHtml(empty)}</div>`}
                 </div>
@@ -2676,6 +2678,21 @@ window.commitBulkMove = () => {
     };
 
     window.isAuditReportOpen = () => !!_report;
+
+    // What a scan's refusal says, on the window itself, beside its toast, as the panel's
+    // notice does (auditPanelNotice hands it here while only this window is up): the toast
+    // layer (z 11000) is under it. The one scan that can be refused with it up is one read
+    // while the park was out and dropped once the audit was over (auditScanOutlived); any
+    // scan processScan takes closes the window first. '' clears it.
+    window.auditReportNotice = (msg) => {
+        if (!_report) return;
+        const el = _report.element.querySelector('#fcc-audit-report-notice');
+        if (!el) return;
+        el.textContent = msg || '';
+        el.style.display = msg ? 'block' : 'none';
+        // A line more: the window may not fit any more.
+        _fitReport(_report.element.querySelector('.fcc-audit-report-panel'));
+    };
 
     // processScan, for every scan: the window goes and the scan goes on. A scanner's second
     // read of the CMD:DONE that ended the audit (`at`: when it was read) leaves it up.

@@ -1752,6 +1752,18 @@ body {
     margin-bottom: 0.625rem;
     overflow-wrap: anywhere;
 }
+/* What a scan's refusal says while the window is up (inv_cmd.js auditReportNotice), in the
+   audit panel's notice colours: the toast layer is under the window. */
+.fcc-audit-report-notice {
+    margin-bottom: 0.625rem;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: #4a3200;
+    color: #ffd27a;
+    border: 1px solid #ffb74d;
+    font-weight: bold;
+    overflow-wrap: anywhere;
+}
 .fcc-audit-report-group + .fcc-audit-report-group { margin-top: 0.75rem; }
 .fcc-audit-report-head {
     font-size: var(--fcc-fs-row);

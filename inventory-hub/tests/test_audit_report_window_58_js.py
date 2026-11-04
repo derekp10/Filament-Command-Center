@@ -330,6 +330,57 @@ def test_a_new_audit_panel_takes_its_place(dialog):
     assert dialog.locator(REPORT).count() == 0
 
 
+# --- what it says while it is up ---------------------------------------------------------------
+
+NOTICE = REPORT + " #fcc-audit-report-notice"
+OUTLIVED = "The audit has ended, so ID:57 did nothing. Scan it again if you meant it."
+
+
+def test_a_scan_read_during_the_park_that_did_nothing_says_so_on_the_report(dialog):
+    """Builder B, resumed (the stacked-overlays lens): a scan read while the park is out waits
+    in the queue (the dim), and once the audit is over the queue drops it with a 7 s warning
+    (window.auditScanOutlived). That toast's layer (z 11000) is under this window, which
+    opened in the meantime, so the window says it too, on a line of its own, as the panel
+    does on its notice; and it stays up, since the scan was read before it opened. Through
+    the real accumulator and queue. RED on 8cd63ab: the words were only in a toast under the
+    report's backdrop."""
+    dialog.evaluate("""(r) => {
+        window.__park = Object.assign({}, window.__park, { report: r });
+        const answers = window.fetch;
+        window.fetch = (url, opts) => {
+            const answered = answers(url, opts);
+            if (String(url).indexOf('/api/audit/park') === -1) return answered;
+            return new Promise((resolve) => { window.__releasePark = () => resolve(answered); });
+        };
+    }""", FULL)
+    _yes(dialog)
+    dialog.wait_for_function("() => typeof window.__releasePark === 'function' && state.processing")
+    dialog.keyboard.type("ID:57", delay=0)          # a scanner, while the park is out
+    dialog.keyboard.press("Enter")
+    dialog.wait_for_function("() => (state.scanQueue || []).length === 1")
+    dialog.evaluate("() => window.__releasePark()")
+    _shown(dialog)
+    dialog.wait_for_function("(s) => { const n = document.querySelector(s); return !!n && n.textContent.length > 0; }",
+                             arg=NOTICE)
+    assert dialog.text_content(NOTICE) == OUTLIVED
+    assert dialog.get_attribute(NOTICE, "role") == "alert"
+    assert dialog.is_visible(NOTICE) and _on_top(dialog, NOTICE)
+    assert dialog.locator(REPORT).count() == 1                  # still up: the scan was read before it
+    assert all(i["text"] != "ID:57" for i in dialog.evaluate("window.__ids"))   # it did nothing
+    assert ["warning", OUTLIVED] in _toasts(dialog)            # and its toast, as before
+    # Under the title and the summary, above the spools: in view however long the report is.
+    order = dialog.evaluate("""(r) => Array.from(document.querySelector(r + ' .fcc-audit-report-panel').children)
+        .map((e) => e.id || e.className)""", REPORT)
+    assert order.index("fcc-audit-report-notice") == order.index("fcc-audit-report-summary") + 1, order
+
+
+def test_a_report_with_nothing_to_say_shows_no_notice_line(dialog):
+    """The line is there only when something was said. Pins it hidden at the start."""
+    dialog.evaluate("(r) => window.openAuditReport(r, { after: true })", FULL)
+    _shown(dialog)
+    assert dialog.locator(NOTICE).count() == 1 and not dialog.is_visible(NOTICE)
+
+
 # --- from the report's Activity Log line ------------------------------------------------------
 
 LOG_ROW = {"time": "11:18:13", "type": "INFO", "color": "ffaa00", "meta": {"type": "audit_report", "audit_id": "boot-1"},

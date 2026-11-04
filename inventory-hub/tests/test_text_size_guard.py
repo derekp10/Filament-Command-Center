@@ -524,6 +524,9 @@ def test_audit_report_window_text_is_readable(page: Page, base_url: str, assert_
     page.wait_for_function("() => typeof window.openAuditReport === 'function'", timeout=45_000)
     page.evaluate("(r) => window.openAuditReport(r, { after: true })", FULL)
     page.wait_for_selector("#fcc-audit-report .fcc-audit-report-foot")
+    # Its notice line too (builder B, resumed): a scan dropped once the audit was over.
+    page.evaluate("() => window.auditScanOutlived({ text: 'ID:57', auditOf: 'boot-1' })")
+    page.wait_for_selector("#fcc-audit-report #fcc-audit-report-notice", state="visible")
     assert_text_size(page.locator("#fcc-audit-report"))
     page.keyboard.press("Escape")
     page.evaluate("(row) => window._renderLogsPayload({ logs: [row], status: { spoolman: true } }, true)", LOG_ROW)

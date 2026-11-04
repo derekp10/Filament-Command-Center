@@ -509,15 +509,21 @@ def test_audit_report_window_is_readable(page: Page, base_url: str, assert_contr
     page.evaluate("(r) => window.openAuditReport(r, { after: true })", FULL)
     report = page.locator("#fcc-audit-report")
     expect(report.locator("#fcc-audit-report-close")).to_be_focused()
+    # Its notice line (builder B, resumed): a scan read during the park, dropped once the
+    # audit was over, says so on the window, as the real queue does it.
+    page.evaluate("() => window.auditScanOutlived({ text: 'ID:57', auditOf: 'boot-1' })")
+    expect(report.locator("#fcc-audit-report-notice")).to_be_visible()
+    # Bootstrap's colour transition, to its end (a fixed wait read it halfway on a busy run):
+    # the focused Close takes its hover colours (Bootstrap 5.3's .btn:focus-visible).
+    settled = "(sel) => document.querySelector(sel).getAnimations().length === 0"
+    page.wait_for_function(settled, arg="#fcc-audit-report-close")
     assert_contrast(report)
     scored = " ".join(o.get("text", "") for o in conftest.contrast_offenders(report, min_ratio=100))
     for words in ("Audit Report: LR-MDB-1", "Found 2 of 6.", "Parked at Unknown (2)", "Filed in LR-MDB-1 (1)",
                   "Left where they are (2)", "Couldn't be moved (1)", "Loaded from LR-MDB-1 (1)", "Needs a label (1)",
                   "from LR-MDB-2 slot 3", "needs a label", "moved to CR-CT-1", "loaded on XL-2",
-                  "The same report is in the Activity Log", "Close"):
+                  "The same report is in the Activity Log", "Close", "ID:57 did nothing"):
         assert words in scored, (words, scored)
-    # Bootstrap's colour transition, to its end (a fixed wait read it halfway on a busy run).
-    settled = "(sel) => document.querySelector(sel).getAnimations().length === 0"
     report.locator("#fcc-audit-report-close").hover()
     page.wait_for_timeout(50)
     page.wait_for_function(settled, arg="#fcc-audit-report-close")
