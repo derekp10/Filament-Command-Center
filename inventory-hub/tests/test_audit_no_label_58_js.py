@@ -1525,7 +1525,12 @@ def test_a_double_click_that_takes_the_panel_away_reaches_nothing_under_it(live,
     xy = behind(live, button)
     double_click(live, xy, then=PANEL, state="detached")
     live.wait_for_timeout(150)
-    assert reached(live) == {"behind": [], "focus": "BODY"}
+    # PIN UPDATED DELIBERATELY (builder B, Q2; Derek, 2026-11-03): a Done that ended the audit
+    # opens its report where the panel was, the keyboard on its Close, and the second press
+    # reached that window no more than the button under it (it is still up).
+    report = button == DONE
+    assert reached(live) == {"behind": [], "focus": "fcc-audit-report-close" if report else "BODY"}
+    assert live.locator("#fcc-audit-report").count() == (1 if report else 0)
     ended = {CANCEL: "CMD:CANCEL", DONE: "CMD:DONE"}.get(button)
     assert sent(live) == ["ID:57"] + ([ended] if ended else [])
     assert session()["active"] is (button == HIDE)
@@ -1542,7 +1547,10 @@ def test_a_double_click_on_park_that_answers_fast_reaches_nothing_under_the_pane
     xy = behind(live, YES)
     double_click(live, xy, then=PANEL, state="detached")
     live.wait_for_timeout(150)
-    assert reached(live) == {"behind": [], "focus": "BODY"}
+    # PIN UPDATED DELIBERATELY (builder B, Q2): the park's report window is up where the
+    # panel was, its Close with the keyboard, and the second press reached nothing.
+    assert reached(live) == {"behind": [], "focus": "fcc-audit-report-close"}
+    assert live.locator("#fcc-audit-report").count() == 1
     assert len(sent(live, PARK_URL)) == 1 and at(env, 99) == "UNKNOWN"
 
 

@@ -25,7 +25,12 @@ Find's ↻ Try again (`try-again`, P-1), whose answer paints the rows under the 
 Their hermetic twins are in test_audit_find_and_tiles_58_js.py. Derek's second look
 (2026-11-03, section H) adds a found tile's own 🏷️ (`a-tag`), whose mark grows its tile and
 moves the tiles under it, and the Last found box's "↩ Put back" (`put-back`), which empties
-the box; their hermetic twins are in test_audit_panel_look_58_js.py. Since the
+the box; their hermetic twins are in test_audit_panel_look_58_js.py. Builder B adds the report
+window, which a press brings up under the pointer: Done's Yes (`park-report`, the park's answer
+carrying its report) and the report line's 📝 Read the report in Live Activity
+(`report-open`); its Close is laid over the spot, and the second press waits until it is
+there, so the shield that opens with the window is proved: one click leaves the window up, the
+keyboard on Close. Their hermetic twins are in test_audit_report_window_58_js.py. Since the
 dock (sample 1b), Done, Cancel Audit and Needs a label sit under the list, in view with no
 scroll; when the panel comes up over the deck, only their QR boxes, which press nothing, lie
 over its AUDIT tile at these five sizes, so where no button lands there `deck-tile` lays Cancel
@@ -53,7 +58,8 @@ pytestmark = pytest.mark.usefixtures("require_server")
 SIZES = [(1366, 640), (1366, 768), (1280, 800), (1600, 900), (1600, 1300)]
 LENGTHS = [3, 6, 10, 14, 24]
 CONTROLS = ["done-ends", "done-asks", "cancel-audit", "hide", "needs-a-label", "a-tile", "undo-that",
-            "back", "park", "deck-tile", "an-extra-tile", "find-open", "a-tag", "put-back"]
+            "back", "park", "deck-tile", "an-extra-tile", "find-open", "a-tag", "put-back",
+            "park-report", "report-open"]
 GAP_MS = 120                 # a person's double click (p12.py's)
 SHIELD_S = 0.75              # DOUBLE_PRESS_MS (inv_cmd.js) and a little: a case starts past it
 
@@ -67,7 +73,10 @@ CONTROL_SEL = {
     "back": QUESTION + " .fcc-apc-no", "park": QUESTION + " .fcc-apc-yes", "deck-tile": "#btn-deck-audit",
     "find-open": "#fcc-audit-panel-find",
     "a-tag": "[data-audit-tag='100']", "put-back": "#fcc-audit-put-back",
+    "park-report": QUESTION + " .fcc-apc-yes", "report-open": "#live-logs .fcc-audit-report-open",
 }
+REPORT = "#fcc-audit-report"
+REPORT_CLOSE = REPORT + " #fcc-audit-report-close"
 # The panel's buttons a first click on the deck's AUDIT tile can bring up under the second.
 PANEL_BUTTONS = ["#fcc-audit-panel-find", "#fcc-audit-panel-loose", "#fcc-audit-panel-close", "#fcc-audit-panel-done",
                  "#fcc-audit-panel-cancel", "#fcc-audit-panel-needlabel", ".fcc-audit-tile", ".fcc-audit-tile-tag",
@@ -94,6 +103,10 @@ ONE_CLICK = {
     "a-tag": ([("/api/audit/needs_label", None)], [PANEL[1:]], "tag:100"),
     # Put back: the find taken back once, and the keyboard nowhere, as after any button that goes.
     "put-back": ([("/api/audit/found", None)], [PANEL[1:]], "BODY"),
+    # The park, its report window up where the panel was, the keyboard on its Close.
+    "park-report": ([("/api/audit/park", None)], [REPORT[1:]], "fcc-audit-report-close"),
+    # The report asked for once (a GET, recorded here), its window up, the keyboard on Close.
+    "report-open": ([("/api/audit/report", None)], [REPORT[1:]], "fcc-audit-report-close"),
 }
 
 # What sits over the panel (item 2f): its first click closes it, and the second lands on
@@ -167,6 +180,8 @@ class Sweep:
         self.session = {"active": False, "audit_end": None}
         self.asks = False
         self.search_fails = False                       # Find's search answers success: false
+        self.report = None                              # the park's answer carries it (park-report)
+        self.logs = []                                  # Live Activity's lines (report-open)
         page.route("**/*", self._any)                   # first: the routes below win
         page.route("**/api/logs*", lambda route: self._json(route, self._payload()))
         page.route("**/api/dashboard_pulse*", lambda route: self._json(route, {"logs": self._payload()}))
@@ -178,6 +193,7 @@ class Sweep:
         page.route("**/api/audit/park", self._park)
         page.route("**/api/loose_spools*", lambda route: self._json(route, LOOSE_SPOOLS))
         page.route("**/api/search*", self._search)
+        page.route("**/api/audit/report*", self._report)
 
     @staticmethod
     def _json(route, body):
@@ -185,7 +201,7 @@ class Sweep:
 
     def _payload(self):
         on = bool(self.session.get("active"))
-        return {"logs": [], "status": {"spoolman": True}, "audit_active": on,
+        return {"logs": list(self.logs), "status": {"spoolman": True}, "audit_active": on,
                 "audit_id": self.audit_id if on else None,
                 "audit_location": "LR-MDB-1" if on else "", "audit_end": self.session.get("audit_end")}
 
@@ -284,9 +300,17 @@ class Sweep:
     def _park(self, route):
         self._record(route)
         ids = (route.request.post_data_json or {}).get("ids") or []
-        self._json(route, {"success": True, "parked": ids, "stayed": [], "failed": [],
-                           "msg": f"Parked {len(ids)} spools at Unknown. Undo Last Move puts them back.",
-                           "audit_ended": self._end("done")})
+        answer = {"success": True, "parked": ids, "stayed": [], "failed": [],
+                  "msg": f"Parked {len(ids)} spools at Unknown. Undo Last Move puts them back.",
+                  "audit_ended": self._end("done")}
+        if self.report:
+            answer["report"] = self.report
+        self._json(route, answer)
+
+    def _report(self, route):
+        """GET /api/audit/report, as the route answers it: recorded, as a press's request."""
+        self._record(route)
+        self._json(route, {"success": True, "report": self.report})
 
 
 # Puts the page back as a case found it: no panel, no question, no mode, no window.
@@ -306,6 +330,9 @@ RESET = r"""() => {
     const list = document.getElementById('fcc-shortcuts-overlay');
     if (list && list.style.display === 'block') window.toggleShortcutsOverlay();
     document.querySelectorAll('#toast-container .toast-msg').forEach((t) => t.remove());
+    const laid = document.getElementById('fcc-test-lay-close');
+    if (laid) laid.remove();
+    if (window.closeAuditReport) window.closeAuditReport();
     if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
 }"""
 
@@ -546,6 +573,14 @@ LAY_CANCEL_OVER_TILE = r"""() => { const r = document.querySelector('#btn-deck-a
     return [r.left + r.width / 2, r.top + r.height / 2]; }"""
 
 
+# The report window's Close laid over a spot (x, y): wherever the window opens, its Close is
+# what the second press of a double click there would press.
+LAY_CLOSE_AT = r"""([x, y]) => { const st = document.createElement('style'); st.id = 'fcc-test-lay-close';
+    st.textContent = `#fcc-audit-report-close { position: fixed !important; margin: 0 !important; left: ${x - 40}px !important;
+        top: ${y - 16}px !important; width: 80px !important; height: 32px !important; z-index: 5 !important; }`;
+    document.head.appendChild(st); }"""
+
+
 def _after(board, expected_requests, overlays, focus, what):
     """The second press did nothing: one click's requests, overlays and keyboard."""
     page = board.page
@@ -595,6 +630,10 @@ def test_a_real_double_click_does_what_one_click_does(board, rows, control):
             page.evaluate("() => { const st = document.getElementById('fcc-test-lay-cancel'); if (st) st.remove(); }")
         return
 
+    if control in ("park-report", "report-open"):
+        _the_report_window_double_clicked(board, rows, control, requests, overlays, focus, what)
+        return
+
     if control == "a-tile":
         board.begin(rows, 0)
         sid, xy = _tile_under_the_strip(board, rows)
@@ -639,6 +678,49 @@ def test_a_real_double_click_does_what_one_click_does(board, rows, control):
     _after(board, requests, overlays, focus, what)
     ends = control in ("done-ends", "cancel-audit", "park")
     assert page.evaluate("state.auditActive") is (not ends), f"{what}: the audit is {'on' if not ends else 'over'}"
+
+
+def _the_report_window_double_clicked(board, rows, control, requests, overlays, focus, what):
+    """Builder B, Q2: the report window comes up under the pointer of the press that asked for
+    it, Done's Yes or the report line's button, with its Close laid over that spot; the
+    second press, waited for until Close is there, reaches nothing: the window stays up and
+    the keyboard on Close. RED with openAuditReport's _shieldPage() taken out (the second
+    press closed the window)."""
+    from test_audit_report_window_58_js import FULL, LOG_ROW
+    page, server = board.page, board.server
+    report = dict(FULL, groups=[dict(FULL["groups"][0], rows=FULL["groups"][0]["rows"] * max(1, rows // 2))]
+                  + FULL["groups"][1:])
+    server.report = report
+    try:
+        if control == "park-report":
+            board.begin(rows, min(2, rows - 1), last=0, asks=True)
+            done = _scrolled_into_view(page, CONTROL_SEL["done-asks"])
+            assert done, f"{what}: Done can't be pressed"
+            board.click(done)
+            page.wait_for_selector(QUESTION + " .fcc-apc-no")
+            board.pressed = time.monotonic()
+            page.wait_for_timeout(200)          # its QR codes, and the question settled
+            board.settle()                      # past the yes's arming
+        else:
+            board.settle()
+            page.evaluate(RESET)
+            server.session = {"active": False, "audit_end": None}
+            server.logs = [LOG_ROW]
+            page.evaluate("(row) => window._renderLogsPayload({ logs: [row], status: { spoolman: true } }, true)", LOG_ROW)
+            page.wait_for_selector(CONTROL_SEL[control])
+            page.evaluate("() => { const b = document.getElementById('live-logs'); b.scrollTop = 0; }")
+        xy = page.evaluate(POINT, CONTROL_SEL[control])
+        assert xy, f"{what}: the control can't be pressed"
+        page.evaluate(LAY_CLOSE_AT, xy)
+        server.sent.clear()
+        board.double_click_over(xy, REPORT_CLOSE)
+        _after(board, requests, overlays, focus, what)
+        assert page.evaluate("state.auditActive") is False, f"{what}: an audit is on"
+    finally:
+        server.report = None
+        server.logs = []
+        page.evaluate("() => { const st = document.getElementById('fcc-test-lay-close'); if (st) st.remove();"
+                      " if (window.closeAuditReport) window.closeAuditReport(); }")
 
 
 def _cover_up(board, cover):

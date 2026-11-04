@@ -515,6 +515,12 @@ def test_a_real_audit_through_the_question_a_real_park_and_its_undo(
         page.wait_for_timeout(PAST_A_DOUBLE_PRESS)
         page.click(YES)
         expect(page.locator(PANEL)).to_have_count(0, timeout=30_000)
+        # The real park's report, where the panel was (builder B, Q2), each spool a tile.
+        report = page.locator("#fcc-audit-report")
+        expect(report).to_contain_text(f"Audit Report: {place}")
+        expect(report).to_contain_text("Parked at Unknown (2)")
+        expect(report.locator(".fcc-spool-tile")).to_have_count(2)
+        expect(report).to_contain_text(f"#{first} ")
         expect(page.locator(PILL)).to_be_hidden()
         assert requests.get(f"{api_base_url}/api/audit_session", timeout=10).json()["active"] is False
         page.wait_for_function("() => Array.from(document.querySelectorAll('#toast-container .toast-msg'))"
@@ -530,6 +536,7 @@ def test_a_real_audit_through_the_question_a_real_park_and_its_undo(
         # A lost spool says so: a scan's 7 s toast, its card, the spool window.
         where = f"{place} slot {slots[0]}" if slots[0] else place
         page.evaluate("(sid) => { window.processScan('ID:' + sid, 'keyboard'); }", first)
+        expect(report).to_have_count(0)        # a scan closes the report, and goes on
         turned_up = f"#{first} turned up. It was marked lost by the audit of {where} on {today}. Scan where it goes."
         page.wait_for_function("(m) => Array.from(document.querySelectorAll('#toast-container .toast-msg'))"
                                ".some((e) => e.innerText === m)", arg=turned_up)

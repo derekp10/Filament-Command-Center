@@ -490,6 +490,57 @@ def test_audit_done_question_is_readable(page: Page, base_url: str, assert_contr
 
 
 @pytest.mark.usefixtures("require_server")
+@pytest.mark.parametrize("width, height, size", [(1600, 1300, "Standard"), (1366, 768, "Extra Large"), (390, 844, "Standard")])
+def test_audit_report_window_is_readable(page: Page, base_url: str, assert_contrast, width, height, size):
+    """Group 58, Derek's second look (builder B, Q2): the report window after Done's Yes,
+    every kind of group and tile (each its own look), the needs-a-label tag, the foot, the
+    Close hovered, and scrolled to its end where it scrolls; and the report line's 📝 Read
+    the report button on the Activity Log's dark rows, hovered. Drawn from the route's
+    shape (test_audit_report_window_58_js.FULL, pinned there), nothing sent."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_audit_report_window_58_js import FULL, LOG_ROW
+    from test_text_size_guard import _read_only
+    page.set_viewport_size({"width": width, "height": height})
+    page.add_init_script("(() => { try { localStorage.setItem('fcc.textSize', %r); } catch (e) {} })();" % size)
+    _read_only(page)
+    conftest.quiet_heartbeat(page)      # after: the newest route answers first
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openAuditReport === 'function' && typeof state !== 'undefined'")
+    page.evaluate("(r) => window.openAuditReport(r, { after: true })", FULL)
+    report = page.locator("#fcc-audit-report")
+    expect(report.locator("#fcc-audit-report-close")).to_be_focused()
+    assert_contrast(report)
+    scored = " ".join(o.get("text", "") for o in conftest.contrast_offenders(report, min_ratio=100))
+    for words in ("Audit Report: LR-MDB-1", "Found 2 of 6.", "Parked at Unknown (2)", "Filed in LR-MDB-1 (1)",
+                  "Left where they are (2)", "Couldn't be moved (1)", "Loaded from LR-MDB-1 (1)", "Needs a label (1)",
+                  "from LR-MDB-2 slot 3", "needs a label", "moved to CR-CT-1", "loaded on XL-2",
+                  "The same report is in the Activity Log", "Close"):
+        assert words in scored, (words, scored)
+    # Bootstrap's colour transition, to its end (a fixed wait read it halfway on a busy run).
+    settled = "(sel) => document.querySelector(sel).getAnimations().length === 0"
+    report.locator("#fcc-audit-report-close").hover()
+    page.wait_for_timeout(50)
+    page.wait_for_function(settled, arg="#fcc-audit-report-close")
+    assert_contrast(report)
+    page.mouse.move(0, 0)
+    page.wait_for_timeout(50)
+    page.wait_for_function(settled, arg="#fcc-audit-report-close")
+    report.locator(".fcc-audit-report-body").evaluate("(b) => { b.scrollTop = b.scrollHeight; }")
+    assert_contrast(report)
+    page.keyboard.press("Escape")
+    expect(report).to_have_count(0)
+    page.evaluate("(row) => window._renderLogsPayload({ logs: [row], status: { spoolman: true } }, true)", LOG_ROW)
+    logs = page.locator("#live-logs")
+    expect(logs.locator(".fcc-audit-report-open")).to_have_count(1)
+    assert_contrast(logs)
+    assert "Read the report" in " ".join(o.get("text", "") for o in conftest.contrast_offenders(logs, min_ratio=100))
+    logs.locator(".fcc-audit-report-open").hover()
+    page.wait_for_timeout(50)
+    page.wait_for_function(settled, arg="#live-logs .fcc-audit-report-open")
+    assert_contrast(logs)
+
+
+@pytest.mark.usefixtures("require_server")
 def test_lost_spools_are_readable(page: Page, base_url: str, assert_contrast):
     """Group 58: a lost spool's badge on the buffer card (over its filament's colours),
     on the search card, and the sentence in the spool window. Read-only: the spool is a

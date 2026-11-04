@@ -312,7 +312,15 @@ window.auditScanOutlived = (q) => {
 
 // What a scan the audit took answers. `sentAt`: when the scan went out.
 const _auditScanAnswer = (res, sentAt) => {
-    if (res.audit_ended) { window.noteAuditEnded(res.audit_ended); return; }
+    if (res.audit_ended) {
+        window.noteAuditEnded(res.audit_ended);
+        // A Done that ended the audit with nothing to ask carries its report: the window
+        // opens where the panel was (Derek, 2026-11-03). A Cancel's doesn't.
+        if (res.report && res.audit_ended.why === 'done' && window.openAuditReport) {
+            window.openAuditReport(res.report, { after: true });
+        }
+        return;
+    }
     // The audit took it: Find a spool, over the panel, would hide what it did.
     if (window.closeAuditFindForScan) window.closeAuditFindForScan();
     // `warning`: found, but its label couldn't be checked (toasted by the caller).
@@ -1988,6 +1996,8 @@ window.commitBulkMove = () => {
     window.openAuditPanel = () => {
         if (_handle) return;  // idempotent
         if (typeof window.mountOverlay !== 'function') return;
+        // An audit started meanwhile: its panel takes the place of a report read.
+        if (window.closeAuditReport) window.closeAuditReport();
         _lastRenderHash = null;  // force first render after open
         _lastData = null;        // nothing drawn yet: Find tags nothing until the first answer
         _dockDrawn = false;      // a new panel: its dock is drawn at the first answer
@@ -2357,6 +2367,9 @@ window.commitBulkMove = () => {
             window.noteAuditEnded(res.audit_ended, { quiet: true });
             showToast(res.msg, res.success ? 'success' : 'warning', res.success ? 4000 : 7000);
             document.dispatchEvent(new CustomEvent('inventory:locations-changed'));
+            // And the report itself, where the panel was (Derek, 2026-11-03): after the
+            // panel has gone (noteAuditEnded), so it is the window on top.
+            if (res.report) window.openAuditReport(res.report, { after: true });
             return;
         }
         // Refused, with nothing written. The audit runs on (a failed read, a second
@@ -2493,6 +2506,188 @@ window.commitBulkMove = () => {
         // question, where a mousedown off the buttons takes the keyboard from Back.
         _shieldPage();
     };
+
+    // --- The audit's report window (Derek, 2026-11-03, section H) -------------------
+    // "a window right after Done's Yes, and a 📝 Read the report button on the report's
+    // Activity Log line": the server's report as data (section H, S3: each spool once,
+    // under what the end did with it), each spool a colour tile as in Done's question
+    // (window.fccSpoolTileHtml). It opens where the panel was after a Done this page ended
+    // (the park's answer, or a Done with nothing to ask), and from the report's line
+    // (GET /api/audit/report). Never after a Cancel or an idle end: their lines' button
+    // opens theirs. A mountOverlay at the panel's tier, Tab kept inside it, Escape and
+    // Close closing it, the keyboard on Close. It takes no scan: a scan read while it is
+    // up goes to processScan as usual and closes it (the scan's toast or dialog would sit
+    // under it), but for a scanner's second read of the CMD:DONE that ended the audit.
+    const REPORT_ID = 'fcc-audit-report';
+    const REPORT_TIMEOUT_MS = 8000;     // the route reads no Spoolman
+    const REPORT_SECOND_READ_MS = 1500; // processScan's LOC_REPEAT_MS: a scanner's double read
+    let _report = null;
+    let _reportFit = null;
+    let _reportAfterDoneAt = 0;
+    let _reportAskedAt = 0;
+    let _reportOut = false;
+    // Each kind of group (logic._audit_report_data): its icon (the report line's), its
+    // tiles' look and what a tile says under its grams.
+    const _at = (r) => (r.where ? `📍 ${r.where}` : '');
+    const REPORT_KINDS = {
+        parked: { icon: '❓', tone: 'missing', where: (r) => (r.where ? `from ${r.where}` : '') },
+        filed: { icon: '📥', tone: 'extra', where: (r) => (r.where ? `from ${r.where}` : '') },
+        stayed: { icon: '📌', tone: 'stay', where: (r) => r.why || _at(r) },
+        failed: { icon: '🛑', tone: 'failed', where: (r) => r.why || _at(r) },
+        missing: { icon: '❌', tone: 'missing', where: (r) => r.why || _at(r) },
+        extra: { icon: '⚠️', tone: 'extra', where: (r) => r.why || _at(r) },
+        trail: { icon: '🔗', tone: 'trail', where: (r) => (r.where ? `loaded on ${r.where}` : '') },
+        needs_label: { icon: '🏷️', tone: 'found', where: _at },
+    };
+
+    const _reportHtml = (rep, after) => {
+        const place = String(rep.place == null ? '' : rep.place);
+        const groups = (Array.isArray(rep.groups) ? rep.groups : []).filter(g => g && Array.isArray(g.rows) && g.rows.length);
+        const count = (kind) => groups.filter(g => g.kind === kind).reduce((n, g) => n + g.rows.length, 0);
+        const lists = groups.map((g) => {
+            const kind = REPORT_KINDS[g.kind] || { icon: '', tone: '', where: (r) => r.why || _at(r) };
+            const tiles = g.rows.map((r) => window.fccSpoolTileHtml({
+                text: _spoolName(r),
+                detail: _grams(r),
+                where: kind.where(r),
+                // Marked in this audit, wherever it is: the group of the marked holds only
+                // the ones no other group lists.
+                tag: (r.needs_label && g.kind !== 'needs_label') ? '🏷️ needs a label' : '',
+                color: r.color,
+                color_direction: r.color_direction,
+            }, kind.tone)).join('');
+            return `<section class="fcc-audit-report-group" data-report-kind="${_escapeHtml(g.kind)}">`
+                + `<div class="fcc-audit-report-head">${_escapeHtml(`${kind.icon ? `${kind.icon} ` : ''}${g.title} (${g.rows.length})`)}</div>`
+                + `<div class="fcc-spool-tiles">${tiles}</div></section>`;
+        }).join('');
+        const empty = !place ? 'No place was scanned in this audit, so there are no spools to list.'
+            : (rep.perfect ? `Every spool FCC had at ${place} was found.` : 'There are no spools to list.');
+        // Right after the Yes: where to read it again, and what Undo puts back.
+        const parked = count('parked');
+        const filed = count('filed');
+        const undone = (parked && filed) ? 'the parked and filed spools'
+            : (parked ? (parked === 1 ? 'the parked spool' : 'the parked spools')
+                : (filed ? (filed === 1 ? 'the filed spool' : 'the filed spools') : ''));
+        const foot = !after ? '' : [
+            place ? 'The same report is in the Activity Log: its 📝 Read the report button opens this window again.' : '',
+            undone ? `Undo Last Move puts ${undone} back.` : '',
+        ].filter(Boolean).join(' ');
+        return `
+            <div class="fcc-audit-report-panel" role="dialog" aria-modal="true" aria-labelledby="fcc-audit-report-title">
+                <div class="fcc-audit-report-top">
+                    <div id="fcc-audit-report-title">${_escapeHtml(place ? `📝 Audit Report: ${place}` : '📝 Audit Report')}</div>
+                    <button type="button" id="fcc-audit-report-close" class="btn btn-sm btn-outline-light">Close</button>
+                </div>
+                <div class="fcc-audit-report-summary">${_escapeHtml(rep.summary || '')}</div>
+                <div class="fcc-audit-report-body" tabindex="-1" role="region" aria-label="Each spool, by what the audit did with it">
+                    ${lists || `<div class="fcc-audit-report-empty">${_escapeHtml(empty)}</div>`}
+                </div>
+                ${foot ? `<div class="fcc-audit-report-foot">${_escapeHtml(foot)}</div>` : ''}
+            </div>`;
+    };
+
+    // Taller than the window, its body scrolls and the title, summary and Close stay
+    // (.fcc-audit-report-scroll); only then, as a question (fccFitQuestion: a scroller
+    // draws its text without ClearType), and then the body is a stop for Tab, whose arrow
+    // and page keys scroll it.
+    const _fitReport = (panel) => {
+        if (!panel || !panel.isConnected || typeof panel.getBoundingClientRect !== 'function') return;
+        panel.classList.remove('fcc-audit-report-scroll');
+        const scroll = panel.getBoundingClientRect().height > (window.innerHeight || 0) - 16 + 0.5;
+        if (scroll) panel.classList.add('fcc-audit-report-scroll');
+        const body = panel.querySelector('.fcc-audit-report-body');
+        if (body) body.tabIndex = scroll ? 0 : -1;
+    };
+    document.addEventListener('fcc:text-size', () => { if (_report) _fitReport(_report.panel); });
+
+    // `opts.after`: right after the Done this page ended (the Yes, or a Done with nothing
+    // to ask); `opts.opener`: the button it was asked for from, which the keyboard goes
+    // back to.
+    window.openAuditReport = (rep, opts = {}) => {
+        if (!rep || typeof window.mountOverlay !== 'function' || typeof window.fccSpoolTileHtml !== 'function') return null;
+        window.closeAuditReport();
+        const after = !!opts.after;
+        const handle = window.mountOverlay({
+            id: REPORT_ID,
+            content: _reportHtml(rep, after),
+            tier: 'standard',
+            backdrop: true,
+            trapTab: true,
+            initialFocus: '#fcc-audit-report-close',
+            onEscape: () => window.closeAuditReport(),
+        });
+        _report = handle;
+        handle._opener = opts.opener || null;
+        const close = handle.element.querySelector('#fcc-audit-report-close');
+        if (close) close.onclick = () => window.closeAuditReport();
+        const panel = handle.element.querySelector('.fcc-audit-report-panel');
+        _fitReport(panel);
+        if (typeof requestAnimationFrame === 'function') {
+            requestAnimationFrame(() => requestAnimationFrame(() => { if (_report === handle) _fitReport(panel); }));
+        }
+        if (typeof window.addEventListener === 'function') {
+            _reportFit = () => _fitReport(panel);
+            window.addEventListener('resize', _reportFit);
+        }
+        _reportAfterDoneAt = after ? Date.now() : 0;
+        // Opened under the pointer that asked for it (the Yes, Done, the line's button):
+        // the second press of a double click reaches nothing, Close included.
+        _shieldPage();
+        return handle;
+    };
+
+    window.closeAuditReport = () => {
+        if (!_report) return;
+        const handle = _report;
+        _report = null;
+        if (_reportFit && typeof window.removeEventListener === 'function') window.removeEventListener('resize', _reportFit);
+        _reportFit = null;
+        try { handle.cleanup(); } catch (_) { /* noop */ }
+        // Back to the button it was asked for from, when nothing else has the keyboard.
+        const opener = handle._opener;
+        const a = document.activeElement;
+        if (opener && opener.isConnected && (!a || a === document.body) && opener.focus) {
+            try { opener.focus({ preventScroll: true }); } catch (_) { /* noop */ }
+        }
+    };
+
+    window.isAuditReportOpen = () => !!_report;
+
+    // processScan, for every scan: the window goes and the scan goes on. A scanner's second
+    // read of the CMD:DONE that ended the audit (`at`: when it was read) leaves it up.
+    window.closeAuditReportForScan = (upper, at) => {
+        if (!_report) return;
+        if (upper === 'CMD:DONE' && _reportAfterDoneAt && (at || Date.now()) - _reportAfterDoneAt < REPORT_SECOND_READ_MS) return;
+        window.closeAuditReport();
+    };
+
+    // The 📝 Read the report button the server puts in the report's line (section H, S3):
+    // one delegated click, for Live Activity (redrawn by innerHTML, frozen while paused)
+    // and the log pill's window, which draw the same line. A double press asks once.
+    const _askReport = (btn) => {
+        const now = Date.now();
+        if (_reportOut || now - _reportAskedAt < DOUBLE_PRESS_MS) return;
+        _reportAskedAt = now;
+        _reportOut = true;
+        const id = String((btn.dataset && btn.dataset.auditReport) || '');
+        window.fetchT(`/api/audit/report?id=${encodeURIComponent(id)}`, {}, REPORT_TIMEOUT_MS)
+            .then(r => r.json())
+            .then((res) => {
+                if (res && res.success && res.report) { window.openAuditReport(res.report, { opener: btn }); return; }
+                // FCC no longer has it (it keeps the last 10, a restart clears them): the
+                // server's words, which point to the line's own words.
+                showToast((res && res.msg) || "FCC couldn't show that report.", 'warning', 7000);
+            }, () => showToast("FCC didn't answer, so the report couldn't be shown. Try again in a moment.", 'warning', 7000))
+            .catch(e => console.error(e))
+            .finally(() => { _reportOut = false; });
+    };
+    document.addEventListener('click', (e) => {
+        const t = e.target && e.target.closest ? e.target : null;
+        const btn = t ? t.closest('.fcc-audit-report-open') : null;
+        if (!btn || !btn.closest('#live-logs, #fcc-log-pill-overlay')) return;
+        e.preventDefault();
+        _askReport(btn);
+    });
 })();
 
 // --- Prusament matched-scan overlay (Stage 2c) -----------------------------
@@ -2972,6 +3167,11 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
         if (window.logClientEvent) window.logClientEvent(`ℹ️ Scan "${escLog(text)}" ignored: ${said}`, 'INFO');
         return;
     }
+    // Group 58 (Derek, 2026-11-03): the audit's report window takes no scan. It goes, and
+    // the scan goes on, its answer on top (a toast, or a dialog such as Undo's, would sit
+    // under it). Below the guards above, so a closed dialog's QR read again leaves it up,
+    // and so does a scanner's second read of the CMD:DONE that ended the audit.
+    if (window.closeAuditReportForScan) window.closeAuditReportForScan(upper, capturedAt);
 
     // Group 58: the commands below never reach the server's audit gate.
     const auditRefusal = state.auditActive ? _auditCommandRefusal(upper) : '';

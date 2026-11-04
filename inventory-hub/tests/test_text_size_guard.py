@@ -512,6 +512,25 @@ def test_audit_done_question_text_is_readable(page: Page, base_url: str, assert_
     assert_text_size(page.locator("#fcc-audit-done-question"))
 
 
+def test_audit_report_window_text_is_readable(page: Page, base_url: str, assert_text_size):
+    """Group 58, Derek's second look (builder B, Q2): the report window, every kind of group
+    and tile, its tag and its foot; and the report line's 📝 Read the report button in Live
+    Activity. From the route's shape (test_audit_report_window_58_js.FULL), nothing sent."""
+    from conftest import quiet_heartbeat
+    from test_audit_report_window_58_js import FULL, LOG_ROW
+    _read_only(page)
+    quiet_heartbeat(page)               # after: the newest route answers first
+    page.goto(base_url, wait_until="domcontentloaded")
+    page.wait_for_function("() => typeof window.openAuditReport === 'function'", timeout=45_000)
+    page.evaluate("(r) => window.openAuditReport(r, { after: true })", FULL)
+    page.wait_for_selector("#fcc-audit-report .fcc-audit-report-foot")
+    assert_text_size(page.locator("#fcc-audit-report"))
+    page.keyboard.press("Escape")
+    page.evaluate("(row) => window._renderLogsPayload({ logs: [row], status: { spoolman: true } }, true)", LOG_ROW)
+    page.wait_for_selector("#live-logs .fcc-audit-report-open")
+    assert_text_size(page.locator("#live-logs"))
+
+
 def test_audit_find_window_text_is_readable(page: Page, base_url: str, assert_text_size):
     """Derek's answers of 2026-11-03, A2: 🔎 Find a spool, its rows (each "where" and both
     tags), its notice, "Searching…" over older rows (review of 7e3720f, P-7) and a failed
