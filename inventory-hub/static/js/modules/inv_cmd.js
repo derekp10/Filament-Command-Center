@@ -2570,16 +2570,35 @@ window.commitBulkMove = () => {
         needs_label: { icon: '🏷️', tone: 'found', where: _at },
     };
 
+    // A row at the audited place itself (Derek's look of 2026-11-04: every parked tile of
+    // SHELF-3-R1's report read "from SHELF-3-R1", which the title already says): its where
+    // goes, and its slot, when it has one, goes on its small line as the panel's tile and
+    // Done's question say it ("500g (slot 2)"). null: a row somewhere else, which keeps its
+    // line; '': the place itself; else the slot. `where` is logic.audit_where's ("LR-MDB-1
+    // slot 2"), compared without case.
+    const _atThePlace = (where, place) => {
+        const w = String(where == null ? '' : where).trim();
+        const p = String(place == null ? '' : place).trim();
+        if (!w || !p) return null;
+        if (w.toUpperCase() === p.toUpperCase()) return '';
+        const head = `${p} slot `;
+        return w.toUpperCase().startsWith(head.toUpperCase()) ? w.slice(head.length).trim() : null;
+    };
+
     const _reportHtml = (rep, after) => {
         const place = String(rep.place == null ? '' : rep.place);
         const groups = (Array.isArray(rep.groups) ? rep.groups : []).filter(g => g && Array.isArray(g.rows) && g.rows.length);
         const count = (kind) => groups.filter(g => g.kind === kind).reduce((n, g) => n + g.rows.length, 0);
         const lists = groups.map((g) => {
             const kind = REPORT_KINDS[g.kind] || { icon: '', tone: '', where: (r) => r.why || _at(r) };
-            const tiles = g.rows.map((r) => window.fccSpoolTileHtml({
+            const tiles = g.rows.map((r) => {
+                const slot = _atThePlace(r.where, place);
+                const grams = _grams(r);
+                return { r, slot, detail: slot ? `${grams}${grams ? ' ' : ''}(slot ${slot})` : grams };
+            }).map(({ r, slot, detail }) => window.fccSpoolTileHtml({
                 text: _spoolName(r),
-                detail: _grams(r),
-                where: kind.where(r),
+                detail,
+                where: kind.where(slot === null ? r : Object.assign({}, r, { where: '' })),
                 // Marked in this audit, wherever it is: the group of the marked holds only
                 // the ones no other group lists.
                 tag: (r.needs_label && g.kind !== 'needs_label') ? '🏷️ needs a label' : '',

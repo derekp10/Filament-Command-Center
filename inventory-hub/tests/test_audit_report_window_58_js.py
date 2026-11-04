@@ -171,17 +171,21 @@ def test_each_spool_once_under_what_done_did_with_it(dialog):
     other group lists, section H, S3)."""
     dialog.evaluate("(r) => window.openAuditReport(r, { after: true })", FULL)
     _shown(dialog)
+    # A row at the audited place keeps only its slot, on its small line (Derek's look of
+    # 2026-11-04, T2). PIN UPDATED DELIBERATELY: #101 read "from LR-MDB-1 slot 2", #57
+    # "📍 LR-MDB-1 slot 1", and #103 had no slot.
     assert _groups(dialog) == [
-        ["❓ Parked at Unknown (2)", "missing", [["#101 Some Brand PLA (Red)", "500g", "from LR-MDB-1 slot 2", ""],
-                                              ["#102 Some Brand PLA (Galaxy Purple With Glitter Sparkles)", "500g",
-                                               "from LR-MDB-1 slot 3", ""]]],
+        ["❓ Parked at Unknown (2)", "missing", [["#101 Some Brand PLA (Red)", "500g (slot 2)", "", ""],
+                                              ["#102 Some Brand PLA (Galaxy Purple With Glitter Sparkles)",
+                                               "500g (slot 3)", "", ""]]],
         ["📥 Filed in LR-MDB-1 (1)", "extra", [["#201 Another Maker PETG (Glow Teal)", "500g", "from LR-MDB-2 slot 3",
                                               "🏷️ needs a label"]]],
         ["📌 Left where they are (2)", "stay", [["#301 Some Brand PETG (Clear)", "500g", HEAD_WHY, ""],
                                               ["#302 Some Brand PLA (White)", "500g", "moved to CR-CT-1", ""]]],
-        ["🛑 Couldn't be moved (1)", "failed", [["#103 Some Brand ASA (Grey)", "500g", "Spoolman refused it: nope", ""]]],
+        ["🛑 Couldn't be moved (1)", "failed", [["#103 Some Brand ASA (Grey)", "500g (slot 4)", "Spoolman refused it: nope",
+                                               ""]]],
         ["🔗 Loaded from LR-MDB-1 (1)", "trail", [["#242 Some Brand PLA (Galaxy Black)", "500g", "loaded on XL-2", ""]]],
-        ["🏷️ Needs a label (1)", "found", [["#57 Some Brand PLA (Blue)", "500g", "📍 LR-MDB-1 slot 1", ""]]]]
+        ["🏷️ Needs a label (1)", "found", [["#57 Some Brand PLA (Blue)", "500g (slot 1)", "", ""]]]]
     assert dialog.locator(REPORT + " .fcc-spool-tile > span[style*='border-radius:50%']").count() == 8   # a swatch each
     foot = dialog.text_content(REPORT + " .fcc-audit-report-foot")
     assert "Undo Last Move puts the parked and filed spools back." in foot
@@ -193,11 +197,42 @@ def test_an_end_that_moved_nothing_lists_what_was_missing_and_the_extras(dialog)
     Undo (nothing moved), nor of the Activity Log (it was opened from there)."""
     dialog.evaluate("(r) => window.openAuditReport(r)", CANCELLED)
     _shown(dialog)
+    # PIN UPDATED DELIBERATELY (T2): #30 read "📍 SHELF-1" and #40 "📍 SHELF-1 slot 2".
     assert _groups(dialog) == [
-        ["❌ Not scanned (2)", "missing", [["#30 Some Brand PLA (Red)", "500g", "📍 SHELF-1", ""],
-                                         ["#40 Some Brand PLA (Red)", "500g", "📍 SHELF-1 slot 2", ""]]],
+        ["❌ Not scanned (2)", "missing", [["#30 Some Brand PLA (Red)", "500g", "", ""],
+                                         ["#40 Some Brand PLA (Red)", "500g (slot 2)", "", ""]]],
         ["⚠️ Extra (filed elsewhere) (1)", "extra", [["#200 Some Brand PLA (Red)", "500g", "📍 LR-MDB-2 slot 3", ""]]]]
     assert dialog.locator(REPORT + " .fcc-audit-report-foot").count() == 0
+
+
+def test_a_row_at_the_audited_place_keeps_only_its_slot(dialog):
+    """Derek's look of 2026-11-04 (T2): every parked tile of SHELF-3-R1's report read "from
+    SHELF-3-R1", which its title already names, so each tile took three lines for two. A row
+    at the place itself has no where line, and its slot, when it has one, is on its small
+    line as the panel's tile says it; a row from anywhere else keeps its line. The place is
+    compared without case, and only whole: LR-MDB-10 isn't LR-MDB-1."""
+    rep = dict(FULL, place="LR-MDB-1", groups=[
+        {"kind": "parked", "title": "Parked at Unknown", "rows": [
+            _row(1, "Some Brand PLA (Red)", "LR-MDB-1"),
+            _row(2, "Some Brand PLA (Red)", "lr-mdb-1 slot 3"),
+            dict(_row(3, "Some Brand PLA (Red)", "LR-MDB-1 slot 4"), remaining_weight=None)]},
+        {"kind": "missing", "title": "Not scanned", "rows": [
+            _row(4, "Some Brand PLA (Red)", "LR-MDB-10 slot 2"),
+            _row(5, "Some Brand PLA (Red)", "Unassigned")]},
+        {"kind": "stayed", "title": "Left where it is", "rows": [
+            _row(6, "Some Brand PLA (Red)", "LR-MDB-1 slot 1", "in the scan buffer")]}])
+    dialog.evaluate("(r) => window.openAuditReport(r, { after: true })", rep)
+    _shown(dialog)
+    assert _groups(dialog) == [
+        ["❓ Parked at Unknown (3)", "missing", [["#1 Some Brand PLA (Red)", "500g", "", ""],
+                                              ["#2 Some Brand PLA (Red)", "500g (slot 3)", "", ""],
+                                              ["#3 Some Brand PLA (Red)", "(slot 4)", "", ""]]],
+        ["❌ Not scanned (2)", "missing", [["#4 Some Brand PLA (Red)", "500g", "📍 LR-MDB-10 slot 2", ""],
+                                         ["#5 Some Brand PLA (Red)", "500g", "📍 Unassigned", ""]]],
+        ["📌 Left where it is (1)", "stay", [["#6 Some Brand PLA (Red)", "500g (slot 1)", "in the scan buffer", ""]]]]
+    # No empty line is drawn for the where that went: two lines, not three.
+    assert dialog.evaluate("""(r) => Array.from(document.querySelectorAll(r + ' [data-report-kind="parked"] .fcc-spool-tile'))
+        .map((t) => t.querySelectorAll('.fcc-spool-tile-where').length)""", REPORT) == [0, 0, 0]
 
 
 def test_every_word_is_escaped(dialog):
