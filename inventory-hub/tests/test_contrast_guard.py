@@ -269,13 +269,17 @@ def test_audit_panel_and_pill_are_readable(page: Page, base_url: str, assert_con
                   # Derek's answers of 2026-11-03: a tile's QR (its badge under its name), an
                   # Extra taken back, the strip's 🖨️ and 🔎 Find a spool.
                   "or scan its QR", "not scanned", "Not here after all?", "Add to print queue", "Find a spool",
-                  # His second look (sample 5a(i)): the spools still to find first, each group headed.
-                  "Not scanned (1)", "Found (2)"):
+                  # His second look (sample 5a(i)): the spools still to find first, each group headed;
+                  # the Last found box's "↩ Put back" (P7).
+                  "Not scanned (1)", "Found (2)", "Put back"):
         assert words in scored, (words, scored)
     # The tile with a QR: the QR's white box holds no text, and its badge moved under the name.
     assert panel.locator("[data-audit-tile='99'] .fcc-audit-tile-qr").count() == 1
     panel.locator("#fcc-audit-label-undo").hover()
     page.wait_for_timeout(200)          # Bootstrap's colour transition
+    assert_contrast(panel)
+    panel.locator("#fcc-audit-put-back").hover()   # his second look (P7): the box's "↩ Put back"
+    page.wait_for_timeout(200)
     assert_contrast(panel)
     # The strip's 🖨️ (2026-11-03, B), for #57, flagged here: under the mouse, then once the
     # label is queued, when it says so and its hover looks like no press. The queue's own
@@ -334,6 +338,12 @@ def test_audit_panel_and_pill_are_readable(page: Page, base_url: str, assert_con
     page.wait_for_timeout(200)
     assert_contrast(panel)
     page.mouse.move(0, 0)
+    # The Last found box with no spool in it, others found: "Nothing is selected" (P2, P7).
+    page.evaluate("(s) => { const plain = window.fetchT; window.fetchT = (u, ...r) => String(u).includes('/api/audit_session')"
+                  " ? Promise.resolve({ json: () => Promise.resolve(s) }) : plain(u, ...r); window.refreshAuditSession(); }",
+                  dict(SAMPLE_AUDIT, last_found=None))
+    expect(panel.locator("#fcc-audit-last-none")).to_contain_text("Nothing is selected")
+    assert_contrast(panel)
     page.keyboard.press("Escape")
     pill = page.locator("#fcc-audit-pill")
     expect(pill).to_be_visible()

@@ -3046,6 +3046,14 @@ button.fcc-audit-tile.fcc-audit-tile-tagged { padding-right: 2.75rem; }
     font-weight: bold;
     color: #7fe8ff;
 }
+/* Its first line: "Last found", and "↩ Put back" at its end (P7). */
+.fcc-audit-strip-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.25rem 0.5rem;
+}
 .fcc-audit-strip-spool {
     display: flex;
     align-items: flex-start;

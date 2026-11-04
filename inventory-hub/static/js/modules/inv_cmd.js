@@ -1214,6 +1214,9 @@ window.commitBulkMove = () => {
     // showed last (_render, for where the keyboard goes).
     let _undoAnsweredAt = 0;
     let _stripSpool = null;
+    // The audit whose Last found box has held a spool: once one has, an empty box says
+    // nothing is selected, not that nothing was found (_renderNoStrip).
+    let _selectedIn = null;
     // When Done's question was last answered: see _shieldClick.
     let _questionClosedAt = 0;
     // A double click's second press (see _shieldPage and _shieldClick). `_press`: the last
@@ -1467,9 +1470,14 @@ window.commitBulkMove = () => {
         const swatch = (typeof window.makeSwatchHtml === 'function')
             ? window.makeSwatchHtml(row.color, row.color_direction, { size: 28, borderColor: '#444' }) : '';
         const name = _escapeHtml(_spoolName(row));
+        // "↩ Put back" (P7): not for a spool loaded from here, whose tile is no button.
+        const id = Number(row.id);
+        const putBack = row.trail ? '' : `<button type="button" id="fcc-audit-put-back" class="btn btn-sm btn-outline-light fcc-audit-put-back"
+                    title="${_escapeHtml(row.rogue ? `Not here after all: take #${id} off the Extras`
+                        : `A mistaken find: put #${id} back on the not-scanned list`)}">↩ Put back</button>`;
         return `
             <div id="fcc-audit-last-found" class="fcc-audit-strip">
-                <div class="fcc-audit-strip-title">Last found</div>
+                <div class="fcc-audit-strip-head"><span class="fcc-audit-strip-title">Last found</span>${putBack}</div>
                 <div class="fcc-audit-strip-spool">${swatch}<span class="fcc-audit-strip-name">${name}</span></div>
                 <div class="fcc-audit-strip-status" role="status">
                     <span>${_escapeHtml(_stripLine(row))}</span>
@@ -1480,12 +1488,14 @@ window.commitBulkMove = () => {
         `;
     };
 
-    // The box with no spool in it: nothing found yet, or nothing selected (a find taken
-    // back that was the last found), so a press of Needs a label, or a scan of its QR,
-    // is answered by the server's "Nothing has been found yet" / "No spool is selected".
-    // Its own id: #fcc-audit-last-found means a spool is in the box.
+    // The box with no spool in it: nothing found yet, or nothing selected (the last find
+    // taken back, by "↩ Put back" or its tile, while others stay found, or once this audit
+    // has had a spool in the box: Derek, "until the next find"), so a press of Needs a
+    // label, or a scan of its QR, is answered by the server's "Nothing has been found yet"
+    // / "No spool is selected". Its own id: #fcc-audit-last-found means a spool is in it.
     const _renderNoStrip = (data) => {
-        const anyFound = (data.expected || []).some(r => r.found) || (data.rogue || []).length || (data.trail || []).length;
+        const anyFound = (data.expected || []).some(r => r.found) || (data.rogue || []).length || (data.trail || []).length
+            || (_selectedIn != null && _selectedIn === (data.audit_id != null ? data.audit_id : state.auditId));
         const words = anyFound ? 'Nothing is selected. The next spool you find shows here.'
             : "Nothing found yet. Scan a spool's label, press its tile, or use 🔎 Find a spool.";
         return `
@@ -1560,6 +1570,27 @@ window.commitBulkMove = () => {
         if (added) showToast(`Added ${tag}'s label to the print queue.`, 'success', 4000);
         else showToast(`${tag}'s label is already in the print queue.`, 'info', 4000);
         _redrawNow();
+    };
+
+    // "↩ Put back" in the Last found box (Derek, 2026-11-03: "put back into the unscanned
+    // queue, so the user doesn't have to scroll to find that one, if they realize it was a
+    // mistaken scan"): what a press on the last found's tile does (POST /api/audit/found,
+    // found: false), here in the box, with no QR, so a double read can't take a find back.
+    // An Extra comes off the Extras (A3). The server clears the last found, so the box
+    // says nothing is selected until the next find. A second press under DOUBLE_PRESS_MS
+    // does nothing, whatever the box shows by then: a scan answered between the two puts
+    // another spool there, and the press was the first's.
+    let _putBackAt = 0;
+    const _putBack = (row) => {
+        const now = Date.now();
+        if (now - _putBackAt < DOUBLE_PRESS_MS) return;
+        _putBackAt = now;
+        if (!row || row.trail) return;
+        const id = Number(row.id);
+        const words = row.rogue ? `#${id} is off the Extras: it isn't here after all.`
+            : `#${id} is back on the not-scanned list.`;
+        _pressPost('/api/audit/found', { audit_id: state.auditId, id, found: false },
+            (res) => ((res && res.success) ? Object.assign({}, res, { msg: words }) : res));
     };
 
     // Drawn again from the session it drew last when what this page knows of the print
@@ -1803,12 +1834,13 @@ window.commitBulkMove = () => {
         // own columns (Needs a label, Done, Cancel Audit) are never replaced, so only the
         // Last found box's buttons and the tiles need it.
         const active = document.activeElement;
-        const refocus = (active && /^fcc-audit-label-(undo|queue)$/.test(active.id || '')) ? active.id : null;
+        const refocus = (active && /^fcc-audit-(label-(undo|queue)|put-back)$/.test(active.id || '')) ? active.id : null;
         const refocusTile = (active && active.dataset) ? active.dataset.auditTile : null;
         const refocusTag = (active && active.dataset) ? active.dataset.auditTag : null;
         const stripSpool = data.last_found ? data.last_found.id : null;
         const stripMoved = stripSpool !== _stripSpool;
         _stripSpool = stripSpool;
+        if (stripSpool != null) _selectedIn = data.audit_id != null ? data.audit_id : state.auditId;
         // The tally, above the scrolling list and always in view (Derek, 2026-11-03,
         // sample 2a: "persistent status up top"), in the words and colours it had as the
         // body's first line.
@@ -1898,6 +1930,8 @@ window.commitBulkMove = () => {
         }
         const queueBtn = root.querySelector('#fcc-audit-label-queue');
         if (queueBtn) queueBtn.onclick = () => _queueLabel(data.last_found);
+        const putBackBtn = root.querySelector('#fcc-audit-put-back');
+        if (putBackBtn) putBackBtn.onclick = () => _putBack(data.last_found);
         _applyBusy();
         if (refocus && !_busy) {
             // "undo that" goes with the mark it undid: the keyboard goes to Needs a label.

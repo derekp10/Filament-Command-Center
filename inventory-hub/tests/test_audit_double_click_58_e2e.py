@@ -24,7 +24,8 @@ among those a first click on the deck's AUDIT tile can bring up. The review of 7
 Find's ↻ Try again (`try-again`, P-1), whose answer paints the rows under the pointer.
 Their hermetic twins are in test_audit_find_and_tiles_58_js.py. Derek's second look
 (2026-11-03, section H) adds a found tile's own 🏷️ (`a-tag`), whose mark grows its tile and
-moves the tiles under it; its hermetic twins are in test_audit_panel_look_58_js.py. Since the
+moves the tiles under it, and the Last found box's "↩ Put back" (`put-back`), which empties
+the box; their hermetic twins are in test_audit_panel_look_58_js.py. Since the
 dock (sample 1b), Done, Cancel Audit and Needs a label sit under the list, in view with no
 scroll; when the panel comes up over the deck, only their QR boxes, which press nothing, lie
 over its AUDIT tile at these five sizes, so `deck-tile` finds no button there and skips (its
@@ -50,7 +51,7 @@ pytestmark = pytest.mark.usefixtures("require_server")
 SIZES = [(1366, 640), (1366, 768), (1280, 800), (1600, 900), (1600, 1300)]
 LENGTHS = [3, 6, 10, 14, 24]
 CONTROLS = ["done-ends", "done-asks", "cancel-audit", "hide", "needs-a-label", "a-tile", "undo-that",
-            "back", "park", "deck-tile", "an-extra-tile", "find-open", "a-tag"]
+            "back", "park", "deck-tile", "an-extra-tile", "find-open", "a-tag", "put-back"]
 GAP_MS = 120                 # a person's double click (p12.py's)
 SHIELD_S = 0.75              # DOUBLE_PRESS_MS (inv_cmd.js) and a little: a case starts past it
 
@@ -63,11 +64,12 @@ CONTROL_SEL = {
     "needs-a-label": "#fcc-audit-panel-needlabel", "undo-that": "#fcc-audit-label-undo",
     "back": QUESTION + " .fcc-apc-no", "park": QUESTION + " .fcc-apc-yes", "deck-tile": "#btn-deck-audit",
     "find-open": "#fcc-audit-panel-find",
-    "a-tag": "[data-audit-tag='100']",
+    "a-tag": "[data-audit-tag='100']", "put-back": "#fcc-audit-put-back",
 }
 # The panel's buttons a first click on the deck's AUDIT tile can bring up under the second.
 PANEL_BUTTONS = ["#fcc-audit-panel-find", "#fcc-audit-panel-loose", "#fcc-audit-panel-close", "#fcc-audit-panel-done",
-                 "#fcc-audit-panel-cancel", "#fcc-audit-panel-needlabel", ".fcc-audit-tile", ".fcc-audit-tile-tag"]
+                 "#fcc-audit-panel-cancel", "#fcc-audit-panel-needlabel", ".fcc-audit-tile", ".fcc-audit-tile-tag",
+                 "#fcc-audit-put-back"]
 
 # What one click leaves: the requests it sends ((path, scan text)), the overlays up, and
 # where the keyboard is.
@@ -88,6 +90,8 @@ ONE_CLICK = {
     "find-open": ([], [PANEL[1:], "fcc-audit-find"], "find-box"),
     # A found tile's 🏷️: marked once, the keyboard kept on it through the redraw.
     "a-tag": ([("/api/audit/needs_label", None)], [PANEL[1:]], "tag:100"),
+    # Put back: the find taken back once, and the keyboard nowhere, as after any button that goes.
+    "put-back": ([("/api/audit/found", None)], [PANEL[1:]], "BODY"),
 }
 
 # What sits over the panel (item 2f): its first click closes it, and the second lands on
@@ -237,7 +241,12 @@ class Sweep:
         rows = [dict(r, found=found) if r["id"] == sid else r for r in self.session["expected"]]
         hit = next(r for r in rows if r["id"] == sid)
         n = sum(1 for r in rows if r["found"])
-        self.session = dict(self.session, expected=rows, last_found=dict(hit, label_read=False, flagged_here=False),
+        last = self.session.get("last_found")
+        if found:
+            last = dict(hit, label_read=False, flagged_here=False)
+        elif last and last["id"] == sid:                # taken back: nothing is selected, as the route leaves it
+            last = None
+        self.session = dict(self.session, expected=rows, last_found=last,
                             stats=dict(self.session["stats"], found=n, missing=len(rows) - n))
 
     def _found(self, route):
@@ -598,6 +607,9 @@ def test_a_real_double_click_does_what_one_click_does(board, rows, control):
     elif control == "a-tag":                        # P6: its first press marks the spool, and grows its tile
         board.begin(rows, 1, last=0)
         xy = _scrolled_into_view(page, CONTROL_SEL[control])
+    elif control == "put-back":                     # P7: its first press empties the Last found box
+        board.begin(rows, min(2, rows), last=0)
+        xy = page.evaluate(POINT, CONTROL_SEL[control])
     else:                                       # cancel-audit, hide, needs-a-label
         board.begin(rows, 1, last=0)
         xy = _scrolled_into_view(page, CONTROL_SEL[control])

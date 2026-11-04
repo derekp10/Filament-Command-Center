@@ -495,9 +495,10 @@ def test_tab_stays_on_the_panel_and_never_reaches_the_page_behind(live, env):
     live.wait_for_selector(BUTTON)
     # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, A2): 🔎 Find a spool is the header's first stop.
     # And again (his second look, sample 5a(i)): the spools still to find come first, so
-    # #99, not scanned, before #57, found; and #57's own 🏷️ follows it (his (a)).
-    stops = ["fcc-audit-panel-find", "fcc-audit-panel-loose", "fcc-audit-panel-close", "99", "57", "tag:57", BUTTON[1:],
-             DONE[1:], CANCEL[1:]]
+    # #99, not scanned, before #57, found; and #57's own 🏷️ follows it (his (a)), then the
+    # Last found box's "↩ Put back" and the dock's three buttons.
+    stops = ["fcc-audit-panel-find", "fcc-audit-panel-loose", "fcc-audit-panel-close", "99", "57", "tag:57",
+             "fcc-audit-put-back", BUTTON[1:], DONE[1:], CANCEL[1:]]
     live.focus(CANCEL)
     walk = []
     for _ in range(len(stops) * 2):

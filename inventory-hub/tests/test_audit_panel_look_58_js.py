@@ -457,3 +457,117 @@ def test_a_double_click_on_a_tag_marks_once_and_reaches_nothing_under_it(live, e
     live.wait_for_timeout(300)
     assert posts(live, TAG_URL) == [{"audit_id": audit_id(), "id": 57}] and posts(live, UNTAG_URL) == []
     assert posts(live, "/api/audit/found") == []
+
+
+# --- P7: "↩ Put back" ----------------------------------------------------------------------
+
+PUT_BACK = "#fcc-audit-put-back"
+FOUND_URL = "/api/audit/found"
+
+
+def test_put_back_takes_the_last_find_back_onto_the_not_scanned_list(live, env):
+    """Derek, 2026-11-03: "put back into the unscanned queue, so the user doesn't have to
+    scroll to find that one, if they realize it was a mistaken scan". What a press on its
+    tile does, from the box; then the box says nothing is selected. RED on 1bcaeb4."""
+    four(env)
+    begin(live, env)
+    scanned(live, "ID:134")
+    scanned(live, "ID:57")
+    box_says(live, STRIP, "#57")
+    assert live.text_content(PUT_BACK).strip() == "↩ Put back"
+    assert "not-scanned list" in live.get_attribute(PUT_BACK, "title")
+    live.click(PUT_BACK)
+    box_says(live, NONE, "Nothing is selected")
+    assert posts(live, FOUND_URL) == [{"audit_id": audit_id(), "id": 57, "found": False}]
+    assert 57 not in session()["scanned_items"] and 134 in session()["scanned_items"]
+    tile_says(live, 57, "not scanned")
+    headings_are(live, ["Not scanned (3)", "Found (1)"])
+    assert {"msg": "#57 is back on the not-scanned list.", "kind": "success"} in toasts(live)
+    assert live.evaluate("document.activeElement === document.body")   # it went, with its box's spool
+
+
+def test_put_back_takes_an_extra_off_the_extras(live, env):
+    four(env)
+    add_spool(env, 200, "LR-MDB-2", container_slot="3")
+    begin(live, env)
+    scanned(live, "ID:200")
+    box_says(live, STRIP, "#200")
+    assert "off the Extras" in live.get_attribute(PUT_BACK, "title")
+    live.click(PUT_BACK)
+    live.wait_for_selector(tile(200), state="detached")
+    assert 200 not in session()["rogue_items"]
+    assert {"msg": "#200 is off the Extras: it isn't here after all.", "kind": "success"} in toasts(live)
+
+
+def test_no_put_back_for_a_spool_loaded_from_here_and_no_qr_in_the_box(live, env):
+    """A loaded-from-here tile is no button, and the route refuses to take it back."""
+    four(env)
+    add_spool(env, 242, "XL-1", physical_source="LR-MDB-1", physical_source_slot="4")
+    begin(live, env)
+    scanned(live, "ID:242")
+    box_says(live, STRIP, "#242")
+    assert live.locator(PUT_BACK).count() == 0
+    scanned(live, "ID:57")
+    box_says(live, STRIP, "#57")
+    assert live.locator(PUT_BACK).count() == 1
+    assert live.evaluate("(s) => document.querySelector(s).querySelectorAll('[id*=qr], canvas, img').length", STRIP) == 0
+
+
+def test_a_second_press_under_a_double_press_puts_nothing_else_back(live, env):
+    """A double click must not put back one spool and then act on what takes its place: a
+    scan answered between the two presses puts another spool in the box."""
+    four(env)
+    begin(live, env)
+    scanned(live, "ID:57")
+    box_says(live, STRIP, "#57")
+    live.click(PUT_BACK)
+    box_says(live, NONE, "Nothing is selected")
+    scanned(live, "ID:99")                             # read between the two presses
+    box_says(live, STRIP, "#99")
+    live.click(PUT_BACK)                               # under 700 ms after the first
+    live.wait_for_timeout(200)
+    assert posts(live, FOUND_URL) == [{"audit_id": audit_id(), "id": 57, "found": False}]
+    assert 99 in session()["scanned_items"]
+
+
+def test_a_real_double_click_on_put_back_puts_back_once_and_reaches_nothing_under_it(live, env):
+    four(env)
+    begin(live, env)
+    scanned(live, "ID:134")
+    scanned(live, "ID:57")
+    box_says(live, STRIP, "#57")
+    live.dblclick(PUT_BACK)
+    box_says(live, NONE, "Nothing is selected")
+    live.wait_for_timeout(300)
+    assert posts(live, FOUND_URL) == [{"audit_id": audit_id(), "id": 57, "found": False}]
+    assert 134 in session()["scanned_items"] and "CMD:NEEDLABEL" not in [p.get("text") for p in posts(live, "/api/identify_scan")]
+
+
+def test_a_persons_enter_on_put_back_presses_it_once(live, env):
+    four(env)
+    begin(live, env)
+    scanned(live, "ID:57")
+    box_says(live, STRIP, "#57")
+    live.focus(PUT_BACK)
+    live.keyboard.press("Enter")
+    box_says(live, NONE, "Nothing is selected")
+    live.keyboard.press("Enter")                       # the keyboard went with it: nothing more
+    live.wait_for_timeout(200)
+    assert posts(live, FOUND_URL) == [{"audit_id": audit_id(), "id": 57, "found": False}]
+
+
+def test_a_put_back_that_is_refused_keeps_the_spool_and_says_why(live, env):
+    """The audit ended elsewhere: nothing is taken back, and the answer's words are toasted
+    at 7 s, as the strip's buttons'."""
+    four(env)
+    begin(live, env)
+    scanned(live, "ID:57")
+    box_says(live, STRIP, "#57")
+    live.evaluate("""() => { const plain = window.fetch;     // the panel's poll hasn't heard
+        window.fetch = (u, o) => (String(u).indexOf('/api/audit_session') !== -1 ? new Promise(() => {}) : plain(u, o)); }""")
+    scan(env, "CMD:CANCEL")
+    live.click(PUT_BACK)
+    live.wait_for_function("() => Array.from(document.querySelectorAll('#toast-container .toast-msg'))"
+                           ".some((e) => e.innerText.includes('already ended'))")
+    assert {"msg": "That audit has already ended.", "kind": "error"} in toasts(live)
+    assert live.locator(STRIP).count() == 1
