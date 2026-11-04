@@ -1049,3 +1049,89 @@ def test_scan_holding_pickers_notice_lines_are_readable(page: Page, base_url: st
     assert any("fcc-tp-flash" in (o.get("className") or "")
                for o in conftest.contrast_offenders(tree, min_ratio=100)), "the tree picker's notice line was never scored"
     page.click("#fcc-parent-tree-picker [data-tp='cancel']")
+
+
+# The coloured dialog headers (Group 58, builder B, Q4). global.css's `.modal-title`
+# cyan beat each header's own text colour: on #confirmModal's yellow (every Undo Last
+# Move and "Clear entire Buffer?" question) 1.09:1, on the 🧵 Multi-Spool Search's cyan,
+# and on the red of the safety interlock and "Clear Queue?". Each opened as the page
+# opens it (the gating dialogs through their helpers), scored from its .modal-content
+# (the guard scores descendants), and closed on its safe answer. Nothing is written.
+# The safety interlock's header only: its message, Bootstrap's danger red on the dark
+# body, is 3.84:1 (28 px bold, which WCAG's large-text 3:1 lets pass and FCC's 4.5 rule
+# doesn't), a red Derek chose, left for him (builder B's open question).
+COLOURED_HEADERS = {
+    "confirmModal": ("() => requestConfirmation('Clear entire Buffer?', () => {})", "() => confirmAction(false)",
+                     ".modal-content", ["Confirmation", "Clear entire Buffer?"]),
+    "safetyModal": ("() => promptSafety('A probe of the header?', () => {})", "() => confirmSafety(false)",
+                    ".modal-header", ["SAFETY INTERLOCK"]),
+    "multiSpoolModal": ("() => bootstrap.Modal.getOrCreateInstance(document.getElementById('multiSpoolModal')).show()",
+                        "() => bootstrap.Modal.getInstance(document.getElementById('multiSpoolModal')).hide()",
+                        ".modal-content", ["Multi-Spool Search", "Add All to Queue"]),
+    "clearQueueConfirmModal": (
+        "() => bootstrap.Modal.getOrCreateInstance(document.getElementById('clearQueueConfirmModal')).show()",
+        "() => bootstrap.Modal.getInstance(document.getElementById('clearQueueConfirmModal')).hide()",
+        ".modal-content", ["Clear Queue?", "Are you sure"]),
+}
+
+
+def _show_dialog(page: Page, modal_id: str, opener: str):
+    """`opener` run, and Bootstrap's shown.bs.modal waited for."""
+    page.evaluate("""(id) => { window.__shown = window.__shown || {}; window.__shown[id] = false;
+        document.getElementById(id).addEventListener('shown.bs.modal', () => { window.__shown[id] = true; }, { once: true }); }""",
+                  modal_id)
+    page.evaluate(opener)
+    page.wait_for_function("(id) => window.__shown[id] === true", arg=modal_id, timeout=10_000)
+
+
+@pytest.mark.usefixtures("require_server")
+@pytest.mark.parametrize("modal_id", list(COLOURED_HEADERS))
+def test_a_coloured_dialog_header_is_readable(page: Page, base_url: str, assert_contrast, modal_id):
+    """RED on 1ad5de6: each title was the app-wide cyan on its header (1.09, 2.56, 1.11
+    and 2.56:1). Now #confirmModal's header is dark with a yellow title (Derek's (b)), and
+    every other coloured header's title takes the text colour its own markup names."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    opener, closer, root, words = COLOURED_HEADERS[modal_id]
+    _read_only(page)
+    conftest.quiet_heartbeat(page)      # after: the newest route answers first
+    page.goto(base_url)
+    page.wait_for_function("() => typeof requestConfirmation === 'function' && typeof bootstrap !== 'undefined'")
+    _show_dialog(page, modal_id, opener)
+    content = page.locator(f"#{modal_id} {root}")
+    assert_contrast(content)
+    scored = " ".join(o.get("text", "") for o in conftest.contrast_offenders(content, min_ratio=100))
+    for word in words:
+        assert word in scored, (word, scored)
+    page.evaluate(closer)
+    conftest.wait_modal_settled(page, modal_id)
+
+
+@pytest.mark.usefixtures("require_server")
+def test_the_confirm_header_is_dark_with_a_thick_yellow_line_and_a_bigger_yellow_title(page: Page, base_url: str):
+    """Derek, 2026-11-03: (b), a dark header with a yellow title, "but A is functional and
+    reads more like a warning because of the yellow used ... easier to scan and work with
+    if the laptop doing the work is a bit of distance away": so a thicker yellow line under
+    it and a bigger title. The ⚠️ on dark needs no backing."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    _read_only(page)
+    conftest.quiet_heartbeat(page)
+    page.goto(base_url)
+    page.wait_for_function("() => typeof requestConfirmation === 'function' && typeof bootstrap !== 'undefined'")
+    _show_dialog(page, "confirmModal", COLOURED_HEADERS["confirmModal"][0])
+    look = page.evaluate("""() => {
+        const head = document.querySelector('#confirmModal .modal-header');
+        const title = head.querySelector('.modal-title');
+        const h = getComputedStyle(head), t = getComputedStyle(title);
+        return { bg: h.backgroundColor, line: parseFloat(h.borderBottomWidth), lineColour: h.borderBottomColor,
+                 lineStyle: h.borderBottomStyle, colour: t.color, px: parseFloat(t.fontSize),
+                 plainH5: parseFloat(getComputedStyle(document.documentElement).fontSize) * 1.25,
+                 backing: !!title.querySelector('.fcc-ico-on-light') }; }""")
+    assert look["bg"] == "rgb(43, 43, 43)", look                    # #2b2b2b, FCC's dark dialog header
+    assert look["line"] >= 4 and look["lineStyle"] == "solid" and look["lineColour"] == "rgb(255, 193, 7)", look
+    assert look["colour"] == "rgb(255, 193, 7)", look               # Bootstrap's warning yellow
+    assert look["px"] >= look["plainH5"] * 1.25, look               # a quarter bigger than an h5, at least
+    assert look["backing"] is False, look
+    page.evaluate(COLOURED_HEADERS["confirmModal"][1])
+    conftest.wait_modal_settled(page, "confirmModal")

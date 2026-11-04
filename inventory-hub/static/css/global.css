@@ -749,6 +749,30 @@ body {
     color: #00d4ff;
     font-weight: bold;
 }
+/* A title in a coloured header takes the header's own text colour, the .text-* class its
+   markup names (Group 58, 2026-11-03): the cyan above beat it, and read 1.11:1 on the
+   🧵 Multi-Spool Search's cyan and 2.56:1 on the red of the safety interlock and of
+   "Clear Queue?". A dark header keeps the cyan, and a title with its own .text-* keeps
+   that (Bootstrap's !important: the Print Queue's dark title on its yellow). */
+.modal-header[class*="bg-"]:not(.bg-dark) .modal-title {
+    color: inherit;
+}
+/* #confirmModal, the question every Undo Last Move and "Clear entire Buffer?" asks
+   (Derek, 2026-11-03, sample 4b (b), "but A is functional and reads more like a warning
+   because of the yellow used ... easier to scan and work with if the laptop doing the
+   work is a bit of distance away"): a dark header with a yellow title, as FCC's own dark
+   dialogs have, over a thick yellow line, and a bigger title, so it still reads as a
+   warning from across the room. Its title was the cyan above on a yellow header, 1.09:1.
+   The ⚠️ on dark needs no backing. */
+#confirmModal .fcc-confirm-header {
+    background-color: #2b2b2b;
+    border-bottom: 4px solid #ffc107;
+}
+#confirmModal .fcc-confirm-header .modal-title {
+    color: #ffc107;
+    font-size: 1.6rem;
+    line-height: 1.2;
+}
 
 .qr-box {
     background: #fff;
