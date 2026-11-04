@@ -114,7 +114,7 @@ def test_find_by_keyboard(page: Page, base_url: str):
     page.keyboard.press("Enter")
     expect(page.locator(FIND)).to_have_count(0)
     expect(page.locator(tile(NOT_SCANNED))).to_contain_text("found, no label read")
-    assert ("ID:99", "search") in server.sources
+    assert ("ID:99", "audit_find") in server.sources      # PIN UPDATED DELIBERATELY (Q5: Find's own source)
     expect(page.locator(FIND_BTN)).to_be_focused()
 
 
@@ -129,7 +129,7 @@ def test_find_by_mouse(page: Page, base_url: str):
     page.click(f"{FIND} .fcc-find-row[data-find-id='99']")
     expect(page.locator(FIND)).to_have_count(0)
     expect(page.locator(tile(NOT_SCANNED))).to_contain_text("found, no label read")
-    assert ("ID:99", "search") in server.sources
+    assert ("ID:99", "audit_find") in server.sources      # PIN UPDATED DELIBERATELY (Q5: Find's own source)
 
 
 @pytest.mark.parametrize("width, height", [(390, 844), (1600, 1300)])

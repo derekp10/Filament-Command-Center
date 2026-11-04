@@ -1110,17 +1110,30 @@ def _is_label_read(source, text):
     return source == 'barcode' and text.strip().upper().startswith('ID:')
 
 
+# The page's sources for a spool picked on screen, with no label read: the audit panel's
+# 🔎 Find a spool (inv_audit_find.js) and a search card's click (ui_builder.js). Neither
+# is 'barcode', so neither is ever a label read (_is_label_read).
+AUDIT_FIND_SOURCE = 'audit_find'
+SEARCH_CARD_SOURCE = 'search'
+
+
 def _audit_find_how(source, text):
     """How a spool scan the audit takes found its spool, for the find's Activity Log
     line and `heard` (logic._audit_found_words): None for a real read of its label
     (_is_label_read), "with Find a spool" for a pick in the panel's 🔎 Find a spool
-    (source 'search', inv_audit_find.js; a search card's click sends it too), and ''
-    for any other find, which read no label either (a typed id, an SPL: label, a bare
-    number, the legacy picker's pick). Group 58, Derek, 2026-11-03: a find with no
-    label read logged "Found #110 (5 left)", the words of a label read."""
+    (source 'audit_find', inv_audit_find.js), "with a search" for a search card's click
+    (source 'search', the search panel's), and '' for any other find, which read no
+    label either (a typed id, an SPL: label, a bare number, the legacy picker's pick).
+    Group 58, Derek, 2026-11-03: a find with no label read logged "Found #110 (5 left)",
+    the words of a label read; and the two picks on screen shared one source, so a
+    search card's click during an audit with the panel hidden read "with Find a spool"."""
     if _is_label_read(source, str(text or '')):
         return None
-    return "with Find a spool" if source == 'search' else ""
+    if source == AUDIT_FIND_SOURCE:
+        return "with Find a spool"
+    if source == SEARCH_CARD_SOURCE:
+        return "with a search"
+    return ""
 
 
 def _verify_spool_label(sid, data, source, text, quiet=False):

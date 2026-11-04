@@ -8,10 +8,13 @@ console.log("🚀 Loaded Module: AUDIT FIND");
 // for that location." The audit panel's 🔎 Find a spool button and its / key open this
 // over the panel (a mountOverlay at the confirm tier; Tab stays inside it): a text box,
 // focused, and the spools the search finds. A pick (Enter on the highlighted row, a
-// click or a tap) closes it and sends ID:<id> with source 'search' through
-// window.sendInScanOrder, in its turn behind scans already read: exactly what a search
-// card's click does, so the audit's own spool path makes the spool found (on the list)
-// or an Extra (not), with no label read, as the last found. It writes nothing itself.
+// click or a tap) closes it and sends ID:<id> with its own source, 'audit_find'
+// (FIND_SOURCE), through window.sendInScanOrder, in its turn behind scans already read:
+// what a search card's click does (source 'search'), so the audit's own spool path makes
+// the spool found (on the list) or an Extra (not), with no label read, as the last found.
+// The server says which in the find's words ("with Find a spool", a search card's "with
+// a search": routes_scan._audit_find_how), and neither is a label read (only a scanner's
+// 'barcode' is). It writes nothing itself.
 //
 // Searching: /api/search?q=…&type=spool&strict=1, debounced, and only the newest answer
 // paints, by this window's own count. A search that fails says "Couldn't search: …",
@@ -55,6 +58,9 @@ console.log("🚀 Loaded Module: AUDIT FIND");
     // The search reads every spool from Spoolman, and the route waits up to 10 s for it.
     const SEARCH_TIMEOUT_MS = 20000;
     const MAX_ROWS = 30;
+    // A pick's scan source, its own (routes_scan.AUDIT_FIND_SOURCE): the find's words say
+    // "with Find a spool", and a search card's click ('search') says "with a search".
+    const FIND_SOURCE = 'audit_find';
     // A double click's second press, inv_cmd.js's figures: under 700 ms after the
     // first, at its spot (16 px for a mouse, 40 for a finger).
     const DOUBLE_PRESS_MS = 700;
@@ -457,7 +463,7 @@ ${P} .fcc-find-foot { color:#ccc; font-size:var(--fcc-fs-small); margin-top:8px;
         const sid = Number(row.dataset.findId);
         if (!Number.isFinite(sid)) return;
         _close(handle, { picked: true });
-        (window.sendInScanOrder || window.processScan)(`ID:${sid}`, 'search');
+        (window.sendInScanOrder || window.processScan)(`ID:${sid}`, FIND_SOURCE);
     }
 
     function _focusBox(handle) {

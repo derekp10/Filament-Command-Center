@@ -1415,7 +1415,11 @@ def find_with_no_label_read(env, door, sid):
         return scan_answer(tile_qr(sid), source="barcode")      # a scanner reading the QR off the screen
     if door == "press":
         return press(env, sid)
-    return scan_answer(f"ID:{sid}", source="search")            # inv_audit_find.js's pick
+    # PIN UPDATED DELIBERATELY (Group 58, builder B, Q5): Find sends its own source, and a
+    # search card's click keeps 'search'; neither is a label read.
+    if door == "search card":
+        return scan_answer(f"ID:{sid}", source="search")        # ui_builder.js's search card
+    return scan_answer(f"ID:{sid}", source="audit_find")        # inv_audit_find.js's pick
 
 
 def label_side(env, *sids):
@@ -1434,7 +1438,7 @@ def label_side(env, *sids):
 
 
 @pytest.mark.parametrize("status", list(STATUSES))
-@pytest.mark.parametrize("door", ["tile QR", "press", "Find pick"])
+@pytest.mark.parametrize("door", ["tile QR", "press", "Find pick", "search card"])
 def test_a_find_with_no_label_read_never_touches_its_label_or_the_backlog(env, door, status):
     """#5 is found by the door, #6 isn't found (Done parks it), and #7, an Extra FCC has in
     LR-MDB-2, is picked in Find (Done files it here), all three with the same status."""
@@ -1452,7 +1456,7 @@ def test_a_find_with_no_label_read_never_touches_its_label_or_the_backlog(env, d
     got = row(env, 5)
     assert got["found"] is True and got["label_read"] is False and got["label_status"] is ROW_STATUS[status]
 
-    assert scan_answer("ID:7", source="search")["cmd"] == "audit_scan"
+    assert scan_answer("ID:7", source="audit_find")["cmd"] == "audit_scan"      # PIN UPDATED DELIBERATELY (Q5)
     assert session()["rogue_items"] == [7] and session()["found_by"]["7"] == logic.AUDIT_FOUND_NO_LABEL
     assert writes(env) == [] and label_side(env, 5, 6, 7) == before
     assert row(env, 7)["label_read"] is False

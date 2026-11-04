@@ -172,11 +172,15 @@ def _box(env):
 
 
 @pytest.mark.parametrize("text, source, words, found_by", [
-    ("ID:1", "search", "Found #1 with Find a spool, no label read (2 left)", "no_label"),   # 🔎 Find a spool
+    # PIN UPDATED DELIBERATELY (Group 58, builder B, Q5; section H's open question): 🔎 Find
+    # a spool sends its own source, 'audit_find', and a search card's click keeps 'search',
+    # so the two are told apart: "with Find a spool" and "with a search".
+    ("ID:1", "audit_find", "Found #1 with Find a spool, no label read (2 left)", "no_label"),   # 🔎 Find a spool
+    ("ID:1", "search", "Found #1 with a search, no label read (2 left)", "no_label"),   # a search card's click
     ("ID:1", "keyboard", "Found #1, no label read (2 left)", "no_label"),   # a typed id; the legacy picker
     ("SPL:1", "barcode", "Found #1, no label read (2 left)", "no_label"),   # a scanner, but no ID: label
     ("ID:1", "barcode", "Found #1 (2 left)", "label"),                      # a real read of its label
-], ids=["find-a-spool", "typed", "spl-label", "label-read"])
+], ids=["find-a-spool", "search-card", "typed", "spl-label", "label-read"])
 def test_a_finds_line_says_whether_a_label_was_read(env, text, source, words, found_by):
     """It read "Found #1 (2 left)" whatever found the spool, the words of a label read.
     The line and `heard` say the same, and so does the tile (`found_by`)."""
@@ -187,10 +191,12 @@ def test_a_finds_line_says_whether_a_label_was_read(env, text, source, words, fo
 
 
 @pytest.mark.parametrize("source, words", [
-    ("search", "Found #7 with Find a spool, no label read: loaded on XL-1 from here"),
+    # PIN UPDATED DELIBERATELY (Q5): Find's own source, and a search card's.
+    ("audit_find", "Found #7 with Find a spool, no label read: loaded on XL-1 from here"),
+    ("search", "Found #7 with a search, no label read: loaded on XL-1 from here"),
     ("keyboard", "Found #7, no label read: loaded on XL-1 from here"),
     ("barcode", "Found #7: loaded on XL-1 from here"),
-], ids=["find-a-spool", "typed", "label-read"])
+], ids=["find-a-spool", "search-card", "typed", "label-read"])
 def test_a_spool_loaded_from_here_says_whether_a_label_was_read(env, source, words):
     add_spool(env, 1, "LR-MDB-1")
     add_spool(env, 7, "XL-1", physical_source="LR-MDB-1", physical_source_slot="2")
@@ -210,8 +216,25 @@ def test_a_row_read_again_is_said_as_the_scan_that_read_it_found_it(env):
     env["fake"].down = False
     env["logs"].clear()
     heard = "Found #7 with Find a spool, no label read: loaded on XL-1 from here"
-    assert scan_answer("ID:7", source="search")["heard"] == heard
+    assert scan_answer("ID:7", source="audit_find")["heard"] == heard     # PIN UPDATED DELIBERATELY (Q5)
     assert log_text(env) == [f"🔗 {heard}."]
+
+
+@pytest.mark.parametrize("source", ["audit_find", "search"])
+@pytest.mark.parametrize("flag", [True, None], ids=["flagged", "no-status"])
+def test_neither_find_nor_a_search_card_is_a_label_read_outside_an_audit(env, source, flag):
+    """Q5 (builder B): Find's own source, like a search card's, never verifies a label,
+    with no audit running either (a pick that raced the audit's end): only a scanner's
+    ID: label read does (routes_scan._is_label_read). Pins what was already right."""
+    extra = {} if flag is None else {"needs_label_print": flag}
+    add_spool(env, 1, "LR-MDB-1", container_slot="1", **extra)
+    assert scan_answer("ID:1", source=source)["type"] == "spool"
+    assert env["fake"].extra("spool", 1).get("needs_label_print") == (None if flag is None else "true")
+    assert env["fake"].patches == []
+    assert not any("Label Verified" in line for line in log_text(env))
+    # The same scan from a scanner (an ID: label read) does verify it: the test can fail.
+    assert scan_answer("ID:1", source="barcode")["type"] == "spool"
+    assert env["fake"].extra("spool", 1).get("needs_label_print") == "false"
 
 
 def test_a_direct_call_that_doesnt_say_how_keeps_a_label_reads_words(env):

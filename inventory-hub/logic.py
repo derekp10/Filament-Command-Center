@@ -6329,9 +6329,9 @@ def _audit_found_words(sid, how):
     """How a find is said, in the Activity Log and in `heard`: "Found #57" for a real
     read of its label (`how` None), else it says that no label was read, and how the
     spool was found when that is known: "Found #57 by hand, no label read", "Found #57
-    by its tile's QR, no label read", "Found #57 with Find a spool, no label read", and
-    "Found #57, no label read" for a typed id, an SPL: label or the legacy picker's
-    pick (`how` ''). A find with no label read used to read as a label read, "Found
+    by its tile's QR, no label read", "Found #57 with Find a spool, no label read",
+    "Found #57 with a search, no label read" (a search card's click), and "Found #57, no
+    label read" for a typed id, an SPL: label or the legacy picker's pick (`how` ''). A find with no label read used to read as a label read, "Found
     #57 (12 left)" (Derek, 2026-11-03: a find on screen must never pass for a label)."""
     if how is None:
         return f"Found #{sid}"
@@ -6342,7 +6342,8 @@ def _audit_find_listed(session, sid, how):
     """A spool on the list found: by a real read of its label (`how` None), or with no
     label read, said how (_audit_found_words): by its tile, a press ("by hand",
     audit_mark_found) or its QR ("by its tile's QR", _audit_found_by_qr), or by a scan
-    that read no label (routes_scan._audit_find_how: "with Find a spool", or '').
+    that read no label (routes_scan._audit_find_how: "with Find a spool", "with a
+    search", or '').
     One find, every door. Logged the first time, and its words answered; a second time
     it only selects the spool again and answers ''."""
     scanned = session.setdefault('scanned_items', [])

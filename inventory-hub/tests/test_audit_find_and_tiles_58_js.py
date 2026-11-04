@@ -582,7 +582,7 @@ def test_after_try_again_a_keyboards_pick_and_a_later_click_still_pick(live, env
     first = rows(live)[0]
     live.keyboard.press("Enter")
     live.wait_for_selector(FIND, state="detached")
-    assert scans_with_source(live) == [(f"ID:{first}", "search")]
+    assert scans_with_source(live) == [(f"ID:{first}", "audit_find")]  # PIN UPDATED DELIBERATELY (Q5: Find's own source)
     live.wait_for_function("() => !state.processing")
     live.wait_for_timeout(PAST_A_DOUBLE_PRESS)           # 🔎 takes no press just after a pick
     open_find(live)                                      # again, and this time a click
@@ -596,7 +596,7 @@ def test_after_try_again_a_keyboards_pick_and_a_later_click_still_pick(live, env
     sid = _row_under(live, xy)
     live.mouse.click(*xy)
     live.wait_for_selector(FIND, state="detached")
-    assert scans_with_source(live)[-1] == (f"ID:{sid}", "search")
+    assert scans_with_source(live)[-1] == (f"ID:{sid}", "audit_find")  # PIN UPDATED DELIBERATELY (Q5)
 
 
 BUSY = FIND + " [data-find-busy]"
@@ -649,7 +649,7 @@ def test_an_answer_that_still_lists_the_row_the_keyboard_is_on_keeps_it_there(li
     assert live.get_attribute(row(99), "class").split().count("kb-active") == 1
     live.keyboard.press("Enter")
     live.wait_for_selector(FIND, state="detached")
-    assert scans_with_source(live) == [("ID:99", "search")]
+    assert scans_with_source(live) == [("ID:99", "audit_find")]  # PIN UPDATED DELIBERATELY (Q5)
 
 
 def test_searching_shows_while_a_newer_search_is_on_its_way_over_an_older_list(live, env):
@@ -782,7 +782,7 @@ def test_enter_on_a_row_picks_it_with_no_label_read(live, env):
     live.wait_for_selector(FIND, state="detached")
     tile_says(live, 99, "found, no label read")
     strip_says(live, "No label was read for #99")
-    assert scans_with_source(live) == [("ID:99", "search")]
+    assert scans_with_source(live) == [("ID:99", "audit_find")]  # PIN UPDATED DELIBERATELY (Q5)
     assert focus_is(live, FIND_BTN)
 
 
@@ -822,7 +822,7 @@ def test_a_click_on_a_row_picks_it_in_its_turn_behind_a_scan_read_before_it(live
     assert scans(live) == ["ID:57"]                  # the pick waits its turn
     live.evaluate("() => { window.__held = false; window.__release(); }")
     live.wait_for_function("() => window.__sent.filter((p) => p.url === '/api/identify_scan').length === 2")
-    assert scans_with_source(live) == [("ID:57", "keyboard"), ("ID:99", "search")]
+    assert scans_with_source(live) == [("ID:57", "keyboard"), ("ID:99", "audit_find")]  # PIN UPDATED DELIBERATELY (Q5)
 
 
 def test_a_spool_off_the_list_picked_is_an_extra(live, env):
