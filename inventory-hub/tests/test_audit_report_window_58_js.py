@@ -235,6 +235,19 @@ def test_each_spool_once_under_what_done_did_with_it(dialog):
     assert "Read the report" in foot
 
 
+def test_the_foot_says_where_to_read_it_again_on_a_phone_too(dialog):
+    """Derek's look of 2026-11-04 (T6): the foot pointed only to the Activity Log, whose box
+    on a phone is too small to show the report's line; the list the 📡 log pill opens does
+    show it, with its button. One short sentence says both. RED on 446b891."""
+    dialog.set_viewport_size({"width": 390, "height": 844})
+    dialog.evaluate("(r) => window.openAuditReport(r, { after: true })", FULL)
+    _shown(dialog)
+    foot = " ".join(dialog.text_content(REPORT + " .fcc-audit-report-foot").split())
+    assert foot.startswith("The same report is in the Activity Log and the 📡 pill's list: its 📝 Read the report "
+                           "button opens this window again."), foot
+    assert foot.count(".") == 2                       # that sentence, then Undo's
+
+
 def test_an_end_that_moved_nothing_lists_what_was_missing_and_the_extras(dialog):
     """A Cancel's report, read later from its line: where FCC has each, and no word of
     Undo (nothing moved), nor of the Activity Log (it was opened from there)."""
