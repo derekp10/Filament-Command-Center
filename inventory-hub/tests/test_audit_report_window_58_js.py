@@ -381,6 +381,36 @@ def test_a_report_with_nothing_to_say_shows_no_notice_line(dialog):
     assert dialog.locator(NOTICE).count() == 1 and not dialog.is_visible(NOTICE)
 
 
+PARTIAL_MSG = ("Parked 2 spools at Unknown. Couldn't park #103. Undo Last Move puts them back. "
+               "The Activity Log lists each spool.")
+
+
+@pytest.mark.parametrize("landed", ["some", "every"])
+def test_a_yes_that_could_not_move_every_spool_says_so_on_the_report(dialog, landed):
+    """A Yes whose writes partly failed still ends the audit, with a 7 s warning (the park's
+    `msg`, logic._audit_park_msg: "Couldn't park #103."), and the report opens with it,
+    over that toast's layer: the window says it too, beside its 🛑 Couldn't be moved group.
+    A Yes that moved every spool says nothing there (its 4 s toast is a success). RED on
+    761b2ab for "some": the words were only in the toast under the window."""
+    if landed == "some":
+        answer = dict(PARKED, success=False, parked=[101, 102],
+                      failed=[{"id": 103, "display": "#103 Some Brand ASA (Grey)", "why": 'HTTP 400: {"message": "nope"}'}],
+                      msg=PARTIAL_MSG, report=FULL)
+    else:
+        answer = dict(PARKED, report=FULL)
+    dialog.evaluate("(a) => { window.__park = a; }", answer)
+    _yes(dialog)
+    _shown(dialog)
+    if landed == "some":
+        dialog.wait_for_function("(s) => document.querySelector(s).textContent.length > 0", arg=NOTICE)
+        assert dialog.text_content(NOTICE) == PARTIAL_MSG and dialog.is_visible(NOTICE) and _on_top(dialog, NOTICE)
+        assert ["warning", PARTIAL_MSG] in _toasts(dialog)
+    else:
+        dialog.wait_for_timeout(100)
+        assert not dialog.is_visible(NOTICE)
+        assert ["success", PARKED["msg"]] in _toasts(dialog)
+
+
 # --- from the report's Activity Log line ------------------------------------------------------
 
 LOG_ROW = {"time": "11:18:13", "type": "INFO", "color": "ffaa00", "meta": {"type": "audit_report", "audit_id": "boot-1"},

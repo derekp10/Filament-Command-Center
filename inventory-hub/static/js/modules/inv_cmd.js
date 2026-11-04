@@ -2393,8 +2393,13 @@ window.commitBulkMove = () => {
             showToast(res.msg, res.success ? 'success' : 'warning', res.success ? 4000 : 7000);
             document.dispatchEvent(new CustomEvent('inventory:locations-changed'));
             // And the report itself, where the panel was (Derek, 2026-11-03): after the
-            // panel has gone (noteAuditEnded), so it is the window on top.
-            if (res.report) window.openAuditReport(res.report, { after: true });
+            // panel has gone (noteAuditEnded), so it is the window on top. A Yes that
+            // couldn't move every spool says so in the 7 s warning above, whose layer is
+            // under the window: the window says it too.
+            if (res.report) {
+                window.openAuditReport(res.report, { after: true });
+                if (!res.success && res.msg && window.auditReportNotice) window.auditReportNotice(res.msg);
+            }
             return;
         }
         // Refused, with nothing written. The audit runs on (a failed read, a second
