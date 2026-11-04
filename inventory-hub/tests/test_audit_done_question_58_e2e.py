@@ -337,89 +337,78 @@ def _press(page: Page, x: float, y: float, second: bool = False):
     page.mouse.up(click_count=count)
 
 
-# The window sizes searched for the geometry a double click needs. The dock (Derek,
-# 2026-11-03, sample 1b) holds Done and Cancel Audit under the list, away from where the
-# question's Park and Back opened over them at 1366 x 640 (findings 34 and 35), so the
-# sizes the review measured may no longer have it: the first size that does is used.
-SEARCH_SIZES = [(1366, 640), (1366, 600), (1280, 600), (1280, 720), (1366, 768), (1280, 800), (1024, 640),
-                (1024, 768), (1600, 900)]
+# Findings 34 and 35 found Park and Back opening over the panel's Done and Cancel Audit at
+# 1366 x 640. The dock (Derek, 2026-11-03, sample 1b) holds them under the list, away from
+# where the question's buttons open, at every window size a laptop or a phone runs (nine
+# sizes searched, none had it, before or after Q1's tiles: builder B, resumed). So, as the
+# double-click sweep lays Cancel Audit over the deck's AUDIT tile, the panel's button is
+# laid where the question's opens, measured from the question itself; the question opens
+# where it always does (its place comes from its words and the window, not from the
+# panel's buttons), and the real Bootstrap and the real shields do the rest.
+LAY_AT = r"""([sel, r]) => { const st = document.createElement('style'); st.id = 'fcc-test-lay-at';
+    st.textContent = `${sel} { position: fixed !important; margin: 0 !important; left: ${r.left}px !important;
+        top: ${r.top}px !important; width: ${r.right - r.left}px !important; height: ${r.bottom - r.top}px !important;
+        z-index: 5 !important; }`;
+    document.head.appendChild(st); }"""
+UNLAY = "() => { const st = document.getElementById('fcc-test-lay-at'); if (st) st.remove(); }"
 
 
-def _overlap(a, b):
-    left, right = max(a["left"], b["left"]), min(a["right"], b["right"])
-    top, bottom = max(a["top"], b["top"]), min(a["bottom"], b["bottom"])
-    return ((left + right) / 2, (top + bottom) / 2) if right - left >= 8 and bottom - top >= 8 else None
-
-
-def _first_size_where(page: Page, found):
-    """The first of SEARCH_SIZES where `found(page)`, the question up, answers a spot:
-    (width, height, spot), else None. The question is put away after each look."""
-    for width, height in SEARCH_SIZES:
-        page.set_viewport_size({"width": width, "height": height})
-        page.wait_for_timeout(150)
-        _asked_and_drawn(page)
-        spot = found(page)
-        page.keyboard.press("Escape")
-        expect(page.locator(QUESTION)).to_have_count(0)
-        page.wait_for_timeout(PAST_A_DOUBLE_PRESS)
-        if spot:
-            return width, height, spot
-    return None
+def _measured(page: Page, sel: str):
+    """Where `sel`, a button of the question, opens: its box and its middle. The question
+    is put away after the look, and the next press waits past a double press."""
+    _asked_and_drawn(page)
+    box = page.evaluate(RECT, sel)
+    page.keyboard.press("Escape")
+    expect(page.locator(QUESTION)).to_have_count(0)
+    page.wait_for_timeout(PAST_A_DOUBLE_PRESS)
+    return box, ((box["left"] + box["right"]) / 2, (box["top"] + box["bottom"]) / 2)
 
 
 def test_a_real_double_click_on_done_where_park_opens_under_it_answers_nothing(page: Page, base_url: str):
     """Finding 34: at 1366 x 640 the question opened with Park over the right of Done.
-    Measured here, with the real Bootstrap, at the first size that still has it (PIN
-    UPDATED DELIBERATELY, sample 1b: Done is in the dock, and none may). RED before the
-    review's fix: every spool parked, and nobody had read a word."""
+    PIN UPDATED DELIBERATELY (builder B, resumed: it searched nine window sizes for that
+    geometry and skipped at all of them, the dock holding Done under the list): Done is
+    laid where Park opens. RED before the review's fix, and again with the shields and
+    the yes's arming taken out of the page (`armAfterMs`, `_shieldPage`): every spool
+    parked, and nobody had read a word."""
     server = _long_audit(page, base_url, 1366, 640)
-    hit = _first_size_where(page, lambda p: _overlap(p.evaluate(RECT, DONE), p.evaluate(RECT, YES)))
-    if not hit:
-        pytest.skip("Park opens over Done at none of the sizes tried: the dock holds Done under the list")
-    x, y = hit[2]
+    park, (x, y) = _measured(page, YES)
+    page.evaluate(LAY_AT, [DONE, park])
+    try:
+        assert page.evaluate(BENEATH, [x, y]) == DONE[1:]
+        _press(page, x, y)
+        expect(page.locator(QRS)).to_be_visible()
+        page.wait_for_timeout(120)              # a double click's gap, and the question settled
+        assert "fcc-apc-yes" in page.evaluate(ON_TOP, [x, y])
+        _press(page, x, y, second=True)
+        page.wait_for_timeout(150)
+        expect(page.locator(QUESTION)).to_have_count(1)
+        assert server.parks == []
 
-    _press(page, x, y)
-    expect(page.locator(QRS)).to_be_visible()
-    page.wait_for_timeout(120)                  # a double click's gap, and the question settled
-    assert "fcc-apc-yes" in page.evaluate(ON_TOP, [x, y])
-    _press(page, x, y, second=True)
-    page.wait_for_timeout(150)
-    expect(page.locator(QUESTION)).to_have_count(1)
-    assert server.parks == []
-
-    page.wait_for_timeout(PAST_A_DOUBLE_PRESS)
-    _press(page, x, y)                          # a person who has read it
-    expect(page.locator(PANEL)).to_have_count(0)
-    assert len(server.parks) == 1
+        page.wait_for_timeout(PAST_A_DOUBLE_PRESS)
+        _press(page, x, y)                      # a person who has read it
+        expect(page.locator(PANEL)).to_have_count(0)
+        assert len(server.parks) == 1
+    finally:
+        page.evaluate(UNLAY)
 
 
 # What can lie under Back: a tile (the body scrolled until one does, as the review found it
 # at 1600 x 1300 with 19 spools), or a button of the dock (Cancel Audit lay under it at
-# 1366 x 640 with 18 before the dock, finding 35; PIN UPDATED DELIBERATELY: the first size
-# where any of the dock's buttons does).
-DOCK_BUTTONS = ["fcc-audit-panel-cancel", "fcc-audit-panel-done", "fcc-audit-panel-needlabel",
-                "fcc-audit-label-undo", "fcc-audit-label-queue", "fcc-audit-put-back"]
-
-
+# 1366 x 640 with 18 before the dock, finding 35; PIN UPDATED DELIBERATELY, builder B,
+# resumed: laid where Back opens, as Done is above).
 @pytest.mark.parametrize("width, height, rows, lies_under", [(1366, 640, 18, "a-dock-button"), (1600, 1300, 19, "tile")],
                          ids=["a-dock-button", "a-tile"])
 def test_a_real_double_click_on_back_changes_nothing_under_it(page: Page, base_url: str, width, height, rows, lies_under):
-    """Finding 35 and 26, at sizes the review measured. The list is scrolled until what
-    the finding names lies under Back. RED before the review's fix: Cancel Audit ended
-    the audit, and a tile found a spool nobody had touched."""
+    """Finding 35 and 26. RED before the review's fix, and the dock-button case again with
+    the panel's shields taken out of the page (`_shieldClick`, `_shieldMouse`): Cancel
+    Audit ended the audit, and a tile found a spool nobody had touched."""
     server = _long_audit(page, base_url, width, height, rows)
     if lies_under == "a-dock-button":
-        def under_back(p):
-            back = p.evaluate(RECT, BACK)
-            xy = [(back["left"] + back["right"]) / 2, (back["top"] + back["bottom"]) / 2]
-            return xy if p.evaluate(BENEATH, xy) in DOCK_BUTTONS else None
-        hit = _first_size_where(page, under_back)
-        if not hit:
-            pytest.skip("Back opens over none of the dock's buttons at the sizes tried")
-        x, y = hit[2]
+        back, (x, y) = _measured(page, BACK)
+        page.evaluate(LAY_AT, [CANCEL, back])
         _asked_and_drawn(page)
-        want = page.evaluate(BENEATH, [x, y])
-        assert want in DOCK_BUTTONS
+        assert page.evaluate(BENEATH, [x, y]) == CANCEL[1:]
     else:
         _scrolled_to_done(page)
         _asked_and_drawn(page)
