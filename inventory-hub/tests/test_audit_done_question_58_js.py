@@ -801,12 +801,16 @@ __park = PARKED;
 await ask(QUESTION);
 await parkThem();
 return { up: questionUp(), panel: panelUp(), active: state.auditActive, here: state.auditEndedHere, toasts: timed(),
-         events: __events, processing: state.processing, out: state.auditRequestsOut, pill: pill().style.display };
+         events: __events, processing: state.processing, out: state.auditRequestsOut, pill: pill().style.display,
+         report: __rec.overlays.some(o => o.id === 'fcc-audit-report' && !o.closed) };
 """, QUESTION=asked["question"], PARKED=asked["parked"])
     assert res["up"] is False and res["panel"] is False and res["active"] is False and res["pill"] == "none"
     assert res["here"] == asked["parked"]["audit_ended"]["id"]
-    assert res["toasts"] == [{"msg": asked["parked"]["msg"], "type": "success", "ms": 4000}]
-    assert "Undo Last Move puts them back." in res["toasts"][0]["msg"]
+    # The real park's answer carries its report, and its window says what the Yes did. PIN
+    # UPDATED DELIBERATELY (Derek's look of 2026-11-04, T3): it stands for the 4 s success
+    # toast, which peeked out around a short report.
+    assert res["report"] is True and res["toasts"] == []
+    assert "Undo Last Move puts them back." in asked["parked"]["msg"]
     assert "inventory:locations-changed" in res["events"]
     assert res["processing"] is False and res["out"] == 0
 
