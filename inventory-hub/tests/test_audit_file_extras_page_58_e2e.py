@@ -12,7 +12,10 @@ FCC's routes are answered in this browser on their real shapes (test_audit_done_
 nothing reaches dev but reads. The question's words and Yes are proved on the real routes
 in test_audit_file_extras_page_58_js.py.
 
-RED on dc83196 unless a test says it pins what was already right.
+RED on dc83196 unless a test says it pins what was already right. PINS UPDATED DELIBERATELY
+(builder B, resumed): since Q1 (Derek, 2026-11-03) Done's question draws its spools as
+colour tiles, its lists one above the other, so what these tests pinned of its lines they
+read from its tiles; their old forms failed on fbc2d8f at every size.
 """
 from __future__ import annotations
 
@@ -21,7 +24,7 @@ from playwright.sync_api import Page
 
 from test_audit_done_question_58_e2e import AUDIT_ID, BACK, QRS, QUESTION, SHEET, YES, Asked, _ask, _on_top
 from test_audit_page_58_e2e import _dashboard, _start
-from test_audit_question_dialog_58_js import CUT, LONG_QUESTION
+from test_audit_question_dialog_58_js import CUT, LONG_QUESTION, _look
 
 pytestmark = pytest.mark.usefixtures("require_server")
 
@@ -68,39 +71,45 @@ def _reachable(page: Page):
 @pytest.mark.parametrize("width, height, size", SIZES)
 def test_nothing_in_dones_question_is_cut(page: Page, base_url: str, width, height, size):
     """P-3: every name and every reason reads whole, at each size, and the question's
-    answers stay reachable."""
+    answers stay reachable. PIN UPDATED DELIBERATELY (Q1): each spool is a tile."""
     server = _asked(page, base_url, width, height, size)
     assert page.evaluate(CUT, QUESTION) == []
-    assert page.evaluate("(q) => document.querySelectorAll(q + ' .fcc-apc-line').length", QUESTION) == 8
+    assert page.evaluate("(q) => document.querySelectorAll(q + ' .fcc-spool-tile').length", QUESTION) == 8
     _reachable(page)
     assert server.parks == []
 
 
 @pytest.mark.parametrize("width, height, size", [(1600, 1300, "Standard"), (1366, 768, "Extra Large")])
-def test_a_list_alone_in_the_last_row_takes_the_whole_width(page: Page, base_url: str, width, height, size):
+def test_each_list_takes_the_whole_width_one_above_the_other(page: Page, base_url: str, width, height, size):
     """P-3: the third list sat alone in half of the grid's second row, beside an empty
-    column, and its reasons were cut at the column's edge."""
+    column, and its reasons were cut at the column's edge. PIN UPDATED DELIBERATELY (was
+    test_a_list_alone_in_the_last_row_takes_the_whole_width): since Q1 the lists sit one
+    above the other, each as wide as the question's lists, so none sits beside an empty
+    column."""
     _asked(page, base_url, width, height, size)
-    got = page.evaluate("""(q) => { const s = document.querySelectorAll(q + ' .fcc-apc-section');
-        const box = document.querySelector(q + ' .fcc-apc-sections').getBoundingClientRect();
-        return { n: s.length, first: s[0].getBoundingClientRect().width, last: s[2].getBoundingClientRect().width,
-                 row: Math.round(s[0].getBoundingClientRect().top) === Math.round(s[1].getBoundingClientRect().top),
-                 box: box.width }; }""", QUESTION)
-    assert got["n"] == 3 and got["row"], got                  # two side by side, then the third
-    assert got["first"] < got["box"] / 2 and abs(got["last"] - got["box"]) <= 1, got
+    got = page.evaluate("""(q) => { const s = Array.from(document.querySelectorAll(q + ' .fcc-apc-section'));
+        const box = document.querySelector(q + ' .fcc-apc-sections'); const cs = getComputedStyle(box);
+        const inner = box.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+        const r = s.map((e) => e.getBoundingClientRect());
+        return { n: s.length, widths: r.map((b) => b.width), inner,
+                 stacked: r.every((b, i) => i === 0 || b.top >= r[i - 1].bottom - 0.5) }; }""", QUESTION)
+    assert got["n"] == 3 and got["stacked"], got
+    assert all(abs(w - got["inner"]) <= 1 for w in got["widths"]), got
 
 
-def test_a_reason_that_fits_stays_on_its_names_line(page: Page, base_url: str):
-    """Pins what the change keeps: a line that fits is one row, its reason at its end, so a
-    question with short lines is as short as it was (a scanner can't read a QR that has
-    scrolled away)."""
+def test_a_short_question_scrolls_neither_whole_nor_in_its_lists(page: Page, base_url: str):
+    """Pins what the old rule kept (a question with short lines is as short as it was: a
+    scanner can't read a QR that has scrolled away): one that fits scrolls neither as a
+    whole nor in its lists (fccFitQuestion: a scroller draws its text without ClearType),
+    its QRs in view and nothing cut. PIN UPDATED DELIBERATELY (was
+    test_a_reason_that_fits_stays_on_its_names_line): since Q1 a reason sits on its tile's
+    own line, under the spool's name."""
     short = dict(LONG, stays=[{"id": 304, "display": "#304 Some Brand PLA (White)", "where": "CR-CT-1",
-                               "why": "in the scan buffer"}])
+                               "why": "in the scan buffer", **_look("F5F5F5")}])
     _asked(page, base_url, 1366, 768, "Standard", short)
-    got = page.evaluate("""(q) => { const l = Array.from(document.querySelectorAll(q + ' .fcc-apc-line'))
-            .find((e) => e.textContent.includes('#304'));
-        const t = l.querySelector('.fcc-apc-line-text').getBoundingClientRect();
-        const w = l.querySelector('.fcc-apc-line-where').getBoundingClientRect();
-        return { sameRow: Math.abs(t.top - w.top) < 4, whereRight: w.right, lineRight: l.getBoundingClientRect().right }; }""",
-                        QUESTION)
-    assert got["sameRow"] and abs(got["whereRight"] - got["lineRight"]) <= 1, got
+    got = page.evaluate("""(s) => { const p = document.querySelector(s);
+        return { whole: p.classList.contains('fcc-question-scroll'), lists: p.classList.contains('fcc-apc-lists-scroll') }; }""",
+                        SHEET)
+    assert got == {"whole": False, "lists": False}, got
+    assert page.evaluate(CUT, QUESTION) == []
+    _reachable(page)
