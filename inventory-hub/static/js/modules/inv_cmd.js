@@ -1311,9 +1311,9 @@ window.commitBulkMove = () => {
     // button, beside the tile's in one cell, never inside it: a button holds no button.
     const _tagButton = (row) => {
         const id = Number(row.id);
-        const say = (state, words, pressed) => `<button type="button" class="fcc-audit-tile-tag" data-audit-tag="${id}"
-                data-audit-tag-state="${state}"${pressed === null ? '' : ` aria-pressed="${pressed}"`}
-                aria-label="${_escapeHtml(words)}" title="${_escapeHtml(words)}">${state === 'marked'
+        const say = (mark, words, pressed) => `<button type="button" class="fcc-audit-tile-tag" data-audit-tag="${id}"
+                data-audit-tag-state="${mark}"${pressed === null ? '' : ` aria-pressed="${pressed}"`}
+                aria-label="${_escapeHtml(words)}" title="${_escapeHtml(words)}">${mark === 'marked'
             ? '<span class="fcc-ico-on-light" aria-hidden="true">🏷️</span>' : '<span aria-hidden="true">🏷️</span>'}</button>`;
         if (row.flagged_here) return say('marked', `#${id} is marked as needing a label: press again to take the mark back`, true);
         if (row.label_status === true) return say('flagged', `#${id} is already flagged for a new label`, null);
@@ -2208,8 +2208,9 @@ window.commitBulkMove = () => {
     // The dock stays under the list, out of the scroll, while it leaves the tiles room:
     // at least DOCK_MIN_BODY_REM of the scrolling part (a tile row and its heading), or
     // the whole list when it is shorter than that. On a window too short for both (a
-    // phone at Large or Extra Large text, a phone held sideways, a laptop window pulled
-    // short) it goes in the flow after the tiles (.fcc-audit-scroll-flow): the list and
+    // phone at Extra Large text, a phone held sideways, a laptop window pulled short;
+    // measured, a phone at Large stays docked) it goes in the flow after the tiles
+    // (.fcc-audit-scroll-flow): the list and
     // the dock scroll as one, and every tile can still be brought into view and pressed.
     // It replaces the Last found strip's sticky rule (review of 7e3720f, P-5), which the
     // dock retired. Measured after each render, as the scrolling part changes size (a

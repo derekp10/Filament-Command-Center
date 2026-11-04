@@ -434,6 +434,18 @@ def test_tab_reaches_a_tag_a_persons_enter_presses_it_and_the_arrows_go_on(live,
     assert posts(live, UNTAG_URL) == []
 
 
+def test_a_persons_space_on_a_tag_presses_it_too(live, env):
+    """Enter or Space presses it as a person's key (the scan accumulator's rules for a
+    button). A pin of the accumulator's rule on the new button."""
+    four(env)
+    begin(live, env)
+    scanned(live, "ID:57")
+    live.focus(tag(57))
+    live.keyboard.press(" ")
+    tag_is(live, 57, "marked")
+    assert posts(live, TAG_URL) == [{"audit_id": audit_id(), "id": 57}]
+
+
 def test_a_scans_enter_on_a_tag_presses_nothing(live, env):
     four(env)
     begin(live, env)
