@@ -1529,17 +1529,17 @@ window.commitBulkMove = () => {
         <div class="fcc-audit-dock-grid">
             <div id="fcc-audit-dock-found" class="fcc-audit-dock-info"></div>
             <div class="fcc-audit-dock-col fcc-audit-dock-need">
-                <button type="button" id="fcc-audit-panel-needlabel" class="btn btn-sm btn-warning fw-bold"><span class="fcc-ico-on-light" aria-hidden="true">🏷️</span> Needs a label</button>
+                <button type="button" id="fcc-audit-panel-needlabel" class="btn btn-sm btn-warning fw-bold"><span class="fcc-audit-dock-words"><span class="fcc-ico-on-light" aria-hidden="true">🏷️</span> Needs a label</span></button>
                 <div id="fcc-audit-panel-qr-needlabel" class="fcc-audit-strip-qr"></div>
                 <div class="fcc-audit-strip-cap">📷 Scan to mark it</div>
             </div>
             <div class="fcc-audit-dock-col fcc-audit-dock-done">
-                <button type="button" id="fcc-audit-panel-done" class="btn btn-success fw-bold">✅ Done…</button>
+                <button type="button" id="fcc-audit-panel-done" class="btn btn-success fw-bold"><span class="fcc-audit-dock-words">✅ Done…</span></button>
                 <div id="fcc-audit-panel-qr-done" class="fcc-audit-dock-qr"></div>
                 <div class="small fcc-audit-dock-cap">Asks before moving anything</div>
             </div>
             <div class="fcc-audit-dock-col fcc-audit-dock-cancel">
-                <button type="button" id="fcc-audit-panel-cancel" class="btn btn-outline-danger fw-bold">❌ Cancel Audit</button>
+                <button type="button" id="fcc-audit-panel-cancel" class="btn btn-outline-danger fw-bold"><span class="fcc-audit-dock-words">❌ Cancel Audit</span></button>
                 <div id="fcc-audit-panel-qr-cancel" class="fcc-audit-dock-qr"></div>
                 <div class="small fcc-audit-dock-cap">Ends it, nothing moves</div>
             </div>

@@ -282,6 +282,66 @@ def test_a_window_too_short_for_the_dock_puts_it_in_the_flow_and_back(live, env)
     assert [c for c in CONTROLS if not seen(live, c)] == []
 
 
+# How each of the dock's buttons sits: its box, the lines its words take, and how far their
+# middle is from the button's. From its text alone: the 🏷️'s round backing reaches above
+# and below its line (fcc-ico-on-light's negative margins).
+DOCK_BUTTONS = r"""(sels) => sels.map((s) => {
+    const b = document.querySelector(s); const r = b.getBoundingClientRect();
+    const walker = document.createTreeWalker(b, NodeFilter.SHOW_TEXT);
+    const rects = [];
+    let node;
+    while ((node = walker.nextNode())) {
+        if (!node.data.trim() || node.parentElement.closest('.fcc-ico-on-light')) continue;
+        const range = document.createRange(); range.selectNodeContents(node);
+        rects.push(...Array.from(range.getClientRects()).filter((x) => x.width > 0 && x.height > 0));
+    }
+    rects.sort((x, y) => x.top - y.top);
+    let lines = 0, floor = -Infinity;
+    for (const x of rects) { if (x.top >= floor - 2) { lines += 1; floor = x.bottom; } else floor = Math.max(floor, x.bottom); }
+    const top = Math.min(...rects.map((x) => x.top)), bottom = Math.max(...rects.map((x) => x.bottom));
+    return { top: r.top, height: r.height, lines, off: (top + bottom) / 2 - (r.top + r.bottom) / 2 }; })"""
+# The hermetic page has no Bootstrap: the dock's buttons get its sizes (.btn 1rem, .btn-sm
+# 0.875rem, bold), so their words wrap as they do on the page.
+BOOTSTRAP_BUTTONS = ("#fcc-audit-panel-dock .btn { font-family: Arial, sans-serif; font-size: 1rem; font-weight: 700;"
+                     " border: 1px solid; } #fcc-audit-panel-dock .btn-sm { font-size: 0.875rem; }")
+
+
+def test_on_a_phone_the_three_dock_buttons_are_one_height(live, env):
+    """Derek's look of 2026-11-04 (T7): on a phone Done… was 30 px tall against 45 and 50 for
+    Needs a label and Cancel Audit, which wrap to two lines. They start level and end level,
+    whatever lines their words take, each centring its words; the QRs stay in one row under
+    them. RED on 8ca03e1: Done was a line shorter."""
+    live.set_viewport_size({"width": 390, "height": 844})
+    live.add_style_tag(content=BOOTSTRAP_BUTTONS)
+    four(env)
+    begin(live, env)
+    scanned(live, "ID:57")
+    live.wait_for_selector(STRIP)
+    got = live.evaluate(DOCK_BUTTONS, [NEED, DONE_BTN, CANCEL_BTN])
+    assert [g["lines"] for g in got] == [2, 1, 2], got           # the case: Done's words take one line
+    assert max(g["height"] for g in got) - min(g["height"] for g in got) <= 1, got
+    assert max(g["top"] for g in got) - min(g["top"] for g in got) <= 1, got
+    assert all(abs(g["off"]) <= 1.5 for g in got), got
+    tops = [live.evaluate(BOX, q)[1] for q in QRS]
+    assert max(tops) - min(tops) <= 1, tops
+    assert [c for c in CONTROLS if not seen(live, c)] == []
+
+
+def test_on_a_laptop_the_dock_keeps_its_look(live, env):
+    """The wide dock is as it was: Done and Cancel Audit one height, Needs a label its smaller
+    button in its own box. Pins what was right."""
+    live.set_viewport_size({"width": 1366, "height": 768})
+    live.add_style_tag(content=BOOTSTRAP_BUTTONS)
+    four(env)
+    begin(live, env)
+    scanned(live, "ID:57")
+    live.wait_for_selector(STRIP)
+    need, done, cancel = live.evaluate(DOCK_BUTTONS, [NEED, DONE_BTN, CANCEL_BTN])
+    assert [need["lines"], done["lines"], cancel["lines"]] == [1, 1, 1]
+    assert abs(done["height"] - cancel["height"]) <= 1 and abs(done["top"] - cancel["top"]) <= 1
+    assert need["height"] < done["height"] - 2 and need["top"] > done["top"] + 2
+
+
 # --- P5: the 🏷️ on a dark round backing -------------------------------------------------
 
 def test_needs_a_label_wears_its_tag_on_a_dark_round_backing(live, env):

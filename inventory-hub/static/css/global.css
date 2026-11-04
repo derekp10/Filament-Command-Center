@@ -3242,6 +3242,19 @@ button.fcc-audit-tile.fcc-audit-tile-tagged { padding-right: 2.75rem; }
     .fcc-audit-dock-col > .fcc-audit-strip-cap,
     .fcc-audit-dock-col > .fcc-audit-dock-cap { display: none; }
     .fcc-audit-dock-col > .btn { padding: 0.25rem 0.375rem; line-height: 1.25; }
+    /* The three buttons one height (Derek's look of 2026-11-04: on a phone Done… was 30 px
+       against 45 and 50 for Needs a label and Cancel Audit, which wrap to two lines): each
+       starts where the Needs a label box's padding leaves its button, stretches to the
+       row's height, and centres its words in it (.fcc-audit-dock-words, one flex item, so
+       they wrap as they did). */
+    .fcc-audit-dock-done,
+    .fcc-audit-dock-cancel { padding-top: 0.25rem; }
+    .fcc-audit-dock-col > .btn {
+        align-self: stretch;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
 }
 /* The Last found box, in the dock. */
 .fcc-audit-strip {

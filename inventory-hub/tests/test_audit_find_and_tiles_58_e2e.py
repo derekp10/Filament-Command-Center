@@ -246,6 +246,25 @@ def test_the_dock_follows_a_text_size_change(page: Page, base_url: str):
     assert server.writes == []
 
 
+@pytest.mark.parametrize("width, height, size", [(390, 844, "Standard"), (390, 844, "Large"), (360, 740, "Standard")])
+def test_on_a_phone_the_dock_buttons_are_one_height(page: Page, base_url: str, width, height, size):
+    """Derek's look of 2026-11-04 (T7), on the real dashboard with Bootstrap: on a phone Done…
+    was 30 px tall against 45 and 50 for Needs a label and Cancel Audit, which wrap to two
+    lines. The three start and end level, each centring its words. Its hermetic twin, red on
+    8ca03e1, is test_audit_panel_look_58_js.py's."""
+    from test_audit_panel_look_58_js import DOCK_BUTTONS
+    page.set_viewport_size({"width": width, "height": height})
+    page.add_init_script("(() => { try { localStorage.setItem('fcc.textSize', %r); } catch (e) {} })();" % size)
+    server = _running(page, base_url)
+    _flagged_last_found(page, server)
+    got = page.evaluate(DOCK_BUTTONS, ["#fcc-audit-panel-needlabel", "#fcc-audit-panel-done", "#fcc-audit-panel-cancel"])
+    what = f"{width}x{height} {size}: {got}"
+    assert max(g["height"] for g in got) - min(g["height"] for g in got) <= 1, what
+    assert max(g["top"] for g in got) - min(g["top"] for g in got) <= 1, what
+    assert all(abs(g["off"]) <= 1.5 for g in got), what
+    assert server.writes == []
+
+
 # --- A phone's rows (review of 7e3720f, P-4) ----------------------------------------------
 # Names as long as dev's ("Sunlu PETG (Red (Glow In The Dark Red))"), with each tag: #99 is
 # on this audit's list, #57 and #200 found already (SESSION).
