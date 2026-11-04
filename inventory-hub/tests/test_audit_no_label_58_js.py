@@ -1580,6 +1580,7 @@ def test_a_double_click_on_a_tile_finds_it_once_and_marks_nothing(live, env):
     assert live.evaluate(HIT, xy) == "99"
     double_click(live, xy, then=STRIP)
     live.wait_for_timeout(150)
+    assert live.evaluate(HIT, xy) == BUTTON[1:]        # it really lay under the second press
     assert [p["id"] for p in sent(live, FOUND_URL)] == [99]
     assert "CMD:NEEDLABEL" not in sent(live) and wire(env, 99) is None
     assert live.evaluate("document.activeElement.dataset.auditTile") == "99"

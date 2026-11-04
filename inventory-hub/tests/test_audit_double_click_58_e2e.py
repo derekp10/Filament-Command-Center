@@ -28,8 +28,10 @@ moves the tiles under it, and the Last found box's "↩ Put back" (`put-back`), 
 the box; their hermetic twins are in test_audit_panel_look_58_js.py. Since the
 dock (sample 1b), Done, Cancel Audit and Needs a label sit under the list, in view with no
 scroll; when the panel comes up over the deck, only their QR boxes, which press nothing, lie
-over its AUDIT tile at these five sizes, so `deck-tile` finds no button there and skips (its
-hermetic twin, test_audit_no_label_58_js.py's, lays Cancel Audit over the tile).
+over its AUDIT tile at these five sizes, so where no button lands there `deck-tile` lays Cancel
+Audit over the tile, as its hermetic twin in test_audit_no_label_58_js.py does, and its second
+press waits until Cancel Audit is under the pointer: the shield that opens with the panel is
+still proved on the real page.
 """
 from __future__ import annotations
 
@@ -534,6 +536,16 @@ def _deck_bands(board, rows):
     return bands
 
 
+# Cancel Audit laid over the deck's AUDIT tile, for a size where no button of the panel lands
+# there when it comes up (the dock, sample 1b). Answers the tile's middle.
+LAY_CANCEL_OVER_TILE = r"""() => { const r = document.querySelector('#btn-deck-audit').getBoundingClientRect();
+    const st = document.createElement('style'); st.id = 'fcc-test-lay-cancel';
+    st.textContent = `#fcc-audit-panel-cancel { position: fixed !important; margin: 0 !important; left: ${r.left}px !important;
+        top: ${r.top}px !important; width: ${r.width}px !important; height: ${r.height}px !important; z-index: 5 !important; }`;
+    document.head.appendChild(st);
+    return [r.left + r.width / 2, r.top + r.height / 2]; }"""
+
+
 def _after(board, expected_requests, overlays, focus, what):
     """The second press did nothing: one click's requests, overlays and keyboard."""
     page = board.page
@@ -562,18 +574,25 @@ def test_a_real_double_click_does_what_one_click_does(board, rows, control):
     if control == "deck-tile":
         board.begin(rows, 1, last=0)
         bands = _deck_bands(board, rows)
-        if not bands:
-            pytest.skip(f"{what}: no button of the panel lands on the AUDIT tile here")
-        for name, xy in bands.items():
-            board.settle()
-            page.evaluate(RESET)
-            page.evaluate(HIDDEN, [server.audit_id])
-            assert page.evaluate("(xy) => !!document.elementFromPoint(xy[0], xy[1]).closest('#btn-deck-audit')", xy)
-            server.sent.clear()
-            board.double_click(xy)
-            page.wait_for_selector(PANEL)
-            _after(board, requests, overlays, focus, f"{what} (where {name} lands)")
-            assert page.evaluate("state.auditActive") is True, f"{what} (where {name} lands): the audit ended"
+        laid = not bands
+        if laid:                                    # the dock: lay Cancel Audit over the tile
+            bands = {"fcc-audit-panel-cancel, laid over the tile": page.evaluate(LAY_CANCEL_OVER_TILE)}
+        try:
+            for name, xy in bands.items():
+                board.settle()
+                page.evaluate(RESET)
+                page.evaluate(HIDDEN, [server.audit_id])
+                assert page.evaluate("(xy) => !!document.elementFromPoint(xy[0], xy[1]).closest('#btn-deck-audit')", xy)
+                server.sent.clear()
+                if laid:                            # the second press lands on Cancel Audit
+                    board.double_click_over(xy, "#fcc-audit-panel-cancel")
+                else:
+                    board.double_click(xy)
+                page.wait_for_selector(PANEL)
+                _after(board, requests, overlays, focus, f"{what} (where {name} lands)")
+                assert page.evaluate("state.auditActive") is True, f"{what} (where {name} lands): the audit ended"
+        finally:
+            page.evaluate("() => { const st = document.getElementById('fcc-test-lay-cancel'); if (st) st.remove(); }")
         return
 
     if control == "a-tile":
