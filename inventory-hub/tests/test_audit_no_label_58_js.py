@@ -921,12 +921,17 @@ RING_CLEAR = r"""([sel, body, strip]) => {
 def walked(page, key, steps):
     """Each tile `key` lands on, and whether it is seen: its centre can be hit, and the
     whole of it and its ring clear the strip and the body's top edge. A tile under the
-    strip has the keyboard on it with no highlight or name to see."""
+    strip has the keyboard on it with no highlight or name to see. A found tile's own 🏷️
+    (Derek, 2026-11-03, (a)), a stop of Tab's after its tile, counts as its tile, and
+    must be seen as one."""
     seen = []
     for _ in range(steps):
         page.keyboard.press(key)
-        sid = page.evaluate("document.activeElement.dataset.auditTile")
-        seen.append((int(sid), _on_top(page, tile(sid)) and page.evaluate(RING_CLEAR, [tile(sid), BODY, STRIP])))
+        got = page.evaluate("() => { const a = document.activeElement;"
+                            " return [a.dataset.auditTile || null, a.dataset.auditTag || null]; }")
+        sid = got[0] or got[1]
+        sel = tile(sid) if got[0] else f"[data-audit-tag='{sid}']"
+        seen.append((int(sid), _on_top(page, sel) and page.evaluate(RING_CLEAR, [sel, BODY, STRIP])))
     return seen
 
 

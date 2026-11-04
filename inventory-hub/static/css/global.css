@@ -2853,6 +2853,45 @@ button.fcc-audit-tile.kb-active {
     line-height: 1;
     vertical-align: middle;
 }
+/* A found tile's own 🏷️ (Derek, 2026-11-03, (a)): its own button over the tile's right
+   end, beside the tile's press button in one grid cell, never inside it; the tile keeps
+   room for it. Marked here: the Needs a label yellow, the tag on its dark backing. A flag
+   up before the audit: a dashed yellow edge. */
+.fcc-audit-tile-cell {
+    position: relative;
+    display: flex;
+    min-width: 0;
+}
+.fcc-audit-tile-cell > .fcc-audit-tile { flex: 1 1 auto; }
+button.fcc-audit-tile.fcc-audit-tile-tagged { padding-right: 2.75rem; }
+.fcc-audit-tile-tag {
+    position: absolute;
+    top: 50%;
+    right: 0.5rem;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    border: 1px solid rgba(255, 255, 255, 0.55);
+    border-radius: 6px;
+    background: #141414;
+    color: #fff;
+    font-size: var(--fcc-fs-row);
+    line-height: 1;
+    cursor: pointer;
+}
+.fcc-audit-tile-tag:hover { background: #2e2e2e; }
+.fcc-audit-tile-tag:focus-visible {
+    outline: 2px solid #0ff;
+    outline-offset: 1px;
+}
+.fcc-audit-tile-tag[data-audit-tag-state="marked"] { background: #ffc107; border-color: #ffc107; }
+.fcc-audit-tile-tag[data-audit-tag-state="marked"]:hover { background: #ffcd39; border-color: #ffcd39; }
+.fcc-audit-tile-tag[data-audit-tag-state="flagged"] { border: 1px dashed #ffc107; }
 /* "Not scanned (N)" over the spools still to find, then "Found (M)" (Derek, 2026-11-03,
    sample 5a(i)): under "Expected here", each with its count. */
 .fcc-audit-subhead {

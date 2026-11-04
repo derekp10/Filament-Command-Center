@@ -22,7 +22,13 @@ Derek's answers of 2026-11-03 add three: an Extra's tile, which a press takes ba
 `find-open`), and a row of it, which a pick closes (`find-row`); and the panel's 🔎 button
 among those a first click on the deck's AUDIT tile can bring up. The review of 7e3720f adds
 Find's ↻ Try again (`try-again`, P-1), whose answer paints the rows under the pointer.
-Their hermetic twins are in test_audit_find_and_tiles_58_js.py.
+Their hermetic twins are in test_audit_find_and_tiles_58_js.py. Derek's second look
+(2026-11-03, section H) adds a found tile's own 🏷️ (`a-tag`), whose mark grows its tile and
+moves the tiles under it; its hermetic twins are in test_audit_panel_look_58_js.py. Since the
+dock (sample 1b), Done, Cancel Audit and Needs a label sit under the list, in view with no
+scroll; when the panel comes up over the deck, only their QR boxes, which press nothing, lie
+over its AUDIT tile at these five sizes, so `deck-tile` finds no button there and skips (its
+hermetic twin, test_audit_no_label_58_js.py's, lays Cancel Audit over the tile).
 """
 from __future__ import annotations
 
@@ -44,7 +50,7 @@ pytestmark = pytest.mark.usefixtures("require_server")
 SIZES = [(1366, 640), (1366, 768), (1280, 800), (1600, 900), (1600, 1300)]
 LENGTHS = [3, 6, 10, 14, 24]
 CONTROLS = ["done-ends", "done-asks", "cancel-audit", "hide", "needs-a-label", "a-tile", "undo-that",
-            "back", "park", "deck-tile", "an-extra-tile", "find-open"]
+            "back", "park", "deck-tile", "an-extra-tile", "find-open", "a-tag"]
 GAP_MS = 120                 # a person's double click (p12.py's)
 SHIELD_S = 0.75              # DOUBLE_PRESS_MS (inv_cmd.js) and a little: a case starts past it
 
@@ -57,10 +63,11 @@ CONTROL_SEL = {
     "needs-a-label": "#fcc-audit-panel-needlabel", "undo-that": "#fcc-audit-label-undo",
     "back": QUESTION + " .fcc-apc-no", "park": QUESTION + " .fcc-apc-yes", "deck-tile": "#btn-deck-audit",
     "find-open": "#fcc-audit-panel-find",
+    "a-tag": "[data-audit-tag='100']",
 }
 # The panel's buttons a first click on the deck's AUDIT tile can bring up under the second.
 PANEL_BUTTONS = ["#fcc-audit-panel-find", "#fcc-audit-panel-loose", "#fcc-audit-panel-close", "#fcc-audit-panel-done",
-                 "#fcc-audit-panel-cancel", "#fcc-audit-panel-needlabel", ".fcc-audit-tile"]
+                 "#fcc-audit-panel-cancel", "#fcc-audit-panel-needlabel", ".fcc-audit-tile", ".fcc-audit-tile-tag"]
 
 # What one click leaves: the requests it sends ((path, scan text)), the overlays up, and
 # where the keyboard is.
@@ -79,6 +86,8 @@ ONE_CLICK = {
     "an-extra-tile": ([("/api/audit/found", None)], [PANEL[1:]], "BODY"),
     # Find opens over the panel, its box takes the keyboard, and the second click finds it there.
     "find-open": ([], [PANEL[1:], "fcc-audit-find"], "find-box"),
+    # A found tile's 🏷️: marked once, the keyboard kept on it through the redraw.
+    "a-tag": ([("/api/audit/needs_label", None)], [PANEL[1:]], "tag:100"),
 }
 
 # What sits over the panel (item 2f): its first click closes it, and the second lands on
@@ -159,6 +168,7 @@ class Sweep:
         page.route("**/api/identify_scan", self._scan)
         page.route("**/api/audit/found", self._found)
         page.route("**/api/audit/needs_label_undo", self._undo_that)
+        page.route("**/api/audit/needs_label", self._tag)
         page.route("**/api/audit/park", self._park)
         page.route("**/api/loose_spools*", lambda route: self._json(route, LOOSE_SPOOLS))
         page.route("**/api/search*", self._search)
@@ -246,6 +256,14 @@ class Sweep:
                 for r in (self.session.get("expected") or [])]
         self._json(route, {"success": True, "results": sorted(rows, key=lambda r: -r["id"])})
 
+    def _tag(self, route):
+        """A found tile's 🏷️, as the route marks it: the row flagged here, the last found as it was."""
+        self._record(route)
+        sid = (route.request.post_data_json or {}).get("id")
+        self.session = dict(self.session, expected=[dict(r, label_status=True, flagged_here=True) if r["id"] == sid else r
+                                                    for r in self.session.get("expected") or []])
+        self._json(route, {"success": True, "msg": f"#{sid} is marked: it needs a label."})
+
     def _undo_that(self, route):
         self._record(route)
         last = self.session.get("last_found")
@@ -332,7 +350,8 @@ AFTER = r"""() => {
         : (a.classList.contains('fcc-apc-no') ? 'back' : (a.classList.contains('fcc-apc-yes') ? 'park'
         : (a.classList.contains('fcc-loose-row') ? 'loose-row'
         : (a.matches('[data-find-box]') ? 'find-box'
-        : (a.dataset && a.dataset.auditTile ? 'tile:' + a.dataset.auditTile : (a.id || a.tagName))))));
+        : (a.dataset && a.dataset.auditTile ? 'tile:' + a.dataset.auditTile
+        : (a.dataset && a.dataset.auditTag ? 'tag:' + a.dataset.auditTag : (a.id || a.tagName)))))));
     const list = document.getElementById('fcc-shortcuts-overlay');
     return {
         overlays: Array.from(document.querySelectorAll('[data-overlay-mount="1"]')).map((e) => e.id),
@@ -576,6 +595,9 @@ def test_a_real_double_click_does_what_one_click_does(board, rows, control):
     elif control == "an-extra-tile":                # A3: its first press takes it back
         board.begin(rows, 1, last=0, extras=2)
         xy = _scrolled_into_view(page, f"[data-audit-tile='{EXTRA}']")
+    elif control == "a-tag":                        # P6: its first press marks the spool, and grows its tile
+        board.begin(rows, 1, last=0)
+        xy = _scrolled_into_view(page, CONTROL_SEL[control])
     else:                                       # cancel-audit, hide, needs-a-label
         board.begin(rows, 1, last=0)
         xy = _scrolled_into_view(page, CONTROL_SEL[control])

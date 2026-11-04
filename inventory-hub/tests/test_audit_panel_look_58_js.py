@@ -18,6 +18,15 @@ Pinned here, each RED on the commit before its own:
   its own row and drops the captions; with nothing found the box says so, and with
   nothing selected says that; on a window too short for the dock and a tile row the dock
   goes in the flow after the tiles, and comes back when the window grows.
+- P5, the 🏷️ on Needs a label sits on a small dark round backing (sample 4(ii)).
+- P6, a found tile's own 🏷️ (Derek's (a)): on an Expected tile found and on an Extra, its
+  own button beside the tile's; a tap marks the spool and leaves the last found alone, a
+  tap apart takes the mark back, a double tap is one; a flag up before the audit shows so
+  and a tap says so; a refusal says why; Tab reaches it, a person's Enter presses it, a
+  scan's presses nothing, the arrows go on from it; a double click reaches nothing else.
+- P7, "↩ Put back" in the Last found box: what a press on its tile does, for an Expected
+  spool and an Extra, never for one loaded from here, with no QR; a second press under a
+  double press puts nothing else back, even when a scan put another spool in the box.
 
 The real dashboard's geometry (the dock at five window sizes, a phone at every Text
 size, the 🏷️ centred on its backing) is test_audit_panel_look_58_e2e.py's; the real
@@ -25,14 +34,13 @@ double click on every control, test_audit_double_click_58_e2e.py's.
 """
 from __future__ import annotations
 
-import pytest
-
 import app as app_module
-from test_audit_find_and_tiles_58_js import begin, live, scanned  # noqa: F401  (live: the fixture)
-from test_audit_no_label_58_js import BODY, tile, tile_says
-from test_audit_panel_58_js import audit  # noqa: F401  (the fixture `live` stands on)
-from test_audit_session_58 import add_spool, env  # noqa: F401  (env: the fixture)
+from test_audit_find_and_tiles_58_js import audit_id, begin, live, posts, scanned  # noqa: F401  (live: the fixture)
+from test_audit_no_label_58_js import BODY, LABEL, PAST_A_DOUBLE_PRESS, tile, tile_says, toasts, wire
+from test_audit_panel_58_js import NOTICE, audit  # noqa: F401  (the fixture `live` stands on)
+from test_audit_session_58 import add_spool, env, scan, session  # noqa: F401  (env: the fixture)
 from test_scanner_safe_dialogs_61_js import page61  # noqa: F401  (the fixture `audit` stands on)
+from test_slow_scan_slash_js import _type
 
 SUBHEAD = ".fcc-audit-subhead"
 
@@ -292,3 +300,160 @@ def test_needs_a_label_wears_its_tag_on_a_dark_round_backing(live, env):
                         NEED)
     assert got == {"ico": "🏷️", "hidden": "true", "text": "🏷️ Needs a label", "round": "50%", "bg": "rgb(30, 30, 30)",
                    "square": True}
+
+
+# --- P6: a 🏷️ on each found tile ----------------------------------------------------------
+
+TAG_URL = "/api/audit/needs_label"
+UNTAG_URL = "/api/audit/needs_label_undo"
+
+
+def tag(sid):
+    return f"[data-audit-tag='{sid}']"
+
+
+def tag_state(page, sid):
+    return page.evaluate("(s) => { const t = document.querySelector(s); return t ? t.dataset.auditTagState : null; }", tag(sid))
+
+
+def tag_is(page, sid, state):
+    page.wait_for_function("([s, w]) => { const t = document.querySelector(s); return !!t && t.dataset.auditTagState === w; }",
+                           arg=[tag(sid), state])
+
+
+def test_a_found_tile_has_its_own_tag_beside_it_and_no_other_tile_does(live, env):
+    """Derek, 2026-11-03, (a): "A sounds good". On an Expected tile found and on an Extra,
+    its own button, a sibling of the tile's press button in one cell, never inside it;
+    none on a tile not yet found, nor on a loaded-from-here one. RED on e64ab36."""
+    four(env)
+    add_spool(env, 200, "LR-MDB-2", container_slot="3")
+    add_spool(env, 242, "XL-1", physical_source="LR-MDB-1", physical_source_slot="4")
+    begin(live, env)
+    scanned(live, "ID:57")
+    scanned(live, "ID:200")
+    scanned(live, "ID:242")
+    live.wait_for_function("(s) => document.querySelector(s).textContent.includes('Loaded from here')", arg=BODY)
+    got = live.evaluate("""() => Array.from(document.querySelectorAll('[data-audit-tag]')).map((b) => {
+        const t = document.querySelector(`[data-audit-tile='${b.dataset.auditTag}']`);
+        return { id: Number(b.dataset.auditTag), tag: b.tagName, sibling: !!t && t.parentElement === b.parentElement && !t.contains(b),
+                 state: b.dataset.auditTagState, pressed: b.getAttribute('aria-pressed') }; })""")
+    assert got == [{"id": 57, "tag": "BUTTON", "sibling": True, "state": "none", "pressed": "false"},
+                   {"id": 200, "tag": "BUTTON", "sibling": True, "state": "none", "pressed": "false"}]
+    assert "Needs a label: mark #57" in live.get_attribute(tag(57), "aria-label")
+    # The tile's own press area stays whole: its middle is the tile, the 🏷️ its own.
+    hit = live.evaluate("""([t, g]) => { const r = document.querySelector(t).getBoundingClientRect();
+        const e = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        const q = document.querySelector(g).getBoundingClientRect();
+        const f = document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2);
+        return [!!e.closest(t) && !e.closest(g), !!f.closest(g)]; }""", [tile(57), tag(57)])
+    assert hit == [True, True]
+
+
+def test_a_tap_marks_the_spool_and_leaves_the_last_found_alone(live, env):
+    four(env)
+    begin(live, env)
+    scanned(live, "ID:57")
+    scanned(live, "ID:99")                             # the last found
+    box_says(live, STRIP, "#99")
+    live.click(tag(57))
+    tag_is(live, 57, "marked")
+    tile_says(live, 57, "needs a label")
+    assert live.get_attribute(tag(57), "aria-pressed") == "true"
+    assert wire(env, 57) == "true"
+    assert posts(live, TAG_URL) == [{"audit_id": audit_id(), "id": 57}]
+    assert session()["last_found"] == 99 and "#99" in live.text_content(STRIP)
+    assert {"msg": "#57 is marked: it needs a label.", "kind": "success"} in toasts(live)
+
+
+def test_a_second_tap_apart_takes_the_mark_back_and_a_double_tap_is_one(live, env):
+    four(env)
+    begin(live, env)
+    scanned(live, "ID:57")
+    live.click(tag(57))
+    live.click(tag(57))                                # under 700 ms: the same tap
+    tag_is(live, 57, "marked")
+    live.wait_for_timeout(PAST_A_DOUBLE_PRESS)
+    assert posts(live, TAG_URL) == [{"audit_id": audit_id(), "id": 57}] and posts(live, UNTAG_URL) == []
+    live.click(tag(57))                                # apart: the mark comes off
+    tag_is(live, 57, "none")
+    assert posts(live, UNTAG_URL) == [{"audit_id": audit_id(), "id": 57}]
+    assert LABEL not in env["fake"].extra("spool", 57)
+    assert "needs a label" not in live.text_content(tile(57))
+
+
+def test_a_spool_flagged_before_the_audit_shows_so_and_a_tap_says_so(live, env):
+    add_spool(env, 57, "LR-MDB-1", container_slot="1")
+    add_spool(env, 99, "LR-MDB-1", container_slot="2", needs_label_print=True)
+    begin(live, env)
+    scanned(live, "ID:99")
+    tag_is(live, 99, "flagged")
+    tile_says(live, 99, "needs a label")
+    assert live.get_attribute(tag(99), "aria-pressed") is None
+    assert "already flagged" in live.get_attribute(tag(99), "aria-label")
+    env["fake"].patches.clear()
+    live.click(tag(99))
+    live.wait_for_function("(s) => document.querySelector(s).textContent.includes('already flagged')", arg=NOTICE)
+    assert env["fake"].patches == [] and tag_state(live, 99) == "flagged"
+    assert {"msg": "#99 is already flagged for a new label.", "kind": "info"} in toasts(live)
+
+
+def test_a_refused_tap_says_why(live, env):
+    """The audit ended elsewhere before the panel heard: nothing is marked, and the
+    answer's words are toasted at 7 s and said on the panel, as the strip's buttons'."""
+    four(env)
+    begin(live, env)
+    scanned(live, "ID:57")
+    live.wait_for_selector(tag(57))
+    live.evaluate("""() => { const plain = window.fetch;     // the panel's poll hasn't heard
+        window.fetch = (u, o) => (String(u).indexOf('/api/audit_session') !== -1 ? new Promise(() => {}) : plain(u, o)); }""")
+    scan(env, "CMD:CANCEL")
+    live.click(tag(57))
+    live.wait_for_function("() => Array.from(document.querySelectorAll('#toast-container .toast-msg'))"
+                           ".some((e) => e.innerText.includes('already ended'))")
+    assert {"msg": "That audit has already ended.", "kind": "error"} in toasts(live)
+    assert wire(env, 57) is None
+
+
+def test_tab_reaches_a_tag_a_persons_enter_presses_it_and_the_arrows_go_on(live, env):
+    four(env)
+    begin(live, env)
+    order = shelf_order()
+    scanned(live, f"ID:{order[0]}")                     # found: drawn last, its 🏷️ after it
+    headings_are(live, ["Not scanned (3)", "Found (1)"])
+    live.focus(tile(order[0]))
+    live.keyboard.press("Tab")
+    assert live.evaluate("document.activeElement.dataset.auditTag") == str(order[0])
+    live.keyboard.press("Enter")                        # a person's Enter, through the accumulator
+    tag_is(live, order[0], "marked")
+    assert live.evaluate("document.activeElement.dataset.auditTag") == str(order[0])   # kept through the redraw
+    live.keyboard.press("ArrowLeft")                    # back to its own tile
+    assert int(live.evaluate("document.activeElement.dataset.auditTile")) == order[0]
+    live.focus(tag(order[0]))
+    live.keyboard.press("ArrowRight")                   # on to the next tile: past the last, the first
+    assert int(live.evaluate("document.activeElement.dataset.auditTile")) == order[1]
+    assert posts(live, UNTAG_URL) == []
+
+
+def test_a_scans_enter_on_a_tag_presses_nothing(live, env):
+    four(env)
+    begin(live, env)
+    scanned(live, "ID:57")
+    live.focus(tag(57))
+    _type(live, "ID:99", 1)                             # a scanner's keys, with the keyboard on the 🏷️
+    live.wait_for_function("() => window.__sent.some((p) => p.body && p.body.text === 'ID:99')")
+    live.wait_for_timeout(150)
+    assert posts(live, TAG_URL) == [] and wire(env, 57) is None
+
+
+def test_a_double_click_on_a_tag_marks_once_and_reaches_nothing_under_it(live, env):
+    """The mark grows the tile, and the tiles under it move: the second press reaches
+    nothing on the panel."""
+    four(env)
+    begin(live, env)
+    scanned(live, "ID:57")
+    live.wait_for_selector(tag(57))
+    live.dblclick(tag(57))
+    tag_is(live, 57, "marked")
+    live.wait_for_timeout(300)
+    assert posts(live, TAG_URL) == [{"audit_id": audit_id(), "id": 57}] and posts(live, UNTAG_URL) == []
+    assert posts(live, "/api/audit/found") == []

@@ -1299,11 +1299,30 @@ window.commitBulkMove = () => {
     // server reads it in any case (a scanner set to upper case sends it so).
     const _tileQrText = (row) => (state.auditId ? `CMD:FOUND:${state.auditId}:${Number(row.id)}` : '');
 
+    // A found tile's own 🏷️ (Derek, 2026-11-03, (a): "A sounds good"): one tap marks that
+    // spool as needing a label without making it the last found (POST
+    // /api/audit/needs_label); the tile then says "needs a label" and its 🏷️ shows the
+    // mark is this audit's (`flagged_here`); a tap on it again, DOUBLE_PRESS_MS or more
+    // after the last, takes the mark back (/api/audit/needs_label_undo). A spool flagged
+    // before the audit shows as flagged already, and a tap is answered so. Its own
+    // button, beside the tile's in one cell, never inside it: a button holds no button.
+    const _tagButton = (row) => {
+        const id = Number(row.id);
+        const say = (state, words, pressed) => `<button type="button" class="fcc-audit-tile-tag" data-audit-tag="${id}"
+                data-audit-tag-state="${state}"${pressed === null ? '' : ` aria-pressed="${pressed}"`}
+                aria-label="${_escapeHtml(words)}" title="${_escapeHtml(words)}">${state === 'marked'
+            ? '<span class="fcc-ico-on-light" aria-hidden="true">🏷️</span>' : '<span aria-hidden="true">🏷️</span>'}</button>`;
+        if (row.flagged_here) return say('marked', `#${id} is marked as needing a label: press again to take the mark back`, true);
+        if (row.label_status === true) return say('flagged', `#${id} is already flagged for a new label`, null);
+        return say('none', `Needs a label: mark #${id}, and leave the last found as it is`, false);
+    };
+
     // Expected tiles are real buttons (window.personMayPress's rule, through the scan
     // accumulator): a press finds a spool with nothing to scan, and takes that back.
     // An Extra's tile is one too (A3): a press takes it back off the found lists, for a
     // spool scanned or picked here by mistake, since Done acts on the Extras. A press
-    // never makes an Extra, and a loaded-from-here tile stays a plain tile.
+    // never makes an Extra, and a loaded-from-here tile stays a plain tile. A found tile,
+    // on the list or an Extra, has its own 🏷️ beside it (_tagButton).
     const _renderTile = (row, kind) => {
         const look = _TILES[kind];
         const swatchBg = (typeof window.makeSwatchHtml === 'function')
@@ -1319,6 +1338,7 @@ window.commitBulkMove = () => {
         const words = _labelWords(row, found);
         const badge = (kind === 'found' && !row.label_read) ? '' : look.badge;
         const pressable = kind === 'found' || kind === 'missing' || kind === 'extra';
+        const tagged = kind === 'found' || kind === 'extra';
         // Only a tile not yet found: a QR never takes a find back.
         const qr = kind === 'missing' ? _tileQrText(row) : '';
         const tag = pressable ? 'button' : 'div';
@@ -1326,12 +1346,12 @@ window.commitBulkMove = () => {
             : (found ? 'Press if it isn\'t here after all'
                 : (qr ? 'Press, or scan its QR, if it\'s here with no label to scan' : 'Press if it\'s here with no label to scan'));
         const press = !pressable ? 'class="fcc-audit-tile-box"'
-            : `type="button" class="fcc-audit-tile-box fcc-audit-tile" data-audit-tile="${Number(row.id)}"
+            : `type="button" class="fcc-audit-tile-box fcc-audit-tile${tagged ? ' fcc-audit-tile-tagged' : ''}" data-audit-tile="${Number(row.id)}"
                data-audit-found="${found ? 1 : 0}" aria-pressed="${found}" title="${_escapeHtml(title)}"`;
         // With a QR the badge goes under the name, and the QR takes the badge's place at
         // the tile's end, so the tile grows by as little as it can.
         const badgeHtml = badge ? `<span style="font-size:var(--fcc-fs-label); white-space:nowrap;${qr ? ' display:block;' : ''}">${badge}</span>` : '';
-        return `
+        const tile = `
             <${tag} ${press} style="background:${look.bg}; border:1px solid ${look.border};">
                 ${swatchBg}
                 <span style="display:block; flex:1; min-width:0;">
@@ -1345,6 +1365,7 @@ window.commitBulkMove = () => {
                 ${qr ? `<span class="fcc-audit-tile-qr" aria-hidden="true" data-audit-qr="${_escapeHtml(qr)}"></span>` : badgeHtml}
             </${tag}>
         `;
+        return tagged ? `<div class="fcc-audit-tile-cell">${tile}${_tagButton(row)}</div>` : tile;
     };
 
     // The QR codes the tiles hold, each drawn once (the shared library, as generateSafeQR
@@ -1503,11 +1524,12 @@ window.commitBulkMove = () => {
 
     const _pressAnswered = (res) => {
         if (res && res.success) {
-            // `left_alone`: the press didn't do what it was asked, so the panel says so
-            // too. The toast layer is under the panel, and the strip alone reads as an
-            // undo that worked.
-            window.auditPanelNotice(res.left_alone ? res.msg : '');
-            if (res.msg) showToast(res.msg, 'success', 4000);
+            // `left_alone`, `already` (a tile's 🏷️ on a spool flagged before the audit):
+            // the press didn't do what it was asked, so the panel says so too. The toast
+            // layer is under the panel, and the strip or the tile alone reads as a press
+            // that worked.
+            window.auditPanelNotice((res.left_alone || res.already) ? res.msg : '');
+            if (res.msg) showToast(res.msg, res.already ? 'info' : 'success', 4000);
             window.refreshAuditSession();
             return;
         }
@@ -1561,9 +1583,27 @@ window.commitBulkMove = () => {
         _pressPost('/api/audit/found', { audit_id: state.auditId, id, found: tile.dataset.auditFound !== '1' });
     };
 
+    // A found tile's 🏷️ says what it showed: marked here, its tap takes the mark back;
+    // else it marks (a flag already up is answered `already`, nothing written). A second
+    // tap under DOUBLE_PRESS_MS is a double press and does nothing, as a tile's: a tap
+    // apart takes the mark back. It never changes the last found.
+    const _tagPressedAt = new Map();
+    const _pressTag = (btn) => {
+        const id = Number(btn.dataset.auditTag);
+        const now = Date.now();
+        if (now - (_tagPressedAt.get(id) || 0) < DOUBLE_PRESS_MS) return;
+        _tagPressedAt.set(id, now);
+        const undo = btn.dataset.auditTagState === 'marked';
+        _pressPost(undo ? '/api/audit/needs_label_undo' : '/api/audit/needs_label', { audit_id: state.auditId, id });
+    };
+
     // Delegated: the tiles are redrawn with the body.
     const _bodyClick = (e) => {
-        const tile = e.target && e.target.closest ? e.target.closest('[data-audit-tile]') : null;
+        const t = e.target && e.target.closest ? e.target : null;
+        if (!t) return;
+        const labelBtn = t.closest('[data-audit-tag]');
+        if (labelBtn) { _pressTag(labelBtn); return; }
+        const tile = t.closest('[data-audit-tile]');
         if (tile) _pressTile(tile);
     };
 
@@ -1650,10 +1690,11 @@ window.commitBulkMove = () => {
         const tileEl = onPanel ? t.closest('[data-audit-tile]') : null;
         // A press on the dock counts as one on the strip (Derek, 2026-11-03, sample 1b): its
         // Needs a label sits in its own column there, outside the Last found box, and the
-        // box's words can grow the dock under the pointer, or shrink it.
+        // box's words can grow the dock under the pointer, or shrink it. So does a tap on a
+        // found tile's 🏷️, which grows its tile ("needs a label") and moves those under it.
         _panelPress = Object.assign({}, _press, {
             cover: !onPanel,
-            strip: onPanel && !!(tileEl || t.closest('#fcc-audit-panel-dock')),
+            strip: onPanel && !!(tileEl || t.closest('[data-audit-tag]') || t.closest('#fcc-audit-panel-dock')),
             stripWas: _stripSpool,
             tile: tileEl ? Number(tileEl.dataset.auditTile) : null,
         });
@@ -1764,6 +1805,7 @@ window.commitBulkMove = () => {
         const active = document.activeElement;
         const refocus = (active && /^fcc-audit-label-(undo|queue)$/.test(active.id || '')) ? active.id : null;
         const refocusTile = (active && active.dataset) ? active.dataset.auditTile : null;
+        const refocusTag = (active && active.dataset) ? active.dataset.auditTag : null;
         const stripSpool = data.last_found ? data.last_found.id : null;
         const stripMoved = stripSpool !== _stripSpool;
         _stripSpool = stripSpool;
@@ -1868,6 +1910,8 @@ window.commitBulkMove = () => {
         }
         const tile = refocusTile ? body.querySelector(`[data-audit-tile="${refocusTile}"]`) : null;
         if (tile && tile.focus) tile.focus();
+        const tagBtn = refocusTag ? body.querySelector(`[data-audit-tag="${refocusTag}"]`) : null;
+        if (tagBtn && tagBtn.focus) tagBtn.focus();
         // Unless the person has gone somewhere on the panel since.
         if (_focusDoneNext) {
             _focusDoneNext = false;
@@ -2122,7 +2166,9 @@ window.commitBulkMove = () => {
     // mouseup lands in.
     const _tileFocused = (e) => {
         const tile = e.target;
-        if (tile && tile.matches && tile.matches('.fcc-audit-tile:focus-visible')) _tileClear(tile);
+        if (!tile || !tile.matches) return;
+        if (tile.matches('.fcc-audit-tile:focus-visible')) _tileClear(tile);
+        else if (tile.matches('.fcc-audit-tile-tag:focus-visible')) _tileClear(tile.closest('.fcc-audit-tile-cell') || tile);
     };
 
     // The dock stays under the list, out of the scroll, while it leaves the tiles room:
@@ -2161,8 +2207,13 @@ window.commitBulkMove = () => {
         e.preventDefault();
         e.stopImmediatePropagation();
         const back = e.key === 'ArrowLeft' || e.key === 'ArrowUp';
-        const at = tiles.indexOf(document.activeElement);
-        const next = at < 0 ? (back ? tiles.length - 1 : 0) : (at + (back ? tiles.length - 1 : 1)) % tiles.length;
+        // From a found tile's 🏷️ (reached by Tab): on to the next tile, or back to its own.
+        const cur = document.activeElement;
+        const own = (cur && cur.dataset && cur.dataset.auditTag)
+            ? tiles.find(t => t.dataset.auditTile === cur.dataset.auditTag) : null;
+        const at = own ? tiles.indexOf(own) : tiles.indexOf(cur);
+        const next = at < 0 ? (back ? tiles.length - 1 : 0)
+            : ((own && back) ? at : (at + (back ? tiles.length - 1 : 1)) % tiles.length);
         tiles.forEach(t => t.classList.remove('kb-active'));
         tiles[next].classList.add('kb-active');
         tiles[next].focus();
@@ -2209,7 +2260,7 @@ window.commitBulkMove = () => {
         });
         window.registerShortcut({
             id: 'audit-tile-press', scope: 'Audit Panel', keys: ['Enter'],
-            description: 'On a tile: found, with no label read. Pressed again, it goes back to not scanned. On an Extra: it isn\'t here after all.',
+            description: 'On a tile: found, with no label read. Pressed again, it goes back to not scanned. On an Extra: it isn\'t here after all. On a found tile\'s 🏷️ (Tab to it): it needs a label; pressed again, the mark comes off.',
         });
         window.registerShortcut({
             id: 'audit-find', scope: 'Audit Panel', keys: ['/'],

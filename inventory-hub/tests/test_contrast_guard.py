@@ -316,10 +316,24 @@ def test_audit_panel_and_pill_are_readable(page: Page, base_url: str, assert_con
     for hovered in ("#fcc-audit-panel-needlabel", "#fcc-audit-panel-done", "#fcc-audit-panel-cancel",
                     "#fcc-audit-panel-close", "[data-audit-tile='99']", "[data-audit-tile='57']",
                     # 2026-11-03: an Extra's tile is a button now, and the panel's 🔎.
-                    "[data-audit-tile='134']", "#fcc-audit-panel-find"):
+                    "[data-audit-tile='134']", "#fcc-audit-panel-find",
+                    # His second look (section H, (a)): a found tile's own 🏷️, marked here
+                    # (#57, yellow with the tag on its dark backing) and not (#100, #134).
+                    "[data-audit-tag='57']", "[data-audit-tag='100']", "[data-audit-tag='134']"):
         panel.locator(hovered).hover()
         page.wait_for_timeout(200)      # Bootstrap's colour transition
         assert_contrast(panel)
+    # And a 🏷️ on a spool flagged before the audit: its dashed yellow edge.
+    flagged = dict(SAMPLE_AUDIT, expected=[dict(r, label_status=True, flagged_here=False) if r["id"] == 100 else r
+                                           for r in SAMPLE_AUDIT["expected"]])
+    page.evaluate("(s) => { const plain = window.fetchT; window.fetchT = (u, ...r) => String(u).includes('/api/audit_session')"
+                  " ? Promise.resolve({ json: () => Promise.resolve(s) }) : plain(u, ...r); window.refreshAuditSession(); }", flagged)
+    expect(panel.locator("[data-audit-tag='100'][data-audit-tag-state='flagged']")).to_have_count(1)
+    assert_contrast(panel)
+    panel.locator("[data-audit-tag='100']").hover()
+    page.wait_for_timeout(200)
+    assert_contrast(panel)
+    page.mouse.move(0, 0)
     page.keyboard.press("Escape")
     pill = page.locator("#fcc-audit-pill")
     expect(pill).to_be_visible()
