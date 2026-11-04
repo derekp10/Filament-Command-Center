@@ -1,6 +1,7 @@
 """Group 58, Derek's second look (2026-11-03, section H), on the real dashboard with Bootstrap
 and the page's own polls: the dock (sample 1b) at the five window sizes the double-click
-sweep uses, on a short list and a big shelf.
+sweep uses, on a short list and a big shelf, and the 🏷️ (and the Admin window's 🔎) centred on
+its dark round backing (sample 4(ii)), measured from its pixels.
 
 FCC's routes are answered in this browser on their real shapes
 (test_audit_double_click_58_e2e.Sweep, every request that isn't a GET answered there), so
@@ -11,9 +12,12 @@ every control of the panel, the dock's included, in test_audit_double_click_58_e
 """
 from __future__ import annotations
 
-import pytest
+import io
 
-from test_audit_double_click_58_e2e import BODY, SIZES, board  # noqa: F401  (board: the fixture)
+import pytest
+from playwright.sync_api import Page
+
+from test_audit_double_click_58_e2e import BODY, START, Sweep, _session, board  # noqa: F401  (board: the fixture)
 
 pytestmark = pytest.mark.usefixtures("require_server")
 
@@ -58,3 +62,97 @@ def test_the_dock_keeps_the_exits_and_the_tally_in_view_at_every_size(board, row
         assert got["whole"] >= min(2, rows), (what, at, got)
         docks.append(got["dock"])
     assert docks[0] == docks[1] == docks[2], (what, docks)      # the dock never scrolled
+
+
+# --- P5: an emoji on its dark round backing, centred (Derek, 2026-11-03) -------------------
+# He saw sample 4b(a)'s ⚠️ sit off the middle of its circle. Measured from the pixels, at
+# four times the window's scale: the ink of the emoji (every pixel inside the circle, clear
+# of its anti-aliased edge, that differs from the backing) against the circle's middle.
+
+SCALE = 4
+INK_FROM_BG = 48            # a channel this far from the backing's #1e1e1e is the emoji's ink
+CENTRED_PX = 1.0
+
+
+def _ink_offset(page: Page, sel: str):
+    """How far the emoji's ink sits from the middle of its backing, in CSS px (dx, dy)."""
+    from PIL import Image
+    box = page.evaluate("(s) => { const r = document.querySelector(s).getBoundingClientRect();"
+                        " return { x: r.left, y: r.top, w: r.width, h: r.height }; }", sel)
+    png = page.screenshot(clip={"x": box["x"], "y": box["y"], "width": box["w"], "height": box["h"]})
+    img = Image.open(io.BytesIO(png)).convert("RGB")
+    width, height = img.size
+    cx, cy = width / 2, height / 2
+    radius = min(width, height) / 2 - 2.5 * SCALE
+    px = img.load()
+    xs, ys = [], []
+    for y in range(height):
+        for x in range(width):
+            if (x + 0.5 - cx) ** 2 + (y + 0.5 - cy) ** 2 > radius * radius:
+                continue
+            if max(abs(c - 0x1e) for c in px[x, y]) > INK_FROM_BG:
+                xs.append(x)
+                ys.append(y)
+    assert xs, f"{sel}: no ink inside its backing"
+    return ((min(xs) + max(xs) + 1) / 2 - cx) / SCALE, ((min(ys) + max(ys) + 1) / 2 - cy) / SCALE
+
+
+# The button as it is, and a twin with the bare emoji, as before the backing: the fill, the
+# text colour and the height must be the same.
+TWIN = r"""(sel) => { const b = document.querySelector(sel);
+    const twin = b.cloneNode(false); twin.removeAttribute('id'); twin.removeAttribute('onclick');
+    twin.textContent = b.textContent.replace(/\s+/g, ' ').trim();
+    b.after(twin);
+    const look = (e) => { const c = getComputedStyle(e); return { fill: c.backgroundColor, text: c.color,
+        height: Math.round(e.getBoundingClientRect().height * 2) / 2 }; };
+    const got = { button: look(b), twin: look(twin), circle: getComputedStyle(b.querySelector('.fcc-ico-on-light')).backgroundColor };
+    twin.remove();
+    return got; }"""
+
+
+@pytest.fixture
+def sharp(browser, base_url, require_server):
+    """The real dashboard at four times the scale, FCC's routes answered in this browser."""
+    context = browser.new_context(viewport={"width": 1366, "height": 768}, device_scale_factor=SCALE)
+    page = context.new_page()
+    server = Sweep(page)
+    page.goto(base_url, wait_until="domcontentloaded")
+    page.wait_for_function("() => typeof window.openAuditPanel === 'function' && typeof window.openConfigModal === 'function'",
+                           timeout=45_000)
+    page.wait_for_function("() => state.lastAuditState === false", timeout=30_000)
+    yield page, server
+    context.close()
+
+
+def test_the_tag_sits_in_the_middle_of_its_dark_backing_on_needs_a_label(sharp):
+    """And the button keeps its yellow fill, its black text and its height. RED on fed9646:
+    the 🏷️ was bare on the yellow."""
+    page, server = sharp
+    server.audit_id = "boot-1"
+    server.session = _session("boot-1", 6, 3, last=0)
+    page.evaluate(START, ["boot-1"])
+    page.wait_for_selector("#fcc-audit-last-found")
+    page.wait_for_timeout(300)
+    sel = "#fcc-audit-panel-needlabel .fcc-ico-on-light"
+    dx, dy = _ink_offset(page, sel)
+    assert abs(dx) <= CENTRED_PX and abs(dy) <= CENTRED_PX, (dx, dy)
+    got = page.evaluate(TWIN, "#fcc-audit-panel-needlabel")
+    assert got["button"] == got["twin"], got
+    assert got["button"]["fill"] == "rgb(255, 193, 7)" and got["button"]["text"] == "rgb(0, 0, 0)", got
+    assert got["circle"] == "rgb(30, 30, 30)"
+
+
+def test_the_lens_sits_in_the_middle_of_its_dark_backing_on_load_report(sharp):
+    """The look's other light-fill spot: 🔎 on the cyan Load report (Admin / Config). RED on
+    fed9646."""
+    page, _server = sharp
+    page.evaluate("() => window.openConfigModal()")
+    page.wait_for_selector("#btn-config-attrs-scan", state="visible")
+    page.wait_for_function("() => document.getElementById('configModal').classList.contains('show')")
+    page.wait_for_timeout(400)                          # the window's fade
+    sel = "#btn-config-attrs-scan .fcc-ico-on-light"
+    dx, dy = _ink_offset(page, sel)
+    assert abs(dx) <= CENTRED_PX and abs(dy) <= CENTRED_PX, (dx, dy)
+    got = page.evaluate(TWIN, "#btn-config-attrs-scan")
+    assert got["button"] == got["twin"], got
+    assert got["button"]["fill"] == "rgb(13, 202, 240)" and got["button"]["text"] == "rgb(0, 0, 0)", got

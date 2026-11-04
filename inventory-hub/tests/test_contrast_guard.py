@@ -934,6 +934,27 @@ def test_settings_this_browser_section_is_readable(page: Page, base_url: str, as
 
 
 @pytest.mark.usefixtures("require_server")
+def test_load_report_with_its_lens_on_a_dark_backing_is_readable(page: Page, base_url: str, assert_contrast):
+    """Group 58, Derek's second look (2026-11-03, sample 4(ii)): the 🔎 on the cyan Load
+    report (Settings -> Filament Attributes) sits on a small dark round backing, as the 🏷️
+    on Needs a label does. Its words and the backing's text node are judged, at rest and
+    hovered. Read-only: Settings is opened and closed, nothing is loaded."""
+    import conftest
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openConfigModal === 'function'")
+    page.evaluate("() => window.openConfigModal()")
+    button = page.locator("#btn-config-attrs-scan")
+    expect(button).to_be_visible(timeout=15000)
+    header = page.locator("#config-sections .card-header", has=button)
+    assert_contrast(header)
+    scored = [o["text"] for o in conftest.contrast_offenders(header, min_ratio=100)]
+    assert "🔎" in scored and any("Load report" in t for t in scored), scored
+    button.hover()
+    page.wait_for_timeout(200)          # Bootstrap's colour transition
+    assert_contrast(header)
+
+
+@pytest.mark.usefixtures("require_server")
 def test_unmeasured_review_cards_are_readable(page: Page, base_url: str, assert_contrast):
     """Group 56.3: the 🛑 Review's "couldn't measure" cards, one per reason (a
     completion whose footer couldn't be read, one that lists no filament, one

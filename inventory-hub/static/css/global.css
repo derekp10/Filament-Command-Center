@@ -2832,6 +2832,27 @@ button.fcc-audit-tile.kb-active {
     color: #ffe08a;
     font-weight: 600;
 }
+/* An emoji on a light fill (a yellow or cyan button), on a small dark round backing
+   (Derek, 2026-11-03, sample 4(ii)): measured, 87% of the 🏷️'s pixels on the yellow Needs
+   a label were within ΔE 25 of it, and the 🔎 on the cyan Load report half lost. The
+   button keeps its fill, its text and its size: the negative margins keep the line box
+   as it was, and the left one reaches into the button's padding. Centred in the circle
+   (inline-flex, line-height 1): within 1 px, measured from the pixels by
+   test_audit_panel_look_58_e2e.py. `color` is for the contrast guard, which reads the
+   emoji's text node: a colour emoji ignores it. */
+.fcc-ico-on-light {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.6em;
+    height: 1.6em;
+    margin: -0.3em 0.05em -0.3em -0.3em;
+    border-radius: 50%;
+    background: #1e1e1e;
+    color: #fff;
+    line-height: 1;
+    vertical-align: middle;
+}
 /* "Not scanned (N)" over the spools still to find, then "Found (M)" (Derek, 2026-11-03,
    sample 5a(i)): under "Expected here", each with its count. */
 .fcc-audit-subhead {

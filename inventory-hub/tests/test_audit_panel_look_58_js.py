@@ -272,3 +272,23 @@ def test_a_window_too_short_for_the_dock_puts_it_in_the_flow_and_back(live, env)
     live.wait_for_function("(s) => !document.querySelector(s).classList.contains('fcc-audit-scroll-flow')", arg=SCROLL)
     live.evaluate("(s) => { document.querySelector(s).scrollTop = 0; }", BODY)
     assert [c for c in CONTROLS if not seen(live, c)] == []
+
+
+# --- P5: the 🏷️ on a dark round backing -------------------------------------------------
+
+def test_needs_a_label_wears_its_tag_on_a_dark_round_backing(live, env):
+    """Derek, 2026-11-03 (sample 4(ii)): the 🏷️ blended into the yellow. The emoji sits in
+    its own round dark span, hidden from a screen reader (the button's name is "Needs a
+    label"), then a real space, so the button's text still reads "🏷️ Needs a label". Its
+    centring is measured from its pixels on the real dashboard
+    (test_audit_panel_look_58_e2e.py). RED on fed9646: the emoji was bare text."""
+    four(env)
+    begin(live, env)
+    got = live.evaluate("""(s) => { const b = document.querySelector(s); const ico = b.querySelector('.fcc-ico-on-light');
+        return { ico: ico ? ico.textContent : null, hidden: ico ? ico.getAttribute('aria-hidden') : null,
+                 text: b.textContent.replace(/\\s+/g, ' ').trim(),
+                 round: ico ? getComputedStyle(ico).borderRadius : null, bg: ico ? getComputedStyle(ico).backgroundColor : null,
+                 square: ico ? Math.abs(ico.getBoundingClientRect().width - ico.getBoundingClientRect().height) < 0.5 : null }; }""",
+                        NEED)
+    assert got == {"ico": "🏷️", "hidden": "true", "text": "🏷️ Needs a label", "round": "50%", "bg": "rgb(30, 30, 30)",
+                   "square": True}
