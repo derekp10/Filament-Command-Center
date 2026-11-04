@@ -53,7 +53,8 @@ FULL = {"audit_id": "boot-1", "place": "LR-MDB-1", "why": "done", "summary": "Fo
                 _row(301, "Some Brand PETG (Clear)", "XL-1", HEAD_WHY, color="E8F1F2"),
                 _row(302, "Some Brand PLA (White)", "CR-CT-1", "moved to CR-CT-1", color="F5F5F5")]},
             {"kind": "failed", "title": "Couldn't be moved", "rows": [
-                _row(103, "Some Brand ASA (Grey)", "LR-MDB-1 slot 4", 'HTTP 400: {"message": "nope"}', color="8E8E8E")]},
+                # Spoolman's words, as the route words them (spoolman_api.refusal_words, T5).
+                _row(103, "Some Brand ASA (Grey)", "LR-MDB-1 slot 4", "Spoolman refused it: nope", color="8E8E8E")]},
             {"kind": "trail", "title": "Loaded from LR-MDB-1", "rows": [
                 _row(242, "Some Brand PLA (Galaxy Black)", "XL-2", color="1A1A1A")]},
             {"kind": "needs_label", "title": "Needs a label", "rows": [
@@ -178,7 +179,7 @@ def test_each_spool_once_under_what_done_did_with_it(dialog):
                                               "🏷️ needs a label"]]],
         ["📌 Left where they are (2)", "stay", [["#301 Some Brand PETG (Clear)", "500g", HEAD_WHY, ""],
                                               ["#302 Some Brand PLA (White)", "500g", "moved to CR-CT-1", ""]]],
-        ["🛑 Couldn't be moved (1)", "failed", [["#103 Some Brand ASA (Grey)", "500g", 'HTTP 400: {"message": "nope"}', ""]]],
+        ["🛑 Couldn't be moved (1)", "failed", [["#103 Some Brand ASA (Grey)", "500g", "Spoolman refused it: nope", ""]]],
         ["🔗 Loaded from LR-MDB-1 (1)", "trail", [["#242 Some Brand PLA (Galaxy Black)", "500g", "loaded on XL-2", ""]]],
         ["🏷️ Needs a label (1)", "found", [["#57 Some Brand PLA (Blue)", "500g", "📍 LR-MDB-1 slot 1", ""]]]]
     assert dialog.locator(REPORT + " .fcc-spool-tile > span[style*='border-radius:50%']").count() == 8   # a swatch each

@@ -5963,7 +5963,8 @@ def _audit_report_data(session, why, parked=(), stays=(), failed=(), filed=(), y
     the end did with it. A Yes to Done's question (`yes`): parked (Parked at Unknown,
     `where` it had been filed), filed (Filed in <place>, `where` FCC had it), stayed
     (Left where they are, `where` it is now and `why`, an Extra FCC has here already
-    included) and failed (Couldn't be moved, `why`). An end that moved nothing (a
+    included) and failed (Couldn't be moved, `why`: Spoolman's words, by
+    spoolman_api.refusal_words, never its raw answer). An end that moved nothing (a
     Cancel, an idle end, a Done with nothing to park or file): missing (Not scanned)
     and extra (Extra (filed elsewhere)), each with `where` FCC has it, and for a Done
     the `why` it stays. Then, for either: trail (Loaded from <place>, `where` its
@@ -6002,7 +6003,10 @@ def _audit_report_data(session, why, parked=(), stays=(), failed=(), filed=(), y
         group('stayed', ("Left where it is", "Left where they are"),
               [row(s['id'], s.get('display'), s.get('where'), s.get('why')) for s in stays]
               + [row(sid, '', *here_already) for sid in extras if str(sid) not in named])
-        group('failed', "Couldn't be moved", [row(f['id'], f.get('display'), None, f.get('why')) for f in failed])
+        # Spoolman's words, never its raw answer (Derek's look of 2026-11-04: the tile read
+        # `HTTP 500: {"message": ...}`). The ERROR line the failed write left keeps the text.
+        group('failed', "Couldn't be moved",
+              [row(f['id'], f.get('display'), None, spoolman_api.refusal_words(f.get('why'))) for f in failed])
     else:
         left = {str(s.get('id')): s for s in stays}
 

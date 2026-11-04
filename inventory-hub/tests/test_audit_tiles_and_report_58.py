@@ -25,11 +25,13 @@ update_spool. RED on 69b0d95 unless a test says it pins what was already right.
 """
 from __future__ import annotations
 
+import html
 import os
 import sys
 import time
 
 import pytest
+import requests
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -650,14 +652,92 @@ def test_a_yes_answers_the_report_each_spool_once_under_what_done_did(env, monke
         {"kind": "stayed", "title": "Left where they are",
          "rows": [_row(4, "040404", 104.0, "CR-CT-1", "moved to CR-CT-1"),
                   _row(21, "212121", 121.0, "XL-1", HEAD_WHY)]},
+        # Spoolman's words, never its raw answer. PIN UPDATED DELIBERATELY (Derek's look of
+        # 2026-11-04, T5: the tile read 'HTTP 400: {"message": "nope (test)"}').
         {"kind": "failed", "title": "Couldn't be moved",
-         "rows": [_row(5, "050505", 105.0, PLACE, 'HTTP 400: {"message": "nope (test)"}')]},   # Spoolman's words
+         "rows": [_row(5, "050505", 105.0, PLACE, "Spoolman refused it: nope (test)")]},
         {"kind": "trail", "title": f"Loaded from {PLACE}", "rows": [_row(7, "070707", 107.0, "XL-2")]},
         {"kind": "needs_label", "title": "Needs a label", "rows": [_row(2, "020202", 102.0, PLACE, needs_label=True)]},
     ]
     ids = [r["id"] for g in got["groups"] for r in g["rows"]]
     assert sorted(ids) == [2, 3, 4, 5, 7, 20, 21] and len(ids) == len(set(ids))      # each once; #1 isn't listed
     assert get_report(audit_id) == {"success": True, "report": got}
+
+
+class _TextResp:
+    """A refusal whose body is what Spoolman, or a proxy in front of it, sent: JSON, an HTML
+    page, plain text or nothing (spoolman_extra_fake._Resp always sends JSON)."""
+
+    def __init__(self, status, text):
+        self.status_code, self.ok, self.text = status, 200 <= status < 300, text
+
+    def json(self):
+        import json
+        return json.loads(self.text)
+
+
+def _park_of_5_answered(env, monkeypatch, answer):
+    """_cart_row, its #5's park answered `answer`: a response, or an exception raised as
+    requests raises it."""
+    _cart_row(env)
+    real = env["fake"].patch
+
+    def answer_5(url, json=None, timeout=None, **kw):  # noqa: A002
+        if url.rstrip("/").endswith("/spool/5"):
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+        return real(url, json=json, timeout=timeout, **kw)
+
+    monkeypatch.setattr(spoolman_api.requests, "patch", answer_5)
+
+
+REFUSALS = [
+    (_TextResp(500, '{"message": "database is locked"}'), "Spoolman refused it: database is locked"),
+    (_TextResp(422, '{"detail": "Spool has no filament"}'), "Spoolman refused it: Spool has no filament"),
+    (_TextResp(422, '{"detail": [{"loc": ["body", "extra"], "msg": "value is not a valid dict", '
+                    '"type": "type_error.dict"}]}'), "Spoolman refused it: value is not a valid dict"),
+    (_TextResp(502, "<html><body><h1>502 Bad Gateway</h1></body></html>"), "Spoolman refused it (HTTP 502)."),
+    (_TextResp(503, ""), "Spoolman refused it (HTTP 503)."),
+    (_TextResp(500, "Internal Server Error"), "Spoolman refused it: Internal Server Error"),
+    # LAST_SPOOLMAN_ERROR keeps 400 characters: a long JSON body arrives cut.
+    (_TextResp(500, '{"message": "database is locked", "trace": "' + "x" * 500 + '"}'),
+     "Spoolman refused it: database is locked"),
+    (requests.exceptions.ReadTimeout("HTTPConnectionPool(host='spoolman', port=7913): Read timed out. "
+                                     "(read timeout=15)"), "Spoolman didn't answer in time."),
+    (requests.exceptions.ConnectionError("HTTPConnectionPool(host='spoolman', port=7913): Max retries exceeded "
+                                         "with url: /api/v1/spool/5"), "FCC couldn't reach Spoolman."),
+]
+
+
+@pytest.mark.parametrize("answer, words", REFUSALS,
+                         ids=["message", "detail", "detail-list", "html-page", "empty", "plain-text", "cut-json",
+                              "timeout", "unreached"])
+def test_a_spool_that_couldnt_be_moved_says_why_in_words(env, monkeypatch, answer, words):
+    """Derek's look of 2026-11-04 (T5): the report's 🛑 Couldn't be moved tile read Spoolman's
+    raw answer, `HTTP 500: {"message": "database is locked"}`, braces and quotes. It says its
+    words now; the ERROR line the failed write left keeps the full text."""
+    _park_of_5_answered(env, monkeypatch, answer)
+    result = yes(env, question(env))
+    assert result["success"] is False
+    failed = [g for g in result["report"]["groups"] if g["kind"] == "failed"]
+    assert [[r["id"], r["why"]] for g in failed for r in g["rows"]] == [[5, words]]
+    raw = (f"HTTP {answer.status_code}: {answer.text[:400]}" if isinstance(answer, _TextResp) else str(answer)[:400])
+    lines = [m for m in log_text(env) if "failed to park Spool" in m]
+    assert len(lines) == 1 and lines[0].endswith(f"at UNKNOWN: {html.escape(raw, quote=False)}"), lines
+    # The report kept for its line's button says the same.
+    assert get_report(result["report"]["audit_id"])["report"] == result["report"]
+
+
+def test_fccs_own_words_for_a_failure_stay_as_they_are():
+    """Only a refusal's raw answer is put in words: what FCC said itself is left alone."""
+    for text in ("couldn't read where FCC has it", "couldn't read LR-MDB-1 from Spoolman (no answer)",
+                 "unknown error", ""):
+        assert spoolman_api.refusal_words(text) == text
+    assert spoolman_api.refusal_words(None) == ""
+    long = "x " * 300
+    words = spoolman_api.refusal_words(f'HTTP 500: {{"message": "{long}"}}')
+    assert words.startswith("Spoolman refused it: x x") and words.endswith("…") and len(words) < 240
 
 
 def test_a_cancel_reports_what_wasnt_scanned_and_the_extras_and_opens_nothing(env):

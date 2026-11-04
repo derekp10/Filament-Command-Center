@@ -72,6 +72,73 @@ JSON_STRING_FIELDS = [
 # diagnosis lag).
 LAST_SPOOLMAN_ERROR = None
 
+# LAST_SPOOLMAN_ERROR's shape for a refused request: "HTTP 500: <Spoolman's body>".
+_HTTP_REFUSAL_RE = re.compile(r"HTTP (\d{3}):\s*(.*)\Z", re.S)
+# The words a person reads are kept short: the full text stays in the log line.
+_REFUSAL_WORDS_MAX = 200
+# requests' own words for a Spoolman it couldn't reach, or that took too long (str(e)).
+_NO_ANSWER_MARKS = ("Read timed out", "ReadTimeout")
+_UNREACHED_MARKS = ("Max retries exceeded", "Failed to establish a new connection", "Connection refused",
+                    "NameResolutionError", "Connection aborted")
+
+
+def refusal_words(text):
+    """LAST_SPOOLMAN_ERROR (or a caller's own words) as a person reads it (Group 58, Derek's
+    look of 2026-11-04: the audit report's 🛑 tile showed `HTTP 500: {"message": "database is
+    locked"}`, braces and quotes included). Spoolman answers a refusal in JSON: {"message"}
+    for its own errors, FastAPI's {"detail"} for a request it can't take (a string, or a
+    list of {"msg"}). So:
+      'HTTP 500: {"message": "database is locked"}' -> "Spoolman refused it: database is locked"
+      a body with no words of its own (an HTML error page, an empty one) -> "Spoolman refused
+      it (HTTP 502)."
+      requests' timeout -> "Spoolman didn't answer in time."; no connection -> "FCC
+      couldn't reach Spoolman."
+    Anything else (FCC's own words) comes back as it is. Only for what a person reads: the
+    log line a failed write leaves keeps the full text."""
+    s = str(text or '').strip()
+    m = _HTTP_REFUSAL_RE.match(s)
+    if m:
+        said = _refusal_said(m.group(2).strip())
+        return f"Spoolman refused it: {said}" if said else f"Spoolman refused it (HTTP {m.group(1)})."
+    if any(mark in s for mark in _NO_ANSWER_MARKS):
+        return "Spoolman didn't answer in time."
+    if any(mark in s for mark in _UNREACHED_MARKS):
+        return "FCC couldn't reach Spoolman."
+    return s
+
+
+def _refusal_said(body):
+    """The words in a refusal's body: its JSON's message or detail, plain text as it is,
+    nothing for an HTML page. LAST_SPOOLMAN_ERROR keeps 400 characters, so a long JSON body
+    can arrive cut: its message is read where it shows."""
+    def short(words):
+        words = " ".join(str(words).split())
+        return words if len(words) <= _REFUSAL_WORDS_MAX else words[:_REFUSAL_WORDS_MAX - 1].rstrip() + "…"
+    try:
+        data = json.loads(body)
+    except (ValueError, TypeError):
+        data = None
+    if isinstance(data, dict):
+        for key in ('message', 'detail', 'error', 'msg'):
+            value = data.get(key)
+            if isinstance(value, str) and value.strip():
+                return short(value)
+            if isinstance(value, list):
+                msgs = [str(d.get('msg')).strip() for d in value if isinstance(d, dict) and d.get('msg')]
+                if msgs:
+                    return short("; ".join(msgs))
+        return ''
+    if isinstance(data, str):
+        return short(data) if data.strip() else ''
+    if data is not None or not body:
+        return ''
+    if body.startswith(('{', '[')):
+        cut = re.search(r'"(?:message|detail|msg)"\s*:\s*"((?:[^"\\]|\\.)*)', body)
+        return short(cut.group(1).replace('\\"', '"')) if cut and cut.group(1).strip() else ''
+    if '<' in body:
+        return ''
+    return short(body)
+
 
 class SpoolmanRejection(Exception):
     """Raised by update_spool_or_raise / update_filament_or_raise when
