@@ -377,10 +377,13 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
                                printing = null, noLoad = false, hint = '',
                                cancelLabel = '', cancelVerb = '', loadVerb = '',
                                loadCaption = '', cancelCaption = '', sections = null,
-                               armAfterMs = 0 } = {}) => {
+                               armAfterMs = 0, keepWhole = false } = {}) => {
     const esc = (s) => String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    // `keepWhole` (Done's question; Derek's look of 2026-11-04): its title and words keep a
+    // place id whole ("SHELF-2-R3", "LR-MDB-1"), as the buttons do, wrapping at spaces.
+    const words = (s) => (keepWhole ? fccKeepWhole(esc(s)) : esc(s));
     const threeWay = !!title;
     const noVerb = (threeWay && cancelVerb) || 'cancels';
     const lists = (threeWay && Array.isArray(sections)) ? sections : [];
@@ -418,7 +421,7 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
     const idAttr = (id) => (id ? `id="${esc(id)}" ` : '');
     const border = (!threeWay || isPrinting) ? '#ff8800' : '#0dcaf0';
     const header = threeWay
-        ? `${isPrinting ? '⚠️' : '🔁'} ${esc(title)}`
+        ? `${isPrinting ? '⚠️' : '🔁'} ${words(title)}`
         : `⚠️ ${esc(first.printer_name || 'A printer')} is ${esc(first.state || 'PRINTING')}`;
     const bodyText = threeWay ? msg : (msg || 'Moving a spool now will disrupt the print. Continue?');
     const buttons = threeWay
@@ -438,7 +441,7 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
     const content = `
         <div class="fcc-apc-panel${tiled ? ' fcc-apc-tiled' : ''}" style="background:#1e1e1e; color:#fff; border:2px solid ${border}; border-radius:8px; padding:20px min(24px, 4vw); ${width} text-align:center;">
             <div class="fcc-apc-title" style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">${header}</div>
-            <div class="fcc-apc-msg" style="color:#ffc; margin-bottom:14px;${threeWay ? ' text-align:left;' : ''}">${esc(bodyText)}</div>${listsHtml}
+            <div class="fcc-apc-msg" style="color:#ffc; margin-bottom:14px;${threeWay ? ' text-align:left;' : ''}">${words(bodyText)}</div>${listsHtml}
             ${status}
             <div class="fcc-apc-btns" style="display:flex; gap:10px; justify-content:center;${threeWay ? ' flex-wrap:wrap;' : ''}">${buttons}</div>
             ${extras}
@@ -3146,7 +3149,27 @@ const closeModal = (id) => {
     }
     state.activeModal = null;
 };
-const requestConfirmation = (msg, cb) => { document.getElementById('confirm-msg').innerText = msg; state.pendingConfirm = cb; _confirmGeneration++; _showGatingModal('confirmModal'); state.activeModal = 'confirm'; };
+// #confirmModal's message keeps a place id whole (Derek's look of 2026-11-04: Undo Last
+// Move's question read "SHELF-2- / R3"), as fccKeepWhole keeps a button's, and wraps at
+// its spaces. Its text is escaped here, and a line break kept as innerText kept it. An id
+// longer than the line itself (a very long one on a phone at Extra Large) breaks at its
+// hyphens again, measured once the dialog is shown, as fccFitQuestion does a question's.
+const _confirmMsgHtml = (msg) => fccKeepWhole(String(msg == null ? '' : msg)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')).replace(/\r?\n/g, '<br>');
+const _fitConfirmMsg = () => {
+    const el = document.getElementById('confirm-msg');
+    if (!el || !el.classList) return;
+    el.classList.remove('fcc-keep-whole-off');
+    if (el.querySelector('.fcc-keep-whole') && el.clientWidth > 0 && el.scrollWidth > el.clientWidth + 1) {
+        el.classList.add('fcc-keep-whole-off');
+    }
+};
+document.addEventListener('shown.bs.modal', (e) => { if (e.target && e.target.id === 'confirmModal') _fitConfirmMsg(); });
+const requestConfirmation = (msg, cb) => {
+    document.getElementById('confirm-msg').innerHTML = _confirmMsgHtml(msg);
+    _fitConfirmMsg();
+    state.pendingConfirm = cb; _confirmGeneration++; _showGatingModal('confirmModal'); state.activeModal = 'confirm';
+};
 // Take the callback and null it BEFORE running it: a callback that re-prompts
 // synchronously arms a NEW pendingConfirm, which a trailing null would wipe.
 const confirmAction = (y) => { const cb = state.pendingConfirm; state.pendingConfirm = null; closeModal('confirmModal'); if (y && cb) cb(); };

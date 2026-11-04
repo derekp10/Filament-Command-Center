@@ -2513,6 +2513,8 @@ window.commitBulkMove = () => {
             cancelVerb: 'goes back',
             cancelCaption: 'Scan to go back',
             armAfterMs: DOUBLE_PRESS_MS,
+            // The place it names stays whole ("SHELF-2- / R3" on a phone).
+            keepWhole: true,
             onConfirm: () => {
                 _question = null;
                 _questionClosedAt = Date.now();
