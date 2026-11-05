@@ -1053,8 +1053,12 @@ def test_settings_this_browser_section_is_readable(page: Page, base_url: str, as
 def test_load_report_with_its_lens_on_a_dark_backing_is_readable(page: Page, base_url: str, assert_contrast):
     """Group 58, Derek's second look (2026-11-03, sample 4(ii)): the 🔎 on the cyan Load
     report (Settings -> Filament Attributes) sits on a small dark round backing, as the 🏷️
-    on Needs a label does. Its words and the backing's text node are judged, at rest and
-    hovered. Read-only: Settings is opened and closed, nothing is loaded."""
+    on Needs a label does. Its words are judged, at rest and hovered. Read-only: Settings is
+    opened and closed, nothing is loaded. PIN UPDATED DELIBERATELY (review 3, Derek
+    2026-11-04): the magnifier on the backing is drawn, an SVG with no text node for this
+    guard to judge, so the backing holds no text; each colour the drawing paints stands out
+    from the backing by 3:1 at least (WCAG's rule for a graphic), pinned by
+    test_icon_on_dark_circle_js.py::test_each_drawn_colour_stands_out_from_the_backing."""
     import conftest
     page.goto(base_url)
     page.wait_for_function("() => typeof window.openConfigModal === 'function'")
@@ -1064,7 +1068,9 @@ def test_load_report_with_its_lens_on_a_dark_backing_is_readable(page: Page, bas
     header = page.locator("#config-sections .card-header", has=button)
     assert_contrast(header)
     scored = [o["text"] for o in conftest.contrast_offenders(header, min_ratio=100)]
-    assert "🔎" in scored and any("Load report" in t for t in scored), scored
+    assert any("Load report" in t for t in scored), scored
+    assert button.locator(".fcc-ico-on-light > svg.fcc-ico-svg").count() == 1
+    assert button.locator(".fcc-ico-on-light").evaluate("(e) => e.textContent") == ""
     button.hover()
     page.wait_for_timeout(200)          # Bootstrap's colour transition
     assert_contrast(header)

@@ -110,7 +110,10 @@ def test_the_strip_its_button_and_a_real_qr_under_it(page: Page, base_url: str):
     expect(strip).to_contain_text("Last found")
     expect(strip).to_contain_text("#99 Some Brand PLA (Red)")
     expect(page.locator(STATUS)).to_contain_text("No label was read for #99")
-    expect(page.locator(BUTTON)).to_have_text("🏷️ Needs a label")
+    # PIN UPDATED DELIBERATELY (review 3, Derek 2026-11-04): the 🏷️ on its dark backing is
+    # drawn (an SVG, test_icon_on_dark_circle_js.py), so the button's text is its words alone.
+    expect(page.locator(BUTTON)).to_have_text("Needs a label")
+    expect(page.locator(f"{BUTTON} .fcc-ico-on-light > svg.fcc-ico-svg")).to_have_count(1)
     expect(page.locator(f"{QR} canvas, {QR} img").first).to_be_attached()
     page.wait_for_timeout(100)                  # the QR draws two frames later
     assert page.locator(QR).bounding_box()["height"] >= 80

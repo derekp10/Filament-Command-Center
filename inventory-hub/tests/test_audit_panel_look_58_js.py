@@ -345,21 +345,24 @@ def test_on_a_laptop_the_dock_keeps_its_look(live, env):
 # --- P5: the 🏷️ on a dark round backing -------------------------------------------------
 
 def test_needs_a_label_wears_its_tag_on_a_dark_round_backing(live, env):
-    """Derek, 2026-11-03 (sample 4(ii)): the 🏷️ blended into the yellow. The emoji sits in
-    its own round dark span, hidden from a screen reader (the button's name is "Needs a
-    label"), then a real space, so the button's text still reads "🏷️ Needs a label". Its
-    centring is measured from its pixels on the real dashboard
-    (test_audit_panel_look_58_e2e.py). RED on fed9646: the emoji was bare text."""
+    """Derek, 2026-11-03 (sample 4(ii)): the 🏷️ blended into the yellow. The tag sits in its
+    own round dark span, hidden from a screen reader (the button's name is "Needs a label"),
+    then a real space. Its centring is measured from its pixels (test_icon_on_dark_circle_js.py
+    hermetic, test_audit_panel_look_58_e2e.py on the real dashboard). RED on fed9646: the emoji
+    was bare text. PIN UPDATED DELIBERATELY (review 3; Derek, 2026-11-04: "that same label icon
+    not centered in circle thing"): the tag on the backing is drawn, an inline SVG as big as the
+    backing, no longer the emoji, so the button's text is its words alone."""
     four(env)
     begin(live, env)
     got = live.evaluate("""(s) => { const b = document.querySelector(s); const ico = b.querySelector('.fcc-ico-on-light');
         return { ico: ico ? ico.textContent : null, hidden: ico ? ico.getAttribute('aria-hidden') : null,
+                 drawn: ico ? !!ico.querySelector(':scope > svg.fcc-ico-svg[aria-hidden="true"]') : null,
                  text: b.textContent.replace(/\\s+/g, ' ').trim(),
                  round: ico ? getComputedStyle(ico).borderRadius : null, bg: ico ? getComputedStyle(ico).backgroundColor : null,
                  square: ico ? Math.abs(ico.getBoundingClientRect().width - ico.getBoundingClientRect().height) < 0.5 : null }; }""",
                         NEED)
-    assert got == {"ico": "🏷️", "hidden": "true", "text": "🏷️ Needs a label", "round": "50%", "bg": "rgb(30, 30, 30)",
-                   "square": True}
+    assert got == {"ico": "", "hidden": "true", "drawn": True, "text": "Needs a label", "round": "50%",
+                   "bg": "rgb(30, 30, 30)", "square": True}
 
 
 # --- P6: a 🏷️ on each found tile ----------------------------------------------------------

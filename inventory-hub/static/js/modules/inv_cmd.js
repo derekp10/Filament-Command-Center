@@ -1334,6 +1334,24 @@ window.commitBulkMove = () => {
     // server reads it in any case (a scanner set to upper case sends it so).
     const _tileQrText = (row) => (state.auditId ? `CMD:FOUND:${state.auditId}:${Number(row.id)}` : '');
 
+    // The 🏷️ drawn for the dark round backing (Derek, 2026-11-04: "that same label icon not
+    // centered in circle thing"): the emoji is drawn on a slant, its yellow body low-left and
+    // its string up-right, and the Windows one's grey string hardly shows on the dark, so even
+    // centred by its box it read as off. A tag in the emoji's warm yellow and orange with its
+    // dark hole and an orange ring of string, pointing up-right as the emoji does, symmetric
+    // about that diagonal, its body and ring balanced about the circle's middle: its box and
+    // its weight within 0.05 of the frame's 32 units, the same on every system. The frame is
+    // the whole circle (.fcc-ico-svg is as big as its backing); test_icon_on_dark_circle_js.py
+    // measures it on the screen at 1x and 2x.
+    // Only on the backing: every other 🏷️, and the words beside this one, stay emoji.
+    const TAG_ICON = '<svg class="fcc-ico-svg" viewBox="0 0 32 32" aria-hidden="true" focusable="false">'
+        + '<g transform="rotate(-45 16 16)">'
+        + '<path d="M9.8 11.6H19.4L23.4 16L19.4 20.4H9.8Q8.8 20.4 8.8 19.4V12.6Q8.8 11.6 9.8 11.6Z" '
+        + 'fill="#FFC83D" stroke="#E57C00" stroke-width="1.6" stroke-linejoin="round"/>'
+        + '<circle cx="19.9" cy="16" r="1.6" fill="#2B1A08"/>'
+        + '<circle cx="23.5" cy="16" r="2.6" fill="none" stroke="#E57C00" stroke-width="1.6"/>'
+        + '</g></svg>';
+
     // A found tile's own 🏷️ (Derek, 2026-11-03, (a): "A sounds good"): one tap marks that
     // spool as needing a label without making it the last found (POST
     // /api/audit/needs_label); the tile then says "needs a label" and its 🏷️ shows the
@@ -1346,7 +1364,7 @@ window.commitBulkMove = () => {
         const say = (mark, words, pressed) => `<button type="button" class="fcc-audit-tile-tag" data-audit-tag="${id}"
                 data-audit-tag-state="${mark}"${pressed === null ? '' : ` aria-pressed="${pressed}"`}
                 aria-label="${_escapeHtml(words)}" title="${_escapeHtml(words)}">${mark === 'marked'
-            ? '<span class="fcc-ico-on-light" aria-hidden="true">🏷️</span>' : '<span aria-hidden="true">🏷️</span>'}</button>`;
+            ? `<span class="fcc-ico-on-light" aria-hidden="true">${TAG_ICON}</span>` : '<span aria-hidden="true">🏷️</span>'}</button>`;
         if (row.flagged_here) return say('marked', `#${id} is marked as needing a label: press again to take the mark back`, true);
         if (row.label_status === true) return say('flagged', `#${id} is already flagged for a new label`, null);
         return say('none', `Needs a label: mark #${id}, and leave the last found as it is`, false);
@@ -1557,7 +1575,7 @@ window.commitBulkMove = () => {
         <div class="fcc-audit-dock-grid">
             <div id="fcc-audit-dock-found" class="fcc-audit-dock-info"></div>
             <div class="fcc-audit-dock-col fcc-audit-dock-need">
-                <button type="button" id="fcc-audit-panel-needlabel" class="btn btn-sm btn-warning fw-bold"><span class="fcc-audit-dock-words"><span class="fcc-ico-on-light" aria-hidden="true">🏷️</span> Needs a label</span></button>
+                <button type="button" id="fcc-audit-panel-needlabel" class="btn btn-sm btn-warning fw-bold"><span class="fcc-audit-dock-words"><span class="fcc-ico-on-light" aria-hidden="true">${TAG_ICON}</span> Needs a label</span></button>
                 <div id="fcc-audit-panel-qr-needlabel" class="fcc-audit-strip-qr"></div>
                 <div class="fcc-audit-strip-cap">📷 Scan to mark it</div>
             </div>

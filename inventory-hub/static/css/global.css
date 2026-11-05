@@ -3188,14 +3188,28 @@ button.fcc-audit-tile:focus-visible { outline: none; }
     font-weight: 600;
     overflow-wrap: anywhere;
 }
-/* An emoji on a light fill (a yellow or cyan button), on a small dark round backing
+/* An icon on a light fill (a yellow or cyan button), on a small dark round backing
    (Derek, 2026-11-03, sample 4(ii)): measured, 87% of the 🏷️'s pixels on the yellow Needs
    a label were within ΔE 25 of it, and the 🔎 on the cyan Load report half lost. The
    button keeps its fill, its text and its size: the negative margins keep the line box
-   as it was, and the left one reaches into the button's padding. Centred in the circle
-   (inline-flex, line-height 1): within 1 px, measured from the pixels by
-   test_audit_panel_look_58_e2e.py. `color` is for the contrast guard, which reads the
-   emoji's text node: a colour emoji ignores it. */
+   as it was, and the left one reaches into the button's padding.
+   The icon on it is drawn, never an emoji (review 3; Derek, 2026-11-04: "that same label
+   icon not centered in circle thing"): an inline SVG, .fcc-ico-svg (inv_cmd.js TAG_ICON,
+   modals_config.html's magnifier). An emoji is drawn on a slant, each system its own, and
+   the Windows 🏷️'s grey string, which hardly shows on the dark, held its box's middle while
+   its yellow body sat low-left. The drawing is as big as its backing, its 32 units the
+   circle, so where it sits in the circle is the drawing's own coordinates (centred on 16, 16).
+   Its ink's box within 1 px and its weight within 0.75 px of the circle's middle, at 1x and
+   2x, at each Text size and with the button a fraction of a pixel off the device's grid,
+   measured from the pixels by test_icon_on_dark_circle_js.py (hermetic) and
+   test_audit_panel_look_58_e2e.py (the real dashboard). `color` is for the contrast guard,
+   should a text icon ever go on it. */
+.fcc-ico-on-light > .fcc-ico-svg {
+    display: block;
+    flex: none;
+    width: 100%;
+    height: 100%;
+}
 .fcc-ico-on-light {
     display: inline-flex;
     align-items: center;

@@ -1,7 +1,8 @@
 """Group 58, Derek's second look (2026-11-03, section H), on the real dashboard with Bootstrap
 and the page's own polls: the dock (sample 1b) at the five window sizes the double-click
 sweep uses, on a short list and a big shelf, and the 🏷️ (and the Admin window's 🔎) centred on
-its dark round backing (sample 4(ii)), measured from its pixels.
+its dark round backing (sample 4(ii); drawn, not the emoji, since review 3), measured from its
+pixels.
 
 FCC's routes are answered in this browser on their real shapes
 (test_audit_double_click_58_e2e.Sweep, every request that isn't a GET answered there), so
@@ -64,10 +65,13 @@ def test_the_dock_keeps_the_exits_and_the_tally_in_view_at_every_size(board, row
     assert docks[0] == docks[1] == docks[2], (what, docks)      # the dock never scrolled
 
 
-# --- P5: an emoji on its dark round backing, centred (Derek, 2026-11-03) -------------------
+# --- P5: an icon on its dark round backing, centred (Derek, 2026-11-03) --------------------
 # He saw sample 4b(a)'s ⚠️ sit off the middle of its circle. Measured from the pixels, at
-# four times the window's scale: the ink of the emoji (every pixel inside the circle, clear
-# of its anti-aliased edge, that differs from the backing) against the circle's middle.
+# four times the window's scale: the ink of the icon (every pixel inside the circle, clear
+# of its anti-aliased edge, that differs from the backing) against the circle's middle. The
+# icon was the emoji until review 3 (Derek, 2026-11-04: "that same label icon not centered in
+# circle thing"), and is drawn since; test_icon_on_dark_circle_js.py measures the drawing's
+# box and weight hermetically, at 1x and 2x.
 
 SCALE = 4
 INK_FROM_BG = 48            # a channel this far from the backing's #1e1e1e is the emoji's ink
@@ -75,7 +79,7 @@ CENTRED_PX = 1.0
 
 
 def _ink_offset(page: Page, sel: str):
-    """How far the emoji's ink sits from the middle of its backing, in CSS px (dx, dy)."""
+    """How far the icon's ink sits from the middle of its backing, in CSS px (dx, dy)."""
     from PIL import Image
     box = page.evaluate("(s) => { const r = document.querySelector(s).getBoundingClientRect();"
                         " return { x: r.left, y: r.top, w: r.width, h: r.height }; }", sel)
@@ -97,8 +101,8 @@ def _ink_offset(page: Page, sel: str):
     return ((min(xs) + max(xs) + 1) / 2 - cx) / SCALE, ((min(ys) + max(ys) + 1) / 2 - cy) / SCALE
 
 
-# The button as it is, and a twin with the bare emoji, as before the backing: the fill, the
-# text colour and the height must be the same.
+# The button as it is, and a twin with its text alone, as before the backing (its words since
+# review 3, the icon being drawn): the fill, the text colour and the height must be the same.
 TWIN = r"""(sel) => { const b = document.querySelector(sel);
     const twin = b.cloneNode(false); twin.removeAttribute('id'); twin.removeAttribute('onclick');
     twin.textContent = b.textContent.replace(/\s+/g, ' ').trim();
