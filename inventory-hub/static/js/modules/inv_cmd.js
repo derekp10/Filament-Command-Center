@@ -2573,6 +2573,9 @@ window.commitBulkMove = () => {
     let _reportFit = null;
     let _reportAfterDoneAt = 0;
     let _reportAskedAt = 0;
+    // When the window last closed: the keyboard goes back to the 📝 it was asked from, and a
+    // double Enter or Space on Close pressed that and opened it again (review 3, R3-3).
+    let _reportClosedAt = 0;
     let _reportOut = false;
     // Each kind of group (logic._audit_report_data): its icon (the report line's), its
     // tiles' look and what a tile says under its grams.
@@ -2714,6 +2717,7 @@ window.commitBulkMove = () => {
         // Armed only while a pointer press is under DOUBLE_PRESS_MS old, so Escape, Enter
         // and a scan's close are as they were.
         _shieldPage();
+        _reportClosedAt = Date.now();
         const handle = _report;
         _report = null;
         if (_reportFit && typeof window.removeEventListener === 'function') window.removeEventListener('resize', _reportFit);
@@ -2757,7 +2761,9 @@ window.commitBulkMove = () => {
     // and the log pill's window, which draw the same line. A double press asks once.
     const _askReport = (btn) => {
         const now = Date.now();
-        if (_reportOut || now - _reportAskedAt < DOUBLE_PRESS_MS) return;
+        // A double press asks once, and so does a double Enter on Close, whose second
+        // lands on this button (the keyboard goes back to it), as Find's 🔎 does.
+        if (_reportOut || now - _reportAskedAt < DOUBLE_PRESS_MS || now - _reportClosedAt < DOUBLE_PRESS_MS) return;
         _reportAskedAt = now;
         _reportOut = true;
         const id = String((btn.dataset && btn.dataset.auditReport) || '');

@@ -646,3 +646,29 @@ def test_a_double_click_on_close_presses_nothing_under_it(logged):
     logged.wait_for_timeout(750)                    # a person's next press there, later, is theirs
     logged.mouse.click(*xy)
     assert logged.evaluate("window.__under") == 1
+
+
+@pytest.mark.parametrize("key", ["Enter", "Space"])
+def test_a_double_key_press_on_close_closes_it_and_asks_nothing(logged, key):
+    """Review 3, R3-3: Close gives the keyboard back to the line's 📝 Read the report button it
+    was asked from, so a person's second Enter (or Space) of a double press pressed that
+    button and the window opened again, and every double press after it looped the same way.
+    A press of the button 700 ms after the close is a person's next one, and asks. RED on
+    b059144: a second /api/audit/report request went out, and the window was up again."""
+    button = "#live-logs .fcc-audit-report-open"
+    logged.evaluate("(r) => { window.__report = { success: true, report: r }; }", CANCELLED)
+    logged.focus(button)
+    logged.keyboard.press(key)
+    _shown(logged)
+    logged.wait_for_timeout(800)                    # read for a while
+    logged.keyboard.press(key)                      # Close
+    logged.wait_for_timeout(90)
+    logged.keyboard.press(key)                      # the second of the double press: on the 📝
+    logged.wait_for_timeout(300)
+    assert logged.locator(REPORT).count() == 0
+    assert logged.evaluate("window.__asked") == ["/api/audit/report?id=boot-1"]
+    assert logged.evaluate("(s) => document.activeElement === document.querySelector(s)", button)
+    logged.wait_for_timeout(450)                    # later, a person's next press opens it
+    logged.keyboard.press(key)
+    _shown(logged)
+    assert len(logged.evaluate("window.__asked")) == 2
