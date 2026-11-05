@@ -2708,6 +2708,12 @@ window.commitBulkMove = () => {
 
     window.closeAuditReport = () => {
         if (!_report) return;
+        // Gone from under the pointer, as the panel's Hide is (review 3, R3-1): the second
+        // press of a double click on Close landed on the dashboard beneath it (a Printer
+        // Status head opened the Location Manager, the title bar's 🛒 Queue its window).
+        // Armed only while a pointer press is under DOUBLE_PRESS_MS old, so Escape, Enter
+        // and a scan's close are as they were.
+        _shieldPage();
         const handle = _report;
         _report = null;
         if (_reportFit && typeof window.removeEventListener === 'function') window.removeEventListener('resize', _reportFit);

@@ -599,3 +599,50 @@ def test_no_answer_says_so(logged):
     logged.wait_for_function("() => document.querySelectorAll('#toast-container .toast-msg').length > 0")
     assert ["warning", "FCC didn't answer, so the report couldn't be shown. Try again in a moment."] in _toasts(logged)
     assert logged.locator(REPORT).count() == 0
+
+
+# --- review 3 (2026-11-04) --------------------------------------------------------------------
+
+# A button laid on the page under a spot, over the deck (z 10) and below every overlay (z 20000),
+# that counts its presses: what lies under the report window's Close on the dashboard (a Printer
+# Status head, the 🛒 Queue, the deck's AUDIT tile on this page).
+LAY_UNDER = r"""([x, y]) => { const b = document.createElement('button'); b.id = 'fcc-test-under';
+    b.type = 'button'; b.textContent = 'under';
+    b.style.cssText = `position:fixed; left:${x - 40}px; top:${y - 16}px; width:80px; height:32px; z-index:1000;`;
+    window.__under = 0; b.addEventListener('click', () => { window.__under += 1; });
+    document.body.appendChild(b); }"""
+
+
+def _middle(page, selector):
+    return page.evaluate("""(s) => { const r = document.querySelector(s).getBoundingClientRect();
+        return [r.left + r.width / 2, r.top + r.height / 2]; }""", selector)
+
+
+def _double_click(page, xy, gap_ms=120):
+    """A person's double click: two presses at one spot, the second one counted as such."""
+    page.mouse.move(*xy)
+    page.mouse.down(click_count=1)
+    page.mouse.up(click_count=1)
+    page.wait_for_timeout(gap_ms)
+    page.mouse.down(click_count=2)
+    page.mouse.up(click_count=2)
+
+
+def test_a_double_click_on_close_presses_nothing_under_it(logged):
+    """Review 3, R3-1: the window closes on Close's first click, and the second press of a
+    double click landed on whatever lay under Close on the dashboard (on a phone, a Printer
+    Status head opened the Location Manager; on a laptop, the title bar's 🛒 Queue opened its
+    window). The panel's Hide already stopped it (_shieldPage); the report window's Close now
+    does too. RED on 539ce88: the button under Close was pressed."""
+    logged.evaluate("(r) => window.openAuditReport(r)", FULL)
+    _shown(logged)
+    logged.wait_for_timeout(750)                    # past the shield its opening armed
+    xy = _middle(logged, CLOSE)
+    logged.evaluate(LAY_UNDER, xy)
+    _double_click(logged, xy)
+    logged.wait_for_timeout(150)
+    assert logged.locator(REPORT).count() == 0      # the first click closed it
+    assert logged.evaluate("window.__under") == 0   # the second reached nothing
+    logged.wait_for_timeout(750)                    # a person's next press there, later, is theirs
+    logged.mouse.click(*xy)
+    assert logged.evaluate("window.__under") == 1
