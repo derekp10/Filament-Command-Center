@@ -897,7 +897,7 @@ const _ensureManageQRsFilled = () => {
         card.querySelectorAll("[id^='qr-pick-'],[id^='qr-print-'],[id^='qr-trash-']").forEach((div) => {
             if (div.querySelector('canvas,img,table')) return; // already drawn
             let text = null;
-            if (div.id.startsWith('qr-pick-')) text = 'ID:' + sid;
+            if (div.id.startsWith('qr-pick-')) text = window.fccSpoolCardQr(sid);
             else if (div.id.startsWith('qr-print-')) text = 'CMD:PRINT:' + sid;
             else if (div.id.startsWith('qr-trash-')) text = 'CMD:TRASH:' + sid;
             if (text) generateSafeQR(div.id, text, 70);
@@ -1383,7 +1383,9 @@ const renderBadgeHTML = (s, i, locId) => {
 };
 
 const renderBadgeQRs = (s, i) => {
-    generateSafeQR(`qr-pick-${i}`, "ID:" + s.id, 70);
+    // Never the printed label's ID: (inv_core.js fccSpoolCardQr): read off the screen, it
+    // would count as a label read.
+    generateSafeQR(`qr-pick-${i}`, window.fccSpoolCardQr(s.id), 70);
     generateSafeQR(`qr-print-${i}`, "CMD:PRINT:" + s.id, 70);
     generateSafeQR(`qr-trash-${i}`, "CMD:TRASH:" + s.id, 70);
 };

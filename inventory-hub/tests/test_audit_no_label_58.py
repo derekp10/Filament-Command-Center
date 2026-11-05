@@ -1397,7 +1397,8 @@ def test_with_a_bulk_move_armed_a_tiles_qr_says_the_same_and_leaves_the_session_
 # doesn't count as a confirmed label in the backlog and in the tagging of an
 # unconfirmed label field."
 # No door that finds a spool with no label read touches its label status: its
-# tile's QR read by a scanner, its tile pressed, a pick in 🔎 Find a spool. Nor does
+# tile's QR read by a scanner, its tile pressed, a pick in 🔎 Find a spool, its card's QR
+# on the screen read by a scanner (review 3, R3S-1). Nor does
 # Done's Yes, which parks the spools not found and files the Extras found here.
 # Nothing is written; the record keeps its status; the Backlog's own test, its list
 # and the count the heartbeat gives its 🏷️ button stay as they were; the row says no
@@ -1419,6 +1420,12 @@ def find_with_no_label_read(env, door, sid):
     # search card's click keeps 'search'; neither is a label read.
     if door == "search card":
         return scan_answer(f"ID:{sid}", source="search")        # ui_builder.js's search card
+    # Review 3, R3S-1 (Derek, 2026-11-04, (a)): a spool's card on the screen (the scan
+    # buffer's, the Location Manager's) draws SPL:<id>, never the printed label's ID:, so a
+    # scanner reading it off the screen reads no label. The page's half is
+    # test_card_qr_no_label_read_58_js.py (what the cards draw, red on 3e26878).
+    if door == "card QR":
+        return scan_answer(f"SPL:{sid}", source="barcode")
     return scan_answer(f"ID:{sid}", source="audit_find")        # inv_audit_find.js's pick
 
 
@@ -1438,7 +1445,7 @@ def label_side(env, *sids):
 
 
 @pytest.mark.parametrize("status", list(STATUSES))
-@pytest.mark.parametrize("door", ["tile QR", "press", "Find pick", "search card"])
+@pytest.mark.parametrize("door", ["tile QR", "press", "Find pick", "search card", "card QR"])
 def test_a_find_with_no_label_read_never_touches_its_label_or_the_backlog(env, door, status):
     """#5 is found by the door, #6 isn't found (Done parks it), and #7, an Extra FCC has in
     LR-MDB-2, is picked in Find (Done files it here), all three with the same status."""
@@ -1470,3 +1477,19 @@ def test_a_find_with_no_label_read_never_touches_its_label_or_the_backlog(env, d
     assert records[6]["location"] == "UNKNOWN" and records[7]["location"] == "LR-MDB-1"
     assert label_side(env, 5, 6, 7) == before
     assert "Needs a label" not in report(env)
+
+
+@pytest.mark.parametrize("status", list(STATUSES))
+def test_a_cards_qr_outside_an_audit_finds_the_spool_and_never_touches_its_label(env, status):
+    """Review 3, R3S-1, the server's half outside an audit: SPL:<id> read by a scanner (a
+    spool's card's QR on the screen) is the spool, as ID:<id> is: the answer a buffer add
+    or a pick reads, key for key, and its label status and the Backlog stay as they were. A
+    pin: SPL: was never a label read (routes_scan._is_label_read); the cards drew ID: until
+    review 3 (test_card_qr_no_label_read_58_js.py)."""
+    add_spool(env, 5, "LR-MDB-1", container_slot="1", **STATUSES[status])
+    before = label_side(env, 5)
+    by_card = scan_answer("SPL:5", source="barcode")
+    assert writes(env) == [] and label_side(env, 5) == before
+    by_hand = scan_answer("ID:5", source="keyboard")           # a typed id: no label read either
+    assert by_card["type"] == "spool" and by_card["id"] == 5
+    assert by_card == by_hand

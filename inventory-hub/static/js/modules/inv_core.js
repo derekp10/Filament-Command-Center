@@ -1439,6 +1439,18 @@ const LABEL_PREFIXES = ['LEGACY', 'SPOOL', 'LOC', 'LEG', 'OLD', 'SPL', 'FIL', 'C
 const WHOLE_LABEL = new RegExp('^(?:(?:' + LABEL_PREFIXES.join('|') + '):\\S.*|https?:\\/\\/\\S+)$', 'i');
 window.fccIsLabel = (text) => WHOLE_LABEL.test(String(text == null ? '' : text));
 
+// --- A SPOOL'S QR ON THE SCREEN (review 3, R3S-1; Derek, 2026-11-04, option (a)) ---
+// What the QR on a spool's card holds: the scan buffer's cards (inv_cmd.js renderBuffer)
+// and the Location Manager's (inv_loc_mgr.js, its ✋ PICK). SPL:<id>, never the printed
+// label's ID:<id>. The scan path reads both as that spool, everywhere (logic.resolve_scan:
+// a move, the buffer, an audit's find, the legacy picker's own-label match), but only a
+// printed label's ID:, read by a scanner, is a label read (routes_scan._is_label_read):
+// it confirms a missing label status and clears a "needs a label" flag. A QR read off the
+// screen proves nothing about the label on the spool: it was the label's own text, so
+// scanning a card confirmed a label in an audit and, outside one, took a flagged spool
+// off the 🏷️ Backlog with no label printed. A label FCC prints keeps ID: (labels_csv.py).
+window.fccSpoolCardQr = (id) => `SPL:${id}`;
+
 // --- INITIALIZATION HELPERS ---
 const acquireLock = async () => {
     if ('wakeLock' in navigator) {

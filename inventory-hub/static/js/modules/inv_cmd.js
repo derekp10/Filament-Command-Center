@@ -48,7 +48,9 @@ const renderBuffer = () => {
                 return window.SpoolCardBuilder.buildCard(s, 'buffer', { isFirst: i === 0, index: i });
             }).join('');
 
-            state.heldSpools.forEach((s, i) => generateSafeQR(`qr-buf-${i}`, "ID:" + s.id, 74));
+            // Never the printed label's ID: (inv_core.js fccSpoolCardQr): read off the
+            // screen, it would count as a label read.
+            state.heldSpools.forEach((s, i) => generateSafeQR(`qr-buf-${i}`, window.fccSpoolCardQr(s.id), 74));
         }
     }
 
