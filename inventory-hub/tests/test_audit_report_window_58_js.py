@@ -477,6 +477,8 @@ def test_a_report_with_nothing_to_say_shows_no_notice_line(dialog):
 
 PARTIAL_MSG = ("Parked 2 spools at Unknown. Couldn't park #103. Undo Last Move puts them back. "
                "The Activity Log lists each spool.")
+# The same words for the report window's line (the park's `report_msg`; review 3, R3S-7).
+PARTIAL_REPORT_MSG = "Parked 2 spools at Unknown. Couldn't park #103. Undo Last Move puts them back."
 
 
 @pytest.mark.parametrize("landed", ["some", "every"])
@@ -489,7 +491,7 @@ def test_a_yes_that_could_not_move_every_spool_says_so_on_the_report(dialog, lan
     if landed == "some":
         answer = dict(PARKED, success=False, parked=[101, 102],
                       failed=[{"id": 103, "display": "#103 Some Brand ASA (Grey)", "why": 'HTTP 400: {"message": "nope"}'}],
-                      msg=PARTIAL_MSG, report=FULL)
+                      msg=PARTIAL_MSG, report_msg=PARTIAL_REPORT_MSG, report=FULL)
     else:
         answer = dict(PARKED, report=FULL)
     dialog.evaluate("(a) => { window.__park = a; }", answer)
@@ -497,7 +499,10 @@ def test_a_yes_that_could_not_move_every_spool_says_so_on_the_report(dialog, lan
     _shown(dialog)
     if landed == "some":
         dialog.wait_for_function("(s) => document.querySelector(s).textContent.length > 0", arg=NOTICE)
-        assert dialog.text_content(NOTICE) == PARTIAL_MSG and dialog.is_visible(NOTICE) and _on_top(dialog, NOTICE)
+        # PIN UPDATED DELIBERATELY (review 3, R3S-7): the line says the park's words for the
+        # window, with no pointer to the Activity Log (the window lists each spool); the toast
+        # keeps the pointer. RED on c1da241: the line ended "The Activity Log lists each spool.".
+        assert dialog.text_content(NOTICE) == PARTIAL_REPORT_MSG and dialog.is_visible(NOTICE) and _on_top(dialog, NOTICE)
         assert ["warning", PARTIAL_MSG] in _toasts(dialog)
     else:
         dialog.wait_for_timeout(100)

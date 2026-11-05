@@ -7154,6 +7154,10 @@ def _audit_park_locked(audit_id, ids, today, file_ids=None, file_where=None):
     return {"success": not (failed or file_failed), "parked": parked, "filed": filed, "stayed": stayed,
             "failed": failed + file_failed,
             "msg": _audit_park_msg(place, parked, stayed, failed, filed, file_failed, bool(file_wanted)),
+            # The same words for the report window's notice line, which sits over the groups that
+            # list each spool: no pointer to the Activity Log (review 3, R3S-7).
+            "report_msg": _audit_park_msg(place, parked, stayed, failed, filed, file_failed, bool(file_wanted),
+                                          pointer=False),
             "audit_ended": {"id": ended['id'], "why": ended['why']}, "report": report}
 
 
@@ -7231,7 +7235,8 @@ AUDIT_REPORT_POINTER = "The Activity Log lists each spool."
 AUDIT_FAILURES_POINTER = "The Activity Log says what went wrong."
 
 
-def _audit_park_msg(place, parked, stayed, failed, filed=(), file_failed=(), file_asked=False, still_open=False):
+def _audit_park_msg(place, parked, stayed, failed, filed=(), file_failed=(), file_asked=False, still_open=False,
+                    pointer=True):
     """A park's toast, and the filing's (C4): "Parked 2 spools at Unknown. Filed #64 in
     LR-MDB-1. Undo Last Move puts them back." It names the audited place, never "here"
     ("Filed #64 here." read as 64 spools placed here; Derek, 2026-11-03), and it stays
@@ -7246,7 +7251,8 @@ def _audit_park_msg(place, parked, stayed, failed, filed=(), file_failed=(), fil
     Undo Last Move: another move on top of the record buries it, and it doesn't survive
     a restart. With nothing moved, a Yes that asked to file (`file_asked`: it named
     Extras) hears "Nothing was moved.", never of a park nobody asked for (review of
-    7e3720f, S-5)."""
+    7e3720f, S-5). `pointer` False leaves the Activity Log's pointer out, for the report
+    window, which lists each spool itself (the park's `report_msg`; review 3, R3S-7)."""
     n, k = len(parked), len(filed)
     words = []
     if n:
@@ -7266,7 +7272,7 @@ def _audit_park_msg(place, parked, stayed, failed, filed=(), file_failed=(), fil
     if still_open:
         words.append("The audit is still open, so you can press Done again.")
         words.append(AUDIT_FAILURES_POINTER)
-    elif stayed or failed or file_failed or any(len(group) > 3 for group in (parked, filed)):
+    elif pointer and (stayed or failed or file_failed or any(len(group) > 3 for group in (parked, filed))):
         words.append(AUDIT_REPORT_POINTER)
     return " ".join(words)
 
@@ -7288,9 +7294,10 @@ def park_audit_missing(audit_id, ids, today=None, file_ids=None, file_where=None
     and an Extra it names with no `file_where` entry files nothing either.
 
       {success, parked: [ids], filed: [ids], stayed: [{id, display, where, why}],
-       failed: [{id, display, why}], msg, audit_ended: {id, why}, report}
+       failed: [{id, display, why}], msg, report_msg, audit_ended: {id, why}, report}
 
-    `success` only when nothing failed. `report` is the ended audit's report as data,
+    `report_msg`: `msg` with no pointer to the Activity Log, for the report window's
+    notice line (it lists each spool itself). `success` only when nothing failed. `report` is the ended audit's report as data,
     for the window that opens where the panel was (_audit_report_data; Derek,
     2026-11-03). No write landed and at least one failed: the same answer with no
     `audit_ended` and no `report`, and the audit runs on, so Done can be pressed

@@ -63,9 +63,11 @@ def _question(park=3, stays=0, file=0):
 
 # The Yes's answer. PIN UPDATED DELIBERATELY (Derek, 2026-11-03, H S3): it carries the
 # report as data, for the window that opens after it (its shape pinned to the route's
-# below, as the question's is).
+# below, as the question's is). And again (review 3, R3S-7): `report_msg`, its words for
+# the report window's notice line.
 PARKED = {"success": True, "parked": [100, 101, 102], "filed": [], "stayed": [], "failed": [],
           "msg": "Parked 3 spools at Unknown. Undo Last Move puts them back.",
+          "report_msg": "Parked 3 spools at Unknown. Undo Last Move puts them back.",
           "audit_ended": {"id": "boot-1", "why": "done"},
           "report": {"audit_id": "boot-1", "place": "LR-MDB-1", "why": "done", "summary": "Found 2 of 5.",
                      "found": 2, "expected": 5, "extras": 0, "loaded": 0, "perfect": False,

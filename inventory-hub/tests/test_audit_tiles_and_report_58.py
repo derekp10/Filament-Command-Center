@@ -1085,3 +1085,31 @@ def test_an_extra_scanned_while_spoolman_wasnt_answering_says_so_with_no_place(e
     got = get_report(audit_id)["report"]
     extra = [(r["id"], r["where"], r["why"]) for g in got["groups"] if g["kind"] == "extra" for r in g["rows"]]
     assert extra == [(23, "", "FCC couldn't read where it is")]
+
+
+# --- review 3, R3S-7: the report window's notice line points nowhere else ------------------
+
+def test_a_partial_yes_says_its_words_for_the_report_window_without_the_logs_pointer(env, monkeypatch):
+    """Review 3, R3S-7: a Yes whose park of #5 Spoolman refused answers `msg` for its 7 s
+    toast, which ends "The Activity Log lists each spool." (written when the toast was all that
+    was said), and the report window put that on its notice line, right above the groups that
+    list each spool. The answer carries the same words with no pointer for the window,
+    `report_msg`, keeping what went wrong and Undo's sentence. RED on c1da241: no report_msg."""
+    _cart_row(env, monkeypatch)                        # #5's park refused
+    res = yes(env, question(env))
+    pointer = " " + logic.AUDIT_REPORT_POINTER
+    assert res["success"] is False and res["msg"].endswith(pointer)
+    assert res["report_msg"] == res["msg"][:-len(pointer)]
+    assert "Couldn't park #5." in res["report_msg"] and "Undo Last Move puts them back." in res["report_msg"]
+    assert "Activity Log" not in res["report_msg"]
+
+
+def test_a_yes_that_moved_every_spool_says_the_same_words_twice(env):
+    """`report_msg` is `msg` when `msg` has no pointer (a short Yes that moved every spool)."""
+    add_spool(env, 1, PLACE)
+    add_spool(env, 2, PLACE)
+    start(env, PLACE)
+    scan(env, "ID:1")
+    res = yes(env, question(env))
+    assert res["success"] is True and res["report_msg"] == res["msg"] == (
+        "Parked 1 spool at Unknown. Undo Last Move puts it back.")

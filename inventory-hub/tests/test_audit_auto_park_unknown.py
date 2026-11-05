@@ -366,9 +366,11 @@ def test_the_yes_parks_with_the_note_and_clears_slot_and_trail(env):
     # And again (H S3): it carries the report as data, pinned on its own in
     # tests/test_audit_tiles_and_report_58.py.
     assert result.pop("report")["audit_id"] == audit_id
+    # And again (review 3, R3S-7): `report_msg`, its words for the report window's notice line.
     assert result == {
         "success": True, "parked": [1], "filed": [], "stayed": [], "failed": [],
         "msg": "Parked 1 spool at Unknown. Undo Last Move puts it back.",
+        "report_msg": "Parked 1 spool at Unknown. Undo Last Move puts it back.",
         "audit_ended": {"id": audit_id, "why": "done"},
     }
     assert spools(env)[1]["location"] == "UNKNOWN"

@@ -2431,7 +2431,9 @@ window.commitBulkMove = () => {
             // says it, as before.
             if (!res.success) showToast(res.msg, 'warning', 7000);
             else if (!shown) showToast(res.msg, 'success', 4000);
-            if (shown && !res.success && res.msg && window.auditReportNotice) window.auditReportNotice(res.msg);
+            // The window lists each spool: its line drops the toast's pointer to the Activity
+            // Log (`report_msg`; review 3, R3S-7). An older server sends `msg` alone.
+            if (shown && !res.success && res.msg && window.auditReportNotice) window.auditReportNotice(res.report_msg || res.msg);
             return;
         }
         // Refused, with nothing written. The audit runs on (a failed read, a second
