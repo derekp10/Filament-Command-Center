@@ -757,7 +757,12 @@ def _the_report_close_double_clicked(board, rows, requests, overlays, focus, wha
         page.evaluate(RESET)
         server.session = {"active": False, "audit_end": None}
         server.logs = [LOG_ROW]
-        page.evaluate("(row) => window._renderLogsPayload({ logs: [row], status: { spoolman: true } }, true)", LOG_ROW)
+        # Drawn as the page's own heartbeat draws it, its whole answer, so the next beat finds
+        # the same answer and leaves the line as it is. Drawn from a smaller answer, the next
+        # beat drew it again, at a moment of its own: the 📝 the keyboard goes back to was
+        # replaced while the window was up or just after it closed, and the keyboard was on
+        # BODY (3 of 25 in the round's first full run, 2026-11-05).
+        page.evaluate("(d) => window._renderLogsPayload(d, true)", server._payload())
         page.wait_for_selector(CONTROL_SEL["report-open"])
         page.evaluate("() => { const b = document.getElementById('live-logs'); b.scrollTop = 0; }")
         board.click(page.evaluate(POINT, CONTROL_SEL["report-open"]))
