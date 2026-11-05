@@ -60,7 +60,7 @@ FULL = {"audit_id": "boot-1", "place": "LR-MDB-1", "why": "done", "summary": "Fo
                 _row(103, "Some Brand ASA (Grey)", "LR-MDB-1 slot 4", "Spoolman refused it: nope", color="8E8E8E")]},
             {"kind": "trail", "title": "Loaded from LR-MDB-1", "rows": [
                 _row(242, "Some Brand PLA (Galaxy Black)", "XL-2", color="1A1A1A")]},
-            {"kind": "needs_label", "title": "Needs a label", "rows": [
+            {"kind": "needs_label", "title": "Marked as needing a label", "rows": [
                 _row(57, "Some Brand PLA (Blue)", "LR-MDB-1 slot 1", needs_label=True, color="1F5FBF")]}]}
 # An end that moved nothing (a Cancel's, read later from its line).
 CANCELLED = {"audit_id": "boot-2", "place": "SHELF-1", "why": "cancel", "summary": "Found 0 of 2.",
@@ -221,19 +221,21 @@ def test_each_spool_once_under_what_done_did_with_it(dialog):
     _shown(dialog)
     # A row at the audited place keeps only its slot, on its small line (Derek's look of
     # 2026-11-04, T2). PIN UPDATED DELIBERATELY: #101 read "from LR-MDB-1 slot 2", #57
-    # "📍 LR-MDB-1 slot 1", and #103 had no slot.
+    # "📍 LR-MDB-1 slot 1", and #103 had no slot. And again (review 3, R3S-5): the marked
+    # group and a marked spool's tag say the audit marked them ("🏷️ Needs a label", "🏷️
+    # needs a label", the words the panel's tile uses for any flag up).
     assert _groups(dialog) == [
         ["❓ Parked at Unknown (2)", "missing", [["#101 Some Brand PLA (Red)", "500g (slot 2)", "", ""],
                                               ["#102 Some Brand PLA (Galaxy Purple With Glitter Sparkles)",
                                                "500g (slot 3)", "", ""]]],
         ["📥 Filed in LR-MDB-1 (1)", "extra", [["#201 Another Maker PETG (Glow Teal)", "500g", "from LR-MDB-2 slot 3",
-                                              "🏷️ needs a label"]]],
+                                              "🏷️ marked as needing a label"]]],
         ["📌 Left where they are (2)", "stay", [["#301 Some Brand PETG (Clear)", "500g", HEAD_WHY, ""],
                                               ["#302 Some Brand PLA (White)", "500g", "moved to CR-CT-1", ""]]],
         ["🛑 Couldn't be moved (1)", "failed", [["#103 Some Brand ASA (Grey)", "500g (slot 4)", "Spoolman refused it: nope",
                                                ""]]],
         ["🔗 Loaded from LR-MDB-1 (1)", "trail", [["#242 Some Brand PLA (Galaxy Black)", "500g", "loaded on XL-2", ""]]],
-        ["🏷️ Needs a label (1)", "found", [["#57 Some Brand PLA (Blue)", "500g (slot 1)", "", ""]]]]
+        ["🏷️ Marked as needing a label (1)", "found", [["#57 Some Brand PLA (Blue)", "500g (slot 1)", "", ""]]]]
     assert dialog.locator(REPORT + " .fcc-spool-tile > span[style*='border-radius:50%']").count() == 8   # a swatch each
     foot = dialog.text_content(REPORT + " .fcc-audit-report-foot")
     assert "Undo Last Move puts the parked and filed spools back." in foot
@@ -942,3 +944,20 @@ def test_the_window_says_how_an_end_that_moved_nothing_ended(logged, which):
     order = logged.evaluate("""(r) => Array.from(document.querySelector(r + ' .fcc-audit-report-panel').children)
         .map((e) => e.id || e.className)""", REPORT)
     assert order.index("fcc-audit-report-ended") == order.index("fcc-audit-report-summary") + 1, order
+
+
+def test_the_report_says_the_audit_marked_a_spool_never_that_its_flag_is_up(dialog):
+    """Review 3, R3S-5: on the panel, a tile's "🏷️ needs a label" means Spoolman's flag is up,
+    whoever raised it; on the report window, which opens where the panel was, the same words
+    and the group "🏷️ Needs a label" meant "marked in this audit", so a spool flagged before
+    the audit and found by hand, which the panel had just called "needs a label", was in no
+    group of it. The report lists what the audit did, so its group and its tag say the audit
+    marked them. RED on c44c083."""
+    rep = json.loads(json.dumps(FULL))
+    rep["groups"][-1]["title"] = "Marked as needing a label"        # the route's (logic._audit_report_data)
+    dialog.evaluate("(r) => window.openAuditReport(r, { after: true })", rep)
+    _shown(dialog)
+    heads = [g[0] for g in _groups(dialog)]
+    assert "🏷️ Marked as needing a label (1)" in heads
+    tags = [t[3] for g in _groups(dialog) for t in g[2] if t[3]]
+    assert tags == ["🏷️ marked as needing a label"], tags

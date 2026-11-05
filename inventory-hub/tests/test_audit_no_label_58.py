@@ -643,7 +643,8 @@ def test_the_report_names_the_spools_marked_as_needing_a_label(env):
     env["fake"].gets.clear()
     scan(env, "CMD:CANCEL")
     line = report(env)
-    assert "<b>Needs a label:</b> #1 Some Brand PLA (Red), #7 Some Brand PLA (Stray)" in line
+    # PIN UPDATED DELIBERATELY (review 3, R3S-5): the line says the audit marked them.
+    assert "<b>Marked as needing a label:</b> #1 Some Brand PLA (Red), #7 Some Brand PLA (Stray)" in line
     assert env["fake"].gets == []
 
 
@@ -657,7 +658,7 @@ def test_a_mark_undone_isnt_in_the_report(env):
     undo(env, 1)
     env["logs"].clear()
     scan(env, "CMD:CANCEL")
-    assert "Needs a label" not in report(env)
+    assert "Marked as needing a label" not in report(env)    # review 3, R3S-5: its words
 
 
 def test_with_no_marks_the_report_has_no_such_line(env):
@@ -669,7 +670,7 @@ def test_with_no_marks_the_report_has_no_such_line(env):
     scan(env, MARK)                                 # already flagged: not this audit's mark
     env["logs"].clear()
     scan(env, "CMD:CANCEL")
-    assert "Needs a label" not in report(env)
+    assert "Marked as needing a label" not in report(env)    # review 3, R3S-5: its words
 
 
 def test_the_reports_marks_are_escaped(env):
@@ -694,7 +695,8 @@ def test_the_idle_line_names_the_marks_with_no_read(env):
     session()["last_activity_ts"] = time.time() - state.AUDIT_IDLE_TIMEOUT_SECONDS - 5
     app_module._check_audit_idle_timeout()
     (msg, _cat, _color), = env["logs"]
-    assert "found 1 of 2; missing #2; needs a label #1." in msg
+    # PIN UPDATED DELIBERATELY (review 3, R3S-5): the line says the audit marked it.
+    assert "found 1 of 2; missing #2; marked as needing a label #1." in msg
     assert env["fake"].gets == []
 
 
@@ -1476,7 +1478,7 @@ def test_a_find_with_no_label_read_never_touches_its_label_or_the_backlog(env, d
     records = env["fake"].records["spool"]
     assert records[6]["location"] == "UNKNOWN" and records[7]["location"] == "LR-MDB-1"
     assert label_side(env, 5, 6, 7) == before
-    assert "Needs a label" not in report(env)
+    assert "Marked as needing a label" not in report(env)    # review 3, R3S-5: its words
 
 
 @pytest.mark.parametrize("status", list(STATUSES))

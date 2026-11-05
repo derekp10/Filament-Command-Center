@@ -5833,7 +5833,7 @@ def check_audit_idle_timeout():
             expected, missing, extras, trail = _audit_tally(session)
             parts = [f"found {len(expected) - len(missing)} of {len(expected)}"]
             for words, ids in (("missing", missing), ("extra", extras), ("loaded from here", trail),
-                               ("needs a label", list(session.get('label_flagged') or {}))):
+                               ("marked as needing a label", list(session.get('label_flagged') or {}))):
                 if ids:
                     parts.append(f"{words} " + ", ".join(f"#{sid}" for sid in ids))
             line += " Report: " + "; ".join(parts) + "." + _audit_report_button(report['audit_id'])
@@ -5994,7 +5994,9 @@ def _audit_report_data(session, why, parked=(), stays=(), failed=(), filed=(), y
     and extra (Extra (filed elsewhere)), each with `where` FCC has it, and for a Done
     the `why` it stays; a Done's Extra FCC has here already is under stayed, as a
     Yes lists it. Then, for either: trail (Loaded from <place>, `where` its
-    head) and needs_label (Needs a label): a spool marked in this audit is flagged on
+    head) and needs_label (Marked as needing a label: what the audit did, never a flag up
+    before it, which the panel's tile also calls "needs a label"; review 3, R3S-5): a
+    spool marked in this audit is flagged on
     its own row wherever it is (`needs_label`), and this group holds only the marked
     spools no other group lists (a spool found on the list). Empty groups are left
     out, and an end with no place has none."""
@@ -6054,7 +6056,7 @@ def _audit_report_data(session, why, parked=(), stays=(), failed=(), filed=(), y
         group('stayed', ("Left where it is", "Left where they are"), [row(sid, '', *here_already) for sid in here])
     group('trail', f"Loaded from {place}", [row(sid) for sid in trail])
     marked = [_audit_spool_id(key) for key in (session.get('label_flagged') or {})]
-    group('needs_label', "Needs a label", [row(sid) for sid in marked if sid is not None])
+    group('needs_label', "Marked as needing a label", [row(sid) for sid in marked if sid is not None])
     return report
 
 
@@ -6118,7 +6120,8 @@ def _audit_report(session, why, parked=(), stays=(), failed=(), filed=(), yes=Fa
                      + ", ".join(_audit_esc(_audit_with_where(session, s)) for s in trail))
     marked = list(session.get('label_flagged') or {})
     if marked:
-        lines.append("🏷️ <b>Needs a label:</b> " + ", ".join(_audit_esc(_audit_label(session, s)) for s in marked))
+        lines.append("🏷️ <b>Marked as needing a label:</b> "
+                     + ", ".join(_audit_esc(_audit_label(session, s)) for s in marked))
     if parked:
         lines.append("❓ <b>Parked at Unknown:</b> " + ", ".join(f"#{p['id']}" for p in parked)
                      + f" (Undo Last Move puts {'it' if len(parked) == 1 else 'them'} back)")

@@ -565,7 +565,8 @@ def test_a_mark_made_on_a_tile_is_in_the_report(env):
     tile_mark(5)
     env["logs"].clear()
     scan(env, "CMD:CANCEL")
-    assert "<b>Needs a label:</b> #5 Some Brand PLA (Red)" in report(env)
+    # PIN UPDATED DELIBERATELY (review 3, R3S-5): the line says the audit marked it.
+    assert "<b>Marked as needing a label:</b> #5 Some Brand PLA (Red)" in report(env)
 
 
 # ---------------------------------------------------------------------------
@@ -657,7 +658,9 @@ def test_a_yes_answers_the_report_each_spool_once_under_what_done_did(env, monke
         {"kind": "failed", "title": "Couldn't be moved",
          "rows": [_row(5, "050505", 105.0, PLACE, "Spoolman refused it: nope (test)")]},
         {"kind": "trail", "title": f"Loaded from {PLACE}", "rows": [_row(7, "070707", 107.0, "XL-2")]},
-        {"kind": "needs_label", "title": "Needs a label", "rows": [_row(2, "020202", 102.0, PLACE, needs_label=True)]},
+        # PIN UPDATED DELIBERATELY (review 3, R3S-5): the group says the audit marked them.
+        {"kind": "needs_label", "title": "Marked as needing a label",
+         "rows": [_row(2, "020202", 102.0, PLACE, needs_label=True)]},
     ]
     ids = [r["id"] for g in got["groups"] for r in g["rows"]]
     assert sorted(ids) == [2, 3, 4, 5, 7, 20, 21] and len(ids) == len(set(ids))      # each once; #1 isn't listed
@@ -755,7 +758,9 @@ def test_a_cancel_reports_what_wasnt_scanned_and_the_extras_and_opens_nothing(en
         {"kind": "extra", "title": "Extra (filed elsewhere)",
          "rows": [_row(20, "202020", 120.0, "LR-MDB-2 slot 3", needs_label=True), _row(21, "212121", 121.0, "XL-1")]},
         {"kind": "trail", "title": f"Loaded from {PLACE}", "rows": [_row(7, "070707", 107.0, "XL-2")]},
-        {"kind": "needs_label", "title": "Needs a label", "rows": [_row(2, "020202", 102.0, PLACE, needs_label=True)]},
+        # PIN UPDATED DELIBERATELY (review 3, R3S-5): the group says the audit marked them.
+        {"kind": "needs_label", "title": "Marked as needing a label",
+         "rows": [_row(2, "020202", 102.0, PLACE, needs_label=True)]},
     ]
     assert env["fake"].gets == []                           # the stored rows: no read
 
@@ -767,7 +772,7 @@ def test_an_idle_end_keeps_its_report_and_its_line_carries_the_button(env):
     session()["last_activity_ts"] = time.time() - state.AUDIT_IDLE_TIMEOUT_SECONDS - 5
     app_module._check_audit_idle_timeout()
     (line,) = log_text(env)
-    assert line.endswith("needs a label #2, #20. " + BUTTON.format(audit_id)), line
+    assert line.endswith("marked as needing a label #2, #20. " + BUTTON.format(audit_id)), line   # R3S-5
     got = get_report(audit_id)["report"]
     assert got["why"] == "idle" and [k for k, _ in kinds(got)] == ["missing", "extra", "trail", "needs_label"]
     assert env["fake"].gets == []
@@ -1161,3 +1166,26 @@ def test_each_end_that_moved_nothing_says_how_it_ended(env, monkeypatch):
     finally:
         state.GLOBAL_BUFFER = []
     assert got["ended"] == "Done had nothing to park or file, so nothing was moved."
+
+
+# --- review 3, R3S-5: the report's 🏷️ group lists what the audit marked ------------------
+
+def test_the_reports_label_group_is_what_the_audit_marked(env):
+    """Review 3, R3S-5: #2, flagged for a new label before the audit and found by hand, reads
+    "🏷️ needs a label" on the panel (any flag up); the report lists what the audit did, so its
+    group is named for that ("Marked as needing a label"), and #2, which the audit didn't
+    mark, is in no group, as before; #1, marked in this audit, is. RED on c44c083: the group
+    was "Needs a label", the panel's words for any flag up."""
+    add_spool(env, 1, PLACE)
+    add_spool(env, 2, PLACE, needs_label_print=True)  # flagged before the audit
+    add_spool(env, 3, PLACE)
+    start(env, PLACE)
+    scan(env, "ID:1")
+    assert scan(env, "CMD:NEEDLABEL")["cmd"] == "audit_scan"       # #1 marked here
+    assert post("/api/audit/found", {"audit_id": session()["audit_id"], "id": 2, "found": True})["success"] is True
+    row2 = next(r for r in live()["expected"] if r["id"] == 2)
+    assert row2["label_status"] is True and row2["flagged_here"] is False
+    rep = yes(env, question(env))["report"]                          # parks #3
+    assert [(g["kind"], g["title"], [r["id"] for r in g["rows"]]) for g in rep["groups"]] == [
+        ("parked", "Parked at Unknown", [3]), ("needs_label", "Marked as needing a label", [1])]
+    assert "🏷️ <b>Marked as needing a label:</b> #1" in report(env)

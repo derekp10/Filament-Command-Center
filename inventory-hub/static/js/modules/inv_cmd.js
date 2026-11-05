@@ -2651,8 +2651,10 @@ window.commitBulkMove = () => {
                 detail,
                 where: kind.where(slot === null ? r : Object.assign({}, r, { where: '' })),
                 // Marked in this audit, wherever it is: the group of the marked holds only
-                // the ones no other group lists.
-                tag: (r.needs_label && g.kind !== 'needs_label') ? '🏷️ needs a label' : '',
+                // the ones no other group lists. Its words say the audit marked it (review 3,
+                // R3S-5): the panel's tile says "needs a label" for any flag up, one raised
+                // before the audit too, which the report doesn't list.
+                tag: (r.needs_label && g.kind !== 'needs_label') ? '🏷️ marked as needing a label' : '',
                 color: r.color,
                 color_direction: r.color_direction,
             }, kind.tone)).join('');
