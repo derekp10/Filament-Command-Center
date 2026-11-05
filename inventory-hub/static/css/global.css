@@ -1766,6 +1766,19 @@ body {
     overflow-wrap: anywhere;
 }
 .fcc-audit-report-group + .fcc-audit-report-group { margin-top: 0.75rem; }
+/* The 📡 pill's list says what a press in it couldn't do (inv_core.js logPillNotice; review 3,
+   R3-4): a toast's layer is under the list. The audit notice's colours. */
+.fcc-log-pill-notice {
+    margin-bottom: 0.5rem;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: #4a3200;
+    color: #ffd27a;
+    border: 1px solid #ffb74d;
+    font-weight: bold;
+    font-size: var(--fcc-fs-row);
+    overflow-wrap: anywhere;
+}
 .fcc-audit-report-head {
     font-size: var(--fcc-fs-row);
     font-weight: bold;

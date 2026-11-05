@@ -777,3 +777,48 @@ def test_two_different_scans_queued_during_the_park_still_say_they_did_nothing(d
     said = [t[1] for t in _toasts(page) if "did nothing" in t[1]]
     assert sorted(said) == ["The audit has ended, so ID:57 did nothing. Scan it again if you meant it.",
                             "The audit has ended, so LOC:LR-MDB-2:SLOT:3 did nothing. Scan it again if you meant it."], said
+
+
+GONE = ("FCC no longer has that audit's report: it keeps the last 10, and a restart clears them. "
+        "Its line in the Activity Log has the same report in words.")
+PILL_LIST = "#fcc-log-pill-overlay"
+PILL_NOTICE = PILL_LIST + " #fcc-log-pill-notice"
+
+
+@pytest.mark.parametrize("answer", ["gone", "down"])
+def test_a_report_that_wont_open_from_the_log_pills_list_says_so_on_the_list(logged, answer):
+    """Review 3, R3-4: from the 📡 pill's list, a 📝 Read the report that couldn't open its
+    window said so only in a toast, whose layer (z 11000) is under the list (z 20000) and drawn
+    where the list is: the press looked as if it did nothing. The list says it on a line of its
+    own now, beside the toast, on top. RED on 80d2a85: no such line."""
+    said = GONE if answer == "gone" else "FCC didn't answer, so the report couldn't be shown. Try again in a moment."
+    if answer == "gone":
+        logged.evaluate("(msg) => { window.__report = { success: false, msg }; }", GONE)
+    else:
+        logged.evaluate("() => { window.__report = 'down'; }")
+    logged.evaluate("() => window.openLogPillOverlay()")
+    logged.wait_for_selector(PILL_LIST + " .fcc-audit-report-open")
+    logged.click(PILL_LIST + " .fcc-audit-report-open")
+    logged.wait_for_function("() => document.querySelectorAll('#toast-container .toast-msg').length > 0")
+    assert ["warning", said] in _toasts(logged)
+    assert logged.locator(REPORT).count() == 0
+    logged.wait_for_selector(PILL_NOTICE, state="visible")
+    assert logged.text_content(PILL_NOTICE) == said
+    assert logged.get_attribute(PILL_NOTICE, "role") == "alert"
+    assert _on_top(logged, PILL_NOTICE)
+
+
+def test_a_report_that_opens_from_the_log_pills_list_says_nothing_on_it(logged):
+    """The quiet case: the line shows only when a press there couldn't do what it was asked,
+    and a good press after a bad one clears it. RED on 80d2a85 too: there was no line."""
+    logged.evaluate("(msg) => { window.__report = { success: false, msg }; }", GONE)
+    logged.evaluate("() => window.openLogPillOverlay()")
+    logged.wait_for_selector(PILL_LIST + " .fcc-audit-report-open")
+    assert logged.locator(PILL_NOTICE).count() == 1 and not logged.is_visible(PILL_NOTICE)
+    logged.click(PILL_LIST + " .fcc-audit-report-open")
+    logged.wait_for_selector(PILL_NOTICE, state="visible")
+    logged.wait_for_timeout(750)                    # past the double press
+    logged.evaluate("(r) => { window.__report = { success: true, report: r }; }", CANCELLED)
+    logged.click(PILL_LIST + " .fcc-audit-report-open")
+    _shown(logged)
+    assert not logged.is_visible(PILL_NOTICE)

@@ -2783,14 +2783,21 @@ window.commitBulkMove = () => {
         _reportAskedAt = now;
         _reportOut = true;
         const id = String((btn.dataset && btn.dataset.auditReport) || '');
+        // Asked from the 📡 pill's list, the list is on top, and a toast's layer is under it:
+        // the list says it too (review 3, R3-4).
+        const say = (msg) => {
+            showToast(msg, 'warning', 7000);
+            if (btn.closest('#fcc-log-pill-overlay') && window.logPillNotice) window.logPillNotice(msg);
+        };
+        if (btn.closest('#fcc-log-pill-overlay') && window.logPillNotice) window.logPillNotice('');
         window.fetchT(`/api/audit/report?id=${encodeURIComponent(id)}`, {}, REPORT_TIMEOUT_MS)
             .then(r => r.json())
             .then((res) => {
                 if (res && res.success && res.report) { window.openAuditReport(res.report, { opener: btn }); return; }
                 // FCC no longer has it (it keeps the last 10, a restart clears them): the
                 // server's words, which point to the line's own words.
-                showToast((res && res.msg) || "FCC couldn't show that report.", 'warning', 7000);
-            }, () => showToast("FCC didn't answer, so the report couldn't be shown. Try again in a moment.", 'warning', 7000))
+                say((res && res.msg) || "FCC couldn't show that report.");
+            }, () => say("FCC didn't answer, so the report couldn't be shown. Try again in a moment."))
             .catch(e => console.error(e))
             .finally(() => { _reportOut = false; });
     };

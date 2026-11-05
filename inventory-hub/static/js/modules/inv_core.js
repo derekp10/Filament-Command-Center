@@ -2789,6 +2789,16 @@ const _updateLogPill = (logs) => {
     pill.classList.add('fcc-log-pill-flash');
 };
 
+// What a press in the list says while the list is up (review 3, R3-4: a 📝 Read the report
+// that couldn't open its window said so only in a toast, whose layer is under the list, and
+// drawn where the list is): a line of the list's own, under its title. '' clears it.
+window.logPillNotice = (msg) => {
+    const el = document.getElementById('fcc-log-pill-notice');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.style.display = msg ? 'block' : 'none';
+};
+
 window.openLogPillOverlay = () => {
     // Snapshot the latest logs and render them in a mountOverlay so the
     // panel sits above any modal stack. Closing marks every entry as seen.
@@ -2809,6 +2819,7 @@ window.openLogPillOverlay = () => {
                     <div style="font-weight:bold; font-size:1.1em; color:#0ff;">📡 Activity Log</div>
                     <button id="fcc-log-pill-close" class="btn btn-sm btn-outline-info">Close</button>
                 </div>
+                <div id="fcc-log-pill-notice" class="fcc-log-pill-notice" role="alert" style="display:none;"></div>
                 <div style="overflow-y:auto; font-family:monospace; font-size:0.85rem;
                             background:#0a0a0a; padding:8px; border:1px solid #333; flex:1 1 auto;">
                     ${rows}
