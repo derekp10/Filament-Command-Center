@@ -78,6 +78,15 @@ _HTTP_REFUSAL_RE = re.compile(r"HTTP (\d{3}):\s*(.*)\Z", re.S)
 _REFUSAL_WORDS_MAX = 200
 # requests' own words for a Spoolman it couldn't reach, or that took too long (str(e)).
 _NO_ANSWER_MARKS = ("Read timed out", "ReadTimeout")
+# What a write says when the read it merges against failed (update_spool, update_filament,
+# update_vendor; Group 36): a developer's sentence, so a person reads refusal_words' instead.
+PREMERGE_READ_REFUSAL = ("could not read the record's existing extras before a partial "
+                         "update; refusing to PATCH because that would wipe the other "
+                         "extra fields")
+_PREMERGE_READ_WORDS = "FCC couldn't read it from Spoolman just before writing, so nothing was written."
+# requests' own words for a refused read (HTTPError, raise_for_status), with Spoolman's URL in
+# them: "503 Server Error: Service Unavailable for url: http://<host>:<port>/api/v1/spool".
+_HTTP_ERROR_RE = re.compile(r"\b(\d{3}) (?:Client|Server) Error: .*? for url: [^\s)]+")
 _UNREACHED_MARKS = ("Max retries exceeded", "Failed to establish a new connection", "Connection refused",
                     "NameResolutionError", "Connection aborted")
 
@@ -93,9 +102,15 @@ def refusal_words(text):
       it (HTTP 502)."
       requests' timeout -> "Spoolman didn't answer in time."; no connection -> "FCC
       couldn't reach Spoolman."
-    Anything else (FCC's own words) comes back as it is. Only for what a person reads: the
-    log line a failed write leaves keeps the full text."""
+    FCC's own words come back as they are, but for two (review 3, R3S-2): a write that
+    couldn't read what it merges against (PREMERGE_READ_REFUSAL) -> "FCC couldn't read it from
+    Spoolman just before writing, so nothing was written.", and requests' words for a refused
+    read inside FCC's sentence ("couldn't read PM-DB-9 from Spoolman (503 Server Error: Service
+    Unavailable for url: http://…)") -> "… (it answered HTTP 503)", Spoolman's address gone.
+    Only for what a person reads: the log line a failed write leaves keeps the full text."""
     s = str(text or '').strip()
+    if PREMERGE_READ_REFUSAL in s:
+        return _PREMERGE_READ_WORDS
     m = _HTTP_REFUSAL_RE.match(s)
     if m:
         said = _refusal_said(m.group(2).strip())
@@ -104,7 +119,7 @@ def refusal_words(text):
         return "Spoolman didn't answer in time."
     if any(mark in s for mark in _UNREACHED_MARKS):
         return "FCC couldn't reach Spoolman."
-    return s
+    return _HTTP_ERROR_RE.sub(lambda h: f"it answered HTTP {h.group(1)}", s)
 
 
 def _refusal_said(body):
@@ -707,11 +722,7 @@ def update_spool(sid, data):
                 # `extra` sub-document on PATCH — so the write would wipe every
                 # sibling. Refuse loudly instead; a failed write is recoverable,
                 # a silent wipe is not. (Group 36.)
-                LAST_SPOOLMAN_ERROR = (
-                    "could not read the record's existing extras before a partial "
-                    "update; refusing to PATCH because that would wipe the other "
-                    "extra fields"
-                )
+                LAST_SPOOLMAN_ERROR = PREMERGE_READ_REFUSAL
                 state.logger.error(
                     f"update_spool({sid}): {LAST_SPOOLMAN_ERROR}"
                 )
@@ -1331,11 +1342,7 @@ def update_filament(fid, data):
             # `extra` sub-document on PATCH — so the write would wipe every
             # sibling. Refuse loudly instead; a failed write is recoverable,
             # a silent wipe is not. (Group 36.)
-            LAST_SPOOLMAN_ERROR = (
-                "could not read the record's existing extras before a partial "
-                "update; refusing to PATCH because that would wipe the other "
-                "extra fields"
-            )
+            LAST_SPOOLMAN_ERROR = PREMERGE_READ_REFUSAL
             state.logger.error(
                 f"update_filament({fid}): {LAST_SPOOLMAN_ERROR}"
             )
@@ -1534,11 +1541,7 @@ def update_vendor(vid, data):
             # `extra` sub-document on PATCH — so the write would wipe every
             # sibling. Refuse loudly instead; a failed write is recoverable,
             # a silent wipe is not. (Group 36.)
-            LAST_SPOOLMAN_ERROR = (
-                "could not read the record's existing extras before a partial "
-                "update; refusing to PATCH because that would wipe the other "
-                "extra fields"
-            )
+            LAST_SPOOLMAN_ERROR = PREMERGE_READ_REFUSAL
             state.logger.error(
                 f"update_vendor({vid}): {LAST_SPOOLMAN_ERROR}"
             )

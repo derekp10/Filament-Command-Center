@@ -6473,9 +6473,11 @@ def _audit_mark_label(session, sid):
     if not spoolman_api.update_spool(sid, {'extra': {'needs_label_print': True}}):
         err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
         if not _audit_label_landed(sid, True):
-            msg = f"Couldn't mark #{sid}: {err}"
-            state.add_log_entry(f"❌ {_audit_esc(msg)}", "ERROR", "ff4444")
-            return {"status": "error", "msg": msg}
+            # The panel's notice and a toast say it in words (review 3, R3S-2); the ERROR
+            # line keeps Spoolman's full answer.
+            line = f"Couldn't mark #{sid}: {err}"
+            state.add_log_entry(f"❌ {_audit_esc(line)}", "ERROR", "ff4444")
+            return {"status": "error", "msg": f"Couldn't mark #{sid}: {spoolman_api.refusal_words(err)}"}
     session.setdefault('label_flagged', {})[str(sid)] = prior
     audit_label_status(sid, True)
     msg = f"#{sid} is marked: it needs a label."
@@ -6626,9 +6628,10 @@ def audit_undo_need_label(audit_id, sid):
     if not res:
         err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
         if not _audit_label_landed(sid, prior):
-            msg = f"Couldn't undo the mark on #{sid}: {err}"
-            state.add_log_entry(f"❌ {_audit_esc(msg)}", "ERROR", "ff4444")
-            return {"success": False, "msg": msg}
+            # In words for the panel (review 3, R3S-2); the ERROR line keeps the full answer.
+            line = f"Couldn't undo the mark on #{sid}: {err}"
+            state.add_log_entry(f"❌ {_audit_esc(line)}", "ERROR", "ff4444")
+            return {"success": False, "msg": f"Couldn't undo the mark on #{sid}: {spoolman_api.refusal_words(err)}"}
     elif isinstance(res, dict) and res.get('fcc_uncleared_extras'):        # update_spool logged why
         return {"success": False, "msg": res.get('fcc_uncleared_note')
                 or f"Couldn't undo the mark on #{sid}: Spoolman kept it."}

@@ -914,3 +914,127 @@ def test_the_report_reads_nothing_even_with_spoolman_down(env):
     assert env["fake"].gets == []
     assert {r["id"]: r["color"] for g in got["groups"] for r in g["rows"]} == {
         3: "030303", 4: "040404", 5: "050505", 20: "202020", 21: "212121", 7: "070707", 2: "020202"}
+
+
+# --- review 3, R3S-2: FCC's own failure texts in words too ---------------------------------
+
+def _failed_rows(report):
+    return [[r["id"], r["why"]] for g in report["groups"] if g["kind"] == "failed" for r in g["rows"]]
+
+
+def test_a_write_that_couldnt_read_its_record_first_says_so_in_words(env, monkeypatch):
+    """Review 3, R3S-2 (a): a slow Spoolman: the park's last look of #5 answers, then
+    update_spool's two pre-merge extras reads time out, so update_spool refuses the PATCH with
+    its own developer's sentence, which the report's 🛑 tile read word for word ("could not read
+    the record's existing extras before a partial update; refusing to PATCH because that would
+    wipe the other extra fields"). It reads as a person would say it now; the ERROR line the
+    failed write left keeps the full text. RED on 421c894."""
+    add_spool(env, 1, PLACE)
+    add_spool(env, 5, PLACE)
+    add_spool(env, 6, PLACE)                           # parks fine, so the audit ends with a report
+    start(env, PLACE)
+    scan(env, "ID:1")
+    asked = question(env)
+    real_get = spoolman_api.requests.get
+    calls = {"n": 0}
+
+    def get(url, timeout=None, **kw):
+        if url.rstrip("/").endswith("/api/v1/spool/5"):
+            calls["n"] += 1
+            # 1: the park's last look; 2: update_spool's own read; 3 and 4: the two
+            # pre-merge extras reads; 5: _move_write's re-read.
+            if calls["n"] in (3, 4):
+                raise requests.exceptions.ReadTimeout(
+                    "HTTPConnectionPool(host='spoolman.test', port=7000): Read timed out. (read timeout=3)")
+        return real_get(url, timeout=timeout, **kw)
+
+    monkeypatch.setattr(spoolman_api.requests, "get", get)
+    res = yes(env, asked)
+    assert _failed_rows(res["report"]) == [
+        [5, "FCC couldn't read it from Spoolman just before writing, so nothing was written."]]
+    lines = [m for m in log_text(env) if "failed to park Spool" in m]
+    assert len(lines) == 1 and lines[0].endswith("refusing to PATCH because that would wipe the other extra fields"), lines
+
+
+class _Real503:
+    """A real requests.Response, as Spoolman's proxy answers when it is overloaded: its
+    raise_for_status is requests' own."""
+
+    @staticmethod
+    def make(url):
+        r = requests.models.Response()
+        r.status_code = 503
+        r.reason = "Service Unavailable"
+        r.url = url
+        r._content = b"<html><body>503 Service Unavailable</body></html>"
+        return r
+
+
+def test_a_one_spool_places_read_that_failed_says_so_without_spoolmans_address(env, monkeypatch):
+    """Review 3, R3S-2 (b): a single-slot box, #10 filed there and not scanned (Done parks it),
+    Extra #20 found there (Done files it once the park frees the box). The filing's strict read
+    of the box answers a 503, and the 🛑 tile read requests' own words, Spoolman's address and
+    port included ("couldn't read PM-DB-9 from Spoolman (503 Server Error: Service Unavailable for
+    url: http://spoolman.test:7000/api/v1/spool)"). It says what Spoolman answered now; the
+    ERROR line keeps the full text. RED on 421c894."""
+    env["rows"].append({"LocationID": "PM-DB-9", "Name": "Poly", "Type": "Dryer Box", "Max Spools": "1",
+                        "parent_id": "LR"})
+    add_spool(env, 10, "PM-DB-9", container_slot="1")
+    add_spool(env, 20, "LR-MDB-2", container_slot="3")
+    start(env, "PM-DB-9")
+    scan(env, "ID:20")
+    asked = question(env)
+    assert [r["id"] for r in asked["park"]] == [10] and [r["id"] for r in asked["file"]] == [20]
+    real_get = spoolman_api.requests.get
+
+    def get(url, timeout=None, **kw):
+        if url == "http://spoolman.test:7000/api/v1/spool":          # the strict read of the box
+            return _Real503.make(url)
+        return real_get(url, timeout=timeout, **kw)
+
+    monkeypatch.setattr(spoolman_api.requests, "get", get)
+    res = yes(env, asked)
+    assert _failed_rows(res["report"]) == [[20, "couldn't read PM-DB-9 from Spoolman (it answered HTTP 503)"]]
+    lines = [m for m in log_text(env) if "failed to file Spool" in m]
+    assert len(lines) == 1 and "for url: http://spoolman.test:7000/api/v1/spool" in lines[0], lines
+
+
+def test_a_tiles_mark_spoolman_refused_says_why_in_words_and_its_line_keeps_the_answer(env, monkeypatch):
+    """Review 3, R3S-2, the same class: a found tile's 🏷️ (and its second tap) whose PATCH is
+    refused answered "Couldn't mark #5: HTTP 500: {"message": "database is locked"}" on the
+    panel's notice and its 7 s toast. Spoolman's words now; the ERROR line keeps its answer.
+    RED on 421c894."""
+    _found_two(env)
+
+    def refused(url, json=None, timeout=None, **kw):  # noqa: A002
+        return _Resp(500, {"message": "database is locked"})
+
+    real_patch = spoolman_api.requests.patch
+    monkeypatch.setattr(spoolman_api.requests, "patch", refused)
+    ans = tile_mark(5)
+    assert ans == {"success": False, "msg": "Couldn't mark #5: Spoolman refused it: database is locked"}
+    errors = [m for m, c, _ in env["logs"] if c == "ERROR"]
+    assert len(errors) == 1 and "HTTP 500" in errors[0] and "database is locked" in errors[0], errors
+    monkeypatch.setattr(spoolman_api.requests, "patch", real_patch)
+    assert tile_mark(5)["success"] is True
+    monkeypatch.setattr(spoolman_api.requests, "patch", refused)
+    env["logs"].clear()
+    undone = undo_mark(5)
+    assert undone == {"success": False, "msg": "Couldn't undo the mark on #5: Spoolman refused it: database is locked"}
+    errors = [m for m, c, _ in env["logs"] if c == "ERROR"]
+    assert len(errors) == 1 and "HTTP 500" in errors[0], errors
+
+
+@pytest.mark.parametrize("text, words", [
+    # update_spool's own words (spoolman_api.PREMERGE_READ_REFUSAL), as LAST_SPOOLMAN_ERROR holds them.
+    ("could not read the record's existing extras before a partial update; refusing to PATCH because that "
+     "would wipe the other extra fields", "FCC couldn't read it from Spoolman just before writing, so nothing was written."),
+    ("couldn't read PM-DB-9 from Spoolman (503 Server Error: Service Unavailable for url: "
+     "http://spoolman.test:7000/api/v1/spool)", "couldn't read PM-DB-9 from Spoolman (it answered HTTP 503)"),
+    ("couldn't read LR-MDB-1 from Spoolman (404 Client Error: Not Found for url: http://10.0.0.5:7912/api/v1/spool?location=X)",
+     "couldn't read LR-MDB-1 from Spoolman (it answered HTTP 404)"),
+], ids=["pre-merge", "server-error", "client-error"])
+def test_fccs_own_words_for_two_failures_are_put_in_words(text, words):
+    """Review 3, R3S-2: the two of FCC's own texts a slow or erroring Spoolman puts on the tile.
+    The rest of FCC's own words stay as they are (test_fccs_own_words_for_a_failure_stay_as_they_are)."""
+    assert spoolman_api.refusal_words(text) == words
