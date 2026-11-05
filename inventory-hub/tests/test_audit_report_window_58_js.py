@@ -672,3 +672,108 @@ def test_a_double_key_press_on_close_closes_it_and_asks_nothing(logged, key):
     logged.keyboard.press(key)
     _shown(logged)
     assert len(logged.evaluate("window.__asked")) == 2
+
+
+def _notice_now(page):
+    page.wait_for_timeout(900)                      # the queue drains every 250 ms
+    return page.evaluate("(s) => { const n = document.querySelector(s); return n ? [n.style.display, n.textContent] : null; }",
+                         NOTICE)
+
+
+def test_a_double_read_of_the_done_that_ended_the_audit_is_no_scan_the_audit_outlived(audit):
+    """Review 3, R3-2 (A): a scanner held over Done's printed QR reads it twice; the first read
+    ends the audit with nothing to ask and opens the report, and the second, read while the
+    first was answered, waits in the queue. Once out of the queue it was called a scan the
+    audit outlived, on the report that first read had just opened: "The audit has ended, so
+    CMD:DONE did nothing. Scan it again if you meant it.", a 7 s warning and a WARNING line.
+    It is the same QR read twice: dropped with an INFO line only. RED on 1e4ab06."""
+    page = audit
+    page.evaluate("""(r) => {
+        window.__answers['CMD:DONE'] = { type: 'command', cmd: 'audit_scan',
+            audit_ended: { id: 'boot-1', why: 'done' }, report: r };
+        window.__held = true;
+        if (document.activeElement) document.activeElement.blur();
+    }""", PERFECT)
+    page.keyboard.type("CMD:DONE", delay=0)
+    page.keyboard.press("Enter")
+    page.wait_for_function("() => typeof window.__release === 'function' && state.processing")
+    page.keyboard.type("CMD:DONE", delay=0)          # the scanner's second read, ~100 ms later
+    page.keyboard.press("Enter")
+    page.wait_for_function("() => (state.scanQueue || []).length === 1")
+    page.evaluate("() => { window.__held = false; window.__release(); }")
+    page.wait_for_selector(CLOSE)
+    notice = _notice_now(page)
+    assert page.locator(REPORT).count() == 1
+    assert notice[0] == "none" and notice[1] == "", notice
+    assert not [t for t in _toasts(page) if "did nothing" in t[1]], _toasts(page)
+    assert page.evaluate("window.__ids") == [{"text": "CMD:DONE", "source": "barcode"}]
+    lines = page.evaluate("window.__logs")
+    assert any('Scan "CMD:DONE" ignored: the same label was read twice' in m for m in lines), lines
+    assert not any("did nothing" in m for m in lines), lines
+
+
+def test_a_double_read_of_the_yes_qr_during_the_park_is_no_scan_the_audit_outlived(dialog):
+    """Review 3, R3-2 (B): the question's "Scan to Park" QR read twice, the second while the
+    park was out: the report read "The audit has ended, so CMD:CONFIRM:fcc-cqr-… did nothing.
+    Scan it again if you meant it.", FCC's own session id in it, and scanned again as told it
+    only heard "That confirm QR belongs to a dialog that has closed". One park went out, and
+    the second read is dropped with an INFO line only. RED on 1e4ab06."""
+    page = dialog
+    page.evaluate("""(r) => {
+        window.__park = Object.assign({}, window.__park, { report: r });
+        const answers = window.fetch;
+        window.fetch = (url, opts) => {
+            const answered = answers(url, opts);
+            if (String(url).indexOf('/api/audit/park') === -1) return answered;
+            return new Promise((resolve) => { window.__releasePark = () => resolve(answered); });
+        };
+    }""", PERFECT)
+    page.click(DONE)
+    page.wait_for_selector(YES)
+    page.wait_for_timeout(300)
+    sid = page.evaluate("() => Object.keys(window._fccActiveConfirms || {})[0]")
+    assert sid
+    qr = f"CMD:CONFIRM:{sid}"
+    page.keyboard.type(qr, delay=0)                  # the scanner reads the Yes's QR
+    page.keyboard.press("Enter")
+    page.wait_for_function("() => typeof window.__releasePark === 'function' && state.processing")
+    page.keyboard.type(qr, delay=0)                  # and reads it again
+    page.keyboard.press("Enter")
+    page.wait_for_function("() => (state.scanQueue || []).length === 1")
+    page.evaluate("() => window.__releasePark()")
+    page.wait_for_selector(CLOSE)
+    notice = _notice_now(page)
+    assert page.evaluate("window.__parks.length") == 1
+    assert notice[0] == "none" and notice[1] == "", notice
+    assert not [t for t in _toasts(page) if "did nothing" in t[1]], _toasts(page)
+    lines = page.evaluate("window.__logs")
+    assert any(f'Scan "{qr}" ignored: the same label was read twice' in m for m in lines), lines
+
+
+def test_two_different_scans_queued_during_the_park_still_say_they_did_nothing(dialog):
+    """What R3-2 keeps, and its other half: a scan read while the park was out that is NOT the
+    one read just before it (a spool's label, then a slot's) did nothing, and each says so,
+    as before; a scanner's second read of that spool's label right after it is said once.
+    RED on 1e4ab06 for that half only: ID:57 was said twice."""
+    page = dialog
+    page.evaluate("""(r) => {
+        window.__park = Object.assign({}, window.__park, { report: r });
+        const answers = window.fetch;
+        window.fetch = (url, opts) => {
+            const answered = answers(url, opts);
+            if (String(url).indexOf('/api/audit/park') === -1) return answered;
+            return new Promise((resolve) => { window.__releasePark = () => resolve(answered); });
+        };
+    }""", FULL)
+    _yes(page)
+    page.wait_for_function("() => typeof window.__releasePark === 'function' && state.processing")
+    for text in ("ID:57", "ID:57", "LOC:LR-MDB-2:SLOT:3"):
+        page.keyboard.type(text, delay=0)
+        page.keyboard.press("Enter")
+    page.wait_for_function("() => (state.scanQueue || []).length === 3")
+    page.evaluate("() => window.__releasePark()")
+    _shown(page)
+    page.wait_for_timeout(900)
+    said = [t[1] for t in _toasts(page) if "did nothing" in t[1]]
+    assert sorted(said) == ["The audit has ended, so ID:57 did nothing. Scan it again if you meant it.",
+                            "The audit has ended, so LOC:LR-MDB-2:SLOT:3 did nothing. Scan it again if you meant it."], said

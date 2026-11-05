@@ -300,11 +300,27 @@ window.auditPressRefused = (cmd) => {
 // a reprint flag. `q`: a queued scan, stamped `auditOf` as it was read (scripts.html).
 // True when that audit has gone, and the scan stops here. CMD:AUDIT goes on: it means
 // the next audit.
+// A scanner's second read of the scan read just before it (the same text within
+// LOC_REPEAT_MS, processScan's double-read window) is no new scan, and is dropped with an
+// INFO line only (review 3, R3-2): the first read of Done's QR, or of the question's "Scan to
+// Park", ended the audit, and its second read, queued while the first was answered, was
+// called a scan the audit outlived ("… CMD:DONE did nothing. Scan it again if you meant
+// it."), on the report window that first read had just opened, and with the question's
+// session id in it.
 window.auditScanOutlived = (q) => {
     const text = String(q.text).trim();
     if (!q.auditOf || text.toUpperCase() === 'CMD:AUDIT') return false;
     const another = q.auditOf !== true && state.auditId != null && q.auditOf !== state.auditId;
     if (state.auditActive && !another) return false;
+    const last = _lastScanRead;
+    const at = q.capturedAt || Date.now();
+    _lastScanRead = { text: text.toUpperCase(), at };
+    if (last && last.text === text.toUpperCase() && Math.abs(at - last.at) < LOC_REPEAT_MS) {
+        const escLog = window.escHtml || ((x) => x);
+        if (window.logClientEvent) window.logClientEvent(
+            `ℹ️ Scan "${escLog(text)}" ignored: the same label was read twice within ${LOC_REPEAT_MS / 1000} s`, 'INFO');
+        return true;
+    }
     const msg = `The audit has ended, so ${text} did nothing. Scan it again if you meant it.`;
     _auditSay(msg, 'warning');
     if (window.logClientEvent) window.logClientEvent(`⚠️ ${window.escHtml ? window.escHtml(msg) : msg}`, 'WARNING');
@@ -3099,6 +3115,10 @@ const _noteScannedLoc = (id) => { state.lastScannedLoc = id; state.lastScannedBu
 // the two straight back (Derek, 2026-10-15: fixing a wrong scan must not hit a
 // hidden stop, so the server no longer holds the old spool back).
 const LOC_REPEAT_MS = 1500;
+// The last scan processScan took, or the queue dropped as one an audit outlived: {text
+// (upper case), at (when it was read)}. auditScanOutlived reads a queued scan of the same
+// text read within LOC_REPEAT_MS of it as a scanner's double read.
+let _lastScanRead = null;
 window._fccLastLocScan = window._fccLastLocScan || null;
 const _isLocRepeat = (key, capturedAt) => {
     const last = window._fccLastLocScan;
@@ -3165,6 +3185,7 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
             `ℹ️ Scan "${escLog(String(text).trim())}" ignored: the same label was read twice within ${LOC_REPEAT_MS / 1000} s`, 'INFO');
         return;
     }
+    _lastScanRead = { text: locKey, at: capturedAt || Date.now() };
     // Answered at once unless it reaches the server below (every early return
     // here is an answer); in flight from the request until its answer.
     const locBefore = window._fccLastLocScan;
