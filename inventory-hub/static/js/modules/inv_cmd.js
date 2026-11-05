@@ -2790,8 +2790,16 @@ window.commitBulkMove = () => {
         if (_reportFit && typeof window.removeEventListener === 'function') window.removeEventListener('resize', _reportFit);
         _reportFit = null;
         try { handle.cleanup(); } catch (_) { /* noop */ }
-        // Back to the button it was asked for from, when nothing else has the keyboard.
-        const opener = handle._opener;
+        // Back to the button it was asked for from, when nothing else has the keyboard: that
+        // line's 📝 as the log draws it now, when a redraw while the window was up replaced
+        // the one it was asked from (review 3: the keyboard fell to the page). The 📡 pill's
+        // list first: open, it lies over the log, and the window was opened from it.
+        let opener = handle._opener;
+        if (opener && !opener.isConnected && opener.dataset && opener.dataset.auditReport) {
+            const id = opener.dataset.auditReport;
+            const find = (sel) => Array.from(document.querySelectorAll(sel)).find((b) => b.dataset.auditReport === id);
+            opener = find('#fcc-log-pill-overlay .fcc-audit-report-open') || find('#live-logs .fcc-audit-report-open') || null;
+        }
         const a = document.activeElement;
         if (opener && opener.isConnected && (!a || a === document.body) && opener.focus) {
             try { opener.focus({ preventScroll: true }); } catch (_) { /* noop */ }

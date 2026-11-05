@@ -690,6 +690,44 @@ def test_a_double_key_press_on_close_closes_it_and_asks_nothing(logged, key):
     assert len(logged.evaluate("window.__asked")) == 2
 
 
+REDRAW = "(row) => window._renderLogsPayload({ logs: [row], status: { spoolman: true } }, true)"
+
+
+def test_the_keyboard_stays_on_the_lines_button_through_a_log_redraw(logged):
+    """Review 3, found by the double-click sweep's report-close case: every redraw of the log
+    replaces its buttons, so a keyboard on the line's 📝 Read the report fell to the page, and
+    the window's Close, which gives the keyboard back to the 📝 it was asked from, found that
+    button gone (a line logged while the window was up, or a Done's forced refresh landing
+    late). A redraw keeps the keyboard on the line's 📝, and Close gives it to that line's 📝
+    as the log draws it now. RED on ca9053a: the keyboard on BODY both times."""
+    button = "#live-logs .fcc-audit-report-open"
+    logged.evaluate("(r) => { window.__report = { success: true, report: r }; }", CANCELLED)
+    logged.focus(button)
+    logged.evaluate(REDRAW, LOG_ROW)                # a heartbeat with something new
+    assert logged.evaluate("(s) => document.activeElement === document.querySelector(s)", button)
+    logged.keyboard.press("Enter")
+    _shown(logged)
+    logged.evaluate(REDRAW, LOG_ROW)                # again, while the window is up
+    logged.wait_for_timeout(800)                    # read for a while
+    logged.keyboard.press("Enter")                  # Close
+    logged.wait_for_selector(REPORT, state="detached")
+    assert logged.evaluate("(s) => document.activeElement === document.querySelector(s)", button)
+    assert logged.evaluate("window.__asked") == ["/api/audit/report?id=boot-1"]
+
+
+def test_a_log_redraw_takes_the_keyboard_only_from_its_own_line(logged):
+    """A pin: the keyboard elsewhere stays where it is through a redraw, and a redraw whose
+    list no longer holds the line leaves it to the page, as before."""
+    logged.evaluate("() => { const b = document.createElement('button'); b.id = 'fcc-test-elsewhere';"
+                    " b.textContent = 'elsewhere'; document.body.appendChild(b); b.focus(); }")
+    logged.evaluate(REDRAW, LOG_ROW)
+    assert logged.evaluate("() => document.activeElement.id") == "fcc-test-elsewhere"
+    logged.focus("#live-logs .fcc-audit-report-open")
+    other = dict(LOG_ROW, meta=None, msg="📦 Something else happened.")
+    logged.evaluate(REDRAW, other)
+    assert logged.evaluate("() => document.activeElement === document.body")
+
+
 def _notice_now(page):
     page.wait_for_timeout(900)                      # the queue drains every 250 ms
     return page.evaluate("(s) => { const n = document.querySelector(s); return n ? [n.style.display, n.textContent] : null; }",

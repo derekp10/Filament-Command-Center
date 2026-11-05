@@ -2883,6 +2883,12 @@ const _renderLogsPayload = (d, force = false, opts = null) => {
     // would skip the catch-up render and leave the panel stale.)
     const logsEl = state.logsPaused ? null : document.getElementById('live-logs');
     if (logsEl && d.logs) {
+        // The keyboard on a report line's 📝 Read the report stays on that line's 📝 through
+        // the redraw (Group 58, review 3): every redraw replaces the buttons, so the keyboard
+        // fell to the page, and the report window's Close, which gives the keyboard back to
+        // the 📝 it was asked from, found it gone.
+        const had = document.activeElement;
+        const keep = (had && had !== logsEl && logsEl.contains(had) && had.dataset) ? had.dataset.auditReport : null;
         logsEl.innerHTML = d.logs.map(l => {
             let extraHtml = '';
             let extraClass = '';
@@ -2895,6 +2901,11 @@ const _renderLogsPayload = (d, force = false, opts = null) => {
             }
             return `<div class="log-${l.type}${extraClass}">[${l.time}] ${l.msg}${extraHtml}</div>`;
         }).join('');
+        if (keep) {
+            const again = Array.from(logsEl.querySelectorAll('.fcc-audit-report-open'))
+                .find((b) => b.dataset.auditReport === keep);
+            if (again) { try { again.focus({ preventScroll: true }); } catch (_) { /* noop */ } }
+        }
     }
     _updateLogPill(d.logs || []);
 
