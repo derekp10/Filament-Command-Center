@@ -2585,8 +2585,11 @@ window.commitBulkMove = () => {
     // up goes to processScan as usual and closes it (the scan's toast or dialog would sit
     // under it), but for a scanner's second read of the CMD:DONE that ended the audit.
     const REPORT_ID = 'fcc-audit-report';
-    const AUDIT_REPORT_AGAIN = "The same report is in the Activity Log and the 📡 pill's list: "
-        + 'its 📝 Read the report button opens this window again.';
+    // Where it can be read again: its line in the Activity Log, for as long as the log keeps
+    // it, and the 📡 pill's list, which shows the same line, only while the pill is up (it
+    // shows while an entry is unread, and hides once its list has been read; review 3, R3S-6).
+    const AUDIT_REPORT_AGAIN = 'Its line in the Activity Log has a 📝 Read the report button that opens this window '
+        + "again, and so does the 📡 pill's list while the pill shows.";
     const REPORT_TIMEOUT_MS = 8000;     // the route reads no Spoolman
     const REPORT_SECOND_READ_MS = 1500; // processScan's LOC_REPEAT_MS: a scanner's double read
     let _report = null;
@@ -2670,8 +2673,8 @@ window.commitBulkMove = () => {
         const undone = (parked && filed) ? 'the parked and filed spools'
             : (parked ? (parked === 1 ? 'the parked spool' : 'the parked spools')
                 : (filed ? (filed === 1 ? 'the filed spool' : 'the filed spools') : ''));
-        // Where to read it again: the Activity Log, and on a phone, whose log box is too
-        // small to show the line, the list the 📡 log pill opens (Derek's look of 2026-11-04).
+        // Where to read it again: the Activity Log, and the list the 📡 log pill opens, which
+        // is bigger on a phone (Derek's look of 2026-11-04), while the pill shows (R3S-6).
         const foot = !after ? '' : [
             place ? AUDIT_REPORT_AGAIN : '',
             undone ? `Undo Last Move puts ${undone} back.` : '',

@@ -523,7 +523,7 @@ def test_audit_report_window_is_readable(page: Page, base_url: str, assert_contr
                   "Left where they are (2)", "Couldn't be moved (1)", "Loaded from LR-MDB-1 (1)",
                   # Review 3, R3S-5: the group and the tag say the audit marked them.
                   "Marked as needing a label (1)", "from LR-MDB-2 slot 3", "marked as needing a label", "moved to CR-CT-1", "loaded on XL-2",
-                  "The same report is in the Activity Log", "Close", "ID:57 did nothing"):
+                  "Its line in the Activity Log", "Close", "ID:57 did nothing"):   # R3S-6's words
         assert words in scored, (words, scored)
     report.locator("#fcc-audit-report-close").hover()
     page.wait_for_timeout(50)

@@ -250,8 +250,12 @@ def test_the_foot_says_where_to_read_it_again_on_a_phone_too(dialog):
     dialog.evaluate("(r) => window.openAuditReport(r, { after: true })", FULL)
     _shown(dialog)
     foot = " ".join(dialog.text_content(REPORT + " .fcc-audit-report-foot").split())
-    assert foot.startswith("The same report is in the Activity Log and the 📡 pill's list: its 📝 Read the report "
-                           "button opens this window again."), foot
+    # PIN UPDATED DELIBERATELY (review 3, R3S-6): the 📡 pill shows only while an entry is
+    # unread, and hides once its list has been read, so the foot names the log's line as the
+    # way that lasts, and the pill's list as a way while the pill shows. RED on 66a6c96: "The
+    # same report is in the Activity Log and the 📡 pill's list: …".
+    assert foot.startswith("Its line in the Activity Log has a 📝 Read the report button that opens this window "
+                           "again, and so does the 📡 pill's list while the pill shows."), foot
     assert foot.count(".") == 2                       # that sentence, then Undo's
 
 
