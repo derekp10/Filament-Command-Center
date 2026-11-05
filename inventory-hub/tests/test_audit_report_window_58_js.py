@@ -14,6 +14,8 @@ RED on the commit before Q2's unless a test says it pins what was already right.
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from test_audit_done_question_58_js import asked  # noqa: F401  (asked: the fixture)
@@ -864,3 +866,45 @@ def test_a_slow_report_answer_opens_nothing_over_what_came_up_meanwhile(logged, 
     assert logged.locator(REPORT).count() == 0
     assert ["info", DIDNT_OPEN] in _toasts(logged)
     logged.evaluate("() => { state.activeModal = null; const o = document.getElementById('fcc-test-over'); if (o) o.remove(); }")
+
+
+def _report_at(place):
+    rep = json.loads(json.dumps(FULL))
+    rep["place"] = place
+    for g in rep["groups"]:
+        g["title"] = g["title"].replace("LR-MDB-1", place)
+    return rep
+
+
+@pytest.mark.parametrize("size", ["standard", "large", "xlarge"])
+def test_the_report_keeps_its_place_whole_in_its_title_and_headings(logged, size):
+    """Review 3, R3-6: T4 keeps a place id whole in Done's question and in #confirmModal's
+    message (Derek's look of 2026-11-04: "SHELF-2- / R3"); the report window, read right
+    after Done, still let its title break at the id's hyphens on a phone ("📝 Audit Report:
+    SHELF-" / "2-R3"), and at Extra Large a group heading too ("🔗 Loaded from SHELF-2-R3").
+    From a phone's width to a small tablet's, the place never breaks in either, and nothing
+    runs past its box. RED on e2fafc7 (Standard 336 to 372 px, Large 366 to 408, Extra Large
+    300 to 312 and 402 to 450)."""
+    from test_audit_place_ids_whole_58_js import _broken
+    logged.evaluate("(s) => document.documentElement.setAttribute('data-fcc-text-size', s)", size)
+    logged.evaluate("(r) => window.openAuditReport(r, { after: true })", _report_at("SHELF-2-R3"))
+    _shown(logged)
+    heads = [f"{REPORT} .fcc-audit-report-group:nth-of-type({n}) .fcc-audit-report-head" for n in (2, 5)]
+    assert logged.text_content(heads[0]).startswith("📥 Filed in SHELF-2-R3")
+    assert logged.text_content(heads[1]).startswith("🔗 Loaded from SHELF-2-R3")
+    bad = _broken(logged, [TITLE] + heads, "SHELF-2-R3", range(300, 481, 6))
+    assert bad == [], bad
+
+
+def test_an_id_longer_than_the_line_still_breaks_rather_than_run_off(logged):
+    """The fallback: an id longer than the title's whole line, on a 300 px phone at Extra
+    Large, breaks at its hyphens again rather than running past the window's edge. A pin of
+    _fitReport's measure (on e2fafc7 nothing kept an id whole, so this passed there too)."""
+    long_id = "GARAGE-SHELF-2-ROW-3-BACK-LEFT-BIN-12"
+    logged.evaluate("() => document.documentElement.setAttribute('data-fcc-text-size', 'xlarge')")
+    logged.set_viewport_size({"width": 300, "height": 844})
+    logged.evaluate("(r) => window.openAuditReport(r, { after: true })", _report_at(long_id))
+    _shown(logged)
+    assert logged.evaluate("(s) => { const e = document.querySelector(s); return e.scrollWidth <= e.clientWidth + 1; }", TITLE)
+    assert logged.evaluate("(s) => document.querySelector(s).getBoundingClientRect().right <= innerWidth + 0.5",
+                           REPORT + " .fcc-audit-report-panel")

@@ -2625,6 +2625,13 @@ window.commitBulkMove = () => {
         return w.toUpperCase().startsWith(head.toUpperCase()) ? w.slice(head.length).trim() : null;
     };
 
+    // A place id stays whole in the title and the group headings (review 3, R3-6: on a phone the
+    // title read "📝 Audit Report: SHELF-" / "2-R3", the complaint T4 fixed in the question just
+    // before it), as window.fccKeepWhole keeps a button's; _fitReport lets an id longer than
+    // the line itself break at its hyphens again.
+    const _keepWhole = (text) => (typeof window.fccKeepWhole === 'function'
+        ? window.fccKeepWhole(_escapeHtml(text)) : _escapeHtml(text));
+
     const _reportHtml = (rep, after) => {
         const place = String(rep.place == null ? '' : rep.place);
         const groups = (Array.isArray(rep.groups) ? rep.groups : []).filter(g => g && Array.isArray(g.rows) && g.rows.length);
@@ -2646,7 +2653,7 @@ window.commitBulkMove = () => {
                 color_direction: r.color_direction,
             }, kind.tone)).join('');
             return `<section class="fcc-audit-report-group" data-report-kind="${_escapeHtml(g.kind)}">`
-                + `<div class="fcc-audit-report-head">${_escapeHtml(`${kind.icon ? `${kind.icon} ` : ''}${g.title} (${g.rows.length})`)}</div>`
+                + `<div class="fcc-audit-report-head">${_keepWhole(`${kind.icon ? `${kind.icon} ` : ''}${g.title} (${g.rows.length})`)}</div>`
                 + `<div class="fcc-spool-tiles">${tiles}</div></section>`;
         }).join('');
         const empty = !place ? 'No place was scanned in this audit, so there are no spools to list.'
@@ -2666,7 +2673,7 @@ window.commitBulkMove = () => {
         return `
             <div class="fcc-audit-report-panel" role="dialog" aria-modal="true" aria-labelledby="fcc-audit-report-title">
                 <div class="fcc-audit-report-top">
-                    <div id="fcc-audit-report-title">${_escapeHtml(place ? `📝 Audit Report: ${place}` : '📝 Audit Report')}</div>
+                    <div id="fcc-audit-report-title">${_keepWhole(place ? `📝 Audit Report: ${place}` : '📝 Audit Report')}</div>
                     <button type="button" id="fcc-audit-report-close" class="btn btn-sm btn-outline-light">Close</button>
                 </div>
                 <div class="fcc-audit-report-summary">${_escapeHtml(rep.summary || '')}</div>
@@ -2684,6 +2691,12 @@ window.commitBulkMove = () => {
     // and page keys scroll it.
     const _fitReport = (panel) => {
         if (!panel || !panel.isConnected || typeof panel.getBoundingClientRect !== 'function') return;
+        // An id kept whole that is wider than its line breaks at its hyphens again
+        // (.fcc-keep-whole-off), as fccFitQuestion and _fitConfirmMsg let it: nothing runs off.
+        panel.classList.remove('fcc-keep-whole-off');
+        const wide = Array.from(panel.querySelectorAll('#fcc-audit-report-title, .fcc-audit-report-head'))
+            .some(el => el.querySelector('.fcc-keep-whole') && el.clientWidth > 0 && el.scrollWidth > el.clientWidth + 1);
+        if (wide) panel.classList.add('fcc-keep-whole-off');
         panel.classList.remove('fcc-audit-report-scroll');
         const scroll = panel.getBoundingClientRect().height > (window.innerHeight || 0) - 16 + 0.5;
         if (scroll) panel.classList.add('fcc-audit-report-scroll');
