@@ -2487,7 +2487,12 @@ window.commitBulkMove = () => {
         const n = park.length;
         const m = file.length;
         const place = String(res.location == null ? '' : res.location);
-        const parks = n ? ` ${n === 1 ? 'The one not scanned goes' : `The ${n} not scanned go`} to Unknown, to find or clear later.` : '';
+        // Counted against every spool not scanned (review 3, R3S-3: "1 of 16 found. The 12 not
+        // scanned go to Unknown" read as 12 not scanned, with 15): the ones that stay (moved
+        // off, deleted, in the scan buffer, on a head) are under Left where they are.
+        const unscanned = Math.max(n, Number(res.expected || 0) - Number(res.found || 0));
+        const parks = !n ? '' : ` ${n < unscanned ? `${n} of the ${unscanned} not scanned ${n === 1 ? 'goes' : 'go'}`
+            : (n === 1 ? 'The one not scanned goes' : `The ${n} not scanned go`)} to Unknown, to find or clear later.`;
         const files = m ? ` ${m === 1 ? `The one found in ${place} that FCC had elsewhere is` : `The ${m} found in ${place} that FCC had elsewhere are`}`
             + ` filed there.${res.file_note ? ` ${res.file_note}` : ''}` : '';
         // A place FCC had nothing filed at asks only to file: "0 of 0 found" said
@@ -2517,8 +2522,10 @@ window.commitBulkMove = () => {
         const words = _doneWords(res, park, file);
         const place = String(res.location == null ? '' : res.location);
         const sections = [];
-        // Its slot as the panel's tile says it ("500g (slot 2)"): Done parks it from there.
-        if (park.length) sections.push(_tiles('Not scanned', park, 'missing', () => '', true));
+        // Its slot as the panel's tile says it ("500g (slot 2)"): Done parks it from there. Named
+        // for what Done does with them (review 3, R3S-3): "Not scanned (12)" read as every spool
+        // not scanned, under a tally that counted 15.
+        if (park.length) sections.push(_tiles('Not scanned, to park at Unknown', park, 'missing', () => '', true));
         // Where FCC has each now: Done moves it to the audited place.
         if (file.length) {
             sections.push(_tiles(`Found in ${place}, FCC had ${file.length === 1 ? 'it' : 'them'} elsewhere`, file, 'extra',

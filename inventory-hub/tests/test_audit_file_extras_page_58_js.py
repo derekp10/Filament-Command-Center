@@ -114,7 +114,9 @@ def test_with_spools_to_park_and_an_extra_to_file_the_yes_does_both(live, env):
     scanned(live, "ID:200")
     ask(live)
     assert live.text_content(TITLE).strip().endswith("Park 1 at Unknown and file 1 in LR-MDB-1?")   # PIN UPDATED DELIBERATELY (Q1)
-    assert [s[0] for s in sections(live)] == ["Not scanned (1)", "Found in LR-MDB-1, FCC had it elsewhere (1)"]
+    # PIN UPDATED DELIBERATELY (review 3, R3S-3): the list is named for what Done does with it.
+    assert [s[0] for s in sections(live)] == ["Not scanned, to park at Unknown (1)",
+                                              "Found in LR-MDB-1, FCC had it elsewhere (1)"]
     assert sections(live)[0][1] == [["#2 Some Brand PLA (Red)", "500g (slot 2)", ""]]
     msg = live.text_content(MSG)
     assert "The one not scanned goes to Unknown" in msg and "found in LR-MDB-1 that FCC had elsewhere is filed there" in msg
@@ -156,7 +158,7 @@ def test_with_nothing_to_file_the_question_is_the_parks_and_the_yes_files_nothin
     scanned(live, "ID:1")
     ask(live)
     assert live.text_content(TITLE).strip().endswith("Park 1 spool at Unknown?")
-    assert [s[0] for s in sections(live)] == ["Not scanned (1)"]                   # PIN UPDATED DELIBERATELY (Q1)
+    assert [s[0] for s in sections(live)] == ["Not scanned, to park at Unknown (1)"]   # PIN UPDATED DELIBERATELY (Q1, R3S-3)
     assert live.text_content(YES) == "Park it"
     say_yes(live)
     live.wait_for_function("() => !state.auditActive")

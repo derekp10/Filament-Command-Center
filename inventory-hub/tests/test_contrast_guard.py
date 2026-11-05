@@ -474,7 +474,7 @@ def test_audit_done_question_is_readable(page: Page, base_url: str, assert_contr
     # Extra here too, so its title and its Yes say both, and its own section lists it.
     # And again (builder B, Q1): every spool a colour tile, each of the tiles' looks
     # ("missing", "extra", "stay"), the place named instead of "here", and no "and N more".
-    for words in ("Park 3 at Unknown and file 1 in LR-MDB-1?", "Not scanned (3)", "Left where they are (12)",
+    for words in ("Park 3 at Unknown and file 1 in LR-MDB-1?", "Not scanned, to park at Unknown (3)", "Left where they are (12)",
                   "#134", "605g (slot 2)", "605g", "moved to XL-4", "no longer in Spoolman", "#253", "Do both",
                   "Back to the audit", "Answer the question", "Enter goes back",
                   "Found in LR-MDB-1, FCC had it elsewhere (1)", "#500", "from LR-MDB-2 slot 3"):

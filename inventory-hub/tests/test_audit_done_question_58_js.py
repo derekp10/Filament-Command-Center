@@ -148,8 +148,11 @@ def asked(env, monkeypatch):
 
 
 def _small_question(asked, park=1):
-    """The real answer, cut down to a few spools."""
-    return dict(asked["question"], park=asked["question"]["park"][:park], stays=[])
+    """The real answer, cut down to a few spools. PIN UPDATED DELIBERATELY (review 3, R3S-3):
+    its tally is cut down with it (the spools found and the ones it parks, none staying), since
+    the words now count the spools parked against every spool not scanned."""
+    return dict(asked["question"], park=asked["question"]["park"][:park], stays=[],
+                expected=asked["question"]["found"] + park)
 
 
 # --- window.confirmActivePrint's new options --------------------------------------
@@ -345,7 +348,8 @@ return { html: questionHtml(), tier: m.opts.tier, focus: m.opts.initialFocus, up
     assert res["parks"] == [] and res["active"] is True and res["panel"] is True and res["scans"] == ["CMD:DONE"]
     text = _text(res["html"])
     assert "Park 12 spools at Unknown?" in text and "Park them" in text and BACK in text
-    assert "1 of 16 found at LR-MDB-1." in text and "The 12 not scanned go to Unknown" in text
+    # PIN UPDATED DELIBERATELY (review 3, R3S-3): 15 weren't scanned, and 3 of them stay.
+    assert "1 of 16 found at LR-MDB-1." in text and "12 of the 15 not scanned go to Unknown" in text
     assert "Undo Last Move puts them back." in text
     assert "#ff8800" in res["html"]                                        # the printing answer's border
     assert res["toasts"] == []
@@ -368,7 +372,8 @@ return { html: questionHtml() };
         assert f"#{sid} Some Brand PLA (Red)" in text, sid
         assert f"500g (slot {sid - 98})" in text, sid           # the panel's tile: its grams, then its slot
     assert "more" not in text and "fcc-apc-more" not in h and "fcc-apc-line" not in h
-    assert "Not scanned (12)" in text and "Left where they are (3)" in text
+    # PIN UPDATED DELIBERATELY (review 3, R3S-3): the list is named for what Done does with it.
+    assert "Not scanned, to park at Unknown (12)" in text and "Left where they are (3)" in text
     assert h.count('<div class="fcc-spool-tile" data-tone="missing">') == 12
     assert h.count('<div class="fcc-spool-tile" data-tone="stay">') == 3
     assert h.count("border-radius:50%") == 15                    # a swatch on each
@@ -1095,3 +1100,21 @@ await __settle(40);
 return { toasts: timed() };
 """, ANSWER=answer)
     assert res["toasts"] == [{"msg": answer["msg"], "type": "success", "ms": 7000}]
+
+
+def test_the_park_list_and_its_words_count_against_every_spool_not_scanned(tmp_path, asked):
+    """Review 3, R3S-3: the group's own question (16 filed at LR-MDB-1, 1 found, 12 to park, 3
+    not scanned that stay: moved off, deleted, in the scan buffer) read "1 of 16 found at
+    LR-MDB-1. The 12 not scanned go to Unknown" above "Not scanned (12)": 15 weren't scanned.
+    The words count the 12 against the 15, and the list is named for what Done does with it;
+    the 3 stay under Left where they are, each with its why. RED on 39e2cf2."""
+    res = _q(tmp_path, """
+await ask(QUESTION);
+return { html: questionHtml() };
+""", QUESTION=asked["question"])
+    text = _text(res["html"])
+    q = asked["question"]
+    assert q["expected"] - q["found"] == 15 and len(q["park"]) == 12
+    assert "1 of 16 found at LR-MDB-1. 12 of the 15 not scanned go to Unknown, to find or clear later." in text
+    assert "Not scanned, to park at Unknown (12)" in text and "Left where they are (3)" in text
+    assert "Not scanned (12)" not in text
