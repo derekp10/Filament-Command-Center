@@ -2593,6 +2593,9 @@ window.commitBulkMove = () => {
     // double Enter or Space on Close pressed that and opened it again (review 3, R3-3).
     let _reportClosedAt = 0;
     let _reportOut = false;
+    // Every scan processScan takes (closeAuditReportForScan): an answer to a 📝 press that a
+    // scan has overtaken opens nothing (review 3, R3-5).
+    let _reportScanSeq = 0;
     // Each kind of group (logic._audit_report_data): its icon (the report line's), its
     // tiles' look and what a tile says under its grams.
     const _at = (r) => (r.where ? `📍 ${r.where}` : '');
@@ -2767,9 +2770,32 @@ window.commitBulkMove = () => {
     // processScan, for every scan: the window goes and the scan goes on. A scanner's second
     // read of the CMD:DONE that ended the audit (`at`: when it was read) leaves it up.
     window.closeAuditReportForScan = (upper, at) => {
+        _reportScanSeq += 1;
         if (!_report) return;
         if (upper === 'CMD:DONE' && _reportAfterDoneAt && (at || Date.now()) - _reportAfterDoneAt < REPORT_SECOND_READ_MS) return;
         window.closeAuditReport();
+    };
+
+    // What is on screen, for a 📝 press's answer to be checked against: the overlay on top
+    // (or none), a gating dialog, the Bootstrap windows up.
+    const _reportScene = () => {
+        const mounted = Array.from(document.querySelectorAll('[data-overlay-mount="1"]'));
+        return {
+            top: (window.isTopOverlay && mounted.find(el => window.isTopOverlay(el))) || null,
+            gating: state.activeModal || null,
+            windows: Array.from(document.querySelectorAll('.modal.show, .offcanvas.show')).map(el => el.id),
+        };
+    };
+    // The answer came to a screen that has changed since the press (review 3, R3-5): a scan
+    // read meanwhile (processScan closes the window for a scan, so a window that wasn't open
+    // yet mustn't open after it), a dialog it opened ("Clear entire Buffer?", whose scans the
+    // window would then hide), or any other window or overlay. The report over it would sit
+    // on top while scans still went to what is under it.
+    const _reportSceneChanged = (was, seq) => {
+        if (_reportScanSeq !== seq) return true;
+        const now = _reportScene();
+        return now.top !== was.top || now.gating !== was.gating
+            || now.windows.some(id => !was.windows.includes(id));
     };
 
     // The 📝 Read the report button the server puts in the report's line (section H, S3):
@@ -2790,10 +2816,22 @@ window.commitBulkMove = () => {
             if (btn.closest('#fcc-log-pill-overlay') && window.logPillNotice) window.logPillNotice(msg);
         };
         if (btn.closest('#fcc-log-pill-overlay') && window.logPillNotice) window.logPillNotice('');
+        const scene = _reportScene();
+        const seq = _reportScanSeq;
         window.fetchT(`/api/audit/report?id=${encodeURIComponent(id)}`, {}, REPORT_TIMEOUT_MS)
             .then(r => r.json())
             .then((res) => {
-                if (res && res.success && res.report) { window.openAuditReport(res.report, { opener: btn }); return; }
+                if (res && res.success && res.report) {
+                    if (_reportSceneChanged(scene, seq)) {
+                        showToast("The report didn't open: the screen changed while FCC answered. "
+                            + 'Press 📝 Read the report again to see it.', 'info', 4000);
+                        if (window.logClientEvent) window.logClientEvent(
+                            "ℹ️ An audit report wasn't opened: a scan or a window came up while FCC answered", 'INFO');
+                        return;
+                    }
+                    window.openAuditReport(res.report, { opener: btn });
+                    return;
+                }
                 // FCC no longer has it (it keeps the last 10, a restart clears them): the
                 // server's words, which point to the line's own words.
                 say((res && res.msg) || "FCC couldn't show that report.");

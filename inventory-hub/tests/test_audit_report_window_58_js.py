@@ -822,3 +822,45 @@ def test_a_report_that_opens_from_the_log_pills_list_says_nothing_on_it(logged):
     logged.click(PILL_LIST + " .fcc-audit-report-open")
     _shown(logged)
     assert not logged.is_visible(PILL_NOTICE)
+
+
+# The report's answer held until window.__releaseReport(): FCC slow to answer the 📝 press.
+HOLD_REPORT = r"""() => {
+    const plain = window.fetch;
+    window.fetch = (url, opts) => {
+        const answered = plain(url, opts);
+        if (String(url).indexOf('/api/audit/report') === -1) return answered;
+        return new Promise((resolve) => { window.__releaseReport = () => resolve(answered); });
+    };
+}"""
+DIDNT_OPEN = "The report didn't open: the screen changed while FCC answered. Press 📝 Read the report again to see it."
+
+
+@pytest.mark.parametrize("meanwhile", ["a scan", "a gating dialog", "an overlay", "nothing"])
+def test_a_slow_report_answer_opens_nothing_over_what_came_up_meanwhile(logged, meanwhile):
+    """Review 3, R3-5: the 📝 press's answer opened the window whatever had happened since the
+    press. A scan read meanwhile (processScan closes the window for any scan, and found none
+    yet), a dialog it opened ("Clear entire Buffer?", z 1100), or another overlay ended up
+    under the report (z 20000) while scans still went to the dialog under it. The answer to a
+    screen that changed opens nothing and says so; with nothing in between it opens as
+    before (a pin). RED on 4f79415 for the three, the window opened over them."""
+    logged.evaluate("(r) => { window.__report = { success: true, report: r }; }", CANCELLED)
+    logged.evaluate(HOLD_REPORT)
+    logged.click("#live-logs .fcc-audit-report-open")
+    logged.wait_for_function("() => typeof window.__releaseReport === 'function'")
+    if meanwhile == "a scan":
+        logged.evaluate("() => window.processScan('ID:58', 'barcode')")
+        logged.wait_for_function("() => !state.processing")
+    elif meanwhile == "a gating dialog":
+        logged.evaluate("() => { state.activeModal = 'confirm'; }")
+    elif meanwhile == "an overlay":
+        logged.evaluate("() => window.mountOverlay({ id: 'fcc-test-over', content: '<div>over</div>', tier: 'standard' })")
+    logged.evaluate("() => window.__releaseReport()")
+    logged.wait_for_timeout(300)
+    if meanwhile == "nothing":
+        _shown(logged)
+        assert ["info", DIDNT_OPEN] not in _toasts(logged)
+        return
+    assert logged.locator(REPORT).count() == 0
+    assert ["info", DIDNT_OPEN] in _toasts(logged)
+    logged.evaluate("() => { state.activeModal = null; const o = document.getElementById('fcc-test-over'); if (o) o.remove(); }")
