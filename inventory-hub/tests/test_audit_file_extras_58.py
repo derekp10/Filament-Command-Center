@@ -522,10 +522,12 @@ def test_the_yes_files_it_here_with_no_slot_and_clears_its_trail_and_notes(env):
     result = yes(env)
     # PIN UPDATED DELIBERATELY (Derek, 2026-11-03, the toast): it names the place, not "here".
     # And again (H S3): the answer carries the report as data, pinned on its own in
-    # tests/test_audit_tiles_and_report_58.py.
+    # tests/test_audit_tiles_and_report_58.py. And again (review 3, R3S-7): `report_msg`, its
+    # words for the report window's notice line.
     assert [g["kind"] for g in result.pop("report")["groups"]] == ["filed"]
     assert result == {"success": True, "parked": [], "filed": [20], "stayed": [], "failed": [],
                       "msg": "Filed #20 in LR-MDB-1. Undo Last Move puts it back.",
+                      "report_msg": "Filed #20 in LR-MDB-1. Undo Last Move puts it back.",
                       "audit_ended": {"id": audit_id, "why": "done"}}
     assert spools(env)[20]["location"] == "LR-MDB-1"
     got = extra_of(env, 20)
