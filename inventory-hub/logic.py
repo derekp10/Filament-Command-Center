@@ -5666,6 +5666,8 @@ AUDIT_FINISHING_MSG = "The audit is already finishing."
 AUDIT_ENDED_MSG = "That audit has ended."
 AUDIT_LOCATIONS_UNREAD = "Couldn't read the locations file, so nothing was recorded. Scan it again in a moment."
 AUDIT_WHERE_UNREAD = "couldn't read where FCC has it"
+# The same, on a report's row, where it is the reason with no place (_audit_report_row).
+AUDIT_WHERE_UNREAD_WHY = "FCC couldn't read where it is"
 AUDIT_GONE_WHY = "no longer in Spoolman"
 
 # How a spool was found (the session's `found_by`): by a real read of its label, or
@@ -5942,14 +5944,18 @@ def _audit_report_row(session, sid, display='', where=None, why=''):
     needs_label}, from the row the session stored at the spool's scan, the end's own
     words over it (`display` read fresh by Done, `where` as the end saw it, `why` it
     stayed or failed). No Spoolman read. `needs_label`: marked as needing a label in
-    this audit."""
+    this audit. A row stored while Spoolman wasn't answering has no place to name: its
+    `where` is '' and its `why` says so (AUDIT_WHERE_UNREAD_WHY; review 3, R3S-8: the
+    window drew "📍 couldn't read where FCC has it", a place pin on no place)."""
     stored = (session.get('rows') or {}).get(str(sid)) or {}
     text = str(display or stored.get('display') or '').strip() or f"#{sid}"
     if not text.startswith(f"#{sid}"):
         text = f"#{sid} {text}"
+    at = str(stored.get('where') or '') if where is None else str(where or '')
+    if where is None and at == AUDIT_WHERE_UNREAD:
+        at, why = '', (why or AUDIT_WHERE_UNREAD_WHY)
     return {"id": sid, "display": text, **_audit_look(session, sid),
-            "where": str(stored.get('where') or '') if where is None else str(where or ''),
-            "why": str(why or ''), "needs_label": str(sid) in (session.get('label_flagged') or {})}
+            "where": at, "why": str(why or ''), "needs_label": str(sid) in (session.get('label_flagged') or {})}
 
 
 def _audit_report_data(session, why, parked=(), stays=(), failed=(), filed=(), yes=False):
@@ -5967,7 +5973,8 @@ def _audit_report_data(session, why, parked=(), stays=(), failed=(), filed=(), y
     spoolman_api.refusal_words, never its raw answer). An end that moved nothing (a
     Cancel, an idle end, a Done with nothing to park or file): missing (Not scanned)
     and extra (Extra (filed elsewhere)), each with `where` FCC has it, and for a Done
-    the `why` it stays. Then, for either: trail (Loaded from <place>, `where` its
+    the `why` it stays; a Done's Extra FCC has here already is under stayed, as a
+    Yes lists it. Then, for either: trail (Loaded from <place>, `where` its
     head) and needs_label (Needs a label): a spool marked in this audit is flagged on
     its own row wherever it is (`needs_label`), and this group holds only the marked
     spools no other group lists (a spool found on the list). Empty groups are left
@@ -6014,12 +6021,15 @@ def _audit_report_data(session, why, parked=(), stays=(), failed=(), filed=(), y
             s = left.get(str(sid))
             if s:
                 return row(sid, s.get('display'), s.get('where'), s.get('why'))
-            # A Done with nothing to park or file left an Extra out of its plan only
-            # when FCC has it here already.
-            return row(sid, '', *here_already) if why == 'done' and sid in extras else row(sid)
+            return row(sid)
 
+        # A Done with nothing to park or file left an Extra out of its plan only when FCC has
+        # it here already: it is listed under Left where it is, as the Yes lists it (review 3,
+        # R3S-8: it sat under "Extra (filed elsewhere)" saying FCC has it here).
+        here = [sid for sid in extras if why == 'done' and str(sid) not in left]
         group('missing', "Not scanned", [as_left(sid) for sid in missing])
-        group('extra', "Extra (filed elsewhere)", [as_left(sid) for sid in extras])
+        group('extra', "Extra (filed elsewhere)", [as_left(sid) for sid in extras if sid not in here])
+        group('stayed', ("Left where it is", "Left where they are"), [row(sid, '', *here_already) for sid in here])
     group('trail', f"Loaded from {place}", [row(sid) for sid in trail])
     marked = [_audit_spool_id(key) for key in (session.get('label_flagged') or {})]
     group('needs_label', "Needs a label", [row(sid) for sid in marked if sid is not None])

@@ -788,7 +788,9 @@ def test_a_done_with_nothing_to_park_answers_its_report_with_why_each_stays(env)
     answer = scan_answer("CMD:DONE")
     assert answer["audit_ended"] == {"id": audit_id, "why": "done"}
     got = answer["report"]
-    assert kinds(got) == [("missing", [2]), ("extra", [21, 22])]
+    # PIN UPDATED DELIBERATELY (review 3, R3S-8): #22, which FCC has here already, is under
+    # Left where it is, as the Yes lists it; it sat under "Extra (filed elsewhere)".
+    assert kinds(got) == [("missing", [2]), ("extra", [21]), ("stayed", [22])]
     rows = {r["id"]: r for g in got["groups"] for r in g["rows"]}
     assert (rows[2]["where"], rows[2]["why"]) == ("CR-CT-1", "moved to CR-CT-1")
     assert rows[21]["why"] == HEAD_WHY
@@ -1038,3 +1040,48 @@ def test_fccs_own_words_for_two_failures_are_put_in_words(text, words):
     """Review 3, R3S-2: the two of FCC's own texts a slow or erroring Spoolman puts on the tile.
     The rest of FCC's own words stay as they are (test_fccs_own_words_for_a_failure_stay_as_they_are)."""
     assert spoolman_api.refusal_words(text) == words
+
+
+# --- review 3, R3S-8: "Extra (filed elsewhere)" heads only rows that are -------------------
+
+def test_a_done_with_nothing_to_ask_lists_an_extra_fcc_has_here_under_left_where_it_is(env):
+    """Review 3, R3S-8 (a): #22 is scanned as an Extra, then filed on the audited row from
+    another tab, and Done has nothing to park or file. The report put it under "⚠️ Extra
+    (filed elsewhere)" with the why "FCC has it in CR-CT-1-R1 already", the opposite of its
+    heading; the Yes lists the same spool under Left where it is, and so does this end now.
+    RED on 5185e67."""
+    add_spool(env, 1, PLACE)
+    add_spool(env, 22, "CR-CT-1")
+    start(env, PLACE)
+    scan(env, "ID:1")
+    scan(env, "ID:22")
+    spools(env)[22]["location"] = PLACE               # filed here since its scan (another tab)
+    got = scan_answer("CMD:DONE")["report"]
+    groups = [(g["kind"], g["title"], [(r["id"], r["where"], r["why"]) for r in g["rows"]]) for g in got["groups"]]
+    assert groups == [("stayed", "Left where it is", [(22, PLACE, f"FCC has it in {PLACE} already")])]
+
+
+def test_an_extra_scanned_while_spoolman_wasnt_answering_says_so_with_no_place(env, monkeypatch):
+    """Review 3, R3S-8 (b): an Extra scanned in a blip keeps the stored row's where, "couldn't
+    read where FCC has it", which the window drew as a place ("📍 couldn't read where FCC has
+    it"). The report's row has no place now, and its why says FCC couldn't read where it is.
+    RED on 5185e67."""
+    add_spool(env, 1, PLACE)
+    add_spool(env, 23, "CR-CT-1")
+    start(env, PLACE)
+    scan(env, "ID:1")
+    real_get = spoolman_api.requests.get
+
+    def get(url, timeout=None, **kw):
+        if url.rstrip("/").endswith("/api/v1/spool/23"):
+            raise requests.exceptions.ReadTimeout("Read timed out. (read timeout=3)")
+        return real_get(url, timeout=timeout, **kw)
+
+    monkeypatch.setattr(spoolman_api.requests, "get", get)
+    scan(env, "ID:23")                                 # an Extra scanned in a blip
+    monkeypatch.setattr(spoolman_api.requests, "get", real_get)
+    audit_id = session()["audit_id"]
+    scan_answer("CMD:CANCEL")
+    got = get_report(audit_id)["report"]
+    extra = [(r["id"], r["where"], r["why"]) for g in got["groups"] if g["kind"] == "extra" for r in g["rows"]]
+    assert extra == [(23, "", "FCC couldn't read where it is")]
