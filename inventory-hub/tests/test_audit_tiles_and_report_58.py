@@ -847,7 +847,10 @@ def test_the_report_line_carries_the_button_after_its_heading(env, monkeypatch):
     seen.clear()
     scan(env, "CMD:CANCEL")
     (msg, cat, color, meta), = [entry for entry in seen if "Audit Report" in entry[0]]
+    # PIN UPDATED DELIBERATELY (review 3, R3S-4): the line says the audit was cancelled, right
+    # under its first sentence; a Done's that moved nothing read the same.
     assert msg == ("📝 <b>Audit Report: LR-MDB-2</b> " + BUTTON.format(audit_id) + "<br>Found 1 of 2.<br>"
+                   "The audit was cancelled, so nothing was moved.<br>"
                    "❌ <b>Missing:</b> #2 Some Brand PLA (Filed 2)<br>"
                    "⚠️ <b>Extra:</b> #9 Some Brand PLA (Stray) → CR-CT-1-R2 slot 3<br>"
                    "🔗 <b>Loaded from here:</b> #7 Some Brand PLA (Running) → XL-1")
@@ -869,9 +872,11 @@ def test_an_end_with_no_place_has_no_button_and_an_empty_report(env):
     scan(env, "CMD:AUDIT")
     audit_id = session()["audit_id"]
     answer = scan_answer("CMD:DONE")
+    # PIN UPDATED DELIBERATELY (review 3, R3S-4): `ended`, blank with no place (the summary
+    # says nothing was checked).
     assert answer["report"] == {"audit_id": audit_id, "place": "", "why": "done",
                                 "summary": "Audit ended before a location was scanned: nothing was checked.",
-                                "found": 0, "expected": 0, "extras": 0, "loaded": 0, "perfect": False,
+                                "ended": "", "found": 0, "expected": 0, "extras": 0, "loaded": 0, "perfect": False,
                                 "groups": []}
     assert report(env) == ("📝 <b>Audit Report:</b> Audit ended before a location was scanned: "
                            "nothing was checked.")
@@ -1113,3 +1118,46 @@ def test_a_yes_that_moved_every_spool_says_the_same_words_twice(env):
     res = yes(env, question(env))
     assert res["success"] is True and res["report_msg"] == res["msg"] == (
         "Parked 1 spool at Unknown. Undo Last Move puts it back.")
+
+
+# --- review 3, R3S-4: the report says how the audit ended -----------------------------------
+
+def test_each_end_that_moved_nothing_says_how_it_ended(env, monkeypatch):
+    """Review 3, R3S-4: the report carries `why`, but its window drew a Cancel's, an idle end's
+    and a Done's that moved nothing the same way, and the Cancel's line, which the window is
+    opened from, said nothing of it either; since C a Done parks and files, so a report read
+    later said nothing of whether this one did. Each end that moved nothing says so in
+    `ended`, which the window draws under the summary; a Yes's groups say what it moved.
+    RED on 2ac4157: no `ended`."""
+    def ended_by(how):
+        add_spool(env, 1, PLACE)
+        add_spool(env, 2, PLACE)
+        start(env, PLACE)
+        scan(env, "ID:1")
+        audit_id = session()["audit_id"]
+        if how == "idle":
+            monkeypatch.setattr(state, "AUDIT_IDLE_TIMEOUT_SECONDS", 1800)
+            session()["last_activity_ts"] = time.time() - 1801
+            logic.check_audit_idle_timeout()
+        elif how == "yes":
+            return yes(env, question(env))["report"]
+        else:
+            scan_answer(f"CMD:{how.upper()}")
+        return get_report(audit_id)["report"]
+
+    assert ended_by("cancel")["ended"] == "The audit was cancelled, so nothing was moved."
+    assert ended_by("idle")["ended"] == "The audit ended on its own after 30 min with no scan, so nothing was moved."
+    assert ended_by("yes")["ended"] == ""
+    # A Done with nothing to park or file: #1 and #3 found, #4 in the scan buffer, so it stays
+    # (#2 went to Unknown with the Yes).
+    add_spool(env, 3, PLACE)
+    add_spool(env, 4, PLACE)
+    start(env, PLACE)
+    scan(env, "ID:1")
+    scan(env, "ID:3")
+    state.GLOBAL_BUFFER = [{"id": 4}]
+    try:
+        got = scan_answer("CMD:DONE")["report"]
+    finally:
+        state.GLOBAL_BUFFER = []
+    assert got["ended"] == "Done had nothing to park or file, so nothing was moved."

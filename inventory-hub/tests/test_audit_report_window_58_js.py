@@ -43,8 +43,9 @@ def _row(sid, name, where="", why="", needs_label=False, color="C0392B", grams=5
             "needs_label": needs_label}
 
 
-# A Yes's report, every kind it can hold, in the route's shape (pinned below).
-FULL = {"audit_id": "boot-1", "place": "LR-MDB-1", "why": "done", "summary": "Found 2 of 6.", "found": 2,
+# A Yes's report, every kind it can hold, in the route's shape (pinned below). PIN UPDATED
+# DELIBERATELY (review 3, R3S-4): each carries `ended`, how an end that moved nothing ended.
+FULL = {"audit_id": "boot-1", "place": "LR-MDB-1", "why": "done", "summary": "Found 2 of 6.", "ended": "", "found": 2,
         "expected": 6, "extras": 2, "loaded": 1, "perfect": False, "groups": [
             {"kind": "parked", "title": "Parked at Unknown", "rows": [
                 _row(101, "Some Brand PLA (Red)", "LR-MDB-1 slot 2"),
@@ -62,14 +63,16 @@ FULL = {"audit_id": "boot-1", "place": "LR-MDB-1", "why": "done", "summary": "Fo
             {"kind": "needs_label", "title": "Needs a label", "rows": [
                 _row(57, "Some Brand PLA (Blue)", "LR-MDB-1 slot 1", needs_label=True, color="1F5FBF")]}]}
 # An end that moved nothing (a Cancel's, read later from its line).
-CANCELLED = {"audit_id": "boot-2", "place": "SHELF-1", "why": "cancel", "summary": "Found 0 of 2.", "found": 0,
+CANCELLED = {"audit_id": "boot-2", "place": "SHELF-1", "why": "cancel", "summary": "Found 0 of 2.",
+             "ended": "The audit was cancelled, so nothing was moved.", "found": 0,
              "expected": 2, "extras": 1, "loaded": 0, "perfect": False, "groups": [
                  {"kind": "missing", "title": "Not scanned", "rows": [_row(30, "Some Brand PLA (Red)", "SHELF-1"),
                                                                       _row(40, "Some Brand PLA (Red)", "SHELF-1 slot 2")]},
                  {"kind": "extra", "title": "Extra (filed elsewhere)", "rows": [
                      _row(200, "Some Brand PLA (Red)", "LR-MDB-2 slot 3")]}]}
 PERFECT = {"audit_id": "boot-1", "place": "SHELF-1", "why": "done",
-           "summary": "Found 1 of 1. ✅ Perfect Match! All items accounted for.", "found": 1, "expected": 1,
+           "summary": "Found 1 of 1. ✅ Perfect Match! All items accounted for.",
+           "ended": "Done had nothing to park or file, so nothing was moved.", "found": 1, "expected": 1,
            "extras": 0, "loaded": 0, "perfect": True, "groups": []}
 
 
@@ -913,3 +916,29 @@ def test_an_id_longer_than_the_line_still_breaks_rather_than_run_off(logged):
     assert logged.evaluate("(s) => { const e = document.querySelector(s); return e.scrollWidth <= e.clientWidth + 1; }", TITLE)
     assert logged.evaluate("(s) => document.querySelector(s).getBoundingClientRect().right <= innerWidth + 0.5",
                            REPORT + " .fcc-audit-report-panel")
+
+
+ENDED = REPORT + " .fcc-audit-report-ended"
+
+
+@pytest.mark.parametrize("which", ["cancel", "idle", "done", "yes"])
+def test_the_window_says_how_an_end_that_moved_nothing_ended(logged, which):
+    """Review 3, R3S-4: a Cancel's, an idle end's and a Done's report that moved nothing drew
+    the same window (title, "Found 0 of 2.", the groups), so one read later from its line said
+    nothing of whether the audit was cancelled or timed out, and since C a Done parks and files.
+    The report's `ended` goes under the summary; a Yes's has none (its groups say what it
+    moved). RED on 2ac4157 for the three: no such line."""
+    idle = "The audit ended on its own after 30 min with no scan, so nothing was moved."
+    rep, said = {"cancel": (CANCELLED, CANCELLED["ended"]),
+                 "idle": (dict(CANCELLED, audit_id="boot-3", why="idle", ended=idle), idle),
+                 "done": (PERFECT, PERFECT["ended"]),
+                 "yes": (FULL, "")}[which]
+    logged.evaluate("(r) => window.openAuditReport(r)", rep)
+    _shown(logged)
+    if not said:
+        assert logged.locator(ENDED).count() == 0
+        return
+    assert logged.text_content(ENDED) == said
+    order = logged.evaluate("""(r) => Array.from(document.querySelector(r + ' .fcc-audit-report-panel').children)
+        .map((e) => e.id || e.className)""", REPORT)
+    assert order.index("fcc-audit-report-ended") == order.index("fcc-audit-report-summary") + 1, order

@@ -5958,14 +5958,33 @@ def _audit_report_row(session, sid, display='', where=None, why=''):
             "where": at, "why": str(why or ''), "needs_label": str(sid) in (session.get('label_flagged') or {})}
 
 
+def _audit_ended_words(why, yes=False):
+    """How an end that moved nothing ended, in a sentence for its report (review 3, R3S-4:
+    a Cancel's, an idle end's and a Done's report that moved nothing drew the same window,
+    so one read later from its line said nothing of whether the audit was cancelled or
+    timed out, and since C a Done parks and files). '' for a Yes: its groups say what it
+    moved."""
+    if yes:
+        return ''
+    if why == 'cancel':
+        return "The audit was cancelled, so nothing was moved."
+    if why == 'idle':
+        return (f"The audit ended on its own after {state.AUDIT_IDLE_TIMEOUT_SECONDS // 60} min with no scan, "
+                "so nothing was moved.")
+    if why == 'done':
+        return "Done had nothing to park or file, so nothing was moved."
+    return ''
+
+
 def _audit_report_data(session, why, parked=(), stays=(), failed=(), filed=(), yes=False):
     """The audit's report as data, for the report window. No Spoolman read: rows come
     from the session's stored rows and the end's own results.
 
-      {audit_id, place, why, summary, found, expected, extras, loaded, perfect,
+      {audit_id, place, why, summary, ended, found, expected, extras, loaded, perfect,
        groups: [{kind, title, rows: [_audit_report_row]}]}
 
-    `why` is the end's: done, cancel or idle. Each spool is in ONE group, under what
+    `why` is the end's: done, cancel or idle, and `ended` says it in a sentence for an
+    end that moved nothing (_audit_ended_words). Each spool is in ONE group, under what
     the end did with it. A Yes to Done's question (`yes`): parked (Parked at Unknown,
     `where` it had been filed), filed (Filed in <place>, `where` FCC had it), stayed
     (Left where they are, `where` it is now and `why`, an Extra FCC has here already
@@ -5983,7 +6002,10 @@ def _audit_report_data(session, why, parked=(), stays=(), failed=(), filed=(), y
     expected, missing, extras, trail = _audit_tally(session)
     report: typing.Dict[str, typing.Any] = {
         "audit_id": session.get('audit_id'), "place": place, "why": why,
-        "summary": _audit_summary(session, filed), "found": len(expected) - len(missing),
+        "summary": _audit_summary(session, filed),
+        # With no place the summary says nothing was checked.
+        "ended": _audit_ended_words(why, yes) if place else '',
+        "found": len(expected) - len(missing),
         "expected": len(expected), "extras": len(extras), "loaded": len(trail),
         "perfect": _audit_perfect(session), "groups": []}
     if not place:
@@ -6084,6 +6106,9 @@ def _audit_report(session, why, parked=(), stays=(), failed=(), filed=(), yes=Fa
     _expected, missing, extras, trail = _audit_tally(session)
     lines = [f"📝 <b>Audit Report: {_audit_esc(place)}</b>{_audit_report_button(data['audit_id'])}",
              _audit_esc(data['summary'])]
+    # A Cancel's line and a Done's that moved nothing read like each other (review 3, R3S-4).
+    if data['ended']:
+        lines.append(_audit_esc(data['ended']))
     if missing:
         lines.append("❌ <b>Missing:</b> " + ", ".join(_audit_esc(_audit_label(session, s)) for s in missing))
     if extras:

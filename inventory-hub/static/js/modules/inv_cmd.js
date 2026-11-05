@@ -2681,6 +2681,7 @@ window.commitBulkMove = () => {
                     <button type="button" id="fcc-audit-report-close" class="btn btn-sm btn-outline-light">Close</button>
                 </div>
                 <div class="fcc-audit-report-summary">${_escapeHtml(rep.summary || '')}</div>
+                ${rep.ended ? `<div class="fcc-audit-report-ended">${_escapeHtml(rep.ended)}</div>` : ''}
                 <div id="fcc-audit-report-notice" class="fcc-audit-report-notice" role="alert" style="display:none;"></div>
                 <div class="fcc-audit-report-body" tabindex="-1" role="region" aria-label="Each spool, by what the audit did with it">
                     ${lists || `<div class="fcc-audit-report-empty">${_escapeHtml(empty)}</div>`}

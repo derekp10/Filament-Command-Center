@@ -1753,6 +1753,14 @@ body {
     margin-bottom: 0.625rem;
     overflow-wrap: anywhere;
 }
+/* How an end that moved nothing ended (a Cancel, an idle end, a Done with nothing to park or
+   file; review 3, R3S-4), under the summary, in the window's amber. */
+.fcc-audit-report-ended {
+    font-size: var(--fcc-fs-row);
+    color: #ffe08a;
+    margin: -0.375rem 0 0.625rem;
+    overflow-wrap: anywhere;
+}
 /* What a scan's refusal says while the window is up (inv_cmd.js auditReportNotice), in the
    audit panel's notice colours: the toast layer is under the window. */
 .fcc-audit-report-notice {
