@@ -18,7 +18,8 @@ to half a pixel; the sub-pixel sweep below holds the drawing to the same limits 
 Measured from the pixels, at 1x and 2x and at each Text size: the drawn ink (every pixel inside
 the circle, clear of its anti-aliased edge, that differs from the backing's #1e1e1e) has its box
 within 1 px of the circle's middle and its weight (the ink's colour-weighted centre) within
-0.75 px, and fills at least half the circle's width. On a real DOM, hermetic: the REAL
+0.8 px (0.75 until 2026-11-05: WEIGHT_PX), and fills at least half the circle's width. On a
+real DOM, hermetic: the REAL
 inv_cmd.js dock and tile (test_audit_panel_58_js's `audit`, page61's modules) and the REAL Load
 report button from modals_config.html, with global.css and Bootstrap 5.3's button rules, in an
 isolated browser (no network), so it runs under --offline. The real dashboard's twin is
@@ -35,6 +36,21 @@ made of, and where its body sits, measured at 40 px a unit. Both RED on 96d488b 
 there, and the body alone sat 1.16 units left and 1.16 down of the middle). The screen tests
 above hold the tag to the same limits as before; only their "not a speck" floor is the tag's own
 now (PIN UPDATED DELIBERATELY: with no ring it spans 15 of the circle's 32 units, under half).
+
+Derek's look at that picture, 2026-11-05: "the circle isn't center in the button, its more on the
+left side" (a marked tile's 🏷️), and Needs a label's circle "isn't center to the button, it is to
+the text, but it's more on the lower end" ("just looks a little sloppy in the shots"). The drawing
+was centred in its circle; the circle wasn't in its button. The tests at the end measure that,
+from the layout: in the square the circle's box has its middle on the button's content box's,
+both ways, within half a pixel; in Needs a label and Load report its middle is on the content
+box's top to bottom within half a pixel, the words' too within a pixel, and the space from the
+button's edge to its left is the space above it, within a pixel. At 1x and 2x, at each Text size
+(Small, Standard, Large, Extra Large). RED on 8a28c5b (24 of 24), in a scratch `git archive`:
+the circle sat in the line of words, its middle on their x-height, 2 px under the button's, 9.4
+px from Needs a label's edge against 6.3 above it, and the square's centring took the margins
+made for words after it, 2.5 px left of its middle. One pin with them: on a phone the circle
+stays in Needs a label's line of words, as it was (8 of 8 pass on 8a28c5b). The ink's weight
+limit is 0.8 px since (WEIGHT_PX: the SVG is painted at whole CSS pixels at 2x).
 """
 from __future__ import annotations
 
@@ -53,7 +69,15 @@ from test_scanner_safe_dialogs_61_js import page61  # noqa: F401  (page61: the f
 HUB = Path(__file__).resolve().parent.parent
 BACKING = "#1e1e1e"
 BOX_PX = 1.0                    # the ink's box, from the circle's middle
-WEIGHT_PX = 0.75                # the ink's weight, from the circle's middle
+# The ink's weight, from the circle's middle. PIN UPDATED DELIBERATELY (2026-11-05): 0.75 until
+# the circle was centred in its button. At 2x the SVG is painted at whole CSS pixels and its
+# circle (a background) at device pixels: a marked tile nudged a quarter pixel at a time at 2x
+# Extra Large, the drawing stayed put while its circle moved a device pixel, and no placement of
+# the SVG (absolute, in a grid, given a transform of its own) changed that. So where the circle
+# lands moves the drawing against it by up to half a CSS pixel, and the square's centred circle
+# lands, at 2x Extra Large, where the tag's weight (0.4 of a unit up-right by its drawing)
+# measures 0.76 px; the margins it had put it near a whole pixel, by chance.
+WEIGHT_PX = 0.8
 TAG_LEAST = 0.42                # the tag's width against the circle's: 15 of 32 units, less a pixel
 SIZES = ["standard", "large", "xlarge"]
 NEED = "#fcc-audit-panel-needlabel .fcc-ico-on-light"
@@ -380,7 +404,7 @@ def test_the_tags_body_with_its_stroke_is_centred_in_the_drawings_own_units(_iso
     """Derek's (c), "the body itself centred": the body, its stroke included, has its box on
     the circle's middle to 0.05 of a unit on each axis, and so does the whole drawing (the hole
     is inside the body). Its weight lies on the tag's own diagonal, at most half a unit off the
-    middle on each axis (0.4 up-right: the hole is dark), well inside the screen tests' 0.75 px.
+    middle on each axis (0.4 up-right: the hole is dark), well inside the screen tests' 0.8 px.
     RED on 96d488b: the body alone sat 1.16 units left and 1.16 down of the middle, the ring at
     its point balancing it."""
     side = 32 * UNIT_PX
@@ -398,3 +422,90 @@ def test_the_tags_body_with_its_stroke_is_centred_in_the_drawings_own_units(_iso
         assert abs(wx) <= 0.5 and abs(wy) <= 0.5, ("its weight", whole)
     finally:
         context.close()
+
+
+# --- Derek's look of 2026-11-05: the circle sits in its button ------------------------------
+
+ALL_SIZES = ["small", "standard", "large", "xlarge"]
+MIDDLE_PX = 0.5                 # the circle's middle, from its button's content box's
+WORDS_PX = 1.0                  # the words' middle, from the same (the font's own box)
+EVEN_PX = 1.0                   # the space to the circle's left, against the space above it
+
+# How the circle `s` sits in its button, from the layout, in CSS px: its box's middle against
+# the button's content box's (dx, dy); the space from the button's edge (its border is its
+# fill's colour) to the circle's left, top and bottom; and the middle of the words' own boxes
+# (each line of text the button draws, the circle's none) against the content box's.
+SITS = r"""(s) => { const c = document.querySelector(s); const b = c.closest('button');
+    const r = b.getBoundingClientRect(), q = c.getBoundingClientRect(), cs = getComputedStyle(b);
+    const n = (k) => parseFloat(cs[k]);
+    const box = { left: r.left + n('borderLeftWidth') + n('paddingLeft'), right: r.right - n('borderRightWidth') - n('paddingRight'),
+                  top: r.top + n('borderTopWidth') + n('paddingTop'), bottom: r.bottom - n('borderBottomWidth') - n('paddingBottom') };
+    const lines = []; const walker = document.createTreeWalker(b, NodeFilter.SHOW_TEXT); let node;
+    while ((node = walker.nextNode())) {
+        if (!node.data.trim() || node.parentElement.closest('.fcc-ico-on-light')) continue;
+        const range = document.createRange(); range.selectNodeContents(node);
+        lines.push(...Array.from(range.getClientRects()).filter((x) => x.width > 0 && x.height > 0));
+    }
+    const f = (v) => Math.round(v * 1000) / 1000;
+    return { dx: f((q.left + q.right) / 2 - (box.left + box.right) / 2), dy: f((q.top + q.bottom) / 2 - (box.top + box.bottom) / 2),
+             left: f(q.left - r.left), top: f(q.top - r.top), bottom: f(r.bottom - q.bottom),
+             words: lines.length ? f((Math.min(...lines.map((x) => x.top)) + Math.max(...lines.map((x) => x.bottom))) / 2
+                                     - (box.top + box.bottom) / 2) : null,
+             button: [f(r.width), f(r.height)], circle: f(q.width) }; }"""
+
+
+@pytest.mark.parametrize("size", ALL_SIZES)
+def test_a_marked_tiles_circle_sits_in_the_middle_of_its_square(icons, size):
+    """Derek: "the circle isn't center in the button, its more on the left side". A found
+    tile's 🏷️ once marked is a square holding the circle alone: the circle's middle is the
+    square's, both ways, within half a pixel. RED on 8a28c5b: the square centred the circle's
+    margins, made for words after it (0.3em to its left reaching into a padding, 0.05em to its
+    right), so the circle sat 2.4 to 3.1 px left of the middle at every Text size."""
+    _text_size(icons, size)
+    got = icons.evaluate(SITS, _marked_tile(icons))
+    assert abs(got["dx"]) <= MIDDLE_PX and abs(got["dy"]) <= MIDDLE_PX, (size, got)
+
+
+@pytest.mark.parametrize("size", ALL_SIZES)
+@pytest.mark.parametrize("which", ["needs-a-label", "load-report"])
+def test_the_circle_sits_centred_top_to_bottom_with_even_space_to_its_left(icons, which, size):
+    """Derek, on Needs a label: "it isn't center to the button, it is to the text, but it's more
+    on the lower end". In the dock's Needs a label and Settings' Load report the circle's middle
+    is the content box's top to bottom, within half a pixel, and the words beside it are
+    centred too (their own box, within a pixel: the font's ascent and descent, as in any
+    button); the space from the button's edge to the circle's left is the space above it,
+    within a pixel. RED on 8a28c5b: the circle sat in the line of words, its middle on their
+    x-height (vertical-align: middle), 2 to 2.5 px under the button's; and Needs a label's
+    line, centred in its wide button, left 9.4 px to the circle's left against 6.3 above it."""
+    sel = NEED if which == "needs-a-label" else _load_report(icons)
+    _text_size(icons, size)
+    got = icons.evaluate(SITS, sel)
+    what = f"{which} at {size}: {got}"
+    assert abs(got["dy"]) <= MIDDLE_PX, what
+    assert got["words"] is not None and abs(got["words"]) <= WORDS_PX, what
+    assert abs(got["left"] - got["top"]) <= EVEN_PX, what
+
+
+# The phone's dock: how far Needs a label runs out of its column, and whether its circle's
+# middle is above the button's (in the first of its lines).
+NARROW = r"""() => { const b = document.getElementById('fcc-audit-panel-needlabel'); const col = b.parentElement;
+    const r = b.getBoundingClientRect(), k = col.getBoundingClientRect();
+    const q = b.querySelector('.fcc-ico-on-light').getBoundingClientRect();
+    return { over: Math.max(k.left - r.left, r.right - k.right), high: (q.top + q.bottom) / 2 < (r.top + r.bottom) / 2 - 2,
+             button: [r.width, r.height], column: k.width }; }"""
+
+
+@pytest.mark.parametrize("size", ["standard", "xlarge"])
+@pytest.mark.parametrize("width", [390, 360])
+def test_on_a_phone_the_circle_stays_in_the_line_of_words(icons, width, size):
+    """A pin: on a phone (the narrow dock) Needs a label's words wrap to two lines or three, and
+    its circle stays in their line, riding the first, as before 2026-11-05; the button stays in
+    its column. Kept beside the words, as on the wide dock, the circle couldn't wrap away from
+    "Needs" at Extra Large, and the button ran out of its column, 8.8 px past it at 360 px wide
+    (seen while building this)."""
+    icons.set_viewport_size({"width": width, "height": 844})
+    icons.wait_for_timeout(100)
+    _text_size(icons, size)
+    got = icons.evaluate(NARROW)
+    assert got["high"] is True, (width, size, got)
+    assert got["over"] <= 0.5, (width, size, got)

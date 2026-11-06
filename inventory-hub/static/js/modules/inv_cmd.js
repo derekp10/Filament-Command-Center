@@ -1578,7 +1578,7 @@ window.commitBulkMove = () => {
         <div class="fcc-audit-dock-grid">
             <div id="fcc-audit-dock-found" class="fcc-audit-dock-info"></div>
             <div class="fcc-audit-dock-col fcc-audit-dock-need">
-                <button type="button" id="fcc-audit-panel-needlabel" class="btn btn-sm btn-warning fw-bold"><span class="fcc-audit-dock-words"><span class="fcc-ico-on-light" aria-hidden="true">${TAG_ICON}</span> Needs a label</span></button>
+                <button type="button" id="fcc-audit-panel-needlabel" class="btn btn-sm btn-warning fw-bold"><span class="fcc-audit-dock-words fcc-ico-row"><span class="fcc-ico-on-light" aria-hidden="true">${TAG_ICON}</span> <span class="fcc-ico-words">Needs a label</span></span></button>
                 <div id="fcc-audit-panel-qr-needlabel" class="fcc-audit-strip-qr"></div>
                 <div class="fcc-audit-strip-cap">📷 Scan to mark it</div>
             </div>

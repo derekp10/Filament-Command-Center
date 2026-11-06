@@ -3191,8 +3191,23 @@ button.fcc-audit-tile:focus-visible { outline: none; }
 /* An icon on a light fill (a yellow or cyan button), on a small dark round backing
    (Derek, 2026-11-03, sample 4(ii)): measured, 87% of the 🏷️'s pixels on the yellow Needs
    a label were within ΔE 25 of it, and the 🔎 on the cyan Load report half lost. The
-   button keeps its fill, its text and its size: the negative margins keep the line box
-   as it was, and the left one reaches into the button's padding.
+   button keeps its fill, its words and its size.
+   The button lays the circle out, never the line of words (Derek, 2026-11-05: "the circle
+   isn't center in the button", "more on the lower end", "just looks a little sloppy"). A
+   button that holds the circle alone (a found tile's 🏷️, a square) centres it both ways: the
+   circle has no margins of its own. Before words, the button's content is a .fcc-ico-row
+   (the dock's Needs a label, Settings' Load report): the circle, a space and its words
+   (.fcc-ico-words) in a flex row, each centred top to bottom. The circle's top and bottom
+   margins keep the button as tall as with its words alone, its left one reaches into the
+   padding so the space to its left is the space above it (within a pixel), the words take
+   the rest of the width, centred in it, and the row's gap is the word space it drops. Set
+   in the line of words, as it was, vertical-align: middle put the circle's middle on the
+   words' x-height, 2 px under the button's, and a centred line left it 9.4 px from Needs a
+   label's edge against 6.3 above; the square centred the margins made for words after it,
+   and the circle sat 2.5 px left of its middle. Measured from the layout (its middle within
+   half a pixel of the content box's, both ways in the square and top to bottom beside
+   words) by test_icon_on_dark_circle_js.py. On a phone the dock puts Needs a label's circle
+   back in its line of words (the narrow dock's rule, below).
    The icon on it is drawn, never an emoji (review 3; Derek, 2026-11-04: "that same label
    icon not centered in circle thing"): an inline SVG, .fcc-ico-svg (inv_cmd.js TAG_ICON,
    modals_config.html's magnifier). An emoji is drawn on a slant, each system its own, and
@@ -3201,11 +3216,13 @@ button.fcc-audit-tile:focus-visible { outline: none; }
    its body itself is what is centred (Derek, 2026-11-05, (c)). The drawing is as big as its
    backing, its 32 units the circle, so where it sits in the circle is the drawing's own
    coordinates (centred on 16, 16).
-   Its ink's box within 1 px and its weight within 0.75 px of the circle's middle, at 1x and
+   Its ink's box within 1 px and its weight within 0.8 px of the circle's middle, at 1x and
    2x, at each Text size and with the button a fraction of a pixel off the device's grid,
    measured from the pixels by test_icon_on_dark_circle_js.py (hermetic) and
-   test_audit_panel_look_58_e2e.py (the real dashboard). `color` is for the contrast guard,
-   should a text icon ever go on it. */
+   test_audit_panel_look_58_e2e.py (the real dashboard). At 2x the SVG is painted at whole
+   CSS pixels and its circle at device pixels, so where the circle lands moves the drawing
+   against it by up to half a CSS pixel (measured; no placement of the SVG changed it).
+   `color` is for the contrast guard, should a text icon ever go on it. */
 .fcc-ico-on-light > .fcc-ico-svg {
     display: block;
     flex: none;
@@ -3214,17 +3231,24 @@ button.fcc-audit-tile:focus-visible { outline: none; }
 }
 .fcc-ico-on-light {
     display: inline-flex;
+    flex: none;
     align-items: center;
     justify-content: center;
     width: 1.6em;
     height: 1.6em;
-    margin: -0.3em 0.05em -0.3em -0.3em;
     border-radius: 50%;
     background: #1e1e1e;
     color: #fff;
     line-height: 1;
     vertical-align: middle;
 }
+.fcc-ico-row {
+    display: flex;
+    align-items: center;
+    column-gap: 0.275em;        /* the word space between them, which a flex row drops */
+}
+.fcc-ico-row > .fcc-ico-on-light { margin: -0.3em 0.05em -0.3em -0.3em; }
+.fcc-ico-row > .fcc-ico-words { flex: 1 1 auto; }
 /* A found tile's own 🏷️ (Derek, 2026-11-03, (a)): its own button, never inside the tile's,
    at the end of the row under the name (2026-11-04). Marked here: the Needs a label yellow,
    the tag on its dark backing. A flag up before the audit: a dashed yellow edge. */
@@ -3410,6 +3434,11 @@ button.fcc-audit-tile:focus-visible { outline: none; }
         align-items: center;
         justify-content: center;
     }
+    /* Needs a label's circle goes back into the line of words here, as before 2026-11-05:
+       its words wrap to two lines, and a circle kept beside them couldn't wrap away from
+       "Needs" at Extra Large, so the button ran out of its column (8.8 px past it at 360 px
+       wide). It rides their first line (vertical-align: middle). */
+    .fcc-audit-dock-col .fcc-ico-row { display: block; }
 }
 /* The Last found box, in the dock. */
 .fcc-audit-strip {
