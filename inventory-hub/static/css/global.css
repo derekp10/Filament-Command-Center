@@ -3197,8 +3197,10 @@ button.fcc-audit-tile:focus-visible { outline: none; }
    icon not centered in circle thing"): an inline SVG, .fcc-ico-svg (inv_cmd.js TAG_ICON,
    modals_config.html's magnifier). An emoji is drawn on a slant, each system its own, and
    the Windows 🏷️'s grey string, which hardly shows on the dark, held its box's middle while
-   its yellow body sat low-left. The drawing is as big as its backing, its 32 units the
-   circle, so where it sits in the circle is the drawing's own coordinates (centred on 16, 16).
+   its yellow body sat low-left. The tag is drawn slanted as the emoji, with no string, so
+   its body itself is what is centred (Derek, 2026-11-05, (c)). The drawing is as big as its
+   backing, its 32 units the circle, so where it sits in the circle is the drawing's own
+   coordinates (centred on 16, 16).
    Its ink's box within 1 px and its weight within 0.75 px of the circle's middle, at 1x and
    2x, at each Text size and with the button a fraction of a pixel off the device's grid,
    measured from the pixels by test_icon_on_dark_circle_js.py (hermetic) and

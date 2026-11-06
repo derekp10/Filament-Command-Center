@@ -25,6 +25,16 @@ isolated browser (no network), so it runs under --offline. The real dashboard's 
 test_audit_panel_look_58_e2e.py's. RED on 76fb961 (27 of 31; the two pins pass): the backing
 held the emoji, not a drawing, and the 🔎's ink, its box within half a pixel of the middle (as
 P5 measured it), had its weight 0.6 to 1.25 px up-right of it at every position.
+
+Derek's pick of 2026-11-05, (c) of four: "Slanted, no loop: the body itself centred". The tag
+had an orange ring of string at its point, and its body sat low-left of the middle so that body
+and ring together were balanced; now it is the body and its hole alone, still slanted as the
+emoji, the body with its stroke centred on (16, 16) in the drawing's own units, and its weight
+0.4 of a unit up-right of it (the hole is dark). Two tests read the drawing itself: what it is
+made of, and where its body sits, measured at 40 px a unit. Both RED on 96d488b (the ring was
+there, and the body alone sat 1.16 units left and 1.16 down of the middle). The screen tests
+above hold the tag to the same limits as before; only their "not a speck" floor is the tag's own
+now (PIN UPDATED DELIBERATELY: with no ring it spans 15 of the circle's 32 units, under half).
 """
 from __future__ import annotations
 
@@ -44,6 +54,7 @@ HUB = Path(__file__).resolve().parent.parent
 BACKING = "#1e1e1e"
 BOX_PX = 1.0                    # the ink's box, from the circle's middle
 WEIGHT_PX = 0.75                # the ink's weight, from the circle's middle
+TAG_LEAST = 0.42                # the tag's width against the circle's: 15 of 32 units, less a pixel
 SIZES = ["standard", "large", "xlarge"]
 NEED = "#fcc-audit-panel-needlabel .fcc-ico-on-light"
 LOAD = "#btn-config-attrs-scan .fcc-ico-on-light"
@@ -167,11 +178,11 @@ def ink(page, sel):
             "across": across}
 
 
-def _centred(got, what):
+def _centred(got, what, least=0.5):
     (bx, by), (wx, wy) = got["box"], got["weight"]
     assert abs(bx) <= BOX_PX and abs(by) <= BOX_PX, (what, got)
     assert abs(wx) <= WEIGHT_PX and abs(wy) <= WEIGHT_PX, (what, got)
-    assert got["width"] >= 0.5, (what, got)                  # an icon, not a speck
+    assert got["width"] >= least, (what, got)                # an icon, not a speck
 
 
 def _drawn(page, sel):
@@ -216,7 +227,7 @@ def test_needs_a_labels_tag_is_drawn_in_the_middle_of_its_backing(icons, size):
     circle, at 1x and 2x. The button's words and name are as they were."""
     _text_size(icons, size)
     assert _drawn(icons, NEED) == {"svg": True, "text": "", "same": True, "hidden": "true", "focusable": "false"}
-    _centred(ink(icons, NEED), f"Needs a label at {size}")
+    _centred(ink(icons, NEED), f"Needs a label at {size}", TAG_LEAST)
     got = icons.evaluate("""(s) => { const b = document.querySelector(s); const ico = b.querySelector('.fcc-ico-on-light');
         return { text: b.textContent.replace(/\\s+/g, ' ').trim(), hidden: ico.getAttribute('aria-hidden'),
                  fill: getComputedStyle(b).backgroundColor }; }""", "#fcc-audit-panel-needlabel")
@@ -229,7 +240,7 @@ def test_a_marked_tiles_tag_is_drawn_in_the_middle_of_its_backing(icons, size):
     _text_size(icons, size)
     sel = _marked_tile(icons)
     assert _drawn(icons, sel)["same"] is True
-    _centred(ink(icons, sel), f"a marked tile's tag at {size}")
+    _centred(ink(icons, sel), f"a marked tile's tag at {size}", TAG_LEAST)
 
 
 @pytest.mark.parametrize("size", SIZES)
@@ -254,7 +265,7 @@ def test_the_drawing_stays_in_the_middle_wherever_the_button_lands(icons, left):
     _load_report(icons, 20.0)
     icons.evaluate("(dx) => { const b = document.getElementById('fcc-audit-panel-needlabel'); b.style.position = 'relative';"
                    " b.style.left = dx + 'px'; }", left - 20.0)
-    _centred(ink(icons, NEED), f"Needs a label nudged {left - 20.0} px")
+    _centred(ink(icons, NEED), f"Needs a label nudged {left - 20.0} px", TAG_LEAST)
 
 
 def test_the_buttons_keep_their_size(icons):
@@ -303,3 +314,87 @@ def test_each_drawn_colour_stands_out_from_the_backing():
         assert colours, name
         for c in colours:
             assert _contrast(c, BACKING) >= 3.0, (name, c, round(_contrast(c, BACKING), 2))
+
+
+# --- Derek's pick of 2026-11-05, (c): "Slanted, no loop: the body itself centred" ----------
+
+UNIT_PX = 40                    # the drawing measured at 40 px a unit: 1280 px for its 32
+UNITS_BOX = 0.05                # its box, from (16, 16), in units
+
+
+def _tag_markup():
+    """TAG_ICON as inv_cmd.js builds it (its string literals joined)."""
+    js = (HUB / "static" / "js" / "modules" / "inv_cmd.js").read_text(encoding="utf-8")
+    expr = re.search(r"const TAG_ICON = (.*?);\r?\n", js, re.S).group(1)
+    return "".join(re.findall(r"'([^']*)'", expr))
+
+
+def _shapes(markup):
+    """Each shape the drawing paints, in order: (its tag, its attributes)."""
+    return [(tag, dict(re.findall(r'([\w-]+)="([^"]*)"', attrs)))
+            for tag, attrs in re.findall(r"<(path|circle|ellipse|rect|line|polyline|polygon)\b([^>]*)>", markup)]
+
+
+def test_the_tag_is_its_body_and_its_hole_alone():
+    """No ring of string at its point: the body (the emoji's warm yellow in its orange stroke)
+    and its dark hole on the tag's axis, slanted as the emoji. RED on 96d488b: a third shape,
+    the orange ring, hung at the point."""
+    markup = _tag_markup()
+    assert '<g transform="rotate(-45 16 16)">' in markup, markup
+    shapes = _shapes(markup)
+    assert [tag for tag, _ in shapes] == ["path", "circle"], shapes
+    body, hole = shapes[0][1], shapes[1][1]
+    assert {k: body.get(k) for k in ("fill", "stroke", "stroke-width", "stroke-linejoin")} == {
+        "fill": "#FFC83D", "stroke": "#E57C00", "stroke-width": "1.6", "stroke-linejoin": "round"}, body
+    assert hole.get("fill") == "#2B1A08" and "stroke" not in hole and hole.get("cy") == "16", hole
+
+
+def _in_units(page, markup, body_only=False):
+    """The drawing painted at UNIT_PX a unit on the backing: its ink's box (every pixel more
+    than 48 off the backing in a channel) and its weight (each pixel past 12, by how far),
+    as (dx, dy) from (16, 16) in the drawing's units. `body_only` paints its path alone."""
+    from PIL import ImageChops
+    side = 32 * UNIT_PX
+    page.set_content(f"<html><body style='margin:0;background:{BACKING}'>"
+                     f"<div id='ico' style='width:{side}px;height:{side}px'>{markup}</div></body></html>")
+    page.add_style_tag(content="#ico > svg { display: block; width: 100%; height: 100%; }"
+                       + (" #ico circle { display: none; }" if body_only else ""))
+    png = page.screenshot(clip={"x": 0, "y": 0, "width": side, "height": side})
+    img = Image.open(io.BytesIO(png)).convert("RGB")
+    back = tuple(int(BACKING[i:i + 2], 16) for i in (1, 3, 5))
+    r, g, b = ImageChops.difference(img, Image.new("RGB", img.size, back)).split()
+    d = ImageChops.lighter(ImageChops.lighter(r, g), b)
+    left, top, right, bottom = d.point(lambda v: 255 if v > 48 else 0).getbbox()
+    total = sx = sy = 0.0
+    for i, v in enumerate(d.getdata()):
+        if v > 12:
+            y, x = divmod(i, side)
+            total += v
+            sx += v * (x + 0.5)
+            sy += v * (y + 0.5)
+    return {"box": ((left + right) / 2 / UNIT_PX - 16, (top + bottom) / 2 / UNIT_PX - 16),
+            "weight": (sx / total / UNIT_PX - 16, sy / total / UNIT_PX - 16)}
+
+
+def test_the_tags_body_with_its_stroke_is_centred_in_the_drawings_own_units(_isolated_chromium):
+    """Derek's (c), "the body itself centred": the body, its stroke included, has its box on
+    the circle's middle to 0.05 of a unit on each axis, and so does the whole drawing (the hole
+    is inside the body). Its weight lies on the tag's own diagonal, at most half a unit off the
+    middle on each axis (0.4 up-right: the hole is dark), well inside the screen tests' 0.75 px.
+    RED on 96d488b: the body alone sat 1.16 units left and 1.16 down of the middle, the ring at
+    its point balancing it."""
+    side = 32 * UNIT_PX
+    context = _isolated_chromium.new_context(viewport={"width": side, "height": side}, device_scale_factor=1)
+    context.route("**/*", lambda route: route.abort())
+    page = context.new_page()
+    try:
+        markup = _tag_markup()
+        body = _in_units(page, markup, body_only=True)
+        assert all(abs(c) <= UNITS_BOX for c in body["box"]), ("the body alone", body)
+        whole = _in_units(page, markup)
+        assert all(abs(c) <= UNITS_BOX for c in whole["box"]), ("the whole drawing", whole)
+        wx, wy = whole["weight"]
+        assert abs(wx + wy) <= UNITS_BOX, ("its weight off the tag's diagonal", whole)
+        assert abs(wx) <= 0.5 and abs(wy) <= 0.5, ("its weight", whole)
+    finally:
+        context.close()

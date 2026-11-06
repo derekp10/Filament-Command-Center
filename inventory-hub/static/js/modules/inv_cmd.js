@@ -1338,18 +1338,21 @@ window.commitBulkMove = () => {
     // centered in circle thing"): the emoji is drawn on a slant, its yellow body low-left and
     // its string up-right, and the Windows one's grey string hardly shows on the dark, so even
     // centred by its box it read as off. A tag in the emoji's warm yellow and orange with its
-    // dark hole and an orange ring of string, pointing up-right as the emoji does, symmetric
-    // about that diagonal, its body and ring balanced about the circle's middle: its box and
-    // its weight within 0.05 of the frame's 32 units, the same on every system. The frame is
-    // the whole circle (.fcc-ico-svg is as big as its backing); test_icon_on_dark_circle_js.py
-    // measures it on the screen at 1x and 2x.
+    // dark hole, pointing up-right as the emoji does, symmetric about that diagonal, and no
+    // string (Derek, 2026-11-05, (c): "Slanted, no loop: the body itself centred"): the body,
+    // its stroke included, has its box on the circle's middle (16, 16) exactly, in the frame's
+    // own 32 units (each of its four corners, the two rounded ones at its back and the two
+    // beside its point, reaches 6.68 units from the middle along its screen axis, and the
+    // stroke adds 0.8 to each), and its weight sits 0.4 of a unit up and 0.4 right of it (the
+    // hole is dark), the same on every system. The frame is the whole circle (.fcc-ico-svg is
+    // as big as its backing); test_icon_on_dark_circle_js.py measures it in those units and on
+    // the screen at 1x and 2x.
     // Only on the backing: every other 🏷️, and the words beside this one, stay emoji.
     const TAG_ICON = '<svg class="fcc-ico-svg" viewBox="0 0 32 32" aria-hidden="true" focusable="false">'
         + '<g transform="rotate(-45 16 16)">'
-        + '<path d="M9.8 11.6H19.4L23.4 16L19.4 20.4H9.8Q8.8 20.4 8.8 19.4V12.6Q8.8 11.6 9.8 11.6Z" '
+        + '<path d="M11.45 11.6H21.05L25.05 16L21.05 20.4H11.45Q10.45 20.4 10.45 19.4V12.6Q10.45 11.6 11.45 11.6Z" '
         + 'fill="#FFC83D" stroke="#E57C00" stroke-width="1.6" stroke-linejoin="round"/>'
-        + '<circle cx="19.9" cy="16" r="1.6" fill="#2B1A08"/>'
-        + '<circle cx="23.5" cy="16" r="2.6" fill="none" stroke="#E57C00" stroke-width="1.6"/>'
+        + '<circle cx="21.55" cy="16" r="1.6" fill="#2B1A08"/>'
         + '</g></svg>';
 
     // A found tile's own 🏷️ (Derek, 2026-11-03, (a): "A sounds good"): one tap marks that
