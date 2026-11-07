@@ -9,6 +9,11 @@
 > Four small hardening fixes from Group 36's lineage (the filament-attribute work and its review). Group 36's other follow-up, the retry on the pre-merge extras read, is [Group 52](52-spoolman-read-load.md) 52.2. Every decision: [refresh-2026-10-19.md](refresh-2026-10-19.md).
 > Code anchors were read on `dev` @ `c5c5aa6` (the refresh's grounding) and spot-checked at `08c4b10`. Line numbers drift, so re-grep before editing.
 
+## Derek's answers, 2026-11-07 (read this first; it overrides the planning pass below)
+
+1. **The "Auto-Archive 0g" switches (the weigh-out window and the Quick-Weigh): (a), off means off.** With the switch off, a spool weighed to 0 g stays in stock at 0 g; with it on, it is archived as today. Today the server archives any spool weighed to 0 g whatever the switch says.
+2. **An emptied spool price: (a), it comes back from the filament's price, but marked as the filament's.** Derek: *"mark the spool price as coming from the filament price. Some times a filament's price might not be the price that exact spool costs, because it was on sale or purchased at a lower (or higher) price than the time that the filament entry was created."* So a person can always tell a spool's own price from one it takes from its filament. The planning pass's note that the next Save writes the refilled price as the spool's own would lose that mark: the build keeps the spool's own price empty while it shows the filament's (marked, e.g. "from the filament"), and writes a price of its own only when one is entered. A look change: show Derek a picture before the merge.
+
 ## Planning pass, 2026-11-06 (read-only; re-check anchors before editing)
 
 Read on `dev` @ `11126bb`, after Groups 40 to 61 merged (Group 58 as `d8c073c`). No code was changed. A read-only probe ran on a scratch copy of the modules outside the repo, against the offline fakes (`tests/spoolman_extra_fake.SpoolmanHTTPFake`), with no Spoolman and no prod. Its results are quoted below. Every anchor below is from `11126bb`. This section supersedes the older sections where they disagree: the decisions, the 54.4 design, the 54.5 log check and the estimate. Those sections are kept as filed.
