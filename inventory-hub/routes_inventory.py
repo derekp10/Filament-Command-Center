@@ -1402,9 +1402,11 @@ def _direct_location_write(sid, pre, updates):
     change of location blanks the slot and trail of the place the spool LEFT
     (`container_slot`, `physical_source`, `physical_source_slot`, and a
     `fcc_pre_box_location` note; Derek, 2026-10-15: a forced location shouldn't
-    still flag the spool as coming from its old slot). Written as '', never
-    omitted, because the extras merge keeps an omitted key; a key the caller sent
-    itself is written as sent."""
+    still flag the spool as coming from its old slot). A change INTO UNKNOWN also
+    blanks an old `fcc_pre_audit_location` (Group 58 review), as the move engine's
+    generic branch does, so a note at Unknown is only ever an audit's. Written as
+    '', never omitted, because the extras merge keeps an omitted key; a key the
+    caller sent itself is written as sent."""
     if not isinstance(pre, dict) or pre.get('id') is None:
         msg = f"Couldn't read #{sid} from Spoolman to check where it is, so nothing was written. Try again."
         state.add_log_entry(f"⚠️ {msg}", "WARNING", "ffaa00")
@@ -1427,7 +1429,8 @@ def _direct_location_write(sid, pre, updates):
         state.add_log_entry(f"⚠️ #{sid} not moved: {msg}", "WARNING", "ffaa00")
         return {"status": "error", "blocked_reason": "toolhead", "msg": msg}, updates
     pre_extra = pre.get('extra') if isinstance(pre.get('extra'), dict) else {}
-    left = [k for k in _TRAIL_KEYS if str(pre_extra.get(k) or '').strip().strip('"')]
+    blank = _TRAIL_KEYS + ('fcc_pre_audit_location',) if new_loc == 'UNKNOWN' else _TRAIL_KEYS
+    left = [k for k in blank if str(pre_extra.get(k) or '').strip().strip('"')]
     if not left:
         return None, updates
     out = dict(updates)
@@ -1564,6 +1567,10 @@ def api_search_inventory():
     # Sort axis. Currently filament-only: 'spools_desc' / 'spools_asc'.
     # Empty / unknown tokens fall through to the default sort path.
     sort = request.args.get('sort', '').strip().lower()
+    # Group 58 (the audit's 🔎 Find a spool): a search that couldn't be made
+    # answers success: false, never an empty list (spoolman_api.SearchUnreadable).
+    # Passed only when asked, so the search panel's call is the one it was.
+    strict = {'strict': True} if request.args.get('strict', '').strip().lower() in ('1', 'true') else {}
 
     try:
         results = spoolman_api.search_inventory(
@@ -1578,6 +1585,7 @@ def api_search_inventory():
             max_weight=max_weight,
             deployed_state=deployed_state,
             sort=sort,
+            **strict,
         )
         return jsonify({"success": True, "results": results})
     except Exception as e:

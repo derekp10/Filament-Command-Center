@@ -29,8 +29,10 @@ SENDS = "sends"
 # file -> [(top-level function header, class, expected door calls, reason for an exemption)]
 TABLE = {
     "inv_cmd.js": [
-        ("const toggleAudit = ", "exempt", 1, "CMD:AUDIT / CMD:CANCEL: a command, never a slot label"),
-        ("window.commitAuditWithAutoPark = ", "exempt", 1, "CMD:DONE: a command"),
+        # PIN UPDATED DELIBERATELY (Group 58): the tile only ever starts an audit,
+        # Cancel has its own door, and Done goes through processScan's POST.
+        ("const toggleAudit = ", "exempt", 1, "CMD:AUDIT: a command, never a slot label"),
+        ("window.cancelAudit = ", "exempt", 1, "CMD:CANCEL: a command, never a slot label"),
         ("const processScan = ", SENDS, 2, None),           # the scan POST and a question's replay
         ("const performContextAssign = ", SENDS, 1, None),
     ],
@@ -39,7 +41,8 @@ TABLE = {
         ("window.ejectSpool = ", "exempt", 1, "the ✋ pickup: an ID: scan never moves a spool"),
         ("window.doEject = ", "exempt", 1, "action remove: an eject"),
         ("window.manualAddSpool = ", "exempt", 1,
-         "ids only: LOC: / CMD: text goes through processScan (pinned in test_head_load_confirm_js)"),
+         "ids only, with no audit running: LOC: / CMD: text, and an id during an audit, go through "
+         "processScan (pinned in test_head_load_confirm_js and test_audit_page_58_js)"),
         ("window.triggerEjectAll = ", "exempt", 1, "action clear_location (check_only)"),
         ("const _runEjectAll = ", "exempt", 1, "action clear_location"),
     ],

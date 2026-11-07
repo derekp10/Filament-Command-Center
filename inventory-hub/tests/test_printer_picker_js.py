@@ -115,6 +115,23 @@ return {{ dialog, focus, posts: posts('/api/smart_move'), toasts: toasts() }};
     assert any(t["msg"] == "#57 → XL-2 (recorded as from LR-MDB-1 slot 2)" for t in res["toasts"]), res["toasts"]
 
 
+def test_a_spool_at_unknown_is_asked_as_one_from_no_box(tmp_path):
+    """Group 58: Unknown is a list, never a place a spool comes from. The engine
+    gives such a spool no trail, so the question is the only way to name its slot."""
+    res = _run(tmp_path, f"""
+answerWith('/api/smart_move', [{_js(dict(DONE, recorded_source="LR-MDB-1:2"))}]);
+window.__picks = [head('XL-2', {{ spool_location: 'UNKNOWN', feeds: {_js(FREE_FEED)} }})];
+await scanLoc('XL');
+const dialog = html().pop();
+await click('.fcc-rs-opt[data-rs-i="0"]');
+await __settle(200);
+return {{ dialog, posts: posts('/api/smart_move') }};
+""")
+    assert "Record #57 as coming from" in res["dialog"], res["dialog"]
+    [post] = res["posts"]
+    assert post["location"] == "XL-2" and post["record_source"] == {"box": "LR-MDB-1", "slot": "2"}, post
+
+
 def test_several_free_slots_preselect_nothing_and_no_box_records_nothing(tmp_path):
     feeds = FREE_FEED + [{"box": "TST-MDB-1", "slot": "1", "spool": None, "claimed_by": None, "free": True},
                          {"box": "LR-MDB-9", "slot": "3", "spool": None, "claimed_by": 61, "free": False}]

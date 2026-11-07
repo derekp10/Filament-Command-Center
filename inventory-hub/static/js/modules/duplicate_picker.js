@@ -16,9 +16,18 @@ console.log("🚀 Loaded Module: DUPLICATE PICKER");
 // opts.onAbort(): called when the user cancels OR queues a label (no further
 //                 scan flow — the re-labeling route disambiguates from here).
 //
-// Inline overlay (no nested Swal — see CLAUDE.md "Project Conventions").
+// Inline overlay (no nested Swal — see CLAUDE.md "Project Conventions"), at the
+// confirm tier always: it opens from a scan, so it can open over anything that
+// lets a scan through, the 🧺 Loose spools list included (Group 58 review: at the
+// standard tier it opened behind that list, and every later scan went dead with
+// nothing on screen saying why). An open question holds scans off, so no question
+// can need to sit above it: same tier, last mounted wins.
 // Keyboard: Enter activates focused button (defaults to "Use selected"),
-// Escape cancels.
+// Escape cancels, Tab stays inside it (trapTab). The list opens with no spool
+// picked, on purpose: a stray Enter finds nothing. Until one is picked, "Use
+// selected" and "Print new label" say so and the picker stays up (Group 58
+// review: Enter closed it with no spool and no word, and an audit went on to
+// offer the spool in the person's hand for parking).
 // Scans (Group 61; Derek, 2026-10-29: "hold until answered … or if the ID
 // matches a spool for the group, than maybe select that spool"): a scan never
 // presses a button here. Its Enter and any Space inside it are the scan's, so
@@ -45,7 +54,7 @@ window.showLegacySpoolPicker = (payload, opts = {}) => {
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
-    const optsHtml = candidates.map((c) => {
+    const optionHtml = (c) => {
         const w = (c.remaining_weight != null) ? `${Math.round(c.remaining_weight)}g` : '?g';
         const loc = c.location || 'Unassigned';
         const arch = c.archived ? ' [ARCHIVED]' : '';
@@ -55,7 +64,34 @@ window.showLegacySpoolPicker = (payload, opts = {}) => {
         const headline = [vendor, mat, name].filter(Boolean).join(' ');
         const label = `#${c.id} — ${headline} (${w} @ ${loc})${arch}`;
         return `<option value="${c.id}">${escapeHtml(label)}</option>`;
-    }).join('');
+    };
+    // During an audit (Group 58; Derek, 2026-11-03: the picker "says which candidates are on
+    // this audit's list and whether they're found yet"): each spool under where it stands
+    // in that audit, from what the page already knows (window.auditStandingOf, the session
+    // it read last; no request of its own), each group a heading of the list that names it
+    // in words, the place named once above the list. Every option still starts with its
+    // number, so a person's jump ("#135") and the browser's own find work as before. With
+    // no audit, or one with no place yet, the list is as it always was.
+    const STANDINGS = [
+        ['listed', '⬜ Expected there, not scanned yet'],
+        ['found', '✅ Expected there, found already'],
+        ['extra', '⚠️ Found there as an Extra'],
+        ['trail', '🔗 Loaded on a printer from there'],
+        ['none', 'Not expected there'],
+    ];
+    const standings = candidates.map((c) => (typeof window.auditStandingOf === 'function'
+        ? window.auditStandingOf(c.id) : null));
+    const audit = standings.find(Boolean) || null;
+    const groups = audit ? STANDINGS.map(([key, words]) => [words, candidates.filter((c, i) => (standings[i]
+        ? standings[i].standing : 'none') === key)]).filter(([, group]) => group.length) : [];
+    const optsHtml = audit
+        ? groups.map(([words, group]) => `<optgroup label="${escapeHtml(words)}">${group.map(optionHtml).join('')}</optgroup>`).join('')
+        : candidates.map(optionHtml).join('');
+    // Its headings take rows of the list too.
+    const listRows = audit ? Math.min(8, candidates.length + groups.length) : Math.min(6, candidates.length);
+    const auditLine = audit
+        ? `<div id="fcc-legacy-picker-audit" style="color:#fff; margin-bottom:8px; font-size:var(--fcc-fs-row); overflow-wrap:anywhere;">🕵️ The audit of <b>${escapeHtml(audit.place)}</b> is running: the spools are listed by where each stands in it.</div>`
+        : '';
 
     // Group 17.4: derive a fallback parent-filament id for the "Add new" path.
     // All candidates share the same filament (legacy id resolves at the filament
@@ -76,7 +112,7 @@ window.showLegacySpoolPicker = (payload, opts = {}) => {
                 ${candidates.length} spools are attached to the filament with this legacy ID. Pick the right one to continue, queue a fresh <code style="color:#ffaa55;">ID:</code>-format label for the chosen spool, or add a new spool on this filament if none on the list is the right one.
             </div>
             <div id="fcc-legacy-picker-flash" role="alert" style="color:#ffc107; min-height:1.5em; margin-bottom:8px;"></div>
-            <select id="fcc-legacy-picker-sel" class="form-select form-select-sm bg-dark text-white border-secondary mb-3" size="${Math.min(6, candidates.length)}" style="width:100%;">${optsHtml}</select>
+            ${auditLine}<select id="fcc-legacy-picker-sel" class="form-select form-select-sm bg-dark text-white border-secondary mb-3" size="${listRows}" style="width:100%;">${optsHtml}</select>
             <div style="display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;">
                 <button id="fcc-legacy-picker-cancel" class="btn btn-secondary btn-sm" style="min-width:100px;">Cancel</button>
                 ${parentFilamentId != null
@@ -106,6 +142,8 @@ window.showLegacySpoolPicker = (payload, opts = {}) => {
     const handle = window.mountOverlay({
         id: 'fcc-legacy-picker-overlay',
         content: panelHtml,
+        tier: 'confirm',
+        trapTab: true,
         focusGuard: true,
         initialFocus: '#fcc-legacy-picker-use',
         onEscape: () => { cleanup(); onAbort(); },
@@ -123,17 +161,24 @@ window.showLegacySpoolPicker = (payload, opts = {}) => {
         return id == null ? null : (candidates.find(c => c.id === id) || null);
     };
 
+    // Nothing picked: the question stays up and says so, the keyboard in the list.
+    const askForPick = () => {
+        flash('Pick a spool first');
+        const list = sel();
+        if (list) list.focus();
+    };
+
     const onUseClick = () => {
         const id = chosenId();
+        if (id == null) { askForPick(); return; }
         cleanup();
-        if (id != null) onSelect(id, 'keyboard');
-        else onAbort();
+        onSelect(id, 'keyboard');
     };
 
     const onPrintClick = () => {
         const c = chosenCandidate();
+        if (!c) { askForPick(); return; }
         cleanup();
-        if (!c) { onAbort(); return; }
         if (window.addToQueue) {
             const ok = window.addToQueue({
                 id: c.id,
@@ -161,6 +206,11 @@ window.showLegacySpoolPicker = (payload, opts = {}) => {
     const onAddNewClick = () => {
         cleanup();
         if (parentFilamentId != null && typeof window.openNewSpoolFromFilamentWizard === 'function') {
+            // Group 58: during an audit this picker opens over the audit's
+            // panel, and the wizard (a Bootstrap window) would open behind it
+            // with nothing to show for the click. Hide the panel as its own Hide
+            // does; the audit keeps running.
+            if (window.closeAuditPanel) window.closeAuditPanel();
             window.openNewSpoolFromFilamentWizard(parentFilamentId);
         } else if (window.showToast) {
             window.showToast('Add-new path unavailable (missing filament id)', 'error', 5000);

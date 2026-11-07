@@ -3,6 +3,7 @@ import state # type: ignore
 import config_loader # type: ignore
 import locations_db # type: ignore  # L271 Phase 2: single hierarchy resolver
 import attr_migration # type: ignore  # Group 36: shared force_reset safety layer
+import datetime
 import html
 import json
 import re
@@ -50,8 +51,9 @@ JSON_STRING_FIELDS = [
     "prusament_manufacturing_date", "sheet_link", "slicer_profile",
     # Vendor extras (Group 6 — Edit Modal new panels):
     "website",
-    # Group 42.6: a location id is text even when it looks like a number.
-    "fcc_pre_box_location",
+    # Group 42.6: a location id is text even when it looks like a number. Group 58:
+    # so is an audit's note, which an older FCC wrote as a bare location id.
+    "fcc_pre_box_location", "fcc_pre_audit_location",
     # Excluded from Low and Out (stock_report.py): a note such as "123" or "true"
     # must stay text.
     "fcc_stock_excluded", "fcc_stock_excluded_note", "fcc_stock_excluded_at",
@@ -69,6 +71,88 @@ JSON_STRING_FIELDS = [
 # their PATCH. Confirmed root cause of the multi-hour 2026-04-27 outage
 # diagnosis lag).
 LAST_SPOOLMAN_ERROR = None
+
+# LAST_SPOOLMAN_ERROR's shape for a refused request: "HTTP 500: <Spoolman's body>".
+_HTTP_REFUSAL_RE = re.compile(r"HTTP (\d{3}):\s*(.*)\Z", re.S)
+# The words a person reads are kept short: the full text stays in the log line.
+_REFUSAL_WORDS_MAX = 200
+# requests' own words for a Spoolman it couldn't reach, or that took too long (str(e)).
+_NO_ANSWER_MARKS = ("Read timed out", "ReadTimeout")
+# What a write says when the read it merges against failed (update_spool, update_filament,
+# update_vendor; Group 36): a developer's sentence, so a person reads refusal_words' instead.
+PREMERGE_READ_REFUSAL = ("could not read the record's existing extras before a partial "
+                         "update; refusing to PATCH because that would wipe the other "
+                         "extra fields")
+_PREMERGE_READ_WORDS = "FCC couldn't read it from Spoolman just before writing, so nothing was written."
+# requests' own words for a refused read (HTTPError, raise_for_status), with Spoolman's URL in
+# them: "503 Server Error: Service Unavailable for url: http://<host>:<port>/api/v1/spool".
+_HTTP_ERROR_RE = re.compile(r"\b(\d{3}) (?:Client|Server) Error: .*? for url: [^\s)]+")
+_UNREACHED_MARKS = ("Max retries exceeded", "Failed to establish a new connection", "Connection refused",
+                    "NameResolutionError", "Connection aborted")
+
+
+def refusal_words(text):
+    """LAST_SPOOLMAN_ERROR (or a caller's own words) as a person reads it (Group 58, Derek's
+    look of 2026-11-04: the audit report's 🛑 tile showed `HTTP 500: {"message": "database is
+    locked"}`, braces and quotes included). Spoolman answers a refusal in JSON: {"message"}
+    for its own errors, FastAPI's {"detail"} for a request it can't take (a string, or a
+    list of {"msg"}). So:
+      'HTTP 500: {"message": "database is locked"}' -> "Spoolman refused it: database is locked"
+      a body with no words of its own (an HTML error page, an empty one) -> "Spoolman refused
+      it (HTTP 502)."
+      requests' timeout -> "Spoolman didn't answer in time."; no connection -> "FCC
+      couldn't reach Spoolman."
+    FCC's own words come back as they are, but for two (review 3, R3S-2): a write that
+    couldn't read what it merges against (PREMERGE_READ_REFUSAL) -> "FCC couldn't read it from
+    Spoolman just before writing, so nothing was written.", and requests' words for a refused
+    read inside FCC's sentence ("couldn't read PM-DB-9 from Spoolman (503 Server Error: Service
+    Unavailable for url: http://…)") -> "… (it answered HTTP 503)", Spoolman's address gone.
+    Only for what a person reads: the log line a failed write leaves keeps the full text."""
+    s = str(text or '').strip()
+    if PREMERGE_READ_REFUSAL in s:
+        return _PREMERGE_READ_WORDS
+    m = _HTTP_REFUSAL_RE.match(s)
+    if m:
+        said = _refusal_said(m.group(2).strip())
+        return f"Spoolman refused it: {said}" if said else f"Spoolman refused it (HTTP {m.group(1)})."
+    if any(mark in s for mark in _NO_ANSWER_MARKS):
+        return "Spoolman didn't answer in time."
+    if any(mark in s for mark in _UNREACHED_MARKS):
+        return "FCC couldn't reach Spoolman."
+    return _HTTP_ERROR_RE.sub(lambda h: f"it answered HTTP {h.group(1)}", s)
+
+
+def _refusal_said(body):
+    """The words in a refusal's body: its JSON's message or detail, plain text as it is,
+    nothing for an HTML page. LAST_SPOOLMAN_ERROR keeps 400 characters, so a long JSON body
+    can arrive cut: its message is read where it shows."""
+    def short(words):
+        words = " ".join(str(words).split())
+        return words if len(words) <= _REFUSAL_WORDS_MAX else words[:_REFUSAL_WORDS_MAX - 1].rstrip() + "…"
+    try:
+        data = json.loads(body)
+    except (ValueError, TypeError):
+        data = None
+    if isinstance(data, dict):
+        for key in ('message', 'detail', 'error', 'msg'):
+            value = data.get(key)
+            if isinstance(value, str) and value.strip():
+                return short(value)
+            if isinstance(value, list):
+                msgs = [str(d.get('msg')).strip() for d in value if isinstance(d, dict) and d.get('msg')]
+                if msgs:
+                    return short("; ".join(msgs))
+        return ''
+    if isinstance(data, str):
+        return short(data) if data.strip() else ''
+    if data is not None or not body:
+        return ''
+    if body.startswith(('{', '[')):
+        cut = re.search(r'"(?:message|detail|msg)"\s*:\s*"((?:[^"\\]|\\.)*)', body)
+        return short(cut.group(1).replace('\\"', '"')) if cut and cut.group(1).strip() else ''
+    if '<' in body:
+        return ''
+    return short(body)
 
 
 class SpoolmanRejection(Exception):
@@ -102,12 +186,21 @@ def get_spool_answer(sid):
     round 2): (what get_spool returns, True) when it answered, a body that isn't
     JSON included (None then: a record Spoolman can't send); (None, False) when
     it didn't (no connection, a timeout). The dashboard's buffer refresh stops
-    reading one spool at a time only on the second kind."""
+    reading one spool at a time only on the second kind.
+
+    A 5xx is the first kind whatever its body says (Group 58 review): "answered,
+    not a spool". Its JSON error body used to read as a truthy dict with no id, which
+    every caller here takes for a deleted spool, and Undo dropped the spool for
+    good. It stays True, never False: one broken record must not stop the refresh
+    of the spools after it."""
     sm_url, _ = config_loader.get_api_urls()
     try:
         resp = requests.get(f"{sm_url}/api/v1/spool/{sid}", timeout=3)
     except Exception:
         return None, False
+    status = getattr(resp, 'status_code', None)
+    if isinstance(status, int) and status >= 500:
+        return None, True
     try:
         return parse_inbound_data(resp.json()), True
     except Exception:
@@ -629,11 +722,7 @@ def update_spool(sid, data):
                 # `extra` sub-document on PATCH — so the write would wipe every
                 # sibling. Refuse loudly instead; a failed write is recoverable,
                 # a silent wipe is not. (Group 36.)
-                LAST_SPOOLMAN_ERROR = (
-                    "could not read the record's existing extras before a partial "
-                    "update; refusing to PATCH because that would wipe the other "
-                    "extra fields"
-                )
+                LAST_SPOOLMAN_ERROR = PREMERGE_READ_REFUSAL
                 state.logger.error(
                     f"update_spool({sid}): {LAST_SPOOLMAN_ERROR}"
                 )
@@ -821,10 +910,12 @@ SYSTEM_MANAGED_EXTRAS = frozenset({
     "physical_source_slot",
     # Owned by _auto_archive_on_empty / _auto_unarchive_on_refill.
     "fcc_pre_archive_location",
-    # 18.2 Part A — set when audit-mode auto-parks an unconfirmed spool
-    # at UNKNOWN. Carries the location the spool was expected at so a
-    # recovery scan can route it home; never user-editable (would lose
-    # the breadcrumb).
+    # 18.2 Part A — set when an audit parks a spool it didn't find at
+    # UNKNOWN: <PLACE>:<slot>@<YYYY-MM-DD>, where FCC last had it, the slot
+    # possibly empty (Group 58; an older note is the bare place). A note for
+    # a person, shown by audit_lost_from: nothing reads it back to send a
+    # spool home, no "recovery scan" exists. Never user-editable (would lose
+    # the note).
     "fcc_pre_audit_location",
     # Group 42.6 — where a spool sat before it went into a single-slot box
     # (a PolyDryer), so ejecting it out of the box puts it back there.
@@ -1251,11 +1342,7 @@ def update_filament(fid, data):
             # `extra` sub-document on PATCH — so the write would wipe every
             # sibling. Refuse loudly instead; a failed write is recoverable,
             # a silent wipe is not. (Group 36.)
-            LAST_SPOOLMAN_ERROR = (
-                "could not read the record's existing extras before a partial "
-                "update; refusing to PATCH because that would wipe the other "
-                "extra fields"
-            )
+            LAST_SPOOLMAN_ERROR = PREMERGE_READ_REFUSAL
             state.logger.error(
                 f"update_filament({fid}): {LAST_SPOOLMAN_ERROR}"
             )
@@ -1454,11 +1541,7 @@ def update_vendor(vid, data):
             # `extra` sub-document on PATCH — so the write would wipe every
             # sibling. Refuse loudly instead; a failed write is recoverable,
             # a silent wipe is not. (Group 36.)
-            LAST_SPOOLMAN_ERROR = (
-                "could not read the record's existing extras before a partial "
-                "update; refusing to PATCH because that would wipe the other "
-                "extra fields"
-            )
+            LAST_SPOOLMAN_ERROR = PREMERGE_READ_REFUSAL
             state.logger.error(
                 f"update_vendor({vid}): {LAST_SPOOLMAN_ERROR}"
             )
@@ -1594,12 +1677,12 @@ REQUIRED_SPOOL_EXTRAS = [
     # without the UI being misleading.
     ("prusament_manufacturing_date", "Manufacturing Date", "text"),
     ("prusament_length_m", "Length (m)", "text"),
-    # 18.2 Part A — breadcrumb planted when audit auto-parks an unscanned
-    # spool at UNKNOWN. Recovery scans read it to route the spool home.
+    # 18.2 Part A — note planted when an audit parks an unscanned spool at
+    # UNKNOWN: where FCC last had it. Nothing reads it to route a spool home.
     # Must be in REQUIRED_SPOOL_EXTRAS so app startup self-heals against
-    # a Spoolman that's missing it; without this, the auto-park PATCH 400s
+    # a Spoolman that's missing it; without this, the park's PATCH 400s
     # ("Unknown extra field fcc_pre_audit_location") and missing spools stay
-    # at their stale location (silent failure surfaces as red Activity Log).
+    # where they were (each one a red Activity Log line).
     ("fcc_pre_audit_location", "Pre-Audit Location (system)", "text"),
     # Group 42.6 — every Undo and Smart Load snapshot writes the
     # SYSTEM_MANAGED_EXTRAS, and Spoolman rejects a whole PATCH carrying an
@@ -1991,6 +2074,73 @@ def update_extra_field_choices(entity_type, key, new_choices):
         state.logger.error(f"API Error updating field choices: {e}")
         return {"success": False, "msg": str(e)}
 
+def label_flag(extra):
+    """A record's label status from its extras (Group 58.5): True (a label needs
+    printing), False (its label is confirmed), None (no status on record: the key
+    is absent, null or blank, or holds something that isn't a yes or a no).
+
+    The absent case is real and common: Spoolman leaves a record's unset extra
+    out of `extra`, it never answers false for it, and spools imported before the
+    field existed have never had one. Reading that as False drew a green "label
+    confirmed" tick on a spool nobody had checked.
+
+    Works on raw and parsed extras alike: Spoolman's "true" / "false", a boolean,
+    1 / 0, or a value still in its JSON quotes."""
+    value = extra.get('needs_label_print') if isinstance(extra, dict) else None
+    if value is None:
+        return None
+    text = str(value).strip().strip('"').strip().lower()
+    if text in ('true', '1'):
+        return True
+    if text in ('false', '0'):
+        return False
+    return None
+
+
+def _is_note_day(text):
+    """True for a real date written YYYY-MM-DD, on every Python this runs on (3.11
+    and newer read more shapes than that)."""
+    try:
+        return datetime.date.fromisoformat(text).isoformat() == text
+    except ValueError:
+        return False
+
+
+def audit_lost_from(location, extra):
+    """Which audit lost a spool (Group 58, Derek's note: if one is found, it should
+    be apparent that it was filed away because FCC didn't know where it went):
+    {place, slot, on} for a spool at UNKNOWN with an audit's note, else None. A
+    spool anywhere else is lost by nobody, whatever old note it carries.
+
+    An audit writes <PLACE>:<slot>@<YYYY-MM-DD>, the slot possibly empty: read from
+    the right, so a LocationID can hold a ':' or an '@'. A note with no real date
+    after its last '@' is an older FCC's, which wrote the bare place: its whole text
+    is the place, and `slot` and `on` are ''."""
+    if str(location or '').strip().upper() != 'UNKNOWN' or not isinstance(extra, dict):
+        return None
+    note = str(extra.get('fcc_pre_audit_location') or '').strip().strip('"').strip()
+    if not note:
+        return None
+    before, at, day = note.rpartition('@')
+    if not at or not before or not _is_note_day(day):
+        return {"place": note, "slot": "", "on": ""}
+    place, colon, slot = before.rpartition(':')
+    if not colon or not place:
+        return {"place": before, "slot": "", "on": day}
+    return {"place": place, "slot": slot, "on": day}
+
+
+def audit_lost_words(lost):
+    """"the audit of LR-MDB-1 slot 2 on 2026-11-01", from audit_lost_from's answer."""
+    where = f"{lost['place']} slot {lost['slot']}" if lost.get('slot') else lost['place']
+    return f"the audit of {where}" + (f" on {lost['on']}" if lost.get('on') else "")
+
+
+def audit_turned_up_msg(sid, lost):
+    """What a scan of a lost spool says, outside an audit."""
+    return f"#{sid} turned up. It was marked lost by {audit_lost_words(lost)}. Scan where it goes."
+
+
 def format_spool_display(spool_data):
     """Creates the text and color for the UI."""
     try:
@@ -2065,9 +2215,11 @@ def format_spool_display(spool_data):
                 "color_name": col_name,
                 "weight": rem,
                 "temp": f"{fil.get('settings_extruder_temp', '')}°C" if fil.get('settings_extruder_temp') else "",
-                # Spoolman stores needs_label_print loosely (bool, 'true'/'false' string, or missing).
-                # Normalize to a strict bool so the card can branch without re-checking types.
-                "needs_label_print": str(extra.get('needs_label_print', '')).lower() in ('true', '1'),
+                # True, False or None (no status on record), so a card's "label
+                # confirmed" tick means a label someone confirmed (label_flag).
+                "needs_label_print": label_flag(extra),
+                # {place, slot, on} for a spool an audit lost, else None.
+                "lost_from": audit_lost_from(spool_data.get('location'), extra),
             }
         }
 
@@ -2442,7 +2594,30 @@ def filament_attribute_list(fil):
     return out
 
 
-def search_inventory(query="", material="", vendor="", color_hex="", only_in_stock=False, empty=False, target_type="spool", min_weight="", max_weight="", deployed_state="", sort=""):
+class SearchUnreadable(Exception):
+    """search_inventory(strict=True) couldn't search: Spoolman didn't answer, or
+    the search itself went wrong. Its text says which, for a person."""
+
+
+SEARCH_ANSWER_UNREAD = "Spoolman's answer couldn't be read."
+
+
+def _search_failure_words(e):
+    """What a strict search that raised says (review of 7e3720f, S-4): Spoolman that
+    didn't answer (no connection, a timeout), or an answer FCC couldn't read (a body
+    that isn't JSON, a list of the wrong shape, a record the search doesn't know),
+    never a Python error behind "didn't answer" when Spoolman did. requests'
+    JSONDecodeError is a RequestException, and so an OSError, as well as a
+    ValueError: it is tested first. The exception itself is logged by the caller."""
+    json_error = getattr(requests.exceptions, 'JSONDecodeError', None)
+    if json_error is not None and isinstance(e, json_error):
+        return SEARCH_ANSWER_UNREAD
+    if isinstance(e, (requests.exceptions.RequestException, OSError)):
+        return f"Spoolman didn't answer ({e})."
+    return SEARCH_ANSWER_UNREAD
+
+
+def search_inventory(query="", material="", vendor="", color_hex="", only_in_stock=False, empty=False, target_type="spool", min_weight="", max_weight="", deployed_state="", sort="", strict=False):
     """
     Searches Spoolman inventory objects (spools or filaments) based on fuzzy attributes and color closeness.
     Returns a sorted list of dictionaries matching the criteria.
@@ -2450,6 +2625,13 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
     `deployed_state` (spool-only): '' or 'any' = no filter, 'deployed' = only
     spools currently on a toolhead (location ∈ printer_map) OR with a ghost
     physical_source set, 'undeployed' = the inverse. Filaments ignore this.
+
+    `strict` (Group 58, the audit's 🔎 Find a spool): a search that couldn't be
+    made raises SearchUnreadable instead of answering [], so a Spoolman that
+    didn't answer reads as "Couldn't search", never as "No matches" (Group 52's
+    rule); a filament search's spool-count read too. Its words say which failure
+    it was (_search_failure_words). Left out, the search panel's [] stands as it
+    was.
     """
     sm_url, _ = config_loader.get_api_urls()
     results = []
@@ -2480,14 +2662,25 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
                 s_resp = requests.get(f"{sm_url}/api/v1/spool{archived_param}", timeout=10)
                 if s_resp.ok:
                     spools_for_count = parse_inbound_data(s_resp.json())
-            except: pass
+                elif strict:
+                    raise SearchUnreadable(f"Spoolman answered HTTP {s_resp.status_code}.")
+            except SearchUnreadable:
+                raise
+            except:
+                # The search panel counts 0 spools when this read fails; a strict search
+                # (Group 58) says it couldn't search instead, as its docstring promises
+                # (review of 7e3720f, S-4).
+                if strict:
+                    raise
         else:
             resp = requests.get(f"{sm_url}/api/v1/spool{archived_param}", timeout=10)
             
         if not resp.ok:
             state.logger.error(f"Failed to fetch {target_type}s for search: {resp.status_code}")
+            if strict:
+                raise SearchUnreadable(f"Spoolman answered HTTP {resp.status_code}.")
             return []
-            
+
         all_items = parse_inbound_data(resp.json())
         
         # Build quick lookup for spool counts if we are answering a filament search
@@ -2687,7 +2880,11 @@ def search_inventory(query="", material="", vendor="", color_hex="", only_in_sto
                 results.sort(key=lambda x: -x['id'])
 
         return results
-        
+
+    except SearchUnreadable:
+        raise
     except Exception as e:
         state.logger.error(f"Search Spools API Error: {e}")
+        if strict:
+            raise SearchUnreadable(_search_failure_words(e))
         return []

@@ -48,7 +48,9 @@ const renderBuffer = () => {
                 return window.SpoolCardBuilder.buildCard(s, 'buffer', { isFirst: i === 0, index: i });
             }).join('');
 
-            state.heldSpools.forEach((s, i) => generateSafeQR(`qr-buf-${i}`, "ID:" + s.id, 74));
+            // Never the printed label's ID: (inv_core.js fccSpoolCardQr): read off the
+            // screen, it would count as a label read.
+            state.heldSpools.forEach((s, i) => generateSafeQR(`qr-buf-${i}`, window.fccSpoolCardQr(s.id), 74));
         }
     }
 
@@ -102,35 +104,263 @@ const nextBuffer = () => { if (state.heldSpools.length > 1) { state.heldSpools.p
 const prevBuffer = () => { if (state.heldSpools.length > 1) { state.heldSpools.unshift(state.heldSpools.pop()); renderBuffer(); } };
 
 // --- MODES ---
-const toggleDropMode = () => { state.dropMode = !state.dropMode; state.ejectMode = false; updateDeckVisuals(); };
-const toggleEjectMode = () => { state.ejectMode = !state.ejectMode; state.dropMode = false; updateDeckVisuals(); };
+// Armed during an audit, a mode would outlive it, and eject the first spool scanned
+// after it. Turning one off is always fine.
+const toggleDropMode = () => {
+    if (!state.dropMode && window.auditPressRefused('CMD:DROP')) return;
+    state.dropMode = !state.dropMode; state.ejectMode = false; updateDeckVisuals();
+};
+const toggleEjectMode = () => {
+    if (!state.ejectMode && window.auditPressRefused('CMD:EJECT')) return;
+    state.ejectMode = !state.ejectMode; state.dropMode = false; updateDeckVisuals();
+};
 window.resetCommandModes = () => { state.dropMode = false; state.ejectMode = false; updateDeckVisuals(); };
-const toggleAudit = () => {
-    // 18.2 Part B — the deck-button toggle is the user's SAFE bail. When
-    // turning audit off via the button, send CMD:CANCEL (no moves) rather
-    // than CMD:DONE (which auto-parks missing spools at UNKNOWN). The
-    // panel's explicit "✅ Done & Auto-Park" button is the path for the
-    // destructive commit; toggle stays purely additive/reversible.
-    // Derek 2026-05-16: previously clicking the deck button while audit
-    // was active triggered CMD:DONE and force-moved unscanned spools to
-    // UNKNOWN, with no way to bail short of refresh.
-    state.auditActive = !state.auditActive;
-    updateLogState(true);
-    const cmd = state.auditActive ? "CMD:AUDIT" : "CMD:CANCEL";
-    fetch('/api/identify_scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: cmd }) });
+
+// --- AUDIT: the page's side (Group 58) --------------------------------------
+// The session lives on the server. state.auditActive is what this page believes.
+// toggleAudit believes a start from the press and takes it back on a refusal, so a
+// double read or a second press only shows the panel. Everything else changes it
+// from an answer (window.noteAuditEnded when one ended the audit, _auditScanAnswer
+// when one proves it runs) or from the heartbeat (_syncAuditSignal, inv_core.js).
+// Nothing flips it by negation: a toggle turned a double press into a new audit,
+// and a failed Cancel into a press that did nothing.
+const _auditClock = () => (window.fccPageClock ? window.fccPageClock() : Date.now());
+const _auditChanged = () => { state.auditChangedAt = _auditClock(); };
+
+// Done goes out in its turn, so it can sit in the scan queue behind scans already read
+// (window.auditDone). Its buttons stay down until it has gone out and been answered,
+// or a second press queues a second Done.
+const _auditDoneQueued = () => (state.scanQueue || [])
+    .some(q => String(q.text).trim().toUpperCase() === 'CMD:DONE');
+const _auditButtonsFree = () => {
+    if (!state.auditRequestsOut && !_auditDoneQueued() && window.auditPanelBusy) window.auditPanelBusy(false);
 };
 
-// Explicit commit path — exposed for the panel button. Mirrors the
-// CMD:DONE scan: closes audit, missing spools get auto-parked to UNKNOWN.
-window.commitAuditWithAutoPark = () => {
-    state.auditActive = false;
-    updateLogState(true);
-    fetch('/api/identify_scan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: 'CMD:DONE' }),
-    });
+// This page's own requests on their way: a scan, a start, a Cancel (and the
+// question's Yes). `delta`: +1 as one goes out, -1 once it is answered. While any
+// is out, _syncAuditSignal won't call a "no audit" someone else's doing.
+window.auditRequestOut = (delta) => {
+    state.auditRequestsOut = Math.max(0, (state.auditRequestsOut || 0) + delta);
+    _auditButtonsFree();
 };
+
+// scripts.html, after each queued scan: a queued Done that was dropped, or stopped
+// short of the server, has no answer coming to free the buttons.
+window.auditQueueMoved = _auditButtonsFree;
+
+// A request of this page's own ended the audit (`audit_ended`: {id, why}): the
+// server's word, so the panel closes now, and the heartbeat that follows stays
+// quiet. `opts.quiet`: the caller has its own words for it.
+const AUDIT_FINISHED_WORDS = 'Audit finished: its report is in the Activity Log.';
+window.noteAuditEnded = (ended, opts = {}) => {
+    if (!ended) return;
+    state.auditEndedHere = ended.id;
+    state.auditActive = false;
+    state.lastAuditState = false;
+    state.auditLocation = '';
+    state.auditId = null;
+    _auditChanged();
+    window.updateAuditVisuals();
+    if (!opts.quiet) {
+        if (ended.why === 'cancel') showToast('Audit cancelled: nothing moved.', 'info', 4000);
+        else showToast(AUDIT_FINISHED_WORDS, 'success', 4000);
+    }
+    if (typeof updateLogState === 'function') updateLogState(true);
+};
+
+// The deck tile and a CMD:AUDIT scan. Strictly non-destructive, as Bulk Move's
+// (Decision 5, for Derek's veto; it replaces his 2026-05-16 one-click bail): during
+// an audit it shows the panel and sends nothing, so a printed CMD:AUDIT label can't
+// cancel an audit, and Hide has a way back. Cancelling is the panel's ❌ or a
+// CMD:CANCEL scan, both labelled.
+// Else it starts one and reads the answer. A refusal (a bulk move is armed) puts
+// the page back, or the next press would have sent CMD:CANCEL at the bulk move.
+const toggleAudit = () => {
+    if (state.auditActive) { window.openAuditPanel(); return; }
+    // Believed from here: a double read or a second press only shows the panel.
+    state.auditActive = true;
+    _auditChanged();
+    const refused = (msg) => {
+        state.auditActive = false;
+        state.lastAuditState = false;
+        _auditChanged();
+        window.updateAuditVisuals();
+        showToast(msg, 'error', 7000);
+    };
+    window.auditRequestOut(1);
+    window.fetchT('/api/identify_scan', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'CMD:AUDIT' }),
+    })
+        .then(r => r.json())
+        .then((res) => {
+            if (!res || res.type === 'error') { refused((res && res.msg) || "Couldn't start the audit."); return; }
+            state.lastAuditState = true;
+            _auditChanged();
+            window.updateAuditVisuals();
+            if (typeof updateLogState === 'function') updateLogState(true);
+        })
+        .catch(() => refused("Couldn't start the audit: FCC didn't answer. Try again in a moment."))
+        .finally(() => window.auditRequestOut(-1));
+};
+
+// A refusal, at the 7 s every refusal gets. The toast layer is under the panel, so
+// the panel says it too.
+const _auditSay = (msg, kind = 'error') => {
+    showToast(msg, kind, 7000);
+    if (window.auditPanelNotice) window.auditPanelNotice(msg);
+};
+
+// The panel's ❌: always CMD:CANCEL, whatever the page believes. Reads the answer,
+// and a Cancel that didn't land says so with the audit still up.
+let _auditCancelOut = false;
+window.cancelAudit = () => {
+    if (_auditCancelOut) return;
+    _auditCancelOut = true;
+    if (window.auditPanelBusy) window.auditPanelBusy(true);
+    window.auditRequestOut(1);
+    window.fetchT('/api/identify_scan', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'CMD:CANCEL' }),
+    })
+        .then(r => r.json())
+        .then((res) => {
+            if (res && res.audit_ended) { window.noteAuditEnded(res.audit_ended); return; }
+            if (res && res.type === 'error') { _auditSay(res.msg || "Cancel didn't go through."); return; }
+            // No audit took it, so none was running: the server says why.
+            if (typeof updateLogState === 'function') updateLogState(true);
+        })
+        .catch(() => _auditSay("Cancel didn't go through: FCC didn't answer, so the audit is still running."))
+        .finally(() => { _auditCancelOut = false; window.auditRequestOut(-1); });
+};
+
+// processScan stops a scan under a gating dialog without a word, so a press that
+// goes through it says so here.
+const _auditDialogBehind = () => {
+    if (!state.activeModal) return false;
+    _auditSay('A dialog behind this panel is still open: press Hide and answer it first.', 'warning');
+    return true;
+};
+
+// The panel's Done: the scan path, so the button and all three QRs share one
+// answer. Its source is 'keyboard': a press reads no label. In its turn behind any
+// scan read before it: sent at once, the plan still had that spool as not scanned,
+// the question listed it, and a Yes parked the spool in the person's hand.
+window.auditDone = () => {
+    if (_auditDialogBehind()) return;
+    if (window.auditPanelBusy) window.auditPanelBusy(true);
+    (window.sendInScanOrder || processScan)('CMD:DONE', 'keyboard');
+    // Stopped short of the server (an open question says why itself): no answer comes.
+    _auditButtonsFree();
+};
+
+// "Needs a label" on the last spool found (Group 58.2): the strip's button and key N.
+// The scan path, as its QR is, in its turn behind any scan read before it: that
+// scan's spool is the one the person means.
+window.auditNeedLabel = () => {
+    if (_auditDialogBehind()) return;
+    (window.sendInScanOrder || processScan)('CMD:NEEDLABEL', 'keyboard');
+};
+
+// Commands the page runs itself never reach the server's audit gate, so it stops
+// them here, with their reason. The toast sits under the panel, so the panel says
+// it too. Hide exists so the page can be used during an audit: what opens a window
+// or changes the buffer's view is refused only while the panel covers it. A mode
+// armed here would outlive the audit, and eject the first spool scanned after it.
+const _AUDIT_REFUSES = new Map([
+    ['CMD:DROP', 'Drop mode waits until the audit is finished or cancelled.'],
+    ['CMD:EJECT', 'Eject mode waits until the audit is finished or cancelled.'],
+    ['CMD:EJECTALL', 'Eject All waits until the audit is finished or cancelled.'],
+    ['CMD:CLEAR', 'The buffer is kept during an audit: finish or cancel it first.'],
+    ['CMD:UNDO', 'Undo Last Move is off while an audit is running. Finish or cancel the audit first.'],
+    ['CMD:BULKMOVE', 'A bulk move waits until the audit is finished or cancelled.'],
+]);
+const _AUDIT_PANEL_COVERS = ['CMD:LOCATIONS', 'CMD:WEIGH', 'CMD:PREV', 'CMD:NEXT'];
+const _auditCommandRefusal = (upper) => {
+    if (_AUDIT_REFUSES.has(upper)) return _AUDIT_REFUSES.get(upper);
+    if (upper.startsWith('CMD:TRASH:')) return 'Eject waits until the audit is finished or cancelled.';
+    const covered = _AUDIT_PANEL_COVERS.includes(upper) || upper.startsWith('CMD:PRINT:');
+    if (covered && window.isAuditPanelOpen && window.isAuditPanelOpen()) {
+        return 'The audit panel is on top: press Hide, then scan that again.';
+    }
+    return '';
+};
+
+// A press that does what `cmd` does, and is refused with its words during an audit: a
+// deck tile, and the Location Manager's pickup (the buffer is kept during an audit, so
+// a press must not count as a find). True when it was refused.
+window.auditPressRefused = (cmd) => {
+    if (!state.auditActive) return false;
+    _auditSay(_AUDIT_REFUSES.get(cmd), 'warning');
+    return true;
+};
+
+// A scan read during an audit never runs as a scan after that audit (Group 58
+// review). The dim holds a scan read during the park, behind a Done or behind the
+// scan a Cancel overtook, and the queue sent it on once the audit was over: a location
+// label filed the whole buffer there, a slot label loaded it, and an ID: label cleared
+// a reprint flag. `q`: a queued scan, stamped `auditOf` as it was read (scripts.html).
+// True when that audit has gone, and the scan stops here. CMD:AUDIT goes on: it means
+// the next audit.
+// A scanner's second read of the scan read just before it (the same text within
+// LOC_REPEAT_MS, processScan's double-read window) is no new scan, and is dropped with an
+// INFO line only (review 3, R3-2): the first read of Done's QR, or of the question's "Scan to
+// Park", ended the audit, and its second read, queued while the first was answered, was
+// called a scan the audit outlived ("… CMD:DONE did nothing. Scan it again if you meant
+// it."), on the report window that first read had just opened, and with the question's
+// session id in it.
+window.auditScanOutlived = (q) => {
+    const text = String(q.text).trim();
+    if (!q.auditOf || text.toUpperCase() === 'CMD:AUDIT') return false;
+    const another = q.auditOf !== true && state.auditId != null && q.auditOf !== state.auditId;
+    if (state.auditActive && !another) return false;
+    const last = _lastScanRead;
+    const at = q.capturedAt || Date.now();
+    _lastScanRead = { text: text.toUpperCase(), at };
+    if (last && last.text === text.toUpperCase() && Math.abs(at - last.at) < LOC_REPEAT_MS) {
+        const escLog = window.escHtml || ((x) => x);
+        if (window.logClientEvent) window.logClientEvent(
+            `ℹ️ Scan "${escLog(text)}" ignored: the same label was read twice within ${LOC_REPEAT_MS / 1000} s`, 'INFO');
+        return true;
+    }
+    const msg = `The audit has ended, so ${text} did nothing. Scan it again if you meant it.`;
+    _auditSay(msg, 'warning');
+    if (window.logClientEvent) window.logClientEvent(`⚠️ ${window.escHtml ? window.escHtml(msg) : msg}`, 'WARNING');
+    return true;
+};
+
+// What a scan the audit took answers. `sentAt`: when the scan went out.
+const _auditScanAnswer = (res, sentAt) => {
+    if (res.audit_ended) {
+        // A Done that ended the audit with nothing to ask carries its report: the window
+        // opens where the panel was (Derek, 2026-11-03), once the panel has gone. It says
+        // what Done did, so it stands for the "Audit finished" toast, which peeked out
+        // around a short report (toasts sit under the overlays; Derek's look of
+        // 2026-11-04). A Cancel's carries none, and an idle end's isn't shown.
+        const report = !!res.report && res.audit_ended.why === 'done' && !!window.openAuditReport;
+        window.noteAuditEnded(res.audit_ended, { quiet: report });
+        if (report && !window.openAuditReport(res.report, { after: true })) showToast(AUDIT_FINISHED_WORDS, 'success', 4000);
+        return;
+    }
+    // The audit took it: Find a spool, over the panel, would hide what it did.
+    if (window.closeAuditFindForScan) window.closeAuditFindForScan();
+    // `warning`: found, but its label couldn't be checked (toasted by the caller).
+    if (window.auditPanelNotice) window.auditPanelNotice(res.warning || '');
+    if (res.said) showToast(res.said, res.said_type || 'success', 4000);
+    // An audit took it, so one runs, whatever this page believed: a scan right
+    // after a reload lands before the first heartbeat.
+    if (!state.auditActive && window._syncAuditSignal) window._syncAuditSignal({ audit_active: true }, { sentAt });
+    // Every scan outcome is owed a toast, and the panel that shows this one is hidden.
+    // Asked after the line above, which can bring the panel up.
+    if (res.heard && !(window.isAuditPanelOpen && window.isAuditPanelOpen())) showToast(res.heard, 'info', 4000);
+    if (window.refreshAuditSession) window.refreshAuditSession();
+};
+
+// An answer no running audit gives: the audit this page believes in has gone.
+const _AUDIT_NEVER_ANSWERS = ['location', 'spool', 'assignment', 'filament', 'prusament_matched', 'prusament_new',
+    'audit_gone'];
+const _noAuditAnswered = (res) => _AUDIT_NEVER_ANSWERS.includes(res.type)
+    || (res.type === 'command' && res.cmd !== 'audit_scan');
 
 const updateDeckVisuals = () => {
     const dropBtn = document.getElementById('btn-deck-drop');
@@ -155,8 +385,10 @@ const updateDeckVisuals = () => {
 // --- Reusable "shapeshift" deck QR (generalizes the Audit slot) -------------
 // A single .deck-qr slot whose ENCODED command, label text, and active CSS
 // classes change IN PLACE between named states, driven by a mode flag. The
-// Audit slot is the reference (idle: CMD:AUDIT/"AUDIT"  <->  active:
-// CMD:DONE/"FINISH"). This factory lets a future multi-state deck command
+// Audit slot was the reference (idle: CMD:AUDIT/"AUDIT"  <->  active:
+// CMD:DONE/"FINISH"); since Derek's 2026-11-03 look its two states differ only
+// in their lit look (see auditShapeshift). Bulk Move's slot below is the one that
+// still changes its command. This factory lets a multi-state deck command
 // (e.g. the backlog's Bulk Moves: arm -> set-dest -> commit) reuse the exact
 // same recipe instead of hand-rolling another updateAuditVisuals.
 //
@@ -231,29 +463,46 @@ window.registerShapeshiftQR = (config) => {
     return { set, reset: () => set(cfg.default), current: () => currentName };
 };
 
-// Audit slot migrated onto the shapeshift helper — behavior is identical to the
-// former hand-rolled updateAuditVisuals (CMD:AUDIT/"AUDIT" <-> CMD:DONE/"FINISH"
-// + the btn-audit-active / label-active-audit classes). The onEnter hooks
-// preserve 18.2 Part B's visual audit panel: open it when the session is
-// active, close it when it ends — additive to the Activity Log, not a
-// replacement (Derek 2026-05-15: "I still like the idea of having the activity
-// log reference"). NOTE: audit is deliberately NOT wired into
-// resetCommandModes — an audit session must survive opening other modals,
-// unlike the drop/eject danger modes. The static idle QR is still seeded once
-// in scripts.html; the first updateAuditVisuals() call (from the backend poll
+// Audit slot on the shapeshift helper. During an audit the tile keeps its AUDIT label
+// and its CMD:AUDIT QR (Derek, 2026-11-03: "drop the finish swap"), lit purple
+// (btn-audit-active / label-active-audit), and its click or scan only shows the panel
+// (toggleAudit): only the panel ends an audit, its Done… and Cancel Audit with their
+// own QRs. It used to read FINISH over CMD:DONE, a second Done a person could scan
+// from across the room with the panel hidden. The onEnter hooks preserve 18.2
+// Part B's visual audit panel: open it when the session is active, close it when it
+// ends — additive to the Activity Log, not a replacement (Derek 2026-05-15: "I still
+// like the idea of having the activity log reference"). NOTE: audit is deliberately
+// NOT wired into resetCommandModes — an audit session must survive opening other
+// modals, unlike the drop/eject danger modes. The static idle QR is still seeded
+// once in scripts.html; the first updateAuditVisuals() call (from the backend poll
 // or toggleAudit) paints the correct state.
 const auditShapeshift = window.registerShapeshiftQR({
     slot: 'audit',
     size: 85,
     default: 'idle',
     states: {
-        idle:   { cmd: "CMD:AUDIT", label: "AUDIT",  btnClass: '',                 labelClass: '',                   onEnter: () => { if (typeof window.closeAuditPanel === 'function') window.closeAuditPanel(); } },
-        active: { cmd: "CMD:DONE",  label: "FINISH", btnClass: 'btn-audit-active', labelClass: 'label-active-audit', onEnter: () => { if (typeof window.openAuditPanel  === 'function') window.openAuditPanel();  } },
+        idle:   { cmd: "CMD:AUDIT", label: "AUDIT", btnClass: '',                 labelClass: '',                   onEnter: () => { if (typeof window.closeAuditPanel === 'function') window.closeAuditPanel(); } },
+        active: { cmd: "CMD:AUDIT", label: "AUDIT", btnClass: 'btn-audit-active', labelClass: 'label-active-audit', onEnter: () => { if (typeof window.openAuditPanel  === 'function') window.openAuditPanel();  } },
     },
 });
 
 window.updateAuditVisuals = () => {
     auditShapeshift.set(state.auditActive ? 'active' : 'idle');
+    window.updateAuditPill();
+};
+
+// The audit pill (Group 58), Bulk Move's: shown for exactly as long as an audit
+// runs, and the always-visible way back to a hidden panel. A hidden audit still
+// takes every scan, so it names the place. Apart from updateAuditVisuals because
+// that one opens the panel, and a new place mustn't undo a Hide.
+window.updateAuditPill = () => {
+    const pill = document.getElementById('fcc-audit-pill');
+    if (!pill) return;
+    if (!state.auditActive) { pill.style.display = 'none'; return; }
+    const txt = pill.querySelector('#fcc-audit-pill-text');
+    if (txt) txt.innerText = `audit: ${state.auditLocation || 'scan a location'}`;
+    pill.style.display = 'inline-flex';
+    pill.style.alignItems = 'center';
 };
 
 // --- L298 Phase 2 — BULK MOVE deck slot ------------------------------------
@@ -972,11 +1221,74 @@ window.commitBulkMove = () => {
 // --- 18.2 Part B — VISUAL AUDIT PANEL --------------------------------------
 // Lives as a mountOverlay (tier 'standard') so it sits above any modal
 // stack. Polls /api/audit_session every 2s while audit is active so the
-// found/missing tiles tick as the user scans. Closes automatically when
-// the audit ends (CMD:DONE / CMD:CANCEL).
+// found/missing tiles tick as the user scans (the server draws them from the rows
+// it stored at each scan, so a poll reads no Spoolman), and right after a scan
+// (window.refreshAuditSession). Closes when the audit ends (CMD:DONE / CMD:CANCEL).
+// Hide and Escape only hide it: the 🕵️ pill and the deck tile bring it back.
 (function () {
     let _handle = null;
     let _pollTimer = null;
+    // Never let slow ticks stack, but coalesce, as the bulk panel does: a plain
+    // drop would swallow the "re-read right now" after a scan.
+    let _pollInflight = false;
+    let _pollPending = false;
+    // Bumped on every close, so an answer still out can't draw on what follows.
+    let _panelGen = 0;
+    // Done or Cancel is on its way (window.auditPanelBusy).
+    let _busy = false;
+    let _busyFocus = null;
+    // "undo that" is on its way.
+    let _undoOut = false;
+    // When "undo that" was last answered (_undoJustPressed), and which spool the strip
+    // showed last (_render, for where the keyboard goes).
+    let _undoAnsweredAt = 0;
+    let _stripSpool = null;
+    // The audit whose Last found box has held a spool: once one has, an empty box says
+    // nothing is selected, not that nothing was found (_renderNoStrip).
+    let _selectedIn = null;
+    // When Done's question was last answered: see _shieldClick.
+    let _questionClosedAt = 0;
+    // A double click's second press (see _shieldPage and _shieldClick). `_press`: the last
+    // primary pointer press, anywhere {at, x, y, slop}. `_panelPress`: the last one made
+    // while the panel was up, and whether it landed on something over the panel (`cover`:
+    // Done's question, the 🧺 list, the legacy picker, the ⌨️ list) or on a tile or the
+    // Last found strip (`strip`), with the spool the strip showed then (`stripWas`) and the
+    // tile's (`tile`). `_eatPress`: when the press now under way began, if it is the
+    // second of a double click and must reach nothing on the panel.
+    let _press = null;
+    let _panelPress = null;
+    let _eatPress = 0;
+    // The press the panel (or what it put up) went or came under, armed by _shieldPage.
+    let _pageShield = null;
+    // When the press now under way began, if the page shield took it whole.
+    let _pageEating = 0;
+    // Back brought a hidden panel back: Done takes the keyboard once it exists.
+    let _focusDoneNext = false;
+    // What this panel put on top of itself, closed with it: no overlay outlives its
+    // parent. Done's question (window.confirmActivePrint's handle), the Loose
+    // spools list and Find a spool. mountOverlay's `host` only hears a Bootstrap
+    // window closing.
+    let _question = null;
+    let _loose = null;
+    let _find = null;
+    // When Find last closed on a pick: the keyboard goes back to 🔎, and a double
+    // Enter or Space on a row would open it again (_openFind).
+    let _findPickedAt = 0;
+    // The session the panel drew last: Find tags its rows from it.
+    let _lastData = null;
+    // The session this page read last, the panel up or hidden (every scan the audit takes
+    // reads it again, window.refreshAuditSession): the legacy picker's tags.
+    let _lastSession = null;
+    // Watches the scrolling part's size for _fitDock while the panel is up.
+    let _dockFit = null;
+    // The dock's columns are drawn once per panel, at its first answer (_render).
+    let _dockDrawn = false;
+    // Each tile's QR (Derek, 2026-11-03, A1), drawn once and kept by its text: a scan
+    // changes the panel's hash, and the body is drawn again. For one audit only.
+    const _tileQrs = new Map();
+    let _tileQrsAudit = null;
+    // When the strip's 🖨️ was last pressed (B): a double press is one press.
+    let _queuePressedAt = 0;
     // 2026-05-16 — every-2s flicker fix: hash-skip the body innerHTML
     // rewrite when the audit payload hasn't actually changed. Same pattern
     // as updateLogState's lastLogHash. Without this the tile grid + the
@@ -984,34 +1296,556 @@ window.commitBulkMove = () => {
     // no scan had landed; Derek saw the panel "redraw" every 2-3s.
     let _lastRenderHash = null;
     const _escapeHtml = (s) => String(s == null ? '' : s)
-        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const PRESS_TIMEOUT_MS = 20000;     // an undo reads and writes a spool
+    const DOUBLE_PRESS_MS = 700;
+    // How far a double click's second press can land from its first: a mouse stays within
+    // a few pixels, a finger's second tap less so.
+    const DOUBLE_PRESS_SLOP_PX = { mouse: 16, other: 40 };
 
+    const _TILES = {
+        found: { bg: '#0a2a0a', border: '#0f0', badge: '<span style="color:#0f0; font-weight:bold;">✅ scanned</span>' },
+        missing: { bg: '#1a1a1a', border: '#555', badge: '<span style="color:rgba(255,255,255,0.7);">⬜ not scanned</span>' },
+        extra: { bg: '#2a2410', border: '#fc0', badge: '<span style="color:#fc0; font-weight:bold;">⚠️ extra</span>' },
+        trail: { bg: '#0a2230', border: '#0cf', badge: '<span style="color:#7fe8ff; font-weight:bold;">🔗 loaded</span>' },
+    };
+
+    // A spool's name as a tile and the strip show it. The server's rows already
+    // start with "#57" (a bare id is its fallback).
+    const _spoolName = (row) => {
+        const text = String(row.display == null ? '' : row.display);
+        return text.startsWith(`#${row.id}`) ? text : `#${row.id} ${text}`;
+    };
+
+    // What a tile says about a spool's label (Group 58.2). A missing status on a spool
+    // nobody has reached yet says nothing: that is most spools, as on the search cards
+    // (58.5). A found spool with a real label read and no status: the check failed.
+    const _labelWords = (row, found) => {
+        const words = [];
+        if (found && !row.label_read) words.push('✅ found, no label read');
+        if (row.label_status === true) words.push('🏷️ needs a label');
+        else if (found && row.label_read && row.label_status === null) words.push('label status unknown');
+        return words;
+    };
+
+    // A tile's QR (Derek, 2026-11-03, A1): scanning it finds the spool as a press does
+    // (logic.resolve_scan's CMD:FOUND). Only once the page knows the audit's id: a QR
+    // without it would name no audit. The id goes as the server wrote it, and the
+    // server reads it in any case (a scanner set to upper case sends it so).
+    const _tileQrText = (row) => (state.auditId ? `CMD:FOUND:${state.auditId}:${Number(row.id)}` : '');
+
+    // The 🏷️ drawn for the dark round backing (Derek, 2026-11-04: "that same label icon not
+    // centered in circle thing"): the emoji is drawn on a slant, its yellow body low-left and
+    // its string up-right, and the Windows one's grey string hardly shows on the dark, so even
+    // centred by its box it read as off. A tag in the emoji's warm yellow and orange with its
+    // dark hole, pointing up-right as the emoji does, symmetric about that diagonal, and no
+    // string (Derek, 2026-11-05, (c): "Slanted, no loop: the body itself centred"): the body,
+    // its stroke included, has its box on the circle's middle (16, 16) exactly, in the frame's
+    // own 32 units (each of its four corners, the two rounded ones at its back and the two
+    // beside its point, reaches 6.68 units from the middle along its screen axis, and the
+    // stroke adds 0.8 to each), and its weight sits 0.4 of a unit up and 0.4 right of it (the
+    // hole is dark), the same on every system. The frame is the whole circle (.fcc-ico-svg is
+    // as big as its backing); test_icon_on_dark_circle_js.py measures it in those units and on
+    // the screen at 1x and 2x.
+    // Only on the backing: every other 🏷️, and the words beside this one, stay emoji.
+    const TAG_ICON = '<svg class="fcc-ico-svg" viewBox="0 0 32 32" aria-hidden="true" focusable="false">'
+        + '<g transform="rotate(-45 16 16)">'
+        + '<path d="M11.45 11.6H21.05L25.05 16L21.05 20.4H11.45Q10.45 20.4 10.45 19.4V12.6Q10.45 11.6 11.45 11.6Z" '
+        + 'fill="#FFC83D" stroke="#E57C00" stroke-width="1.6" stroke-linejoin="round"/>'
+        + '<circle cx="21.55" cy="16" r="1.6" fill="#2B1A08"/>'
+        + '</g></svg>';
+
+    // A found tile's own 🏷️ (Derek, 2026-11-03, (a): "A sounds good"): one tap marks that
+    // spool as needing a label without making it the last found (POST
+    // /api/audit/needs_label); the tile then says "needs a label" and its 🏷️ shows the
+    // mark is this audit's (`flagged_here`); a tap on it again, DOUBLE_PRESS_MS or more
+    // after the last, takes the mark back (/api/audit/needs_label_undo). A spool flagged
+    // before the audit shows as flagged already, and a tap is answered so. Its own
+    // button, beside the tile's in one cell, never inside it: a button holds no button.
+    const _tagButton = (row) => {
+        const id = Number(row.id);
+        const say = (mark, words, pressed) => `<button type="button" class="fcc-audit-tile-tag" data-audit-tag="${id}"
+                data-audit-tag-state="${mark}"${pressed === null ? '' : ` aria-pressed="${pressed}"`}
+                aria-label="${_escapeHtml(words)}" title="${_escapeHtml(words)}">${mark === 'marked'
+            ? `<span class="fcc-ico-on-light" aria-hidden="true">${TAG_ICON}</span>` : '<span aria-hidden="true">🏷️</span>'}</button>`;
+        if (row.flagged_here) return say('marked', `#${id} is marked as needing a label: press again to take the mark back`, true);
+        if (row.label_status === true) return say('flagged', `#${id} is already flagged for a new label`, null);
+        return say('none', `Needs a label: mark #${id}, and leave the last found as it is`, false);
+    };
+
+    // Expected tiles are real buttons (window.personMayPress's rule, through the scan
+    // accumulator): a press finds a spool with nothing to scan, and takes that back.
+    // An Extra's tile is one too (A3): a press takes it back off the found lists, for a
+    // spool scanned or picked here by mistake, since Done acts on the Extras. A press
+    // never makes an Extra, and a loaded-from-here tile stays a plain tile. A found tile,
+    // on the list or an Extra, has its own 🏷️ (_tagButton).
+    // Laid out again on Derek's look of 2026-11-04 ("move some of the stuff on the sides to
+    // the top and bottom, like the label buttons, and the scanned notifications. That would
+    // give us a little more room for the full name. Id also say let it wrap too. but we'd have
+    // to try and keep the box size consistant among all of them"): each tile is a cell in its
+    // kind's colours (global.css .fcc-audit-tile-cell); the name takes the tile's width and
+    // wraps, two lines at most (its whole name in its title); under the name and its grams,
+    // a row says what the audit knows of the spool (.fcc-audit-tile-status), a found tile's
+    // 🏷️ at its end. That row is no part of a found tile's press button, so a tap a little off
+    // the 🏷️ presses nothing: a press there took the find back, and its label read with it.
+    // A tile not yet found has no 🏷️, and its whole tile, its QR at its side, stays its press
+    // button. The grids give every tile in a group one height (global.css .fcc-audit-grid).
     const _renderTile = (row, kind) => {
-        // kind: 'found' (green check), 'missing' (gray ?), 'rogue' (yellow !)
+        const look = _TILES[kind];
+        const id = Number(row.id);
         const swatchBg = (typeof window.makeSwatchHtml === 'function')
             ? window.makeSwatchHtml(row.color, row.color_direction, { size: 28, borderColor: '#444' })
             : `<span style="display:inline-block;width:28px;height:28px;background:#${row.color || '333'};border-radius:4px;"></span>`;
         const weight = row.remaining_weight != null ? `${Math.round(row.remaining_weight)}g` : '';
         const slot = row.slot ? ` (slot ${_escapeHtml(row.slot)})` : '';
-        const badge = kind === 'found'
-            ? '<span style="color:#0f0; font-weight:bold;">✅ scanned</span>'
-            : (kind === 'rogue'
-                ? '<span style="color:#fc0; font-weight:bold;">⚠️ rogue</span>'
-                : '<span style="color:rgba(255,255,255,0.7);">⬜ not scanned</span>');
-        const border = kind === 'found' ? '#0f0' : (kind === 'rogue' ? '#fc0' : '#555');
-        const bg = kind === 'found' ? '#0a2a0a' : (kind === 'rogue' ? '#2a2410' : '#1a1a1a');
+        const name = _spoolName(row);
+        // Where FCC has it: an Extra's filed place, a loaded spool's head.
+        const where = !row.where ? ''
+            : (kind === 'extra' ? `📍 ${row.where}` : (kind === 'trail' ? `🔗 on ${row.where}` : ''));
+        const found = kind !== 'missing';
+        const words = _labelWords(row, found);
+        const badge = (kind === 'found' && !row.label_read) ? '' : look.badge;
+        const pressable = kind === 'found' || kind === 'missing' || kind === 'extra';
+        const tagged = kind === 'found' || kind === 'extra';
+        // Only a tile not yet found: a QR never takes a find back.
+        const qr = kind === 'missing' ? _tileQrText(row) : '';
+        const title = kind === 'extra' ? 'Press if it isn\'t here after all: it comes off the Extras'
+            : (found ? 'Press if it isn\'t here after all'
+                : (qr ? 'Press, or scan its QR, if it\'s here with no label to scan' : 'Press if it\'s here with no label to scan'));
+        const statusId = `fcc-audit-tile-status-${id}`;
+        const status = `<span id="${statusId}" class="fcc-audit-tile-status">${badge ? `<span class="fcc-audit-tile-badge">${badge}</span>` : ''}`
+            + `${words.map(w => `<span class="fcc-audit-tile-word">${_escapeHtml(w)}</span>`).join('')}</span>`;
+        const text = `<span class="fcc-audit-tile-swatch">${swatchBg}</span>`
+            + '<span class="fcc-audit-tile-text">'
+            + `<span class="fcc-audit-tile-name" title="${_escapeHtml(name)}">${_escapeHtml(name)}</span>`
+            + `<span class="fcc-audit-tile-detail">${_escapeHtml(weight)}${slot}</span>`
+            + `${where ? `<span class="fcc-audit-tile-where">${_escapeHtml(where)}</span>` : ''}</span>`;
+        const press = `type="button" class="fcc-audit-tile-box fcc-audit-tile" data-audit-tile="${id}"
+               data-audit-found="${found ? 1 : 0}" aria-pressed="${found}" title="${_escapeHtml(title)}"`;
+        const cell = (inner) => `<div class="fcc-audit-tile-cell" data-audit-kind="${kind}"
+               style="--fcc-tile-bg:${look.bg}; --fcc-tile-border:${look.border};">${inner}</div>`;
+        if (kind === 'missing') {
+            return cell(`<button ${press}>${text}${status}`
+                + `${qr ? `<span class="fcc-audit-tile-qr" aria-hidden="true" data-audit-qr="${_escapeHtml(qr)}"></span>` : ''}</button>`);
+        }
+        // The press button says the row's words (aria-describedby): they sit outside it.
+        const top = pressable ? `<button ${press} aria-describedby="${statusId}">${text}</button>`
+            : `<div class="fcc-audit-tile-box">${text}</div>`;
+        return cell(`${top}${status}${tagged ? _tagButton(row) : ''}`);
+    };
+
+    // The QR codes the tiles hold, each drawn once (the shared library, as generateSafeQR
+    // calls it) and moved into its tile at every redraw. qrcode.js puts its text in a
+    // tooltip on the box it draws in, and the tile says what the QR does.
+    const TILE_QR_PX = 72;
+    const _tileQrNode = (text) => {
+        let node = _tileQrs.get(text);
+        if (node) return node;
+        node = document.createElement('span');
+        node.className = 'fcc-audit-tile-qr-code';
+        try {
+            new QRCode(node, { text, width: TILE_QR_PX, height: TILE_QR_PX, correctLevel: QRCode.CorrectLevel.L });
+        } catch (e) { /* no QR library: the tile can still be pressed */ }
+        node.removeAttribute('title');
+        _tileQrs.set(text, node);
+        return node;
+    };
+    const _placeTileQrs = (body) => {
+        if (_tileQrsAudit !== state.auditId) { _tileQrs.clear(); _tileQrsAudit = state.auditId; }
+        body.querySelectorAll('[data-audit-qr]').forEach((slot) => {
+            slot.appendChild(_tileQrNode(slot.dataset.auditQr));
+        });
+    };
+
+    // A spool found here that isn't on the list, in a sentence: its tile can be below
+    // the fold or under this strip, and a toast is under the panel. Nothing for a
+    // spool the list expected. An Extra Spoolman wouldn't answer for has `where`
+    // saying so (logic.AUDIT_WHERE_UNREAD), and FCC "has it at" no such place.
+    const WHERE_UNREAD = "couldn't read where FCC has it";
+    const _stripFoundHere = (row) => {
+        const tag = `#${row.id}`;
+        const where = String(row.where == null ? '' : row.where);
+        if (row.trail) return where ? `${tag} is loaded on ${where} from here` : `${tag} is loaded from here`;
+        if (!row.rogue) return '';
+        if (!where) return `Extra: ${tag}${_atDoneWords(row.at_done)}`;
+        return where === WHERE_UNREAD ? `Extra: ${tag}: ${where}` : `Extra: FCC has ${tag} at ${where}${_atDoneWords(row.at_done)}`;
+    };
+
+    // What Done will do with an Extra (Derek's C6, 2026-11-03, for his look): the row's
+    // `at_done`, worked out by Done's own rule when the spool was scanned, so a poll
+    // reads nothing. `files` true: filed here; false: it stays, and why; null: a fresh
+    // read at Done decides (a place that holds one spool), and the sentence says so. No
+    // key, or null (Spoolman didn't answer at the scan): nothing is said of Done. A stay
+    // that depends on a fresh read is said at Done, in its question, never here.
+    const _atDoneWords = (at) => {
+        if (!at || typeof at !== 'object') return '';
+        const why = String(at.why == null ? '' : at.why).trim();
+        if (at.files === true) return '; Done files it here';
+        if (at.files === false && why) return `; it stays: ${why}`;
+        if (at.files === null && why) return `; ${why}`;
+        return '';
+    };
+
+    // What FCC knows about this spool's label.
+    const _stripLabel = (row) => {
+        const tag = `#${row.id}`;
+        if (row.flagged_here) return `${tag} is marked: it needs a label`;
+        if (row.label_status === true) return `${tag} is still flagged for a new label`;
+        if (!row.label_read) return `No label was read for ${tag}`;
+        if (row.label_status === null) return `${tag}'s label was read, but FCC couldn't confirm it`;
+        return `${tag}'s label was read`;
+    };
+
+    // The Last found strip's line.
+    const _stripLine = (row) => {
+        const here = _stripFoundHere(row);
+        return here ? `${here}. ${_stripLabel(row)}` : _stripLabel(row);
+    };
+
+    // Is this spool's label in the 🛒 print queue (inv_queue.js's, this browser's copy
+    // of the shared one)? Read as the queue reads an id, a number or its text.
+    const _inPrintQueue = (id) => Array.isArray(window.labelQueue)
+        && window.labelQueue.some(q => q && (q.type || 'spool') === 'spool' && String(q.id) === String(id));
+
+    // The strip's 🖨️ (Derek, 2026-11-03, B: "just in case I decide to do some updating
+    // while I'm auditing the row"): for a spool whose label is flagged, before the audit
+    // or in it, and for one already queued, which it says. No QR: printing happens at
+    // the desk, and "Needs a label" already puts the spool on the 🏷️ Backlog. Not
+    // `disabled` once queued, which would drop the keyboard: a press does nothing.
+    const _queueButton = (row) => {
+        const queued = _inPrintQueue(row.id);
+        if (!queued && row.label_status !== true && !row.flagged_here) return '';
+        return queued
+            ? '<button type="button" id="fcc-audit-label-queue" class="btn btn-sm btn-outline-info fcc-audit-queue" aria-disabled="true"'
+                + ` title="#${Number(row.id)}'s label is in the print queue">✓ In the print queue</button>`
+            : '<button type="button" id="fcc-audit-label-queue" class="btn btn-sm btn-outline-info fcc-audit-queue"'
+                + ` title="Queue #${Number(row.id)}'s label to print at the desk">🖨️ Add to print queue</button>`;
+    };
+
+    // The Last found box: the spool "Needs a label" acts on, in the dock under the
+    // scrolling list (Derek, 2026-11-03, sample 1b: "the placement of useful buttons and
+    // last found on the panel"), so its words and the dock's buttons and QRs are there
+    // however far the tiles scroll, when the spool in the person's hand has no label
+    // worth scanning. Its name wraps rather than being cut: a touch screen can't show a
+    // title. "undo that" has no QR, so a double read of the mark's own QR can't toggle it.
+    const _renderStrip = (row) => {
+        if (!row) return '';
+        const swatch = (typeof window.makeSwatchHtml === 'function')
+            ? window.makeSwatchHtml(row.color, row.color_direction, { size: 28, borderColor: '#444' }) : '';
+        const name = _escapeHtml(_spoolName(row));
+        // "↩ Put back" (P7): not for a spool loaded from here, whose tile is no button.
+        const id = Number(row.id);
+        const putBack = row.trail ? '' : `<button type="button" id="fcc-audit-put-back" class="btn btn-sm btn-outline-light fcc-audit-put-back"
+                    title="${_escapeHtml(row.rogue ? `Not here after all: take #${id} off the Extras`
+                        : `A mistaken find: put #${id} back on the not-scanned list`)}">↩ Put back</button>`;
         return `
-            <div style="display:flex; align-items:center; gap:10px; padding:8px;
-                        background:${bg}; border:1px solid ${border}; border-radius:6px;">
-                ${swatchBg}
-                <div style="flex:1; min-width:0;">
-                    <div class="text-truncate" style="color:#fff; font-weight:600; font-size:0.9rem;"
-                         title="${_escapeHtml(row.display)}">#${row.id} ${_escapeHtml(row.display)}</div>
-                    <div style="font-size:var(--fcc-fs-small); color:rgba(255,255,255,0.75);">${_escapeHtml(weight)}${_escapeHtml(slot)}</div>
+            <div id="fcc-audit-last-found" class="fcc-audit-strip">
+                <div class="fcc-audit-strip-head"><span class="fcc-audit-strip-title">Last found</span>${putBack}</div>
+                <div class="fcc-audit-strip-spool">${swatch}<span class="fcc-audit-strip-name">${name}</span></div>
+                <div class="fcc-audit-strip-status" role="status">
+                    <span>${_escapeHtml(_stripLine(row))}</span>
+                    ${row.flagged_here ? '<button type="button" id="fcc-audit-label-undo" class="btn btn-sm btn-outline-light">undo that</button>' : ''}
+                    ${_queueButton(row)}
                 </div>
-                <div style="font-size:var(--fcc-fs-label);">${badge}</div>
             </div>
         `;
+    };
+
+    // The box with no spool in it: nothing found yet, or nothing selected (the last find
+    // taken back, by "↩ Put back" or its tile, while others stay found, or once this audit
+    // has had a spool in the box: Derek, "until the next find"), so a press of Needs a
+    // label, or a scan of its QR, is answered by the server's "Nothing has been found yet"
+    // / "No spool is selected". Its own id: #fcc-audit-last-found means a spool is in it.
+    const _renderNoStrip = (data) => {
+        const anyFound = (data.expected || []).some(r => r.found) || (data.rogue || []).length || (data.trail || []).length
+            || (_selectedIn != null && _selectedIn === (data.audit_id != null ? data.audit_id : state.auditId));
+        const words = anyFound ? 'Nothing is selected. The next spool you find shows here.'
+            : "Nothing found yet. Scan a spool's label, press its tile, or use 🔎 Find a spool.";
+        return `
+            <div id="fcc-audit-last-none" class="fcc-audit-strip fcc-audit-strip-none">
+                <div class="fcc-audit-strip-title">Last found</div>
+                <div class="fcc-audit-strip-status" role="status"><span>${words}</span></div>
+            </div>
+        `;
+    };
+
+    // The dock's three columns, each a button over its QR, the three QRs in one row
+    // (global.css lines them up): Needs a label beside the Last found box, then Done and
+    // Cancel Audit, the exits a scanner needs, always in view. Drawn once per panel, so
+    // their QRs never flicker at a redraw and the keyboard on one stays there; only the
+    // Last found box is drawn again.
+    const _dockHtml = () => `
+        <div class="fcc-audit-dock-grid">
+            <div id="fcc-audit-dock-found" class="fcc-audit-dock-info"></div>
+            <div class="fcc-audit-dock-col fcc-audit-dock-need">
+                <button type="button" id="fcc-audit-panel-needlabel" class="btn btn-sm btn-warning fw-bold"><span class="fcc-audit-dock-words fcc-ico-row"><span class="fcc-ico-on-light" aria-hidden="true">${TAG_ICON}</span> <span class="fcc-ico-words">Needs a label</span></span></button>
+                <div id="fcc-audit-panel-qr-needlabel" class="fcc-audit-strip-qr"></div>
+                <div class="fcc-audit-strip-cap">📷 Scan to mark it</div>
+            </div>
+            <div class="fcc-audit-dock-col fcc-audit-dock-done">
+                <button type="button" id="fcc-audit-panel-done" class="btn btn-success fw-bold"><span class="fcc-audit-dock-words">✅ Done…</span></button>
+                <div id="fcc-audit-panel-qr-done" class="fcc-audit-dock-qr"></div>
+                <div class="small fcc-audit-dock-cap">Asks before moving anything</div>
+            </div>
+            <div class="fcc-audit-dock-col fcc-audit-dock-cancel">
+                <button type="button" id="fcc-audit-panel-cancel" class="btn btn-outline-danger fw-bold"><span class="fcc-audit-dock-words">❌ Cancel Audit</span></button>
+                <div id="fcc-audit-panel-qr-cancel" class="fcc-audit-dock-qr"></div>
+                <div class="small fcc-audit-dock-cap">Ends it, nothing moves</div>
+            </div>
+        </div>
+    `;
+
+    const _pressAnswered = (res) => {
+        if (res && res.success) {
+            // `left_alone`, `already` (a tile's 🏷️ on a spool flagged before the audit):
+            // the press didn't do what it was asked, so the panel says so too. The toast
+            // layer is under the panel, and the strip or the tile alone reads as a press
+            // that worked.
+            window.auditPanelNotice((res.left_alone || res.already) ? res.msg : '');
+            if (res.msg) showToast(res.msg, res.already ? 'info' : 'success', 4000);
+            window.refreshAuditSession();
+            return;
+        }
+        _auditSay((res && res.msg) || "That didn't go through.");
+        // The audit has gone: the heartbeat says why.
+        if (res && res.stale && typeof updateLogState === 'function') updateLogState(true);
+    };
+
+    // `said`: the page's own words added to the answer's.
+    const _pressPost = (url, body, said) => window.fetchT(url, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    }, PRESS_TIMEOUT_MS)
+        .then(r => r.json())
+        .then((res) => _pressAnswered(said ? said(res) : res),
+            () => _auditSay("That press didn't go through: FCC didn't answer. Press it again."));
+
+    // The strip's 🖨️: inv_queue.js's 🛒 Queue, shared through /api/state/queue. Its
+    // set_flag changes nothing on a spool already flagged. The toast is under the
+    // panel, so the button says it too, from window.labelQueue (the redraw that
+    // inventory:queue-updated asks for).
+    const _queueLabel = (row) => {
+        const now = Date.now();
+        if (now - _queuePressedAt < DOUBLE_PRESS_MS) return;
+        _queuePressedAt = now;
+        if (!row || _inPrintQueue(row.id) || typeof window.addToQueue !== 'function') return;
+        const tag = `#${Number(row.id)}`;
+        const added = window.addToQueue({ id: Number(row.id), type: 'spool', display: _spoolName(row) });
+        if (added) showToast(`Added ${tag}'s label to the print queue.`, 'success', 4000);
+        else showToast(`${tag}'s label is already in the print queue.`, 'info', 4000);
+        _redrawNow();
+    };
+
+    // "↩ Put back" in the Last found box (Derek, 2026-11-03: "put back into the unscanned
+    // queue, so the user doesn't have to scroll to find that one, if they realize it was a
+    // mistaken scan"): what a press on the last found's tile does (POST /api/audit/found,
+    // found: false), here in the box, with no QR, so a double read can't take a find back.
+    // An Extra comes off the Extras (A3). The server clears the last found, so the box
+    // says nothing is selected until the next find. A second press under DOUBLE_PRESS_MS
+    // does nothing, whatever the box shows by then: a scan answered between the two puts
+    // another spool there, and the press was the first's.
+    let _putBackAt = 0;
+    const _putBack = (row) => {
+        const now = Date.now();
+        if (now - _putBackAt < DOUBLE_PRESS_MS) return;
+        _putBackAt = now;
+        if (!row || row.trail) return;
+        const id = Number(row.id);
+        const words = row.rogue ? `#${id} is off the Extras: it isn't here after all.`
+            : `#${id} is back on the not-scanned list.`;
+        _pressPost('/api/audit/found', { audit_id: state.auditId, id, found: false },
+            (res) => ((res && res.success) ? Object.assign({}, res, { msg: words }) : res));
+    };
+
+    // Drawn again from the session it drew last when what this page knows of the print
+    // queue changed it (the hash counts the strip's spool's place in the queue).
+    const _redrawNow = () => { if (_lastData && _handle) _render(_lastData); };
+    document.addEventListener('inventory:queue-updated', () => _redrawNow());
+
+    // A double press of "undo that" must not mark the spool straight back: the keyboard
+    // lands on Needs a label when "undo that" leaves, so its second Enter pressed that.
+    const _undoJustPressed = () => _undoOut || Date.now() - _undoAnsweredAt < DOUBLE_PRESS_MS;
+
+    // A tile's press says what the tile showed, never "the other one". A second press
+    // of one tile under 700 ms is a double press and does nothing, as on the 🛑 review's
+    // Discard: pressed apart, it takes the first one back.
+    const _pressedAt = new Map();
+    const _pressTile = (tile) => {
+        const id = Number(tile.dataset.auditTile);
+        const now = Date.now();
+        if (now - (_pressedAt.get(id) || 0) < DOUBLE_PRESS_MS) return;
+        _pressedAt.set(id, now);
+        _pressPost('/api/audit/found', { audit_id: state.auditId, id, found: tile.dataset.auditFound !== '1' });
+    };
+
+    // A found tile's 🏷️ says what it showed: marked here, its tap takes the mark back;
+    // else it marks (a flag already up is answered `already`, nothing written). A second
+    // tap under DOUBLE_PRESS_MS is a double press and does nothing, as a tile's: a tap
+    // apart takes the mark back. It never changes the last found.
+    const _tagPressedAt = new Map();
+    const _pressTag = (btn) => {
+        const id = Number(btn.dataset.auditTag);
+        const now = Date.now();
+        if (now - (_tagPressedAt.get(id) || 0) < DOUBLE_PRESS_MS) return;
+        _tagPressedAt.set(id, now);
+        const undo = btn.dataset.auditTagState === 'marked';
+        _pressPost(undo ? '/api/audit/needs_label_undo' : '/api/audit/needs_label', { audit_id: state.auditId, id });
+    };
+
+    // Delegated: the tiles are redrawn with the body.
+    const _bodyClick = (e) => {
+        const t = e.target && e.target.closest ? e.target : null;
+        if (!t) return;
+        const labelBtn = t.closest('[data-audit-tag]');
+        if (labelBtn) { _pressTag(labelBtn); return; }
+        const tile = t.closest('[data-audit-tile]');
+        if (tile) _pressTile(tile);
+    };
+
+    // --- A double click's second press (Group 58 re-review) --------------------------
+    // A press that takes away, or brings, what lies under the pointer hands the second
+    // press of a double click to whatever lies beneath. A second press is one that starts
+    // under DOUBLE_PRESS_MS after the last primary press, at its spot (within its slop): a
+    // press elsewhere is a person's next press, and goes on.
+    const _isSecondPress = (first, e, now) => !!first && now - first.at < DOUBLE_PRESS_MS
+        && Math.abs(first.x - e.clientX) <= first.slop && Math.abs(first.y - e.clientY) <= first.slop;
+    const _pressEaten = () => !!_eatPress && Date.now() - _eatPress < 2000;
+
+    // Done's question closes on the first click of a double click, and the second lands
+    // on whatever lies under its button: Cancel Audit, or a tile (a spool found that
+    // nobody touched). "Back to the audit" should only go back. On the panel's root in
+    // the capture phase, so it covers every button on it in one place. Any click for
+    // DOUBLE_PRESS_MS after the question is answered, the keyboard's too (the keyboard
+    // lands on Done, and a double Enter asked again). And a pointer's second press
+    // (_eatPress), wherever on the panel it lands: one at the spot of a press on what sat
+    // over the panel (Done's question, the 🧺 list, the legacy picker, the ⌨️ list, gone
+    // with the first press), or of a press on a tile or the dock, which move what lies
+    // under the pointer: a find moves its tile from Not scanned to Found and slides the
+    // next one into its place, and changes the Last found box, which can grow the dock
+    // over the tiles' last row (a tile's double click pressed Needs a label, and a
+    // spool nobody asked about was flagged), or grows a short panel, which centres
+    // itself again (the second press landed beside the tile and took the keyboard off
+    // it); and the dock's own Needs a label marked twice.
+    const _shieldClick = (e) => {
+        const eat = Date.now() - _questionClosedAt < DOUBLE_PRESS_MS || (e.detail > 0 && _pressEaten());
+        if (e.detail > 0) _eatPress = 0;
+        if (!eat) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+    };
+
+    // The same press's mousedown would move the keyboard to what lies under it, with no
+    // ring to say so, and the next Enter pressed that (Cancel Audit, or a tile): Done
+    // keeps the keyboard Back gave it.
+    const _shieldMouse = (e) => {
+        if (Date.now() - _questionClosedAt < DOUBLE_PRESS_MS || _pressEaten()) e.preventDefault();
+    };
+
+    // The panel went, or came, under the pointer (Done with nothing to park, Cancel
+    // Audit, Hide, a park that answered fast; the deck tile or the 🕵️ pill bringing a
+    // hidden panel up, its Cancel Audit under the tile's second click; Done's question or
+    // the 🧺 list opening there). The second press would land on what lies under it now:
+    // the deck behind the panel armed Drop or Eject mode, asked Undo, opened the weigh
+    // window or started a new audit, and the panel's own Cancel Audit ended the audit
+    // the tile had just shown. Armed only while the press that did it is under
+    // DOUBLE_PRESS_MS old, so an audit ended from another window, a scan or the heartbeat
+    // takes nobody's click. The next press that starts at its spot in DOUBLE_PRESS_MS then
+    // reaches nothing, on the document: the panel's root is gone, or wasn't there for the
+    // first press. Its pointerdown and pointerup too, which the floating pills act on. A
+    // click from the keyboard (detail 0) is no double click, and goes on.
+    const _shieldPage = () => {
+        const now = Date.now();
+        if (_press && now - _press.at < DOUBLE_PRESS_MS) _pageShield = Object.assign({}, _press, { at: now });
+    };
+
+    // Registered once. A primary press only: mouse, touch, pen.
+    document.addEventListener('pointerdown', (e) => {
+        if (e.button > 0) return;
+        const now = Date.now();
+        const shield = _pageShield;
+        _pageShield = null;             // one press: this one, or one elsewhere ends it
+        _pageEating = 0;
+        _eatPress = 0;
+        if (_isSecondPress(shield, e, now)) {
+            _pageEating = now;
+            e.stopImmediatePropagation();
+            return;
+        }
+        const slop = e.pointerType === 'mouse' ? DOUBLE_PRESS_SLOP_PX.mouse : DOUBLE_PRESS_SLOP_PX.other;
+        _press = { at: now, x: e.clientX, y: e.clientY, slop };
+        if (!_handle) { _panelPress = null; return; }
+        const t = e.target;
+        const onPanel = !!(t && t.nodeType === 1 && _handle.element.contains(t));
+        const first = _panelPress;
+        // The strip moved to a spool the first press didn't bring (neither the tile's, nor
+        // what it showed then): a scan read between them, so this press is a person's
+        // next one (they mark #57, scan #99 and mark that one too, quickly).
+        const moved = !!first && _stripSpool != null && _stripSpool !== first.stripWas && _stripSpool !== first.tile;
+        if (onPanel && _isSecondPress(first, e, now) && (first.cover || (first.strip && !moved))) _eatPress = now;
+        const tileEl = onPanel ? t.closest('[data-audit-tile]') : null;
+        // A press on the dock counts as one on the strip (Derek, 2026-11-03, sample 1b): its
+        // Needs a label sits in its own column there, outside the Last found box, and the
+        // box's words can grow the dock under the pointer, or shrink it. So does a tap on a
+        // found tile's 🏷️, which grows its tile ("needs a label") and moves those under it.
+        _panelPress = Object.assign({}, _press, {
+            cover: !onPanel,
+            strip: onPanel && !!(tileEl || t.closest('[data-audit-tag]') || t.closest('#fcc-audit-panel-dock')),
+            stripWas: _stripSpool,
+            tile: tileEl ? Number(tileEl.dataset.auditTile) : null,
+        });
+    }, true);
+    ['mousedown', 'pointerup', 'mouseup', 'click', 'dblclick'].forEach((type) => {
+        document.addEventListener(type, (e) => {
+            if (!_pageEating || Date.now() - _pageEating > 2000) return;
+            if (type === 'click' && !e.detail) return;      // a key's click: not this press
+            if (e.button > 0) return;
+            if (type !== 'pointerup') e.preventDefault();  // mousedown: the keyboard stays put
+            e.stopImmediatePropagation();
+            if (type === 'click') {
+                const was = _pageEating;
+                setTimeout(() => { if (_pageEating === was) _pageEating = 0; }, 0);   // and its dblclick
+            }
+        }, true);
+    });
+    document.addEventListener('pointercancel', () => { _pageEating = 0; }, true);
+
+    const _applyBusy = () => {
+        if (!_handle) return;
+        ['#fcc-audit-panel-done', '#fcc-audit-panel-cancel'].forEach((sel) => {
+            const btn = _handle.element.querySelector(sel);
+            if (btn) btn.disabled = _busy;
+        });
+    };
+
+    // Disables Done and Cancel until the answer: both stay on screen for the whole
+    // request. Only the buttons change: a redraw here would re-make the QRs. A
+    // disabled button drops the keyboard's focus, so it comes back with the answer.
+    window.auditPanelBusy = (on) => {
+        const was = _busy;
+        _busy = !!on;
+        const active = document.activeElement;
+        if (_busy && !was) {
+            _busyFocus = (active && /^fcc-audit-panel-(done|cancel)$/.test(active.id || '')) ? active.id : null;
+        }
+        _applyBusy();
+        if (!_busy && _busyFocus && _handle && (!active || active === document.body)) {
+            const btn = _handle.element.querySelector(`#${_busyFocus}`);
+            if (btn && btn.focus) btn.focus();
+        }
+        if (!_busy) _busyFocus = null;
+    };
+
+    // A scan's refusal, beside its toast: the toast layer is under the panel, and
+    // the Activity Log behind it. Outside #fcc-audit-panel-body, so a redraw keeps
+    // it. '' clears it: a good scan means the refusal has been dealt with.
+    window.auditPanelNotice = (msg) => {
+        // The panel gone and the report window up (a Done this page ended): it says it.
+        if (!_handle) { if (window.auditReportNotice) window.auditReportNotice(msg); return; }
+        // Find, over the panel, would hide it: it says it too.
+        if (_find && window.auditFindNotice) window.auditFindNotice(_find, msg);
+        const el = _handle.element.querySelector('#fcc-audit-panel-notice');
+        if (!el) return;
+        el.textContent = msg || '';
+        el.style.display = msg ? 'block' : 'none';
     };
 
     const _render = (data) => {
@@ -1021,105 +1855,243 @@ window.commitBulkMove = () => {
         if (!body) return;
         // Hash-skip when payload is unchanged so the 2s poll stops
         // re-rendering the tile grid (and re-generating QR codes) every
-        // tick. Derek 2026-05-16 visible-flicker fix.
-        const hash = JSON.stringify(data);
+        // tick. Derek 2026-05-16 visible-flicker fix. The strip's 🖨️ reads the
+        // print queue, which the poll's answer doesn't carry: another tab's queue
+        // reaches this one every 2 s (inv_queue.js).
+        _lastData = data;
+        const queued = data.last_found ? _inPrintQueue(data.last_found.id) : false;
+        const hash = `${JSON.stringify(data)}|${queued ? 1 : 0}`;
         if (hash === _lastRenderHash) return;
         _lastRenderHash = hash;
-        const s = data.stats || { total_expected: 0, found: 0, missing: 0, rogue: 0 };
-        const expectedTiles = (data.expected || []).map(r => _renderTile(r, r.found ? 'found' : 'missing')).join('');
-        const rogueTiles = (data.rogue || []).map(r => _renderTile(r, 'rogue')).join('');
+        // Find's tags say what this audit says of each spool now.
+        if (_find && window.retagAuditFind) window.retagAuditFind(_find);
+        // What this audit doesn't check: always in view, outside the scrolling body.
+        const note = root.querySelector('#fcc-audit-panel-note');
+        if (note) {
+            note.textContent = data.note || '';
+            note.style.display = data.note ? 'block' : 'none';
+        }
+        const s = data.stats || { total_expected: 0, found: 0, missing: 0, rogue: 0, trail: 0 };
+        const expected = data.expected || [];
+        const extras = data.rogue || [];
+        const trail = data.trail || [];
+        const extraTiles = extras.map(r => _renderTile(r, 'extra')).join('');
+        const trailTiles = trail.map(r => _renderTile(r, 'trail')).join('');
         const loc = _escapeHtml(data.location_id || '(scan a location to start)');
-        body.innerHTML = `
-            <div style="margin-bottom:10px; font-size:0.95rem;">
+        // Not scanned first (Derek, 2026-11-03, sample 5a(i): "keeping of unfound items at
+        // the top"): the spools still to find, with their QRs, then the ones found, each
+        // in the order the server sends (shelf order). A group with nothing in it has no
+        // heading. A press moves a tile from one group to the other and the keyboard
+        // goes with it (its tile is found by its id below), never to the tile that slid
+        // into its place, whose next Enter would find a spool nobody pressed.
+        const group = (key, title, rows, kind, gap) => (rows.length ? `
+                <div class="fcc-audit-subhead">${title} (${rows.length})</div>
+                <div data-audit-group="${key}" class="fcc-audit-grid" style="margin-bottom:${gap}px;">
+                    ${rows.map(r => _renderTile(r, kind)).join('')}
+                </div>` : '');
+        const expectedTiles = group('missing', 'Not scanned', expected.filter(r => !r.found), 'missing', 10)
+            + group('found', 'Found', expected.filter(r => r.found), 'found', 12);
+        // A note says it already when the place's spools are all in places inside it.
+        const nothing = data.location_id ? (data.note ? '' : 'Nothing is filed here.') : "Scan a location's label to start.";
+        // A button or a tile the redraw is about to replace keeps the keyboard. The dock's
+        // own columns (Needs a label, Done, Cancel Audit) are never replaced, so only the
+        // Last found box's buttons and the tiles need it.
+        const active = document.activeElement;
+        const refocus = (active && /^fcc-audit-(label-(undo|queue)|put-back)$/.test(active.id || '')) ? active.id : null;
+        const refocusTile = (active && active.dataset) ? active.dataset.auditTile : null;
+        const refocusTag = (active && active.dataset) ? active.dataset.auditTag : null;
+        const stripSpool = data.last_found ? data.last_found.id : null;
+        const stripMoved = stripSpool !== _stripSpool;
+        _stripSpool = stripSpool;
+        if (stripSpool != null) _selectedIn = data.audit_id != null ? data.audit_id : state.auditId;
+        // The tally, above the scrolling list and always in view (Derek, 2026-11-03,
+        // sample 2a: "persistent status up top"), in the words and colours it had as the
+        // body's first line.
+        const tally = root.querySelector('#fcc-audit-panel-tally');
+        if (tally) {
+            tally.innerHTML = `
                 Auditing <b style="color:#0ff;">${loc}</b> —
                 <span style="color:#0f0; font-weight:bold;">${s.found}/${s.total_expected}</span> found,
                 <span style="color:rgba(255,255,255,0.75); font-weight:bold;">${s.missing}</span> missing,
-                <span style="color:#fc0; font-weight:bold;">${s.rogue}</span> rogue
-            </div>
-            ${data.expected && data.expected.length ? `
-                <div style="font-weight:bold; color:#0ff; margin-bottom:6px;">Expected here</div>
-                <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(16.25rem,1fr)); gap:6px; margin-bottom:12px;">
-                    ${expectedTiles}
+                <span style="color:#fc0; font-weight:bold;">${s.rogue}</span> extra${s.trail ? `,
+                <span style="color:#7fe8ff; font-weight:bold;">${s.trail}</span> loaded from here` : ''}`;
+        }
+        body.innerHTML = `
+            ${expected.length ? `
+                <div style="margin-bottom:6px;">
+                    <span style="font-weight:bold; color:#0ff;">Expected here</span>
+                    <span class="small" style="color:rgba(255,255,255,0.75); margin-left:8px;">No label to scan? ${state.auditId && expected.some(r => !r.found) ? 'Press its tile, or scan its QR.' : 'Press its tile.'}</span>
                 </div>
-            ` : `<div class="small" style="color:rgba(255,255,255,0.7);">Scan a location's QR to populate the expected list.</div>`}
+                ${expectedTiles}
+            ` : (nothing ? `<div class="small" style="color:rgba(255,255,255,0.7);">${nothing}</div>` : '')}
             ${data.idle_timeout_min ? `
                 <div class="small" style="color:rgba(255,255,255,0.55); margin-top:8px;">
                     ⏳ This audit stays open for <b>${_escapeHtml(data.idle_timeout_min)} min</b> of
-                    inactivity, then clears itself. Nothing is moved either way.
+                    inactivity, then clears itself with nothing moved.
                 </div>` : ''}
-            ${data.rogue && data.rogue.length ? `
-                <div style="font-weight:bold; color:#fc0; margin-bottom:6px;">Rogue (scanned but expected elsewhere)</div>
-                <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(16.25rem,1fr)); gap:6px;">
-                    ${rogueTiles}
+            ${extras.length ? `
+                <div style="margin:8px 0 6px;">
+                    <span style="font-weight:bold; color:#fc0;">Extra (found here, filed elsewhere)</span>
+                    <span class="small" style="color:rgba(255,255,255,0.75); margin-left:8px;">Not here after all? Press its tile.</span>
+                </div>
+                <div data-audit-group="extra" class="fcc-audit-grid">
+                    ${extraTiles}
                 </div>
             ` : ''}
-            <!-- 18.2 Part B follow-up: surface DONE + CANCEL as explicit
-                 click-targets AND QR codes so the user has both keyboard/
-                 mouse and scanner exits. Without these the only way out
-                 was the deck button (used to auto-DONE; now CANCEL-only). -->
-            <div class="d-flex justify-content-between align-items-stretch gap-3 mt-3 pt-3 border-top border-secondary">
-                <div style="flex:1; text-align:center;">
-                    <button class="btn btn-success fw-bold w-100 mb-2"
-                            onclick="window.commitAuditWithAutoPark && window.commitAuditWithAutoPark()">
-                        ✅ Done &amp; Auto-Park
-                    </button>
-                    <div id="fcc-audit-panel-qr-done" style="display:inline-block; background:#fff; padding:4px; border-radius:4px;"></div>
-                    <div class="small mt-1" style="color: rgba(255,255,255,0.75);">
-                        Missing spools <b style="color:#fc0;">→ ❓ Unknown</b>
-                    </div>
+            ${trail.length ? `
+                <div style="font-weight:bold; color:#7fe8ff; margin:8px 0 6px;">Loaded from here</div>
+                <div data-audit-group="trail" class="fcc-audit-grid">
+                    ${trailTiles}
                 </div>
-                <div style="flex:1; text-align:center;">
-                    <button class="btn btn-outline-danger fw-bold w-100 mb-2"
-                            onclick="if (typeof toggleAudit==='function') toggleAudit(); else window.closeAuditPanel();">
-                        ❌ Cancel Audit
-                    </button>
-                    <div id="fcc-audit-panel-qr-cancel" style="display:inline-block; background:#fff; padding:4px; border-radius:4px;"></div>
-                    <div class="small mt-1" style="color: rgba(255,255,255,0.75);">
-                        Bail without moving anything
-                    </div>
-                </div>
-            </div>
+            ` : ''}
         `;
-        // Generate QR codes after the placeholders are in the DOM.
-        // `generateSafeQR` is a script-scope const in inv_core.js — accessible
-        // by bare name (not on window). The wrong `window.generateSafeQR`
-        // guard previously silently dropped these calls, which is why no
-        // QR rendered (Derek 2026-05-16).
-        if (typeof generateSafeQR === 'function') {
-            generateSafeQR('fcc-audit-panel-qr-done', 'CMD:DONE', 90);
-            generateSafeQR('fcc-audit-panel-qr-cancel', 'CMD:CANCEL', 90);
+        // Now, not two frames later: the tile is its full size before the keyboard's
+        // tile is brought into view, and a QR already drawn doesn't flicker.
+        _placeTileQrs(body);
+        // The dock (Derek, 2026-11-03, sample 1b): its columns once per panel, the Last
+        // found box at every redraw.
+        const dock = root.querySelector('#fcc-audit-panel-dock');
+        if (dock && !_dockDrawn) {
+            _dockDrawn = true;
+            dock.innerHTML = _dockHtml();
+            const doneBtn = root.querySelector('#fcc-audit-panel-done');
+            if (doneBtn) doneBtn.onclick = () => { if (!_busy) window.auditDone(); };
+            const cancelBtn = root.querySelector('#fcc-audit-panel-cancel');
+            if (cancelBtn) cancelBtn.onclick = () => { if (!_busy) window.cancelAudit(); };
+            const markBtn = root.querySelector('#fcc-audit-panel-needlabel');
+            if (markBtn) markBtn.onclick = () => { if (!_undoJustPressed()) window.auditNeedLabel(); };
+            // `generateSafeQR` is a script-scope const in inv_core.js — accessible by bare
+            // name (not on window). The wrong `window.generateSafeQR` guard once silently
+            // dropped these calls, which is why no QR rendered (Derek 2026-05-16). Each box
+            // holds its QR's size until it draws, two frames later (global.css).
+            if (typeof generateSafeQR === 'function') {
+                generateSafeQR('fcc-audit-panel-qr-done', 'CMD:DONE', 90);
+                generateSafeQR('fcc-audit-panel-qr-cancel', 'CMD:CANCEL', 90);
+                generateSafeQR('fcc-audit-panel-qr-needlabel', 'CMD:NEEDLABEL', 80);
+            }
+        }
+        const found = root.querySelector('#fcc-audit-dock-found');
+        if (found) found.innerHTML = _renderStrip(data.last_found) || _renderNoStrip(data);
+        // The dock in the flow on a window too short for it, before the keyboard's tile
+        // is brought into view.
+        _fitDock();
+        const undoBtn = root.querySelector('#fcc-audit-label-undo');
+        if (undoBtn) {
+            // Not `disabled`: that drops the keyboard's focus, and it goes to the
+            // Needs a label button when this one leaves.
+            const sid = data.last_found.id;
+            undoBtn.onclick = () => {
+                if (_undoJustPressed()) return;
+                _undoOut = true;
+                // It leaves the print queue alone (B), and says so when the label is there.
+                _pressPost('/api/audit/needs_label_undo', { audit_id: state.auditId, id: sid },
+                    (res) => ((res && res.success && _inPrintQueue(sid))
+                        ? Object.assign({}, res, { msg: `${res.msg ? `${res.msg} ` : ''}#${Number(sid)} is still in the print queue.` })
+                        : res))
+                    .finally(() => { _undoOut = false; _undoAnsweredAt = Date.now(); });
+            };
+        }
+        const queueBtn = root.querySelector('#fcc-audit-label-queue');
+        if (queueBtn) queueBtn.onclick = () => _queueLabel(data.last_found);
+        const putBackBtn = root.querySelector('#fcc-audit-put-back');
+        if (putBackBtn) putBackBtn.onclick = () => _putBack(data.last_found);
+        _applyBusy();
+        if (refocus && !_busy) {
+            // "undo that" goes with the mark it undid: the keyboard goes to Needs a label.
+            // Not when another spool took the box: an Enter meant for the old spool must
+            // write nothing on the new one (nor queue its label), so the keyboard stays
+            // on the panel, where N and the arrows still work.
+            const again = stripMoved ? null
+                : (root.querySelector(`#${refocus}`) || root.querySelector('#fcc-audit-panel-needlabel'));
+            if (again && again.focus) again.focus();
+        }
+        const tile = refocusTile ? body.querySelector(`[data-audit-tile="${refocusTile}"]`) : null;
+        if (tile && tile.focus) tile.focus();
+        const tagBtn = refocusTag ? body.querySelector(`[data-audit-tag="${refocusTag}"]`) : null;
+        if (tagBtn && tagBtn.focus) tagBtn.focus();
+        // Unless the person has gone somewhere on the panel since.
+        if (_focusDoneNext) {
+            _focusDoneNext = false;
+            if (!root.contains(document.activeElement)) _focusDone();
         }
     };
 
     const _poll = async () => {
+        if (_pollInflight) { _pollPending = true; return; }
+        _pollInflight = true;
+        const gen = _panelGen;
+        const sentAt = _auditClock();
         try {
-            const r = await fetch('/api/audit_session');
+            // Explicit timeout: a wedged request would leave _pollInflight stuck
+            // true and the panel frozen.
+            const r = await window.fetchT('/api/audit_session', {}, 8000);
             const d = await r.json();
+            // Read for a hidden panel too: the legacy picker tags its spools from it.
+            _lastSession = (d && d.active) ? d : null;
+            if (gen !== _panelGen) return;   // the panel closed meanwhile
             if (!d || !d.active) {
-                window.closeAuditPanel();
+                // Seen here before any heartbeat, so the warning starts here too.
+                if (window._syncAuditSignal) window._syncAuditSignal(d, { sentAt });
+                if (!state.auditActive) window.closeAuditPanel();
                 return;
+            }
+            state.auditId = d.audit_id != null ? d.audit_id : state.auditId;
+            state.auditIdleMin = d.idle_timeout_min || state.auditIdleMin;
+            if (state.auditActive && (d.location_id || '') !== state.auditLocation && !(sentAt < state.auditLocationAt)) {
+                state.auditLocation = d.location_id || '';
+                state.auditLocationAt = sentAt;
+                window.updateAuditPill();
             }
             _render(d);
         } catch (e) { /* network hiccup — try again next tick */ }
+        finally {
+            _pollInflight = false;
+            if (_pollPending) { _pollPending = false; _poll(); }
+        }
     };
 
     window.openAuditPanel = () => {
         if (_handle) return;  // idempotent
         if (typeof window.mountOverlay !== 'function') return;
+        // An audit started meanwhile: its panel takes the place of a report read.
+        if (window.closeAuditReport) window.closeAuditReport();
         _lastRenderHash = null;  // force first render after open
+        _lastData = null;        // nothing drawn yet: Find tags nothing until the first answer
+        _lastSession = null;     // nor the legacy picker: it may be another audit's
+        _dockDrawn = false;      // a new panel: its dock is drawn at the first answer
+        // As tall as the window less 8 px above and below (Derek, 2026-11-03, sample 1b),
+        // as a question that doesn't fit is: the dock under the list takes room, and the
+        // deck under the panel is behind its backdrop and only shows this panel.
         const content = `
-            <div style="background:#1e1e1e; color:#fff; border:2px solid #ff00ff;
+            <div class="fcc-audit-panel" style="background:#1e1e1e; color:#fff; border:2px solid #ff00ff;
                         border-radius:8px; padding:0.875rem 1rem;
-                        width:min(51.25rem,94vw); max-height:80vh; display:flex; flex-direction:column;">
+                        width:min(51.25rem,94vw); display:flex; flex-direction:column;">
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <div style="font-weight:bold; font-size:1.15em; color:#ff7eff;">
                         🕵️‍♀️ Audit in Progress
                     </div>
-                    <button id="fcc-audit-panel-close" class="btn btn-sm btn-outline-light"
-                            title="Hide the panel (audit stays active; reopen via the AUDIT deck button while running)">Hide</button>
+                    <div class="d-flex flex-wrap justify-content-end gap-2">
+                        <button id="fcc-audit-panel-find" class="btn btn-sm btn-outline-info"
+                                title="A spool here with no label to scan: find it by its name, colour, brand or number, and pick it (/).">🔎 Find a spool</button>
+                        <button id="fcc-audit-panel-loose" class="btn btn-sm btn-outline-info"
+                                title="Every spool filed at a room or a cart itself, with no more exact place. Read-only: it changes nothing in this audit.">🧺 Loose spools</button>
+                        <button id="fcc-audit-panel-close" class="btn btn-sm btn-outline-light"
+                                title="Hide the panel: the audit keeps running, and scans still go to it. The 🕵️ audit pill brings it back.">Hide</button>
+                    </div>
                 </div>
-                <div id="fcc-audit-panel-body" style="overflow-y:auto; flex:1 1 auto;">
-                    <div class="small" style="color:rgba(255,255,255,0.7);">Loading audit state…</div>
+                <div id="fcc-audit-panel-notice" role="alert"
+                     style="display:none; margin-bottom:8px; padding:6px 10px; border-radius:6px; background:#4a3200;
+                            color:#ffd27a; border:1px solid #ffb74d; font-weight:bold; overflow-wrap:anywhere;"></div>
+                <div id="fcc-audit-panel-note"
+                     style="display:none; margin-bottom:8px; font-size:var(--fcc-fs-row); color:#ffe08a;"></div>
+                <div id="fcc-audit-panel-tally" style="flex:0 0 auto; margin-bottom:8px; font-size:0.95rem;"></div>
+                <!-- The tiles scroll; the dock under them never does (global.css), unless the
+                     window is too short for both (_fitDock). -->
+                <div id="fcc-audit-panel-scroll" class="fcc-audit-scroll">
+                    <div id="fcc-audit-panel-body" class="fcc-audit-body">
+                        <div class="small" style="color:rgba(255,255,255,0.7);">Loading audit state…</div>
+                    </div>
+                    <div id="fcc-audit-panel-dock" class="fcc-audit-dock"></div>
                 </div>
             </div>
         `;
@@ -1129,19 +2101,810 @@ window.commitBulkMove = () => {
             tier: 'standard',
             backdrop: true,
             backdropDismiss: false,  // Audit is in progress; Hide is the explicit dismiss
+            trapTab: true,           // the page behind it is out of reach, as for the mouse
             onEscape: () => window.closeAuditPanel(),
         });
+        // Each time the panel opens: Back brings a hidden one back, under the pointer.
+        _handle.element.addEventListener('click', _shieldClick, true);
+        _handle.element.addEventListener('mousedown', _shieldMouse, true);
+        // Brought up under the pointer (the deck tile, the 🕵️ pill, Back): its Cancel
+        // Audit can lie under the second click.
+        _shieldPage();
         const closeBtn = _handle.element.querySelector('#fcc-audit-panel-close');
         if (closeBtn) closeBtn.onclick = () => window.closeAuditPanel();
+        // Over the panel, so the confirm tier. A row opens nothing during an audit.
+        const looseBtn = _handle.element.querySelector('#fcc-audit-panel-loose');
+        if (looseBtn) looseBtn.onclick = () => { _loose = window.openLooseList({ tier: 'confirm' }); _shieldPage(); };
+        const findBtn = _handle.element.querySelector('#fcc-audit-panel-find');
+        if (findBtn) findBtn.onclick = () => _openFind();
+        const bodyEl = _handle.element.querySelector('#fcc-audit-panel-body');
+        if (bodyEl) {
+            bodyEl.addEventListener('click', _bodyClick);
+            // `focus` in the capture phase: mountOverlay's focus guard stops focusin at
+            // the document, before it reaches anything inside the overlay.
+            bodyEl.addEventListener('focus', _tileFocused, true);
+        }
+        // A window resized, or a notice, the note or the tally above the list that grows.
+        const scrollEl = _handle.element.querySelector('#fcc-audit-panel-scroll');
+        if (scrollEl && typeof ResizeObserver === 'function') {
+            _dockFit = new ResizeObserver(() => _fitDock());
+            _dockFit.observe(scrollEl);
+        }
         // Initial render + start the 2s poll.
         _poll();
         _pollTimer = setInterval(_poll, 2000);
     };
 
+    // An audit that ends, or a panel that goes, takes what sits on it along: a Yes
+    // left up would answer a question about an audit that has gone.
     window.closeAuditPanel = () => {
+        // Gone from under the pointer: what lies beneath it must not take the second click.
+        if (_handle) _shieldPage();
+        _panelGen += 1;
+        _focusDoneNext = false;
         if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+        if (_question) {
+            const open = _question;
+            _question = null;
+            try { open.close(); } catch (_) { /* noop */ }
+        }
+        if (_loose) {
+            const list = _loose;
+            _loose = null;
+            if (window.closeLooseList) window.closeLooseList(list);
+        }
+        if (_find) {
+            const find = _find;
+            _find = null;
+            if (window.closeAuditFind) window.closeAuditFind(find);
+        }
+        if (_dockFit) { _dockFit.disconnect(); _dockFit = null; }
         if (_handle) { try { _handle.cleanup(); } catch (_) { /* noop */ } _handle = null; }
     };
+
+    // --- Find a spool (Derek, 2026-11-03, A2) ----------------------------------------
+    // "some spools are in the system, with a location, but no barcode": a window over
+    // the panel finds one by its name and picks it (inv_audit_find.js). The pick goes
+    // out as a search card's click does, ID:<id> with no label read, in its turn behind
+    // scans already read, and the audit's own spool path makes it found or an Extra.
+    // What this audit says of a spool now: on its list, or found already.
+    const _findTag = (id) => {
+        const d = _lastData;
+        if (!d) return null;
+        const hit = (rows) => (rows || []).find(r => r && String(r.id) === String(id));
+        const listed = hit(d.expected);
+        if (listed) return listed.found ? 'found' : 'listed';
+        return (hit(d.rogue) || hit(d.trail)) ? 'found' : null;
+    };
+
+    // Where a spool stands in the audit that runs, for the legacy shared-label picker (Derek,
+    // 2026-11-03: it "says which candidates are on this audit's list and whether they're
+    // found yet"), from what the page already knows, the session it read last, with no
+    // request of its own: {standing, place}, `standing` one of 'listed' (on the list, not
+    // scanned yet), 'found' (on the list, found), 'extra' (found here, filed elsewhere),
+    // 'trail' (loaded on a head from here) or 'none' (not on its list). null with no audit,
+    // before its place is scanned, or when what the page read is another audit's.
+    window.auditStandingOf = (id) => {
+        const d = _lastSession;
+        if (!state.auditActive || !d || !d.active || !d.location_id) return null;
+        if (d.audit_id != null && String(d.audit_id) !== String(state.auditId)) return null;
+        const hit = (rows) => (rows || []).find(r => r && String(r.id) === String(id));
+        const listed = hit(d.expected);
+        const standing = listed ? (listed.found ? 'found' : 'listed')
+            : (hit(d.rogue) ? 'extra' : (hit(d.trail) ? 'trail' : 'none'));
+        return { standing, place: String(d.location_id) };
+    };
+
+    const _openFind = () => {
+        if (!_handle || typeof window.openAuditFind !== 'function') return;
+        // A double Enter or Space on a row: the second lands on 🔎, where the keyboard
+        // went back to.
+        if (Date.now() - _findPickedAt < DOUBLE_PRESS_MS) return;
+        if (window.isTopOverlay && !window.isTopOverlay(_handle.element)) return;
+        _find = window.openAuditFind({
+            tagOf: _findTag,
+            // The keyboard comes back to 🔎, on the panel, however Find was opened.
+            opener: _handle.element.querySelector('#fcc-audit-panel-find'),
+            onClose: (handle, picked) => {
+                if (_find === handle) _find = null;
+                if (picked) _findPickedAt = Date.now();
+            },
+        });
+        // Opened under the pointer that pressed 🔎: the second click lands on it.
+        _shieldPage();
+    };
+
+    // A scan the audit took (or Done asking) is the spool in the person's hand: Find,
+    // over the panel, would hide what it did.
+    window.closeAuditFindForScan = () => {
+        if (!_find) return;
+        const find = _find;
+        _find = null;
+        if (window.closeAuditFind) window.closeAuditFind(find);
+    };
+
+    window.isAuditPanelOpen = () => !!_handle;
+
+    // Poll once RIGHT NOW instead of waiting for the next 2s tick: called after a
+    // scan lands, so its tile turns at once. Hidden, it still names the pill's place.
+    window.refreshAuditSession = () => { _poll(); };
+
+    // --- The panel's keys (Group 58.2) --------------------------------------------
+    // N marks the last spool found, as the strip's button does; the arrows move
+    // between the tiles, and Enter presses the one with the focus (a real button).
+    // Only while the panel is on top: the question and the Loose spools list own their
+    // keys, and the shortcut list is read, not pressed through.
+    const NEED_LABEL_WAIT_MS = 150;     // the scan accumulator's burst figure (scripts.html)
+
+    const _keyNeedLabel = (e) => {
+        // A held key's repeats are no second press, and no scanner sends one.
+        if (e.repeat) { e.preventDefault(); e.stopImmediatePropagation(); return; }
+        if (window.scanIsArriving && window.scanIsArriving()) return;
+        // The slot picker's rule, with a longer wait: its key only moves a highlight, and
+        // this one writes. Left for the scan accumulator: a label may start with an N
+        // (an old bare location id), and only the key after it can tell, a slow
+        // scanner's up to the burst figure later (at the picker's 50 ms, 60 ms a key
+        // marked the last spool and lost the label's first letter). Nothing followed:
+        // the person's, so it goes from the buffer, or it sits in front of the next scan.
+        const root = _handle.element;
+        const left = `${state.scanBuffer || ''}${e.key}`;
+        setTimeout(() => {
+            if (!_handle || _handle.element !== root || state.scanBuffer !== left) return;
+            if (window.isTopOverlay && !window.isTopOverlay(root)) return;
+            if (window.clearScanBuffer) window.clearScanBuffer();
+            window.auditNeedLabel();
+        }, NEED_LABEL_WAIT_MS);
+    };
+
+    // What scrolls the tiles: the body, or with the dock in the flow (_fitDock) the part
+    // that holds the body and the dock.
+    const _scroller = () => {
+        const root = _handle && _handle.element;
+        if (!root) return null;
+        const wrap = root.querySelector('#fcc-audit-panel-scroll');
+        return (wrap && wrap.classList.contains('fcc-audit-scroll-flow')) ? wrap : root.querySelector('#fcc-audit-panel-body');
+    };
+
+    // A tile the keyboard reaches is seen whole, its focus ring too: clear of the
+    // scrolling part's top and bottom edges. Nothing is drawn over the tiles since the
+    // dock (Derek, 2026-11-03, sample 1b), which sits under the list; the browser's own
+    // focus scroll would leave the ring cut at an edge.
+    const TILE_AIR_PX = 6;              // the focus ring (2 px + 1 px offset) and a little
+    const _tileClear = (tile) => {
+        const sc = _scroller();
+        if (!sc || !tile) return;
+        const box = sc.getBoundingClientRect();
+        const under = tile.getBoundingClientRect().bottom + TILE_AIR_PX - box.bottom;
+        if (under > 0) sc.scrollTop += under;
+        const over = box.top + TILE_AIR_PX - tile.getBoundingClientRect().top;
+        if (over > 0) sc.scrollTop -= over;
+    };
+
+    // Tab into a tile, and the keyboard's tile drawn again after a redraw. Not a mouse's
+    // focus: a click's own mousedown focuses the tile, and a tile pressed near the edge
+    // and scrolled out from under the pointer would lose the click to the gap its
+    // mouseup lands in.
+    // The whole tile, its row under the name and its ring with it (the cell draws the ring).
+    const _cellOf = (el) => (el && el.closest && el.closest('.fcc-audit-tile-cell')) || el;
+    const _tileFocused = (e) => {
+        const tile = e.target;
+        if (!tile || !tile.matches) return;
+        if (tile.matches('.fcc-audit-tile:focus-visible, .fcc-audit-tile-tag:focus-visible')) _tileClear(_cellOf(tile));
+    };
+
+    // The dock stays under the list, out of the scroll, while it leaves the tiles room:
+    // at least DOCK_MIN_BODY_REM of the scrolling part (a tile row and its heading), or
+    // the whole list when it is shorter than that. On a window too short for both (a
+    // phone at Extra Large text, a phone held sideways, a laptop window pulled short;
+    // measured, a phone at Large stays docked) it goes in the flow after the tiles
+    // (.fcc-audit-scroll-flow): the list and
+    // the dock scroll as one, and every tile can still be brought into view and pressed.
+    // It replaces the Last found strip's sticky rule (review of 7e3720f, P-5), which the
+    // dock retired. Measured after each render, as the scrolling part changes size (a
+    // resize, a notice, the note or the tally above it) and on a Text size change. The
+    // dock is the same height in the flow and out of it, and it comes back only with
+    // DOCK_SLACK_PX to spare, so the measure never flips back by itself.
+    const DOCK_MIN_BODY_REM = 7;
+    const DOCK_SLACK_PX = 8;
+    const _fitDock = () => {
+        const root = _handle && _handle.element;
+        if (!root || typeof window.getComputedStyle !== 'function') return;
+        const wrap = root.querySelector('#fcc-audit-panel-scroll');
+        const body = root.querySelector('#fcc-audit-panel-body');
+        const dock = root.querySelector('#fcc-audit-panel-dock');
+        if (!wrap || !body || !dock || !(wrap.clientHeight > 0)) return;
+        const flow = wrap.classList.contains('fcc-audit-scroll-flow');
+        const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+        const docked = dock.offsetHeight + (parseFloat(getComputedStyle(dock).marginTop) || 0);
+        const room = wrap.clientHeight - docked;        // what the list keeps with the dock docked
+        const need = Math.min(DOCK_MIN_BODY_REM * rem, body.scrollHeight);
+        const goFlow = flow ? room < need + DOCK_SLACK_PX : room < need;
+        if (goFlow !== flow) wrap.classList.toggle('fcc-audit-scroll-flow', goFlow);
+    };
+    document.addEventListener('fcc:text-size', () => _fitDock());
+
+    const _keyArrow = (e) => {
+        const tiles = Array.from(_handle.element.querySelectorAll('.fcc-audit-tile'));
+        if (!tiles.length) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        const back = e.key === 'ArrowLeft' || e.key === 'ArrowUp';
+        // From a found tile's 🏷️ (reached by Tab): on to the next tile, or back to its own.
+        const cur = document.activeElement;
+        const own = (cur && cur.dataset && cur.dataset.auditTag)
+            ? tiles.find(t => t.dataset.auditTile === cur.dataset.auditTag) : null;
+        const at = own ? tiles.indexOf(own) : tiles.indexOf(cur);
+        const next = at < 0 ? (back ? tiles.length - 1 : 0)
+            : ((own && back) ? at : (at + (back ? tiles.length - 1 : 1)) % tiles.length);
+        tiles.forEach(t => t.classList.remove('kb-active'));
+        tiles[next].classList.add('kb-active');
+        tiles[next].focus();
+        _tileClear(_cellOf(tiles[next]));
+    };
+
+    // '/' opens Find a spool, as it opens the search elsewhere (fab_drag.js, which it
+    // would open behind the panel): a person's, never the '/' of a URL a scan carries
+    // (window.scanIsArriving). The keys a person left before it go with it, or they'd
+    // start the next scan.
+    const _keyFind = (e) => {
+        if (e.repeat || (window.scanIsArriving && window.scanIsArriving())) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (window.clearScanBuffer) window.clearScanBuffer();
+        _openFind();
+    };
+
+    document.addEventListener('keydown', (e) => {
+        const isN = e.key === 'n' || e.key === 'N';
+        const isFind = e.key === '/';
+        if (!_handle || !(isN || isFind || /^Arrow(Up|Down|Left|Right)$/.test(e.key))) return;
+        // Shift: a keyboard that types '/' with it, and a scanner's capitals, which N
+        // and the arrows leave alone.
+        if (e.ctrlKey || e.altKey || e.metaKey || (e.shiftKey && !isFind)) return;
+        if (window.isTopOverlay && !window.isTopOverlay(_handle.element)) return;
+        const shortcuts = document.getElementById('fcc-shortcuts-overlay');
+        if (shortcuts && shortcuts.getClientRects().length) return;
+        const tag = ((e.target && e.target.tagName) || '').toUpperCase();
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (e.target && e.target.isContentEditable)) return;
+        if (isFind) _keyFind(e);
+        else if (isN) _keyNeedLabel(e);
+        else _keyArrow(e);
+    }, true);
+
+    if (window.registerShortcut) {
+        window.registerShortcut({
+            id: 'audit-need-label', scope: 'Audit Panel', keys: ['N'],
+            description: 'The last spool found needs a label: raises it in the 🏷️ Backlog. "undo that" on the panel takes it back.',
+        });
+        window.registerShortcut({
+            id: 'audit-tiles', scope: 'Audit Panel', keys: ['↑', '↓', '←', '→'],
+            description: 'Move between the tiles of the spools expected here and the Extras. Wraps at the ends.',
+        });
+        window.registerShortcut({
+            id: 'audit-tile-press', scope: 'Audit Panel', keys: ['Enter'],
+            description: 'On a tile: found, with no label read. Pressed again, it goes back to not scanned. On an Extra: it isn\'t here after all. On a found tile\'s 🏷️ (Tab to it): it needs a label; pressed again, the mark comes off.',
+        });
+        window.registerShortcut({
+            id: 'audit-find', scope: 'Audit Panel', keys: ['/'],
+            description: 'Find a spool with no label to scan by its name, colour, brand or number, and pick it: it counts as found here.',
+        });
+    }
+
+    // --- Done's question (Group 58, Build spec section 7) -------------------------
+    // Done moves nothing until a person says so. It is window.confirmActivePrint's
+    // three-way, the one dialog that draws above this panel (#confirmModal is z 1100
+    // and the panel 20000) and holds every other scan off until it is answered. It
+    // opens on Back to the audit, and Enter goes back: a scanner's Enter, a double
+    // press and a held key all lose nothing. A mouse's double click loses nothing
+    // either: the yes takes no click for DOUBLE_PRESS_MS (`armAfterMs`), and the panel
+    // takes none for as long after the question goes (_shieldClick).
+    const QUESTION_ID = 'fcc-audit-done-question';
+    const PARK_TIMEOUT_MS = 120000;     // about six Spoolman calls a spool
+    const _spools = (n) => `${n} spool${n === 1 ? '' : 's'}`;
+
+    // Each list's spools as the panel's tiles (Derek, 2026-11-03: "display the spools like
+    // we did in the audit window, that way a visual scan of the list isn't a tedious list
+    // of spools with very little context, but more of a vibrant list of data where an out
+    // of place color might spark a memory and help someone catch a possible mistake"):
+    // every one of them, never "and N more", the heading counting them. A tile is the
+    // spool's colour, its name, its grams (and slot, as the panel's tile says it), and
+    // where it comes from or why it stays (`where`). The rows carry their look (section
+    // H, S1: from the rows stored at each scan). Not pressable, no QR.
+    const _grams = (r) => (r.remaining_weight != null ? `${Math.round(r.remaining_weight)}g` : '');
+    const _tiles = (heading, rows, tone, where, slot = false) => ({
+        heading: `${heading} (${rows.length})`,
+        tiles: true,
+        tone,
+        lines: rows.map((r) => ({
+            text: _spoolName(r),
+            detail: `${_grams(r)}${slot && r.slot ? `${_grams(r) ? ' ' : ''}(slot ${r.slot})` : ''}`,
+            where: where(r),
+            color: r.color,
+            color_direction: r.color_direction,
+        })),
+    });
+
+    // Where the keyboard goes when the question leaves: its window has gone with it.
+    const _focusDone = () => {
+        const done = _handle && _handle.element.querySelector('#fcc-audit-panel-done');
+        if (done && done.focus) done.focus();
+    };
+
+    // `show`: a hidden panel comes back for this, or nothing on screen would say the
+    // audit still runs.
+    const _parkRefused = (msg, show = true) => {
+        if (show) window.openAuditPanel();
+        _auditSay(msg);
+    };
+
+    const _parkAnswered = (res) => {
+        if (res && res.audit_ended) {
+            window.noteAuditEnded(res.audit_ended, { quiet: true });
+            document.dispatchEvent(new CustomEvent('inventory:locations-changed'));
+            // The report itself, where the panel was (Derek, 2026-11-03): after the panel
+            // has gone (noteAuditEnded), so it is the window on top.
+            const shown = !!(res.report && window.openAuditReport(res.report, { after: true }));
+            // `success` is false only when a write failed: its 7 s warning goes, and its
+            // layer is under the window, so the window's notice line says it too. A Yes
+            // that moved every spool raises no toast when the window opens: the window
+            // says what it did, and the toast peeked out around a short report (Derek's
+            // look of 2026-11-04). With no window (an answer with no report), the toast
+            // says it, as before.
+            if (!res.success) showToast(res.msg, 'warning', 7000);
+            else if (!shown) showToast(res.msg, 'success', 4000);
+            // The window lists each spool: its line drops the toast's pointer to the Activity
+            // Log (`report_msg`; review 3, R3S-7). An older server sends `msg` alone.
+            if (shown && !res.success && res.msg && window.auditReportNotice) window.auditReportNotice(res.report_msg || res.msg);
+            return;
+        }
+        // Refused, with nothing written. The audit runs on (a failed read, a second
+        // Yes), or has gone (`stale`), which the heartbeat says with its reason.
+        const stale = !!(res && res.stale);
+        _parkRefused((res && res.msg) || "The park didn't go through, so nothing was moved. Press Done again.", !stale);
+        if (stale && typeof updateLogState === 'function') updateLogState(true);
+    };
+
+    // Past the timeout the server may well still be parking. Only for no answer: an
+    // exception after a park landed must not read as this.
+    const _parkNotAnswered = () => {
+        const msg = "FCC didn't answer, so the park may not have finished. Check the Activity Log before moving anything.";
+        _parkRefused(msg);
+        if (window.logClientEvent) window.logClientEvent(`⚠️ ${msg}`, 'WARNING');
+        if (typeof updateLogState === 'function') updateLogState(true);
+    };
+
+    // The Yes. Every id the question counted, not only the lines it drew: the spools it
+    // parks, and (Derek's C, 2026-11-03, for his look) the Extras it files here, sent
+    // as `file_ids` ([] files nothing) with where the question showed each,
+    // `file_where` ({id: where}): a move sends what its screen showed, so one that
+    // moved while the question sat open stays where it went.
+    const _park = (auditId, ids, fileIds = [], fileWhere = {}) => {
+        const words = (ids.length && fileIds.length) ? `Parking ${_spools(ids.length)} and filing ${fileIds.length}…`
+            : (fileIds.length ? `Filing ${_spools(fileIds.length)}…` : `Parking ${_spools(ids.length)}…`);
+        setProcessing(true, { label: `⏳ ${words}` });      // under the panel, when it is up
+        // On Done, so a refusal hands the keyboard back there (auditPanelBusy).
+        _focusDone();
+        window.auditPanelBusy(true);
+        window.auditPanelNotice(words);
+        // Counted out, or the panel's 2 s poll sees the audit gone first and warns.
+        window.auditRequestOut(1);
+        window.fetchT('/api/audit/park', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ audit_id: auditId, ids, file_ids: fileIds, file_where: fileWhere,
+                today: window.fccLocalDay() }),
+        }, PARK_TIMEOUT_MS)
+            .then(r => r.json())
+            .then(_parkAnswered, _parkNotAnswered)
+            .catch(e => console.error(e))
+            .finally(() => { setProcessing(false); window.auditRequestOut(-1); });
+    };
+
+    // What the question says, and its Yes: the park's words as they were; with Extras to
+    // file (Derek's C, 2026-11-03, for his look; `file`, and `file_note` for a box whose
+    // slot FCC never guesses) the filing's, or both. It names the audited place, never
+    // "here" (Derek, 2026-11-03: a question is read away from the panel, and "File #64
+    // here?" read as 64 spools): "File #57 in LR-MDB-1?".
+    const _doneWords = (res, park, file) => {
+        const n = park.length;
+        const m = file.length;
+        const place = String(res.location == null ? '' : res.location);
+        // Counted against every spool not scanned (review 3, R3S-3: "1 of 16 found. The 12 not
+        // scanned go to Unknown" read as 12 not scanned, with 15): the ones that stay (moved
+        // off, deleted, in the scan buffer, on a head) are under Left where they are.
+        const unscanned = Math.max(n, Number(res.expected || 0) - Number(res.found || 0));
+        const parks = !n ? '' : ` ${n < unscanned ? `${n} of the ${unscanned} not scanned ${n === 1 ? 'goes' : 'go'}`
+            : (n === 1 ? 'The one not scanned goes' : `The ${n} not scanned go`)} to Unknown, to find or clear later.`;
+        const files = m ? ` ${m === 1 ? `The one found in ${place} that FCC had elsewhere is` : `The ${m} found in ${place} that FCC had elsewhere are`}`
+            + ` filed there.${res.file_note ? ` ${res.file_note}` : ''}` : '';
+        // A place FCC had nothing filed at asks only to file: "0 of 0 found" said
+        // nothing (review of 7e3720f, R-4), so the tally is left out.
+        const tally = res.expected ? `${res.found} of ${res.expected} found at ${place}.` : '';
+        const msg = `${tally}${parks}${files} Undo Last Move puts ${n + m === 1 ? 'it' : 'them'} back.`.trim();
+        if (!m) {
+            return { msg, title: `Park ${_spools(n)} at Unknown?`, yes: n === 1 ? 'Park it' : 'Park them',
+                verb: n === 1 ? 'parks it' : 'parks them', caption: 'Scan to Park' };
+        }
+        if (!n) {
+            return { msg, title: m === 1 ? `File #${Number(file[0].id)} in ${place}?` : `File ${_spools(m)} in ${place}?`,
+                yes: m === 1 ? 'File it' : 'File them', verb: m === 1 ? 'files it' : 'files them',
+                caption: 'Scan to File' };
+        }
+        return { msg, title: `Park ${n} at Unknown and file ${m} in ${place}?`, yes: 'Do both', verb: 'does both',
+            caption: 'Scan to Do both' };
+    };
+
+    // `res`: the route's audit_done_question answer. Nothing has moved yet.
+    window.askAuditDone = (res) => {
+        // Find would sit between the question and the panel, and Back goes to the panel.
+        window.closeAuditFindForScan();
+        const park = Array.isArray(res.park) ? res.park : [];
+        const stays = Array.isArray(res.stays) ? res.stays : [];
+        const file = Array.isArray(res.file) ? res.file : [];
+        const words = _doneWords(res, park, file);
+        const place = String(res.location == null ? '' : res.location);
+        const sections = [];
+        // Its slot as the panel's tile says it ("500g (slot 2)"): Done parks it from there. Named
+        // for what Done does with them (review 3, R3S-3): "Not scanned (12)" read as every spool
+        // not scanned, under a tally that counted 15.
+        if (park.length) sections.push(_tiles('Not scanned, to park at Unknown', park, 'missing', () => '', true));
+        // Where FCC has each now: Done moves it to the audited place.
+        if (file.length) {
+            sections.push(_tiles(`Found in ${place}, FCC had ${file.length === 1 ? 'it' : 'them'} elsewhere`, file, 'extra',
+                (r) => (r.where ? `from ${r.where}` : '')));
+        }
+        // `why`, not `where`: a deleted spool is nowhere.
+        if (stays.length) {
+            sections.push(_tiles(stays.length === 1 ? 'Left where it is' : 'Left where they are', stays, 'stay',
+                (r) => String(r.why == null ? '' : r.why)));
+        }
+        if (res.audit_id != null) state.auditId = res.audit_id;
+        const asked = window.confirmActivePrint({
+            title: words.title,
+            msg: words.msg,
+            sections,
+            printing: true,
+            ids: { overlay: QUESTION_ID },
+            loadLabel: words.yes,
+            loadVerb: words.verb,
+            loadCaption: words.caption,
+            cancelLabel: 'Back to the audit',
+            cancelVerb: 'goes back',
+            cancelCaption: 'Scan to go back',
+            armAfterMs: DOUBLE_PRESS_MS,
+            // The place it names stays whole ("SHELF-2- / R3" on a phone).
+            keepWhole: true,
+            onConfirm: () => {
+                _question = null;
+                _questionClosedAt = Date.now();
+                _park(res.audit_id, park.map(r => r.id), file.map(r => r.id),
+                    Object.fromEntries(file.map(r => [String(r.id), String(r.where || '')])));
+            },
+            onCancel: (info) => {
+                // Closed with the panel, or replaced by a newer Done's question
+                // (confirmActivePrint logged that): nobody answered this one.
+                const answered = _question === asked && !(info && info.superseded);
+                if (_question === asked) _question = null;
+                if (!answered) return;
+                _questionClosedAt = Date.now();
+                showToast('Back to the audit: nothing moved.', 'info', 4000);
+                if (window.logClientEvent) window.logClientEvent(`ℹ️ Done's question: back to the audit of ${window.escHtml(res.location)}, nothing moved`, 'INFO');
+                // Hidden, the words on the button still have to be true. A panel just
+                // brought back has no Done yet: its body comes with the first poll.
+                _focusDoneNext = !_handle;
+                window.openAuditPanel();
+                if (!_focusDoneNext) _focusDone();
+            },
+        });
+        _question = asked;
+        // Opened under the pointer that pressed Done: its second click lands on the
+        // question, where a mousedown off the buttons takes the keyboard from Back.
+        _shieldPage();
+    };
+
+    // --- The audit's report window (Derek, 2026-11-03, section H) -------------------
+    // "a window right after Done's Yes, and a 📝 Read the report button on the report's
+    // Activity Log line": the server's report as data (section H, S3: each spool once,
+    // under what the end did with it), each spool a colour tile as in Done's question
+    // (window.fccSpoolTileHtml). It opens where the panel was after a Done this page ended
+    // (the park's answer, or a Done with nothing to ask), and from the report's line
+    // (GET /api/audit/report). Never after a Cancel or an idle end: their lines' button
+    // opens theirs. A mountOverlay at the panel's tier, Tab kept inside it, Escape and
+    // Close closing it, the keyboard on Close. It takes no scan: a scan read while it is
+    // up goes to processScan as usual and closes it (the scan's toast or dialog would sit
+    // under it), but for a scanner's second read of the CMD:DONE that ended the audit.
+    const REPORT_ID = 'fcc-audit-report';
+    // Where it can be read again: its line in the Activity Log, for as long as the log keeps
+    // it, and the 📡 pill's list, which shows the same line, only while the pill is up (it
+    // shows while an entry is unread, and hides once its list has been read; review 3, R3S-6).
+    const AUDIT_REPORT_AGAIN = 'Its line in the Activity Log has a 📝 Read the report button that opens this window '
+        + "again, and so does the 📡 pill's list while the pill shows.";
+    const REPORT_TIMEOUT_MS = 8000;     // the route reads no Spoolman
+    const REPORT_SECOND_READ_MS = 1500; // processScan's LOC_REPEAT_MS: a scanner's double read
+    let _report = null;
+    let _reportFit = null;
+    let _reportAfterDoneAt = 0;
+    let _reportAskedAt = 0;
+    // When the window last closed: the keyboard goes back to the 📝 it was asked from, and a
+    // double Enter or Space on Close pressed that and opened it again (review 3, R3-3).
+    let _reportClosedAt = 0;
+    let _reportOut = false;
+    // Every scan processScan takes (closeAuditReportForScan): an answer to a 📝 press that a
+    // scan has overtaken opens nothing (review 3, R3-5).
+    let _reportScanSeq = 0;
+    // Each kind of group (logic._audit_report_data): its icon (the report line's), its
+    // tiles' look and what a tile says under its grams.
+    const _at = (r) => (r.where ? `📍 ${r.where}` : '');
+    const REPORT_KINDS = {
+        parked: { icon: '❓', tone: 'missing', where: (r) => (r.where ? `from ${r.where}` : '') },
+        filed: { icon: '📥', tone: 'extra', where: (r) => (r.where ? `from ${r.where}` : '') },
+        stayed: { icon: '📌', tone: 'stay', where: (r) => r.why || _at(r) },
+        failed: { icon: '🛑', tone: 'failed', where: (r) => r.why || _at(r) },
+        missing: { icon: '❌', tone: 'missing', where: (r) => r.why || _at(r) },
+        extra: { icon: '⚠️', tone: 'extra', where: (r) => r.why || _at(r) },
+        trail: { icon: '🔗', tone: 'trail', where: (r) => (r.where ? `loaded on ${r.where}` : '') },
+        needs_label: { icon: '🏷️', tone: 'found', where: _at },
+    };
+
+    // A row at the audited place itself (Derek's look of 2026-11-04: every parked tile of
+    // SHELF-3-R1's report read "from SHELF-3-R1", which the title already says): its where
+    // goes, and its slot, when it has one, goes on its small line as the panel's tile and
+    // Done's question say it ("500g (slot 2)"). null: a row somewhere else, which keeps its
+    // line; '': the place itself; else the slot. `where` is logic.audit_where's ("LR-MDB-1
+    // slot 2"), compared without case.
+    const _atThePlace = (where, place) => {
+        const w = String(where == null ? '' : where).trim();
+        const p = String(place == null ? '' : place).trim();
+        if (!w || !p) return null;
+        if (w.toUpperCase() === p.toUpperCase()) return '';
+        const head = `${p} slot `;
+        return w.toUpperCase().startsWith(head.toUpperCase()) ? w.slice(head.length).trim() : null;
+    };
+
+    // A place id stays whole in the title and the group headings (review 3, R3-6: on a phone the
+    // title read "📝 Audit Report: SHELF-" / "2-R3", the complaint T4 fixed in the question just
+    // before it), as window.fccKeepWhole keeps a button's; _fitReport lets an id longer than
+    // the line itself break at its hyphens again.
+    const _keepWhole = (text) => (typeof window.fccKeepWhole === 'function'
+        ? window.fccKeepWhole(_escapeHtml(text)) : _escapeHtml(text));
+
+    const _reportHtml = (rep, after) => {
+        const place = String(rep.place == null ? '' : rep.place);
+        const groups = (Array.isArray(rep.groups) ? rep.groups : []).filter(g => g && Array.isArray(g.rows) && g.rows.length);
+        const count = (kind) => groups.filter(g => g.kind === kind).reduce((n, g) => n + g.rows.length, 0);
+        const lists = groups.map((g) => {
+            const kind = REPORT_KINDS[g.kind] || { icon: '', tone: '', where: (r) => r.why || _at(r) };
+            const tiles = g.rows.map((r) => {
+                const slot = _atThePlace(r.where, place);
+                const grams = _grams(r);
+                return { r, slot, detail: slot ? `${grams}${grams ? ' ' : ''}(slot ${slot})` : grams };
+            }).map(({ r, slot, detail }) => window.fccSpoolTileHtml({
+                text: _spoolName(r),
+                detail,
+                where: kind.where(slot === null ? r : Object.assign({}, r, { where: '' })),
+                // Marked in this audit, wherever it is: the group of the marked holds only
+                // the ones no other group lists. Its words say the audit marked it (review 3,
+                // R3S-5): the panel's tile says "needs a label" for any flag up, one raised
+                // before the audit too, which the report doesn't list.
+                tag: (r.needs_label && g.kind !== 'needs_label') ? '🏷️ marked as needing a label' : '',
+                color: r.color,
+                color_direction: r.color_direction,
+            }, kind.tone)).join('');
+            return `<section class="fcc-audit-report-group" data-report-kind="${_escapeHtml(g.kind)}">`
+                + `<div class="fcc-audit-report-head">${_keepWhole(`${kind.icon ? `${kind.icon} ` : ''}${g.title} (${g.rows.length})`)}</div>`
+                + `<div class="fcc-spool-tiles">${tiles}</div></section>`;
+        }).join('');
+        const empty = !place ? 'No place was scanned in this audit, so there are no spools to list.'
+            : (rep.perfect ? `Every spool FCC had at ${place} was found.` : 'There are no spools to list.');
+        // Right after the Yes: where to read it again, and what Undo puts back.
+        const parked = count('parked');
+        const filed = count('filed');
+        const undone = (parked && filed) ? 'the parked and filed spools'
+            : (parked ? (parked === 1 ? 'the parked spool' : 'the parked spools')
+                : (filed ? (filed === 1 ? 'the filed spool' : 'the filed spools') : ''));
+        // Where to read it again: the Activity Log, and the list the 📡 log pill opens, which
+        // is bigger on a phone (Derek's look of 2026-11-04), while the pill shows (R3S-6).
+        const foot = !after ? '' : [
+            place ? AUDIT_REPORT_AGAIN : '',
+            undone ? `Undo Last Move puts ${undone} back.` : '',
+        ].filter(Boolean).join(' ');
+        return `
+            <div class="fcc-audit-report-panel" role="dialog" aria-modal="true" aria-labelledby="fcc-audit-report-title">
+                <div class="fcc-audit-report-top">
+                    <div id="fcc-audit-report-title">${_keepWhole(place ? `📝 Audit Report: ${place}` : '📝 Audit Report')}</div>
+                    <button type="button" id="fcc-audit-report-close" class="btn btn-sm btn-outline-light">Close</button>
+                </div>
+                <div class="fcc-audit-report-summary">${_escapeHtml(rep.summary || '')}</div>
+                ${rep.ended ? `<div class="fcc-audit-report-ended">${_escapeHtml(rep.ended)}</div>` : ''}
+                <div id="fcc-audit-report-notice" class="fcc-audit-report-notice" role="alert" style="display:none;"></div>
+                <div class="fcc-audit-report-body" tabindex="-1" role="region" aria-label="Each spool, by what the audit did with it">
+                    ${lists || `<div class="fcc-audit-report-empty">${_escapeHtml(empty)}</div>`}
+                </div>
+                ${foot ? `<div class="fcc-audit-report-foot">${_escapeHtml(foot)}</div>` : ''}
+            </div>`;
+    };
+
+    // Taller than the window, its body scrolls and the title, summary and Close stay
+    // (.fcc-audit-report-scroll); only then, as a question (fccFitQuestion: a scroller
+    // draws its text without ClearType), and then the body is a stop for Tab, whose arrow
+    // and page keys scroll it.
+    const _fitReport = (panel) => {
+        if (!panel || !panel.isConnected || typeof panel.getBoundingClientRect !== 'function') return;
+        // An id kept whole that is wider than its line breaks at its hyphens again
+        // (.fcc-keep-whole-off), as fccFitQuestion and _fitConfirmMsg let it: nothing runs off.
+        panel.classList.remove('fcc-keep-whole-off');
+        const wide = Array.from(panel.querySelectorAll('#fcc-audit-report-title, .fcc-audit-report-head'))
+            .some(el => el.querySelector('.fcc-keep-whole') && el.clientWidth > 0 && el.scrollWidth > el.clientWidth + 1);
+        if (wide) panel.classList.add('fcc-keep-whole-off');
+        panel.classList.remove('fcc-audit-report-scroll');
+        const scroll = panel.getBoundingClientRect().height > (window.innerHeight || 0) - 16 + 0.5;
+        if (scroll) panel.classList.add('fcc-audit-report-scroll');
+        const body = panel.querySelector('.fcc-audit-report-body');
+        if (body) body.tabIndex = scroll ? 0 : -1;
+    };
+    document.addEventListener('fcc:text-size', () => { if (_report) _fitReport(_report.panel); });
+
+    // `opts.after`: right after the Done this page ended (the Yes, or a Done with nothing
+    // to ask); `opts.opener`: the button it was asked for from, which the keyboard goes
+    // back to.
+    window.openAuditReport = (rep, opts = {}) => {
+        if (!rep || typeof window.mountOverlay !== 'function' || typeof window.fccSpoolTileHtml !== 'function') return null;
+        window.closeAuditReport();
+        const after = !!opts.after;
+        const handle = window.mountOverlay({
+            id: REPORT_ID,
+            content: _reportHtml(rep, after),
+            tier: 'standard',
+            backdrop: true,
+            trapTab: true,
+            initialFocus: '#fcc-audit-report-close',
+            onEscape: () => window.closeAuditReport(),
+        });
+        _report = handle;
+        handle._opener = opts.opener || null;
+        const close = handle.element.querySelector('#fcc-audit-report-close');
+        if (close) close.onclick = () => window.closeAuditReport();
+        const panel = handle.element.querySelector('.fcc-audit-report-panel');
+        _fitReport(panel);
+        if (typeof requestAnimationFrame === 'function') {
+            requestAnimationFrame(() => requestAnimationFrame(() => { if (_report === handle) _fitReport(panel); }));
+        }
+        if (typeof window.addEventListener === 'function') {
+            _reportFit = () => _fitReport(panel);
+            window.addEventListener('resize', _reportFit);
+        }
+        _reportAfterDoneAt = after ? Date.now() : 0;
+        // Opened under the pointer that asked for it (the Yes, Done, the line's button):
+        // the second press of a double click reaches nothing, Close included.
+        _shieldPage();
+        return handle;
+    };
+
+    window.closeAuditReport = () => {
+        if (!_report) return;
+        // Gone from under the pointer, as the panel's Hide is (review 3, R3-1): the second
+        // press of a double click on Close landed on the dashboard beneath it (a Printer
+        // Status head opened the Location Manager, the title bar's 🛒 Queue its window).
+        // Armed only while a pointer press is under DOUBLE_PRESS_MS old, so Escape, Enter
+        // and a scan's close are as they were.
+        _shieldPage();
+        _reportClosedAt = Date.now();
+        const handle = _report;
+        _report = null;
+        if (_reportFit && typeof window.removeEventListener === 'function') window.removeEventListener('resize', _reportFit);
+        _reportFit = null;
+        try { handle.cleanup(); } catch (_) { /* noop */ }
+        // Back to the button it was asked for from, when nothing else has the keyboard: that
+        // line's 📝 as the log draws it now, when a redraw while the window was up replaced
+        // the one it was asked from (review 3: the keyboard fell to the page). The 📡 pill's
+        // list first: open, it lies over the log, and the window was opened from it.
+        let opener = handle._opener;
+        if (opener && !opener.isConnected && opener.dataset && opener.dataset.auditReport) {
+            const id = opener.dataset.auditReport;
+            const find = (sel) => Array.from(document.querySelectorAll(sel)).find((b) => b.dataset.auditReport === id);
+            opener = find('#fcc-log-pill-overlay .fcc-audit-report-open') || find('#live-logs .fcc-audit-report-open') || null;
+        }
+        const a = document.activeElement;
+        if (opener && opener.isConnected && (!a || a === document.body) && opener.focus) {
+            try { opener.focus({ preventScroll: true }); } catch (_) { /* noop */ }
+        }
+    };
+
+    window.isAuditReportOpen = () => !!_report;
+
+    // What a scan's refusal says, on the window itself, beside its toast, as the panel's
+    // notice does (auditPanelNotice hands it here while only this window is up): the toast
+    // layer (z 11000) is under it. The one scan that can be refused with it up is one read
+    // while the park was out and dropped once the audit was over (auditScanOutlived); any
+    // scan processScan takes closes the window first. '' clears it.
+    window.auditReportNotice = (msg) => {
+        if (!_report) return;
+        const el = _report.element.querySelector('#fcc-audit-report-notice');
+        if (!el) return;
+        el.textContent = msg || '';
+        el.style.display = msg ? 'block' : 'none';
+        // A line more: the window may not fit any more.
+        _fitReport(_report.element.querySelector('.fcc-audit-report-panel'));
+    };
+
+    // processScan, for every scan: the window goes and the scan goes on. A scanner's second
+    // read of the CMD:DONE that ended the audit (`at`: when it was read) leaves it up.
+    window.closeAuditReportForScan = (upper, at) => {
+        _reportScanSeq += 1;
+        if (!_report) return;
+        if (upper === 'CMD:DONE' && _reportAfterDoneAt && (at || Date.now()) - _reportAfterDoneAt < REPORT_SECOND_READ_MS) return;
+        window.closeAuditReport();
+    };
+
+    // What is on screen, for a 📝 press's answer to be checked against: the overlay on top
+    // (or none), a gating dialog, the Bootstrap windows up.
+    const _reportScene = () => {
+        const mounted = Array.from(document.querySelectorAll('[data-overlay-mount="1"]'));
+        return {
+            top: (window.isTopOverlay && mounted.find(el => window.isTopOverlay(el))) || null,
+            gating: state.activeModal || null,
+            windows: Array.from(document.querySelectorAll('.modal.show, .offcanvas.show')).map(el => el.id),
+        };
+    };
+    // The answer came to a screen that has changed since the press (review 3, R3-5): a scan
+    // read meanwhile (processScan closes the window for a scan, so a window that wasn't open
+    // yet mustn't open after it), a dialog it opened ("Clear entire Buffer?", whose scans the
+    // window would then hide), or any other window or overlay. The report over it would sit
+    // on top while scans still went to what is under it.
+    const _reportSceneChanged = (was, seq) => {
+        if (_reportScanSeq !== seq) return true;
+        const now = _reportScene();
+        return now.top !== was.top || now.gating !== was.gating
+            || now.windows.some(id => !was.windows.includes(id));
+    };
+
+    // The 📝 Read the report button the server puts in the report's line (section H, S3):
+    // one delegated click, for Live Activity (redrawn by innerHTML, frozen while paused)
+    // and the log pill's window, which draw the same line. A double press asks once.
+    const _askReport = (btn) => {
+        const now = Date.now();
+        // A double press asks once, and so does a double Enter on Close, whose second
+        // lands on this button (the keyboard goes back to it), as Find's 🔎 does.
+        if (_reportOut || now - _reportAskedAt < DOUBLE_PRESS_MS || now - _reportClosedAt < DOUBLE_PRESS_MS) return;
+        _reportAskedAt = now;
+        _reportOut = true;
+        const id = String((btn.dataset && btn.dataset.auditReport) || '');
+        // Asked from the 📡 pill's list, the list is on top, and a toast's layer is under it:
+        // the list says it too (review 3, R3-4).
+        const say = (msg) => {
+            showToast(msg, 'warning', 7000);
+            if (btn.closest('#fcc-log-pill-overlay') && window.logPillNotice) window.logPillNotice(msg);
+        };
+        if (btn.closest('#fcc-log-pill-overlay') && window.logPillNotice) window.logPillNotice('');
+        const scene = _reportScene();
+        const seq = _reportScanSeq;
+        window.fetchT(`/api/audit/report?id=${encodeURIComponent(id)}`, {}, REPORT_TIMEOUT_MS)
+            .then(r => r.json())
+            .then((res) => {
+                if (res && res.success && res.report) {
+                    if (_reportSceneChanged(scene, seq)) {
+                        showToast("The report didn't open: the screen changed while FCC answered. "
+                            + 'Press 📝 Read the report again to see it.', 'info', 4000);
+                        if (window.logClientEvent) window.logClientEvent(
+                            "ℹ️ An audit report wasn't opened: a scan or a window came up while FCC answered", 'INFO');
+                        return;
+                    }
+                    window.openAuditReport(res.report, { opener: btn });
+                    return;
+                }
+                // FCC no longer has it (it keeps the last 10, a restart clears them): the
+                // server's words, which point to the line's own words.
+                say((res && res.msg) || "FCC couldn't show that report.");
+            }, () => say("FCC didn't answer, so the report couldn't be shown. Try again in a moment."))
+            .catch(e => console.error(e))
+            .finally(() => { _reportOut = false; });
+    };
+    document.addEventListener('click', (e) => {
+        const t = e.target && e.target.closest ? e.target : null;
+        const btn = t ? t.closest('.fcc-audit-report-open') : null;
+        if (!btn || !btn.closest('#live-logs, #fcc-log-pill-overlay')) return;
+        e.preventDefault();
+        _askReport(btn);
+    });
 })();
 
 // --- Prusament matched-scan overlay (Stage 2c) -----------------------------
@@ -1456,6 +3219,10 @@ const _noteScannedLoc = (id) => { state.lastScannedLoc = id; state.lastScannedBu
 // the two straight back (Derek, 2026-10-15: fixing a wrong scan must not hit a
 // hidden stop, so the server no longer holds the old spool back).
 const LOC_REPEAT_MS = 1500;
+// The last scan processScan took, or the queue dropped as one an audit outlived: {text
+// (upper case), at (when it was read)}. auditScanOutlived reads a queued scan of the same
+// text read within LOC_REPEAT_MS of it as a scanner's double read.
+let _lastScanRead = null;
 window._fccLastLocScan = window._fccLastLocScan || null;
 const _isLocRepeat = (key, capturedAt) => {
     const last = window._fccLastLocScan;
@@ -1497,11 +3264,16 @@ const _quickPickItem = (locData, res) => {
     return direct;
 };
 
+// When a bare CMD:CANCEL last closed an open question (processScan).
+let _questionCancelledAt = 0;
+
 // --- SCAN ROUTER ---
 // `weighRead`: the weigh-out list's mark for this scan, made as it was read
 // when the scan accumulator queued it behind another (weighOutScanStart); it
 // is ended by the queue if the scan never goes out (Group 57 review, round 9).
-const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = null) => {
+// `auditOf`: the audit the queue's scan was read for, stamped as it was read
+// (scripts.html; left out, a scan read now). It goes out as `audit_seen`.
+const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = null, auditOf = undefined) => {
     // Blanks around a scan are nobody's (the server strips them too); kept,
     // the exact matches below missed (Group 57 review, round 5).
     text = String(text == null ? '' : text).trim();
@@ -1517,6 +3289,7 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
             `ℹ️ Scan "${escLog(String(text).trim())}" ignored: the same label was read twice within ${LOC_REPEAT_MS / 1000} s`, 'INFO');
         return;
     }
+    _lastScanRead = { text: locKey, at: capturedAt || Date.now() };
     // Answered at once unless it reaches the server below (every early return
     // here is an answer); in flight from the request until its answer.
     const locBefore = window._fccLastLocScan;
@@ -1559,7 +3332,7 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
     if (openQuestion) {
         // At the end of the text, as routeConfirmScan reads its QRs: a stray
         // key in front refused the question's own Cancel (round 5).
-        if (/CMD:CANCEL(:[A-Z0-9_-]+)?$/.test(upper)) { openQuestion.cancel(); return; }
+        if (/CMD:CANCEL(:[A-Z0-9_-]+)?$/.test(upper)) { openQuestion.cancel(); _questionCancelledAt = Date.now(); return; }
         // A question whose answers are labels (Group 40.5's "Record it as coming
         // from…": a feed slot's label picks it) routes them itself; 'refused'
         // (a held slot, round 9) is no read of the label.
@@ -1582,7 +3355,7 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
     // belongs to a dialog that has already closed. Never let it fall through to
     // the substring-matching routes below and answer whatever unrelated dialog
     // is up now (2026-09-12 review). A stale CMD:CANCEL:<sid> still falls
-    // through: cancelling is always safe. A stale CMD:STORE:<sid> (Group 40.3's
+    // through: cancelling is safe, outside a session (below). A stale CMD:STORE:<sid> (Group 40.3's
     // "Just store it") is a choice too, so it is stopped the same way. Read
     // anywhere in the text: a stray key in front never lets one through (Group
     // 57 review, round 5), and neither does a later scan glued after it with a
@@ -1601,10 +3374,37 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
             : '⚠️ Stale confirm QR scanned (its dialog had closed) — ignored', 'WARNING');
         return;
     }
+    // Group 58: a stale CMD:CANCEL:<sid> is safe everywhere but in a session: "Scan to
+    // go back" read twice cancelled the whole audit, every scan in it, until the
+    // server's gate stopped it too (logic.is_closed_dialogs_cancel; here it says so in
+    // a word, and asks nothing of the server). A bare CMD:CANCEL read twice did the
+    // same, its first read having only closed a question or a gating dialog, and the
+    // server can't tell that one: it is the session's own Cancel. It can be meant, so
+    // it goes after the window a double read takes (LOC_REPEAT_MS).
+    const staleCancel = /CMD:CANCEL:\S/.test(upper);
+    const secondCancel = upper === 'CMD:CANCEL' && (capturedAt || Date.now()) - _questionCancelledAt < LOC_REPEAT_MS;
+    if ((staleCancel || secondCancel) && (state.auditActive || state.bulkMoveActive)) {
+        const said = staleCancel ? 'That cancel QR belongs to a dialog that has closed — ignored' : 'Ignored a second read of CMD:CANCEL';
+        showToast(said, 'info', 4000);
+        if (window.logClientEvent) window.logClientEvent(`ℹ️ Scan "${escLog(text)}" ignored: ${said}`, 'INFO');
+        return;
+    }
+    // Group 58 (Derek, 2026-11-03): the audit's report window takes no scan. It goes, and
+    // the scan goes on, its answer on top (a toast, or a dialog such as Undo's, would sit
+    // under it). Below the guards above, so a closed dialog's QR read again leaves it up,
+    // and so does a scanner's second read of the CMD:DONE that ended the audit.
+    if (window.closeAuditReportForScan) window.closeAuditReportForScan(upper, capturedAt);
 
+    // Group 58: the commands below never reach the server's audit gate.
+    const auditRefusal = state.auditActive ? _auditCommandRefusal(upper) : '';
+    if (auditRefusal) {
+        _auditSay(auditRefusal, 'warning');
+        if (window.logClientEvent) window.logClientEvent(`⚠️ Scan "${escLog(text)}" ignored: ${escLog(auditRefusal)}`, 'WARNING');
+        return;
+    }
     if (upper === 'CMD:AUDIT') { toggleAudit(); return; }
-    // L298 Phase 2 — same client-side toggle shape as CMD:AUDIT: arm when idle,
-    // safe-bail when running. Location scans + CMD:DONE / CMD:CANCEL are NOT
+    // L298 Phase 2 — same client-side shape as CMD:AUDIT: arm when idle, show
+    // the panel when running. Location scans + CMD:DONE / CMD:CANCEL are NOT
     // intercepted here; they fall through to the backend, whose active-session
     // gate routes them into process_bulk_move_scan.
     if (upper === 'CMD:BULKMOVE') { toggleBulkMove(); return; }
@@ -1654,6 +3454,19 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
         if (window.logClientEvent) window.logClientEvent(`⚠️ Confirm scan ignored: ${why}`, 'WARNING');
     };
     const onScreen = (id) => !!(window.isGatingModalOnScreen && window.isGatingModalOnScreen(id));
+    // Group 58 review: the audit's panel (z 20000) covers a gating dialog (z 1100), so
+    // a scan the dialog would swallow without a word is said on the panel. With the
+    // panel hidden the dialog is on screen, and says it all itself. CONFIRM and CANCEL
+    // still reach it. Its CANCEL counts as a question's, or a second read of it, with
+    // no dialog left to take it, would be sent on and end the audit.
+    if ((state.activeModal === 'safety' || state.activeModal === 'confirm')
+        && !upper.includes('CONFIRM') && !upper.includes('CANCEL')
+        && window.isAuditPanelOpen && window.isAuditPanelOpen()) {
+        _auditDialogBehind();
+        if (window.logClientEvent) window.logClientEvent(`⚠️ Scan "${escLog(text)}" ignored: a dialog behind the audit panel is still open`, 'WARNING');
+        return;
+    }
+    if (state.activeModal && upper.includes('CANCEL')) _questionCancelledAt = Date.now();
     if (state.activeModal === 'safety') return upper.includes('CONFIRM') ? (onScreen('safetyModal') ? confirmSafety(true) : ignoredConfirm('safetyModal', !!state.pendingSafety)) : (upper.includes('CANCEL') ? confirmSafety(false) : null);
     if (state.activeModal === 'confirm') return upper.includes('CONFIRM') ? (onScreen('confirmModal') ? confirmAction(true) : ignoredConfirm('confirmModal', !!state.pendingConfirm)) : (upper.includes('CANCEL') ? confirmAction(false) : null);
     if (state.activeModal === 'action') { if (upper.includes('CANCEL')) { closeModal('actionModal'); return; } if (upper.startsWith('CMD:MODAL:')) { if (!onScreen('actionModal')) { ignoredConfirm('actionModal', true); return; } closeModal('actionModal'); state.modalCallbacks[parseInt(upper.split(':')[2])](); return; } }
@@ -1682,12 +3495,21 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
     // running another spool" question, so a slot scan is asked it instead of
     // being refused as a stale page (logic.stale_fed_refusal). Empty: the user
     // has confirmed nothing yet. A blind scan never names a feed (no
-    // expected_feed), so a first slot scan stays prompt-free.
-    window.fetchT('/api/identify_scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: text, source: source, confirmed_fed_heads: [] }) })
+    // expected_feed), so a first slot scan stays prompt-free. `audit_ask` (Group
+    // 58): this page can show Done's question; a page that doesn't say so hears
+    // "reload" and nothing moves. `audit_seen`: the audit this scan was read for, left
+    // out with none. If it has gone the server moves nothing: a page can believe in an
+    // audit that ended under it, and a slot label would load the buffered spool.
+    const scanSentAt = _auditClock();
+    const auditSeen = auditOf !== undefined ? auditOf : (state.auditActive ? (state.auditId || true) : null);
+    window.auditRequestOut(1);
+    window.fetchT('/api/identify_scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: text, source: source, confirmed_fed_heads: [], audit_ask: true, audit_seen: auditSeen || undefined }) })
         .then(r => r.json())
         .then(res => {
             locDone();
             setProcessing(false);
+            // The server has no audit, and this page hasn't heard yet: ask why now.
+            if (state.auditActive && _noAuditAnswered(res) && typeof updateLogState === 'function') updateLogState(true);
             if (res.type === 'command') {
                 // Group 41.5: a bulk-move commit the server couldn't verify.
                 if (res.warning) showToast(res.warning, 'warning', 7000);
@@ -1707,6 +3529,8 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
                     // are deliberately left in place, nothing consumed them.
                     if (res.cmd === 'clear') return;
                 }
+                // Group 58: a scan the audit took, which may have ended it.
+                if (res.cmd === 'audit_scan') { _auditScanAnswer(res, scanSentAt); return; }
                 const cmds = { 'clear': requestClearBuffer, 'undo': triggerUndo, 'eject': toggleEjectMode, 'done': closeManage };
                 if (cmds[res.cmd]) cmds[res.cmd]();
                 // Same on-screen rule as the activeModal routes above. This is the
@@ -1847,6 +3671,16 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
                     );
                 }
             } else if (res.type === 'location') {
+                // Group 58: a location label in an audit moves nothing, and this
+                // one was scanned as part of an audit the server no longer has, or
+                // answered after one started here. Left to run on, it would file
+                // the whole buffer there, unasked.
+                if (state.auditActive) {
+                    const msg = `The audit has ended, so ${res.id} did nothing. Scan it again if you meant it.`;
+                    showToast(msg, 'warning', 7000);
+                    if (window.logClientEvent) window.logClientEvent(`⚠️ ${escLog(msg)}`, 'WARNING');
+                    return;
+                }
                 // Group 42.5b: eject mode decides first (the location-scan order
                 // the Group 40 pickers build on: eject mode, then the legacy
                 // label note, then the buffered / empty-buffer branches).
@@ -1953,6 +3787,10 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
                 }
                 openManage(res.id); _noteScannedLoc(res.id);
             } else if (res.type === 'spool') {
+                // Group 58: an audit lost this spool, and here it is. Above the
+                // modes: drop and eject act on the spool, and the person holding
+                // it should still hear. The server has logged it.
+                if (res.lost_msg) showToast(res.lost_msg, 'warning', 7000);
                 if (state.dropMode) { removeBufferItem(res.id); return; }
                 if (state.ejectMode) { ejectSpool(res.id, "Scan", false); return; }
 
@@ -2033,10 +3871,34 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
                         }
                     });
                 }
-            } else if (res.type === 'error') showToast(res.msg, 'error');
+            } else if (res.type === 'audit_done_question') {
+                // Done found spools to park, and nothing has moved. An audit
+                // answered, so one runs, whatever this page believed: a Done
+                // right after a reload lands before the first heartbeat.
+                if (!state.auditActive && window._syncAuditSignal) window._syncAuditSignal({ audit_active: true }, { sentAt: scanSentAt });
+                if (window.auditPanelNotice) window.auditPanelNotice('');
+                window.askAuditDone(res);
+            } else if (res.type === 'audit_gone') {
+                // The audit this scan was read for has gone, and the server moved
+                // nothing and logged it. The heartbeat asked for above says why.
+                _auditSay(res.msg, 'warning');
+            } else if (res.type === 'error') {
+                showToast(res.msg, 'error', 7000);
+                // The toast sits under the panel.
+                if (state.auditActive && window.auditPanelNotice) window.auditPanelNotice(res.msg);
+            }
         })
-        .catch((e) => { locDone(); setProcessing(false); console.error(e); showToast("Scan Error", "error"); })
-        .finally(() => { if (window.weighOutScanDone) window.weighOutScanDone(weighFrom); });
+        .catch((e) => {
+            locDone();
+            setProcessing(false);
+            console.error(e);
+            showToast("Scan Error", "error", 7000);
+            if (state.auditActive && window.auditPanelNotice) window.auditPanelNotice("That scan didn't go through: FCC didn't answer. Scan it again.");
+        })
+        .finally(() => {
+            window.auditRequestOut(-1);
+            if (window.weighOutScanDone) window.weighOutScanDone(weighFrom);
+        });
 };
 
 // The active-print confirm for a scan assign: the shared one (inv_core.js,
@@ -2335,7 +4197,9 @@ const _askRecordSource = (pick, sid, host) => {
     if (pick.spool_keeps_trail) return Promise.resolve(undefined);
     const fromRow = (state.allLocations || []).find(l => String(l.LocationID || '').toUpperCase() === from);
     const headTypes = ['Tool Head', 'MMU Slot', 'No MMU Direct Load', 'Printer'];
-    if (from && !(fromRow && headTypes.includes(fromRow.Type))) return Promise.resolve(undefined);
+    // Unknown is a list, never a place a spool comes from (Group 58): the engine
+    // gives a spool leaving it no trail, so it is asked about like one from Unassigned.
+    if (from && from !== 'UNKNOWN' && !(fromRow && headTypes.includes(fromRow.Type))) return Promise.resolve(undefined);
     const feeds = (Array.isArray(pick.feeds) ? pick.feeds : []).filter(f => f && f.box);
     const free = feeds.filter(f => f.free);
     if (!free.length) return Promise.resolve('');
@@ -2657,10 +4521,33 @@ window._placeBufferWithPicker = _placeBufferWithPicker;
 // it called out as printing (the shared confirm), else the plain yes/no dialog
 // (Claude's call 9). The toast says what really went back; a failure names the
 // spool at 7 s; "Nothing to undo" is an info toast.
+const UNDO_TIMEOUT_MS = 120000;     // a big park's Undo reads and writes every spool in it
+
+// Past the timeout the server may well still be putting spools back, and a second
+// press would ask about whatever it hasn't reached. Only for no answer: an exception
+// after an answer must not read as this.
+const _undoNotAnswered = () => {
+    const msg = "FCC didn't answer, so the Undo may not have finished. Check the Activity Log before pressing it again.";
+    showToast(msg, 'error', 7000);
+    if (window.logClientEvent) window.logClientEvent(`⚠️ ${msg}`, 'WARNING');
+    if (typeof updateLogState === 'function') updateLogState(true);
+};
+
+// The first press only asks the question, and writes nothing: with no answer to it,
+// nothing was undone and nothing began (Group 58 re-review: it said the Undo "may not
+// have finished", and sent the person to an Activity Log that holds nothing about it).
+const _undoNotAsked = () => {
+    const msg = "FCC didn't answer, so nothing was undone. Try again in a moment.";
+    showToast(msg, 'error', 7000);
+    if (window.logClientEvent) window.logClientEvent(`⚠️ ${msg}`, 'WARNING');
+};
+
 const triggerUndo = (opts = {}) => {
     const body = {};
     if (opts.confirm) { body.confirm = true; body.undo_id = opts.undoId; body.confirmed_toolheads = opts.heads || []; }
-    fetch('/api/undo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    window.fetchT('/api/undo', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    }, UNDO_TIMEOUT_MS)
         .then(r => r.json())
         .then((res) => {
             if (res && res.requires_confirm) {
@@ -2687,11 +4574,13 @@ const triggerUndo = (opts = {}) => {
                 try { renderBuffer(); } finally { window.suppressBufferDirty = false; }
             }
             updateLogState(); loadBuffer(); if (window.fetchLocations) window.fetchLocations();
-            if (res && res.success) showToast(res.msg || '↩️ Undone', 'success', 4000);
+            // An audit park's Undo leaves a spool that moved on since, and says so:
+            // that is a sentence to read, so the longer toast.
+            if (res && res.success) showToast(res.msg || '↩️ Undone', 'success', (res.left_alone || []).length ? 7000 : 4000);
             else if (res && res.nothing) showToast(res.msg, 'info', 4000);
             else showToast((res && res.msg) || 'Undo failed', 'error', 7000);
-        })
-        .catch(() => showToast('Undo failed: no answer from the server', 'error', 7000));
+        }, opts.confirm ? _undoNotAnswered : _undoNotAsked)
+        .catch(e => console.error(e));
 };
 
 const printLabel = (sid) => {

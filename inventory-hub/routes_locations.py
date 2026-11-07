@@ -166,10 +166,7 @@ def build_locations_response(spools=None):
     # Immediate-child counts so a row can be classified parent-vs-leaf for the
     # occupancy display (a real parent shows a subtree Total; a leaf shows
     # curr/max). Pseudo-prefix parents never count as real parents.
-    children_count: dict[str, int] = {}
-    for _lid, _p in parent_map.items():
-        if _p and _p not in locations_db.PSEUDO_ROOM_PREFIXES:
-            children_count[_p] = children_count.get(_p, 0) + 1
+    children_count = locations_db.child_row_counts(parent_map)
 
     subtree_ids: dict[str, set] = {}   # ancestor -> set of distinct spool ids
     ancestor_hit: set[str] = set()     # non-row prefixes that need a Virtual Room
@@ -1078,11 +1075,94 @@ def contents_batch(ids, spools=None):
     return {"read_ok": True, "read_error": None,
             "contents": {lid: buckets.get(lid.upper(), []) for lid in wanted}}
 
+
+@app.route('/api/loose_spools', methods=['GET'])
+def api_loose_spools():
+    """Every loose spool, for the Loose spools list (Group 58.4). Read-only: one
+    spool-list read, no write, opened on demand, never on the heartbeat.
+
+    A spool is loose when its own `location` is exactly a place
+    locations_db.loose_place_ids names, or a place with no locations.json row (FCC
+    can't say what that is, so it is shown rather than hidden). Exact, never through
+    spoolman_api's matcher, whose prefix match would pull a room's rows in, and
+    whose trail match would count a spool that runs on a head. Unassigned and
+    UNKNOWN are lists of their own and stay out, and so does a head with no row of
+    its own (Settings can make one): a loaded spool is as exact as a spool gets.
+
+      {"read_ok": True, "read_error": None, "count": 54,
+       "places": [{"id", "name", "type", "spools": [{"id", "display", "color",
+                                                      "color_direction", "remaining_weight"}]}]}
+      {"read_ok": False, "read_error": "...", "count": 0, "places": []}   (200, like
+          /api/get_contents?ids=, so a blip is never an empty list)
+
+    `type` is the row's Type, '' for a place with no row. Places and their spools
+    come sorted by id."""
+    failed = {"read_ok": False, "count": 0, "places": []}
+    try:
+        rows = locations_db.load_locations_list()
+    except locations_db.LocationsCorruptError as e:
+        state.logger.warning(f"loose_spools: {e}")
+        return jsonify({**failed, "read_error": f"couldn't read locations.json ({e})"})
+    spools, why = spoolman_api.read_spool_list()
+    if spools is None:
+        state.logger.warning(f"loose_spools: {why}")
+        return jsonify({**failed, "read_error": f"couldn't read Spoolman ({why})"})
+
+    by_id = {}
+    for row in rows:
+        lid = str(row.get('LocationID', '')).strip().upper() if isinstance(row, dict) else ''
+        if lid:
+            by_id.setdefault(lid, row)
+    heads = locations_db.get_active_printer_map(rows)
+    loose = locations_db.loose_place_ids(rows, heads)
+
+    places = {}
+    count = 0
+    for s in spools:
+        if not isinstance(s, dict) or s.get('archived'):
+            continue
+        loc = str(s.get('location') or '').strip()
+        lid = loc.upper()
+        if not lid or lid in ('UNASSIGNED', 'UNKNOWN') or lid in heads:
+            continue
+        row = by_id.get(lid)
+        if row is not None and lid not in loose:
+            continue
+        place = places.get(lid)
+        if place is None:
+            place_id = str(row.get('LocationID')).strip() if row is not None else loc
+            place = places[lid] = {
+                "id": place_id,
+                "name": str(row.get('Name') or place_id) if row is not None else loc,
+                "type": str(row.get('Type') or '').strip() if row is not None else '',
+                "spools": [],
+            }
+        info = spoolman_api.format_spool_display(s)
+        place["spools"].append({
+            "id": s.get('id'),
+            "display": info.get('text'),
+            "color": info.get('color'),
+            "color_direction": info.get('color_direction', 'longitudinal'),
+            "remaining_weight": s.get('remaining_weight'),
+        })
+        count += 1
+    ordered = [places[k] for k in sorted(places)]
+    for place in ordered:
+        place["spools"].sort(key=lambda sp: str(sp.get('id')).zfill(12))
+    return jsonify({"read_ok": True, "read_error": None, "count": count, "places": ordered})
+
+
 @app.route('/api/spool_details', methods=['GET'])
 def api_spool_details():
     sid = request.args.get('id')
     if not sid: return jsonify({})
-    return jsonify(spoolman_api.get_spool(sid))
+    rec = spoolman_api.get_spool(sid)
+    if isinstance(rec, dict):
+        # Group 58, section 8: the spool window says which audit lost it.
+        lost = spoolman_api.audit_lost_from(rec.get('location'), rec.get('extra'))
+        if lost:
+            rec['lost_from'] = lost
+    return jsonify(rec)
 
 @app.route('/api/filament_details', methods=['GET'])
 def api_filament_details():

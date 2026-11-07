@@ -17,6 +17,11 @@ import app as app_module
 
 EXPECTED_ROUTES = [
     ("/", "GET", "dashboard"),
+    ("/api/audit/found", "POST", "api_audit_found"),  # Group 58.2: a tile's press
+    ("/api/audit/needs_label", "POST", "api_audit_needs_label"),  # Group 58 H S4: a found tile's 🏷️
+    ("/api/audit/needs_label_undo", "POST", "api_audit_needs_label_undo"),  # Group 58.2: "undo that"
+    ("/api/audit/park", "POST", "api_audit_park"),  # Group 58: the Yes to Done's question
+    ("/api/audit/report", "GET", "api_audit_report"),  # Group 58 H S3: an ended audit's report as data
     ("/api/audit_session", "GET", "api_audit_session"),
     ("/api/backfill_spool_weights/<int:fid>", "POST", "api_backfill_spool_weights"),
     ("/api/buffer/clear", "POST", "api_buffer_clear"),
@@ -67,6 +72,7 @@ EXPECTED_ROUTES = [
     ("/api/locations", "POST", "api_save_location"),
     ("/api/log_event", "POST", "api_log_event"),
     ("/api/logs", "GET", "api_get_logs_route"),
+    ("/api/loose_spools", "GET", "api_loose_spools"),  # Group 58.4 Loose spools list
     ("/api/machine/<path:printer_name>/toolhead_slots", "GET", "api_machine_toolhead_slots"),
     ("/api/manage_contents", "POST", "api_manage_contents"),
     ("/api/materials", "GET", "api_materials"),

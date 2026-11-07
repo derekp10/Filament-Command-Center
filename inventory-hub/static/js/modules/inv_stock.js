@@ -694,11 +694,7 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
     }
 
     // The page's own date for a new mark (the server's clock may be UTC).
-    function _localDay() {
-        const d = new Date();
-        const pad = (n) => String(n).padStart(2, '0');
-        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-    }
+    const _localDay = () => window.fccLocalDay();
 
     async function _saveDialog(handle) {
         const d = handle._dialog;

@@ -153,13 +153,15 @@ class HttpSpoolman:
     """Spoolman's HTTP API at `requests.get`: the spool list (archived spools
     only with allow_archived=true), the filament list and single spools.
     `down` holds the paths that time out, `broken` the ones answered with a
-    plain-text 500. Every GET is recorded by path."""
+    plain-text 500, `failing` the ones answered with a 500 and Spoolman's own JSON
+    error body. Every GET is recorded by path."""
 
-    def __init__(self, spools=SPOOLS, filaments=FILAMENTS, down=(), broken=()):
+    def __init__(self, spools=SPOOLS, filaments=FILAMENTS, down=(), broken=(), failing=()):
         self.spools = copy.deepcopy(list(spools))
         self.filaments = copy.deepcopy(list(filaments))
         self.down = set(down)
         self.broken = set(broken)
+        self.failing = set(failing)
         self.gets = []
 
     def get(self, url, *a, **k):
@@ -170,6 +172,8 @@ class HttpSpoolman:
             raise spoolman_api.requests.exceptions.ReadTimeout("Read timed out. (read timeout=5) (test)")
         if path in self.broken:
             return _TextResp()
+        if path in self.failing:
+            return _Resp(500, {"message": "database is locked (test)"})
         if path == SPOOL_LIST:
             archived_too = "allow_archived=true" in parts.query
             return _Resp(200, [s for s in self.spools if archived_too or not s.get("archived")])
@@ -486,6 +490,17 @@ def test_a_spool_spoolman_cannot_send_stops_only_itself(client):
     assert sm.single_gets() == ["/api/v1/spool/101", "/api/v1/spool/102", "/api/v1/spool/105"], sm.gets
     assert set(body["spools_refresh"]) == {"102", "105"}, body["spools_refresh"]
     assert body["spools_refresh"]["102"] == _old_answer([102])["102"]
+
+
+def test_a_500_with_a_json_body_stops_only_itself_too(client):
+    """Group 58 review: a JSON error body read as a spool, and drew a card that says
+    nothing. It is "answered, not a spool", as a plain-text 500 is, and never "no
+    answer", which would stop the refresh of every spool after it."""
+    ids = [101, 102, 105]
+    sm = HttpSpoolman(down={SPOOL_LIST}, failing={"/api/v1/spool/101"})
+    body = _pulse(client, sm, "printer_status", body={"refresh_spool_ids": ids})
+    assert sm.single_gets() == ["/api/v1/spool/101", "/api/v1/spool/102", "/api/v1/spool/105"], sm.gets
+    assert set(body["spools_refresh"]) == {"102", "105"}, body["spools_refresh"]
 
 
 def test_an_outage_stops_at_the_first_spool_with_no_answer_wherever_it_is(client):

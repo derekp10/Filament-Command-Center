@@ -376,7 +376,9 @@ await click('.fcc-apc-yes');   // the stub DOM fakes one element per selector
 return {{ posts: posts('/api/identify_scan'), shown, toasts: toasts(), ids: lastMount().opts.id }};
 """)
     first, load = res["posts"]
-    assert first == {"text": "LOC:LR-MDB-1:SLOT:1", "source": "barcode", "confirmed_fed_heads": []}, first
+    # audit_ask (Group 58): on every scan, so a Done can be asked instead of refused.
+    assert first == {"text": "LOC:LR-MDB-1:SLOT:1", "source": "barcode", "confirmed_fed_heads": [],
+                     "audit_ask": True}, first
     assert "expected_feed" not in first     # a blind scan names no feed: S1 stays prompt-free
     assert "is PRINTING" not in res["shown"] and "Continue Anyway" not in res["shown"]
     assert "Just store it in LR-MDB-1 slot 1" in _text(res["shown"]) and 'id="fcc-aps-store"' in res["shown"]
@@ -623,6 +625,7 @@ window.manualAddSpool();
 await __settle(150);
 return {{ posts: posts('/api/identify_scan'), toasts: toasts() }};
 """)
-    assert res["posts"] == [{"text": "LOC:LR-MDB-1:SLOT:1", "source": "keyboard", "confirmed_fed_heads": []}]
+    assert res["posts"] == [{"text": "LOC:LR-MDB-1:SLOT:1", "source": "keyboard", "confirmed_fed_heads": [],
+                             "audit_ask": True}]
     assert not any("Invalid Code" in t["msg"] for t in res["toasts"]), res["toasts"]
     assert any("Loaded #57 into LR-MDB-1:1" in t["msg"] for t in res["toasts"]), res["toasts"]

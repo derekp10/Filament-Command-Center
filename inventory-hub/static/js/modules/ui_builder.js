@@ -20,6 +20,36 @@ const SpoolCardBuilder = {
     },
 
     /**
+     * Spoolman's free text (a colour name, a brand, a material, a legacy id, a
+     * display) as HTML text (Group 58 review of 7e3720f, R-6). The core card, the
+     * grid's tiles, the Quick-Swap card and the buffer's nav cards put it into their
+     * HTML as it came, so "Robin's <Egg> & Blue" lost its words and made an <egg>
+     * element, and a name holding markup was drawn as markup. getRichInfo stays
+     * raw: the picker and Printer Status variants escape its lines themselves, and
+     * escaping there would do it twice.
+     */
+    esc(v) {
+        return typeof window.escHtml === 'function' ? window.escHtml(v)
+            : String(v == null ? '' : v).replace(/[&<>"']/g, (c) => (
+                { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    },
+
+    /**
+     * The yellow caution badge of a spool at Unknown (18.1), which says which
+     * audit lost it when one did (Group 58, Derek: "if one is found, it's apparent
+     * that this was filed away because we didn't know where it went"). No note,
+     * no audit: the plain badge. `onclick`: what a click runs, left out for a card
+     * already in that list.
+     */
+    unknownBadge(item, onclick = '') {
+        const lost = window.auditLostWords(item.details && item.details.lost_from);
+        const label = lost ? `❓ Lost: ${lost.where}` : '❓ Unknown';
+        const title = lost ? `Marked lost by ${lost.by}` : 'Physically lost — last known location unknown';
+        const click = onclick ? `onclick="${onclick}" ` : '';
+        return `<span class="badge bg-warning text-dark loc-badge-hover" ${click}style="cursor:${onclick ? 'pointer' : 'default'}; font-size: 1.1rem;" title="${escHtml(title)}">${escHtml(label)}</span>`;
+    },
+
+    /**
      * Reusable formatter for rich data extraction.
      */
     getRichInfo(item) {
@@ -63,6 +93,7 @@ const SpoolCardBuilder = {
         const ownBoxId = String((item.is_ghost && item.location) || locId || '').replace(/[^A-Za-z0-9_.:\-]/g, '');
         const viewId = String(locId || '').replace(/[^A-Za-z0-9_.:\-]/g, '');
         const info = this.getRichInfo(item);
+        const esc = (v) => this.esc(v);
         // Compute archived badge for Row 3 (weight row, left side)
         const isArchived = (item.archived === true || String(item.archived).toLowerCase() === 'true');
         const archivedBadgeHTML = isArchived ? `<span class="badge text-bg-danger px-1 text-pop fcc-archived-badge">📦 ARCHIVED</span>` : '';
@@ -119,8 +150,9 @@ const SpoolCardBuilder = {
                 else if (window.processScan) actionTarget = `processScan('ID:${item.id}', 'search')`;
                 else actionTarget = `openSpoolDetails(${item.id})`;
                 
-                // needs_label_print is surfaced from format_spool_display's details block.
-                // Only render the ✅ when we have an explicit false — missing details
+                // needs_label_print is surfaced from format_spool_display's details block
+                // (spoolman_api.label_flag: true, false, or null for no status on record).
+                // Only render the ✅ for an explicit false: a null or missing status
                 // means we can't be sure, so stay quiet rather than over-promising.
                 const labelFlagKnown = item.details && Object.prototype.hasOwnProperty.call(item.details, 'needs_label_print');
                 const labelConfirmed = labelFlagKnown && item.details.needs_label_print === false;
@@ -153,7 +185,7 @@ const SpoolCardBuilder = {
                 // used up under the old spreadsheet system without a
                 // proper update — this badge makes them easy to spot.
                 if (String(item.location).toUpperCase() === 'UNKNOWN') {
-                    locBadgeHTML = `<span class="badge bg-warning text-dark loc-badge-hover" onclick="${badgeClick}" style="cursor:pointer; font-size: 1.1rem;" title="Physically lost — last known location unknown">❓ Unknown</span>`;
+                    locBadgeHTML = this.unknownBadge(item, badgeClick);
                 }
                 else if (item.is_ghost) locBadgeHTML = `<span class="badge bg-warning text-dark loc-badge-hover" onclick="${badgeClick}" style="cursor:pointer; font-size: 1.1rem;" title="Jump to Location">📍 Deployed: ${item.location} (Slot ${item.slot})</span>`;
                 else locBadgeHTML = `<span class="badge bg-info text-dark loc-badge-hover" onclick="${badgeClick}" style="cursor:pointer; font-size: 1.1rem;" title="Jump to Location">📍 ${item.location}</span>`;
@@ -206,6 +238,9 @@ const SpoolCardBuilder = {
             } else {
                 // Normal slotted item in List View
 
+                // The Unknown list: each spool says which audit lost it (Group 58).
+                if (item.details && item.details.lost_from) locBadgeHTML = this.unknownBadge(item);
+
                 // Add Row 4 for Physical QR scanning + large button interactions.
                 row4FooterHTML = `
                     <div class="d-flex justify-content-around flex-wrap mt-2 pt-2 border-top border-secondary" style="background: rgba(0,0,0,0.2); border-radius: 0 0 6px 6px;">
@@ -248,9 +283,9 @@ const SpoolCardBuilder = {
                         </div>
                         
                         <div class="slot-info-gold text-center w-100 mb-2 mt-1" style="background: rgba(0,0,0,0.7); border-radius: 5px; padding: 5px; border: 1px solid #444; cursor:pointer;" onclick="event.stopPropagation(); openSpoolDetails(${item.id})">
-                            <div class="text-line-1" style="color: #aaa; font-size:0.9rem;">${info.line1} <span ${!isFil ? `style="float:right; color:#ddd; font-weight:bold; font-size:0.95rem; cursor:pointer;" onclick="event.stopPropagation(); if(window.openQuickWeigh) window.openQuickWeigh(${item.id})"` : `style="float:right; color:#ddd; font-weight:bold; font-size:0.95rem;"`}>${info.line4 ? '⚖️ ' + info.line4 : ''}</span></div>
-                            <div class="text-line-2 text-pop" style="color:#fff; font-weight:bold; font-size:1.0rem;">${info.line2}</div>
-                            <div class="text-line-3 text-pop" style="font-weight:bold; color: #fff; font-size:0.95rem;">${info.line3}</div>
+                            <div class="text-line-1" style="color: #aaa; font-size:0.9rem;">${esc(info.line1)} <span ${!isFil ? `style="float:right; color:#ddd; font-weight:bold; font-size:0.95rem; cursor:pointer;" onclick="event.stopPropagation(); if(window.openQuickWeigh) window.openQuickWeigh(${item.id})"` : `style="float:right; color:#ddd; font-weight:bold; font-size:0.95rem;"`}>${info.line4 ? '⚖️ ' + info.line4 : ''}</span></div>
+                            <div class="text-line-2 text-pop" style="color:#fff; font-weight:bold; font-size:1.0rem;">${esc(info.line2)}</div>
+                            <div class="text-line-3 text-pop" style="font-weight:bold; color: #fff; font-size:0.95rem;">${esc(info.line3)}</div>
                         </div>
                         
                         <div class="d-flex justify-content-around gap-1 mt-2 w-100 pt-2 border-top" style="border-color: rgba(255,255,255,0.2) !important;">
@@ -274,9 +309,9 @@ const SpoolCardBuilder = {
                         <div id="qr-slot-${options.slotNum}" class="bg-white p-1 rounded mb-2" style="border: 3px solid white;"></div>
                         
                         <div class="slot-info-gold w-100" style="cursor:pointer;" onclick="event.stopPropagation(); openSpoolDetails(${item.id})">
-                            <div class="text-line-1" style="font-size:0.9rem;">${info.line1}</div>
-                            <div class="text-line-2 text-pop" style="color:#fff; font-weight:bold; font-size:1.0rem;">${info.line2}</div>
-                            <div class="text-line-3" style="font-size:0.95rem;">${info.line3}</div>
+                            <div class="text-line-1" style="font-size:0.9rem;">${esc(info.line1)}</div>
+                            <div class="text-line-2 text-pop" style="color:#fff; font-weight:bold; font-size:1.0rem;">${esc(info.line2)}</div>
+                            <div class="text-line-3" style="font-size:0.95rem;">${esc(info.line3)}</div>
                         </div>
                         
                         <div class="d-flex justify-content-around gap-1 mt-2 w-100 pt-2 border-top" style="border-color: rgba(255,255,255,0.2) !important;">
@@ -423,9 +458,9 @@ const SpoolCardBuilder = {
                             </div>
                             <div class="d-flex align-items-center" style="font-size:0.95rem;">
                                 ${swatch}
-                                <span class="text-light fw-bold text-truncate" style="max-width:12.5rem;">${compactName}</span>
+                                <span class="text-light fw-bold text-truncate" style="max-width:12.5rem;">${esc(compactName)}</span>
                             </div>
-                            <div class="text-light" style="font-size:var(--fcc-fs-small); opacity:0.8;">${info.line2}</div>
+                            <div class="text-light" style="font-size:var(--fcc-fs-small); opacity:0.8;">${esc(info.line2)}</div>
                             <div class="d-flex justify-content-between align-items-center mt-1" style="font-size:0.9rem;">
                                 <div class="text-light fw-bold">⚖️ ${weightStr}</div>
                                 ${thLine}
@@ -465,7 +500,7 @@ const SpoolCardBuilder = {
                 const badgeClick = `event.stopPropagation(); if(window.openManage) window.openManage('${item.location}')`;
                 // 18.1 — UNKNOWN bucket badge (yellow caution, same shape as search mode).
                 if (String(item.location).toUpperCase() === 'UNKNOWN') {
-                    locBadgeHTML = `<span class="badge bg-warning text-dark loc-badge-hover" onclick="${badgeClick}" style="cursor:pointer; font-size: 1.1rem;" title="Physically lost — last known location unknown">❓ Unknown</span>`;
+                    locBadgeHTML = this.unknownBadge(item, badgeClick);
                 } else if (item.is_ghost) {
                     locBadgeHTML = `<span class="badge bg-warning text-dark loc-badge-hover" onclick="${badgeClick}" style="cursor:pointer; font-size: 1.1rem;" title="Jump to Location">📍 Deployed: ${item.location}${item.slot ? ` (Slot ${item.slot})` : ''}</span>`;
                 } else {
@@ -490,7 +525,7 @@ const SpoolCardBuilder = {
                         <div>
                             <div class="nav-label text-pop" style="color: #fff; font-weight: 900;">◀ PREV</div>
                             <div class="nav-name text-pop" style="color: #fff; font-weight: 800;">
-                                ${(item.display_short || item.display).replace(/^#\d+\s*/, '')}
+                                ${esc((item.display_short || item.display).replace(/^#\d+\s*/, ''))}
                             </div>
                         </div>
                     </div>
@@ -502,7 +537,7 @@ const SpoolCardBuilder = {
                         <div style="text-align:right; margin-right: 15px;">
                             <div class="nav-label text-pop" style="color: #fff; font-weight: 900;">NEXT ▶</div>
                             <div class="nav-name text-pop" style="color: #fff; font-weight: 800;">
-                                ${(item.display_short || item.display).replace(/^#\d+\s*/, '')}
+                                ${esc((item.display_short || item.display).replace(/^#\d+\s*/, ''))}
                             </div>
                         </div>
                         <div id="qr-nav-next" class="nav-qr"></div>
@@ -534,13 +569,13 @@ const SpoolCardBuilder = {
                     <!-- Row 2: Properties Stack (Material, Brand, Name) -->
                     <div class="d-flex flex-column justify-content-center text-start mx-0 mb-2 mt-1 w-100 ps-1 flex-grow-1">
                          <div class="fcc-card-material text-white-50 text-pop fw-bold" style="font-size: 0.95rem;">
-                            ${item.details ? item.details.material || "PLA" : "PLA"}
+                            ${esc(item.details ? item.details.material || "PLA" : "PLA")}
                          </div>
                          <div class="fcc-card-brand text-light text-pop fw-bold pb-1" style="font-size: 0.95rem;">
-                            ${item.details ? item.details.brand || "Generic" : "Generic"}
+                            ${esc(item.details ? item.details.brand || "Generic" : "Generic")}
                          </div>
                          <div class="fcc-card-title text-pop" style="font-size: 1.25rem;">
-                            ${info.line3}
+                            ${esc(info.line3)}
                          </div>
                     </div>
 

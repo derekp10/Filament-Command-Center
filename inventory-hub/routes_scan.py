@@ -24,6 +24,7 @@ Preserved semantics (do not 'fix' in a move — see the carve plan):
 Python 3.9 runtime (the container image) — keep syntax 3.9-safe.
 """
 from flask import request, jsonify  # type: ignore
+import html
 import time
 
 import state  # type: ignore
@@ -1024,11 +1025,224 @@ def _handle_prusament_url_scan(res):
     })
 
 
+# Group 58: what a scan the audit took answers. The page only redraws its panel. It
+# used to be cmd 'clear', which raised "Clear entire Buffer?" behind the audit
+# panel whenever a spool was buffered, and that hidden prompt ate every later scan;
+# a page guard would still miss the moments after a reload, before its first
+# heartbeat says an audit runs.
+_AUDIT_SCAN_ANSWER = {"type": "command", "cmd": "audit_scan"}
+
+
+def _audit_done_answer(ask):
+    """Done found spools to park (logic.plan_audit_done). A page that can show the
+    question says so on every scan (`audit_ask: true`) and gets it; a page loaded
+    before there was one would drop it with no sign, so it hears "reload" and
+    nothing moves, as for a page older than Groups 39 and 40's questions."""
+    if (request.json or {}).get('audit_ask') is True:
+        return jsonify({"type": "audit_done_question",
+                         **{key: value for key, value in ask.items() if key != 'status'}})
+    msg = "This page is out of date, so Done did nothing. Reload the page (Ctrl+F5) and press Done again."
+    state.add_log_entry(f"⚠️ {msg}", "WARNING", "ffaa00")
+    return jsonify({"type": "error", "stale_page": True, "msg": msg})
+
+
+@app.route('/api/audit/park', methods=['POST'])
+def api_audit_park():
+    """The Yes to Done's question: {audit_id, ids, file_ids, file_where, today}, the
+    spools it showed to park, the Extras it showed to file here (Group 58, Derek's
+    C3; a page from before that sends none and files none) with where it showed each
+    ({id: where}: one that moved since stays where it went), and the page's own date
+    (the note's day). Answers logic.park_audit_missing's dict."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        data = {}
+    return jsonify(logic.park_audit_missing(data.get('audit_id'), data.get('ids'), today=data.get('today'),
+                                            file_ids=data.get('file_ids'), file_where=data.get('file_where')))
+
+
+@app.route('/api/audit/report', methods=['GET'])
+def api_audit_report():
+    """An ended audit's report as data, for the report window (Group 58; Derek,
+    2026-11-03): ?id=<audit id>, from the 📝 Read the report button on the report's
+    Activity Log line (its data-audit-report). Answers logic.audit_report's dict:
+    {success: true, report} for one of the last 10 audits, else {success: false, msg}.
+    Reads nothing from Spoolman."""
+    return jsonify(logic.audit_report(request.args.get('id')))
+
+
+@app.route('/api/audit/found', methods=['POST'])
+def api_audit_found():
+    """A tile's press: {audit_id, id, found}. Found with no label read, or back off
+    the found list: a person's press, never a scan. Answers logic.audit_mark_found's
+    dict."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        data = {}
+    return jsonify(logic.audit_mark_found(data.get('audit_id'), data.get('id'), data.get('found')))
+
+
+@app.route('/api/audit/needs_label', methods=['POST'])
+def api_audit_needs_label():
+    """A found tile's own 🏷️ (Group 58; Derek, 2026-11-03): {audit_id, id}. Marks that
+    spool as needing a label, as the strip's "Needs a label" marks the last found, and
+    leaves the last found alone. Answers logic.audit_mark_needs_label's dict; a second
+    press takes the mark back through /api/audit/needs_label_undo."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        data = {}
+    return jsonify(logic.audit_mark_needs_label(data.get('audit_id'), data.get('id')))
+
+
+@app.route('/api/audit/needs_label_undo', methods=['POST'])
+def api_audit_needs_label_undo():
+    """The Last found strip's "undo that", and a found tile's 🏷️ pressed again:
+    {audit_id, id}. Answers logic.audit_undo_need_label's dict."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        data = {}
+    return jsonify(logic.audit_undo_need_label(data.get('audit_id'), data.get('id')))
+
+
+def _is_label_read(source, text):
+    """A real read of a spool's printed label: an ID: label, at a scanner's speed. A
+    typed id, an SPL: label, a bare number, a search card and the legacy picker all
+    find a spool, and none of them has read a label."""
+    return source == 'barcode' and text.strip().upper().startswith('ID:')
+
+
+# The page's sources for a spool picked on screen, with no label read: the audit panel's
+# 🔎 Find a spool (inv_audit_find.js) and a search card's click (ui_builder.js). Neither
+# is 'barcode', so neither is ever a label read (_is_label_read).
+AUDIT_FIND_SOURCE = 'audit_find'
+SEARCH_CARD_SOURCE = 'search'
+
+
+def _audit_find_how(source, text):
+    """How a spool scan the audit takes found its spool, for the find's Activity Log
+    line and `heard` (logic._audit_found_words): None for a real read of its label
+    (_is_label_read), "with Find a spool" for a pick in the panel's 🔎 Find a spool
+    (source 'audit_find', inv_audit_find.js), "with a search" for a search card's click
+    (source 'search', the search panel's), and '' for any other find, which read no
+    label either (a typed id, an SPL: label, a bare number, the legacy picker's pick).
+    Group 58, Derek, 2026-11-03: a find with no label read logged "Found #110 (5 left)",
+    the words of a label read; and the two picks on screen shared one source, so a
+    search card's click during an audit with the panel hidden read "with Find a spool"."""
+    if _is_label_read(source, str(text or '')):
+        return None
+    if source == AUDIT_FIND_SOURCE:
+        return "with Find a spool"
+    if source == SEARCH_CARD_SOURCE:
+        return "with a search"
+    return ""
+
+
+def _verify_spool_label(sid, data, source, text, quiet=False):
+    """A real label read confirms the label: 'verified', 'failed' (Spoolman said no,
+    with an ERROR line), 'already' (it was confirmed before this read), or None when
+    this wasn't a label read. `quiet` logs only a flip: an audit walks a shelf, and
+    the log keeps 50 lines. `data` is the spool's record."""
+    if not _is_label_read(source, text):
+        return None
+    extra = data.get('extra', {})
+    raw_flag = extra.get('needs_label_print')
+    # Tri-state: True = needs print, False = positively verified,
+    # null/missing = unknown (legacy record predating the feature,
+    # or a record created via a path that didn't auto-flag).
+    # A valid scan should verify both True AND null states — only
+    # an explicit False is treated as "already verified" and
+    # short-circuits the flag flip.
+    already_verified = (
+        raw_flag is False or raw_flag == 'false' or raw_flag == 'False'
+    )
+    if already_verified:
+        # L128 follow-up (2026-05-15): toast-only ack felt
+        # noisier than the log line it replaced, so revert
+        # to writing to the Activity Log. The log is bounded
+        # at 50 entries server-side and the user can pause
+        # it via the click-to-pause indicator — both better
+        # mitigations for blind-scan volume than a 1.5s
+        # toast for every scan.
+        if not quiet:
+            state.add_log_entry(f"ℹ️ Spool #{sid} already verified", "INFO", "00ccff")
+        return 'already'
+    extra['needs_label_print'] = False
+    if spoolman_api.update_spool(sid, {'extra': extra}):
+        state.add_log_entry(f"✔️ Spool #{sid} Label Verified", "SUCCESS", "00ff00")
+        return 'verified'
+    # Surface the actual Spoolman rejection body so the
+    # user can see WHY (Phase B fix). Without this, the
+    # 2026-04-27 outage stayed undiagnosed for hours.
+    err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+    state.add_log_entry(
+        f"❌ Failed to verify Spool #{sid} label: {html.escape(str(err), quote=False)}", "ERROR", "ff4444"
+    )
+    return 'failed'
+
+
+def _audit_label_check(sid, source, text):
+    """A spool scan the audit took (Group 58.2). A real label read confirms only a
+    MISSING status, Derek's rule (b): a flag stays up and the panel says so, so a walk
+    along a shelf can't clear its reprint reminders, and a confirmed label writes
+    nothing. A spool marked in this audit is skipped, so a double read of its label
+    can't clear the mark.
+
+    The spool stays found whatever happens here: the answer is a sentence for the
+    scanner when the check couldn't be done, else None."""
+    if not _is_label_read(source, text):
+        return None
+    session = state.AUDIT_SESSION
+    session.setdefault('found_by', {})[str(sid)] = logic.AUDIT_FOUND_BY_LABEL
+    if str(sid) in (session.get('label_flagged') or {}):
+        return None
+    try:
+        data, _answered = spoolman_api.get_spool_answer(sid)
+        if not isinstance(data, dict) or data.get('id') is None:   # a 404's body is a truthy dict
+            msg = f"Found #{sid}, but FCC couldn't read its label status."
+            state.add_log_entry(f"❌ {msg}", "ERROR", "ff4444")
+            return msg
+        status = spoolman_api.label_flag(data.get('extra'))
+        logic.audit_label_status(sid, status)
+        if status is True:
+            return None
+        if _verify_spool_label(sid, data, source, text, quiet=True) == 'failed':
+            return f"Found #{sid}, but its label couldn't be confirmed: the Activity Log says why."
+        logic.audit_label_status(sid, False)
+        return None
+    except Exception as e:
+        state.logger.error(f"Audit label check for spool {sid} failed: {e}")
+        msg = f"Found #{sid}, but its label check failed."
+        state.add_log_entry(f"❌ {msg}", "ERROR", "ff4444")
+        return msg
+
+
 @app.route('/api/identify_scan', methods=['POST'])
 def api_identify_scan():
     text = request.json.get('text', '')
     source = request.json.get('source', '')
     res = logic.resolve_scan(text)
+
+    # Group 58: BEFORE anything below refreshes the timestamp, so a scan after 30
+    # idle minutes finds no session instead of reviving the one nobody was at.
+    logic.check_audit_idle_timeout()
+
+    # Group 58: a page says which audit it believed in as the scan was read
+    # (`audit_seen`). Gone, the scan was meant for that audit: with nothing here it
+    # would fall through to the normal paths, and a slot label would load the
+    # buffered spool. A page from before the release sends nothing: no check.
+    if logic.audit_seen_gone(request.json.get('audit_seen')):
+        _msg = f"The audit has ended, so {text} did nothing. Scan it again if you meant it."
+        state.add_log_entry(f"⚠️ {html.escape(_msg, quote=False)}", "WARNING", "ffaa00")
+        return jsonify({"type": "audit_gone", "msg": _msg})
+
+    # Group 58: above both session gates, because resolve_scan reads any text holding
+    # CMD:CANCEL as cancel. Outside a session a closed dialog's QR is as harmless as
+    # ever; in one it would end the session (logic.is_closed_dialogs_cancel).
+    if (res and res.get('type') == 'command' and res.get('cmd') == 'cancel'
+            and (state.AUDIT_SESSION.get('active') or state.BULK_MOVE_SESSION.get('active'))
+            and logic.is_closed_dialogs_cancel(text)):
+        _msg = "That cancel QR belongs to a dialog that has closed — ignored"
+        state.add_log_entry(f"⚠️ {_msg}", "WARNING", "ffaa00")
+        return jsonify({"type": "error", "msg": _msg})
 
     if res and res.get('type') == 'command' and res.get('cmd') == 'audit':
         if state.AUDIT_SESSION.get('active'):
@@ -1040,7 +1254,7 @@ def api_identify_scan():
             state.add_log_entry(
                 "🕵️‍♀️ Audit already in progress — scan a Location to continue, "
                 "or CMD:CANCEL to end.", "INFO", "ff00ff")
-            return jsonify({"type": "command", "cmd": "clear"})
+            return jsonify(_AUDIT_SCAN_ANSWER)
         # L298 Phase 2 — audit and bulk move are mutually exclusive scan modes
         # (they share CMD:DONE / CMD:CANCEL, and this audit gate runs FIRST, so
         # an audit started over an armed bulk move would leave the bulk session
@@ -1053,6 +1267,7 @@ def api_identify_scan():
             return jsonify({"type": "error", "msg": _msg})
         state.reset_audit()
         state.AUDIT_SESSION['active'] = True
+        state.AUDIT_SESSION['audit_id'] = logic.new_audit_id()
         state.AUDIT_SESSION['last_activity_ts'] = time.time()
         state.add_log_entry("🕵️‍♀️ <b>AUDIT MODE STARTED</b>", "INFO", "ff00ff")
         # Set the expiry expectation here too, so the log and the panel agree
@@ -1060,25 +1275,65 @@ def api_identify_scan():
         state.add_log_entry(
             f"Scan a Location label to begin checking. (Clears itself after "
             f"{state.AUDIT_IDLE_TIMEOUT_SECONDS // 60} min idle.)", "INFO")
-        return jsonify({"type": "command", "cmd": "clear"})
+        return jsonify(_AUDIT_SCAN_ANSWER)
 
     if state.AUDIT_SESSION.get('active'):
         # Refresh the watchdog timestamp on every audit-mode scan so the
-        # idle-timeout in _check_audit_idle_timeout() only fires after a
+        # idle-timeout in logic.check_audit_idle_timeout() only fires after a
         # real abandonment. Updating BEFORE process_audit_scan so an
         # explicit CMD:DONE/CMD:CANCEL still ends the session cleanly.
         state.AUDIT_SESSION['last_activity_ts'] = time.time()
-        audit_res = logic.process_audit_scan(res)
-        # 28.C2 — propagate an audit-scan error to the scanner UI (the frontend
-        # toasts res.type=='error') instead of always answering cmd:clear and
-        # leaving the failure in the Activity Log only. A successful audit scan
-        # still returns the buffer-clear signal.
-        if isinstance(audit_res, dict) and audit_res.get('status') == 'error':
-            return jsonify({
-                "type": "error",
-                "msg": audit_res.get('msg') or "Scan not allowed during audit.",
-            })
-        return jsonify({"type": "command", "cmd": "clear"})
+        # Group 58: a legacy label several spools share skips the audit: its
+        # picker opens over the panel, and its pick comes back here as ID:<n>.
+        if not (res and res.get('type') == 'ambiguous'):
+            audit_res = logic.process_audit_scan(res, how=_audit_find_how(source, text))
+            # 28.C2 — propagate an audit-scan error to the scanner UI (the frontend
+            # toasts res.type=='error') instead of leaving the failure in the
+            # Activity Log only.
+            if isinstance(audit_res, dict) and audit_res.get('status') == 'error':
+                return jsonify({
+                    "type": "error",
+                    "msg": audit_res.get('msg') or "Scan not allowed during audit.",
+                })
+            if isinstance(audit_res, dict) and audit_res.get('status') == 'ask':
+                return _audit_done_answer(audit_res)
+            answer = dict(_AUDIT_SCAN_ANSWER)
+            if isinstance(audit_res, dict) and audit_res.get('audit_ended'):
+                answer['audit_ended'] = audit_res['audit_ended']
+            # A Done that ended the audit with no question carries its report as
+            # data, for the window that opens where the panel was (Derek, 2026-11-03).
+            if isinstance(audit_res, dict) and audit_res.get('report'):
+                answer['report'] = audit_res['report']
+            if isinstance(audit_res, dict) and audit_res.get('said'):
+                answer['said'] = audit_res['said']
+                if audit_res.get('said_type'):
+                    answer['said_type'] = audit_res['said_type']
+            # What a location or spool scan did, in a sentence: a hidden panel can't
+            # show it, and every scan outcome is owed a toast.
+            if isinstance(audit_res, dict) and audit_res.get('heard'):
+                answer['heard'] = audit_res['heard']
+            # Group 58.2: the gate used to answer before the label check, so an ID:
+            # scan in an audit confirmed nothing. `warning` is the page's 7 s toast.
+            if res and res.get('type') == 'spool':
+                trouble = _audit_label_check(res.get('id'), source, text)
+                if trouble:
+                    answer['warning'] = trouble
+            return jsonify(answer)
+
+    # Group 58.2: "Needs a label" means the last spool an audit found, so with no
+    # audit running it means nothing. Above the bulk gates, which would call it a
+    # scan out of place.
+    if res and res.get('type') == 'command' and res.get('cmd') == 'needlabel':
+        _msg = "No audit is running, so nothing was marked: \"Needs a label\" works during an audit."
+        state.add_log_entry(f"⚠️ {html.escape(_msg, quote=False)}", "WARNING", "ffaa00")
+        return jsonify({"type": "error", "msg": _msg})
+    # Group 58 (Derek, 2026-11-03, A1): a tile's QR (CMD:FOUND:<audit id>:<spool id>)
+    # names a spool on its audit's list, so with no audit running it marks nothing.
+    # Here for the same reason as the line above.
+    if res and res.get('type') == 'command' and res.get('cmd') == 'found':
+        _msg = "No audit is running, so nothing was marked: a tile's QR works only during its audit."
+        state.add_log_entry(f"⚠️ {html.escape(_msg, quote=False)}", "WARNING", "ffaa00")
+        return jsonify({"type": "error", "msg": _msg})
 
     # --- L298 Phase 2: CMD:BULKMOVE start interceptor ----------------------
     # Mirrors the audit pattern: the START command is handled BEFORE the
@@ -1134,7 +1389,7 @@ def api_identify_scan():
     # for the chosen spool (helps unwind the ambiguity over time).
     if res['type'] == 'ambiguous':
         state.add_log_entry(
-            f"⚠️ Legacy ID {res.get('legacy_id', '?')} matches "
+            f"⚠️ Legacy ID {html.escape(str(res.get('legacy_id', '?')), quote=False)} matches "
             f"{len(res.get('candidates') or [])} spools — pick one to continue",
             "WARNING", "ffaa00",
         )
@@ -1161,43 +1416,10 @@ def api_identify_scan():
         
     if res['type'] == 'spool':
         sid = res['id']; data = spoolman_api.get_spool(sid)
-        label_already_verified = False  # response flag — see L128 below
+        label_already_verified = False  # response flag — see L128 at _verify_spool_label
         if data:
-            if source == 'barcode' and text.strip().upper().startswith('ID:'):
-                extra = data.get('extra', {})
-                raw_flag = extra.get('needs_label_print')
-                # Tri-state: True = needs print, False = positively verified,
-                # null/missing = unknown (legacy record predating the feature,
-                # or a record created via a path that didn't auto-flag).
-                # A valid scan should verify both True AND null states — only
-                # an explicit False is treated as "already verified" and
-                # short-circuits the flag flip.
-                already_verified = (
-                    raw_flag is False or raw_flag == 'false' or raw_flag == 'False'
-                )
-                if not already_verified:
-                    extra['needs_label_print'] = False
-                    if spoolman_api.update_spool(sid, {'extra': extra}):
-                        state.add_log_entry(f"✔️ Spool #{sid} Label Verified", "SUCCESS", "00ff00")
-                    else:
-                        # Surface the actual Spoolman rejection body so the
-                        # user can see WHY (Phase B fix). Without this, the
-                        # 2026-04-27 outage stayed undiagnosed for hours.
-                        err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
-                        state.add_log_entry(
-                            f"❌ Failed to verify Spool #{sid} label: {err}", "ERROR", "ff4444"
-                        )
-                else:
-                    # L128 follow-up (2026-05-15): toast-only ack felt
-                    # noisier than the log line it replaced, so revert
-                    # to writing to the Activity Log. The log is bounded
-                    # at 50 entries server-side and the user can pause
-                    # it via the click-to-pause indicator — both better
-                    # mitigations for blind-scan volume than a 1.5s
-                    # toast for every scan.
-                    state.add_log_entry(f"ℹ️ Spool #{sid} already verified", "INFO", "00ccff")
-                    label_already_verified = True
-            
+            label_already_verified = _verify_spool_label(sid, data, source, text) == 'already'
+
             info = spoolman_api.format_spool_display(data)
             
             # Ensure ghost and slot location logic is provided directly in buffer payloads
@@ -1213,7 +1435,7 @@ def api_identify_scan():
             if is_ghost and ghost_slot:
                 final_slot = ghost_slot
 
-            return jsonify({
+            answer = {
                 "type": "spool",
                 "id": int(sid),
                 "display": info['text'],
@@ -1227,7 +1449,16 @@ def api_identify_scan():
                 "slot": final_slot,
                 "deployed_to": sloc if is_ghost else None,
                 "label_already_verified": label_already_verified
-            })
+            }
+            # Group 58, section 8: a lost spool has turned up. It joins the buffer
+            # as any scanned spool does, so the next scan says where it goes; the
+            # page toasts `lost_msg` for 7 s. (In an audit it is an Extra.)
+            lost = spoolman_api.audit_lost_from(sloc, extra)
+            if lost:
+                answer['lost_from'] = lost
+                answer['lost_msg'] = spoolman_api.audit_turned_up_msg(int(sid), lost)
+                state.add_log_entry(f"❓ {html.escape(answer['lost_msg'], quote=False)}", "WARNING", "ffaa00")
+            return jsonify(answer)
 
         # 27.10 — unknown/deleted spool id (get_spool -> None): the branch above
         # was skipped, so return a renderable scan-failure payload (the frontend

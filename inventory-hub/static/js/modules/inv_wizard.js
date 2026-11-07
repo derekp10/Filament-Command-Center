@@ -35,7 +35,8 @@ let wizardState = {
     // The dynamic extras the user changed in this session ("fil:<key>",
     // "spool:<key>"): edit mode sends a blank one as cleared only when it is
     // here, so a field drawn blank by the page itself never clears the record
-    // (2026-10-21 review: a clear now really clears on Spoolman 0.27).
+    // (2026-10-21 review: a clear now really clears on Spoolman 0.27), and the
+    // filament's label status box is sent only when it is here (Group 58.5).
     touchedExtras: new Set(),
 };
 
@@ -3933,6 +3934,14 @@ window.wizardSubmit = async () => {
             document.querySelectorAll('.dynamic-extra-field').forEach(el => {
                 const key = el.getAttribute('data-key');
                 if (!key) return;
+
+                // The label status has three states and a checkbox two: a box the
+                // user didn't touch says nothing. Sent as drawn, it wrote "confirmed"
+                // on a filament with no status at every Save (Group 58.5), and kept a
+                // new filament out of the Backlog (the server flags one only when
+                // the key is left out). The swatch status is the same: "No" on a
+                // filament whose status is "unknown" (Group 58 review).
+                if (['needs_label_print', 'sample_printed'].includes(key) && !wizardExtraTouched('fil', key)) return;
 
                 if (el.type === 'checkbox') {
                     f_payload.extra[key] = el.checked;

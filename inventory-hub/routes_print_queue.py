@@ -219,10 +219,11 @@ def api_flag_spool_labels(fid):
     """23.3 follow-up — a filament edit changed a SPOOL-label-visible field
     (Brand / Type / Color-name), so the printed labels on that filament's
     physical spools are now stale. Light touch (no prompt, per Derek): raise
-    needs_label_print on the filament's UNARCHIVED spools so the spool details
-    badge + print queue surface them as needing a reprint. Hex/RGB are NOT
-    printed on the spool label, so the caller only invokes this for non-hex
-    changes. Best-effort + per-spool error surfacing."""
+    needs_label_print on the filament's UNARCHIVED spools so the 🏷️ Backlog lists
+    them as needing a reprint (the spool window shows no label status; only the
+    filament window has a badge). Hex/RGB are NOT printed on the spool label, so
+    the caller only invokes this for non-hex changes. Best-effort + per-spool
+    error surfacing."""
     try:
         try:
             fid_int = int(fid)

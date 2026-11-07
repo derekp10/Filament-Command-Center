@@ -113,10 +113,18 @@ const openSpoolDetails = (id, silent = false) => {
                 // of the UI (spool cards + Location Manager type badge). Was
                 // previously rendering blue, which read as a normal location.
                 if (isUnknown) {
-                    locBadge.innerText = '❓ Unknown';
-                    locBadge.className = "badge bg-warning text-dark ms-2 me-1";
+                    // Group 58: which audit lost it, in words on the badge itself,
+                    // for a screen with no hover. A sentence, so it may wrap, its
+                    // box id and day whole.
+                    const lost = window.auditLostWords(d.lost_from);
+                    if (lost) locBadge.innerHTML = window.fccKeepWhole(window.escHtml(`❓ Marked lost by ${lost.by}`));
+                    else locBadge.innerText = '❓ Unknown';
+                    locBadge.className = `badge bg-warning text-dark ms-2 me-1${lost ? ' text-wrap text-start' : ''}`;
                     locBadge.style.cursor = "pointer";
-                    locBadge.title = "Physically lost — last known location unknown. Click to open the Unknown bucket.";
+                    // Its tooltip can't say the place is unknown under a badge naming it.
+                    locBadge.title = lost
+                        ? `Marked lost by ${lost.by}. Click to open the Unknown list.`
+                        : "Physically lost — last known location unknown. Click to open the Unknown bucket.";
                     locBadge.onclick = () => {
                         if (typeof modals !== 'undefined' && modals.spoolModal) modals.spoolModal.hide();
                         if (window.openManage) window.openManage('UNKNOWN');
@@ -1004,6 +1012,9 @@ window.promptEditLocation = (spoolId, currentLoc, opts = {}) => {
     const fromCard = !!(opts && opts.fromCard);
     let defaultLoc = currentLoc || "Unassigned";
     if (defaultLoc.startsWith("Deployed: ")) defaultLoc = defaultLoc.replace("Deployed: ", "");
+    // The spool window's ✏️ hands over its badge's words, and at Unknown those are
+    // no place: a Force Move with no pick wrote them to the spool as its location.
+    if (defaultLoc.startsWith("❓")) defaultLoc = "UNKNOWN";
     if (defaultLoc === "Unassigned") defaultLoc = "";
 
     fetch('/api/locations')
@@ -2843,8 +2854,9 @@ const _maybePromptLabelReprint = (filId, displayName, changed, dirtyExtras, rawE
     // --- Spool labels (LIGHT, no prompt): Brand/Type/Color-NAME also print on
     // the spool labels of this filament's physical spools, so those go stale
     // when changed. Hex/RGB are NOT on the spool label, so a hex-only change is
-    // excluded. Flag the filament's spools' needs_label_print so the spool
-    // details badge + print queue surface them (Derek: a heads-up is enough).
+    // excluded. Flag the filament's spools' needs_label_print so the 🏷️ Backlog
+    // lists them (Derek: a heads-up is enough; the spool window has no label
+    // badge, only the filament window does).
     const spoolLabelChanged = has(changed, 'name') || has(changed, 'material')
         || has(changed, 'vendor_id') || has(dirtyExtras, 'original_color')
         || has(dirtyExtras, 'filament_attributes');
@@ -2927,7 +2939,8 @@ const _showLabelReprintPrompt = (filId, displayName, changedLabels) => {
     const no = panel.querySelector('#fcc-label-reprint-no');
     if (yes) yes.addEventListener('click', () => {
         // addToQueue both raises needs_label_print (surfaces the staleness in the
-        // pending list + Details badge) AND queues the label for the P-touch batch.
+        // 🏷️ Backlog and the filament window's badge) AND queues the label for the
+        // P-touch batch.
         const queued = (typeof window.addToQueue === 'function')
             ? window.addToQueue({ id: filId, type: 'filament', display: `Filament #${filId}` })
             : false;

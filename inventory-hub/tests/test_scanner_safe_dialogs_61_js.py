@@ -234,7 +234,8 @@ def _toasts(page):
 def _open_picker(page, choose=None):
     """A legacy label two spools share, scanned: the real scan path opens it.
     `choose`: a spool picked in its list first (it starts with none, and "Use
-    selected" with none closes it), the focus back on "Use selected"."""
+    selected" with none asks for one, Group 58 review), the focus back on "Use
+    selected"."""
     page.evaluate("(a) => { window.__answers['LEG:120'] = a; window.processScan('LEG:120', 'barcode'); }", LEGACY)
     page.wait_for_selector("#fcc-legacy-picker-overlay", timeout=5000)
     page.wait_for_function("() => document.activeElement && document.activeElement.id === 'fcc-legacy-picker-use'")
@@ -411,6 +412,56 @@ def test_a_persons_enter_still_answers_the_focused_button(page61):
     page61.focus("#fcc-legacy-picker-cancel")
     _type(page61, "", 0)                                   # Enter on Cancel
     assert not _picker(page61)["open"] and len(_ids(page61)) == 3
+
+
+@pytest.mark.parametrize("button", ["#fcc-legacy-picker-use", "#fcc-legacy-picker-print"], ids=["use", "print"])
+@pytest.mark.parametrize("how", ["click", "enter"])
+def test_with_nothing_picked_it_says_so_and_stays_up(page61, button, how):
+    """Group 58 review, finding 39. Both closed with no spool and no word, and the scan
+    the person was making was simply gone. Not preselected: a stray Enter would then
+    find the wrong spool, and "Print new label" queue the wrong label. RED on 1f8e03a."""
+    page61.evaluate("""() => { window.__queued = []; window.addToQueue = (o) => { window.__queued.push(o.id); return true; }; }""")
+    _clock(page61)
+    _open_picker(page61)
+    assert page61.evaluate("() => document.getElementById('fcc-legacy-picker-sel').selectedIndex") == -1
+    if how == "click":
+        page61.click(button)
+    else:
+        page61.focus(button)
+        _type(page61, "", 0)
+    assert _picker(page61) == {"open": True, "flash": "Pick a spool first", "held": []}
+    assert _ids(page61) == [["LEG:120", "barcode"]] and page61.evaluate("window.__queued") == []
+    assert page61.evaluate("() => document.activeElement.id") == "fcc-legacy-picker-sel"
+
+
+def test_a_second_enter_with_nothing_picked_still_picks_no_one(page61):
+    """The keyboard is in the list now, and Enter there still means "use it"."""
+    _clock(page61)
+    _open_picker(page61)
+    _type(page61, "", 0)
+    _type(page61, "", 0)
+    assert _picker(page61) == {"open": True, "flash": "Pick a spool first", "held": []}
+    assert _ids(page61) == [["LEG:120", "barcode"]]
+
+
+def test_a_pick_after_the_note_goes_through(page61):
+    """The list's Enter, and a person's arrow first: nothing about the note stays."""
+    _open_picker(page61)
+    page61.wait_for_timeout(120)                           # a person's Enter again (CR LF)
+    page61.keyboard.press("Enter")
+    assert _picker(page61)["flash"] == "Pick a spool first"
+    page61.keyboard.press("ArrowDown")
+    page61.keyboard.press("Enter")
+    page61.wait_for_function("() => window.__ids.length === 2")
+    assert _ids(page61)[1] == ["ID:134", "keyboard"] and not _picker(page61)["open"]
+
+
+def test_print_new_label_with_a_spool_picked_still_queues_it(page61):
+    """A pin: proved on a copy that always asks."""
+    page61.evaluate("""() => { window.__queued = []; window.addToQueue = (o) => { window.__queued.push(o.id); return true; }; }""")
+    _open_picker(page61, choose=135)
+    page61.click("#fcc-legacy-picker-print")
+    assert page61.evaluate("window.__queued") == [135] and not _picker(page61)["open"]
 
 
 def test_the_question_goes_when_the_picker_closes(page61):

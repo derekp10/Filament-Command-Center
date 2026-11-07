@@ -17,7 +17,8 @@
  * Ctrl/Cmd+K and '/' (there was none before) — so "search always available"
  * doesn't depend on finding the button.
  *
- * Storage: localStorage 'fcc.fab.pos' / 'fcc.logPill.pos' = {left, bottom} px.
+ * Storage: localStorage 'fcc.fab.pos' / 'fcc.logPill.pos' / 'fcc.bulkMovePill.pos'
+ * / 'fcc.auditPill.pos' = {left, bottom} px.
  * See the CLAUDE.md "User preferences (pre-Config-system)" table.
  */
 (function () {
@@ -84,6 +85,28 @@
             });
         }
 
+        // --- Draggable 🕵️ AUDIT pill (Group 58) -------------------------------
+        // Bulk Move's: shown for exactly as long as an audit runs, so a hidden
+        // panel can never be lost. Visibility + label are owned by
+        // updateAuditPill (inv_cmd.js). An audit and a bulk move never run
+        // together, so it can share the bulk pill's lane.
+        const auditPill = document.getElementById('fcc-audit-pill');
+        if (auditPill && mk) {
+            mk(auditPill, {
+                key: 'fcc.auditPill.pos',
+                defaultPos: () => {
+                    const w = auditPill.offsetWidth || 150;
+                    const onDeck = !!document.querySelector('.cmd-deck');
+                    return { left: Math.max(30, window.innerWidth - w - 30), bottom: onDeck ? 320 : 170 };
+                },
+                fallbackW: 150,   // representative width while hidden (offsetWidth 0)
+                fallbackH: 44,
+                draggingClass: 'fcc-audit-pill-dragging',
+                resetToast: '🕵️ Audit pill reset to default position',
+                onTap: () => { if (window.openAuditPanel) window.openAuditPanel(); },
+            });
+        }
+
         // --- Keyboard: open search from anywhere (none existed before) --------
         const openSearch = () => { if (window.SearchEngine && window.SearchEngine.open) window.SearchEngine.open(); };
         // Delegates to the canonical definition in inv_core.js — this was one of
@@ -95,12 +118,26 @@
         // person left don't hold it off.
         const scanInFlight = () => !!(window.scanIsArriving ? window.scanIsArriving()
             : (window.isScanInFlight && window.isScanInFlight()));
+        // What sits on top owns the keys. The search is a Bootstrap offcanvas (z 1045),
+        // so with a mountOverlay up (z 20000 and over) it opened behind it, and its box
+        // took the keyboard 400 ms later: the next scan was typed into a box nobody
+        // could see (Group 58 review of 7e3720f, P-2: under the audit's 🧺 list, Done's
+        // question, the legacy picker, and Find under the ⌨️ shortcut list). So neither
+        // key opens it while an overlay is mounted or the shortcut list is up. A hidden
+        // audit panel mounts nothing: there '/' still opens the search, as Hide means.
+        const covered = () => {
+            if (document.querySelector('[data-overlay-mount="1"]')) return true;
+            const list = document.getElementById('fcc-shortcuts-overlay');
+            return !!(list && list.getClientRects().length);
+        };
         document.addEventListener('keydown', (e) => {
             const tag = (e.target && e.target.tagName) || '';
             const inField = tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable);
             // Ctrl/Cmd+K — safe even mid-scan (a modifier combo never appears in a scan stream).
             if ((e.key === 'k' || e.key === 'K') && (e.ctrlKey || e.metaKey)) {
-                e.preventDefault(); openSearch(); return;
+                e.preventDefault();
+                if (!covered()) openSearch();
+                return;
             }
             // '/' — the common "focus search" key. Skip while typing in a field
             // or while a scan stream is in flight (Prusament URL QRs contain '/').
@@ -121,7 +158,9 @@
                 // list's and its dialog's '/' take them (Group 57 review, round
                 // 5): kept, they started the next scan ("abLOC:…").
                 if (window.clearScanBuffer) window.clearScanBuffer();
-                openSearch();
+                // Taken from the scan buffer even when it opens nothing, or it
+                // would start the next scan ("/ID:99").
+                if (!covered()) openSearch();
             }
         });
 

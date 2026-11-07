@@ -343,14 +343,64 @@ SAMPLE_REVIEW = {"pending": [{
                 "remaining_before": 900, "ambiguous": True, "unconfirmed_write": True, "runout": True, "color": "453A72"},
                {"sid": 99, "display": "#99 Tecbears PETG (Clear)", "toolhead": "XL-2", "grams": 4.1,
                 "remaining_before": 19, "color": "C4C2C8"}]}]}
-SAMPLE_AUDIT = {"active": True, "location_id": "LR-MDB-1", "idle_timeout_min": 30,
-                "stats": {"total_expected": 2, "found": 1, "missing": 1, "rogue": 1},
-                "expected": [{"id": 57, "display": "Prusament PLA (Purple (Galaxy Purple))", "color": "453A72",
-                              "remaining_weight": 922, "slot": "", "found": True},
-                             {"id": 99, "display": "Tecbears PETG (Clear)", "color": "C4C2C8",
-                              "remaining_weight": 19, "slot": "4", "found": False}],
-                "rogue": [{"id": 134, "display": "Prusament PLA (Pearl White)", "color": "F0F0F0",
-                           "remaining_weight": 924, "slot": "3"}]}
+SAMPLE_AUDIT = {"active": True, "audit_id": "boot-1", "location_id": "LR-MDB-1", "idle_timeout_min": 30,
+                "note": "1 is filed here. 2 more are in the places inside it, and this audit doesn't check those: "
+                        "audit each of them.",
+                "stats": {"total_expected": 3, "found": 2, "missing": 1, "rogue": 1, "trail": 1},
+                "expected": [{"id": 57, "display": "#57 Prusament PLA (Purple (Galaxy Purple))", "color": "453A72",
+                              "remaining_weight": 922, "slot": "", "where": "LR-MDB-1", "found": True,
+                              "label_status": True, "label_read": False, "flagged_here": True},
+                             {"id": 99, "display": "#99 Tecbears PETG (Clear)", "color": "C4C2C8",
+                              "remaining_weight": 19, "slot": "4", "where": "LR-MDB-1 slot 4", "found": False,
+                              "label_status": None, "label_read": False, "flagged_here": False},
+                             {"id": 100, "display": "#100 Tecbears PETG (Red)", "color": "C81E1E",
+                              "remaining_weight": 19, "slot": "2", "where": "LR-MDB-1 slot 2", "found": True,
+                              "label_status": None, "label_read": True, "flagged_here": False}],
+                "rogue": [{"id": 134, "display": "#134 Prusament PLA (Pearl White)", "color": "F0F0F0",
+                           "remaining_weight": 924, "slot": "3", "where": "LR-MDB-2 slot 3", "found": True,
+                           "label_status": False, "label_read": True, "flagged_here": False,
+                           "at_done": {"files": True}}],
+                "trail": [{"id": 242, "display": "#242 Prusament PLA (Galaxy Black)", "color": "111111",
+                           "remaining_weight": 605, "slot": "1", "where": "XL-4", "found": True,
+                           "label_status": False, "label_read": True, "flagged_here": False}]}
+SAMPLE_AUDIT["last_found"] = SAMPLE_AUDIT["expected"][0]
+# The session before a place is scanned (both pinned to the route in
+# test_audit_page_58_js).
+SAMPLE_AUDIT_EMPTY = dict(SAMPLE_AUDIT, location_id=None, note="", last_found=None, expected=[], rogue=[], trail=[],
+                          stats={"total_expected": 0, "found": 0, "missing": 0, "rogue": 0, "trail": 0})
+# /api/identify_scan's audit_done_question (pinned in test_audit_question_dialog_58_js).
+# Every row carries its tile's look (PIN UPDATED DELIBERATELY, Derek, 2026-11-03, H S1:
+# the question draws its spools as the panel's tiles do, from the rows stored at each scan).
+_QUESTION_LOOK = {"color_direction": "longitudinal", "remaining_weight": 605.0}
+SAMPLE_QUESTION = {
+    "type": "audit_done_question", "audit_id": "boot-1", "location": "LR-MDB-1", "found": 2, "expected": 18,
+    "park": [{"id": 134, "display": "#134 Prusament PLA (Pearl White)", "where": "LR-MDB-1 slot 2", "slot": "2",
+              "color": "F2F0E6", **_QUESTION_LOOK},
+             {"id": 99, "display": "#99 Tecbears PETG (Clear)", "where": "LR-MDB-1", "slot": "",
+              "color": "E8F1F2", **_QUESTION_LOOK},
+             {"id": 57, "display": "#57 Prusament PLA (Purple (Galaxy Purple))", "where": "LR-MDB-1 slot 4",
+              "slot": "4", "color": "4B2A6B", **_QUESTION_LOOK}],
+    "stays": [{"id": 242 + n, "display": f"#{242 + n} Prusament PLA (Galaxy Black)", "where": where, "why": why,
+               "color": "1A1A1A", **_QUESTION_LOOK}
+              for n, (where, why) in enumerate([("XL-4", "moved to XL-4"), ("", "no longer in Spoolman")] * 6)],
+    # Derek's C3: the Extras Done files here, and the words for a multi-slot box (PIN
+    # UPDATED DELIBERATELY, review of 7e3720f, S-7: they name the real gesture).
+    "file": [{"id": 500, "display": "#500 Tecbears PETG (Clear)", "where": "LR-MDB-2 slot 3",
+              "color": "E8F1F2", **_QUESTION_LOOK}],
+    "file_note": "It goes in with no slot: scan it, then its slot's label, to set one."}
+# A lost spool as /api/identify_scan and /api/spool_details answer it, from the real
+# park (test_audit_lost_badges_58_js pins both).
+SAMPLE_LOST = {"id": 8099, "type": "spool", "display": "#8099 Prusament PLA (Galaxy Black)", "color": "111111",
+               "color_direction": "longitudinal", "remaining_weight": 605, "archived": False, "location": "UNKNOWN",
+               "is_ghost": False, "slot": "", "deployed_to": None,
+               "details": {"id": 8099, "brand": "Prusament", "material": "PLA", "color_name": "Galaxy Black",
+                           "weight": 605, "temp": "", "needs_label_print": False,
+                           "lost_from": {"place": "LR-MDB-1", "slot": "2", "on": "2026-11-01"}}}
+SAMPLE_LOST_DETAILS = {"id": 8099, "location": "UNKNOWN", "archived": False, "extra": {}, "initial_weight": 1000,
+                       "used_weight": 395, "remaining_weight": 605, "comment": "",
+                       "filament": {"id": 8100, "name": "Galaxy Black", "material": "PLA", "color_hex": "111111",
+                                    "extra": {}, "vendor": {"id": 1, "name": "Prusament"}},
+                       "lost_from": {"place": "LR-MDB-1", "slot": "2", "on": "2026-11-01"}}
 SAMPLE_BULK = {"active": True, "stage": "preview", "source_id": "LR-MDB-1", "dest_id": "CR-CT-1-R1",
                "preview": {"ok": True, "msg": "", "stats": {"movable": 2, "skipped": 1}, "source_feeds": ["XL-1"],
                            "movable": [{"id": 57, "display": "#57 Prusament PLA (Purple (Galaxy Purple))",
@@ -378,10 +428,24 @@ def test_review_audit_and_bulk_move_panels_text_is_readable(page: Page, base_url
     page.keyboard.press("Escape")
     page.wait_for_function("() => !document.getElementById('fcc-cr-title')", timeout=5000)
     page.evaluate("() => window.openAuditPanel()")
-    page.wait_for_function("() => { const b = document.getElementById('fcc-audit-panel-body');"
+    # The tally sits above the body since Derek's 2026-11-03 look (sample 2a).
+    page.wait_for_function("() => { const b = document.getElementById('fcc-audit-panel-tally');"
                            " return !!b && /Auditing/.test(b.innerText); }", timeout=10_000)
     page.wait_for_timeout(800)
     assert_text_size(page.locator("#fcc-audit-panel-body"))
+    # Group 58: the notice and the note sit outside the body.
+    page.evaluate("() => window.auditPanelNotice('Already auditing LR-MDB-1. Finish first!')")
+    assert page.is_visible("#fcc-audit-panel-notice") and page.is_visible("#fcc-audit-panel-note")
+    assert_text_size(page.locator("#fcc-audit-panel-overlay"))
+    # Group 58's review: the strip's longest line, an Extra an earlier audit lost.
+    lost = dict(SAMPLE_AUDIT["rogue"][0], rogue=True,
+                where="Unknown (marked lost by the audit of LR-MDB-2 slot 3 on 2026-11-01)")
+    page.evaluate("(s) => { const plain = window.fetchT; window.fetchT = (u, ...r) => String(u).includes('/api/audit_session')"
+                  " ? Promise.resolve({ json: () => Promise.resolve(s) }) : plain(u, ...r); window.refreshAuditSession(); }",
+                  dict(SAMPLE_AUDIT, last_found=lost))
+    page.wait_for_function("() => (document.querySelector('#fcc-audit-last-found [role=status]') || {}).textContent"
+                           " && document.querySelector('#fcc-audit-last-found [role=status]').textContent.includes('marked lost')")
+    assert_text_size(page.locator("#fcc-audit-last-found"))
     page.evaluate("() => window.closeAuditPanel()")
     page.wait_for_timeout(400)
     if not page.evaluate("() => window.FCC_BULK_MOVE_ENABLED === true && typeof window.openBulkMovePanel === 'function'"):
@@ -391,6 +455,188 @@ def test_review_audit_and_bulk_move_panels_text_is_readable(page: Page, base_url
                            timeout=10_000)
     page.wait_for_timeout(800)
     assert_text_size(page.locator("#fcc-bulkmove-body"))
+
+
+def hold_audit_session(page: Page):
+    """The panel's polls wait on window.__answer(session): until then it shows its
+    first line. Install once the page has loaded."""
+    page.evaluate("""() => { const plain = window.fetchT;
+        window.__session = new Promise((resolve) => { window.__answer = resolve; });
+        window.fetchT = (url, ...rest) => (String(url).includes('/api/audit_session')
+            ? window.__session.then(s => ({ json: () => Promise.resolve(s) })) : plain(url, ...rest)); }""")
+
+
+def walk_empty_audit_panel(page: Page, panel, check):
+    """Group 58: the panel's three plain lines, which no sample with tiles draws:
+    before its first answer, before a place is scanned, and at a place with nothing
+    filed. `check` runs on the panel at each."""
+    from playwright.sync_api import expect
+    hold_audit_session(page)
+    page.evaluate("() => { state.auditActive = true; window.updateAuditVisuals(); }")
+    body = panel.locator("#fcc-audit-panel-body")
+    expect(body).to_contain_text("Loading audit state")
+    check(panel)
+    page.evaluate("(s) => { window.__answer(s); }", SAMPLE_AUDIT_EMPTY)
+    expect(body).to_contain_text("Scan a location's label to start.")
+    check(panel)
+    page.evaluate("(s) => { window.__session = Promise.resolve(s); window.refreshAuditSession(); }",
+                  dict(SAMPLE_AUDIT_EMPTY, location_id="LR-MDB-1"))
+    expect(body).to_contain_text("Nothing is filed here.")
+    check(panel)
+
+
+def test_audit_panel_with_nothing_to_list_text_is_readable(page: Page, base_url: str, assert_text_size):
+    from conftest import quiet_heartbeat
+    _read_only(page)
+    quiet_heartbeat(page)               # after: the newest route answers first
+    page.goto(base_url, wait_until="domcontentloaded")
+    page.wait_for_function("() => typeof window.openAuditPanel === 'function' && typeof window.fetchT === 'function'",
+                           timeout=45_000)
+    walk_empty_audit_panel(page, page.locator("#fcc-audit-panel-overlay"), assert_text_size)
+
+
+def test_audit_done_question_text_is_readable(page: Page, base_url: str, assert_text_size):
+    """Group 58: Done's question, its lists and captions, and its hold-off's line."""
+    from conftest import quiet_heartbeat
+    _read_only(page, extra_get={"/api/audit_session": SAMPLE_AUDIT})
+    quiet_heartbeat(page)               # after: the newest route answers first
+    page.goto(base_url, wait_until="domcontentloaded")
+    page.wait_for_function("() => typeof window.askAuditDone === 'function'", timeout=45_000)
+    page.evaluate("() => { state.auditActive = true; window.updateAuditVisuals(); }")
+    page.wait_for_selector("#fcc-audit-panel-done")
+    assert_text_size(page.locator("#fcc-audit-panel-overlay"))        # with its Loose spools button
+    page.evaluate("(q) => window.askAuditDone(q)", SAMPLE_QUESTION)
+    page.wait_for_selector("#fcc-audit-done-question .fcc-confirm-qr-row")
+    page.evaluate("() => window.processScan('CMD:DONE', 'barcode')")
+    page.wait_for_selector("#fcc-audit-done-question .fcc-apc-status", state="visible")
+    assert_text_size(page.locator("#fcc-audit-done-question"))
+
+
+def test_audit_report_window_text_is_readable(page: Page, base_url: str, assert_text_size):
+    """Group 58, Derek's second look (builder B, Q2): the report window, every kind of group
+    and tile, its tag and its foot; and the report line's 📝 Read the report button in Live
+    Activity. From the route's shape (test_audit_report_window_58_js.FULL), nothing sent."""
+    from conftest import quiet_heartbeat
+    from test_audit_report_window_58_js import FULL, LOG_ROW
+    _read_only(page)
+    quiet_heartbeat(page)               # after: the newest route answers first
+    page.goto(base_url, wait_until="domcontentloaded")
+    page.wait_for_function("() => typeof window.openAuditReport === 'function'", timeout=45_000)
+    page.evaluate("(r) => window.openAuditReport(r, { after: true })", FULL)
+    page.wait_for_selector("#fcc-audit-report .fcc-audit-report-foot")
+    # Its notice line too (builder B, resumed): a scan dropped once the audit was over.
+    page.evaluate("() => window.auditScanOutlived({ text: 'ID:57', auditOf: 'boot-1' })")
+    page.wait_for_selector("#fcc-audit-report #fcc-audit-report-notice", state="visible")
+    assert_text_size(page.locator("#fcc-audit-report"))
+    page.keyboard.press("Escape")
+    page.evaluate("(row) => window._renderLogsPayload({ logs: [row], status: { spoolman: true } }, true)", LOG_ROW)
+    page.wait_for_selector("#live-logs .fcc-audit-report-open")
+    assert_text_size(page.locator("#live-logs"))
+
+
+def test_legacy_picker_during_an_audit_text_is_readable(page: Page, base_url: str, assert_text_size):
+    """Group 58, Derek's second look (builder B, Q3): the legacy picker's line naming the
+    audit and its list of spools under where each stands in it."""
+    from conftest import quiet_heartbeat
+    _read_only(page, extra_get={"/api/audit_session": SAMPLE_AUDIT})
+    quiet_heartbeat(page)               # after: the newest route answers first
+    page.goto(base_url, wait_until="domcontentloaded")
+    page.wait_for_function("() => typeof window.showLegacySpoolPicker === 'function'", timeout=45_000)
+    page.evaluate("() => { state.auditActive = true; window.updateAuditVisuals(); }")
+    page.wait_for_function("() => (document.getElementById('fcc-audit-panel-tally') || {}).textContent"
+                           " && document.getElementById('fcc-audit-panel-tally').textContent.includes('Auditing')")
+    page.evaluate("""() => { const spool = (id, at) => ({ id, remaining_weight: 800, location: at, archived: false,
+            filament_id: 7, filament_name: 'Size Black', material: 'PLA', vendor_name: 'FCC Test', display: '#' + id });
+        window.showLegacySpoolPicker({ legacy_id: '999120', candidates: [spool(99, 'LR-MDB-1'), spool(57, 'LR-MDB-1'),
+            spool(999135, 'ZZ-SIZE-1')] }); }""")
+    page.wait_for_selector("#fcc-legacy-picker-audit")
+    assert_text_size(page.locator("#fcc-legacy-picker-overlay"))
+    page.click("#fcc-legacy-picker-cancel")
+
+
+def test_audit_find_window_text_is_readable(page: Page, base_url: str, assert_text_size):
+    """Derek's answers of 2026-11-03, A2: 🔎 Find a spool, its rows (each "where" and both
+    tags), its notice, "Searching…" over older rows (review of 7e3720f, P-7) and a failed
+    search; and the panel with a tile's QR and the strip's 🖨️ (A1, B), at Standard."""
+    from conftest import quiet_heartbeat
+    from test_audit_find_and_tiles_58_js import SEARCH_ROWS
+    _read_only(page, extra_get={"/api/audit_session": SAMPLE_AUDIT,
+                                "/api/search": {"success": True, "results": SEARCH_ROWS}})
+    quiet_heartbeat(page)               # after: the newest route answers first
+    page.goto(base_url, wait_until="domcontentloaded")
+    page.wait_for_function("() => typeof window.openAuditFind === 'function'", timeout=45_000)
+    page.evaluate("() => { state.auditActive = true; window.updateAuditVisuals(); }")
+    page.wait_for_selector("[data-audit-tile='99'] .fcc-audit-tile-qr")
+    page.wait_for_selector("#fcc-audit-label-queue")
+    assert_text_size(page.locator("#fcc-audit-panel-overlay"))
+    page.click("#fcc-audit-panel-find")
+    page.wait_for_selector("#fcc-audit-find [data-find-box]")
+    assert_text_size(page.locator("#fcc-audit-find"))
+    page.fill("#fcc-audit-find [data-find-box]", "glow")
+    page.wait_for_function("(n) => document.querySelectorAll('#fcc-audit-find .fcc-find-row').length === n",
+                           arg=len(SEARCH_ROWS))
+    page.evaluate("() => window.auditPanelNotice('Already auditing LR-MDB-1. Finish first!')")
+    assert_text_size(page.locator("#fcc-audit-find"))
+    # "Searching…" over the older rows, a newer search on its way (review of 7e3720f, P-7).
+    page.evaluate("() => { const plain = window.fetchT; window.fetchT = (u, ...r) => String(u).includes('/api/search')"
+                  " ? new Promise(() => {}) : plain(u, ...r); }")
+    page.fill("#fcc-audit-find [data-find-box]", "glow blue")
+    page.wait_for_function("() => document.querySelector('#fcc-audit-find [data-find-busy]').textContent === 'Searching…'")
+    assert_text_size(page.locator("#fcc-audit-find"))
+    page.evaluate("() => { const plain = window.fetchT; window.fetchT = (u, ...r) => String(u).includes('/api/search')"
+                  " ? Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ success: false,"
+                  " msg: \"Spoolman didn't answer (timed out).\" }) }) : plain(u, ...r); }")
+    page.fill("#fcc-audit-find [data-find-box]", "glow b")
+    page.wait_for_selector("#fcc-audit-find [data-find-retry]")
+    assert_text_size(page.locator("#fcc-audit-find"))
+
+
+def draw_lost_cards(page: Page):
+    """The two lost-spool cards no screen here opens by itself, the search panel's
+    and the Unknown list's, drawn by the real builder from the routes' shape, on the
+    page and over everything. Answers their box."""
+    page.evaluate("""(item) => {
+        const box = document.createElement('div');
+        box.id = 'fcc-test-lost-cards';
+        box.style.cssText = 'position:fixed; top:1rem; left:1rem; width:40rem; z-index:1040; background:#1e1e1e;';
+        box.innerHTML = SpoolCardBuilder.buildCard(item, 'search', {})
+            + SpoolCardBuilder.buildCard(item, 'loc_list', { locId: 'UNKNOWN', index: 0 });
+        document.body.appendChild(box); }""", SAMPLE_LOST)
+    return page.locator("#fcc-test-lost-cards")
+
+
+def test_lost_spools_text_is_readable(page: Page, base_url: str, assert_text_size):
+    """Group 58: the buffer card's badge, the search and Unknown list cards' and the
+    sentence in the spool window."""
+    from conftest import own_the_buffer
+    _read_only(page, extra_get={"/api/spool_details": SAMPLE_LOST_DETAILS})
+    own_the_buffer(page, [SAMPLE_LOST])  # after: the newest route answers first
+    page.goto(base_url, wait_until="domcontentloaded")
+    page.wait_for_function("() => typeof openSpoolDetails === 'function' && state.heldSpools.length === 1", timeout=45_000)
+    card = page.locator(f".buffer-item[data-spool-id='{SAMPLE_LOST['id']}']")
+    card.wait_for()
+    assert_text_size(card.locator(".badge.bg-warning").first.locator(".."))
+    cards = draw_lost_cards(page)
+    assert cards.locator(".badge.bg-warning", has_text="Lost: LR-MDB-1 slot 2").count() == 2
+    assert_text_size(cards)
+    cards.evaluate("(box) => box.remove()")
+    _shown(page, "spoolModal", "(sid) => { openSpoolDetails(sid); }", SAMPLE_LOST["id"])
+    assert "Marked lost" in page.inner_text("#detail-location-badge")
+    assert_text_size(page.locator("#detail-location-badge").locator(".."))
+
+
+def test_audit_pill_text_is_readable(page: Page, base_url: str, assert_text_size):
+    """Group 58: the pill a hidden audit leaves on screen, with its place and without."""
+    from conftest import quiet_heartbeat
+    _read_only(page, extra_get={"/api/audit_session": SAMPLE_AUDIT})
+    quiet_heartbeat(page)               # after: the newest route answers first
+    page.goto(base_url, wait_until="domcontentloaded")
+    page.wait_for_function("() => typeof window.openAuditPanel === 'function'", timeout=45_000)
+    page.evaluate("() => { state.auditActive = true; window.updateAuditVisuals(); window.closeAuditPanel(); }")
+    assert page.is_visible("#fcc-audit-pill")
+    assert_text_size(page.locator("#fcc-audit-pill"))
+    page.evaluate("() => { state.auditLocation = 'LR-MDB-1'; window.updateAuditPill(); }")
+    assert_text_size(page.locator("#fcc-audit-pill"))
 
 
 def _open_picker(page: Page, loc: str, spool: int):
@@ -519,6 +765,41 @@ def test_settings_and_list_windows_text_is_readable(page: Page, base_url: str, a
         page.wait_for_timeout(1200)
         assert_text_size(page.locator("#%s .modal-content" % modal))
         _hide(page, modal)
+
+
+SAMPLE_LOOSE = {"read_ok": True, "read_error": None, "count": 3, "places": [
+    {"id": "ZQ", "name": "A Room", "type": "Room", "spools": [
+        {"id": 1, "display": "#1 Some Brand PLA (Gold)", "color": "F9E352", "color_direction": "longitudinal",
+         "remaining_weight": 912.5}]},
+    {"id": "ZQ-CT-1", "name": "A Cart", "type": "Cart", "spools": [
+        {"id": 2, "display": "#2 Some Brand PETG (Red Blue)", "color": "BA0C2F,0047BB", "color_direction": "coaxial",
+         "remaining_weight": None}]},
+    {"id": "Old Shelf", "name": "Old Shelf", "type": "", "spools": [
+        {"id": 3, "display": "#3 Some Brand PLA (White)", "color": "FFFFFF", "color_direction": "longitudinal",
+         "remaining_weight": 19}]}]}
+
+
+def test_loose_spools_list_text_is_readable(page: Page, base_url: str, assert_text_size):
+    """Group 58.4: the 🧺 Loose spools list, drawn from a sample, and its yellow
+    notice; the Locations window around its button is measured by
+    test_locations_and_search_text_is_readable."""
+    import json as _json
+    _read_only(page)
+    answers = [SAMPLE_LOOSE, {"read_ok": False, "read_error": "couldn't read Spoolman (test)", "count": 0, "places": []}]
+    page.route("**/api/loose_spools", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=_json.dumps(answers.pop(0))))
+    _ready(page, base_url)
+    _shown(page, "locMgrModal", "() => window.openLocationsModal()")
+    page.click("#loc-loose-list-btn")
+    panel = page.locator("#fcc-loose-list .fcc-loose-panel")
+    page.wait_for_function("() => document.querySelectorAll('#fcc-loose-list .fcc-loose-row').length === 3")
+    assert_text_size(panel)
+    # The rows are what the rule calls list rows: --fcc-fs-row, 14.4 px at Standard.
+    assert page.evaluate("() => parseFloat(getComputedStyle(document.querySelector('#fcc-loose-list .fcc-loose-row'))"
+                         ".fontSize)") == pytest.approx(14.4)
+    page.evaluate("() => { window.openLooseList(); }")
+    page.wait_for_selector("#fcc-loose-list [data-loose-notice]")
+    assert_text_size(panel)
 
 
 # ---------------------------------------------------------------------------

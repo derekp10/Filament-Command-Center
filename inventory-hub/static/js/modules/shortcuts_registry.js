@@ -49,14 +49,35 @@
         el.innerHTML = html;
     };
 
+    // What had the keyboard when the list opened (Group 58 re-review): a click on its ✕
+    // or its backdrop takes the focus off it, and Done's question, whose keys sit on its
+    // own overlay, then heard nothing, its Enter dead with its hint still saying what
+    // Enter does.
+    let _focusBefore = null;
     window.toggleShortcutsOverlay = function () {
         const ov = document.getElementById('fcc-shortcuts-overlay');
         if (!ov) return;
         const bd = document.getElementById('fcc-shortcuts-overlay-backdrop');
         const hidden = ov.style.display === 'none' || !ov.style.display;
         renderList();  // refresh in case new shortcuts were registered post-load
+        if (hidden) _focusBefore = document.activeElement;
         ov.style.display = hidden ? 'block' : 'none';
         if (bd) bd.style.display = hidden ? 'block' : 'none';
+        // A scan's outcome is still read over the list (global.css): its toast is 7 s
+        // when it fails, and every scan outcome is owed one. The class on <body>, so a
+        // toast container made later (showToast makes it on first use) is in it too.
+        if (document.body) document.body.classList.toggle('fcc-shortcuts-up', hidden);
+        if (!hidden) {
+            const back = _focusBefore;
+            const now = document.activeElement;
+            _focusBefore = null;
+            // Only where the list left it nowhere: the ✕ (inside the list) or the page
+            // (a click on the backdrop). A focus put somewhere since stays there.
+            if (back && back.isConnected && back !== document.body && typeof back.focus === 'function'
+                && (!now || now === document.body || ov.contains(now))) {
+                back.focus();
+            }
+        }
     };
 
     // Bind `?` globally + `Escape` to close the overlay.
@@ -120,6 +141,16 @@
             e.preventDefault();
             e.stopImmediatePropagation();
             window.toggleShortcutsOverlay();
+        } else if (e.key === 'Enter' && ov.style.display === 'block' && !ov.contains(e.target)
+                   && !(window.enterIsAScan && window.enterIsAScan())) {
+            // The list is read, not pressed through. It sits above every overlay, so a
+            // person's Enter here can't be meant for what it covers, and a dialog's
+            // own Enter handler would answer a question they can't see (Group 58
+            // review: a Yes with the focus on it). A scan's Enter goes on: scans work
+            // under the list.
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            if (window.clearScanBuffer) window.clearScanBuffer();
         }
     }, true);  // capture phase — beats Bootstrap's bubble-phase handler
 
@@ -208,7 +239,7 @@
     window.registerShortcut({
         id: 'scan-cmd-audit', scope: 'Scan Commands',
         keys: ['CMD:AUDIT'],
-        description: 'Enter audit mode — scan locations to reconcile their contents.'
+        description: 'Enter audit mode — scan locations to reconcile their contents. During an audit it shows the panel.'
     });
     window.registerShortcut({
         id: 'scan-cmd-bulkmove', scope: 'Scan Commands',
@@ -268,12 +299,17 @@
     window.registerShortcut({
         id: 'scan-cmd-done', scope: 'Scan Commands',
         keys: ['CMD:DONE'],
-        description: 'Close the open location manager OR commit an audit (missing spools → Unknown).'
+        description: 'Close the open location manager, or finish an audit: it asks before moving anything.'
     });
     window.registerShortcut({
         id: 'scan-cmd-cancel', scope: 'Scan Commands',
         keys: ['CMD:CANCEL'],
         description: 'Cancel without moving anything: an active audit (safe bail; opposite of CMD:DONE), the slot picker, or the load question on screen.'
+    });
+    window.registerShortcut({
+        id: 'scan-cmd-needlabel', scope: 'Scan Commands',
+        keys: ['CMD:NEEDLABEL'],
+        description: 'During an audit: the last spool found needs a label. Reading it twice marks it once.'
     });
     window.registerShortcut({
         id: 'scan-cmd-store', scope: 'Scan Commands',

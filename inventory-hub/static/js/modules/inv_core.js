@@ -19,6 +19,21 @@ let state = {
     lastScannedLoc: null,
     auditActive: false,
     lastAuditState: null,
+    // Group 58: what this page knows of the audit beside the flag above, which
+    // _syncAuditSignal and the page's own requests own (inv_cmd.js): the place
+    // ('' until one is scanned) and when it was last learned (page clock: the
+    // sentAt of the answer that said so, so an answer sent before that can't take
+    // it back), its id (the heartbeat and the panel's poll) and idle limit, the
+    // last audit this page's own request ended, how many of its requests are
+    // on their way, and when it last changed its mind (page clock), so an
+    // answer sent before that can't undo it.
+    auditLocation: '',
+    auditLocationAt: 0,
+    auditId: null,
+    auditIdleMin: null,
+    auditEndedHere: null,
+    auditRequestsOut: 0,
+    auditChangedAt: 0,
     // L298 Phase 2 — bulk-move scan session. `bulkMoveActive` mirrors the
     // backend's session flag from the /api/logs heartbeat; `bulkMoveStage`
     // (idle | awaiting_source | awaiting_dest | preview) drives the deck QR's
@@ -230,7 +245,57 @@ window.unionConfirmFedHeads = unionConfirmFedHeads;
 // mounted on the same id over an unanswered one replaces it, and the older one
 // is settled as superseded (`onCancel({superseded: true})`), so its host
 // listener, QR session and scan hold-off never outlive its DOM.
+// The three-way's words can be a door's own (Group 58, the audit's Done; left out,
+// each is the default above): `cancelLabel` and `cancelVerb`, the Cancel button and
+// what the hint says Enter and Esc do on it; `loadVerb`, the same for the yes;
+// `loadCaption` and `cancelCaption`, the QRs' captions. `sections`
+// ([{heading, lines: [{text, where}], more, wrap}]) are lists under `msg`, escaped here.
+// A line never wraps and `more` counts the lines left out, so a door names a few
+// and a count: fccFitQuestion scrolls the whole question, QRs included, and a
+// scanner can't read a QR that has scrolled away. A list whose lines can be long asks
+// to wrap (`wrap: true`; made for Done's question, Derek's C, review of 7e3720f P-3,
+// which has drawn colour tiles instead since his second look, so no door sends it
+// now): a line that fits is drawn as one row still, and one that doesn't keeps its
+// name whole and puts its `where` under it, nothing cut (a touch screen can't read a
+// line's title).
+// `armAfterMs` (Group 58 review; default 0, every other door as it was): the yes
+// button's CLICK does nothing until that long after the mount. The question can open
+// with its yes under the pointer, and the second click of a double click on the
+// button that asked it then answered a question nobody had read (a whole batch
+// parked). Enter and the QRs are no second click, so they don't wait.
+// A list of every spool, as colour tiles (`tiles: true` on a section; Done's question,
+// Derek, 2026-11-03: "display the spools like we did in the audit window ... a vibrant
+// list of data where an out of place color might spark a memory"): its lines are
+// fccSpoolTileHtml's tiles ({text, detail, where, color, color_direction}), `tone` the
+// section's look, and none is left out. The lists sit one above the other, the tiles of
+// each in a grid where the question has the room and in one column on a phone. A
+// question too tall for the window scrolls its lists alone (.fcc-apc-lists-scroll), so
+// its title, words, buttons and QRs stay in view, and only then: a question that fits
+// is no scroller (fccFitQuestion's rule). Scrolling, the lists are a stop in the Tab
+// order that the arrow and page keys scroll, and Enter there does what the hint says.
 const _openMoveConfirms = {};
+
+// --- A SPOOL AS A COLOUR TILE (Group 58; Derek, 2026-11-03) ---
+// The audit panel's look for a spool in a list nobody presses: Done's question and the
+// audit's report window. Its swatch (makeSwatchHtml, as the panel's tiles), its name
+// (wrapping, never cut: a touch screen can't show a title), a small line (its grams and
+// slot), where it is or why it stays in amber, and a tag (a label it needs). Not a
+// button. `t`: {text, detail, where, tag, color, color_direction}; `tone`: its colours
+// (global.css .fcc-spool-tile[data-tone]: missing, found, extra, trail, stay, failed).
+// Every word is escaped here.
+const fccSpoolTileHtml = (t, tone = '') => {
+    const row = t || {};
+    const esc = (s) => String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    const swatch = (typeof window.makeSwatchHtml === 'function')
+        ? window.makeSwatchHtml(row.color, row.color_direction || 'longitudinal', { size: 28, borderColor: '#444' }) : '';
+    const line = (cls, text) => (text ? `<span class="${cls}">${esc(text)}</span>` : '');
+    return `<div class="fcc-spool-tile"${tone ? ` data-tone="${esc(tone)}"` : ''}>${swatch}`
+        + `<span class="fcc-spool-tile-text">${line('fcc-spool-tile-name', row.text)}${line('fcc-spool-tile-detail', row.detail)}`
+        + `${line('fcc-spool-tile-where', row.where)}${line('fcc-spool-tile-tag', row.tag)}</span></div>`;
+};
+window.fccSpoolTileHtml = fccSpoolTileHtml;
 
 // --- KEEP A BOX ID WHOLE (review, 2026-10-22) ---
 // A button label that wraps on a phone may break a line after any hyphen:
@@ -253,6 +318,13 @@ window.fccKeepWhole = fccKeepWhole;
 //    coming from…" was 667 px high on a 360 x 640 phone at Extra Large). Only
 //    then: a scroller draws its text without the screen's sub-pixel smoothing
 //    (greyscale, not ClearType), so a question that fits keeps it.
+//  - a question of tiles (confirmActivePrint's `tiles` sections, .fcc-apc-tiled)
+//    scrolls its lists alone instead (.fcc-apc-lists-scroll), its title, words,
+//    buttons and QRs in view, while that leaves the lists LISTS_MIN_REM at least
+//    (a row of tiles and its heading, or the whole list when shorter); on a window
+//    too short for even that (a phone held sideways) the whole question scrolls, as
+//    any question does.
+const LISTS_MIN_REM = 5;
 const _fitQuestionNow = (panel) => {
     if (!panel || !panel.classList || typeof panel.getBoundingClientRect !== 'function') return null;
     const vw = (document.documentElement && document.documentElement.clientWidth) || window.innerWidth || 0;
@@ -265,9 +337,21 @@ const _fitQuestionNow = (panel) => {
         if (off) panel.classList.add('fcc-keep-whole-off');
     }
     panel.classList.remove('fcc-question-scroll');
-    const scroll = panel.getBoundingClientRect().height > vh - 16 + 0.5;
+    const tiled = panel.classList.contains('fcc-apc-tiled');
+    if (tiled) panel.classList.remove('fcc-apc-lists-scroll');
+    let scroll = panel.getBoundingClientRect().height > vh - 16 + 0.5;
+    let lists = false;
+    if (scroll && tiled && typeof panel.querySelector === 'function') {
+        panel.classList.add('fcc-apc-lists-scroll');
+        const box = panel.querySelector('.fcc-apc-sections');
+        const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+        lists = !!box && panel.getBoundingClientRect().height <= vh - 16 + 0.5
+            && box.clientHeight + 0.5 >= Math.min(LISTS_MIN_REM * rem, box.scrollHeight);
+        if (lists) scroll = false;
+        else panel.classList.remove('fcc-apc-lists-scroll');
+    }
     if (scroll) panel.classList.add('fcc-question-scroll');
-    return { off, scroll };
+    return tiled ? { off, scroll, lists } : { off, scroll };
 };
 const fccFitQuestion = (panel) => {
     const now = _fitQuestionNow(panel);
@@ -290,11 +374,43 @@ window.fccFitQuestion = fccFitQuestion;
 window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', host = null,
                                ids = {}, onConfirm = null, onCancel = null,
                                title = '', onStore = null, storeLabel = '', loadLabel = '',
-                               printing = null, noLoad = false, hint = '' } = {}) => {
+                               printing = null, noLoad = false, hint = '',
+                               cancelLabel = '', cancelVerb = '', loadVerb = '',
+                               loadCaption = '', cancelCaption = '', sections = null,
+                               armAfterMs = 0, keepWhole = false } = {}) => {
     const esc = (s) => String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    // `keepWhole` (Done's question; Derek's look of 2026-11-04): its title and words keep a
+    // place id whole ("SHELF-2-R3", "LR-MDB-1"), as the buttons do, wrapping at spaces.
+    const words = (s) => (keepWhole ? fccKeepWhole(esc(s)) : esc(s));
     const threeWay = !!title;
+    const noVerb = (threeWay && cancelVerb) || 'cancels';
+    const lists = (threeWay && Array.isArray(sections)) ? sections : [];
+    // A question whose lists are tiles (Done's): see `tiles` above.
+    const tiled = lists.some(s => s && s.tiles);
+    const tileSectionHtml = ({ heading = '', lines = [], tone = '' }) => '<div class="fcc-apc-section fcc-apc-section-tiles">'
+        + `<div class="fcc-apc-section-head">${esc(heading)}</div>`
+        + `<div class="fcc-spool-tiles">${lines.map(l => fccSpoolTileHtml(l, tone)).join('')}</div></div>`;
+    const lineSectionHtml = ({ heading = '', lines = [], more = 0, wrap = false }) => `<div class="fcc-apc-section${wrap ? ' fcc-apc-section-wrap' : ''}">`
+        + `<div class="fcc-apc-section-head">${esc(heading)}</div>`
+        + lines.map(({ text = '', where = '' }) => `<div class="fcc-apc-line" title="${esc(where ? `${text} · ${where}` : text)}">`
+            + `<span class="fcc-apc-line-text">${esc(text)}</span>`
+            + `${where ? `<span class="fcc-apc-line-where">${esc(where)}</span>` : ''}</div>`).join('')
+        + `${more > 0 ? `<div class="fcc-apc-more">and ${esc(more)} more</div>` : ''}</div>`;
+    const sectionHtml = (s) => ((s && s.tiles) ? tileSectionHtml(s) : lineSectionHtml(s || {}));
+    // Tiled, the lists are one region that scrolls when the question doesn't fit
+    // (fccFitQuestion), and then a keyboard stop (`tabindex`; Tab reaches it only then).
+    const listsHtml = !lists.length ? ''
+        : (tiled ? '<div class="fcc-apc-sections fcc-apc-sections-tiles" tabindex="0" role="region" aria-label="The spools this question names">'
+            : '<div class="fcc-apc-sections">') + `${lists.map(sectionHtml).join('')}</div>`;
+    // Two lists sit side by side where the window has the room, so the height a
+    // question takes is one list's, and its QRs stay in view. Tiles take the wide
+    // window for more than two of them: three to a row on a laptop.
+    const tileCount = tiled ? lists.reduce((n, s) => n + ((s && Array.isArray(s.lines)) ? s.lines.length : 0), 0) : 0;
+    const width = lists.length
+        ? `width:min(${(lists.length > 1 || tileCount > 2) ? 50 : 35}rem, calc(100vw - 16px)); box-sizing:border-box;`
+        : `max-width:${threeWay ? 35 : 30}rem;`;
     const first = activePrint || (Array.isArray(activePrints) && activePrints[0]) || {};
     const isPrinting = printing != null ? !!printing
         : !!(activePrint || (Array.isArray(activePrints) && activePrints.length));
@@ -305,27 +421,27 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
     const idAttr = (id) => (id ? `id="${esc(id)}" ` : '');
     const border = (!threeWay || isPrinting) ? '#ff8800' : '#0dcaf0';
     const header = threeWay
-        ? `${isPrinting ? '⚠️' : '🔁'} ${esc(title)}`
+        ? `${isPrinting ? '⚠️' : '🔁'} ${words(title)}`
         : `⚠️ ${esc(first.printer_name || 'A printer')} is ${esc(first.state || 'PRINTING')}`;
     const bodyText = threeWay ? msg : (msg || 'Moving a spool now will disrupt the print. Continue?');
     const buttons = threeWay
         ? (hasLoad ? `<button type="button" ${idAttr(ids.yes)}class="btn btn-warning btn-sm fcc-apc-yes" style="min-width:120px;">${fccKeepWhole(esc(loadLabel || 'Load it instead'))}</button>` : '')
           + (hasStore ? `<button type="button" ${idAttr(ids.store)}class="btn btn-info btn-sm fcc-apc-store" style="min-width:120px;">${fccKeepWhole(esc(storeLabel || 'Just store it'))}</button>` : '')
-          + `<button type="button" ${idAttr(ids.no)}class="btn btn-secondary btn-sm fcc-apc-no" style="min-width:100px;">Cancel</button>`
+          + `<button type="button" ${idAttr(ids.no)}class="btn btn-secondary btn-sm fcc-apc-no" style="min-width:100px;">${esc(cancelLabel || 'Cancel')}</button>`
         : `<button type="button" ${idAttr(ids.yes)}class="btn btn-warning btn-sm fcc-apc-yes" style="min-width:120px;">Continue Anyway</button>
                 <button type="button" ${idAttr(ids.no)}class="btn btn-secondary btn-sm fcc-apc-no" style="min-width:120px;">Cancel</button>`;
     // The yes / no (a printer is printing) opens on Cancel (Derek, 2026-10-29:
     // "I don't want an accidental double press to mess things up"), as the
     // three-way opens on its safe answer: Continue Anyway takes a deliberate
     // Tab or click.
-    const extras = `<div class="fcc-apc-hint" style="font-size:var(--fcc-fs-small); color:#ccc; margin-top:8px;">Enter ${hasStore ? 'stores it' : 'cancels'} · Esc cancels</div>`;
+    const extras = `<div class="fcc-apc-hint" style="font-size:var(--fcc-fs-small); color:#ccc; margin-top:8px;">Enter ${hasStore ? 'stores it' : noVerb} · Esc ${noVerb}</div>`;
     const status = threeWay
         ? `<div class="fcc-apc-status" role="alert" style="display:none; margin-bottom:10px; padding:6px 10px; border-radius:6px; background:#4a3200; color:#ffd27a; border:1px solid #ffb74d; font-weight:bold; text-align:left;"></div>`
         : '';
     const content = `
-        <div class="fcc-apc-panel" style="background:#1e1e1e; color:#fff; border:2px solid ${border}; border-radius:8px; padding:20px min(24px, 4vw); max-width:${threeWay ? 35 : 30}rem; text-align:center;">
+        <div class="fcc-apc-panel${tiled ? ' fcc-apc-tiled' : ''}" style="background:#1e1e1e; color:#fff; border:2px solid ${border}; border-radius:8px; padding:20px min(24px, 4vw); ${width} text-align:center;">
             <div class="fcc-apc-title" style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">${header}</div>
-            <div class="fcc-apc-msg" style="color:#ffc; margin-bottom:14px;${threeWay ? ' text-align:left;' : ''}">${esc(bodyText)}</div>
+            <div class="fcc-apc-msg" style="color:#ffc; margin-bottom:14px;${threeWay ? ' text-align:left;' : ''}">${words(bodyText)}</div>${listsHtml}
             ${status}
             <div class="fcc-apc-btns" style="display:flex; gap:10px; justify-content:center;${threeWay ? ' flex-wrap:wrap;' : ''}">${buttons}</div>
             ${extras}
@@ -386,7 +502,14 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
     const yesBtn = hasLoad ? ov.querySelector('.fcc-apc-yes') : null;
     const storeBtn = hasStore ? ov.querySelector('.fcc-apc-store') : null;
     const noBtn = ov.querySelector('.fcc-apc-no');
-    if (yesBtn) yesBtn.onclick = yes;
+    // Tiled lists that scroll (fccFitQuestion's .fcc-apc-lists-scroll): a keyboard stop.
+    const listsEl = tiled ? ov.querySelector('.fcc-apc-sections') : null;
+    const listsScroll = () => !!(listsEl && handle && handle.panel && handle.panel.classList
+        && handle.panel.classList.contains('fcc-apc-lists-scroll'));
+    // What Enter does on the lists, as anywhere but a button: the hint says so there too.
+    const otherVerb = hasStore ? 'stores it' : noVerb;
+    const armedAt = Date.now() + armAfterMs;
+    if (yesBtn) yesBtn.onclick = armAfterMs > 0 ? () => { if (Date.now() >= armedAt) yes(); } : yes;
     if (storeBtn) storeBtn.onclick = store;
     if (noBtn) noBtn.onclick = no;
     // The hint says what Enter does on the button that has the focus (Group 50
@@ -396,9 +519,10 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         // `focus` in the capture phase: mountOverlay's focus guard stops focusin
         // at the document, before it reaches anything inside the overlay.
         ov.addEventListener('focus', (e) => {
-            const does = e.target === yesBtn ? (threeWay ? 'loads it' : 'continues')
-                : (e.target === storeBtn ? 'stores it' : (e.target === noBtn ? 'cancels' : ''));
-            if (does) hintEl.textContent = `Enter ${does} · Esc cancels`;
+            const does = e.target === yesBtn ? (threeWay ? (loadVerb || 'loads it') : 'continues')
+                : (e.target === storeBtn ? 'stores it' : (e.target === noBtn ? noVerb
+                    : (listsEl && e.target === listsEl ? otherVerb : '')));
+            if (does) hintEl.textContent = `Enter ${does} · Esc ${noVerb}`;
         }, true);
     }
     // mountOverlay removes the DOM when the host closes; the answer must close
@@ -441,7 +565,9 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         }
         const arrow = threeWay && (e.key === 'ArrowLeft' || e.key === 'ArrowRight');
         if (e.key === 'Tab' || arrow) {
-            const order = [yesBtn, storeBtn, noBtn].filter(Boolean);
+            // Tab reaches the tiles' lists while they scroll (their arrow and page keys
+            // scroll them); ← and → go between the buttons.
+            const order = ((e.key === 'Tab' && listsScroll()) ? [listsEl] : []).concat([yesBtn, storeBtn, noBtn].filter(Boolean));
             const back = e.key === 'ArrowLeft' || (e.key === 'Tab' && e.shiftKey);
             const idx = order.indexOf(document.activeElement);
             const next = idx === -1 ? (back ? order.length - 1 : 0)
@@ -466,10 +592,11 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
                 confirmTone: 'warning', cancelTone: 'secondary' }
             : hasLoad
                 ? { host: handle.panel, alignTo, onConfirm: yes, onCancel: no, onStore: hasStore ? store : undefined,
-                    confirmLabel: 'Scan to Load', storeLabel: 'Scan to Store', cancelLabel: 'Scan to Cancel', theme,
+                    confirmLabel: loadCaption || 'Scan to Load', storeLabel: 'Scan to Store',
+                    cancelLabel: cancelCaption || 'Scan to Cancel', theme,
                     confirmTone: 'warning', storeTone: 'info', cancelTone: 'secondary' }
                 : { host: handle.panel, alignTo, onConfirm: store, onCancel: no,
-                    confirmLabel: 'Scan to Store', cancelLabel: 'Scan to Cancel', theme,
+                    confirmLabel: 'Scan to Store', cancelLabel: cancelCaption || 'Scan to Cancel', theme,
                     confirmTone: 'info', cancelTone: 'secondary' });
     }
     // Fitted to the screen: box ids whole where they fit, and a question
@@ -482,7 +609,7 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         // the toast layer (z 11000) sits under this dialog.
         // What a held-off scan is told (processScan): the buttons on screen
         // (Group 40 review, BD-6: a question with no store said "Just store it").
-        const said = [hasLoad ? (loadLabel || 'Load it instead') : '', hasStore ? 'Just store it' : '', 'Cancel']
+        const said = [hasLoad ? (loadLabel || 'Load it instead') : '', hasStore ? 'Just store it' : '', cancelLabel || 'Cancel']
             .filter(Boolean);
         question = {
             title,
@@ -1311,6 +1438,18 @@ window.looksLikeScanPayload = (txt) =>
 const LABEL_PREFIXES = ['LEGACY', 'SPOOL', 'LOC', 'LEG', 'OLD', 'SPL', 'FIL', 'CMD', 'ID'];
 const WHOLE_LABEL = new RegExp('^(?:(?:' + LABEL_PREFIXES.join('|') + '):\\S.*|https?:\\/\\/\\S+)$', 'i');
 window.fccIsLabel = (text) => WHOLE_LABEL.test(String(text == null ? '' : text));
+
+// --- A SPOOL'S QR ON THE SCREEN (review 3, R3S-1; Derek, 2026-11-04, option (a)) ---
+// What the QR on a spool's card holds: the scan buffer's cards (inv_cmd.js renderBuffer)
+// and the Location Manager's (inv_loc_mgr.js, its ✋ PICK). SPL:<id>, never the printed
+// label's ID:<id>. The scan path reads both as that spool, everywhere (logic.resolve_scan:
+// a move, the buffer, an audit's find, the legacy picker's own-label match), but only a
+// printed label's ID:, read by a scanner, is a label read (routes_scan._is_label_read):
+// it confirms a missing label status and clears a "needs a label" flag. A QR read off the
+// screen proves nothing about the label on the spool: it was the label's own text, so
+// scanning a card confirmed a label in an audit and, outside one, took a flagged spool
+// off the 🏷️ Backlog with no label printed. A label FCC prints keeps ID: (labels_csv.py).
+window.fccSpoolCardQr = (id) => `SPL:${id}`;
 
 // --- INITIALIZATION HELPERS ---
 const acquireLock = async () => {
@@ -2662,6 +2801,16 @@ const _updateLogPill = (logs) => {
     pill.classList.add('fcc-log-pill-flash');
 };
 
+// What a press in the list says while the list is up (review 3, R3-4: a 📝 Read the report
+// that couldn't open its window said so only in a toast, whose layer is under the list, and
+// drawn where the list is): a line of the list's own, under its title. '' clears it.
+window.logPillNotice = (msg) => {
+    const el = document.getElementById('fcc-log-pill-notice');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.style.display = msg ? 'block' : 'none';
+};
+
 window.openLogPillOverlay = () => {
     // Snapshot the latest logs and render them in a mountOverlay so the
     // panel sits above any modal stack. Closing marks every entry as seen.
@@ -2682,6 +2831,7 @@ window.openLogPillOverlay = () => {
                     <div style="font-weight:bold; font-size:1.1em; color:#0ff;">📡 Activity Log</div>
                     <button id="fcc-log-pill-close" class="btn btn-sm btn-outline-info">Close</button>
                 </div>
+                <div id="fcc-log-pill-notice" class="fcc-log-pill-notice" role="alert" style="display:none;"></div>
                 <div style="overflow-y:auto; font-family:monospace; font-size:0.85rem;
                             background:#0a0a0a; padding:8px; border:1px solid #333; flex:1 1 auto;">
                     ${rows}
@@ -2714,8 +2864,12 @@ window.openLogPillOverlay = () => {
 // L206: render path extracted to _renderLogsPayload so the bulk-pulse
 // dispatcher can hand pre-fetched data directly into the renderer without
 // triggering another /api/logs round-trip.
-const _renderLogsPayload = (d, force = false) => {
+// `opts.sentAt`: when this answer was asked for, on the page's own clock.
+const _renderLogsPayload = (d, force = false, opts = null) => {
     if (!d) return;
+    // Above the hash check, so an answer it dropped as stale can't leave the
+    // next one, the same text, unread (Group 58).
+    _syncAuditSignal(d, opts);
     // --- NO WIGGLE CHECK ---
     const contentHash = JSON.stringify(d);
     if (!force && state.lastLogHash === contentHash) return;
@@ -2729,6 +2883,12 @@ const _renderLogsPayload = (d, force = false) => {
     // would skip the catch-up render and leave the panel stale.)
     const logsEl = state.logsPaused ? null : document.getElementById('live-logs');
     if (logsEl && d.logs) {
+        // The keyboard on a report line's 📝 Read the report stays on that line's 📝 through
+        // the redraw (Group 58, review 3): every redraw replaces the buttons, so the keyboard
+        // fell to the page, and the report window's Close, which gives the keyboard back to
+        // the 📝 it was asked from, found it gone.
+        const had = document.activeElement;
+        const keep = (had && had !== logsEl && logsEl.contains(had) && had.dataset) ? had.dataset.auditReport : null;
         logsEl.innerHTML = d.logs.map(l => {
             let extraHtml = '';
             let extraClass = '';
@@ -2741,6 +2901,11 @@ const _renderLogsPayload = (d, force = false) => {
             }
             return `<div class="log-${l.type}${extraClass}">[${l.time}] ${l.msg}${extraHtml}</div>`;
         }).join('');
+        if (keep) {
+            const again = Array.from(logsEl.querySelectorAll('.fcc-audit-report-open'))
+                .find((b) => b.dataset.auditReport === keep);
+            if (again) { try { again.focus({ preventScroll: true }); } catch (_) { /* noop */ } }
+        }
     }
     _updateLogPill(d.logs || []);
 
@@ -2749,14 +2914,109 @@ const _renderLogsPayload = (d, force = false) => {
         if (sSpool) sSpool.className = `status-dot ${d.status.spoolman ? 'status-on' : 'status-off'}`;
     }
 
-    if (d.audit_active !== undefined && d.audit_active !== state.lastAuditState) {
-        state.lastAuditState = d.audit_active;
-        state.auditActive = d.audit_active;
-        if (window.updateAuditVisuals) window.updateAuditVisuals();
-    }
-
     _syncBulkMoveSignal(d);
 };
+
+// The page's own clock, which a wall-clock step can't move (the heartbeat's
+// sentAt, Group 57 review).
+const _pageClock = () => ((typeof performance !== 'undefined' && performance && typeof performance.now === 'function')
+    ? performance.now() : Date.now());
+window.fccPageClock = _pageClock;
+
+// The page's own date, for a mark the server stamps with a day: its clock may be
+// UTC, where the evening is already tomorrow.
+window.fccLocalDay = () => {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+
+// Which audit lost a spool (Group 58, spoolman_api.audit_lost_from's answer: `lost_from`,
+// {place, slot, on}; `slot` and `on` are '' on an older note) in the words every
+// surface shows: `where` ("LR-MDB-1 slot 2") and `by` ("the audit of LR-MDB-1 slot 2
+// on 2026-11-01", spoolman_api.audit_lost_words' twin). null when none did.
+window.auditLostWords = (lost) => {
+    if (!lost || !lost.place) return null;
+    const where = lost.slot ? `${lost.place} slot ${lost.slot}` : String(lost.place);
+    return { where, by: `the audit of ${where}${lost.on ? ` on ${lost.on}` : ''}` };
+};
+
+// Which run of FCC an audit's id belongs to: logic.new_audit_id is <boot token>-<n>.
+const _auditRun = (id) => {
+    const text = String(id);
+    const at = text.lastIndexOf('-');
+    return at < 0 ? text : text.slice(0, at);
+};
+
+// An audit this page believed in is gone, and none of its own requests ended
+// it. Says why from the server's word: audit_end names how the last audit ended.
+// None, or an id from another run of FCC, is a restart (the session lives in FCC's
+// memory). A later audit's id from this same run is no restart: the one this page
+// believed in ended elsewhere, and that one after it (a hidden panel hears only
+// the heartbeat, and both can fall between two ticks). An audit that ended under
+// the page matters: the scans it was taking go to the buffer now, and the next
+// location label moves the buffer.
+const _sayAuditEndedUnderPage = (end) => {
+    if (end && end.id != null && end.id === state.auditEndedHere) return;
+    const same = !!end && (state.auditId == null || end.id === state.auditId);
+    const sameRun = same || (!!end && _auditRun(end.id) === _auditRun(state.auditId));
+    const idle = state.auditIdleMin ? `idle for ${state.auditIdleMin} minutes` : 'left idle';
+    const how = !sameRun ? 'FCC restarted' : (same && end.why === 'idle' ? idle : 'elsewhere');
+    const place = (same && end.location) || state.auditLocation || '';
+    const msg = `The audit${place ? ` of ${place}` : ''} ended (${how}): scans go to the buffer again.`;
+    showToast(msg, 'warning', 7000);
+    if (window.logClientEvent) window.logClientEvent(`⚠️ ${window.escHtml ? window.escHtml(msg) : msg}`, 'WARNING');
+};
+
+// Group 58: the one owner of what the heartbeat says about an audit, for both
+// its shapes (/api/logs and a paused log's `status`) and the panel's own poll,
+// which sees an end first. It compares against what this page believes, not
+// against the last heartbeat, so a wrong belief heals at the next tick: a refused
+// start used to sit there until a reload, turning the tile into a disguised
+// Cancel. `opts.sentAt` (page clock): an answer asked for before this page last
+// changed its mind says nothing about now, and a heartbeat takes seconds. While
+// one of this page's own requests is out, the "none" may be its own Done or
+// Cancel and its answer will say so: warning here would cry wolf on every
+// scanned Done, because the panel's 2 s poll can land before that answer.
+// Which audit runs, and where, comes from here too (a hidden panel has no poll): a
+// scan is stamped with the id (inv_cmd.js), so an old one would have every scan
+// refused while another audit runs. An answer sent before the place was last learned
+// says nothing about it, or about the id: a heartbeat can take seconds, and a slow one
+// took the place back off the pill.
+const _syncAuditSignal = (src, opts = null) => {
+    if (!src) return;
+    const said = src.audit_active !== undefined ? src.audit_active : src.active;
+    if (said === undefined) return;
+    const active = !!said;
+    const sentAt = opts ? opts.sentAt : null;
+    if (sentAt != null && sentAt < state.auditChangedAt) return;
+    if (!active && state.auditActive && state.auditRequestsOut > 0) return;
+    const first = state.lastAuditState === null;
+    state.lastAuditState = active;
+    if (active && !(sentAt != null && sentAt < state.auditLocationAt)) {
+        if (src.audit_id != null) state.auditId = src.audit_id;
+        if (src.audit_location !== undefined && (src.audit_location || '') !== state.auditLocation) {
+            state.auditLocation = src.audit_location || '';
+            state.auditLocationAt = sentAt != null ? sentAt : _pageClock();
+            if (window.updateAuditPill) window.updateAuditPill();
+        }
+    }
+    if (active === state.auditActive) {
+        if (first && window.updateAuditVisuals) window.updateAuditVisuals();
+        return;
+    }
+    state.auditActive = active;
+    // Two answers can pass each other: the older one mustn't change it back
+    // and have the next tick warn a second time.
+    state.auditChangedAt = sentAt != null ? sentAt : _pageClock();
+    if (!active) {
+        _sayAuditEndedUnderPage(src.audit_end);
+        state.auditLocation = '';
+        state.auditId = null;
+    }
+    if (window.updateAuditVisuals) window.updateAuditVisuals();
+};
+window._syncAuditSignal = _syncAuditSignal;
 
 // L298 Phase 2/3 — sync the bulk-move session so a session started/ended
 // ANYWHERE (another tab, a page reload, the idle watchdog) repaints this tab's
@@ -2795,7 +3055,8 @@ const updateLogState = (force = false) => {
     // Load is unchanged — this is the rate an unpaused dashboard already polls.
     if (_updateLogStateInflight) return;
     _updateLogStateInflight = true;
-    fetch('/api/logs').then(r => r.json()).then(d => _renderLogsPayload(d, force))
+    const sentAt = _pageClock();
+    fetch('/api/logs').then(r => r.json()).then(d => _renderLogsPayload(d, force, { sentAt }))
         .catch(e => console.warn("updateLogState failed:", e))
         .finally(() => { _updateLogStateInflight = false; });
 };
@@ -2922,7 +3183,27 @@ const closeModal = (id) => {
     }
     state.activeModal = null;
 };
-const requestConfirmation = (msg, cb) => { document.getElementById('confirm-msg').innerText = msg; state.pendingConfirm = cb; _confirmGeneration++; _showGatingModal('confirmModal'); state.activeModal = 'confirm'; };
+// #confirmModal's message keeps a place id whole (Derek's look of 2026-11-04: Undo Last
+// Move's question read "SHELF-2- / R3"), as fccKeepWhole keeps a button's, and wraps at
+// its spaces. Its text is escaped here, and a line break kept as innerText kept it. An id
+// longer than the line itself (a very long one on a phone at Extra Large) breaks at its
+// hyphens again, measured once the dialog is shown, as fccFitQuestion does a question's.
+const _confirmMsgHtml = (msg) => fccKeepWhole(String(msg == null ? '' : msg)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')).replace(/\r?\n/g, '<br>');
+const _fitConfirmMsg = () => {
+    const el = document.getElementById('confirm-msg');
+    if (!el || !el.classList) return;
+    el.classList.remove('fcc-keep-whole-off');
+    if (el.querySelector('.fcc-keep-whole') && el.clientWidth > 0 && el.scrollWidth > el.clientWidth + 1) {
+        el.classList.add('fcc-keep-whole-off');
+    }
+};
+document.addEventListener('shown.bs.modal', (e) => { if (e.target && e.target.id === 'confirmModal') _fitConfirmMsg(); });
+const requestConfirmation = (msg, cb) => {
+    document.getElementById('confirm-msg').innerHTML = _confirmMsgHtml(msg);
+    _fitConfirmMsg();
+    state.pendingConfirm = cb; _confirmGeneration++; _showGatingModal('confirmModal'); state.activeModal = 'confirm';
+};
 // Take the callback and null it BEFORE running it: a callback that re-prompts
 // synchronously arms a NEW pendingConfirm, which a trailing null would wipe.
 const confirmAction = (y) => { const cb = state.pendingConfirm; state.pendingConfirm = null; closeModal('confirmModal'); if (y && cb) cb(); };
@@ -3151,16 +3432,12 @@ const _dashboardPulseTick = () => {
 
             // logs / status renderer — handles status dots + audit visuals + log entries
             if (payload.logs) {
-                _renderLogsPayload(payload.logs);
+                _renderLogsPayload(payload.logs, false, { sentAt });
             } else if (payload.status) {
                 // No log entries but still got status — repaint the dot only.
                 const sSpool = document.getElementById('st-spoolman');
                 if (sSpool) sSpool.className = `status-dot ${payload.status.spoolman ? 'status-on' : 'status-off'}`;
-                if (payload.status.audit_active !== undefined && payload.status.audit_active !== state.lastAuditState) {
-                    state.lastAuditState = payload.status.audit_active;
-                    state.auditActive = payload.status.audit_active;
-                    if (window.updateAuditVisuals) window.updateAuditVisuals();
-                }
+                _syncAuditSignal(payload.status, { sentAt });
                 // Same bulk-move sync the logs branch runs — this is the branch a
                 // PAUSED Activity Log takes, and it's the only bulk-move signal
                 // such a tab receives (updateLogState early-returns while paused).
