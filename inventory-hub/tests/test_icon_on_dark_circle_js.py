@@ -451,6 +451,8 @@ SITS = r"""(s) => { const c = document.querySelector(s); const b = c.closest('bu
              left: f(q.left - r.left), top: f(q.top - r.top), bottom: f(r.bottom - q.bottom),
              words: lines.length ? f((Math.min(...lines.map((x) => x.top)) + Math.max(...lines.map((x) => x.bottom))) / 2
                                      - (box.top + box.bottom) / 2) : null,
+             right: lines.length ? f(r.right - Math.max(...lines.map((x) => x.right))) : null,
+             gap: lines.length ? f(Math.min(...lines.map((x) => x.left)) - q.right) : null,
              button: [f(r.width), f(r.height)], circle: f(q.width) }; }"""
 
 
@@ -483,7 +485,16 @@ def test_the_circle_sits_centred_top_to_bottom_with_even_space_to_its_left(icons
     what = f"{which} at {size}: {got}"
     assert abs(got["dy"]) <= MIDDLE_PX, what
     assert got["words"] is not None and abs(got["words"]) <= WORDS_PX, what
-    assert abs(got["left"] - got["top"]) <= EVEN_PX, what
+    if which == "load-report":
+        # A button as wide as what it holds: the space to the circle's left is the space above it.
+        assert abs(got["left"] - got["top"]) <= EVEN_PX, what
+    else:
+        # The dock's column is wider than what it holds (Derek, 2026-11-06: tighten the gap):
+        # the circle and its words are centred together, the space to the circle's left the
+        # space to the words' right, and they are one word space apart, as in Load report.
+        other = icons.evaluate(SITS, _load_report(icons))
+        assert abs(got["left"] - got["right"]) <= EVEN_PX, what
+        assert abs(got["gap"] - other["gap"]) <= EVEN_PX, (what, other)
 
 
 # The phone's dock: how far Needs a label runs out of its column, and whether its circle's

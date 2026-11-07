@@ -3199,8 +3199,10 @@ button.fcc-audit-tile:focus-visible { outline: none; }
    (the dock's Needs a label, Settings' Load report): the circle, a space and its words
    (.fcc-ico-words) in a flex row, each centred top to bottom. The circle's top and bottom
    margins keep the button as tall as with its words alone, its left one reaches into the
-   padding so the space to its left is the space above it (within a pixel), the words take
-   the rest of the width, centred in it, and the row's gap is the word space it drops. Set
+   padding so the space to its left is the space above it (within a pixel), the words follow
+   it at one word space (the row's gap, the space a flex row drops), and in a button wider than
+   both (the dock's Needs a label) the two are centred together (Derek, 2026-11-06: tighten
+   the gap, which was twice Load report's). Set
    in the line of words, as it was, vertical-align: middle put the circle's middle on the
    words' x-height, 2 px under the button's, and a centred line left it 9.4 px from Needs a
    label's edge against 6.3 above; the square centred the margins made for words after it,
@@ -3245,10 +3247,11 @@ button.fcc-audit-tile:focus-visible { outline: none; }
 .fcc-ico-row {
     display: flex;
     align-items: center;
+    justify-content: center;   /* circle and words centred together in a wide button */
     column-gap: 0.275em;        /* the word space between them, which a flex row drops */
 }
 .fcc-ico-row > .fcc-ico-on-light { margin: -0.3em 0.05em -0.3em -0.3em; }
-.fcc-ico-row > .fcc-ico-words { flex: 1 1 auto; }
+.fcc-ico-row > .fcc-ico-words { flex: 0 1 auto; margin-right: -0.3em; }   /* as far into the padding as the circle's left, so the two balance */
 /* A found tile's own 🏷️ (Derek, 2026-11-03, (a)): its own button, never inside the tile's,
    at the end of the row under the name (2026-11-04). Marked here: the Needs a label yellow,
    the tag on its dark backing. A flag up before the audit: a dashed yellow edge. */
@@ -3439,6 +3442,7 @@ button.fcc-audit-tile:focus-visible { outline: none; }
        "Needs" at Extra Large, so the button ran out of its column (8.8 px past it at 360 px
        wide). It rides their first line (vertical-align: middle). */
     .fcc-audit-dock-col .fcc-ico-row { display: block; }
+    .fcc-audit-dock-col .fcc-ico-row > .fcc-ico-words { margin-right: 0; }
 }
 /* The Last found box, in the dock. */
 .fcc-audit-strip {
