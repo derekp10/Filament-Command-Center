@@ -4,7 +4,7 @@
 **Estimated effort:** MEDIUM–LARGE (~6–12 h, 1–2 sessions), after Derek's decisions. 58.1 ~2–4 h · 58.2 ~1–2 h · 58.3 ~2–4 h (about ten small traps) · 58.4 ~1 h · 58.5 ~0.5–1 h · 58.6 depends on his pick (a scanning pass is his time, not code).
 **Risk:** **MEDIUM.** Audit's Done moves spools, including off a head, with no undo today; any change to it is a write path. 58.6 touches prod data (read-only until Derek picks a repair).
 
-> **2026-11-06: DONE, merged to `dev` (Derek: "Yeah, looks good."; `main` held). 58.6 and 58.7 stay open as standalone buglist items.**
+> **2026-11-06: DONE, merged to `dev` `d8c073c` (Derek: "Yeah, looks good."; `main` held). 58.6 and 58.7 stay open as standalone buglist items.**
 > **2026-11-03: building Derek's answers (the section right below): tile QRs, 🔎 Find a spool, an Extra taken back, 🖨️ Add to print queue, and Done filing the Extras (for his look). Then a review, fixes, the sweep, and the morning walk with pictures.**
 > **2026-11-04: Derek's look at the round's pictures (section K): the tiles laid out again (the name wraps, the words and the 🏷️ go under it, one height per group) and the picture-taker's yellows, built with this round's pictures; its owed CLAUDE.md text is at K's end. Next: the independent review and one fix pass.**
 > **2026-11-05: review 3's fourteen findings fixed, the 🏷️ and 🔎 on their dark circle drawn, a keyboard a log redraw took given back, and the families run together (section L; its owed CLAUDE.md text at its end, the earlier blocks it changes amended in place). Next: Derek's look at the pictures, then his OK to merge.**
