@@ -62,7 +62,9 @@ class FakeSpoolman:
             return None
         return {"id": int(sid), **copy.deepcopy(rec)}
 
-    def update_spool(self, sid, data):
+    def update_spool(self, sid, data, archive_on_empty=True):
+        """`archive_on_empty` is update_spool's own keyword (Group 54.7): this
+        stand-in runs no archive edge, so it has nothing to switch off."""
         self.writes.append((int(sid), copy.deepcopy(data)))
         if int(sid) in self.reject_ids or str(data.get("location", "")).upper() in self.reject_locations:
             logic.spoolman_api.LAST_SPOOLMAN_ERROR = "400: rejected by test"
@@ -189,11 +191,15 @@ class WireSpoolman(FakeSpoolman):
         return MagicMock(ok=True, status_code=200,
                          json=MagicMock(return_value={"id": sid, **copy.deepcopy(rec)}))
 
-    def update_spool(self, sid, data):
+    def update_spool(self, sid, data, archive_on_empty=True):
+        """The REAL update_spool. `archive_on_empty` (Group 54.7) goes on only when
+        it is False, as /api/spool/update passes it, so the harness still drives
+        an update_spool from before the keyword."""
         self.writes.append((int(sid), copy.deepcopy(data)))
+        kw = {} if archive_on_empty else {"archive_on_empty": False}
         with patch.object(logic.spoolman_api.requests, "get", side_effect=self._http_get), \
              patch.object(logic.spoolman_api.requests, "patch", side_effect=self._http_patch):
-            return REAL_UPDATE_SPOOL(sid, copy.deepcopy(data))
+            return REAL_UPDATE_SPOOL(sid, copy.deepcopy(data), **kw)
 
 
 class WeighedWireSpoolman(WireSpoolman):

@@ -653,13 +653,23 @@ def _release_box_on_archive(sid, data, existing, pre_archived):
         state.logger.warning(f"42.1b archive-edge box release skipped for #{sid}: {e}")
 
 
-def update_spool(sid, data):
+def update_spool(sid, data, archive_on_empty=True):
     """Returns the updated spool dict on success, or None on failure.
 
     The last Spoolman error message is stashed in module-global
     LAST_SPOOLMAN_ERROR so callers can surface the actual rejection
     reason to the UI. Use update_spool_or_raise for paths that must
     never silent-fail (slot assignment, label-confirm, force-move).
+
+    `archive_on_empty` (Group 54.7; Derek, 2026-11-07: the weigh screens'
+    "Auto-Archive 0g" switch off means off): False skips the archive edge
+    (`_auto_archive_on_empty`) entirely, so a weight write that leaves nothing
+    is written as it is: no `archived` added, no location blank, no pre-archive
+    note, no trail blanks, so no "Auto-archived" line and no box release (a
+    caller's own `archived` / `location` still go as sent). The refill edge
+    still runs, so a refill still un-archives a spool, and an archived spool
+    weighed to 0 g stays archived where it is. /api/spool/update passes it only
+    for a request whose `auto_archive` is JSON false.
     """
     global LAST_SPOOLMAN_ERROR
     sm_url, _ = config_loader.get_api_urls()
@@ -682,15 +692,17 @@ def update_spool(sid, data):
                 state.logger.warning(f"Capping used_weight {data['used_weight']} to initial_weight {current_initial} for Spool {sid}")
                 data['used_weight'] = current_initial
 
-        # Auto-archive + unassign when remaining weight hits 0.
+        # Auto-archive + unassign when remaining weight hits 0, unless the caller
+        # switched the edge off (Group 54.7).
         pre_archived = existing.get('archived', False)
-        _auto_archive_on_empty(
-            data,
-            existing.get('initial_weight'),
-            existing.get('used_weight'),
-            existing_location=existing.get('location'),
-            existing_filament_weight=(existing.get('filament') or {}).get('weight'),
-        )
+        if archive_on_empty:
+            _auto_archive_on_empty(
+                data,
+                existing.get('initial_weight'),
+                existing.get('used_weight'),
+                existing_location=existing.get('location'),
+                existing_filament_weight=(existing.get('filament') or {}).get('weight'),
+            )
         if data.get('archived') and not pre_archived:
             try:
                 state.add_log_entry(

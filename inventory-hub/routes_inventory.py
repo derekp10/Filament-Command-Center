@@ -1457,11 +1457,20 @@ def api_spool_update():
     a toolhead or a Printer row is refused with nothing written (`blocked_reason`
     "toolhead" / "printer_row"), and any other new place blanks the slot and trail
     the spool left behind.
+
+    Group 54.7 (Derek, 2026-11-07: "Auto-Archive 0g" off means off): an optional
+    top-level `auto_archive` beside `id` and `updates`, the weigh screen's switch.
+    Only JSON false turns update_spool's archive-on-empty edge off
+    (`archive_on_empty=False`): a spool weighed to 0 g then stays in stock where it
+    is, and `auto_archived` is false. Absent, true or anything else keeps the rule
+    as it was. The keyword is passed only for false, so a two-argument stand-in for
+    update_spool still serves every other request.
     """
     try:
         data = request.json
         spool_id = data.get('id')
         updates = data.get('updates')
+        archive_on_empty = data.get('auto_archive') is not False
 
         if not spool_id or not updates:
             return jsonify({"status": "error", "msg": "Missing id or updates"})
@@ -1474,7 +1483,10 @@ def api_spool_update():
             if refusal:
                 return jsonify(refusal)
 
-        res = spoolman_api.update_spool(spool_id, updates)
+        if archive_on_empty:
+            res = spoolman_api.update_spool(spool_id, updates)
+        else:
+            res = spoolman_api.update_spool(spool_id, updates, archive_on_empty=False)
         if not res:
             err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the update"
             return jsonify({"status": "error", "msg": f"Failed to update spool: {err}", "error": err})
