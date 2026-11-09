@@ -53,6 +53,13 @@ let wizardState = {
     // none. Edit Spool doesn't save an inherited one untouched
     // (wizardSpoolEmptyWeightIsInherited).
     spoolEmptyWeightFrom: null,
+    // Group 54 review (R2-1, R2-3): true once New Spool or Clone has filled the
+    // spool's price and empty weight from its filament; those boxes then follow a
+    // filament picked afterwards (wizardFollowFilament). Reset by wizardReset.
+    spoolBoxesFollowFilament: false,
+    // The filaments wizardSearchExisting listed last (/api/filaments' records), so a
+    // pick from that list knows the picked filament's price and empty weight.
+    existingFilaments: [],
 };
 
 // Empty-spool-weight inheritance helper (resolveEmptySpoolWeight) lives in
@@ -817,6 +824,101 @@ const wizardSpoolEmptyWeightIsInherited = () =>
     (wizardState.spoolEmptyWeightFrom === 'filament' || wizardState.spoolEmptyWeightFrom === 'vendor')
     && !wizardNativeTouched('spool', 'spool_weight');
 
+// Group 54 review (R2-1, R2-3): New Spool and Clone fill the spool's price and
+// empty weight from its filament, marked as inherited, and the person can still
+// pick another filament before Save (the Existing Filament list, 🔍 Advanced
+// Search, a scan that recognises one, New Manual Form, Import Database). The boxes
+// kept the first filament's: "$25 ↩ from filament" under a filament with no price,
+// and its 200 g, which Create then saved as the new spool's own (L34). A box that
+// still shows what its filament gives (marked, or empty where that filament gave
+// nothing) and that the person hasn't typed in now follows the filament Save will
+// use. A clone's own values (its source spool's) stay, and so does a typed one.
+// Only those two openers fill the boxes from a filament, so only theirs follow one
+// (wizardState.spoolBoxesFollowFilament): the plain wizard's never filled from a
+// filament, and don't start now.
+const _wizBoxValue = (id) => {
+    const el = document.getElementById(id);
+    return el && el.value != null ? String(el.value) : '';
+};
+const _wizPriceFollowsFilament = () => !wizardNativeTouched('spool', 'price')
+    && (wizardState.spoolPriceFrom === 'filament' || _wizBoxValue('wiz-spool-price') === '');
+const _wizEmptyWeightFollowsFilament = () => !wizardNativeTouched('spool', 'spool_weight')
+    && (wizardState.spoolEmptyWeightFrom === 'filament' || wizardState.spoolEmptyWeightFrom === 'vendor'
+        || _wizBoxValue('wiz-spool-empty_weight') === '');
+
+// Puts what `fil` gives ({price, spool_weight, vendor}, a filament's record) into
+// the boxes that follow it: its price marked "↩ from filament", its empty weight
+// (else its brand's) with its badge, or nothing where it has none. `fil` null means
+// nothing is known of it (its read failed or is on its way): those boxes then show
+// nothing, never the last filament's, and Save sends neither.
+const _wizFollowApply = (fil) => {
+    let changed = false;
+    if (_wizPriceFollowsFilament()) {
+        const el = document.getElementById('wiz-spool-price');
+        const price = fil && fil.price != null && fil.price !== '' ? fil.price : null;
+        if (el) el.value = price != null ? price : '';
+        wizardState.spoolPriceFrom = price != null ? 'filament' : null;
+        window.wizardRefreshSpoolPriceMark();
+        changed = true;
+    }
+    if (_wizEmptyWeightFollowsFilament()) {
+        const { value, source } = resolveEmptySpoolWeightSource({
+            filamentWt: fil ? fil.spool_weight : null,
+            vendor: fil ? fil.vendor : null,
+        });
+        window.wizardSetSpoolEmptyWeightInherited(value, source);
+        // A gross reading in the scale box was worked out against the old empty
+        // weight: work it out again against this one.
+        if (_wizBoxValue('wiz-spool-scale').trim() !== '') window.wizardCalcUsedWeight();
+        changed = true;
+    }
+    if (changed && window.wizardRefreshSectionSummary) {
+        window.wizardRefreshSectionSummary('wiz-spool-metadata-panel');
+        window.wizardRefreshSectionSummary('wiz-spool-weight-panel');
+    }
+};
+
+const _wizKnownFilament = (id) => {
+    const key = String(id);
+    for (const list of [wizardState.existingFilaments, wizardState.allFilaments]) {
+        const hit = Array.isArray(list) ? list.find(f => f && String(f.id) === key) : null;
+        if (hit) return hit;
+    }
+    return null;
+};
+
+// The wizard's filament may have changed: the boxes that follow it show what the
+// filament Save will use gives. In Existing Filament mode that is the selected
+// filament (`record` when the caller has it, else the lists the wizard read, else
+// a read of its own); in New Manual Form and Import Database it is a new filament,
+// which has no price (the wizard has no price box for one) and the empty weight
+// its own form shows, else its brand's.
+window.wizardFollowFilament = (record = null) => {
+    if (!wizardState.spoolBoxesFollowFilament) return;
+    const mode = wizardState.mode;
+    if (mode === 'manual' || mode === 'external') {
+        const vid = _wizBoxValue('wiz-fil-vendor-sel');
+        const vendor = vid ? ((wizardState.vendors || []).find(v => String(v.id) === String(vid)) || null) : null;
+        _wizFollowApply({ price: null, spool_weight: _wizBoxValue('wiz-fil-empty_weight'), vendor });
+        return;
+    }
+    if (mode !== 'existing') return;
+    const id = wizardState.selectedFilamentId;
+    if (id == null || String(id) === '') return;
+    const rec = (record && String(record.id) === String(id)) ? record : _wizKnownFilament(id);
+    if (rec) { _wizFollowApply(rec); return; }
+    _wizFollowApply(null);
+    fetch(`/api/filaments/${encodeURIComponent(id)}`)
+        .then(r => r.json())
+        .then(d => {
+            // Only while it is still the filament Save will use, in this session.
+            if (!wizardState.spoolBoxesFollowFilament || wizardState.mode !== 'existing'
+                || String(wizardState.selectedFilamentId) !== String(id)) return;
+            if (d && d.success && d.data && String(d.data.id) === String(id)) _wizFollowApply(d.data);
+        })
+        .catch(() => {});
+};
+
 const wizardReset = () => {
     wizardState.mode = 'manual';
     wizardState.touchedExtras = new Set();
@@ -824,6 +926,7 @@ const wizardReset = () => {
     // Group 54.8: nothing is shown from the filament until an open puts it there.
     wizardState.spoolPriceFrom = null;
     wizardState.spoolEmptyWeightFrom = null;
+    wizardState.spoolBoxesFollowFilament = false;
     wizardState.selectedFilamentId = null;
     wizardState.externalMetaData = null;
     wizardState.lockedAfterSuccess = false;
@@ -1281,6 +1384,9 @@ window.wizardSelectType = (mode, skipSearch = false) => {
 
         wizardValidateSubmit();
     }
+    // Group 54 review (R2-1, R2-3): New Manual Form and Import Database make a new
+    // filament, and Existing Filament goes back to the one selected there.
+    window.wizardFollowFilament();
 };
 
 window.wizardValidateSubmit = () => {
@@ -2703,6 +2809,8 @@ window.wizardSearchExisting = () => {
             sel.innerHTML = "";
             let count = 0;
             if (d.success && d.filaments) {
+                // Kept for a pick from this list (wizardFollowFilament).
+                wizardState.existingFilaments = d.filaments;
                 const terms = term.split(' ').map(t => t.trim()).filter(t => t.length > 0);
 
                 d.filaments.forEach(f => {
@@ -2726,12 +2834,16 @@ window.wizardSearchExisting = () => {
         });
 };
 
-window.wizardExistingSelected = () => {
+// `filament`: the picked filament's record when the caller has it (a scan that
+// recognised one); the list's own pick passes none.
+window.wizardExistingSelected = (filament = null) => {
     const sel = document.getElementById('wiz-existing-results');
     if (sel.value) {
         wizardState.selectedFilamentId = sel.value;
         document.getElementById('wiz-status-msg').innerHTML = `Selected Existing Filament ID: <strong>${sel.value}</strong>`;
         wizardValidateSubmit();
+        // Group 54 review (R2-1, R2-3): the spool's boxes follow the pick.
+        window.wizardFollowFilament(filament);
     }
 };
 
@@ -2762,6 +2874,8 @@ window.wizardOpenGlobalSearch = () => {
                     const sel = document.getElementById('wiz-existing-results');
                     sel.innerHTML = `<option value="${filId}" selected>${displayString}</option>`;
                     wizardValidateSubmit();
+                    // Group 54 review (R2-1, R2-3): the spool's boxes follow the pick.
+                    window.wizardFollowFilament(filData);
                 };
 
                 if (type === 'spool') {
@@ -2982,6 +3096,9 @@ window.applyFilamentFieldsFromTemplate = (temp) => {
     // Group 48.4: a blank Slicer Profile takes the one this source names (the
     // Prusament spool page's product line); nothing else fills it.
     window.wizardSuggestSlicerProfile({ lookup: temp.slicer_profile, source: temp.slicer_profile_source });
+    // Group 54 review (R2-3): the template is the new filament, so a spool box that
+    // follows the filament shows its empty weight now.
+    window.wizardFollowFilament();
 };
 
 // --- Group 48.4: fill a blank Slicer Profile --------------------------------------------
@@ -4508,6 +4625,9 @@ window.openCloneWizard = async (spoolId) => {
             document.getElementById('wiz-spool-comment').value = d.comment || "";
             // Price & Purchase Link
             window.wizardPrefillSpoolPrice(d.price, d.filament && d.filament.price);
+            // Group 54 review (R2-1, R2-3): what the boxes show from the filament
+            // follows a filament picked from here on (never the source spool's own).
+            wizardState.spoolBoxesFollowFilament = true;
             // Group 10.4 smart fallback: only prefill with the spool's OWN
             // purchase_url. If the spool has none but the filament does,
             // surface the filament URL as ghost placeholder text — saving
@@ -4584,6 +4704,9 @@ window.openNewSpoolFromFilamentWizard = async (filamentId) => {
             // L349: a brand-new spool has no price of its own — inherit the
             // filament's (d is the filament here, so d.price is the fallback).
             window.wizardPrefillSpoolPrice(null, d.price);
+            // Group 54 review (R2-1, R2-3): what the boxes show from the filament
+            // follows a filament picked from here on.
+            wizardState.spoolBoxesFollowFilament = true;
             // L351: show the filament's product link as inherited ghost text.
             wizardApplyProductLinkFallback(null, d.extra?.product_url);
 
@@ -5248,7 +5371,7 @@ window.wizardAutoSwitchToExisting = (filament, parsedTemplate) => {
     if (sel) {
         const name = `${filament.vendor?.name || 'Generic'} ${filament.material} - ${filament.name || 'Unknown'}`;
         sel.innerHTML = `<option value="${filament.id}" selected>${name} (ID: ${filament.id})</option>`;
-        window.wizardExistingSelected();
+        window.wizardExistingSelected(filament);
     }
     const msg = document.getElementById('wiz-status-msg');
     if (msg) {

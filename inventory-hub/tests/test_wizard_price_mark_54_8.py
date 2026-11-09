@@ -333,6 +333,228 @@ def test_new_spools_and_clones_take_the_inherited_empty_weight_as_their_own(wiz,
     assert _save(wiz, CREATE)["spool_data"]["spool_weight"] == 200
 
 
+# --- the filament changes (Group 54 review, R2-1 / R2-3) -----------------------------------
+#
+# New Spool (or Clone) fills the spool's price and empty weight from its filament,
+# marked as inherited. The person can still pick another filament before Save: in
+# the Existing Filament list, by Advanced Search, by a scan that recognises one, or
+# by switching to New Manual Form / Import Database. The marked boxes kept the first
+# filament's values: the price "$25 ↩ from filament" under a filament with no price
+# (or another price), and the empty weight 200 "↩ from filament" under a filament
+# whose own is 180, which Create then saved as the new spool's own (L34). A box that
+# still shows what its filament gives now follows the filament Save will use; a
+# value the person typed, and a clone's own (its source spool's), stay.
+
+WEIGHT_SUMMARY = 'button.fcc-wiz-section-toggle[data-bs-target="#wiz-spool-weight-panel"] .fcc-wiz-section-summary'
+
+
+def _filament(fid, name, *, price=None, spool_wt=None, vendor_wt=None):
+    """A filament as /api/filaments lists it: Spoolman's own record, a field with no
+    value left out, its brand nested as `vendor`."""
+    fil = _details(fil_price=price, fil_wt=spool_wt, vendor_wt=vendor_wt)["filament"]
+    fil.update(id=fid, name=name)
+    return fil
+
+
+FIL_A = _filament(7, "Red", price=25.0, spool_wt=200.0)          # the opener's filament
+FIL_B = _filament(8, "Green", spool_wt=200.0)                     # no price
+FIL_C = _filament(9, "Blue", price=31.5, spool_wt=180.0)
+FIL_D = _filament(10, "Black", vendor_wt=170.0)                   # no price, no empty weight; its brand has one
+
+
+def _list(page, *fils):
+    page.evaluate("(f) => { window.__answers['/api/filaments'] = { success: true, filaments: f }; }", list(fils))
+
+
+def _pick(page, fid):
+    """The person picks another filament in the Existing Filament list: the list as
+    its search box fills it, then a click on the row (a real `change`)."""
+    page.evaluate("() => window.wizardSearchExisting()")
+    page.wait_for_function("(f) => !!document.querySelector(`#wiz-existing-results option[value='${f}']`)",
+                           arg=str(fid))
+    page.select_option("#wiz-existing-results", str(fid))
+    page.wait_for_function("(f) => String(wizardState.selectedFilamentId) === f", arg=str(fid))
+
+
+def _shown_summary(page, sel=SUMMARY):
+    """The collapsed summary as it shows now (not redrawn by the test)."""
+    return page.evaluate("(s) => document.querySelector(s).textContent.trim()", sel)
+
+
+def test_a_marked_price_follows_a_pick_of_a_filament_with_no_price(wiz):
+    """R2-1. RED on the base: the box kept 25 with "↩ from filament", and the summary
+    "$25 ↩ from filament", under a filament with no price."""
+    _list(wiz, FIL_A, FIL_B, FIL_C)
+    _open_new_spool(wiz)
+    assert (_value(wiz, PRICE), _badge(wiz)) == ("25", True)
+    _pick(wiz, 8)
+    assert _value(wiz, PRICE) == ""
+    assert _badge(wiz) is False
+    assert "$25" not in _shown_summary(wiz), _shown_summary(wiz)
+    body = _save(wiz, CREATE)
+    assert body["filament_id"] == "8", body
+    assert "price" not in body["spool_data"], _got(body["spool_data"], "price")
+
+
+def test_a_marked_price_follows_a_pick_of_a_filament_with_another_price(wiz):
+    """R2-1. RED on the base: 25, the first filament's."""
+    _list(wiz, FIL_A, FIL_B, FIL_C)
+    _open_new_spool(wiz)
+    _pick(wiz, 9)
+    assert (_value(wiz, PRICE), _badge(wiz)) == ("31.5", True)
+    assert _shown_summary(wiz).startswith("$31.5 ↩ from filament"), _shown_summary(wiz)
+    body = _save(wiz, CREATE)
+    assert body["filament_id"] == "9", body
+    assert "price" not in body["spool_data"], _got(body["spool_data"], "price")
+
+
+def test_an_inherited_empty_weight_follows_a_pick(wiz):
+    """R2-3. RED on the base: 200, the first filament's, kept in the box with its
+    badge and created as the new spool's own; the new filament's 180 never used."""
+    _list(wiz, FIL_A, FIL_B, FIL_C)
+    _open_new_spool(wiz)
+    assert (_value(wiz, EMPTY), _badge(wiz, EMPTY_BADGE)) == ("200", True)
+    _pick(wiz, 9)
+    assert (_value(wiz, EMPTY), _badge(wiz, EMPTY_BADGE)) == ("180", True)
+    assert wiz.locator("#wiz-spool-empty-inherited-source").inner_text() == "filament"
+    assert "tare 180g" in _shown_summary(wiz, WEIGHT_SUMMARY), _shown_summary(wiz, WEIGHT_SUMMARY)
+    assert _save(wiz, CREATE)["spool_data"]["spool_weight"] == 180
+
+
+def test_an_inherited_empty_weight_follows_to_the_new_filaments_brand(wiz):
+    """A filament with no empty weight of its own: its brand's, marked as the brand's
+    ("vendor", the badge's word). RED on the base: 200 "↩ from filament"."""
+    _list(wiz, FIL_A, FIL_D)
+    _open_new_spool(wiz)
+    _pick(wiz, 10)
+    assert (_value(wiz, EMPTY), _badge(wiz, EMPTY_BADGE)) == ("170", True)
+    assert wiz.locator("#wiz-spool-empty-inherited-source").inner_text() == "vendor"
+    assert _save(wiz, CREATE)["spool_data"]["spool_weight"] == 170
+
+
+def test_a_box_one_pick_left_empty_follows_the_next(wiz):
+    """$25, then a filament with no price (the box empty), then one at $31.50: the box
+    shows 31.5 marked, as a New Spool of that filament does. RED on the base: 25."""
+    _list(wiz, FIL_A, FIL_B, FIL_C)
+    _open_new_spool(wiz)
+    _pick(wiz, 8)
+    _pick(wiz, 9)
+    assert (_value(wiz, PRICE), _badge(wiz)) == ("31.5", True)
+
+
+def test_a_price_typed_before_the_pick_stays_and_is_sent(wiz):
+    """The person's own price never follows a filament. A pin: green on the base, red
+    on a fix that follows a typed price."""
+    _list(wiz, FIL_A, FIL_B, FIL_C)
+    _open_new_spool(wiz)
+    wiz.locator(PRICE).fill("19.5")
+    wiz.locator(EMPTY).fill("190")
+    _pick(wiz, 9)
+    assert (_value(wiz, PRICE), _badge(wiz)) == ("19.5", False)
+    assert (_value(wiz, EMPTY), _badge(wiz, EMPTY_BADGE)) == ("190", False)
+    sp = _save(wiz, CREATE)["spool_data"]
+    assert (sp["price"], sp["spool_weight"]) == (19.5, 190), sp
+
+
+def test_a_clones_own_price_and_empty_weight_stay_on_a_pick(wiz):
+    """A clone's own values are its source spool's (a sibling bought together), not
+    its filament's. A pin: green on the base, red on a fix that follows them."""
+    _list(wiz, FIL_A, FIL_B, FIL_C)
+    _open_clone(wiz, price=30.0, spool_wt=196.0)
+    _pick(wiz, 9)
+    assert (_value(wiz, PRICE), _badge(wiz)) == ("30", False)
+    assert (_value(wiz, EMPTY), _badge(wiz, EMPTY_BADGE)) == ("196", False)
+    sp = _save(wiz, CREATE)["spool_data"]
+    assert (sp["price"], sp["spool_weight"]) == (30, 196), sp
+
+
+def test_a_clone_with_nothing_of_its_own_follows_a_pick(wiz):
+    """RED on the base: 25 and 200, the first filament's."""
+    _list(wiz, FIL_A, FIL_B, FIL_C)
+    _open_clone(wiz, price=None, spool_wt=None)
+    _pick(wiz, 9)
+    assert (_value(wiz, PRICE), _badge(wiz)) == ("31.5", True)
+    assert (_value(wiz, EMPTY), _badge(wiz, EMPTY_BADGE)) == ("180", True)
+
+
+def test_advanced_search_picks_follow_too(wiz):
+    """The Existing Filament area's 🔍 Advanced Search (its pick's processFilament).
+    RED on the base: 25 and 200."""
+    _list(wiz, FIL_A, FIL_B)
+    wiz.evaluate("""(c) => {
+        window.__answers['/api/filaments/9'] = { success: true, data: c };
+        window.SearchEngine = { open: (o) => o.callback(9, 'filament') };
+    }""", FIL_C)
+    _open_new_spool(wiz)
+    wiz.locator("#area-existing button", has_text="Advanced Search").click()
+    wiz.wait_for_function("() => String(wizardState.selectedFilamentId) === '9'")
+    assert (_value(wiz, PRICE), _badge(wiz)) == ("31.5", True)
+    assert (_value(wiz, EMPTY), _badge(wiz, EMPTY_BADGE)) == ("180", True)
+    assert "price" not in _save(wiz, CREATE)["spool_data"]
+
+
+def test_a_filament_fcc_couldnt_read_shows_nothing_of_the_old_ones(wiz):
+    """Advanced Search picks a filament whose record FCC can't read: nothing is known
+    of its price or empty weight, so the boxes show nothing, never the first
+    filament's, and Create saves neither. RED on the base: 25 and 200, the 200 saved
+    as the new spool's own."""
+    _list(wiz, FIL_A)
+    wiz.evaluate("""() => {
+        window.__answers['/api/filaments/9'] = { success: false, msg: 'Filament not found' };
+        window.SearchEngine = { open: (o) => o.callback(9, 'filament') };
+    }""")
+    _open_new_spool(wiz)
+    wiz.locator("#area-existing button", has_text="Advanced Search").click()
+    wiz.wait_for_function("() => String(wizardState.selectedFilamentId) === '9'")
+    wiz.wait_for_timeout(100)                        # the record's read, answered
+    assert (_value(wiz, PRICE), _badge(wiz)) == ("", False)
+    assert (_value(wiz, EMPTY), _badge(wiz, EMPTY_BADGE)) == ("", False)
+    sp = _save(wiz, CREATE)["spool_data"]
+    assert "price" not in sp and "spool_weight" not in sp, sp
+
+
+def test_a_new_manual_filament_takes_the_marks_away(wiz):
+    """New Manual Form: the spool's filament is a new one, which has no price (the
+    wizard has no price box for a filament) and only the empty weight its own form
+    gives. RED on the base: 25 and 200 still marked as "the filament's"."""
+    _list(wiz, FIL_A)
+    _open_new_spool(wiz)
+    wiz.locator("#btn-type-manual").click()
+    assert (_value(wiz, PRICE), _badge(wiz)) == ("", False)
+    assert (_value(wiz, EMPTY), _badge(wiz, EMPTY_BADGE)) == ("", False)
+    assert "$25" not in _shown_summary(wiz), _shown_summary(wiz)
+    wiz.locator("#wiz-fil-color_name").fill("Test Red")
+    sp = _save(wiz, CREATE)["spool_data"]
+    assert "price" not in sp and "spool_weight" not in sp, sp
+
+
+def test_a_scan_that_recognises_a_filament_follows_it(wiz):
+    """New Manual Form, then a Prusament scan that recognises a filament on record
+    (wizardAutoSwitchToExisting): the boxes show that filament's. RED on the base:
+    25 and 200 (the manual form never took them away either)."""
+    _list(wiz, FIL_A, FIL_C)
+    _open_new_spool(wiz)
+    wiz.locator("#btn-type-manual").click()
+    wiz.evaluate("(c) => window.wizardAutoSwitchToExisting(c, null)", FIL_C)
+    assert wiz.evaluate("() => [wizardState.mode, String(wizardState.selectedFilamentId)]") == ["existing", "9"]
+    assert (_value(wiz, PRICE), _badge(wiz)) == ("31.5", True)
+    assert (_value(wiz, EMPTY), _badge(wiz, EMPTY_BADGE)) == ("180", True)
+
+
+def test_the_plain_wizards_boxes_still_never_fill_from_a_pick(wiz):
+    """Claude's call: only New Spool and Clone fill the spool's boxes from a filament,
+    so only there do they follow one. The plain wizard (📦 Add Inventory) with a
+    filament picked from the list keeps both boxes empty, as before. A pin: green on
+    the base, red on a fix that fills them on every pick."""
+    _list(wiz, FIL_A, FIL_C)
+    wiz.evaluate("() => window.openWizardModal()")
+    wiz.wait_for_function("() => !!document.getElementById('wiz_fil_ef_needs_label_print')")
+    wiz.locator("#btn-type-existing").click()
+    _pick(wiz, 9)
+    assert (_value(wiz, PRICE), _badge(wiz)) == ("", False)
+    assert (_value(wiz, EMPTY), _badge(wiz, EMPTY_BADGE)) == ("", False)
+
+
 # --- the real dashboard -------------------------------------------------------------------
 
 @pytest.mark.usefixtures("require_server")
