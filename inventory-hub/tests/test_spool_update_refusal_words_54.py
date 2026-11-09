@@ -30,6 +30,19 @@ save" stands; unreadable, the answer says FCC can't tell and to check the weight
 first (`may_have_saved`). A refusal Spoolman answered, or FCC's own before
 sending, wrote nothing and is never read back. refusal_words also puts a cut-off
 or unreadable answer in words. The tests marked "RED on 2c4b6f6" fail there.
+
+Review R6 (2026-11-09): a save that never left FCC (requests' "Max retries
+exceeded": a refused or timed-out connect, Spoolman down) is "Couldn't save" and
+is never read back (R6-1: it read "Couldn't tell whether … saved: FCC couldn't
+reach Spoolman"); a connection Spoolman dropped after taking the request reads
+"Spoolman dropped the connection before answering." (R6-2); a "can't tell"
+answer to a weigh to empty says saving the same reading again is safe and
+finishes it (R6-3: the weight is capped at empty, so no mode adds twice, and the
+re-save's unassign takes the spool off its place), any other says to check the
+weight FCC shows first, its words always ending a sentence (R6-8); a weight left
+above the spool's capacity, which Spoolman stores as the capacity, counts as
+landed (R6-6). The fake's PATCH now does Spoolman's arithmetic for a weight left
+(used = max(initial - left, 0)). The tests marked "RED on 6e499a2" fail there.
 """
 from __future__ import annotations
 
@@ -63,6 +76,17 @@ BODY_422 = {"detail": [{"type": "float_parsing", "loc": ["body", "used_weight"],
                         "msg": "Input should be a valid number, unable to parse string as a number", "input": "x"}]}
 BODY_500 = {"message": "database is locked"}
 ABORTED = "('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
+RESET = ("('Connection aborted.', ConnectionResetError(10054, 'An existing connection was forcibly closed by "
+         "the remote host', None, 10054, None))")
+# requests' MaxRetryError texts: raised only while connecting, so nothing was sent.
+CONNECT_REFUSED = ("HTTPConnectionPool(host='192.168.1.29', port=7913): Max retries exceeded with url: "
+                   "/api/v1/spool/57 (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object "
+                   "at 0x7f2c>: Failed to establish a new connection: [Errno 111] Connection refused'))")
+CONNECT_TIMEOUT = ("HTTPConnectionPool(host='192.168.1.29', port=7913): Max retries exceeded with url: "
+                   "/api/v1/spool/57 (Caused by ConnectTimeoutError(<urllib3.connection.HTTPConnection object "
+                   "at 0x7f2c>, 'Connection to 192.168.1.29 timed out. (connect timeout=15)'))")
+CHECK = " Check the weight FCC shows for it before saving again."
+EMPTY = " It was weighed empty, so saving the same reading again is safe and finishes it."
 CHUNKED = ("('Connection broken: IncompleteRead(0 bytes read, 512 more expected)', "
            "IncompleteRead(0 bytes read, 512 more expected))")
 
@@ -111,12 +135,23 @@ def spoolman(monkeypatch):
         if isinstance(fail, tuple):
             status, body = fail
             return _Resp(status, body)
-        out = fake.patch(url, json=json, timeout=timeout, **kw)
+        body = dict(json or {})
+        rec = fake.records["spool"].get(int(str(url).rstrip("/").rsplit("/", 1)[-1]))
+        if "remaining_weight" in body and "used_weight" not in body and rec and rec.get("initial_weight") is not None:
+            # Spoolman 0.27 stores a weight left as used = max(initial - left, 0)
+            # (checked on dev's 0.27.1 by the R6 skeptic: 1012 g left on 1000 g
+            # reads back as 1000 g left, 0 used).
+            initial = float(rec["initial_weight"])
+            used = max(initial - float(body["remaining_weight"]), 0.0)
+            body["used_weight"], body["remaining_weight"] = used, initial - used
+        out = fake.patch(url, json=body, timeout=timeout, **kw)
         lost = fake.apply_then
         if isinstance(lost, Exception):
             raise lost
         if lost == "html":
             return _HTMLResp()
+        if lost == "null":
+            return _Resp(200, None)
         return out
 
     monkeypatch.setattr(sm_api.config_loader, "get_api_urls", lambda: ("http://sm.test", "http://fb"))
@@ -231,21 +266,33 @@ def test_an_unread_spools_weigh_to_empty_that_landed_names_its_place(client, spo
     assert body.get("location_now") == "CR-SHELF", body
 
 
-@pytest.mark.parametrize("lost", LOST[:3], ids=LOST_IDS[:3])
-def test_a_save_whose_answer_and_read_back_both_failed_says_it_cant_tell(client, spoolman, monkeypatch, lost):
+@pytest.mark.parametrize("lost, words", [
+    (LOST[0], "Spoolman didn't answer in time."),
+    (LOST[1], "Spoolman dropped the connection before answering."),
+    (LOST[2], "Spoolman's answer was cut off."),
+    (requests.exceptions.RequestException("socket closed"), "socket closed."),
+    ("null", "Spoolman's answer couldn't be read."),
+], ids=LOST_IDS[:3] + ["no-stop", "ok-no-record"])
+def test_a_save_whose_answer_and_read_back_both_failed_says_it_cant_tell(client, spoolman, monkeypatch, lost, words):
     """RED on 2c4b6f6: the answer was lost and so was the read-back, so FCC can't
-    tell whether the write landed: it says so, and to check the weight before saving
-    again (the Quick-Weigh's Additive mode would add the grams twice), never
-    "Couldn't save". `error` keeps the raw text."""
+    tell whether the write landed: it says so, and to check the weight FCC shows
+    before saving again (the Quick-Weigh's Additive mode would add the grams
+    twice), never "Couldn't save". `error` keeps the raw text.
+
+    PIN UPDATED DELIBERATELY (review R6-2 / R6-8, RED on 6e499a2): it checked only
+    the start and the end, so "… saved: FCC couldn't reach Spoolman. Check …" (a
+    dropped connection: Spoolman WAS reached) passed. Now each whole message is
+    pinned; its words always end a sentence; an OK answer with no record in it is
+    "couldn't be read", not "rejected"."""
     spoolman.apply_then = lost
     monkeypatch.setattr(sm_api, "get_spool_answer", lambda sid: (None, False))
     body = _save(client)
     assert body["status"] == "error" and body.get("may_have_saved") is True, body
-    assert body["msg"].startswith("Couldn't tell whether Spool #57 saved: "), body
-    assert body["msg"].endswith(" Check its weight before saving again."), body
+    assert body["msg"] == f"Couldn't tell whether Spool #57 saved: {words}{CHECK}", body
     for leak in ("7913", "host=", "HTTPConnectionPool", "IncompleteRead", "RemoteDisconnected"):
         assert leak not in body["msg"], (leak, body)
-    assert body["error"] == sm_api.LAST_SPOOLMAN_ERROR, body
+    # The raw text, or with none (an OK answer with no record) the route's own words.
+    assert body["error"] == (sm_api.LAST_SPOOLMAN_ERROR or "Spoolman's answer couldn't be read."), body
 
 
 def test_control_a_save_that_timed_out_and_never_landed_still_says_it_couldnt_save(client, spoolman):
@@ -287,4 +334,81 @@ def test_control_refusal_words_keeps_fccs_own_sentences():
     """Control: FCC's own sentence comes back as it is (the audit report's reasons)."""
     said = "FCC couldn't read PM-DB-9 from Spoolman, so nothing was moved."
     assert sm_api.refusal_words(said) == said
+
+
+# ---- review R6 ------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("err", [requests.exceptions.ConnectionError(CONNECT_REFUSED),
+                                 requests.exceptions.ConnectTimeout(CONNECT_TIMEOUT)],
+                         ids=["refused", "connect-timeout"])
+def test_a_save_with_spoolman_down_is_never_read_back(client, spoolman, monkeypatch, err):
+    """RED on 6e499a2 (review R6-1): Spoolman is down, so the PATCH fails while
+    connecting (requests' "Max retries exceeded") and nothing left FCC; the read-back
+    fails the same way. It is "Couldn't save … FCC couldn't reach Spoolman.", with no
+    read-back. On the base: "Couldn't tell whether … saved: FCC couldn't reach
+    Spoolman. Check its weight …", on every weigh while Spoolman was down."""
+    reads = []
+    monkeypatch.setattr(sm_api, "get_spool_answer", lambda sid: reads.append(sid) or (None, False))
+    spoolman.fail = err
+    body = _save(client)
+    assert body["status"] == "error" and not body.get("may_have_saved"), body
+    assert body["msg"] == "Couldn't save Spool #57: FCC couldn't reach Spoolman.", body
+    assert reads == [], reads
+
+
+@pytest.mark.parametrize("raw", [ABORTED, RESET], ids=["remote-disconnected", "reset"])
+def test_refusal_words_says_a_dropped_connection_reached_spoolman(raw):
+    """RED on 6e499a2 (review R6-2): requests' "Connection aborted" is raised once
+    the connection is up, so Spoolman was reached: it said "FCC couldn't reach
+    Spoolman."."""
+    assert sm_api.refusal_words(raw) == "Spoolman dropped the connection before answering."
+
+
+def test_refusal_words_says_an_answer_that_ended_early_was_cut_off():
+    """RED on 6e499a2 (review R6-8): urllib3 2's text for a chunked answer cut between
+    chunks."""
+    raw = "('Response ended prematurely', ProtocolError('Response ended prematurely'))"
+    assert sm_api.refusal_words(raw) == "Spoolman's answer was cut off."
+
+
+@pytest.mark.parametrize("write, unread", [
+    ({"remaining_weight": 0, "archived": True}, True),
+    ({"used_weight": 1000}, False),
+], ids=["fallback-unread", "read-edge-archives"])
+def test_a_cant_tell_answer_to_a_weigh_to_empty_says_to_save_the_same_reading_again(client, spoolman, monkeypatch,
+                                                                                     write, unread):
+    """RED on 6e499a2 (review R6-3): a weigh to empty whose answer and read-back were
+    both lost. Saving the same reading again is safe in every mode (the weight is
+    capped at empty) and finishes the job (the re-save's success runs the page's
+    unassign, which takes the spool off its place), so the answer says so. On the
+    base it said to check the weight first, and a person who saw 0 g archived didn't
+    save again: an unread spool stayed archived on its place."""
+    if unread:
+        monkeypatch.setattr(sm_api, "get_spool", lambda sid: None)
+    monkeypatch.setattr(sm_api, "get_spool_answer", lambda sid: (None, False))
+    spoolman.apply_then = requests.exceptions.ReadTimeout(TIMEOUT)
+    body = _save(client, {"id": 57, "updates": dict(write)})
+    assert spoolman.records["spool"][57]["archived"] is True
+    assert body["status"] == "error" and body.get("may_have_saved") is True, body
+    assert body["msg"] == f"Couldn't tell whether Spool #57 saved: Spoolman didn't answer in time.{EMPTY}", body
+
+
+def test_a_weight_left_above_capacity_that_landed_is_answered_saved(client, spoolman):
+    """RED on 6e499a2 (review R6-6): the weigh-out fallback sends a reading of 1012 g
+    left on a 1000 g spool; Spoolman stores it as 1000 g left (0 used), and the
+    answer was lost. The read-back holds what Spoolman makes of the write, so it
+    landed. On the base: "Couldn't save" (1012 against 1000)."""
+    spoolman.apply_then = requests.exceptions.ReadTimeout(TIMEOUT)
+    body = _save(client, {"id": 57, "updates": {"remaining_weight": 1012}})
+    rec = spoolman.records["spool"][57]
+    assert rec["used_weight"] == 0.0 and rec["remaining_weight"] == 1000.0, rec
+    assert body["status"] == "success", body
+
+
+def test_control_a_weight_left_within_capacity_that_landed_is_answered_saved(client, spoolman):
+    """Control (green on 6e499a2 too): 512 g left reads back as 512 g left."""
+    spoolman.apply_then = requests.exceptions.ReadTimeout(TIMEOUT)
+    body = _save(client, {"id": 57, "updates": {"remaining_weight": 512}})
+    assert spoolman.records["spool"][57]["used_weight"] == 488.0
+    assert body["status"] == "success", body
 

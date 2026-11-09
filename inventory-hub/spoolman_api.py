@@ -88,11 +88,16 @@ _PREMERGE_READ_WORDS = "FCC couldn't read it from Spoolman just before writing, 
 # them: "503 Server Error: Service Unavailable for url: http://<host>:<port>/api/v1/spool".
 _HTTP_ERROR_RE = re.compile(r"\b(\d{3}) (?:Client|Server) Error: .*? for url: [^\s)]+")
 _UNREACHED_MARKS = ("Max retries exceeded", "Failed to establish a new connection", "Connection refused",
-                    "NameResolutionError", "Connection aborted")
+                    "NameResolutionError")
+# urllib3's "Connection aborted" is raised once the connection is up (Spoolman closed or
+# reset it before answering), so Spoolman WAS reached (Group 54 review R6-2: it read
+# "FCC couldn't reach Spoolman.", inside "Couldn't tell whether … saved").
+_DROPPED_MARKS = ("Connection aborted",)
 # Group 54 review R5-3: Spoolman's answer came but FCC couldn't read it: requests' words
-# for one that stopped part-way (ChunkedEncodingError), and json's for one that isn't JSON
-# (a 200 with a proxy's page), whose message always ends in where it stopped reading.
-_CUT_OFF_MARKS = ("Connection broken", "IncompleteRead")
+# for one that stopped part-way (ChunkedEncodingError, urllib3 2's "Response ended
+# prematurely" among them, R6-8), and json's for one that isn't JSON (a 200 with a proxy's
+# page), whose message always ends in where it stopped reading.
+_CUT_OFF_MARKS = ("Connection broken", "IncompleteRead", "Response ended prematurely")
 _NOT_JSON_RE = re.compile(r": line \d+ column \d+ \(char \d+\)")
 
 
@@ -106,7 +111,8 @@ def refusal_words(text):
       a body with no words of its own (an HTML error page, an empty one) -> "Spoolman refused
       it (HTTP 502)."
       requests' timeout -> "Spoolman didn't answer in time."; no connection -> "FCC
-      couldn't reach Spoolman."
+      couldn't reach Spoolman."; a connection Spoolman dropped before answering ->
+      "Spoolman dropped the connection before answering." (Group 54 review R6-2)
       an answer cut off part-way -> "Spoolman's answer was cut off."; one that isn't
       JSON -> "Spoolman's answer couldn't be read." (Group 54 review R5-3).
     FCC's own words come back as they are, but for two (review 3, R3S-2): a write that
@@ -126,6 +132,8 @@ def refusal_words(text):
         return "Spoolman didn't answer in time."
     if any(mark in s for mark in _UNREACHED_MARKS):
         return "FCC couldn't reach Spoolman."
+    if any(mark in s for mark in _DROPPED_MARKS):
+        return "Spoolman dropped the connection before answering."
     if any(mark in s for mark in _CUT_OFF_MARKS):
         return "Spoolman's answer was cut off."
     if _NOT_JSON_RE.search(s):

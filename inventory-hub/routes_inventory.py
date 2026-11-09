@@ -1445,17 +1445,23 @@ def _direct_location_write(sid, pre, updates):
 
 # Group 54 review R5-2: LAST_SPOOLMAN_ERROR's shape for a refusal Spoolman answered.
 _ANSWERED_REFUSAL_RE = re.compile(r"HTTP \d{3}:")
+# requests' MaxRetryError: its adapter retries nothing (Retry(0, read=False)), so this is
+# raised only while connecting (refused, timed out, a name that doesn't resolve) and the
+# request never left FCC (review R6-1). A read error comes out as itself instead.
+_NEVER_SENT_MARK = "Max retries exceeded"
 _LANDED_EPS_G = 0.05   # grams: Spoolman keeps weights as floats
 
 
 def _write_may_have_landed(err):
     """Whether a write update_spool reported failed may have landed all the same:
-    its answer never came, or came broken (a timeout, a dropped or cut-off
+    its answer never came, or came broken (a read timeout, a dropped or cut-off
     connection, a 200 whose body isn't JSON: update_spool's timeout is a READ
-    timeout). Not a refusal Spoolman answered ("HTTP nnn: …"), nor FCC's own
-    before sending (PREMERGE_READ_REFUSAL): those wrote nothing."""
+    timeout). Not a refusal Spoolman answered ("HTTP nnn: …"), FCC's own before
+    sending (PREMERGE_READ_REFUSAL), nor one that never connected ("Max retries
+    exceeded": Spoolman down; review R6-1): those wrote nothing."""
     s = str(err or '')
-    return not (_ANSWERED_REFUSAL_RE.match(s) or spoolman_api.PREMERGE_READ_REFUSAL in s)
+    return not (_ANSWERED_REFUSAL_RE.match(s) or spoolman_api.PREMERGE_READ_REFUSAL in s
+                or _NEVER_SENT_MARK in s)
 
 
 def _landed_as_sent(rec, updates):
@@ -1476,6 +1482,13 @@ def _landed_as_sent(rec, updates):
         except (TypeError, ValueError):
             unknown = True
             continue
+        if key == 'remaining_weight':
+            # Spoolman stores a weight left as used = max(initial - left, 0), so one
+            # above the spool's capacity reads back as the capacity (review R6-6).
+            try:
+                sent = min(sent, float(rec.get('initial_weight')))
+            except (TypeError, ValueError):
+                pass
         if abs(held - sent) > _LANDED_EPS_G:
             return False
         checked = True
@@ -1544,7 +1557,8 @@ def api_spool_update():
             # put in words (refusal_words: no Spoolman address, no JSON, nothing
             # that runs off a phone's screen); `error` keeps the raw text, which the
             # page's Activity Log line carries after the words.
-            err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the update"
+            # No error text: update_spool had an OK answer with no record in it.
+            err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman's answer couldn't be read."
             words = spoolman_api.refusal_words(err)
             # Group 54 review R5-2: a write whose answer was lost may have landed,
             # so it is read back once before it is called failed, as the print
@@ -1557,9 +1571,19 @@ def api_spool_update():
                 back, _answered = spoolman_api.get_spool_answer(spool_id)
                 landed = _landed_as_sent(back, updates) if isinstance(back, dict) else None
                 if landed is None:
+                    # Review R6-3 / R6-8: a weigh to empty is safe to save again in
+                    # every mode (the weight is capped at empty) and the re-save
+                    # finishes it (its success runs the page's unassign, which takes
+                    # the spool off its place); any other is checked first (the
+                    # Quick-Weigh's Additive mode would add the grams twice).
+                    said = words.rstrip()
+                    if not said.endswith(('.', '!', '?')):
+                        said += '.'
+                    then = ("It was weighed empty, so saving the same reading again is safe and finishes it."
+                            if updates.get('archived') else
+                            "Check the weight FCC shows for it before saving again.")
                     return jsonify({"status": "error", "may_have_saved": True,
-                                    "msg": (f"Couldn't tell whether Spool #{spool_id} saved: {words} "
-                                            f"Check its weight before saving again."),
+                                    "msg": f"Couldn't tell whether Spool #{spool_id} saved: {said} {then}",
                                     "error": err})
                 if landed:
                     state.logger.warning(f"Spool #{spool_id}: the save's answer was lost ({err}), "
