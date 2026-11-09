@@ -20,11 +20,13 @@ would risk the very thing we are protecting.
 from __future__ import annotations
 
 import json
+from unittest.mock import patch
 
 import pytest
 
 import app as app_module
 import labels_csv
+import spoolman_api
 
 from test_l316_charact_filament_attributes_unit import (  # noqa: E402
     _attr_field,
@@ -32,6 +34,7 @@ from test_l316_charact_filament_attributes_unit import (  # noqa: E402
     _install_wire,
     client,  # noqa: F401  (pytest fixture, imported for use)
 )
+from test_search_api import _attr_filament, _attr_get  # noqa: E402
 
 
 # A realistically-sized worst case: the live dev schema carried 28 choices when
@@ -162,3 +165,63 @@ class TestSweepUnusedWithAMaxAttributeFilament:
         assert body["success"] is True
         assert body.get("unused") == [], body
         assert not [m for (m, _u, _j) in calls if m == "DELETE"]
+
+
+# --- Group 54.2: search, the fifth surface ------------------------------------
+#
+# Group 49.1 made the attributes searchable text, and a card's line puts every one
+# in front of the material (format_spool_display for a spool card, search_inventory's
+# own builder for a filament card), so a filament holding the whole schema has a
+# card that says 28 tags before "PLA". The four windows that draw them as chips are
+# checked on the real page: test_max_attribute_chips_e2e.py.
+
+MAX_FIL = _attr_filament(801, "Ocean Blue", "PLA", json.dumps(ALL_CHOICES), color="Ocean Blue")
+# A filament with no attributes whose own words hold none of the 28's, so a query
+# that found it would find anything (the control below shows it can be found).
+PLAIN_FIL = _attr_filament(802, "Plain Jane", "ABS", "[]")
+MAX_SPOOLS = [
+    {"id": 901, "remaining_weight": 750, "location": "Shelf A", "filament": MAX_FIL},
+    {"id": 902, "remaining_weight": 300, "location": "Shelf B", "filament": PLAIN_FIL},
+]
+CARD_LINE = " ".join(ALL_CHOICES) + " PLA"
+
+
+class TestSearchWithAMaxAttributeFilament:
+    """The attribute search with one filament holding all 28 (Group 54.2, the
+    planning pass's search case, due since Group 49.1 shipped). Spoolman's two
+    lists are test_search_api's _attr_get fake; nothing else is stubbed."""
+
+    @pytest.fixture(autouse=True)
+    def _spoolman(self):
+        with patch("spoolman_api.requests.get") as get:
+            get.side_effect = _attr_get(spools=MAX_SPOOLS, filaments=[MAX_FIL, PLAIN_FIL])
+            yield
+
+    @pytest.mark.parametrize("choice", ALL_CHOICES)
+    def test_each_attribute_finds_the_filament(self, choice):
+        found = spoolman_api.search_inventory(query=choice, target_type="filament")
+        assert [r["id"] for r in found] == [801]
+
+    @pytest.mark.parametrize("choice", ALL_CHOICES)
+    def test_each_attribute_finds_its_spool(self, choice):
+        assert [r["id"] for r in spoolman_api.search_inventory(query=choice)] == [901]
+
+    def test_all_28_in_one_query_find_it(self):
+        """The every-token rule over all of them at once (33 words: some tags are two)."""
+        query = " ".join(ALL_CHOICES)
+        assert [r["id"] for r in spoolman_api.search_inventory(query=query, target_type="filament")] == [801]
+        assert [r["id"] for r in spoolman_api.search_inventory(query=query)] == [901]
+
+    def test_control_the_plain_filament_is_found_by_its_own_words(self):
+        assert [r["id"] for r in spoolman_api.search_inventory(query="plain", target_type="filament")] == [802]
+        assert [r["id"] for r in spoolman_api.search_inventory(query="plain")] == [902]
+
+    @pytest.mark.parametrize("raw", [json.dumps(ALL_CHOICES), list(ALL_CHOICES)], ids=["wire", "parsed"])
+    def test_filament_attribute_list_gives_all_28_in_order(self, raw):
+        assert spoolman_api.filament_attribute_list({"extra": {"filament_attributes": raw}}) == ALL_CHOICES
+
+    def test_the_cards_line_names_every_attribute_before_the_material(self):
+        [spool] = spoolman_api.search_inventory(query="ocean")
+        [fil] = spoolman_api.search_inventory(query="ocean", target_type="filament")
+        assert spool["details"]["material"] == CARD_LINE
+        assert fil["details"]["material"] == CARD_LINE
