@@ -1488,8 +1488,14 @@ def api_spool_update():
         else:
             res = spoolman_api.update_spool(spool_id, updates, archive_on_empty=False)
         if not res:
+            # Group 54 review R4-2: `msg` is the weigh screens' 7 s toast, so it is
+            # put in words (refusal_words: no Spoolman address, no JSON, nothing
+            # that runs off a phone's screen); `error` keeps the raw text, which the
+            # page's Activity Log line carries after the words.
             err = spoolman_api.LAST_SPOOLMAN_ERROR or "Spoolman rejected the update"
-            return jsonify({"status": "error", "msg": f"Failed to update spool: {err}", "error": err})
+            return jsonify({"status": "error",
+                            "msg": f"Couldn't save Spool #{spool_id}: {spoolman_api.refusal_words(err)}",
+                            "error": err})
         # Group 42 review: a location change off a head releases the spool's own
         # single-slot box, as a move would (the engine never ran).
         logic.release_box_after_direct_write(spool_id, pre, res)

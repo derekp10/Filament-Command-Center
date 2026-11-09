@@ -1206,14 +1206,15 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
             
         } else {
             setProcessing(false);
-            // Refused: the route's own reason (its `msg` carries Spoolman's
-            // error), for an error toast's 7 s (Group 54 review R1-3: it was
-            // "Failed to update weight" for 2 s, whatever the route said).
+            // Refused: the route's own reason, in words (its `msg`: "Couldn't
+            // save Spool #57: Spoolman didn't answer in time.", review R4-2),
+            // for an error toast's 7 s (Group 54 review R1-3: it was "Failed to
+            // update weight" for 2 s, whatever the route said).
             const said = res.msg || res.error || 'Failed to update weight';
             showToast(said, 'error', 7000);
-            // The log keeps the full text: the raw `error` too, where `msg`
-            // doesn't hold it already (today `msg` is "Failed to update
-            // spool: " and the raw error).
+            // The log keeps the full text: the raw `error` (Spoolman's answer,
+            // or requests' own words) after the words, where `msg` doesn't hold
+            // it already.
             const raw = res.error ? String(res.error) : '';
             logWeighFailure(id, raw && !String(said).includes(raw) ? `${said} (${raw})` : said);
             markSaving(id, false);

@@ -17,6 +17,12 @@ weight", and "Error updating weight" when no answer could be read, each for 7 s;
 and the page writes the one Activity Log line (window.logClientEvent, ERROR),
 naming the spool and saying what the toast said, escaped (the log is HTML).
 
+Since review R4-2 the route puts `msg` in words ("Couldn't save Spool #57:
+Spoolman didn't answer in time.", spoolman_api.refusal_words; pinned in
+test_spool_update_refusal_words_54) and keeps the raw text in `error`. The page
+shows whatever the route says, so the answers here keep the older shape too, and
+test_the_log_line_keeps_the_raw_error_when_the_msg_doesnt_hold_it is the worded one.
+
 Two harnesses: node's `vm` (test_core1_return_ejectall_js.run_js: showToast and
 logClientEvent recorded with their arguments, so the 7 s is read exactly), and
 the real weigh-out window in `isolated_page` (the real showToast and
