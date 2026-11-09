@@ -89,6 +89,11 @@ _PREMERGE_READ_WORDS = "FCC couldn't read it from Spoolman just before writing, 
 _HTTP_ERROR_RE = re.compile(r"\b(\d{3}) (?:Client|Server) Error: .*? for url: [^\s)]+")
 _UNREACHED_MARKS = ("Max retries exceeded", "Failed to establish a new connection", "Connection refused",
                     "NameResolutionError", "Connection aborted")
+# Group 54 review R5-3: Spoolman's answer came but FCC couldn't read it: requests' words
+# for one that stopped part-way (ChunkedEncodingError), and json's for one that isn't JSON
+# (a 200 with a proxy's page), whose message always ends in where it stopped reading.
+_CUT_OFF_MARKS = ("Connection broken", "IncompleteRead")
+_NOT_JSON_RE = re.compile(r": line \d+ column \d+ \(char \d+\)")
 
 
 def refusal_words(text):
@@ -102,6 +107,8 @@ def refusal_words(text):
       it (HTTP 502)."
       requests' timeout -> "Spoolman didn't answer in time."; no connection -> "FCC
       couldn't reach Spoolman."
+      an answer cut off part-way -> "Spoolman's answer was cut off."; one that isn't
+      JSON -> "Spoolman's answer couldn't be read." (Group 54 review R5-3).
     FCC's own words come back as they are, but for two (review 3, R3S-2): a write that
     couldn't read what it merges against (PREMERGE_READ_REFUSAL) -> "FCC couldn't read it from
     Spoolman just before writing, so nothing was written.", and requests' words for a refused
@@ -119,6 +126,10 @@ def refusal_words(text):
         return "Spoolman didn't answer in time."
     if any(mark in s for mark in _UNREACHED_MARKS):
         return "FCC couldn't reach Spoolman."
+    if any(mark in s for mark in _CUT_OFF_MARKS):
+        return "Spoolman's answer was cut off."
+    if _NOT_JSON_RE.search(s):
+        return "Spoolman's answer couldn't be read."
     return _HTTP_ERROR_RE.sub(lambda h: f"it answered HTTP {h.group(1)}", s)
 
 
