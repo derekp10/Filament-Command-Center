@@ -269,3 +269,55 @@ def test_a_save_that_waits_for_its_details_sends_the_switch_as_it_was_at_enter(w
         _check(page, switch_on=on_at_enter, empties=True, body_key="remaining_weight", value=0)
     else:
         _check(page, switch_on=on_at_enter, empties=True, value=750)
+
+
+# --- Derek, 2026-11-09 (Group 54's picture walk): the list's switch is on each time the list opens ---
+
+
+def _close_list(page):
+    page.evaluate("""() => { const m = document.getElementById('weighOutModal'); m.classList.remove('show');
+        m.dispatchEvent(new Event('hidden.bs.modal', { bubbles: true })); }""")
+
+
+def _switch_checked(page):
+    return page.evaluate("() => document.getElementById('weigh-auto-archive').checked")
+
+
+def test_the_lists_switch_is_on_again_each_time_the_list_opens(weigh):
+    """RED: Derek, 2026-11-09 (Group 54's picture walk, "Back on each open"). Since
+    54.7 off means off, so a switch left off at one weigh-out kept every spool
+    weighed to 0 g in stock at the next, until the page was reloaded. Like the
+    Quick-Weigh's switch, which is drawn on each time it opens, the list's is on
+    again each time the list opens; turned off, it stays off for the rest of that
+    session, through a save. On the base it kept its last state: off at the second
+    open, and that open's save sent `auto_archive: false`."""
+    page = weigh
+    _open_list(page)
+    _list_switch(page, False)
+    press(page, "425", 150)
+    _saved_and_toasted(page)
+    assert _updates(page)[-1]["auto_archive"] is False, _updates(page)
+    assert _switch_checked(page) is False, "off stays off for the rest of the session"
+    _close_list(page)
+    _open_list(page)
+    assert _switch_checked(page) is True, "on again at the next open"
+    press(page, "425", 150)
+    page.wait_for_function("() => window.__posts.filter((p) => p.url === '/api/spool/update').length === 2",
+                           timeout=5000)
+    assert _updates(page)[-1]["auto_archive"] is True, _updates(page)
+    assert page.evaluate("() => window.__errors") == []
+
+
+def test_control_a_scanned_weigh_command_opens_the_list_with_the_switch_on_too(weigh):
+    """The WEIGH tile and a `CMD:WEIGH` scan both open the list through
+    `openWeighOutModal`, so the scan's open starts with the switch on as well."""
+    page = weigh
+    _open_list(page)
+    _list_switch(page, False)
+    _close_list(page)
+    page.evaluate("(held) => { state.heldSpools = held.map((id) => Object.assign({}, window.__rows[id])); }",
+                  [57, 6])
+    page.evaluate("() => window.processScan('CMD:WEIGH', 'barcode')")
+    page.wait_for_function("() => document.getElementById('weighOutModal').classList.contains('show')",
+                           timeout=5000)
+    assert _switch_checked(page) is True

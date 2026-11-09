@@ -109,6 +109,12 @@ window.openWeighOutModal = () => {
     setPending(null);
     setRescan(null);
     deferredTake = null;
+    // The "Auto-Archive 0g" switch is on at every open, as the Quick-Weigh's is
+    // (Derek, 2026-11-09, at Group 54's picture walk). Since 54.7 off means off,
+    // so a switch left off at one weigh-out kept every spool weighed to 0 g in
+    // stock at the next. Turned off, it stays off for the rest of this session.
+    const archiveSwitch = document.getElementById('weigh-auto-archive');
+    if (archiveSwitch) archiveSwitch.checked = true;
     // 31.3 review fix: start every session fresh. Closing the modal does NOT
     // clear #weigh-out-list, so rows (with any un-submitted text) linger in the
     // hidden DOM. Wipe them BEFORE the first render so the preserve-text
