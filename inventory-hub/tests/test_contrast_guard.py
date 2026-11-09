@@ -1273,3 +1273,33 @@ def test_the_wizards_price_from_the_filament_is_readable(page: Page, base_url: s
     assert any(o.get("id") == "wiz-spool-price-inherited-badge"
                for o in conftest.contrast_offenders(column, min_ratio=100)), "the price's badge was never scored"
     conftest.close_wizard(page)
+
+
+def test_the_wizards_tare_from_the_filament_is_readable(page: Page, base_url: str):
+    """Group 54 review (L1): a new spool of a filament with a 200 g empty weight shows
+    "tare 200g ↩ from filament" in the closed Weight & Scale summary, in the price
+    summary's look (the same colours, scored here too). The filament is a stub, every
+    write is answered in the browser, and nothing is saved. The summary is scored from
+    its toggle (the guard scores descendants only), and the mark is proved scored."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    filament = {"id": 9002, "name": "Ocean Blue", "material": "PLA", "color_hex": "1E6FD9", "weight": 1000.0,
+                "spool_weight": 200.0, "price": 25.0, "extra": {},
+                "vendor": {"id": 9003, "name": "Example Brand", "extra": {}}}
+    _read_only(page, extra_get={"/api/filament_details": filament})
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openNewSpoolFromFilamentWizard === 'function'"
+                           " && typeof state !== 'undefined' && state.locationsLoaded", timeout=45_000)
+    page.evaluate("() => { window.openNewSpoolFromFilamentWizard(9002); }")
+    page.wait_for_function("() => document.getElementById('wiz-status-msg').innerText.includes('pre-filled')"
+                           " && document.getElementById('wiz-spool-empty_weight').value === '200'", timeout=15_000)
+    conftest.wait_modal_settled(page, "wizardModal")
+    toggle = page.locator('button.fcc-wiz-section-toggle[data-bs-target="#wiz-spool-weight-panel"]')
+    expect(toggle.locator(".fcc-wiz-section-summary")).to_have_text("tare 200g ↩ from filament")
+    # The toggle's ▾ is left out, as in the price case: a state glyph, older than 54.
+    offenders = [o for o in conftest.contrast_offenders(toggle)
+                 if "fcc-wiz-section-chevron" not in (o.get("className") or "")]
+    assert offenders == [], offenders
+    scored = [o.get("text") for o in conftest.contrast_offenders(toggle, min_ratio=100)]
+    assert "↩ from filament" in scored and any(t.startswith("tare 200g") for t in scored), scored
+    conftest.close_wizard(page)

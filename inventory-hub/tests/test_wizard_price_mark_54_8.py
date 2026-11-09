@@ -661,6 +661,70 @@ def test_the_plain_wizards_boxes_still_never_fill_from_a_pick(wiz):
     assert (_value(wiz, EMPTY), _badge(wiz, EMPTY_BADGE)) == ("", False)
 
 
+# --- the closed Weight & Scale summary (Group 54 review, L1: a look change) --------------
+#
+# In Edit Spool the closed Weight & Scale summary read "tare 200g" with no mark, right
+# above "$25 ↩ from filament", though both values were inherited and, since 54.8, Save
+# writes neither. The summary now marks an inherited empty weight as the open
+# section's badge does, in the price summary's look, exactly while that badge shows,
+# in New Spool too (there it says where the value came from; a new spool still takes
+# it as its own, L34). The word after "from" is the badge's own: filament or vendor.
+
+def _weight_summary(page):
+    page.evaluate("() => window.wizardRefreshSectionSummary('wiz-spool-weight-panel')")
+    return _shown_summary(page, WEIGHT_SUMMARY)
+
+
+def test_the_weight_summary_marks_an_edits_inherited_empty_weight(wiz):
+    """RED before L1: "… tare 200g", unmarked."""
+    _open_edit(wiz, price=None, spool_wt=None)
+    assert _badge(wiz, EMPTY_BADGE) is True
+    assert _weight_summary(wiz).endswith("· tare 200g ↩ from filament"), _weight_summary(wiz)
+    assert _summary(wiz) == "$25 ↩ from filament"
+
+
+def test_the_weight_summary_says_an_empty_weight_comes_from_the_brand(wiz):
+    """The badge's own word. RED before L1: unmarked."""
+    _open_edit(wiz, spool_wt=None, fil_wt=None, vendor_wt=180.0)
+    assert _weight_summary(wiz).endswith("· tare 180g ↩ from vendor"), _weight_summary(wiz)
+
+
+def test_the_weight_summary_leaves_the_spools_own_empty_weight_plain(wiz):
+    """A pin: green before L1, red on a summary that marks every empty weight."""
+    _open_edit(wiz, spool_wt=196.0)
+    assert _badge(wiz, EMPTY_BADGE) is False
+    assert _weight_summary(wiz).endswith("· tare 196g"), _weight_summary(wiz)
+
+
+def test_the_weight_summary_marks_a_new_spools_empty_weight_too(wiz):
+    """RED before L1: "tare 200g"."""
+    _open_new_spool(wiz)
+    assert _weight_summary(wiz) == "tare 200g ↩ from filament"
+
+
+def test_typing_takes_the_weight_summarys_mark_away(wiz):
+    """Typed, it is the spool's own: the badge goes, and the summary's mark with it
+    (redrawn by the page itself). A pin: green before L1 (no mark at all), red on a
+    summary that reads the cascade's source instead of the badge."""
+    _open_new_spool(wiz)
+    wiz.locator(EMPTY).fill("190")
+    assert _badge(wiz, EMPTY_BADGE) is False
+    assert _shown_summary(wiz, WEIGHT_SUMMARY) == "tare 190g"
+
+
+def test_the_weight_summary_follows_a_picked_filament(wiz):
+    """The mark goes with the value when another filament is picked (R2-3) and when an
+    edit's filament box empties to its brand's (S1). RED before L1: unmarked."""
+    _list(wiz, FIL_A, FIL_D)
+    _open_new_spool(wiz)
+    _pick(wiz, 10)
+    assert _shown_summary(wiz, WEIGHT_SUMMARY) == "tare 170g ↩ from vendor"
+    _open_edit(wiz, spool_wt=None, vendor_wt=180.0)
+    wiz.locator("#wiz-fil-empty_weight").fill("")
+    _blur(wiz)
+    assert _shown_summary(wiz, WEIGHT_SUMMARY).endswith("· tare 180g ↩ from vendor"), _shown_summary(wiz, WEIGHT_SUMMARY)
+
+
 # --- the real dashboard -------------------------------------------------------------------
 
 @pytest.mark.usefixtures("require_server")

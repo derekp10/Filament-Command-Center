@@ -402,6 +402,15 @@ window.wizardApplyCollapseDefaults = (context) => {
 //   - Clears the summary span when expanded; re-renders when collapsed.
 const _wizEscape = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+// Group 54 review (L1): " ↩ from filament" (or "vendor") while the spool's
+// empty-weight badge shows, for the closed Weight & Scale summary; '' otherwise.
+const _wizEmptyWeightSummaryMark = () => {
+    const badge = document.getElementById('wiz-spool-empty-inherited-badge');
+    if (!badge || badge.style.display === 'none') return '';
+    const source = (document.getElementById('wiz-spool-empty-inherited-source')?.textContent || '').trim();
+    return source ? ` <span class="text-info">↩ from ${_wizEscape(source)}</span>` : '';
+};
+
 const _wizSectionSummarizers = {
     'wiz-fil-physical-panel': () => {
         const v = (id) => (document.getElementById(id)?.value || '').trim();
@@ -462,7 +471,10 @@ const _wizSectionSummarizers = {
         if (remaining) parts.push(`<span class="text-success">${remaining}g left</span>`);
         if (used && used !== '0') parts.push(`${used}g used`);
         if (initial) parts.push(`net ${initial}g`);
-        if (empty) parts.push(`tare ${empty}g`);
+        // Group 54 review (L1): an inherited empty weight says so, as the open
+        // section's badge does and exactly while it shows, in the price summary's
+        // look ("tare 200g ↩ from filament"; the badge's own word, filament or vendor).
+        if (empty) parts.push(`tare ${empty}g${_wizEmptyWeightSummaryMark()}`);
         return parts.join(' · ');
     },
     'wiz-spool-metadata-panel': () => {
