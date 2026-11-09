@@ -111,8 +111,20 @@ class TestMigrationSnapshotsAndRestoresValues:
 
     def test_snapshots_then_restores_every_non_empty_value(self, setup_fields_mod):
         # Order matters: GET field schema → GET all spools → DELETE field
-        # → POST field → PATCH each spool. Drive the mock through a
-        # side_effect that responds based on URL.
+        # → POST field → per spool, GET it again and PATCH its whole extra.
+        # Drive the mock through a side_effect that responds based on URL.
+        # Group 54.4 (updated deliberately): the restore re-reads each spool
+        # and sends its WHOLE extra (a Spoolman before 0.22 replaced a spool's
+        # extra with a PATCH's, so the old partial restore wiped the sibling
+        # "other"), so the per-spool GET is answered, as Spoolman would after
+        # the field DELETE: the record without its container_slot.
+        rows = [
+            {"id": 1, "extra": {"container_slot": '"XL-1"', "other": "x"}},
+            {"id": 2, "extra": {"container_slot": ""}},   # empty — skipped
+            {"id": 3, "extra": {"container_slot": '"DRYER-A:2"'}},
+            {"id": 4, "extra": {}},                        # missing — skipped
+        ]
+
         def fake_get(url, *args, **kwargs):
             if "/api/v1/field/spool" in url and url.endswith("/spool"):
                 # First call: field listing
@@ -122,15 +134,17 @@ class TestMigrationSnapshotsAndRestoresValues:
                 ]
                 return m
             if url.endswith("/api/v1/spool"):
-                # Spool listing
+                # Spool listing (archived spools too: Group 54.4)
+                assert kwargs.get("params") == {"allow_archived": "true"}, kwargs
                 m = MagicMock(status_code=200)
-                m.json.return_value = [
-                    {"id": 1, "extra": {"container_slot": '"XL-1"', "other": "x"}},
-                    {"id": 2, "extra": {"container_slot": ""}},   # empty — skipped
-                    {"id": 3, "extra": {"container_slot": '"DRYER-A:2"'}},
-                    {"id": 4, "extra": {}},                        # missing — skipped
-                ]
+                m.json.return_value = rows
                 return m
+            for row in rows:
+                if url.endswith(f"/api/v1/spool/{row['id']}"):
+                    m = MagicMock(status_code=200)
+                    after = {k: v for k, v in row["extra"].items() if k != "container_slot"}
+                    m.json.return_value = {"id": row["id"], "extra": after}
+                    return m
             return MagicMock(status_code=404)
 
         del_resp = MagicMock(status_code=200, text="")
@@ -154,13 +168,15 @@ class TestMigrationSnapshotsAndRestoresValues:
         assert len(restores) == 2, f"expected 2 restores, got {len(restores)}: {restores}"
         restored_ids = sorted(int(url.rsplit("/", 1)[-1]) for url, _ in restores)
         assert restored_ids == [1, 3]
-        # Every restore PATCH must include the snapshotted container_slot value.
+        # Every restore PATCH must include the snapshotted container_slot value,
+        # beside the spool's other extras as they are now (its whole extra).
         for url, body in restores:
             sid = int(url.rsplit("/", 1)[-1])
             assert "extra" in body
             assert "container_slot" in body["extra"]
             if sid == 1:
                 assert body["extra"]["container_slot"] == '"XL-1"'
+                assert body["extra"]["other"] == "x"
             elif sid == 3:
                 assert body["extra"]["container_slot"] == '"DRYER-A:2"'
 
