@@ -34,6 +34,7 @@ Base proof (224bc63): every test marked RED fails there; the controls pass.
 from __future__ import annotations
 
 import copy
+import importlib.util
 import json
 import os
 import re
@@ -77,7 +78,9 @@ class FieldFake(SpoolmanHTTPFake):
     whose PATCH lands and then raises, as a read timeout does. `post_fails` /
     `delete_fails`: the field POST / DELETE answers 500. `on_post`: runs right
     after the field POST, standing in for FCC writing in the window between the
-    rebuild and the restore. `list_unreadable`: the spool list's 200 isn't JSON."""
+    rebuild and the restore. `list_unreadable`: the spool list's 200 isn't JSON.
+    `field_read_answers`: {n: answer} for the n-th read of the spool field list
+    (1-based), answered instead of the list; an exception instance is raised."""
 
     def __init__(self, **kw):
         super().__init__(**kw)
@@ -89,6 +92,8 @@ class FieldFake(SpoolmanHTTPFake):
         self.delete_fails = False
         self.on_post = None
         self.list_unreadable = False
+        self.field_read_answers = {}
+        self.field_reads = 0
 
     @staticmethod
     def _path(url):
@@ -99,6 +104,13 @@ class FieldFake(SpoolmanHTTPFake):
             url = f"{url}?{urlencode(params)}"
         path = self._path(url)
         self.events.append(("GET", path, urlsplit(str(url)).query))
+        if path == "/api/v1/field/spool":
+            self.field_reads += 1
+            answer = self.field_read_answers.get(self.field_reads)
+            if isinstance(answer, BaseException):
+                raise answer
+            if answer is not None:
+                return answer
         m = re.fullmatch(r"/api/v1/spool/(\d+)", path)
         if m and int(m.group(1)) in self.read_fails:
             return _Resp(503, {"message": "unavailable (test)"})
@@ -445,6 +457,121 @@ def test_an_unreadable_spool_list_deletes_nothing_and_raises_nothing(setup_field
     assert fake.slot(1) == '"2"'
     assert fake.field_type() == "choice"
     assert "aborting migration" in out, out
+
+
+# ---- a field list Spoolman can't answer (review R3-3) -----------------------------------------------
+
+def test_a_rebuild_that_fails_and_whose_re_read_isnt_json_still_prints_every_value(setup_fields_mod, capsys):
+    """Review R3-3. The DELETE landed (every value is gone from Spoolman), the field
+    POST failed, and the re-read of the field list answered a 200 whose body isn't
+    JSON: the migration says the values may be gone and prints every one, to be put
+    back by hand. RED on 7c831c6: ValueError raised out of _get_field_definition
+    before any value was printed, and out of setup_fields, skipping every field set
+    up after it."""
+    fake = _fake(old_type="integer")
+    fake.add("spool", 1, location="LR-MDB-1", extra={SLOT: "2"})
+    fake.add("spool", 2, location="LR-MDB-1", archived=True, extra={SLOT: "3"})
+    fake.post_fails = True
+    fake.field_read_answers = {2: _Unreadable()}
+    out = _run(setup_fields_mod, fake, capsys)
+    assert len(fake.deleted()) == 1 and fake.slot(1) is None, out   # the delete landed
+    assert fake.patched_ids() == []
+    assert "may no longer hold" in out, out
+    assert re.search(r"#1: 2 \(at LR-MDB-1\)", out), out
+    assert re.search(r"#2: 3 \(at LR-MDB-1\)", out), out
+
+
+@pytest.mark.parametrize("answer", [
+    _Unreadable(),
+    _Resp(200, {"message": "not a list"}),
+], ids=["not-json", "not-a-list"])
+def test_a_field_list_that_cant_be_read_skips_the_migration_and_writes_nothing(setup_fields_mod, capsys, answer):
+    """Steady state, on every deploy (prod's too): the first read of the field list
+    answers a 200 that isn't JSON, or isn't a list. The migration is skipped this
+    run with nothing written, and says it couldn't read the field list (not that
+    the field isn't there). RED on 7c831c6: a ValueError ("not-json") or an
+    AttributeError ("not-a-list", a JSON object read key by key) raised out of the
+    migration, which stopped setup_fields before every field set up after it."""
+    fake = _fake(old_type="integer")
+    fake.add("spool", 1, location="LR-MDB-1", extra={SLOT: "2"})
+    fake.field_read_answers = {1: answer}
+    out = _run(setup_fields_mod, fake, capsys)
+    assert [e[:2] for e in fake.events] == [("GET", "/api/v1/field/spool")], fake.events
+    assert fake.slot(1) == "2" and fake.field_type() == "integer"
+    assert "couldn't read spoolman's spool field list" in out.lower(), out
+    assert "not present" not in out, out
+
+
+def test_a_field_list_spoolman_doesnt_answer_says_so(setup_fields_mod, capsys):
+    """No answer at all (a timeout): nothing is written, as before, and the run says
+    it couldn't read the field list. RED on 7c831c6 for the words only: it said
+    "container_slot field not present yet", as if Spoolman had answered that."""
+    fake = _fake(old_type="integer")
+    fake.add("spool", 1, location="LR-MDB-1", extra={SLOT: "2"})
+    fake.field_read_answers = {1: requests.exceptions.ReadTimeout("read timed out (test)")}
+    out = _run(setup_fields_mod, fake, capsys)
+    assert [e[:2] for e in fake.events] == [("GET", "/api/v1/field/spool")], fake.events
+    assert fake.slot(1) == "2"
+    assert "couldn't read spoolman's spool field list" in out.lower(), out
+    assert "not present" not in out, out
+
+
+def test_an_entry_in_the_field_list_that_isnt_a_field_is_skipped(setup_fields_mod, capsys):
+    """An entry that isn't an object is no field: it is skipped, and the field after
+    it is found and migrated. RED on 7c831c6: `"junk".get` raised AttributeError out
+    of the migration."""
+    fake = _fake(old_type="integer")
+    fake.add("spool", 1, location="LR-MDB-1", extra={SLOT: "2"})
+    fake.field_read_answers = {1: _Resp(200, ["junk", None, 7] + copy.deepcopy(fake.fields["spool"]))}
+    out = _run(setup_fields_mod, fake, capsys)
+    assert fake.field_type() == "text" and fake.slot(1) == '"2"', out
+    assert "1 restored, 0 kept, 0 gone, 0 failed" in out, out
+
+
+def test_control_a_field_list_without_the_field_skips_the_migration(setup_fields_mod, capsys):
+    """Control (green on 7c831c6 too): Spoolman answered, and the field isn't there
+    yet; the create_field call after the migration makes it."""
+    fake = FieldFake(fields={"spool": [{"key": "needs_label_print", "name": "N", "field_type": "boolean"}]})
+    out = _run(setup_fields_mod, fake, capsys)
+    assert [e[:2] for e in fake.events] == [("GET", "/api/v1/field/spool")], fake.events
+    assert "not present yet" in out, out
+
+
+def test_setup_fields_goes_on_past_a_field_list_it_cant_read():
+    """The whole script, as update.sh runs it on every deploy, with Spoolman's spool
+    field list answering a 200 that isn't JSON: every field after the migration is
+    still set up, the vendor's last. RED on 7c831c6: the ValueError stopped the
+    script at the migration, so the spool type, every filament field and the
+    vendor's website were never set up. (The three legacy fields setup_fields
+    retires are DELETEd on every deploy; the migration deletes nothing here.)"""
+    calls = []
+
+    def get(url, *a, **k):
+        if str(url).rstrip("/").endswith("/api/v1/field/spool"):
+            return _Unreadable()
+        return _Resp(200, [])
+
+    def record(verb, status, body):
+        def answer(url, *a, **k):
+            calls.append((verb, urlsplit(str(url)).path))
+            return _Resp(status, body)
+        return answer
+
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    spec = importlib.util.spec_from_file_location(
+        "setup_fields_r3_3_under_test", os.path.join(repo_root, "setup-and-rebuild", "setup_fields.py"))
+    mod = importlib.util.module_from_spec(spec)
+    with patch("requests.get", side_effect=get), \
+         patch("requests.post", side_effect=record("POST", 200, [])), \
+         patch("requests.delete", side_effect=record("DELETE", 404, {"message": "not found (test)"})), \
+         patch("requests.patch", side_effect=record("PATCH", 200, {})):
+        spec.loader.exec_module(mod)
+    posted = [path for verb, path in calls if verb == "POST"]
+    assert "/api/v1/field/spool/container_slot" in posted, calls
+    assert "/api/v1/field/spool/spool_type" in posted, calls
+    assert posted[-1] == "/api/v1/field/vendor/website", calls
+    assert ("DELETE", "/api/v1/field/spool/container_slot") not in calls, calls
+    assert not [c for c in calls if c[0] == "PATCH"], calls
 
 
 def test_control_already_text_is_a_no_op(setup_fields_mod, capsys):

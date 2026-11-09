@@ -161,20 +161,41 @@ def delete_field(entity_type, key, error_check=False):
             raise
 
 
-def _get_field_definition(entity_type, key):
-    """Return the current Spoolman field definition for entity_type/key,
-    or None if absent / unreachable. Used by migrations to decide whether
-    a value-preserving rebuild is needed."""
+def _read_field_definition(entity_type, key):
+    """Spoolman's field definition for entity_type/key, said three ways:
+    (field, None) when the field list holds it, (None, None) when Spoolman answered
+    a list without it, and (None, why) when the list couldn't be read (no answer,
+    an HTTP error, or a 200 whose body isn't JSON or isn't a list). Never raises.
+
+    Review R3-3 (Group 54): only a RequestException was caught, so a 200 whose body
+    wasn't JSON raised ValueError out of the migration (and an entry that wasn't an
+    object, AttributeError). On a rebuild that failed after its DELETE, that came
+    before every snapshotted value was printed, and either way it stopped
+    setup_fields before every field set up after the migration, on every deploy."""
     try:
         resp = requests.get(f"{SPOOLMAN_IP}/api/v1/field/{entity_type}", timeout=5)
-        if resp.status_code != 200:
-            return None
-        for f in resp.json() or []:
-            if f.get("key") == key:
-                return f
-    except requests.RequestException:
-        return None
-    return None
+    except Exception as e:   # no answer: a RequestException, or anything else
+        return None, f"no answer: {e}"
+    if resp.status_code != 200:
+        return None, f"HTTP {resp.status_code}"
+    try:
+        rows = resp.json()
+    except ValueError:
+        return None, "its answer wasn't JSON"
+    if not isinstance(rows, list):
+        return None, "its answer wasn't a list"
+    for f in rows:
+        if isinstance(f, dict) and f.get("key") == key:
+            return f, None
+    return None, None
+
+
+def _get_field_definition(entity_type, key):
+    """Return the current Spoolman field definition for entity_type/key,
+    or None if absent / unreadable (`_read_field_definition` tells the two
+    apart). Used by migrations to decide whether a value-preserving rebuild
+    is needed."""
+    return _read_field_definition(entity_type, key)[0]
 
 
 def _as_text_wire(raw):
@@ -315,6 +336,9 @@ def migrate_container_slot_to_text():
 
     The template for any type migration (Group 54.4). FCC is still running
     while update.sh runs this, so:
+      0. read the field list without ever raising (`_read_field_definition`):
+         one that can't be read skips the migration with nothing written, and
+         says so, so the rest of setup_fields still runs (review R3-3);
       1. snapshot every spool, archived ones too (the list leaves them out
          unless asked), with where each one is;
       2. put every value in the new type's wire form (`_as_text_wire`) before
@@ -330,7 +354,13 @@ def migrate_container_slot_to_text():
     pull in Flask and FCC's state.
     """
     print("\n--- Container Slot Type Migration ---")
-    field = _get_field_definition("spool", "container_slot")
+    field, why = _read_field_definition("spool", "container_slot")
+
+    if why:
+        # Nothing read, nothing written: the next deploy checks again (review R3-3).
+        print(f"   ⚠️ Couldn't read Spoolman's spool field list ({why}); skipping the"
+              f" container_slot migration this run, with nothing changed.")
+        return
 
     if field is None:
         # Field doesn't exist yet — the regular create_field call below
@@ -377,7 +407,9 @@ def migrate_container_slot_to_text():
                      force_reset=True, error_check=True)
     except Exception as e:
         print(f"   ❌ Field rebuild failed: {e}")
-        after = _get_field_definition("spool", "container_slot")
+        after, why = _read_field_definition("spool", "container_slot")
+        if why:
+            print(f"   ⚠️ Couldn't read Spoolman's spool field list again ({why}).")
         if after is not None and after.get("field_type") == current_type:
             print("   ℹ️ The old field is still there, so every value is still in Spoolman; nothing to put back.")
         elif snapshot:
