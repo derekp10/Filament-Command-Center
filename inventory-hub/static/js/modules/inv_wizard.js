@@ -38,6 +38,11 @@ let wizardState = {
     // (2026-10-21 review: a clear now really clears on Spoolman 0.27), and the
     // filament's label status box is sent only when it is here (Group 58.5).
     touchedExtras: new Set(),
+    // The plain number boxes the user changed in this session ("spool:price",
+    // "fil:settings_bed_temp", … WIZ_NATIVE_CLEARABLE has all five), read per key
+    // through wizardNativeTouched: edit mode sends one left empty as null, which
+    // clears the field, and only then (Group 54.5).
+    touchedNative: new Set(),
 };
 
 // Empty-spool-weight inheritance helper (resolveEmptySpoolWeight) lives in
@@ -167,6 +172,13 @@ window.wizardClearSpoolEmptyWeightBadge = () => {
         // while the chip still sits in its box.
         wizEl.addEventListener('input', (e) => window.wizardNoteExtraTouched(e.target));
         wizEl.addEventListener('change', (e) => window.wizardNoteExtraTouched(e.target));
+        // Which plain boxes the user changed (window.wizardNoteNativeTouched,
+        // Group 54.5): `input` only. A number box fires `input` for every change a
+        // person makes (a key, a paste, the spinner, the wheel); its `change` comes
+        // at blur, and Chromium still fires it for an edit made before the wizard
+        // was reset for the next spool when the box kept the focus (the open moves
+        // the focus after the reset), which read as a touch of the new spool's box.
+        wizEl.addEventListener('input', (e) => window.wizardNoteNativeTouched(e.target));
         wizEl.addEventListener('click', (e) => {
             const chip = e.target && e.target.closest ? e.target.closest('.dynamic-chip') : null;
             if (chip) window.wizardNoteExtraTouched(chip);
@@ -751,6 +763,7 @@ window.wizardPrefillSpoolPrice = (ownPrice, filamentPrice) => {
 const wizardReset = () => {
     wizardState.mode = 'manual';
     wizardState.touchedExtras = new Set();
+    wizardState.touchedNative = new Set();
     wizardState.selectedFilamentId = null;
     wizardState.externalMetaData = null;
     wizardState.lockedAfterSuccess = false;
@@ -1698,6 +1711,44 @@ window.wizardNoteExtraTouched = (el) => {
 };
 const wizardExtraTouched = (entity, key) =>
     !!(wizardState.touchedExtras && wizardState.touchedExtras.has(`${entity}:${key}`));
+
+// Group 54.5: the plain (not extra) number boxes Edit Spool can clear: box id →
+// "<entity>:<key>", the payload key it fills. Spoolman takes a JSON null for each
+// and drops the value (dev's 0.27.1, 2026-11-09). Initial and used weight stay out
+// on purpose: an emptied initial weight would be a weight write (update_spool's
+// archive edge reads it), and an emptied used weight already sends 0.
+const WIZ_NATIVE_CLEARABLE = {
+    'wiz-spool-price': 'spool:price',
+    'wiz-spool-empty_weight': 'spool:spool_weight',
+    'wiz-fil-empty_weight': 'fil:spool_weight',
+    'wiz-fil-settings_extruder_temp': 'fil:settings_extruder_temp',
+    'wiz-fil-settings_bed_temp': 'fil:settings_bed_temp',
+};
+// Records that the user changed one of those boxes (the wizard's `input`
+// listener). A value set by code fires no event, so a box the page filled or
+// blanked itself (the edit's prefill, the filament empty weight's copy into the
+// spool's) is never touched. The vendor push's own input event only ever fills a
+// blank box with a value, so it can't make a clear.
+window.wizardNoteNativeTouched = (el) => {
+    const id = el && el.id;
+    if (id && Object.prototype.hasOwnProperty.call(WIZ_NATIVE_CLEARABLE, id)) {
+        wizardState.touchedNative.add(WIZ_NATIVE_CLEARABLE[id]);
+    }
+};
+// Whether the user changed that box in this session ('spool', 'price'): the plain
+// boxes' twin of wizardExtraTouched.
+const wizardNativeTouched = (entity, key) =>
+    !!(wizardState.touchedNative && wizardState.touchedNative.has(`${entity}:${key}`));
+// Edit mode: the user emptied that box, so Save sends null and the field is
+// cleared. Never for a box holding a number half typed ("-", "1e"): a number box
+// reads '' while it shows that text (validity.badInput), and the field is left
+// as it is, as before.
+const wizardNativeCleared = (entity, key) => {
+    if (wizardState.mode !== 'edit_spool' || !wizardNativeTouched(entity, key)) return false;
+    const id = Object.keys(WIZ_NATIVE_CLEARABLE).find(k => WIZ_NATIVE_CLEARABLE[k] === `${entity}:${key}`);
+    const el = id ? document.getElementById(id) : null;
+    return !!el && el.value === '' && !(el.validity && el.validity.badInput);
+};
 
 // Edit mode: every multi-choice (chip) Filament Extras field the form shows
 // that the user emptied is sent as cleared (window.FCC_DELETE_EXTRA). The chip
@@ -3857,7 +3908,13 @@ window.wizardSubmit = async () => {
             }
         });
 
-        Object.keys(sp_payload).forEach(k => { if (sp_payload[k] === undefined || sp_payload[k] === null || Number.isNaN(sp_payload[k])) delete sp_payload[k]; });
+        // Group 54.5: in edit mode a plain box the user emptied is a clear, sent as
+        // null; every other null is left out, as before, so the record keeps what
+        // it has.
+        Object.keys(sp_payload).forEach(k => {
+            if (sp_payload[k] === null && wizardNativeCleared('spool', k)) return;
+            if (sp_payload[k] === undefined || sp_payload[k] === null || Number.isNaN(sp_payload[k])) delete sp_payload[k];
+        });
 
         let f_payload = null;
         let target_fid = null;
@@ -3905,6 +3962,15 @@ window.wizardSubmit = async () => {
             // Cross-Inherit empty-spool-weight along the chain: Spool → Filament → Vendor.
             // Resolves the selected vendor from wizardState so a manufacturer-level weight
             // flows down even when both Filament and Spool fields are left blank.
+            //
+            // It fills the FILAMENT's side only. The spool's nulls are taken out of
+            // sp_payload above, so a blank spool box reaches here as undefined, and the
+            // spool line this block had (`if (sp_payload.spool_weight === null) …`)
+            // could never fire (not since 13654bb, 2026-04-06; found by Group 54.5). A
+            // new spool's box copies the filament's (wizardSetupFieldSync), and an
+            // edited spool's shows its inherited value from the open, so the spool's
+            // empty weight comes from its box. Edit mode never refills a box the user
+            // emptied: that is a clear (Group 54.5).
             {
                 const selectedVendorId = document.getElementById('wiz-fil-vendor-sel')?.value;
                 const vendor = selectedVendorId
@@ -3915,9 +3981,9 @@ window.wizardSubmit = async () => {
                     filamentWt: f_payload.spool_weight,
                     vendor,
                 });
-                if (resolved !== null) {
-                    if (sp_payload.spool_weight === null) sp_payload.spool_weight = resolved;
-                    if (f_payload.spool_weight === null) f_payload.spool_weight = resolved;
+                if (resolved !== null && f_payload.spool_weight === null
+                        && !wizardNativeCleared('fil', 'spool_weight')) {
+                    f_payload.spool_weight = resolved;
                 }
             }
 
@@ -3986,9 +4052,13 @@ window.wizardSubmit = async () => {
                 if (t.article_number) f_payload.article_number = t.article_number;
             }
 
-            Object.keys(f_payload).forEach(k => { 
-                if (f_payload[k] === undefined || Number.isNaN(f_payload[k])) delete f_payload[k]; 
-                else if (f_payload[k] === null && k !== 'multi_color_hexes' && k !== 'multi_color_direction') delete f_payload[k];
+            // A null is left out, except the two multi-colour keys (which clear a
+            // single colour's old list) and, in edit mode, a plain box the user
+            // emptied (a clear, Group 54.5).
+            Object.keys(f_payload).forEach(k => {
+                if (f_payload[k] === undefined || Number.isNaN(f_payload[k])) delete f_payload[k];
+                else if (f_payload[k] === null && k !== 'multi_color_hexes' && k !== 'multi_color_direction'
+                         && !wizardNativeCleared('fil', k)) delete f_payload[k];
             });
         }
 
