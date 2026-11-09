@@ -1773,7 +1773,18 @@ FILAMENT_ATTRIBUTES_FLAG_CHOICES: frozenset = frozenset()
 
 def _parse_filament_attrs_value(raw):
     """filament_attributes is stored as a JSON-encoded string list, e.g.
-    '["+", "Silk"]'. Tolerant of both wire-form and raw list inputs."""
+    '["+", "Silk"]'. Tolerant of both wire-form and raw list inputs.
+
+    Group 54.3: a string that isn't JSON ('Silk, Matte', an old record's) or a
+    JSON string ('"Silk, Matte"', what a text-type field leaves behind) is a
+    comma list, read by `_split_attr_text`. It used to come back as ONE
+    pseudo-tag: the attribute report counted Silk and Matte 0, sweep_unused
+    offered to delete them, and a bulk edit or a purge's restore wrote
+    ["Silk, Matte"] back, which Spoolman refuses as not a choice. A list (JSON
+    or parsed) is the multi-choice shape and comes back as it is, its items
+    never split: an item with a comma could only be a real choice. A JSON
+    string holding a JSON list (a list once written through a text field) is
+    that list. None, '', other types and a JSON number read as before."""
     if raw is None or raw == "":
         return []
     if isinstance(raw, list):
@@ -1781,12 +1792,31 @@ def _parse_filament_attrs_value(raw):
     if isinstance(raw, str):
         try:
             parsed = json.loads(raw)
-            if isinstance(parsed, list):
-                return [str(x) for x in parsed]
-            return [str(parsed)]
         except (ValueError, TypeError):
-            return [raw]
+            return _split_attr_text(raw)
+        if isinstance(parsed, list):
+            return [str(x) for x in parsed]
+        if isinstance(parsed, str):
+            try:
+                inner = json.loads(parsed)
+            except (ValueError, TypeError):
+                inner = None
+            if isinstance(inner, list):
+                return [str(x) for x in inner]
+            return _split_attr_text(parsed)
+        return [str(parsed)]
     return []
+
+
+def _split_attr_text(text):
+    """Group 54.3: a comma list of attributes as tags: split on commas, each
+    piece trimmed, blanks dropped, a repeat dropped (the first is kept)."""
+    out = []
+    for piece in str(text).split(','):
+        tag = piece.strip()
+        if tag and tag not in out:
+            out.append(tag)
+    return out
 
 
 def ensure_filament_attributes_cleaned():
