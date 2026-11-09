@@ -14,6 +14,51 @@
 1. **The "Auto-Archive 0g" switches (the weigh-out window and the Quick-Weigh): (a), off means off.** With the switch off, a spool weighed to 0 g stays in stock at 0 g; with it on, it is archived as today. Today the server archives any spool weighed to 0 g whatever the switch says.
 2. **An emptied spool price: (a), it comes back from the filament's price, but marked as the filament's.** Derek: *"mark the spool price as coming from the filament price. Some times a filament's price might not be the price that exact spool costs, because it was on sale or purchased at a lower (or higher) price than the time that the filament entry was created."* So a person can always tell a spool's own price from one it takes from its filament. The planning pass's note that the next Save writes the refilled price as the spool's own would lose that mark: the build keeps the spool's own price empty while it shows the filament's (marked, e.g. "from the filament"), and writes a price of its own only when one is entered. A look change: show Derek a picture before the merge.
 
+## Build plan, 2026-11-08 (read this second; it extends the planning pass below)
+
+Started 2026-11-08 23:50 on `feature/group-54-group36-leftovers`, cut from `dev` `6e094e5` (code unchanged since the planning pass's `11126bb`). Derek, going to bed: *"feel free to work on all the parts for this that you can without my input."* So everything is built, and only the price look (54.8) waits for his OK, from pictures, before the merge. His two answers become two new parts, 54.7 and 54.8, because they touch the same code as 54.6 and 54.5.
+
+**Order (one builder at a time, one commit per part, red-first tests):** B1 server: 54.6, 54.7 (server half), 54.1, 54.3 · B2: 54.4, 54.7 (page half) · B3: 54.5 then 54.8, with before pictures taken before the wizard changes · B4: 54.2, the `?v=` bumps, the owed CLAUDE.md text · then a full `--offline` run. Then one batched review (`docs/agent_docs/review-checklist.md`), its fixes, the full sweep, and Derek's picture check.
+
+### 54.7 "Auto-Archive 0g" off means off (Derek's answer 1)
+
+**Today.** Two switches: the weigh-out window's "Auto-Archive 0g" (`#weigh-auto-archive`, `modals_weigh_out.html:55-56`, on by default) and the Quick-Weigh's "Auto Archive & Eject if Empty (0g)" (`#fcc-we-auto-archive`, `weight_entry.js:151-152`; only `openQuickWeigh` shows it, `inv_weigh_out.js:1226`). Each decides only whether `saveSpoolWeight` (`inv_weigh_out.js:990`) sends `archived: true` and force-unassigns afterwards (`:1110-1120`). The server's archive edge (`spoolman_api._auto_archive_on_empty`, run from `update_spool` at `:672`) archives every weight write that leaves nothing, so with a switch off a spool weighed to 0 g is still archived, Unassigned, its trail blanked and its pre-archive note planted.
+
+**Change.**
+- Server: `update_spool(sid, data, archive_on_empty=True)`, a keyword with today's default. `False` skips `_auto_archive_on_empty` entirely: no `archived`, no location blank, no note, no trail blanks, no "📦 Auto-archived" line. The unarchive edge still runs, so a refill of an archived spool still un-archives it, and an archived spool weighed to 0 g stays archived where it is. `update_spool_or_raise` is unchanged.
+- `/api/spool/update` reads an optional top-level `auto_archive` beside `id` and `updates`. Only exactly JSON `false` passes `archive_on_empty=False`; absent, `true` or anything else is today's behaviour. The route passes the keyword only in that case, so the tests that patch `update_spool` with a two-argument fake are untouched.
+- Page: every weigh-out and Quick-Weigh save sends `auto_archive` with its window's switch state: the weigh-out list's switch for its row saves and the details-fallback row (`:906-920`), and the Quick-Weigh's own switch for its saves (`payload.auto_archive`). It sends the switch, not the per-save verdict, so with the switch on the server's rule still decides when the page's own arithmetic (its `details.initial`) disagrees. The `archived: true` and force-unassign chain stays as it is with the switch on.
+- Words (Claude's call): with the switch off and a save that leaves 0 g by the page's own reading, the success toast says so, e.g. "Updated Spool #57: 0 g left, kept in stock (Auto-Archive is off)". With the switch on, the toast is unchanged.
+- Tests (red first): `update_spool` and the route over `SpoolmanHTTPFake`: used weight = initial with `auto_archive: false` keeps the spool in stock, its location, slot and trail, with no note; without the key it archives as today; `remaining_weight: 0` with `false` (after 54.6) keeps it; an archived spool at 0 g with `false` stays archived; a refill with `false` still un-archives. Page: the POST body carries `auto_archive: false` with the switch off and `true` with it on, from a row save, the fallback row and the Quick-Weigh (use the harness the weigh-out family already uses: `test_weigh_out_scan_focus_js.py`, `test_quick_weigh_scan_js.py`, `test_weight_entry_overlay.py`, `test_weigh_out_e2e.py`).
+
+### 54.8 An inherited spool price is marked as the filament's (Derek's answer 2)
+
+**Today.** `wizardPrefillSpoolPrice(ownPrice, filamentPrice)` (`inv_wizard.js:743-749`) puts the filament's price into the spool's "Price Paid ($)" box (`#wiz-spool-price`, `modals_wizard.html:431-433`) as a plain number whenever the spool has none of its own: a new spool of an existing filament (`:4440`), a clone (`:4364`) and an edit (`:4658`). Save sends the box as the spool's own price (`wizardSubmit`, `:3826`). So every new spool, and every edited spool with no price of its own, gets its filament's price written as its own. No other FCC screen shows a spool's price; the section's collapsed summary does (`'wiz-spool-metadata-panel'`, `:392-400`, "$25").
+
+**Change** (all three modes):
+- A price of the spool's own (an edit's, or a clone's source spool's) shows as today, plain, and is saved as today.
+- With none of its own and a filament price, the box shows the filament's price marked as the filament's, in the look the empty-weight box already has: the value in the box and a "↩ from filament" badge beside the label (`wizardSetSpoolEmptyWeightInherited`, `:70-82`; `#wiz-spool-empty-inherited-badge`, `modals_wizard.html:377-380`). Typing in the box makes it the spool's own, and the badge goes.
+- Save sends a price only when it is the spool's own: the box was typed into (54.5's touched set), or it held the spool's own price. An untouched box showing the filament's price sends nothing, so a new spool is created with no price and an edited spool keeps none. 54.5's emptied box still sends `null` in edit mode.
+- A price an external import puts in the box is that purchase's price, the spool's own (check whether any import writes `#wiz-spool-price`; the anchors above found none).
+- The collapsed summary says where the price comes from (e.g. "$25 from filament").
+- **Claude's call, the empty weight's twin (edit mode only).** An edited spool with no empty weight of its own shows its filament's (or brand's) with the badge, and Save writes it as the spool's own: the server's diff (`routes_inventory.py:1181-1183`) sees `None` against 200. So 54.5's clear of an empty weight would come back as the spool's own at the next Save. In edit mode, an untouched box showing an inherited empty weight sends nothing. New spools and clones keep today's rule (they take the cascade's value as their own, L34).
+- **Pictures for Derek before the merge** (standing order: no look change without a sample): before and after, the price box and the collapsed summary, for a new spool and for an edit, at 1600×1300, into `review-samples/2026-11-08-group54/` (git-ignored), numbered in walk order. Take the "before" ones from the live dev page before the wizard code changes, with every read stubbed and nothing written.
+- Tests (red first): a new spool of a $25 filament with the box untouched sends no `price`; an edit of a spool with no price of its own sends no `price`; a typed price is sent; an own price is sent as today; the badge shows and hides; the summary's words; the empty-weight twin. Update deliberately the cascade tests that pin the old plain prefill (`test_wizard_price_product_cascade_e2e.py` and its family).
+
+### Claude's calls, for Derek's veto
+
+- 54.7: `auto_archive: false` stops only the archive-on-empty edge; a refill still un-archives, and nothing un-archives a spool that is already archived. The toast says when a spool was kept in stock at 0 g.
+- 54.8: a clone keeps its source spool's own price as its own (a sibling bought together); only a filament's price is marked. The empty-weight twin above, in edit mode only.
+- Everything in the planning pass's "Claude's calls" stands.
+
+### Build log
+
+_(Each builder appends: the parts done, commits, tests run with results, anything left or surprising.)_
+
+### Owed CLAUDE.md text
+
+_(Each builder appends the CLAUDE.md sentences its parts make stale or owe, quoting the anchor sentence. B4 applies them all with an anchor-checked script, one commit.)_
+
 ## Planning pass, 2026-11-06 (read-only; re-check anchors before editing)
 
 Read on `dev` @ `11126bb`, after Groups 40 to 61 merged (Group 58 as `d8c073c`). No code was changed. A read-only probe ran on a scratch copy of the modules outside the repo, against the offline fakes (`tests/spoolman_extra_fake.SpoolmanHTTPFake`), with no Spoolman and no prod. Its results are quoted below. Every anchor below is from `11126bb`. This section supersedes the older sections where they disagree: the decisions, the 54.4 design, the 54.5 log check and the estimate. Those sections are kept as filed.
