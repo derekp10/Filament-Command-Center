@@ -433,24 +433,39 @@ def _auto_archive_on_empty(data, existing_initial, existing_used, existing_locat
 
     The caller's explicit intent always wins: if the payload already sets
     `archived` or `location`, we leave those keys alone.
+
+    Group 54.6: a `remaining_weight` write is a weight write too, read exactly
+    as `_auto_unarchive_on_refill` reads it: without `used_weight` beside it
+    (Spoolman refuses the pair; the used weight decides), the weight left is the
+    one sent, whatever `initial_weight` the write also carries. The weigh-out
+    row's fallback (no spool details) sends it, and weighing a spool to 0 g that
+    way used to leave it in stock, or archived by the page's own second call
+    with no pre-archive note. A weight left that isn't a number (NaN included)
+    changes nothing.
     """
-    if 'used_weight' not in data and 'initial_weight' not in data:
+    if not any(k in data for k in ('used_weight', 'initial_weight', 'remaining_weight')):
         return  # nothing weight-related in this update
-    new_used = data.get('used_weight', existing_used)
-    new_initial = data.get('initial_weight', existing_initial)
-    # 31.2 — fall back to the parent filament's net weight when the spool has no
-    # initial_weight of its own (inherit-weight spool). Matches Spoolman's own
-    # remaining_weight math and lets the wizard/quick-weigh auto-archive fire.
-    if new_initial is None:
-        new_initial = existing_filament_weight
-    if new_used is None or new_initial is None:
-        return
-    try:
-        remaining = float(new_initial) - float(new_used)
-    except (TypeError, ValueError):
-        return
-    if remaining > 0:
-        return
+    if 'remaining_weight' in data and 'used_weight' not in data:
+        try:
+            remaining = float(data['remaining_weight'])
+        except (TypeError, ValueError):
+            return
+    else:
+        new_used = data.get('used_weight', existing_used)
+        new_initial = data.get('initial_weight', existing_initial)
+        # 31.2 — fall back to the parent filament's net weight when the spool has no
+        # initial_weight of its own (inherit-weight spool). Matches Spoolman's own
+        # remaining_weight math and lets the wizard/quick-weigh auto-archive fire.
+        if new_initial is None:
+            new_initial = existing_filament_weight
+        if new_used is None or new_initial is None:
+            return
+        try:
+            remaining = float(new_initial) - float(new_used)
+        except (TypeError, ValueError):
+            return
+    if remaining != remaining or remaining > 0:
+        return  # NaN reads as no weight at all; anything above 0 g isn't empty
     # Only inject the auto-settings if the caller didn't provide them.
     if 'archived' not in data:
         data['archived'] = True
