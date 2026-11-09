@@ -56,6 +56,9 @@ const fetchSpoolDetails = (id) => {
             const entry = {
                 initial: Number(d.initial_weight) || Number(d.filament?.weight) || 0,
                 used: Number(d.used_weight) || 0,
+                // Group 54.7: a spool archived before its save stays archived
+                // at 0 g with the switch off, so it isn't "kept in stock".
+                archived: d.archived === true,
                 empty,
                 cascade,
                 context: {
@@ -857,6 +860,20 @@ window.handleWeighInput = (e, inputEl) => {
     }
 };
 
+// The weigh-out list's "Auto-Archive 0g" switch: true / false, or null when the
+// window isn't on the page (Group 54.7).
+const listArchiveSwitch = () => {
+    const el = document.getElementById('weigh-auto-archive');
+    return el ? !!el.checked : null;
+};
+
+// Whether the scan buffer has this spool as archived (a weigh-out row whose
+// details couldn't be read has nothing else to go on).
+const heldArchived = (id) => {
+    const s = (state.heldSpools || []).find((x) => x.id == id);
+    return !!s && (s.archived === true || String(s.archived).toLowerCase() === 'true');
+};
+
 // New per-row save path that runs the typed value through computeUsedWeight
 // before handing off to saveSpoolWeight (which still owns the actual write,
 // auto-archive flag, force-unassign chain, and sync-pulse dispatch).
@@ -916,7 +933,10 @@ window.saveWeighOutRow = async (idStr) => {
             const n = window.parseGramsReading(raw);
             if (Number.isNaN(n)) { notAReading(); return; }
             handed = true;
-            window.saveSpoolWeight(id, n);
+            // The list's own switch (Group 54.7), and the buffer's word on
+            // whether the spool is archived: its details couldn't be read.
+            window.saveSpoolWeight(id, n, null, null, null,
+                { archiveSwitch: listArchiveSwitch(), empties: n <= 0, wasArchived: heldArchived(id) });
             return;
         }
 
@@ -971,15 +991,17 @@ window.saveWeighOutRow = async (idStr) => {
         // Hand off to saveSpoolWeight with a precomputed used_weight payload.
         // saveSpoolWeight's auto-archive check inspects remaining_weight, but
         // we're submitting used_weight — so compute the auto-archive verdict
-        // locally and pass it explicitly via the 4th arg.
+        // locally and pass it explicitly via the 4th arg. The list's switch
+        // itself goes too (Group 54.7), sent as `auto_archive`.
         const remainingAfter = Math.max(0, details.initial - r.used_weight);
-        const autoToggle = document.getElementById('weigh-auto-archive');
-        const autoArchive = !!(autoToggle && autoToggle.checked && remainingAfter <= 0);
+        const switchOn = listArchiveSwitch();
+        const autoArchive = switchOn === true && remainingAfter <= 0;
         // Forward this row's resolved empty-spool-weight (the just-entered tare when
         // the gross missing-tare prompt fired above, otherwise the spool/filament/
         // vendor cascade value) so the post-archive record prompt is pre-filled.
         handed = true;
-        window.saveSpoolWeight(id, null, { used_weight: r.used_weight }, autoArchive, details.empty);
+        window.saveSpoolWeight(id, null, { used_weight: r.used_weight }, autoArchive, details.empty,
+            { archiveSwitch: switchOn, empties: remainingAfter <= 0, wasArchived: details.archived === true });
     } finally {
         // Not saved after all, and scanned again while its details were read:
         // its box is open for the new reading, with what was typed for it.
@@ -987,7 +1009,21 @@ window.saveWeighOutRow = async (idStr) => {
     }
 };
 
-window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts = null, emptyPrefill = null) => {
+// `how` (Group 54.7; Derek, 2026-11-07, (a): "Auto-Archive 0g" off means off) is
+// what the window the reading was typed in says, from each caller:
+//   archiveSwitch: that window's own switch (the weigh-out list's, or the
+//     Quick-Weigh's "Auto Archive & Eject if Empty (0g)"), sent as `auto_archive`
+//     beside `id` and `updates`. Off, /api/spool/update keeps a spool weighed to
+//     0 g in stock where it is; on, its rule (archive at 0 g) decides, also where
+//     the page's own arithmetic says the spool isn't empty. The switch is sent,
+//     never the per-save verdict (autoArchiveOpts).
+//   empties: the save leaves 0 g by the page's own reading.
+//   wasArchived: the spool was archived before the save, as the page read it
+//     (it stays archived at 0 g with the switch off, so it isn't "kept in stock").
+// A caller that names no switch (an older one): the weigh-out list's switch when
+// it leaves the verdict to this function, as that path always read it, else none,
+// and the server's rule decides, as before.
+window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts = null, emptyPrefill = null, how = null) => {
     let updates = updatesObj || {};
     if (newWeight !== null && newWeight !== "" && !isNaN(newWeight)) {
         updates.remaining_weight = parseFloat(newWeight);
@@ -1017,6 +1053,15 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
         updates.archived = true;
     }
 
+    const told = how || {};
+    const archiveSwitch = typeof told.archiveSwitch === 'boolean' ? told.archiveSwitch
+        : (autoArchiveOpts === null && autoToggle ? !!autoToggle.checked : null);
+    const empties = typeof told.empties === 'boolean' ? told.empties
+        : (updates.remaining_weight !== undefined && updates.remaining_weight <= 0);
+    const wasArchived = typeof told.wasArchived === 'boolean' ? told.wasArchived : heldArchived(id);
+    const request = { id: id, updates: updates };
+    if (archiveSwitch !== null) request.auto_archive = archiveSwitch;
+
     setProcessing(true);
 
     // Its row shows the save on its way (markSaving). The focus moves on from
@@ -1031,10 +1076,7 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
     fetch(`/api/spool/update`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            id: id,
-            updates: updates
-        })
+        body: JSON.stringify(request)
     })
     .then(r => r.json())
     .then(res => {
@@ -1044,7 +1086,16 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
                 // Saved: a redraw from now on draws its row as any other (its
                 // fade, or a scan of it, decides what comes next).
                 savingIds.delete(id);
-                showToast(`Updated Spool #${id}`, 'success');
+                // Group 54.7: weighed to 0 g with the switch off, the spool
+                // stays in stock, and the toast says so, for a success
+                // toast's 4 s (the plain one keeps showToast's default).
+                const keptInStock = archiveSwitch === false && empties && !wasArchived
+                    && !(res && res.auto_archived);
+                if (keptInStock) {
+                    showToast(`Updated Spool #${id}: 0 g left, kept in stock (Auto-Archive is off)`, 'success', 4000);
+                } else {
+                    showToast(`Updated Spool #${id}`, 'success');
+                }
                 // Group 42.3c: a used-up spool weighed back above 0 g whose old
                 // toolhead holds another spool now went to Unassigned instead.
                 if (res && res.warning) showToast(res.warning, 'warning', 7000);
@@ -1230,11 +1281,15 @@ window.openQuickWeigh = (spoolId) => {
                     // Used == initial means remaining hits zero; auto-archive
                     // gate matches the legacy behavior (auto-archive only when
                     // the toggle is on AND the spool emptied).
-                    const autoArchive = !!payload.auto_archive &&
-                        Math.max(0, initial - payload.used_weight) <= 0;
+                    const switchOn = !!payload.auto_archive;
+                    const empties = Math.max(0, initial - payload.used_weight) <= 0;
+                    const autoArchive = switchOn && empties;
                     // Forward the tare WeightEntry collected (Gross-mode missing-
                     // tare prompt) so the post-archive record prompt is pre-filled.
-                    window.saveSpoolWeight(d.id, null, updates, autoArchive, payload.empty_spool_weight);
+                    // This window's own switch goes as `auto_archive` (Group 54.7),
+                    // never the weigh-out list's.
+                    window.saveSpoolWeight(d.id, null, updates, autoArchive, payload.empty_spool_weight,
+                        { archiveSwitch: switchOn, empties, wasArchived: d.archived === true });
                 },
             });
         })

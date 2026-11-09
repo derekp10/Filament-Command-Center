@@ -182,6 +182,9 @@ def _box(page, sid):
 
 
 def _updates(page):
+    """Every weight posted, as sent. Since Group 54.7 each carries `auto_archive`,
+    the list's "Auto-Archive 0g" switch (on unless a test turns it off), so the
+    exact bodies below say `"auto_archive": True` (updated deliberately)."""
     return page.evaluate("() => window.__posts.filter((p) => p.url === '/api/spool/update').map((p) => p.body)")
 
 
@@ -1039,7 +1042,7 @@ def test_a_prompts_save_waits_while_a_scan_is_answered(wo, prompt):
     _saved(page, len(before) + 1)
     ups = _updates(page)
     used = 475 if prompt == "tare" else 325
-    assert ups[len(before):] == [{"id": 57, "updates": {"used_weight": used}}] and _filament_writes(page) == 0, ups
+    assert ups[len(before):] == [{"id": 57, "updates": {"used_weight": used}, "auto_archive": True}] and _filament_writes(page) == 0, ups
 
 
 @pytest.mark.parametrize("prompt", ["tare", "empty"])
@@ -1087,7 +1090,7 @@ def test_a_prompt_doesnt_open_while_a_scan_is_answered(wo, prompt):
     _saved(page, saved_before + 1)
     ups = _updates(page)
     used = 475 if prompt == "tare" else 325
-    assert ups[saved_before:] == [{"id": 57, "updates": {"used_weight": used}}] and _filament_writes(page) == 0, ups
+    assert ups[saved_before:] == [{"id": 57, "updates": {"used_weight": used}, "auto_archive": True}] and _filament_writes(page) == 0, ups
 
 
 def test_a_save_that_reads_its_details_first_moves_the_focus_on_at_once(wo):
@@ -1118,7 +1121,8 @@ def test_a_save_that_reads_its_details_first_moves_the_focus_on_at_once(wo):
     press(page, "25", 150)
     _saved(page, 2)
     ups = _updates(page)
-    assert ups == [{"id": 6, "updates": {"used_weight": 500}}, {"id": 57, "updates": {"used_weight": 325}}], ups
+    assert ups == [{"id": 6, "updates": {"used_weight": 500}, "auto_archive": True},
+                   {"id": 57, "updates": {"used_weight": 325}, "auto_archive": True}], ups
 
 
 def test_after_the_last_box_is_saved_a_reading_typed_before_the_next_answer_is_kept_for_it(wo):
@@ -1143,14 +1147,14 @@ def test_after_the_last_box_is_saved_a_reading_typed_before_the_next_answer_is_k
     later(page, 300)
     press(page, "425", 150)
     page.wait_for_timeout(50)
-    assert (_box(page, 6), _updates(page)) == ("500", [{"id": 6, "updates": {"used_weight": 500}}])
+    assert (_box(page, 6), _updates(page)) == ("500", [{"id": 6, "updates": {"used_weight": 500}, "auto_archive": True}])
     _release(page, "scan")
     _scan_answered(page)
     assert (_focus(page), _box(page, 57), _scans(page)) == ("57", "425", ["ID:57"])
     later(page, 300)
     press(page, "", 0)
     _saved(page, 2)
-    assert _updates(page)[1] == {"id": 57, "updates": {"used_weight": 325}}
+    assert _updates(page)[1] == {"id": 57, "updates": {"used_weight": 325}, "auto_archive": True}
 
 
 @pytest.mark.parametrize("mode, typed", [("additive", "+25"), ("set_used", "0"), ("gross", "645")])
@@ -1194,7 +1198,7 @@ def test_a_reading_left_in_a_spools_own_box_is_replaced_by_the_one_typed_before_
     later(page, 150)
     press(page, "25", 150)
     _saved(page)
-    assert (_updates(page), _unassigned(page)) == ([{"id": 6, "updates": {"used_weight": used}}], []), mode
+    assert (_updates(page), _unassigned(page)) == ([{"id": 6, "updates": {"used_weight": used}, "auto_archive": True}], []), mode
 
 
 def test_a_spool_scanned_again_while_it_saves_over_the_empty_weight_prompt_keeps_the_reading(wo):
@@ -1258,7 +1262,7 @@ def test_a_key_typed_on_another_rows_save_button_while_a_scan_is_answered_goes_w
     later(page, 150)
     press(page, "25", 150)
     _saved(page)
-    assert _updates(page) == [{"id": 57, "updates": {"used_weight": 325}}]
+    assert _updates(page) == [{"id": 57, "updates": {"used_weight": 325}, "auto_archive": True}]
 
 
 def test_a_backspace_takes_back_a_key_held_for_a_scan(wo):
@@ -1283,7 +1287,7 @@ def test_a_backspace_takes_back_a_key_held_for_a_scan(wo):
     later(page, 150)
     press(page, "", 0)
     _saved(page)
-    assert _updates(page) == [{"id": 57, "updates": {"used_weight": 325}}]
+    assert _updates(page) == [{"id": 57, "updates": {"used_weight": 325}, "auto_archive": True}]
 
 
 def test_a_scanners_second_enter_doesnt_move_the_focus_before_the_answer(wo):
@@ -1306,7 +1310,7 @@ def test_a_scanners_second_enter_doesnt_move_the_focus_before_the_answer(wo):
     later(page, 150)
     press(page, "25", 150)
     _saved(page)
-    assert _updates(page) == [{"id": 57, "updates": {"used_weight": 325}}]
+    assert _updates(page) == [{"id": 57, "updates": {"used_weight": 325}, "auto_archive": True}]
 
 
 @pytest.mark.parametrize("scanned", [134, 57])
@@ -1368,7 +1372,7 @@ def test_a_scan_queued_behind_another_takes_the_reading_typed_meanwhile(wo, when
         later(page, 300)
         press(page, "", 0)
     _saved(page)
-    assert _updates(page) == [{"id": 57, "updates": {"used_weight": 105}}], when
+    assert _updates(page) == [{"id": 57, "updates": {"used_weight": 105}, "auto_archive": True}], when
 
 
 def test_a_scan_queued_behind_a_spool_scan_that_names_no_spool_leaves_it_the_focus(wo):
@@ -1398,7 +1402,7 @@ def test_a_scan_queued_behind_a_spool_scan_that_names_no_spool_leaves_it_the_foc
     later(page, 150)
     press(page, "5", 150)
     _saved(page)
-    assert _updates(page) == [{"id": 57, "updates": {"used_weight": 325}}]
+    assert _updates(page) == [{"id": 57, "updates": {"used_weight": 325}, "auto_archive": True}]
 
 
 def test_a_queued_scan_answered_without_the_server_holds_nothing_off(wo):
@@ -1425,7 +1429,7 @@ def test_a_queued_scan_answered_without_the_server_holds_nothing_off(wo):
     later(page, 150)
     press(page, "", 0)
     _saved(page)
-    assert _updates(page) == [{"id": 57, "updates": {"used_weight": 325}}]
+    assert _updates(page) == [{"id": 57, "updates": {"used_weight": 325}, "auto_archive": True}]
 
 
 def test_an_earlier_spool_scan_answered_after_a_later_one_that_named_none_takes_the_focus(wo):
@@ -1696,7 +1700,7 @@ def test_a_save_that_read_its_details_first_doesnt_open_its_tare_prompt_over_the
     later(page, 150)
     press(page, "45", 150)
     _saved(page)
-    assert _updates(page) == [{"id": 6, "updates": {"used_weight": 522}}]
+    assert _updates(page) == [{"id": 6, "updates": {"used_weight": 522}, "auto_archive": True}]
     assert page.evaluate("() => !document.querySelector('.weigh-input[data-id=\"8\"]').disabled") and _box(page, 8) == "645"
     page.locator(".weigh-input[data-id='8']").focus()
     later(page, 700)
@@ -1881,7 +1885,7 @@ def test_enter_waits_for_an_earlier_spool_scan_after_a_later_one_named_none(wo):
     later(page, 300)
     press(page, "", 0)
     _saved(page)
-    assert _updates(page) == [{"id": 57, "updates": {"used_weight": 325}}]
+    assert _updates(page) == [{"id": 57, "updates": {"used_weight": 325}, "auto_archive": True}]
 
 
 def _queue_behind(page, labels_and_keys):
