@@ -316,6 +316,118 @@ def test_the_next_wizard_session_forgets_a_touch(wiz):
     assert "settings_bed_temp" not in body["filament_data"], body["filament_data"]
 
 
+# --- a scanner's label in a number box (Group 54 review, R2-2) --------------------------
+#
+# With a box's value selected (the focus came by Tab), Chromium's number box rejects
+# a scanned label's letters, but its first rejected key still deletes the selection
+# and fires ONE `input` (insertText, the box now '' with no badInput). The scan goes
+# nowhere (the scan accumulator leaves a box's keys to the box, and the wizard has no
+# field scan capture), and the emptied box counted as the person's: 54.5's touched
+# set took it as a clear, and Spoolman wiped the field at Save. A key the box can't
+# take is no edit now: the box gets its value back, still selected, and nothing counts
+# it. A label with none of [0-9eE+-.] in it does this (LOC:XL, CMD:UNDO, CMD:AUDIT).
+
+LABELS = ["LOC:XL", "CMD:UNDO"]
+
+
+def _tab_in(page, box):
+    """The focus arrives by Tab, so the box's value is selected, as Chromium does."""
+    page.focus(box)
+    page.keyboard.press("Shift+Tab")
+    page.keyboard.press("Tab")
+    assert page.evaluate("(s) => document.activeElement === document.querySelector(s)", box)
+
+
+def _scan_into(page, box, label):
+    _tab_in(page, box)
+    page.keyboard.type(label, delay=8)          # a scanner types its label, then Enter
+    page.keyboard.press("Enter")
+
+
+@pytest.mark.parametrize("label", LABELS)
+def test_a_scanned_label_never_clears_the_bed_temperature(wiz, label):
+    """RED on the base: the box empty and `settings_bed_temp: null` sent, which
+    Spoolman takes as "no value"."""
+    _open_edit(wiz)
+    _scan_into(wiz, "#wiz-fil-settings_bed_temp", label)
+    assert _value(wiz, "#wiz-fil-settings_bed_temp") == "60"
+    assert _touched(wiz) == []
+    body = _save(wiz, EDIT)
+    assert body["filament_data"]["settings_bed_temp"] == 60, _got(body["filament_data"], "settings_bed_temp")
+
+
+@pytest.mark.parametrize("box,part,key", BOXES, ids=[b[0][1:] for b in BOXES])
+def test_a_scanned_label_clears_none_of_the_five_boxes(wiz, box, part, key):
+    """Every box the touched set reads. RED on the base for all five: null sent."""
+    _open_edit(wiz)
+    shown = _value(wiz, box)
+    assert shown != ""
+    _scan_into(wiz, box, "LOC:XL")
+    assert _value(wiz, box) == shown
+    assert _touched(wiz) == []
+    body = _save(wiz, EDIT)
+    assert _got(body[part], key) is not None, (key, _got(body[part], key))
+
+
+def test_a_scanned_label_leaves_a_marked_price_marked_and_unsent(wiz):
+    """A spool with no price of its own shows its filament's 25 "↩ from filament"
+    (Group 54.8). RED on the base: the box emptied, the mark gone, and `price: null`
+    sent."""
+    _open_edit(wiz, price=None)
+    _scan_into(wiz, "#wiz-spool-price", "LOC:XL")
+    assert _value(wiz, "#wiz-spool-price") == "25"
+    assert wiz.evaluate("() => [wizardSpoolPriceIsFilaments(), getComputedStyle("
+                        "document.getElementById('wiz-spool-price-inherited-badge')).display !== 'none']") == [True, True]
+    body = _save(wiz, EDIT)
+    assert "price" not in body["spool_data"], _got(body["spool_data"], "price")
+
+
+def test_a_scanned_label_leaves_an_inherited_empty_weight_marked_and_unsent(wiz):
+    """The spool's empty weight it only inherits (its filament's 200, "↩ from
+    filament"). RED on the base: the box emptied, its badge hidden, and
+    `spool_weight: null` sent."""
+    _open_edit(wiz, spool_wt=None)
+    _scan_into(wiz, "#wiz-spool-empty_weight", "CMD:UNDO")
+    assert _value(wiz, "#wiz-spool-empty_weight") == "200"
+    assert wiz.evaluate("() => [wizardSpoolEmptyWeightIsInherited(), getComputedStyle("
+                        "document.getElementById('wiz-spool-empty-inherited-badge')).display !== 'none']") == [True, True]
+    body = _save(wiz, EDIT)
+    assert "spool_weight" not in body["spool_data"], _got(body["spool_data"], "spool_weight")
+
+
+def test_a_scanned_label_never_zeroes_the_used_weight(wiz):
+    """Claude's call: every number box in the wizard, not just the five. An emptied
+    Total Used box is sent as 0, a refill of a spool with 500 g used. RED on the
+    base: `used_weight: 0`."""
+    _open_edit(wiz)
+    assert _value(wiz, "#wiz-spool-used") == "500"
+    _scan_into(wiz, "#wiz-spool-used", "LOC:XL")
+    assert _value(wiz, "#wiz-spool-used") == "500"
+    assert _save(wiz, EDIT)["spool_data"]["used_weight"] == 500
+
+
+def test_a_persons_backspace_still_empties_the_box(wiz):
+    """A person's own Delete or Backspace is an edit, and in Edit Spool a clear. A
+    pin: green on the base, red on a fix that also undoes a deletion."""
+    _open_edit(wiz)
+    _tab_in(wiz, "#wiz-fil-settings_bed_temp")
+    wiz.keyboard.press("Backspace")
+    assert _value(wiz, "#wiz-fil-settings_bed_temp") == ""
+    body = _save(wiz, EDIT)
+    assert _got(body["filament_data"], "settings_bed_temp") is None, _got(body["filament_data"], "settings_bed_temp")
+
+
+def test_a_persons_digits_over_the_selected_value_are_an_edit(wiz):
+    """A key the box takes replaces the selection, as before. A pin: green on the
+    base, red on a fix that undoes every insert into a selected box."""
+    _open_edit(wiz)
+    _tab_in(wiz, "#wiz-fil-settings_bed_temp")
+    wiz.keyboard.type("65")
+    assert _value(wiz, "#wiz-fil-settings_bed_temp") == "65"
+    assert _touched(wiz) == ["fil:settings_bed_temp"]
+    assert _save(wiz, EDIT)["filament_data"]["settings_bed_temp"] == 65
+
+
 # --- the real dashboard ------------------------------------------------------------------
 
 @pytest.mark.usefixtures("require_server")

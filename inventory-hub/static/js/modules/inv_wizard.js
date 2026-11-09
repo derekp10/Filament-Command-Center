@@ -219,6 +219,42 @@ window.wizardClearSpoolEmptyWeightBadge = () => {
     }
 })();
 
+// --- A KEY A NUMBER BOX CAN'T TAKE IS NO EDIT (Group 54 review, R2-2) ---
+// With a number box's value selected (the focus came by Tab), Chromium deletes the
+// selection for a key the box rejects (a letter, ':') and fires one `input` that
+// inserted nothing: insertText, the box now '' with no badInput. A scanner's label
+// typed there (LOC:XL, CMD:UNDO: none of 0-9 e E + - . in it) emptied the box, and
+// that counted as the person's: 54.5's touched set made it a clear at Edit Spool's
+// Save, the price's and empty weight's "↩ from …" marks went, and an emptied Total
+// Used went out as 0. Every number box in the wizard now gets back the value it had
+// just before, still selected, and the event goes no further (this listener is the
+// first to hear it): nothing counts it as touched, takes a mark off, copies it or
+// marks the wizard changed. A person's Delete or Backspace, and a key the box takes,
+// are edits as before. The scan itself still goes nowhere: the scan accumulator
+// leaves a box's keys to the box, and this routes them nowhere new.
+(function () {
+    const wizEl = document.getElementById('wizardModal');
+    if (!wizEl) return;
+    const isNumberBox = (t) => !!t && t.tagName === 'INPUT' && t.type === 'number';
+    const valueBeforeKey = new WeakMap();   // box → its value when a key was typed in it
+    wizEl.addEventListener('beforeinput', (e) => {
+        if (!isNumberBox(e.target)) return;
+        if (e.inputType === 'insertText' && e.data) valueBeforeKey.set(e.target, e.target.value);
+        else valueBeforeKey.delete(e.target);
+    }, true);
+    wizEl.addEventListener('input', (e) => {
+        const box = e.target;
+        if (!isNumberBox(box)) return;
+        const before = valueBeforeKey.get(box);
+        valueBeforeKey.delete(box);
+        if (before === undefined || before === '' || e.inputType !== 'insertText') return;
+        if (box.value !== '' || (box.validity && box.validity.badInput)) return;
+        box.value = before;
+        try { box.select(); } catch (_) { /* a box that can't select keeps its caret */ }
+        e.stopImmediatePropagation();
+    }, true);
+})();
+
 window.openWizardModal = async () => {
     // L26 follow-up: close any open details modal before launching the
     // wizard. The 2026-04-29 lock-up Derek reproed was wizard-on-top-of-
