@@ -1558,9 +1558,13 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
     // prompt itself, since the toast layer is under every overlay (Group 54 review
     // R5-1: the weigh page's "Spool #57 is archived but still at XL-1: …" was hidden
     // behind this prompt for its whole 7 s). The label's own look, in yellow.
+    // A place id in it stays whole, as in every other dialog (fccKeepWhole; review R6-7:
+    // "still at LR-" / "MDB-1" on a phone at Extra Large); one longer than the line
+    // itself breaks at its hyphens again, measured once it is drawn (below).
     const notice = (opts && opts.notice) ? String(opts.notice) : '';
+    const keepWhole = (h) => (typeof window.fccKeepWhole === 'function' ? window.fccKeepWhole(h) : h);
     const noticeRow = notice
-        ? `<div id="fcc-archive-empty-notice" role="alert" class="text-warning small" style="margin-bottom:10px;">⚠️ ${esc(notice)}</div>`
+        ? `<div id="fcc-archive-empty-notice" role="alert" class="text-warning small" style="margin-bottom:10px;">⚠️ ${keepWhole(esc(notice))}</div>`
         : '';
 
     const propagateRow = canPropagate ? `
@@ -1635,6 +1639,18 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
         onEscape: cleanup,   // Escape == "Later" (no-op); mountOverlay owns Escape
     });
     const ov = handle.element;
+    // An id kept whole that is longer than the line itself widens the whole prompt
+    // past the window's sides (a 360 px phone at Extra Large), so then it breaks at its
+    // hyphens again, measured as fccFitQuestion measures a question.
+    const noticeEl = ov.querySelector('#fcc-archive-empty-notice');
+    const dialogEl = ov.querySelector('[data-fcc-weight-keys]');
+    if (noticeEl && dialogEl && noticeEl.querySelector('.fcc-keep-whole')) {
+        const vw = (document.documentElement && document.documentElement.clientWidth) || window.innerWidth || 0;
+        if ((vw > 0 && dialogEl.getBoundingClientRect().width > vw + 0.5)
+            || noticeEl.scrollWidth > noticeEl.clientWidth + 1) {
+            noticeEl.classList.add('fcc-keep-whole-off');
+        }
+    }
     // A spool scanned over it in the weigh-out list answers it Later: that
     // spool is the one being weighed now, and its reading would go in this box
     // as the filament's empty weight (inv_weigh_out.js, round 8). A save

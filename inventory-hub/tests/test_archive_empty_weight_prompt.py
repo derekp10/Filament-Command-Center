@@ -348,3 +348,73 @@ def test_archive_empty_weight_prompt_has_no_notice_unless_given(page: Page):
     page.wait_for_selector("#fcc-archive-empty-wt", state="visible", timeout=3_000)
     assert page.locator("#fcc-archive-empty-notice").count() == 0
     page.locator("#fcc-archive-later").click()
+
+
+# The lines a place id takes inside the prompt's notice: a Range over its text,
+# counted by distinct line tops, so it measures the same with or without a span.
+_ID_LINES = """(id) => {
+    const n = document.querySelector('#fcc-archive-empty-notice');
+    if (!n) return -1;
+    const walker = document.createTreeWalker(n, NodeFilter.SHOW_TEXT);
+    const nodes = []; let text = '';
+    while (walker.nextNode()) { nodes.push([walker.currentNode, text.length]); text += walker.currentNode.data; }
+    const at = text.indexOf(id);
+    if (at < 0) return -2;
+    const find = (off) => { for (let i = nodes.length - 1; i >= 0; i--) if (nodes[i][1] <= off) return [nodes[i][0], off - nodes[i][1]]; };
+    const r = document.createRange();
+    const s = find(at); r.setStart(s[0], s[1]);
+    const e = find(at + id.length - 1); r.setEnd(e[0], e[1] + 1);
+    return new Set(Array.from(r.getClientRects()).filter((x) => x.width > 0).map((x) => Math.round(x.top))).size;
+}"""
+
+
+def test_archive_empty_weight_prompt_keeps_a_place_id_whole_on_a_phone(page: Page):
+    """Group 54 review R6-7 (RED on 6e499a2): on a phone at Large or Extra Large
+    text the notice broke a place id at its hyphens ("still at LR-" / "MDB-1",
+    "RCOI-" / "5"), where every other dialog keeps one whole (fccKeepWhole; Derek
+    flagged "SHELF-2- / R3", 2026-11-04). Each id here, after spool numbers of two
+    lengths, takes one line."""
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.showArchiveEmptyWeightPrompt === 'function'")
+    _stub_filament_and_writes(page)
+    split = []
+    for size in ("large", "xlarge"):
+        page.evaluate("(s) => document.documentElement.setAttribute('data-fcc-text-size', s)", size)
+        for place in ("LR-MDB-1", "RCOI-5", "PM-DB-XL-L", "SHELF-2-R3", "CR-CT-2-R1", "XL-1"):
+            for sid in (57, 1234):
+                said = f"Spool #{sid} is archived but still at {place}: FCC couldn't take it off there."
+                page.evaluate("(said) => { window.showArchiveEmptyWeightPrompt(99, 7, null, { notice: said }); }", said)
+                page.wait_for_selector("#fcc-archive-empty-notice", state="visible", timeout=3_000)
+                lines = page.evaluate(_ID_LINES, place)
+                if lines != 1:
+                    split.append((size, place, sid, lines))
+                page.locator("#fcc-archive-later").click()
+                page.wait_for_selector("#fcc-archive-empty-overlay", state="detached", timeout=3_000)
+    assert split == [], split
+
+
+def test_archive_empty_weight_prompt_lets_an_id_longer_than_its_line_break(page: Page):
+    """Group 54 review R6-7: an id longer than the notice's line itself (a 360 px
+    phone at Extra Large) breaks at its hyphens again (.fcc-keep-whole-off), as
+    #confirmModal's message and Done's question do. Kept whole it widened the whole
+    prompt past the window's sides (472 px on 360), so the measure is the prompt's
+    width against the window, as fccFitQuestion's."""
+    page.set_viewport_size({"width": 360, "height": 800})
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.showArchiveEmptyWeightPrompt === 'function'")
+    page.evaluate("() => document.documentElement.setAttribute('data-fcc-text-size', 'xlarge')")
+    _stub_filament_and_writes(page)
+    said = ("Spool #57 is archived but still at GARAGE-SHELVING-UNIT-WEST-WALL-UPPER-BIN-12: "
+            "FCC couldn't take it off there.")
+    page.evaluate("(said) => { window.showArchiveEmptyWeightPrompt(99, 7, null, { notice: said }); }", said)
+    page.wait_for_selector("#fcc-archive-empty-notice", state="visible", timeout=3_000)
+    fit = page.evaluate("""() => { const n = document.querySelector('#fcc-archive-empty-notice');
+        const d = document.querySelector('#fcc-archive-empty-overlay [data-fcc-weight-keys]').getBoundingClientRect();
+        return { off: n.classList.contains('fcc-keep-whole-off'), left: d.left, right: d.right,
+                 vw: document.documentElement.clientWidth }; }""")
+    assert fit["off"] is True, fit
+    assert fit["left"] >= -0.5 and fit["right"] <= fit["vw"] + 0.5, fit
+    page.locator("#fcc-archive-later").click()
