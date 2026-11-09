@@ -785,13 +785,14 @@ const renderWeighOutList = () => {
     }
 };
 
-// Compute used_weight for a row given the modal-level mode + the cached
+// Compute used_weight for a row given the weigh-out mode `mode` + the cached
 // spool details + the row's typed input. Returns the computeUsedWeight
 // result object (or null when details aren't loaded yet / input is empty).
-const computeRowResult = (id, rawInputValue) => {
+// The mode is the caller's (Group 54 review R3-2): a row's preview passes the
+// window's mode now, a save the mode it read when Enter was pressed.
+const computeRowResult = (id, rawInputValue, mode) => {
     const details = weighOutDetailsCache.get(Number(id));
     if (!details) return null;
-    const mode = window.weighOutMode || 'net';
     let value;
     if (mode === 'additive') {
         const parsed = window.parseAdditiveInput(rawInputValue);
@@ -823,7 +824,7 @@ window.updateWeighRowPreview = (inputEl) => {
         previewEl.innerText = '';
         return;
     }
-    const r = computeRowResult(id, raw);
+    const r = computeRowResult(id, raw, window.weighOutMode || 'net');
     if (!r) {
         previewEl.innerText = ''; // details still loading
         return;
@@ -883,6 +884,19 @@ window.saveWeighOutRow = async (idStr) => {
     if (!inputEl) return;
     const raw = inputEl.value;
     if (raw === '' || raw === '+' || raw === '-') return;
+    // What the person asked at Enter (or 💾) is read here, before anything
+    // waits (Group 54 review R3-1 / R3-2): the reading above, the window's mode
+    // and its "Auto-Archive 0g" switch. The save can wait up to 10 s for the
+    // spool's details, then for its tare, and a click on the switch or a mode
+    // button meanwhile (for the next spool) used to decide this one: a spool
+    // weighed to 0 g with the switch off was archived and taken off its shelf,
+    // and Net 425 was saved as Set Used 425. Read after a wait, by design: the
+    // spool's own state (its details; the buffer's word on whether it is
+    // archived), the tare the prompt gives, where the focus is and what was
+    // typed meanwhile (the late tare prompt's check), and the row as drawn now
+    // (a redraw replaces it).
+    const mode = window.weighOutMode || 'net';
+    const switchOn = listArchiveSwitch();
     // Not while a scan read in this window is being answered: its spool's
     // reading may still be on its way to its box (Group 57 review, round 8: a
     // reading and Enter typed before the answer were saved to another spool).
@@ -925,22 +939,25 @@ window.saveWeighOutRow = async (idStr) => {
             // Fallback: the backend treats `newWeight` as remaining_weight,
             // which a Net reading is. Any other mode's reading needs the
             // spool's details (round 9: Additive '+25' was saved as 25 g left,
-            // Set Used '0' as an empty spool, which was archived).
-            if ((window.weighOutMode || 'net') !== 'net') {
+            // Set Used '0' as an empty spool, which was archived). The mode
+            // the reading was typed in, at Enter (review R3-2).
+            if (mode !== 'net') {
                 showToast(`Couldn't read #${id}'s details, so its reading wasn't saved: press Enter in its box to try again`, 'warning', 7000);
                 return;
             }
             const n = window.parseGramsReading(raw);
             if (Number.isNaN(n)) { notAReading(); return; }
             handed = true;
-            // The list's own switch (Group 54.7), and the buffer's word on
-            // whether the spool is archived: its details couldn't be read.
-            window.saveSpoolWeight(id, n, null, null, null,
-                { archiveSwitch: listArchiveSwitch(), empties: n <= 0, wasArchived: heldArchived(id) });
+            // The list's own switch (Group 54.7) as it was at Enter, and its
+            // verdict with it, so saveSpoolWeight never reads the switch itself
+            // now (review R3-1); and the buffer's word on whether the spool is
+            // archived: its details couldn't be read.
+            window.saveSpoolWeight(id, n, null, switchOn === true && n <= 0, null,
+                { archiveSwitch: switchOn, empties: n <= 0, wasArchived: heldArchived(id) });
             return;
         }
 
-        let r = computeRowResult(id, raw);
+        let r = computeRowResult(id, raw, mode);
         if (r && r.error === 'not_a_reading') { notAReading(); return; }
         if (!r || r.error) {
             showToast('Could not compute used weight', 'error');
@@ -981,7 +998,7 @@ window.saveWeighOutRow = async (idStr) => {
             if (tare === null) { window.weighOutRefocus(); return; }
             details.empty = Number(tare);
             weighOutDetailsCache.set(id, details);
-            r = computeRowResult(id, raw);
+            r = computeRowResult(id, raw, mode);
             if (!r || r.error || r.requires_empty) {
                 showToast('Could not compute used weight', 'error');
                 return;
@@ -992,9 +1009,9 @@ window.saveWeighOutRow = async (idStr) => {
         // saveSpoolWeight's auto-archive check inspects remaining_weight, but
         // we're submitting used_weight — so compute the auto-archive verdict
         // locally and pass it explicitly via the 4th arg. The list's switch
-        // itself goes too (Group 54.7), sent as `auto_archive`.
+        // itself goes too (Group 54.7), sent as `auto_archive`: both from the
+        // switch as it was at Enter (review R3-1).
         const remainingAfter = Math.max(0, details.initial - r.used_weight);
-        const switchOn = listArchiveSwitch();
         const autoArchive = switchOn === true && remainingAfter <= 0;
         // Forward this row's resolved empty-spool-weight (the just-entered tare when
         // the gross missing-tare prompt fired above, otherwise the spool/filament/

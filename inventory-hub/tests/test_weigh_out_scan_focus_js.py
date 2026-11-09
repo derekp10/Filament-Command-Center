@@ -2046,3 +2046,74 @@ def test_the_fallback_goes_to_the_latest_spool_scan_read(wo):
     page.wait_for_timeout(200)
     assert _focus(page) == "134"
 
+
+# --- Group 54 review, R3-2 (2026-11-09) ----------------------------------------
+# The weigh-out mode is read when Enter is pressed. A save whose spool's details
+# are still being read waits (up to 10 s), and the mode used to be read only once
+# they came, so a click on a mode button meanwhile (for the next spool, say)
+# decided the reading before it. Each test below is RED on c2f4222.
+
+
+def _enter_then_click_a_mode(page, open_, *, mode, typed, clicked, fail_details=False):
+    """#57's reading typed in `mode` and its Enter pressed while its details are
+    held (its row waits, the focus moving on to #6's box); then a click on the
+    `clicked` mode button; then the details come (or, `fail_details`, can't be
+    read: the fallback)."""
+    page.evaluate("(f) => { window.__holdDetails = [57]; window.__detailsFail = f; }", fail_details)
+    open_(held=(57, 6), mode=mode)
+    press(page, typed, 150)                       # its Enter: #57's details aren't in yet
+    later(page, 200)
+    assert _updates(page) == [] and _focus(page) == "6", "#57 waits for its details"
+    page.locator(f"#weigh-out-mode [data-mode='{clicked}']").click()
+    later(page, 200)
+    assert page.evaluate("() => window.weighOutMode") == clicked
+    page.evaluate("() => window.__releaseDetails(57)")
+
+
+@pytest.mark.parametrize("mode, typed, clicked, used", [
+    ("net", "425", "set_used", 325),
+    ("additive", "0", "net", 100),
+], ids=["net-then-set-used", "additive-then-net"])
+def test_a_save_that_waits_for_its_details_reads_the_mode_as_it_was_at_enter(wo, mode, typed, clicked, used):
+    """#57 (750 g, 100 g used): Net 425 is 325 g used, and Additive 0 adds nothing
+    (100 g used), whatever mode button is clicked while its details are read. RED
+    on c2f4222: the mode was read once the details came, so Net 425 was saved as
+    Set Used 425, and Additive 0 as Net 0, an empty spool, archived and taken off
+    its place."""
+    page, open_ = wo
+    _enter_then_click_a_mode(page, open_, mode=mode, typed=typed, clicked=clicked)
+    _saved(page)
+    page.wait_for_timeout(100)
+    assert (_updates(page), _unassigned(page)) == (
+        [{"id": 57, "updates": {"used_weight": used}, "auto_archive": True}], []), mode
+
+
+def test_with_no_details_an_additive_reading_stays_unsaved_after_a_click_on_net(wo):
+    """#57's details can't be read, so only a Net reading (what is left) can be
+    saved without them: Additive '25' (25 g more used) waits in its box for
+    another try, with a warning, though Net was clicked while the details were
+    read. RED on c2f4222: the fallback read the mode late and saved '25' as 25 g
+    left."""
+    page, open_ = wo
+    _enter_then_click_a_mode(page, open_, mode="additive", typed="25", clicked="net", fail_details=True)
+    # The save decided: its warning raised, or (the base) a weight posted.
+    page.wait_for_function("""() => window.__posts.some((p) => p.url === '/api/spool/update')
+        || Array.from(document.querySelectorAll('#toast-container .toast-msg'))
+            .some((t) => t.innerText.includes("Couldn't read #57's details"))""", timeout=5000)
+    page.wait_for_timeout(200)
+    assert (_updates(page), _unassigned(page)) == ([], [])
+    assert page.evaluate("() => !document.querySelector('.weigh-input[data-id=\"57\"]').disabled") and _box(page, 57) == "25"
+    assert any("Couldn't read #57's details" in t for t in _toasts(page)), _toasts(page)
+
+
+def test_with_no_details_a_net_reading_is_saved_after_a_click_on_additive(wo):
+    """The other way round: Net '425' with #57's details unreadable is saved as 425
+    g left, though Additive was clicked while they were read. RED on c2f4222: the
+    fallback read the mode late and saved nothing ("Couldn't read #57's
+    details")."""
+    page, open_ = wo
+    _enter_then_click_a_mode(page, open_, mode="net", typed="425", clicked="additive", fail_details=True)
+    _saved(page)
+    assert (_updates(page), _unassigned(page)) == (
+        [{"id": 57, "updates": {"remaining_weight": 425}, "auto_archive": True}], [])
+

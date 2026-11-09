@@ -25,6 +25,9 @@ to any network), so it RUNS under --offline. The server is the page's `fetch`,
 test_weigh_out_scan_focus_js.py's stub; keys are real, on the page's fake clock.
 
 Base proof (94f87de): every test marked RED fails there; the controls pass.
+
+Group 54 review, R3-1 (2026-11-09): the switch is read when Enter is pressed, not
+once the row's details have come. The tests under its heading are RED on c2f4222.
 """
 from __future__ import annotations
 
@@ -225,3 +228,44 @@ def test_control_an_older_caller_that_names_no_switch_sends_none(weigh):
     body = _updates(page)[0]
     assert "auto_archive" not in body and "archived" not in body["updates"], body
     assert _success_toasts(page) == [PLAIN], _success_toasts(page)
+
+
+# --- Group 54 review, R3-1 (2026-11-09): the switch is read when Enter is pressed ---
+
+
+def _enter_then_click_the_switch(page, *, on_at_enter, fail_details):
+    """#57 weighed empty (Net 0) and its Enter pressed with the list's switch as
+    `on_at_enter`, while #57's details are still being read (held: a slow
+    Spoolman), so its row waits; then the person clicks the switch (for the next
+    spool, say), and only then do the details come (or fail to: the fallback)."""
+    page.evaluate("(f) => { window.__holdDetails = [57]; window.__detailsFail = f; }", fail_details)
+    _open_list(page)
+    _list_switch(page, on_at_enter)
+    press(page, "0", 150)
+    later(page, 200)
+    assert _updates(page) == [], "nothing is sent while #57's details are read"
+    page.locator("#weigh-auto-archive").click()
+    later(page, 200)
+    assert page.evaluate("() => document.getElementById('weigh-auto-archive').checked") is (not on_at_enter)
+    page.evaluate("() => window.__releaseDetails(57)")
+    _saved_and_toasted(page)
+
+
+@pytest.mark.parametrize("fail_details", [False, True], ids=["details", "fallback"])
+@pytest.mark.parametrize("on_at_enter", [False, True], ids=["off-at-enter", "on-at-enter"])
+def test_a_save_that_waits_for_its_details_sends_the_switch_as_it_was_at_enter(weigh, on_at_enter, fail_details):
+    """RED: a row's save waits up to 10 s for its spool's details (the fallback too,
+    when they can't be read), and the switch was read only once they came, so a
+    click on it meanwhile decided the spool before it. Off at Enter and turned on:
+    #57 was sent `archived: true` and `auto_archive: true`, then force-unassigned,
+    archived and taken off its shelf against what was asked (the toast said only
+    "Updated Spool #57"). On at Enter and turned off: #57, asked to be archived,
+    was kept in stock. Now the switch is read at Enter: off sends `auto_archive:
+    false`, no `archived` and no force-unassign, and says it was kept in stock; on
+    sends `auto_archive: true`, `archived: true` and the force-unassign."""
+    page = weigh
+    _enter_then_click_the_switch(page, on_at_enter=on_at_enter, fail_details=fail_details)
+    if fail_details:
+        _check(page, switch_on=on_at_enter, empties=True, body_key="remaining_weight", value=0)
+    else:
+        _check(page, switch_on=on_at_enter, empties=True, value=750)
