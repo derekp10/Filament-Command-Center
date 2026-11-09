@@ -117,13 +117,84 @@ _(Each builder appends: the parts done, commits, tests run with results, anythin
   - 54.4's "kept" line prints the raw wire value (`'"4"'`). It is accurate but technical; the migration is dormant.
   - This file's owed-text header said "B4 applies them all" from the numbering before `7cb6988`. It now names b5-chips-docs.
 
+**b5-chips-docs, 2026-11-09: 54.2, the `?v=` bumps and the owed CLAUDE.md text. Done.** Commits `724f022` (54.2, tests only), `e067c00` (cache bust), `cc11239` (CLAUDE.md), and this entry.
+
+- **54.2: nothing broke at 1600x1300, so no code changed and there is no look change (no 6a / 6b pictures).**
+  - New `tests/test_max_attribute_chips_e2e.py`, 3 browser tests. The real dashboard on the dev container. Every read the four windows make is answered in the browser from made-up records: spool #9541; filament #9542 with all 28 in Spoolman's wire form; a field list shaped like dev's, with the 28 as choices; materials, brands, filaments and locations. Every request that isn't a read is answered in the browser too. The heartbeat and log polls are cut off (`conftest.quiet_heartbeat`), so nothing live repaints a window while it is measured and no "N new" log pill floats over it. The scan buffer is the page's own. Nothing reaches dev.
+  - One page session per size walks the spool window, the filament window, its Edit Filament form (opened by its ✏️) and the wizard's Edit Spool. In the wizard, Custom Filament Attributes is opened by its toggle, as a person does, because every optional section opens closed.
+  - Per window, it checks:
+    - 28 chips, in the filament's order;
+    - each chip inside its box and inside the window (`getBoundingClientRect`);
+    - more than one row;
+    - no sideways scroll on the box, the window's body, its frame (the `.modal`) or the page;
+    - the window inside the screen;
+    - the controls after the chips can be reached. They are the next field and the window's last button: Close, ✏️ Edit Filament, the tag box, Save, the wizard's ➕, Slicer Profile and SAVE CHANGES. Each is scrolled to (up and down only), must sit inside the window and on the screen, and must be what `elementFromPoint` finds at its centre.
+  - Results:
+    - Committed sizes, 1600x1300 and 1366x768 at Text size Extra Large: everything holds. At 1600 the chips take 3 rows in the two detail windows, 4 in Edit Filament and 6 in the wizard.
+    - Explored with a scratch plugin, not committed: 1366x768 Standard, 1600x1300 Extra Large, 1280x600 Large and 1024x700 Extra Large. Everything holds.
+  - **At 390x844 (a phone), the chips hold (13 to 16 rows), but two footers don't. That is the phone view, not the attributes.**
+    - The spool window's and the filament window's footer row of buttons doesn't wrap. So Close sticks out past the window's right edge (the spool window's at x 370 to 435, the filament window's at 327 to 392, with the window at 8 to 382), and the window's frame scrolls sideways (435 and 392 px of content in 390).
+    - It is the same, to the pixel, with one attribute as with 28, and at Extra Large it reads 540 and 487 px. So it is recorded in the test's `PHONE_KNOWN` for the phone-view work rather than fixed.
+    - A finding not on that list fails the phone test, and so does a window whose Close no longer sticks out (take it off the list then).
+    - Edit Filament and the wizard hold at 390.
+  - New `TestSearchWithAMaxAttributeFilament` in `tests/test_max_attributes_supported.py`, 61 offline tests on `test_search_api`'s `_attr_filament` / `_attr_get`:
+    - each of the 28 finds the filament (filament target) and its spool (spool target), and nothing else;
+    - all 28 in one query (33 words) find it;
+    - a control finds the plain filament by its own words, which shows the 28 queries discriminate;
+    - `filament_attribute_list` gives all 28 in order, from the wire form and from the parsed one;
+    - both cards' line (the spool card's `format_spool_display` and the filament card's own builder) is every attribute in order, then "PLA".
+  - A side probe (a scratch script, not committed): in the search panel, the card with that 28-word material line wraps it over 5 lines (6 at 390 px) inside the card. Nothing sticks out at 1600 or at 390.
+- **The proof that the checks bite.** Scratch plugins outside the repo either set the test module's `ATTRS` / `EXTRA_CSS` hooks or patch `spoolman_api` in memory (`scratchpad/g54/bite_542.py`, `mut_search_542.py`). No repo file was touched.
+  - E2E (all three tests each time):
+    - the stub cut to one attribute: 3 failed (12 × "1 chips, not 28" and 12 × "1 row(s)": every window, every size);
+    - the 28 reversed: 3 failed (the order, 12×);
+    - the chip boxes made not to wrap (`NOWRAP_CSS`): 3 failed. That is 228 chips outside the window, the body scrolling sideways 12×, the frame 7×, one row 12×, and the wizard's tag box and ➕ pushed out of the window 6×;
+    - not wrapping and held to their line's width ("boxed"): 3 failed, adding 175 chips outside their box and the box scrolling sideways 9×. The wizard's box grows with its chips, so for the wizard the window checks catch it.
+  - Never fired in any run, so not proven to bite; kept as guards: "the page scrolls sideways" (the windows are fixed-position, so they can't widen the page), "the window is wider than the screen", and the reach check's "off the screen", "covered" and "isn't drawn".
+  - Search:
+    - `filament_attribute_list` answering [] fails 59 of 61; the control and the card line, which don't use it, pass;
+    - capped at 10 fails 37 (Matte is still found through "Duel Matte": the search matches substrings);
+    - the card's line cut to 3 words fails the card test only.
+- **Cache bust (`e067c00`).** The two static files the branch changes, in `scripts.html`: `inv_wizard.js` 15 → 16 and `inv_weigh_out.js` 2.2 → 2.3. No test pins a `?v=`, and the dev dashboard serves the new ones.
+- **CLAUDE.md (`cc11239`).** All seven owed entries were applied, in order, by `scratchpad/g54/apply_owed_claude_md.py`, which:
+  - reads each entry's heading to decide between replace and insert, and takes its two fenced blocks;
+  - applies an entry only when its anchor occurs exactly once at its turn;
+  - checks that the new text occurs once afterwards;
+  - keeps CRLF.
+
+  None was skipped, and a second run finds all seven already applied. 54.2 owes none: CLAUDE.md describes neither the chips nor their tests.
+- **Test runs (from inventory-hub/):**
+  - First draft, against the container: the desktop test 1 passed; the phone test 1 failed (the two footers).
+  - Draft bite runs: one attribute 2 failed; nowrap 2 failed; boxed and reversed (desktop) 1 failed each.
+  - Explored sizes: the five above 1 passed each. The phone at Extra Large 1 failed (the same footers), and the same with one attribute.
+  - The final file: 3 passed, four runs in a row (about 20 s each).
+  - Final bite runs: one, reversed, nowrap and boxed: 3 failed each.
+  - `test_max_attributes_supported.py --offline`: 71 passed. The class alone: 61 passed. Mutants: empty 59 failed / 2 passed; cap10 37 / 24; cardcut 1 / 60.
+  - `--offline` with the new E2E file, the supported file and `test_offline_mode.py`: 89 passed, 3 skipped (the E2E file skips offline).
+  - Related offline (`test_search_api`, `test_l316_charact_filament_attributes_unit`, `test_max_attributes_supported`, `test_filament_attrs_split_54_3`): 139 passed.
+  - Browser: `test_detail_modal_attributes` plus the new file: 7 passed. After the `?v=` bump, the new file plus `test_weight_entry_overlay`: 26 passed.
+  - The CLAUDE.md script: the check found 7 to apply; the write applied 7; a re-check found 7 already applied.
+- **Claude's calls.**
+  1. The phone footers are recorded in the test, strictly (Close must still stick out), rather than marked xfail, so the phone run still guards everything else.
+  2. A third committed size, 1366x768 at Extra Large (the review checklist's small laptop and large text). It costs about 7 s.
+  3. The heartbeat is cut off for the walk.
+  4. Edit Filament is opened by a DOM click on the filament window's ✏️, which runs the same handler; the reach check covers the ✏️ itself.
+- **Left / surprising.**
+  - (a) The phone footers want a standalone buglist item for the phone-view work. Not filed: like b1, I left `Feature-Buglist.md` alone.
+  - (b) **Pre-existing, outside 54.2: the wizard's chips build their HTML with the attribute unescaped.** Both builders do it: `wizardAddMultiChoiceChip` (`inv_wizard.js:2234-2238`) and Edit Spool's prefill (`:4759-4760`), as `data-value="${val}">${val} &times;`.
+    - A probe swapped the 28th attribute for `Odd "Quote" <b>Tag</b> & Co`. The spool window, the filament window and Edit Filament show it whole, because they escape it. The wizard's chip reads "Odd".
+    - Save collects the chips by `data-value`, so it would send "Odd". Spoolman 0.27 refuses a value that isn't a choice, so the filament's save would fail; were "Odd" a choice, the attribute would be swapped silently.
+    - `validateNewChoice` lets a quote or `<` into a new choice. No such choice exists on dev today.
+    - Suggested as a standalone item: escape the value in both builders, as the other windows do.
+  - (c) The planning pass's wizard anchors had drifted. The chip box is now built by `wizardGenerateFieldHTML` (`inv_wizard.js:2116`, `chip-container-fil-<key>`), `wizardAddMultiChoiceChip` is at `:2176`, and the edit prefill's chip loop is at `:4741-4762`. The Edit Filament chips are at `inv_details.js:2219-2240`, as filed.
+
 ### Owed CLAUDE.md text
 
 _(Each builder appends the CLAUDE.md sentences its parts make stale or owe, quoting the anchor sentence. b5-chips-docs applies them all with an anchor-checked script, one commit. This line said "B4", the builder numbering before `7cb6988`, where B4 was the chips-and-docs builder; b1's and b3's notes saying "b4" mean the same builder.)_
 
 **From b1-server (54.6, 54.7 server half, 54.1; 54.3 owes nothing, since CLAUDE.md doesn't describe the attribute parser).** All three sit in the "Spool / Filament write surfaces" table. Each anchor and each new text is one line of CLAUDE.md, in its own fenced block, exactly as it is or is to be (checked against CLAUDE.md on 2026-11-09).
 
-1. **54.6 (replace the anchor with the new text).** In the `/api/spool/update` row. Anchor:
+1. **54.6 (replace the anchor with the new text).** **Applied in `cc11239`.** In the `/api/spool/update` row. Anchor:
 
    ```text
    **Only a weight write is a refill (Group 51.1):** the unarchive edge runs only when a write carries `used_weight`, `initial_weight` or `remaining_weight` (the weigh-out row's fallback, Group 51 review; the archive edge still reads only the first two)
@@ -135,7 +206,7 @@ _(Each builder appends the CLAUDE.md sentences its parts make stale or owe, quot
    **Only a weight write is a refill (Group 51.1):** the unarchive edge runs only when a write carries `used_weight`, `initial_weight` or `remaining_weight` (the weigh-out row's fallback, Group 51 review; since Group 54.6 the archive edge reads all three too, a `remaining_weight` without `used_weight` beside it read as the weight left, so the fallback row weighing a spool to 0 g archives it in that one write, with its note, its trail blanked and its single-slot box released; a weight left that isn't a number changes nothing)
    ```
 
-2. **54.7 (insert the new text right after the anchor, one space between).** Same row. Anchor:
+2. **54.7 (insert the new text right after the anchor, one space between).** **Applied in `cc11239`.** Same row. Anchor:
 
    ```text
    ⚠️ Sending `initial_weight` here runs `_auto_archive_on_empty`/`_auto_unarchive_on_refill` — a too-low total can silently archive+unassign a loaded spool.
@@ -147,7 +218,7 @@ _(Each builder appends the CLAUDE.md sentences its parts make stale or owe, quot
    **"Auto-Archive 0g" off means off (Group 54.7; Derek, 2026-11-07, (a)):** an optional top-level `auto_archive` beside `id` and `updates` is the weigh screen's switch. Only JSON `false` passes `update_spool(sid, data, archive_on_empty=False)`, which skips the archive edge entirely (no `archived` added, no location blank, no note, no trail blanks, no box release): a spool weighed to 0 g stays in stock where it is, `auto_archived` is false, the refill edge still runs, and an archived spool weighed to 0 g stays archived where it is. Absent, `true` or anything else (`"false"`, `0`, `null`) is the rule as before. The keyword is passed only for `false`, so a two-argument stand-in for `update_spool` still serves every other request (`tests/move_engine_harness`'s stand-ins take it; `WireSpoolman` hands it on only when False).
    ```
 
-3. **54.1 (replace the anchor with the new text).** The whole row. Anchor:
+3. **54.1 (replace the anchor with the new text).** **Applied in `cc11239`.** The whole row. Anchor:
 
    ```text
    | `routes_scan.py` | `/api/update_filament` quick-edit | Reference impl — surfaces error in response JSON. |
@@ -161,7 +232,7 @@ _(Each builder appends the CLAUDE.md sentences its parts make stale or owe, quot
 
 **From b2-wizard-clears (54.5).** One entry, in the same table's `api_edit_spool_wizard` spool save row (the anchor checked against CLAUDE.md on 2026-11-09: it occurs once). 54.8 changes the price box after this, so b3 may extend the new text.
 
-4. **54.5 (insert the new text right after the anchor, one space between).** Anchor:
+4. **54.5 (insert the new text right after the anchor, one space between).** **Applied in `cc11239`.** Anchor:
 
    ```text
    Pinned by `tests/test_wizard_extras_touched.py` (a browser) and `tests/test_extras_clear_027_js.py`.
@@ -175,7 +246,7 @@ _(Each builder appends the CLAUDE.md sentences its parts make stale or owe, quot
 
 **From b3-price-mark (54.8).** One entry in the same row. CLAUDE.md says nothing about the price cascade today (no line holds "price"), so this follows 54.5's text: **apply it after #4**, whose last sentence is its anchor. That sentence occurs once in this task file and not yet in CLAUDE.md, so it occurs once in CLAUDE.md once #4 is in.
 
-5. **54.8 (insert the new text right after the anchor, one space between; after #4).** Anchor (the last sentence of #4's new text):
+5. **54.8 (insert the new text right after the anchor, one space between; after #4).** **Applied in `cc11239`.** Anchor (the last sentence of #4's new text):
 
    ```text
    Pinned by `tests/test_wizard_native_clear_54_5.py`.
@@ -189,7 +260,7 @@ _(Each builder appends the CLAUDE.md sentences its parts make stale or owe, quot
 
 **From b4-migration-weigh (54.4, 54.7 page half).** Two entries. A script applied all seven entries in order to an in-memory copy of CLAUDE.md (`scratchpad/g54/check_anchors_b4.py`, outside the repo): each anchor occurred exactly once when its turn came, and each new text once after.
 
-6. **54.4 (replace the anchor with the new text).** In "Spool / Filament write surfaces", the "Don't add `force_reset=True` to `setup_fields.py` lightly" bullet, which the planning pass says this group owes. Anchor:
+6. **54.4 (replace the anchor with the new text).** **Applied in `cc11239`.** In "Spool / Filament write surfaces", the "Don't add `force_reset=True` to `setup_fields.py` lightly" bullet, which the planning pass says this group owes. Anchor:
 
    ```text
    The existing `migrate_container_slot_to_text()` is the template for any future legitimate type migration: snapshot values, force_reset, restore.
@@ -201,7 +272,7 @@ _(Each builder appends the CLAUDE.md sentences its parts make stale or owe, quot
    The existing `migrate_container_slot_to_text()` is the template for any future legitimate type migration (Group 54.4; it runs on every deploy, while FCC is still running): snapshot every record, archived ones too (`allow_archived=true`, or their values are lost), with where each one is; put every value in the new type's wire form before anything is deleted (`_as_text_wire`: Spoolman refuses an old type's value in the new field, an integer's `2` in a text one); force_reset; then restore each record through a fresh read and a write of its whole `extra` (`_restore_container_slot`; a Spoolman before 0.22 replaced a spool's whole `extra` with a PATCH's), leaving alone one deleted ("gone"), given a value of that field since the rebuild (a blank too) or moved since the snapshot ("kept"), sending nothing for one it can't read, and reading a write that reports failure again before calling it failed. It prints the counts and every value a failure kept from coming back (and every value when the rebuild fails after its delete), so they can be put back by hand; the deploy's Spoolman backup is the other way back. Plain `requests` only, no `spoolman_api` import. Pinned by `tests/test_setup_fields_migration_54_4.py` (on `SpoolmanHTTPFake` with Spoolman's field DELETE and POST) and `tests/test_setup_fields_idempotent.py`.
    ```
 
-7. **54.7, the page half (insert the new text right after the anchor, one space between; after #2).** Anchor (the last sentence of #2's new text, so it occurs in CLAUDE.md once #2 is in):
+7. **54.7, the page half (insert the new text right after the anchor, one space between; after #2).** **Applied in `cc11239`.** Anchor (the last sentence of #2's new text, so it occurs in CLAUDE.md once #2 is in):
 
    ```text
    The keyword is passed only for `false`, so a two-argument stand-in for `update_spool` still serves every other request (`tests/move_engine_harness`'s stand-ins take it; `WireSpoolman` hands it on only when False).
@@ -212,6 +283,8 @@ _(Each builder appends the CLAUDE.md sentences its parts make stale or owe, quot
    ```text
    The page sends it from every weigh save, through `saveSpoolWeight`'s sixth argument (`how`: `{archiveSwitch, empties, wasArchived}`): a weigh-out row's save and its details fallback send the list's switch (`#weigh-auto-archive`), the Quick-Weigh its own (`#fcc-we-auto-archive`, never the list's, whose markup is on the page with a state of its own), always the switch and never the per-save verdict, so with it on the server's rule still decides where the page's arithmetic disagrees; with it on, `archived: true` and the force-unassign after it are as before. With the switch off, a save that leaves 0 g by the page's own reading raises a 4 s success toast, "Updated Spool #57: 0 g left, kept in stock (Auto-Archive is off)", but not for a spool already archived before the save (it stays archived where it is; the weigh-out details carry `archived`, the fallback reads the scan buffer's entry) nor one the answer says was archived. A caller that names no switch sends the list's only where it leaves the verdict to `saveSpoolWeight`, as that path always read it, else none. Pinned by `tests/test_auto_archive_switch_page_54_7_js.py` (hermetic) and `tests/test_auto_archive_switch_real_54_7_e2e.py` (integration-gated: the real chain on the dev container and dev's Spoolman, on a throwaway spool).
    ```
+
+**From b5-chips-docs (54.2): none.** CLAUDE.md describes neither the attribute chips nor their tests. The phone footers that 54.2 found are recorded in the test's `PHONE_KNOWN`, the Build log and the builder's report, for the phone-view work. All seven entries above were applied to CLAUDE.md in `cc11239`, in order, by `scratchpad/g54/apply_owed_claude_md.py` (outside the repo). Each anchor occurred exactly once at its turn and each new text once after. A second run finds all seven already applied.
 
 ## Planning pass, 2026-11-06 (read-only; re-check anchors before editing)
 
