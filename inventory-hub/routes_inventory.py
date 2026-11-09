@@ -1458,6 +1458,9 @@ def api_spool_update():
     "toolhead" / "printer_row"), and any other new place blanks the slot and trail
     the spool left behind.
 
+    Group 54 review R4-1: the answer also carries `location_now`, where the spool
+    is once the write landed ('' for Unassigned).
+
     Group 54.7 (Derek, 2026-11-07: "Auto-Archive 0g" off means off): an optional
     top-level `auto_archive` beside `id` and `updates`, the weigh screen's switch.
     Only JSON false turns update_spool's archive-on-empty edge off
@@ -1530,6 +1533,12 @@ def api_spool_update():
             "auto_archived": auto_archived,
             "needs_empty_weight_prompt": needs_prompt,
             "filament_id": filament_id,
+            # Group 54 review R4-1: where the spool is once the write landed ('' for
+            # Unassigned). A weigh screen that archived it reads it: '' means the
+            # archive edge already took it off its place; a place means it didn't
+            # (FCC couldn't read the spool, review R1-1), so the page's own
+            # force-unassign is what takes it off, and a failure of that is said.
+            "location_now": str(res.get('location') or '').strip(),
         }
         # Group 42.3c: an auto-unarchived spool whose old toolhead holds another
         # spool now went to Unassigned; the weigh screen toasts this at 7 s.

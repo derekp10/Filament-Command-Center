@@ -1031,12 +1031,29 @@ window.saveWeighOutRow = async (idStr) => {
 // reached no log at all, so a toast missed (or under a prompt) left no record.
 // One line, saying what the toast said; escaped, since the log is HTML and
 // Spoolman's reason is free text.
+const escWeighLog = (said) => {
+    const text = String(said == null ? '' : said);
+    return typeof window.escHtml === 'function' ? window.escHtml(text)
+        : text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+};
 const logWeighFailure = (id, said) => {
     if (!window.logClientEvent) return;
-    const text = String(said == null ? '' : said);
-    const safe = typeof window.escHtml === 'function' ? window.escHtml(text)
-        : text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-    window.logClientEvent(`❌ Spool #${id}: ${safe}`, 'ERROR');
+    window.logClientEvent(`❌ Spool #${id}: ${escWeighLog(said)}`, 'ERROR');
+};
+
+// Group 54 review R4-1: a spool a weigh save archived that the archive's own
+// unassign couldn't take off its place (`place`, from the save's answer; null when
+// the answer named none). It is archived there, which no in-stock reader shows, so
+// it is said for a warning's 7 s, and one WARNING Activity Log line keeps the
+// reason, escaped (the log is HTML, and a Spoolman location is free text).
+const warnStillPlaced = (id, place, why) => {
+    const said = place
+        ? `Spool #${id} is archived but still at ${place}: FCC couldn't take it off there.`
+        : `Spool #${id} is archived, but FCC couldn't take it off its place.`;
+    showToast(said, 'warning', 7000);
+    if (window.logClientEvent) {
+        window.logClientEvent(`⚠️ ${escWeighLog(`${said.slice(0, -1)} (${why})`)}`, 'WARNING');
+    }
 };
 
 // `how` (Group 54.7; Derek, 2026-11-07, (a): "Auto-Archive 0g" off means off) is
@@ -1111,7 +1128,9 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
     .then(r => r.json())
     .then(res => {
         if (res.status === 'success') {
-            const finalize = () => {
+            // `stillAt` ({place, why}): the archive's own unassign below failed
+            // while the spool still had a place (Group 54 review R4-1).
+            const finalize = (stillAt = null) => {
                 setProcessing(false);
                 // Saved: a redraw from now on draws its row as any other (its
                 // fade, or a scan of it, decides what comes next).
@@ -1126,6 +1145,7 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
                 } else {
                     showToast(`Updated Spool #${id}`, 'success');
                 }
+                if (stillAt) warnStillPlaced(id, stillAt.place, stillAt.why);
                 // Group 42.3c: a used-up spool weighed back above 0 g whose old
                 // toolhead holds another spool now went to Unassigned instead.
                 if (res && res.warning) showToast(res.warning, 'warning', 7000);
@@ -1195,11 +1215,29 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
             };
 
             if (updates.archived) {
+                // The archive takes the spool off its place ("Auto Archive & Eject
+                // if Empty"). When FCC read the spool, update_spool's archive edge
+                // already did, and this request finds it Unassigned; when it
+                // couldn't (review R1-1: no edge on an unread spool), the write
+                // archived it where it is, and this request is what takes it off.
+                // It answers the print question itself, as the edge never asks one
+                // (a spool weighed empty is in the person's hand, not feeding the
+                // head), and its answer is read (Group 54 review R4-1: a printing
+                // head refused it, nothing read that, and an archived spool stayed
+                // on the head behind "Updated"). A failure while the save's answer
+                // had the spool on a place is said; one after the edge took it off
+                // already changes nothing a person needs to know.
+                const placeNow = typeof res.location_now === 'string' ? res.location_now.trim() : null;
                 fetch('/api/manage_contents', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ action: 'force_unassign', spool_id: id, location: '' })
-                }).then(() => finalize()).catch(() => finalize());
+                    body: JSON.stringify({ action: 'force_unassign', spool_id: id, location: '',
+                                           confirm_active_print: true })
+                })
+                    .then((r) => r.json())
+                    .then((ans) => (ans && ans.success === true ? null : String((ans && ans.msg) || 'no answer')),
+                          (e) => String((e && e.message) || 'no answer'))
+                    .then((why) => finalize(why === null || placeNow === '' ? null : { place: placeNow, why }));
             } else {
                 finalize();
             }

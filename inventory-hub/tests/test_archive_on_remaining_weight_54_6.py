@@ -31,6 +31,12 @@ without knowing where the spool was, and nothing could release its single-slot
 box afterwards. Now update_spool runs the archive edge only on a record it read
 (one with an id); an unread spool goes out as the caller sent it. The tests
 marked "RED on d60c86e" fail on the branch before that fix.
+
+Review R4-1 (2026-11-09): such a spool on a PRINTING head was then left archived
+on it, because the page's force-unassign asked about the print and the page read
+nothing back. The save's answer now says where the spool is after the write
+(`location_now`), and the page's unassign answers the print question itself
+(test_weigh_archive_unassign_js). The `location_now` tests fail on 01ef59e.
 """
 from __future__ import annotations
 
@@ -44,7 +50,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 import spoolman_api as sm_api  # noqa: E402
 import state  # noqa: E402
-from move_engine_harness import IDLE, LocationsStore, WeighedWireSpoolman, run_move  # noqa: E402
+from move_engine_harness import IDLE, LocationsStore, WeighedWireSpoolman, _probe_for, run_move  # noqa: E402
 from spoolman_extra_fake import SpoolmanHTTPFake  # noqa: E402
 
 TRAIL = ("container_slot", "physical_source", "physical_source_slot")
@@ -347,6 +353,74 @@ def test_update_spool_never_runs_the_edge_on_a_spool_it_couldnt_read(http, monke
     rec = http.records["spool"][57]
     assert rec["archived"] is False and rec["location"] == "XL-1", rec
     assert rec["extra"] == {"physical_source": '"PM-DB-1"', "physical_source_slot": '"1"'}, rec
+
+
+# ---- where the spool is after the write, and the archive's own unassign (review R4-1) -----------------
+
+PRINTING = _probe_for({"XL"})
+
+
+@pytest.mark.parametrize("blind, where", [(False, ""), (True, "XL-1")], ids=["read", "unread"])
+def test_the_answer_says_where_the_spool_is_after_the_write(client, blind, where):
+    """RED: the save's answer carries `location_now`, where Spoolman's answer has
+    the spool once the write landed, so the weigh page knows whether the archive
+    already took it off its place: '' when FCC read #57 (the edge did), 'XL-1'
+    when it couldn't (R1-1: archived where it is, for the page's force-unassign to
+    take off). On the base the answer had no such key."""
+    sm = _UnreadSpoolman(_on_xl1_from_pm_db_1(), failure=None)
+    sm.blind = blind
+    res = _post(sm, client, {"id": 57, "updates": {"remaining_weight": 0, "archived": True},
+                             "auto_archive": True}, LocationsStore(ROWS))
+    sm.blind = False
+    assert res["status"] == "success", res
+    assert res.get("location_now") == where, res
+    assert sm.spools[57]["location"] == where, sm.spools[57]
+
+
+def test_the_answer_names_a_place_the_save_left_alone(client):
+    """RED (the key is new): a weight save that empties nothing names where the
+    spool still is."""
+    sm = WeighedWireSpoolman({57: {"location": "CR-SHELF", "initial_weight": 1000, "used_weight": 700,
+                                   "archived": False, "extra": {}}})
+    res = _post(sm, client, {"id": 57, "updates": {"remaining_weight": 250}}, LocationsStore(ROWS))
+    assert res["status"] == "success" and res["auto_archived"] is False, res
+    assert res.get("location_now") == "CR-SHELF", res
+
+
+def test_the_archives_own_unassign_takes_an_unread_spool_off_a_printing_head(client):
+    """The server half of R4-1 (green on the base too: force_unassign has always
+    taken `confirm_active_print`). #57 is on XL-1 from PM-DB-1 and XL is printing.
+    FCC couldn't read #57, so the weigh-out fallback's write archives it in place
+    (R1-1); the page's own unassign, which answers the print question itself as
+    the archive edge never asks one, takes it off XL-1 and lets PM-DB-1 go. Without
+    `confirm_active_print` the same request asks instead and writes nothing: the
+    answer the page used to ignore, leaving an archived spool on a printing head."""
+    sm = _UnreadSpoolman(_on_xl1_from_pm_db_1(), failure=None)
+    store = LocationsStore(ROWS)
+    sm.blind = True
+    res = run_move(sm, probe=PRINTING, store=store, printer_map=PRINTER_MAP,
+                   call=lambda: client.post("/api/spool/update", json={
+                       "id": 57, "updates": {"remaining_weight": 0, "archived": True},
+                       "auto_archive": True})).get_json()
+    sm.blind = False
+    assert res["status"] == "success", res
+    assert sm.spools[57]["archived"] is True and sm.spools[57]["location"] == "XL-1", sm.spools[57]
+
+    asked = run_move(sm, probe=PRINTING, store=store, printer_map=PRINTER_MAP,
+                     call=lambda: client.post("/api/manage_contents", json={
+                         "action": "force_unassign", "spool_id": 57, "location": ""})).get_json()
+    assert asked.get("success") is False and asked.get("require_confirm") is True, asked
+    assert sm.spools[57]["location"] == "XL-1" and store.bound("PM-DB-1") == "XL-1"
+
+    out = run_move(sm, probe=PRINTING, store=store, printer_map=PRINTER_MAP,
+                   call=lambda: client.post("/api/manage_contents", json={
+                       "action": "force_unassign", "spool_id": 57, "location": "",
+                       "confirm_active_print": True})).get_json()
+    assert out.get("success") is True, out
+    spool = sm.spools[57]
+    assert spool["archived"] is True and spool["location"] == "", spool
+    assert all(spool["extra"].get(k) == "" for k in TRAIL), spool
+    assert store.bound("PM-DB-1") == "", store.row("PM-DB-1")
 
 
 def test_control_a_spool_read_with_no_known_capacity_is_still_archived(http):
