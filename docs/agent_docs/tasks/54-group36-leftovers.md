@@ -55,9 +55,58 @@ Started 2026-11-08 23:50 on `feature/group-54-group36-leftovers`, cut from `dev`
 
 _(Each builder appends: the parts done, commits, tests run with results, anything left or surprising.)_
 
+**b1-server, 2026-11-09: 54.6, 54.7 (server half), 54.1, 54.3. All done, all offline.** Commits `502f06d` (54.6), `cac365d` (54.7 server), `013f56e` (54.1), `4a89bb0` (54.3). Every new test file was run red on the commit before its part, and each RED case failed for the reason the spec gives.
+
+- **54.6** `spoolman_api._auto_archive_on_empty` reads `remaining_weight` exactly as the refill edge does (without `used_weight` beside it, it is the weight left, and it decides over a new `initial_weight`). `tests/move_engine_harness.WeighedWireSpoolman` now stores a `remaining_weight` as Spoolman does (the used weight it leaves; refused beside `used_weight`, with no known capacity, or when it isn't a number). New `tests/test_archive_on_remaining_weight_54_6.py`, 19 tests: red 11 failed / 8 passed (every failure "not archived", the door's `auto_archived: false` with PM-DB-1 still bound to XL-1); green 19/19.
+- **54.7, server half.** `update_spool(sid, data, archive_on_empty=True)`; False skips the archive edge entirely (the refill edge still runs). The harness's `FakeSpoolman.update_spool` / `WireSpoolman.update_spool` take the keyword; WireSpoolman hands it to the real `update_spool` only when it is False, so the harness still drives older product code. New `tests/test_auto_archive_off_54_7.py`, 20 tests over `SpoolmanHTTPFake` with an in-memory locations.json (the box release, the route's release and the single-slot helpers run for real), plus one through `run_move`: red on `502f06d` 9 failed / 11 passed (no keyword ×4; the route ignored the switch ×2, `used_weight` and `remaining_weight`, the second being where 54.6 meets 54.7; an archived spool taken off its shelf; the keyword never passed; the harness route test); green 20/20. Every `update_spool` monkeypatch in tests/ was checked: none sends `auto_archive`, and the route passes the keyword only for false (pinned by `test_control_a_two_argument_stand_in_serves_every_request_but_false`).
+  - **What the route accepts, for the page builder (b4):** `POST /api/spool/update` with `{"id": <spool id>, "updates": {...}, "auto_archive": <boolean>}`. `auto_archive` is optional and top-level, beside `id` and `updates`, never inside `updates`. Only the JSON boolean `false` turns the archive-on-empty edge off; absent, `true`, the string `"false"`, `0` and `null` all keep today's rule, so send the switch as a real boolean (`!!checkbox.checked`). With `false`, a weight write that leaves 0 g writes only what `updates` carries (no `archived`, no location blank, no note, no trail blanks, no box release); the answer's `auto_archived` and `needs_empty_weight_prompt` are false; a refill of an archived spool still un-archives it (with `warning` as before); an archived spool weighed to 0 g stays archived where it is. With `true` or absent, nothing changes. A page's own `archived: true` inside `updates` (switch on) still goes as sent. Since 54.6 the fallback row's `remaining_weight: 0` with the switch on is archived by the server in that one write (`auto_archived: true`), and the page's force-unassign after it writes Unassigned again, harmlessly, as on the main path.
+- **54.1** `/api/update_filament` answers 400, before anything is read (`request.get_json(silent=True)`): a body that isn't a JSON object ("The request isn't a JSON object, so nothing was updated."), no id ("Missing filament id."), no `data` ('Nothing was updated: the request has no "data" field. Send {id, data: {field: value}}.', plus "(It looks like the old {id, field, value} shape.)" when the body carries `field` or `value`, and one WARNING in hub.log naming the keys that came), a `data` that isn't an object ('"data" must be an object of field: value, so nothing was updated.'). `{id, data: {}}` keeps its 200. New `tests/test_update_filament_payload_54_1.py`, 15 tests: red 13 failed / 2 passed (200 generic answers, a crash on `.get` for a list or string body, Flask's HTML 400 for a body that isn't JSON); green 15/15. The live pins in `test_filament_edit_button.py:23-40` keep their words (skipped under `--offline`; they write nothing).
+- **54.3** `_parse_filament_attrs_value` splits a non-JSON string and a JSON string on commas (`_split_attr_text`: trimmed, blanks and repeats dropped, first kept); lists are never split. `tests/test_search_api.py`'s `["Silk, Matte"]` pin updated deliberately to `["Silk", "Matte"]`. New `tests/test_filament_attrs_split_54_3.py`, 22 tests (the helper, the report and the sweep preview on the spec's `_install_wire` harness with the hidden list stubbed, and a real bulk add over `SpoolmanHTTPFake` 0.27): red 12 failed / 10 passed (one pseudo-tag; Silk 1, Matte 0 and a rogue; Matte offered for deletion; Spoolman refusing `["Silk, Matte", "Glow"]` as invalid choices); green 22/22. The boot cleanup's decision to run reads no usage, so the split makes it write nothing new; only what it would restore is now the valid shape.
+- **Test runs (all `--offline`, from inventory-hub/):** 54.6 + the archive-edge family (13 files) 295 passed, 11 skipped; every file importing the harness (37) 924 passed; after 54.7, every file that patches `update_spool`, posts to `/api/spool/update` or imports the harness, plus the route pin and source canaries (81 files) 2233 passed, 17 skipped; 54.1 with the route's other files (11) 212 passed, 157 skipped; 54.3 with every file touching attributes, search or stock (42) 693 passed, 202 skipped.
+- **Claude's calls:** a weight left (or a used / initial pair) that works out to NaN never archives (`nan > 0` is False, so the bare mirror would have archived on "nan"); a JSON string holding a JSON list (a list once written through a text field) reads as that list rather than as one pseudo-tag; 54.1's words put the key in double quotes rather than backticks (they reach a toast); the "📦 Auto-archived" line is not gated on the keyword, so it fires only when a write newly archives, as before (with `archive_on_empty=False` the edge adds no `archived`, so only a caller's own `archived: true` could fire it, which no page sends with the switch off).
+- **Left / surprising:** the spun-off 54.3 item (the browser's `parseFilamentAttributes`, the wizard's edit prefill, the Edit Filament form's diff, and the three server display parsers in `spoolman_api.format_spool_display`, `spoolman_api.search_inventory`'s filament cards and `labels_csv.get_smart_type`, which read the same comma string differently) is not filed yet: I left `Feature-Buglist.md` alone, because Derek types into it in VS Code. `SpoolmanHTTPFake.patch` stores a `remaining_weight` as a literal key and doesn't work out the used weight (left as it is, it is shared; the new tests assert on the PATCH bodies). `tests/roundtrip_bridge.py` errors at collection when named on the command line (a helper, not a test; harmless in a normal run).
+
 ### Owed CLAUDE.md text
 
 _(Each builder appends the CLAUDE.md sentences its parts make stale or owe, quoting the anchor sentence. B4 applies them all with an anchor-checked script, one commit.)_
+
+**From b1-server (54.6, 54.7 server half, 54.1; 54.3 owes nothing, since CLAUDE.md doesn't describe the attribute parser).** All three sit in the "Spool / Filament write surfaces" table. Each anchor and each new text is one line of CLAUDE.md, in its own fenced block, exactly as it is or is to be (checked against CLAUDE.md on 2026-11-09).
+
+1. **54.6 (replace the anchor with the new text).** In the `/api/spool/update` row. Anchor:
+
+   ```text
+   **Only a weight write is a refill (Group 51.1):** the unarchive edge runs only when a write carries `used_weight`, `initial_weight` or `remaining_weight` (the weigh-out row's fallback, Group 51 review; the archive edge still reads only the first two)
+   ```
+
+   New text:
+
+   ```text
+   **Only a weight write is a refill (Group 51.1):** the unarchive edge runs only when a write carries `used_weight`, `initial_weight` or `remaining_weight` (the weigh-out row's fallback, Group 51 review; since Group 54.6 the archive edge reads all three too, a `remaining_weight` without `used_weight` beside it read as the weight left, so the fallback row weighing a spool to 0 g archives it in that one write, with its note, its trail blanked and its single-slot box released; a weight left that isn't a number changes nothing)
+   ```
+
+2. **54.7 (insert the new text right after the anchor, one space between).** Same row. Anchor:
+
+   ```text
+   ⚠️ Sending `initial_weight` here runs `_auto_archive_on_empty`/`_auto_unarchive_on_refill` — a too-low total can silently archive+unassign a loaded spool.
+   ```
+
+   New text:
+
+   ```text
+   **"Auto-Archive 0g" off means off (Group 54.7; Derek, 2026-11-07, (a)):** an optional top-level `auto_archive` beside `id` and `updates` is the weigh screen's switch. Only JSON `false` passes `update_spool(sid, data, archive_on_empty=False)`, which skips the archive edge entirely (no `archived` added, no location blank, no note, no trail blanks, no box release): a spool weighed to 0 g stays in stock where it is, `auto_archived` is false, the refill edge still runs, and an archived spool weighed to 0 g stays archived where it is. Absent, `true` or anything else (`"false"`, `0`, `null`) is the rule as before. The keyword is passed only for `false`, so a two-argument stand-in for `update_spool` still serves every other request (`tests/move_engine_harness`'s stand-ins take it; `WireSpoolman` hands it on only when False).
+   ```
+
+3. **54.1 (replace the anchor with the new text).** The whole row. Anchor:
+
+   ```text
+   | `routes_scan.py` | `/api/update_filament` quick-edit | Reference impl — surfaces error in response JSON. |
+   ```
+
+   New text:
+
+   ```text
+   | `routes_scan.py` | `/api/update_filament` quick-edit | Reference impl — surfaces error in response JSON. A malformed request is refused with 400 before anything is read (Group 54.1; its siblings `/api/create_filament` and `PATCH /api/vendors/<id>` already did): a body that isn't a JSON object, no `id`, no `data` (naming the old {id, field, value} shape when the body carries `field` or `value`, whose generic 200 hid the attribute purge's restore no-op for months, plus one WARNING in hub.log naming the keys that came) and a `data` that isn't an object, each in its own words. `{id, data: {}}` keeps its 200 "No fields to update." Pinned by `tests/test_update_filament_payload_54_1.py`. |
+   ```
 
 ## Planning pass, 2026-11-06 (read-only; re-check anchors before editing)
 
