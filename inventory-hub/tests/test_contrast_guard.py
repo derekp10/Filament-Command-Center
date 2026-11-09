@@ -1303,3 +1303,30 @@ def test_the_wizards_tare_from_the_filament_is_readable(page: Page, base_url: st
     scored = [o.get("text") for o in conftest.contrast_offenders(toggle, min_ratio=100)]
     assert "↩ from filament" in scored and any(t.startswith("tare 200g") for t in scored), scored
     conftest.close_wizard(page)
+
+
+def test_the_empty_weight_prompts_notice_is_readable(page: Page, base_url: str):
+    """Group 54 review R5-1: the post-archive empty-weight prompt can carry a notice
+    (the weigh page's "Spool #99 is archived but still at …", which the prompt
+    would otherwise hide under it): its alert line in the prompt's own yellow label
+    look, on the prompt's dark ground. The filament is a stub, every write is
+    answered in the browser, and nothing is saved. Scored from the dialog (the
+    guard scores descendants only), and the notice is proved scored."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    filament = {"id": 9004, "name": "Ocean Blue", "material": "PLA", "spool_weight": None,
+                "vendor": {"id": 9005, "name": "Example Brand", "empty_spool_weight": None}}
+    _read_only(page, extra_get={"/api/filament_details": filament})
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.showArchiveEmptyWeightPrompt === 'function'"
+                           " && typeof state !== 'undefined' && state.locationsLoaded", timeout=45_000)
+    page.evaluate("() => { window.showArchiveEmptyWeightPrompt(99, 9004, null,"
+                  " { notice: \"Spool #99 is archived but still at Shelf 1: FCC couldn't take it off there.\" }); }")
+    notice = page.locator("#fcc-archive-empty-overlay #fcc-archive-empty-notice")
+    expect(notice).to_be_visible()
+    dialog = page.locator("#fcc-archive-empty-overlay [data-fcc-weight-keys]")
+    offenders = [o for o in conftest.contrast_offenders(dialog) if "still at Shelf 1" in (o.get("text") or "")]
+    assert offenders == [], offenders
+    scored = [o.get("text") for o in conftest.contrast_offenders(dialog, min_ratio=100)]
+    assert any("still at Shelf 1" in (t or "") for t in scored), scored
+    page.locator("#fcc-archive-later").click()

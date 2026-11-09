@@ -1554,6 +1554,15 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
     const pre = Number(prefillWeight);
     const prefillAttr = (Number.isFinite(pre) && pre > 0) ? ` value="${pre}"` : '';
 
+    // `opts.notice`: something the person must read about this spool, said on the
+    // prompt itself, since the toast layer is under every overlay (Group 54 review
+    // R5-1: the weigh page's "Spool #57 is archived but still at XL-1: …" was hidden
+    // behind this prompt for its whole 7 s). The label's own look, in yellow.
+    const notice = (opts && opts.notice) ? String(opts.notice) : '';
+    const noticeRow = notice
+        ? `<div id="fcc-archive-empty-notice" role="alert" class="text-warning small" style="margin-bottom:10px;">⚠️ ${esc(notice)}</div>`
+        : '';
+
     const propagateRow = canPropagate ? `
             <label style="display:flex; align-items:flex-start; gap:8px; margin-top:12px; cursor:pointer;">
                 <input type="checkbox" id="fcc-archive-propagate" class="form-check-input" style="margin-top:3px; flex:0 0 auto;">
@@ -1568,6 +1577,7 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
     const content = `
         <div data-fcc-weight-keys style="background:#1e1e1e; color:#fff; border:2px solid #ffc107; border-radius:8px; padding:20px 24px; max-width:28.75rem; text-align:left;">
             <div style="font-size:1.2em; font-weight:bold; margin-bottom:10px;">📦 Spool archived — record the empty weight?</div>
+            ${noticeRow}
             <p style="color:#ddd; margin-bottom:8px; font-size:0.95em;">
                 Spool <strong>#${esc(spoolId)}</strong> just hit 0g and was auto-archived. Its filament
                 <strong>#${esc(fil.id)}</strong> (<em>${esc(vendorName)} ${esc(material)}, ${esc(colorName)}</em>)

@@ -314,3 +314,37 @@ def test_archive_empty_weight_prompt_enter_with_blank_input_validates(page: Page
     err = page.locator("#fcc-archive-empty-err")
     expect(err).to_be_visible()
     assert page.evaluate("() => window.__updateFilamentPayload") is None
+
+
+def test_archive_empty_weight_prompt_shows_a_notice_it_is_given(page: Page):
+    """Group 54 review R5-1 (2026-11-09): the prompt opens over the toast layer,
+    so a sentence the person must read about the spool (the weigh page's "Spool #99
+    is archived but still at …") comes in `opts.notice` and is shown on the prompt
+    itself: an alert line under its title, as text (a place's '<' stays a '<').
+    RED on 2c4b6f6: the prompt took no notice."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.showArchiveEmptyWeightPrompt === 'function'")
+    _stub_filament_and_writes(page)
+
+    said = "Spool #99 is archived but still at Bin <2>: FCC couldn't take it off there."
+    page.evaluate("(said) => { window.showArchiveEmptyWeightPrompt(99, 7, null, { notice: said }); }", said)
+    page.wait_for_selector("#fcc-archive-empty-wt", state="visible", timeout=3_000)
+    notice = page.locator("#fcc-archive-empty-overlay #fcc-archive-empty-notice")
+    expect(notice).to_be_visible()
+    assert notice.get_attribute("role") == "alert"
+    assert notice.inner_text() == f"⚠️ {said}"
+    page.locator("#fcc-archive-later").click()
+
+
+def test_archive_empty_weight_prompt_has_no_notice_unless_given(page: Page):
+    """Control (green on 2c4b6f6 too): with no notice the prompt is as it was."""
+    page.goto("http://localhost:8000")
+    page.wait_for_selector("#buffer-zone")
+    page.wait_for_function("typeof window.showArchiveEmptyWeightPrompt === 'function'")
+    _stub_filament_and_writes(page)
+
+    page.evaluate("() => { window.showArchiveEmptyWeightPrompt(99, 7); }")
+    page.wait_for_selector("#fcc-archive-empty-wt", state="visible", timeout=3_000)
+    assert page.locator("#fcc-archive-empty-notice").count() == 0
+    page.locator("#fcc-archive-later").click()

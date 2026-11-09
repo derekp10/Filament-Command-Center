@@ -1046,10 +1046,11 @@ const logWeighFailure = (id, said) => {
 // the answer named none). It is archived there, which no in-stock reader shows, so
 // it is said for a warning's 7 s, and one WARNING Activity Log line keeps the
 // reason, escaped (the log is HTML, and a Spoolman location is free text).
+const stillPlacedWords = (id, place) => (place
+    ? `Spool #${id} is archived but still at ${place}: FCC couldn't take it off there.`
+    : `Spool #${id} is archived, but FCC couldn't take it off its place.`);
 const warnStillPlaced = (id, place, why) => {
-    const said = place
-        ? `Spool #${id} is archived but still at ${place}: FCC couldn't take it off there.`
-        : `Spool #${id} is archived, but FCC couldn't take it off its place.`;
+    const said = stillPlacedWords(id, place);
     showToast(said, 'warning', 7000);
     if (window.logClientEvent) {
         window.logClientEvent(`⚠️ ${escWeighLog(`${said.slice(0, -1)} (${why})`)}`, 'WARNING');
@@ -1162,10 +1163,14 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
                 // in the prompt's box as the filament's empty weight (Group 57
                 // review, rounds 8 and 9). A spool scanned while the prompt is up
                 // closes it, and its Save waits while one is being answered.
+                // The toast layer is under every overlay, so a spool the archive's
+                // unassign left on its place is said on the prompt too, or the
+                // prompt hid the warning for its whole 7 s (Group 54 review R5-1).
                 if (res && res.needs_empty_weight_prompt && res.filament_id && window.showArchiveEmptyWeightPrompt) {
                     setTimeout(() => window.showArchiveEmptyWeightPrompt(id, res.filament_id, emptyPrefill,
                         { settle: scanSettled, skipIf: () => scansTaken !== takenAtSave,
-                          scanPending: () => !!pendingScan }), 400);
+                          scanPending: () => !!pendingScan,
+                          notice: stillAt ? stillPlacedWords(id, stillAt.place) : null }), 400);
                 }
 
                 // Visual feedback that it's done, on its row as it is now (a

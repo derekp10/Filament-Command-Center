@@ -22,6 +22,12 @@ took off its place (`location_now` '') needs no warning whatever the request
 answers. The server half, the route's `location_now` and force_unassign taking an
 unread spool off a printing head, is pinned in test_archive_on_remaining_weight_54_6.
 
+Review R5-1 (2026-11-09): when the archive also asks for the filament's empty
+weight, its prompt opens 400 ms after the save over the toast layer (z 20000 over
+11000) and hid that warning for its whole 7 s. The page now hands the prompt the
+same sentence as its notice, which the prompt shows as an alert line
+(test_archive_empty_weight_prompt). Those tests are marked "RED on 2c4b6f6".
+
 Harness: node's `vm` (test_core1_return_ejectall_js.run_js), showToast and
 logClientEvent recorded with their arguments.
 
@@ -160,3 +166,54 @@ def test_control_a_spool_the_archive_took_off_already_needs_no_warning(tmp_path,
     res = _save(tmp_path, ARCHIVED_OFF, off)
     assert _toasts(res) == [UPDATED], res
     assert res["logs"] == [], res
+
+
+# ---- the empty-weight prompt says it too (review R5-1) ----------------------------------------------------
+
+# The same save, with the archive answer asking for the filament's empty weight: the
+# page opens showArchiveEmptyWeightPrompt 400 ms after the save, stubbed here to
+# record what it was given.
+PROMPT_SAVE = """
+const UPDATE = __UPDATE__;
+const OFF = __OFF__;
+window.__respond = (url) => {
+    if (url === '/api/spool/update') return { body: UPDATE };
+    if (url === '/api/manage_contents') return { body: OFF };
+    return { body: {} };
+};
+const prompts = [];
+window.showArchiveEmptyWeightPrompt = (sid, fid, prefill, opts) => {
+    prompts.push({ sid, fid, notice: (opts && opts.notice) === undefined ? 'undefined' : opts.notice });
+};
+window.saveSpoolWeight(77, 0, null, true, null, { archiveSwitch: true, empties: true, wasArchived: false });
+await __settle(700);
+return { toasts: __rec.toasts, prompts };
+"""
+
+ASKS_EMPTY_WEIGHT = dict(ARCHIVED_AT_XL1, needs_empty_weight_prompt=True, filament_id=5)
+
+
+def _prompt_save(tmp_path, update, off):
+    res = run_js(tmp_path, ["inv_weigh_out.js"],
+                 PROMPT_SAVE.replace("__UPDATE__", json.dumps(update)).replace("__OFF__", json.dumps(off)))
+    assert res["unhandled"] == [], res
+    return res
+
+
+@needs_node
+def test_the_empty_weight_prompt_says_the_spool_is_still_on_its_place(tmp_path):
+    """RED on 2c4b6f6: the prompt that asks for the filament's empty weight opens
+    400 ms after the save, over the toast layer (z 20000 over 11000), and hid the
+    7 s "still at XL-1" warning; the page now hands it the same sentence as its
+    notice. On the base it was given none."""
+    res = _prompt_save(tmp_path, ASKS_EMPTY_WEIGHT, {"success": False, "msg": "DB Update Failed"})
+    said = "Spool #77 is archived but still at XL-1: FCC couldn't take it off there."
+    assert res["prompts"] == [{"sid": 77, "fid": 5, "notice": said}], res
+    assert (said, "warning", 7000) in _toasts(res), res
+
+
+@needs_node
+def test_control_a_prompt_after_an_unassign_that_landed_has_no_notice(tmp_path):
+    """Control (green on the base too, which gave none): nothing to say."""
+    res = _prompt_save(tmp_path, ASKS_EMPTY_WEIGHT, {"success": True})
+    assert [p["notice"] for p in res["prompts"]] in ([None], ["undefined"]), res
