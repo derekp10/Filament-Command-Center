@@ -1026,6 +1026,19 @@ window.saveWeighOutRow = async (idStr) => {
     }
 };
 
+// A weight write that failed, in the Activity Log (Group 54 review R1-3): the
+// route writes a refused one only to hub.log, and a save that got no answer
+// reached no log at all, so a toast missed (or under a prompt) left no record.
+// One line, saying what the toast said; escaped, since the log is HTML and
+// Spoolman's reason is free text.
+const logWeighFailure = (id, said) => {
+    if (!window.logClientEvent) return;
+    const text = String(said == null ? '' : said);
+    const safe = typeof window.escHtml === 'function' ? window.escHtml(text)
+        : text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    window.logClientEvent(`❌ Spool #${id}: ${safe}`, 'ERROR');
+};
+
 // `how` (Group 54.7; Derek, 2026-11-07, (a): "Auto-Archive 0g" off means off) is
 // what the window the reading was typed in says, from each caller:
 //   archiveSwitch: that window's own switch (the weigh-out list's, or the
@@ -1193,7 +1206,16 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
             
         } else {
             setProcessing(false);
-            showToast("Failed to update weight", "error");
+            // Refused: the route's own reason (its `msg` carries Spoolman's
+            // error), for an error toast's 7 s (Group 54 review R1-3: it was
+            // "Failed to update weight" for 2 s, whatever the route said).
+            const said = res.msg || res.error || 'Failed to update weight';
+            showToast(said, 'error', 7000);
+            // The log keeps the full text: the raw `error` too, where `msg`
+            // doesn't hold it already (today `msg` is "Failed to update
+            // spool: " and the raw error).
+            const raw = res.error ? String(res.error) : '';
+            logWeighFailure(id, raw && !String(said).includes(raw) ? `${said} (${raw})` : said);
             markSaving(id, false);
             refocusAfterFailedSave(id);
         }
@@ -1201,7 +1223,8 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
     .catch(e => {
         setProcessing(false);
         console.error("Weigh update failed", e);
-        showToast("Error updating weight", "error");
+        showToast("Error updating weight", "error", 7000);
+        logWeighFailure(id, `Error updating weight (${(e && e.message) || 'no answer'})`);
         markSaving(id, false);
         refocusAfterFailedSave(id);
     });
