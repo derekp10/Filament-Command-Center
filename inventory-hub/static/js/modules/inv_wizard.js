@@ -1621,9 +1621,13 @@ const wizardFetchMaterials = () => {
                 wizardState.materials = materials;
                 const dropdown = document.getElementById('dropdown-material');
                 if (dropdown) {
-                    dropdown.innerHTML = materials.map(m => 
-                        `<div class="dropdown-item text-white py-1 px-2 cursor-pointer autocomplete-option" 
-                              onmousedown="window.wizardMaterialSelect(event, '${m.replace(/'/g, "\\'")}')">${m}</div>`
+                    // A material is Spoolman's free text: HTML text here, and the pick
+                    // reads it back from data-value, never from a JS string in the
+                    // handler (Group 54 review, S2: a quote or '<' cut it short).
+                    dropdown.innerHTML = materials.map(m =>
+                        `<div class="dropdown-item text-white py-1 px-2 cursor-pointer autocomplete-option"
+                              data-value="${_wizEscape(m)}"
+                              onmousedown="window.wizardMaterialSelect(event, this.dataset.value)">${_wizEscape(m)}</div>`
                     ).join('');
                 }
             }
@@ -2302,10 +2306,12 @@ const wizardGenerateFieldHTML = (field, entityType) => {
                          id="dropdown-${entityType}-${field.key}"
                          style="display: none; top: 100%; left: 0; z-index: 1050; max-height: 200px; overflow-y: auto;">`;
 
-        // Populate the dropdown with initial options
+        // Populate the dropdown with initial options. A pick reads its option back by
+        // its text, so each choice is HTML text here, never markup (Group 54 review,
+        // S2: a choice holding a quote or '<' came back cut, or with its tags gone).
         field.choices.forEach(c => {
             html += `<div class="dropdown-item text-white py-1 px-2 cursor-pointer autocomplete-option"
-                          onmousedown="wizardMultiselectSelect(event, '${entityType}', '${field.key}', this.innerText)">${c}</div>`;
+                          onmousedown="wizardMultiselectSelect(event, '${entityType}', '${field.key}', this.innerText)">${_wizEscape(c)}</div>`;
         });
 
         html += `   </div>
@@ -2323,7 +2329,8 @@ const wizardGenerateFieldHTML = (field, entityType) => {
                     <select class="form-select bg-dark text-white border-secondary ${dataClass} sync-source-${entityType}" data-key="${field.key}" id="${inputId}">
                         <option value="">-- None --</option>`;
         field.choices.forEach(c => {
-            html += `<option value="${c}">${c}</option>`;
+            // Escaped (Group 54 review, S2): a quote in a choice cut its value short.
+            html += `<option value="${_wizEscape(c)}">${_wizEscape(c)}</option>`;
         });
         html += `   </select>
                     <button class="btn btn-outline-secondary" type="button" 
@@ -2402,12 +2409,15 @@ window.wizardAddMultiChoiceChip = (entityType, key, directVal = null) => {
         // We do NOT call wizardFetchExtraFields() here because it would wipe the unsaved modal DOM. The chip is already visually rendering below!
     }
 
-    // Append Chip visually
+    // Append Chip visually. The value is HTML text in both places (Group 54 review,
+    // S2): Save reads it back from data-value, and an attribute holding a quote or
+    // '<' ('Odd "Quote" <b>Tag</b> & Co') read "Odd" here and was sent as "Odd ",
+    // which Spoolman refuses as no choice of the field.
     const chipHtml = `<span class="badge rounded-pill text-bg-primary border border-primary cursor-pointer dynamic-chip"
                            onclick="this.remove()"
                            data-key="${key}"
                            data-selected="true"
-                           data-value="${val}">${val} &times;</span>`;
+                           data-value="${_wizEscape(val)}">${_wizEscape(val)} &times;</span>`;
     container.insertAdjacentHTML('beforeend', chipHtml);
     input.value = '';
 
@@ -4945,8 +4955,9 @@ window.openEditWizard = async (spoolId) => {
                             const cContainer = document.getElementById(`chip-container-fil-${k}`);
                             cContainer.innerHTML = '';
                             parsedArr.forEach(val => {
-                                const chipHtml = `<span class="badge rounded-pill text-bg-primary border border-primary cursor-pointer dynamic-chip" 
-                                                       onclick="this.remove()" data-key="${k}" data-selected="true" data-value="${val}">${val} &times;</span>`;
+                                // HTML text, as wizardAddMultiChoiceChip's (Group 54 review, S2).
+                                const chipHtml = `<span class="badge rounded-pill text-bg-primary border border-primary cursor-pointer dynamic-chip"
+                                                       onclick="this.remove()" data-key="${k}" data-selected="true" data-value="${_wizEscape(val)}">${_wizEscape(val)} &times;</span>`;
                                 cContainer.insertAdjacentHTML('beforeend', chipHtml);
                             });
                         } else {
