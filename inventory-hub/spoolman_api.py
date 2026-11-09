@@ -670,6 +670,17 @@ def update_spool(sid, data, archive_on_empty=True):
     still runs, so a refill still un-archives a spool, and an archived spool
     weighed to 0 g stays archived where it is. /api/spool/update passes it only
     for a request whose `auto_archive` is JSON false.
+
+    The archive edge runs only on a record FCC read (one with an id; review R1-1,
+    2026-11-09). With none (no answer, Spoolman's 404 body, or a 5xx's JSON error
+    body, which get_spool hands back as a dict with no id), FCC doesn't know where
+    the spool is, and the edge would blank its location and trail blind: no note,
+    and nothing could release its single-slot box afterwards (the edge saw no head,
+    and a later force-unassign found the trail blank). So an unread spool goes out
+    as the caller sent it: the weigh-out fallback's own `archived: true` archives
+    it where it is, and the page's force-unassign then takes it off its head and
+    releases the box. That covers a write with the weight left (Group 54.6) and a
+    used plus initial weight alike. A record read with no capacity still runs it.
     """
     global LAST_SPOOLMAN_ERROR
     sm_url, _ = config_loader.get_api_urls()
@@ -684,6 +695,8 @@ def update_spool(sid, data, archive_on_empty=True):
         # Fetch the existing spool once — used for the used_weight cap AND the
         # auto-archive-on-empty check below. Cheaper than two round-trips.
         existing = get_spool(sid) or {}
+        # A record FCC read has an id (review R1-1, above).
+        read_ok = isinstance(existing, dict) and existing.get('id') is not None
 
         # [ALEX FIX] Ensure used_weight never crashes SQLAlchemy due to constraint by artificially capping to initial_weight
         if 'used_weight' in data:
@@ -693,9 +706,9 @@ def update_spool(sid, data, archive_on_empty=True):
                 data['used_weight'] = current_initial
 
         # Auto-archive + unassign when remaining weight hits 0, unless the caller
-        # switched the edge off (Group 54.7).
+        # switched the edge off (Group 54.7) or FCC couldn't read the spool (R1-1).
         pre_archived = existing.get('archived', False)
-        if archive_on_empty:
+        if archive_on_empty and read_ok:
             _auto_archive_on_empty(
                 data,
                 existing.get('initial_weight'),

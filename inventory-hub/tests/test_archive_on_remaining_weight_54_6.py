@@ -23,6 +23,14 @@ update_spool over tests/move_engine_harness with only Spoolman's HTTP faked
 ([[mocked engine hides chain bugs]]).
 
 Base proof (7cb6988): every test marked RED fails there; the controls pass.
+
+Review R1-1 (2026-11-09): the fallback row runs only when the spool's details
+couldn't be read, so FCC's own reads of the spool can fail too. With no record,
+the edge decided from the weight alone and blanked the location and the trail
+without knowing where the spool was, and nothing could release its single-slot
+box afterwards. Now update_spool runs the archive edge only on a record it read
+(one with an id); an unread spool goes out as the caller sent it. The tests
+marked "RED on d60c86e" fail on the branch before that fix.
 """
 from __future__ import annotations
 
@@ -249,3 +257,104 @@ def test_control_the_fallback_row_weighing_an_archived_spool_back_unarchives_it(
     assert spool["archived"] is False and spool["location"] == "CR-SHELF", spool
     assert spool["used_weight"] == 960.0, spool
     assert spool["extra"]["fcc_pre_archive_location"] == "", spool
+
+
+# ---- a spool FCC couldn't read (review R1-1) ----------------------------------------------------------
+
+# How FCC's bare read (spoolman_api.get_spool) fails: no answer (a timeout, or no
+# connection: None), or a 5xx, whose JSON error body get_spool hands back as a
+# truthy dict with no id.
+READ_FAILURES = [None, {"message": "database is locked"}]
+READ_FAILURE_IDS = ["no-answer", "5xx-body"]
+
+
+class _UnreadSpoolman(WeighedWireSpoolman):
+    """WeighedWireSpoolman whose `get_spool` (FCC's read of a spool) fails while
+    `blind` is set, as `failure` says. The plain GET of the record that the
+    pre-merge extras read makes still answers."""
+
+    def __init__(self, spools, failure=None):
+        super().__init__(spools)
+        self.blind = False
+        self.failure = failure
+
+    def get_spool(self, sid):
+        if self.blind:
+            return copy.deepcopy(self.failure)
+        return super().get_spool(sid)
+
+
+def _on_xl1_from_pm_db_1():
+    return {57: {"location": "XL-1", "initial_weight": 1000, "used_weight": 700, "archived": False,
+                 "extra": {"physical_source": "PM-DB-1", "physical_source_slot": "1"}}}
+
+
+@pytest.mark.parametrize("failure", READ_FAILURES, ids=READ_FAILURE_IDS)
+def test_the_fallback_row_on_a_spool_fcc_couldnt_read_archives_it_in_place_and_its_box_lets_go(client, failure):
+    """#57 is on XL-1, loaded from the single-slot box PM-DB-1. The weigh-out row's
+    fallback, with Auto-Archive on, sends {remaining_weight: 0, archived: true} and
+    then force-unassigns, as the page does (inv_weigh_out.js). FCC's reads of #57
+    fail during the first call (the route's and update_spool's own); the pre-merge
+    extras read answers. The write goes out as the page sent it, so #57 is archived
+    where it is with its trail, and the force-unassign takes it off XL-1 and lets
+    PM-DB-1 go, as before 54.6. RED on d60c86e: the edge decided from the weight
+    alone, the PATCH blanked the location and the trail without knowing where #57
+    was (no note), so the edge saw no head, the route's `pre` was empty, the
+    force-unassign found the trail blank, and PM-DB-1 stayed bound to XL-1."""
+    sm = _UnreadSpoolman(_on_xl1_from_pm_db_1(), failure=failure)
+    store = LocationsStore(ROWS)
+    sm.blind = True
+    res = _post(sm, client, {"id": 57, "updates": {"remaining_weight": 0, "archived": True},
+                             "auto_archive": True}, store)
+    sm.blind = False
+    assert res["status"] == "success", res
+    (sid, first), = sm.patch_bodies
+    assert sid == 57 and first == {"remaining_weight": 0, "archived": True}, first
+    assert "location" not in first and "extra" not in first, first
+    spool = sm.spools[57]
+    assert spool["archived"] is True and spool["location"] == "XL-1", spool
+    assert spool["extra"]["physical_source"] == "PM-DB-1", spool
+    assert "fcc_pre_archive_location" not in spool["extra"], spool
+
+    out = run_move(sm, probe=IDLE, store=store, printer_map=PRINTER_MAP,
+                   call=lambda: client.post("/api/manage_contents", json={
+                       "action": "force_unassign", "spool_id": 57, "location": ""})).get_json()
+    assert out.get("success") is True, out
+    spool = sm.spools[57]
+    assert spool["archived"] is True and spool["location"] == "", spool
+    assert all(spool["extra"].get(k) == "" for k in TRAIL), spool
+    assert store.bound("PM-DB-1") == "", store.row("PM-DB-1")
+    assert _logs("PM-DB-1 detached from XL-1"), state.RECENT_LOGS
+
+
+@pytest.mark.parametrize("failure", READ_FAILURES, ids=READ_FAILURE_IDS)
+@pytest.mark.parametrize("write", [{"remaining_weight": 0}, {"used_weight": 1000, "initial_weight": 1000}],
+                         ids=["weight-left", "used-and-initial"])
+def test_update_spool_never_runs_the_edge_on_a_spool_it_couldnt_read(http, monkeypatch, write, failure):
+    """With no record, FCC can't know where the spool is, so the edge doesn't run:
+    the write goes out as the caller sent it, with no `archived`, no location blank,
+    no note and no trail blanks, and the spool stays where it is. That covers a
+    write carrying the weight left and a write carrying both the used and the
+    initial weight. RED on d60c86e: the PATCH carried `archived: True`,
+    `location: ''` and the trail blanks, decided from the weight alone."""
+    http.add("spool", 57, {"physical_source": '"PM-DB-1"', "physical_source_slot": '"1"'},
+             location="XL-1", initial_weight=1000.0, used_weight=700.0, archived=False)
+    monkeypatch.setattr(sm_api, "get_spool", lambda sid: copy.deepcopy(failure))
+    out = sm_api.update_spool(57, dict(write))
+    assert out is not None, sm_api.LAST_SPOOLMAN_ERROR
+    (_entity, _sid, body), = http.patches
+    assert body == write, body
+    rec = http.records["spool"][57]
+    assert rec["archived"] is False and rec["location"] == "XL-1", rec
+    assert rec["extra"] == {"physical_source": '"PM-DB-1"', "physical_source_slot": '"1"'}, rec
+
+
+def test_control_a_spool_read_with_no_known_capacity_is_still_archived(http):
+    """Control (green on d60c86e too): the edge needs a record, not a capacity. A
+    spool FCC read, with no weight of its own and none on its filament, weighed to
+    nothing left is archived and Unassigned, its note saying where it was."""
+    http.add("spool", 57, {}, location="CR-SHELF", initial_weight=None, used_weight=None, archived=False)
+    assert sm_api.update_spool(57, {"remaining_weight": 0}) is not None, sm_api.LAST_SPOOLMAN_ERROR
+    (_entity, _sid, body), = http.patches
+    assert body["archived"] is True and body["location"] == "", body
+    assert body["extra"]["fcc_pre_archive_location"] == '"CR-SHELF"', body
