@@ -43,6 +43,16 @@ let wizardState = {
     // through wizardNativeTouched: edit mode sends one left empty as null, which
     // clears the field, and only then (Group 54.5).
     touchedNative: new Set(),
+    // Group 54.8: 'filament' while the price box shows the filament's price, the
+    // spool having none of its own (wizardPrefillSpoolPrice); null for the spool's
+    // own price or none. Typed over, the price is the spool's own
+    // (wizardSpoolPriceIsFilaments), and Save sends a price only then.
+    spoolPriceFrom: null,
+    // Group 54.8: 'filament' / 'vendor' while the spool's empty-weight box shows an
+    // inherited value (wizardSetSpoolEmptyWeightInherited); null for its own or
+    // none. Edit Spool doesn't save an inherited one untouched
+    // (wizardSpoolEmptyWeightIsInherited).
+    spoolEmptyWeightFrom: null,
 };
 
 // Empty-spool-weight inheritance helper (resolveEmptySpoolWeight) lives in
@@ -78,6 +88,9 @@ window.wizardSetSpoolEmptyWeightInherited = (value, source) => {
     const sourceEl = document.getElementById('wiz-spool-empty-inherited-source');
     if (!inputEl) return;
     inputEl.value = (value !== null && value !== undefined) ? value : '';
+    // Group 54.8: where the value came from, for Edit Spool's Save.
+    const inherited = (source === 'filament' || source === 'vendor') && inputEl.value !== '';
+    wizardState.spoolEmptyWeightFrom = inherited ? source : null;
     if (badge && sourceEl && (source === 'filament' || source === 'vendor')) {
         sourceEl.textContent = source;
         badge.style.display = '';
@@ -86,9 +99,12 @@ window.wizardSetSpoolEmptyWeightInherited = (value, source) => {
     }
 };
 
+// The box holds a value of the spool's own from here on (or nothing): the badge
+// goes, and so does the mark Edit Spool's Save reads (Group 54.8).
 window.wizardClearSpoolEmptyWeightBadge = () => {
     const badge = document.getElementById('wiz-spool-empty-inherited-badge');
     if (badge) badge.style.display = 'none';
+    wizardState.spoolEmptyWeightFrom = null;
 };
 
 // --- WIZARD CLOSE → RE-OPEN DETAIL MODAL ---
@@ -179,6 +195,11 @@ window.wizardClearSpoolEmptyWeightBadge = () => {
         // was reset for the next spool when the box kept the focus (the open moves
         // the focus after the reset), which read as a touch of the new spool's box.
         wizEl.addEventListener('input', (e) => window.wizardNoteNativeTouched(e.target));
+        // Group 54.8: a price typed over the filament's is the spool's own, so its
+        // "↩ from filament" goes (after the line above has noted the touch).
+        wizEl.addEventListener('input', (e) => {
+            if (e.target && e.target.id === 'wiz-spool-price') window.wizardRefreshSpoolPriceMark();
+        });
         wizEl.addEventListener('click', (e) => {
             const chip = e.target && e.target.closest ? e.target.closest('.dynamic-chip') : null;
             if (chip) window.wizardNoteExtraTouched(chip);
@@ -409,7 +430,9 @@ const _wizSectionSummarizers = {
         const purl = v('wiz-spool-product_url');
         const archived = document.getElementById('wiz-spool-archived')?.checked;
         const parts = [];
-        if (price) parts.push(`$${price}`);
+        // Group 54.8: the filament's price says so, as the box's badge does.
+        if (price) parts.push(wizardSpoolPriceIsFilaments()
+            ? `$${price} <span class="text-info">↩ from filament</span>` : `$${price}`);
         if (archived) parts.push('<span class="text-warning">archived</span>');
         // 23.5 — mirror the purchase-link chip for the product link so the
         // summary shows BOTH are filled. Icons match the form labels:
@@ -752,18 +775,55 @@ const wizardApplyProductLinkFallback = (spoolUrl, filamentUrl) => {
 // price, so it NEVER overwrites an explicit spool price. `ownPrice` is the
 // spool's own price (null for a brand-new spool); `filamentPrice` is the
 // filament-level fallback.
+//
+// Group 54.8 (Derek, 2026-11-07, (a)): the filament's price is shown marked as
+// the filament's ("↩ from filament" beside the label, and in the section's
+// summary), and it is never saved as the spool's own: a filament's price may not
+// be what this spool cost (a sale, a later price). The spool's own price (an
+// edit's, or a clone's source spool's) shows plain and saves as before.
 window.wizardPrefillSpoolPrice = (ownPrice, filamentPrice) => {
     const el = document.getElementById('wiz-spool-price');
     if (!el) return;
     if (el.value !== '' && el.value != null) return;  // never clobber a typed/own value
-    const v = (ownPrice != null) ? ownPrice : filamentPrice;
-    if (v != null) el.value = v;
+    if (ownPrice != null) {
+        el.value = ownPrice;
+        wizardState.spoolPriceFrom = null;
+    } else if (filamentPrice != null) {
+        el.value = filamentPrice;
+        wizardState.spoolPriceFrom = 'filament';
+    }
+    window.wizardRefreshSpoolPriceMark();
 };
+
+// Group 54.8: whether the price box shows the filament's price, not the spool's
+// own: put there by wizardPrefillSpoolPrice and not typed over since (54.5's
+// touched set). Save leaves such a price out, so a new spool is created with no
+// price and an edited spool keeps none.
+const wizardSpoolPriceIsFilaments = () =>
+    wizardState.spoolPriceFrom === 'filament' && !wizardNativeTouched('spool', 'price');
+
+// Shows or hides the price box's "↩ from filament" badge to match.
+window.wizardRefreshSpoolPriceMark = () => {
+    const badge = document.getElementById('wiz-spool-price-inherited-badge');
+    if (badge) badge.style.display = wizardSpoolPriceIsFilaments() ? '' : 'none';
+};
+
+// Group 54.8, the empty weight's twin (Claude's call): whether the spool's
+// empty-weight box shows a value it inherits (its filament's or its brand's, the
+// open's cascade, with its badge), not typed over since. Edit Spool's Save leaves
+// it out, so the spool keeps having none of its own (or 54.5's clear stays a
+// clear). New spools and clones still take it as their own (L34).
+const wizardSpoolEmptyWeightIsInherited = () =>
+    (wizardState.spoolEmptyWeightFrom === 'filament' || wizardState.spoolEmptyWeightFrom === 'vendor')
+    && !wizardNativeTouched('spool', 'spool_weight');
 
 const wizardReset = () => {
     wizardState.mode = 'manual';
     wizardState.touchedExtras = new Set();
     wizardState.touchedNative = new Set();
+    // Group 54.8: nothing is shown from the filament until an open puts it there.
+    wizardState.spoolPriceFrom = null;
+    wizardState.spoolEmptyWeightFrom = null;
     wizardState.selectedFilamentId = null;
     wizardState.externalMetaData = null;
     wizardState.lockedAfterSuccess = false;
@@ -800,6 +860,7 @@ const wizardReset = () => {
     if (productUrlReset) productUrlReset.placeholder = 'https://...';
     document.querySelectorAll('#wizardModal select').forEach(i => i.selectedIndex = 0);
     if (window.wizardClearSpoolEmptyWeightBadge) window.wizardClearSpoolEmptyWeightBadge();
+    if (window.wizardRefreshSpoolPriceMark) window.wizardRefreshSpoolPriceMark();
 
     // Reset Color UI
     document.getElementById('wiz-fil-color-extra-container').innerHTML = '';
@@ -1380,6 +1441,10 @@ window.wizardOpenWeightEntry = () => {
             if (payload.empty_spool_weight != null &&
                 (emptyEl && emptyEl.value != null ? emptyEl.value : '').trim() === '') {
                 setVal('wiz-spool-empty_weight', window.fmtGramsPrecise(payload.empty_spool_weight));
+                // The tare the person gave is the spool's own, even in a box marked
+                // as inherited (the filament's emptied, and the spool's with it):
+                // its badge goes, and Edit Spool saves it (Group 54.8).
+                window.wizardClearSpoolEmptyWeightBadge();
             }
             if (payload.derived_initial != null) {
                 // Unknown-net path: record what's on the spool now as its full capacity.
@@ -3915,6 +3980,16 @@ window.wizardSubmit = async () => {
             if (sp_payload[k] === null && wizardNativeCleared('spool', k)) return;
             if (sp_payload[k] === undefined || sp_payload[k] === null || Number.isNaN(sp_payload[k])) delete sp_payload[k];
         });
+        // Group 54.8 (Derek, 2026-11-07, (a)): a price the box shows from the
+        // filament is not this spool's, so it is never saved as its own: a new
+        // spool is created with no price, an edited spool keeps none. Typed over
+        // (or emptied, 54.5's clear in edit mode), it is the spool's own.
+        if (wizardSpoolPriceIsFilaments()) delete sp_payload.price;
+        // Its twin (Claude's call, Edit Spool only): an empty weight the spool only
+        // inherits, untouched, isn't written as its own either. The empty-weight
+        // cross-inherit below then reads the filament's box, then the brand, where
+        // that value came from. New spools and clones take it as their own (L34).
+        if (isWizardEdit && wizardSpoolEmptyWeightIsInherited()) delete sp_payload.spool_weight;
 
         let f_payload = null;
         let target_fid = null;
@@ -3969,8 +4044,9 @@ window.wizardSubmit = async () => {
             // could never fire (not since 13654bb, 2026-04-06; found by Group 54.5). A
             // new spool's box copies the filament's (wizardSetupFieldSync), and an
             // edited spool's shows its inherited value from the open, so the spool's
-            // empty weight comes from its box. Edit mode never refills a box the user
-            // emptied: that is a clear (Group 54.5).
+            // empty weight comes from its box; in Edit Spool an inherited value left
+            // untouched is no longer sent at all (Group 54.8). Edit mode never refills
+            // a box the user emptied: that is a clear (Group 54.5).
             {
                 const selectedVendorId = document.getElementById('wiz-fil-vendor-sel')?.value;
                 const vendor = selectedVendorId
