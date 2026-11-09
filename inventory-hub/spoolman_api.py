@@ -674,11 +674,28 @@ def _archive_line(sid, data, existing, after, emptied):
     named, else where it is now ("still at <place>", "still Unassigned"), from
     `after` (the record Spoolman answered, or a re-read) or FCC's own read; nothing
     when neither says. The place is escaped: the Activity Log is HTML, and a
-    Spoolman location is free text."""
+    Spoolman location is free text.
+
+    With no read of the spool before the write (review R4-3), FCC can't know
+    whether the spool was archived already, or already where the write puts it (a
+    print charge on a spool archived by hand sends `archived: true` and its own
+    place), so the line is a state, never an archive or a move: "📦 Spool #N is
+    archived — at <place>" ("— Unassigned"), from `after`, else the place the write
+    named, else no place, and "(FCC couldn't read it before this write)"."""
+    read = isinstance(existing, dict) and existing.get('id') is not None
+    if not read:
+        if isinstance(after, dict) and after.get('id') is not None:
+            now = _place_text(after.get('location'))
+        elif 'location' in data:
+            now = _place_text(data.get('location'))
+        else:
+            now = None
+        where = ('' if now is None
+                 else f" — at {html.escape(now, quote=False)}" if now else " — Unassigned")
+        return f"📦 Spool #{sid} is archived{where} (FCC couldn't read it before this write)"
     head = (f"📦 Auto-archived Spool #{sid} (remaining weight hit 0)" if emptied
             else f"📦 Archived Spool #{sid}")
-    read = isinstance(existing, dict) and existing.get('id') is not None
-    was = _place_text(existing.get('location')) if read else None
+    was = _place_text(existing.get('location'))
     if 'location' in data:
         now = _place_text(data.get('location'))
         if not now:

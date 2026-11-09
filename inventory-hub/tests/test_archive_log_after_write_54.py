@@ -27,6 +27,13 @@ PATCH made to refuse) and over tests/deduct_wire_harness.WeightWireSpoolman (a
 PATCH that lands and then times out, or times out and never lands).
 
 Base proof (9c40996, R1-1 in): every test marked RED fails there; the controls pass.
+
+Review R4-3 (2026-11-09): when FCC's own read of the spool before the write
+fails, it can't know whether the spool was archived already, or already where
+the write puts it (a charge on a spool archived by hand sends `archived: true`
+and its own place), so the line says only the state: "📦 Spool #57 is archived —
+at CR-SHELF (FCC couldn't read it before this write)". The tests marked RED under
+that heading fail on 01ef59e.
 """
 from __future__ import annotations
 
@@ -228,15 +235,77 @@ def test_the_edges_archive_of_a_spool_already_unassigned_moves_nothing(http):
     assert _msgs("📦") == ["📦 Auto-archived Spool #57 (remaining weight hit 0) — still Unassigned"]
 
 
+UNREAD = " (FCC couldn't read it before this write)"
+
+
 def test_an_archive_of_a_spool_fcc_couldnt_read_says_where_spoolman_has_it(http, monkeypatch):
     """Review R1-1's case: FCC's read failed, so the edge didn't run and the page's
     own `archived: true` went out alone. The line says where Spoolman's answer has
     the spool. RED on 9c40996: it said the weight hit 0 and the spool moved to
-    UNASSIGNED, neither of which FCC knew or did."""
+    UNASSIGNED, neither of which FCC knew or did.
+
+    PIN UPDATED DELIBERATELY (review R4-3): with no read before the write FCC can't
+    say this write archived the spool (it may have been archived already), so the
+    line is a state, "is archived — at XL-1", and says why it is only that."""
     _in_stock(http, location="XL-1")
     monkeypatch.setattr(sm_api, "get_spool", lambda sid: None)
     assert sm_api.update_spool(57, {"remaining_weight": 0, "archived": True}) is not None
-    assert _msgs("📦") == ["📦 Archived Spool #57 — still at XL-1"], state.RECENT_LOGS
+    assert _msgs("📦") == [f"📦 Spool #57 is archived — at XL-1{UNREAD}"], state.RECENT_LOGS
+
+
+# ---- a spool FCC couldn't read before the write: where it is, never an archive or a move (review R4-3) --
+
+def _archived_by_hand(fake, location="CR-SHELF"):
+    """#57 archived by hand at `location` with 700 g left."""
+    fake.add("spool", 57, {}, location=location, initial_weight=1000.0, used_weight=300.0, archived=True)
+
+
+def test_an_unread_spool_charged_in_its_own_place_claims_no_archive_or_move(http, monkeypatch):
+    """RED: a print charge on a spool archived by hand sends its weight with
+    `archived: true` and its own place (print_deduct._deduct_payload), and FCC's own
+    read before the write failed. The spool was archived, and at CR-SHELF, before
+    and after: the line says that state and nothing else. On 7c831c6..01ef59e:
+    "📦 Archived Spool #57 — moved to CR-SHELF", an archive and a move that never
+    happened."""
+    _archived_by_hand(http)
+    monkeypatch.setattr(sm_api, "get_spool", lambda sid: None)
+    assert sm_api.update_spool(57, {"used_weight": 310.0, "archived": True, "location": "CR-SHELF"}) is not None
+    rec = http.records["spool"][57]
+    assert rec["archived"] is True and rec["location"] == "CR-SHELF", rec
+    assert _msgs("📦") == [f"📦 Spool #57 is archived — at CR-SHELF{UNREAD}"], state.RECENT_LOGS
+
+
+def test_an_unread_archived_spool_weighed_empty_where_it_is_claims_no_archive(http, monkeypatch):
+    """RED: the weigh-out fallback (switch on) weighs a spool already archived at
+    XL-1 to 0 g, and FCC's read failed: "📦 Archived Spool #57 — still at XL-1" on
+    the base, though nothing archived it."""
+    _archived_by_hand(http, location="XL-1")
+    monkeypatch.setattr(sm_api, "get_spool", lambda sid: None)
+    assert sm_api.update_spool(57, {"remaining_weight": 0, "archived": True}) is not None
+    assert _msgs("📦") == [f"📦 Spool #57 is archived — at XL-1{UNREAD}"], state.RECENT_LOGS
+
+
+@pytest.mark.parametrize("data, after, line", [
+    ({"archived": True}, None, f"📦 Spool #57 is archived{UNREAD}"),
+    ({"archived": True, "location": ""}, None, f"📦 Spool #57 is archived — Unassigned{UNREAD}"),
+    ({"archived": True}, {"id": 57, "location": ""}, f"📦 Spool #57 is archived — Unassigned{UNREAD}"),
+    ({"archived": True, "location": "Bin <2>"}, {"id": 57, "location": "Bin <2>"},
+     f"📦 Spool #57 is archived — at Bin &lt;2&gt;{UNREAD}"),
+    ({"archived": True}, {"message": "database is locked"}, f"📦 Spool #57 is archived{UNREAD}"),
+], ids=["nothing-said", "write-blanks-it", "answer-unassigned", "escaped", "answer-not-a-record"])
+def test_the_unread_line_says_only_where_the_spool_is(data, after, line):
+    """RED (the words are new): with no record read before the write (`existing`
+    {}), the line is a state: where Spoolman's answer has the spool, else the place
+    the write named, else no place, and never "moved to" or "Archived Spool"."""
+    assert sm_api._archive_line(57, data, {}, after, False) == line
+
+
+def test_control_a_read_spools_line_is_unchanged(http):
+    """Control (green on the base too): with FCC's read the line says what the
+    write did, as before."""
+    _in_stock(http)
+    assert sm_api.update_spool(57, {"archived": True, "location": ""}) is not None
+    assert _msgs("📦") == ["📦 Archived Spool #57 — moved to UNASSIGNED"], state.RECENT_LOGS
 
 
 def test_a_place_in_the_line_is_escaped(http):
@@ -308,6 +377,26 @@ def test_a_callers_own_archive_that_lands_and_times_out_says_where_the_spool_is(
     assert sm_api.update_spool(50, {"archived": True}) is None
     assert sm.spools[50]["archived"] is True and sm.spools[50]["location"] == "CR-SHELF"
     assert _msgs("📦") == ["📦 Archived Spool #50 — still at CR-SHELF"], state.RECENT_LOGS
+
+
+def test_an_unread_spools_archive_that_lands_and_times_out_says_where_it_is(wire, monkeypatch):
+    """RED: FCC's read before the write failed, the charge's PATCH landed and its
+    answer timed out, and the re-read shows the spool archived at CR-SHELF: the line
+    is the state, from the re-read. On the base: "📦 Archived Spool #50 — moved to
+    CR-SHELF"."""
+    sm = wire(_shelf_spool(archived=True), patch_fails={50})
+    real = sm_api.get_spool
+    reads = []
+
+    def first_read_fails(sid):
+        reads.append(sid)
+        return None if len(reads) == 1 else real(sid)
+
+    monkeypatch.setattr(sm_api, "get_spool", first_read_fails)
+    assert sm_api.update_spool(50, {"used_weight": 310.0, "archived": True, "location": "CR-SHELF"}) is None
+    assert len(reads) == 2, reads
+    assert sm.spools[50]["archived"] is True and sm.spools[50]["location"] == "CR-SHELF"
+    assert _msgs("📦") == [f"📦 Spool #50 is archived — at CR-SHELF{UNREAD}"], state.RECENT_LOGS
 
 
 def test_control_a_refill_that_lands_and_times_out_is_logged_from_the_re_read(wire):
