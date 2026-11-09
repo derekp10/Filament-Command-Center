@@ -18,7 +18,7 @@
 
 Started 2026-11-08 23:50 on `feature/group-54-group36-leftovers`, cut from `dev` `6e094e5` (code unchanged since the planning pass's `11126bb`). Derek, going to bed: *"feel free to work on all the parts for this that you can without my input."* So everything is built, and only the price look (54.8) waits for his OK, from pictures, before the merge. His two answers become two new parts, 54.7 and 54.8, because they touch the same code as 54.6 and 54.5.
 
-**Order (one builder at a time, one commit per part, red-first tests):** B1 server: 54.6, 54.7 (server half), 54.1, 54.3 · B2: 54.4, 54.7 (page half) · B3: 54.5 then 54.8, with before pictures taken before the wizard changes · B4: 54.2, the `?v=` bumps, the owed CLAUDE.md text · then a full `--offline` run. Then one batched review (`docs/agent_docs/review-checklist.md`), its fixes, the full sweep, and Derek's picture check.
+**Order (five builders, one at a time, one commit per part, red-first tests; the workflow `group-54-build`):** b1-server: 54.6, 54.7 (server half), 54.1, 54.3 · b2-wizard-clears: 54.5 · b3-price-mark: 54.8, with its before pictures taken before the wizard changes (so Derek's pictures are ready first) · b4-migration-weigh: 54.4, 54.7 (page half) · b5-chips-docs: 54.2, the `?v=` bumps, the owed CLAUDE.md text · then a full `--offline` run (the orchestrator). Then one batched review (`docs/agent_docs/review-checklist.md`), its fixes, the full sweep, and Derek's picture check.
 
 ### 54.7 "Auto-Archive 0g" off means off (Derek's answer 1)
 
