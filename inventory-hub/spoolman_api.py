@@ -442,14 +442,18 @@ def _auto_archive_on_empty(data, existing_initial, existing_used, existing_locat
     way used to leave it in stock, or archived by the page's own second call
     with no pre-archive note. A weight left that isn't a number (NaN included)
     changes nothing.
+
+    Returns True when it read the spool as empty (whatever the caller had set
+    itself), else False: update_spool words its Activity Log line from it
+    (Group 54 review R1-2).
     """
     if not any(k in data for k in ('used_weight', 'initial_weight', 'remaining_weight')):
-        return  # nothing weight-related in this update
+        return False  # nothing weight-related in this update
     if 'remaining_weight' in data and 'used_weight' not in data:
         try:
             remaining = float(data['remaining_weight'])
         except (TypeError, ValueError):
-            return
+            return False
     else:
         new_used = data.get('used_weight', existing_used)
         new_initial = data.get('initial_weight', existing_initial)
@@ -459,13 +463,13 @@ def _auto_archive_on_empty(data, existing_initial, existing_used, existing_locat
         if new_initial is None:
             new_initial = existing_filament_weight
         if new_used is None or new_initial is None:
-            return
+            return False
         try:
             remaining = float(new_initial) - float(new_used)
         except (TypeError, ValueError):
-            return
+            return False
     if remaining != remaining or remaining > 0:
-        return  # NaN reads as no weight at all; anything above 0 g isn't empty
+        return False  # NaN reads as no weight at all; anything above 0 g isn't empty
     # Only inject the auto-settings if the caller didn't provide them.
     if 'archived' not in data:
         data['archived'] = True
@@ -494,6 +498,7 @@ def _auto_archive_on_empty(data, existing_initial, existing_used, existing_locat
         extra['container_slot'] = ''
         extra['physical_source'] = ''
         extra['physical_source_slot'] = ''
+    return True
 
 
 def _auto_unarchive_on_refill(data, existing):
@@ -653,6 +658,76 @@ def _release_box_on_archive(sid, data, existing, pre_archived):
         state.logger.warning(f"42.1b archive-edge box release skipped for #{sid}: {e}")
 
 
+def _place_text(loc):
+    """A spool's location as text, '' for none (Unassigned)."""
+    return str(loc or '').strip().strip('"')
+
+
+def _archive_line(sid, data, existing, after, emptied):
+    """The Activity Log line for a landed write that archived spool `sid`, worded
+    from what the write did (Group 54 review R1-2). The archive edge's own archive
+    (`emptied`: it read the spool as empty) keeps its words, "📦 Auto-archived Spool
+    #N (remaining weight hit 0)"; any other archive (the wizard's Archived box, a
+    page's own `archived: true` on a spool FCC couldn't read) is "📦 Archived Spool
+    #N". Then where the spool is: "moved to UNASSIGNED" only when the write blanked
+    the location of a spool that had one, "moved to <place>" for a place the write
+    named, else where it is now ("still at <place>", "still Unassigned"), from
+    `after` (the record Spoolman answered, or a re-read) or FCC's own read; nothing
+    when neither says. The place is escaped: the Activity Log is HTML, and a
+    Spoolman location is free text."""
+    head = (f"📦 Auto-archived Spool #{sid} (remaining weight hit 0)" if emptied
+            else f"📦 Archived Spool #{sid}")
+    read = isinstance(existing, dict) and existing.get('id') is not None
+    was = _place_text(existing.get('location')) if read else None
+    if 'location' in data:
+        now = _place_text(data.get('location'))
+        if not now:
+            return f"{head} — {'still Unassigned' if was == '' else 'moved to UNASSIGNED'}"
+        verb = 'still at' if was is not None and was.upper() == now.upper() else 'moved to'
+        return f"{head} — {verb} {html.escape(now, quote=False)}"
+    now = _place_text(after.get('location')) if isinstance(after, dict) and after.get('id') is not None else was
+    if now is None:
+        return head
+    return f"{head} — still at {html.escape(now, quote=False)}" if now else f"{head} — still Unassigned"
+
+
+def _unarchive_line(sid, data, existing):
+    """The Activity Log line for a landed write that took spool `sid` out of the
+    archive (Group 54 review R1-2: written once the write lands, never before)."""
+    # Where it is now: the place this write names, else where it already
+    # was (an untick names none; 2026-10-20 review, engine-4).
+    restored_to = (data['location'] if 'location' in data
+                   else (existing.get('location') or '')) or 'UNASSIGNED'
+    # A weight write refilled it; otherwise the caller un-archived it
+    # itself (the move engine loading it onto a head, an untick).
+    weighed = any(k in data for k in ('used_weight', 'initial_weight', 'remaining_weight'))
+    return (f"📤 {'Auto-unarchived' if weighed else 'Un-archived'} Spool #{sid} "
+            f"({'weight refilled' if weighed else 'back in stock'}) — "
+            f"{'restored to' if weighed else 'now at'} {html.escape(str(restored_to), quote=False)}")
+
+
+def _log_archive_change(sid, data, existing, after, pre_archived, emptied, unarchive_warning):
+    """Write the Activity Log line(s) of a LANDED write that archived spool `sid`,
+    or took it out of the archive (with the 42.3c warning when it couldn't go back
+    where it was). Group 54 review R1-2: these used to be written before the PATCH,
+    so a write Spoolman refused, or FCC refused itself, read as done. Best-effort:
+    a log failure never changes the write's result."""
+    try:
+        if data.get('archived') and not pre_archived:
+            state.add_log_entry(_archive_line(sid, data, existing, after, emptied), "INFO", "00ccff")
+        if pre_archived and data.get('archived') is False:
+            state.add_log_entry(_unarchive_line(sid, data, existing), "INFO", "00ccff")
+    except Exception as e:
+        state.logger.warning(f"Archive log line for #{sid} skipped: {e}")
+    if unarchive_warning:
+        # Every surface logs it; the weight screens also toast it at 7 s
+        # (/api/spool/update and the wizard pass `fcc_warning` on).
+        try:
+            state.add_log_entry(f"⚠️ {unarchive_warning}", "WARNING", "ffaa00")
+        except Exception:
+            pass
+
+
 def update_spool(sid, data, archive_on_empty=True):
     """Returns the updated spool dict on success, or None on failure.
 
@@ -681,10 +756,19 @@ def update_spool(sid, data, archive_on_empty=True):
     it where it is, and the page's force-unassign then takes it off its head and
     releases the box. That covers a write with the weight left (Group 54.6) and a
     used plus initial weight alike. A record read with no capacity still runs it.
+
+    The "📦 … archived" and "📤 … un-archived" Activity Log lines are written only
+    once the write has landed (review R1-2, 2026-11-09): after Spoolman's OK, or,
+    for a PATCH whose answer never came, once a re-read shows the change landed
+    (`_after_unanswered_write`). They used to be written before the PATCH, so a
+    write Spoolman refused, or FCC refused itself, read as done, and the archive
+    line said "remaining weight hit 0 — moved to UNASSIGNED" for every
+    `archived: true`; `_archive_line` now words it from what the write did.
     """
     global LAST_SPOOLMAN_ERROR
     sm_url, _ = config_loader.get_api_urls()
     existing, pre_archived = {}, False   # read by the except branch's archive-edge check
+    emptied, unarchive_warning, patch_sent = False, None, False   # likewise (review R1-2)
     clears = {}   # how the extras this write clears are written (_plan_extra_clears)
     try:
         # [ALEX FIX] Intercept "UNASSIGNED" and coerce into empty string for Spoolman API
@@ -709,44 +793,20 @@ def update_spool(sid, data, archive_on_empty=True):
         # switched the edge off (Group 54.7) or FCC couldn't read the spool (R1-1).
         pre_archived = existing.get('archived', False)
         if archive_on_empty and read_ok:
-            _auto_archive_on_empty(
+            emptied = _auto_archive_on_empty(
                 data,
                 existing.get('initial_weight'),
                 existing.get('used_weight'),
                 existing_location=existing.get('location'),
                 existing_filament_weight=(existing.get('filament') or {}).get('weight'),
             )
-        if data.get('archived') and not pre_archived:
-            try:
-                state.add_log_entry(
-                    f"📦 Auto-archived Spool #{sid} (remaining weight hit 0) — moved to UNASSIGNED",
-                    "INFO", "00ccff",
-                )
-            except Exception:
-                pass
 
         # Symmetric auto-unarchive: weight went from 0 back to >0 on an archived
         # spool. Restores the pre-archive location when the breadcrumb is present
         # (Group 42.3c: unless a one-spool head there holds another spool now;
-        # the warning then says so).
+        # the warning then says so). Its line, like the archive's, is written once
+        # the write lands (review R1-2).
         unarchive_warning = _auto_unarchive_on_refill(data, existing)
-        if pre_archived and data.get('archived') is False:
-            try:
-                # Where it is now: the place this write names, else where it already
-                # was (an untick names none; 2026-10-20 review, engine-4).
-                restored_to = (data['location'] if 'location' in data
-                               else (existing.get('location') or '')) or 'UNASSIGNED'
-                # A weight write refilled it; otherwise the caller un-archived it
-                # itself (the move engine loading it onto a head, an untick).
-                weighed = any(k in data for k in ('used_weight', 'initial_weight', 'remaining_weight'))
-                state.add_log_entry(
-                    f"📤 {'Auto-unarchived' if weighed else 'Un-archived'} Spool #{sid} "
-                    f"({'weight refilled' if weighed else 'back in stock'}) — "
-                    f"{'restored to' if weighed else 'now at'} {restored_to or 'UNASSIGNED'}",
-                    "INFO", "00ccff",
-                )
-            except Exception:
-                pass
 
         # Merge extras with the existing record so a PATCH that replaces `extra`
         # (a Spoolman that does) can't wipe siblings. Use the RAW (still-wrapped)
@@ -794,21 +854,19 @@ def update_spool(sid, data, archive_on_empty=True):
         # blow a tight read timeout even though the request itself is fine").
         # Still bounded, so a wedged Spoolman cannot pin the worker forever —
         # which was the original defect this fix exists for.
+        patch_sent = True
         r = requests.patch(f"{sm_url}/api/v1/spool/{sid}", json=clean_data, timeout=15)
         if r.ok:
             LAST_SPOOLMAN_ERROR = None
-            _release_box_on_archive(sid, data, existing, pre_archived)
             out = r.json()
+            # The write landed: now its archive / un-archive line (review R1-2).
+            _log_archive_change(sid, data, existing, out, pre_archived, emptied, unarchive_warning)
+            _release_box_on_archive(sid, data, existing, pre_archived)
             _note_uncleared_extras('spool', sid, clears, out)
-            if unarchive_warning:
-                # Every surface logs it; the weight screens also toast it at 7 s
+            if unarchive_warning and isinstance(out, dict):
+                # Logged above; the weight screens also toast it at 7 s
                 # (/api/spool/update and the wizard pass `fcc_warning` on).
-                try:
-                    state.add_log_entry(f"⚠️ {unarchive_warning}", "WARNING", "ffaa00")
-                except Exception:
-                    pass
-                if isinstance(out, dict):
-                    out['fcc_warning'] = unarchive_warning
+                out['fcc_warning'] = unarchive_warning
             return out
         err_body = r.text
         state.logger.error(f"Failed to update spool {sid}: {r.status_code} - {err_body}")
@@ -816,30 +874,44 @@ def update_spool(sid, data, archive_on_empty=True):
     except Exception as e:
         state.logger.error(f"API Error updating spool {sid}: {e}")
         LAST_SPOOLMAN_ERROR = str(e)[:400]
-        _release_box_if_archive_landed(sid, data, existing, pre_archived)
+        if patch_sent:   # an error before the PATCH wrote nothing
+            _after_unanswered_write(sid, data, existing, pre_archived, emptied, unarchive_warning)
     return None
 
 
-def _release_box_if_archive_landed(sid, data, existing, pre_archived):
-    """Group 42 review: `timeout` is a READ timeout, so the archive edge can land
-    while the PATCH reports failure (a print deduct that empties the spool, a
-    weigh-out to 0). The deduct re-reads and counts such a charge as landed
-    (print_deduct._write_landed), and nothing could release the box afterwards:
-    the spool is off the head and its trail is cleared. So when the write was an
-    archive edge, re-read, and release the box if the archive really landed.
+def _after_unanswered_write(sid, data, existing, pre_archived, emptied=False, unarchive_warning=None):
+    """A PATCH whose answer never came may still have landed: update_spool's
+    `timeout` is a READ timeout (a print deduct that empties a spool, a weigh-out
+    to 0). When the write would archive the spool, or take it out of the archive,
+    read it again, and if the change landed (archived, or back in stock, where the
+    write put it):
+      - write its Activity Log line(s), as for an answered write (Group 54 review
+        R1-2: never before the write lands, so one that never landed reads as
+        nothing, and one that did still says so);
+      - for an archive that blanked the location, release the spool's own
+        single-slot box (Group 42 review: the deduct re-reads and counts such a
+        charge as landed, and nothing could release the box afterwards: the spool
+        is off the head and its trail is cleared).
     Never changes the result or LAST_SPOOLMAN_ERROR (get_spool leaves it alone)."""
     try:
         if not isinstance(data, dict) or not isinstance(existing, dict):
             return
-        if not (data.get('archived') and not pre_archived and data.get('location') == ''):
+        archiving = bool(data.get('archived')) and not pre_archived
+        unarchiving = bool(pre_archived) and data.get('archived') is False
+        if not (archiving or unarchiving):
             return
         rec = get_spool(sid)
         if not isinstance(rec, dict) or rec.get('id') is None:
-            return   # unreadable, or Spoolman's truthy 404 body
-        if rec.get('archived') and not str(rec.get('location') or '').strip().strip('"'):
+            return   # unreadable, or Spoolman's truthy 404 / 5xx body
+        if 'location' in data and _place_text(rec.get('location')).upper() != _place_text(data.get('location')).upper():
+            return   # not where the write put it: the write didn't land
+        if archiving and rec.get('archived'):
+            _log_archive_change(sid, data, existing, rec, pre_archived, emptied, None)
             _release_box_on_archive(sid, data, existing, pre_archived)
+        elif unarchiving and not rec.get('archived'):
+            _log_archive_change(sid, data, existing, rec, pre_archived, emptied, unarchive_warning)
     except Exception as e:
-        state.logger.warning(f"42.1b archive-edge re-read for #{sid} skipped: {e}")
+        state.logger.warning(f"Re-read of #{sid} after an unanswered write skipped: {e}")
 
 
 def update_spool_or_raise(sid, data):
