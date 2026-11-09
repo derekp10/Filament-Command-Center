@@ -4,6 +4,7 @@
 **Estimated effort:** SMALL–MEDIUM (~5–9 h, 1 session). 54.1–54.4 ~3–6 h · 54.5 ~1.5–3 h (with its check on dev) · 54.6 ~0.5–1 h.
 **Risk:** **LOW–MEDIUM.** 54.1–54.4 are dormant on today's data. `setup_fields.py` runs on every prod deploy, but the change sits inside a branch that returns early. 54.5 changes the wizard's edit-mode save, a live path; 54.6 the archive edge of `update_spool`, a rare path.
 
+> **2026-11-09: DONE, merged to `dev` (Derek: "Merge now", after his picture walk; `main` held). Nothing is left in the group; its follow-ups are standalone buglist items, his "still at" item first.**
 > **Status: `TODO` — filed 2026-10-19 (`/refresh-groups`). No Derek decision needed.** Not in the 48 + 49 + 51 + 52 bundle.
 > **🔄 2026-10-25 (`/refresh-groups`): gains 54.5 and 54.6**, two small items of the same shape (a clear or an edge that silently doesn't fire), filed 2026-10-21 by the extras-clear fix and 2026-10-19 by the Group 51 review. Still no Derek decision; 54.5 needs a check on dev first.
 > Four small hardening fixes from Group 36's lineage (the filament-attribute work and its review). Group 36's other follow-up, the retry on the pre-merge extras read, is [Group 52](52-spoolman-read-load.md) 52.2. Every decision: [refresh-2026-10-19.md](refresh-2026-10-19.md).
