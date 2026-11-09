@@ -428,7 +428,14 @@
                     <div id="wiz-spool-metadata-panel" class="collapse">
                         <div class="row g-3 fcc-wiz-section-panel">
                             <div class="col-md-4">
-                                <label class="form-label small text-secondary mb-1">Price Paid ($)</label>
+                                <label class="form-label small text-secondary mb-1">Price Paid ($)
+                                    <!-- Group 54.8: the box shows the filament's price, the
+                                         spool having none of its own (wizardRefreshSpoolPriceMark). -->
+                                    <span id="wiz-spool-price-inherited-badge"
+                                        class="badge bg-info-subtle text-info-emphasis ms-1"
+                                        style="display: none; font-size: var(--fcc-fs-label); font-weight: normal;"
+                                        title="The filament's price: this spool has no price of its own, and saving keeps it that way. Type a price to give the spool its own.">↩ from filament</span>
+                                </label>
                                 <input type="number" step="0.01" class="form-control bg-dark text-white border-secondary"
                                     id="wiz-spool-price" placeholder="0.00">
                             </div>

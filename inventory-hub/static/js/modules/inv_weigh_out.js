@@ -56,6 +56,9 @@ const fetchSpoolDetails = (id) => {
             const entry = {
                 initial: Number(d.initial_weight) || Number(d.filament?.weight) || 0,
                 used: Number(d.used_weight) || 0,
+                // Group 54.7: a spool archived before its save stays archived
+                // at 0 g with the switch off, so it isn't "kept in stock".
+                archived: d.archived === true,
                 empty,
                 cascade,
                 context: {
@@ -106,6 +109,12 @@ window.openWeighOutModal = () => {
     setPending(null);
     setRescan(null);
     deferredTake = null;
+    // The "Auto-Archive 0g" switch is on at every open, as the Quick-Weigh's is
+    // (Derek, 2026-11-09, at Group 54's picture walk). Since 54.7 off means off,
+    // so a switch left off at one weigh-out kept every spool weighed to 0 g in
+    // stock at the next. Turned off, it stays off for the rest of this session.
+    const archiveSwitch = document.getElementById('weigh-auto-archive');
+    if (archiveSwitch) archiveSwitch.checked = true;
     // 31.3 review fix: start every session fresh. Closing the modal does NOT
     // clear #weigh-out-list, so rows (with any un-submitted text) linger in the
     // hidden DOM. Wipe them BEFORE the first render so the preserve-text
@@ -782,13 +791,14 @@ const renderWeighOutList = () => {
     }
 };
 
-// Compute used_weight for a row given the modal-level mode + the cached
+// Compute used_weight for a row given the weigh-out mode `mode` + the cached
 // spool details + the row's typed input. Returns the computeUsedWeight
 // result object (or null when details aren't loaded yet / input is empty).
-const computeRowResult = (id, rawInputValue) => {
+// The mode is the caller's (Group 54 review R3-2): a row's preview passes the
+// window's mode now, a save the mode it read when Enter was pressed.
+const computeRowResult = (id, rawInputValue, mode) => {
     const details = weighOutDetailsCache.get(Number(id));
     if (!details) return null;
-    const mode = window.weighOutMode || 'net';
     let value;
     if (mode === 'additive') {
         const parsed = window.parseAdditiveInput(rawInputValue);
@@ -820,7 +830,7 @@ window.updateWeighRowPreview = (inputEl) => {
         previewEl.innerText = '';
         return;
     }
-    const r = computeRowResult(id, raw);
+    const r = computeRowResult(id, raw, window.weighOutMode || 'net');
     if (!r) {
         previewEl.innerText = ''; // details still loading
         return;
@@ -857,6 +867,20 @@ window.handleWeighInput = (e, inputEl) => {
     }
 };
 
+// The weigh-out list's "Auto-Archive 0g" switch: true / false, or null when the
+// window isn't on the page (Group 54.7).
+const listArchiveSwitch = () => {
+    const el = document.getElementById('weigh-auto-archive');
+    return el ? !!el.checked : null;
+};
+
+// Whether the scan buffer has this spool as archived (a weigh-out row whose
+// details couldn't be read has nothing else to go on).
+const heldArchived = (id) => {
+    const s = (state.heldSpools || []).find((x) => x.id == id);
+    return !!s && (s.archived === true || String(s.archived).toLowerCase() === 'true');
+};
+
 // New per-row save path that runs the typed value through computeUsedWeight
 // before handing off to saveSpoolWeight (which still owns the actual write,
 // auto-archive flag, force-unassign chain, and sync-pulse dispatch).
@@ -866,6 +890,19 @@ window.saveWeighOutRow = async (idStr) => {
     if (!inputEl) return;
     const raw = inputEl.value;
     if (raw === '' || raw === '+' || raw === '-') return;
+    // What the person asked at Enter (or 💾) is read here, before anything
+    // waits (Group 54 review R3-1 / R3-2): the reading above, the window's mode
+    // and its "Auto-Archive 0g" switch. The save can wait up to 10 s for the
+    // spool's details, then for its tare, and a click on the switch or a mode
+    // button meanwhile (for the next spool) used to decide this one: a spool
+    // weighed to 0 g with the switch off was archived and taken off its shelf,
+    // and Net 425 was saved as Set Used 425. Read after a wait, by design: the
+    // spool's own state (its details; the buffer's word on whether it is
+    // archived), the tare the prompt gives, where the focus is and what was
+    // typed meanwhile (the late tare prompt's check), and the row as drawn now
+    // (a redraw replaces it).
+    const mode = window.weighOutMode || 'net';
+    const switchOn = listArchiveSwitch();
     // Not while a scan read in this window is being answered: its spool's
     // reading may still be on its way to its box (Group 57 review, round 8: a
     // reading and Enter typed before the answer were saved to another spool).
@@ -908,19 +945,25 @@ window.saveWeighOutRow = async (idStr) => {
             // Fallback: the backend treats `newWeight` as remaining_weight,
             // which a Net reading is. Any other mode's reading needs the
             // spool's details (round 9: Additive '+25' was saved as 25 g left,
-            // Set Used '0' as an empty spool, which was archived).
-            if ((window.weighOutMode || 'net') !== 'net') {
+            // Set Used '0' as an empty spool, which was archived). The mode
+            // the reading was typed in, at Enter (review R3-2).
+            if (mode !== 'net') {
                 showToast(`Couldn't read #${id}'s details, so its reading wasn't saved: press Enter in its box to try again`, 'warning', 7000);
                 return;
             }
             const n = window.parseGramsReading(raw);
             if (Number.isNaN(n)) { notAReading(); return; }
             handed = true;
-            window.saveSpoolWeight(id, n);
+            // The list's own switch (Group 54.7) as it was at Enter, and its
+            // verdict with it, so saveSpoolWeight never reads the switch itself
+            // now (review R3-1); and the buffer's word on whether the spool is
+            // archived: its details couldn't be read.
+            window.saveSpoolWeight(id, n, null, switchOn === true && n <= 0, null,
+                { archiveSwitch: switchOn, empties: n <= 0, wasArchived: heldArchived(id) });
             return;
         }
 
-        let r = computeRowResult(id, raw);
+        let r = computeRowResult(id, raw, mode);
         if (r && r.error === 'not_a_reading') { notAReading(); return; }
         if (!r || r.error) {
             showToast('Could not compute used weight', 'error');
@@ -961,7 +1004,7 @@ window.saveWeighOutRow = async (idStr) => {
             if (tare === null) { window.weighOutRefocus(); return; }
             details.empty = Number(tare);
             weighOutDetailsCache.set(id, details);
-            r = computeRowResult(id, raw);
+            r = computeRowResult(id, raw, mode);
             if (!r || r.error || r.requires_empty) {
                 showToast('Could not compute used weight', 'error');
                 return;
@@ -971,15 +1014,17 @@ window.saveWeighOutRow = async (idStr) => {
         // Hand off to saveSpoolWeight with a precomputed used_weight payload.
         // saveSpoolWeight's auto-archive check inspects remaining_weight, but
         // we're submitting used_weight — so compute the auto-archive verdict
-        // locally and pass it explicitly via the 4th arg.
+        // locally and pass it explicitly via the 4th arg. The list's switch
+        // itself goes too (Group 54.7), sent as `auto_archive`: both from the
+        // switch as it was at Enter (review R3-1).
         const remainingAfter = Math.max(0, details.initial - r.used_weight);
-        const autoToggle = document.getElementById('weigh-auto-archive');
-        const autoArchive = !!(autoToggle && autoToggle.checked && remainingAfter <= 0);
+        const autoArchive = switchOn === true && remainingAfter <= 0;
         // Forward this row's resolved empty-spool-weight (the just-entered tare when
         // the gross missing-tare prompt fired above, otherwise the spool/filament/
         // vendor cascade value) so the post-archive record prompt is pre-filled.
         handed = true;
-        window.saveSpoolWeight(id, null, { used_weight: r.used_weight }, autoArchive, details.empty);
+        window.saveSpoolWeight(id, null, { used_weight: r.used_weight }, autoArchive, details.empty,
+            { archiveSwitch: switchOn, empties: remainingAfter <= 0, wasArchived: details.archived === true });
     } finally {
         // Not saved after all, and scanned again while its details were read:
         // its box is open for the new reading, with what was typed for it.
@@ -987,7 +1032,52 @@ window.saveWeighOutRow = async (idStr) => {
     }
 };
 
-window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts = null, emptyPrefill = null) => {
+// A weight write that failed, in the Activity Log (Group 54 review R1-3): the
+// route writes a refused one only to hub.log, and a save that got no answer
+// reached no log at all, so a toast missed (or under a prompt) left no record.
+// One line, saying what the toast said; escaped, since the log is HTML and
+// Spoolman's reason is free text.
+const escWeighLog = (said) => {
+    const text = String(said == null ? '' : said);
+    return typeof window.escHtml === 'function' ? window.escHtml(text)
+        : text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+};
+const logWeighFailure = (id, said) => {
+    if (!window.logClientEvent) return;
+    window.logClientEvent(`❌ Spool #${id}: ${escWeighLog(said)}`, 'ERROR');
+};
+
+// Group 54 review R4-1: a spool a weigh save archived that the archive's own
+// unassign couldn't take off its place (`place`, from the save's answer; null when
+// the answer named none). It is archived there, which no in-stock reader shows, so
+// it is said for a warning's 7 s, and one WARNING Activity Log line keeps the
+// reason, escaped (the log is HTML, and a Spoolman location is free text).
+const stillPlacedWords = (id, place) => (place
+    ? `Spool #${id} is archived but still at ${place}: FCC couldn't take it off there.`
+    : `Spool #${id} is archived, but FCC couldn't take it off its place.`);
+const warnStillPlaced = (id, place, why) => {
+    const said = stillPlacedWords(id, place);
+    showToast(said, 'warning', 7000);
+    if (window.logClientEvent) {
+        window.logClientEvent(`⚠️ ${escWeighLog(`${said.slice(0, -1)} (${why})`)}`, 'WARNING');
+    }
+};
+
+// `how` (Group 54.7; Derek, 2026-11-07, (a): "Auto-Archive 0g" off means off) is
+// what the window the reading was typed in says, from each caller:
+//   archiveSwitch: that window's own switch (the weigh-out list's, or the
+//     Quick-Weigh's "Auto Archive & Eject if Empty (0g)"), sent as `auto_archive`
+//     beside `id` and `updates`. Off, /api/spool/update keeps a spool weighed to
+//     0 g in stock where it is; on, its rule (archive at 0 g) decides, also where
+//     the page's own arithmetic says the spool isn't empty. The switch is sent,
+//     never the per-save verdict (autoArchiveOpts).
+//   empties: the save leaves 0 g by the page's own reading.
+//   wasArchived: the spool was archived before the save, as the page read it
+//     (it stays archived at 0 g with the switch off, so it isn't "kept in stock").
+// A caller that names no switch (an older one): the weigh-out list's switch when
+// it leaves the verdict to this function, as that path always read it, else none,
+// and the server's rule decides, as before.
+window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts = null, emptyPrefill = null, how = null) => {
     let updates = updatesObj || {};
     if (newWeight !== null && newWeight !== "" && !isNaN(newWeight)) {
         updates.remaining_weight = parseFloat(newWeight);
@@ -1017,6 +1107,15 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
         updates.archived = true;
     }
 
+    const told = how || {};
+    const archiveSwitch = typeof told.archiveSwitch === 'boolean' ? told.archiveSwitch
+        : (autoArchiveOpts === null && autoToggle ? !!autoToggle.checked : null);
+    const empties = typeof told.empties === 'boolean' ? told.empties
+        : (updates.remaining_weight !== undefined && updates.remaining_weight <= 0);
+    const wasArchived = typeof told.wasArchived === 'boolean' ? told.wasArchived : heldArchived(id);
+    const request = { id: id, updates: updates };
+    if (archiveSwitch !== null) request.auto_archive = archiveSwitch;
+
     setProcessing(true);
 
     // Its row shows the save on its way (markSaving). The focus moves on from
@@ -1031,20 +1130,29 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
     fetch(`/api/spool/update`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            id: id,
-            updates: updates
-        })
+        body: JSON.stringify(request)
     })
     .then(r => r.json())
     .then(res => {
         if (res.status === 'success') {
-            const finalize = () => {
+            // `stillAt` ({place, why}): the archive's own unassign below failed
+            // while the spool still had a place (Group 54 review R4-1).
+            const finalize = (stillAt = null) => {
                 setProcessing(false);
                 // Saved: a redraw from now on draws its row as any other (its
                 // fade, or a scan of it, decides what comes next).
                 savingIds.delete(id);
-                showToast(`Updated Spool #${id}`, 'success');
+                // Group 54.7: weighed to 0 g with the switch off, the spool
+                // stays in stock, and the toast says so, for a success
+                // toast's 4 s (the plain one keeps showToast's default).
+                const keptInStock = archiveSwitch === false && empties && !wasArchived
+                    && !(res && res.auto_archived);
+                if (keptInStock) {
+                    showToast(`Updated Spool #${id}: 0 g left, kept in stock (Auto-Archive is off)`, 'success', 4000);
+                } else {
+                    showToast(`Updated Spool #${id}`, 'success');
+                }
+                if (stillAt) warnStillPlaced(id, stillAt.place, stillAt.why);
                 // Group 42.3c: a used-up spool weighed back above 0 g whose old
                 // toolhead holds another spool now went to Unassigned instead.
                 if (res && res.warning) showToast(res.warning, 'warning', 7000);
@@ -1061,10 +1169,14 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
                 // in the prompt's box as the filament's empty weight (Group 57
                 // review, rounds 8 and 9). A spool scanned while the prompt is up
                 // closes it, and its Save waits while one is being answered.
+                // The toast layer is under every overlay, so a spool the archive's
+                // unassign left on its place is said on the prompt too, or the
+                // prompt hid the warning for its whole 7 s (Group 54 review R5-1).
                 if (res && res.needs_empty_weight_prompt && res.filament_id && window.showArchiveEmptyWeightPrompt) {
                     setTimeout(() => window.showArchiveEmptyWeightPrompt(id, res.filament_id, emptyPrefill,
                         { settle: scanSettled, skipIf: () => scansTaken !== takenAtSave,
-                          scanPending: () => !!pendingScan }), 400);
+                          scanPending: () => !!pendingScan,
+                          notice: stillAt ? stillPlacedWords(id, stillAt.place) : null }), 400);
                 }
 
                 // Visual feedback that it's done, on its row as it is now (a
@@ -1114,18 +1226,46 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
             };
 
             if (updates.archived) {
+                // The archive takes the spool off its place ("Auto Archive & Eject
+                // if Empty"). When FCC read the spool, update_spool's archive edge
+                // already did, and this request finds it Unassigned; when it
+                // couldn't (review R1-1: no edge on an unread spool), the write
+                // archived it where it is, and this request is what takes it off.
+                // It answers the print question itself, as the edge never asks one
+                // (a spool weighed empty is in the person's hand, not feeding the
+                // head), and its answer is read (Group 54 review R4-1: a printing
+                // head refused it, nothing read that, and an archived spool stayed
+                // on the head behind "Updated"). A failure while the save's answer
+                // had the spool on a place is said; one after the edge took it off
+                // already changes nothing a person needs to know.
+                const placeNow = typeof res.location_now === 'string' ? res.location_now.trim() : null;
                 fetch('/api/manage_contents', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ action: 'force_unassign', spool_id: id, location: '' })
-                }).then(() => finalize()).catch(() => finalize());
+                    body: JSON.stringify({ action: 'force_unassign', spool_id: id, location: '',
+                                           confirm_active_print: true })
+                })
+                    .then((r) => r.json())
+                    .then((ans) => (ans && ans.success === true ? null : String((ans && ans.msg) || 'no answer')),
+                          (e) => String((e && e.message) || 'no answer'))
+                    .then((why) => finalize(why === null || placeNow === '' ? null : { place: placeNow, why }));
             } else {
                 finalize();
             }
             
         } else {
             setProcessing(false);
-            showToast("Failed to update weight", "error");
+            // Refused: the route's own reason, in words (its `msg`: "Couldn't
+            // save Spool #57: Spoolman didn't answer in time.", review R4-2),
+            // for an error toast's 7 s (Group 54 review R1-3: it was "Failed to
+            // update weight" for 2 s, whatever the route said).
+            const said = res.msg || res.error || 'Failed to update weight';
+            showToast(said, 'error', 7000);
+            // The log keeps the full text: the raw `error` (Spoolman's answer,
+            // or requests' own words) after the words, where `msg` doesn't hold
+            // it already.
+            const raw = res.error ? String(res.error) : '';
+            logWeighFailure(id, raw && !String(said).includes(raw) ? `${said} (${raw})` : said);
             markSaving(id, false);
             refocusAfterFailedSave(id);
         }
@@ -1133,7 +1273,8 @@ window.saveSpoolWeight = (idStr, newWeight, updatesObj = null, autoArchiveOpts =
     .catch(e => {
         setProcessing(false);
         console.error("Weigh update failed", e);
-        showToast("Error updating weight", "error");
+        showToast("Error updating weight", "error", 7000);
+        logWeighFailure(id, `Error updating weight (${(e && e.message) || 'no answer'})`);
         markSaving(id, false);
         refocusAfterFailedSave(id);
     });
@@ -1230,11 +1371,15 @@ window.openQuickWeigh = (spoolId) => {
                     // Used == initial means remaining hits zero; auto-archive
                     // gate matches the legacy behavior (auto-archive only when
                     // the toggle is on AND the spool emptied).
-                    const autoArchive = !!payload.auto_archive &&
-                        Math.max(0, initial - payload.used_weight) <= 0;
+                    const switchOn = !!payload.auto_archive;
+                    const empties = Math.max(0, initial - payload.used_weight) <= 0;
+                    const autoArchive = switchOn && empties;
                     // Forward the tare WeightEntry collected (Gross-mode missing-
                     // tare prompt) so the post-archive record prompt is pre-filled.
-                    window.saveSpoolWeight(d.id, null, updates, autoArchive, payload.empty_spool_weight);
+                    // This window's own switch goes as `auto_archive` (Group 54.7),
+                    // never the weigh-out list's.
+                    window.saveSpoolWeight(d.id, null, updates, autoArchive, payload.empty_spool_weight,
+                        { archiveSwitch: switchOn, empties, wasArchived: d.archived === true });
                 },
             });
         })

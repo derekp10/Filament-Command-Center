@@ -1554,6 +1554,19 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
     const pre = Number(prefillWeight);
     const prefillAttr = (Number.isFinite(pre) && pre > 0) ? ` value="${pre}"` : '';
 
+    // `opts.notice`: something the person must read about this spool, said on the
+    // prompt itself, since the toast layer is under every overlay (Group 54 review
+    // R5-1: the weigh page's "Spool #57 is archived but still at XL-1: …" was hidden
+    // behind this prompt for its whole 7 s). The label's own look, in yellow.
+    // A place id in it stays whole, as in every other dialog (fccKeepWhole; review R6-7:
+    // "still at LR-" / "MDB-1" on a phone at Extra Large); one longer than the line
+    // itself breaks at its hyphens again, measured once it is drawn (below).
+    const notice = (opts && opts.notice) ? String(opts.notice) : '';
+    const keepWhole = (h) => (typeof window.fccKeepWhole === 'function' ? window.fccKeepWhole(h) : h);
+    const noticeRow = notice
+        ? `<div id="fcc-archive-empty-notice" role="alert" class="text-warning small" style="margin-bottom:10px;">⚠️ ${keepWhole(esc(notice))}</div>`
+        : '';
+
     const propagateRow = canPropagate ? `
             <label style="display:flex; align-items:flex-start; gap:8px; margin-top:12px; cursor:pointer;">
                 <input type="checkbox" id="fcc-archive-propagate" class="form-check-input" style="margin-top:3px; flex:0 0 auto;">
@@ -1568,6 +1581,7 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
     const content = `
         <div data-fcc-weight-keys style="background:#1e1e1e; color:#fff; border:2px solid #ffc107; border-radius:8px; padding:20px 24px; max-width:28.75rem; text-align:left;">
             <div style="font-size:1.2em; font-weight:bold; margin-bottom:10px;">📦 Spool archived — record the empty weight?</div>
+            ${noticeRow}
             <p style="color:#ddd; margin-bottom:8px; font-size:0.95em;">
                 Spool <strong>#${esc(spoolId)}</strong> just hit 0g and was auto-archived. Its filament
                 <strong>#${esc(fil.id)}</strong> (<em>${esc(vendorName)} ${esc(material)}, ${esc(colorName)}</em>)
@@ -1625,6 +1639,18 @@ window.showArchiveEmptyWeightPrompt = async (spoolId, filamentId, prefillWeight 
         onEscape: cleanup,   // Escape == "Later" (no-op); mountOverlay owns Escape
     });
     const ov = handle.element;
+    // An id kept whole that is longer than the line itself widens the whole prompt
+    // past the window's sides (a 360 px phone at Extra Large), so then it breaks at its
+    // hyphens again, measured as fccFitQuestion measures a question.
+    const noticeEl = ov.querySelector('#fcc-archive-empty-notice');
+    const dialogEl = ov.querySelector('[data-fcc-weight-keys]');
+    if (noticeEl && dialogEl && noticeEl.querySelector('.fcc-keep-whole')) {
+        const vw = (document.documentElement && document.documentElement.clientWidth) || window.innerWidth || 0;
+        if ((vw > 0 && dialogEl.getBoundingClientRect().width > vw + 0.5)
+            || noticeEl.scrollWidth > noticeEl.clientWidth + 1) {
+            noticeEl.classList.add('fcc-keep-whole-off');
+        }
+    }
     // A spool scanned over it in the weigh-out list answers it Later: that
     // spool is the one being weighed now, and its reading would go in this box
     // as the filament's empty weight (inv_weigh_out.js, round 8). A save

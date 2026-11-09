@@ -161,20 +161,162 @@ def delete_field(entity_type, key, error_check=False):
             raise
 
 
-def _get_field_definition(entity_type, key):
-    """Return the current Spoolman field definition for entity_type/key,
-    or None if absent / unreachable. Used by migrations to decide whether
-    a value-preserving rebuild is needed."""
+def _read_field_definition(entity_type, key):
+    """Spoolman's field definition for entity_type/key, said three ways:
+    (field, None) when the field list holds it, (None, None) when Spoolman answered
+    a list without it, and (None, why) when the list couldn't be read (no answer,
+    an HTTP error, or a 200 whose body isn't JSON or isn't a list). Never raises.
+
+    Review R3-3 (Group 54): only a RequestException was caught, so a 200 whose body
+    wasn't JSON raised ValueError out of the migration (and an entry that wasn't an
+    object, AttributeError). On a rebuild that failed after its DELETE, that came
+    before every snapshotted value was printed, and either way it stopped
+    setup_fields before every field set up after the migration, on every deploy."""
     try:
         resp = requests.get(f"{SPOOLMAN_IP}/api/v1/field/{entity_type}", timeout=5)
-        if resp.status_code != 200:
-            return None
-        for f in resp.json() or []:
-            if f.get("key") == key:
-                return f
-    except requests.RequestException:
+    except Exception as e:   # no answer: a RequestException, or anything else
+        return None, f"no answer: {e}"
+    if resp.status_code != 200:
+        return None, f"HTTP {resp.status_code}"
+    try:
+        rows = resp.json()
+    except ValueError:
+        return None, "its answer wasn't JSON"
+    if not isinstance(rows, list):
+        return None, "its answer wasn't a list"
+    for f in rows:
+        if isinstance(f, dict) and f.get("key") == key:
+            return f, None
+    return None, None
+
+
+def _get_field_definition(entity_type, key):
+    """Return the current Spoolman field definition for entity_type/key,
+    or None if absent / unreadable (`_read_field_definition` tells the two
+    apart). Used by migrations to decide whether a value-preserving rebuild
+    is needed."""
+    return _read_field_definition(entity_type, key)[0]
+
+
+def _as_text_wire(raw):
+    """A stored extra value as a `text` field's wire form (a JSON string), or None
+    when there is nothing to keep (JSON null, a blank).
+
+    Spoolman stores and answers every extra value as JSON text and checks each
+    write against the field's type, so a rebuild to `text` must restore values
+    the new type takes: an integer field's `2` sent back as it was is refused
+    ("Value is not a string."). Every value is put in this form before anything
+    is deleted (Group 54.4):
+      - a JSON string stays as it is ('"2"');
+      - any other JSON (a number, a bool, a list) becomes its own JSON text as a
+        string: '2' -> '"2"', 'true' -> '"true"', never Python's "True";
+      - text that isn't JSON (a value from before Spoolman checked) becomes that
+        text as a string: 'slot 2' -> '"slot 2"';
+      - JSON null, '' and a blank string are skipped.
+    """
+    if raw is None:
         return None
-    return None
+    if not isinstance(raw, str):
+        # Spoolman answers wire text; a parsed value goes back to it first.
+        try:
+            raw = json.dumps(raw)
+        except (TypeError, ValueError):
+            raw = str(raw)
+    text = raw.strip()
+    if not text:
+        return None
+    try:
+        decoded = json.loads(text)
+    except ValueError:
+        return json.dumps(text)
+    if decoded is None:
+        return None
+    if isinstance(decoded, str):
+        return text if decoded.strip() else None
+    return json.dumps(text)
+
+
+def _spool_place(record):
+    """Where a spool record says it is, '' for nowhere."""
+    return str(record.get("location") or "").strip()
+
+
+def _read_spool(url):
+    """GET one spool: (record, None), (None, "gone") for a 404, or (None, why)."""
+    try:
+        r = requests.get(url, timeout=10)
+    except requests.RequestException as e:
+        return None, str(e)
+    if r.status_code == 404:
+        return None, "gone"
+    if r.status_code != 200:
+        return None, f"HTTP {r.status_code} {str(r.text)[:200]}"
+    try:
+        record = r.json()
+    except ValueError:
+        return None, "its answer wasn't JSON"
+    if not isinstance(record, dict) or record.get("id") is None:
+        return None, "its answer wasn't a spool"
+    return record, None
+
+
+def _print_slot_values(snapshot, sids):
+    """One line per spool: its id, its slot value and where it was, so a value
+    Spoolman no longer holds can be put back by hand."""
+    for sid in sids:
+        snap = snapshot[sid]
+        print(f"      #{sid}: {json.loads(snap['value'])} (at {snap['location'] or 'no location'})")
+
+
+def _restore_container_slot(sid, snap):
+    """Put one snapshotted value back through a fresh read-merge-write of the
+    spool's whole `extra`. Answers 'restored', 'kept', 'gone' or 'failed'.
+
+    The read is the last look before the write. FCC keeps running through the
+    deploy, so a spool may have changed since the snapshot: a spool deleted since
+    is 'gone'; one that holds a `container_slot` again (FCC wrote it since the
+    rebuild, a blank included, since a move to a place with no slot writes "")
+    or that is somewhere else now is left as it is ('kept'); one that can't be
+    read is sent nothing ('failed'), never a partial `extra`. A whole `extra`,
+    as spoolman_api.update_spool sends it, because a Spoolman before 0.22
+    replaced a spool's whole `extra` with a PATCH's."""
+    value, was_at = snap["value"], snap["location"]
+    url = f"{SPOOLMAN_IP}/api/v1/spool/{sid}"
+    record, why = _read_spool(url)
+    if why == "gone":
+        print(f"   ℹ️ Spool #{sid} was deleted since the snapshot; nothing to restore.")
+        return "gone"
+    if record is None:
+        print(f"   ⚠️ Couldn't read spool #{sid} again ({why}), so nothing was sent for it.")
+        return "failed"
+    extra = record.get("extra")
+    if not isinstance(extra, dict):
+        extra = {}
+    if "container_slot" in extra:
+        print(f"   ℹ️ Spool #{sid} was given a slot value since the rebuild "
+              f"({extra.get('container_slot')!r}); kept that one.")
+        return "kept"
+    now_at = _spool_place(record)
+    if now_at != was_at:
+        print(f"   ℹ️ Spool #{sid} moved since the snapshot ({was_at or 'no location'} -> "
+              f"{now_at or 'no location'}), so its old slot no longer applies; left it as it is.")
+        return "kept"
+    body = {"extra": {**{k: v for k, v in extra.items() if v is not None}, "container_slot": value}}
+    try:
+        r = requests.patch(url, json=body, timeout=10)
+        if r.ok:
+            return "restored"
+        why = f"{r.status_code} {str(r.text)[:200]}"
+    except requests.RequestException as e:
+        why = str(e)
+    # A write that timed out may still have landed (it is a READ timeout): look again
+    # before calling it failed.
+    again, _ = _read_spool(url)
+    if again is not None and isinstance(again.get("extra"), dict) \
+            and again["extra"].get("container_slot") == value:
+        return "restored"
+    print(f"   ⚠️ Failed to restore container_slot on spool #{sid}: {why}")
+    return "failed"
 
 
 def migrate_container_slot_to_text():
@@ -191,9 +333,34 @@ def migrate_container_slot_to_text():
     every spool's value so the rebuild is value-preserving.
 
     Idempotent on subsequent deploys (no-op when type is already `text`).
+
+    The template for any type migration (Group 54.4). FCC is still running
+    while update.sh runs this, so:
+      0. read the field list without ever raising (`_read_field_definition`):
+         one that can't be read skips the migration with nothing written, and
+         says so, so the rest of setup_fields still runs (review R3-3);
+      1. snapshot every spool, archived ones too (the list leaves them out
+         unless asked), with where each one is;
+      2. put every value in the new type's wire form (`_as_text_wire`) before
+         anything is deleted;
+      3. delete and re-create the field (this drops the value on every record);
+      4. restore each spool through a fresh read and a write of its whole
+         `extra` (`_restore_container_slot`), leaving alone a spool that
+         changed since;
+      5. print the counts, and every value not restored for a failure, so it
+         can be put back by hand (the deploy's Spoolman backup is the other way
+         back).
+    Plain `requests` only: importing the inventory-hub spoolman_api module would
+    pull in Flask and FCC's state.
     """
     print("\n--- Container Slot Type Migration ---")
-    field = _get_field_definition("spool", "container_slot")
+    field, why = _read_field_definition("spool", "container_slot")
+
+    if why:
+        # Nothing read, nothing written: the next deploy checks again (review R3-3).
+        print(f"   ⚠️ Couldn't read Spoolman's spool field list ({why}); skipping the"
+              f" container_slot migration this run, with nothing changed.")
+        return
 
     if field is None:
         # Field doesn't exist yet — the regular create_field call below
@@ -208,53 +375,65 @@ def migrate_container_slot_to_text():
 
     print(f"   ⚠️ container_slot is type={current_type!r}; running value-preserving rebuild.")
 
-    # 1. Snapshot every spool's value.
-    snapshot = {}  # sid -> raw extras value (still wire-form / JSON-encoded)
+    # 1. Snapshot every spool's value, archived spools included, each already in
+    #    the new type's wire form (2), with where the spool was.
+    snapshot = {}  # sid -> {"value": text wire form, "location": place}
     try:
-        resp = requests.get(f"{SPOOLMAN_IP}/api/v1/spool", timeout=15)
+        resp = requests.get(f"{SPOOLMAN_IP}/api/v1/spool", params={"allow_archived": "true"}, timeout=15)
         if resp.status_code != 200:
             print(f"   ❌ Could not list spools for snapshot ({resp.status_code}); aborting migration.")
             return
-        for sp in resp.json() or []:
-            sid = sp.get("id")
-            extra = (sp.get("extra") or {})
-            v = extra.get("container_slot")
-            if v is not None and v != "" and v != '""':
-                snapshot[sid] = v
-        print(f"   📸 Snapshotted {len(snapshot)} spool container_slot values.")
-    except requests.RequestException as e:
+        rows = resp.json()
+    except (requests.RequestException, ValueError) as e:
         print(f"   ❌ Snapshot failed: {e}; aborting migration.")
         return
+    if not isinstance(rows, list):
+        print("   ❌ Spoolman's spool list wasn't a list; aborting migration.")
+        return
+    for sp in rows:
+        if not isinstance(sp, dict) or sp.get("id") is None:
+            continue
+        extra = sp.get("extra")
+        if not isinstance(extra, dict):
+            continue
+        value = _as_text_wire(extra.get("container_slot"))
+        if value is not None:
+            snapshot[sp["id"]] = {"value": value, "location": _spool_place(sp)}
+    print(f"   📸 Snapshotted {len(snapshot)} spool container_slot values (archived spools too), each as text.")
 
-    # 2. Force-reset the field schema (this wipes values on Spoolman's side).
+    # 3. Force-reset the field schema (this wipes values on Spoolman's side).
     try:
         create_field("spool", "container_slot", "Container / MMU Slot", "text",
                      force_reset=True, error_check=True)
     except Exception as e:
-        print(f"   ❌ Field rebuild failed: {e}; values still snapshotted but not restored.")
+        print(f"   ❌ Field rebuild failed: {e}")
+        after, why = _read_field_definition("spool", "container_slot")
+        if why:
+            print(f"   ⚠️ Couldn't read Spoolman's spool field list again ({why}).")
+        if after is not None and after.get("field_type") == current_type:
+            print("   ℹ️ The old field is still there, so every value is still in Spoolman; nothing to put back.")
+        elif snapshot:
+            print("   ❌ Spoolman may no longer hold these values, and none was restored. Put them back by hand,"
+                  " or restore the Spoolman backup the deploy took:")
+            _print_slot_values(snapshot, list(snapshot))
         return
 
-    # 3. Restore each snapshotted value via individual PATCHes. We call
-    #    the spool PATCH directly here because importing the inventory-hub
-    #    spoolman_api module would pull in Flask/state init.
-    restored = 0
-    failed = 0
-    for sid, value in snapshot.items():
-        try:
-            r = requests.patch(
-                f"{SPOOLMAN_IP}/api/v1/spool/{sid}",
-                json={"extra": {"container_slot": value}},
-                timeout=5,
-            )
-            if r.ok:
-                restored += 1
-            else:
-                failed += 1
-                print(f"   ⚠️ Failed to restore container_slot on spool #{sid}: {r.status_code} {r.text[:200]}")
-        except requests.RequestException as e:
-            failed += 1
-            print(f"   ⚠️ Connection error restoring spool #{sid}: {e}")
-    print(f"   ✅ Migration complete: {restored} restored, {failed} failed.")
+    # 4. Restore each snapshotted value through a fresh read-merge-write.
+    counts = {"restored": 0, "kept": 0, "gone": 0, "failed": 0}
+    failed = []
+    for sid, snap in snapshot.items():
+        outcome = _restore_container_slot(sid, snap)
+        counts[outcome] += 1
+        if outcome == "failed":
+            failed.append(sid)
+    mark = "⚠️" if failed else "✅"
+    print(f"   {mark} Migration complete: {counts['restored']} restored, {counts['kept']} kept, "
+          f"{counts['gone']} gone, {counts['failed']} failed.")
+    # 5. Every value a failure kept from coming back.
+    if failed:
+        print("   ❌ Spoolman no longer holds these values. Put them back by hand, or restore the"
+              " Spoolman backup the deploy took:")
+        _print_slot_values(snapshot, failed)
 
 
 # --- CHOICE EXTRACTOR ---

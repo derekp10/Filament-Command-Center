@@ -1233,3 +1233,100 @@ def test_the_confirm_header_is_dark_with_a_thick_yellow_line_and_a_bigger_yellow
     assert look["backing"] is False, look
     page.evaluate(COLOURED_HEADERS["confirmModal"][1])
     conftest.wait_modal_settled(page, "confirmModal")
+
+
+@pytest.mark.usefixtures("require_server")
+def test_the_wizards_price_from_the_filament_is_readable(page: Page, base_url: str, assert_contrast):
+    """Group 54.8: a new spool of a filament priced 25 shows the filament's price
+    marked "↩ from filament", in the Pricing & Metadata section's summary and beside
+    Price Paid once the section is open. The filament is a stub, every write is
+    answered in the browser, and nothing is saved. Each root is scored from its
+    parent (the guard scores descendants only), and the mark is proved scored."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    filament = {"id": 9002, "name": "Ocean Blue", "material": "PLA", "color_hex": "1E6FD9", "weight": 1000.0,
+                "spool_weight": 200.0, "price": 25.0, "extra": {},
+                "vendor": {"id": 9003, "name": "Example Brand", "extra": {}}}
+    _read_only(page, extra_get={"/api/filament_details": filament})
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openNewSpoolFromFilamentWizard === 'function'"
+                           " && typeof state !== 'undefined' && state.locationsLoaded", timeout=45_000)
+    page.evaluate("() => { window.openNewSpoolFromFilamentWizard(9002); }")
+    page.wait_for_function("() => document.getElementById('wiz-status-msg').innerText.includes('pre-filled')"
+                           " && document.getElementById('wiz-spool-price').value === '25'", timeout=15_000)
+    conftest.wait_modal_settled(page, "wizardModal")
+    toggle = page.locator('button.fcc-wiz-section-toggle[data-bs-target="#wiz-spool-metadata-panel"]')
+    expect(toggle.locator(".fcc-wiz-section-summary")).to_have_text("$25 ↩ from filament")
+    # The toggle's ▾ is left out: a state glyph, not text (#6c757d on #1a1a1a, 3.71:1,
+    # over WCAG's 3:1 for a control's parts), and older than 54.8.
+    offenders = [o for o in conftest.contrast_offenders(toggle)
+                 if "fcc-wiz-section-chevron" not in (o.get("className") or "")]
+    assert offenders == [], offenders
+    scored = [o.get("text") for o in conftest.contrast_offenders(toggle, min_ratio=100)]
+    assert "↩ from filament" in scored and any(t.startswith("$25") for t in scored), scored
+    page.evaluate("() => bootstrap.Collapse.getOrCreateInstance("
+                  "document.getElementById('wiz-spool-metadata-panel'), { toggle: false }).show()")
+    badge = page.locator("#wiz-spool-price-inherited-badge")
+    expect(badge).to_be_visible()
+    column = badge.locator("xpath=ancestor::div[contains(@class, 'col-md-4')][1]")
+    assert_contrast(column)
+    assert any(o.get("id") == "wiz-spool-price-inherited-badge"
+               for o in conftest.contrast_offenders(column, min_ratio=100)), "the price's badge was never scored"
+    conftest.close_wizard(page)
+
+
+def test_the_wizards_tare_from_the_filament_is_readable(page: Page, base_url: str):
+    """Group 54 review (L1): a new spool of a filament with a 200 g empty weight shows
+    "tare 200g ↩ from filament" in the closed Weight & Scale summary, in the price
+    summary's look (the same colours, scored here too). The filament is a stub, every
+    write is answered in the browser, and nothing is saved. The summary is scored from
+    its toggle (the guard scores descendants only), and the mark is proved scored."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    filament = {"id": 9002, "name": "Ocean Blue", "material": "PLA", "color_hex": "1E6FD9", "weight": 1000.0,
+                "spool_weight": 200.0, "price": 25.0, "extra": {},
+                "vendor": {"id": 9003, "name": "Example Brand", "extra": {}}}
+    _read_only(page, extra_get={"/api/filament_details": filament})
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openNewSpoolFromFilamentWizard === 'function'"
+                           " && typeof state !== 'undefined' && state.locationsLoaded", timeout=45_000)
+    page.evaluate("() => { window.openNewSpoolFromFilamentWizard(9002); }")
+    page.wait_for_function("() => document.getElementById('wiz-status-msg').innerText.includes('pre-filled')"
+                           " && document.getElementById('wiz-spool-empty_weight').value === '200'", timeout=15_000)
+    conftest.wait_modal_settled(page, "wizardModal")
+    toggle = page.locator('button.fcc-wiz-section-toggle[data-bs-target="#wiz-spool-weight-panel"]')
+    expect(toggle.locator(".fcc-wiz-section-summary")).to_have_text("tare 200g ↩ from filament")
+    # The toggle's ▾ is left out, as in the price case: a state glyph, older than 54.
+    offenders = [o for o in conftest.contrast_offenders(toggle)
+                 if "fcc-wiz-section-chevron" not in (o.get("className") or "")]
+    assert offenders == [], offenders
+    scored = [o.get("text") for o in conftest.contrast_offenders(toggle, min_ratio=100)]
+    assert "↩ from filament" in scored and any(t.startswith("tare 200g") for t in scored), scored
+    conftest.close_wizard(page)
+
+
+def test_the_empty_weight_prompts_notice_is_readable(page: Page, base_url: str):
+    """Group 54 review R5-1: the post-archive empty-weight prompt can carry a notice
+    (the weigh page's "Spool #99 is archived but still at …", which the prompt
+    would otherwise hide under it): its alert line in the prompt's own yellow label
+    look, on the prompt's dark ground. The filament is a stub, every write is
+    answered in the browser, and nothing is saved. Scored from the dialog (the
+    guard scores descendants only), and the notice is proved scored."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    filament = {"id": 9004, "name": "Ocean Blue", "material": "PLA", "spool_weight": None,
+                "vendor": {"id": 9005, "name": "Example Brand", "empty_spool_weight": None}}
+    _read_only(page, extra_get={"/api/filament_details": filament})
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.showArchiveEmptyWeightPrompt === 'function'"
+                           " && typeof state !== 'undefined' && state.locationsLoaded", timeout=45_000)
+    page.evaluate("() => { window.showArchiveEmptyWeightPrompt(99, 9004, null,"
+                  " { notice: \"Spool #99 is archived but still at Shelf 1: FCC couldn't take it off there.\" }); }")
+    notice = page.locator("#fcc-archive-empty-overlay #fcc-archive-empty-notice")
+    expect(notice).to_be_visible()
+    dialog = page.locator("#fcc-archive-empty-overlay [data-fcc-weight-keys]")
+    offenders = [o for o in conftest.contrast_offenders(dialog) if "still at Shelf 1" in (o.get("text") or "")]
+    assert offenders == [], offenders
+    scored = [o.get("text") for o in conftest.contrast_offenders(dialog, min_ratio=100)]
+    assert any("still at Shelf 1" in (t or "") for t in scored), scored
+    page.locator("#fcc-archive-later").click()

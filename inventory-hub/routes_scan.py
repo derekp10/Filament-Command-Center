@@ -172,13 +172,40 @@ def api_update_filament():
     Deliberately thinner than /api/edit_spool_wizard — no spool coupling,
     no cross-inherit logic — since this endpoint's sole caller is the
     filament-only edit flow.
+
+    Group 54.1: a malformed request is refused with HTTP 400 and its own words,
+    before anything is read, as its siblings /api/create_filament and
+    PATCH /api/vendors/<id> already do: a body that isn't a JSON object, a
+    missing id, a missing `data` (named, with the old {id, field, value} shape
+    named when the body looks like it, and one WARNING in hub.log naming the
+    keys that came: that shape's generic 200 hid the attribute purge's restore
+    no-op for months), and a `data` that isn't an object. `{id, data: {}}` keeps
+    its 200 "No fields to update."
     """
-    payload = request.json or {}
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        state.logger.warning(
+            f"/api/update_filament refused a request that isn't a JSON object ({type(payload).__name__})")
+        return jsonify({"success": False,
+                        "msg": "The request isn't a JSON object, so nothing was updated."}), 400
     fid = payload.get('id')
-    data = payload.get('data') or {}
     if not fid:
-        return jsonify({"success": False, "msg": "Missing filament id."})
-    if not isinstance(data, dict) or not data:
+        return jsonify({"success": False, "msg": "Missing filament id."}), 400
+    if 'data' not in payload:
+        keys = ", ".join(sorted(str(k) for k in payload))
+        msg = 'Nothing was updated: the request has no "data" field. Send {id, data: {field: value}}.'
+        if 'field' in payload or 'value' in payload:
+            msg += " (It looks like the old {id, field, value} shape.)"
+        state.logger.warning(
+            f"/api/update_filament #{fid} refused: no \"data\" field; the request carried {keys}")
+        return jsonify({"success": False, "msg": msg}), 400
+    data = payload.get('data')
+    if not isinstance(data, dict):
+        state.logger.warning(
+            f"/api/update_filament #{fid} refused: \"data\" is a {type(data).__name__}, not an object")
+        return jsonify({"success": False,
+                        "msg": '"data" must be an object of field: value, so nothing was updated.'}), 400
+    if not data:
         return jsonify({"success": False, "msg": "No fields to update."})
     # Snapshot the existing record BEFORE the update so the activity-log
     # entry can show concrete before→after values per field. Older code

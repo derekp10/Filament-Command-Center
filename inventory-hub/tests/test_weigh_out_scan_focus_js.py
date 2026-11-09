@@ -182,6 +182,9 @@ def _box(page, sid):
 
 
 def _updates(page):
+    """Every weight posted, as sent. Since Group 54.7 each carries `auto_archive`,
+    the list's "Auto-Archive 0g" switch (on unless a test turns it off), so the
+    exact bodies below say `"auto_archive": True` (updated deliberately)."""
     return page.evaluate("() => window.__posts.filter((p) => p.url === '/api/spool/update').map((p) => p.body)")
 
 
@@ -1039,7 +1042,7 @@ def test_a_prompts_save_waits_while_a_scan_is_answered(wo, prompt):
     _saved(page, len(before) + 1)
     ups = _updates(page)
     used = 475 if prompt == "tare" else 325
-    assert ups[len(before):] == [{"id": 57, "updates": {"used_weight": used}}] and _filament_writes(page) == 0, ups
+    assert ups[len(before):] == [{"id": 57, "updates": {"used_weight": used}, "auto_archive": True}] and _filament_writes(page) == 0, ups
 
 
 @pytest.mark.parametrize("prompt", ["tare", "empty"])
@@ -1087,7 +1090,7 @@ def test_a_prompt_doesnt_open_while_a_scan_is_answered(wo, prompt):
     _saved(page, saved_before + 1)
     ups = _updates(page)
     used = 475 if prompt == "tare" else 325
-    assert ups[saved_before:] == [{"id": 57, "updates": {"used_weight": used}}] and _filament_writes(page) == 0, ups
+    assert ups[saved_before:] == [{"id": 57, "updates": {"used_weight": used}, "auto_archive": True}] and _filament_writes(page) == 0, ups
 
 
 def test_a_save_that_reads_its_details_first_moves_the_focus_on_at_once(wo):
@@ -1118,7 +1121,8 @@ def test_a_save_that_reads_its_details_first_moves_the_focus_on_at_once(wo):
     press(page, "25", 150)
     _saved(page, 2)
     ups = _updates(page)
-    assert ups == [{"id": 6, "updates": {"used_weight": 500}}, {"id": 57, "updates": {"used_weight": 325}}], ups
+    assert ups == [{"id": 6, "updates": {"used_weight": 500}, "auto_archive": True},
+                   {"id": 57, "updates": {"used_weight": 325}, "auto_archive": True}], ups
 
 
 def test_after_the_last_box_is_saved_a_reading_typed_before_the_next_answer_is_kept_for_it(wo):
@@ -1143,14 +1147,14 @@ def test_after_the_last_box_is_saved_a_reading_typed_before_the_next_answer_is_k
     later(page, 300)
     press(page, "425", 150)
     page.wait_for_timeout(50)
-    assert (_box(page, 6), _updates(page)) == ("500", [{"id": 6, "updates": {"used_weight": 500}}])
+    assert (_box(page, 6), _updates(page)) == ("500", [{"id": 6, "updates": {"used_weight": 500}, "auto_archive": True}])
     _release(page, "scan")
     _scan_answered(page)
     assert (_focus(page), _box(page, 57), _scans(page)) == ("57", "425", ["ID:57"])
     later(page, 300)
     press(page, "", 0)
     _saved(page, 2)
-    assert _updates(page)[1] == {"id": 57, "updates": {"used_weight": 325}}
+    assert _updates(page)[1] == {"id": 57, "updates": {"used_weight": 325}, "auto_archive": True}
 
 
 @pytest.mark.parametrize("mode, typed", [("additive", "+25"), ("set_used", "0"), ("gross", "645")])
@@ -1194,7 +1198,7 @@ def test_a_reading_left_in_a_spools_own_box_is_replaced_by_the_one_typed_before_
     later(page, 150)
     press(page, "25", 150)
     _saved(page)
-    assert (_updates(page), _unassigned(page)) == ([{"id": 6, "updates": {"used_weight": used}}], []), mode
+    assert (_updates(page), _unassigned(page)) == ([{"id": 6, "updates": {"used_weight": used}, "auto_archive": True}], []), mode
 
 
 def test_a_spool_scanned_again_while_it_saves_over_the_empty_weight_prompt_keeps_the_reading(wo):
@@ -1258,7 +1262,7 @@ def test_a_key_typed_on_another_rows_save_button_while_a_scan_is_answered_goes_w
     later(page, 150)
     press(page, "25", 150)
     _saved(page)
-    assert _updates(page) == [{"id": 57, "updates": {"used_weight": 325}}]
+    assert _updates(page) == [{"id": 57, "updates": {"used_weight": 325}, "auto_archive": True}]
 
 
 def test_a_backspace_takes_back_a_key_held_for_a_scan(wo):
@@ -1283,7 +1287,7 @@ def test_a_backspace_takes_back_a_key_held_for_a_scan(wo):
     later(page, 150)
     press(page, "", 0)
     _saved(page)
-    assert _updates(page) == [{"id": 57, "updates": {"used_weight": 325}}]
+    assert _updates(page) == [{"id": 57, "updates": {"used_weight": 325}, "auto_archive": True}]
 
 
 def test_a_scanners_second_enter_doesnt_move_the_focus_before_the_answer(wo):
@@ -1306,7 +1310,7 @@ def test_a_scanners_second_enter_doesnt_move_the_focus_before_the_answer(wo):
     later(page, 150)
     press(page, "25", 150)
     _saved(page)
-    assert _updates(page) == [{"id": 57, "updates": {"used_weight": 325}}]
+    assert _updates(page) == [{"id": 57, "updates": {"used_weight": 325}, "auto_archive": True}]
 
 
 @pytest.mark.parametrize("scanned", [134, 57])
@@ -1368,7 +1372,7 @@ def test_a_scan_queued_behind_another_takes_the_reading_typed_meanwhile(wo, when
         later(page, 300)
         press(page, "", 0)
     _saved(page)
-    assert _updates(page) == [{"id": 57, "updates": {"used_weight": 105}}], when
+    assert _updates(page) == [{"id": 57, "updates": {"used_weight": 105}, "auto_archive": True}], when
 
 
 def test_a_scan_queued_behind_a_spool_scan_that_names_no_spool_leaves_it_the_focus(wo):
@@ -1398,7 +1402,7 @@ def test_a_scan_queued_behind_a_spool_scan_that_names_no_spool_leaves_it_the_foc
     later(page, 150)
     press(page, "5", 150)
     _saved(page)
-    assert _updates(page) == [{"id": 57, "updates": {"used_weight": 325}}]
+    assert _updates(page) == [{"id": 57, "updates": {"used_weight": 325}, "auto_archive": True}]
 
 
 def test_a_queued_scan_answered_without_the_server_holds_nothing_off(wo):
@@ -1425,7 +1429,7 @@ def test_a_queued_scan_answered_without_the_server_holds_nothing_off(wo):
     later(page, 150)
     press(page, "", 0)
     _saved(page)
-    assert _updates(page) == [{"id": 57, "updates": {"used_weight": 325}}]
+    assert _updates(page) == [{"id": 57, "updates": {"used_weight": 325}, "auto_archive": True}]
 
 
 def test_an_earlier_spool_scan_answered_after_a_later_one_that_named_none_takes_the_focus(wo):
@@ -1696,7 +1700,7 @@ def test_a_save_that_read_its_details_first_doesnt_open_its_tare_prompt_over_the
     later(page, 150)
     press(page, "45", 150)
     _saved(page)
-    assert _updates(page) == [{"id": 6, "updates": {"used_weight": 522}}]
+    assert _updates(page) == [{"id": 6, "updates": {"used_weight": 522}, "auto_archive": True}]
     assert page.evaluate("() => !document.querySelector('.weigh-input[data-id=\"8\"]').disabled") and _box(page, 8) == "645"
     page.locator(".weigh-input[data-id='8']").focus()
     later(page, 700)
@@ -1881,7 +1885,7 @@ def test_enter_waits_for_an_earlier_spool_scan_after_a_later_one_named_none(wo):
     later(page, 300)
     press(page, "", 0)
     _saved(page)
-    assert _updates(page) == [{"id": 57, "updates": {"used_weight": 325}}]
+    assert _updates(page) == [{"id": 57, "updates": {"used_weight": 325}, "auto_archive": True}]
 
 
 def _queue_behind(page, labels_and_keys):
@@ -2041,4 +2045,75 @@ def test_the_fallback_goes_to_the_latest_spool_scan_read(wo):
     _scan_answered(page, 3)
     page.wait_for_timeout(200)
     assert _focus(page) == "134"
+
+
+# --- Group 54 review, R3-2 (2026-11-09) ----------------------------------------
+# The weigh-out mode is read when Enter is pressed. A save whose spool's details
+# are still being read waits (up to 10 s), and the mode used to be read only once
+# they came, so a click on a mode button meanwhile (for the next spool, say)
+# decided the reading before it. Each test below is RED on c2f4222.
+
+
+def _enter_then_click_a_mode(page, open_, *, mode, typed, clicked, fail_details=False):
+    """#57's reading typed in `mode` and its Enter pressed while its details are
+    held (its row waits, the focus moving on to #6's box); then a click on the
+    `clicked` mode button; then the details come (or, `fail_details`, can't be
+    read: the fallback)."""
+    page.evaluate("(f) => { window.__holdDetails = [57]; window.__detailsFail = f; }", fail_details)
+    open_(held=(57, 6), mode=mode)
+    press(page, typed, 150)                       # its Enter: #57's details aren't in yet
+    later(page, 200)
+    assert _updates(page) == [] and _focus(page) == "6", "#57 waits for its details"
+    page.locator(f"#weigh-out-mode [data-mode='{clicked}']").click()
+    later(page, 200)
+    assert page.evaluate("() => window.weighOutMode") == clicked
+    page.evaluate("() => window.__releaseDetails(57)")
+
+
+@pytest.mark.parametrize("mode, typed, clicked, used", [
+    ("net", "425", "set_used", 325),
+    ("additive", "0", "net", 100),
+], ids=["net-then-set-used", "additive-then-net"])
+def test_a_save_that_waits_for_its_details_reads_the_mode_as_it_was_at_enter(wo, mode, typed, clicked, used):
+    """#57 (750 g, 100 g used): Net 425 is 325 g used, and Additive 0 adds nothing
+    (100 g used), whatever mode button is clicked while its details are read. RED
+    on c2f4222: the mode was read once the details came, so Net 425 was saved as
+    Set Used 425, and Additive 0 as Net 0, an empty spool, archived and taken off
+    its place."""
+    page, open_ = wo
+    _enter_then_click_a_mode(page, open_, mode=mode, typed=typed, clicked=clicked)
+    _saved(page)
+    page.wait_for_timeout(100)
+    assert (_updates(page), _unassigned(page)) == (
+        [{"id": 57, "updates": {"used_weight": used}, "auto_archive": True}], []), mode
+
+
+def test_with_no_details_an_additive_reading_stays_unsaved_after_a_click_on_net(wo):
+    """#57's details can't be read, so only a Net reading (what is left) can be
+    saved without them: Additive '25' (25 g more used) waits in its box for
+    another try, with a warning, though Net was clicked while the details were
+    read. RED on c2f4222: the fallback read the mode late and saved '25' as 25 g
+    left."""
+    page, open_ = wo
+    _enter_then_click_a_mode(page, open_, mode="additive", typed="25", clicked="net", fail_details=True)
+    # The save decided: its warning raised, or (the base) a weight posted.
+    page.wait_for_function("""() => window.__posts.some((p) => p.url === '/api/spool/update')
+        || Array.from(document.querySelectorAll('#toast-container .toast-msg'))
+            .some((t) => t.innerText.includes("Couldn't read #57's details"))""", timeout=5000)
+    page.wait_for_timeout(200)
+    assert (_updates(page), _unassigned(page)) == ([], [])
+    assert page.evaluate("() => !document.querySelector('.weigh-input[data-id=\"57\"]').disabled") and _box(page, 57) == "25"
+    assert any("Couldn't read #57's details" in t for t in _toasts(page)), _toasts(page)
+
+
+def test_with_no_details_a_net_reading_is_saved_after_a_click_on_additive(wo):
+    """The other way round: Net '425' with #57's details unreadable is saved as 425
+    g left, though Additive was clicked while they were read. RED on c2f4222: the
+    fallback read the mode late and saved nothing ("Couldn't read #57's
+    details")."""
+    page, open_ = wo
+    _enter_then_click_a_mode(page, open_, mode="net", typed="425", clicked="additive", fail_details=True)
+    _saved(page)
+    assert (_updates(page), _unassigned(page)) == (
+        [{"id": 57, "updates": {"remaining_weight": 425}, "auto_archive": True}], [])
 
