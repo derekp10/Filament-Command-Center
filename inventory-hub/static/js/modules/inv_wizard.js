@@ -876,6 +876,12 @@ const _wizBoxValue = (id) => {
     const el = document.getElementById(id);
     return el && el.value != null ? String(el.value) : '';
 };
+// The brand picked in the filament's Vendor field, as the wizard read it (its
+// empty_spool_weight is the cascade's last step), or null.
+const _wizSelectedVendor = () => {
+    const vid = _wizBoxValue('wiz-fil-vendor-sel');
+    return vid ? ((wizardState.vendors || []).find(v => String(v.id) === String(vid)) || null) : null;
+};
 const _wizPriceFollowsFilament = () => !wizardNativeTouched('spool', 'price')
     && (wizardState.spoolPriceFrom === 'filament' || _wizBoxValue('wiz-spool-price') === '');
 const _wizEmptyWeightFollowsFilament = () => !wizardNativeTouched('spool', 'spool_weight')
@@ -933,9 +939,7 @@ window.wizardFollowFilament = (record = null) => {
     if (!wizardState.spoolBoxesFollowFilament) return;
     const mode = wizardState.mode;
     if (mode === 'manual' || mode === 'external') {
-        const vid = _wizBoxValue('wiz-fil-vendor-sel');
-        const vendor = vid ? ((wizardState.vendors || []).find(v => String(v.id) === String(vid)) || null) : null;
-        _wizFollowApply({ price: null, spool_weight: _wizBoxValue('wiz-fil-empty_weight'), vendor });
+        _wizFollowApply({ price: null, spool_weight: _wizBoxValue('wiz-fil-empty_weight'), vendor: _wizSelectedVendor() });
         return;
     }
     if (mode !== 'existing') return;
@@ -2047,15 +2051,41 @@ const wizardFetchExtraFields = () => {
         });
 };
 
-window.wizardSetupFieldSync = () => {
-    // Empy weight static propagation
-    const filEmptyWt = document.getElementById('wiz-fil-empty_weight');
+// The filament's Spool Wt box changed (typed, or emptied): the spool's box shows it.
+// Create and Clone, as before: the spool's box takes the filament's value. Edit
+// Spool (Group 54 review, S1): never over the spool's own value, which a correction
+// of its filament's used to replace on every key, unseen in its section that opens
+// closed, and Save then wrote it as the spool's own (Derek, L349: "as long as we
+// aren't overwriting filaments/spools that have data for that field"). A spool box
+// that shows what the spool inherits (its badge), or nothing, shows what it
+// inherits now: the filament's new value, else its brand's, with its badge, or
+// nothing. A box the person typed in or emptied is theirs, and is left alone.
+window.wizardFilamentEmptyWeightChanged = (value) => {
     const spoolEmptyWt = document.getElementById('wiz-spool-empty_weight');
-    if (filEmptyWt && spoolEmptyWt) {
+    if (!spoolEmptyWt) return;
+    if (wizardState.mode !== 'edit_spool') {
+        spoolEmptyWt.value = value;
+        return;
+    }
+    if (wizardNativeTouched('spool', 'spool_weight')) return;
+    const inherited = wizardState.spoolEmptyWeightFrom === 'filament' || wizardState.spoolEmptyWeightFrom === 'vendor';
+    if (!inherited && spoolEmptyWt.value !== '') return;       // the spool's own
+    const { value: shown, source } = resolveEmptySpoolWeightSource({
+        filamentWt: value,
+        vendor: _wizSelectedVendor(),
+    });
+    window.wizardSetSpoolEmptyWeightInherited(shown, source);
+};
+
+window.wizardSetupFieldSync = () => {
+    // Empty weight static propagation (wizardFilamentEmptyWeightChanged). Bound once:
+    // wizardFetchExtraFields runs this at every open, and both boxes are the
+    // template's own, so each open used to add another copy of the listener.
+    const filEmptyWt = document.getElementById('wiz-fil-empty_weight');
+    if (filEmptyWt && filEmptyWt.dataset && !filEmptyWt.dataset.fccEmptyWeightSync) {
+        filEmptyWt.dataset.fccEmptyWeightSync = '1';
         ['input', 'change'].forEach(evt => {
-            filEmptyWt.addEventListener(evt, (e) => {
-                spoolEmptyWt.value = e.target.value;
-            });
+            filEmptyWt.addEventListener(evt, (e) => window.wizardFilamentEmptyWeightChanged(e.target.value));
         });
     }
 

@@ -171,9 +171,10 @@ def test_the_emptied_spool_empty_weight_is_null_although_the_filament_has_200(wi
 def test_an_emptied_filament_empty_weight_is_not_refilled_from_the_brand(wiz):
     """The cross-inherit fills an empty filament box from the spool's box or the
     brand. In edit mode a box the user emptied means "no value of its own", so it
-    is sent as null. RED on the base: 180, the brand's, written as the filament's
-    own. (The filament's box copies itself into the spool's on screen, so the
-    spool's own 196 g is no candidate here: its box is empty too.)"""
+    is sent as null, never refilled from the brand's 180 or the spool's own 196.
+    RED on the base: 180, the brand's, written as the filament's own. (Since the
+    Group 54 review's S1 the spool's own 196 stays in its box, where the filament's
+    box used to copy itself over it.)"""
     _open_edit(wiz, vendor_wt=180.0)
     wiz.locator("#wiz-fil-empty_weight").fill("")
     body = _save(wiz, EDIT)
@@ -181,16 +182,17 @@ def test_an_emptied_filament_empty_weight_is_not_refilled_from_the_brand(wiz):
 
 
 def test_emptying_the_filament_empty_weight_never_clears_the_spools(wiz):
-    """The filament's box copies itself into the spool's on screen
-    (wizardSetupFieldSync, set by code). The spool's box is then empty, but the
-    user didn't empty it, so the spool keeps its own 196 g: its key is left out,
-    as before. A pin: green on the base, red on a copy of the fix that sends every
-    empty box in edit mode as null."""
+    """The spool keeps its own 196 g, never null. Updated deliberately by the Group 54
+    review's S1: the filament's box used to copy itself over the spool's own value
+    in Edit Spool (wizardSetupFieldSync), so the spool's box went empty and its key
+    was left out; now the spool's own value stays in its box and is sent as before.
+    Its first half was a pin against a fix that sends every empty box as null (red
+    on such a copy of 54.5); now RED on the code before S1 too: the box emptied."""
     _open_edit(wiz)
     wiz.locator("#wiz-fil-empty_weight").fill("")
-    assert _value(wiz, "#wiz-spool-empty_weight") == ""          # emptied by the copy, not by the user
+    assert _value(wiz, "#wiz-spool-empty_weight") == "196"       # the spool's own, never the filament's copy
     body = _save(wiz, EDIT)
-    assert "spool_weight" not in body["spool_data"], _got(body["spool_data"], "spool_weight")
+    assert body["spool_data"]["spool_weight"] == 196, _got(body["spool_data"], "spool_weight")
 
 
 def test_typed_then_emptied_is_null(wiz):
@@ -285,12 +287,14 @@ def test_create_mode_still_cross_inherits_the_spools_empty_weight_to_the_filamen
 
 def test_only_the_boxes_the_user_changes_count_as_touched(wiz):
     """Values set by code (the edit's prefill, the filament box's copy into the
-    spool's) are no touch; a typed value is. Red on the base: there is no set."""
+    spool's) are no touch; a typed value is. Red on the base: there is no set.
+    (The spool's own 196 g stays in its box since the Group 54 review's S1, where
+    the copy used to put the filament's 205 over it: updated deliberately.)"""
     _open_edit(wiz)
     assert _touched(wiz) == []
     wiz.locator("#wiz-fil-settings_extruder_temp").fill("220")
     wiz.locator("#wiz-fil-empty_weight").fill("205")
-    assert _value(wiz, "#wiz-spool-empty_weight") == "205"
+    assert _value(wiz, "#wiz-spool-empty_weight") == "196"
     assert _touched(wiz) == ["fil:settings_extruder_temp", "fil:spool_weight"]
     assert wiz.evaluate("() => [wizardNativeTouched('fil', 'spool_weight'),"
                         " wizardNativeTouched('spool', 'spool_weight'), wizardNativeTouched('spool', 'price')]"

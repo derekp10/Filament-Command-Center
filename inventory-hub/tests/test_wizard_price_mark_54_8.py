@@ -39,7 +39,7 @@ from __future__ import annotations
 import pytest
 
 from test_wizard_label_status_58_5 import FIELDS, MODULES, PRELUDE, WIZARD_HTML, _save
-from test_wizard_native_clear_54_5 import _details, _got, _open_edit, _value, _vendor
+from test_wizard_native_clear_54_5 import _details, _got, _open_edit, _open_new_filament, _value, _vendor
 
 EDIT = "/api/edit_spool_wizard"
 CREATE = "/api/create_inventory_wizard"
@@ -317,6 +317,112 @@ def test_a_tare_entered_in_the_weigh_window_is_the_spools_own(wiz):
     assert _badge(wiz, EMPTY_BADGE) is False
     body = _save(wiz, EDIT)
     assert body["spool_data"]["spool_weight"] == 190, _got(body["spool_data"], "spool_weight")
+
+
+# --- Edit Spool: the filament's empty weight changes (Group 54 review, S1) ----------------
+#
+# In Edit Spool the filament's Spool Wt box copied itself into the spool's on every key
+# and at blur (wizardSetupFieldSync), whatever the spool's box held. Correcting the
+# filament's 200 to 205 put 205 over the spool's own measured 196, in a section that
+# opens closed, and Save wrote 205 as the spool's own (Derek, L349: "as long as we
+# aren't overwriting filaments/spools that have data for that field"). An emptied
+# filament box blanked an inherited spool box, its badge still up. Now, in Edit Spool
+# only, the copy goes only into a spool box that shows what the spool inherits, or
+# nothing: it shows what the spool inherits now (the filament's new value, else its
+# brand's), with its badge. Create and Clone copy as before.
+
+def _blur(page):
+    """The focus leaves the box (its `change`)."""
+    page.keyboard.press("Tab")
+
+
+def test_an_edits_own_empty_weight_is_never_overwritten_by_the_filaments(wiz):
+    """RED on the base: 205 put over the spool's own 196, and sent as its own."""
+    _open_edit(wiz, spool_wt=196.0)
+    wiz.locator("#wiz-fil-empty_weight").fill("205")
+    _blur(wiz)
+    assert (_value(wiz, EMPTY), _badge(wiz, EMPTY_BADGE)) == ("196", False)
+    body = _save(wiz, EDIT)
+    assert body["spool_data"]["spool_weight"] == 196, _got(body["spool_data"], "spool_weight")
+    assert body["filament_data"]["spool_weight"] == 205, body["filament_data"]
+
+
+def test_an_inherited_empty_weight_follows_the_filaments_box_through_its_blur(wiz):
+    """The spool inherits its filament's 200: the box follows a change to 205, keeps
+    its badge, and Save gives 205 to the filament only. A pin: green on the base, red
+    on a fix that stops the copy in Edit Spool."""
+    _open_edit(wiz, spool_wt=None)
+    wiz.locator("#wiz-fil-empty_weight").fill("205")
+    _blur(wiz)
+    assert (_value(wiz, EMPTY), _badge(wiz, EMPTY_BADGE)) == ("205", True)
+    assert wiz.locator("#wiz-spool-empty-inherited-source").inner_text() == "filament"
+    body = _save(wiz, EDIT)
+    assert "spool_weight" not in body["spool_data"], _got(body["spool_data"], "spool_weight")
+    assert body["filament_data"]["spool_weight"] == 205, body["filament_data"]
+
+
+def test_an_emptied_filament_box_gives_an_inherited_spool_box_its_brands_value(wiz):
+    """The spool inherits 200 from its filament, whose brand has 180: with the
+    filament's box emptied, the spool's shows 180 "↩ from vendor", and Save clears the
+    filament's (54.5) and sends nothing for the spool. RED on the base: the spool's box
+    emptied, its badge still saying "↩ from filament"."""
+    _open_edit(wiz, spool_wt=None, vendor_wt=180.0)
+    wiz.locator("#wiz-fil-empty_weight").fill("")
+    _blur(wiz)
+    assert (_value(wiz, EMPTY), _badge(wiz, EMPTY_BADGE)) == ("180", True)
+    assert wiz.locator("#wiz-spool-empty-inherited-source").inner_text() == "vendor"
+    body = _save(wiz, EDIT)
+    assert "spool_weight" not in body["spool_data"], _got(body["spool_data"], "spool_weight")
+    assert _got(body["filament_data"], "spool_weight") is None, _got(body["filament_data"], "spool_weight")
+
+
+def test_an_emptied_filament_box_with_nothing_left_to_inherit_takes_the_badge_away(wiz):
+    """RED on the base: the badge stayed up over the empty box."""
+    _open_edit(wiz, spool_wt=None)
+    wiz.locator("#wiz-fil-empty_weight").fill("")
+    _blur(wiz)
+    assert (_value(wiz, EMPTY), _badge(wiz, EMPTY_BADGE)) == ("", False)
+    assert "spool_weight" not in _save(wiz, EDIT)["spool_data"]
+
+
+def test_a_value_typed_for_the_filament_shows_in_an_empty_spool_box_as_inherited(wiz):
+    """No empty weight on the spool, its filament or its brand: the spool's box is
+    empty. A value typed for the filament shows there as the filament's, and Save gives
+    it to the filament only. RED on the base: 205 shown plain and sent as the spool's
+    own."""
+    _open_edit(wiz, spool_wt=None, fil_wt=None)
+    assert (_value(wiz, EMPTY), _badge(wiz, EMPTY_BADGE)) == ("", False)
+    wiz.locator("#wiz-fil-empty_weight").fill("205")
+    _blur(wiz)
+    assert (_value(wiz, EMPTY), _badge(wiz, EMPTY_BADGE)) == ("205", True)
+    body = _save(wiz, EDIT)
+    assert "spool_weight" not in body["spool_data"], _got(body["spool_data"], "spool_weight")
+    assert body["filament_data"]["spool_weight"] == 205, body["filament_data"]
+
+
+def test_a_spool_box_the_person_emptied_stays_empty_when_the_filaments_changes(wiz):
+    """The person emptied the spool's own 196 (54.5's clear), then corrected the
+    filament's: the spool's box is still theirs, empty, and still cleared. RED on the
+    base: 205 copied in, and sent as the spool's own."""
+    _open_edit(wiz, spool_wt=196.0)
+    wiz.locator(EMPTY).fill("")
+    wiz.locator("#wiz-fil-empty_weight").fill("205")
+    _blur(wiz)
+    assert _value(wiz, EMPTY) == ""
+    body = _save(wiz, EDIT)
+    assert _got(body["spool_data"], "spool_weight") is None, _got(body["spool_data"], "spool_weight")
+    assert body["filament_data"]["spool_weight"] == 205, body["filament_data"]
+
+
+def test_a_new_filaments_empty_weight_still_copies_into_the_spools_plainly(wiz):
+    """Create is unchanged by S1: in New Manual Form the spool's box shows what is
+    typed for the filament, plain, and the new spool takes it as its own. A pin: green
+    on the base, red on a fix that applies S1's rule in every mode."""
+    _open_new_filament(wiz)
+    wiz.locator("#wiz-fil-empty_weight").fill("210")
+    _blur(wiz)
+    assert (_value(wiz, EMPTY), _badge(wiz, EMPTY_BADGE)) == ("210", False)
+    assert _save(wiz, CREATE)["spool_data"]["spool_weight"] == 210
 
 
 @pytest.mark.parametrize("opener", ["new", "clone"])
