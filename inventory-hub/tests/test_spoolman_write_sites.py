@@ -101,12 +101,18 @@ What counts as a write call site:
   * A direct HTTP write in any module, spoolman_api included:
     `<requests>.post / patch / put / delete(...)`, `<requests>.request(<verb>,
     ...)` with anything but a read verb, `<http_retry>.request_with_retry(<verb>,
-    ...)` likewise, and `getattr(<requests>, <verb>)(...)`. <requests> is a name
-    an import binds to requests or requests.api (`from requests.api import
-    post` too), any attribute chain ending in `.requests`
-    (`spoolman_api.requests`, which needs no import of its own), or either of
-    those followed by `.api` (`requests.api`); <http_retry> is a name an import
-    binds to http_retry, or any chain ending in `.http_retry`. The callee reads
+    ...)` likewise, and `getattr(<requests>, <verb>)(...)`; and the same verbs,
+    `request` and `request_with_retry` called by the name an import gave them
+    (`from requests import post [as p]`, from requests.api too, or `*`; `from
+    http_retry import request_with_retry [as r]`, or `*`). <requests> is
+    exactly: a name bound by `import requests [as x]`, `import
+    requests.<sub>` (which binds `requests`), `import requests.api as x` or
+    `from requests import api [as x]`; any attribute chain ending in
+    `.requests` (`spoolman_api.requests`, which needs no import of its own);
+    or either of those followed by `.api` (`requests.api`). <http_retry> is a
+    name bound by `import http_retry [as x]`, or any chain ending in
+    `.http_retry`. A name bound any other way is neither (see "Not seen").
+    The callee reads
     "HTTP <VERB> <target>", the verb "?" when it isn't written as a literal and
     the target taken from the URL argument's text: spool / filament / vendor /
     field / other (a URL held in a variable reads as other).
@@ -132,8 +138,12 @@ Not seen, so no check can see it either:
   * an HTTP verb chosen into a variable (`send = requests.post if new else
     requests.patch`, then `send(...)`). In spoolman_api.py that would also hide
     a new writer from test_every_spoolman_api_writer_is_listed;
-  * the retry helper aliased by assignment (`rr = http_retry.request_with_retry`,
-    then `rr("patch", ...)`);
+  * requests or http_retry bound any other way: by assignment (`rq =
+    spoolman_api.requests` or `http = requests`, then `rq.patch(...)`), or
+    imported from another backend module (`from spoolman_api import
+    requests`, `from attr_migration import http_retry`); and the retry helper
+    aliased by assignment (`rr = http_retry.request_with_retry`, then
+    `rr("patch", ...)`);
   * a requests Session (none in the backend; a test's patch of
     `requests.<verb>` can't reach one either), urllib and http.client;
   * a write helper or wrapper reached through getattr (`getattr(spoolman_api,
@@ -141,6 +151,20 @@ Not seen, so no check can see it either:
   * a NEW function of the wrappers' kind: its callers are watched only once it
     is in WRAPPER_WRITERS. Its own write is a new site (check 1), and the
     registration message asks whether it belongs there.
+
+Counted, though it may not be a Spoolman write at all: any attribute chain
+ending in `.requests` or `.http_retry` is read as that module, so an unrelated
+`self.requests.delete(rid)` registers as "HTTP DELETE other"; and any
+`<anything>.<name>(...)` of a write helper's or a wrapper's name is read as
+that helper, so `cache.update_spool(sid, x)` registers as update_spool, and
+another object's `backup.restore_extras(rows)` as
+attr_migration.restore_extras, with check 2 on its result. None is in the
+backend today (2026-11-09). Such a call fails check 1 like any new site:
+rename it, or register it with a comment saying what it really is (and, for a
+result it drops, an ALLOWED_DISCARDS entry saying the same).
+test_a_documented_blind_spot_is_not_seen and
+test_a_documented_over_count_is_counted pin both lists, so a scanner that
+learns to see more fails there until these words are brought up to date.
 
 test_no_direct_extra_patch.py already forbids a direct PATCH that carries
 `extra`; this test doesn't repeat it.
@@ -1816,3 +1840,43 @@ def test_a_helper_check_2_cannot_place_is_reported():
     assert helper_group_problems(source, {"update_spool"}, returns_nothing={"update_spool"}) == [
         "update_spool: in FAILS_BY_RETURN_VALUE and RETURNS_NOTHING"]
     assert "HOW_IT_FAILS" in helper_group_message(["x"])
+
+
+# --- What the docstring says the scanner can't see, and counts anyway (review rb-5) --
+
+LIMITS_CHANGED = (
+    "The scanner's limits changed. Bring the docstring's \"Not seen\" list and its "
+    f"\"Counted, though ...\" paragraph in {THIS_FILE} up to date, and CLAUDE.md's write-site "
+    "bullet under Testing (its \"It can't see\" and over-count sentences), then this case.")
+
+
+@pytest.mark.parametrize("source", [
+    "import spoolman_api\ndef h(u, i):\n    rq = spoolman_api.requests\n"
+    "    rq.patch(f'{u}/api/v1/spool/{i}')\n",
+    "import requests\nhttp = requests\ndef h(u, i):\n    http.delete(f'{u}/api/v1/spool/{i}')\n",
+    "from spoolman_api import requests\ndef h(u, i):\n    requests.patch(f'{u}/api/v1/spool/{i}')\n",
+    "from attr_migration import http_retry\ndef h(u, i):\n"
+    "    http_retry.request_with_retry('patch', f'{u}/api/v1/spool/{i}')\n",
+    "import http_retry\ndef h(u, i):\n    rr = http_retry.request_with_retry\n"
+    "    rr('patch', f'{u}/api/v1/spool/{i}')\n",
+    "import requests\ndef h(u, new):\n    send = requests.post if new else requests.patch\n"
+    "    send(u + '/api/v1/spool')\n",
+    "import requests\ndef h(u):\n    s = requests.Session()\n    s.patch(u + '/api/v1/spool/1')\n",
+    "import spoolman_api\ndef h(i):\n    getattr(spoolman_api, 'update_spool')(i, {})\n",
+], ids=["requests-by-assignment", "module-alias-by-assignment", "requests-from-a-backend-module",
+        "http_retry-from-a-backend-module", "retry-helper-by-assignment", "verb-in-a-variable",
+        "session", "getattr-on-spoolman_api"])
+def test_a_documented_blind_spot_is_not_seen(source):
+    assert _keys(source, module="routes_x.py") == {}, LIMITS_CHANGED
+
+
+@pytest.mark.parametrize("source,callee", [
+    ("class Registry:\n    def drop(self, rid):\n        return self.requests.delete(rid)\n",
+     "HTTP DELETE other"),
+    ("def h(cache, u):\n    return cache.http_retry.request_with_retry('post', u)\n", "HTTP POST other"),
+    ("def h(cache, sid, x):\n    return cache.update_spool(sid, x)\n", "update_spool"),
+    ("def h(backup, rows):\n    return backup.restore_extras(rows)\n", "attr_migration.restore_extras"),
+], ids=["a-requests-attribute", "an-http_retry-attribute", "a-write-helpers-name",
+        "a-wrappers-name"])
+def test_a_documented_over_count_is_counted(source, callee):
+    assert [s.callee for s in _sites(source, module="routes_x.py")] == [callee], LIMITS_CHANGED
