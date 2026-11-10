@@ -19,8 +19,9 @@
     // registerShortcut SHIM — must run before ANY module (2026-08-05).
     //
     // shortcuts_registry.js loads well down this list, but modules above it
-    // (inv_cmd, inv_wizard, inv_details, inv_loc_mgr, …) register shortcuts at
-    // module-eval time. They all guard with `if (window.registerShortcut)`, so
+    // register shortcuts at module-eval time (inv_cmd, inv_wizard, inv_stock,
+    // inv_loose and inv_audit_find in 2026-11; tests/test_load_order_canary_js.py
+    // names each one if this shim goes). They all guard with `if (window.registerShortcut)`, so
     // the call was silently DROPPED — the shortcut still worked, it just never
     // appeared in the `?` help overlay, quietly breaking the rule that the
     // overlay stays complete. L298's Shift+B hit this exactly.
