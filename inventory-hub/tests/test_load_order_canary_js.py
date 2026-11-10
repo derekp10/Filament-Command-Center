@@ -21,20 +21,27 @@ How (node's `vm`: no browser, no container, so it runs under --offline):
      declaration, a var, a `window.X = ...`), or a new top-level const / let /
      class (those never land on window: V8 is asked which of the names the
      script's declarations name, every declarator of each, resolve after the
-     script that didn't before).
+     script that didn't before). Then it fires the DOMContentLoaded handlers
+     and the load ones, as a browser does once every script has loaded: a
+     name only a handler defines is filed under one definer past the last
+     script, "(DOMContentLoaded / load handlers)".
   3. Pass 2 loads them again in a fresh context where each of those names is
      first planted on window as an accessor that records who read it and
      returns undefined. The defining script's own definition replaces it (a
      const / let / class shadows it), so a read recorded while an EARLIER
      script runs is an early read.
-The stub runs only what runs at load: document.readyState is 'loading',
-DOMContentLoaded never fires, timers and animation frames never fire, fetch
-never answers. Promise callbacks run when each script ends, as at the
-browser's microtask checkpoint, and count as that script's load.
+The stub runs only what runs at load: document.readyState is 'loading' while
+the scripts run, timers and animation frames never fire, fetch never answers,
+and of the events only DOMContentLoaded and load fire, once, after every
+script (pass 1 only: pass 2 never fires them, so a read inside a handler is
+never charged to anyone). Promise callbacks run when each script ends, as at
+the browser's microtask checkpoint, and count as that script's load.
 
 What it catches: a script that throws while loading; a load-time read (window.X,
 a bare X, typeof X) of a name a later script defines, in a script's top-level
-code or anything that code calls; a load-time window.X read of a name that is
+code or anything that code calls, or of a name only a DOMContentLoaded or load
+handler defines (a provider moved into one: those run once every script has
+loaded); a load-time window.X read of a name that is
 only a top-level const / let / class (never on window, so always undefined); a
 script-scope alias of a later script's name (`const { X } = window;` or
 `const X = window.X;` in a script that loads before X's: the script declares X
@@ -51,7 +58,12 @@ What it can't see:
     starts empty;
   - reads inside handlers, timers and fetch callbacks: those run at call time,
     after every script has loaded, which is exactly where this canary asks a
-    read to move;
+    read to move. That includes a DOMContentLoaded or load handler's read of
+    a name a later handler defines (they run in the order they were added);
+  - a throw inside a DOMContentLoaded or load handler: the handlers run
+    against a stub that can't model the page they would see, so a throw
+    there is only listed in the run's diagnostics (what the handler defined
+    before it threw still counts);
   - a load-time use of a top-level `var X = window.X;` alias of a later
     script's name. A top-level var IS the window property, so the later
     script's assignment reaches it and a use at call time works; only a use
@@ -104,6 +116,9 @@ STATIC = HUB / "static"
 ENTRY = "dashboard.html"
 SCRIPTS_HTML = "templates/components/scripts.html"
 RESULT_MARK = "__FCC_LOAD_ORDER__"
+# The definer of a name only a DOMContentLoaded or load handler defines: those
+# run once every script has loaded, so it counts as defined after the last one.
+HANDLERS = "(DOMContentLoaded / load handlers)"
 
 # Every CDN library the page loads, by a part of its URL, with every global the
 # real bundle sets on window (read from the bundles themselves, 2026-11-09). FCC
@@ -364,6 +379,21 @@ STUB_JS = r"""
   const never = () => new Promise(noop);
   g.window = g; g.self = g; g.top = g; g.parent = g; g.frames = g;
 
+  // DOMContentLoaded listeners (on document or window) and load listeners (on
+  // window) are kept: the driver fires them once every script has loaded.
+  // Every other listener is dropped, as those events never fire.
+  let runningNow = '';
+  const readyListeners = [];
+  const listen = (target) => (type, fn) => {
+    const t = String(type);
+    if (fn == null || !(t === 'DOMContentLoaded' || (t === 'load' && target === 'window'))) return;
+    if (readyListeners.some((r) => !r.removed && r.target === target && r.type === t && r.fn === fn)) return;
+    readyListeners.push({ target, type: t, fn, by: runningNow, stack: new Error().stack, removed: false });
+  };
+  const unlisten = (target) => (type, fn) => {
+    for (const r of readyListeners) if (r.target === target && r.type === String(type) && r.fn === fn) r.removed = true;
+  };
+
   const rect = () => ({ top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0 });
   const classList = () => {
     const set = new Set();
@@ -444,7 +474,7 @@ STUB_JS = r"""
     createEvent: () => ({ initEvent: noop }),
     querySelector: () => null, querySelectorAll: () => [], getElementsByTagName: () => [],
     getElementsByClassName: () => [], getElementsByName: () => [],
-    addEventListener: noop, removeEventListener: noop, dispatchEvent: () => true,
+    addEventListener: listen('document'), removeEventListener: unlisten('document'), dispatchEvent: () => true,
     hasFocus: () => true, elementFromPoint: () => null, elementsFromPoint: () => [], getSelection: () => null,
     execCommand: () => false,
   };
@@ -510,7 +540,7 @@ STUB_JS = r"""
     getSelection: () => null, getComputedStyle: () => styleDecl(),
     matchMedia: (q) => ({ matches: false, media: String(q), onchange: null, addEventListener: noop,
                           removeEventListener: noop, addListener: noop, removeListener: noop }),
-    addEventListener: noop, removeEventListener: noop, dispatchEvent: () => true,
+    addEventListener: listen('window'), removeEventListener: unlisten('window'), dispatchEvent: () => true,
     CSS: { supports: () => true, escape: (s) => String(s) },
   });
   g.Image = class Image { constructor() { this.complete = false; } };
@@ -552,6 +582,28 @@ STUB_JS = r"""
   const cdnStandIns = { bootstrap, Sweetalert2: swal, Swal: swal, SweetAlert: swal, swal, sweetAlert: swal, QRCode };
 
   return {
+    // What the driver tells the stub: what is running now (a listener added
+    // is stamped with it), and the document's readyState.
+    running(label) { runningNow = String(label); },
+    readyState(state) { g.document.readyState = state; },
+    // The live listeners for DOMContentLoaded (document's, then window's, as
+    // the event bubbles) or load (window's, then window.onload), in order.
+    readyListeners(type) {
+      const out = [];
+      for (const target of (type === 'DOMContentLoaded' ? ['document', 'window'] : ['window'])) {
+        for (const r of readyListeners) if (r.target === target && r.type === type) out.push(r);
+      }
+      if (type === 'load' && typeof g.onload === 'function') {
+        out.push({ target: 'window', type, fn: g.onload, by: 'window.onload', stack: '', removed: false });
+      }
+      return out;
+    },
+    fire(r) {
+      const target = r.target === 'window' ? g : g.document;
+      const event = new Event(r.type, { bubbles: r.type === 'DOMContentLoaded', target: g.document, currentTarget: target });
+      if (typeof r.fn === 'function') r.fn.call(target, event);
+      else if (r.fn && typeof r.fn.handleEvent === 'function') r.fn.handleEvent(event);
+    },
     cdn(names) {
       for (const n of names) {
         if (!Object.prototype.hasOwnProperty.call(cdnStandIns, n)) {
@@ -576,6 +628,13 @@ const fs = require('fs');
 const page = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const scripts = page.scripts || [];
 const tick = () => new Promise((resolve) => setImmediate(resolve));
+// The definer past the last script: the DOMContentLoaded and load handlers.
+const HANDLERS = '__HANDLERS__';
+const named = (i) => (i < scripts.length ? scripts[i].name : HANDLERS);
+// Runs nothing, so a microtask queued by a context function the driver
+// called (a handler) runs now: a vm context with microtaskMode
+// 'afterEvaluate' runs its microtasks only after code it evaluates.
+const CHECKPOINT = new vm.Script('void 0', { filename: 'load-order-checkpoint.js' });
 
 function quietConsole() {
   const out = {};
@@ -617,10 +676,10 @@ function describe(e, phase) {
   return { message, at, stack: frames.slice(0, 5) };
 }
 
-let current = -1;      // the script running now; pass 2 charges every read to it
-let errorsNow = null;  // where a promise rejected at load is filed
+let current = -1;  // the script running now; pass 2 charges every read to it
+let sink = null;   // where a promise rejected now is filed: { list, script, phase }
 process.on('unhandledRejection', (reason) => {
-  if (errorsNow && current >= 0) errorsNow.push(Object.assign({ script: scripts[current].name, phase: 'promise' }, describe(reason, 'promise')));
+  if (sink) sink.list.push(Object.assign({ script: sink.script, phase: sink.phase }, describe(reason, 'promise')));
 });
 
 function runOne(env, i, errors) {
@@ -642,10 +701,13 @@ function runOne(env, i, errors) {
 // Loads script i, then waits a turn so a promise it rejected is reported
 // while it is still the script charged.
 async function load(env, i, errors) {
-  current = i; errorsNow = errors;
+  current = i;
+  sink = { list: errors, script: scripts[i].name, phase: 'promise' };
+  env.stub.running(scripts[i].name);
   runOne(env, i, errors);
   await tick();
-  current = -1; errorsNow = null;
+  current = -1;
+  sink = null;
 }
 
 function ownValues(obj) {
@@ -847,12 +909,29 @@ const shadowed = (env, names) =>
 async function pass1() {
   const env = freshContext();
   const errors = [];
+  const diagnostics = [];  // throws the stub can't vouch for: in a DOMContentLoaded / load handler
   const definers = new Map();
   const lexical = new Set();
   const onWindowLater = new Map();  // a top-level const / let name a later script also sets on window
+  const handlerOf = new Map();      // a name the handlers put on window -> the handler that did
   const stubNames = new Set(Object.getOwnPropertyNames(env.sandbox));
   const overlaps = [];
   const overlapping = new Set();
+  // Files the window names that appeared between two snapshots under definer
+  // i; returns the ones it filed.
+  const fileNew = (before, after, i) => {
+    const filed = [];
+    for (const [name, value] of after) {
+      if (!before.has(name)) {
+        if (!definers.has(name)) { definers.set(name, i); filed.push(name); }
+        else if (lexical.has(name) && !onWindowLater.has(name)) { onWindowLater.set(name, i); filed.push(name); }
+      } else if (stubNames.has(name) && !Object.is(before.get(name), value) && !overlapping.has(name)) {
+        overlapping.add(name);
+        overlaps.push({ name, script: named(i), how: 'sets it on window' });
+      }
+    }
+    return filed;
+  };
   let before = ownValues(env.sandbox);
   for (let i = 0; i < scripts.length; i++) {
     const src = sources[i];
@@ -860,15 +939,7 @@ async function pass1() {
     const resolvedBefore = resolvable(env, names);
     await load(env, i, errors);
     const after = ownValues(env.sandbox);
-    for (const [name, value] of after) {
-      if (!before.has(name)) {
-        if (!definers.has(name)) definers.set(name, i);
-        else if (lexical.has(name) && !onWindowLater.has(name)) onWindowLater.set(name, i);
-      } else if (stubNames.has(name) && !Object.is(before.get(name), value) && !overlapping.has(name)) {
-        overlapping.add(name);
-        overlaps.push({ name, script: scripts[i].name, how: 'sets it on window' });
-      }
-    }
+    fileNew(before, after, i);
     for (const name of resolvable(env, names)) {
       if (!resolvedBefore.has(name) && !definers.has(name)) { definers.set(name, i); lexical.add(name); }
     }
@@ -880,7 +951,29 @@ async function pass1() {
     }
     before = after;
   }
-  return { errors, definers, lexical, onWindowLater, overlaps };
+  // The DOMContentLoaded handlers, then the load ones, as the browser fires
+  // them once every script has loaded: a name only they define is defined
+  // after every script (definer HANDLERS, past the last). A throw in one is a
+  // diagnostic, not a load error (they run against a stub that can't model
+  // the page they would see), and what it defined before it threw stays.
+  const H = scripts.length;
+  env.stub.running(HANDLERS);
+  for (const [state, type] of [['interactive', 'DOMContentLoaded'], ['complete', 'load']]) {
+    env.stub.readyState(state);
+    for (const r of env.stub.readyListeners(type)) {
+      if (r.removed) continue;
+      const where = `the ${type} handler added at ${pageFrame(framesOf(r.stack)) || r.by}`;
+      sink = { list: diagnostics, script: where, phase: 'handler' };
+      try { env.stub.fire(r); } catch (e) { diagnostics.push(Object.assign({ script: where, phase: 'handler' }, describe(e, 'run'))); }
+      CHECKPOINT.runInContext(env.ctx);
+      await tick();
+      sink = null;
+      const after = ownValues(env.sandbox);
+      for (const name of fileNew(before, after, H)) handlerOf.set(name, where);
+      before = after;
+    }
+  }
+  return { errors, diagnostics, definers, lexical, onWindowLater, handlerOf, overlaps };
 }
 
 // Pass 2: every defined name planted on window, each read charged to the
@@ -911,7 +1004,6 @@ async function pass2(definers) {
   }
   const one = await pass1();
   const two = await pass2(one.definers);
-  const named = (i) => scripts[i].name;
   const early = [];
   const late = [];
   const seen = new Set();
@@ -946,7 +1038,8 @@ async function pass2(definers) {
     const key = reader + ' ' + name;
     if (seen.has(key)) continue;
     seen.add(key);
-    const read = { reader: named(reader), name, definer: named(definer), lexical, alias, at };
+    const read = { reader: named(reader), name, definer: named(definer), lexical, alias, at,
+                   handler: definer === scripts.length ? (one.handlerOf.get(name) || '') : '' };
     (reader < definer ? early : late).push(read);
   }
   const definers = {};
@@ -955,16 +1048,18 @@ async function pass2(definers) {
     order: scripts.map((s) => s.name),
     errors: one.errors,
     errors_pass2: two.errors,
+    diagnostics: one.diagnostics,
     early_reads: early,
     late_reads: late,
     reads_recorded: two.reads.length,
     self_reads: selfReads,
     definers,
     lexical: [...one.lexical],
+    handler_definers: Object.fromEntries(one.handlerOf),
     stub_overlaps: one.overlaps,
   }));
 })().catch((e) => { console.error((e && e.stack) || e); process.exitCode = 3; });
-""".replace("__RESULT_MARK__", RESULT_MARK)
+""".replace("__RESULT_MARK__", RESULT_MARK).replace("__HANDLERS__", HANDLERS)
 
 
 def _run_driver(payload: dict, work: Path, label: str):
@@ -1023,6 +1118,10 @@ def early_read_problems(result: dict, allowed: dict) -> list:
             continue
         text = (f"  - {r['reader']} reads {r['name']} while it loads{_at(r)}, but {r['name']} is defined "
                 f"later, by {r['definer']}.")
+        if r.get("handler"):
+            text = (f"{text[:-1]}: {r['handler']} sets it, and those handlers run once every script has loaded. "
+                    f"Define {r['name']} while its script loads, outside the handler, or read it only once the "
+                    f"handlers have run.")
         if r.get("alias"):
             text += (f" ({r['reader']} declares {r['name']} itself, as a top-level const / let taken from "
                      f"window.{r['name']}: that alias stays undefined for good. Read window.{r['name']} where it "
@@ -1177,6 +1276,13 @@ def test_the_instrument_sees_each_kind_of_definition(page_scripts, page_load):
     tail = [s["name"] for s in page_scripts if s["kind"] == "inline" and "const SPOOLMAN_URL" in s["code"]]
     assert len(tail) == 1 and tail[0].startswith("templates/dashboard.html:"), tail
     assert d["SPOOLMAN_URL"] == tail[0] and "SPOOLMAN_URL" in lexical
+    # A name a DOMContentLoaded handler defines (scripts.html's last script
+    # sets these two in its handler) is defined after every script.
+    for name in ("personMayPress", "sendInScanOrder"):
+        assert d.get(name) == HANDLERS, (_pinned(name, "a DOMContentLoaded handler"), d.get(name))
+        assert page_load["handler_definers"][name].startswith(
+            f"the DOMContentLoaded handler added at {SCRIPTS_HTML}:"), (
+            _pinned(name, f"the DOMContentLoaded handler in {SCRIPTS_HTML}"), page_load["handler_definers"][name])
     # Each CDN library defines what the real bundle defines.
     for part, names in CDN_GLOBALS.items():
         cdn = [s["name"] for s in page_scripts if s["kind"] == "cdn" and part in s["name"]]
@@ -1315,6 +1421,68 @@ def test_an_alias_in_a_real_module_is_reported(page_scripts, load_dir):
     result = run_page(page, load_dir, "alias-inv-cmd")
     assert _early(result) == {(module, "openSlotPicker", provider)}, result["early_reads"]
     assert result["early_reads"][0]["at"].startswith(module + ":1:"), result["early_reads"]
+
+
+def test_a_provider_moved_into_a_dom_ready_handler_is_reported(page_scripts, load_dir):
+    """A copy of empty_weight_field.js that sets window.bindEmptyWeightField in
+    a DOMContentLoaded handler instead of at load: inv_wizard.js, which binds
+    the wizard's empty-weight field once while it loads, would then find
+    nothing and bind nothing, silently (review findings r2-1 / r5-1). The
+    handlers run once every script has loaded, so a name only a handler
+    defines is defined after every script."""
+    module, reader = "js/modules/empty_weight_field.js", "js/modules/inv_wizard.js"
+    line = "    window.bindEmptyWeightField = bindEmptyWeightField;\n"
+    src = (STATIC / module).read_text(encoding="utf-8").replace("\r\n", "\n")
+    assert src.count(line) == 1 and _index(page_scripts, module) < _index(page_scripts, reader), (
+        f"{module} no longer sets window.bindEmptyWeightField at load in one line, or {reader} no longer loads "
+        f"after it: point this proof at another provider whose name a later script reads while it loads.")
+    copy = load_dir / "dcl_empty_weight_field.js"
+    copy.write_text(src.replace(line, "    document.addEventListener('DOMContentLoaded', () => {\n"
+                                      "        window.bindEmptyWeightField = bindEmptyWeightField;\n"
+                                      "    });\n"), encoding="utf-8")
+    page = [dict(s, file=str(copy)) if s["name"] == module else s for s in page_scripts]
+    result = run_page(page, load_dir, "dcl-provider")
+    assert _early(result) == {(reader, "bindEmptyWeightField", HANDLERS)}, result["early_reads"]
+    read = result["early_reads"][0]
+    assert f"{reader}:81:" in read["at"], (
+        "inv_wizard.js reads window.bindEmptyWeightField on its line 81 today: if that line moved, update the "
+        "line number here.", read)
+    problems = early_read_problems(result, ALLOWED_EARLY_READS)
+    assert len(problems) == 1 and HANDLERS in problems[0], problems
+    assert f"the DOMContentLoaded handler added at {module}:" in problems[0], problems
+    assert result["errors"] == [], result["errors"]
+
+
+def test_a_name_only_a_handler_defines_is_defined_after_every_script(page_scripts, load_dir):
+    """Fakes, each with a name of its own: a load-time read of personMayPress
+    (scripts.html's last script defines it in its DOMContentLoaded handler) is
+    early; a read inside a DOMContentLoaded handler is call time and stays
+    quiet; a handler that throws is a diagnostic, not a load error, and the
+    name it defined before it threw still counts; a window load listener is
+    a handler too."""
+    may_press = "FAKE before inv_core.js reading window.personMayPress at load"
+    in_handler = "FAKE before inv_core.js reading window.openSlotPicker in a DOMContentLoaded handler"
+    thrower = "FAKE after titlebar_prefs.js: a DOMContentLoaded handler that defines fakeReady, then throws"
+    on_load = "FAKE after titlebar_prefs.js: a window load listener that defines fakeLoaded"
+    reader = "FAKE before inv_core.js reading fakeReady and fakeLoaded at load"
+    page = with_fake(page_scripts, "if (window.personMayPress) {}", may_press, before="js/modules/inv_core.js")
+    page = with_fake(page, "document.addEventListener('DOMContentLoaded', () => { if (window.openSlotPicker) {} });",
+                     in_handler, before="js/modules/inv_core.js")
+    page = with_fake(page, "if (window.fakeReady || window.fakeLoaded) {}", reader, before="js/modules/inv_core.js")
+    page = with_fake(page, "document.addEventListener('DOMContentLoaded', () => {\n"
+                           "  window.fakeReady = function () {};\n"
+                           "  null.boom;\n"
+                           "});", thrower, after="js/modules/titlebar_prefs.js")
+    page = with_fake(page, "window.addEventListener('load', function () { window.fakeLoaded = 1; });", on_load,
+                     after=thrower)
+    result = run_page(page, load_dir, "fake-handlers")
+    assert _early(result) == {(may_press, "personMayPress", HANDLERS), (reader, "fakeReady", HANDLERS),
+                              (reader, "fakeLoaded", HANDLERS)}, result["early_reads"]
+    assert result["errors"] == [], result["errors"]
+    thrown = [d for d in result["diagnostics"] if d["phase"] == "handler" and thrower in d["script"]]
+    assert len(thrown) == 1 and "TypeError" in thrown[0]["message"], result["diagnostics"]
+    assert result["handler_definers"]["fakeLoaded"].startswith(f"the load handler added at {on_load}:1:"), (
+        result["handler_definers"])
 
 
 def test_every_declarator_of_a_top_level_let_is_a_definer(page_scripts, load_dir):
