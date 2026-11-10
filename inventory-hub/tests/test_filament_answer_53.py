@@ -13,8 +13,9 @@ The record is the filament only when it is a dict whose id is the one asked for.
 
 Every answer that isn't that record leaves ONE hub.log WARNING line from the
 helper itself, saying what came back (rd-1): the status and the start of the
-body, or the exception's class and text (requests' words name Spoolman's
-address). The callers used to log it, after the helper had dropped all of that:
+body, or the address it asked and the exception's class and text (requests'
+words name the address for a timeout or a refused connection, but not for a
+connection Spoolman dropped). The callers used to log it, after the helper had dropped all of that:
 "Merge: couldn't read filament 9: None". Now they log nothing more about the read.
 
 Besides Merge Filament (test_filament_merge.py), two sites read through it:
@@ -39,6 +40,7 @@ Spoolman fake (spoolman_extra_fake.SpoolmanHTTPFake: a missing record answers
 from __future__ import annotations
 
 import copy
+import http.client
 import json
 import os
 import re
@@ -234,8 +236,14 @@ REFUSED_READS = [
     (requests.exceptions.ConnectionError(
         "HTTPConnectionPool(host='spoolman.test', port=7913): Max retries exceeded with url: /api/v1/filament/7"),
      ["no answer", "ConnectionError", "spoolman.test", "Max retries exceeded"]),
+    # A connection Spoolman (or a proxy) dropped: requests' words name no host, so the
+    # line names the address it asked (final verification, v2).
+    (requests.exceptions.ConnectionError(
+        ("Connection aborted.", http.client.RemoteDisconnected("Remote end closed connection without response"))),
+     [f"no answer from {SM}/api/v1/filament/", "ConnectionError", "Connection aborted"]),
 ]
-REFUSED_IDS = ["500", "503", "503 page", "200 not JSON", "404", "another record", "a list", "timeout", "down"]
+REFUSED_IDS = ["500", "503", "503 page", "200 not JSON", "404", "another record", "a list", "timeout", "down",
+               "dropped"]
 
 
 @pytest.mark.parametrize("answer, said", REFUSED_READS, ids=REFUSED_IDS)

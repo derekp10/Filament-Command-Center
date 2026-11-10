@@ -243,15 +243,18 @@ def get_filament_answer(fid):
 
     Every answer that isn't filament `fid`'s record (by that same test, a 404
     included) leaves ONE hub.log WARNING line saying what came back (Group 53
-    review, rd-1): the status and the start of the body (_log_body), or the
-    exception's class and text when Spoolman didn't answer (requests' words name
-    its address). Only this helper sees those: its callers logged "couldn't read
-    filament 9: None". A caller logs nothing more about the read."""
+    review, rd-1): the status and the start of the body (_log_body), or, when
+    Spoolman didn't answer, the address asked and the exception's class and text
+    (requests' words name the address for a timeout or a refused connection, but
+    not for a connection Spoolman dropped). Only this helper sees those: its
+    callers logged "couldn't read filament 9: None". A caller logs nothing more
+    about the read."""
     sm_url, _ = config_loader.get_api_urls()
+    url = f"{sm_url}/api/v1/filament/{fid}"
     try:
-        resp = requests.get(f"{sm_url}/api/v1/filament/{fid}", timeout=3)
+        resp = requests.get(url, timeout=3)
     except Exception as e:
-        _log_no_filament(fid, "no answer (" + " ".join(f"{type(e).__name__}: {e}".split()) + ")")
+        _log_no_filament(fid, f"no answer from {url} (" + " ".join(f"{type(e).__name__}: {e}".split()) + ")")
         return None, False
     status = getattr(resp, 'status_code', None)
     if isinstance(status, int) and status >= 500:

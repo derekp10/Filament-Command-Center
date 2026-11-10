@@ -76,7 +76,8 @@ What it catches:
     before a later script sets window.X: a script-scope alias (`const { X } =
     window;` or `const X = window.X;`, read while that declaration runs: the
     alias is undefined when it is taken) or any other such read (the bare X
-    already holds the script's own value), each worded for what it is;
+    holds the script's own value, or an alias a later top-level assignment
+    took), each worded for what it is;
   - a file under static/js that the page doesn't load, or loads twice, and a
     page script missing from disk (a module split that forgets scripts.html);
   - template constructs it can't model (a <script> inside {% if %} / {% for %},
@@ -97,7 +98,9 @@ What it can't see:
     those, the answer is null, as in a browser; otherwise querySelector and
     closest answer a dummy element, querySelectorAll an empty list and
     matches false, so a throw a browser would raise there (no element passes
-    the pseudo-class, or the selector isn't valid at all) goes unseen. An
+    the pseudo-class, or the selector isn't valid at all) goes unseen, while
+    indexing that empty list, or a query under the dummy, can still throw
+    where a browser wouldn't (the stub's limit, said so in the failure). An
     element's text and inline style are empty; elements nest as their tags
     are written (no implied end tags), and one inside a Jinja block counts as
     there, as does an attribute (its value's Jinja taken out);
@@ -162,8 +165,10 @@ When it fails:
     built, or of anything under one or under a dummy, is the stub's limit:
     teach STUB_JS's query to find it.
   - a throw in a DOMContentLoaded / load handler or a zero-delay timer: the
-    same two causes (add the stand-in, or fix the code). Until it runs to its
-    end, every name it sets after the throwing line goes unjudged.
+    same causes (add the stand-in; for a null from a query of an element a
+    script built, or under a dummy, teach STUB_JS's query to find it; or fix
+    the code). Until it runs to its end, every name it sets after the
+    throwing line goes unjudged.
   - a CDN library it doesn't know: add a part of its URL to CDN_GLOBALS with
     every global the real bundle sets on window (its UMD line,
     `global.X = factory()`, or a top-level var), and a stand-in for each to
@@ -1989,8 +1994,9 @@ def early_read_problems(result: dict, allowed: dict) -> list:
                      f"while that declaration runs: the alias is undefined when it is taken. Read "
                      f"window.{name} where it is used instead, or take it from window only once {ran}.)")
         elif r.get("alias"):
-            text += (f" ({reader} declares {name} itself and reads window.{name} before {definer} sets it: read "
-                     f"the bare {name} while it loads, or window.{name} only once {ran}.)")
+            text += (f" ({reader} declares {name} itself and reads window.{name} before {definer} sets it, so "
+                     f"that read is undefined: read window.{name} only once {ran}, or, where {name} holds the "
+                     f"script's own value (not a copy of window.{name}), read the bare {name}.)")
         if r["lexical"]:
             text += (f" (If that read is window.{r['name']}, loading earlier won't help: {r['name']} is a "
                      f"top-level const / let / class there, never a window property. Read it bare, or have "
@@ -2020,8 +2026,12 @@ _UNJUDGED = (
     "Until each runs to its end, every name it sets after the throwing line goes unjudged: it never enters the "
     "definer map, so a load-time read of it is never reported. Most often the stub lacks a browser API the code "
     "uses (an undefined property of window, document or an element): add a plain stand-in for it that does "
-    "nothing to STUB_JS in tests/test_load_order_canary_js.py, never one for an FCC name. If it would throw in "
-    "a browser too, it is a real error: fix the handler or timer.")
+    "nothing to STUB_JS in tests/test_load_order_canary_js.py, never one for an FCC name. A null from a query of "
+    "an element a script built (createElement, innerHTML, insertAdjacentHTML), of anything under one, or of "
+    "anything under the dummy the stub answers for an id the templates lack or a selector it can't read, is a "
+    "limit of the stub, whose queries find only the templates' elements: teach STUB_JS's query to find it "
+    "rather than change the handler for the canary. If it would throw in a browser too, it is a real error: fix "
+    "the handler or timer.")
 
 
 def _thrown(result: dict) -> str:
@@ -2079,8 +2089,9 @@ def test_every_script_loads_without_throwing(page_load):
         "script's tag (the stub's DOM holds the templates' elements by position): look it up later (on "
         "DOMContentLoaded), or move the <script> below it. A null from a query of an element a script built, or of "
         "anything under one (or under the dummy the stub answers for an id the templates lack or a selector it "
-        "can't read), is a limit of the stub, whose queries find only the templates' elements: teach STUB_JS's "
-        "query to find it rather than change the script for the canary. "
+        "can't read), is a limit of the stub, whose queries find only the templates' elements, and so is an "
+        "undefined from indexing the empty list it answers to querySelectorAll of a selector it can't read: teach "
+        "STUB_JS's query to find it rather than change the script for the canary. "
         "Until it loads, the early-read check can't see past the throw.")
 
 
@@ -2409,7 +2420,9 @@ def test_an_own_read_of_a_name_a_later_script_puts_on_window_says_what_it_is(pag
     an initializer, an IIFE in one), it takes an alias of window.X that is
     undefined when it is taken; a later assignment may refresh it. Read
     anywhere else (the script's own value read back off window, a function it
-    declares, called later), the bare X already holds the script's own value.
+    declares, called later), the bare X usually holds the script's own value,
+    though an alias a later top-level assignment took (`X = window.X;`) reads
+    the same way, so the words offer both remedies.
     Neither is fixed by loading the setter earlier: a setter that reads the
     script's binding (`window.X = X;`) would then throw."""
     setter = "FAKE setter after the readers"
@@ -2442,7 +2455,9 @@ def test_an_own_read_of_a_name_a_later_script_puts_on_window_says_what_it_is(pag
             assert f"taken from window.{name}" in p and f"Read window.{name} where it is used" in p, p
         else:
             assert "taken from" not in p, p
-            assert (f"read the bare {name} while it loads, or window.{name} only once {setter} has run" in p), p
+            assert (f"so that read is undefined: read window.{name} only once {setter} has run, or, where "
+                    f"{name} holds the script's own value (not a copy of window.{name}), read the bare "
+                    f"{name}." in p), p
 
 
 def test_an_alias_in_a_real_module_is_reported(page_scripts, load_dir):
@@ -2740,7 +2755,7 @@ def test_a_script_sees_only_the_page_above_it(page_scripts, load_dir):
         result["errors"])
 
 
-def test_a_selector_the_stub_cant_read_never_invents_a_throw(page_scripts, load_dir):
+def test_a_selector_the_stub_cant_read_answers_null_only_when_nothing_could_match(page_scripts, load_dir):
     """A selector the stub's query can't read (a pseudo-class such as
     :checked or :not(), :scope, + or ~) under an element it finds answered
     null, so code a browser runs fine threw, and the failure called that

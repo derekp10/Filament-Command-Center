@@ -977,10 +977,10 @@ def api_merge_filament(src_fid, dst_fid):
     holding another filament's spool (Group 53 review). Every answer is in
     words (refusal_words). hub.log keeps what came back (rd-1): for a
     filament read that gave no filament, get_filament_answer's one WARNING line
-    (the status and the body's first 200 characters, or the exception);
-    for the spool list, an ERROR line with the status and the body's first 400
-    characters, requests' words (Spoolman's address included) when it didn't
-    answer, or the JSON it couldn't use. A refused write's Activity Log line
+    (the status and the body's first 200 characters, or the address asked and
+    the exception); for the spool list, an ERROR line with the status and the
+    body's first 400 characters, the address asked and requests' words when it
+    didn't answer, or the JSON it couldn't use. A refused write's Activity Log line
     keeps Spoolman's refusal as LAST_SPOOLMAN_ERROR holds it (400 characters).
     """
     if src_fid == dst_fid:
@@ -1006,16 +1006,15 @@ def api_merge_filament(src_fid, dst_fid):
     # `filament.id`, as stock_report reads it: Spoolman deprecated the
     # `filament_id` alias (Group 53 review, D1).
     sm_url, _ = config_loader.get_api_urls()
+    list_url = f"{sm_url}/api/v1/spool?filament.id={src_fid}&allow_archived=true"
     try:
-        r = requests.get(
-            f"{sm_url}/api/v1/spool?filament.id={src_fid}&allow_archived=true",
-            timeout=5,
-        )
+        r = requests.get(list_url, timeout=5)
         children, unread = _merge_source_spools(r, src_fid)
     except Exception as e:
         # Spoolman didn't answer: its words (refusal_words), never requests', which
-        # name its address (Group 53 review, D2). hub.log keeps them.
-        state.logger.error(f"Merge: failed to enumerate spools for filament {src_fid}: {e}")
+        # name its address (Group 53 review, D2). hub.log keeps them, with the
+        # address asked: requests' words lack it for a connection Spoolman dropped.
+        state.logger.error(f"Merge: failed to enumerate spools for filament {src_fid} from {list_url}: {e}")
         return jsonify({
             "success": False,
             "error": f"Could not list source spools: {_sentence(spoolman_api.refusal_words(str(e)))}{_MERGE_RETRY}",

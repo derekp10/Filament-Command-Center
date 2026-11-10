@@ -1668,8 +1668,8 @@ def api_identify_scan():
         # free, never unseating a spool filed there since the tile was drawn. A
         # blind scan of a slot's label sends nothing: an explicit slot, as
         # always. A single-slot box keeps its own slot-1 rule either way. The
-        # Type as the check above read it, trimmed (rb-6): a box the check takes
-        # is never Overwritten on a deposit for a stray space in its Type.
+        # Type as the check above read it, as the row holds it (untrimmed): a
+        # padded box was refused there and never gets here.
         shown_empty = ((request.json or {}).get('shown_empty') is True
                        and tgt_type == locations_db.DRYER_BOX_TYPE and max_slots > 1)
         slot_kw = {'picked_slot': slot} if shown_empty else {'target_slot': slot}

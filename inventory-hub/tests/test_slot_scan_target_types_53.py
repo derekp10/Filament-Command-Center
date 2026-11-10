@@ -193,11 +193,13 @@ def test_a_deposit_shown_empty_on_a_multi_slot_box_is_filled_only_while_free(cli
     _moved(r, mv, "BOX-1", "2", picked_slot="2")
 
 
-@pytest.mark.parametrize("type_, max_spools", [("Tool Head", "1"), ("Dryer Box", "1")],
-                         ids=["a head", "a single-slot box"])
+@pytest.mark.parametrize("type_, max_spools", [("Tool Head", "1"), ("Dryer Box", "1"), ("Printer", "2")],
+                         ids=["a head", "a single-slot box", "a multi-slot place that isn't a box"])
 def test_a_deposit_shown_empty_elsewhere_keeps_its_slot(client, type_, max_spools):
     """The control: only a MULTI-slot Dryer Box reads `shown_empty` (a single-slot
-    box keeps its own slot-1 rule)."""
+    box keeps its own slot-1 rule, and a place with more than one slot that isn't
+    a Dryer Box keeps its explicit slot: the Type half of the rule, which no other
+    case here would miss)."""
     r, mv = _scan(client, [_row(type_, "PLACE-1", max_spools)], "LOC:PLACE-1:SLOT:1",
                   spool_id=42, shown_empty=True)
     _moved(r, mv, "PLACE-1", "1", target_slot="1")

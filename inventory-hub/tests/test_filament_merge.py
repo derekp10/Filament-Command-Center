@@ -38,6 +38,7 @@ archived), then calls `update_spool_or_raise` per spool, then `delete_filament`.
 """
 from __future__ import annotations
 
+import http.client
 import re
 from urllib.parse import parse_qs, urlsplit
 
@@ -603,7 +604,12 @@ class TestMergeAgainstSpoolman:
             "/api/v1/spool?filament.id=7&allow_archived=true (Caused by NewConnectionError("
             "'<urllib3.connection.HTTPConnection object>: Failed to establish a new connection'))"),
          "FCC couldn't reach Spoolman."),
-    ], ids=["timeout", "down"])
+        # A connection Spoolman (or a proxy) dropped: requests' words name no host, so
+        # the line names the address it asked (final verification, v2).
+        (requests.exceptions.ConnectionError(
+            ("Connection aborted.", http.client.RemoteDisconnected("Remote end closed connection without response"))),
+         "Spoolman dropped the connection before answering."),
+    ], ids=["timeout", "down", "dropped"])
     def test_a_list_read_spoolman_didnt_answer_says_so_in_words(self, client, raised, words):
         fake = _stocked()
         fake.canned[("GET", LIST_PATH)] = raised
