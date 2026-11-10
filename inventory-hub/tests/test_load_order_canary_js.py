@@ -35,6 +35,9 @@ What it catches: a script that throws while loading; a load-time read (window.X,
 a bare X, typeof X) of a name a later script defines, in a script's top-level
 code or anything that code calls; a load-time window.X read of a name that is
 only a top-level const / let / class (never on window, so always undefined); a
+script-scope alias of a later script's name (`const { X } = window;` or
+`const X = window.X;` in a script that loads before X's: the script declares X
+itself, and its alias stays undefined for good); a
 file under static/js that the page doesn't load, or loads twice, and a page
 script missing from disk (a module split that forgets scripts.html); and
 template constructs it can't model (a <script> inside {% if %} / {% for %},
@@ -48,6 +51,11 @@ What it can't see:
   - reads inside handlers, timers and fetch callbacks: those run at call time,
     after every script has loaded, which is exactly where this canary asks a
     read to move;
+  - a load-time use of a top-level `var X = window.X;` alias of a later
+    script's name. A top-level var IS the window property, so the later
+    script's assignment reaches it and a use at call time works; only a use
+    while loading gets undefined, and the alias's own read counts as the
+    script reading its own name;
   - an `'X' in window` / hasOwnProperty / getOwnPropertyDescriptor check of a
     name pass 2 planted: the accessor is there, so the check says "present"
     before the defining script has run. The check itself records nothing; a
@@ -312,6 +320,12 @@ def _index(scripts: list, name: str) -> int:
         if s["name"] == name:
             return i
     raise AssertionError(f"the page has no script named {name!r} any more: point this proof at one it loads")
+
+
+def _pinned(name: str, today: str) -> str:
+    """What a proof that names today's home of an FCC name says when it fails."""
+    return (f"This proof names where {name} is defined today ({today}). If a module split moved it, point the "
+            f"proof at the file that defines it now (or, if nothing does, at another name a later script defines).")
 
 
 def with_fake(scripts: list, code: str, name: str, *, before: str = None, after: str = None) -> list:
@@ -725,18 +739,17 @@ async function pass1() {
 }
 
 // Pass 2: every defined name planted on window, each read charged to the
-// script running when it happens (with the line, for any read but the
-// definer's own).
+// script running when it happens, with the line it was read at.
 async function pass2(definers) {
   const env = freshContext();
   const errors = [];
   const reads = [];
-  for (const [name, definer] of definers) {
+  for (const [name] of definers) {
     if (Object.prototype.hasOwnProperty.call(env.sandbox, name)) continue;
     Object.defineProperty(env.sandbox, name, {
       configurable: true, enumerable: false,
       get() {
-        if (current >= 0) reads.push([name, current, current === definer ? '' : pageFrame(framesOf(new Error().stack))]);
+        if (current >= 0) reads.push([name, current, pageFrame(framesOf(new Error().stack))]);
         return undefined;
       },
       set(value) { Object.defineProperty(env.sandbox, name, { value, writable: true, configurable: true, enumerable: true }); },
@@ -757,7 +770,18 @@ async function pass2(definers) {
   for (const [name, reader, at] of two.reads) {
     let definer = one.definers.get(name);
     let lexical = one.lexical.has(name);
-    if (reader === definer) { selfReads += 1; continue; }
+    let alias = false;
+    if (reader === definer) {
+      // A script's own read of a name it declares as a top-level const / let
+      // is a window.X read (its bare reads hit its own binding): an alias
+      // such as `const { X } = window;`. If a later script sets window.X, the
+      // alias was taken before it did, and stays undefined: an early read.
+      const setter = lexical ? one.onWindowLater.get(name) : undefined;
+      if (setter === undefined || reader >= setter) { selfReads += 1; continue; }
+      definer = setter;
+      lexical = false;
+      alias = true;
+    }
     // Past its definer, a planted name is read only off window, and only one
     // that is a top-level const / let / class there is still planted. If a
     // later script sets it on window, the read is early against that script.
@@ -773,7 +797,7 @@ async function pass2(definers) {
     const key = reader + ' ' + name;
     if (seen.has(key)) continue;
     seen.add(key);
-    const read = { reader: named(reader), name, definer: named(definer), lexical, at };
+    const read = { reader: named(reader), name, definer: named(definer), lexical, alias, at };
     (reader < definer ? early : late).push(read);
   }
   const definers = {};
@@ -841,6 +865,10 @@ def early_read_problems(result: dict, allowed: dict) -> list:
             continue
         text = (f"  - {r['reader']} reads {r['name']} while it loads{_at(r)}, but {r['name']} is defined "
                 f"later, by {r['definer']}.")
+        if r.get("alias"):
+            text += (f" ({r['reader']} declares {r['name']} itself, as a top-level const / let taken from "
+                     f"window.{r['name']}: that alias stays undefined for good. Read window.{r['name']} where it "
+                     f"is used instead, or load {r['definer']} earlier.)")
         if r["lexical"]:
             text += (f" (If that read is window.{r['name']}, loading earlier won't help: {r['name']} is a "
                      f"top-level const / let / class there, never a window property. Read it bare, or have "
@@ -1093,6 +1121,42 @@ def test_a_window_read_before_a_later_script_puts_the_const_on_window_is_early(p
     result = run_page(page, load_dir, "fake-window-lexical-set-later")
     assert _early(result) == {(reader, "state", setter)}, result["early_reads"]
     assert result["late_reads"] == [] and result["errors"] == [], result
+
+
+def test_a_script_scope_alias_of_a_later_scripts_name_is_reported(page_scripts, load_dir):
+    """`const { openSlotPicker } = window;` at the top of a script that loads
+    before slot_picker.js leaves the alias undefined for good: the script
+    declares the name itself, and read window.openSlotPicker before
+    slot_picker.js put it there. Its own read is early against slot_picker.js,
+    not a self-read (review finding r2-2)."""
+    fake = "FAKE script before slot_picker.js aliasing openSlotPicker at script scope"
+    result = run_page(with_fake(page_scripts, "const { openSlotPicker } = window;", fake,
+                                before="js/modules/slot_picker.js"), load_dir, "fake-alias")
+    assert _early(result) == {(fake, "openSlotPicker", "js/modules/slot_picker.js")}, (
+        _pinned("openSlotPicker", "js/modules/slot_picker.js"), result["early_reads"])
+    assert result["early_reads"][0]["at"].startswith(fake + ":1:"), result["early_reads"]
+    problems = early_read_problems(result, ALLOWED_EARLY_READS)
+    assert len(problems) == 1 and "declares openSlotPicker itself" in problems[0], problems
+    assert result["errors"] == [] and result["late_reads"] == [], result
+
+
+def test_an_alias_in_a_real_module_is_reported(page_scripts, load_dir):
+    """The finding's own shape, on a copy of inv_cmd.js (which loads before
+    slot_picker.js): a script-scope `const { openSlotPicker } = window;` with
+    its uses made bare. In a browser a Dryer Box or Printer-row scan would skip
+    the slot picker for good, and its open would throw."""
+    module, provider = "js/modules/inv_cmd.js", "js/modules/slot_picker.js"
+    src = (STATIC / module).read_text(encoding="utf-8")
+    assert "window.openSlotPicker" in src and _index(page_scripts, module) < _index(page_scripts, provider), (
+        f"{module} no longer reads window.openSlotPicker, or no longer loads before {provider}: point this proof "
+        f"at a module that reads a later script's window name.")
+    copy = load_dir / "alias_inv_cmd.js"
+    copy.write_text("const { openSlotPicker } = window;\n" + src.replace("window.openSlotPicker", "openSlotPicker"),
+                    encoding="utf-8")
+    page = [dict(s, file=str(copy)) if s["name"] == module else s for s in page_scripts]
+    result = run_page(page, load_dir, "alias-inv-cmd")
+    assert _early(result) == {(module, "openSlotPicker", provider)}, result["early_reads"]
+    assert result["early_reads"][0]["at"].startswith(module + ":1:"), result["early_reads"]
 
 
 def test_a_stub_copy_of_a_page_name_is_reported(page_scripts, load_dir):
