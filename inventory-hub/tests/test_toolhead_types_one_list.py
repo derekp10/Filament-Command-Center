@@ -20,7 +20,7 @@ window.isToolheadType(type) and window.isHeadOrPrinterType(type), in the
      locations_db.PRINTER_ROW_TYPE;
   2. no other quoted copy of a toolhead Type: a string or template literal that
      IS one, in any case or spacing, in static/js or in a template's inline
-     <script>;
+     JavaScript <script>;
   3. no test of a Type for a head Type's words ("tool", "mmu", "direct load"),
      and nothing kept for one, in the same scripts (the marked block too):
        - any regex literal holding a word, however it is used: tested in place
@@ -48,7 +48,10 @@ no reason doesn't count.
 
 Comments are skipped (the scanners read JavaScript through a small lexer that
 knows strings, templates, regex literals and comments), and so are the vendor
-bundles (*.min.js), which aren't FCC's code.
+bundles (*.min.js), which aren't FCC's code, and a template's <script> whose own
+text a browser doesn't run as JavaScript: one with a src, or a type that is
+neither a JavaScript MIME type nor module (a JSON or template block). A type is
+read however it is written (quoted either way or bare, in any case).
 
 What the rules don't see: a Type built from pieces none of which is a head Type
 or a word ('No ' + 'MMU Direct Load'), or spelled another way ('Tool-Head'); a
@@ -65,6 +68,7 @@ import bisect
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -356,14 +360,47 @@ def substring_tests_of_a_type(name: str, text: str, first_line: int = 1) -> list
 
 
 _SCRIPT = re.compile(r"<script\b([^>]*)>(.*?)</script\s*>", re.IGNORECASE | re.DOTALL)
-# A <script type="..."> that isn't JavaScript (a JSON or template block).
-_NOT_JS = re.compile(r"""(?:^|\s)type\s*=\s*["']?(?!text/javascript|module|application/javascript)""",
-                     re.IGNORECASE)
+# One attribute of a tag: its name, then its value in double quotes, in single
+# quotes or bare (HTML's three forms), or no value at all.
+_ATTRIBUTE = re.compile(r"""([^\s"'=<>/]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?""")
+# The <script> types whose own text a browser runs as JavaScript: the HTML
+# standard's JavaScript MIME types, and module. No type, or an empty one, is
+# JavaScript too. A type is compared in lower case and by the part before any
+# ';' (text/javascript; charset=utf-8 is read: its text is JavaScript). Any
+# other type (application/json, text/template, importmap) is a block of data a
+# browser never runs as JavaScript, so its text isn't read.
+_JS_SCRIPT_TYPES = frozenset({
+    "", "module", "application/ecmascript", "application/javascript", "application/x-ecmascript",
+    "application/x-javascript", "text/ecmascript", "text/javascript", "text/javascript1.0",
+    "text/javascript1.1", "text/javascript1.2", "text/javascript1.3", "text/javascript1.4",
+    "text/javascript1.5", "text/jscript", "text/livescript", "text/x-ecmascript",
+    "text/x-javascript"})
+
+
+def _tag_attributes(raw: str) -> dict:
+    """A tag's attributes, {name in lower case: value, or None when it has none}. A
+    name given twice keeps its first value, as a browser does."""
+    attrs: dict = {}
+    for m in _ATTRIBUTE.finditer(raw):
+        value = next((v for v in m.group(2, 3, 4) if v is not None), None)
+        attrs.setdefault(m.group(1).lower(), value)
+    return attrs
+
+
+def _runs_its_text_as_javascript(attrs: dict) -> bool:
+    """Whether a browser runs an inline <script>'s own text as JavaScript: never
+    with a src (it runs that file), else with no type or a JavaScript one."""
+    if "src" in attrs:
+        return False
+    kind = attrs.get("type") or ""
+    return kind.split(";", 1)[0].strip().lower() in _JS_SCRIPT_TYPES
 
 
 def frontend_sources():
     """(name, text, first line) of every page script: static/js/**/*.js (not the
-    *.min.js vendor bundles) and every inline <script> body in templates/**/*.html."""
+    *.min.js vendor bundles) and, in templates/**/*.html, the text of every inline
+    <script> a browser runs as JavaScript (no src; no type, a JavaScript type, or
+    module)."""
     for path in sorted(JS_ROOT.rglob("*.js")):
         if path.name.endswith(".min.js"):
             continue
@@ -371,8 +408,7 @@ def frontend_sources():
     for path in sorted(TEMPLATES.rglob("*.html")):
         text = path.read_text(encoding="utf-8")
         for m in _SCRIPT.finditer(text):
-            attrs = m.group(1)
-            if re.search(r"\bsrc\s*=", attrs, re.IGNORECASE) or _NOT_JS.search(attrs):
+            if not _runs_its_text_as_javascript(_tag_attributes(m.group(1))):
                 continue
             yield (path.relative_to(HUB).as_posix(), m.group(2),
                    text.count("\n", 0, m.start(2)) + 1)
@@ -600,6 +636,54 @@ def test_a_literal_inside_a_template_expression_is_still_read():
 def test_an_inline_script_reports_the_template_line():
     assert copies_of_the_list("templates/x.html", "\n\nif (t === 'MMU Slot') go();\n", first_line=40) \
         == ["templates/x.html:42: if (t === 'MMU Slot') go();"]
+
+
+def _page_sources(tmp_path, monkeypatch, html: str) -> list:
+    """frontend_sources() over a tree holding one template, templates/page.html."""
+    (tmp_path / "static" / "js").mkdir(parents=True)
+    (tmp_path / "templates").mkdir()
+    (tmp_path / "templates" / "page.html").write_text(html, encoding="utf-8")
+    here = sys.modules[__name__]
+    monkeypatch.setattr(here, "HUB", tmp_path)
+    monkeypatch.setattr(here, "JS_ROOT", tmp_path / "static" / "js")
+    monkeypatch.setattr(here, "TEMPLATES", tmp_path / "templates")
+    return list(frontend_sources())
+
+
+def _page_hits(sources) -> list:
+    return [h for name, text, first in sources
+            for h in copies_of_the_list(name, text, first) + substring_tests_of_a_type(name, text, first)]
+
+
+@pytest.mark.parametrize("tag", [
+    '<script type="text/javascript">', "<script type='application/javascript'>",
+    "<script type=text/javascript>", '<script defer TYPE="Module">', '<script type="">',
+    '<script type="text/javascript; charset=utf-8">', '<script data-src="boot.js">',
+], ids=["double-quoted", "single-quoted", "unquoted", "module-any-case", "empty", "parameters",
+        "data-src"])
+def test_an_inline_script_a_browser_runs_is_scanned(tmp_path, monkeypatch, tag):
+    """A <script> whose own text a browser runs as JavaScript is read, however its
+    type is written (the review of Group 53, r2-5: any quoted type was skipped)."""
+    page = f"<div>\n{tag}\nif (row.Type === 'Tool Head') go();\nif (t.includes('mmu')) go();\n</script>\n"
+    assert _page_hits(_page_sources(tmp_path, monkeypatch, page)) == [
+        "templates/page.html:3: if (row.Type === 'Tool Head') go();",
+        "templates/page.html:4: if (t.includes('mmu')) go();"]
+
+
+@pytest.mark.parametrize("tag", [
+    '<script type="application/json">', "<script type='text/template'>",
+    "<script type=text/x-template>", '<script type="importmap">', '<script src="/static/js/app.js">',
+    "<script SRC='x.js' type=\"module\">",
+], ids=["json", "template", "x-template-unquoted", "importmap", "src", "src-any-case"])
+def test_a_script_a_browser_does_not_run_as_javascript_is_not_read(tmp_path, monkeypatch, tag):
+    """A data block or a template isn't JavaScript (read as JavaScript, its
+    apostrophe would lose the lexer), and a script with a src runs that file, not
+    its own text. The plain <script> after it is still read."""
+    page = (f"{tag}\n<option>Tool Head</option> it's {{\"type\": \"MMU Slot\"}}\n</script>\n"
+            "<script>\nconst ok = 1;\n</script>\n")
+    sources = _page_sources(tmp_path, monkeypatch, page)
+    assert [(name, first) for name, _text, first in sources] == [("templates/page.html", 4)]
+    assert _page_hits(sources) == []
 
 
 def test_a_source_the_lexer_cannot_read_fails_loudly():
