@@ -9,12 +9,31 @@ Covers POST /api/filament/<src>/merge_into/<dst>:
   - A spool list Spoolman refused, or one that isn't a list of spools, refuses
     the merge before anything is written (Group 53.2): it used to read as "no
     spools" and go straight on to delete the source.
+  - Group 53 review (D1): every entry must be a spool record, a dict whose `id`
+    is an int (not a bool) with a `filament` object whose `id` is an int: an
+    entry with no id was skipped, and the source deleted. The list is read by
+    `filament.id` (the old `filament_id` alias is deprecated), and a spool the
+    list holds of another filament refuses the merge: Spoolman ignores a query
+    parameter it doesn't know and answers every spool, which the merge would
+    all have re-parented.
+  - Group 53 review (D3b): a filament Spoolman has no record of is "not found"
+    (404), and one it couldn't send (a 5xx, no answer) is "couldn't read"
+    (502); both read nothing more and write nothing. get_filament handed back
+    Spoolman's 404 or 5xx body as if it were the filament.
+  - Group 53 review (D2): every answer is in words, never Spoolman's address or
+    raw JSON (refusal_words), "try again in a moment" only where a retry can
+    help, and the Activity Log lines escape the names and Spoolman's text.
 
-Mocked Spoolman — no real HTTP. The endpoint enumerates children via direct
-`requests.get` (not `get_spools_for_filament`, so it can include archived),
-then calls `update_spool_or_raise` per spool, then `delete_filament`.
+TestMergeFilament stubs the Spoolman helpers. TestMergeAgainstSpoolman runs the
+real route, the real read and write helpers and the real requests calls they
+make, against the repo's Spoolman fake. The endpoint enumerates children via
+direct `requests.get` (not `get_spools_for_filament`, so it can include
+archived), then calls `update_spool_or_raise` per spool, then `delete_filament`.
 """
 from __future__ import annotations
+
+import re
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 import requests
@@ -27,6 +46,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from app import app as flask_app
 import spoolman_api
 import state
+from spoolman_extra_fake import SpoolmanHTTPFake, _Resp
 
 
 @pytest.fixture()
@@ -55,6 +75,23 @@ def _answer(status=200, body=None, text='', json_error=None):
     return m
 
 
+def _answered(*records):
+    """spoolman_api.get_filament_answer's answers for these records, in order
+    (Group 53 review, D3b: the route reads its two filaments through it)."""
+    return [(rec, True) for rec in records]
+
+
+def _no_such_filament(fid):
+    """get_filament_answer's answer for a filament Spoolman has no record of:
+    its 404 body, a dict with no id."""
+    return ({'message': f'No filament with ID {fid} found.'}, True)
+
+
+def _spools_of(fid, *sids):
+    """Spool records as Spoolman's list answers them: each names its filament."""
+    return [{'id': sid, 'filament': {'id': fid}} for sid in sids]
+
+
 class TestMergeFilament:
     def test_rejects_same_source_and_target(self, client):
         r = client.post('/api/filament/7/merge_into/7')
@@ -64,7 +101,10 @@ class TestMergeFilament:
         assert 'differ' in body['error'].lower()
 
     def test_rejects_missing_source(self, client):
-        with patch('spoolman_api.get_filament', side_effect=[None]):
+        # Group 53 review (D3b): "missing" is Spoolman's own answer for it, its
+        # 404 body. This stubbed get_filament to None, which the real read never
+        # answers for a 404 (it answered the body, read as found).
+        with patch('spoolman_api.get_filament_answer', side_effect=[_no_such_filament(7)]):
             r = client.post('/api/filament/7/merge_into/9')
         assert r.status_code == 404
         body = r.get_json()
@@ -72,8 +112,9 @@ class TestMergeFilament:
         assert '#7' in body['error']
 
     def test_rejects_missing_target(self, client):
-        # Source resolves, target returns None.
-        with patch('spoolman_api.get_filament', side_effect=[{'id': 7, 'name': 'src'}, None]):
+        # Source resolves, Spoolman has no record of the target.
+        with patch('spoolman_api.get_filament_answer',
+                   side_effect=_answered({'id': 7, 'name': 'src'}) + [_no_such_filament(9)]):
             r = client.post('/api/filament/7/merge_into/9')
         assert r.status_code == 404
         body = r.get_json()
@@ -83,9 +124,9 @@ class TestMergeFilament:
     def test_happy_path_reparents_and_deletes_source(self, client):
         src = {'id': 7, 'name': 'PLA Old'}
         dst = {'id': 9, 'name': 'PLA New'}
-        children = [{'id': 101}, {'id': 102}, {'id': 103}]
+        children = _spools_of(7, 101, 102, 103)
 
-        with patch('spoolman_api.get_filament', side_effect=[src, dst]), \
+        with patch('spoolman_api.get_filament_answer', side_effect=_answered(src, dst)), \
              patch('app.requests.get', return_value=_ok_json(children)), \
              patch('spoolman_api.update_spool_or_raise', return_value={'id': 'ok'}) as mock_upd, \
              patch('spoolman_api.delete_filament', return_value=True) as mock_del:
@@ -107,14 +148,14 @@ class TestMergeFilament:
     def test_partial_reparent_failure_aborts_without_deleting_source(self, client):
         src = {'id': 7, 'name': 'src'}
         dst = {'id': 9, 'name': 'dst'}
-        children = [{'id': 101}, {'id': 102}]
+        children = _spools_of(7, 101, 102)
 
         def upd_side_effect(sid, data):
             if sid == 102:
                 raise spoolman_api.SpoolmanRejection("HTTP 409: cannot reassign")
             return {'id': sid}
 
-        with patch('spoolman_api.get_filament', side_effect=[src, dst]), \
+        with patch('spoolman_api.get_filament_answer', side_effect=_answered(src, dst)), \
              patch('app.requests.get', return_value=_ok_json(children)), \
              patch('spoolman_api.update_spool_or_raise', side_effect=upd_side_effect), \
              patch('spoolman_api.delete_filament') as mock_del:
@@ -133,10 +174,10 @@ class TestMergeFilament:
     def test_source_delete_failure_after_full_reparent_is_reported(self, client):
         src = {'id': 7, 'name': 'src'}
         dst = {'id': 9, 'name': 'dst'}
-        children = [{'id': 101}]
+        children = _spools_of(7, 101)
 
         spoolman_api.LAST_SPOOLMAN_ERROR = "HTTP 500: db locked"
-        with patch('spoolman_api.get_filament', side_effect=[src, dst]), \
+        with patch('spoolman_api.get_filament_answer', side_effect=_answered(src, dst)), \
              patch('app.requests.get', return_value=_ok_json(children)), \
              patch('spoolman_api.update_spool_or_raise', return_value={'id': 101}), \
              patch('spoolman_api.delete_filament', return_value=False):
@@ -153,7 +194,7 @@ class TestMergeFilament:
         # a rename + delete, but the endpoint should still succeed cleanly.
         src = {'id': 7, 'name': 'src'}
         dst = {'id': 9, 'name': 'dst'}
-        with patch('spoolman_api.get_filament', side_effect=[src, dst]), \
+        with patch('spoolman_api.get_filament_answer', side_effect=_answered(src, dst)), \
              patch('app.requests.get', return_value=_ok_json([])), \
              patch('spoolman_api.update_spool_or_raise') as mock_upd, \
              patch('spoolman_api.delete_filament', return_value=True) as mock_del:
@@ -176,7 +217,7 @@ class TestMergeFilament:
     def _merge_with_list_answer(self, client, answer):
         src = {'id': 7, 'name': 'PLA Old'}
         dst = {'id': 9, 'name': 'PLA New'}
-        with patch('spoolman_api.get_filament', side_effect=[src, dst]), \
+        with patch('spoolman_api.get_filament_answer', side_effect=_answered(src, dst)), \
              patch('app.requests.get', return_value=answer), \
              patch('spoolman_api.update_spool_or_raise', return_value={'id': 'ok'}) as mock_upd, \
              patch('spoolman_api.delete_filament', return_value=True) as mock_del, \
@@ -189,8 +230,11 @@ class TestMergeFilament:
         return [c.args[0] for c in mock_log.call_args_list
                 if c.args and 'enumerate spools for filament 7' in str(c.args[0])]
 
-    @pytest.mark.parametrize('status', [404, 500, 503])
+    @pytest.mark.parametrize('status', [404, 422, 500, 503])
     def test_a_refused_spool_list_refuses_the_merge_before_any_write(self, client, status):
+        # Group 53 review (D2): Spoolman's refusal in its words (refusal_words),
+        # "try again in a moment" only for a 5xx (a 4xx comes back the same).
+        # It said "Spoolman answered HTTP 404. ... try again in a moment." for all.
         r, mock_upd, mock_del, mock_log = self._merge_with_list_answer(
             client, _answer(status, body={'message': 'database is locked'},
                             text='{"message": "database is locked"}'))
@@ -199,8 +243,10 @@ class TestMergeFilament:
         body = r.get_json()
         assert body['success'] is False
         assert body['error'].startswith('Could not list source spools: ')
-        assert f'Spoolman answered HTTP {status}' in body['error']
+        assert 'Spoolman refused it: database is locked.' in body['error']
         assert 'Nothing was merged' in body['error']
+        assert ('try again in a moment' in body['error']) is (status >= 500)
+        assert '{' not in body['error'] and 'HTTP' not in body['error']
         mock_upd.assert_not_called()
         mock_del.assert_not_called()
         logged = self._logged_for_filament_7(mock_log)
@@ -213,6 +259,21 @@ class TestMergeFilament:
         'spools',                       # a JSON string
         [101, 102],                     # ids, not spool records
         [{'id': 101}, 'x'],             # #101 re-parented, then a crash
+        # Group 53 review (D1): an entry with no int id was skipped, then the
+        # source deleted ("0 spools re-parented; source deleted").
+        [{'name': 'x'}],
+        [{'detail': 'Not authenticated'}],
+        [{'id': None}],
+        [{'id': True}],                 # a bool is not an id
+        [{'id': '101'}],
+        [{'id': 101}, {}],              # #101 re-parented, {} skipped, source deleted
+        [{'id': 101, 'filament': {'id': 7}}, {}],
+        [{'id': 101, 'filament': {'id': 7}}, {'id': None, 'filament': {'id': 7}}],
+        # ... and every spool names its filament, as Spoolman's records do
+        [{'id': 101}],
+        [{'id': 101, 'filament': None}],
+        [{'id': 101, 'filament': {'name': 'PLA Old'}}],
+        [{'id': 101, 'filament': {'id': True}}],
     ])
     def test_a_spool_list_that_isnt_a_list_of_spools_refuses_the_merge_before_any_write(
             self, client, listed):
@@ -242,3 +303,298 @@ class TestMergeFilament:
         mock_upd.assert_not_called()
         mock_del.assert_not_called()
         assert self._logged_for_filament_7(mock_log)
+
+
+# --- Group 53 review: the real route against the repo's Spoolman fake ----------
+
+SM = "http://spoolman.test:7913"
+LIST_PATH = "/api/v1/spool"
+UNREAD_LIST = ("Could not list source spools: Spoolman's answer couldn't be read. "
+               "Nothing was merged; try again in a moment.")
+
+
+class _Spoolman(SpoolmanHTTPFake):
+    """The repo's Spoolman fake, plus what Merge Filament also reaches: a spool
+    list filtered as Spoolman filters it, a DELETE, and a canned answer, or an
+    error raised as requests raises one when Spoolman doesn't answer, for one
+    request (`canned[(verb, path)]`).
+
+    `honours` names the list parameters this Spoolman filters by. Spoolman 0.27
+    honours `filament.id` and its deprecated alias `filament_id`; a release that
+    dropped the alias would ignore it, as Spoolman ignores any parameter it
+    doesn't know, and answer every spool. A PATCH of `filament_id` moves the
+    spool's nested filament, which is how Spoolman's records name it, and a
+    filament that still has spools isn't deleted (the fake's own refusal)."""
+
+    def __init__(self, honours=("filament.id", "filament_id")):
+        super().__init__()
+        self.honours = tuple(honours)
+        self.get_urls = []
+        self.deletes = []
+        self.canned = {}
+
+    def _canned(self, verb, path):
+        answer = self.canned.get((verb, path))
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+    def get(self, url, timeout=None, **kw):
+        self.get_urls.append(str(url))
+        parts = urlsplit(str(url))
+        path = parts.path.rstrip("/")
+        canned = self._canned("GET", path)
+        if canned is not None:
+            return canned
+        r = super().get(url, timeout=timeout, **kw)
+        if path == LIST_PATH and r.ok:
+            query = parse_qs(parts.query)
+            for name in self.honours:
+                if name in query:
+                    fid = int(query[name][0])
+                    return _Resp(200, [s for s in r.json() if (s.get("filament") or {}).get("id") == fid])
+        return r
+
+    def patch(self, url, json=None, timeout=None, **kw):  # noqa: A002 (requests' kwarg)
+        path = urlsplit(str(url)).path.rstrip("/")
+        canned = self._canned("PATCH", path)
+        if canned is not None:
+            m = re.fullmatch(r"/api/v1/(spool|filament|vendor)/(\d+)", path)
+            self.patches.append((m.group(1), int(m.group(2)), json))
+            return canned
+        r = super().patch(url, json=json, timeout=timeout, **kw)
+        m = re.fullmatch(r"/api/v1/spool/(\d+)", path)
+        if r.ok and m and "filament_id" in (json or {}):
+            rec = self.records["spool"][int(m.group(1))]
+            rec["filament"] = {"id": rec.pop("filament_id")}
+        return r
+
+    def delete(self, url, timeout=None, **kw):
+        path = urlsplit(str(url)).path.rstrip("/")
+        self.deletes.append(path)
+        canned = self._canned("DELETE", path)
+        if canned is not None:
+            return canned
+        m = re.fullmatch(r"/api/v1/(spool|filament)/(\d+)", path)
+        if not m or int(m.group(2)) not in self.records[m.group(1)]:
+            return _Resp(404, {"message": "No such record (test)."})
+        entity, eid = m.group(1), int(m.group(2))
+        if entity == "filament" and any(self.filament_of(s) == eid for s in self.records["spool"]):
+            return _Resp(400, {"message": f"Filament {eid} still has spools (test)."})
+        del self.records[entity][eid]
+        return _Resp(200, {})
+
+    def filament_of(self, sid):
+        return self.records["spool"][sid]["filament"]["id"]
+
+    def list_reads(self):
+        return [u for u in self.get_urls if urlsplit(u).path.rstrip("/") == LIST_PATH]
+
+
+def _stocked(**kw):
+    """Filaments #7 (the source) and #9 (the target); #7 has spools #101 and #102
+    (archived), #9 has #200, and filament #12 has #300."""
+    fake = _Spoolman(**kw)
+    fake.add("filament", 7, name="PLA Old", material="PLA")
+    fake.add("filament", 9, name="PLA New", material="PLA")
+    fake.add("spool", 101, filament={"id": 7}, location="SHELF")
+    fake.add("spool", 102, filament={"id": 7}, location="SHELF", archived=True)
+    fake.add("spool", 200, filament={"id": 9}, location="SHELF")
+    fake.add("spool", 300, filament={"id": 12}, location="BIN")
+    return fake
+
+
+def _merge(client, fake, src=7, dst=9):
+    """POST the merge with every Spoolman request on `fake`. Answers (response,
+    Activity Log lines as (msg, level), hub.log error lines)."""
+    logged = []
+    with patch.object(spoolman_api.config_loader, "get_api_urls", return_value=(SM, "http://fb.test")), \
+         patch.object(spoolman_api.requests, "get", side_effect=fake.get), \
+         patch.object(spoolman_api.requests, "patch", side_effect=fake.patch), \
+         patch.object(spoolman_api.requests, "delete", side_effect=fake.delete), \
+         patch.object(state, "add_log_entry",
+                      side_effect=lambda msg, *a, **k: logged.append((msg, a[0] if a else None))), \
+         patch.object(state.logger, "error") as hub_errors:
+        r = client.post(f"/api/filament/{src}/merge_into/{dst}")
+    return r, logged, [str(c.args[0]) for c in hub_errors.call_args_list if c.args]
+
+
+class TestMergeAgainstSpoolman:
+    def test_a_merge_moves_the_sources_spools_then_deletes_it(self, client):
+        fake = _stocked()
+        r, logged, _errors = _merge(client, fake)
+
+        assert r.status_code == 200, r.get_json()
+        assert r.get_json()["reparented_spool_ids"] == [101, 102]
+        assert [fake.filament_of(s) for s in (101, 102, 200, 300)] == [9, 9, 9, 12]
+        assert fake.records["spool"][102]["archived"] is True
+        assert fake.deletes == ["/api/v1/filament/7"] and 7 not in fake.records["filament"]
+        # D1 (a): by `filament.id`, archived spools too, as stock_report reads it.
+        assert fake.list_reads() == [f"{SM}/api/v1/spool?filament.id=7&allow_archived=true"]
+        assert [level for _msg, level in logged] == ["INFO"]
+
+    def test_a_spoolman_without_the_old_filter_name_still_merges_only_the_sources_spools(self, client):
+        # Spoolman deprecated `filament_id`. A release without it ignores it and
+        # answers every spool, and the merge re-parented every spool of every
+        # filament onto the target.
+        fake = _stocked(honours=("filament.id",))
+        r, _logged, _errors = _merge(client, fake)
+
+        assert r.status_code == 200, r.get_json()
+        assert r.get_json()["reparented_spool_ids"] == [101, 102]
+        assert [(entity, sid) for entity, sid, _body in fake.patches] == [("spool", 101), ("spool", 102)]
+        assert [fake.filament_of(s) for s in (101, 102, 200, 300)] == [9, 9, 9, 12]
+
+    def test_a_list_holding_other_filaments_spools_refuses_the_merge_before_any_write(self, client):
+        fake = _stocked(honours=())    # a filter it doesn't know: every spool
+        r, logged, errors = _merge(client, fake)
+
+        assert r.status_code == 502
+        assert r.get_json() == {"success": False, "error": (
+            "Spoolman listed spool #200 under filament #7, but it belongs to filament #9 "
+            "(and 1 more spool of another filament). Nothing was merged.")}
+        assert fake.patches == [] and fake.deletes == [] and logged == []
+        assert [fake.filament_of(s) for s in (101, 102, 200, 300)] == [7, 7, 9, 12]
+        assert any("#200 (filament 9)" in e and "#300 (filament 12)" in e for e in errors), errors
+
+    def test_one_spool_of_another_filament_is_named(self, client):
+        fake = _stocked()
+        fake.canned[("GET", LIST_PATH)] = _Resp(200, [
+            {"id": 101, "filament": {"id": 7}}, {"id": 200, "filament": {"id": 9}}])
+        r, logged, _errors = _merge(client, fake)
+
+        assert r.status_code == 502
+        assert r.get_json()["error"] == ("Spoolman listed spool #200 under filament #7, but it belongs "
+                                         "to filament #9. Nothing was merged.")
+        assert fake.patches == [] and fake.deletes == [] and logged == []
+
+    @pytest.mark.parametrize("listed", [
+        [{"name": "x"}],
+        [{"id": None}],
+        [{"id": True, "filament": {"id": 7}}],
+        [{"id": 101, "filament": {"id": 7}}, {}],
+        [{"id": 101}],                                  # no filament: whose is it?
+    ])
+    def test_a_list_entry_that_isnt_a_spool_record_refuses_the_merge_before_any_write(self, client, listed):
+        fake = _stocked()
+        fake.canned[("GET", LIST_PATH)] = _Resp(200, listed)
+        r, logged, errors = _merge(client, fake)
+
+        assert r.status_code == 502
+        assert r.get_json() == {"success": False, "error": UNREAD_LIST}
+        assert fake.patches == [] and fake.deletes == [] and logged == []
+        assert any("filament 7" in e for e in errors), errors
+
+    # --- D3b: Spoolman's 404 body is "not found"; a 5xx or no answer is "couldn't read"
+
+    @pytest.mark.parametrize("missing, words", [
+        (7, "Source filament #7 not found."),
+        (9, "Target filament #9 not found."),
+    ])
+    def test_a_filament_spoolman_has_no_record_of_is_not_found_and_nothing_follows(self, client, missing, words):
+        fake = _stocked()
+        del fake.records["filament"][missing]     # its read answers 404 {"message": "No filament with ID …"}
+        r, logged, _errors = _merge(client, fake)
+
+        assert r.status_code == 404
+        assert r.get_json() == {"success": False, "error": words}
+        assert fake.list_reads() == [] and fake.patches == [] and fake.deletes == [] and logged == []
+
+    @pytest.mark.parametrize("which", [7, 9])
+    @pytest.mark.parametrize("answer", [
+        _Resp(500, {"message": "database is locked"}),
+        _Resp(503, {"message": "Service Unavailable"}),
+        requests.exceptions.ReadTimeout(
+            "HTTPConnectionPool(host='spoolman.test', port=7913): Read timed out. (read timeout=3)"),
+    ], ids=["500", "503", "no answer"])
+    def test_a_filament_spoolman_couldnt_send_is_couldnt_read_and_nothing_follows(self, client, which, answer):
+        fake = _stocked()
+        fake.canned[("GET", f"/api/v1/filament/{which}")] = answer
+        r, logged, errors = _merge(client, fake)
+
+        assert r.status_code == 502
+        assert r.get_json() == {"success": False, "error": (
+            f"Couldn't read filament #{which} from Spoolman, so nothing was merged. Try again in a moment.")}
+        assert fake.list_reads() == [] and fake.patches == [] and fake.deletes == [] and logged == []
+        assert any(f"filament {which}" in e for e in errors), errors
+
+    # --- D2: every answer in words; hub.log and the Activity Log keep the whole text
+
+    @pytest.mark.parametrize("raised, words", [
+        (requests.exceptions.ReadTimeout(
+            "HTTPConnectionPool(host='spoolman.test', port=7913): Read timed out. (read timeout=5)"),
+         "Spoolman didn't answer in time."),
+        (requests.exceptions.ConnectionError(
+            "HTTPConnectionPool(host='spoolman.test', port=7913): Max retries exceeded with url: "
+            "/api/v1/spool?filament.id=7&allow_archived=true (Caused by NewConnectionError("
+            "'<urllib3.connection.HTTPConnection object>: Failed to establish a new connection'))"),
+         "FCC couldn't reach Spoolman."),
+    ], ids=["timeout", "down"])
+    def test_a_list_read_spoolman_didnt_answer_says_so_in_words(self, client, raised, words):
+        fake = _stocked()
+        fake.canned[("GET", LIST_PATH)] = raised
+        r, logged, errors = _merge(client, fake)
+
+        assert r.status_code == 502
+        assert r.get_json() == {"success": False, "error": (
+            f"Could not list source spools: {words} Nothing was merged; try again in a moment.")}
+        assert fake.patches == [] and fake.deletes == [] and logged == []
+        assert any("spoolman.test" in e for e in errors), errors     # the address stays in hub.log
+
+    def test_a_list_read_spoolman_refused_says_its_words_and_no_retry(self, client):
+        fake = _stocked()
+        fake.canned[("GET", LIST_PATH)] = _Resp(422, {"detail": [
+            {"loc": ["query", "filament.id"], "msg": "value is not a valid integer", "type": "type_error.integer"}]})
+        r, logged, errors = _merge(client, fake)
+
+        assert r.status_code == 502
+        assert r.get_json()["error"] == ("Could not list source spools: Spoolman refused it: "
+                                         "value is not a valid integer. Nothing was merged.")
+        assert fake.patches == [] and fake.deletes == [] and logged == []
+        assert any("HTTP 422" in e for e in errors), errors
+
+    def test_a_refused_source_delete_is_said_in_words_and_logged_in_full(self, client):
+        fake = _stocked()
+        fake.canned[("DELETE", "/api/v1/filament/7")] = _Resp(500, {"message": "database is locked"})
+        r, logged, _errors = _merge(client, fake)
+
+        assert r.status_code == 502
+        body = r.get_json()
+        assert body["error"] == ("Spools re-parented, but source filament delete failed: "
+                                 "Spoolman refused it: database is locked.")
+        assert body["reparented_spool_ids"] == [101, 102]
+        [(line, level)] = logged
+        assert level == "ERROR" and 'HTTP 500: {"message": "database is locked"}' in line
+
+    def test_a_refused_reparent_is_said_in_words_and_logged_in_full(self, client):
+        fake = _stocked()
+        fake.canned[("PATCH", "/api/v1/spool/102")] = _Resp(400, {"message": "Unknown extra field 'colour'"})
+        r, logged, _errors = _merge(client, fake)
+
+        assert r.status_code == 502
+        body = r.get_json()
+        assert body["error"] == "Some spools could not be re-parented; source filament left in place."
+        assert body["reparented_spool_ids"] == [101]
+        assert body["spool_errors"] == [
+            {"spool_id": 102, "error": "Spoolman refused it: Unknown extra field 'colour'"}]
+        assert fake.deletes == [] and 7 in fake.records["filament"]
+        [(line, level)] = logged
+        assert level == "ERROR" and "HTTP 400" in line and "Unknown extra field 'colour'" in line
+
+    @pytest.mark.parametrize("outcome", ["merged", "reparent refused", "delete refused"])
+    def test_the_activity_log_lines_escape_the_names_and_spoolmans_text(self, client, outcome):
+        fake = _stocked()
+        fake.records["filament"][7]["name"] = "PLA <b>Old</b> & Co"
+        fake.records["filament"][9]["name"] = "PLA <i>New</i>"
+        if outcome == "reparent refused":
+            fake.canned[("PATCH", "/api/v1/spool/101")] = _Resp(400, {"message": "Unknown field <x>"})
+        elif outcome == "delete refused":
+            fake.canned[("DELETE", "/api/v1/filament/7")] = _Resp(500, {"message": "locked <y>"})
+        _r, logged, _errors = _merge(client, fake)
+
+        [(line, _level)] = logged
+        assert "PLA &lt;b&gt;Old&lt;/b&gt; &amp; Co" in line and "PLA &lt;i&gt;New&lt;/i&gt;" in line
+        assert "<b>" not in line and "<i>" not in line
+        if outcome != "merged":
+            assert "&lt;x&gt;" in line or "&lt;y&gt;" in line
+            assert "<x>" not in line and "<y>" not in line
