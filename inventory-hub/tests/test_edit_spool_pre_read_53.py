@@ -201,9 +201,9 @@ def test_a_5xx_body_never_writes_the_spool_unassigned_before_its_move(client, wi
 def test_a_record_of_another_spool_is_not_the_spool_and_nothing_is_written(client, wire, monkeypatch, form):
     """rd-2: the record is the spool only when its id is the one asked for.
     Spoolman (or a proxy or cache before it) answering 200 with Spool 58's record:
-    diffed against #58, the form's comment was written to #57, and the form's
-    Location (where #57 is) differed from #58's, so the edit was a move whose
-    first write filed #57 where #58 is."""
+    diffed against #58 (the id check dropped), the form's comment would be written
+    to #57, and the form's Location (where #57 is) would differ from #58's, so the
+    edit would be a move whose first write files #57 where #58 is."""
     fake = wire(_stocked())
     other = {"id": 58, "location": "BIN-9", "comment": "", "filament": {"id": 4}, "extra": {},
              "initial_weight": 1000.0, "used_weight": 900.0, "archived": False}

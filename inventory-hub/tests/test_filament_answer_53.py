@@ -360,8 +360,9 @@ def test_a_filament_spoolman_has_is_still_set(client, wire, logs):
 def test_a_record_of_another_filament_is_couldnt_read_and_nothing_is_written(client, wire, logs, op):
     """rd-2: the read is the filament only when its id is the one asked for.
     Spoolman (or a proxy before it) answering 200 with filament #6's record: read
-    as #5, a remove counted #5 "unchanged" (#6 has no Matte), and an add wrote
-    #6's attributes, plus Silk, over #5's own."""
+    as #5 (the id check dropped), a remove would count #5 "unchanged" (#6 has no
+    Matte), and an add would send #6's attributes, plus Silk, to be written over
+    #5's own."""
     fake = wire(_attrs_fake())
     fake.canned["/api/v1/filament/5"] = [_Resp(200, {
         "id": 6, "name": "PETG", "material": "PETG", "extra": {"filament_attributes": json.dumps(["Glow"])}})]
@@ -458,8 +459,8 @@ def test_a_filament_read_that_isnt_the_filament_writes_nothing_and_says_so(clien
 
 def test_a_filament_read_of_another_record_writes_nothing_and_says_so(client, wire, logs, monkeypatch):
     """rd-2: a 200 holding ANOTHER filament's record is no filament either. Read as
-    #7, its blank temps made the scan fill all four of #7's set temps with
-    prusament.com's."""
+    #7 (the id check dropped), its blank temps would make the scan fill all four
+    of #7's set temps with prusament.com's."""
     fake = wire(_prusament_fake())
     fake.canned["/api/v1/filament/7"] = [_Resp(200, {
         "id": 8, "name": "Other PLA", "material": "PLA",

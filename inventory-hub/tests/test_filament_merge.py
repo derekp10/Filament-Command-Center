@@ -563,9 +563,9 @@ class TestMergeAgainstSpoolman:
     def test_a_record_of_another_filament_is_couldnt_read_and_nothing_follows(self, client, which):
         """rd-2: a read is the filament only when its id is the one asked for.
         Spoolman (or a proxy or cache before it) answering 200 with filament #8's
-        record: read as the source, the merge re-parented #7's spools and deleted
-        #7 on #8's record; read as the target, it re-parented them onto a filament
-        it never read."""
+        record: read as the source (the id check dropped), the merge would
+        re-parent #7's spools and delete #7 on #8's record; read as the target, it
+        would re-parent them onto a filament it never read."""
         fake = _stocked()
         fake.canned[("GET", f"/api/v1/filament/{which}")] = _Resp(
             200, {"id": 8, "name": "PLA Other", "material": "PLA"})
