@@ -1750,7 +1750,8 @@ window.isSingleSlotBox = (row) => {
 // quoted copy of a head Type in the page's scripts, or a test of a Type for a
 // head Type's words (its rules 2 and 3). A row is a head when its Type, trimmed,
 // is exactly one of these, as most backend reads go (the move engine's one-spool
-// rule and locations_db.validate_slot_targets compare it untrimmed). Never a
+// rule, locations_db.validate_slot_targets and the slot-label scan's target check
+// compare it untrimmed). Never a
 // substring: a custom "Toolbox" or "MMU Buffer" is no head. Call the helpers
 // when the code runs; never copy the list or keep it from load. The block
 // defines window properties only (a top-level name here would be shared with

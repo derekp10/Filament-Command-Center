@@ -4,7 +4,9 @@ The backend decides "is this row a toolhead?" with one list,
 locations_db.TOOLHEAD_TYPES ('Tool Head', 'MMU Slot', 'No MMU Direct Load'), mostly
 read as `str(row.get('Type', '')).strip() in TOOLHEAD_TYPES`, exact and
 case-sensitive (the move engine's one-spool rule, logic._is_single_occupancy and
-_holds_one_spool, and locations_db.validate_slot_targets compare it untrimmed).
+_holds_one_spool, locations_db.validate_slot_targets and the slot-label scan's target
+check in routes_scan.py compare it untrimmed; that check reads the list itself since
+the Group 53 review, so no backend module keeps a copy).
 The page had 16 checks of its own: hand-written copies of that list (two of them
 lower-cased) and four substring tests ("tool" / "mmu" / "direct load"). They
 agreed, but a new head Type would have had to be added to every copy, and a
