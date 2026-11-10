@@ -42,7 +42,11 @@ zero-delay timers it queued (setTimeout / setInterval with no delay or one
 <= 0; an interval once; then up to two rounds of the ones they queue): while
 the parser waits on the network for a later script (FCC sends every response
 no-store) a browser runs them, so they count as that script's load. Longer
-timers, animation frames and idle callbacks never fire.
+timers, animation frames and idle callbacks never fire. A throw in a handler
+or a zero-delay timer is no load error (a browser would run it against the
+page it then has), so it goes to the run's diagnostics, and what it defined
+before it threw still counts; but every name it would set after the throw
+goes unjudged, so on the page the diagnostics must be empty.
 
 What it catches:
   - a script that throws while loading, a DOM error included (document.body
@@ -54,6 +58,9 @@ What it catches:
     no fix);
   - the same read of a name only a DOMContentLoaded or load handler defines (a
     provider moved into one: those run once every script has loaded);
+  - a DOMContentLoaded / load handler or a zero-delay timer on the page that
+    throws against the stub (most often a browser API the stub lacks), since
+    every name it would set after the throwing line would go unjudged;
   - a load-time window.X read of a name that is only a top-level const / let /
     class (never on window, so always undefined), a script's read of one it
     declares itself included;
@@ -91,10 +98,6 @@ What it can't see:
     one is no fix for an early read either, but the canary never runs them;
   - a name a zero-delay timer defines counts as defined when its script ends,
     although a browser may run the timer only after the next script loads;
-  - a throw inside a zero-delay timer or a DOMContentLoaded or load handler:
-    it runs against a stub that can't model the page it would see, so a throw
-    there is only listed in the run's diagnostics (what it defined before it
-    threw still counts);
   - a load-time use of a top-level `var X = window.X;` alias of a later
     script's name. A top-level var IS the window property, so the later
     script's assignment reaches it and a use at call time works; only a use
@@ -131,6 +134,9 @@ When it fails:
     one (document.body in a <head> script, an element looked up by a script
     above it) is real: look the element up later, on DOMContentLoaded, or
     move the <script> below it.
+  - a throw in a DOMContentLoaded / load handler or a zero-delay timer: the
+    same two causes (add the stand-in, or fix the code). Until it runs to its
+    end, every name it sets after the throwing line goes unjudged.
   - a CDN library it doesn't know: add a part of its URL to CDN_GLOBALS with
     every global the real bundle sets on window (its UMD line,
     `global.X = factory()`, or a top-level var), and a stand-in for each to
@@ -1761,6 +1767,39 @@ def early_read_problems(result: dict, allowed: dict) -> list:
     return out
 
 
+def diagnostic_problems(result: dict) -> list:
+    """The throws in the run's diagnostics: a DOMContentLoaded / load handler
+    or a zero-delay timer (a script's, or one a handler queued) that stopped
+    part way."""
+    out = []
+    for d in result.get("diagnostics", []):
+        where = d["script"]
+        if d["phase"] == "timer" and not where.startswith("a zero-delay timer"):
+            where = f"a zero-delay timer {where} queued while it loaded"
+        text = f"  - {where} threw: {d['message']}"
+        if d.get("at"):
+            text += f"\n      at {d['at']}"
+        out.append(text)
+    return out
+
+
+# What a throw in a handler or a zero-delay timer costs, and what to do.
+_UNJUDGED = (
+    "Until each runs to its end, every name it sets after the throwing line goes unjudged: it never enters the "
+    "definer map, so a load-time read of it is never reported. Most often the stub lacks a browser API the code "
+    "uses (an undefined property of window, document or an element): add a plain stand-in for it that does "
+    "nothing to STUB_JS in tests/test_load_order_canary_js.py, never one for an FCC name. If it would throw in "
+    "a browser too, it is a real error: fix the handler or timer.")
+
+
+def _thrown(result: dict) -> str:
+    """For a message about a name a handler defines: what threw in this run."""
+    problems = diagnostic_problems(result)
+    if not problems:
+        return "No handler or zero-delay timer threw in this run."
+    return "These threw in this run, and a name set after the throw is never defined:\n" + "\n".join(problems)
+
+
 def late_read_problems(result: dict) -> list:
     out = []
     for r in result["late_reads"]:
@@ -1855,6 +1894,19 @@ def test_no_script_reads_window_dot_a_top_level_const_at_load(page_load):
     assert not problems, "\n".join(["These reads are always undefined in a browser:"] + problems)
 
 
+def test_every_handler_and_zero_delay_timer_runs_to_its_end(page_load):
+    """A DOMContentLoaded / load handler or a zero-delay timer that throws
+    against the stub isn't a load error (in a browser it would run later, on
+    the page it would see), but it stops there: every name it would set after
+    the throwing line never enters the definer map, so a load-time read of
+    that name goes unjudged (review finding ra-3). On today's page every one
+    runs to its end."""
+    problems = diagnostic_problems(page_load)
+    assert not problems, (
+        "These DOMContentLoaded / load handlers or zero-delay timers threw while the canary ran them:\n"
+        + "\n".join(problems) + "\n" + _UNJUDGED)
+
+
 def test_the_stub_stands_in_only_for_the_browser(page_load):
     """Pass 2 plants only the names the stub doesn't have, so a stub copy of
     one of FCC's own names (added to get a script to load, say) would hide
@@ -1928,11 +1980,16 @@ def test_the_instrument_sees_each_kind_of_definition(page_scripts, page_load):
         _pinned("SPOOLMAN_URL", f"{tail[0]}, as a const"), d.get("SPOOLMAN_URL"))
     # A name a DOMContentLoaded handler defines (scripts.html's last script
     # sets these two in its handler) is defined after every script.
+    # (A string message: pytest cuts a tuple's repr short, and this one must
+    # show what threw.)
     for name in ("personMayPress", "sendInScanOrder"):
-        assert d.get(name) == HANDLERS, (_pinned(name, "a DOMContentLoaded handler"), d.get(name))
+        assert d.get(name) == HANDLERS, (
+            f"{_thrown(page_load)}\n{_pinned(name, 'a DOMContentLoaded handler')} In this run its definer is "
+            f"{d.get(name)!r}.")
         assert page_load["handler_definers"][name].startswith(
             f"the DOMContentLoaded handler added at {SCRIPTS_HTML}:"), (
-            _pinned(name, f"the DOMContentLoaded handler in {SCRIPTS_HTML}"), page_load["handler_definers"][name])
+            f"{_thrown(page_load)}\n{_pinned(name, f'the DOMContentLoaded handler in {SCRIPTS_HTML}')} In this "
+            f"run it is set by {page_load['handler_definers'][name]!r}.")
     # Each CDN library defines what the real bundle defines.
     for part, names in CDN_GLOBALS.items():
         cdn = [s["name"] for s in page_scripts if s["kind"] == "cdn" and part in s["name"]]
@@ -2225,12 +2282,46 @@ def test_a_name_only_a_handler_defines_is_defined_after_every_script(page_script
                      after=thrower)
     result = run_page(page, load_dir, "fake-handlers")
     assert _early(result) == {(may_press, "personMayPress", HANDLERS), (reader, "fakeReady", HANDLERS),
-                              (reader, "fakeLoaded", HANDLERS)}, result["early_reads"]
+                              (reader, "fakeLoaded", HANDLERS)}, f"{_thrown(result)}\n{result['early_reads']}"
     assert result["errors"] == [], result["errors"]
     thrown = [d for d in result["diagnostics"] if d["phase"] == "handler" and thrower in d["script"]]
     assert len(thrown) == 1 and "TypeError" in thrown[0]["message"], result["diagnostics"]
     assert result["handler_definers"]["fakeLoaded"].startswith(f"the load handler added at {on_load}:1:"), (
         result["handler_definers"])
+
+
+def test_a_handler_that_throws_against_the_stub_is_reported(page_scripts, load_dir):
+    """scripts.html's last script defines personMayPress and sendInScanOrder
+    in its DOMContentLoaded handler. An edit that calls, near the top of that
+    handler, a browser API the stub lacks (window.visualViewport, which every
+    browser FCC targets has) stops the handler there against the stub, and
+    both names drop out of the definer map, so a load-time read of either
+    would go unjudged (review finding ra-3). The real-page test reports it
+    and says what to do, and the instrument test's handler proof shows what
+    threw instead of blaming a module split."""
+    opener = "document.addEventListener('DOMContentLoaded', () => {"
+    target = [s for s in page_scripts if s["kind"] == "inline" and "window.personMayPress = personMayPress" in s["code"]]
+    assert len(target) == 1 and target[0]["code"].count(opener) == 1, (
+        _pinned("personMayPress", f"the DOMContentLoaded handler in {SCRIPTS_HTML}"), [s["name"] for s in target])
+    # On the opener's own line, so every line keeps its number.
+    edited = dict(target[0], code=target[0]["code"].replace(
+        opener, opener + " window.visualViewport.addEventListener('resize', () => {});", 1))
+    page = [edited if s is target[0] else s for s in page_scripts]
+    result = run_page(page, load_dir, "handler-throws")
+    assert result["errors"] == [], result["errors"]
+    assert "personMayPress" not in result["definers"] and "sendInScanOrder" not in result["definers"], (
+        "the handler threw before it set them, so neither may be defined", result["handler_definers"])
+    problems = diagnostic_problems(result)
+    assert len(problems) == 1 and f"the DOMContentLoaded handler added at {SCRIPTS_HTML}:" in problems[0], problems
+    assert "TypeError" in problems[0], problems
+    thrown = problems[0].splitlines()[0].strip()  # pytest indents a message's later lines
+    with pytest.raises(AssertionError) as red:
+        test_every_handler_and_zero_delay_timer_runs_to_its_end(result)
+    assert thrown in str(red.value), str(red.value)
+    assert "add a plain stand-in for it" in str(red.value) and "goes unjudged" in str(red.value), str(red.value)
+    with pytest.raises(AssertionError) as red:
+        test_the_instrument_sees_each_kind_of_definition(page, result)
+    assert thrown in str(red.value), str(red.value)
 
 
 def test_a_zero_delay_timer_queued_at_load_reads_at_load(page_scripts, load_dir):
