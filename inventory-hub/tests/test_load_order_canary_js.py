@@ -26,8 +26,11 @@ How (node's `vm`: no browser, no container, so it runs under --offline):
      script's top-level declarations name, every declarator of each, resolve
      after the script that didn't before). Then it fires the DOMContentLoaded
      handlers and the load ones, as a browser does once every script has
-     loaded: a name only a handler defines is filed under one definer past the
-     last script, "(DOMContentLoaded / load handlers)".
+     loaded, each event's handlers followed by the zero-delay timers they
+     queued (one task runs every listener of an event, so such a timer runs
+     once they all have): a name only a handler or such a timer defines is
+     filed under one definer past the last script, "(DOMContentLoaded / load
+     handlers)".
   3. Pass 2 loads them again in a fresh context where each of those names is
      first planted on window as an accessor that records who read it and
      returns undefined. The defining script's own definition replaces it (a
@@ -56,8 +59,9 @@ What it catches:
     defines, in a script's top-level code, anything that code calls, or a
     zero-delay timer it queues (wrapping an early read in setTimeout(..., 0) is
     no fix);
-  - the same read of a name only a DOMContentLoaded or load handler defines (a
-    provider moved into one: those run once every script has loaded);
+  - the same read of a name only a DOMContentLoaded or load handler defines,
+    or a zero-delay timer one queues (a provider moved into one: those run
+    once every script has loaded);
   - a DOMContentLoaded / load handler or a zero-delay timer on the page that
     throws against the stub (most often a browser API the stub lacks), since
     every name it would set after the throwing line would go unjudged;
@@ -96,6 +100,9 @@ What it can't see:
     fetch callback queued at load. A browser may run those between scripts
     too (a fetch that answers while the parser waits for a later script), so
     one is no fix for an early read either, but the canary never runs them;
+    nor does it run them for a handler, so a name only one of those defines
+    (a provider moved into `setTimeout(..., 100)`) is never defined, and a
+    load-time read of it goes unjudged;
   - a name a zero-delay timer defines counts as defined when its script ends,
     although a browser may run the timer only after the next script loads;
   - a load-time use of a top-level `var X = window.X;` alias of a later
@@ -993,10 +1000,12 @@ STUB_JS = r"""
   });
 
   // A zero-delay setTimeout or setInterval (no delay, or one <= 0) is kept
-  // for the driver, which runs it right after the script that queued it and
-  // that script's microtasks: a browser may run it there, before a later
-  // script loads (FCC sends every response no-store, so the parser waits on
-  // the network at each script). An interval runs once. Longer timers,
+  // for the driver, with what queued it (what was running): the driver runs
+  // it right after the script that queued it and that script's microtasks
+  // (a browser may run it there, before a later script loads: FCC sends
+  // every response no-store, so the parser waits on the network at each
+  // script), or, if a DOMContentLoaded or load handler queued it, once every
+  // handler of that event has run. An interval runs once. Longer timers,
   // animation frames and idle callbacks never fire, and fetch never answers.
   // A microtask runs when the script that queued it ends (the context's
   // microtaskMode), as in a browser.
@@ -1004,7 +1013,7 @@ STUB_JS = r"""
   const zeroTimers = [];
   const queueTimer = (fn, ms, args) => {
     const id = ++timerId;
-    if (typeof fn === 'function' && !(Number(ms) > 0)) zeroTimers.push({ id, fn, args });
+    if (typeof fn === 'function' && !(Number(ms) > 0)) zeroTimers.push({ id, fn, args, by: runningNow });
     return id;
   };
   const clearTimer = (id) => { const k = zeroTimers.findIndex((t) => t.id === id); if (k >= 0) zeroTimers.splice(k, 1); };
@@ -1063,11 +1072,13 @@ STUB_JS = r"""
   const cdnStandIns = { bootstrap, Sweetalert2: swal, Swal: swal, SweetAlert: swal, swal, sweetAlert: swal, QRCode };
 
   return {
-    // What the driver tells the stub: what is running now (a listener added
-    // is stamped with it), and the document's readyState.
+    // What the driver tells the stub: what is running now (a listener or a
+    // zero-delay timer added is stamped with it), and the document's
+    // readyState.
     running(label) { runningNow = String(label); },
     readyState(state) { g.document.readyState = state; },
-    // The zero-delay timers queued since the last call, in order.
+    // The zero-delay timers queued since the last call, in order, each with
+    // what queued it (by).
     takeTimers() { return zeroTimers.splice(0); },
     // The page's elements (read_page_scripts' dom: each one's tag, attributes
     // and parent's index, in document order), then how many are parsed now.
@@ -1220,32 +1231,38 @@ async function load(env, i, errors, diagnostics) {
   env.stub.parsed(scripts[i].dom_at);  // the page above its tag
   runOne(env, i, errors);
   await tick();
-  await fireTimers(env, i, diagnostics);
+  await fireTimers(env, diagnostics, () => scripts[i].name);
   current = -1;
   sink = null;
 }
 
-const TIMER_ROUNDS = 3;  // a script's own zero-delay timers, then two rounds of the ones they queue
-const TIMER_CAP = 100;   // timers run after one script, at most
-// Runs the zero-delay timers script i queued, as a browser may before the
-// next script loads, each charged to script i (with the microtasks it
-// queues). A throw in one is a diagnostic, not a load error.
-async function fireTimers(env, i, diagnostics) {
+const TIMER_ROUNDS = 3;  // the zero-delay timers queued so far, then two rounds of the ones they queue
+const TIMER_CAP = 100;   // timers run at a time, at most
+// Runs the zero-delay timers queued so far: a script's own, as a browser may
+// before the next script loads (each charged to that script, with the
+// microtasks it queues), or those an event's handlers queued, once they have
+// all run. what(t) names a timer, for a throw in it and for what it queues;
+// a throw in one is a diagnostic, not a load error. done(name), if given, is
+// told each one's name once it and its microtasks have run.
+async function fireTimers(env, diagnostics, what, done) {
   let fired = 0;
   for (let round = 0; round < TIMER_ROUNDS; round++) {
     const batch = env.stub.takeTimers();
     if (!batch.length) break;
-    sink = { list: diagnostics, script: scripts[i].name, phase: 'timer' };
     for (const t of batch.slice(0, TIMER_CAP - fired)) {
       fired += 1;
+      const name = what(t);
+      sink = { list: diagnostics, script: name, phase: 'timer' };
+      env.stub.running(name);
       inTimer = true;
       try { t.fn.apply(undefined, t.args); } catch (e) {
-        diagnostics.push(Object.assign({ script: scripts[i].name, phase: 'timer' }, describe(e, 'run')));
+        diagnostics.push(Object.assign({ script: name, phase: 'timer' }, describe(e, 'run')));
       }
       CHECKPOINT.runInContext(env.ctx);
       inTimer = false;
+      await tick();  // so a promise it rejected is filed under it
+      if (done) done(name);
     }
-    await tick();
   }
   env.stub.takeTimers();  // past the caps: never run
 }
@@ -1522,27 +1539,38 @@ async function pass1() {
     before = after;
   }
   // The DOMContentLoaded handlers, then the load ones, as the browser fires
-  // them once every script has loaded: a name only they define is defined
-  // after every script (definer HANDLERS, past the last). A throw in one is a
-  // diagnostic, not a load error (they run against a stub that can't model
-  // the page they would see), and what it defined before it threw stays.
+  // them once every script has loaded, each event's followed by the
+  // zero-delay timers its handlers queued: one task runs every listener of
+  // an event, so such a timer runs once they all have (and, in the order a
+  // browser most likely takes, before load). A name only they define is
+  // defined after every script (definer HANDLERS, past the last), and
+  // handlerOf names the handler, or the timer and the handler that queued
+  // it. A throw in one is a diagnostic, not a load error (a browser would
+  // run it against the page it then has), and what it defined before it
+  // threw stays; the page's own test requires none.
   const H = scripts.length;
-  env.stub.running(HANDLERS);
+  const fileHandlers = (by) => {
+    const after = ownValues(env.sandbox);
+    for (const name of fileNew(before, after, H)) handlerOf.set(name, by);
+    before = after;
+  };
+  const queuedBy = (t) => (String(t.by).startsWith('a zero-delay timer') ? t.by : `a zero-delay timer queued by ${t.by}`);
   env.stub.parsedAll();  // the whole page is parsed by DOMContentLoaded
   for (const [state, type] of [['interactive', 'DOMContentLoaded'], ['complete', 'load']]) {
     env.stub.readyState(state);
     for (const r of env.stub.readyListeners(type)) {
       if (r.removed) continue;
       const where = `the ${type} handler added at ${pageFrame(framesOf(r.stack)) || r.by}`;
+      env.stub.running(where);
       sink = { list: diagnostics, script: where, phase: 'handler' };
       try { env.stub.fire(r); } catch (e) { diagnostics.push(Object.assign({ script: where, phase: 'handler' }, describe(e, 'run'))); }
       CHECKPOINT.runInContext(env.ctx);
       await tick();
       sink = null;
-      const after = ownValues(env.sandbox);
-      for (const name of fileNew(before, after, H)) handlerOf.set(name, where);
-      before = after;
+      fileHandlers(where);
     }
+    await fireTimers(env, diagnostics, queuedBy, fileHandlers);
+    sink = null;
   }
   return { errors, diagnostics, definers, lexical, onWindowLater, handlerOf, overlaps, spans };
 }
@@ -2256,6 +2284,90 @@ def test_a_provider_moved_into_a_dom_ready_handler_is_reported(page_scripts, loa
     assert len(problems) == 1 and HANDLERS in problems[0], problems
     assert f"the DOMContentLoaded handler added at {module}:" in problems[0], problems
     assert result["errors"] == [], result["errors"]
+
+
+def test_a_provider_moved_into_a_timer_a_handler_queues_is_reported(page_scripts, load_dir):
+    """A copy of empty_weight_field.js that sets window.bindEmptyWeightField
+    in a zero-delay timer queued by a DOMContentLoaded handler (the "after
+    the other ready handlers" idiom), or by a load handler. In a browser that
+    timer runs after every script, so inv_wizard.js's load-time read finds
+    nothing and the wizard's empty-weight field is never bound (review
+    finding ra-4: the handlers' timers never ran, so the name was never
+    defined and the read went unjudged)."""
+    module, reader = "js/modules/empty_weight_field.js", "js/modules/inv_wizard.js"
+    line = "    window.bindEmptyWeightField = bindEmptyWeightField;\n"
+    src = (STATIC / module).read_text(encoding="utf-8").replace("\r\n", "\n")
+    assert src.count(line) == 1 and _index(page_scripts, module) < _index(page_scripts, reader), (
+        f"{module} no longer sets window.bindEmptyWeightField at load in one line, or {reader} no longer loads "
+        f"after it: point this proof at another provider whose name a later script reads while it loads.")
+    wrapped = {
+        "DOMContentLoaded": ("    document.addEventListener('DOMContentLoaded', () => {\n"
+                             "        setTimeout(() => { window.bindEmptyWeightField = bindEmptyWeightField; }, 0);\n"
+                             "    });\n"),
+        "load": ("    window.addEventListener('load', () => {\n"
+                 "        setTimeout(() => { window.bindEmptyWeightField = bindEmptyWeightField; });\n"
+                 "    });\n"),
+    }
+    for event, code in wrapped.items():
+        copy = load_dir / f"timer_{event}_empty_weight_field.js"
+        copy.write_text(src.replace(line, code), encoding="utf-8")
+        page = [dict(s, file=str(copy)) if s["name"] == module else s for s in page_scripts]
+        result = run_page(page, load_dir, f"timer-provider-{event}")
+        assert _early(result) == {(reader, "bindEmptyWeightField", HANDLERS)}, (
+            f"{event}: {_thrown(result)}\n{result['early_reads']}")
+        read = result["early_reads"][0]
+        assert f"{reader}:81:" in read["at"], (
+            "inv_wizard.js reads window.bindEmptyWeightField on its line 81 today: if that line moved, update the "
+            "line number here.", read)
+        problems = early_read_problems(result, ALLOWED_EARLY_READS)
+        assert len(problems) == 1 and HANDLERS in problems[0], problems
+        assert f"a zero-delay timer queued by the {event} handler added at {module}:" in problems[0], problems
+        assert result["errors"] == [] and result["diagnostics"] == [], result
+
+
+def test_the_timers_handlers_queue_run_once_every_handler_of_the_event_has(page_scripts, load_dir):
+    """As in a browser, one task runs every DOMContentLoaded listener, then the
+    zero-delay timers they queued run, then the load listeners and theirs.
+    Fakes with names of their own: a DOMContentLoaded handler's timer that
+    calls a function a later DOMContentLoaded handler defines runs fine (run
+    right after its own handler it would throw against the stub, a throw
+    that would fail the page); a load handler sees what such a timer defined;
+    a timer such a timer queues runs too, under the handler that started it;
+    one with a delay, or cleared, never does; and a throw in a timer a
+    handler queued is a diagnostic naming that handler."""
+    first = "FAKE A: a DOMContentLoaded handler whose timers use what a later handler defines"
+    second = "FAKE B: a later DOMContentLoaded handler defining fakeLaterFn"
+    third = "FAKE C: a load handler using what a DOMContentLoaded handler's timer defined"
+    page = with_fake(page_scripts, "document.addEventListener('DOMContentLoaded', () => {\n"
+                                   "  setTimeout(() => {\n"
+                                   "    window.fakeLaterFn();\n"
+                                   "    window.fakeFromTimer = 1;\n"
+                                   "    setTimeout(() => { window.fakeNestedFromTimer = 1; }, 0);\n"
+                                   "  }, 0);\n"
+                                   "  setTimeout(() => { window.fakeDelayedFromHandler = 1; }, 50);\n"
+                                   "  clearTimeout(setTimeout(() => { window.fakeClearedFromHandler = 1; }, 0));\n"
+                                   "});", first, after="js/modules/titlebar_prefs.js")
+    page = with_fake(page, "document.addEventListener('DOMContentLoaded', () => { window.fakeLaterFn = function () {}; });",
+                     second, after=first)
+    page = with_fake(page, "window.addEventListener('load', () => {\n"
+                           "  window.fakeLoadSaw = window.fakeFromTimer.toFixed();\n"
+                           "  setTimeout(() => { null.boom; }, 0);\n"
+                           "});", third, after=second)
+    result = run_page(page, load_dir, "fake-handler-timers")
+    assert result["errors"] == [], result["errors"]
+    by = result["handler_definers"]
+    queued = f"a zero-delay timer queued by the DOMContentLoaded handler added at {first}:1:"
+    assert by.get("fakeLaterFn", "").startswith(f"the DOMContentLoaded handler added at {second}:1:"), by
+    assert by.get("fakeFromTimer", "").startswith(queued), by
+    assert by.get("fakeNestedFromTimer", "").startswith(queued), by
+    assert by.get("fakeLoadSaw", "").startswith(f"the load handler added at {third}:1:"), by
+    for name in ("fakeLaterFn", "fakeFromTimer", "fakeNestedFromTimer", "fakeLoadSaw"):
+        assert result["definers"].get(name) == HANDLERS, (name, result["definers"].get(name))
+    assert "fakeDelayedFromHandler" not in result["definers"] and "fakeClearedFromHandler" not in result["definers"]
+    problems = diagnostic_problems(result)
+    assert len(problems) == 1 and problems[0].startswith(
+        f"  - a zero-delay timer queued by the load handler added at {third}:1:"), problems
+    assert "TypeError" in problems[0], problems
 
 
 def test_a_name_only_a_handler_defines_is_defined_after_every_script(page_scripts, load_dir):
