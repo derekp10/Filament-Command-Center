@@ -19,19 +19,29 @@ Three checks:
   2. No silent failure. A call of a helper that reports a failed write only by
      what it returns (FAILS_BY_RETURN_VALUE) must not have that result thrown
      away as a bare statement, an `await` of it as a statement, or an
-     assignment only to `_`. Those helpers are spoolman_api's record updates,
-     creates and deletes (None from update_spool / update_filament /
-     update_vendor and create_*, False from delete_*; not the `_or_raise`
-     forms, which raise), update_extra_field_choices (`{"success": False,
-     "msg": ...}`, which it logs nowhere for a refused field-list read, a key
-     that isn't there or has no choices, or a refused POST; only an exception
-     reaches hub.log), and FCC's own write wrappers (WRAPPER_WRITERS, below).
-     The other field-schema helpers are outside the rule because they log
-     their own failed writes: ensure_extra_field a WARNING, ensure_required_extras
-     through it, and ensure_filament_attributes_cleaned a WARNING or an ERROR
-     (with the restore's losses in the Activity Log). A direct HTTP
-     call is outside it too, because its failure is the caller's own check of
-     the response. Only those three shapes are seen, and only on a call the
+     assignment only to `_`, unless ALLOWED_DISCARDS allows that call. Those
+     helpers are spoolman_api's record updates, creates and deletes (None from
+     update_spool / update_filament / update_vendor and create_*, False from
+     delete_*, each with a hub.log line only), update_extra_field_choices
+     (`{"success": False, "msg": ...}`, which it logs nowhere for a refused
+     field-list read, a key that isn't there or has no choices, or a refused
+     POST; only an exception reaches hub.log), ensure_extra_field (False when
+     it couldn't register a field, with one hub.log WARNING and no
+     LAST_SPOOLMAN_ERROR: the record helpers' shape), and FCC's own write
+     wrappers (WRAPPER_WRITERS, below). Left out: the `_or_raise` forms
+     (RAISING_UPDATES), which raise, and the two field-schema helpers that
+     return nothing on any path (RETURNS_NOTHING: ensure_required_extras and
+     ensure_filament_attributes_cleaned), which leave a caller no result to
+     check. A direct HTTP call is outside it too, because its failure is the
+     caller's own check of the response.
+     ALLOWED_DISCARDS names each site whose calls drop such a result on
+     purpose, with how many and why: today only the boot registration,
+     ensure_required_extras' three ensure_extra_field calls (best effort at
+     startup: a field it can't register is that WARNING, and FCC starts
+     anyway). A site with more thrown-away calls than its entry allows has
+     every one of them reported.
+     Only those three shapes of a thrown-away result (a bare statement, an
+     awaited one, `_ =`) are seen, and only on a call the
      scanner reads as a write; everything else passes, such as a result
      stored and never read, a tuple unpacked with its failure part ignored,
      `__ = ...`, `ok and update_spool(...)`, a list or a conditional
@@ -55,10 +65,16 @@ Three checks:
      notes, or the prose) is not seen, and neither is a new call in a function
      the section already names (check 1 reports that one). This is the first
      test that reads CLAUDE.md (Derek's OK, 2026-11-09).
-  And two lists are kept honest: WRITE_FUNCTIONS equals the spoolman_api
-  functions that write, so a new writer there is watched from its first call,
-  and every WRAPPER_WRITERS entry is still a function of its module that
-  writes, so a renamed wrapper can't stop watching its callers unnoticed.
+  And four lists are kept honest: WRITE_FUNCTIONS equals the spoolman_api
+  functions that write, so a new writer there is watched from its first call;
+  each of them is in exactly one of check 2's groups (FAILS_BY_RETURN_VALUE,
+  RAISING_UPDATES, RETURNS_NOTHING), a RETURNS_NOTHING one with no `return
+  <value>` in its own body, so none is left out of check 2 for a reason the
+  code doesn't bear out; every WRAPPER_WRITERS entry is still a function of
+  its module that writes, so a renamed wrapper can't stop watching its
+  callers unnoticed; and every ALLOWED_DISCARDS entry still matches the code
+  (as many thrown-away calls at its site, of a helper check 2 reports), so a
+  stale one can't let a new call there drop its result unseen.
 
 What counts as a write call site:
   * A use of one of spoolman_api's write helpers (WRITE_FUNCTIONS): the record
@@ -166,10 +182,13 @@ WRITE_FUNCTIONS = RECORD_UPDATES | RAISING_UPDATES | CREATES_AND_DELETES | FIELD
 # hub.log, which nobody reads in the moment). So each caller is a registered write
 # site (check 1), and check 2 reports one whose result is thrown away.
 # test_every_watched_wrapper_still_writes keeps each entry a function of its module
-# that writes. Surveyed 2026-11-09: every other backend function that writes and
-# that other backend code calls puts its own failed writes in the Activity Log,
-# except http_retry.request_with_retry, the transport, whose every write call is
-# an HTTP site of its own.
+# that writes. spoolman_api's own write helpers are never entries here: they are
+# WRITE_FUNCTIONS, each in one of check 2's groups (FAILS_BY_RETURN_VALUE,
+# RAISING_UPDATES, RETURNS_NOTHING). Surveyed 2026-11-09: every other backend
+# function outside spoolman_api.py that writes and that other backend code calls
+# puts its own failed writes in the Activity Log (itself, or through a function it
+# calls), except http_retry.request_with_retry, the transport, whose every write
+# call is an HTTP site of its own.
 WRAPPER_WRITERS = {
     "logic._move_write":
         "returns False when the write failed and a re-read doesn't show it landed",
@@ -198,13 +217,22 @@ _WRAPPER_BY_NAME = {q.split(".", 1)[1]: q for q in WRAPPER_WRITERS}
 # update_spool / update_filament / update_vendor and create_*, False from delete_*
 # (each writes only hub.log), {"success": False, "msg": ...} from
 # update_extra_field_choices (it logs none of its refusals: a refused field-list
-# read, a key that isn't there or has no choices, a refused POST), and each
-# wrapper's shape in WRAPPER_WRITERS. Left out: the _or_raise forms, which raise
-# spoolman_api.SpoolmanRejection, and the other field-schema helpers, which log
-# their own failed writes (ensure_extra_field a WARNING, ensure_required_extras
-# through it, ensure_filament_attributes_cleaned a WARNING or an ERROR).
+# read, a key that isn't there or has no choices, a refused POST), False from
+# ensure_extra_field (one hub.log WARNING and no LAST_SPOOLMAN_ERROR, the record
+# helpers' shape), and each wrapper's shape in WRAPPER_WRITERS. A call may drop
+# such a result only where ALLOWED_DISCARDS says so.
 FAILS_BY_RETURN_VALUE = (RECORD_UPDATES | CREATES_AND_DELETES
-                         | {"update_extra_field_choices"} | frozenset(WRAPPER_WRITERS))
+                         | {"update_extra_field_choices", "ensure_extra_field"}
+                         | frozenset(WRAPPER_WRITERS))
+# Left out of check 2, each for a reason the code bears out: the _or_raise forms
+# (RAISING_UPDATES), which raise spoolman_api.SpoolmanRejection, and these
+# field-schema helpers, which return nothing on any path, so a caller has no
+# result to check (a failure of theirs is a hub.log WARNING or ERROR, and
+# ensure_filament_attributes_cleaned puts a restore's losses in the Activity Log).
+# test_every_write_helper_is_checked_raises_or_returns_nothing keeps every write
+# helper in exactly one of FAILS_BY_RETURN_VALUE, RAISING_UPDATES and this set, and
+# each of these free of a `return <value>`.
+RETURNS_NOTHING = frozenset({"ensure_required_extras", "ensure_filament_attributes_cleaned"})
 # Check 3: these sites must carry a doc anchor that CLAUDE.md's write-surface
 # section holds. Every other site's anchor is optional, and checked when given.
 NEEDS_DOC_ANCHOR = RECORD_UPDATES | RAISING_UPDATES
@@ -226,6 +254,13 @@ HOW_IT_FAILS = {
         "returns {\"success\": False, \"msg\": ...} on a refused field-list read, a key that "
         "isn't there or has no choices, or a refused POST, and logs none of them: check "
         "res.get(\"success\") and pass res (its msg) back to the page, or log the msg"),
+    "ensure_extra_field": (
+        "returns False when the field isn't registered and Spoolman refused it or didn't "
+        "answer, with one hub.log WARNING and no Activity Log line, and sets no "
+        "LAST_SPOOLMAN_ERROR (a refused label update of a field that is there still returns "
+        "True): check the result and say so yourself, naming the field, in an ERROR line "
+        "(state.add_log_entry(..., \"ERROR\", \"ff4444\")) or in an answer the page toasts "
+        "at 7 s"),
     "logic._move_write": (
         f"{WRAPPER_WRITERS['logic._move_write']}, with no log line: {_READ_LAST_ERROR}"),
     "logic._swap_out_write": (
@@ -253,6 +288,23 @@ HOW_IT_FAILS = {
         f"{WRAPPER_WRITERS['routes_config_attrs._strip_choice_from_carriers']}, with no log "
         "line: count them and log them (\"ERROR\" when none landed, \"WARNING\" when some "
         "did), as api_filament_attributes_remove_choice does"),
+}
+
+# Check 2's deliberate exceptions: each site, keyed like WRITE_SITES, whose calls
+# drop a FAILS_BY_RETURN_VALUE result on purpose, with how many such calls it
+# allows and why. The failure must reach someone another way, or need no one to
+# hear of it. A site with more thrown-away calls than its entry allows has every
+# one of them reported. test_every_allowed_discard_is_still_used keeps each entry
+# matching the code, so a stale one can't let a new call there drop its result
+# unseen.
+ALLOWED_DISCARDS = {
+    # Its filament, spool and vendor loops, run once at startup (app.py, under
+    # __main__).
+    ("spoolman_api.py", "ensure_required_extras", "ensure_extra_field"): (
+        3, "the boot registration is best effort, as its docstring says: a field it can't "
+           "register is the WARNING ensure_extra_field writes to hub.log, FCC starts anyway, "
+           "and Spoolman refuses a later write that carries that extra, which that write's "
+           "own surface reports; there is no request to answer"),
 }
 
 HTTP_READ_VERBS = frozenset({"get", "head", "options"})
@@ -747,15 +799,114 @@ def registry_problems(found, registry):
     return new, stale
 
 
-def silent_failures(sites):
+def _allowances(allowed):
+    """ALLOWED_DISCARDS-shaped entries, each checked for its shape first:
+    (module, function, callee): (count of 1 or more, a reason that isn't blank)."""
+    for key, value in allowed.items():
+        ok = (isinstance(key, tuple) and len(key) == 3 and all(isinstance(k, str) for k in key)
+              and isinstance(value, tuple) and len(value) == 2
+              and isinstance(value[0], int) and not isinstance(value[0], bool) and value[0] >= 1
+              and isinstance(value[1], str) and value[1].strip())
+        if not ok:
+            raise ValueError(
+                f"ALLOWED_DISCARDS entry {key!r}: {value!r} has the wrong shape. Write it as "
+                '("module.py", "function", "callee"): (count, "why its result may be thrown '
+                'away"), with a count of 1 or more and a reason that isn\'t blank.')
+    return sorted(allowed.items())
+
+
+def _thrown_away(sites):
+    """The sites' calls of a FAILS_BY_RETURN_VALUE helper whose result is thrown
+    away as a bare statement, an awaited statement or `_ =`."""
+    return [s for s in sites if s.discarded and s.callee in FAILS_BY_RETURN_VALUE]
+
+
+def silent_failures(sites, allowed=None):
     """The calls of a FAILS_BY_RETURN_VALUE helper (a record helper,
-    update_extra_field_choices or a wrapper) whose result is thrown away as a
-    bare statement, an awaited statement or `_ =`."""
-    return [
-        f"{s.module}:{s.line}  {s.function}  -> {s.callee}(...), its result thrown away"
-        for s in sites
-        if s.discarded and s.callee in FAILS_BY_RETURN_VALUE
-    ]
+    update_extra_field_choices, ensure_extra_field or a wrapper) whose result is
+    thrown away as a bare statement, an awaited statement or `_ =`, less what
+    `allowed` (ALLOWED_DISCARDS unless given) allows: a site's thrown-away calls
+    pass while there are no more of them than its entry allows, and are all
+    reported, with both counts, when there are more."""
+    allows = {key: n for key, (n, _why) in _allowances(
+        ALLOWED_DISCARDS if allowed is None else allowed)}
+    thrown = _thrown_away(sites)
+    per_site = count_sites(thrown)
+    out = []
+    for s in thrown:
+        key = (s.module, s.function, s.callee)
+        n, ok = per_site[key], allows.get(key, 0)
+        if n <= ok:
+            continue
+        note = f" ({n} thrown away here, ALLOWED_DISCARDS allows {ok})" if ok else ""
+        out.append(f"{s.module}:{s.line}  {s.function}  -> {s.callee}(...), its result "
+                   f"thrown away{note}")
+    return out
+
+
+def allowance_problems(sites, allowed):
+    """The `allowed` (ALLOWED_DISCARDS) entries that no longer match `sites`, each
+    a line of text: an entry for a callee check 2 doesn't report, or one that
+    allows more thrown-away calls than its site has (its calls gone, or keeping
+    their result now). An entry of the wrong shape, or with no reason, raises."""
+    thrown = count_sites(_thrown_away(sites))
+    out = []
+    for key, (want, _why) in _allowances(allowed):
+        if key[2] not in FAILS_BY_RETURN_VALUE:
+            out.append(f"{_key_text(key)}: check 2 doesn't report this callee (it isn't in "
+                       "FAILS_BY_RETURN_VALUE): remove it")
+            continue
+        n = thrown.get(key, 0)
+        if n < want:
+            out.append(f"{_key_text(key)}: ALLOWED_DISCARDS allows {want} thrown-away call(s), "
+                       f"{n} found: " + ("remove it" if n == 0 else f"lower its count to {n}"))
+    return out
+
+
+def _value_returns(func):
+    """The lines of `func`'s own `return <value>` statements. A bare `return` and
+    `return None` return nothing, and a nested def's or class's returns are its
+    own."""
+    out, todo = [], list(ast.iter_child_nodes(func))
+    while todo:
+        node = todo.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+            continue
+        if isinstance(node, ast.Return) and node.value is not None and not (
+                isinstance(node.value, ast.Constant) and node.value.value is None):
+            out.append(node.lineno)
+        todo.extend(ast.iter_child_nodes(node))
+    return sorted(out)
+
+
+def helper_group_problems(source, helpers=WRITE_FUNCTIONS, returns_nothing=RETURNS_NOTHING):
+    """For spoolman_api.py's source: each write helper (`helpers`) that isn't in
+    exactly one of check 2's groups, FAILS_BY_RETURN_VALUE (it reports a failed
+    write by what it returns), RAISING_UPDATES (it raises) or `returns_nothing`
+    (it returns nothing, so there is nothing to check); each `returns_nothing`
+    helper with a `return <value>` in its own body; and each `returns_nothing`
+    name that isn't a write helper. Each a line of text."""
+    groups = (("FAILS_BY_RETURN_VALUE", FAILS_BY_RETURN_VALUE),
+              ("RAISING_UPDATES", RAISING_UPDATES), ("RETURNS_NOTHING", returns_nothing))
+    defined = {n.name: n for n in ast.parse(source).body
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    out = []
+    for name in sorted(set(helpers) | set(returns_nothing)):
+        if name not in helpers:
+            out.append(f"{name}: in RETURNS_NOTHING, but it isn't a write helper (WRITE_FUNCTIONS)")
+            continue
+        found_in = [label for label, members in groups if name in members]
+        if not found_in:
+            out.append(f"{name}: in none of FAILS_BY_RETURN_VALUE, RAISING_UPDATES and "
+                       "RETURNS_NOTHING")
+        elif len(found_in) > 1:
+            out.append(f"{name}: in {' and '.join(found_in)}")
+        elif found_in == ["RETURNS_NOTHING"] and name in defined:
+            lines = _value_returns(defined[name])
+            if lines:
+                out.append(f"{name}: in RETURNS_NOTHING, but it returns a value "
+                           f"(spoolman_api.py:{', '.join(map(str, lines))})")
+    return out
 
 
 class SectionMissing(LookupError):
@@ -910,11 +1061,42 @@ def _offender_callee(offender):
 
 def silent_failure_message(offenders):
     helpers = sorted({_offender_callee(o) for o in offenders} & set(HOW_IT_FAILS))
+    over = any("ALLOWED_DISCARDS allows" in o for o in offenders)
     return (
         "A Spoolman write's result is thrown away, so a failed write goes unseen (the class of "
         "bug behind the 2026-04-26/27 prod outages):\n  " + "\n  ".join(offenders)
         + "\n\nEach of these reports a failed write only by what it returns. Keep the result and "
           "check it:\n" + "\n".join(f"  - {h} {HOW_IT_FAILS[h]}." for h in helpers)
+        + ("\n\nA site listed with two counts has more thrown-away calls than ALLOWED_DISCARDS "
+           "allows there: keep the new call's result, or raise its count only when the new call "
+           "drops it for the same reason." if over else "")
+        + "\n\nOnly a call that drops the result on purpose, its failure reaching someone another "
+          "way (or needing no one to hear of it), may stay as it is: add its site to "
+          f"ALLOWED_DISCARDS in {THIS_FILE}, (\"module.py\", \"function\", \"callee\"): (how many "
+          "such calls, \"why\")."
+    )
+
+
+def allowance_message(problems):
+    return (
+        "ALLOWED_DISCARDS entries that no longer match the code:\n  " + "\n  ".join(problems)
+        + f"\nIn {THIS_FILE}, an entry allows that many thrown-away calls of its callee in its "
+          "function, and no more. Remove one whose calls are gone or keep their result now, "
+          "lower a count that is above what the site has, and remove one for a callee check 2 "
+          "doesn't report: a stale entry would let a new call there drop its result unseen."
+    )
+
+
+def helper_group_message(problems):
+    return (
+        "spoolman_api write helpers check 2 can't place:\n  " + "\n  ".join(problems)
+        + f"\nIn {THIS_FILE}, put each write helper in exactly one group: FAILS_BY_RETURN_VALUE "
+          "when it reports a failed write by what it returns (with a HOW_IT_FAILS line saying "
+          "what its caller must do, and an ALLOWED_DISCARDS entry for each site that drops the "
+          "result on purpose), RAISING_UPDATES when it raises on a failed write (the _or_raise "
+          "forms), or RETURNS_NOTHING when it returns nothing on any path. A helper that "
+          "returns a value isn't RETURNS_NOTHING: its callers can check it. Take a name that "
+          "isn't a write helper out of RETURNS_NOTHING."
     )
 
 
@@ -946,6 +1128,14 @@ def test_no_write_result_is_thrown_away():
     assert not offenders, silent_failure_message(offenders)
 
 
+def test_every_allowed_discard_is_still_used():
+    """Each ALLOWED_DISCARDS entry still matches the code: as many calls there,
+    each still dropping its result, of a helper check 2 reports. A stale entry
+    would let a new call there drop its result unseen."""
+    problems = allowance_problems(scan_backend(), ALLOWED_DISCARDS)
+    assert not problems, allowance_message(problems)
+
+
 def test_the_write_surface_section_holds_every_doc_anchor():
     """Check 3: each registered anchor is somewhere in the section, and every
     update_spool / update_filament / update_vendor (and _or_raise) site has one.
@@ -969,12 +1159,23 @@ def test_every_spoolman_api_writer_is_listed():
         + ", ".join(unlisted)
         + f"\nAdd each to the set it belongs to in {THIS_FILE} (RECORD_UPDATES, RAISING_UPDATES, "
           "CREATES_AND_DELETES or FIELD_SCHEMA_WRITERS), so every call of it is a registered "
-          "write site."
+          "write site, and to one of check 2's groups (FAILS_BY_RETURN_VALUE with a HOW_IT_FAILS "
+          "line when it reports a failed write by what it returns, RAISING_UPDATES when it "
+          "raises, RETURNS_NOTHING when it returns nothing)."
     )
     assert not not_writers, (
         "WRITE_FUNCTIONS names function(s) spoolman_api.py doesn't define, or that no longer "
         "write: " + ", ".join(not_writers) + f"\nTake them out of their set in {THIS_FILE}."
     )
+
+
+def test_every_write_helper_is_checked_raises_or_returns_nothing():
+    """Each spoolman_api write helper is in exactly one of check 2's groups, and
+    a RETURNS_NOTHING one has no `return <value>`: a helper is never left out of
+    check 2 for a reason the code doesn't bear out (review rb-1)."""
+    source = (INV_HUB / "spoolman_api.py").read_text(encoding="utf-8-sig")
+    problems = helper_group_problems(source)
+    assert not problems, helper_group_message(problems)
 
 
 def test_every_watched_wrapper_still_writes():
@@ -1098,7 +1299,7 @@ def test_a_kept_or_raising_result_is_not_reported():
         "import spoolman_api\n"
         "def handler(fid, sid):\n"
         "    spoolman_api.update_filament_or_raise(fid, {})\n"   # raises: fine as a statement
-        "    spoolman_api.ensure_required_extras()\n"           # field schema: logs its own failure
+        "    spoolman_api.ensure_required_extras()\n"           # returns nothing: nothing to check
         "    res = spoolman_api.update_spool(sid, {})\n"
         "    if not spoolman_api.delete_spool(sid):\n"
         "        return res\n"
@@ -1287,13 +1488,14 @@ def test_a_thrown_away_field_choices_result_is_reported():
     assert offenders == [
         "synthetic.py:3  api_new_choice  -> update_extra_field_choices(...), its result thrown away"]
     assert 'res.get("success")' in silent_failure_message(offenders)
-    # The other field-schema helpers log their own failures: a bare call is fine.
+    # The two field-schema helpers that return nothing leave a caller nothing to
+    # check: a bare call is fine. (ensure_extra_field returns False: review rb-1,
+    # below.)
     assert silent_failures(_sites(
         "import spoolman_api\n"
         "def boot():\n"
         "    spoolman_api.ensure_required_extras()\n"
         "    spoolman_api.ensure_filament_attributes_cleaned()\n"
-        "    spoolman_api.ensure_extra_field('spool', 'k', 'K')\n"
     )) == []
 
 
@@ -1488,3 +1690,129 @@ def test_requests_through_another_module_and_requests_api_are_seen():
         "        self.api.post(u + '/api/v1/spool')\n"
         "        return self.session.patch(u + '/api/v1/spool/1')\n"
     ) == {}
+
+
+# --- ensure_extra_field is under check 2; the boot's drops are allowed (review rb-1) --
+
+def test_a_thrown_away_ensure_extra_field_result_is_reported():
+    # It answers False when the field isn't registered and Spoolman refused it or
+    # didn't answer, with one hub.log WARNING and no LAST_SPOOLMAN_ERROR: the
+    # record helpers' shape. A route that drops it answers success over a field
+    # Spoolman doesn't have, and every later write carrying that extra is refused.
+    offenders = silent_failures(_sites(
+        "import spoolman_api\n"
+        "def api_register_field(key):\n"
+        "    spoolman_api.ensure_extra_field('spool', key, key)\n"
+        "    return {'success': True}\n"
+    ))
+    assert offenders == [
+        "synthetic.py:3  api_register_field  -> ensure_extra_field(...), its result thrown away"]
+    message = silent_failure_message(offenders)
+    assert f"  - ensure_extra_field {HOW_IT_FAILS['ensure_extra_field']}." in message
+    assert "sets no LAST_SPOOLMAN_ERROR" in HOW_IT_FAILS["ensure_extra_field"]
+    assert "ALLOWED_DISCARDS" in message
+    # Kept and checked, it passes.
+    assert silent_failures(_sites(
+        "import spoolman_api\n"
+        "def api_register_field(key):\n"
+        "    if not spoolman_api.ensure_extra_field('spool', key, key):\n"
+        "        return {'success': False, 'msg': f'Spoolman would not register {key}'}\n"
+        "    return {'success': True}\n"
+    )) == []
+
+
+BOOT_KEY = ("spoolman_api.py", "ensure_required_extras", "ensure_extra_field")
+
+
+def _boot_sites(dropped, kept=0, module="spoolman_api.py"):
+    """A boot registration with `dropped` bare ensure_extra_field calls, then
+    `kept` more whose result it keeps."""
+    return _sites(
+        "def ensure_extra_field(entity, key, name):\n"
+        "    return False\n"
+        "def ensure_required_extras():\n"
+        + "".join(f"    ensure_extra_field('spool', 'k{i}', 'K{i}')\n" for i in range(dropped))
+        + "".join(f"    ok{i} = ensure_extra_field('vendor', 'v{i}', 'V{i}')\n" for i in range(kept)),
+        module=module)
+
+
+def test_an_allowed_discard_passes_and_one_more_is_reported():
+    allowed = {BOOT_KEY: (3, "the boot registration's best effort")}
+    assert silent_failures(_boot_sites(3), allowed) == []
+    assert silent_failures(_boot_sites(3, kept=2), allowed) == []
+    # One more than allowed: every one at that site is listed, with both counts.
+    offenders = silent_failures(_boot_sites(4), allowed)
+    assert offenders == [
+        f"spoolman_api.py:{4 + i}  ensure_required_extras  -> ensure_extra_field(...), its result "
+        "thrown away (4 thrown away here, ALLOWED_DISCARDS allows 3)" for i in range(4)]
+    message = silent_failure_message(offenders)
+    assert "  - ensure_extra_field returns False" in message
+    assert "raise its count only" in message
+    # Without the entry each one is reported; and an entry is for its own site only.
+    assert len(silent_failures(_boot_sites(3), {})) == 3
+    assert len(silent_failures(_boot_sites(3, module="routes_x.py"), allowed)) == 3
+    # The real ALLOWED_DISCARDS is the default.
+    assert silent_failures(_boot_sites(ALLOWED_DISCARDS[BOOT_KEY][0])) == []
+
+
+def test_a_stale_allowance_is_reported():
+    sites = _boot_sites(2, kept=1)
+    assert allowance_problems(sites, {BOOT_KEY: (2, "boot")}) == []
+    assert allowance_problems(sites, {BOOT_KEY: (3, "boot")}) == [
+        "spoolman_api.py  ensure_required_extras  -> ensure_extra_field: ALLOWED_DISCARDS allows 3 "
+        "thrown-away call(s), 2 found: lower its count to 2"]
+    gone = ("routes_x.py", "api_old", "ensure_extra_field")
+    not_checked = ("spoolman_api.py", "ensure_required_extras", "update_spool_or_raise")
+    assert allowance_problems(sites, {BOOT_KEY: (2, "boot"), gone: (1, "it was here"),
+                                      not_checked: (1, "it raises")}) == [
+        "routes_x.py  api_old  -> ensure_extra_field: ALLOWED_DISCARDS allows 1 thrown-away "
+        "call(s), 0 found: remove it",
+        "spoolman_api.py  ensure_required_extras  -> update_spool_or_raise: check 2 doesn't report "
+        "this callee (it isn't in FAILS_BY_RETURN_VALUE): remove it",
+    ]
+    # Calls that keep their result now leave the entry nothing to allow.
+    assert allowance_problems(_boot_sites(0, kept=3), {BOOT_KEY: (3, "boot")}) == [
+        "spoolman_api.py  ensure_required_extras  -> ensure_extra_field: ALLOWED_DISCARDS allows 3 "
+        "thrown-away call(s), 0 found: remove it"]
+    assert "Remove one whose calls are gone" in allowance_message(["x"])
+
+
+@pytest.mark.parametrize("value", [(3, ""), (3, "   "), (3, None), 3, (0, "why"), (True, "why"),
+                                   ("3", "why"), (3,), (3, "why", "more")])
+def test_an_allowance_of_the_wrong_shape_or_with_no_reason_says_how_to_write_it(value):
+    with pytest.raises(ValueError, match=r"Write it as .*why its result may be thrown away"):
+        allowance_problems(_boot_sites(3), {BOOT_KEY: value})
+    with pytest.raises(ValueError, match="wrong shape"):
+        silent_failures(_boot_sites(3), {BOOT_KEY: value})
+
+
+def test_an_allowance_key_of_the_wrong_shape_says_how_to_write_it():
+    with pytest.raises(ValueError, match="wrong shape"):
+        allowance_problems([], {"spoolman_api.py ensure_required_extras ensure_extra_field": (3, "why")})
+
+
+def test_a_helper_check_2_cannot_place_is_reported():
+    source = (
+        "def ensure_a():\n"
+        "    for k in ('a', 'b'):\n"
+        "        if not k:\n"
+        "            return\n"
+        "    def inner():\n"
+        "        return True\n"              # a nested def's return is its own
+        "    return None\n"
+        "def ensure_b(key):\n"
+        "    if key:\n"
+        "        return False\n"
+        "    return\n"
+        "def new_writer():\n"
+        "    return True\n"
+    )
+    helpers = {"ensure_a", "ensure_b", "new_writer", "update_spool", "update_spool_or_raise"}
+    assert helper_group_problems(source, helpers, returns_nothing={"ensure_a", "ensure_b", "gone"}) == [
+        "ensure_b: in RETURNS_NOTHING, but it returns a value (spoolman_api.py:10)",
+        "gone: in RETURNS_NOTHING, but it isn't a write helper (WRITE_FUNCTIONS)",
+        "new_writer: in none of FAILS_BY_RETURN_VALUE, RAISING_UPDATES and RETURNS_NOTHING",
+    ]
+    assert helper_group_problems(source, {"update_spool"}, returns_nothing={"update_spool"}) == [
+        "update_spool: in FAILS_BY_RETURN_VALUE and RETURNS_NOTHING"]
+    assert "HOW_IT_FAILS" in helper_group_message(["x"])
