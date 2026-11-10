@@ -1,8 +1,10 @@
 """One toolhead-Type list for the page (Group 53.1).
 
 The backend decides "is this row a toolhead?" with one list,
-locations_db.TOOLHEAD_TYPES ('Tool Head', 'MMU Slot', 'No MMU Direct Load'), read
-as `str(row.get('Type', '')).strip() in TOOLHEAD_TYPES`, exact and case-sensitive.
+locations_db.TOOLHEAD_TYPES ('Tool Head', 'MMU Slot', 'No MMU Direct Load'), mostly
+read as `str(row.get('Type', '')).strip() in TOOLHEAD_TYPES`, exact and
+case-sensitive (the move engine's one-spool rule, logic._is_single_occupancy and
+_holds_one_spool, and locations_db.validate_slot_targets compare it untrimmed).
 The page had 16 checks of its own: hand-written copies of that list (two of them
 lower-cased) and four substring tests ("tool" / "mmu" / "direct load"). They
 agreed, but a new head Type would have had to be added to every copy, and a
@@ -759,7 +761,7 @@ def test_the_helpers_behave(tmp_path):
     assert out["pushThrew"] == "TypeError" and out["listAfterPush"] == out["list"], (
         f"a caller could change the page's list: {out}")
     got = {label: (head, head_or_printer) for label, head, head_or_printer in out["rows"]}
-    # A head: the backend's rule, exact and case-sensitive once trimmed.
+    # A head: exact and case-sensitive once trimmed, as most backend reads go.
     head = {'"Tool Head"', '"MMU Slot"', '"No MMU Direct Load"', '" Tool Head "', '"\\tMMU Slot\\n"'}
     printer = {'"Printer"', '" Printer "'}
     for label, (is_head, is_head_or_printer) in got.items():

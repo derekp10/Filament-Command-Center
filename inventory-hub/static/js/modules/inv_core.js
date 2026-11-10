@@ -1746,13 +1746,15 @@ window.isSingleSlotBox = (row) => {
 
 // --- WHICH TYPES ARE TOOLHEADS (Group 53.1) ---
 // The browser's copy of locations_db.TOOLHEAD_TYPES, and its only one:
-// tests/test_toolhead_types_one_list.py keeps the two equal and fails on any
-// other copy of a head Type in the page's scripts. A row is a head when its Type,
-// trimmed, is exactly one of these, the backend's rule (never a substring: a
-// custom "Toolbox" or "MMU Buffer" is no head). Call the helpers when the code
-// runs; never copy the list or keep it from load. The block defines window
-// properties only (a top-level name here would be shared with every module), and
-// the node harnesses lift it out between its two marker lines.
+// tests/test_toolhead_types_one_list.py keeps the two equal and fails on another
+// quoted copy of a head Type in the page's scripts, or a test of a Type for a
+// head Type's words (its rules 2 and 3). A row is a head when its Type, trimmed,
+// is exactly one of these, as most backend reads go (the move engine's one-spool
+// rule and locations_db.validate_slot_targets compare it untrimmed). Never a
+// substring: a custom "Toolbox" or "MMU Buffer" is no head. Call the helpers
+// when the code runs; never copy the list or keep it from load. The block
+// defines window properties only (a top-level name here would be shared with
+// every module), and the node harnesses lift it out between its two marker lines.
 // @fcc-toolhead-types:begin
 window.TOOLHEAD_TYPES = Object.freeze(['Tool Head', 'MMU Slot', 'No MMU Direct Load']);
 window.isToolheadType = (type) => window.TOOLHEAD_TYPES.includes(String(type == null ? '' : type).trim());
