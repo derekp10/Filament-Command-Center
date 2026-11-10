@@ -506,8 +506,7 @@ def _pinned_readers(name: str, readers) -> str:
 
 def with_fake(scripts: list, code: str, name: str, *, before: str = None, after: str = None) -> list:
     """The page plus one fake inline script, right before or right after a
-    named one: it sees the elements that one sees (none sits between two
-    adjacent <script> tags)."""
+    named one: next to that one's tag, so it sees the elements that one sees."""
     at = _index(scripts, before) if before else _index(scripts, after) + 1
     beside = scripts[at] if before else scripts[at - 1]
     fake = {"kind": "inline", "name": name, "where": name, "code": code, "filename": name,
@@ -530,9 +529,11 @@ def with_moved(scripts: list, name: str, *, before: str) -> list:
 
 # ---------------------------------------------------------------------------
 # The browser stub. It runs inside the vm context (its objects belong to the
-# page's realm) and returns the hook the driver uses for CDN scripts. Only a
-# stand-in for the browser goes here: a stand-in for one of FCC's own names
-# would hide every early read of it (test_the_stub_stands_in_only_for_the_browser).
+# page's realm) and returns the hook the driver works it with: CDN globals,
+# the page's elements and how many are parsed, the zero-delay timers, the
+# DOMContentLoaded / load listeners. Only a stand-in for the browser goes here:
+# a stand-in for one of FCC's own names would hide every early read of it
+# (test_the_stub_stands_in_only_for_the_browser).
 # ---------------------------------------------------------------------------
 
 STUB_JS = r"""
@@ -1129,7 +1130,7 @@ const tick = () => new Promise((resolve) => setImmediate(resolve));
 const HANDLERS = '__HANDLERS__';
 const named = (i) => (i < scripts.length ? scripts[i].name : HANDLERS);
 // Runs nothing, so a microtask queued by a context function the driver
-// called (a handler) runs now: a vm context with microtaskMode
+// called (a handler, a timer) runs now: a vm context with microtaskMode
 // 'afterEvaluate' runs its microtasks only after code it evaluates.
 const CHECKPOINT = new vm.Script('void 0', { filename: 'load-order-checkpoint.js' });
 
@@ -1197,8 +1198,9 @@ function runOne(env, i, errors) {
   try { compiled.runInContext(env.ctx); } catch (e) { fail('run', e); }
 }
 
-// Loads script i, then waits a turn so a promise it rejected is reported
-// while it is still the script charged.
+// Loads script i over the page parsed above its tag, waits a turn so a
+// promise it rejected is reported while it is still the script charged, then
+// runs the zero-delay timers it queued.
 async function load(env, i, errors, diagnostics) {
   current = i;
   sink = { list: errors, script: scripts[i].name, phase: 'promise' };
