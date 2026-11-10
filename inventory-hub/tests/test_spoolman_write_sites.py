@@ -27,8 +27,9 @@ Three checks:
      string CLAUDE.md's write-surface section must hold (from the line
      "## Spool / Filament write surfaces" to "### Weight-entry surfaces"):
      normally the enclosing function's name, or its endpoint as the table
-     writes it. This is the first test that reads CLAUDE.md (Derek's OK,
-     2026-11-09).
+     writes it. A write helper's own name, which the section's opening lines
+     hold for every site, anchors only a site inside that helper. This is the
+     first test that reads CLAUDE.md (Derek's OK, 2026-11-09).
   And WRITE_FUNCTIONS is kept equal to the spoolman_api functions that write,
   so a new writer there is watched from its first call.
 
@@ -64,10 +65,10 @@ setup-and-rebuild/setup_fields.py, a deploy tool with its own tests
 the repo-root scripts.
 
 Not seen: a requests Session (none in the backend; a test's patch of
-`requests.<verb>` can't reach one either), urllib / http.client, a URL built
-outside the call, and a helper reached through getattr(spoolman_api, ...). A
-wrapper outside spoolman_api (logic._move_write, attr_migration.restore_extras)
-is registered at the write inside it; its callers are not listed.
+`requests.<verb>` can't reach one either), urllib / http.client, and a helper
+reached through getattr(spoolman_api, ...). A wrapper outside spoolman_api
+(logic._move_write, attr_migration.restore_extras) is registered at the write
+inside it; its callers are not listed.
 
 test_no_direct_extra_patch.py already forbids a direct PATCH that carries
 `extra`; this test doesn't repeat it.
@@ -474,19 +475,19 @@ def _key_text(key):
 
 
 def _entries(registry):
-    """The registry's entries, sorted, each checked for its shape:
+    """The registry's entries, each checked for its shape first, then sorted:
     (module, function, callee): (count of 1 or more, doc anchor or None)."""
-    for key, value in sorted(registry.items()):
+    for key, value in registry.items():
         ok = (isinstance(key, tuple) and len(key) == 3 and all(isinstance(k, str) for k in key)
               and isinstance(value, tuple) and len(value) == 2
-              and isinstance(value[0], int) and value[0] >= 1
+              and isinstance(value[0], int) and not isinstance(value[0], bool) and value[0] >= 1
               and (value[1] is None or (isinstance(value[1], str) and value[1].strip())))
         if not ok:
             raise ValueError(
                 f"WRITE_SITES entry {key!r}: {value!r} has the wrong shape. Write it as "
                 '("module.py", "function", "callee"): (count, "doc anchor" or None), '
                 "with a count of 1 or more.")
-        yield key, value
+    return sorted(registry.items())
 
 
 def registry_problems(found, registry):
@@ -536,14 +537,20 @@ def write_surface_section(claude_md):
     return "\n".join(lines[start:end])
 
 
-def missing_anchors(registry, section):
-    """The registered sites whose doc anchor the section doesn't hold, and the
-    record-update sites with no anchor at all."""
+def anchor_problems(registry, section):
+    """The registered sites whose doc anchor the section doesn't hold, the
+    record-update sites with no anchor at all, and the anchors that would hold
+    for any site: a write helper's own name is in the section's opening lines,
+    so it is an anchor only for a site inside that helper (the `_or_raise`
+    forms' own calls)."""
     out = []
     for key, (_n, doc) in _entries(registry):
         if doc is None:
             if _writer(key[2]) in NEEDS_DOC_ANCHOR:
                 out.append(f"{_key_text(key)}: no doc anchor")
+        elif _writer(doc) and doc != key[1]:
+            out.append(f"{_key_text(key)}: {doc!r} is a write helper's name, which the section "
+                       "holds for every site; anchor it to its function or endpoint")
         elif doc not in section:
             out.append(f"{_key_text(key)}: {doc!r} is not in the section")
     return out
@@ -618,10 +625,10 @@ def silent_failure_message(offenders):
     )
 
 
-def anchor_message(missing):
+def anchor_message(problems):
     return (
         "CLAUDE.md's write-surface table doesn't name these registered sites:\n  "
-        + "\n  ".join(missing)
+        + "\n  ".join(problems)
         + "\n\nAdd a row to the table in the section from \"" + SECTION_START + "\" to \""
         + SECTION_END + "\" (| Module | Endpoint / Function | Notes |: what it writes, whether "
           "it merges against the live record, how a failure is surfaced), or extend the row "
@@ -650,8 +657,8 @@ def test_the_write_surface_table_names_every_update_site():
         section = write_surface_section(CLAUDE_MD.read_text(encoding="utf-8"))
     except SectionMissing as e:
         pytest.fail(str(e))
-    missing = missing_anchors(WRITE_SITES, section)
-    assert not missing, anchor_message(missing)
+    problems = anchor_problems(WRITE_SITES, section)
+    assert not problems, anchor_message(problems)
 
 
 def test_every_spoolman_api_writer_is_listed():
@@ -727,13 +734,20 @@ def test_a_registered_site_missing_from_the_source_is_stale():
     assert "Remove it from the registry" in registry_message(new, stale)
 
 
-@pytest.mark.parametrize("value", [1, (0, "x"), (1,), (1, ""), ("1", "x"), (1, 2)])
+@pytest.mark.parametrize("value", [1, (0, "x"), (1,), (1, ""), ("1", "x"), (1, 2), (True, "x")])
 def test_a_registry_entry_of_the_wrong_shape_says_how_to_write_it(value):
     key = ("synthetic.py", "handler", "update_spool")
     with pytest.raises(ValueError, match=r"Write it as .*count, \"doc anchor\" or None"):
         registry_problems({key: 1}, {key: value})
     with pytest.raises(ValueError, match="wrong shape"):
-        missing_anchors({key: value}, "## Spool / Filament write surfaces\n")
+        anchor_problems({key: value}, "## Spool / Filament write surfaces\n")
+
+
+def test_a_registry_key_of_the_wrong_shape_says_how_to_write_it():
+    registry = {("synthetic.py", "handler", "update_spool"): (1, "handler"),
+                "synthetic.py handler update_filament": (1, "handler")}
+    with pytest.raises(ValueError, match="wrong shape"):
+        registry_problems({}, registry)
 
 
 def test_a_discarded_update_result_is_reported():
@@ -891,13 +905,32 @@ def test_an_anchor_missing_from_the_section_is_reported():
         ("logic.py", "a_create", "create_spool"): (1, None),      # optional: fine
         ("logic.py", "a_named_delete", "delete_spool"): (1, "nowhere"),  # given: checked
     }
-    assert missing_anchors(registry, section) == [
+    assert anchor_problems(registry, section) == [
         "logic.py  a_named_delete  -> delete_spool: 'nowhere' is not in the section",
         "logic.py  after_the_section  -> update_spool: 'after_the_section' is not in the section",
         "logic.py  unanchored  -> update_filament_or_raise: no doc anchor",
         "logic.py  unknown_writer  -> update_spool: 'unknown_writer' is not in the section",
     ]
     assert "Add a row to the table" in anchor_message(["x"])
+
+
+def test_a_write_helpers_own_name_anchors_only_a_site_inside_that_helper():
+    # The section's opening lines name update_spool for every site, so as an
+    # anchor it would hold whatever the table says.
+    section = write_surface_section(
+        "## Spool / Filament write surfaces\n"
+        "Every code path that calls `spoolman_api.update_spool` or `update_filament` ...\n"
+        "- `update_spool_or_raise` raises instead of returning None.\n"
+        "### Weight-entry surfaces\n"
+    )
+    registry = {
+        ("routes_x.py", "api_new_thing", "update_spool"): (1, "update_spool"),
+        ("spoolman_api.py", "update_spool_or_raise", "update_spool"): (1, "update_spool_or_raise"),
+    }
+    assert anchor_problems(registry, section) == [
+        "routes_x.py  api_new_thing  -> update_spool: 'update_spool' is a write helper's name, "
+        "which the section holds for every site; anchor it to its function or endpoint",
+    ]
 
 
 def test_a_moved_or_renamed_section_fails_with_where_to_point():
