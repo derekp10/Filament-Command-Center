@@ -33,12 +33,17 @@ window.isToolheadType(type) and window.isHeadOrPrinterType(type), in the
          ('tool', 'MMU', 'direct load'): the words kept in a list;
        - a string holding '|' and a word ('tool|mmu', 'Tool Head|MMU Slot'): a
          regex's source, or a list to split;
+       - a string holding a word that is split into a list right where it is
+         written, whatever the separator ('tool,mmu,direct load'.split(','),
+         'Tool Head,MMU Slot'.split(','), its .split( on the next line too);
        - a quoted first argument holding a word, of .includes / .indexOf /
          .lastIndexOf / .startsWith / .endsWith / .match / .matchAll / .search
          or RegExp() (type.includes('Toolbox')).
-     A word counts at a word start only, a backslash escape before it reading
-     as a break (/\\btool\\b/), and "tooltip" is no Type, so 'community' or a
-     tooltip class name never trips it;
+     A template literal with a ${...} in it is a built string (a key, some
+     HTML), and isn't read as a '|' string or a split list. A word counts at a
+     word start only, a backslash escape before it reading as a break
+     (/\\btool\\b/), and "tooltip" is no Type, so 'community' or a tooltip
+     class name never trips it;
   4. the scanners catch what they should, on synthetic source;
   5. the helpers behave, in node, lifted out of inv_core.js on their own;
   6. the switched places behave, on the real modules in node.
@@ -46,7 +51,14 @@ window.isToolheadType(type) and window.isHeadOrPrinterType(type), in the
 A line that names a Type or a word on purpose and isn't an "is it a head?" check
 (the location editor's Type list, a Type badge's colour, a regex that reads a
 data-toolhead attribute) ends with `// toolhead-type-ok: <why>`; a marker with
-no reason doesn't count.
+no reason doesn't count. The rules can't tell such a line from a head check, so
+this is the trade-off they make: each of these needs the marker too, a UI label
+that is exactly a word ('MMU', 'Tool ', a column header 'Tool'; a label built as
+'Tool ' + n, its first piece being one, while `Tool ${n}` and 'Tool 3' aren't
+read), a label, key or selector holding '|' and a word (a toast 'MMU | Slot 3
+empty', a key 'tool|' + slot, '[data-kind|=mmu]'), a string of words split into
+a list for another reason, and a regex holding 'toolhead' or another word
+(/toolhead/i in a replace).
 
 Comments are skipped (the scanners read JavaScript through a small lexer that
 knows strings, templates, regex literals and comments), and so are the vendor
@@ -59,10 +71,13 @@ What the rules don't see: a Type built from pieces none of which is a head Type
 or a word ('No ' + 'MMU Direct Load'), or spelled another way ('Tool-Head'); a
 Type inside a longer string (some HTML, a selector '[data-type="Tool Head"]') or
 in a template's markup outside a <script> (an onclick attribute, an <option>); a
-'|' list in a template literal that also holds a ${...}; a regex literal right
-after ')', which the lexer reads as a division (if (ok) /mmu/i.test(t)); and
-'head', 'slot' or 'direct' on their own (the slot picker's 'head' kind and FCC's
-DIRECT spools would trip a rule that read them).
+list of words in a string split anywhere but right after it (const W =
+'tool,mmu'; then W.split(','), or a literal in parentheses), since a rule for
+every string with a comma would trip on prose ('Pick a tool, then a slot'); a
+'|' list or a split list in a template literal that also holds a ${...}; a
+regex literal right after ')', which the lexer reads as a division (if (ok)
+/mmu/i.test(t)); and 'head', 'slot' or 'direct' on their own (the slot picker's
+'head' kind and FCC's DIRECT spools would trip a rule that read them).
 """
 from __future__ import annotations
 
@@ -310,6 +325,9 @@ _ESCAPE = re.compile(r"\\+[A-Za-z]")
 _TEST_CALL_BEFORE = re.compile(
     r"(?:\.(?:includes|indexOf|lastIndexOf|startsWith|endsWith|match|matchAll|search)|\bRegExp)"
     r"\s*\(\s*$")
+# A literal split into a list right where it is written ('tool,mmu'.split(','),
+# its `.split(` on the next line too), whatever the separator.
+_SPLIT_AFTER = re.compile(r"\s*\??\.\s*split\s*\(")
 
 
 def _holds_type_words(inner: str) -> bool:
@@ -348,8 +366,13 @@ def substring_tests_of_a_type(name: str, text: str, first_line: int = 1) -> list
       - a string or template literal that IS a word, in any case or spacing
         ('tool', ' MMU ', `Direct Load`): the words kept in a list;
       - a string holding '|' and a word ('tool|mmu', 'Tool Head|MMU Slot'): a
-        regex's source, or a list to split. A template literal with a ${...} in
-        it is a built string (a key, some HTML) and isn't read this way;
+        regex's source, or a list to split;
+      - a string holding a word that is split into a list right where it is
+        written, whatever the separator ('tool,mmu'.split(','), 'Tool
+        Head,MMU Slot'.split(','), its .split( on the next line too): the
+        words, or the Types, kept in a list. A template literal with a ${...}
+        in it is a built string (a key, some HTML), and isn't read as a '|'
+        string or a split list;
       - a quoted first argument holding a word, of .includes / .indexOf /
         .lastIndexOf / .startsWith / .endsWith / .match / .matchAll / .search or
         RegExp() (type.includes('Toolbox'), new RegExp('\\bmmu\\b')).
@@ -357,12 +380,14 @@ def substring_tests_of_a_type(name: str, text: str, first_line: int = 1) -> list
     break (/\btool\b/)."""
     src = _Source(name, text, first_line)
     hits = []
-    for kind, start, _end, inner in src.literals():
+    for kind, start, end, inner in src.literals():
         if src.line_of(start) in src.marked_lines or not _holds_type_words(inner):
             continue
+        built = kind == "tpl" and "${" in inner
         if (kind == "regex"
                 or _norm(inner) in _HEAD_WORDS
-                or ("|" in inner and not (kind == "tpl" and "${" in inner))
+                or ("|" in inner and not built)
+                or (_SPLIT_AFTER.match(src.text, end) and not built)
                 or _TEST_CALL_BEFORE.search(src.text[max(0, start - 60):start])):
             hits.append(start)
     return src.report(hits)
@@ -475,7 +500,8 @@ def test_no_substring_test_of_a_location_type():
         f"{len(hits)} line(s) test a Type for a toolhead Type's words (\"tool\", \"mmu\", \"direct "
         "load\") or keep them for such a test: a regex literal holding one, however it is used "
         "(tested in place, kept in a const, handed to .match()), a quoted word on its own (a words "
-        "list), a string joining them with '|', or a quoted first argument holding one of .includes "
+        "list), a string joining them with '|', a string holding one split into a list where it "
+        "is written ('tool,mmu'.split(',')), or a quoted first argument holding one of .includes "
         "/ .indexOf / .lastIndexOf / .startsWith / .endsWith / .match / .matchAll / .search / "
         "RegExp(). A test for the words also makes any custom Type holding them "
         "(\"Toolbox\", \"MMU Buffer\") a head, and a regex of the whole Types is a copy of the "
@@ -495,17 +521,26 @@ DO_ASSIGN = "static/js/modules/inv_loc_mgr.js"
 DO_ASSIGN_CHECK = "const isToolheadTarget = !!locObjCheck && window.isHeadOrPrinterType(locObjCheck.Type);"
 
 
+_WORDS_CHECK = ("const isToolheadTarget = !!locObjCheck && HEAD_WORDS.some((w) => "
+                "String(locObjCheck.Type).toLowerCase().includes(w));")
+
+
 @pytest.mark.parametrize("kept,check", [
     ("const HEAD_RE = /tool|mmu|direct load|printer/i;",
      "const isToolheadTarget = !!locObjCheck && HEAD_RE.test(locObjCheck.Type);"),
-    ("const HEAD_WORDS = ['tool', 'mmu', 'direct load', 'printer'];",
-     "const isToolheadTarget = !!locObjCheck && HEAD_WORDS.some((w) => "
-     "String(locObjCheck.Type).toLowerCase().includes(w));"),
-], ids=["hoisted-regex", "words-list"])
+    ("const HEAD_WORDS = ['tool', 'mmu', 'direct load', 'printer'];", _WORDS_CHECK),
+    # The words, or the Types, kept in a string split into a list (review rb-2).
+    ("const HEAD_WORDS = 'tool,mmu,direct load,printer'.split(',');", _WORDS_CHECK),
+    ("const HEAD_WORDS = 'tool mmu printer'.split(' ');", _WORDS_CHECK),
+    ("const HEAD_TYPES = 'Tool Head,MMU Slot,No MMU Direct Load'.split(',');",
+     "const isToolheadTarget = !!locObjCheck && HEAD_TYPES.includes(String(locObjCheck.Type).trim());"),
+], ids=["hoisted-regex", "words-list", "comma-split-words", "space-split-words", "comma-split-types"])
 def test_doassigns_head_check_written_the_old_way_is_caught(kept, check):
-    """The review's proof on a real module (r2-4 / r5-2): doAssign's head check in
-    inv_loc_mgr.js, a daily move path, written as the old substring rule again,
-    its regex or its words kept in a const above it. The canary names the line."""
+    """The review's proof on a real module (r2-4 / r5-2, rb-2): doAssign's head
+    check in inv_loc_mgr.js, a daily move path, written as the old substring
+    rule again, its regex or its words kept in a const above it (a list, or a
+    string split into one), or the Types kept in a split string. The canary
+    names the line."""
     lines = (HUB / DO_ASSIGN).read_text(encoding="utf-8").split("\n")
     at = [i for i, ln in enumerate(lines) if ln.strip() == DO_ASSIGN_CHECK]
     assert len(at) == 1, (
@@ -567,11 +602,22 @@ def test_a_copy_is_caught(line):
     # A Type built from pieces, one of them a word on its own.
     "if (row.Type === 'Tool' + ' Head') go();",
     "if (type.includes ('toolhead')) go();",
+    # The words or the Types in a string split into a list, whatever the
+    # separator (review rb-2). The line reported is the literal's.
+    "const HEAD_WORDS = 'tool,mmu,direct load'.split(',');\n"
+    "const isHead = HEAD_WORDS.some((w) => type.toLowerCase().includes(w));",
+    "const HEAD_WORDS = 'tool mmu'.split(' ');\nconst isHead = HEAD_WORDS.some((w) => t.includes(w));",
+    "const isHead = 'Tool Head,MMU Slot,No MMU Direct Load'.split(',').includes(row.Type);",
+    "const HEAD_WORDS = 'tool;mmu;direct load'.split(';');\nconst isHead = HEAD_WORDS.some((w) => t.includes(w));",
+    "const HEAD_WORDS = 'Tool, MMU, Direct Load'\n  .split(/,\\s*/);\n"
+    "const isHead = HEAD_WORDS.some((w) => t.includes(w));",
+    "const HEAD_WORDS = `tool mmu`.split(' ');\nconst isHead = HEAD_WORDS.some((w) => t.includes(w));",
 ], ids=["indexOf", "regex-test", "includes", "startsWith", "match-regex", "RegExp", "search-backtick",
         "hoisted-regex-of-the-list", "hoisted-lower-case-regex-match", "hoisted-substring-regex",
         "words-list", "hoisted-words-list", "list-of-regexes", "escaped-word-starts",
         "RegExp-of-escaped-words", "joined-regex-source", "joined-list-split", "type-from-pieces",
-        "space-before-paren"])
+        "space-before-paren", "comma-split-words", "space-split-words", "comma-split-types",
+        "semicolon-split-words", "split-on-the-next-line", "template-split"])
 def test_a_substring_test_is_caught(line):
     first = line.split("\n")[0]
     assert substring_tests_of_a_type(M, "let a;\n" + line + "\n") == [f"{M}:2: {first}"]
@@ -629,9 +675,17 @@ def test_the_marked_block_allows_no_substring_test():
     "const key = `${th.toolhead}|${slot}`;\n",
     "const label = 'Tool 3'; showToast('Pick a tool first');\n",
     "const kind = 'toolhead'; const cls = 'mmu-grid'; el.matches('.mmu-grid');\n",
+    # A comma in prose is no list; only a string split right where it is
+    # written is read as one (review rb-2).
+    "showToast('Pick a tool, then a slot'); const t = 'MMU, then the slot';\n",
+    "const parts = 'a,b,c'.split(','); const words = name.split(' ');\n",
+    "const ids = `${row.toolhead_id}-${slot}`.split('-');\n",
+    "const kinds = 'tooltip,popover'.split(',');\n",
+    "const fields = lineOf(text).split(','); const label = `Tool ${n + 1}`;\n",
 ], ids=["comment", "block-comment", "prose", "tooltip-community", "feed-kind", "variable",
         "division", "quote-in-regex", "template-expression", "tooltip-regex", "template-key",
-        "a-word-in-words", "longer-words"])
+        "a-word-in-words", "longer-words", "prose-with-a-comma", "split-without-a-word",
+        "built-template-split", "tooltip-split", "split-of-no-literal"])
 def test_unrelated_code_passes(text):
     assert copies_of_the_list(M, text) == [] and substring_tests_of_a_type(M, text) == []
 
