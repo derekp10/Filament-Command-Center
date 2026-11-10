@@ -961,7 +961,10 @@ def update_spool_or_raise(sid, data):
     return result
 
 def create_spool(data):
-    """Creates a new spool via POST to Spoolman."""
+    """Creates a new spool via POST to Spoolman. Sets LAST_SPOOLMAN_ERROR on a
+    refusal and clears it on success, as the other writers do (Group 53.2: it
+    never did, so a caller read an earlier write's refusal as this one's)."""
+    global LAST_SPOOLMAN_ERROR
     sm_url, _ = config_loader.get_api_urls()
     try:
         if 'location' in data and isinstance(data['location'], str):
@@ -977,10 +980,13 @@ def create_spool(data):
         clean_data = sanitize_outbound_data(data)
         r = requests.post(f"{sm_url}/api/v1/spool", json=clean_data, timeout=5)
         if r.ok:
+            LAST_SPOOLMAN_ERROR = None
             return r.json()
         state.logger.error(f"Failed to create spool: {r.status_code} - {r.text}")
+        LAST_SPOOLMAN_ERROR = f"HTTP {r.status_code}: {r.text[:400]}"
     except Exception as e:
         state.logger.error(f"API Error creating spool: {e}")
+        LAST_SPOOLMAN_ERROR = str(e)[:400]
     return None
 
 # Group 52.2: the pre-merge extras read gets a second try after a short pause.
@@ -1531,16 +1537,22 @@ def update_filament_or_raise(fid, data):
 
 
 def create_filament(data):
-    """Creates a new filament via POST to Spoolman."""
+    """Creates a new filament via POST to Spoolman. Sets LAST_SPOOLMAN_ERROR on
+    a refusal and clears it on success (Group 53.2): /api/create_filament
+    answers a refusal with it (28.B4), and it used to hold an earlier write's."""
+    global LAST_SPOOLMAN_ERROR
     sm_url, _ = config_loader.get_api_urls()
     sanitized = sanitize_outbound_data(data)
     try:
         r = requests.post(f"{sm_url}/api/v1/filament", json=sanitized, timeout=5)
         if r.ok:
+            LAST_SPOOLMAN_ERROR = None
             return r.json()
         state.logger.error(f"Failed to create filament: {r.status_code} - {r.text}")
+        LAST_SPOOLMAN_ERROR = f"HTTP {r.status_code}: {r.text[:400]}"
     except Exception as e:
         state.logger.error(f"API Error creating filament: {e}")
+        LAST_SPOOLMAN_ERROR = str(e)[:400]
     return None
 
 
