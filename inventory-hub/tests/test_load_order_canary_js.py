@@ -55,7 +55,8 @@ What it catches:
   - the same read of a name only a DOMContentLoaded or load handler defines (a
     provider moved into one: those run once every script has loaded);
   - a load-time window.X read of a name that is only a top-level const / let /
-    class (never on window, so always undefined), and a script-scope alias of
+    class (never on window, so always undefined), a script's read of one it
+    declares itself included, and a script-scope alias of
     a later script's name (`const { X } = window;` or `const X = window.X;` in
     a script that loads before X's: the script declares X itself, and its
     alias stays undefined for good);
@@ -1556,17 +1557,25 @@ async function pass2(definers) {
   for (const [name, reader, at, timer] of two.reads) {
     let definer = one.definers.get(name);
     let lexical = one.lexical.has(name);
+    const own = reader === definer;
     let alias = false;
-    if (reader === definer) {
-      // A script's own read of a name it declares as a top-level const / let
-      // is a window.X read (its bare reads hit its own binding): an alias
-      // such as `const { X } = window;`. If a later script sets window.X, the
-      // alias was taken before it did, and stays undefined: an early read.
-      const setter = lexical ? one.onWindowLater.get(name) : undefined;
-      if (setter === undefined || reader >= setter) { selfReads += 1; continue; }
-      definer = setter;
-      lexical = false;
-      alias = true;
+    if (own) {
+      // A script reading a name it defines on window reads its own name.
+      // One it declares as a top-level const / let / class is different: its
+      // bare reads hit its own binding, so a read that reaches the planted
+      // name is a window.X read, and X is never a window property unless a
+      // later script sets it there. With no such script, the read is always
+      // undefined: a late read below (reader === definer). With one, it is
+      // early against that script (an alias such as `const { X } = window;`
+      // is undefined when it is taken).
+      if (!lexical) { selfReads += 1; continue; }
+      const setter = one.onWindowLater.get(name);
+      if (setter !== undefined) {
+        if (reader >= setter) { selfReads += 1; continue; }
+        definer = setter;
+        lexical = false;
+        alias = true;
+      }
     }
     // Past its definer, a planted name is read only off window, and only one
     // that is a top-level const / let / class there is still planted. If a
@@ -1583,7 +1592,7 @@ async function pass2(definers) {
     const key = reader + ' ' + name;
     if (seen.has(key)) continue;
     seen.add(key);
-    const read = { reader: named(reader), name, definer: named(definer), lexical, alias, at, timer,
+    const read = { reader: named(reader), name, definer: named(definer), lexical, alias, own, at, timer,
                    handler: definer === scripts.length ? (one.handlerOf.get(name) || '') : '' };
     (reader < definer ? early : late).push(read);
   }
@@ -1686,10 +1695,19 @@ def early_read_problems(result: dict, allowed: dict) -> list:
 
 
 def late_read_problems(result: dict) -> list:
-    return [f"  - {r['reader']} reads window.{r['name']} while it loads{_at(r)}, but {r['name']} is a top-level "
-            f"const / let / class in {r['definer']}, which never becomes a window property, so the read is "
-            f"always undefined. Read it bare ({r['name']}), or have {r['definer']} also set "
-            f"window.{r['name']}." for r in result["late_reads"]]
+    out = []
+    for r in result["late_reads"]:
+        if r.get("own"):  # the script declares the name itself
+            out.append(f"  - {r['reader']} reads window.{r['name']} while it loads{_at(r)}, but {r['name']} is its "
+                       f"own top-level const / let / class, which never becomes a window property, so the read is "
+                       f"always undefined. Read it bare ({r['name']}), or set window.{r['name']} = {r['name']} "
+                       f"before that read.")
+            continue
+        out.append(f"  - {r['reader']} reads window.{r['name']} while it loads{_at(r)}, but {r['name']} is a "
+                   f"top-level const / let / class in {r['definer']}, which never becomes a window property, so "
+                   f"the read is always undefined. Read it bare ({r['name']}), or have {r['definer']} also set "
+                   f"window.{r['name']}.")
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1950,6 +1968,46 @@ def test_a_window_read_of_a_top_level_const_is_reported(page_scripts, load_dir):
         (fake, "state", "js/modules/inv_core.js")], (
         _pinned("state", "js/modules/inv_core.js, as a top-level let"), result["late_reads"])
     assert result["early_reads"] == [], result["early_reads"]
+
+
+def test_a_scripts_window_read_of_its_own_top_level_const_is_reported(page_scripts, load_dir):
+    """A script's own window.X read of a top-level const / let / class it
+    declares itself, when no later script sets window.X, is always undefined:
+    the name never becomes a window property (review finding ra-2: it was
+    counted as the script reading its own name, and never reported). The
+    finding's own shape, a copy of inv_core.js reading window.state at its
+    end, and fakes with names of their own: a let, a class, and a const read
+    in a zero-delay timer the script queues."""
+    module = "js/modules/inv_core.js"
+    src = (STATIC / module).read_text(encoding="utf-8")
+    assert re.search(r"^let state\b", src, re.M), (
+        _pinned("state", f"{module}, as a top-level let"), "no top-level `let state` in it")
+    copy = load_dir / "own_inv_core.js"
+    copy.write_text(src + "\nif (window.state && window.state.heldSpools) { window.__fakeRestore = 1; }\n",
+                    encoding="utf-8")
+    page = [dict(s, file=str(copy)) if s["name"] == module else s for s in page_scripts]
+    fakes = {
+        "FAKE own let read off window": ("let fakeOwnLet = 1;\nif (window.fakeOwnLet) {}", "fakeOwnLet"),
+        "FAKE own class read off window": ("class FakeOwnClass {}\nif (window.FakeOwnClass) {}", "FakeOwnClass"),
+        "FAKE own const read off window in a zero-delay timer": (
+            "const fakeOwnTimed = 1;\nsetTimeout(() => { if (window.fakeOwnTimed) {} }, 0);", "fakeOwnTimed"),
+    }
+    for fake, (code, _) in fakes.items():
+        page = with_fake(page, code, fake, after="js/modules/titlebar_prefs.js")
+    result = run_page(page, load_dir, "fake-own-lexical")
+    expected = {(module, "state", module)} | {(fake, name, fake) for fake, (_, name) in fakes.items()}
+    assert {(r["reader"], r["name"], r["definer"]) for r in result["late_reads"]} == expected, (
+        _pinned("state", f"{module}, as a top-level let"), result["late_reads"])
+    assert result["early_reads"] == [] and result["errors"] == [], result
+    at = {r["name"]: r["at"] for r in result["late_reads"]}
+    assert at["state"].startswith(module + ":"), at
+    assert at["fakeOwnLet"].startswith("FAKE own let read off window:2:"), at
+    problems = late_read_problems(result)
+    assert len(problems) == 4, problems
+    for p in problems:
+        assert "its own top-level const / let / class" in p and "always undefined" in p, p
+    words = [p for p in problems if " reads window.state " in p]
+    assert len(words) == 1 and "Read it bare (state)" in words[0], problems
 
 
 def test_a_window_read_before_a_later_script_puts_the_const_on_window_is_early(page_scripts, load_dir):
