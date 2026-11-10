@@ -19,8 +19,9 @@ How (node's `vm`: no browser, no container, so it runs under --offline):
   2. Pass 1 loads every script over a browser stub (STUB_JS) and records which
      script first defines each name: a new property of window (a function
      declaration, a var, a `window.X = ...`), or a new top-level const / let /
-     class (those never land on window: V8 is asked which names resolve after
-     the script that didn't before).
+     class (those never land on window: V8 is asked which of the names the
+     script's declarations name, every declarator of each, resolve after the
+     script that didn't before).
   3. Pass 2 loads them again in a fresh context where each of those names is
      first planted on window as an accessor that records who read it and
      returns undefined. The defining script's own definition replaces it (a
@@ -56,6 +57,10 @@ What it can't see:
     script's assignment reaches it and a use at call time works; only a use
     while loading gets undefined, and the alias's own read counts as the
     script reading its own name;
+  - a top-level const / let declarator the declaration scan misreads
+    (DRIVER_JS's declaredNames says where it can go wrong: a regular
+    expression taken for a division, a line break read as the statement's end,
+    a declaration past MAX_DECLARATION_TOKENS, a non-ASCII name);
   - an `'X' in window` / hasOwnProperty / getOwnPropertyDescriptor check of a
     name pass 2 planted: the accessor is there, so the check says "present"
     before the defining script has run. The check itself records nothing; a
@@ -569,7 +574,7 @@ const vm = require('vm');
 const fs = require('fs');
 
 const page = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-const scripts = page.scripts;
+const scripts = page.scripts || [];
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
 function quietConsole() {
@@ -657,24 +662,164 @@ const RESERVED = new Set((
   'function if import in instanceof new null return super switch this throw true try typeof var void while with ' +
   'yield let static implements interface package private protected public await arguments eval undefined NaN Infinity'
 ).split(' '));
-// Every name a const / let / class anywhere in the source declares, a
-// destructuring pattern's names included: a superset of the script's
-// top-level lexical names, which V8 is then asked about (resolvable below).
+// The names V8 is asked about (resolvable below): every name a const / let /
+// class anywhere in the source declares. Each declarator of a statement
+// (`let a = 1, b = 2;`), every name in a destructuring pattern (a default
+// value's names with them: an extra name costs only a probe), and a class's
+// name. The source is read as tokens, so a comma or bracket inside a string,
+// template literal (its ${...} too), comment or regular expression starts no
+// declarator. Where the scan can still go wrong, a later declarator is missed:
+// a '/' is taken for a regular expression only where an expression may start
+// (after a punctuator other than ) ] }, or a keyword such as return: the usual
+// rule of thumb); a line break ends a declaration unless the line before it
+// ends, or the next begins, with an operator, a comma or a bracket (automatic
+// semicolon insertion, roughly); a declaration is followed for at most
+// MAX_DECLARATION_TOKENS tokens; and only plain ASCII names are taken.
+const MAX_DECLARATION_TOKENS = 20000;
+const REGEX_AFTER_WORD = new Set(['return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void', 'throw',
+                                  'case', 'do', 'else', 'yield', 'await']);
+const isIdStart = (c) => (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c === 36 || c === 95 || c > 127;
+const isIdPart = (c) => isIdStart(c) || (c >= 48 && c <= 57);
+const isLineBreak = (c) => c === 10 || c === 13 || c === 0x2028 || c === 0x2029;
+const isBlank = (c) => c === 32 || c === 9 || c === 11 || c === 12 || c === 0xa0 || c === 0xfeff;
+// Reads src from i as tokens ({t: 'id' | 'p' (one punctuator character) |
+// 'lit', v, nl: a line break before it}) into toks (null: only skip them), to
+// the end, or with closeBrace to just past the } that closes a ${. Returns
+// where it stopped.
+function lexInto(src, i, toks, closeBrace) {
+  const n = src.length;
+  let depth = 0;
+  let nl = false;
+  let prev = null;
+  const push = (t, v) => { prev = { t, v, nl }; if (toks) toks.push(prev); nl = false; };
+  while (i < n) {
+    const c = src.charCodeAt(i);
+    if (isLineBreak(c)) { nl = true; i += 1; continue; }
+    if (isBlank(c)) { i += 1; continue; }
+    if (c === 47) {  // '/'
+      const d = src.charCodeAt(i + 1);
+      if (d === 47) { while (i < n && !isLineBreak(src.charCodeAt(i))) i += 1; continue; }
+      if (d === 42) {
+        const close = src.indexOf('*/', i + 2);
+        const end = close < 0 ? n : close + 2;
+        for (let j = i; j < end; j++) if (isLineBreak(src.charCodeAt(j))) { nl = true; break; }
+        i = end;
+        continue;
+      }
+      if (!prev || (prev.t === 'p' && !')]}'.includes(prev.v)) || (prev.t === 'id' && REGEX_AFTER_WORD.has(prev.v))) {
+        i = skipRegex(src, i);
+        push('lit', '');
+        continue;
+      }
+    }
+    if (c === 39 || c === 34) { i = skipQuoted(src, i); push('lit', ''); continue; }
+    if (c === 96) { i = skipTemplate(src, i); push('lit', ''); continue; }
+    if (isIdStart(c)) {
+      let j = i + 1;
+      while (j < n && isIdPart(src.charCodeAt(j))) j += 1;
+      push('id', src.slice(i, j));
+      i = j;
+      continue;
+    }
+    if (c >= 48 && c <= 57) {
+      let j = i + 1;
+      while (j < n && (isIdPart(src.charCodeAt(j)) || src.charCodeAt(j) === 46)) j += 1;
+      push('lit', '');
+      i = j;
+      continue;
+    }
+    if (closeBrace) {
+      if (c === 123) depth += 1;
+      else if (c === 125 && depth-- === 0) return i + 1;
+    }
+    push('p', src[i]);
+    i += 1;
+  }
+  return n;
+}
+function skipQuoted(src, i) {
+  const q = src.charCodeAt(i);
+  for (let j = i + 1; j < src.length; j++) {
+    const c = src.charCodeAt(j);
+    if (c === 92) { j += 1; continue; }
+    if (c === q) return j + 1;
+    if (c === 10 || c === 13) return j;  // never closed: its line ends it
+  }
+  return src.length;
+}
+function skipTemplate(src, i) {
+  for (let j = i + 1; j < src.length; j++) {
+    const c = src.charCodeAt(j);
+    if (c === 92) { j += 1; continue; }
+    if (c === 96) return j + 1;
+    if (c === 36 && src.charCodeAt(j + 1) === 123) j = lexInto(src, j + 2, null, true) - 1;
+  }
+  return src.length;
+}
+function skipRegex(src, i) {
+  let inClass = false;
+  for (let j = i + 1; j < src.length; j++) {
+    const c = src.charCodeAt(j);
+    if (c === 92) { j += 1; continue; }
+    if (c === 10 || c === 13) return j;  // no closing '/' on its line: not one after all
+    if (inClass) { if (c === 93) inClass = false; continue; }
+    if (c === 91) { inClass = true; continue; }
+    if (c === 47) { j += 1; while (j < src.length && isIdPart(src.charCodeAt(j))) j += 1; return j; }
+  }
+  return src.length;
+}
+// After these a line break doesn't end a declaration, nor before these: the
+// expression goes on.
+const GOES_ON_AFTER = new Set([',', '=', '+', '-', '*', '/', '%', '&', '|', '^', '!', '~', '?', ':', '<', '>', '.', '(', '[', '{']);
+const GOES_ON_BEFORE = new Set([',', '=', '+', '-', '*', '/', '%', '&', '|', '^', '?', ':', '<', '>', '.', '(', '[', ')', ']', '}']);
+// The names a const / let starting at toks[k] declares, one per declarator.
+function declarators(toks, k, add) {
+  let depth = 0;
+  let binding = true;  // the next token starts a declarator
+  const stop = Math.min(toks.length, k + MAX_DECLARATION_TOKENS);
+  for (; k < stop; k++) {
+    const t = toks[k];
+    if (binding) {
+      binding = false;
+      if (t.t === 'id') { add(t.v); continue; }
+      if (t.t === 'p' && (t.v === '[' || t.v === '{')) {  // a destructuring pattern: every name in it
+        for (let d = 0; k < stop; k++) {
+          const u = toks[k];
+          if (u.t === 'p' && '([{'.includes(u.v)) d += 1;
+          else if (u.t === 'p' && ')]}'.includes(u.v)) { if (--d === 0) break; }
+          else if (u.t === 'id') add(u.v);
+        }
+        continue;
+      }
+      return;  // not a declaration (`let` as a name)
+    }
+    if (t.nl && depth === 0) {
+      const p = toks[k - 1];
+      if (!(p.t === 'p' && GOES_ON_AFTER.has(p.v)) && !(t.t === 'p' && GOES_ON_BEFORE.has(t.v))) return;
+    }
+    if (t.t !== 'p') continue;
+    if ('([{'.includes(t.v)) depth += 1;
+    else if (')]}'.includes(t.v)) { if (--depth < 0) return; }
+    else if (depth === 0 && t.v === ';') return;
+    else if (depth === 0 && t.v === ',') binding = true;
+  }
+}
 function declaredNames(src) {
   const out = new Set();
-  const add = (n) => { if (!RESERVED.has(n) && !n.startsWith('__fccProbe')) out.add(n); };
-  const re = /\b(?:const|let|class)(?:\s+([A-Za-z_$][\w$]*)|\s*([\[{]))/g;
-  let m;
-  while ((m = re.exec(src))) {
-    if (m[1]) { add(m[1]); continue; }
-    let depth = 0;
-    let j = m.index + m[0].length - 1;
-    for (; j < src.length; j++) {
-      const c = src[j];
-      if (c === '{' || c === '[') depth += 1;
-      else if ((c === '}' || c === ']') && --depth === 0) break;
+  const add = (n) => { if (/^[A-Za-z_$][\w$]*$/.test(n) && !RESERVED.has(n) && !n.startsWith('__fccProbe')) out.add(n); };
+  const toks = [];
+  lexInto(src, 0, toks, false);
+  for (let k = 0; k < toks.length; k++) {
+    const t = toks[k];
+    if (t.t !== 'id' || (t.v !== 'const' && t.v !== 'let' && t.v !== 'class')) continue;
+    const before = toks[k - 1];
+    if (before && before.t === 'p' && before.v === '.') continue;  // a property named so
+    if (t.v === 'class') {
+      const next = toks[k + 1];
+      if (next && next.t === 'id' && next.v !== 'extends') add(next.v);
+      continue;
     }
-    for (const n of src.slice(m.index + m[0].length, j).match(/[A-Za-z_$][\w$]*/g) || []) add(n);
+    declarators(toks, k + 1, add);
   }
   return out;
 }
@@ -760,6 +905,10 @@ async function pass2(definers) {
 }
 
 (async () => {
+  if (page.declared) {  // the declaration scan alone, on the sources given (its own test)
+    console.log('__RESULT_MARK__' + JSON.stringify(page.declared.map((src) => [...declaredNames(src)].sort())));
+    return;
+  }
   const one = await pass1();
   const two = await pass2(one.definers);
   const named = (i) => scripts[i].name;
@@ -818,10 +967,9 @@ async function pass2(definers) {
 """.replace("__RESULT_MARK__", RESULT_MARK)
 
 
-def run_page(scripts: list, work: Path, label: str, stub: str = STUB_JS) -> dict:
-    """Loads `scripts` in order under node, both passes, and returns the driver's result."""
+def _run_driver(payload: dict, work: Path, label: str):
     page = work / f"{label}.json"
-    page.write_text(json.dumps({"stub": stub, "scripts": scripts}), encoding="utf-8")
+    page.write_text(json.dumps(payload), encoding="utf-8")
     driver = work / "load_order_driver.js"
     driver.write_text(DRIVER_JS, encoding="utf-8")
     proc = subprocess.run([NODE, str(driver), str(page)], capture_output=True, text=True,
@@ -831,6 +979,16 @@ def run_page(scripts: list, work: Path, label: str, stub: str = STUB_JS) -> dict
         f"the load-order driver failed (rc={proc.returncode})\n"
         f"stdout:\n{proc.stdout[-4000:]}\nstderr:\n{proc.stderr[-4000:]}")
     return json.loads(lines[-1][len(RESULT_MARK):])
+
+
+def run_page(scripts: list, work: Path, label: str, stub: str = STUB_JS) -> dict:
+    """Loads `scripts` in order under node, both passes, and returns the driver's result."""
+    return _run_driver({"stub": stub, "scripts": scripts}, work, label)
+
+
+def declared_names(sources: list, work: Path) -> list:
+    """For each source, the names the declaration scan (DRIVER_JS's declaredNames) lists."""
+    return _run_driver({"stub": STUB_JS, "declared": sources}, work, "declared-names")
 
 
 # ---------------------------------------------------------------------------
@@ -1157,6 +1315,48 @@ def test_an_alias_in_a_real_module_is_reported(page_scripts, load_dir):
     result = run_page(page, load_dir, "alias-inv-cmd")
     assert _early(result) == {(module, "openSlotPicker", provider)}, result["early_reads"]
     assert result["early_reads"][0]["at"].startswith(module + ":1:"), result["early_reads"]
+
+
+def test_every_declarator_of_a_top_level_let_is_a_definer(page_scripts, load_dir):
+    """`let a = ..., b = ...;` declares both names: a `typeof` of the second
+    before its script is an early read, as one of the first is (review finding
+    r2-6: only the first declarator used to be a definer)."""
+    definer = "FAKE definer after titlebar_prefs.js: let fakeFirst = ..., fakeSecond = ..."
+    reader = "FAKE reader before inv_core.js: typeof fakeSecond"
+    page = with_fake(page_scripts, "let fakeFirst = function () {}, fakeSecond = function () {};", definer,
+                     after="js/modules/titlebar_prefs.js")
+    page = with_fake(page, "if (typeof fakeSecond === 'function') {}", reader, before="js/modules/inv_core.js")
+    result = run_page(page, load_dir, "fake-second-declarator")
+    assert _early(result) == {(reader, "fakeSecond", definer)}, result["early_reads"]
+    assert result["definers"].get("fakeFirst") == definer and {"fakeFirst", "fakeSecond"} <= set(result["lexical"])
+    assert result["errors"] == [], result["errors"]
+
+
+# (source, names the declaration scan must find, names it must not)
+DECLARATION_SHAPES = [
+    ("let a1 = 1, b1 = 2;", {"a1", "b1"}, set()),
+    ("const c1 = f(1, 2), d1 = [3, 4], e1 = { x: 1, y: 2 }, g1 = function () { return 1, 2; };",
+     {"c1", "d1", "e1", "g1"}, {"x", "y"}),
+    ("const { k1, l1: m1 = n(1, 2), ...o1 } = p, [q1, , r1 = 's,t'] = u;", {"k1", "m1", "o1", "q1", "r1"}, {"p"}),
+    ("const v1 = 'a, w1 = 1', x1 = `${y1, 1}, z1 = 2`, aa1 = /, bb1 = [,]/g, cc1 = 1;",
+     {"v1", "x1", "aa1", "cc1"}, {"w1", "y1", "z1", "bb1"}),
+    ("let dd1 = cond\n  ? 1\n  : 2,\n  ee1 = 3\nfoo(ff1, gg1);", {"dd1", "ee1"}, {"ff1", "gg1"}),
+    ("let hh1 = 1 // , ii1 = 2\n, jj1 = 3; /* , kk1 = 4 */", {"hh1", "jj1"}, {"ii1", "kk1"}),
+    ("obj.let = 1; const ll1 = 1; class Mm1 extends Nn1 {}", {"ll1", "Mm1"}, {"Nn1"}),
+    ("for (const [oo1, pp1] of xs) {} let qq1 = 1", {"oo1", "pp1", "qq1"}, set()),
+]
+
+
+def test_the_declaration_scan_finds_every_declarator_and_skips_literals(load_dir):
+    """The scan (DRIVER_JS's declaredNames) lists the names V8 is then asked
+    about. Over-inclusion costs a probe; a miss hides a definer. A comma inside
+    a string, template literal, comment or regular expression starts no
+    declarator, and a line break ends a declaration only where JavaScript's
+    automatic semicolon insertion would."""
+    found = declared_names([src for src, _, _ in DECLARATION_SHAPES], load_dir)
+    for (src, must, must_not), names in zip(DECLARATION_SHAPES, found):
+        assert must <= set(names), f"{src!r}: missed {sorted(must - set(names))} (found {names})"
+        assert not (must_not & set(names)), f"{src!r}: took {sorted(must_not & set(names))} for declared names"
 
 
 def test_a_stub_copy_of_a_page_name_is_reported(page_scripts, load_dir):
