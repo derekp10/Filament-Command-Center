@@ -50,7 +50,9 @@ What it can't see:
     read to move;
   - an `'X' in window` / hasOwnProperty / getOwnPropertyDescriptor check of a
     name pass 2 planted: the accessor is there, so the check says "present"
-    before the defining script has run, and no read is recorded.
+    before the defining script has run. The check itself records nothing; a
+    read of X the code then makes is reported, although a browser would have
+    skipped it (FCC has no such check today).
 
 When it fails:
   - an early read: move the read into a function that runs later (on
@@ -127,7 +129,7 @@ class CanaryCannotRead(Exception):
 # ---------------------------------------------------------------------------
 
 _JINJA_COMMENT = re.compile(r"\{#.*?#\}", re.S)
-_JINJA_STATEMENT = re.compile(r"\{%-?\s*([A-Za-z_]\w*)(.*?)-?%\}", re.S)
+_JINJA_STATEMENT = re.compile(r"\{%[-+]?\s*([A-Za-z_]\w*)(.*?)[-+]?%\}", re.S)  # {%- / {%+ trim marks too
 _JINJA_EXPRESSION = re.compile(r"\{\{.*?\}\}", re.S)
 _INCLUDE_TARGET = re.compile(r"""\s*(['"])([^'"]+)\1""")
 # A <script> inside these never runs at load: a <template>'s content is inert,
@@ -688,6 +690,7 @@ async function pass1() {
   const errors = [];
   const definers = new Map();
   const lexical = new Set();
+  const onWindowLater = new Map();  // a top-level const / let name a later script also sets on window
   const stubNames = new Set(Object.getOwnPropertyNames(env.sandbox));
   const overlaps = [];
   const overlapping = new Set();
@@ -699,8 +702,10 @@ async function pass1() {
     await load(env, i, errors);
     const after = ownValues(env.sandbox);
     for (const [name, value] of after) {
-      if (!before.has(name)) { if (!definers.has(name)) definers.set(name, i); }
-      else if (stubNames.has(name) && !Object.is(before.get(name), value) && !overlapping.has(name)) {
+      if (!before.has(name)) {
+        if (!definers.has(name)) definers.set(name, i);
+        else if (lexical.has(name) && !onWindowLater.has(name)) onWindowLater.set(name, i);
+      } else if (stubNames.has(name) && !Object.is(before.get(name), value) && !overlapping.has(name)) {
         overlapping.add(name);
         overlaps.push({ name, script: scripts[i].name, how: 'sets it on window' });
       }
@@ -716,7 +721,7 @@ async function pass1() {
     }
     before = after;
   }
-  return { errors, definers, lexical, overlaps };
+  return { errors, definers, lexical, onWindowLater, overlaps };
 }
 
 // Pass 2: every defined name planted on window, each read charged to the
@@ -750,15 +755,25 @@ async function pass2(definers) {
   const seen = new Set();
   let selfReads = 0;
   for (const [name, reader, at] of two.reads) {
-    const definer = one.definers.get(name);
-    const key = reader + ' ' + name;
+    let definer = one.definers.get(name);
+    let lexical = one.lexical.has(name);
     if (reader === definer) { selfReads += 1; continue; }
     // Past its definer, a planted name is read only off window, and only one
-    // that is a top-level const / let / class there is still planted.
-    if (reader > definer && !one.lexical.has(name)) continue;
+    // that is a top-level const / let / class there is still planted. If a
+    // later script sets it on window, the read is early against that script.
+    if (reader > definer) {
+      if (!lexical) continue;
+      const setter = one.onWindowLater.get(name);
+      if (setter !== undefined) {
+        if (reader >= setter) { selfReads += 1; continue; }
+        definer = setter;
+        lexical = false;
+      }
+    }
+    const key = reader + ' ' + name;
     if (seen.has(key)) continue;
     seen.add(key);
-    const read = { reader: named(reader), name, definer: named(definer), lexical: one.lexical.has(name), at };
+    const read = { reader: named(reader), name, definer: named(definer), lexical, at };
     (reader < definer ? early : late).push(read);
   }
   const definers = {};
@@ -877,7 +892,9 @@ def test_every_inline_script_parses_with_its_server_values_as_null(page_scripts,
     checked. (Today the last script's server values are in `= {{ ... }};`
     and inside a string, both fine as null.)"""
     inline = [s for s in page_scripts if s["kind"] == "inline"]
-    assert any("= null;" in s["code"] for s in inline), "no inline script holds a server value any more"
+    assert any("= null;" in s["code"] for s in inline), (
+        "No inline script on the page assigns a {{ ... }} server value any more, so this check guards "
+        "nothing as written: point the line above at an inline script that still holds one, or drop it.")
     broken = [e for e in page_load["errors"]
               if e["phase"] == "compile" and e["script"] in {s["name"] for s in inline}]
     assert not broken, "\n".join(
@@ -1066,6 +1083,18 @@ def test_a_window_read_of_a_top_level_const_is_reported(page_scripts, load_dir):
     assert result["early_reads"] == [], result["early_reads"]
 
 
+def test_a_window_read_before_a_later_script_puts_the_const_on_window_is_early(page_scripts, load_dir):
+    """When a later script does set window.state, a window.state read before it
+    is an early read against that script, not one that is always undefined."""
+    reader = "FAKE script after inv_core.js reading window.state"
+    setter = "FAKE script after it setting window.state = state"
+    page = with_fake(page_scripts, "if (window.state) {}", reader, after="js/modules/inv_core.js")
+    page = with_fake(page, "window.state = state;", setter, after=reader)
+    result = run_page(page, load_dir, "fake-window-lexical-set-later")
+    assert _early(result) == {(reader, "state", setter)}, result["early_reads"]
+    assert result["late_reads"] == [] and result["errors"] == [], result
+
+
 def test_a_stub_copy_of_a_page_name_is_reported(page_scripts, load_dir):
     """A stand-in for showToast in the stub, as someone might add to get a
     script to load, is caught: inv_core.js sets showToast on window too."""
@@ -1156,6 +1185,8 @@ def test_a_failure_names_its_template_line(tmp_path):
 @pytest.mark.parametrize("files,words", [
     pytest.param({"page.html": "{% if on %}\n<script>var a = 1;</script>\n{% endif %}\n"},
                  "sits inside {% if %} at templates/page.html:1", id="script-in-if"),
+    pytest.param({"page.html": "{%+ if on +%}\n<script>var a = 1;</script>\n{%- endif -%}\n"},
+                 "sits inside {% if %} at templates/page.html:1", id="script-in-if-with-trim-marks"),
     pytest.param({"page.html": "{% for x in xs %}{% include 'part.html' %}{% endfor %}\n",
                   "part.html": "<script>var a = 1;</script>\n"},
                  "sits inside {% for %} at templates/page.html:1", id="include-in-for"),
