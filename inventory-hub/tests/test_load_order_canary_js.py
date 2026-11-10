@@ -608,7 +608,7 @@ function runOne(env, i, errors) {
   const fail = (phase, e) => errors.push(Object.assign({ script: s.name, phase }, describe(e, phase)));
   if (s.kind === 'cdn') { try { env.stub.cdn(s.globals); } catch (e) { fail('run', e); } return; }
   if (src && typeof src === 'object') {
-    errors.push({ script: s.name, phase: 'read', message: `not on disk (${src.missing})`, at: s.file, stack: [] });
+    errors.push({ script: s.name, phase: 'read', message: `not on disk (${src.missing})`, at: s.where || s.file, stack: [] });
     return;
   }
   let compiled;
@@ -799,7 +799,7 @@ def run_page(scripts: list, work: Path, label: str, stub: str = STUB_JS) -> dict
 # ---------------------------------------------------------------------------
 
 _PHASES = {"compile": "a syntax error", "run": "an error while it loads",
-           "promise": "an error in a promise callback while it loads", "read": "its file"}
+           "promise": "an error in a promise callback while it loads"}
 
 
 def _at(read: dict) -> str:
@@ -809,6 +809,9 @@ def _at(read: dict) -> str:
 def load_error_problems(result: dict) -> list:
     out = []
     for e in result["errors"]:
+        if e["phase"] == "read":
+            out.append(f"  - {e['script']} (a missing file): {e['at']} loads it, but it is not on disk.")
+            continue
         text = f"  - {e['script']} ({_PHASES.get(e['phase'], e['phase'])}): {e['message']}"
         if e.get("at"):
             text += f"\n      at {e['at']}"
@@ -860,11 +863,12 @@ def page_load(page_scripts, load_dir) -> dict:
 def test_every_script_loads_without_throwing(page_load):
     problems = load_error_problems(page_load)
     assert not problems, (
-        "These scripts threw while the canary loaded the page:\n" + "\n".join(problems) + "\n"
-        "Each is either a gap in the stub (the script used a browser feature STUB_JS doesn't have: add a "
-        "plain stand-in for it to STUB_JS in tests/test_load_order_canary_js.py, never a stand-in for one of "
-        "FCC's own names) or a real load-time error (it would throw in a browser too: fix the script). Until "
-        "it loads, the early-read check can't see past the throw.")
+        "These scripts failed while the canary loaded the page:\n" + "\n".join(problems) + "\n"
+        "A missing file: fix that <script>'s src. Any other is either a gap in the stub (the script used a "
+        "browser feature STUB_JS doesn't have: add a plain stand-in for it to STUB_JS in "
+        "tests/test_load_order_canary_js.py, never a stand-in for one of FCC's own names) or a real load-time "
+        "error (it would throw in a browser too: fix the script). Until it loads, the early-read check can't "
+        "see past the throw.")
 
 
 def test_every_inline_script_parses_with_its_server_values_as_null(page_scripts, page_load):
@@ -1035,6 +1039,20 @@ def test_moving_inv_core_late_is_reported(page_scripts, load_dir):
     assert any(p.startswith("  - js/modules/inv_stock.js reads installFieldScanCapture") for p in problems), problems
     assert any(p.startswith("  - js/modules/inv_loc_mgr.js (an error while it loads)")
                for p in load_error_problems(result))
+
+
+def test_without_the_shortcut_shim_the_2026_08_drop_is_reported(page_scripts, load_dir):
+    """The real precedent: without the queueing shim at the top of
+    scripts.html, the modules that register their shortcuts at load read
+    registerShortcut before shortcuts_registry.js defines it, and those
+    shortcuts were silently missing from the ? overlay (fixed 2026-08-05)."""
+    shim = [s for s in page_scripts if s["kind"] == "inline" and "window.__pendingShortcuts = []" in s["code"]]
+    assert len(shim) == 1, shim
+    result = run_page([s for s in page_scripts if s is not shim[0]], load_dir, "no-shim")
+    readers = {r["reader"] for r in result["early_reads"] if r["name"] == "registerShortcut"}
+    assert {"js/modules/inv_cmd.js", "js/modules/inv_wizard.js"} <= readers, result["early_reads"]
+    assert {(r["name"], r["definer"]) for r in result["early_reads"]} == {
+        ("registerShortcut", "js/modules/shortcuts_registry.js")}, result["early_reads"]
 
 
 def test_a_window_read_of_a_top_level_const_is_reported(page_scripts, load_dir):
