@@ -163,8 +163,9 @@ backend today (2026-11-09). Such a call fails check 1 like any new site:
 rename it, or register it with a comment saying what it really is (and, for a
 result it drops, an ALLOWED_DISCARDS entry saying the same).
 test_a_documented_blind_spot_is_not_seen and
-test_a_documented_over_count_is_counted pin both lists, so a scanner that
-learns to see more fails there until these words are brought up to date.
+test_a_documented_over_count_is_counted pin every shape both lists name (all
+but a new wrapper, which no snippet can show), so a scanner that learns to see
+more fails there until these words are brought up to date.
 
 test_no_direct_extra_patch.py already forbids a direct PATCH that carries
 `extra`; this test doesn't repeat it.
@@ -1862,10 +1863,14 @@ LIMITS_CHANGED = (
     "import requests\ndef h(u, new):\n    send = requests.post if new else requests.patch\n"
     "    send(u + '/api/v1/spool')\n",
     "import requests\ndef h(u):\n    s = requests.Session()\n    s.patch(u + '/api/v1/spool/1')\n",
+    "import urllib.request\ndef h(u):\n"
+    "    urllib.request.urlopen(urllib.request.Request(u + '/api/v1/spool/1', method='PATCH'))\n",
+    "import http.client\ndef h(host):\n    c = http.client.HTTPConnection(host)\n"
+    "    c.request('PATCH', '/api/v1/spool/1')\n",
     "import spoolman_api\ndef h(i):\n    getattr(spoolman_api, 'update_spool')(i, {})\n",
 ], ids=["requests-by-assignment", "module-alias-by-assignment", "requests-from-a-backend-module",
         "http_retry-from-a-backend-module", "retry-helper-by-assignment", "verb-in-a-variable",
-        "session", "getattr-on-spoolman_api"])
+        "session", "urllib", "http-client", "getattr-on-spoolman_api"])
 def test_a_documented_blind_spot_is_not_seen(source):
     assert _keys(source, module="routes_x.py") == {}, LIMITS_CHANGED
 
