@@ -287,7 +287,8 @@ def api_filament_attributes_bulk_set():
     is written for either. get_filament handed back those bodies as filaments
     with no attributes: a remove counted a deleted filament "unchanged" with
     success: true, and an add over a 5xx-blipped read wrote the added choices
-    alone over the filament's own.
+    alone over the filament's own. A read that gives no filament has its one
+    hub.log line from get_filament_answer, saying what came back (rd-1).
     """
     import json as _json
     payload = request.get_json(silent=True) or {}
@@ -311,11 +312,10 @@ def api_filament_attributes_bulk_set():
             continue
         fil, answered = spoolman_api.get_filament_answer(fid)
         if not (isinstance(fil, dict) and fil.get('id') == fid):
+            # hub.log has get_filament_answer's line saying what came back (rd-1).
             if answered and isinstance(fil, dict) and fil.get('id') is None:
                 errors.append({"id": fid, "msg": "filament not found"})
             else:
-                state.logger.warning(f"bulk_set: couldn't read filament {fid}: "
-                                     f"{str(fil)[:200] if answered else 'Spoolman did not answer'}")
                 errors.append({"id": fid, "msg": "couldn't read it from Spoolman, so nothing was changed on it"})
             continue
         existing_attrs = spoolman_api._parse_filament_attrs_value(

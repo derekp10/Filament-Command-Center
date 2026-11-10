@@ -899,15 +899,16 @@ def _merge_filament(fid, role):
     """One end of a merge, read through get_filament_answer (Group 53 review,
     D3b): (the filament, None), or (None, the route's answer). get_filament
     handed back Spoolman's body whatever the status, so a deleted filament's 404
-    body, and a 500's error body, read as found and the merge went on."""
+    body, and a 500's error body, read as found and the merge went on. A read
+    that gives no filament has its hub.log line from get_filament_answer, which
+    alone sees what came back (rd-1: this logged "couldn't read filament 9:
+    None")."""
     rec, answered = spoolman_api.get_filament_answer(fid)
     if isinstance(rec, dict) and rec.get('id') == fid:
         return rec, None
     if answered and isinstance(rec, dict) and rec.get('id') is None:
         # Spoolman's own "no such filament" ({"message": "No filament with ID …"}).
         return None, (jsonify({"success": False, "error": f"{role} filament #{fid} not found."}), 404)
-    state.logger.error(f"Merge: couldn't read filament {fid}: "
-                       f"{str(rec)[:200] if answered else 'Spoolman did not answer'}")
     return None, (jsonify({
         "success": False,
         "error": f"Couldn't read filament #{fid} from Spoolman, so nothing was merged. Try again in a moment.",
@@ -937,7 +938,9 @@ def _merge_source_spools(r, src_fid):
     try:
         listed = r.json()
     except ValueError as e:
-        return None, (f"its answer isn't JSON ({e})", _MERGE_LIST_UNREAD)
+        # What came back, not only where parsing stopped (Group 53 review, rd-1).
+        return None, (f"its answer isn't JSON ({e}): HTTP {r.status_code}: {(r.text or '')[:400]}",
+                      _MERGE_LIST_UNREAD)
     if not isinstance(listed, list):
         return None, (f"its answer isn't a list of spools: {str(listed)[:200]}", _MERGE_LIST_UNREAD)
     foreign = []
@@ -972,7 +975,13 @@ def api_merge_filament(src_fid, dst_fid):
     list FCC can't read refuses the merge before anything is written, and so
     does a filament Spoolman has no record of or couldn't send, and a list
     holding another filament's spool (Group 53 review). Every answer is in
-    words (refusal_words); hub.log and the Activity Log keep the whole text.
+    words (refusal_words). hub.log keeps what came back (rd-1): for a
+    filament read that gave no filament, get_filament_answer's one WARNING line
+    (the status and the body's first 200 characters, or the exception);
+    for the spool list, an ERROR line with the status and the body's first 400
+    characters, requests' words (Spoolman's address included) when it didn't
+    answer, or the JSON it couldn't use. A refused write's Activity Log line
+    keeps Spoolman's refusal as LAST_SPOOLMAN_ERROR holds it (400 characters).
     """
     if src_fid == dst_fid:
         return jsonify({

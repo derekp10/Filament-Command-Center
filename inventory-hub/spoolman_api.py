@@ -239,19 +239,54 @@ def get_filament_answer(fid):
     404's {"message": "No filament with ID 99 found."} and a 500's {"message":
     "database is locked"} read as truthy filaments (Merge Filament went on past a
     missing source, bulk_set counted a deleted filament "unchanged", and the
-    Prusament scan read every temp as blank and filled them all)."""
+    Prusament scan read every temp as blank and filled them all).
+
+    Every answer that isn't filament `fid`'s record (by that same test, a 404
+    included) leaves ONE hub.log WARNING line saying what came back (Group 53
+    review, rd-1): the status and the start of the body (_log_body), or the
+    exception's class and text when Spoolman didn't answer (requests' words name
+    its address). Only this helper sees those: its callers logged "couldn't read
+    filament 9: None". A caller logs nothing more about the read."""
     sm_url, _ = config_loader.get_api_urls()
     try:
         resp = requests.get(f"{sm_url}/api/v1/filament/{fid}", timeout=3)
-    except Exception:
+    except Exception as e:
+        _log_no_filament(fid, "no answer (" + " ".join(f"{type(e).__name__}: {e}".split()) + ")")
         return None, False
     status = getattr(resp, 'status_code', None)
     if isinstance(status, int) and status >= 500:
+        _log_no_filament(fid, f"HTTP {status}: {_log_body(resp)}")
         return None, True
     try:
-        return parse_inbound_data(resp.json()), True
+        rec = parse_inbound_data(resp.json())
     except Exception:
+        _log_no_filament(fid, f"HTTP {status}, not JSON: {_log_body(resp)}")
         return None, True
+    if not (isinstance(rec, dict) and rec.get('id') == fid):
+        _log_no_filament(fid, f"HTTP {status}: {_log_body(resp)}")
+    return rec, True
+
+
+# How much of an answer's body a read's hub.log line keeps (Group 53 review, rd-1).
+_READ_LOG_BODY_MAX = 200
+
+
+def _log_body(resp):
+    """The start of `resp`'s body for a hub.log line: on one line, its first
+    _READ_LOG_BODY_MAX characters ("…" after a cut), "(empty body)" for none.
+    Never raises: the read it describes has already given up."""
+    try:
+        text = " ".join(str(getattr(resp, 'text', '') or '').split())
+    except Exception as e:  # a body requests couldn't decode
+        return f"(a body FCC couldn't decode: {type(e).__name__})"
+    if not text:
+        return "(empty body)"
+    return text if len(text) <= _READ_LOG_BODY_MAX else text[:_READ_LOG_BODY_MAX] + "…"
+
+
+def _log_no_filament(fid, what):
+    """get_filament_answer's one hub.log line for a read that gave no filament."""
+    state.logger.warning(f"Read of filament {fid} from Spoolman gave no filament: {what}")
 
 
 def get_all_spools(allow_archived=True):

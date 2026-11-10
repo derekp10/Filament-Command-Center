@@ -935,13 +935,12 @@ def _handle_prusament_url_scan(res):
     # temp read as blank, and the write a moment later overwrote all four set
     # temps, skipping the differing-temps suggestion. Anything else writes
     # nothing, the spool's metadata included, and answers the error the page
-    # toasts for 7 s.
-    fil, answered = spoolman_api.get_filament_answer(fid)
+    # toasts for 7 s. hub.log has get_filament_answer's line saying what came
+    # back (rd-1); the Activity Log line says what the scan did.
+    fil, _answered = spoolman_api.get_filament_answer(fid)
     if not (isinstance(fil, dict) and fil.get('id') == fid):
         msg = (f"Couldn't read filament #{fid} from Spoolman, so its temps weren't changed. "
                f"Scan it again in a moment.")
-        state.logger.warning(f"Prusament scan: filament {fid} read gave no filament: "
-                             f"{str(fil)[:200] if answered else 'Spoolman did not answer'}")
         state.add_log_entry(html.escape(f"⚠️ Prusament scan of spool #{sid}: {msg}", quote=False),
                             "WARNING", "ffaa00")
         return jsonify({

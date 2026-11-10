@@ -534,7 +534,7 @@ class TestMergeAgainstSpoolman:
         (_Resp(500, {"message": "database is locked"}), ["HTTP 500", '{"message": "database is locked"}']),
         (_Resp(503, {"message": "Service Unavailable"}), ["HTTP 503", "Service Unavailable"]),
         (_Page(503, "<html><body>502 Bad Gateway nginx</body></html>"),
-         ["HTTP 503", "not JSON", "<html><body>502 Bad Gateway nginx</body></html>"]),
+         ["HTTP 503", "<html><body>502 Bad Gateway nginx</body></html>"]),
         (requests.exceptions.ReadTimeout(
             "HTTPConnectionPool(host='spoolman.test', port=7913): Read timed out. (read timeout=3)"),
          ["no answer", "ReadTimeout", "host='spoolman.test', port=7913", "Read timed out"]),

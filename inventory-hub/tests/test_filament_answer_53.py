@@ -224,8 +224,8 @@ def test_the_read_is_one_get_of_the_filament_with_a_timeout(monkeypatch):
 REFUSED_READS = [
     (_Resp(500, {"message": "database is locked"}), ["HTTP 500", '{"message": "database is locked"}']),
     (_Resp(503, {"message": "Service Unavailable"}), ["HTTP 503", "Service Unavailable"]),
-    (_Page(503, "<html><body>502 Bad Gateway nginx</body></html>"),
-     ["HTTP 503", "not JSON", "<html><body>502 Bad Gateway nginx</body></html>"]),
+    (_Page(503, "<html><body>502 Bad Gateway nginx</body></html>"),     # a 5xx isn't parsed at all
+     ["HTTP 503", "<html><body>502 Bad Gateway nginx</body></html>"]),
     (_NotJson(), ["HTTP 200", "not JSON", "<html>Bad Gateway</html>"]),
     (_Resp(404, {"message": "No filament with ID 7 found."}), ["HTTP 404", "No filament with ID 7 found."]),
     (_Resp(200, {"id": 8, "name": "PLA Other"}), ["HTTP 200", '"id": 8', "PLA Other"]),
