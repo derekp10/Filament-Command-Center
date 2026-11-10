@@ -201,7 +201,12 @@ def test_wizard_get_spool_none_fails_closed_no_raw_forward(monkeypatch):
     FAILS CLOSED: without the original record it can't run the dirty-diff OR
     the SYSTEM_MANAGED strip, so forwarding the raw payload (which carries
     container_slot / physical_source) would reopen the Item-4 slot-clobber
-    window. update_spool is NEVER called; the response surfaces the error."""
+    window. update_spool is NEVER called; the response surfaces the error.
+
+    Group 53 review (r3-3): the error is in words of its own. It used to be
+    LAST_SPOOLMAN_ERROR, which get_spool never sets: the "HTTP 503" this test
+    puts there, as an earlier write would, was never this read's, and since 53.2
+    a refused filament create's text showed as the reason the edit failed."""
     called = []
     monkeypatch.setattr(app_module.spoolman_api, "get_spool", lambda sid: None)
     monkeypatch.setattr(
@@ -220,8 +225,11 @@ def test_wizard_get_spool_none_fails_closed_no_raw_forward(monkeypatch):
     body = r.get_json()
     assert body["success"] is False
     assert called == []  # raw-payload PATCH refused — no slot-clobber
-    assert body["error"] == "HTTP 503: Spoolman unavailable"
-    assert body["msg"] == "Failed to update Spool 42: HTTP 503: Spoolman unavailable"
+    words = ("Couldn't read Spool 42 from Spoolman before the edit, so nothing was saved. "
+             "Try again in a moment.")
+    assert body["error"] == words
+    assert body["msg"] == f"Failed to update Spool 42: {words}"
+    assert "HTTP 503" not in body["msg"]
 
 
 def test_wizard_no_dirty_changes_skips_update_spool(monkeypatch):
