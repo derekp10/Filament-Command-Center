@@ -31,15 +31,20 @@ How (node's `vm`: no browser, no container, so it runs under --offline):
      const / let / class shadows it), so a read recorded while an EARLIER
      script runs is an early read.
 The stub runs only what runs at load: document.readyState is 'loading' while
-the scripts run, timers and animation frames never fire, fetch never answers,
-and of the events only DOMContentLoaded and load fire, once, after every
-script (pass 1 only: pass 2 never fires them, so a read inside a handler is
-never charged to anyone). Promise callbacks run when each script ends, as at
-the browser's microtask checkpoint, and count as that script's load.
+the scripts run, fetch never answers, and of the events only DOMContentLoaded
+and load fire, once, after every script (pass 1 only: pass 2 never fires them,
+so a read inside a handler is never charged to anyone). Promise callbacks run
+when each script ends, as at the browser's microtask checkpoint, and so do the
+zero-delay timers it queued (setTimeout / setInterval with no delay or one
+<= 0; an interval once; then up to two rounds of the ones they queue): while
+the parser waits on the network for a later script (FCC sends every response
+no-store) a browser runs them, so they count as that script's load. Longer
+timers, animation frames and idle callbacks never fire.
 
 What it catches: a script that throws while loading; a load-time read (window.X,
 a bare X, typeof X) of a name a later script defines, in a script's top-level
-code or anything that code calls, or of a name only a DOMContentLoaded or load
+code, anything that code calls, or a zero-delay timer it queues (wrapping an
+early read in `setTimeout(..., 0)` is no fix), or of a name only a DOMContentLoaded or load
 handler defines (a provider moved into one: those run once every script has
 loaded); a load-time window.X read of a name that is
 only a top-level const / let / class (never on window, so always undefined); a
@@ -56,14 +61,20 @@ What it can't see:
   - code paths the stub doesn't take: getElementById always finds a dummy
     element, querySelector never finds one, matchMedia never matches, storage
     starts empty;
-  - reads inside handlers, timers and fetch callbacks: those run at call time,
-    after every script has loaded, which is exactly where this canary asks a
-    read to move. That includes a DOMContentLoaded or load handler's read of
-    a name a later handler defines (they run in the order they were added);
-  - a throw inside a DOMContentLoaded or load handler: the handlers run
-    against a stub that can't model the page they would see, so a throw
-    there is only listed in the run's diagnostics (what the handler defined
-    before it threw still counts);
+  - reads inside handlers (a click, DOMContentLoaded, load): those run at
+    call time, after every script has loaded, which is where this canary
+    asks a read to move. That includes a DOMContentLoaded or load handler's
+    read of a name a later handler defines (they run in the order added);
+  - reads in a timer with a delay, an animation frame, an idle callback or a
+    fetch callback queued at load. A browser may run those between scripts
+    too (a fetch that answers while the parser waits for a later script), so
+    one is no fix for an early read either, but the canary never runs them;
+  - a name a zero-delay timer defines counts as defined when its script ends,
+    although a browser may run the timer only after the next script loads;
+  - a throw inside a zero-delay timer or a DOMContentLoaded or load handler:
+    it runs against a stub that can't model the page it would see, so a throw
+    there is only listed in the run's diagnostics (what it defined before it
+    threw still counts);
   - a load-time use of a top-level `var X = window.X;` alias of a later
     script's name. A top-level var IS the window property, so the later
     script's assignment reaches it and a use at call time works; only a use
@@ -81,8 +92,8 @@ What it can't see:
 
 When it fails:
   - an early read: move the read into a function that runs later (on
-    DOMContentLoaded, or in a handler such as a click), or load the defining
-    script earlier in scripts.html. A deliberate, harmless early read (a guard
+    DOMContentLoaded, or in a handler such as a click; a zero-delay timer is
+    no fix), or load the defining script earlier in scripts.html. A deliberate, harmless early read (a guard
     meant to find nothing at load and retried later) goes in
     ALLOWED_EARLY_READS as (reader script, name): the reason, named as the
     failure names them. The list starts empty, an entry needs a reason, and an
@@ -524,12 +535,25 @@ STUB_JS = r"""
     origin: 'http://fcc.test',
   });
 
-  // Timers and frames never fire, and fetch never answers: what they would
-  // run is call time, not load time. A microtask runs when the script that
-  // queued it ends (the context's microtaskMode), as in a browser.
+  // A zero-delay setTimeout or setInterval (no delay, or one <= 0) is kept
+  // for the driver, which runs it right after the script that queued it and
+  // that script's microtasks: a browser may run it there, before a later
+  // script loads (FCC sends every response no-store, so the parser waits on
+  // the network at each script). An interval runs once. Longer timers,
+  // animation frames and idle callbacks never fire, and fetch never answers.
+  // A microtask runs when the script that queued it ends (the context's
+  // microtaskMode), as in a browser.
   let timerId = 0;
+  const zeroTimers = [];
+  const queueTimer = (fn, ms, args) => {
+    const id = ++timerId;
+    if (typeof fn === 'function' && !(Number(ms) > 0)) zeroTimers.push({ id, fn, args });
+    return id;
+  };
+  const clearTimer = (id) => { const k = zeroTimers.findIndex((t) => t.id === id); if (k >= 0) zeroTimers.splice(k, 1); };
   Object.assign(g, {
-    setTimeout: () => ++timerId, clearTimeout: noop, setInterval: () => ++timerId, clearInterval: noop,
+    setTimeout: (fn, ms, ...args) => queueTimer(fn, ms, args), clearTimeout: clearTimer,
+    setInterval: (fn, ms, ...args) => queueTimer(fn, ms, args), clearInterval: clearTimer,
     requestAnimationFrame: () => ++timerId, cancelAnimationFrame: noop,
     requestIdleCallback: () => ++timerId, cancelIdleCallback: noop,
     queueMicrotask: (fn) => { Promise.resolve().then(fn); },
@@ -586,6 +610,8 @@ STUB_JS = r"""
     // is stamped with it), and the document's readyState.
     running(label) { runningNow = String(label); },
     readyState(state) { g.document.readyState = state; },
+    // The zero-delay timers queued since the last call, in order.
+    takeTimers() { return zeroTimers.splice(0); },
     // The live listeners for DOMContentLoaded (document's, then window's, as
     // the event bubbles) or load (window's, then window.onload), in order.
     readyListeners(type) {
@@ -676,8 +702,9 @@ function describe(e, phase) {
   return { message, at, stack: frames.slice(0, 5) };
 }
 
-let current = -1;  // the script running now; pass 2 charges every read to it
-let sink = null;   // where a promise rejected now is filed: { list, script, phase }
+let current = -1;     // the script running now; pass 2 charges every read to it
+let inTimer = false;  // running one of its zero-delay timers
+let sink = null;      // where a promise rejected now is filed: { list, script, phase }
 process.on('unhandledRejection', (reason) => {
   if (sink) sink.list.push(Object.assign({ script: sink.script, phase: sink.phase }, describe(reason, 'promise')));
 });
@@ -700,14 +727,40 @@ function runOne(env, i, errors) {
 
 // Loads script i, then waits a turn so a promise it rejected is reported
 // while it is still the script charged.
-async function load(env, i, errors) {
+async function load(env, i, errors, diagnostics) {
   current = i;
   sink = { list: errors, script: scripts[i].name, phase: 'promise' };
   env.stub.running(scripts[i].name);
   runOne(env, i, errors);
   await tick();
+  await fireTimers(env, i, diagnostics);
   current = -1;
   sink = null;
+}
+
+const TIMER_ROUNDS = 3;  // a script's own zero-delay timers, then two rounds of the ones they queue
+const TIMER_CAP = 100;   // timers run after one script, at most
+// Runs the zero-delay timers script i queued, as a browser may before the
+// next script loads, each charged to script i (with the microtasks it
+// queues). A throw in one is a diagnostic, not a load error.
+async function fireTimers(env, i, diagnostics) {
+  let fired = 0;
+  for (let round = 0; round < TIMER_ROUNDS; round++) {
+    const batch = env.stub.takeTimers();
+    if (!batch.length) break;
+    sink = { list: diagnostics, script: scripts[i].name, phase: 'timer' };
+    for (const t of batch.slice(0, TIMER_CAP - fired)) {
+      fired += 1;
+      inTimer = true;
+      try { t.fn.apply(undefined, t.args); } catch (e) {
+        diagnostics.push(Object.assign({ script: scripts[i].name, phase: 'timer' }, describe(e, 'run')));
+      }
+      CHECKPOINT.runInContext(env.ctx);
+      inTimer = false;
+    }
+    await tick();
+  }
+  env.stub.takeTimers();  // past the caps: never run
 }
 
 function ownValues(obj) {
@@ -909,7 +962,7 @@ const shadowed = (env, names) =>
 async function pass1() {
   const env = freshContext();
   const errors = [];
-  const diagnostics = [];  // throws the stub can't vouch for: in a DOMContentLoaded / load handler
+  const diagnostics = [];  // throws the stub can't vouch for: in a zero-delay timer or a DOMContentLoaded / load handler
   const definers = new Map();
   const lexical = new Set();
   const onWindowLater = new Map();  // a top-level const / let name a later script also sets on window
@@ -937,7 +990,7 @@ async function pass1() {
     const src = sources[i];
     const names = typeof src === 'string' ? declaredNames(src) : new Set();
     const resolvedBefore = resolvable(env, names);
-    await load(env, i, errors);
+    await load(env, i, errors, diagnostics);
     const after = ownValues(env.sandbox);
     fileNew(before, after, i);
     for (const name of resolvable(env, names)) {
@@ -987,13 +1040,13 @@ async function pass2(definers) {
     Object.defineProperty(env.sandbox, name, {
       configurable: true, enumerable: false,
       get() {
-        if (current >= 0) reads.push([name, current, pageFrame(framesOf(new Error().stack))]);
+        if (current >= 0) reads.push([name, current, pageFrame(framesOf(new Error().stack)), inTimer]);
         return undefined;
       },
       set(value) { Object.defineProperty(env.sandbox, name, { value, writable: true, configurable: true, enumerable: true }); },
     });
   }
-  for (let i = 0; i < scripts.length; i++) await load(env, i, errors);
+  for (let i = 0; i < scripts.length; i++) await load(env, i, errors, []);
   return { errors, reads };
 }
 
@@ -1008,7 +1061,7 @@ async function pass2(definers) {
   const late = [];
   const seen = new Set();
   let selfReads = 0;
-  for (const [name, reader, at] of two.reads) {
+  for (const [name, reader, at, timer] of two.reads) {
     let definer = one.definers.get(name);
     let lexical = one.lexical.has(name);
     let alias = false;
@@ -1038,7 +1091,7 @@ async function pass2(definers) {
     const key = reader + ' ' + name;
     if (seen.has(key)) continue;
     seen.add(key);
-    const read = { reader: named(reader), name, definer: named(definer), lexical, alias, at,
+    const read = { reader: named(reader), name, definer: named(definer), lexical, alias, at, timer,
                    handler: definer === scripts.length ? (one.handlerOf.get(name) || '') : '' };
     (reader < definer ? early : late).push(read);
   }
@@ -1118,6 +1171,9 @@ def early_read_problems(result: dict, allowed: dict) -> list:
             continue
         text = (f"  - {r['reader']} reads {r['name']} while it loads{_at(r)}, but {r['name']} is defined "
                 f"later, by {r['definer']}.")
+        if r.get("timer"):
+            text += (" (In a zero-delay timer it queued: a browser may run that while it waits for a later "
+                     "script, so a timer is no fix.)")
         if r.get("handler"):
             text = (f"{text[:-1]}: {r['handler']} sets it, and those handlers run once every script has loaded. "
                     f"Define {r['name']} while its script loads, outside the handler, or read it only once the "
@@ -1195,7 +1251,8 @@ def test_no_script_reads_at_load_a_name_a_later_script_defines(page_load):
         "These scripts read, while they load, a name a later script on the page defines, so they get "
         "undefined there (an `if (window.X)` guard silently does nothing):\n" + "\n".join(problems) + "\n"
         "Move the read into a function that runs later (on DOMContentLoaded, or in a handler such as a "
-        "click), or load the defining script earlier in templates/components/scripts.html. If the early read "
+        "click; a zero-delay timer is no fix), or load the defining script earlier in "
+        "templates/components/scripts.html. If the early read "
         "is deliberate and harmless (a guard meant to find nothing at load that is tried again later), add it "
         "to ALLOWED_EARLY_READS in tests/test_load_order_canary_js.py as (reader, name): the reason.")
 
@@ -1483,6 +1540,47 @@ def test_a_name_only_a_handler_defines_is_defined_after_every_script(page_script
     assert len(thrown) == 1 and "TypeError" in thrown[0]["message"], result["diagnostics"]
     assert result["handler_definers"]["fakeLoaded"].startswith(f"the load handler added at {on_load}:1:"), (
         result["handler_definers"])
+
+
+def test_a_zero_delay_timer_queued_at_load_reads_at_load(page_scripts, load_dir):
+    """`setTimeout(() => { if (window.X) {} }, 0)` is no fix for an early read:
+    while the parser waits on the network for a later script (FCC sends every
+    response no-store), the browser runs the timer, and X may not be there yet
+    (review findings r2-7 / r5-6). Its read is charged to the script that
+    queued it."""
+    fake = "FAKE before inv_core.js reading window.openSlotPicker in a zero-delay timer"
+    result = run_page(with_fake(page_scripts, "setTimeout(() => { if (window.openSlotPicker) {} }, 0);", fake,
+                                before="js/modules/inv_core.js"), load_dir, "fake-timer")
+    assert _early(result) == {(fake, "openSlotPicker", "js/modules/slot_picker.js")}, (
+        _pinned("openSlotPicker", "js/modules/slot_picker.js"), result["early_reads"])
+    assert result["early_reads"][0]["at"].startswith(fake + ":1:"), result["early_reads"]
+    problems = early_read_problems(result, ALLOWED_EARLY_READS)
+    assert len(problems) == 1 and "a timer is no fix" in problems[0], problems
+    assert result["errors"] == [], result["errors"]
+
+
+def test_which_timers_fire_after_their_script(page_scripts, load_dir):
+    """The timer model, on fakes with names of their own: a zero-delay timer
+    or interval queued at load runs right after its script (an interval once),
+    a timer one queues runs too, a cleared one never does, nor one with a
+    delay; and a throw in one is a diagnostic, not a load error."""
+    fake = "FAKE after titlebar_prefs.js queueing timers"
+    code = ("(function () {\n"
+            "  setTimeout(function () { null.boom; });\n"
+            "  clearTimeout(setTimeout(() => { window.fakeCleared = 1; }, 0));\n"
+            "  setInterval(() => { window.fakeInterval = 1; }, 0);\n"
+            "  setTimeout(() => { setTimeout(() => { window.fakeNested = 1; }); }, -5);\n"
+            "  setTimeout(() => { window.fakeDelayed = 1; }, 10);\n"
+            "})();")
+    result = run_page(with_fake(page_scripts, code, fake, after="js/modules/titlebar_prefs.js"), load_dir,
+                      "fake-timers")
+    defined = result["definers"]
+    assert defined.get("fakeInterval") == fake and defined.get("fakeNested") == fake, defined
+    assert "fakeCleared" not in defined and "fakeDelayed" not in defined, defined
+    assert result["errors"] == [], result["errors"]
+    thrown = [d for d in result["diagnostics"] if d["phase"] == "timer"]
+    assert len(thrown) == 1 and thrown[0]["script"] == fake and "TypeError" in thrown[0]["message"], (
+        result["diagnostics"])
 
 
 def test_every_declarator_of_a_top_level_let_is_a_definer(page_scripts, load_dir):
