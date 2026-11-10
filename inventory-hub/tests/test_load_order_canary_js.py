@@ -23,11 +23,11 @@ How (node's `vm`: no browser, no container, so it runs under --offline):
      script first defines each name: a new property of window (a function
      declaration, a var, a `window.X = ...`), or a new top-level const / let /
      class (those never land on window: V8 is asked which of the names the
-     script's declarations name, every declarator of each, resolve after the
-     script that didn't before). Then it fires the DOMContentLoaded handlers
-     and the load ones, as a browser does once every script has loaded: a
-     name only a handler defines is filed under one definer past the last
-     script, "(DOMContentLoaded / load handlers)".
+     script's top-level declarations name, every declarator of each, resolve
+     after the script that didn't before). Then it fires the DOMContentLoaded
+     handlers and the load ones, as a browser does once every script has
+     loaded: a name only a handler defines is filed under one definer past the
+     last script, "(DOMContentLoaded / load handlers)".
   3. Pass 2 loads them again in a fresh context where each of those names is
      first planted on window as an accessor that records who read it and
      returns undefined. The defining script's own definition replaces it (a
@@ -44,23 +44,26 @@ the parser waits on the network for a later script (FCC sends every response
 no-store) a browser runs them, so they count as that script's load. Longer
 timers, animation frames and idle callbacks never fire.
 
-What it catches: a script that throws while loading (a DOM error too:
-document.body read in a <head> script, an element looked up before the parser
-reached it); a load-time read (window.X,
-a bare X, typeof X) of a name a later script defines, in a script's top-level
-code, anything that code calls, or a zero-delay timer it queues (wrapping an
-early read in `setTimeout(..., 0)` is no fix), or of a name only a DOMContentLoaded or load
-handler defines (a provider moved into one: those run once every script has
-loaded); a load-time window.X read of a name that is
-only a top-level const / let / class (never on window, so always undefined); a
-script-scope alias of a later script's name (`const { X } = window;` or
-`const X = window.X;` in a script that loads before X's: the script declares X
-itself, and its alias stays undefined for good); a
-file under static/js that the page doesn't load, or loads twice, and a page
-script missing from disk (a module split that forgets scripts.html); and
-template constructs it can't model (a <script> inside {% if %} / {% for %},
-Jinja control flow in an inline script, an async / defer / module script, a CDN
-library it doesn't know), which fail loudly with "teach the canary".
+What it catches:
+  - a script that throws while loading, a DOM error included (document.body
+    read in a <head> script, an element looked up before the parser reached
+    it);
+  - a load-time read (window.X, a bare X, typeof X) of a name a later script
+    defines, in a script's top-level code, anything that code calls, or a
+    zero-delay timer it queues (wrapping an early read in setTimeout(..., 0) is
+    no fix);
+  - the same read of a name only a DOMContentLoaded or load handler defines (a
+    provider moved into one: those run once every script has loaded);
+  - a load-time window.X read of a name that is only a top-level const / let /
+    class (never on window, so always undefined), and a script-scope alias of
+    a later script's name (`const { X } = window;` or `const X = window.X;` in
+    a script that loads before X's: the script declares X itself, and its
+    alias stays undefined for good);
+  - a file under static/js that the page doesn't load, or loads twice, and a
+    page script missing from disk (a module split that forgets scripts.html);
+  - template constructs it can't model (a <script> inside {% if %} / {% for %},
+    Jinja control flow in an inline script, an async / defer / module script,
+    a CDN library it doesn't know), which fail loudly with "teach the canary".
 
 What it can't see:
   - code paths the stub's DOM doesn't take. It holds the templates' elements
@@ -98,6 +101,9 @@ What it can't see:
     (DRIVER_JS's declaredNames says where it can go wrong: a regular
     expression taken for a division, a line break read as the statement's end,
     a declaration past MAX_DECLARATION_TOKENS, a non-ASCII name);
+  - properties of shared objects: an initialisation such as `state.X = ...`
+    moved to a later file while an earlier one reads state.X at load is not
+    seen (only names on window and top-level declarations are planted);
   - an `'X' in window` / hasOwnProperty / getOwnPropertyDescriptor check of a
     name pass 2 planted: the accessor is there, so the check says "present"
     before the defining script has run. The check itself records nothing; a
@@ -107,21 +113,27 @@ What it can't see:
 When it fails:
   - an early read: move the read into a function that runs later (on
     DOMContentLoaded, or in a handler such as a click; a zero-delay timer is
-    no fix), or load the defining script earlier in scripts.html. A deliberate, harmless early read (a guard
-    meant to find nothing at load and retried later) goes in
-    ALLOWED_EARLY_READS as (reader script, name): the reason, named as the
-    failure names them. The list starts empty, an entry needs a reason, and an
-    entry no longer read early fails too.
+    no fix), or load the defining script earlier in scripts.html. A name a
+    handler defines: define it while its script loads, outside the handler.
+    A deliberate, harmless early read (a guard meant to find nothing at load
+    and retried later) goes in ALLOWED_EARLY_READS as (reader script, name):
+    the reason, named as the failure names them. The list starts empty, an
+    entry needs a reason, and an entry no longer read early fails too.
   - a throw: either a gap in the stub (a browser feature STUB_JS lacks: add a
     plain stand-in that does nothing, never one for an FCC name) or a real
-    load-time error (it would throw in a browser too: fix the script).
+    load-time error (it would throw in a browser too: fix the script). A DOM
+    one (document.body in a <head> script, an element looked up by a script
+    above it) is real: look the element up later, on DOMContentLoaded, or
+    move the <script> below it.
   - a CDN library it doesn't know: add a part of its URL to CDN_GLOBALS with
     every global the real bundle sets on window (its UMD line,
     `global.X = factory()`, or a top-level var), and a stand-in for each to
     STUB_JS's cdnStandIns.
 
-Needs node on PATH (skips with a PytestWarning without it, as
-test_core1_return_ejectall_js.py does; FCC_REQUIRE_NODE=1 makes that an error).
+Needs node on PATH. Without it every test here skips, saying the load-order
+canary did NOT run, and the run's warnings summary carries one PytestWarning
+(test_core1_return_ejectall_js.py's node check, imported here);
+FCC_REQUIRE_NODE=1 makes a missing node a collection error instead.
 """
 from __future__ import annotations
 
@@ -133,7 +145,15 @@ from pathlib import Path
 
 import pytest
 
-from test_core1_return_ejectall_js import NODE, pytestmark  # noqa: F401  (pytestmark: skip without node)
+# Its import does the node check once for every node-vm file: without node it
+# warns (a PytestWarning in the run's summary), and FCC_REQUIRE_NODE=1 makes a
+# missing node a collection error.
+from test_core1_return_ejectall_js import NODE
+
+pytestmark = pytest.mark.skipif(NODE is None, reason=(
+    "node is not on PATH: the load-order canary (test_load_order_canary_js.py) did NOT run, so a script that "
+    "reads while it loads a name a later script defines would go unseen. Install Node.js (see CLAUDE.md "
+    "Testing), or set FCC_REQUIRE_NODE=1 to fail instead of skipping."))
 
 HUB = Path(__file__).resolve().parent.parent
 TEMPLATES = HUB / "templates"
@@ -476,6 +496,12 @@ def _pinned(name: str, today: str) -> str:
     """What a proof that names today's home of an FCC name says when it fails."""
     return (f"This proof names where {name} is defined today ({today}). If a module split moved it, point the "
             f"proof at the file that defines it now (or, if nothing does, at another name a later script defines).")
+
+
+def _pinned_readers(name: str, readers) -> str:
+    """What a proof that names today's load-time readers of a name says when it fails."""
+    return (f"This proof names the scripts that read {name} while they load today ({', '.join(readers)}). If a "
+            f"module split moved those reads, point the proof at the scripts that read it while they load now.")
 
 
 def with_fake(scripts: list, code: str, name: str, *, before: str = None, after: str = None) -> list:
@@ -1690,8 +1716,10 @@ def test_every_script_loads_without_throwing(page_load):
         "A missing file: fix that <script>'s src. Any other is either a gap in the stub (the script used a "
         "browser feature STUB_JS doesn't have: add a plain stand-in for it to STUB_JS in "
         "tests/test_load_order_canary_js.py, never a stand-in for one of FCC's own names) or a real load-time "
-        "error (it would throw in a browser too: fix the script). Until it loads, the early-read check can't "
-        "see past the throw.")
+        "error (it would throw in a browser too: fix the script). A TypeError on null from document.body or an "
+        "element lookup is real: the stub's DOM holds the templates' elements by position, so the script ran in "
+        "<head> or above that element; look it up later (on DOMContentLoaded) or move the <script> below it. "
+        "Until it loads, the early-read check can't see past the throw.")
 
 
 def test_every_inline_script_parses_with_its_server_values_as_null(page_scripts, page_load):
@@ -1786,20 +1814,30 @@ def test_the_instrument_sees_each_kind_of_definition(page_scripts, page_load):
     """The definer map, which every early read is judged against."""
     d = page_load["definers"]
     lexical = set(page_load["lexical"])
-    assert d["showToast"] == "js/modules/inv_core.js", d.get("showToast")          # const + window.showToast =
-    assert d["openSlotPicker"] == "js/modules/slot_picker.js", d.get("openSlotPicker")  # window.X = in an IIFE
+    # const + window.showToast = ...
+    assert d.get("showToast") == "js/modules/inv_core.js", (_pinned("showToast", "js/modules/inv_core.js"),
+                                                            d.get("showToast"))
+    # window.X = ... in an IIFE
+    assert d.get("openSlotPicker") == "js/modules/slot_picker.js", (
+        _pinned("openSlotPicker", "js/modules/slot_picker.js"), d.get("openSlotPicker"))
     # registerShortcut is first defined by the queueing shim near the top of
     # scripts.html, not by shortcuts_registry.js, which replaces it later.
     shim = [s["name"] for s in page_scripts
             if s["kind"] == "inline" and "window.__pendingShortcuts = []" in s["code"]]
-    assert len(shim) == 1 and shim[0].startswith(SCRIPTS_HTML + ":"), shim
-    assert d["registerShortcut"] == shim[0], d.get("registerShortcut")
+    assert len(shim) == 1 and shim[0].startswith(SCRIPTS_HTML + ":"), (
+        f"This proof looks for the shortcut queueing shim (`window.__pendingShortcuts = []`) in one inline "
+        f"script of {SCRIPTS_HTML}: if it moved or changed, point the proof at it.", shim)
+    assert d.get("registerShortcut") == shim[0], (_pinned("registerShortcut", f"the queueing shim, {shim[0]}"),
+                                                  d.get("registerShortcut"))
     # A top-level let (never on window), and an indented const in an inline
     # script, which a column-0 search for declarations would miss.
-    assert d["state"] == "js/modules/inv_core.js" and "state" in lexical
+    assert d.get("state") == "js/modules/inv_core.js" and "state" in lexical, (
+        _pinned("state", "js/modules/inv_core.js, as a top-level let"), d.get("state"))
     tail = [s["name"] for s in page_scripts if s["kind"] == "inline" and "const SPOOLMAN_URL" in s["code"]]
-    assert len(tail) == 1 and tail[0].startswith("templates/dashboard.html:"), tail
-    assert d["SPOOLMAN_URL"] == tail[0] and "SPOOLMAN_URL" in lexical
+    assert len(tail) == 1 and tail[0].startswith("templates/dashboard.html:"), (
+        _pinned("SPOOLMAN_URL", "an inline script of templates/dashboard.html, as a const"), tail)
+    assert d.get("SPOOLMAN_URL") == tail[0] and "SPOOLMAN_URL" in lexical, (
+        _pinned("SPOOLMAN_URL", f"{tail[0]}, as a const"), d.get("SPOOLMAN_URL"))
     # A name a DOMContentLoaded handler defines (scripts.html's last script
     # sets these two in its handler) is defined after every script.
     for name in ("personMayPress", "sendInScanOrder"):
@@ -1810,8 +1848,12 @@ def test_the_instrument_sees_each_kind_of_definition(page_scripts, page_load):
     # Each CDN library defines what the real bundle defines.
     for part, names in CDN_GLOBALS.items():
         cdn = [s["name"] for s in page_scripts if s["kind"] == "cdn" and part in s["name"]]
-        assert len(cdn) == 1, (part, cdn)
-        assert {n: d.get(n) for n in names} == {n: cdn[0] for n in names}
+        assert len(cdn) == 1, (
+            f"CDN_GLOBALS lists {part!r}, which names {len(cdn)} of the page's CDN scripts: if the page no longer "
+            f"loads that library, take it out of CDN_GLOBALS (and its stand-ins out of STUB_JS).", cdn)
+        assert {n: d.get(n) for n in names} == {n: cdn[0] for n in names}, (
+            f"{cdn[0]} should define {list(names)} (CDN_GLOBALS): a stand-in in STUB_JS is missing, or a page "
+            f"script defines one of them first.", {n: d.get(n) for n in names})
     # And reads are seen at all: the modules that check a flag of their own
     # before setting it.
     assert page_load["self_reads"] > 0 and page_load["reads_recorded"] >= page_load["self_reads"]
@@ -1829,7 +1871,8 @@ def test_a_window_read_before_its_definer_is_reported(page_scripts, load_dir):
     fake = "FAKE script before inv_core.js reading window.openSlotPicker"
     result = run_page(with_fake(page_scripts, "if (window.openSlotPicker) {}", fake,
                                 before="js/modules/inv_core.js"), load_dir, "fake-window-read")
-    assert _early(result) == {(fake, "openSlotPicker", "js/modules/slot_picker.js")}, result["early_reads"]
+    assert _early(result) == {(fake, "openSlotPicker", "js/modules/slot_picker.js")}, (
+        _pinned("openSlotPicker", "js/modules/slot_picker.js"), result["early_reads"])
     assert result["early_reads"][0]["at"].startswith(fake + ":1:"), result["early_reads"]
     problems = early_read_problems(result, ALLOWED_EARLY_READS)
     assert len(problems) == 1 and fake in problems[0] and "js/modules/slot_picker.js" in problems[0], problems
@@ -1840,7 +1883,8 @@ def test_a_bare_typeof_before_its_definer_is_reported(page_scripts, load_dir):
     fake = "FAKE script before inv_core.js testing typeof processScan"
     result = run_page(with_fake(page_scripts, "if (typeof processScan === 'function') {}", fake,
                                 before="js/modules/inv_core.js"), load_dir, "fake-typeof")
-    assert _early(result) == {(fake, "processScan", "js/modules/inv_cmd.js")}, result["early_reads"]
+    assert _early(result) == {(fake, "processScan", "js/modules/inv_cmd.js")}, (
+        _pinned("processScan", "js/modules/inv_cmd.js"), result["early_reads"])
     assert result["errors"] == [], result["errors"]
 
 
@@ -1853,7 +1897,8 @@ def test_the_same_read_after_its_definer_is_not_reported(page_scripts, load_dir)
     assert after["early_reads"] == [] and after["errors"] == [], after
     before = run_page(with_fake(page_scripts, "if (window.mountOverlay) {}", fake,
                                 before="js/modules/overlay_mount.js"), load_dir, "fake-before")
-    assert _early(before) == {(fake, "mountOverlay", "js/modules/overlay_mount.js")}, before["early_reads"]
+    assert _early(before) == {(fake, "mountOverlay", "js/modules/overlay_mount.js")}, (
+        _pinned("mountOverlay", "js/modules/overlay_mount.js"), before["early_reads"])
 
 
 def test_moving_inv_core_late_is_reported(page_scripts, load_dir):
@@ -1861,13 +1906,15 @@ def test_moving_inv_core_late_is_reported(page_scripts, load_dir):
     result = run_page(with_moved(page_scripts, "js/modules/inv_core.js", before="js/modules/titlebar_prefs.js"),
                       load_dir, "inv-core-late")
     early = _early(result)
-    assert ("js/modules/inv_stock.js", "installFieldScanCapture", "js/modules/inv_core.js") in early, early
-    assert ("js/modules/inv_loc_mgr.js", "state", "js/modules/inv_core.js") in early, early
+    readers = _pinned_readers("installFieldScanCapture and state (both inv_core.js's)",
+                              ["js/modules/inv_stock.js", "js/modules/inv_loc_mgr.js"])
+    assert ("js/modules/inv_stock.js", "installFieldScanCapture", "js/modules/inv_core.js") in early, (readers, early)
+    assert ("js/modules/inv_loc_mgr.js", "state", "js/modules/inv_core.js") in early, (readers, early)
     at = {(r["reader"], r["name"]): r["at"] for r in result["early_reads"]}
     assert "(js/modules/inv_stock.js:" in at["js/modules/inv_stock.js", "installFieldScanCapture"], at
     assert at["js/modules/inv_loc_mgr.js", "state"].startswith("js/modules/inv_loc_mgr.js:"), at
     errors = [e for e in result["errors"] if e["script"] == "js/modules/inv_loc_mgr.js"]
-    assert errors and errors[0]["message"] == "ReferenceError: state is not defined", result["errors"]
+    assert errors and errors[0]["message"] == "ReferenceError: state is not defined", (readers, result["errors"])
     problems = early_read_problems(result, ALLOWED_EARLY_READS)
     assert any(p.startswith("  - js/modules/inv_stock.js reads installFieldScanCapture") for p in problems), problems
     assert any(p.startswith("  - js/modules/inv_loc_mgr.js (an error while it loads)")
@@ -1883,9 +1930,12 @@ def test_without_the_shortcut_shim_the_2026_08_drop_is_reported(page_scripts, lo
     assert len(shim) == 1, shim
     result = run_page([s for s in page_scripts if s is not shim[0]], load_dir, "no-shim")
     readers = {r["reader"] for r in result["early_reads"] if r["name"] == "registerShortcut"}
-    assert {"js/modules/inv_cmd.js", "js/modules/inv_wizard.js"} <= readers, result["early_reads"]
+    assert {"js/modules/inv_cmd.js", "js/modules/inv_wizard.js"} <= readers, (
+        _pinned_readers("registerShortcut", ["js/modules/inv_cmd.js", "js/modules/inv_wizard.js"]),
+        result["early_reads"])
     assert {(r["name"], r["definer"]) for r in result["early_reads"]} == {
-        ("registerShortcut", "js/modules/shortcuts_registry.js")}, result["early_reads"]
+        ("registerShortcut", "js/modules/shortcuts_registry.js")}, (
+        _pinned("registerShortcut (without the shim)", "js/modules/shortcuts_registry.js"), result["early_reads"])
 
 
 def test_a_window_read_of_a_top_level_const_is_reported(page_scripts, load_dir):
@@ -1895,7 +1945,8 @@ def test_a_window_read_of_a_top_level_const_is_reported(page_scripts, load_dir):
     result = run_page(with_fake(page_scripts, "if (window.state) {}", fake, after="js/modules/inv_core.js"),
                       load_dir, "fake-window-lexical")
     assert [(r["reader"], r["name"], r["definer"]) for r in result["late_reads"]] == [
-        (fake, "state", "js/modules/inv_core.js")], result["late_reads"]
+        (fake, "state", "js/modules/inv_core.js")], (
+        _pinned("state", "js/modules/inv_core.js, as a top-level let"), result["late_reads"])
     assert result["early_reads"] == [], result["early_reads"]
 
 
@@ -1907,7 +1958,8 @@ def test_a_window_read_before_a_later_script_puts_the_const_on_window_is_early(p
     page = with_fake(page_scripts, "if (window.state) {}", reader, after="js/modules/inv_core.js")
     page = with_fake(page, "window.state = state;", setter, after=reader)
     result = run_page(page, load_dir, "fake-window-lexical-set-later")
-    assert _early(result) == {(reader, "state", setter)}, result["early_reads"]
+    assert _early(result) == {(reader, "state", setter)}, (
+        _pinned("state", "js/modules/inv_core.js, as a top-level let"), result["early_reads"])
     assert result["late_reads"] == [] and result["errors"] == [], result
 
 
@@ -2198,7 +2250,8 @@ def test_a_stub_copy_of_a_page_name_is_reported(page_scripts, load_dir):
     stub = STUB_JS.replace("  g.navigator = {", "  g.showToast = noop;\n  g.navigator = {", 1)
     assert stub != STUB_JS
     result = run_page(page_scripts, load_dir, "stub-copy", stub=stub)
-    assert [(o["name"], o["script"]) for o in result["stub_overlaps"]] == [("showToast", "js/modules/inv_core.js")]
+    assert [(o["name"], o["script"]) for o in result["stub_overlaps"]] == [("showToast", "js/modules/inv_core.js")], (
+        _pinned("showToast", "js/modules/inv_core.js"), result["stub_overlaps"])
     # And the copy did hide the name: with it, nothing is planted for showToast.
     assert "showToast" not in result["definers"]
 
