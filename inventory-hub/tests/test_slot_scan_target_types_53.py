@@ -1,20 +1,24 @@
-"""A slot-label scan's target check reads locations_db's Types, trimmed (Group 53 review, rb-6).
+"""A slot-label scan's target check reads locations_db's Types (Group 53 review, rb-6).
 
 api_identify_scan's LOC:<place>:SLOT:<n> branch refuses a place that can't take a
 spool in a slot: a 400 `assignment_bad_target` and an ERROR Activity Log line, and
 nothing moves. It kept its own copy of the Types that can,
-{'Dryer Box', 'MMU Slot', 'Tool Head', 'No MMU Direct Load', 'Printer'}, and compared
-the row's Type untrimmed:
-  - a head Type added to locations_db.TOOLHEAD_TYPES (the backend's one list, which
-    the page's window.TOOLHEAD_TYPES mirrors, Group 53.1) was refused as a slot-scan
-    target until someone found this copy too;
-  - a Type with a stray space (" Tool Head") was refused, though locations_db reads
-    the Type trimmed (`str(row.get('Type', '')).strip()`).
-The check now reads locations_db.TOOLHEAD_TYPES, DRYER_BOX_TYPE and PRINTER_ROW_TYPE
-when it runs, and the Type trimmed, and so does the Quick-Swap deposit's
-`shown_empty` rule in the same branch (a slot shown empty is filled only while still
-free). A place that can't take a slot keeps the same answer and the same ERROR line,
-its Type as the row holds it, and the match stays exact and case-sensitive.
+{'Dryer Box', 'MMU Slot', 'Tool Head', 'No MMU Direct Load', 'Printer'}, so a head
+Type added to locations_db.TOOLHEAD_TYPES (the backend's one list, which the page's
+window.TOOLHEAD_TYPES mirrors, Group 53.1) was refused as a slot-scan target until
+someone found this copy too. The check now reads locations_db.TOOLHEAD_TYPES,
+DRYER_BOX_TYPE and PRINTER_ROW_TYPE when it runs.
+
+It still compares the row's Type as the row holds it, untrimmed, as the move engine
+does (`logic._holds_one_spool` / `_is_single_occupancy`, its dryer branch): a Type
+with a stray space (" Tool Head") is refused here, as before, rather than handed to
+an engine that would file a spool there as a plain place without unloading the one
+on it (the integrator's call, Group 53 review round 3; one trimmed Type read for
+every door is a follow-up). Only a hand-edited locations.json holds such a Type: the
+location editor trims a custom Type. The Quick-Swap deposit's `shown_empty` rule in
+the same branch reads the same Type. A place that can't take a slot keeps the same
+answer and the same ERROR line, its Type as the row holds it, and the match stays
+exact and case-sensitive.
 
 The real route; the location list is a fixture and logic.perform_smart_move a mock
 (as test_assignment_logic.py does), so nothing reads Spoolman.
@@ -126,9 +130,19 @@ def test_every_container_type_is_still_a_slot_scan_target(client, type_, max_spo
     (" Dryer Box ", "4", "3"),
     ("Printer  ", "1", "1"),
 ])
-def test_a_type_with_stray_spaces_is_read_trimmed_as_locations_db_reads_it(client, type_, max_spools, slot):
+def test_a_type_with_stray_spaces_is_refused_as_the_move_engine_would_misread_it(
+        client, buffer_and_logs, type_, max_spools, slot):
+    """The move engine compares a Type untrimmed: a padded head row outside the printer
+    map would be filed as a plain place without unloading its resident, and a padded
+    Dryer Box isn't a box to its dryer branch. So the door refuses it, as it always did,
+    with the same answer and ERROR line, its Type as the row holds it."""
     r, mv = _scan(client, [_row(type_, "PLACE-1", max_spools)], f"LOC:PLACE-1:SLOT:{slot}")
-    _moved(r, mv, "PLACE-1", slot, target_slot=slot)
+    assert r.status_code == 400
+    assert r.get_json() == {"type": "assignment", "action": "assignment_bad_target",
+                            "location": "PLACE-1", "slot": slot, "found_type": type_}
+    assert buffer_and_logs == [
+        (f"❌ Slot scan target <b>PLACE-1</b> invalid (type={type_}) — scan dropped", "ERROR", "ff0000")]
+    mv.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -169,14 +183,12 @@ def test_a_place_locations_json_doesnt_have_keeps_the_same_answer_and_error_line
 # The deposit's "shown empty" reads the same Type
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("type_", ["Dryer Box", " Dryer Box "], ids=["Dryer Box", "with stray spaces"])
-def test_a_deposit_shown_empty_on_a_multi_slot_box_is_filled_only_while_free(client, type_):
+def test_a_deposit_shown_empty_on_a_multi_slot_box_is_filled_only_while_free(client):
     """Group 51 review (engine-3): the Quick-Swap DEPOSIT tile that showed slot 2
     empty sends `shown_empty`, and a multi-slot box's slot then goes as
-    `picked_slot` (filled only while still free), never as an Overwrite. A box whose
-    Type has a stray space is now a slot-scan target, so its deposit reads the same
-    trimmed Type, or the scan would unseat a spool filed there since."""
-    r, mv = _scan(client, [_row(type_, "BOX-1", "4")], "LOC:BOX-1:SLOT:2",
+    `picked_slot` (filled only while still free), never as an Overwrite. The rule
+    reads the same Type the target check does (locations_db.DRYER_BOX_TYPE)."""
+    r, mv = _scan(client, [_row("Dryer Box", "BOX-1", "4")], "LOC:BOX-1:SLOT:2",
                   spool_id=42, shown_empty=True)
     _moved(r, mv, "BOX-1", "2", picked_slot="2")
 

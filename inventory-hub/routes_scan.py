@@ -1581,12 +1581,15 @@ def api_identify_scan():
         # like the Core One IS its own single deploy slot (Type:"Printer",
         # Max Spools "1"). Without this, LOC:CORE1:SLOT:1 scans would 400.
         # Group 53 review (rb-6): the Types are locations_db's, read as the scan
-        # runs, and the row's Type is read trimmed, as locations_db reads it. A
-        # copy kept here refused a head Type added to TOOLHEAD_TYPES, and a Type
-        # with a stray space. The answer keeps the Type as the row holds it.
+        # runs (a copy kept here refused a head Type added to TOOLHEAD_TYPES). The
+        # row's Type is compared as the row holds it, untrimmed, as the move engine
+        # compares it (logic._holds_one_spool, its dryer branch): a padded Type is
+        # refused here rather than reaching an engine that would misread it, e.g.
+        # file a spool on a padded head row as a plain place without unloading the
+        # one on it. One trimmed Type read for every door is a follow-up.
         container_types = locations_db.TOOLHEAD_TYPES | {locations_db.DRYER_BOX_TYPE,
                                                          locations_db.PRINTER_ROW_TYPE}
-        tgt_type = str(tgt_info.get('Type', '')).strip() if tgt_info else ''
+        tgt_type = tgt_info.get('Type') if tgt_info else None
         if not tgt_info or tgt_type not in container_types:
             found_type = tgt_info.get('Type') if tgt_info else 'missing'
             state.add_log_entry(
