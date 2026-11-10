@@ -1581,8 +1581,14 @@ def api_identify_scan():
         # L271 Phase 3: "Printer" is a valid slot target — a dual-role printer
         # like the Core One IS its own single deploy slot (Type:"Printer",
         # Max Spools "1"). Without this, LOC:CORE1:SLOT:1 scans would 400.
-        container_types = {'Dryer Box', 'MMU Slot', 'Tool Head', 'No MMU Direct Load', 'Printer'}
-        if not tgt_info or tgt_info.get('Type') not in container_types:
+        # Group 53 review (rb-6): the Types are locations_db's, read as the scan
+        # runs, and the row's Type is read trimmed, as locations_db reads it. A
+        # copy kept here refused a head Type added to TOOLHEAD_TYPES, and a Type
+        # with a stray space. The answer keeps the Type as the row holds it.
+        container_types = locations_db.TOOLHEAD_TYPES | {locations_db.DRYER_BOX_TYPE,
+                                                         locations_db.PRINTER_ROW_TYPE}
+        tgt_type = str(tgt_info.get('Type', '')).strip() if tgt_info else ''
+        if not tgt_info or tgt_type not in container_types:
             found_type = tgt_info.get('Type') if tgt_info else 'missing'
             state.add_log_entry(
                 f"❌ Slot scan target <b>{target}</b> invalid (type={found_type}) — scan dropped",
@@ -1659,9 +1665,11 @@ def api_identify_scan():
         # box's slot then goes as `picked_slot`, filled only while it is still
         # free, never unseating a spool filed there since the tile was drawn. A
         # blind scan of a slot's label sends nothing: an explicit slot, as
-        # always. A single-slot box keeps its own slot-1 rule either way.
+        # always. A single-slot box keeps its own slot-1 rule either way. The
+        # Type as the check above read it, trimmed (rb-6): a box the check takes
+        # is never Overwritten on a deposit for a stray space in its Type.
         shown_empty = ((request.json or {}).get('shown_empty') is True
-                       and tgt_info.get('Type') == locations_db.DRYER_BOX_TYPE and max_slots > 1)
+                       and tgt_type == locations_db.DRYER_BOX_TYPE and max_slots > 1)
         slot_kw = {'picked_slot': slot} if shown_empty else {'target_slot': slot}
         # Slot-QR scans pass the caller's confirm through: the heads whose
         # warning the user saw (Group 39.1). Frontend slot-QR paths pre-probe

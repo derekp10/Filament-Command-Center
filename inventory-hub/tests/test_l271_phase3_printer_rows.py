@@ -141,13 +141,26 @@ def test_multiple_blank_stubs_all_removed():
     assert len(core1) == 1 and core1[0]["Type"] == "Printer"
 
 
-def test_printer_is_a_valid_slot_container_type():
+def test_printer_is_a_valid_slot_container_type(monkeypatch):
     """Review fix: 'Printer' must be an accepted slot-assignment target — a
     dual-role printer (Core One) is its own deploy slot, else LOC:CORE1:SLOT:1
-    scans 400."""
-    import re
-    m = re.search(r"container_types = \{([^}]*)\}", _read_app())
-    assert m and "'Printer'" in m.group(1), "container_types must include 'Printer'"
+    scans 400. Group 53 review (rb-6): the slot-scan check reads its Types from
+    locations_db (TOOLHEAD_TYPES, DRYER_BOX_TYPE, PRINTER_ROW_TYPE) instead of an
+    inline set this test used to grep for, so it drives the real route."""
+    from unittest.mock import patch
+    import app as app_module
+    import state
+    monkeypatch.setattr(state, "GLOBAL_BUFFER", [{"id": 42}])
+    monkeypatch.setattr(state, "add_log_entry", lambda *a, **k: None)
+    rows = [{"LocationID": "CORE1", "Type": "Printer", "Max Spools": "1"}]
+    app_module.app.config["TESTING"] = True
+    with patch.object(app_module.locations_db, "load_locations_list", return_value=rows), \
+         patch.object(app_module.logic, "perform_smart_move", return_value={"status": "success"}) as mv:
+        r = app_module.app.test_client().post("/api/identify_scan",
+                                              json={"text": "LOC:CORE1:SLOT:1", "source": "barcode"})
+    assert r.status_code == 200, f"a Printer row must be a slot-scan target: {r.get_json()}"
+    mv.assert_called_once()
+    assert mv.call_args.args == ("CORE1", [42]) and mv.call_args.kwargs["target_slot"] == "1"
 
 
 def test_printer_map_put_resyncs_printer_rows():
