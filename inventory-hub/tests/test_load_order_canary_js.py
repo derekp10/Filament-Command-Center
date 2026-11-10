@@ -118,15 +118,20 @@ What it can't see:
     load-time read of it goes unjudged;
   - a name a zero-delay timer defines counts as defined when its script ends,
     although a browser may run the timer only after the next script loads;
+    and a DOMContentLoaded handler's zero-delay timers run before the load
+    handlers, though a browser may fire load first;
   - a load-time use of a top-level `var X = window.X;` alias of a later
     script's name. A top-level var IS the window property, so the later
     script's assignment reaches it and a use at call time works; only a use
     while loading gets undefined, and the alias's own read counts as the
     script reading its own name;
-  - a top-level const / let declarator the declaration scan misreads
-    (DRIVER_JS's declaredNames says where it can go wrong: a regular
-    expression taken for a division, a line break read as the statement's end,
-    a declaration past MAX_DECLARATION_TOKENS, a non-ASCII name);
+  - a top-level const / let declarator the declaration scan misreads (the
+    comment above DRIVER_JS's MAX_DECLARATION_TOKENS says where it can go
+    wrong: a regular expression taken for a division, a line break read as
+    the statement's end, a declaration past MAX_DECLARATION_TOKENS, a
+    non-ASCII name). Where it misreads a statement's end, a script's own
+    window.X read of a name it declares may be worded as an alias when it
+    isn't one, or the other way round (it is reported either way);
   - properties of shared objects: an initialisation such as `state.X = ...`
     moved to a later file while an earlier one reads state.X at load is not
     seen (only names on window and top-level declarations are planted);
@@ -1817,10 +1822,10 @@ function lineCol(src, at, s) {
   return [line + 1 + (s.lineOffset || 0), at - start + 1 + (line === 0 ? (s.columnOffset || 0) : 0)];
 }
 // Whether a read of name by script i was made while the top-level statement
-// declaring it ran: the outermost frame of the page's own code under the read
-// (the script's top-level code, or a timer) sits inside that statement, and it
-// wasn't a timer's. So `const { X } = window;`, `let X = window.X || null;`
-// and `const X = (() => window.X)();` are; `X();` on a later line, calling a
+// declaring it ran: the read wasn't made in a timer, and the outermost frame
+// of the page's own code under it (the script's top-level code) sits inside
+// that statement. So `const { X } = window;`, `let X = window.X || null;` and
+// `const X = (() => window.X)();` are; `X();` on a later line, calling a
 // function the declaration made, and a read on a later line are not.
 function inItsDeclaration(spans, i, name, outer, timer) {
   const s = scripts[i];
@@ -1971,13 +1976,13 @@ def early_read_problems(result: dict, allowed: dict) -> list:
             text = f"  - {reader} reads window.{name} while it loads{_at(r)}, but {definer} sets window.{name} later."
         else:
             text = f"  - {reader} reads {name} while it loads{_at(r)}, but {name} is defined later, by {definer}."
-        if r.get("timer"):
-            text += (" (In a zero-delay timer it queued: a browser may run that while it waits for a later "
-                     "script, so a timer is no fix.)")
-        if r.get("handler"):
+        if r.get("handler"):  # (before any note: it replaces the sentence's full stop)
             text = (f"{text[:-1]}: {r['handler']} sets it, and those handlers run once every script has loaded. "
                     f"Define {name} while its script loads, outside the handler, or read it only once the "
                     f"handlers have run.")
+        if r.get("timer"):
+            text += (" (In a zero-delay timer it queued: a browser may run that while it waits for a later "
+                     "script, so a timer is no fix.)")
         ran = "those handlers have run" if r.get("handler") else f"{definer} has run"
         if r.get("alias") and r.get("taken"):
             text += (f" ({reader} declares {name} itself, as a top-level const / let taken from window.{name} "
@@ -2585,7 +2590,10 @@ def test_a_name_only_a_handler_defines_is_defined_after_every_script(page_script
     thrower = "FAKE after titlebar_prefs.js: a DOMContentLoaded handler that defines fakeReady, then throws"
     on_load = "FAKE after titlebar_prefs.js: a window load listener that defines fakeLoaded"
     reader = "FAKE before inv_core.js reading fakeReady and fakeLoaded at load"
+    timed = "FAKE before inv_core.js reading personMayPress in a zero-delay timer"
     page = with_fake(page_scripts, "if (window.personMayPress) {}", may_press, before="js/modules/inv_core.js")
+    page = with_fake(page, "setTimeout(() => { if (window.personMayPress) {} }, 0);", timed,
+                     before="js/modules/inv_core.js")
     page = with_fake(page, "document.addEventListener('DOMContentLoaded', () => { if (window.openSlotPicker) {} });",
                      in_handler, before="js/modules/inv_core.js")
     page = with_fake(page, "if (window.fakeReady || window.fakeLoaded) {}", reader, before="js/modules/inv_core.js")
@@ -2597,7 +2605,12 @@ def test_a_name_only_a_handler_defines_is_defined_after_every_script(page_script
                      after=thrower)
     result = run_page(page, load_dir, "fake-handlers")
     assert _early(result) == {(may_press, "personMayPress", HANDLERS), (reader, "fakeReady", HANDLERS),
-                              (reader, "fakeLoaded", HANDLERS)}, f"{_thrown(result)}\n{result['early_reads']}"
+                              (reader, "fakeLoaded", HANDLERS), (timed, "personMayPress", HANDLERS)}, (
+        f"{_thrown(result)}\n{result['early_reads']}")
+    # A read in a timer of a name a handler defines gets both notes, whole.
+    words = [p for p in early_read_problems(result, {}) if p.startswith(f"  - {timed} ")]
+    assert len(words) == 1 and "sets it, and those handlers run once every script has loaded" in words[0], words
+    assert words[0].endswith("so a timer is no fix.)") and ".:" not in words[0], words
     assert result["errors"] == [], result["errors"]
     thrown = [d for d in result["diagnostics"] if d["phase"] == "handler" and thrower in d["script"]]
     assert len(thrown) == 1 and "TypeError" in thrown[0]["message"], result["diagnostics"]
