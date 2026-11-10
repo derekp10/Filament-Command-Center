@@ -16,22 +16,49 @@ Three checks:
      count, and every registered site still exists. A new or grown site fails
      with the rules to check before registering it; a stale one fails with
      "remove it from the registry".
-  2. No silent failure. A record helper that reports a rejection only by its
-     return value (update_* / create_* / delete_*, not the `_or_raise` forms,
-     which raise) must not have that result thrown away: a bare statement, an
-     `await` of it as a statement, or an assignment only to `_`. The
-     field-schema helpers are outside this rule because they handle and log
-     their own failures inside; a direct HTTP call is too, because its
-     failure is the caller's own check of the response.
-  3. The table is honest. Every record-update site carries a doc anchor, a
-     string CLAUDE.md's write-surface section must hold (from the line
+  2. No silent failure. A call of a helper that reports a failed write only by
+     what it returns (FAILS_BY_RETURN_VALUE) must not have that result thrown
+     away as a bare statement, an `await` of it as a statement, or an
+     assignment only to `_`. Those helpers are spoolman_api's record updates,
+     creates and deletes (None from update_spool / update_filament /
+     update_vendor and create_*, False from delete_*; not the `_or_raise`
+     forms, which raise), update_extra_field_choices (`{"success": False,
+     "msg": ...}`, which it logs nowhere for a refused field-list read, a key
+     that isn't there or has no choices, or a refused POST; only an exception
+     reaches hub.log), and FCC's own write wrappers (WRAPPER_WRITERS, below).
+     The other field-schema helpers are outside the rule because they log
+     their own failed writes: ensure_extra_field a WARNING, ensure_required_extras
+     through it, and ensure_filament_attributes_cleaned a WARNING or an ERROR
+     (with the restore's losses in the Activity Log). A direct HTTP
+     call is outside it too, because its failure is the caller's own check of
+     the response. Only those three shapes are seen, and only on a call the
+     scanner reads as a write; everything else passes, such as a result
+     stored and never read, a tuple unpacked with its failure part ignored,
+     `__ = ...`, `ok and update_spool(...)`, a list or a conditional
+     expression of writes as a statement, a write in a lambda or handed to a
+     thread, and a call through a local alias (`upd = spoolman_api.update_spool`,
+     registered as a value, then `upd(...)`).
+  3. The section holds each anchor. A site may carry a doc anchor, a string
+     CLAUDE.md's write-surface section must hold (from the line
      "## Spool / Filament write surfaces" to "### Weight-entry surfaces"):
      normally the enclosing function's name, or its endpoint as the table
-     writes it. A write helper's own name, which the section's opening lines
-     hold for every site, anchors only a site inside that helper. This is the
-     first test that reads CLAUDE.md (Derek's OK, 2026-11-09).
-  And WRITE_FUNCTIONS is kept equal to the spoolman_api functions that write,
-  so a new writer there is watched from its first call.
+     writes it. A site of update_spool / update_filament / update_vendor or
+     their `_or_raise` forms must carry one; any other site's anchor is
+     optional, and checked when it is given. A write helper's or a wrapper's
+     own name names what a site calls, and the section may hold it for other
+     sites, so it anchors only a site inside that very function. The check is
+     a substring test over the whole
+     section, its rows, their notes and its prose alike: it fails when a
+     site's anchor is nowhere in the section (a write in a function the
+     section doesn't name, or a function renamed under it). A row deleted
+     while its anchor still appears elsewhere in the section (another row's
+     notes, or the prose) is not seen, and neither is a new call in a function
+     the section already names (check 1 reports that one). This is the first
+     test that reads CLAUDE.md (Derek's OK, 2026-11-09).
+  And two lists are kept honest: WRITE_FUNCTIONS equals the spoolman_api
+  functions that write, so a new writer there is watched from its first call,
+  and every WRAPPER_WRITERS entry is still a function of its module that
+  writes, so a renamed wrapper can't stop watching its callers unnoticed.
 
 What counts as a write call site:
   * A use of one of spoolman_api's write helpers (WRITE_FUNCTIONS): the record
@@ -42,12 +69,28 @@ What counts as a write call site:
     (inside spoolman_api itself; anywhere else that would be a
     `from spoolman_api import <name>`, which CLAUDE.md forbids, so it is still
     seen rather than left to hide), under a `from spoolman_api import <name>
-    as <alias>` alias, and as a value handed on uncalled (a thread's target):
-    callee "<name> (as a value)".
+    as <alias>` alias, and as a value handed on uncalled (a thread's target,
+    or a local alias by assignment): callee "<name> (as a value)".
+  * A use of one of FCC's own write wrappers (WRAPPER_WRITERS): a backend
+    function that writes to Spoolman, directly or through another of them,
+    and reports a failed write only by what it returns, with no log line of
+    its own (a record helper under it may write hub.log, which nobody reads in
+    the moment). Its callee is its module-qualified name, "logic._move_write".
+    It is seen as a bare `<name>(...)` inside its own module, as
+    `<anything>.<name>(...)` (`logic._move_write(...)`, a module alias by
+    import or by assignment), under a `from <module> import <name> [as
+    <alias>]` name, and as a value handed on uncalled. A bare `<name>(...)` in
+    another module that didn't import it is that module's own function, and
+    is not counted.
   * A direct HTTP write in any module, spoolman_api included:
-    `<requests alias>.post / patch / put / delete(...)`, `.request(<verb>, ...)`
-    with anything but a read verb, `http_retry.request_with_retry(<verb>, ...)`
-    likewise, and `getattr(<requests alias>, <verb>)(...)`. The callee reads
+    `<requests>.post / patch / put / delete(...)`, `<requests>.request(<verb>,
+    ...)` with anything but a read verb, `<http_retry>.request_with_retry(<verb>,
+    ...)` likewise, and `getattr(<requests>, <verb>)(...)`. <requests> is a name
+    an import binds to requests or requests.api (`from requests.api import
+    post` too), any attribute chain ending in `.requests`
+    (`spoolman_api.requests`, which needs no import of its own), or either of
+    those followed by `.api` (`requests.api`); <http_retry> is a name an import
+    binds to http_retry, or any chain ending in `.http_retry`. The callee reads
     "HTTP <VERB> <target>", the verb "?" when it isn't written as a literal and
     the target taken from the URL argument's text: spool / filament / vendor /
     field / other (a URL held in a variable reads as other).
@@ -59,16 +102,29 @@ What counts as a write call site:
 Scope: the flat backend modules, inventory-hub/*.py, non-recursive (CLAUDE.md
 "Backend module map"), as test_requests_timeout_canary.py and
 test_no_direct_extra_patch.py scan; test_*.py and conftest.py there are left
-out, as the image's .dockerignore leaves them out. Out of scope:
+out, as the image's .dockerignore leaves them out. Every other Python file is
+out of scope. Those that write to Spoolman (2026-11-09):
 setup-and-rebuild/setup_fields.py, a deploy tool with its own tests
-(test_setup_fields_migration_54_4.py, test_setup_fields_idempotent.py), and
-the repo-root scripts.
+(test_setup_fields_migration_54_4.py, test_setup_fields_idempotent.py); the
+other setup-and-rebuild scripts (migrate_filament_attributes.py,
+migrate_inventory.py, migrate_spool_links.py, reset_dev.py); the hand-run
+utilities/ scripts (backup_database.py, debug_test.py, repair_db_fields.py,
+test_assignment.py, update_from_csv.py); clean_choices.py at the repo root;
+and _backup/sync_spoolman.py.
 
-Not seen: a requests Session (none in the backend; a test's patch of
-`requests.<verb>` can't reach one either), urllib / http.client, and a helper
-reached through getattr(spoolman_api, ...). A wrapper outside spoolman_api
-(logic._move_write, attr_migration.restore_extras) is registered at the write
-inside it; its callers are not listed.
+Not seen, so no check can see it either:
+  * an HTTP verb chosen into a variable (`send = requests.post if new else
+    requests.patch`, then `send(...)`). In spoolman_api.py that would also hide
+    a new writer from test_every_spoolman_api_writer_is_listed;
+  * the retry helper aliased by assignment (`rr = http_retry.request_with_retry`,
+    then `rr("patch", ...)`);
+  * a requests Session (none in the backend; a test's patch of
+    `requests.<verb>` can't reach one either), urllib and http.client;
+  * a write helper or wrapper reached through getattr (`getattr(spoolman_api,
+    "update_spool")(...)`);
+  * a NEW function of the wrappers' kind: its callers are watched only once it
+    is in WRAPPER_WRITERS. Its own write is a new site (check 1), and the
+    registration message asks whether it belongs there.
 
 test_no_direct_extra_patch.py already forbids a direct PATCH that carries
 `extra`; this test doesn't repeat it.
@@ -102,11 +158,102 @@ FIELD_SCHEMA_WRITERS = frozenset({
     "ensure_filament_attributes_cleaned", "ensure_required_extras",
 })
 WRITE_FUNCTIONS = RECORD_UPDATES | RAISING_UPDATES | CREATES_AND_DELETES | FIELD_SCHEMA_WRITERS
-# Check 2: these report a rejection only by their return value (None, or
-# False from delete_*).
-FAILS_BY_RETURN_VALUE = RECORD_UPDATES | CREATES_AND_DELETES
-# Check 3: these sites must be named in CLAUDE.md's write-surface table.
+
+# FCC's own write wrappers, module-qualified, each with how it reports a failed
+# write. Every one writes to Spoolman (directly, or through another of these) and
+# reports a failed write ONLY by what it returns: neither it nor anything it calls
+# puts that failure in the Activity Log (a record helper under it may write
+# hub.log, which nobody reads in the moment). So each caller is a registered write
+# site (check 1), and check 2 reports one whose result is thrown away.
+# test_every_watched_wrapper_still_writes keeps each entry a function of its module
+# that writes. Surveyed 2026-11-09: every other backend function that writes and
+# that other backend code calls puts its own failed writes in the Activity Log,
+# except http_retry.request_with_retry, the transport, whose every write call is
+# an HTTP site of its own.
+WRAPPER_WRITERS = {
+    "logic._move_write":
+        "returns False when the write failed and a re-read doesn't show it landed",
+    "logic._swap_out_write":
+        "returns (landed, location, slot); landed is False when its _move_write failed",
+    "logic._audit_park_one":
+        "returns (stay why, fail why, record); a failed write's reason is the fail why",
+    "logic._audit_file_one":
+        "returns (stay why, fail why, record); a failed write's reason is the fail why",
+    "logic._undo_filed":
+        "returns a dict; a write that failed and isn't proved landed is only in its "
+        "retry / retry_why",
+    "logic.perform_toolhead_delete_cascade":
+        "returns {\"status\": \"requires_confirm\", ...} having written nothing, or a "
+        "summary whose errors list holds each refused write",
+    "attr_migration.restore_extras":
+        "returns (restored, failures, recovered); a filament it couldn't restore is "
+        "only in failures",
+    "routes_config_attrs._strip_choice_from_carriers":
+        "returns (stripped, errors); each refused write is only in errors",
+}
+# Their bare names, for a call inside their own module: {"_move_write": "logic._move_write"}.
+_WRAPPER_BY_NAME = {q.split(".", 1)[1]: q for q in WRAPPER_WRITERS}
+
+# Check 2: these report a failed write only by what they return: None from
+# update_spool / update_filament / update_vendor and create_*, False from delete_*
+# (each writes only hub.log), {"success": False, "msg": ...} from
+# update_extra_field_choices (it logs none of its refusals: a refused field-list
+# read, a key that isn't there or has no choices, a refused POST), and each
+# wrapper's shape in WRAPPER_WRITERS. Left out: the _or_raise forms, which raise
+# spoolman_api.SpoolmanRejection, and the other field-schema helpers, which log
+# their own failed writes (ensure_extra_field a WARNING, ensure_required_extras
+# through it, ensure_filament_attributes_cleaned a WARNING or an ERROR).
+FAILS_BY_RETURN_VALUE = (RECORD_UPDATES | CREATES_AND_DELETES
+                         | {"update_extra_field_choices"} | frozenset(WRAPPER_WRITERS))
+# Check 3: these sites must carry a doc anchor that CLAUDE.md's write-surface
+# section holds. Every other site's anchor is optional, and checked when given.
 NEEDS_DOC_ANCHOR = RECORD_UPDATES | RAISING_UPDATES
+
+# What check 2's message says about each helper it can report: how the helper
+# reports a failed write, and what its caller must do with that.
+_READ_LAST_ERROR = ("read spoolman_api.LAST_SPOOLMAN_ERROR right after the call and log it "
+                    "(state.add_log_entry(..., \"ERROR\", \"ff4444\")) or return it so the page "
+                    "toasts it at 7 s")
+HOW_IT_FAILS = {
+    **{name: (f"returns None when Spoolman refused it or didn't answer: {_READ_LAST_ERROR}; "
+              f"or call {name}_or_raise, which raises spoolman_api.SpoolmanRejection")
+       for name in RECORD_UPDATES},
+    **{name: f"returns None when Spoolman refused it or didn't answer: {_READ_LAST_ERROR}"
+       for name in ("create_spool", "create_filament", "create_vendor")},
+    **{name: f"returns False when Spoolman refused it or didn't answer: {_READ_LAST_ERROR}"
+       for name in ("delete_spool", "delete_filament")},
+    "update_extra_field_choices": (
+        "returns {\"success\": False, \"msg\": ...} on a refused field-list read, a key that "
+        "isn't there or has no choices, or a refused POST, and logs none of them: check "
+        "res.get(\"success\") and pass res (its msg) back to the page, or log the msg"),
+    "logic._move_write": (
+        f"{WRAPPER_WRITERS['logic._move_write']}, with no log line: {_READ_LAST_ERROR}"),
+    "logic._swap_out_write": (
+        f"{WRAPPER_WRITERS['logic._swap_out_write']}, with no log line: check landed, then "
+        f"{_READ_LAST_ERROR}"),
+    "logic._audit_park_one": (
+        f"{WRAPPER_WRITERS['logic._audit_park_one']}, with no log line: log a fail why "
+        "(\"ERROR\") and list its spool as failed, as _audit_park_locked does"),
+    "logic._audit_file_one": (
+        f"{WRAPPER_WRITERS['logic._audit_file_one']}, with no log line: log a fail why "
+        "(\"ERROR\") and list its spool as failed, as _audit_file_extras does"),
+    "logic._undo_filed": (
+        f"{WRAPPER_WRITERS['logic._undo_filed']}, with no log line: fold its failed, retry and "
+        "retry_why into the Undo's answer, which says each reason in an ERROR line, as "
+        "perform_undo does"),
+    "logic.perform_toolhead_delete_cascade": (
+        f"{WRAPPER_WRITERS['logic.perform_toolhead_delete_cascade']}, with no log line: ask "
+        "the question on requires_confirm, and on any errors keep the row and log them "
+        "(\"ERROR\"), as api_delete_location does"),
+    "attr_migration.restore_extras": (
+        f"{WRAPPER_WRITERS['attr_migration.restore_extras']}, with no log line: hand failures "
+        "to attr_migration.report_restore_failures (it logs each one's recovery payload), "
+        "keep the recovery snapshot, and log the loss (\"ERROR\"), as the three rebuilds do"),
+    "routes_config_attrs._strip_choice_from_carriers": (
+        f"{WRAPPER_WRITERS['routes_config_attrs._strip_choice_from_carriers']}, with no log "
+        "line: count them and log them (\"ERROR\" when none landed, \"WARNING\" when some "
+        "did), as api_filament_attributes_remove_choice does"),
+}
 
 HTTP_READ_VERBS = frozenset({"get", "head", "options"})
 HTTP_VERB_FUNCS = frozenset({"get", "head", "options", "post", "patch", "put", "delete"})
@@ -118,10 +265,14 @@ Site = collections.namedtuple("Site", "module function callee line discarded")
 # ---------------------------------------------------------------------------
 # The registry: (module, function, callee): (count, doc anchor).
 #
-# The doc anchor is a string CLAUDE.md's write-surface section holds, so the
-# table can't lose a surface unnoticed (check 3). Every update_* site has one;
-# a create, delete, field-schema or HTTP site has one where a row names it,
-# else None.
+# The doc anchor is a string CLAUDE.md's write-surface section must hold
+# (check 3), so a write in a function the section doesn't name can't be
+# registered unnoticed. It is a substring test over the whole section: a row
+# deleted while its anchor still appears elsewhere there (another row's notes,
+# or the prose) is not seen. Every update_spool / update_filament /
+# update_vendor site, and every `_or_raise` one, has an anchor; a create,
+# delete, field-schema, HTTP or wrapper site has one where the section already
+# names its function, else None.
 # ---------------------------------------------------------------------------
 WRITE_SITES = {
     # --- app.py: the startup field registration, under __main__ ---
@@ -150,6 +301,27 @@ WRITE_SITES = {
         (2, "perform_toolhead_delete_cascade"),
     # A move's restore, a Smart Load ejection's, and a Swap's displaced spool.
     ("logic.py", "perform_undo", "update_spool"): (3, "perform_undo"),
+    # The writes through FCC's own wrappers (WRAPPER_WRITERS). The audit's park
+    # and file loops (_audit_park_locked, _audit_file_extras) are named nowhere
+    # in the section, so their anchors are None.
+    ("logic.py", "_audit_file_extras", "logic._audit_file_one"): (1, None),
+    ("logic.py", "_audit_file_one", "logic._move_write"): (1, "_audit_file_one"),
+    ("logic.py", "_audit_park_locked", "logic._audit_park_one"): (1, None),
+    ("logic.py", "_audit_park_one", "logic._move_write"): (1, "_audit_park_one"),
+    # The toolhead, dryer and generic branches' writes.
+    ("logic.py", "_perform_smart_move_impl", "logic._move_write"): (3, "_perform_smart_move_impl"),
+    # A Swap's stored occupant, filed where it sat before the slot (Swap option C).
+    ("logic.py", "_perform_smart_move_impl", "logic._swap_out_write"):
+        (1, "_perform_smart_move_impl"),
+    ("logic.py", "_swap_out_write", "logic._move_write"): (1, "_swap_out_write"),
+    ("logic.py", "_undo_filed", "logic._move_write"): (1, "_undo_filed"),
+    # Smart Load's same-slot swap takes the resident into the scan buffer: filed
+    # where it sat before that slot, or Unassigned.
+    ("logic.py", "perform_smart_eject", "logic._move_write"): (1, "perform_smart_eject"),
+    ("logic.py", "perform_smart_eject", "logic._swap_out_write"): (1, "perform_smart_eject"),
+    # An audit park's restore, and its filed group's.
+    ("logic.py", "perform_undo", "logic._move_write"): (1, "perform_undo"),
+    ("logic.py", "perform_undo", "logic._undo_filed"): (1, "perform_undo"),
 
     # --- print_deduct.py: print usage and the 🛑 review ---
     ("print_deduct.py", "_apply_usage_to_printer", "update_spool"): (1, "_apply_usage_to_printer"),
@@ -166,10 +338,19 @@ WRITE_SITES = {
         (1, None),
     # Purge and Sweep Unused rebuild the field: DELETE it, POST it back, then
     # attr_migration.restore_extras. The DELETE wipes the extra on every record.
+    # No row describes the rebuild (the section's remove_choice row is the HIDE
+    # path), so its sites have no anchor.
     ("routes_config_attrs.py", "api_filament_attributes_remove_choice", "HTTP DELETE field"): (1, None),
     ("routes_config_attrs.py", "api_filament_attributes_remove_choice", "HTTP POST field"): (1, None),
+    ("routes_config_attrs.py", "api_filament_attributes_remove_choice", "attr_migration.restore_extras"):
+        (1, None),
     ("routes_config_attrs.py", "api_filament_attributes_sweep_unused", "HTTP DELETE field"): (1, None),
     ("routes_config_attrs.py", "api_filament_attributes_sweep_unused", "HTTP POST field"): (1, None),
+    ("routes_config_attrs.py", "api_filament_attributes_sweep_unused", "attr_migration.restore_extras"):
+        (1, None),
+    # The HIDE path, the default.
+    ("routes_config_attrs.py", "api_filament_attributes_remove_choice",
+     "routes_config_attrs._strip_choice_from_carriers"): (1, "/api/filament_attributes/remove_choice"),
 
     # --- routes_inventory.py: the wizard, vendors, creates, /api/spool/update ---
     ("routes_inventory.py", "_take_archived_off", "update_spool"): (1, "_take_archived_off"),
@@ -192,6 +373,9 @@ WRITE_SITES = {
     ("routes_locations.py", "api_delete_filament", "delete_filament"): (1, None),
     ("routes_locations.py", "api_delete_filament", "delete_spool"): (1, None),
     ("routes_locations.py", "api_delete_location", "update_spool"): (1, "`/api/locations` DELETE cascade"),
+    # A toolhead row's delete: its spools unassigned or un-deployed.
+    ("routes_locations.py", "api_delete_location", "logic.perform_toolhead_delete_cascade"):
+        (1, "`/api/locations` DELETE cascade"),
     ("routes_locations.py", "api_delete_spool", "delete_spool"): (1, None),
     ("routes_locations.py", "api_merge_filament", "delete_filament"): (1, "api_merge_filament"),
     ("routes_locations.py", "api_merge_filament", "update_spool_or_raise"): (1, "api_merge_filament"),
@@ -228,6 +412,7 @@ WRITE_SITES = {
     ("spoolman_api.py", "ensure_extra_field", "HTTP POST field"): (2, None),
     ("spoolman_api.py", "ensure_filament_attributes_cleaned", "HTTP DELETE field"): (1, None),
     ("spoolman_api.py", "ensure_filament_attributes_cleaned", "HTTP POST field"): (1, None),
+    ("spoolman_api.py", "ensure_filament_attributes_cleaned", "attr_migration.restore_extras"): (1, None),
     ("spoolman_api.py", "ensure_required_extras", "ensure_extra_field"): (3, None),
     ("spoolman_api.py", "update_extra_field_choices", "HTTP POST field"): (1, None),
     ("spoolman_api.py", "update_filament", "HTTP PATCH filament"): (1, None),
@@ -248,19 +433,24 @@ WRITE_SITES = {
 # ---------------------------------------------------------------------------
 
 class _Bindings:
-    """The names one module binds to requests, http_retry and spoolman_api's writers."""
+    """The names one module binds to requests, http_retry, spoolman_api's writers
+    and FCC's write wrappers."""
 
     def __init__(self, tree):
-        self.requests = set()        # import requests [as x]
-        self.requests_funcs = {}     # from requests import post [as p] -> {"p": "post"}
+        self.requests = set()        # import requests [as x], import requests.api as x,
+                                     # from requests import api [as x]
+        self.requests_funcs = {}     # from requests[.api] import post [as p] -> {"p": "post"}
         self.retry = set()           # import http_retry [as x]
         self.retry_funcs = set()     # from http_retry import request_with_retry [as r]
         self.writers = {}            # from spoolman_api import update_spool [as us] -> {"us": "update_spool"}
+        self.wrappers = {}           # from logic import _move_write [as mw] -> {"mw": "logic._move_write"}
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for a in node.names:
                     if a.name == "requests":
                         self.requests.add(a.asname or "requests")
+                    elif a.name == "requests.api" and a.asname:
+                        self.requests.add(a.asname)     # binds the api module itself
                     elif a.name.startswith("requests.") and not a.asname:
                         self.requests.add("requests")   # `import requests.x` binds `requests`
                     elif a.name == "http_retry":
@@ -268,16 +458,27 @@ class _Bindings:
             elif isinstance(node, ast.ImportFrom):
                 for a in node.names:
                     local = a.asname or a.name
-                    if node.module == "requests":
+                    if node.module in ("requests", "requests.api"):
                         if a.name == "*":
                             self.requests_funcs.update({v: v for v in HTTP_VERB_FUNCS | {"request"}})
                         elif a.name in HTTP_VERB_FUNCS or a.name == "request":
                             self.requests_funcs[local] = a.name
+                        elif node.module == "requests" and a.name == "api":
+                            self.requests.add(local)    # `from requests import api [as x]`
                     elif node.module == "http_retry":
                         if a.name in ("request_with_retry", "*"):
                             self.retry_funcs.add("request_with_retry" if a.name == "*" else local)
                     elif node.module == "spoolman_api" and a.name in WRITE_FUNCTIONS:
                         self.writers[local] = a.name
+                    else:
+                        for qual in WRAPPER_WRITERS:
+                            module, name = qual.split(".", 1)
+                            if node.module != module:
+                                continue
+                            if a.name == name:
+                                self.wrappers[local] = qual
+                            elif a.name == "*" and not name.startswith("_"):
+                                self.wrappers[name] = qual   # a star import binds public names only
 
 
 def _discarded_calls(tree):
@@ -336,9 +537,20 @@ def _target(url):
 
 
 def _writer(callee):
-    """The spoolman_api helper a callee names, or None for an HTTP site."""
+    """The spoolman_api helper or FCC wrapper a callee names (a wrapper by its
+    module-qualified name), or None for an HTTP site."""
     name = callee[:-len(AS_VALUE)] if callee.endswith(AS_VALUE) else callee
-    return name if name in WRITE_FUNCTIONS else None
+    return name if name in WRITE_FUNCTIONS or name in WRAPPER_WRITERS else None
+
+
+def _own_name(anchor):
+    """The function an anchor names when it is a write helper's or a wrapper's
+    own name (a wrapper's bare or module-qualified name), else None."""
+    if anchor in WRITE_FUNCTIONS:
+        return anchor
+    if anchor in WRAPPER_WRITERS:
+        return anchor.split(".", 1)[1]
+    return anchor if anchor in _WRAPPER_BY_NAME else None
 
 
 class _SiteFinder(ast.NodeVisitor):
@@ -372,15 +584,25 @@ class _SiteFinder(ast.NodeVisitor):
         self.sites.append(Site(self.module, ".".join(self._scope) or "<module>",
                                callee, node.lineno, discarded))
 
-    # -- spoolman_api's writers ----------------------------------------------
+    # -- spoolman_api's writers and FCC's wrappers ---------------------------
     def _writer_named(self, node):
-        if isinstance(node, ast.Attribute) and node.attr in WRITE_FUNCTIONS:
-            return node.attr
+        """The callee text `node` names: a write helper's name, a wrapper's
+        module-qualified name, or None."""
+        if isinstance(node, ast.Attribute):
+            if node.attr in WRITE_FUNCTIONS:
+                return node.attr
+            if node.attr in _WRAPPER_BY_NAME:
+                return _WRAPPER_BY_NAME[node.attr]          # logic._move_write(...), any receiver
         if isinstance(node, ast.Name):
             if node.id in self._b.writers:
                 return self._b.writers[node.id]
             if node.id in WRITE_FUNCTIONS:
                 return node.id
+            if node.id in self._b.wrappers:
+                return self._b.wrappers[node.id]            # from logic import _move_write [as x]
+            qual = _WRAPPER_BY_NAME.get(node.id)
+            if qual and qual.split(".", 1)[0] + ".py" == self.module:
+                return qual                                 # a bare call inside its own module
         return None
 
     def visit_Attribute(self, node):
@@ -391,7 +613,7 @@ class _SiteFinder(ast.NodeVisitor):
         self._value_use(node)
 
     def _value_use(self, node):
-        """A writer named without being called: handed on as a value."""
+        """A write helper or wrapper named without being called: handed on as a value."""
         if id(node) in self._called or not isinstance(node.ctx, ast.Load):
             return
         writer = self._writer_named(node)
@@ -412,17 +634,37 @@ class _SiteFinder(ast.NodeVisitor):
                           id(node) in self._discarded)
         self.generic_visit(node)
 
+    def _is_requests(self, node):
+        """Does `node` name the requests module (or requests.api)? A name an
+        import bound to it, any attribute chain ending in `.requests`
+        (`spoolman_api.requests`, which a module can use with no import of its
+        own), or either of those followed by `.api`."""
+        if isinstance(node, ast.Name):
+            return node.id in self._b.requests
+        if isinstance(node, ast.Attribute):
+            if node.attr == "requests":
+                return True
+            if node.attr == "api":
+                return self._is_requests(node.value)
+        return False
+
+    def _is_retry(self, node):
+        """Does `node` name the http_retry module? A name an import bound to it,
+        or any attribute chain ending in `.http_retry`."""
+        if isinstance(node, ast.Name):
+            return node.id in self._b.retry
+        return isinstance(node, ast.Attribute) and node.attr == "http_retry"
+
     def _http_call(self, node):
         """(verb, URL node) when `node` is an HTTP call, else None."""
         func, b = node.func, self._b
-        if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
-            receiver = func.value.id
-            if receiver in b.requests:
+        if isinstance(func, ast.Attribute):
+            if self._is_requests(func.value):
                 if func.attr in HTTP_VERB_FUNCS:
                     return func.attr, _arg(node, 0, "url")
                 if func.attr == "request":
                     return _verb(_arg(node, 0, "method")), _arg(node, 1, "url")
-            if receiver in b.retry and func.attr == "request_with_retry":
+            if func.attr == "request_with_retry" and self._is_retry(func.value):
                 return _verb(_arg(node, 0, "method")), _arg(node, 1, "url")
         if isinstance(func, ast.Name):
             if func.id in b.requests_funcs:
@@ -435,7 +677,7 @@ class _SiteFinder(ast.NodeVisitor):
         # getattr(requests, verb)(url, ...): http_retry's own dispatch.
         if (isinstance(func, ast.Call) and isinstance(func.func, ast.Name)
                 and func.func.id == "getattr" and len(func.args) >= 2
-                and isinstance(func.args[0], ast.Name) and func.args[0].id in b.requests):
+                and self._is_requests(func.args[0])):
             return _verb(func.args[1]), _arg(node, 0, "url")
         return None
 
@@ -506,7 +748,9 @@ def registry_problems(found, registry):
 
 
 def silent_failures(sites):
-    """The calls of a return-value-failing record helper whose result is thrown away."""
+    """The calls of a FAILS_BY_RETURN_VALUE helper (a record helper,
+    update_extra_field_choices or a wrapper) whose result is thrown away as a
+    bare statement, an awaited statement or `_ =`."""
     return [
         f"{s.module}:{s.line}  {s.function}  -> {s.callee}(...), its result thrown away"
         for s in sites
@@ -539,18 +783,30 @@ def write_surface_section(claude_md):
 
 def anchor_problems(registry, section):
     """The registered sites whose doc anchor the section doesn't hold, the
-    record-update sites with no anchor at all, and the anchors that would hold
-    for any site: a write helper's own name is in the section's opening lines,
-    so it is an anchor only for a site inside that helper (the `_or_raise`
-    forms' own calls)."""
+    NEEDS_DOC_ANCHOR sites with no anchor at all, and the anchors that name
+    what a site calls rather than the site: a write helper's own name is in
+    the section's opening lines, and a wrapper's sits in the rows of functions
+    that call it, so either is an anchor only for a site inside that very
+    function (the `_or_raise` forms' own calls, a wrapper's own write).
+
+    A substring test over the whole section, rows, notes and prose alike: an
+    anchor found anywhere there passes, so a site's row deleted while its
+    anchor still appears elsewhere in the section is not reported."""
     out = []
     for key, (_n, doc) in _entries(registry):
         if doc is None:
             if _writer(key[2]) in NEEDS_DOC_ANCHOR:
                 out.append(f"{_key_text(key)}: no doc anchor")
-        elif _writer(doc) and doc != key[1]:
-            out.append(f"{_key_text(key)}: {doc!r} is a write helper's name, which the section "
-                       "holds for every site; anchor it to its function or endpoint")
+        elif _own_name(doc) and _own_name(doc) != key[1]:
+            if doc in WRITE_FUNCTIONS:
+                what = ("a write helper's name, which the section holds for every site; anchor it "
+                        "to its function or endpoint")
+            else:
+                what = ("a wrapper's own name, not the site's; anchor it to its function or "
+                        "endpoint")
+            if _writer(key[2]) not in NEEDS_DOC_ANCHOR:
+                what += ", or give it None (its anchor is optional)"
+            out.append(f"{_key_text(key)}: {doc!r} is {what}")
         elif doc not in section:
             out.append(f"{_key_text(key)}: {doc!r} is not in the section")
     return out
@@ -560,7 +816,7 @@ def writer_set_problems(source, listed):
     """For spoolman_api.py's source: ([writers missing from `listed`, with what
     each writes through], [listed names that aren't writers there]). A writer is
     a top-level function with a write in it: an HTTP write, or a use of one of
-    WRITE_FUNCTIONS."""
+    WRITE_FUNCTIONS or WRAPPER_WRITERS."""
     writes = collections.defaultdict(set)
     for s in find_write_sites("spoolman_api.py", source):
         writes[s.function.split(".")[0]].add(s.callee)
@@ -569,6 +825,35 @@ def writer_set_problems(source, listed):
     unlisted = [f"{f} ({', '.join(sorted(writes[f]))})" for f in sorted(set(writes) - listed)]
     not_writers = [f if f in defined else f"{f} (not defined)" for f in sorted(listed - set(writes))]
     return unlisted, not_writers
+
+
+def wrapper_set_problems(sources, wrappers):
+    """For the backend's {module file: source}: the `wrappers` entries
+    ("module.function") that no longer hold, each a line of text. Its module
+    must be a backend module that defines it as a top-level function, the
+    function must still write (a write site inside it, a call of another
+    wrapper included), and its bare name must be its own: shared with another
+    entry or a spoolman_api write helper, a bare call couldn't be told apart."""
+    out = []
+    bare = collections.Counter(q.split(".", 1)[1] for q in wrappers)
+    for qual in sorted(wrappers):
+        module, _, name = qual.partition(".")
+        path = module + ".py"
+        if bare[name] > 1 or name in WRITE_FUNCTIONS:
+            out.append(f"{qual}: its bare name {name!r} is also another write helper's or wrapper's")
+        if path not in sources:
+            out.append(f"{qual}: {path} is not a backend module (inventory-hub/*.py)")
+            continue
+        tree = ast.parse(sources[path])
+        if name not in {n.name for n in tree.body
+                        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}:
+            out.append(f"{qual}: {path} defines no top-level function {name} (renamed or removed?)")
+            continue
+        if not any(s.function.split(".")[0] == name for s in find_write_sites(path, sources[path])):
+            out.append(f"{qual}: {name} has no write site inside it any more: it no longer "
+                       "writes, or writes only through a helper this file doesn't watch (a "
+                       "renamed wrapper?)")
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -591,10 +876,16 @@ Before you register a write, check it against CLAUDE.md "Spool / Filament write 
     timeout): re-read the record before calling it failed where that matters.
   - A field-schema DELETE wipes that extra on every record (Group 36): never add one lightly.
   - Add a row for it to the write-surface table in CLAUDE.md (or extend the row that covers it).
+  - If the write is in a helper other backend code calls, and that helper reports a failed write
+    only by what it returns (no log line of its own), add the helper to WRAPPER_WRITERS in
+    {THIS_FILE}: then each call of it is a site here, and check 2 reports one whose result
+    is thrown away.
 Then register it in WRITE_SITES in {THIS_FILE}, under its module:
     ("module.py", "function", "callee"): (count, "doc anchor"),
-where the doc anchor is a string the table holds (the function's name, or its endpoint as the
-table writes it); it is required for update_* sites and may be None for the others.
+where the doc anchor is a string the write-surface section holds (the function's name, or its
+endpoint as the table writes it). It is required for update_spool / update_filament /
+update_vendor and their _or_raise forms; for any other site give one where the section already
+names the function, else None.
 """
 
 
@@ -612,22 +903,25 @@ def registry_message(new, stale):
     return "\n\n".join(parts)
 
 
+def _offender_callee(offender):
+    """The callee in one of silent_failures' lines."""
+    return offender.rsplit("-> ", 1)[-1].rsplit("(...)", 1)[0]
+
+
 def silent_failure_message(offenders):
+    helpers = sorted({_offender_callee(o) for o in offenders} & set(HOW_IT_FAILS))
     return (
-        "A Spoolman write's result is thrown away, so a rejection goes unseen (the class of "
+        "A Spoolman write's result is thrown away, so a failed write goes unseen (the class of "
         "bug behind the 2026-04-26/27 prod outages):\n  " + "\n  ".join(offenders)
-        + "\n\nThese helpers report a rejection only by returning None (False from delete_*). "
-          "Keep the result and check it: on a falsy answer read spoolman_api.LAST_SPOOLMAN_ERROR "
-          "and log it (state.add_log_entry(..., \"ERROR\", \"ff4444\")) or return it so the page "
-          "toasts it at 7 s. Or call the _or_raise form (update_spool_or_raise / "
-          "update_filament_or_raise / update_vendor_or_raise), which raises "
-          "spoolman_api.SpoolmanRejection."
+        + "\n\nEach of these reports a failed write only by what it returns. Keep the result and "
+          "check it:\n" + "\n".join(f"  - {h} {HOW_IT_FAILS[h]}." for h in helpers)
     )
 
 
 def anchor_message(problems):
     return (
-        "CLAUDE.md's write-surface table doesn't name these registered sites:\n  "
+        "These registered sites' doc anchors are missing, not in CLAUDE.md's write-surface "
+        "section, or name a write helper or wrapper instead of the site:\n  "
         + "\n  ".join(problems)
         + "\n\nAdd a row to the table in the section from \"" + SECTION_START + "\" to \""
         + SECTION_END + "\" (| Module | Endpoint / Function | Notes |: what it writes, whether "
@@ -652,7 +946,11 @@ def test_no_write_result_is_thrown_away():
     assert not offenders, silent_failure_message(offenders)
 
 
-def test_the_write_surface_table_names_every_update_site():
+def test_the_write_surface_section_holds_every_doc_anchor():
+    """Check 3: each registered anchor is somewhere in the section, and every
+    update_spool / update_filament / update_vendor (and _or_raise) site has one.
+    It can't tell which row holds an anchor: a row deleted while its anchor
+    still appears elsewhere in the section passes."""
     try:
         section = write_surface_section(CLAUDE_MD.read_text(encoding="utf-8"))
     except SectionMissing as e:
@@ -676,6 +974,22 @@ def test_every_spoolman_api_writer_is_listed():
     assert not not_writers, (
         "WRITE_FUNCTIONS names function(s) spoolman_api.py doesn't define, or that no longer "
         "write: " + ", ".join(not_writers) + f"\nTake them out of their set in {THIS_FILE}."
+    )
+
+
+def test_every_watched_wrapper_still_writes():
+    """Every WRAPPER_WRITERS entry is a top-level function of its backend module
+    that writes, with a bare name of its own: a renamed wrapper would otherwise
+    stop watching its callers with every check still green."""
+    sources = {p.name: p.read_text(encoding="utf-8-sig") for p in backend_modules()}
+    problems = wrapper_set_problems(sources, WRAPPER_WRITERS)
+    assert not problems, (
+        "WRAPPER_WRITERS entries that no longer hold:\n  " + "\n  ".join(problems)
+        + f"\nIn {THIS_FILE}: point a renamed or moved wrapper's entry at its new "
+          "\"module.function\" (and its callers' WRITE_SITES keys at the new callee). Take an "
+          "entry out only when the function no longer writes, or now puts a failed write in "
+          "the Activity Log itself; its callers' sites then go stale in WRITE_SITES, so remove "
+          "them too."
     )
 
 
@@ -956,3 +1270,221 @@ def test_a_new_writer_in_spoolman_api_must_be_listed():
     unlisted, not_writers = writer_set_problems(source, listed)
     assert unlisted == ["archive_spool (HTTP PUT spool)"]
     assert not_writers == ["update_filament (not defined)"]
+
+
+# --- update_extra_field_choices is under check 2 (review r4-1) ----------------
+
+def test_a_thrown_away_field_choices_result_is_reported():
+    # It answers {"success": False, "msg": ...} on a refused field-list read, a
+    # key with no choices and a refused POST, and logs none of them, so a route
+    # that drops it answers success over a choice that was never added.
+    offenders = silent_failures(_sites(
+        "import spoolman_api\n"
+        "def api_new_choice(choice):\n"
+        "    spoolman_api.update_extra_field_choices('filament', 'filament_attributes', [choice])\n"
+        "    return {'success': True}\n"
+    ))
+    assert offenders == [
+        "synthetic.py:3  api_new_choice  -> update_extra_field_choices(...), its result thrown away"]
+    assert 'res.get("success")' in silent_failure_message(offenders)
+    # The other field-schema helpers log their own failures: a bare call is fine.
+    assert silent_failures(_sites(
+        "import spoolman_api\n"
+        "def boot():\n"
+        "    spoolman_api.ensure_required_extras()\n"
+        "    spoolman_api.ensure_filament_attributes_cleaned()\n"
+        "    spoolman_api.ensure_extra_field('spool', 'k', 'K')\n"
+    )) == []
+
+
+def test_check_2_says_what_to_do_for_each_helper_it_reports():
+    assert set(HOW_IT_FAILS) == set(FAILS_BY_RETURN_VALUE)
+    offenders = [f"synthetic.py:1  handler  -> {name}(...), its result thrown away"
+                 for name in sorted(FAILS_BY_RETURN_VALUE)]
+    message = silent_failure_message(offenders)
+    for name in FAILS_BY_RETURN_VALUE:
+        assert f"  - {name} {HOW_IT_FAILS[name]}." in message
+    # Only the helpers it reports: one offender, one line of advice.
+    one = silent_failure_message(["x.py:1  f  -> logic._move_write(...), its result thrown away"])
+    assert "  - logic._move_write " in one and "restore_extras" not in one
+
+
+# --- FCC's own write wrappers (review r5-3, r3-7) ------------------------------
+
+def test_a_wrappers_calls_are_write_sites_wherever_they_are():
+    # Inside its own module: a bare call.
+    assert _keys(
+        "import spoolman_api\n"
+        "def _move_write(sid, target, extra):\n"
+        "    return spoolman_api.update_spool(sid, {'location': target, 'extra': extra})\n"
+        "def _new_surface(sid):\n"
+        "    return _move_write(sid, 'UNKNOWN', {})\n",
+        module="logic.py") == {
+        ("logic.py", "_move_write", "update_spool"): 1,
+        ("logic.py", "_new_surface", "logic._move_write"): 1,
+    }
+    # Elsewhere: through the module, an alias of it, a from-import (a star import
+    # binds only public names), and handed on as a value.
+    assert _keys(
+        "import threading\n"
+        "import logic\n"
+        "import logic as lg\n"
+        "import attr_migration\n"
+        "from logic import _swap_out_write as swap_out\n"
+        "from logic import *\n"
+        "def handler(sid, url, payloads, rec, rows):\n"
+        "    ok = logic._move_write(sid, '', {})\n"
+        "    parked = lg._audit_park_one(sid, 'BOX', '2026-11-09', {}, {})\n"
+        "    out = attr_migration.restore_extras(url, payloads)\n"
+        "    moved = swap_out(sid, rec, 'BOX', '1', {})\n"
+        "    cascade = perform_toolhead_delete_cascade('HEAD', rows)\n"
+        "    threading.Thread(target=logic._undo_filed, args=({}, {}, [])).start()\n"
+        "    return ok, parked, out, moved, cascade\n",
+        module="routes_x.py") == {
+        ("routes_x.py", "handler", "logic._move_write"): 1,
+        ("routes_x.py", "handler", "logic._audit_park_one"): 1,
+        ("routes_x.py", "handler", "attr_migration.restore_extras"): 1,
+        ("routes_x.py", "handler", "logic._swap_out_write"): 1,
+        ("routes_x.py", "handler", "logic.perform_toolhead_delete_cascade"): 1,
+        ("routes_x.py", "handler", "logic._undo_filed (as a value)"): 1,
+    }
+
+
+def test_a_wrappers_bare_name_elsewhere_is_that_modules_own_function():
+    # No import binds it, so it is routes_x.py's own _move_write, not logic's;
+    # and `from logic import *` doesn't bind a name that starts with "_".
+    assert _keys(
+        "from logic import *\n"
+        "def _move_write(sid):\n"
+        "    return sid\n"
+        "def handler(sid):\n"
+        "    _move_write(sid)\n"
+        "    return _audit_file_one(sid, 'BOX', 'X', {}, {})\n",
+        module="routes_x.py") == {}
+
+
+def test_a_thrown_away_wrapper_result_is_reported_and_a_kept_one_is_not():
+    sites = _sites(
+        "import logic\n"
+        "import attr_migration\n"
+        "def handler(sid, url, payloads, rows):\n"
+        "    logic._move_write(sid, 'UNKNOWN', {})\n"
+        "    _ = attr_migration.restore_extras(url, payloads)\n"
+        "    if not logic._move_write(sid, '', {}):\n"
+        "        return 'failed'\n"
+        "    result = logic.perform_toolhead_delete_cascade('HEAD', rows)\n"
+        "    return result['errors']\n",
+        module="routes_x.py")
+    assert count_sites(sites) == {
+        ("routes_x.py", "handler", "logic._move_write"): 2,
+        ("routes_x.py", "handler", "attr_migration.restore_extras"): 1,
+        ("routes_x.py", "handler", "logic.perform_toolhead_delete_cascade"): 1,
+    }
+    offenders = silent_failures(sites)
+    assert offenders == [
+        "routes_x.py:4  handler  -> logic._move_write(...), its result thrown away",
+        "routes_x.py:5  handler  -> attr_migration.restore_extras(...), its result thrown away",
+    ]
+    message = silent_failure_message(offenders)
+    assert "report_restore_failures" in message and "LAST_SPOOLMAN_ERROR" in message
+    assert "perform_toolhead_delete_cascade" not in message
+
+
+def test_a_wrappers_own_name_anchors_only_a_site_inside_that_wrapper():
+    # The section names _move_write in the rows of the functions that call it,
+    # so as an anchor it would hold for any new caller.
+    section = write_surface_section(
+        "## Spool / Filament write surfaces\n"
+        "| `logic.py` | `_perform_smart_move_impl` | its writes go through `_move_write` |\n"
+        "### Weight-entry surfaces\n"
+    )
+    registry = {
+        ("logic.py", "_move_write", "update_spool"): (1, "_move_write"),          # inside it: fine
+        ("logic.py", "_new_thing", "logic._move_write"): (1, "_move_write"),
+        ("logic.py", "_newer_thing", "logic._move_write"): (1, "logic._move_write"),
+        ("logic.py", "_perform_smart_move_impl", "logic._move_write"): (3, "_perform_smart_move_impl"),
+        ("logic.py", "_unnamed", "logic._move_write"): (1, None),                  # optional: fine
+    }
+    held = ("is a wrapper's own name, not the site's; anchor it to its function or endpoint, "
+            "or give it None (its anchor is optional)")
+    assert anchor_problems(registry, section) == [
+        f"logic.py  _new_thing  -> logic._move_write: '_move_write' {held}",
+        f"logic.py  _newer_thing  -> logic._move_write: 'logic._move_write' {held}",
+    ]
+    # On a site that must have an anchor, a wrapper's name is refused the same
+    # way, and None isn't offered.
+    assert anchor_problems(
+        {("logic.py", "_new_thing", "update_spool"): (1, "_move_write")}, section) == [
+        "logic.py  _new_thing  -> update_spool: '_move_write' is a wrapper's own name, not the "
+        "site's; anchor it to its function or endpoint"]
+
+
+def test_a_renamed_or_stale_wrapper_is_reported():
+    sources = {
+        "logic.py": (
+            "import spoolman_api\n"
+            "def _move_write(sid, target, extra):\n"
+            "    return spoolman_api.update_spool(sid, {'location': target, 'extra': extra})\n"
+            "def _audit_park_one(sid):\n"
+            "    return _move_write(sid, 'UNKNOWN', {})\n"   # writes through another wrapper
+            "def _undo_filed(record):\n"
+            "    return {}\n"),                              # no longer writes
+        "attr_migration.py": "def restore_extras_v2(url, payloads):\n    return 0, [], 0\n",
+    }
+    wrappers = {
+        "logic._move_write": "", "logic._audit_park_one": "", "logic._undo_filed": "",
+        "attr_migration.restore_extras": "",              # renamed
+        "gone.helper": "",                                # its module is gone
+        "logic.update_spool": "",                         # a spoolman_api helper's bare name
+    }
+    assert wrapper_set_problems(sources, wrappers) == [
+        "attr_migration.restore_extras: attr_migration.py defines no top-level function "
+        "restore_extras (renamed or removed?)",
+        "gone.helper: gone.py is not a backend module (inventory-hub/*.py)",
+        "logic._undo_filed: _undo_filed has no write site inside it any more: it no longer "
+        "writes, or writes only through a helper this file doesn't watch (a renamed wrapper?)",
+        "logic.update_spool: its bare name 'update_spool' is also another write helper's or wrapper's",
+        "logic.update_spool: logic.py defines no top-level function update_spool (renamed or removed?)",
+    ]
+
+
+# --- requests reached through another module, and requests.api (review r4-4) --
+
+def test_requests_through_another_module_and_requests_api_are_seen():
+    found = _keys(
+        "import requests\n"
+        "import requests.api as rapi\n"
+        "from requests import api as api2\n"
+        "from requests.api import put as api_put\n"
+        "import spoolman_api\n"
+        "import attr_migration\n"
+        "def handler(u, i):\n"
+        "    spoolman_api.requests.patch(f'{u}/api/v1/spool/{i}', json={}, timeout=5)\n"
+        "    spoolman_api.requests.request('DELETE', f'{u}/api/v1/vendor/{i}', timeout=5)\n"
+        "    getattr(spoolman_api.requests, 'post')(f'{u}/api/v1/field/spool/k', json={}, timeout=5)\n"
+        "    requests.api.post(f'{u}/api/v1/filament', json={}, timeout=5)\n"
+        "    spoolman_api.requests.api.delete(f'{u}/api/v1/spool/{i}', timeout=5)\n"
+        "    rapi.patch(f'{u}/api/v1/filament/{i}', json={}, timeout=5)\n"
+        "    api2.post(f'{u}/api/v1/vendor', json={}, timeout=5)\n"
+        "    api_put('http://printer/api/job', timeout=5)\n"
+        "    attr_migration.http_retry.request_with_retry('patch', f'{u}/api/v1/filament/{i}', json={})\n"
+        "    spoolman_api.requests.get(f'{u}/api/v1/spool/{i}', timeout=5)\n"          # a read
+        "    requests.api.get(f'{u}/api/v1/spool', timeout=5)\n"                       # a read
+    )
+    assert found == {
+        ("synthetic.py", "handler", "HTTP PATCH spool"): 1,
+        ("synthetic.py", "handler", "HTTP DELETE vendor"): 1,
+        ("synthetic.py", "handler", "HTTP POST field"): 1,
+        ("synthetic.py", "handler", "HTTP POST filament"): 1,
+        ("synthetic.py", "handler", "HTTP DELETE spool"): 1,
+        ("synthetic.py", "handler", "HTTP PATCH filament"): 2,
+        ("synthetic.py", "handler", "HTTP POST vendor"): 1,
+        ("synthetic.py", "handler", "HTTP PUT other"): 1,
+    }
+    # An `api` or `session` attribute that isn't reached through requests is not one.
+    assert _keys(
+        "class Client:\n"
+        "    def go(self, u):\n"
+        "        self.api.post(u + '/api/v1/spool')\n"
+        "        return self.session.patch(u + '/api/v1/spool/1')\n"
+    ) == {}
