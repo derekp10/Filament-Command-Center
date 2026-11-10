@@ -53,8 +53,8 @@ goes unjudged, so on the page the diagnostics must be empty.
 
 What it catches:
   - a script that throws while loading, a DOM error included (document.body
-    read in a <head> script, an element looked up before the parser reached
-    it);
+    read in a <head> script, an element looked up, by id or by a selector,
+    before the parser reached it);
   - a load-time read (window.X, a bare X, typeof X) of a name a later script
     defines, in a script's top-level code, anything that code calls, or a
     zero-delay timer it queues (wrapping an early read in setTimeout(..., 0) is
@@ -84,10 +84,17 @@ What it can't see:
     by position, but an id the templates don't have still gets a dummy
     element, as does one whose every element a script took out (an element a
     script builds is beyond a parse), and a query never finds an element a
-    script built; a selector it can't read (a pseudo-class, + or ~) finds
-    nothing; an element's text and inline style are empty; elements nest as
-    their tags are written (no implied end tags), and one inside a Jinja
-    block counts as there;
+    script built, nor anything under one or under a dummy (a null there is
+    the stub's, not the page's). A selector it can't read exactly (a
+    pseudo-class, :scope, + or ~) is judged by its subjects (each part's last
+    compound, its pseudo-classes left out): if nothing in reach matches
+    those, the answer is null, as in a browser; otherwise querySelector and
+    closest answer a dummy element, querySelectorAll an empty list and
+    matches false, so a throw a browser would raise there (no element passes
+    the pseudo-class, or the selector isn't valid at all) goes unseen. An
+    element's text and inline style are empty; elements nest as their tags
+    are written (no implied end tags), and one inside a Jinja block counts as
+    there;
   - code paths of another window or visitor: matchMedia answers as the
     stub's 1600 x 1300 desktop window (width, height, orientation, a fine
     pointer with hover; any other feature never matches), and storage starts
@@ -140,7 +147,9 @@ When it fails:
     load-time error (it would throw in a browser too: fix the script). A DOM
     one (document.body in a <head> script, an element looked up by a script
     above it) is real: look the element up later, on DOMContentLoaded, or
-    move the <script> below it.
+    move the <script> below it. A null from a query of an element a script
+    built, or of anything under one or under a dummy, is the stub's limit:
+    teach STUB_JS's query to find it.
   - a throw in a DOMContentLoaded / load handler or a zero-delay timer: the
     same two causes (add the stand-in, or fix the code). Until it runs to its
     end, every name it sets after the throwing line goes unjudged.
@@ -754,8 +763,8 @@ STUB_JS = r"""
   // What the stub reads of a selector: a list of chains of compound selectors
   // (a type or *, #id, .class, [attr], [attr="v"] with = ~= ^= $= *= |=)
   // joined by a space (a descendant) or > (a child). Anything else (a
-  // pseudo-class, + or ~, a namespace) can't be read, and the query keeps the
-  // answer it always had: nothing.
+  // pseudo-class, :scope, + or ~, a namespace, an attribute's case flag, an
+  // escape) can't be read exactly: see unknownAnswer below.
   const SEL_TAG = /^(\*|[A-Za-z][\w-]*)/;
   const SEL_ID = /^#([\w-]+)/;
   const SEL_CLASS = /^\.([\w-]+)/;
@@ -831,27 +840,99 @@ STUB_JS = r"""
     return false;
   };
   const matchChain = (chain, rec) => matchCompound(chain[chain.length - 1], rec) && matchUp(chain, chain.length - 3, rec);
+
+  // A selector the stub can't read is judged by what it can read of it: the
+  // last compound of each comma-separated part (its subject), with its
+  // pseudo-classes and pseudo-elements left out. Every element the selector
+  // matches matches that, so when no element in reach matches it (none above
+  // the running script, none in the scope, no ancestor for closest), the
+  // answer is what a browser's would be: null, or nothing. Otherwise the
+  // stub can't tell which element, if any, a browser finds, so it answers
+  // without inventing a throw (unknownAnswer): querySelector and closest a
+  // dummy element (detached, as for an id the templates lack; one per scope
+  // and selector), querySelectorAll an empty list. matches answers false,
+  // which can't throw. A selector it can't read even so (an escape, a
+  // namespace, an attribute's case flag) always gets that answer, and so does
+  // one that isn't valid at all, which a browser would throw on.
+  const SEL_PSEUDO = /^::?[\w-]+(?:\((?:[^()"']|"[^"]*"|'[^']*'|\((?:[^()"']|"[^"]*"|'[^']*')*\))*\))?/;
+  const SEL_ANY_JOIN = /^\s*[>+~]\s*|^\s+/;
+  const subjectOf = (text) => {
+    let rest = text.trim();
+    let last = null;
+    while (rest) {
+      const c = { tag: null, id: null, classes: [], attrs: [] };
+      let any = false;
+      let m;
+      if ((m = SEL_TAG.exec(rest))) { if (m[1] !== '*') c.tag = m[1].toLowerCase(); rest = rest.slice(m[0].length); any = true; }
+      for (;;) {
+        if ((m = SEL_ID.exec(rest))) c.id = m[1];
+        else if ((m = SEL_CLASS.exec(rest))) c.classes.push(m[1]);
+        else if ((m = SEL_ATTR.exec(rest))) c.attrs.push({ name: m[1].toLowerCase(), op: m[2] || '', value: m[3] ?? m[4] ?? m[5] ?? '' });
+        else if (!(m = SEL_PSEUDO.exec(rest))) break;  // a pseudo-class only narrows: left out
+        rest = rest.slice(m[0].length);
+        any = true;
+      }
+      if (!any) return null;
+      last = c;
+      if (!rest) break;
+      if (!(m = SEL_ANY_JOIN.exec(rest))) return null;
+      rest = rest.slice(m[0].length);
+    }
+    return last;
+  };
+  const subjects = new Map();
+  const subjectsOf = (text) => {  // each part's subject, or null if one can't be read even so
+    const key = String(text);
+    if (!subjects.has(key)) {
+      const parts = splitList(key).map(subjectOf);
+      subjects.set(key, parts.length && parts.every(Boolean) ? parts : null);
+    }
+    return subjects.get(key);
+  };
+  const dummies = new WeakMap();  // a scope (an element's record, or DOC) -> selector -> its dummy
+  const DOC = {};
+  const unknownAnswer = (scope, s, one) => {
+    if (!one) return [];
+    const key = scope || DOC;
+    if (!dummies.has(key)) dummies.set(key, new Map());
+    const mine = dummies.get(key);
+    if (!mine.has(s)) mine.set(s, makeEl('div'));
+    return mine.get(s);
+  };
+  // How an element is tested against a selector: exactly, or (one the stub
+  // can't read) against its subjects, which tells only that it could match.
+  const tester = (s) => {
+    const list = parseSelector(s);
+    if (list) return { exact: true, test: (rec) => list.some((ch) => matchChain(ch, rec)) };
+    const parts = subjectsOf(s);
+    return parts ? { exact: false, test: (rec) => parts.some((c) => matchCompound(c, rec)) } : null;
+  };
   const matchesSelector = (rec, s) => { const list = parseSelector(s); return !!list && list.some((ch) => matchChain(ch, rec)); };
   const closestOf = (rec, s) => {
-    const list = parseSelector(s);
-    for (let r = rec; list && r; r = parentRec(r)) if (list.some((ch) => matchChain(ch, r))) return elOf(r);
+    const how = tester(s);
+    if (!how) return unknownAnswer(rec, 'closest ' + s, true);
+    for (let r = rec; r; r = parentRec(r)) {
+      if (how.test(r)) return how.exact ? elOf(r) : unknownAnswer(rec, 'closest ' + s, true);
+    }
     return null;
   };
   const classSelector = (names) => String(names).trim().split(/\s+/).filter(Boolean).map((n) => '.' + n).join('') || ':none';
   // The page's elements a query finds, in document order: those parsed by now
   // and still in place, in the whole page (document's) or under an element
-  // (its own). What a script built, and anything under it, is never found.
+  // (its own). What a script built, and anything under it, is never found
+  // (nor anything under a dummy).
   const query = (s, scope, one) => {
-    const list = page && (!scope || scope.k >= 0) ? parseSelector(s) : null;
+    if (!page || (scope && scope.k < 0)) return one ? null : [];
+    const how = tester(s);
+    if (!how) return unknownAnswer(scope, String(s), one);
     const out = [];
-    if (list) {
-      const to = Math.min(scope ? page.end[scope.k] : page.recs.length, parsedUpTo);
-      for (let k = scope ? scope.k + 1 : 0; k < to; k++) {
-        const rec = page.recs[k];
-        if (!list.some((ch) => matchChain(ch, rec)) || !connected(rec)) continue;
-        if (one) return elOf(rec);
-        out.push(elOf(rec));
-      }
+    const to = Math.min(scope ? page.end[scope.k] : page.recs.length, parsedUpTo);
+    for (let k = scope ? scope.k + 1 : 0; k < to; k++) {
+      const rec = page.recs[k];
+      if (!how.test(rec) || !connected(rec)) continue;
+      if (!how.exact) return unknownAnswer(scope, String(s), one);  // it could match here: which, the stub can't tell
+      if (one) return elOf(rec);
+      out.push(elOf(rec));
     }
     return one ? null : out;
   };
@@ -908,10 +989,11 @@ STUB_JS = r"""
 
   // The document. With the page's elements (setPage): <body> once the parser
   // has reached it (null in a <head> script), an element of the templates once
-  // it is parsed, by id or by a selector the stub reads. An id the templates
-  // don't have still gets a dummy element (one a script builds is beyond a
-  // parse), and so does one whose every element a script took out. Without
-  // them (a list of scripts made by hand): a dummy for every id, and a body.
+  // it is parsed, by id or by a selector (one the stub can't read exactly:
+  // unknownAnswer). An id the templates don't have still gets a dummy element
+  // (one a script builds is beyond a parse), and so does one whose every
+  // element a script took out. Without them (a list of scripts made by hand):
+  // a dummy for every id, a body, and no query finds anything.
   const byId = new Map();
   const without = { body: makeEl('body'), head: makeEl('head'), html: makeEl('html') };
   const pageEl = (k) => elOf(page.recs[k]);
@@ -1870,9 +1952,13 @@ def test_every_script_loads_without_throwing(page_load):
         "A missing file: fix that <script>'s src. Any other is either a gap in the stub (the script used a "
         "browser feature STUB_JS doesn't have: add a plain stand-in for it to STUB_JS in "
         "tests/test_load_order_canary_js.py, never a stand-in for one of FCC's own names) or a real load-time "
-        "error (it would throw in a browser too: fix the script). A TypeError on null from document.body or an "
-        "element lookup is real: the stub's DOM holds the templates' elements by position, so the script ran in "
-        "<head> or above that element; look it up later (on DOMContentLoaded) or move the <script> below it. "
+        "error (it would throw in a browser too: fix the script). A TypeError on null from the DOM is real only "
+        "when it is document.body read in a <head> script, or a lookup of an element the templates put below the "
+        "script's tag (the stub's DOM holds the templates' elements by position): look it up later (on "
+        "DOMContentLoaded), or move the <script> below it. A null from a query of an element a script built, or of "
+        "anything under one (or under the dummy the stub answers for an id the templates lack or a selector it "
+        "can't read), is a limit of the stub, whose queries find only the templates' elements: teach STUB_JS's "
+        "query to find it rather than change the script for the canary. "
         "Until it loads, the early-read check can't see past the throw.")
 
 
@@ -2524,6 +2610,64 @@ def test_a_script_sees_only_the_page_above_it(page_scripts, load_dir):
         result["errors"])
 
 
+def test_a_selector_the_stub_cant_read_never_invents_a_throw(page_scripts, load_dir):
+    """A selector the stub's query can't read (a pseudo-class such as
+    :checked or :not(), :scope, + or ~) under an element it finds answered
+    null, so code a browser runs fine threw, and the failure called that
+    null real (review finding ra-1, the reviewer's three shapes). Now it
+    answers a dummy element. Each fake runs after titlebar_prefs.js, where
+    the page above holds the search panel with its checked radio and the
+    title bar with its brand, and first proves the outer element is found."""
+    fakes = {
+        "FAKE reading the search panel's default type at load": (
+            "(function () {\n"
+            "  const panel = document.querySelector('.fcc-offcanvas-search');\n"
+            "  if (!panel) throw new Error('no search panel above this script');\n"
+            "  const t = panel.querySelector('input[name=\"global-search-type\"]:checked').value;\n"
+            "})();"),
+        "FAKE :not() under the title bar": (
+            "(function () {\n"
+            "  const bar = document.querySelector('.fcc-titlebar');\n"
+            "  if (!bar) throw new Error('no title bar above this script');\n"
+            "  bar.querySelector('.navbar-brand:not(.fake-x)').setAttribute('data-fake', '1');\n"
+            "})();"),
+        "FAKE :scope under the title bar": (
+            "(function () {\n"
+            "  const bar = document.querySelector('.fcc-titlebar');\n"
+            "  if (!bar) throw new Error('no title bar above this script');\n"
+            "  bar.querySelector(':scope .navbar-brand').classList.add('fake');\n"
+            "})();"),
+    }
+    page = page_scripts
+    for fake, code in fakes.items():
+        page = with_fake(page, code, fake, after="js/modules/titlebar_prefs.js")
+    result = run_page(page, load_dir, "fake-unreadable-selectors")
+    assert load_error_problems(result) == [], "\n".join(load_error_problems(result))
+    assert result["early_reads"] == [] and result["diagnostics"] == [], result
+
+
+def test_a_null_from_the_dom_is_called_real_only_where_it_is(page_scripts, load_dir):
+    """The load-error failure says a TypeError on null is real only for
+    document.body in a <head> script or an element the templates put below
+    the script; a query of an element a script built (the stub never finds
+    one), or under one, is the stub's limit (review finding ra-1)."""
+    fake = "FAKE building an element and querying it"
+    result = run_page(with_fake(page_scripts, "(function () {\n"
+                                              "  const d = document.createElement('div');\n"
+                                              "  d.id = 'fake-built';\n"
+                                              "  document.body.appendChild(d);\n"
+                                              "  document.querySelector('#fake-built').classList.add('x');\n"
+                                              "})();", fake, after="js/modules/titlebar_prefs.js"),
+                      load_dir, "fake-built-query")
+    assert [e["script"] for e in result["errors"]] == [fake], result["errors"]
+    with pytest.raises(AssertionError) as red:
+        test_every_script_loads_without_throwing(result)
+    words = " ".join(str(red.value).split())
+    assert "is real only when it is document.body read in a <head> script" in words, words
+    assert "a limit of the stub" in words and "an element a script built" in words, words
+    assert "is real: the stub's DOM" not in words, words
+
+
 def test_the_dom_by_position_on_a_made_up_page(tmp_path):
     """The positional DOM, checked from inside the page's own scripts (each
     throws if an answer is wrong): what a <head> script sees, ids and simple
@@ -2554,7 +2698,21 @@ def test_the_dom_by_position_on_a_made_up_page(tmp_path):
         "  delete top.dataset.kind;\n"
         "  if (!document.querySelector('[data-fresh=\"y\"]') || document.querySelector('[data-kind]')) throw new Error('dataset');\n"
         "  if (document.getElementById('below') !== null || document.querySelector('#below')) throw new Error('#below early');\n"
-        "  if (document.querySelector('button:hover') !== null) throw new Error('an unreadable selector found something');\n"
+        # A selector the stub can't read is judged by what it can read of it
+        # (each part's last compound, its pseudo-classes left out): nothing
+        # above matches that, null; something does, a dummy (review ra-1).
+        "  const hover = document.querySelector('button:hover');\n"
+        "  if (!hover || hover === document.querySelector('button.go') || hover.isConnected) throw new Error('unreadable, a match above: no dummy');\n"
+        "  if (document.querySelector('button:hover') !== hover) throw new Error('unreadable: a new dummy each time');\n"
+        "  if (!top.querySelector(':scope > span + p') || !top.querySelector('span ~ p:not(.x)')) throw new Error('unreadable + / ~ / :scope');\n"
+        "  if (top.querySelector('span + .nothing-like-it') !== null || top.querySelector(':scope ~ i') !== null) throw new Error('unreadable + / ~, no match: not null');\n"
+        "  if (document.querySelectorAll('button:hover').length !== 0) throw new Error('unreadable: querySelectorAll found something');\n"
+        "  if (document.querySelector('#below:not(.x)') !== null) throw new Error('unreadable, only a match below: not null');\n"
+        "  if (document.querySelector('.nothing-like-it:checked, i:hover') !== null) throw new Error('unreadable, no match: not null');\n"
+        "  if (!brand.closest('.bar:not(.x)') || brand.closest('.bar:not(.x)') === top) throw new Error('unreadable closest: no dummy');\n"
+        "  if (brand.closest('.nothing-like-it:not(.x)') !== null) throw new Error('unreadable closest, no match: not null');\n"
+        "  if (top.matches('div:not(.x)')) throw new Error('unreadable matches said yes');\n"
+        "  if (!document.querySelector('a[b=c i], p') ) throw new Error('unreadable even loosely: no dummy');\n"
         "  if (!matchMedia('(min-width: 992px)').matches || matchMedia('(max-width: 600px)').matches) throw new Error('media');\n"
         "  brand.remove();\n"
         "  if (top.querySelector('.brand') !== null) throw new Error('a removed element was found');\n"
