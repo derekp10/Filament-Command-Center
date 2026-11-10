@@ -326,10 +326,10 @@ ALLOWED_DISCARDS = {
     # Its filament, spool and vendor loops, run once at startup (app.py, under
     # __main__).
     ("spoolman_api.py", "ensure_required_extras", "ensure_extra_field"): (
-        3, "the boot registration is best effort, as its docstring says: a field it can't "
-           "register is the WARNING ensure_extra_field writes to hub.log, FCC starts anyway, "
-           "and Spoolman refuses a later write that carries that extra, which that write's "
-           "own surface reports; there is no request to answer"),
+        3, "the boot registration is best effort by design, as its docstring says: a field "
+           "it can't register is the WARNING ensure_extra_field writes to hub.log, FCC starts "
+           "anyway, and there is no request to answer (Spoolman then refuses a write that "
+           "carries that extra, at that write)"),
 }
 
 HTTP_READ_VERBS = frozenset({"get", "head", "options"})
