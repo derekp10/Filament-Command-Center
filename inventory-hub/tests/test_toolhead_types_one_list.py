@@ -18,24 +18,46 @@ window.isToolheadType(type) and window.isHeadOrPrinterType(type), in the
 
   1. the block's list is locations_db.TOOLHEAD_TYPES, and its 'Printer' is
      locations_db.PRINTER_ROW_TYPE;
-  2. no other quoted copy of a toolhead Type, in any case or spacing, in
-     static/js or in a template's inline <script>;
-  3. no substring test of a Type: .includes / .indexOf / .lastIndexOf /
-     .startsWith / .endsWith / .match / .matchAll / .search or RegExp() with a
-     quoted "tool", "mmu" or "direct load", nor such a regex literal tested
-     (/mmu/i.test(t)). The words are matched at a word start, and "tooltip" is
-     no Type, so 'community' or a tooltip class name never trips it;
+  2. no other quoted copy of a toolhead Type: a string or template literal that
+     IS one, in any case or spacing, in static/js or in a template's inline
+     <script>;
+  3. no test of a Type for a head Type's words ("tool", "mmu", "direct load"),
+     and nothing kept for one, in the same scripts (the marked block too):
+       - any regex literal holding a word, however it is used: tested in place
+         (/mmu/i.test(t)), kept in a const and tested later, or handed to
+         .match(). A regex of the whole Types (/^(Tool Head|MMU Slot)$/) is a
+         copy of the list, and is caught here;
+       - a string or template literal that IS a word, in any case or spacing
+         ('tool', 'MMU', 'direct load'): the words kept in a list;
+       - a string holding '|' and a word ('tool|mmu', 'Tool Head|MMU Slot'): a
+         regex's source, or a list to split;
+       - a quoted first argument holding a word, of .includes / .indexOf /
+         .lastIndexOf / .startsWith / .endsWith / .match / .matchAll / .search
+         or RegExp() (type.includes('Toolbox')).
+     A word counts at a word start only, a backslash escape before it reading
+     as a break (/\\btool\\b/), and "tooltip" is no Type, so 'community' or a
+     tooltip class name never trips it;
   4. the scanners catch what they should, on synthetic source;
   5. the helpers behave, in node, lifted out of inv_core.js on their own;
   6. the switched places behave, on the real modules in node.
 
-A line that names a Type on purpose and isn't an "is it a head?" check (the
-location editor's Type list, a Type badge's colour) ends with
-`// toolhead-type-ok: <why>`; a marker with no reason doesn't count.
+A line that names a Type or a word on purpose and isn't an "is it a head?" check
+(the location editor's Type list, a Type badge's colour, a regex that reads a
+data-toolhead attribute) ends with `// toolhead-type-ok: <why>`; a marker with
+no reason doesn't count.
 
 Comments are skipped (the scanners read JavaScript through a small lexer that
 knows strings, templates, regex literals and comments), and so are the vendor
 bundles (*.min.js), which aren't FCC's code.
+
+What the rules don't see: a Type built from pieces none of which is a head Type
+or a word ('No ' + 'MMU Direct Load'), or spelled another way ('Tool-Head'); a
+Type inside a longer string (some HTML, a selector '[data-type="Tool Head"]') or
+in a template's markup outside a <script> (an onclick attribute, an <option>); a
+'|' list in a template literal that also holds a ${...}; a regex literal right
+after ')', which the lexer reads as a division (if (ok) /mmu/i.test(t)); and
+'head', 'slot' or 'direct' on their own (the slot picker's 'head' kind and FCC's
+DIRECT spools would trip a rule that read them).
 """
 from __future__ import annotations
 
@@ -63,8 +85,9 @@ MARKER = "toolhead-type-ok:"
 FIX = ("Use window.isToolheadType(type) (a Tool Head, MMU Slot or No MMU Direct Load row) or "
        "window.isHeadOrPrinterType(type) (those, or a Printer row) from inv_core.js, called when "
        "the code runs. For a line that isn't an \"is it a head?\" check (a Type list a person picks "
-       "from, a badge colour), end it with `// toolhead-type-ok: <why>`. A new head Type goes in "
-       "locations_db.TOOLHEAD_TYPES and in inv_core.js's @fcc-toolhead-types block, nowhere else.")
+       "from, a badge colour, a regex that reads a data-toolhead attribute or an API path), end it "
+       "with `// toolhead-type-ok: <why>`. A new head Type goes in locations_db.TOOLHEAD_TYPES and "
+       "in inv_core.js's @fcc-toolhead-types block, nowhere else.")
 
 
 # ---------------------------------------------------------------------------
@@ -261,19 +284,31 @@ def _norm(s: str) -> str:
 
 
 _HEAD_TYPES = frozenset(_norm(t) for t in locations_db.TOOLHEAD_TYPES)
+# The old substring rule's words: a literal that IS one of them (in any case or
+# spacing) has one use here, a test of a Type kept in a list.
+_HEAD_WORDS = frozenset({"tool", "mmu", "direct load"})
 # A head Type's own words, at a word start ("tooltip" is no Type). "direct" and
 # "load" may have a little between them: a space, or a regex's \s* or .?.
 _TYPE_WORDS = re.compile(r"\btool(?!tip)|\bmmu|\bdirect.{0,8}?load", re.IGNORECASE)
+# A backslash escape and its letter (a regex's \b or \s, a string's \n, or the \\b
+# a string holds for RegExp) are no part of a word: read as a space, the word
+# after one still starts a word (/\btool\b/, new RegExp('\\bmmu')).
+_ESCAPE = re.compile(r"\\+[A-Za-z]")
 _TEST_CALL_BEFORE = re.compile(
-    r"(?:\.(?:includes|indexOf|lastIndexOf|startsWith|endsWith|match|matchAll|search)|\bRegExp)\(\s*$")
-_REGEX_TESTED_AFTER = re.compile(r"^\s*\.(?:test|exec)\(")
+    r"(?:\.(?:includes|indexOf|lastIndexOf|startsWith|endsWith|match|matchAll|search)|\bRegExp)"
+    r"\s*\(\s*$")
+
+
+def _holds_type_words(inner: str) -> bool:
+    return bool(_TYPE_WORDS.search(inner) or _TYPE_WORDS.search(_ESCAPE.sub(" ", inner)))
 
 
 def copies_of_the_list(name: str, text: str, first_line: int = 1) -> list:
-    """Rule 2: every line of `text` (JavaScript, called `name`) holding a quoted
-    literal that IS a toolhead Type in any case or spacing ('Tool Head', 'mmu slot',
-    `No MMU Direct Load`), outside inv_core.js's marked block, unless the line ends
-    with a `toolhead-type-ok:` comment that gives a reason."""
+    """Rule 2: every line of `text` (JavaScript, called `name`) holding a string or
+    template literal that IS a toolhead Type in any case or spacing ('Tool Head',
+    'mmu slot', `No MMU Direct Load`), outside inv_core.js's marked block, unless
+    the line has a `toolhead-type-ok:` comment that gives a reason. A regex literal
+    holding the Types is rule 3's."""
     src = _Source(name, text, first_line)
     span = src.block_span()
     hits = []
@@ -289,20 +324,33 @@ def copies_of_the_list(name: str, text: str, first_line: int = 1) -> list:
 
 
 def substring_tests_of_a_type(name: str, text: str, first_line: int = 1) -> list:
-    """Rule 3: every line testing a string for a head Type's words ("tool", "mmu",
-    "direct load") with a quoted argument (type.includes('mmu'), x.indexOf("Tool"),
-    new RegExp('direct load')), or with a regex literal (/tool/i.test(t),
-    t.match(/mmu/)), unless the line ends with a `toolhead-type-ok:` comment that
-    gives a reason."""
+    r"""Rule 3: every line testing a Type for a head Type's words ("tool", "mmu",
+    "direct load"), or keeping them for such a test, anywhere (inv_core.js's marked
+    block included), unless the line has a `toolhead-type-ok:` comment that gives a
+    reason. It holds one of these:
+      - any regex literal holding a word, however it is used: tested in place
+        (/tool/i.test(t)), handed to t.match(/mmu/), or kept in a const or a list
+        and tested later. A regex of the whole Types (/^(Tool Head|MMU Slot)$/) is
+        a copy of the list, and is caught here;
+      - a string or template literal that IS a word, in any case or spacing
+        ('tool', ' MMU ', `Direct Load`): the words kept in a list;
+      - a string holding '|' and a word ('tool|mmu', 'Tool Head|MMU Slot'): a
+        regex's source, or a list to split. A template literal with a ${...} in
+        it is a built string (a key, some HTML) and isn't read this way;
+      - a quoted first argument holding a word, of .includes / .indexOf /
+        .lastIndexOf / .startsWith / .endsWith / .match / .matchAll / .search or
+        RegExp() (type.includes('Toolbox'), new RegExp('\\bmmu\\b')).
+    A word counts at a word start only, a backslash escape before it reading as a
+    break (/\btool\b/)."""
     src = _Source(name, text, first_line)
     hits = []
-    for kind, start, end, inner in src.literals():
-        if not _TYPE_WORDS.search(inner) or src.line_of(start) in src.marked_lines:
+    for kind, start, _end, inner in src.literals():
+        if src.line_of(start) in src.marked_lines or not _holds_type_words(inner):
             continue
-        before = src.text[max(0, start - 60):start]
-        if _TEST_CALL_BEFORE.search(before):
-            hits.append(start)
-        elif kind == "regex" and _REGEX_TESTED_AFTER.match(src.text[end:end + 20]):
+        if (kind == "regex"
+                or _norm(inner) in _HEAD_WORDS
+                or ("|" in inner and not (kind == "tpl" and "${" in inner))
+                or _TEST_CALL_BEFORE.search(src.text[max(0, start - 60):start])):
             hits.append(start)
     return src.report(hits)
 
@@ -370,17 +418,23 @@ def test_the_page_printer_type_is_the_backends():
 def test_no_other_copy_of_the_toolhead_type_list():
     hits = [h for name, text, first in frontend_sources() for h in copies_of_the_list(name, text, first)]
     assert not hits, (
-        f"{len(hits)} line(s) name a toolhead Type outside inv_core.js's @fcc-toolhead-types "
-        "block:\n  " + "\n  ".join(hits) + "\n" + FIX)
+        f"{len(hits)} line(s) name a toolhead Type (a string or template literal that is one, in "
+        "any case or spacing) outside inv_core.js's @fcc-toolhead-types block:\n  "
+        + "\n  ".join(hits) + "\n" + FIX)
 
 
 def test_no_substring_test_of_a_location_type():
     hits = [h for name, text, first in frontend_sources()
             for h in substring_tests_of_a_type(name, text, first)]
     assert not hits, (
-        f"{len(hits)} line(s) test a string for a toolhead Type's words, which also makes any "
-        "custom Type holding them (\"Toolbox\", \"MMU Buffer\") a head:\n  " + "\n  ".join(hits)
-        + "\n" + FIX)
+        f"{len(hits)} line(s) test a Type for a toolhead Type's words (\"tool\", \"mmu\", \"direct "
+        "load\") or keep them for such a test: a regex literal holding one, however it is used "
+        "(tested in place, kept in a const, handed to .match()), a quoted word on its own (a words "
+        "list), a string joining them with '|', or a quoted first argument holding one of .includes "
+        "/ .indexOf / .lastIndexOf / .startsWith / .endsWith / .match / .matchAll / .search / "
+        "RegExp(). A test for the words also makes any custom Type holding them "
+        "(\"Toolbox\", \"MMU Buffer\") a head, and a regex of the whole Types is a copy of the "
+        "list:\n  " + "\n  ".join(hits) + "\n" + FIX)
 
 
 def test_the_scan_reads_every_page_script():
@@ -390,6 +444,36 @@ def test_the_scan_reads_every_page_script():
                  "templates/dashboard.html", "templates/components/scripts.html"):
         assert must in names, f"{must} wasn't scanned: {sorted(names)}"
     assert not any(n.endswith(".min.js") for n in names)
+
+
+DO_ASSIGN = "static/js/modules/inv_loc_mgr.js"
+DO_ASSIGN_CHECK = "const isToolheadTarget = !!locObjCheck && window.isHeadOrPrinterType(locObjCheck.Type);"
+
+
+@pytest.mark.parametrize("kept,check", [
+    ("const HEAD_RE = /tool|mmu|direct load|printer/i;",
+     "const isToolheadTarget = !!locObjCheck && HEAD_RE.test(locObjCheck.Type);"),
+    ("const HEAD_WORDS = ['tool', 'mmu', 'direct load', 'printer'];",
+     "const isToolheadTarget = !!locObjCheck && HEAD_WORDS.some((w) => "
+     "String(locObjCheck.Type).toLowerCase().includes(w));"),
+], ids=["hoisted-regex", "words-list"])
+def test_doassigns_head_check_written_the_old_way_is_caught(kept, check):
+    """The review's proof on a real module (r2-4 / r5-2): doAssign's head check in
+    inv_loc_mgr.js, a daily move path, written as the old substring rule again,
+    its regex or its words kept in a const above it. The canary names the line."""
+    lines = (HUB / DO_ASSIGN).read_text(encoding="utf-8").split("\n")
+    at = [i for i, ln in enumerate(lines) if ln.strip() == DO_ASSIGN_CHECK]
+    assert len(at) == 1, (
+        f"{DO_ASSIGN} should hold doAssign's head check `{DO_ASSIGN_CHECK}` once; found {len(at)}. "
+        "This proof writes that check the old way and expects the canary to name its line: point "
+        "DO_ASSIGN_CHECK at the check's new text, or at another line that calls "
+        "window.isHeadOrPrinterType.")
+    i = at[0]
+    indent = lines[i][:len(lines[i]) - len(lines[i].lstrip())]
+    lines[i:i + 1] = [indent + kept, indent + check]
+    text = "\n".join(lines)
+    hits = copies_of_the_list(DO_ASSIGN, text) + substring_tests_of_a_type(DO_ASSIGN, text)
+    assert hits == [f"{DO_ASSIGN}:{i + 1}: {kept}"], hits
 
 
 # ---------------------------------------------------------------------------
@@ -419,9 +503,33 @@ def test_a_copy_is_caught(line):
     "if (t.match(/direct\\s*load/i)) go();",
     "const r = new RegExp('Tool', 'i');",
     "if (t.search(`mmu`) >= 0) go();",
-], ids=["indexOf", "regex-test", "includes", "startsWith", "match-regex", "RegExp", "search-backtick"])
+    # Kept in a const and used later (Group 53's review, r2-4 / r5-2): the list as
+    # a regex, the same lower-cased for match(), the old substring rule's regex,
+    # and its words in a list. The line reported is the literal's, not the use's.
+    "const HEAD_RE = /^(Tool Head|MMU Slot|No MMU Direct Load)$/;\nif (HEAD_RE.test(row.Type)) go();",
+    "const HEAD_RE = /^(tool head|mmu slot|no mmu direct load)$/i;\nconst m = String(t).match(HEAD_RE);",
+    "const HEAD_RE = /tool|mmu|direct load/i;\nconst isHead = HEAD_RE.test(t);",
+    "const isHead = ['tool', 'mmu', 'direct load'].some((w) => type.toLowerCase().includes(w));",
+    "const HEAD_WORDS = ['Tool', ' MMU ', 'Direct  Load'];\nconst isHead = HEAD_WORDS.some((w) => t.includes(w));",
+    "const HEADS = [/^tool head$/i, /^mmu slot$/i];\nconst isHead = HEADS.some((re) => re.test(t));",
+    # A backslash escape before a word (a regex's \b, the \\b a string holds for
+    # RegExp) still leaves the word at a word start.
+    "const HEAD_RE = /\\btool\\b|\\bmmu\\b|\\bdirect\\s*load\\b/i;\nconst isHead = HEAD_RE.test(t);",
+    "const r = new RegExp('\\\\bmmu\\\\b', 'i');",
+    # A string joining the words or the Types with '|': a regex's source, or a list to split.
+    "const HEAD_SRC = 'tool|mmu|direct load';\nconst isHead = new RegExp(HEAD_SRC, 'i').test(t);",
+    "const isHead = 'Tool Head|MMU Slot|No MMU Direct Load'.split('|').includes(row.Type);",
+    # A Type built from pieces, one of them a word on its own.
+    "if (row.Type === 'Tool' + ' Head') go();",
+    "if (type.includes ('toolhead')) go();",
+], ids=["indexOf", "regex-test", "includes", "startsWith", "match-regex", "RegExp", "search-backtick",
+        "hoisted-regex-of-the-list", "hoisted-lower-case-regex-match", "hoisted-substring-regex",
+        "words-list", "hoisted-words-list", "list-of-regexes", "escaped-word-starts",
+        "RegExp-of-escaped-words", "joined-regex-source", "joined-list-split", "type-from-pieces",
+        "space-before-paren"])
 def test_a_substring_test_is_caught(line):
-    assert substring_tests_of_a_type(M, "let a;\n" + line + "\n") == [f"{M}:2: {line}"]
+    first = line.split("\n")[0]
+    assert substring_tests_of_a_type(M, "let a;\n" + line + "\n") == [f"{M}:2: {first}"]
 
 
 @pytest.mark.parametrize("line", [
@@ -451,6 +559,16 @@ def test_the_marked_block_is_allowed_in_inv_core_only():
     assert len(copies_of_the_list(M, block)) == 2
 
 
+def test_the_marked_block_allows_no_substring_test():
+    """The block may hold the list, never the old substring rule: a helper written
+    as a regex of the words is caught there too."""
+    helper = "window.isToolheadType = (type) => /tool|mmu|direct load/i.test(String(type));"
+    block = (f"{BEGIN}\nwindow.TOOLHEAD_TYPES = Object.freeze(['Tool Head', 'MMU Slot', "
+             f"'No MMU Direct Load']);\n{helper}\n{END}\n")
+    assert copies_of_the_list(CORE_NAME, block) == []
+    assert substring_tests_of_a_type(CORE_NAME, block) == [f"{CORE_NAME}:3: {helper}"]
+
+
 @pytest.mark.parametrize("text", [
     "// a 'Tool Head' row, or an 'MMU Slot'\n",
     "/* type.includes('mmu') was the old test */\n",
@@ -458,11 +576,17 @@ def test_the_marked_block_is_allowed_in_inv_core_only():
     "el.classList.contains('tooltip'); x.includes('tooltip'); y.indexOf('community');\n",
     "const what = feeds.kind === 'toolhead' ? 'a toolhead' : 'a slot';\n",
     "if (type.includes(word)) go();\n",
-    "const r = a / b / c; const s = 'Tool' + ' Head';\n",
+    # A division read as a regex would hold "mmu" and be caught.
+    "const r = a / b / c; const s = tool / mmu / 2;\n",
     "const re = /['\"]/g; const q = \"it's a Tool Head\";\n",
     "const html = `<b>${row.Type === x ? 'a' : 'b'}</b> tool`;\n",
+    "const r = /tooltip|community/i; const k = 'tooltip|x';\n",
+    "const key = `${th.toolhead}|${slot}`;\n",
+    "const label = 'Tool 3'; showToast('Pick a tool first');\n",
+    "const kind = 'toolhead'; const cls = 'mmu-grid'; el.matches('.mmu-grid');\n",
 ], ids=["comment", "block-comment", "prose", "tooltip-community", "feed-kind", "variable",
-        "division", "quote-in-regex", "template-expression"])
+        "division", "quote-in-regex", "template-expression", "tooltip-regex", "template-key",
+        "a-word-in-words", "longer-words"])
 def test_unrelated_code_passes(text):
     assert copies_of_the_list(M, text) == [] and substring_tests_of_a_type(M, text) == []
 
