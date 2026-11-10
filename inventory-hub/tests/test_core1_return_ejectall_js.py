@@ -200,6 +200,10 @@ __SCENARIO__
   process.on('unhandledRejection', (e) => unhandled.push(String((e && e.stack) || e)));
   const ctx = vm.createContext({ console, setTimeout, clearTimeout });
   vm.runInContext('(' + prelude.toString() + ')()', ctx, { filename: 'prelude.js' });
+  // inv_core.js's toolhead-Type list and helpers (toolhead_types_block(), Group
+  // 53.1), which the page has before any module loads: a scenario that loads a
+  // module without inv_core.js still finds them. Every driver builder fills it.
+  vm.runInContext(__TOOLHEAD_TYPES_BLOCK__, ctx, { filename: 'inv_core.js (@fcc-toolhead-types)' });
   for (const p of MODULE_PATHS) {
     vm.runInContext(fs.readFileSync(p, 'utf8'), ctx, { filename: p });
   }
@@ -215,6 +219,7 @@ __SCENARIO__
 
 def run_js(tmp_path: Path, modules: list[str], scenario: str) -> dict:
     driver = (DRIVER_JS
+              .replace("__TOOLHEAD_TYPES_BLOCK__", json.dumps(toolhead_types_block()), 1)
               .replace("__MODULE_PATHS__", json.dumps([str(MODULES / m) for m in modules]))
               .replace("__SCENARIO__", scenario))
     script = tmp_path / "driver.js"

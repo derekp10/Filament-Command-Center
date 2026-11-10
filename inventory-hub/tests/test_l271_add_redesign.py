@@ -33,8 +33,11 @@ def test_add_child_button_and_suppression_in_render():
     core = _read("static", "js", "modules", "inv_core.js")
     assert "btn-add-child" in core, "the per-row Add-child button must be rendered"
     assert "canAddChild" in core and "NO_ADD_CHILD_TYPES" in core, "suppression helper must exist"
-    for suppressed in ("'printer'", "'tool head'", "'mmu slot'", "'no mmu direct load'"):
-        assert suppressed in core, f"Add-child must be suppressed on {suppressed} rows"
+    assert "'printer'" in core, "Add-child must be suppressed on 'printer' rows"
+    # Group 53.1: the toolhead Types are the page's one list (window.isToolheadType),
+    # no longer a lower-cased copy here. tests/test_toolhead_types_one_list.py renders
+    # the table and pins which rows get the button.
+    assert "!window.isToolheadType(r.Type)" in core, "Add-child must be suppressed on toolhead rows"
 
 
 def test_add_child_delegated_handler_wired():

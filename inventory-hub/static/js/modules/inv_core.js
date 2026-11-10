@@ -1744,6 +1744,23 @@ window.isSingleSlotBox = (row) => {
     return raw !== '' && !isNaN(n) && n <= 1;
 };
 
+// --- WHICH TYPES ARE TOOLHEADS (Group 53.1) ---
+// The browser's copy of locations_db.TOOLHEAD_TYPES, and its only one:
+// tests/test_toolhead_types_one_list.py keeps the two equal and fails on any
+// other copy of a head Type in the page's scripts. A row is a head when its Type,
+// trimmed, is exactly one of these, the backend's rule (never a substring: a
+// custom "Toolbox" or "MMU Buffer" is no head). Call the helpers when the code
+// runs; never copy the list or keep it from load. The block defines window
+// properties only (a top-level name here would be shared with every module), and
+// the node harnesses lift it out between its two marker lines.
+// @fcc-toolhead-types:begin
+window.TOOLHEAD_TYPES = Object.freeze(['Tool Head', 'MMU Slot', 'No MMU Direct Load']);
+window.isToolheadType = (type) => window.TOOLHEAD_TYPES.includes(String(type == null ? '' : type).trim());
+// A head, or a Printer row (locations_db.PRINTER_ROW_TYPE).
+window.isHeadOrPrinterType = (type) => window.isToolheadType(type)
+    || String(type == null ? '' : type).trim() === 'Printer';
+// @fcc-toolhead-types:end
+
 // A client probe of a head, with the pill and the timeout race (every client
 // probe gets it; doAssign's used to wait on the server with no cap).
 window.checkPrinterForHead = (locId, { timeoutMs = PRINTER_CHECK_TIMEOUT_MS } = {}) => {
@@ -2405,9 +2422,9 @@ const _renderLocationsPayload = (d, read) => {
             // kinds only. Suppressed on printer topology (Printer + toolhead types —
             // their source of truth is the printer-map editor, not the parent_id tree,
             // so a toolhead created via api_save_location would be invisible to
-            // Quick-Swap + print-deduct) and on synthetic/virtual rows.
-            const NO_ADD_CHILD_TYPES = new Set(['printer', 'tool head', 'mmu slot',
-                'no mmu direct load', 'virtual', 'virtual room', 'unknown',
+            // Quick-Swap + print-deduct) and on synthetic/virtual rows. The toolhead
+            // types are window.isToolheadType's (Group 53.1).
+            const NO_ADD_CHILD_TYPES = new Set(['printer', 'virtual', 'virtual room', 'unknown',
                 'spoolman native', 'unassigned']);
             const canAddChild = (r) => {
                 // The synthetic Unassigned/UNKNOWN buckets are identified by id (the
@@ -2416,7 +2433,7 @@ const _renderLocationsPayload = (d, read) => {
                 const idU = String(r.LocationID || '').trim().toUpperCase();
                 if (idU === 'UNASSIGNED' || idU === 'UNKNOWN') return false;
                 const t = String(r.Type || '').trim().toLowerCase();
-                return !!t && !NO_ADD_CHILD_TYPES.has(t);
+                return !!t && !window.isToolheadType(r.Type) && !NO_ADD_CHILD_TYPES.has(t);
             };
 
             // The always-pinned virtual rows live OUTSIDE the tree.
@@ -2572,7 +2589,7 @@ const _renderLocationsPayload = (d, read) => {
                     const t = l.Type || '';
                     if (t.includes('Dryer')) { badgeClass = 'bg-warning text-dark'; badgeStyle = 'border:1px solid #fff;'; }
                     else if (t.includes('Storage')) { badgeClass = 'bg-primary'; badgeStyle = 'border:1px solid #88f;'; }
-                    else if (t.includes('MMU')) { badgeClass = 'bg-danger'; badgeStyle = 'border:1px solid #f88;'; }
+                    else if (t.includes('MMU')) { badgeClass = 'bg-danger'; badgeStyle = 'border:1px solid #f88;'; } // toolhead-type-ok: a badge colour only
                     // L271 Phase 5 — Room > Wall Shelf > Row > Section. Wall Shelf
                     // + Row are structural groupings; Section is the spool leaf.
                     // Exact matches MUST precede the generic 'Shelf' includes
@@ -2582,7 +2599,7 @@ const _renderLocationsPayload = (d, read) => {
                     else if (t === 'Section') { badgeClass = 'bg-success'; badgeStyle = 'border:1px solid #8f8;'; }
                     else if (t.includes('Shelf')) { badgeClass = 'bg-success'; badgeStyle = 'border:1px solid #8f8;'; }
                     else if (t.includes('Cart')) { badgeClass = 'bg-info text-dark'; badgeStyle = 'border:1px solid #fff;'; }
-                    else if (t.includes('Printer') || t.includes('Toolhead')) { badgeClass = 'bg-dark'; badgeStyle = 'border:1px solid #f0f; background-color: #aa00ff !important; color: #fff;'; }
+                    else if (t.includes('Printer') || t.includes('Toolhead')) { badgeClass = 'bg-dark'; badgeStyle = 'border:1px solid #f0f; background-color: #aa00ff !important; color: #fff;'; } // toolhead-type-ok: a badge colour only
                     else if (t.includes('Room')) { badgeClass = 'bg-light text-dark'; badgeStyle = 'border:1px solid #fff; box-shadow: 0 0 5px rgba(255,255,255,0.5);'; }
                     // [ALEX FIX] Ghostly, Hollow Look for Virtual
                     else if (t.includes('Virtual')) { badgeClass = 'bg-transparent text-light'; badgeStyle = 'border:2px dashed #aaa; box-shadow: inset 0 0 5px rgba(255,255,255,0.2);'; }

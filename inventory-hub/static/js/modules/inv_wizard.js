@@ -1851,11 +1851,12 @@ const wizardFetchLocations = () => {
         .then(d => {
             if (!Array.isArray(d)) return;
             wizardState.allLocationRows = d.filter(loc => loc && typeof loc === 'object');
-            // Same filter the select used to apply: hide MMU/toolhead/direct-load
-            // targets and the virtual "Unassigned" row (that's the empty-string default).
+            // Same filter the select used to apply: hide toolheads (window.isToolheadType:
+            // a custom Type that only holds a head's word, "Toolbox", is offered) and the
+            // virtual "Unassigned" row (that's the empty-string default).
             const valid = d.filter(loc => {
                 const type = (loc.Type || '').toLowerCase();
-                if (type.includes('mmu') || type.includes('tool') || type.includes('direct load') || type === 'virtual') return false;
+                if (window.isToolheadType(loc.Type) || type === 'virtual') return false;
                 // L271 Phase 5: Wall Shelf/Row are structural grouping nodes —
                 // they nest children but never hold spools, so don't offer them
                 // as spool-assignment targets (Section, the leaf, IS offered).
@@ -3827,11 +3828,10 @@ window.wizardPlaceRemaining = async ({ spoolIds = [], location = '', placement =
 window.wizardIsHeadOrPrinterRow = (locId, rows) => {
     const id = _wizLocKey(locId);
     if (!id) return false;
-    const heads = ['tool head', 'mmu slot', 'no mmu direct load'];
     return (Array.isArray(rows) ? rows : []).some(r => {
         if (!r) return false;
         const type = String(r.Type || '').trim().toLowerCase();
-        if (_wizLocKey(r.LocationID) === id && (type === 'printer' || heads.includes(type))) return true;
+        if (_wizLocKey(r.LocationID) === id && (type === 'printer' || window.isToolheadType(r.Type))) return true;
         return type === 'printer' && Array.isArray(r.toolheads)
             && r.toolheads.some(h => _wizLocKey(h && h.location_id) === id);
     });

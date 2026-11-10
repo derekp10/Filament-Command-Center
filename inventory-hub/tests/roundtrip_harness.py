@@ -23,7 +23,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from test_core1_return_ejectall_js import DRIVER_JS, NODE, RESULT_MARK
+from test_core1_return_ejectall_js import DRIVER_JS, NODE, RESULT_MARK, toolhead_types_block
 
 HERE = Path(__file__).resolve().parent
 HUB = HERE.parent
@@ -157,6 +157,7 @@ def run(tmp_path: Path, setup: dict, modules: list, scenario: str) -> dict:
     setup_path = tmp_path / "setup.json"
     setup_path.write_text(json.dumps(setup), encoding="utf-8")
     driver = (DRIVER_JS
+              .replace("__TOOLHEAD_TYPES_BLOCK__", json.dumps(toolhead_types_block()), 1)
               .replace("__MODULE_PATHS__", json.dumps([str(MODULES / m) for m in modules]))
               .replace("__SCENARIO__", PRELUDE + scenario))
     bridge = (BRIDGE_JS

@@ -10,11 +10,10 @@
 // ---------------------------------------------------------------------------
 
 (function () {
-    // Toolhead types get the grid directly. Printer-type locations (e.g. the
-    // "🦝 XL" virtual printer) also get it so binding edits / Quick-Swap work
-    // from either view — the grid aggregates every toolhead that belongs to
-    // that printer.
-    const TOOLHEAD_TYPES = new Set(['Tool Head', 'MMU Slot', 'No MMU Direct Load']);
+    // Toolhead types (window.isToolheadType, inv_core.js) get the grid directly.
+    // Printer-type locations (e.g. the "🦝 XL" virtual printer) also get it so
+    // binding edits / Quick-Swap work from either view — the grid aggregates
+    // every toolhead that belongs to that printer.
     const PRINTER_TYPE = 'Printer';
 
     // Group 42.5c — a single-slot box (a PolyDryer) is bound to a head because
@@ -163,7 +162,7 @@
         const section = document.getElementById('manage-quickswap-section');
         if (!section) return;
 
-        const isToolhead = TOOLHEAD_TYPES.has(loc.Type);
+        const isToolhead = window.isToolheadType(loc.Type);
         const isPrinter = loc.Type === PRINTER_TYPE;
 
         if (!isToolhead && !isPrinter) {

@@ -58,7 +58,7 @@ window.updateManageTitle = (loc, itemArray = null) => {
     const t = loc.Type || '';
     if (t.includes('Dryer')) { badgeClass = 'bg-warning text-dark'; badgeStyle = 'border:1px solid #fff;'; }
     else if (t.includes('Storage')) { badgeClass = 'bg-primary'; badgeStyle = 'border:1px solid #88f;'; }
-    else if (t.includes('MMU')) { badgeClass = 'bg-danger'; badgeStyle = 'border:1px solid #f88;'; }
+    else if (t.includes('MMU')) { badgeClass = 'bg-danger'; badgeStyle = 'border:1px solid #f88;'; } // toolhead-type-ok: a badge colour only
     // L271 Phase 5 — Room > Wall Shelf > Row > Section (exact matches before the
     // generic 'Shelf' includes, since 'Wall Shelf' contains 'Shelf').
     else if (t === 'Wall Shelf') { badgeClass = 'bg-secondary'; badgeStyle = 'border:1px solid #6dd5c9; background-color:#1f5a52 !important; color:#fff;'; }
@@ -66,7 +66,7 @@ window.updateManageTitle = (loc, itemArray = null) => {
     else if (t === 'Section') { badgeClass = 'bg-success'; badgeStyle = 'border:1px solid #8f8;'; }
     else if (t.includes('Shelf')) { badgeClass = 'bg-success'; badgeStyle = 'border:1px solid #8f8;'; }
     else if (t.includes('Cart')) { badgeClass = 'bg-info text-dark'; badgeStyle = 'border:1px solid #fff;'; }
-    else if (t.includes('Printer') || t.includes('Toolhead')) { badgeClass = 'bg-dark'; badgeStyle = 'border:1px solid #f0f; background-color: #aa00ff !important; color: #fff;'; }
+    else if (t.includes('Printer') || t.includes('Toolhead')) { badgeClass = 'bg-dark'; badgeStyle = 'border:1px solid #f0f; background-color: #aa00ff !important; color: #fff;'; } // toolhead-type-ok: a badge colour only
     else if (t.includes('Virtual')) { badgeClass = 'bg-light text-dark'; badgeStyle = 'border:1px solid #fff; box-shadow: 0 0 5px rgba(255,255,255,0.5);'; }
     // 18.1 — Unknown bucket: yellow caution band so it's instantly readable.
     else if (t.includes('Unknown')) { badgeClass = 'bg-warning text-dark'; badgeStyle = 'border:1px solid #ffd54a; box-shadow: 0 0 6px rgba(255,193,7,0.6);'; }
@@ -79,9 +79,9 @@ window.updateManageTitle = (loc, itemArray = null) => {
     // by renderGrid, and renderList's `qr-eject-all-list` target doesn't exist
     // in the live template — so a button placed there would be invisible on
     // Rooms / Shelves / Carts, which are the most likely bulk-move sources.
-    // Suppressed on single-occupancy locations, where every spool would be
-    // skipped as "loaded in a toolhead slot" (a guaranteed no-op).
-    const SINGLE_OCC = ['Tool Head', 'MMU Slot', 'No MMU Direct Load', 'Printer'];
+    // Suppressed on single-occupancy locations, a head or a Printer row
+    // (window.isHeadOrPrinterType), where every spool would be skipped as
+    // "loaded in a toolhead slot" (a guaranteed no-op).
     // The LocationID rides in a data- attribute and the handler reads it back via
     // dataset — it NEVER enters a JS string literal inside the onclick. escAttr
     // escapes for an HTML ATTRIBUTE, not for JS source, so interpolating into
@@ -105,7 +105,7 @@ window.updateManageTitle = (loc, itemArray = null) => {
     // button even when the flag is off, so a session armed before the flag was
     // turned off can still be found and cancelled rather than stranded.
     const bulkEnabled = (window.FCC_BULK_MOVE_ENABLED !== false);
-    const moveAllBtn = (SINGLE_OCC.includes(t) || (!bulkEnabled && !bulkArmed)) ? '' : (bulkArmed ? `
+    const moveAllBtn = (window.isHeadOrPrinterType(t) || (!bulkEnabled && !bulkArmed)) ? '' : (bulkArmed ? `
         <button class="btn btn-sm btn-info ms-auto" style="white-space:nowrap;"
                 title="A bulk move is already armed — reopen its preview panel"
                 onclick="window.openBulkMovePanel && window.openBulkMovePanel({ user: true })">
@@ -189,7 +189,7 @@ const _clearManageReadFailure = () => {
 };
 window._showManageReadFailure = _showManageReadFailure;
 // The grid (a multi-slot Dryer Box / MMU Slot) or the list, whichever `loc` uses.
-const _isGridLoc = (loc) => (loc.Type === 'Dryer Box' || loc.Type === 'MMU Slot') && parseInt(loc['Max Spools']) > 1;
+const _isGridLoc = (loc) => (loc.Type === 'Dryer Box' || loc.Type === 'MMU Slot') && parseInt(loc['Max Spools']) > 1; // toolhead-type-ok: an MMU unit's slots draw as a grid
 const _showManageView = (isGrid) => {
     document.getElementById('manage-grid-view').style.display = isGrid ? 'block' : 'none';
     document.getElementById('manage-list-view').style.display = isGrid ? 'none' : 'block';
@@ -1189,7 +1189,7 @@ const _syncDepositCard = () => {
 // words (Claude's call 23).
 const _isOneSpoolHeadRow = (row, lid) => {
     if (!row) return false;
-    if (['Tool Head', 'MMU Slot', 'No MMU Direct Load'].includes(row.Type)) return true;
+    if (window.isToolheadType(row.Type)) return true;
     // A dual-role printer that is its own (only) head, the CORE1 shape (Group 42
     // review: its tile said "⚠️ 2 spools" while its view showed no banner).
     if (row.Type !== 'Printer') return false;
@@ -1437,12 +1437,11 @@ window.handleSlotInteraction = (slot) => {
             // the slot feeds comes off into the buffer either way (the same-slot
             // swap); one loaded on any other head is refused by the server, so
             // nothing is offered; a stale record isn't moved.
-            const headTypes = ['Tool Head', 'MMU Slot', 'No MMU Direct Load', 'Printer'];
             const rowOf = (id) => (state.allLocations || []).find(l => String(l.LocationID || '').toUpperCase() === id);
             const boxRow = rowOf(String(locId).toUpperCase()) || {};
             const feed = String((((boxRow.extra || {}).slot_targets) || {})[String(slot)] || '').trim().toUpperCase();
             const on = String(item.deployed_to || '').trim().toUpperCase();
-            const onHead = !!(item.is_ghost && on && headTypes.includes((rowOf(on) || {}).Type));
+            const onHead = !!(item.is_ghost && on && window.isHeadOrPrinterType((rowOf(on) || {}).Type));
             if (onHead && on === feed) {
                 promptAction("Slot Occupied", `Put ${what} into Slot ${slot}?<br>`
                     + `<small>Slot ${slot}'s spool ${old} is loaded on ${esc(on)}: it comes off into your scan buffer, `
@@ -1512,7 +1511,7 @@ window.handleSlotInteraction = (slot) => {
             // explicit slot is an Overwrite). An MMU Slot row keeps its 0-based
             // explicit slot (dormant: no such rows exist).
             const row = (state.allLocations || []).find(l => l.LocationID === locId) || {};
-            if (row.Type === 'MMU Slot') doAssign(locId, newId, slot, true);
+            if (row.Type === 'MMU Slot') doAssign(locId, newId, slot, true); // toolhead-type-ok: an MMU Slot row numbers its slots from 0
             else doAssign(locId, newId, null, true, { pickedSlot: slot, shownEmpty: true });
         }
     } else if (item) {
@@ -1539,8 +1538,7 @@ const _ownHeadOf = (spool) => {
     const own = String((held.is_ghost ? held.deployed_to : held.location) || '').toUpperCase();
     if (!own) return null;
     const row = (state.allLocations || []).find(l => String(l.LocationID || '').toUpperCase() === own);
-    const headTypes = ['Tool Head', 'MMU Slot', 'No MMU Direct Load', 'Printer'];
-    return row && headTypes.includes(row.Type) ? own : null;
+    return row && window.isHeadOrPrinterType(row.Type) ? own : null;
 };
 
 window.doAssign = (loc, spool, slot, isFromBufferFlag = null, options = {}) => {
@@ -1557,12 +1555,7 @@ window.doAssign = (loc, spool, slot, isFromBufferFlag = null, options = {}) => {
     // it's actively printing/paused. Fails open on any network hiccup —
     // we don't want to block moves on a cold printer.
     const locObjCheck = state.allLocations.find(l => l.LocationID === loc);
-    const isToolheadTarget = locObjCheck && (
-        locObjCheck.Type === 'Tool Head' ||
-        locObjCheck.Type === 'MMU Slot' ||
-        locObjCheck.Type === 'No MMU Direct Load' ||
-        locObjCheck.Type === 'Printer'
-    );
+    const isToolheadTarget = !!locObjCheck && window.isHeadOrPrinterType(locObjCheck.Type);
     // Group 39 review (engine-6): a spool LEAVING a printer head gets ONE answer
     // from the server, naming both heads in Derek's D6 wording. Confirming the
     // destination here first made a head -> head move on one printer ask twice
@@ -1647,7 +1640,7 @@ const _doAssignFinalize = (loc, spool, slot, isFromBufferFlag = null, confirmedH
         const locObj = state.allLocations.find(l => l.LocationID === loc);
         // If Type is 'MMU Slot', we assume backend expects 0-based indexing (0..N-1)
         // Frontend grid is 1-based (1..N). So we subtract 1.
-        if (locObj && locObj.Type === 'MMU Slot') {
+        if (locObj && locObj.Type === 'MMU Slot') { // toolhead-type-ok: an MMU Slot row numbers its slots from 0
             finalSlot = parseInt(slot) - 1;
         }
     }
@@ -2233,7 +2226,7 @@ const _syncParentBreadcrumb = () => {
 // toolheads-as-leaves are intentionally NOT excluded here (a toolhead CAN hold
 // a child box) except the synthetic buckets, which can't be a real parent.
 const _LOC_PARENT_KINDS = ['Room', 'Wall Shelf', 'Row', 'Cart', 'Printer', 'Section', 'Shelf',
-    'Storage', 'Dryer Box', 'Tool Head', 'No MMU Direct Load', 'MMU Slot'];
+    'Storage', 'Dryer Box', 'Tool Head', 'No MMU Direct Load', 'MMU Slot']; // toolhead-type-ok: the parent picker's kinds, in display order
 
 // L271 Phase 5 — the Type dropdown is now data-driven (built-ins + any custom
 // types you add) so it isn't capped at a hardcoded list. Built-in types + their
@@ -2249,9 +2242,9 @@ const _LOC_BUILTIN_TYPES = [
     { v: 'Cart', l: 'Cart' },
     { v: 'Sliding Drawer', l: 'Sliding Drawer' },
     { v: 'Printer', l: 'Printer' },
-    { v: 'Tool Head', l: 'Tool Head' },
-    { v: 'No MMU Direct Load', l: 'No MMU Direct Load' },
-    { v: 'MMU Slot', l: 'MMU Slot' },
+    { v: 'Tool Head', l: 'Tool Head' }, // toolhead-type-ok: an option of the Type dropdown
+    { v: 'No MMU Direct Load', l: 'No MMU Direct Load' }, // toolhead-type-ok: an option of the Type dropdown
+    { v: 'MMU Slot', l: 'MMU Slot' }, // toolhead-type-ok: an option of the Type dropdown
     { v: 'Virtual Room', l: 'Virtual Room / Zone' },
 ];
 const _LOC_CUSTOM_TYPES_KEY = 'fcc.locMgr.customTypes';
@@ -3018,7 +3011,7 @@ const _renderParentTreePicker = (rows, selfIdUpper, sel, locModalEl) => {
 // printer map other views cache for the page's life (Quick-Swap, Feeds); after
 // changing one, drop the cache and tell them to refresh.
 function _isPrinterTopologyType(t) {
-    return ['Printer', 'Tool Head', 'MMU Slot', 'No MMU Direct Load'].includes(t);
+    return window.isHeadOrPrinterType(t);
 }
 function _announcePrinterMapChange() {
     state.printerMap = null;

@@ -1024,7 +1024,9 @@ window.promptEditLocation = (spoolId, currentLoc, opts = {}) => {
             if (Array.isArray(locs)) {
                 locs.forEach(l => {
                     const type = (l.Type || '').toLowerCase();
-                    if (type.includes('mmu') || type.includes('tool') || type.includes('direct load') || type === 'virtual') return;
+                    // Never a toolhead (window.isToolheadType: a custom Type that only
+                    // holds a head's word, "Toolbox", is a place like any other).
+                    if (window.isToolheadType(l.Type) || type === 'virtual') return;
                     // L271 Phase 5: Wall Shelf/Row are structural grouping nodes, never spool targets.
                     if (type === 'wall shelf' || type === 'row') return;
                     if (l.LocationID === 'Unassigned') return;

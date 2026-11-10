@@ -24,7 +24,7 @@ import subprocess
 from pathlib import Path
 
 from test_core1_return_ejectall_js import (  # noqa: F401  (pytestmark: skip without node)
-    DRIVER_JS, MODULES, NODE, RESULT_MARK, pytestmark)
+    DRIVER_JS, MODULES, NODE, RESULT_MARK, pytestmark, toolhead_types_block)
 
 # Record document listeners (the shared stub drops them) so a scenario can fire
 # one with __fire(type, detail). Nothing fires unless a scenario asks.
@@ -44,6 +44,7 @@ EVENT_DRIVER_JS = DRIVER_JS.replace(_HOOK, EVENTS_JS + _HOOK, 1)
 
 def run(tmp_path: Path, modules: list, scenario: str) -> dict:
     driver = (EVENT_DRIVER_JS
+              .replace("__TOOLHEAD_TYPES_BLOCK__", json.dumps(toolhead_types_block()), 1)
               .replace("__MODULE_PATHS__", json.dumps([str(MODULES / m) for m in modules]))
               .replace("__SCENARIO__", scenario))
     script = tmp_path / "driver.js"

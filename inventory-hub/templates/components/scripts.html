@@ -38,14 +38,14 @@
 <script src="{{ url_for('static', filename='js/NoSleep.min.js') }}"></script>
 <script src="{{ url_for('static', filename='js/modules/overlay_mount.js') }}?v=1.2"></script>
 <script src="{{ url_for('static', filename='js/modules/choice_validation.js') }}?v=1.0"></script>
-<script src="{{ url_for('static', filename='js/modules/inv_core.js') }}?v=2.3"></script>
+<script src="{{ url_for('static', filename='js/modules/inv_core.js') }}?v=2.4"></script>
 <script src="{{ url_for('static', filename='js/modules/ui_builder.js') }}?v=2.4"></script>
 <script src="{{ url_for('static', filename='js/modules/weight_utils.js') }}?v=2"></script>
 <script src="{{ url_for('static', filename='js/modules/empty_weight_field.js') }}?v=1"></script>
 <script src="{{ url_for('static', filename='js/modules/weight_entry.js') }}?v=1"></script>
-<script src="{{ url_for('static', filename='js/modules/inv_wizard.js') }}?v=17"></script>
+<script src="{{ url_for('static', filename='js/modules/inv_wizard.js') }}?v=18"></script>
 
-<script src="{{ url_for('static', filename='js/modules/inv_details.js') }}?v=3.5"></script>
+<script src="{{ url_for('static', filename='js/modules/inv_details.js') }}?v=3.6"></script>
 
 <script src="{{ url_for('static', filename='js/modules/inv_queue.js') }}?v=1.1"></script>
 
@@ -55,7 +55,7 @@
      the picker's "🖨️ Print new label" path can call window.addToQueue. -->
 <script src="{{ url_for('static', filename='js/modules/duplicate_picker.js') }}?v=1.6"></script>
 
-<script src="{{ url_for('static', filename='js/modules/inv_loc_mgr.js') }}?v=1.5"></script>
+<script src="{{ url_for('static', filename='js/modules/inv_loc_mgr.js') }}?v=1.6"></script>
 
 <script src="{{ url_for('static', filename='js/modules/inv_search.js') }}?v=1.1"></script>
 <!-- Group 49.2a: the ⚠️ Low-stock list, opened by the title bar's ⚠️ count
@@ -66,13 +66,13 @@
 <script src="{{ url_for('static', filename='js/modules/inv_loose.js') }}?v=1.3"></script>
 <!-- Group 58 (Derek's answers of 2026-11-03, A2): 🔎 Find a spool, opened over the
      audit panel (its button and its / key). -->
-<script src="{{ url_for('static', filename='js/modules/inv_audit_find.js') }}?v=1.1"></script>
-<script src="{{ url_for('static', filename='js/modules/inv_cmd.js') }}?v=2.9"></script>
+<script src="{{ url_for('static', filename='js/modules/inv_audit_find.js') }}?v=1.2"></script>
+<script src="{{ url_for('static', filename='js/modules/inv_cmd.js') }}?v=3.0"></script>
 <script src="{{ url_for('static', filename='js/modules/inv_weigh_out.js') }}?v=2.7"></script>
 
 <!-- Phase 3: Quick-Swap + keyboard shortcuts registry. Must load after
      inv_loc_mgr.js since it hooks into state.printerMap. -->
-<script src="{{ url_for('static', filename='js/modules/inv_quickswap.js') }}?v=1.4"></script>
+<script src="{{ url_for('static', filename='js/modules/inv_quickswap.js') }}?v=1.5"></script>
 <!-- Group 40.1: the shared slot picker (box / printer / return). After inv_cmd.js
      (processScan calls window.routePickerScan at scan time) and before
      shortcuts_registry.js (it registers its keys after DOMContentLoaded). -->
