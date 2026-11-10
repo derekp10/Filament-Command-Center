@@ -15,8 +15,13 @@
   ~30%" (`cancel_review.js`), its grams worked out at 30%. Record the last good sample's time and the first failed probe
   after it on the latch (persisted with it, `data/print_tracker_latch.json`), and when the edge comes after a gap, word
   the review from it: "FCC lost contact with XL at ~30% (14:02) and next saw it idle at 16:40, so the print may have gone
-  further." Question for Derek before building: pre-fill such a review at the last seen % (today) or at the whole print,
-  with a one-tap "Charge the whole print" either way.
+  further." **Derek's answer (2026-11-09):** "the 30% last seen is the real issue, we should have a charge the whole
+  print, or a way to change the percentage (in case the user actually did see the percentage before interruption (either
+  power, or reset/otherwise))". So every ❓ ambiguous review, whatever ended it (a network drop, a power cut, a reset),
+  gets (a) a one-tap **Charge the whole print** (each head's footer grams) and (b) an editable **percentage**, pre-filled
+  with the last % FCC saw, that works the grams out again from the print file at the % typed (the cancel partial's own
+  walk, `prusalink_api.measure_filament_usage`, so a server round trip, not a page-side scale). Today the card offers only
+  each spool's grams to edit (`cancel_review.js`). The per-spool grams stay editable after either.
   **(2) Nothing is logged (S, ~2 h).** `prusalink_api._probe_printer_state` answers None on a timeout without a word, and
   hub.log held no printer line all day. Log once per change, never per tick: a WARNING after a few failed probes in a row
   (so a one-tick blip says nothing), "Lost contact with XL (it was printing 'x.bgcode', ~30%)" or "… (idle)", and an INFO
