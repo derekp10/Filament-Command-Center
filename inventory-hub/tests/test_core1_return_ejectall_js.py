@@ -54,6 +54,30 @@ pytestmark = pytest.mark.skipif(NODE is None, reason=NODE_MISSING_MSG)
 MODULES = Path(__file__).resolve().parent.parent / "static" / "js" / "modules"
 RESULT_MARK = "__FCC_RESULT__"
 
+# inv_core.js's one toolhead-Type list and its two helpers (Group 53.1) sit
+# between these two lines. Never write a copy of the list in a test: lift it.
+TOOLHEAD_TYPES_BEGIN = "// @fcc-toolhead-types:begin"
+TOOLHEAD_TYPES_END = "// @fcc-toolhead-types:end"
+
+
+def toolhead_types_block() -> str:
+    """The code between inv_core.js's @fcc-toolhead-types lines: the page's
+    window.TOOLHEAD_TYPES, isToolheadType and isHeadOrPrinterType. The node
+    driver runs it before the modules load, as the page does (scripts.html loads
+    inv_core.js first), and tests/test_toolhead_types_one_list.py checks it
+    against locations_db.TOOLHEAD_TYPES. Fails loudly when the lines are missing,
+    doubled or out of order."""
+    lines = (MODULES / "inv_core.js").read_text(encoding="utf-8").splitlines(keepends=True)
+    begins = [i for i, ln in enumerate(lines) if ln.strip() == TOOLHEAD_TYPES_BEGIN]
+    ends = [i for i, ln in enumerate(lines) if ln.strip() == TOOLHEAD_TYPES_END]
+    if len(begins) != 1 or len(ends) != 1 or begins[0] > ends[0]:
+        raise AssertionError(
+            f"inv_core.js must hold one `{TOOLHEAD_TYPES_BEGIN}` line and, after it, one "
+            f"`{TOOLHEAD_TYPES_END}` line around window.TOOLHEAD_TYPES, window.isToolheadType and "
+            f"window.isHeadOrPrinterType (found {len(begins)} and {len(ends)}). The node harnesses "
+            "and tests/test_toolhead_types_one_list.py read the page's toolhead-Type list from there.")
+    return "".join(lines[begins[0] + 1:ends[0]])
+
 # The driver. `prelude` and `scenario` are stringified and evaluated INSIDE the
 # vm context, so every object they build belongs to the modules' realm.
 DRIVER_JS = r"""
