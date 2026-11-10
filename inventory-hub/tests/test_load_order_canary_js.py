@@ -15,7 +15,10 @@ How (node's `vm`: no browser, no container, so it runs under --offline):
      dashboard.html with every {% include %} expanded in place, Jinja and HTML
      comments dropped, then every <script> in document order: a file under
      static/, a CDN library (stood in for by the globals it sets, CDN_GLOBALS),
-     or an inline script with each {{ ... }} replaced by null.
+     or an inline script with each {{ ... }} replaced by null. Along the way it
+     builds the page's elements in document order (_Dom) and notes how many
+     are parsed when each script runs: the stub answers document.body,
+     getElementById and querySelector by that position, as a browser would.
   2. Pass 1 loads every script over a browser stub (STUB_JS) and records which
      script first defines each name: a new property of window (a function
      declaration, a var, a `window.X = ...`), or a new top-level const / let /
@@ -41,7 +44,9 @@ the parser waits on the network for a later script (FCC sends every response
 no-store) a browser runs them, so they count as that script's load. Longer
 timers, animation frames and idle callbacks never fire.
 
-What it catches: a script that throws while loading; a load-time read (window.X,
+What it catches: a script that throws while loading (a DOM error too:
+document.body read in a <head> script, an element looked up before the parser
+reached it); a load-time read (window.X,
 a bare X, typeof X) of a name a later script defines, in a script's top-level
 code, anything that code calls, or a zero-delay timer it queues (wrapping an
 early read in `setTimeout(..., 0)` is no fix), or of a name only a DOMContentLoaded or load
@@ -58,9 +63,18 @@ Jinja control flow in an inline script, an async / defer / module script, a CDN
 library it doesn't know), which fail loudly with "teach the canary".
 
 What it can't see:
-  - code paths the stub doesn't take: getElementById always finds a dummy
-    element, querySelector never finds one, matchMedia never matches, storage
-    starts empty;
+  - code paths the stub's DOM doesn't take. It holds the templates' elements
+    by position, but an id the templates don't have still gets a dummy
+    element, as does one whose every element a script took out (an element a
+    script builds is beyond a parse), and a query never finds an element a
+    script built; a selector it can't read (a pseudo-class, + or ~) finds
+    nothing; an element's text and inline style are empty; elements nest as
+    their tags are written (no implied end tags), and one inside a Jinja
+    block counts as there;
+  - code paths of another window or visitor: matchMedia answers as the
+    stub's 1600 x 1300 desktop window (width, height, orientation, a fine
+    pointer with hover; any other feature never matches), and storage starts
+    empty, as on a first visit;
   - reads inside handlers (a click, DOMContentLoaded, load): those run at
     call time, after every script has loaded, which is where this canary
     asks a read to move. That includes a DOMContentLoaded or load handler's
@@ -174,7 +188,10 @@ _INCLUDE_TARGET = re.compile(r"""\s*(['"])([^'"]+)\1""")
 # A <script> inside these never runs at load: a <template>'s content is inert,
 # and the others hold raw text.
 _INERT = ("template", "textarea", "style", "title", "noscript")
-_TOKEN = re.compile(r"<!--|\{%|<(script|" + "|".join(_INERT) + r")\b", re.I)
+# A comment, a Jinja statement, or a tag's start ("<", an optional "/", a name).
+_TOKEN = re.compile(r"<!--|\{%|<(/?)([A-Za-z][^\s/>]*)", re.I)
+# A whole tag, its quoted attribute values (which may hold a '>') included.
+_TAG = re.compile(r"""<(/?)([A-Za-z][^\s/>]*)((?:[^>"']|"[^"]*"|'[^']*')*)>""")
 _SCRIPT_OPEN = re.compile(r"<script\b([^>]*)>", re.I)
 _SCRIPT_CLOSE = re.compile(r"</script\s*>", re.I)
 _ATTRIBUTE = re.compile(r"""([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?""")
@@ -195,6 +212,93 @@ def _line(text: str, pos: int) -> int:
     return text.count("\n", 0, pos) + 1
 
 
+_VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track",
+         "wbr"}
+_HEAD_ONLY = {"base", "link", "meta", "noscript", "style", "template", "title"}
+
+
+class _Dom:
+    """The page's elements as the browser's parser builds them, in document
+    order, for the stub's DOM by position: spec["elements"] holds each one's
+    tag, attributes ({{ ... }} in a value read as '') and parent's index.
+
+    Simplified: tags nest as written (the templates close what they open, and
+    an implied end tag, such as an unclosed <p>'s, isn't modelled); <html>,
+    <head> and <body> are implied where the page leaves them out (only a tag
+    opens the <body>, not text); a <script>'s own element is left out, and so
+    is what a <template>, <textarea>, <style>, <title> or <noscript> holds;
+    an element inside a Jinja block counts once, as written."""
+
+    def __init__(self):
+        self.spec = {"elements": [], "html": -1, "head": -1, "body": -1}
+        self.open: list = []  # the open elements' indices, innermost last
+        self.head_done = False
+
+    def _add(self, tag: str, attrs: dict, parent: int) -> int:
+        self.spec["elements"].append({"tag": tag, "attrs": attrs, "parent": parent})
+        return len(self.spec["elements"]) - 1
+
+    def _html(self, attrs=None) -> None:
+        if self.spec["html"] < 0:
+            self.spec["html"] = self._add("html", attrs or {}, -1)
+            self.open = [self.spec["html"]]
+
+    def _head(self, attrs=None) -> None:
+        self._html()
+        if self.spec["head"] < 0:
+            self.spec["head"] = self._add("head", attrs or {}, self.spec["html"])
+            self.open = [self.spec["html"], self.spec["head"]]
+
+    def _body(self, attrs=None) -> None:
+        if self.spec["body"] < 0:
+            self._head()
+            self.head_done = True
+            self.spec["body"] = self._add("body", attrs or {}, self.spec["html"])
+            self.open = [self.spec["html"], self.spec["body"]]
+
+    def start(self, tag: str, attrs: dict, closed: bool) -> None:
+        if tag == "html":
+            self._html(attrs)
+        elif tag == "head":
+            if self.spec["body"] < 0:
+                self._head(attrs)
+        elif tag == "body":
+            self._body(attrs)
+        else:
+            if self.spec["body"] < 0:
+                if tag not in _HEAD_ONLY:
+                    self._body()  # content: the <body> starts here
+                else:
+                    self._head()
+                    if self.head_done:  # after </head>, the parser puts it back in <head>
+                        self._add(tag, attrs, self.spec["head"])
+                        return
+            k = self._add(tag, attrs, self.open[-1])
+            if not closed and tag not in _VOID:
+                self.open.append(k)
+
+    def end(self, tag: str) -> None:
+        if tag == "head":
+            if self.spec["head"] in self.open:
+                del self.open[self.open.index(self.spec["head"]):]
+            self.head_done = True
+        elif tag not in ("html", "body"):
+            for j in range(len(self.open) - 1, 0, -1):
+                if self.spec["elements"][self.open[j]]["tag"] == tag:
+                    del self.open[j:]
+                    return
+
+    def script_here(self) -> int:
+        """How many elements are parsed when a <script> at this point runs."""
+        if self.spec["head"] < 0:
+            self._head()  # a script before any tag goes into an implied <head>
+        return len(self.spec["elements"])
+
+
+def _dom_attributes(raw: str) -> dict:
+    return {name: _JINJA_EXPRESSION.sub("", value) if value else "" for name, value in _attributes(raw).items()}
+
+
 def read_page_scripts(templates: Path = TEMPLATES, static: Path = STATIC, entry: str = ENTRY) -> list:
     """The page's <script>s in the order the browser runs them.
 
@@ -202,14 +306,16 @@ def read_page_scripts(templates: Path = TEMPLATES, static: Path = STATIC, entry:
     it: "js/modules/inv_core.js", a CDN URL, "templates/components/
     scripts.html:18 (inline)"), where (the template line of its tag), and per
     kind file / globals / code, plus the filename and line offsets node gives
-    its stack frames. Raises CanaryCannotRead on anything it can't model.
+    its stack frames; dom (the page's elements, _Dom.spec, one dict all the
+    scripts share) and dom_at (how many of them are parsed when it runs).
+    Raises CanaryCannotRead on anything it can't model.
     """
     scripts: list = []
-    _read_template(templates, static, entry, scripts, inside=None, chain=())
+    _read_template(templates, static, entry, scripts, inside=None, chain=(), dom=_Dom())
     return scripts
 
 
-def _read_template(templates: Path, static: Path, rel: str, scripts: list, inside, chain: tuple) -> None:
+def _read_template(templates: Path, static: Path, rel: str, scripts: list, inside, chain: tuple, dom: _Dom) -> None:
     if rel in chain:
         raise CanaryCannotRead(f"templates/{rel} includes itself: {' -> '.join(chain + (rel,))}.")
     path = templates / rel
@@ -242,7 +348,7 @@ def _read_template(templates: Path, static: Path, rel: str, scripts: list, insid
                         f"{here}:{line}: {st.group(0)!r} names its template in a way the canary can't read; "
                         f"{_TEACH} (read_page_scripts) how to find it.")
                 opened = inside or (f"{{% {blocks[-1][0]} %}} at {here}:{blocks[-1][1]}" if blocks else None)
-                _read_template(templates, static, target.group(2), scripts, opened, chain + (rel,))
+                _read_template(templates, static, target.group(2), scripts, opened, chain + (rel,), dom)
             elif keyword == "extends":
                 raise CanaryCannotRead(
                     f"{here}:{line}: {{% extends %}} puts this template's blocks into another one; "
@@ -253,9 +359,20 @@ def _read_template(templates: Path, static: Path, rel: str, scripts: list, insid
             elif keyword in _BLOCKS or (keyword == "set" and "=" not in args):
                 blocks.append((keyword, line))
             continue
-        tag = m.group(1).lower()
-        if tag != "script":
-            pos = _skip_element(text, m.start(), tag)
+        closing, tag = m.group(1), m.group(2).lower()
+        if tag != "script" or closing:
+            whole = _TAG.match(text, m.start())
+            if not whole:  # a '<' that opens no tag
+                pos = m.end()
+                continue
+            pos = whole.end()
+            if closing:
+                dom.end(tag)
+                continue
+            raw = whole.group(3)
+            dom.start(tag, _dom_attributes(raw), tag in _INERT or raw.rstrip().endswith("/"))
+            if tag in _INERT:
+                pos = _skip_element(text, m.start(), tag)
             continue
         opened_tag = _SCRIPT_OPEN.match(text, m.start())
         closed_tag = _SCRIPT_CLOSE.search(text, opened_tag.end()) if opened_tag else None
@@ -282,8 +399,9 @@ def _read_template(templates: Path, static: Path, rel: str, scripts: list, insid
                 f"{_TEACH} (read_page_scripts) how to load it.")
         if kind and kind not in _JS_TYPES:
             continue  # a data block (type="application/json" and the like): never run
+        parsed = {"dom": dom.spec, "dom_at": dom.script_here()}
         if "src" in attrs:
-            scripts.append(_src_script((attrs["src"] or "").strip(), static, where))
+            scripts.append(dict(_src_script((attrs["src"] or "").strip(), static, where), **parsed))
             continue
         body = text[opened_tag.end():closed_tag.start()]
         if "{%" in body:
@@ -303,6 +421,7 @@ def _read_template(templates: Path, static: Path, rel: str, scripts: list, insid
             "filename": here,
             "lineOffset": _line(text, opened_tag.end()) - 1,
             "columnOffset": opened_tag.end() - (text.rfind("\n", 0, opened_tag.end()) + 1),
+            **parsed,
         })
 
 
@@ -360,18 +479,26 @@ def _pinned(name: str, today: str) -> str:
 
 
 def with_fake(scripts: list, code: str, name: str, *, before: str = None, after: str = None) -> list:
-    """The page plus one fake inline script, right before or right after a named one."""
+    """The page plus one fake inline script, right before or right after a
+    named one: it sees the elements that one sees (none sits between two
+    adjacent <script> tags)."""
     at = _index(scripts, before) if before else _index(scripts, after) + 1
+    beside = scripts[at] if before else scripts[at - 1]
     fake = {"kind": "inline", "name": name, "where": name, "code": code, "filename": name,
             "lineOffset": 0, "columnOffset": 0}
+    if "dom_at" in beside:
+        fake["dom_at"] = beside["dom_at"]
     return scripts[:at] + [fake] + scripts[at:]
 
 
 def with_moved(scripts: list, name: str, *, before: str) -> list:
-    """The page with one script moved to right before another."""
+    """The page with one script moved to right before another, where it sees
+    the elements that one sees."""
     moving = scripts[_index(scripts, name)]
     rest = [s for s in scripts if s is not moving]
     at = _index(rest, before)
+    if "dom_at" in rest[at]:
+        moving = dict(moving, dom_at=rest[at]["dom_at"])
     return rest[:at] + [moving] + rest[at:]
 
 
@@ -406,46 +533,142 @@ STUB_JS = r"""
   };
 
   const rect = () => ({ top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0 });
-  const classList = () => {
-    const set = new Set();
-    return {
-      add: (...c) => c.forEach((x) => set.add(x)),
-      remove: (...c) => c.forEach((x) => set.delete(x)),
-      contains: (c) => set.has(c),
-      toggle: (c, force) => { const on = force === undefined ? !set.has(c) : !!force; if (on) set.add(c); else set.delete(c); return on; },
-      replace: () => false, forEach: (fn) => set.forEach(fn), item: () => null,
-      get length() { return set.size; }, get value() { return Array.from(set).join(' '); },
-    };
-  };
   const styleDecl = () => new Proxy({ setProperty: noop, removeProperty: () => '', getPropertyValue: () => '', cssText: '' }, {
     get: (t, k) => (k in t ? t[k] : ''), set: (t, k, v) => { t[k] = v; return true; },
   });
-  const makeEl = (tag, id) => {
-    const attrs = new Map();
-    const kids = [];
-    const name = String(tag || 'div').toUpperCase();
-    return {
-      tagName: name, nodeName: name, nodeType: 1, id: id || '', className: '',
-      innerHTML: '', innerText: '', textContent: '', outerHTML: '', value: '', type: '', name: '', title: '',
-      checked: false, disabled: false, hidden: false, tabIndex: -1, href: '', src: '',
-      style: styleDecl(), dataset: {}, classList: classList(),
-      children: kids, childNodes: kids, options: [], selectedOptions: [], files: [],
-      firstChild: null, lastChild: null, firstElementChild: null, lastElementChild: null,
-      nextSibling: null, previousSibling: null, nextElementSibling: null, previousElementSibling: null,
-      parentNode: null, parentElement: null, ownerDocument: null, isConnected: false,
+
+  // The page's DOM by position (setPage / parsed, from the driver): an element
+  // of the templates is there once the parser has reached it, which is the
+  // running script's tag.
+  let page = null;  // { recs, ids: Map(id -> [index]), end: one past each one's last descendant, html, head, body }
+  let parsedUpTo = Infinity;
+
+  // An element's state (tag, id, classes, attributes) lives in a record the
+  // query engine reads too. A page element's comes from the templates; any
+  // other's from what scripts set. A page element sits where the templates put
+  // it (parentK) unless a script took it out (gone) or put it elsewhere
+  // (parent); an element a script built sits where a script put it, if anywhere.
+  const recOf = new WeakMap();
+  const newRec = (tag, k) => ({ tag: String(tag || 'div').toLowerCase(), id: '', cls: new Set(), attrs: new Map(), k,
+                               parentK: -1, pageKids: [], kids: [], parent: null, gone: false, el: null, html: '', text: '' });
+  const setClasses = (rec, text) => { rec.cls.clear(); for (const c of String(text || '').split(/\s+/)) if (c) rec.cls.add(c); };
+  const classList = (rec) => ({
+    add: (...c) => c.forEach((x) => rec.cls.add(String(x))),
+    remove: (...c) => c.forEach((x) => rec.cls.delete(String(x))),
+    contains: (c) => rec.cls.has(String(c)),
+    toggle: (c, force) => {
+      const x = String(c);
+      const on = force === undefined ? !rec.cls.has(x) : !!force;
+      if (on) rec.cls.add(x); else rec.cls.delete(x);
+      return on;
+    },
+    replace: (a, b) => { if (!rec.cls.delete(String(a))) return false; rec.cls.add(String(b)); return true; },
+    forEach: (fn) => rec.cls.forEach(fn), item: (i) => (Array.from(rec.cls)[i] ?? null),
+    get length() { return rec.cls.size; }, get value() { return Array.from(rec.cls).join(' '); },
+  });
+  const camel = (s) => s.replace(/-([a-z])/g, (m, c) => c.toUpperCase());
+  const kebab = (s) => 'data-' + String(s).replace(/[A-Z]/g, (c) => '-' + c.toLowerCase());
+  // dataset is a view of the data-* attributes, as in a browser.
+  const dataset = (rec) => new Proxy({}, {
+    get: (t, k) => (typeof k === 'string' ? rec.attrs.get(kebab(k)) : undefined),
+    set: (t, k, v) => { rec.attrs.set(kebab(k), String(v)); return true; },
+    deleteProperty: (t, k) => { rec.attrs.delete(kebab(k)); return true; },
+    has: (t, k) => typeof k === 'string' && rec.attrs.has(kebab(k)),
+    ownKeys: () => Array.from(rec.attrs.keys()).filter((a) => a.startsWith('data-')).map((a) => camel(a.slice(5))),
+    getOwnPropertyDescriptor: (t, k) => (typeof k === 'string' && rec.attrs.has(kebab(k))
+      ? { value: rec.attrs.get(kebab(k)), writable: true, enumerable: true, configurable: true } : undefined),
+  });
+  const FLAGS = new Map([['checked', 'checked'], ['disabled', 'disabled'], ['hidden', 'hidden'], ['selected', 'selected'],
+                         ['required', 'required'], ['readonly', 'readOnly'], ['multiple', 'multiple']]);
+  const TEXTS = new Set(['type', 'name', 'title', 'href', 'src', 'value', 'placeholder']);
+  // An attribute's mirror on the element's own properties (null: it went).
+  const reflect = (el, rec, a, v) => {
+    if (a === 'id') rec.id = v === null ? '' : v;
+    else if (a === 'class') setClasses(rec, v);
+    else if (FLAGS.has(a)) el[FLAGS.get(a)] = v !== null;
+    else if (a === 'tabindex') el.tabIndex = v === null ? -1 : (parseInt(v, 10) || 0);
+    else if (TEXTS.has(a)) el[a] = v === null ? '' : v;
+  };
+  const parentRec = (rec) => rec.parent || (rec.k >= 0 && !rec.gone && rec.parentK >= 0 ? page.recs[rec.parentK] : null);
+  const elOf = (rec) => rec.el || makeEl(rec.tag, '', rec);
+  // An element's children: a page element's from the templates (parsed, still
+  // in place), then those scripts put in.
+  const kidsOf = (rec) => {
+    const out = [];
+    if (rec.k >= 0) {
+      for (const k of rec.pageKids) { const r = page.recs[k]; if (k < parsedUpTo && !r.gone && !r.parent) out.push(elOf(r)); }
+    }
+    return out.concat(rec.kids);
+  };
+  const connected = (rec) => {
+    for (let r = rec, n = 0; r && n < 100000; n++) {
+      if (r.k >= 0 && !r.parent) {
+        if (r.gone || r.k >= parsedUpTo) return false;
+        if (r.parentK < 0) return true;  // <html>
+        r = page.recs[r.parentK];
+      } else {
+        r = r.parent;
+      }
+    }
+    return false;
+  };
+  const takeOut = (r) => {
+    if (r.parent) { const a = r.parent.kids; const j = a.indexOf(r.el); if (j >= 0) a.splice(j, 1); r.parent = null; }
+    if (r.k >= 0) r.gone = true;
+  };
+  const adopt = (rec, child, first) => {
+    const r = recOf.get(child);
+    if (r) takeOut(r);
+    if (first) rec.kids.unshift(child); else rec.kids.push(child);
+    if (r) r.parent = rec;
+  };
+  const clearKids = (rec) => {
+    for (const c of rec.kids.splice(0)) { const r = recOf.get(c); if (r) r.parent = null; }
+    if (rec.k >= 0) for (const k of rec.pageKids) if (k < parsedUpTo && !page.recs[k].parent) page.recs[k].gone = true;
+  };
+  const sibling = (el, rec, step) => {
+    const p = parentRec(rec);
+    const a = p ? kidsOf(p) : [];
+    const j = a.indexOf(el);
+    return j < 0 ? null : (a[j + step] || null);
+  };
+  const makeEl = (tag, id, rec) => {
+    rec = rec || newRec(tag, -1);
+    const name = rec.tag.toUpperCase();
+    const el = {
+      tagName: name, nodeName: name, nodeType: 1,
+      outerHTML: '', value: '', type: '', name: '', title: '', placeholder: '', href: '', src: '',
+      checked: false, disabled: false, hidden: false, selected: false, required: false, readOnly: false, multiple: false,
+      tabIndex: -1, style: styleDecl(), dataset: dataset(rec), classList: classList(rec), options: [], selectedOptions: [], files: [],
       offsetWidth: 0, offsetHeight: 0, offsetTop: 0, offsetLeft: 0, offsetParent: null,
       clientWidth: 0, clientHeight: 0, scrollWidth: 0, scrollHeight: 0, scrollTop: 0, scrollLeft: 0,
       selectionStart: 0, selectionEnd: 0, selectedIndex: -1,
-      appendChild(c) { kids.push(c); return c; }, append(...c) { kids.push(...c); }, prepend(...c) { kids.unshift(...c); },
-      removeChild(c) { return c; }, replaceChild(c) { return c; }, insertBefore(c) { return c; },
+      appendChild(c) { adopt(rec, c); return c; }, append(...c) { c.forEach((x) => adopt(rec, x)); },
+      prepend(...c) { c.slice().reverse().forEach((x) => adopt(rec, x, true)); },
+      removeChild(c) { const r = recOf.get(c); if (r) takeOut(r); return c; },
+      replaceChild(c, old) { const r = recOf.get(old); if (r) takeOut(r); adopt(rec, c); return old; },
+      insertBefore(c) { adopt(rec, c); return c; },
       insertAdjacentHTML: noop, insertAdjacentElement: (p, e) => e, insertAdjacentText: noop,
-      remove: noop, replaceWith: noop, before: noop, after: noop, replaceChildren: noop,
-      cloneNode() { return makeEl(tag); },
-      setAttribute(k, v) { attrs.set(k, String(v)); }, getAttribute(k) { return attrs.has(k) ? attrs.get(k) : null; },
-      hasAttribute(k) { return attrs.has(k); }, removeAttribute(k) { attrs.delete(k); }, toggleAttribute: () => false,
+      remove() { takeOut(rec); }, replaceWith() { takeOut(rec); }, before: noop, after: noop,
+      replaceChildren(...c) { clearKids(rec); c.forEach((x) => adopt(rec, x)); },
+      cloneNode() { const copy = makeEl(rec.tag); for (const [a, v] of rec.attrs) copy.setAttribute(a, v); return copy; },
+      setAttribute(a, v) { const n = String(a).toLowerCase(); const s = String(v); rec.attrs.set(n, s); reflect(el, rec, n, s); },
+      getAttribute(a) { const n = String(a).toLowerCase(); return rec.attrs.has(n) ? rec.attrs.get(n) : null; },
+      hasAttribute(a) { return rec.attrs.has(String(a).toLowerCase()); },
+      removeAttribute(a) { const n = String(a).toLowerCase(); rec.attrs.delete(n); reflect(el, rec, n, null); },
+      toggleAttribute(a, force) {
+        const on = force === undefined ? !el.hasAttribute(a) : !!force;
+        if (on) el.setAttribute(a, ''); else el.removeAttribute(a);
+        return on;
+      },
+      getAttributeNames: () => Array.from(rec.attrs.keys()),
       addEventListener: noop, removeEventListener: noop, dispatchEvent: () => true,
-      querySelector: () => null, querySelectorAll: () => [], getElementsByTagName: () => [], getElementsByClassName: () => [],
-      closest: () => null, matches: () => false, contains: () => false, hasChildNodes: () => false,
+      querySelector: (s) => query(s, rec, true), querySelectorAll: (s) => query(s, rec, false),
+      getElementsByTagName: (t) => query(String(t), rec, false),
+      getElementsByClassName: (c) => query(classSelector(c), rec, false),
+      closest: (s) => closestOf(rec, s), matches: (s) => matchesSelector(rec, s),
+      contains: (o) => { for (let r = recOf.get(o); r; r = parentRec(r)) if (r === rec) return true; return false; },
+      hasChildNodes: () => kidsOf(rec).length > 0,
       focus: noop, blur: noop, click: noop, select: noop, setSelectionRange: noop,
       scrollIntoView: noop, scrollTo: noop, scrollBy: noop,
       getBoundingClientRect: rect, getClientRects: () => [],
@@ -453,6 +676,177 @@ STUB_JS = r"""
       showModal: noop, show: noop, close: noop, attachShadow: () => makeEl('#shadow'),
       checkValidity: () => true, reportValidity: () => true, setCustomValidity: noop,
     };
+    const read = (get) => ({ get, enumerable: true, configurable: true });
+    const kept = (get, set) => ({ get, set, enumerable: true, configurable: true });
+    Object.defineProperties(el, {
+      id: kept(() => rec.id, (v) => { rec.id = String(v); }),
+      className: kept(() => Array.from(rec.cls).join(' '), (v) => setClasses(rec, v)),
+      innerHTML: kept(() => rec.html, (v) => { clearKids(rec); rec.html = String(v); }),
+      innerText: kept(() => rec.text, (v) => { clearKids(rec); rec.text = String(v); }),
+      textContent: kept(() => rec.text, (v) => { clearKids(rec); rec.text = String(v); }),
+      parentNode: read(() => {
+        const p = parentRec(rec);
+        return p ? elOf(p) : (rec.k >= 0 && !rec.gone && rec.parentK < 0 ? g.document : null);
+      }),
+      parentElement: read(() => { const p = parentRec(rec); return p ? elOf(p) : null; }),
+      ownerDocument: read(() => g.document),
+      isConnected: read(() => connected(rec)),
+      children: read(() => kidsOf(rec)), childNodes: read(() => kidsOf(rec)),
+      childElementCount: read(() => kidsOf(rec).length),
+      firstChild: read(() => kidsOf(rec)[0] || null), firstElementChild: read(() => kidsOf(rec)[0] || null),
+      lastChild: read(() => kidsOf(rec).slice(-1)[0] || null), lastElementChild: read(() => kidsOf(rec).slice(-1)[0] || null),
+      nextSibling: read(() => sibling(el, rec, 1)), nextElementSibling: read(() => sibling(el, rec, 1)),
+      previousSibling: read(() => sibling(el, rec, -1)), previousElementSibling: read(() => sibling(el, rec, -1)),
+    });
+    if (id) rec.id = String(id);
+    rec.el = el;
+    recOf.set(el, rec);
+    for (const [a, v] of rec.attrs) reflect(el, rec, a, v);
+    return el;
+  };
+
+  // What the stub reads of a selector: a list of chains of compound selectors
+  // (a type or *, #id, .class, [attr], [attr="v"] with = ~= ^= $= *= |=)
+  // joined by a space (a descendant) or > (a child). Anything else (a
+  // pseudo-class, + or ~, a namespace) can't be read, and the query keeps the
+  // answer it always had: nothing.
+  const SEL_TAG = /^(\*|[A-Za-z][\w-]*)/;
+  const SEL_ID = /^#([\w-]+)/;
+  const SEL_CLASS = /^\.([\w-]+)/;
+  const SEL_ATTR = /^\[\s*([\w-]+)\s*(?:([~|^$*]?=)\s*(?:"([^"]*)"|'([^']*)'|([\w-]+))\s*)?\]/;
+  const SEL_JOIN = /^\s*>\s*|^\s+/;
+  const selectors = new Map();
+  const splitList = (s) => {
+    const out = [];
+    let depth = 0, quote = '', start = 0;
+    for (let i = 0; i < s.length; i++) {
+      const c = s[i];
+      if (quote) { if (c === '\\') i += 1; else if (c === quote) quote = ''; continue; }
+      if (c === '"' || c === "'") quote = c;
+      else if (c === '[' || c === '(') depth += 1;
+      else if (c === ']' || c === ')') depth -= 1;
+      else if (c === ',' && depth === 0) { out.push(s.slice(start, i)); start = i + 1; }
+    }
+    out.push(s.slice(start));
+    return out;
+  };
+  const parseChain = (s) => {
+    const chain = [];
+    let rest = s;
+    while (rest) {
+      let m;
+      if (chain.length) {
+        if (!(m = SEL_JOIN.exec(rest))) return null;
+        chain.push(m[0].includes('>') ? '>' : ' ');
+        rest = rest.slice(m[0].length);
+      }
+      const c = { tag: null, id: null, classes: [], attrs: [] };
+      let any = false;
+      if ((m = SEL_TAG.exec(rest))) { if (m[1] !== '*') c.tag = m[1].toLowerCase(); rest = rest.slice(m[0].length); any = true; }
+      for (;;) {
+        if ((m = SEL_ID.exec(rest))) c.id = m[1];
+        else if ((m = SEL_CLASS.exec(rest))) c.classes.push(m[1]);
+        else if ((m = SEL_ATTR.exec(rest))) c.attrs.push({ name: m[1].toLowerCase(), op: m[2] || '', value: m[3] ?? m[4] ?? m[5] ?? '' });
+        else break;
+        rest = rest.slice(m[0].length);
+        any = true;
+      }
+      if (!any) return null;
+      chain.push(c);
+    }
+    return chain.length ? chain : null;
+  };
+  const parseSelector = (text) => {
+    const key = String(text);
+    if (!selectors.has(key)) {
+      const chains = splitList(key).map((part) => parseChain(part.trim()));
+      selectors.set(key, chains.length && chains.every(Boolean) ? chains : null);
+    }
+    return selectors.get(key);
+  };
+  const matchCompound = (c, rec) => {
+    if ((c.tag && rec.tag !== c.tag) || (c.id !== null && rec.id !== c.id)) return false;
+    for (const x of c.classes) if (!rec.cls.has(x)) return false;
+    for (const a of c.attrs) {
+      const v = rec.attrs.get(a.name);
+      const w = a.value;
+      if (v === undefined || (a.op === '=' && v !== w) || (a.op === '~=' && !v.split(/\s+/).includes(w))
+          || (a.op === '^=' && !(w && v.startsWith(w))) || (a.op === '$=' && !(w && v.endsWith(w)))
+          || (a.op === '*=' && !(w && v.includes(w))) || (a.op === '|=' && v !== w && !v.startsWith(w + '-'))) return false;
+    }
+    return true;
+  };
+  const matchUp = (chain, j, rec) => {
+    if (j < 0) return true;
+    for (let p = parentRec(rec); p; p = parentRec(p)) {
+      if (matchCompound(chain[j], p) && matchUp(chain, j - 2, p)) return true;
+      if (chain[j + 1] === '>') return false;
+    }
+    return false;
+  };
+  const matchChain = (chain, rec) => matchCompound(chain[chain.length - 1], rec) && matchUp(chain, chain.length - 3, rec);
+  const matchesSelector = (rec, s) => { const list = parseSelector(s); return !!list && list.some((ch) => matchChain(ch, rec)); };
+  const closestOf = (rec, s) => {
+    const list = parseSelector(s);
+    for (let r = rec; list && r; r = parentRec(r)) if (list.some((ch) => matchChain(ch, r))) return elOf(r);
+    return null;
+  };
+  const classSelector = (names) => String(names).trim().split(/\s+/).filter(Boolean).map((n) => '.' + n).join('') || ':none';
+  // The page's elements a query finds, in document order: those parsed by now
+  // and still in place, in the whole page (document's) or under an element
+  // (its own). What a script built, and anything under it, is never found.
+  const query = (s, scope, one) => {
+    const list = page && (!scope || scope.k >= 0) ? parseSelector(s) : null;
+    const out = [];
+    if (list) {
+      const to = Math.min(scope ? page.end[scope.k] : page.recs.length, parsedUpTo);
+      for (let k = scope ? scope.k + 1 : 0; k < to; k++) {
+        const rec = page.recs[k];
+        if (!list.some((ch) => matchChain(ch, rec)) || !connected(rec)) continue;
+        if (one) return elOf(rec);
+        out.push(elOf(rec));
+      }
+    }
+    return one ? null : out;
+  };
+
+  // matchMedia answers as the window the stub describes (innerWidth and
+  // innerHeight: 1600 x 1300, the visual baselines' viewport, a desktop):
+  // width and height and their min- / max- forms in px, em or rem,
+  // orientation, a fine pointer that can hover. Any other feature (range
+  // syntax, prefers-*) never matches.
+  const mediaLength = (v) => {
+    const m = /^(-?\d*\.?\d+)(px|em|rem)?$/.exec(String(v).trim());
+    return m ? parseFloat(m[1]) * (m[2] && m[2] !== 'px' ? 16 : 1) : NaN;
+  };
+  const mediaFeature = (text) => {
+    const m = /^\(\s*([a-z-]+)\s*(?::\s*(.+?))?\s*\)$/.exec(text);
+    if (!m) return false;
+    const [, feature, value] = m;
+    const dim = /^(min-|max-)?(width|height|device-width|device-height)$/.exec(feature);
+    if (dim) {
+      const have = { width: g.innerWidth, height: g.innerHeight, 'device-width': g.screen.width,
+                     'device-height': g.screen.height }[dim[2]];
+      if (value === undefined) return have > 0;
+      const want = mediaLength(value);
+      if (Number.isNaN(want)) return false;
+      return dim[1] === 'min-' ? have >= want : dim[1] === 'max-' ? have <= want : have === want;
+    }
+    if (feature === 'orientation') return value === (g.innerWidth >= g.innerHeight ? 'landscape' : 'portrait');
+    if (feature === 'pointer' || feature === 'any-pointer') return value === undefined || value === 'fine';
+    if (feature === 'hover' || feature === 'any-hover') return value === undefined || value === 'hover';
+    return false;
+  };
+  const mediaMatches = (text) => {
+    const all = String(text).trim().toLowerCase();
+    return !all || all.split(',').some((one) => {
+      let q = one.trim();
+      const not = q.startsWith('not ');
+      if (not) q = q.slice(4).trim();
+      if (q.startsWith('only ')) q = q.slice(5).trim();
+      const ok = q.split(/\s+and\s+/).every((p) => p === 'all' || p === 'screen' || mediaFeature(p));
+      return not ? !ok : ok;
+    });
   };
 
   class EventTarget { addEventListener() {} removeEventListener() {} dispatchEvent() { return true; } }
@@ -466,25 +860,49 @@ STUB_JS = r"""
                    'HTMLImageElement', 'HTMLCanvasElement', 'HTMLDialogElement', 'SVGElement']) g[n] = class extends HTMLElement {};
   g.NodeFilter = { SHOW_ALL: 0xFFFFFFFF, SHOW_ELEMENT: 1, SHOW_TEXT: 4, FILTER_ACCEPT: 1, FILTER_REJECT: 2, FILTER_SKIP: 3 };
 
-  // The page has its elements (getElementById finds a dummy for any id), but
-  // nothing matches a selector, and it is still loading.
+  // The document. With the page's elements (setPage): <body> once the parser
+  // has reached it (null in a <head> script), an element of the templates once
+  // it is parsed, by id or by a selector the stub reads. An id the templates
+  // don't have still gets a dummy element (one a script builds is beyond a
+  // parse), and so does one whose every element a script took out. Without
+  // them (a list of scripts made by hand): a dummy for every id, and a body.
   const byId = new Map();
-  const body = makeEl('body');
+  const without = { body: makeEl('body'), head: makeEl('head'), html: makeEl('html') };
+  const pageEl = (k) => elOf(page.recs[k]);
   g.document = {
-    nodeType: 9, body, head: makeEl('head'), documentElement: makeEl('html'), defaultView: g,
-    activeElement: body, currentScript: null,
+    nodeType: 9, defaultView: g, currentScript: null,
+    get body() { return page ? (page.body >= 0 && page.body < parsedUpTo ? pageEl(page.body) : null) : without.body; },
+    get head() { return page ? (page.head >= 0 ? pageEl(page.head) : null) : without.head; },
+    get documentElement() { return page ? (page.html >= 0 ? pageEl(page.html) : null) : without.html; },
+    get activeElement() { return g.document.body || g.document.documentElement; },
     readyState: 'loading', visibilityState: 'visible', hidden: false,
     title: '', cookie: '', referrer: '', URL: 'http://fcc.test/', characterSet: 'UTF-8',
     fonts: { ready: never(), check: () => true, addEventListener: noop, removeEventListener: noop },
-    getElementById(id) { if (!byId.has(id)) byId.set(id, makeEl('div', id)); return byId.get(id); },
+    getElementById(id) {
+      const s = String(id);
+      const where = page ? page.ids.get(s) : null;
+      if (where) {
+        let below = false;
+        for (const k of where) {
+          if (page.recs[k].id !== s) continue;  // a script changed it
+          if (k >= parsedUpTo) below = true;
+          else if (connected(page.recs[k])) return pageEl(k);
+        }
+        if (below) return null;  // not parsed yet: below the running script
+      }
+      if (!byId.has(s)) byId.set(s, makeEl('div', s));
+      return byId.get(s);
+    },
     createElement: (tag) => makeEl(tag), createElementNS: (ns, tag) => makeEl(tag),
     createTextNode: (t) => ({ nodeType: 3, textContent: String(t), data: String(t) }),
     createComment: () => ({ nodeType: 8 }), createDocumentFragment: () => makeEl('#fragment'),
     createTreeWalker: () => ({ nextNode: () => null, currentNode: null }),
     createRange: () => ({ selectNodeContents: noop, collapse: noop, setStart: noop, setEnd: noop, getBoundingClientRect: rect }),
     createEvent: () => ({ initEvent: noop }),
-    querySelector: () => null, querySelectorAll: () => [], getElementsByTagName: () => [],
-    getElementsByClassName: () => [], getElementsByName: () => [],
+    querySelector: (s) => query(s, null, true), querySelectorAll: (s) => query(s, null, false),
+    getElementsByTagName: (t) => query(String(t), null, false),
+    getElementsByClassName: (c) => query(classSelector(c), null, false),
+    getElementsByName: (n) => query('[name="' + String(n).replace(/["\\]/g, '') + '"]', null, false),
     addEventListener: listen('document'), removeEventListener: unlisten('document'), dispatchEvent: () => true,
     hasFocus: () => true, elementFromPoint: () => null, elementsFromPoint: () => [], getSelection: () => null,
     execCommand: () => false,
@@ -562,7 +980,7 @@ STUB_JS = r"""
     alert: noop, confirm: () => false, prompt: () => null, open: () => null, print: noop, focus: noop, blur: noop,
     close: noop, stop: noop, scroll: noop, scrollTo: noop, scrollBy: noop, postMessage: noop,
     getSelection: () => null, getComputedStyle: () => styleDecl(),
-    matchMedia: (q) => ({ matches: false, media: String(q), onchange: null, addEventListener: noop,
+    matchMedia: (q) => ({ matches: mediaMatches(q), media: String(q), onchange: null, addEventListener: noop,
                           removeEventListener: noop, addListener: noop, removeListener: noop }),
     addEventListener: listen('window'), removeEventListener: unlisten('window'), dispatchEvent: () => true,
     CSS: { supports: () => true, escape: (s) => String(s) },
@@ -612,6 +1030,33 @@ STUB_JS = r"""
     readyState(state) { g.document.readyState = state; },
     // The zero-delay timers queued since the last call, in order.
     takeTimers() { return zeroTimers.splice(0); },
+    // The page's elements (read_page_scripts' dom: each one's tag, attributes
+    // and parent's index, in document order), then how many are parsed now.
+    setPage(spec) {
+      const recs = spec.elements.map((e, k) => {
+        const rec = newRec(e.tag, k);
+        rec.parentK = e.parent;
+        for (const [a, v] of Object.entries(e.attrs || {})) {
+          rec.attrs.set(a, v);
+          if (a === 'id') rec.id = v; else if (a === 'class') setClasses(rec, v);
+        }
+        return rec;
+      });
+      const ids = new Map();
+      for (const rec of recs) {
+        if (rec.parentK >= 0) recs[rec.parentK].pageKids.push(rec.k);
+        if (rec.id) { if (!ids.has(rec.id)) ids.set(rec.id, []); ids.get(rec.id).push(rec.k); }
+      }
+      const end = new Array(recs.length);
+      for (let k = recs.length - 1; k >= 0; k--) {
+        const kids = recs[k].pageKids;
+        end[k] = kids.length ? end[kids[kids.length - 1]] : k + 1;
+      }
+      page = { recs, ids, end, html: spec.html, head: spec.head, body: spec.body };
+      parsedUpTo = 0;
+    },
+    parsed(n) { if (typeof n === 'number' && n > parsedUpTo) parsedUpTo = n; },
+    parsedAll() { parsedUpTo = Infinity; },
     // The live listeners for DOMContentLoaded (document's, then window's, as
     // the event bubbles) or load (window's, then window.onload), in order.
     readyListeners(type) {
@@ -677,6 +1122,7 @@ function freshContext() {
   const sandbox = { console: quietConsole(), URL, URLSearchParams, TextEncoder, TextDecoder, structuredClone, atob, btoa };
   const ctx = vm.createContext(sandbox, { microtaskMode: 'afterEvaluate' });
   const stub = vm.runInContext(page.stub, ctx, { filename: 'load-order-stub.js' });
+  if (page.dom) stub.setPage(page.dom);
   return { sandbox, ctx, stub };
 }
 
@@ -731,6 +1177,7 @@ async function load(env, i, errors, diagnostics) {
   current = i;
   sink = { list: errors, script: scripts[i].name, phase: 'promise' };
   env.stub.running(scripts[i].name);
+  env.stub.parsed(scripts[i].dom_at);  // the page above its tag
   runOne(env, i, errors);
   await tick();
   await fireTimers(env, i, diagnostics);
@@ -778,7 +1225,7 @@ const RESERVED = new Set((
   'yield let static implements interface package private protected public await arguments eval undefined NaN Infinity'
 ).split(' '));
 // The names V8 is asked about (resolvable below): every name a const / let /
-// class anywhere in the source declares. Each declarator of a statement
+// class at the source's top level declares. Each declarator of a statement
 // (`let a = 1, b = 2;`), every name in a destructuring pattern (a default
 // value's names with them: an extra name costs only a probe), and a class's
 // name. The source is read as tokens, so a comma or bracket inside a string,
@@ -919,16 +1366,32 @@ function declarators(toks, k, add) {
     else if (depth === 0 && t.v === ',') binding = true;
   }
 }
+// Only a declaration outside every bracket can be top-level, so only those
+// are probed (probing every name declared anywhere took most of a load).
+// If the script's brackets don't balance as read, the scan has misread
+// something, and every declaration's names are probed instead.
 function declaredNames(src) {
-  const out = new Set();
-  const add = (n) => { if (/^[A-Za-z_$][\w$]*$/.test(n) && !RESERVED.has(n) && !n.startsWith('__fccProbe')) out.add(n); };
+  const top = new Set();
+  const all = new Set();
+  const ok = (n) => /^[A-Za-z_$][\w$]*$/.test(n) && !RESERVED.has(n) && !n.startsWith('__fccProbe');
+  const addTop = (n) => { if (ok(n)) { top.add(n); all.add(n); } };
+  const addAll = (n) => { if (ok(n)) all.add(n); };
   const toks = [];
   lexInto(src, 0, toks, false);
+  const open = [];  // the brackets open here, innermost last
+  let balanced = true;
   for (let k = 0; k < toks.length; k++) {
     const t = toks[k];
+    if (t.t === 'p') {
+      const closes = ')]}'.indexOf(t.v);
+      if ('([{'.includes(t.v)) open.push(t.v);
+      else if (closes >= 0 && open.pop() !== '([{'[closes]) balanced = false;
+      continue;
+    }
     if (t.t !== 'id' || (t.v !== 'const' && t.v !== 'let' && t.v !== 'class')) continue;
     const before = toks[k - 1];
     if (before && before.t === 'p' && before.v === '.') continue;  // a property named so
+    const add = open.length === 0 ? addTop : addAll;
     if (t.v === 'class') {
       const next = toks[k + 1];
       if (next && next.t === 'id' && next.v !== 'extends') add(next.v);
@@ -936,7 +1399,7 @@ function declaredNames(src) {
     }
     declarators(toks, k + 1, add);
   }
-  return out;
+  return balanced && open.length === 0 ? top : all;
 }
 function probe(env, names, test) {
   const run = (list) => vm.runInContext('(() => { const __fccProbeFound = [];\n' +
@@ -1011,6 +1474,7 @@ async function pass1() {
   // the page they would see), and what it defined before it threw stays.
   const H = scripts.length;
   env.stub.running(HANDLERS);
+  env.stub.parsedAll();  // the whole page is parsed by DOMContentLoaded
   for (const [state, type] of [['interactive', 'DOMContentLoaded'], ['complete', 'load']]) {
     env.stub.readyState(state);
     for (const r of env.stub.readyListeners(type)) {
@@ -1131,7 +1595,10 @@ def _run_driver(payload: dict, work: Path, label: str):
 
 def run_page(scripts: list, work: Path, label: str, stub: str = STUB_JS) -> dict:
     """Loads `scripts` in order under node, both passes, and returns the driver's result."""
-    return _run_driver({"stub": stub, "scripts": scripts}, work, label)
+    doms = {id(s["dom"]): s["dom"] for s in scripts if s.get("dom") is not None}
+    assert len(doms) <= 1, "these scripts come from more than one page (read_page_scripts): run one page at a time"
+    return _run_driver({"stub": stub, "dom": next(iter(doms.values()), None),
+                        "scripts": [{k: v for k, v in s.items() if k != "dom"} for s in scripts]}, work, label)
 
 
 def declared_names(sources: list, work: Path) -> list:
@@ -1547,40 +2014,135 @@ def test_a_zero_delay_timer_queued_at_load_reads_at_load(page_scripts, load_dir)
     while the parser waits on the network for a later script (FCC sends every
     response no-store), the browser runs the timer, and X may not be there yet
     (review findings r2-7 / r5-6). Its read is charged to the script that
-    queued it."""
-    fake = "FAKE before inv_core.js reading window.openSlotPicker in a zero-delay timer"
-    result = run_page(with_fake(page_scripts, "setTimeout(() => { if (window.openSlotPicker) {} }, 0);", fake,
-                                before="js/modules/inv_core.js"), load_dir, "fake-timer")
-    assert _early(result) == {(fake, "openSlotPicker", "js/modules/slot_picker.js")}, (
+    queued it. And the timer model, on a fake with names of its own: a
+    zero-delay timer or interval runs right after its script (an interval
+    once), a timer one queues runs too, a cleared one never does, nor one with
+    a delay; a throw in one is a diagnostic, not a load error."""
+    reader = "FAKE before inv_core.js reading window.openSlotPicker in a zero-delay timer"
+    model = "FAKE after titlebar_prefs.js queueing timers"
+    page = with_fake(page_scripts, "setTimeout(() => { if (window.openSlotPicker) {} }, 0);", reader,
+                     before="js/modules/inv_core.js")
+    page = with_fake(page, "(function () {\n"
+                           "  setTimeout(function () { null.boom; });\n"
+                           "  clearTimeout(setTimeout(() => { window.fakeCleared = 1; }, 0));\n"
+                           "  setInterval(() => { window.fakeInterval = 1; }, 0);\n"
+                           "  setTimeout(() => { setTimeout(() => { window.fakeNested = 1; }); }, -5);\n"
+                           "  setTimeout(() => { window.fakeDelayed = 1; }, 10);\n"
+                           "})();", model, after="js/modules/titlebar_prefs.js")
+    result = run_page(page, load_dir, "fake-timers")
+    assert _early(result) == {(reader, "openSlotPicker", "js/modules/slot_picker.js")}, (
         _pinned("openSlotPicker", "js/modules/slot_picker.js"), result["early_reads"])
-    assert result["early_reads"][0]["at"].startswith(fake + ":1:"), result["early_reads"]
+    assert result["early_reads"][0]["at"].startswith(reader + ":1:"), result["early_reads"]
     problems = early_read_problems(result, ALLOWED_EARLY_READS)
     assert len(problems) == 1 and "a timer is no fix" in problems[0], problems
     assert result["errors"] == [], result["errors"]
-
-
-def test_which_timers_fire_after_their_script(page_scripts, load_dir):
-    """The timer model, on fakes with names of their own: a zero-delay timer
-    or interval queued at load runs right after its script (an interval once),
-    a timer one queues runs too, a cleared one never does, nor one with a
-    delay; and a throw in one is a diagnostic, not a load error."""
-    fake = "FAKE after titlebar_prefs.js queueing timers"
-    code = ("(function () {\n"
-            "  setTimeout(function () { null.boom; });\n"
-            "  clearTimeout(setTimeout(() => { window.fakeCleared = 1; }, 0));\n"
-            "  setInterval(() => { window.fakeInterval = 1; }, 0);\n"
-            "  setTimeout(() => { setTimeout(() => { window.fakeNested = 1; }); }, -5);\n"
-            "  setTimeout(() => { window.fakeDelayed = 1; }, 10);\n"
-            "})();")
-    result = run_page(with_fake(page_scripts, code, fake, after="js/modules/titlebar_prefs.js"), load_dir,
-                      "fake-timers")
     defined = result["definers"]
-    assert defined.get("fakeInterval") == fake and defined.get("fakeNested") == fake, defined
+    assert defined.get("fakeInterval") == model and defined.get("fakeNested") == model, defined
     assert "fakeCleared" not in defined and "fakeDelayed" not in defined, defined
-    assert result["errors"] == [], result["errors"]
     thrown = [d for d in result["diagnostics"] if d["phase"] == "timer"]
-    assert len(thrown) == 1 and thrown[0]["script"] == fake and "TypeError" in thrown[0]["message"], (
+    assert len(thrown) == 1 and thrown[0]["script"] == model and "TypeError" in thrown[0]["message"], (
         result["diagnostics"])
+
+
+def test_titlebar_fit_takes_its_real_load_path(page_scripts, load_dir):
+    """titlebar_fit.js, the one FCC module before inv_core.js, fits the title
+    bar while it loads: the bar sits above its <script>. With a DOM that never
+    found the bar, start() returned at once and a read there of a later
+    script's name was never seen (review finding r2-3). A copy whose fit()
+    reads, at the top of its try (the reviewer's mutation), window.
+    fccTitleBarPrefs (titlebar_prefs.js), and at its last line window.
+    fccTextSize (text_size.js): the last is reached only if matchMedia said
+    one line, floor() read the count placeholders and natural() measured the
+    title in its parent."""
+    module = "js/modules/titlebar_fit.js"
+    reads = {  # a line of fit() -> the read put before it
+        "            bar.classList.remove(...ALL);\n":
+            ("fccTitleBarPrefs", "js/modules/titlebar_prefs.js",
+             "            const fakePrefs = window.fccTitleBarPrefs ? window.fccTitleBarPrefs.get() : null;\n"),
+        "            if (!pending) remember(level);\n":
+            ("fccTextSize", "js/modules/text_size.js", "            const fakeSize = window.fccTextSize;\n"),
+    }
+    src = (STATIC / module).read_text(encoding="utf-8")
+    for line, (name, provider, read) in reads.items():
+        assert src.count(line) == 1, (
+            f"{module} no longer has the line {line.strip()!r}: point this proof at a line fit() runs at load.")
+        src = src.replace(line, read + line)
+    copy = load_dir / "tbfit.js"
+    copy.write_text(src, encoding="utf-8")
+    page = [dict(s, file=str(copy)) if s["name"] == module else s for s in page_scripts]
+    result = run_page(page, load_dir, "tbfit")
+    assert _early(result) == {(module, name, provider) for name, provider, _ in reads.values()}, (
+        _pinned("fccTitleBarPrefs and fccTextSize", "titlebar_prefs.js and text_size.js"), result["early_reads"])
+    assert all("fit (" + module in r["at"] for r in result["early_reads"]), result["early_reads"]
+    assert result["errors"] == [], result["errors"]
+
+
+def test_a_script_sees_only_the_page_above_it(page_scripts, load_dir):
+    """While a <head> script runs, document.body is null, and an element below
+    a script's tag isn't there yet: both throw in a browser, and now in the
+    canary (review finding r2-3). The same lookup once the element is parsed
+    is fine."""
+    boot = "templates/dashboard.html:25 (inline #fcc-title-bar-boot)"
+    in_head = "FAKE <head> script using document.body"
+    too_early = "FAKE <head> script looking up #fcc-shortcuts-overlay"
+    after_it = "FAKE script after #fcc-shortcuts-overlay looking it up"
+    lookup = "document.getElementById('fcc-shortcuts-overlay').addEventListener('click', function () {});"
+    page = with_fake(page_scripts, "document.body.classList.add('fake');", in_head, after=boot)
+    page = with_fake(page, lookup, too_early, after=in_head)
+    page = with_fake(page, lookup, after_it, before="js/NoSleep.min.js")
+    result = run_page(page, load_dir, "fake-dom-position")
+    assert [(e["script"], e["phase"]) for e in result["errors"]] == [(in_head, "run"), (too_early, "run")], (
+        result["errors"])
+    assert all(e["message"].startswith("TypeError: Cannot read properties of null") for e in result["errors"]), (
+        result["errors"])
+
+
+def test_the_dom_by_position_on_a_made_up_page(tmp_path):
+    """The positional DOM, checked from inside the page's own scripts (each
+    throws if an answer is wrong): what a <head> script sees, ids and simple
+    selectors by position, an element's own queries, a selector the stub can't
+    read, a removed element, an id the templates lack, and matchMedia."""
+    templates = _templates(tmp_path, {"page.html": (
+        "<!DOCTYPE html>\n<html><head>\n<script>\n(function () {\n"
+        "  if (document.body !== null) throw new Error('a <head> script saw a body');\n"
+        "  if (document.getElementById('top') !== null) throw new Error('#top before the parser reached it');\n"
+        "  if (!document.head || !document.documentElement) throw new Error('no <head> or <html>');\n"
+        "  if (!document.getElementById('built-by-a-script')) throw new Error('an id the page lacks lost its dummy');\n"
+        "})();\n</script>\n</head>\n<body>\n"
+        "<div id=\"top\" class=\"bar main\" data-kind=\"x\">\n"
+        "  <span class=\"brand\">FCC</span>\n"
+        "  <p><button class=\"go\" type=\"button\" data-bs-target=\"#panel\">Go</button></p>\n"
+        "</div>\n"
+        "<script>\n(function () {\n"
+        "  const top = document.getElementById('top');\n"
+        "  if (!top || !top.isConnected || top.parentNode !== document.body) throw new Error('#top');\n"
+        "  if (document.querySelector('.bar') !== top || document.querySelector('div.main.bar') !== top) throw new Error('classes');\n"
+        "  const brand = top.querySelector('.brand');\n"
+        "  if (!brand || brand.parentNode !== top || brand.closest('.bar') !== top) throw new Error('descendant');\n"
+        "  if (!document.querySelector('#top > p > button.go[data-bs-target=\"#panel\"]')) throw new Error('child, attribute');\n"
+        "  if (document.querySelector('#top > button') !== null) throw new Error('a grandchild matched >');\n"
+        "  if (document.querySelectorAll('#top span, #top button').length !== 2) throw new Error('a selector list');\n"
+        "  if (top.dataset.kind !== 'x' || top.className !== 'bar main') throw new Error('attributes');\n"
+        "  top.dataset.fresh = 'y';\n"
+        "  delete top.dataset.kind;\n"
+        "  if (!document.querySelector('[data-fresh=\"y\"]') || document.querySelector('[data-kind]')) throw new Error('dataset');\n"
+        "  if (document.getElementById('below') !== null || document.querySelector('#below')) throw new Error('#below early');\n"
+        "  if (document.querySelector('button:hover') !== null) throw new Error('an unreadable selector found something');\n"
+        "  if (!matchMedia('(min-width: 992px)').matches || matchMedia('(max-width: 600px)').matches) throw new Error('media');\n"
+        "  brand.remove();\n"
+        "  if (top.querySelector('.brand') !== null) throw new Error('a removed element was found');\n"
+        "})();\n</script>\n"
+        "<template><div id=\"inert\"></div></template>\n"
+        "<div id=\"below\"></div>\n"
+        "<script>\n(function () {\n"
+        "  if (!document.getElementById('below')) throw new Error('#below once parsed');\n"
+        "})();\n</script>\n"
+        "</body></html>\n")})
+    scripts = read_page_scripts(templates, tmp_path / "static", "page.html")
+    ats = [s["dom_at"] for s in scripts]
+    assert len(ats) == 3 and ats[0] < ats[1] < ats[2], ats
+    result = run_page(scripts, tmp_path, "made-up-dom")
+    assert result["errors"] == [], result["errors"]
 
 
 def test_every_declarator_of_a_top_level_let_is_a_definer(page_scripts, load_dir):
@@ -1609,7 +2171,12 @@ DECLARATION_SHAPES = [
     ("let dd1 = cond\n  ? 1\n  : 2,\n  ee1 = 3\nfoo(ff1, gg1);", {"dd1", "ee1"}, {"ff1", "gg1"}),
     ("let hh1 = 1 // , ii1 = 2\n, jj1 = 3; /* , kk1 = 4 */", {"hh1", "jj1"}, {"ii1", "kk1"}),
     ("obj.let = 1; const ll1 = 1; class Mm1 extends Nn1 {}", {"ll1", "Mm1"}, {"Nn1"}),
-    ("for (const [oo1, pp1] of xs) {} let qq1 = 1", {"oo1", "pp1", "qq1"}, set()),
+    # Only a declaration outside every bracket can be top-level.
+    ("for (const [oo1, pp1] of xs) {} function f() { const rr1 = 1; } { let ss1; } let qq1 = 1",
+     {"qq1"}, {"oo1", "pp1", "rr1", "ss1"}),
+    # Brackets that don't balance as read: every declaration's names, to be safe.
+    ("function f() { const tt1 = 1; let uu1 = 1", {"tt1", "uu1"}, set()),
+    ("function f() { const vv1 = 1; ) let ww1 = 1", {"vv1", "ww1"}, set()),
 ]
 
 
