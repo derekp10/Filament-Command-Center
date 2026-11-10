@@ -2,6 +2,31 @@
 * **🔍 The legacy shared-label picker during an audit: look at it again some day (Derek, 2026-11-04).** Group 58 gave it the audit's tags (on this audit's list, not scanned yet / found already / found here as an Extra / loaded on a printer from here / not on the list; picture `review-samples/2026-11-01-audit/2026-11-03-built-7-old-label-picker.png`). Derek: "Something feels like it needs some work there, but I can't quite put my finger on it": it is almost impossible to tell spools apart in a list like that while some legacy spools still have no label of their own. He expects it to be rare and is fine with it as is for now. **Standalone.**
 * **🎨 Two older dialogs fail the contrast rule (found 2026-11-03 by Group 58's pictures).** The ⛔ SAFETY INTERLOCK dialog's message is Bootstrap's danger red (rgb 220, 53, 69) on #1a1a1a at 28 px bold, 3.84:1 against FCC's 4.5:1, and its ⛔ blends into the red header (`review-samples/2026-11-01-audit/2026-11-03-old-contrast-safety-interlock.png`). The Print Queue's and the 🧵 Multi-Spool Search's ✕ close buttons are white on yellow (about 1.6:1) and on cyan (about 2.0:1) (`2026-11-03-old-contrast-print-queue-close.png`). Both predate Group 58, which fixed the titles of the same headers. A look change, so a sample first: a lighter red for the message, and a dark ✕ on a light header. **Standalone.**
 
+* **📡 A printer that drops off the network mid-print: say so, and say what FCC missed (Derek, 2026-11-09).**
+  _(Standalone. Found when both printers showed offline after a router reboot: they answered ping, but PrusaLink timed
+  out on every port, from the PC and from the container, until Derek pressed each printer's reset button.)_ Derek: *"the
+  biggest problem, is if the network drops mid print, and fcc doesn't receive data when everything re-connects."* What
+  FCC does now is safe: `print_monitor._track_print_edge` keeps the latched job through every failed probe, so on
+  reconnect a FINISHED charges as usual, a STOPPED runs the cancel partial, an IDLE (the finish screen cleared, or a
+  reset) opens the ❓ ambiguous review and never charges by itself, and a new job started meanwhile opens the job-changed
+  review. Three gaps:
+  **(1) The review's percentage is where FCC lost sight of the print, and it doesn't say so (M, ~4–6 h).** The latch
+  keeps no time for its last good sample, so a print that lost contact at 30% and finished unseen reads "❓ XL — ended at
+  ~30%" (`cancel_review.js`), its grams worked out at 30%. Record the last good sample's time and the first failed probe
+  after it on the latch (persisted with it, `data/print_tracker_latch.json`), and when the edge comes after a gap, word
+  the review from it: "FCC lost contact with XL at ~30% (14:02) and next saw it idle at 16:40, so the print may have gone
+  further." Question for Derek before building: pre-fill such a review at the last seen % (today) or at the whole print,
+  with a one-tap "Charge the whole print" either way.
+  **(2) Nothing is logged (S, ~2 h).** `prusalink_api._probe_printer_state` answers None on a timeout without a word, and
+  hub.log held no printer line all day. Log once per change, never per tick: a WARNING after a few failed probes in a row
+  (so a one-tick blip says nothing), "Lost contact with XL (it was printing 'x.bgcode', ~30%)" or "… (idle)", and an INFO
+  "XL is back (PRINTING, ~62%)" on the first good probe after it.
+  **(3) Say when PrusaLink, not the printer, is stuck (S, ~2 h, after a check on TrueNAS).** On 2026-11-09 the printers
+  answered ping while every TCP port timed out, and only a reset brought PrusaLink back. Where the container can ping
+  (ICMP needs NET_RAW: check it on TrueNAS first), the lost-contact line and the Printer Status badge could tell "XL is on
+  the network but PrusaLink isn't answering: restart the printer once its print ends" from "XL doesn't answer at all (off,
+  or off the network)". A reset mid-print ends the print, so the words must say to wait; the ambiguous review covers a
+  reset that ends one.
 * **🔎 Catch print-file changes early: a per-printer print-file watch, and the 2% walk check on finished prints too
   (Derek, 2026-11-03).** _(Standalone. Scoped 2026-11-03 in `docs/agent_docs/scoping-2026-11-03-change-detection.md`: hook points, the replay on his real files, the tag
   lists, tests. No decision needed to start.)_ Derek: *"Is there any way to have FCC find and flag any bgcode that uses
