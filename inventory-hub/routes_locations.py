@@ -879,6 +879,24 @@ def api_delete_filament(fid):
     })
 
 
+def _merge_source_spools(r):
+    """Spoolman's answer to Merge Filament's spool-list read, as (spools, None),
+    or (None, (detail for hub.log, words for the page)) when it isn't a list of
+    spools: a refusal, a body that isn't JSON, or JSON that isn't a list of
+    spool records."""
+    if not r.ok:
+        return None, (f"HTTP {r.status_code}: {(r.text or '')[:200]}",
+                      f"Spoolman answered HTTP {r.status_code}.")
+    try:
+        listed = r.json()
+    except ValueError as e:
+        return None, (f"its answer isn't JSON ({e})", "Spoolman's answer couldn't be read.")
+    if not isinstance(listed, list) or not all(isinstance(s, dict) for s in listed):
+        return None, (f"its answer isn't a list of spools: {str(listed)[:200]}",
+                      "Spoolman's answer couldn't be read.")
+    return listed, None
+
+
 @app.route('/api/filament/<int:src_fid>/merge_into/<int:dst_fid>', methods=['POST'])
 def api_merge_filament(src_fid, dst_fid):
     """Merge `src_fid` into `dst_fid`: re-parent every spool from source to
@@ -886,7 +904,8 @@ def api_merge_filament(src_fid, dst_fid):
     "Merge into another filament…" action on the Filament Details modal
     to clean up duplicates that pre-date the tier-1 product-id matcher
     (Group 11.2). Atomic-ish: if any spool re-parent fails, we abort
-    before deleting the source so partial state stays recoverable.
+    before deleting the source so partial state stays recoverable. A spool
+    list FCC can't read refuses the merge before anything is written.
     """
     if src_fid == dst_fid:
         return jsonify({
@@ -918,12 +937,23 @@ def api_merge_filament(src_fid, dst_fid):
             f"{sm_url}/api/v1/spool?filament_id={src_fid}&allow_archived=true",
             timeout=5,
         )
-        children = r.json() if r.ok else []
+        children, unread = _merge_source_spools(r)
     except Exception as e:
         state.logger.error(f"Merge: failed to enumerate spools for filament {src_fid}: {e}")
         return jsonify({
             "success": False,
             "error": f"Could not list source spools: {e}",
+        }), 502
+    if unread:
+        # Group 53.2: a refused or unreadable list is not "no spools". Read as
+        # one, the merge went straight on to delete the source filament, and
+        # only Spoolman's refusal to delete a filament that still has spools
+        # kept them.
+        detail, words = unread
+        state.logger.error(f"Merge: failed to enumerate spools for filament {src_fid}: {detail}")
+        return jsonify({
+            "success": False,
+            "error": f"Could not list source spools: {words} Nothing was merged; try again in a moment.",
         }), 502
 
     reparented_spool_ids = []
