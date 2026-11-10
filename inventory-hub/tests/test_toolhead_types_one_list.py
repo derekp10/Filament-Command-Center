@@ -74,11 +74,19 @@ from pathlib import Path
 import pytest
 
 import locations_db
+# Importing the shared node driver also warns once when node is missing (a
+# PytestWarning in the run's summary), and with FCC_REQUIRE_NODE=1 fails this
+# file's collection instead.
 from test_core1_return_ejectall_js import (
-    NODE, NODE_MISSING_MSG, RESULT_MARK, TOOLHEAD_TYPES_BEGIN as BEGIN, TOOLHEAD_TYPES_END as END,
+    NODE, RESULT_MARK, TOOLHEAD_TYPES_BEGIN as BEGIN, TOOLHEAD_TYPES_END as END,
     run_js, toolhead_types_block)
 
-needs_node = pytest.mark.skipif(NODE is None, reason=NODE_MISSING_MSG)
+# Only sections 5 and 6 need node; the source rules (1 to 4) run without it.
+needs_node = pytest.mark.skipif(NODE is None, reason=(
+    "node is not on PATH: the toolhead-Type canary's node checks (test_toolhead_types_one_list.py: "
+    "the helpers, and the switched places on the real modules) did NOT run; its source rules "
+    "did. Install Node.js (see CLAUDE.md Testing), or set FCC_REQUIRE_NODE=1 to fail instead "
+    "of skipping."))
 
 HUB = Path(__file__).resolve().parent.parent
 JS_ROOT = HUB / "static" / "js"
