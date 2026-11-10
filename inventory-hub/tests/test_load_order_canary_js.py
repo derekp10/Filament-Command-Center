@@ -56,10 +56,12 @@ What it catches:
     provider moved into one: those run once every script has loaded);
   - a load-time window.X read of a name that is only a top-level const / let /
     class (never on window, so always undefined), a script's read of one it
-    declares itself included, and a script-scope alias of
-    a later script's name (`const { X } = window;` or `const X = window.X;` in
-    a script that loads before X's: the script declares X itself, and its
-    alias stays undefined for good);
+    declares itself included;
+  - a script's load-time window.X read of a name it declares itself, made
+    before a later script sets window.X: a script-scope alias (`const { X } =
+    window;` or `const X = window.X;`, read while that declaration runs: the
+    alias is undefined when it is taken) or any other such read (the bare X
+    already holds the script's own value), each worded for what it is;
   - a file under static/js that the page doesn't load, or loads twice, and a
     page script missing from disk (a module split that forgets scripts.html);
   - template constructs it can't model (a <script> inside {% if %} / {% for %},
@@ -116,6 +118,9 @@ When it fails:
     DOMContentLoaded, or in a handler such as a click; a zero-delay timer is
     no fix), or load the defining script earlier in scripts.html. A name a
     handler defines: define it while its script loads, outside the handler.
+    A window.X read of a name the script declares itself says what fits it
+    (loading the setter earlier throws if the setter reads the script's own
+    X).
     A deliberate, harmless early read (a guard meant to find nothing at load
     and retried later) goes in ALLOWED_EARLY_READS as (reader script, name):
     the reason, named as the failure names them. The list starts empty, an
@@ -1274,17 +1279,18 @@ const isIdPart = (c) => isIdStart(c) || (c >= 48 && c <= 57);
 const isLineBreak = (c) => c === 10 || c === 13 || c === 0x2028 || c === 0x2029;
 const isBlank = (c) => c === 32 || c === 9 || c === 11 || c === 12 || c === 0xa0 || c === 0xfeff;
 // Reads src from i as tokens ({t: 'id' | 'p' (one punctuator character) |
-// 'lit', v, nl: a line break before it}) into toks (null: only skip them), to
-// the end, or with closeBrace to just past the } that closes a ${. Returns
-// where it stopped.
+// 'lit', v, nl: a line break before it, s / e: where it starts and ends in
+// src}) into toks (null: only skip them), to the end, or with closeBrace to
+// just past the } that closes a ${. Returns where it stopped.
 function lexInto(src, i, toks, closeBrace) {
   const n = src.length;
   let depth = 0;
   let nl = false;
   let prev = null;
-  const push = (t, v) => { prev = { t, v, nl }; if (toks) toks.push(prev); nl = false; };
+  const push = (t, v, s, e) => { prev = { t, v, nl, s, e }; if (toks) toks.push(prev); nl = false; };
   while (i < n) {
     const c = src.charCodeAt(i);
+    const s = i;
     if (isLineBreak(c)) { nl = true; i += 1; continue; }
     if (isBlank(c)) { i += 1; continue; }
     if (c === 47) {  // '/'
@@ -1299,23 +1305,23 @@ function lexInto(src, i, toks, closeBrace) {
       }
       if (!prev || (prev.t === 'p' && !')]}'.includes(prev.v)) || (prev.t === 'id' && REGEX_AFTER_WORD.has(prev.v))) {
         i = skipRegex(src, i);
-        push('lit', '');
+        push('lit', '', s, i);
         continue;
       }
     }
-    if (c === 39 || c === 34) { i = skipQuoted(src, i); push('lit', ''); continue; }
-    if (c === 96) { i = skipTemplate(src, i); push('lit', ''); continue; }
+    if (c === 39 || c === 34) { i = skipQuoted(src, i); push('lit', '', s, i); continue; }
+    if (c === 96) { i = skipTemplate(src, i); push('lit', '', s, i); continue; }
     if (isIdStart(c)) {
       let j = i + 1;
       while (j < n && isIdPart(src.charCodeAt(j))) j += 1;
-      push('id', src.slice(i, j));
+      push('id', src.slice(i, j), s, j);
       i = j;
       continue;
     }
     if (c >= 48 && c <= 57) {
       let j = i + 1;
       while (j < n && (isIdPart(src.charCodeAt(j)) || src.charCodeAt(j) === 46)) j += 1;
-      push('lit', '');
+      push('lit', '', s, j);
       i = j;
       continue;
     }
@@ -1323,7 +1329,7 @@ function lexInto(src, i, toks, closeBrace) {
       if (c === 123) depth += 1;
       else if (c === 125 && depth-- === 0) return i + 1;
     }
-    push('p', src[i]);
+    push('p', src[i], s, i + 1);
     i += 1;
   }
   return n;
@@ -1364,6 +1370,8 @@ function skipRegex(src, i) {
 const GOES_ON_AFTER = new Set([',', '=', '+', '-', '*', '/', '%', '&', '|', '^', '!', '~', '?', ':', '<', '>', '.', '(', '[', '{']);
 const GOES_ON_BEFORE = new Set([',', '=', '+', '-', '*', '/', '%', '&', '|', '^', '?', ':', '<', '>', '.', '(', '[', ')', ']', '}']);
 // The names a const / let starting at toks[k] declares, one per declarator.
+// Returns where its statement ends in the source (just past its last token,
+// its ';' included), or -1 when it is not a declaration.
 function declarators(toks, k, add) {
   let depth = 0;
   let binding = true;  // the next token starts a declarator
@@ -1382,29 +1390,32 @@ function declarators(toks, k, add) {
         }
         continue;
       }
-      return;  // not a declaration (`let` as a name)
+      return -1;  // not a declaration (`let` as a name)
     }
     if (t.nl && depth === 0) {
       const p = toks[k - 1];
-      if (!(p.t === 'p' && GOES_ON_AFTER.has(p.v)) && !(t.t === 'p' && GOES_ON_BEFORE.has(t.v))) return;
+      if (!(p.t === 'p' && GOES_ON_AFTER.has(p.v)) && !(t.t === 'p' && GOES_ON_BEFORE.has(t.v))) return p.e;
     }
     if (t.t !== 'p') continue;
     if ('([{'.includes(t.v)) depth += 1;
-    else if (')]}'.includes(t.v)) { if (--depth < 0) return; }
-    else if (depth === 0 && t.v === ';') return;
+    else if (')]}'.includes(t.v)) { if (--depth < 0) return toks[k - 1].e; }
+    else if (depth === 0 && t.v === ';') return t.e;
     else if (depth === 0 && t.v === ',') binding = true;
   }
+  return toks[Math.min(k, toks.length) - 1].e;
 }
 // Only a declaration outside every bracket can be top-level, so only those
 // are probed (probing every name declared anywhere took most of a load).
 // If the script's brackets don't balance as read, the scan has misread
-// something, and every declaration's names are probed instead.
-function declaredNames(src) {
+// something, and every declaration's names are probed instead. Also notes
+// where the const / let statement declaring each top-level name starts and
+// ends in the source (spans: name -> [start, end)), so a script's own read of
+// a name can be placed inside its declaration or not (none when unbalanced).
+function declarations(src) {
   const top = new Set();
   const all = new Set();
+  const spans = new Map();
   const ok = (n) => /^[A-Za-z_$][\w$]*$/.test(n) && !RESERVED.has(n) && !n.startsWith('__fccProbe');
-  const addTop = (n) => { if (ok(n)) { top.add(n); all.add(n); } };
-  const addAll = (n) => { if (ok(n)) all.add(n); };
   const toks = [];
   lexInto(src, 0, toks, false);
   const open = [];  // the brackets open here, innermost last
@@ -1420,16 +1431,21 @@ function declaredNames(src) {
     if (t.t !== 'id' || (t.v !== 'const' && t.v !== 'let' && t.v !== 'class')) continue;
     const before = toks[k - 1];
     if (before && before.t === 'p' && before.v === '.') continue;  // a property named so
-    const add = open.length === 0 ? addTop : addAll;
+    const atTop = open.length === 0;
+    const names = [];
+    const add = (n) => { if (ok(n)) { all.add(n); if (atTop) { top.add(n); names.push(n); } } };
     if (t.v === 'class') {
       const next = toks[k + 1];
       if (next && next.t === 'id' && next.v !== 'extends') add(next.v);
       continue;
     }
-    declarators(toks, k + 1, add);
+    const end = declarators(toks, k + 1, add);
+    if (end >= 0) for (const n of names) if (!spans.has(n)) spans.set(n, [t.s, end]);
   }
-  return balanced && open.length === 0 ? top : all;
+  const sure = balanced && open.length === 0;
+  return { names: sure ? top : all, spans: sure ? spans : new Map() };
 }
+const declaredNames = (src) => declarations(src).names;
 function probe(env, names, test) {
   const run = (list) => vm.runInContext('(() => { const __fccProbeFound = [];\n' +
     list.map((n) => `try { if (${test(n)}) __fccProbeFound.push(${JSON.stringify(n)}); } catch (__fccProbeErr) {}`).join('\n') +
@@ -1477,10 +1493,13 @@ async function pass1() {
     }
     return filed;
   };
+  const spans = [];  // per script: where each top-level const / let name's declaration is
   let before = ownValues(env.sandbox);
   for (let i = 0; i < scripts.length; i++) {
     const src = sources[i];
-    const names = typeof src === 'string' ? declaredNames(src) : new Set();
+    const declared = typeof src === 'string' ? declarations(src) : { names: new Set(), spans: new Map() };
+    const names = declared.names;
+    spans.push(declared.spans);
     const resolvedBefore = resolvable(env, names);
     await load(env, i, errors, diagnostics);
     const after = ownValues(env.sandbox);
@@ -1519,11 +1538,14 @@ async function pass1() {
       before = after;
     }
   }
-  return { errors, diagnostics, definers, lexical, onWindowLater, handlerOf, overlaps };
+  return { errors, diagnostics, definers, lexical, onWindowLater, handlerOf, overlaps, spans };
 }
 
 // Pass 2: every defined name planted on window, each read charged to the
-// script running when it happens, with the line it was read at.
+// script running when it happens, with the line it was read at. A script's
+// read of a name it defines itself also keeps the outermost frame of the
+// page's own code under it (the whole stack is taken for those), which says
+// whether the read was made while the statement declaring the name ran.
 async function pass2(definers) {
   const env = freshContext();
   const errors = [];
@@ -1533,7 +1555,13 @@ async function pass2(definers) {
     Object.defineProperty(env.sandbox, name, {
       configurable: true, enumerable: false,
       get() {
-        if (current >= 0) reads.push([name, current, pageFrame(framesOf(new Error().stack)), inTimer]);
+        if (current < 0) return undefined;
+        const own = definers.get(name) === current;
+        const limit = Error.stackTraceLimit;
+        if (own) Error.stackTraceLimit = Infinity;
+        const frames = framesOf(new Error().stack).filter((f) => PAGE_FILES.has(frameFile(f)));
+        Error.stackTraceLimit = limit;
+        reads.push([name, current, frames[0] || '', inTimer, own ? frames[frames.length - 1] || '' : '']);
         return undefined;
       },
       set(value) { Object.defineProperty(env.sandbox, name, { value, writable: true, configurable: true, enumerable: true }); },
@@ -1541,6 +1569,35 @@ async function pass2(definers) {
   }
   for (let i = 0; i < scripts.length; i++) await load(env, i, errors, []);
   return { errors, reads };
+}
+
+// Where offset `at` of script s's source is in its stack frames: the line
+// (lineOffset added) and the column, both from 1 (columnOffset added on its
+// first line only, as V8 does).
+function lineCol(src, at, s) {
+  let line = 0;
+  let start = 0;
+  for (let j = 0; j < at; j++) {
+    const c = src.charCodeAt(j);
+    if (c === 10 || c === 0x2028 || c === 0x2029 || (c === 13 && src.charCodeAt(j + 1) !== 10)) { line += 1; start = j + 1; }
+  }
+  return [line + 1 + (s.lineOffset || 0), at - start + 1 + (line === 0 ? (s.columnOffset || 0) : 0)];
+}
+// Whether a read of name by script i was made while the top-level statement
+// declaring it ran: the outermost frame of the page's own code under the read
+// (the script's top-level code, or a timer) sits inside that statement, and it
+// wasn't a timer's. So `const { X } = window;`, `let X = window.X || null;`
+// and `const X = (() => window.X)();` are; `X();` on a later line, calling a
+// function the declaration made, and a read on a later line are not.
+function inItsDeclaration(spans, i, name, outer, timer) {
+  const s = scripts[i];
+  const src = sources[i];
+  const span = spans[i] && spans[i].get(name);
+  const m = /\(?([^()]+?):(\d+):(\d+)\)?$/.exec(outer || '');
+  if (timer || !span || !m || typeof src !== 'string' || m[1] !== (s.filename || s.name)) return false;
+  const at = [Number(m[2]), Number(m[3])];
+  const before = (a, b) => a[0] < b[0] || (a[0] === b[0] && a[1] < b[1]);
+  return !before(at, lineCol(src, span[0], s)) && before(at, lineCol(src, span[1], s));
 }
 
 (async () => {
@@ -1554,11 +1611,12 @@ async function pass2(definers) {
   const late = [];
   const seen = new Set();
   let selfReads = 0;
-  for (const [name, reader, at, timer] of two.reads) {
+  for (const [name, reader, at, timer, outer] of two.reads) {
     let definer = one.definers.get(name);
     let lexical = one.lexical.has(name);
     const own = reader === definer;
     let alias = false;
+    let taken = false;
     if (own) {
       // A script reading a name it defines on window reads its own name.
       // One it declares as a top-level const / let / class is different: its
@@ -1566,8 +1624,9 @@ async function pass2(definers) {
       // name is a window.X read, and X is never a window property unless a
       // later script sets it there. With no such script, the read is always
       // undefined: a late read below (reader === definer). With one, it is
-      // early against that script (an alias such as `const { X } = window;`
-      // is undefined when it is taken).
+      // early against that script, and if it was made while X's declaration
+      // ran, that declaration took an alias of window.X, undefined when taken
+      // (`const { X } = window;`).
       if (!lexical) { selfReads += 1; continue; }
       const setter = one.onWindowLater.get(name);
       if (setter !== undefined) {
@@ -1575,6 +1634,7 @@ async function pass2(definers) {
         definer = setter;
         lexical = false;
         alias = true;
+        taken = inItsDeclaration(one.spans, reader, name, outer, timer);
       }
     }
     // Past its definer, a planted name is read only off window, and only one
@@ -1592,7 +1652,7 @@ async function pass2(definers) {
     const key = reader + ' ' + name;
     if (seen.has(key)) continue;
     seen.add(key);
-    const read = { reader: named(reader), name, definer: named(definer), lexical, alias, own, at, timer,
+    const read = { reader: named(reader), name, definer: named(definer), lexical, alias, taken, own, at, timer,
                    handler: definer === scripts.length ? (one.handlerOf.get(name) || '') : '' };
     (reader < definer ? early : late).push(read);
   }
@@ -1673,19 +1733,26 @@ def early_read_problems(result: dict, allowed: dict) -> list:
     for r in result["early_reads"]:
         if (r["reader"], r["name"]) in allowed:
             continue
-        text = (f"  - {r['reader']} reads {r['name']} while it loads{_at(r)}, but {r['name']} is defined "
-                f"later, by {r['definer']}.")
+        name, reader, definer = r["name"], r["reader"], r["definer"]
+        if r.get("alias"):  # the reader declares the name itself, so the read reached it off window
+            text = f"  - {reader} reads window.{name} while it loads{_at(r)}, but {definer} sets window.{name} later."
+        else:
+            text = f"  - {reader} reads {name} while it loads{_at(r)}, but {name} is defined later, by {definer}."
         if r.get("timer"):
             text += (" (In a zero-delay timer it queued: a browser may run that while it waits for a later "
                      "script, so a timer is no fix.)")
         if r.get("handler"):
             text = (f"{text[:-1]}: {r['handler']} sets it, and those handlers run once every script has loaded. "
-                    f"Define {r['name']} while its script loads, outside the handler, or read it only once the "
+                    f"Define {name} while its script loads, outside the handler, or read it only once the "
                     f"handlers have run.")
-        if r.get("alias"):
-            text += (f" ({r['reader']} declares {r['name']} itself, as a top-level const / let taken from "
-                     f"window.{r['name']}: that alias stays undefined for good. Read window.{r['name']} where it "
-                     f"is used instead, or load {r['definer']} earlier.)")
+        ran = "those handlers have run" if r.get("handler") else f"{definer} has run"
+        if r.get("alias") and r.get("taken"):
+            text += (f" ({reader} declares {name} itself, as a top-level const / let taken from window.{name} "
+                     f"while that declaration runs: the alias is undefined when it is taken. Read "
+                     f"window.{name} where it is used instead, or take it from window only once {ran}.)")
+        elif r.get("alias"):
+            text += (f" ({reader} declares {name} itself and reads window.{name} before {definer} sets it: read "
+                     f"the bare {name} while it loads, or window.{name} only once {ran}.)")
         if r["lexical"]:
             text += (f" (If that read is window.{r['name']}, loading earlier won't help: {r['name']} is a "
                      f"top-level const / let / class there, never a window property. Read it bare, or have "
@@ -1767,7 +1834,8 @@ def test_no_script_reads_at_load_a_name_a_later_script_defines(page_load):
         "undefined there (an `if (window.X)` guard silently does nothing):\n" + "\n".join(problems) + "\n"
         "Move the read into a function that runs later (on DOMContentLoaded, or in a handler such as a "
         "click; a zero-delay timer is no fix), or load the defining script earlier in "
-        "templates/components/scripts.html. If the early read "
+        "templates/components/scripts.html (a line about a name the script declares itself says what fits "
+        "it). If the early read "
         "is deliberate and harmless (a guard meant to find nothing at load that is tried again later), add it "
         "to ALLOWED_EARLY_READS in tests/test_load_order_canary_js.py as (reader, name): the reason.")
 
@@ -2037,7 +2105,51 @@ def test_a_script_scope_alias_of_a_later_scripts_name_is_reported(page_scripts, 
     assert result["early_reads"][0]["at"].startswith(fake + ":1:"), result["early_reads"]
     problems = early_read_problems(result, ALLOWED_EARLY_READS)
     assert len(problems) == 1 and "declares openSlotPicker itself" in problems[0], problems
+    assert "taken from window.openSlotPicker" in problems[0], problems
     assert result["errors"] == [] and result["late_reads"] == [], result
+
+
+def test_an_own_read_of_a_name_a_later_script_puts_on_window_says_what_it_is(page_scripts, load_dir):
+    """A script that declares X itself and reads window.X before a later
+    script sets it reads too early either way, but what is true differs
+    (review finding ra-6). Read while X's own declaration runs (destructuring,
+    an initializer, an IIFE in one), it takes an alias of window.X that is
+    undefined when it is taken; a later assignment may refresh it. Read
+    anywhere else (the script's own value read back off window, a function it
+    declares, called later), the bare X already holds the script's own value.
+    Neither is fixed by loading the setter earlier: a setter that reads the
+    script's binding (`window.X = X;`) would then throw."""
+    setter = "FAKE setter after the readers"
+    readers = {  # fake -> (code, name, read while its declaration runs)
+        "FAKE own value read off window": (
+            "let fakeShared = { ready: true };\nif (window.fakeShared && window.fakeShared.ready) {}",
+            "fakeShared", False),
+        "FAKE alias refreshed on DOMContentLoaded": (
+            "let fakeAlias = window.fakeAlias;\n"
+            "document.addEventListener('DOMContentLoaded', () => { fakeAlias = window.fakeAlias; });",
+            "fakeAlias", True),
+        "FAKE destructured alias": ("const { fakeDestructured } = window;", "fakeDestructured", True),
+        "FAKE alias from an IIFE": ("const fakeIife = (() => window.fakeIife)();", "fakeIife", True),
+        "FAKE function called later": ("const fakeLater = () => window.fakeLater;\nfakeLater();", "fakeLater", False),
+    }
+    page, last = page_scripts, "js/modules/titlebar_prefs.js"
+    for fake, (code, _, _) in readers.items():
+        page, last = with_fake(page, code, fake, after=last), fake
+    page = with_fake(page, "window.fakeShared = fakeShared;\nwindow.fakeAlias = 1;\nwindow.fakeDestructured = 1;\n"
+                           "window.fakeIife = 1;\nwindow.fakeLater = 1;", setter, after=last)
+    result = run_page(page, load_dir, "fake-own-reads")
+    assert _early(result) == {(fake, name, setter) for fake, (_, name, _) in readers.items()}, result["early_reads"]
+    assert result["errors"] == [] and result["late_reads"] == [], result
+    problems = {r["reader"]: p for r, p in zip(result["early_reads"], early_read_problems(result, {}))}
+    for fake, (_, name, taken) in readers.items():
+        p = problems[fake]
+        assert f"reads window.{name} while it loads" in p and f"declares {name} itself" in p, p
+        assert "for good" not in p and "earlier" not in p, p
+        if taken:
+            assert f"taken from window.{name}" in p and f"Read window.{name} where it is used" in p, p
+        else:
+            assert "taken from" not in p, p
+            assert (f"read the bare {name} while it loads, or window.{name} only once {setter} has run" in p), p
 
 
 def test_an_alias_in_a_real_module_is_reported(page_scripts, load_dir):
@@ -2290,6 +2402,35 @@ DECLARATION_SHAPES = [
     ("function f() { const tt1 = 1; let uu1 = 1", {"tt1", "uu1"}, set()),
     ("function f() { const vv1 = 1; ) let ww1 = 1", {"vv1", "ww1"}, set()),
 ]
+
+
+def test_an_own_reads_place_is_found_through_line_offsets_and_crlf(tmp_path):
+    """Whether an own read sat in its declaration is told from stack frames,
+    which count a template's lines from the template's top, add the column of
+    the <script> tag's end on the script's first line only, and count a CRLF
+    as one line end. On a made-up page: an inline script whose alias is on its
+    first line, after the tag (its read ends that statement, so only the tag's
+    column puts it inside), and whose own-value read is two lines down; and a
+    file with CRLF line ends holding the same two shapes lower down."""
+    templates = _templates(tmp_path, {"page.html": (
+        "<html><head></head><body>\n<p>x</p>\n"
+        "<script>  let fakeA = window.fakeA;\n  let fakeSecond = 1;\n  if (window.fakeSecond) {}\n</script>\n"
+        "<script src=\"{{ url_for('static', filename='js/crlf.js') }}\"></script>\n"
+        "<script>window.fakeA = 1; window.fakeSecond = fakeSecond;\n"
+        "  window.fakeCrlfAlias = 1; window.fakeCrlfOwn = fakeCrlfOwn;</script>\n"
+        "</body></html>\n")})
+    js = tmp_path / "static" / "js"
+    js.mkdir(parents=True)
+    (js / "crlf.js").write_bytes(b"// CRLF line ends\r\nvar pad = 1;\r\nlet fakeCrlfAlias = window.fakeCrlfAlias;\r\n"
+                                 b"let fakeCrlfOwn = 2;\r\nif (window.fakeCrlfOwn) {}\r\n")
+    scripts = read_page_scripts(templates, tmp_path / "static", "page.html")
+    result = run_page(scripts, tmp_path, "made-up-own-reads")
+    assert result["errors"] == [], result["errors"]
+    first, setter = scripts[0]["name"], scripts[2]["name"]
+    got = {(r["reader"], r["name"], r["definer"], r["taken"]) for r in result["early_reads"]}
+    assert got == {(first, "fakeA", setter, True), (first, "fakeSecond", setter, False),
+                   ("js/crlf.js", "fakeCrlfAlias", setter, True), ("js/crlf.js", "fakeCrlfOwn", setter, False)}, (
+        result["early_reads"])
 
 
 def test_the_declaration_scan_finds_every_declarator_and_skips_literals(load_dir):
