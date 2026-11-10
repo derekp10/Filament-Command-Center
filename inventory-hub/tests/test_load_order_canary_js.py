@@ -15,7 +15,11 @@ How (node's `vm`: no browser, no container, so it runs under --offline):
      dashboard.html with every {% include %} expanded in place, Jinja and HTML
      comments dropped, then every <script> in document order: a file under
      static/, a CDN library (stood in for by the globals it sets, CDN_GLOBALS),
-     or an inline script with each {{ ... }} replaced by null. Along the way it
+     or an inline script with each {{ ... }} replaced by null. Each tag is
+     read as the HTML tokenizer reads it once Jinja has rendered (a Jinja
+     statement or expression in it is one unit, whatever '>' or quote it
+     holds; a quote opens a value only right after '='), and a Jinja
+     statement in a tag opens and closes blocks as anywhere. Along the way it
      builds the page's elements in document order (_Dom) and notes how many
      are parsed when each script runs: the stub answers document.body,
      getElementById and querySelector by that position, as a browser would.
@@ -76,8 +80,10 @@ What it catches:
   - a file under static/js that the page doesn't load, or loads twice, and a
     page script missing from disk (a module split that forgets scripts.html);
   - template constructs it can't model (a <script> inside {% if %} / {% for %},
-    Jinja control flow in an inline script, an async / defer / module script,
-    a CDN library it doesn't know), which fail loudly with "teach the canary".
+    a block opened inside a tag included, Jinja control flow in an inline
+    script or in a <script>'s tag, an {% include %} inside a tag, an async /
+    defer / module script, a CDN library it doesn't know), which fail loudly
+    with "teach the canary".
 
 What it can't see:
   - code paths the stub's DOM doesn't take. It holds the templates' elements
@@ -94,7 +100,7 @@ What it can't see:
     the pseudo-class, or the selector isn't valid at all) goes unseen. An
     element's text and inline style are empty; elements nest as their tags
     are written (no implied end tags), and one inside a Jinja block counts as
-    there;
+    there, as does an attribute (its value's Jinja taken out);
   - code paths of another window or visitor: matchMedia answers as the
     stub's 1600 x 1300 desktop window (width, height, orientation, a fine
     pointer with hover; any other feature never matches), and storage starts
@@ -236,13 +242,13 @@ _INCLUDE_TARGET = re.compile(r"""\s*(['"])([^'"]+)\1""")
 # A <script> inside these never runs at load: a <template>'s content is inert,
 # and the others hold raw text.
 _INERT = ("template", "textarea", "style", "title", "noscript")
-# A comment, a Jinja statement, or a tag's start ("<", an optional "/", a name).
-_TOKEN = re.compile(r"<!--|\{%|<(/?)([A-Za-z][^\s/>]*)", re.I)
-# A whole tag, its quoted attribute values (which may hold a '>') included.
-_TAG = re.compile(r"""<(/?)([A-Za-z][^\s/>]*)((?:[^>"']|"[^"]*"|'[^']*')*)>""")
-_SCRIPT_OPEN = re.compile(r"<script\b([^>]*)>", re.I)
+# A comment, a Jinja statement or expression, or a tag's start ("<", an
+# optional "/", a name).
+_TOKEN = re.compile(r"<!--|\{%|\{\{|<(/?)([A-Za-z][^\s/>]*)", re.I)
 _SCRIPT_CLOSE = re.compile(r"</script\s*>", re.I)
-_ATTRIBUTE = re.compile(r"""([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?""")
+_JINJA_CLOSE = {"{%": "%}", "{{": "}}", "{#": "#}"}
+_JINJA_OPEN = tuple(_JINJA_CLOSE)
+_SPACE = " \t\n\f\r"
 _STATIC_SRC = re.compile(
     r"""\{\{\s*url_for\(\s*['"]static['"]\s*,\s*filename\s*=\s*['"]([^'"]+)['"]\s*\)\s*\}\}(?:\?\S*)?""")
 _JS_TYPES = {"text/javascript", "application/javascript", "application/x-javascript",
@@ -343,8 +349,96 @@ class _Dom:
         return len(self.spec["elements"])
 
 
-def _dom_attributes(raw: str) -> dict:
-    return {name: _JINJA_EXPRESSION.sub("", value) if value else "" for name, value in _attributes(raw).items()}
+def _jinja_end(text: str, i: int) -> int:
+    """Just past the Jinja statement, expression or comment that starts at i,
+    or -1 if it never closes."""
+    j = text.find(_JINJA_CLOSE[text[i:i + 2]], i + 2)
+    return -1 if j < 0 else j + 2
+
+
+def _scan_tag(text: str, i: int):
+    """A tag's attributes, from i (just past its name) to the '>' that ends it,
+    read as the HTML tokenizer reads them once Jinja has rendered: a Jinja
+    statement, expression or comment is one unit wherever it sits (a '>' or a
+    quote in it is Jinja's, and one where a name would start is no
+    attribute); a quote opens a quoted value only right after '=' (spaces
+    around the '=' allowed), and anywhere else is a plain character
+    (alt=Derek's). Returns (just past the '>', [(name, value or None)] with
+    their Jinja as written, the spans of the Jinja statements in the tag,
+    whether a '/' ended it), or None if the tag never ends."""
+    n = len(text)
+    attrs: list = []
+    statements: list = []
+    slash = False
+
+    def past_jinja(j: int) -> int:
+        end = _jinja_end(text, j)
+        if end >= 0 and text[j + 1] == "%":
+            statements.append((j, end))
+        return end
+
+    def run(j: int, stop: str) -> int:  # past a name or an unquoted value: up to a space or a character in stop
+        while 0 <= j < n and text[j] not in _SPACE and text[j] not in stop:
+            j = past_jinja(j) if text.startswith(_JINJA_OPEN, j) else j + 1
+        return j
+
+    while i < n:
+        c = text[i]
+        if text.startswith(_JINJA_OPEN, i):
+            i, slash = past_jinja(i), False
+            if i < 0:
+                return None
+            continue
+        if c in _SPACE or c == "/":  # a '/' right before the '>' closes the tag (an <svg>'s <path />)
+            i, slash = i + 1, c == "/"
+            continue
+        if c == ">":
+            return i + 1, attrs, statements, slash
+        slash = False
+        start, i = i, run(i + 1, "/>=")  # its first character is the name's, even an '=' or a quote
+        if i < 0:
+            return None
+        name, value = text[start:i], None
+        j = i
+        while j < n and text[j] in _SPACE:
+            j += 1
+        if j < n and text[j] == "=":
+            j += 1
+            while j < n and text[j] in _SPACE:
+                j += 1
+            if j < n and text[j] in "\"'":
+                quote, j = text[j], j + 1
+                k = j
+                while k < n and text[k] != quote:
+                    k = past_jinja(k) if text.startswith(_JINJA_OPEN, k) else k + 1
+                    if k < 0:
+                        return None
+                if k >= n:
+                    return None
+                value, i = text[j:k], k + 1
+            else:
+                k = run(j, ">")
+                if k < 0:
+                    return None
+                value, i = text[j:k], k
+        attrs.append((name, value))
+    return None
+
+
+def _attr_dict(attrs: list) -> dict:
+    """A tag's attributes by lower-cased name, the first of a repeated one
+    winning, as in a browser; a value with its Jinja as written."""
+    out: dict = {}
+    for name, value in attrs:
+        out.setdefault(name.lower(), value)
+    return out
+
+
+def _dom_attributes(attrs: list) -> dict:
+    """For the DOM: each value with its Jinja taken out ({{ ... }} and every
+    {% ... %} statement; the text inside a Jinja block counts as written)."""
+    return {name: _JINJA_STATEMENT.sub("", _JINJA_EXPRESSION.sub("", value)) if value else ""
+            for name, value in _attr_dict(attrs).items()}
 
 
 def read_page_scripts(templates: Path = TEMPLATES, static: Path = STATIC, entry: str = ENTRY) -> list:
@@ -373,6 +467,26 @@ def _read_template(templates: Path, static: Path, rel: str, scripts: list, insid
     text = _JINJA_COMMENT.sub(lambda m: _blank(m.group(0)), path.read_text(encoding="utf-8"))
     here = f"templates/{rel}"
     blocks: list = []  # the Jinja blocks open at this point: (statement, line)
+
+    def in_tag(statements: list, tag: str, line: int) -> None:
+        """A Jinja statement inside a tag opens and closes blocks as anywhere
+        else (an {% if %} opened in a tag may close after a <script>)."""
+        for start, _ in statements:
+            st = _JINJA_STATEMENT.match(text, start)
+            at = _line(text, start)
+            if not st:
+                raise CanaryCannotRead(f"{here}:{at}: a {{% the canary can't read, inside the <{tag}> tag.")
+            keyword, args = st.group(1), st.group(2)
+            if keyword in ("include", "extends"):
+                raise CanaryCannotRead(
+                    f"{here}:{at}: {st.group(0)!r} sits inside the <{tag}> tag at {here}:{line}, so the page's "
+                    f"markup there depends on what it puts in; {_TEACH} (read_page_scripts) how to read it.")
+            if keyword.startswith("end"):
+                if blocks:
+                    blocks.pop()
+            elif keyword in _BLOCKS or (keyword == "set" and "=" not in args):
+                blocks.append((keyword, at))
+
     pos = 0
     while True:
         m = _TOKEN.search(text, pos)
@@ -407,25 +521,31 @@ def _read_template(templates: Path, static: Path, rel: str, scripts: list, insid
             elif keyword in _BLOCKS or (keyword == "set" and "=" not in args):
                 blocks.append((keyword, line))
             continue
+        if m.group(0) == "{{":  # an expression outside a tag is text, whatever it holds
+            end = _jinja_end(text, m.start())
+            if end < 0:
+                raise CanaryCannotRead(f"{here}:{line}: a {{{{ with no }}}}.")
+            pos = end
+            continue
         closing, tag = m.group(1), m.group(2).lower()
+        scanned = _scan_tag(text, m.end())
         if tag != "script" or closing:
-            whole = _TAG.match(text, m.start())
-            if not whole:  # a '<' that opens no tag
+            if not scanned:  # a '<' that opens no tag: no '>' ends it
                 pos = m.end()
                 continue
-            pos = whole.end()
+            pos, tag_attrs, statements, slash = scanned
+            in_tag(statements, tag, line)
             if closing:
                 dom.end(tag)
                 continue
-            raw = whole.group(3)
-            dom.start(tag, _dom_attributes(raw), tag in _INERT or raw.rstrip().endswith("/"))
+            dom.start(tag, _dom_attributes(tag_attrs), tag in _INERT or slash)
             if tag in _INERT:
                 pos = _skip_element(text, m.start(), tag)
             continue
-        opened_tag = _SCRIPT_OPEN.match(text, m.start())
-        closed_tag = _SCRIPT_CLOSE.search(text, opened_tag.end()) if opened_tag else None
+        closed_tag = _SCRIPT_CLOSE.search(text, scanned[0]) if scanned else None
         if not closed_tag:
             raise CanaryCannotRead(f"{here}:{line}: a <script> with no </script>.")
+        opened_end, script_attrs, statements, _ = scanned
         pos = closed_tag.end()
         where = f"{here}:{line}"
         condition = inside or (f"{{% {blocks[-1][0]} %}} at {here}:{blocks[-1][1]}" if blocks else None)
@@ -434,7 +554,12 @@ def _read_template(templates: Path, static: Path, rel: str, scripts: list, insid
                 f"{where}: this <script> sits inside {condition}, so whether (and how often) it loads depends on "
                 f"the template's data, while the canary reads the page as one fixed list. Move the <script> out "
                 f"of the block, or {_TEACH} (read_page_scripts) how to read it.")
-        attrs = _attributes(opened_tag.group(1))
+        if statements:
+            raise CanaryCannotRead(
+                f"{where}: this <script>'s tag holds Jinja control flow ({{% ... %}}), so its attributes (its "
+                f"src, a defer) depend on the template's data. Move the logic out of the tag, or {_TEACH} "
+                f"(read_page_scripts) how to read it.")
+        attrs = _attr_dict(script_attrs)
         for flag in ("async", "defer", "nomodule"):
             if flag in attrs:
                 raise CanaryCannotRead(
@@ -451,7 +576,7 @@ def _read_template(templates: Path, static: Path, rel: str, scripts: list, insid
         if "src" in attrs:
             scripts.append(dict(_src_script((attrs["src"] or "").strip(), static, where), **parsed))
             continue
-        body = text[opened_tag.end():closed_tag.start()]
+        body = text[opened_end:closed_tag.start()]
         if "{%" in body:
             raise CanaryCannotRead(
                 f"{where}: this inline script holds Jinja control flow ({{% ... %}}), so its code depends on the "
@@ -467,8 +592,8 @@ def _read_template(templates: Path, static: Path, rel: str, scripts: list, insid
             "where": where,
             "code": code,
             "filename": here,
-            "lineOffset": _line(text, opened_tag.end()) - 1,
-            "columnOffset": opened_tag.end() - (text.rfind("\n", 0, opened_tag.end()) + 1),
+            "lineOffset": _line(text, opened_end) - 1,
+            "columnOffset": opened_end - (text.rfind("\n", 0, opened_end) + 1),
             **parsed,
         })
 
@@ -482,14 +607,6 @@ def _skip_element(text: str, start: int, tag: str) -> int:
         if depth == 0:
             return m.end()
     return len(text)
-
-
-def _attributes(raw: str) -> dict:
-    attrs: dict = {}
-    for m in _ATTRIBUTE.finditer(raw):
-        value = next((v for v in m.group(2, 3, 4) if v is not None), None)
-        attrs.setdefault(m.group(1).lower(), value)
-    return attrs
 
 
 def _src_script(src: str, static: Path, where: str) -> dict:
@@ -2874,6 +2991,42 @@ def test_the_reader_follows_includes_and_skips_what_never_runs(tmp_path):
     assert tail["code"].split("\n")[4] == "  window.after = 1;"
 
 
+def test_the_reader_reads_a_tag_as_the_browser_does_once_jinja_has_rendered(tmp_path):
+    """A '>' inside Jinja in a tag ({% if n > 0 %}, {{ a if n > 0 else b }})
+    doesn't end the tag, and a quote opens a quoted value only right after
+    '=': an apostrophe in an unquoted value (alt=Derek's) is a plain
+    character, as the HTML tokenizer reads it, and so is a stray quote where
+    an attribute's name would start (review finding ra-5: each ran on to the
+    next such quote and swallowed the <script> in between). A {{ ... }}
+    outside a tag is text, whatever it holds."""
+    templates = _templates(tmp_path, {"page.html": (
+        "<html><body>\n"                                                                          # 1
+        "<p><img alt=Derek's>\n"                                                                  # 2
+        "<script>var a = 1;</script>\n"                                                           # 3
+        "<span>it's here {{ n<b }}</span></p>\n"                                                  # 4
+        "<div data-n=\"{{ 1 if n > 0 else 0 }}\" class={{ 'a' if n > 0 else 'b' }}>x</div>\n"     # 5
+        "<li {% if x.n > 0 %}class=\"ok\"{% endif %} title=\"{{ \"a>b\" }}\">row</li>\n"         # 6
+        "<a href=/x/ data-x=a=\"b\">y</a><br/>\n"                                                 # 7
+        "<i class=\"c\" \">z</i>\n"                                                               # 8
+        "<script src=\"{{ url_for('static', filename='js/x.js') }}\"></script>\n"                # 9
+        "<script>var b = 2;</script>\n"                                                           # 10
+        "</body></html>\n")})
+    scripts = read_page_scripts(templates, tmp_path / "static", "page.html")
+    assert [s["name"] for s in scripts] == [
+        "templates/page.html:3 (inline)", "js/x.js", "templates/page.html:10 (inline)"], [s["name"] for s in scripts]
+    els = scripts[0]["dom"]["elements"]
+    tags = [e["tag"] for e in els]
+    assert tags == ["html", "head", "body", "p", "img", "span", "div", "li", "a", "br", "i"], tags
+    attrs = {e["tag"]: e["attrs"] for e in els}
+    assert attrs["img"] == {"alt": "Derek's"}, attrs["img"]
+    assert attrs["div"] == {"data-n": "", "class": ""}, attrs["div"]
+    assert attrs["li"] == {"class": "ok", "title": ""}, attrs["li"]
+    assert attrs["a"] == {"href": "/x/", "data-x": 'a="b"'}, attrs["a"]
+    assert attrs["i"] == {"class": "c", '"': ""}, attrs["i"]
+    parent = {e["tag"]: els[e["parent"]]["tag"] for e in els if e["parent"] >= 0}
+    assert parent["span"] == "p" and parent["div"] == "body" and parent["br"] == "body", parent
+
+
 def test_a_failure_names_its_template_line(tmp_path):
     """Node's stack frames point at the template's own lines, and a promise
     rejected while a script loads is charged to that script."""
@@ -2902,6 +3055,20 @@ def test_a_failure_names_its_template_line(tmp_path):
     pytest.param({"page.html": "{% for x in xs %}{% include 'part.html' %}{% endfor %}\n",
                   "part.html": "<script>var a = 1;</script>\n"},
                  "sits inside {% for %} at templates/page.html:1", id="include-in-for"),
+    # A Jinja comparison inside a tag before the <script> (review finding ra-5).
+    pytest.param({"page.html": "{% for x in xs %}<li {% if x.n > 0 %}class=\"ok\"{% endif %}>row</li>"
+                               "<script>var a = 1;</script>{% endfor %}\n"},
+                 "sits inside {% for %} at templates/page.html:1", id="script-in-for-after-a-comparison-in-a-tag"),
+    pytest.param({"page.html": "{% if show %}\n<div {% if count >= 1 %}hidden{% endif %}>x</div>\n"
+                               "<script>var a = 1;</script>\n{% endif %}\n"},
+                 "sits inside {% if %} at templates/page.html:1", id="script-in-if-after-a-comparison-in-a-tag"),
+    pytest.param({"page.html": "<div {% if on %}class=\"a\">\n<script>var a = 1;</script>\n{% endif %}</div>\n"},
+                 "sits inside {% if %} at templates/page.html:1", id="script-after-an-if-opened-in-a-tag"),
+    pytest.param({"page.html": "<div {% include 'part.html' %}>x</div>\n", "part.html": "class=\"a\"\n"},
+                 "sits inside the <div> tag at templates/page.html:1", id="include-in-a-tag"),
+    pytest.param({"page.html": "<script {% if on %}defer{% endif %} "
+                               "src=\"{{ url_for('static', filename='js/a.js') }}\"></script>\n"},
+                 "this <script>'s tag holds Jinja control flow", id="control-flow-in-a-script-tag"),
     pytest.param({"page.html": "<script>\n{% if on %}var a = 1;{% endif %}\n</script>\n"},
                  "holds Jinja control flow", id="control-flow-in-inline"),
     pytest.param({"page.html": "<script defer src=\"{{ url_for('static', filename='js/a.js') }}\"></script>\n"},
