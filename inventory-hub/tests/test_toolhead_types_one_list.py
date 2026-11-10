@@ -70,7 +70,6 @@ import bisect
 import json
 import re
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -653,10 +652,10 @@ def _page_sources(tmp_path, monkeypatch, html: str) -> list:
     (tmp_path / "static" / "js").mkdir(parents=True)
     (tmp_path / "templates").mkdir()
     (tmp_path / "templates" / "page.html").write_text(html, encoding="utf-8")
-    here = sys.modules[__name__]
-    monkeypatch.setattr(here, "HUB", tmp_path)
-    monkeypatch.setattr(here, "JS_ROOT", tmp_path / "static" / "js")
-    monkeypatch.setattr(here, "TEMPLATES", tmp_path / "templates")
+    # frontend_sources() reads its roots from this module's globals when it runs.
+    monkeypatch.setitem(globals(), "HUB", tmp_path)
+    monkeypatch.setitem(globals(), "JS_ROOT", tmp_path / "static" / "js")
+    monkeypatch.setitem(globals(), "TEMPLATES", tmp_path / "templates")
     return list(frontend_sources())
 
 
