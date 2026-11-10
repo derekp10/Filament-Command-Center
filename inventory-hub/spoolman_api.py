@@ -226,6 +226,34 @@ def get_spool_answer(sid):
         return None, True
 
 
+def get_filament_answer(fid):
+    """`get_filament`, saying what happened (Group 53 review): get_spool_answer's
+    contract, so the two read alike.
+      (record, True)  Spoolman answered with JSON. A 404's body is a dict with no
+                      id: "answered, no such filament".
+      (None, True)    a 5xx, whatever its body, or a body that isn't JSON:
+                      "answered, unreadable".
+      (None, False)   it didn't answer (no connection, a timeout).
+    The record is the filament only when it is a dict whose `id` is `fid`: the
+    caller checks. get_filament hands back Spoolman's body whatever the status, so a
+    404's {"message": "No filament with ID 99 found."} and a 500's {"message":
+    "database is locked"} read as truthy filaments (Merge Filament went on past a
+    missing source, bulk_set counted a deleted filament "unchanged", and the
+    Prusament scan read every temp as blank and filled them all)."""
+    sm_url, _ = config_loader.get_api_urls()
+    try:
+        resp = requests.get(f"{sm_url}/api/v1/filament/{fid}", timeout=3)
+    except Exception:
+        return None, False
+    status = getattr(resp, 'status_code', None)
+    if isinstance(status, int) and status >= 500:
+        return None, True
+    try:
+        return parse_inbound_data(resp.json()), True
+    except Exception:
+        return None, True
+
+
 def get_all_spools(allow_archived=True):
     """Return every spool (optionally including archived) as parsed dicts.
     Backs the Prusament-scan matcher, which finds a spool by its stored

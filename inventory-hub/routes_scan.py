@@ -929,8 +929,25 @@ def _handle_prusament_url_scan(res):
 
     sid = matched.get('id')
     fid = (matched.get('filament') or {}).get('id')
-    # Re-fetch the filament fresh — the spool's embedded copy can be stale.
-    fil = spoolman_api.get_filament(fid) or (matched.get('filament') or {})
+    # Re-fetch the filament fresh — the spool's embedded copy can be stale, so it
+    # is never used instead. Only the filament itself counts (Group 53 review,
+    # r3-5): get_filament handed back a 5xx's JSON body as the filament, every
+    # temp read as blank, and the write a moment later overwrote all four set
+    # temps, skipping the differing-temps suggestion. Anything else writes
+    # nothing, the spool's metadata included, and answers the error the page
+    # toasts for 7 s.
+    fil, answered = spoolman_api.get_filament_answer(fid)
+    if not (isinstance(fil, dict) and fil.get('id') == fid):
+        msg = (f"Couldn't read filament #{fid} from Spoolman, so its temps weren't changed. "
+               f"Scan it again in a moment.")
+        state.logger.warning(f"Prusament scan: filament {fid} read gave no filament: "
+                             f"{str(fil)[:200] if answered else 'Spoolman did not answer'}")
+        state.add_log_entry(html.escape(f"⚠️ Prusament scan of spool #{sid}: {msg}", quote=False),
+                            "WARNING", "ffaa00")
+        return jsonify({
+            "type": "prusament_matched", "status": "error",
+            "spool_id": sid, "filament_id": fid, "msg": msg,
+        })
     fil_extra = fil.get('extra') or {}
 
     # field -> (current on filament, scanned from parser, is_native_field)
