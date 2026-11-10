@@ -2248,6 +2248,10 @@ def update_extra_field_choices(entity_type, key, new_choices):
                     return {"success": False, "msg": f"POST failed: {post_r.text}"}
             else:
                 return {"success": False, "msg": "Field key not found or doesn't support choices"}
+        # Group 53.2: a refused field-list read used to fall through to None,
+        # which neither add_choice route can read (one answered 500, one `null`).
+        return {"success": False,
+                "msg": f"Spoolman's field list answered HTTP {r.status_code}, so no choice was added."}
     except Exception as e:
         state.logger.error(f"API Error updating field choices: {e}")
         return {"success": False, "msg": str(e)}
