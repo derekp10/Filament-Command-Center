@@ -19,10 +19,16 @@ Covers POST /api/filament/<src>/merge_into/<dst>:
   - Group 53 review (D3b): a filament Spoolman has no record of is "not found"
     (404), and one it couldn't send (a 5xx, no answer) is "couldn't read"
     (502); both read nothing more and write nothing. get_filament handed back
-    Spoolman's 404 or 5xx body as if it were the filament.
+    Spoolman's 404 or 5xx body as if it were the filament. A 200 holding another
+    filament's record is "couldn't read" too (rd-2: nothing pinned the id rule).
   - Group 53 review (D2): every answer is in words, never Spoolman's address or
     raw JSON (refusal_words), "try again in a moment" only where a retry can
     help, and the Activity Log lines escape the names and Spoolman's text.
+  - Group 53 review (rd-1): hub.log keeps what came back. A filament read that
+    gives no filament leaves ONE WARNING line from get_filament_answer, with the
+    status and the start of the body, or the exception (it logged "Merge:
+    couldn't read filament 9: None"); a spool list that isn't JSON names its
+    status and body (it logged only where JSON parsing stopped).
 
 TestMergeFilament stubs the Spoolman helpers. TestMergeAgainstSpoolman runs the
 real route, the real read and write helpers and the real requests calls they
@@ -73,6 +79,16 @@ def _answer(status=200, body=None, text='', json_error=None):
     m.text = text
     m.json = MagicMock(side_effect=json_error) if json_error else MagicMock(return_value=body)
     return m
+
+
+class _Page:
+    """An answer whose body isn't JSON (a proxy's page): requests' .json() raises."""
+
+    def __init__(self, status, text):
+        self.status_code, self.ok, self.text = status, 200 <= status < 300, text
+
+    def json(self):
+        raise requests.exceptions.JSONDecodeError("Expecting value", self.text, 0)
 
 
 def _answered(*records):
@@ -404,19 +420,27 @@ def _stocked(**kw):
     return fake
 
 
-def _merge(client, fake, src=7, dst=9):
+def _merge(client, fake, src=7, dst=9, hub=None):
     """POST the merge with every Spoolman request on `fake`. Answers (response,
-    Activity Log lines as (msg, level), hub.log error lines)."""
+    Activity Log lines as (msg, level), hub.log error lines). `hub`, a list, is
+    handed every hub.log ERROR and WARNING line, as (LEVEL, text)."""
     logged = []
+    hub = [] if hub is None else hub
     with patch.object(spoolman_api.config_loader, "get_api_urls", return_value=(SM, "http://fb.test")), \
          patch.object(spoolman_api.requests, "get", side_effect=fake.get), \
          patch.object(spoolman_api.requests, "patch", side_effect=fake.patch), \
          patch.object(spoolman_api.requests, "delete", side_effect=fake.delete), \
          patch.object(state, "add_log_entry",
                       side_effect=lambda msg, *a, **k: logged.append((msg, a[0] if a else None))), \
-         patch.object(state.logger, "error") as hub_errors:
+         patch.object(state.logger, "error", side_effect=lambda msg, *a, **k: hub.append(("ERROR", str(msg)))), \
+         patch.object(state.logger, "warning", side_effect=lambda msg, *a, **k: hub.append(("WARNING", str(msg)))):
         r = client.post(f"/api/filament/{src}/merge_into/{dst}")
-    return r, logged, [str(c.args[0]) for c in hub_errors.call_args_list if c.args]
+    return r, logged, [line for level, line in hub if level == "ERROR"]
+
+
+def _about(hub, fid):
+    """The hub.log lines that name filament `fid`."""
+    return [(level, line) for level, line in hub if re.search(rf"\bfilament {fid}\b", line)]
 
 
 class TestMergeAgainstSpoolman:
@@ -494,29 +518,79 @@ class TestMergeAgainstSpoolman:
     def test_a_filament_spoolman_has_no_record_of_is_not_found_and_nothing_follows(self, client, missing, words):
         fake = _stocked()
         del fake.records["filament"][missing]     # its read answers 404 {"message": "No filament with ID …"}
-        r, logged, _errors = _merge(client, fake)
+        hub = []
+        r, logged, _errors = _merge(client, fake, hub=hub)
 
         assert r.status_code == 404
         assert r.get_json() == {"success": False, "error": words}
         assert fake.list_reads() == [] and fake.patches == [] and fake.deletes == [] and logged == []
+        # rd-1: hub.log says what came back (a 404 logged nothing at all).
+        [(level, line)] = _about(hub, missing)
+        assert level == "WARNING", hub
+        assert "HTTP 404" in line and f"No filament with ID {missing} found." in line, line
 
     @pytest.mark.parametrize("which", [7, 9])
-    @pytest.mark.parametrize("answer", [
-        _Resp(500, {"message": "database is locked"}),
-        _Resp(503, {"message": "Service Unavailable"}),
-        requests.exceptions.ReadTimeout(
+    @pytest.mark.parametrize("answer, said", [
+        (_Resp(500, {"message": "database is locked"}), ["HTTP 500", '{"message": "database is locked"}']),
+        (_Resp(503, {"message": "Service Unavailable"}), ["HTTP 503", "Service Unavailable"]),
+        (_Page(503, "<html><body>502 Bad Gateway nginx</body></html>"),
+         ["HTTP 503", "not JSON", "<html><body>502 Bad Gateway nginx</body></html>"]),
+        (requests.exceptions.ReadTimeout(
             "HTTPConnectionPool(host='spoolman.test', port=7913): Read timed out. (read timeout=3)"),
-    ], ids=["500", "503", "no answer"])
-    def test_a_filament_spoolman_couldnt_send_is_couldnt_read_and_nothing_follows(self, client, which, answer):
+         ["no answer", "ReadTimeout", "host='spoolman.test', port=7913", "Read timed out"]),
+    ], ids=["500", "503", "503 page", "no answer"])
+    def test_a_filament_spoolman_couldnt_send_is_couldnt_read_and_nothing_follows(self, client, which, answer,
+                                                                                  said):
         fake = _stocked()
         fake.canned[("GET", f"/api/v1/filament/{which}")] = answer
-        r, logged, errors = _merge(client, fake)
+        hub = []
+        r, logged, _errors = _merge(client, fake, hub=hub)
 
         assert r.status_code == 502
         assert r.get_json() == {"success": False, "error": (
             f"Couldn't read filament #{which} from Spoolman, so nothing was merged. Try again in a moment.")}
         assert fake.list_reads() == [] and fake.patches == [] and fake.deletes == [] and logged == []
-        assert any(f"filament {which}" in e for e in errors), errors
+        # rd-1: ONE hub.log line about the read, get_filament_answer's, saying what
+        # came back. The merge logged its own at ERROR: "Merge: couldn't read
+        # filament 9: None", or "... 7: Spoolman did not answer".
+        [(level, line)] = _about(hub, which)
+        assert level == "WARNING", hub
+        for words in said:
+            assert words in line, (words, line)
+        assert "None" not in line
+
+    @pytest.mark.parametrize("which", [7, 9], ids=["source", "target"])
+    def test_a_record_of_another_filament_is_couldnt_read_and_nothing_follows(self, client, which):
+        """rd-2: a read is the filament only when its id is the one asked for.
+        Spoolman (or a proxy or cache before it) answering 200 with filament #8's
+        record: read as the source, the merge re-parented #7's spools and deleted
+        #7 on #8's record; read as the target, it re-parented them onto a filament
+        it never read."""
+        fake = _stocked()
+        fake.canned[("GET", f"/api/v1/filament/{which}")] = _Resp(
+            200, {"id": 8, "name": "PLA Other", "material": "PLA"})
+        r, logged, _errors = _merge(client, fake)
+
+        assert r.status_code == 502
+        assert r.get_json() == {"success": False, "error": (
+            f"Couldn't read filament #{which} from Spoolman, so nothing was merged. Try again in a moment.")}
+        assert fake.list_reads() == [] and fake.patches == [] and fake.deletes == [] and logged == []
+        assert [fake.filament_of(s) for s in (101, 102, 200, 300)] == [7, 7, 9, 12]
+        assert set(fake.records["filament"]) == {7, 9}
+
+    def test_a_spool_list_that_isnt_json_names_its_status_and_body_in_hub_log(self, client):
+        """rd-1: hub.log keeps what came back. It logged only where JSON parsing
+        stopped ("its answer isn't JSON (Expecting value: line 1 column 1 (char
+        0))"), so a proxy's login page and a list cut off part-way read alike."""
+        fake = _stocked()
+        fake.canned[("GET", LIST_PATH)] = _Page(200, "<html>proxy login page</html>")
+        r, logged, errors = _merge(client, fake)
+
+        assert r.status_code == 502
+        assert r.get_json() == {"success": False, "error": UNREAD_LIST}
+        assert fake.patches == [] and fake.deletes == [] and logged == []
+        [line] = [e for e in errors if "enumerate spools for filament 7" in e]
+        assert "HTTP 200" in line and "<html>proxy login page</html>" in line, line
 
     # --- D2: every answer in words; hub.log and the Activity Log keep the whole text
 

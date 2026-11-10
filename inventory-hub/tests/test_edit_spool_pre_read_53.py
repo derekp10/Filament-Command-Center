@@ -19,6 +19,8 @@ Anything else writes nothing, and the answer says in words which it was: "There
 is no Spool 57 in Spoolman." (asked again through get_spool_answer, only when
 Spoolman answered something that isn't the spool) or "Couldn't read Spool 57
 from Spoolman before the edit, so nothing was saved. Try again in a moment."
+Another spool's record is no spool either (Group 53 review, rd-2: nothing pinned
+the id half of the rule).
 
 The real routes and the real read and write helpers; only Spoolman's HTTP
 answers are faked (spoolman_extra_fake.SpoolmanHTTPFake).
@@ -192,6 +194,30 @@ def test_a_5xx_body_never_writes_the_spool_unassigned_before_its_move(client, wi
     assert fake.patches == [], fake.patches
     assert moves == []
     assert fake.records["spool"][57]["location"] == "CR-SHELF"
+
+
+@pytest.mark.parametrize("form", [{"comment": "hi"}, {"comment": "hi", "location": "CR-SHELF"}],
+                         ids=["a comment", "a comment and the Location"])
+def test_a_record_of_another_spool_is_not_the_spool_and_nothing_is_written(client, wire, monkeypatch, form):
+    """rd-2: the record is the spool only when its id is the one asked for.
+    Spoolman (or a proxy or cache before it) answering 200 with Spool 58's record:
+    diffed against #58, the form's comment was written to #57, and the form's
+    Location (where #57 is) differed from #58's, so the edit was a move whose
+    first write filed #57 where #58 is."""
+    fake = wire(_stocked())
+    other = {"id": 58, "location": "BIN-9", "comment": "", "filament": {"id": 4}, "extra": {},
+             "initial_weight": 1000.0, "used_weight": 900.0, "archived": False}
+    fake.canned[SPOOL_PATH] = [_Resp(200, other), _Resp(200, other)]
+    moves = []
+    monkeypatch.setattr(routes_inventory, "_wizard_move",
+                        lambda *a, **k: moves.append(a) or (True, {"status": "success"}, None))
+    body = _edit(client, form)
+
+    assert body == {"success": False, "msg": f"Failed to update Spool 57: {COULDNT_READ}", "error": COULDNT_READ}
+    assert fake.patches == [], fake.patches
+    assert moves == []
+    assert {k: fake.records["spool"][57][k] for k in ("comment", "location")} == {
+        "comment": "", "location": "CR-SHELF"}
 
 
 @pytest.mark.parametrize("sid", [57, "57"], ids=["number", "text"])

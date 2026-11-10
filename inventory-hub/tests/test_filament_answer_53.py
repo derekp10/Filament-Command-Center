@@ -11,6 +11,12 @@ with get_spool_answer's contract:
   (None, False)   no answer (no connection, a timeout).
 The record is the filament only when it is a dict whose id is the one asked for.
 
+Every answer that isn't that record leaves ONE hub.log WARNING line from the
+helper itself, saying what came back (rd-1): the status and the start of the
+body, or the exception's class and text (requests' words name Spoolman's
+address). The callers used to log it, after the helper had dropped all of that:
+"Merge: couldn't read filament 9: None". Now they log nothing more about the read.
+
 Besides Merge Filament (test_filament_merge.py), two sites read through it:
   - bulk_set (/api/filament_attributes/bulk_set): a deleted filament was counted
     "unchanged" with success: true, and an add over it failed with the pre-merge
@@ -23,6 +29,8 @@ Besides Merge Filament (test_filament_merge.py), two sites read through it:
     differing-temps suggestion was skipped). Now a read that isn't the filament
     writes nothing (not even the spool's metadata) and answers the error the page
     toasts for 7 s, with a WARNING Activity Log line.
+At both, a 200 holding ANOTHER filament's record is no filament either (rd-2:
+nothing pinned the id half of the rule).
 
 The real helper, the real routes and the real write helpers, against the repo's
 Spoolman fake (spoolman_extra_fake.SpoolmanHTTPFake: a missing record answers
@@ -33,6 +41,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import sys
 from urllib.parse import urlsplit
 
@@ -81,6 +90,13 @@ class _NotJson:
         raise requests.exceptions.JSONDecodeError("Expecting value", self.text, 0)
 
 
+class _Page(_NotJson):
+    """An answer of any status whose body isn't JSON (a proxy's error page)."""
+
+    def __init__(self, status, text):
+        self.status_code, self.ok, self.text = status, 200 <= status < 300, text
+
+
 def _clear_caches():
     for name in ("_FIELD_SCHEMA_CACHE", "_SPOOLMAN_VERSION_CACHE"):
         getattr(spoolman_api, name, {}).clear()
@@ -111,6 +127,22 @@ def logs(monkeypatch):
     calls = []
     monkeypatch.setattr(state, "add_log_entry", lambda msg, *a, **k: calls.append((msg, a[0] if a else None)))
     return calls
+
+
+@pytest.fixture
+def hub(monkeypatch):
+    """Every line state.logger (hub.log) is handed, as (LEVEL, text). With `logs`
+    on, the Activity Log's own lines don't reach it."""
+    lines = []
+    for level in ("debug", "info", "warning", "error", "critical", "exception"):
+        monkeypatch.setattr(state.logger, level,
+                            lambda msg, *a, _lv=level.upper(), **k: lines.append((_lv, str(msg))))
+    return lines
+
+
+def _about(hub, fid):
+    """The hub.log lines that name filament `fid` (not filament 99 for 9)."""
+    return [(level, line) for level, line in hub if re.search(rf"\bfilament {fid}\b", line)]
 
 
 @pytest.fixture
@@ -183,6 +215,64 @@ def test_the_read_is_one_get_of_the_filament_with_a_timeout(monkeypatch):
     monkeypatch.setattr(spoolman_api.requests, "get", get)
     assert spoolman_api.get_filament_answer(7) == ({"id": 7}, True)
     assert len(seen) == 1 and seen[0][0] == f"{SM}/api/v1/filament/7" and seen[0][1]
+
+
+# ---------------------------------------------------------------------------
+# rd-1: a read that gives no filament says in hub.log what came back
+# ---------------------------------------------------------------------------
+
+REFUSED_READS = [
+    (_Resp(500, {"message": "database is locked"}), ["HTTP 500", '{"message": "database is locked"}']),
+    (_Resp(503, {"message": "Service Unavailable"}), ["HTTP 503", "Service Unavailable"]),
+    (_Page(503, "<html><body>502 Bad Gateway nginx</body></html>"),
+     ["HTTP 503", "not JSON", "<html><body>502 Bad Gateway nginx</body></html>"]),
+    (_NotJson(), ["HTTP 200", "not JSON", "<html>Bad Gateway</html>"]),
+    (_Resp(404, {"message": "No filament with ID 7 found."}), ["HTTP 404", "No filament with ID 7 found."]),
+    (_Resp(200, {"id": 8, "name": "PLA Other"}), ["HTTP 200", '"id": 8', "PLA Other"]),
+    (_Resp(200, ["not", "a", "record"]), ["HTTP 200", '["not", "a", "record"]']),
+    (TIMEOUT, ["no answer", "ReadTimeout", "host='spoolman.test', port=7913", "Read timed out"]),
+    (requests.exceptions.ConnectionError(
+        "HTTPConnectionPool(host='spoolman.test', port=7913): Max retries exceeded with url: /api/v1/filament/7"),
+     ["no answer", "ConnectionError", "spoolman.test", "Max retries exceeded"]),
+]
+REFUSED_IDS = ["500", "503", "503 page", "200 not JSON", "404", "another record", "a list", "timeout", "down"]
+
+
+@pytest.mark.parametrize("answer, said", REFUSED_READS, ids=REFUSED_IDS)
+def test_a_read_that_gives_no_filament_leaves_one_hub_log_line_saying_what_came_back(wire, hub, answer, said):
+    """The status and the start of the body, or the exception's class and text:
+    the helper used to drop them all, and its callers logged "None"."""
+    fake = wire(_Spoolman())
+    fake.add("filament", 7, name="PLA Old")
+    fake.canned["/api/v1/filament/7"] = [answer]
+    rec, _answered = spoolman_api.get_filament_answer(7)
+
+    assert not (isinstance(rec, dict) and rec.get("id") == 7)
+    [(level, line)] = hub
+    assert level == "WARNING"
+    assert re.search(r"\bfilament 7\b", line), line
+    for words in said:
+        assert words in line, (words, line)
+    assert "None" not in line
+
+
+def test_a_read_that_gives_the_filament_leaves_no_hub_log_line(wire, hub):
+    fake = wire(_Spoolman())
+    fake.add("filament", 7, name="PLA Old")
+    rec, answered = spoolman_api.get_filament_answer(7)
+    assert answered is True and rec["id"] == 7
+    assert hub == []
+
+
+def test_a_long_body_is_logged_on_one_line_cut_to_its_first_200_characters(wire, hub):
+    page = "<html>\n<body>\n" + "A" * 150 + "\n" + "B" * 300 + "\n</body></html>"
+    fake = wire(_Spoolman())
+    fake.canned["/api/v1/filament/7"] = [_Page(502, page)]
+    spoolman_api.get_filament_answer(7)
+
+    [(_level, line)] = hub
+    assert "\n" not in line and "<html> <body> " + "A" * 150 + " " + "B" * 30 in line, line
+    assert "B" * 200 not in line and "</body>" not in line
 
 
 # ---------------------------------------------------------------------------
@@ -266,6 +356,41 @@ def test_a_filament_spoolman_has_is_still_set(client, wire, logs):
     assert _attrs(fake, 5) == ["Matte", "Silk"]
 
 
+@pytest.mark.parametrize("op", [{"remove": ["Matte"]}, {"add": ["Silk"]}], ids=["remove", "add"])
+def test_a_record_of_another_filament_is_couldnt_read_and_nothing_is_written(client, wire, logs, op):
+    """rd-2: the read is the filament only when its id is the one asked for.
+    Spoolman (or a proxy before it) answering 200 with filament #6's record: read
+    as #5, a remove counted #5 "unchanged" (#6 has no Matte), and an add wrote
+    #6's attributes, plus Silk, over #5's own."""
+    fake = wire(_attrs_fake())
+    fake.canned["/api/v1/filament/5"] = [_Resp(200, {
+        "id": 6, "name": "PETG", "material": "PETG", "extra": {"filament_attributes": json.dumps(["Glow"])}})]
+    body = _bulk(client, dict({"filament_ids": [5]}, **op))
+
+    assert body == {"success": False, "updated": 0, "unchanged": 0,
+                    "errors": [{"id": 5, "msg": NOT_READ}]}
+    assert fake.patches == []
+    assert _attrs(fake, 5) == ["Matte"]
+
+
+@pytest.mark.parametrize("answer, said", REFUSED_READS, ids=REFUSED_IDS)
+def test_bulk_set_logs_each_refused_read_once_saying_what_came_back(client, wire, logs, hub, answer, said):
+    """rd-1: bulk_set logged "bulk_set: couldn't read filament 5: None" for a 5xx
+    (and nothing at all for a 404). The helper's line is now the only hub.log line
+    about the read."""
+    fake = wire(_attrs_fake())
+    fake.canned["/api/v1/filament/5"] = [answer]
+    body = _bulk(client, {"filament_ids": [5], "remove": ["Matte"]})
+
+    assert body["success"] is False and body["errors"][0]["id"] == 5, body
+    assert fake.patches == []
+    [(level, line)] = _about(hub, 5)
+    assert level == "WARNING"
+    for words in said:
+        assert words in line, (words, line)
+    assert "None" not in line
+
+
 # ---------------------------------------------------------------------------
 # D6: the Prusament link scan over a filament read that isn't the filament
 # ---------------------------------------------------------------------------
@@ -329,6 +454,45 @@ def test_a_filament_read_that_isnt_the_filament_writes_nothing_and_says_so(clien
     warnings = [msg for msg, level in logs if level == "WARNING"]
     assert len(warnings) == 1 and "spool #50" in warnings[0] and "filament #7" in warnings[0], logs
     assert not [msg for msg, level in logs if level == "SUCCESS"]
+
+
+def test_a_filament_read_of_another_record_writes_nothing_and_says_so(client, wire, logs, monkeypatch):
+    """rd-2: a 200 holding ANOTHER filament's record is no filament either. Read as
+    #7, its blank temps made the scan fill all four of #7's set temps with
+    prusament.com's."""
+    fake = wire(_prusament_fake())
+    fake.canned["/api/v1/filament/7"] = [_Resp(200, {
+        "id": 8, "name": "Other PLA", "material": "PLA",
+        "settings_extruder_temp": None, "settings_bed_temp": None, "extra": {}})]
+    _scanned_page(monkeypatch)
+    res = _scan(client)
+
+    assert res == {"type": "prusament_matched", "status": "error",
+                   "spool_id": 50, "filament_id": 7, "msg": NOT_READ_SCAN}
+    assert fake.patches == []
+    fil = fake.records["filament"][7]
+    assert {k: fil[k] for k in SET_TEMPS} == SET_TEMPS and fil["extra"] == SET_EXTRA
+
+
+@pytest.mark.parametrize("answer, said", REFUSED_READS, ids=REFUSED_IDS)
+def test_the_prusament_scan_logs_a_refused_read_once_saying_what_came_back(client, wire, logs, hub, monkeypatch,
+                                                                           answer, said):
+    """rd-1: the scan logged "Prusament scan: filament 7 read gave no filament:
+    None" for a 5xx. The helper's line is now the only hub.log line about the
+    read, and the Activity Log's one WARNING line says what the scan did."""
+    fake = wire(_prusament_fake())
+    fake.canned["/api/v1/filament/7"] = [answer]
+    _scanned_page(monkeypatch)
+    res = _scan(client)
+
+    assert res["status"] == "error" and res["msg"] == NOT_READ_SCAN, res
+    assert fake.patches == []
+    [(level, line)] = _about(hub, 7)
+    assert level == "WARNING"
+    for words in said:
+        assert words in line, (words, line)
+    assert "None" not in line
+    assert len([msg for msg, level in logs if level == "WARNING"]) == 1, logs
 
 
 def test_a_filament_read_that_is_the_filament_fills_its_blank_temps(client, wire, logs, monkeypatch):
