@@ -226,6 +226,72 @@ def get_spool_answer(sid):
         return None, True
 
 
+def get_filament_answer(fid):
+    """`get_filament`, saying what happened (Group 53 review): get_spool_answer's
+    contract, so the two read alike.
+      (record, True)  Spoolman answered with JSON. A 404's body is a dict with no
+                      id: "answered, no such filament".
+      (None, True)    a 5xx, whatever its body, or a body that isn't JSON:
+                      "answered, unreadable".
+      (None, False)   it didn't answer (no connection, a timeout).
+    The record is the filament only when it is a dict whose `id` is `fid`: the
+    caller checks. get_filament hands back Spoolman's body whatever the status, so a
+    404's {"message": "No filament with ID 99 found."} and a 500's {"message":
+    "database is locked"} read as truthy filaments (Merge Filament went on past a
+    missing source, bulk_set counted a deleted filament "unchanged", and the
+    Prusament scan read every temp as blank and filled them all).
+
+    Every answer that isn't filament `fid`'s record (by that same test, a 404
+    included) leaves ONE hub.log WARNING line saying what came back (Group 53
+    review, rd-1): the status and the start of the body (_log_body), or, when
+    Spoolman didn't answer, the address asked and the exception's class and text
+    (requests' words name the address for a timeout or a refused connection, but
+    not for a connection Spoolman dropped). Only this helper sees those: its
+    callers logged "couldn't read filament 9: None". A caller logs nothing more
+    about the read."""
+    sm_url, _ = config_loader.get_api_urls()
+    url = f"{sm_url}/api/v1/filament/{fid}"
+    try:
+        resp = requests.get(url, timeout=3)
+    except Exception as e:
+        _log_no_filament(fid, f"no answer from {url} (" + " ".join(f"{type(e).__name__}: {e}".split()) + ")")
+        return None, False
+    status = getattr(resp, 'status_code', None)
+    if isinstance(status, int) and status >= 500:
+        _log_no_filament(fid, f"HTTP {status}: {_log_body(resp)}")
+        return None, True
+    try:
+        rec = parse_inbound_data(resp.json())
+    except Exception:
+        _log_no_filament(fid, f"HTTP {status}, not JSON: {_log_body(resp)}")
+        return None, True
+    if not (isinstance(rec, dict) and rec.get('id') == fid):
+        _log_no_filament(fid, f"HTTP {status}: {_log_body(resp)}")
+    return rec, True
+
+
+# How much of an answer's body a read's hub.log line keeps (Group 53 review, rd-1).
+_READ_LOG_BODY_MAX = 200
+
+
+def _log_body(resp):
+    """The start of `resp`'s body for a hub.log line: on one line, its first
+    _READ_LOG_BODY_MAX characters ("…" after a cut), "(empty body)" for none.
+    Never raises: the read it describes has already given up."""
+    try:
+        text = " ".join(str(getattr(resp, 'text', '') or '').split())
+    except Exception as e:  # a body requests couldn't decode
+        return f"(a body FCC couldn't decode: {type(e).__name__})"
+    if not text:
+        return "(empty body)"
+    return text if len(text) <= _READ_LOG_BODY_MAX else text[:_READ_LOG_BODY_MAX] + "…"
+
+
+def _log_no_filament(fid, what):
+    """get_filament_answer's one hub.log line for a read that gave no filament."""
+    state.logger.warning(f"Read of filament {fid} from Spoolman gave no filament: {what}")
+
+
 def get_all_spools(allow_archived=True):
     """Return every spool (optionally including archived) as parsed dicts.
     Backs the Prusament-scan matcher, which finds a spool by its stored
@@ -961,7 +1027,10 @@ def update_spool_or_raise(sid, data):
     return result
 
 def create_spool(data):
-    """Creates a new spool via POST to Spoolman."""
+    """Creates a new spool via POST to Spoolman. Sets LAST_SPOOLMAN_ERROR on a
+    refusal and clears it on success, as the other writers do (Group 53.2: it
+    never did, so a caller read an earlier write's refusal as this one's)."""
+    global LAST_SPOOLMAN_ERROR
     sm_url, _ = config_loader.get_api_urls()
     try:
         if 'location' in data and isinstance(data['location'], str):
@@ -977,10 +1046,13 @@ def create_spool(data):
         clean_data = sanitize_outbound_data(data)
         r = requests.post(f"{sm_url}/api/v1/spool", json=clean_data, timeout=5)
         if r.ok:
+            LAST_SPOOLMAN_ERROR = None
             return r.json()
         state.logger.error(f"Failed to create spool: {r.status_code} - {r.text}")
+        LAST_SPOOLMAN_ERROR = f"HTTP {r.status_code}: {r.text[:400]}"
     except Exception as e:
         state.logger.error(f"API Error creating spool: {e}")
+        LAST_SPOOLMAN_ERROR = str(e)[:400]
     return None
 
 # Group 52.2: the pre-merge extras read gets a second try after a short pause.
@@ -1531,16 +1603,22 @@ def update_filament_or_raise(fid, data):
 
 
 def create_filament(data):
-    """Creates a new filament via POST to Spoolman."""
+    """Creates a new filament via POST to Spoolman. Sets LAST_SPOOLMAN_ERROR on
+    a refusal and clears it on success (Group 53.2): /api/create_filament
+    answers a refusal with it (28.B4), and it used to hold an earlier write's."""
+    global LAST_SPOOLMAN_ERROR
     sm_url, _ = config_loader.get_api_urls()
     sanitized = sanitize_outbound_data(data)
     try:
         r = requests.post(f"{sm_url}/api/v1/filament", json=sanitized, timeout=5)
         if r.ok:
+            LAST_SPOOLMAN_ERROR = None
             return r.json()
         state.logger.error(f"Failed to create filament: {r.status_code} - {r.text}")
+        LAST_SPOOLMAN_ERROR = f"HTTP {r.status_code}: {r.text[:400]}"
     except Exception as e:
         state.logger.error(f"API Error creating filament: {e}")
+        LAST_SPOOLMAN_ERROR = str(e)[:400]
     return None
 
 
@@ -2248,6 +2326,10 @@ def update_extra_field_choices(entity_type, key, new_choices):
                     return {"success": False, "msg": f"POST failed: {post_r.text}"}
             else:
                 return {"success": False, "msg": "Field key not found or doesn't support choices"}
+        # Group 53.2: a refused field-list read used to fall through to None,
+        # which neither add_choice route can read (one answered 500, one `null`).
+        return {"success": False,
+                "msg": f"Spoolman's field list answered HTTP {r.status_code}, so no choice was added."}
     except Exception as e:
         state.logger.error(f"API Error updating field choices: {e}")
         return {"success": False, "msg": str(e)}

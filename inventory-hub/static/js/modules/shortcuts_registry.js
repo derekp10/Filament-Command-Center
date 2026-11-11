@@ -342,7 +342,8 @@
     });
 
     // Drain anything registered BEFORE this module loaded. Modules above this
-    // one in scripts.html (inv_cmd, inv_wizard, inv_details, inv_loc_mgr, …)
+    // one in scripts.html (inv_cmd, inv_wizard, inv_stock, inv_loose and
+    // inv_audit_find in 2026-11; tests/test_load_order_canary_js.py names them)
     // register at eval time, and their `if (window.registerShortcut)` guard
     // used to swallow the call entirely — the shortcut still worked, it was
     // just invisible in the `?` overlay. The shim at the top of scripts.html

@@ -19,8 +19,11 @@ false-green. These tests are the offline tripwire.
 Mocking layer: the handlers do `import requests as _req` FUNCTION-LOCALLY,
 which resolves to the singleton `requests` module — so patching
 requests.get/delete/post/patch covers every wire call. bulk_set is the
-exception: it goes through spoolman_api.get_filament/update_filament, so
-those are patched at the spoolman_api layer instead.
+exception: it goes through spoolman_api.get_filament_answer/update_filament,
+so those are patched at the spoolman_api layer instead. (It read through
+get_filament until the Group 53 review, r3-4: a missing filament is stubbed as
+Spoolman answers it, its 404 body, which get_filament handed back as a
+filament; the unreadable branch is pinned in test_filament_answer_53.py.)
 """
 from __future__ import annotations
 
@@ -239,12 +242,18 @@ def test_bulk_set_rejects_noop_payload(client):
     assert body["msg"].startswith("Nothing to do")
 
 
+def _filament_answer(fils):
+    """spoolman_api.get_filament_answer over these records: Spoolman's own answer
+    for one it has no record of is its 404 body, a dict with no id."""
+    return lambda fid: (fils.get(fid) or {"message": f"No filament with ID {fid} found."}, True)
+
+
 def test_bulk_set_per_id_error_surface_and_warning_log(client, monkeypatch):
     """The per-id error taxonomy: non-integer id -> 'not an integer id',
-    get_filament None -> 'filament not found', update_filament None ->
-    LAST_SPOOLMAN_ERROR propagated verbatim into errors[]. Partial success
-    still counts `updated`, and errors escalate the summary log to
-    WARNING/ffaa00.
+    a filament Spoolman has no record of -> 'filament not found',
+    update_filament None -> LAST_SPOOLMAN_ERROR propagated verbatim into
+    errors[]. Partial success still counts `updated`, and errors escalate the
+    summary log to WARNING/ffaa00.
     # 29.A3: partial success (>=1 id processed) keeps top-level success:true;
     # only the all-errored case flips to false — see
     # test_bulk_set_all_errored_reports_success_false below."""
@@ -252,8 +261,7 @@ def test_bulk_set_per_id_error_surface_and_warning_log(client, monkeypatch):
         5: {"id": 5, "extra": {"filament_attributes": '["Old"]'}},
         7: {"id": 7, "extra": {}},
     }
-    monkeypatch.setattr(app_module.spoolman_api, "get_filament",
-                        lambda fid: fils.get(fid))
+    monkeypatch.setattr(app_module.spoolman_api, "get_filament_answer", _filament_answer(fils))
     update_calls = []
 
     def fake_update(fid, data):
@@ -289,7 +297,7 @@ def test_bulk_set_all_errored_reports_success_false(client, monkeypatch):
     the top-level `success` is now False (was True), so a caller reading only
     `success` can't mistake a total failure for a win. Partial success (>=1
     processed) still reports True (pinned above)."""
-    monkeypatch.setattr(app_module.spoolman_api, "get_filament", lambda fid: None)
+    monkeypatch.setattr(app_module.spoolman_api, "get_filament_answer", _filament_answer({}))
     _capture_logs(monkeypatch)
 
     r = client.post("/api/filament_attributes/bulk_set",
@@ -308,8 +316,8 @@ def test_bulk_set_all_errored_reports_success_false(client, monkeypatch):
 def test_bulk_set_null_last_error_falls_back_to_unknown(client, monkeypatch):
     """update_filament None while LAST_SPOOLMAN_ERROR is unset -> the per-id
     msg falls back to 'unknown error' (the `or` guard)."""
-    monkeypatch.setattr(app_module.spoolman_api, "get_filament",
-                        lambda fid: {"id": fid, "extra": {}})
+    monkeypatch.setattr(app_module.spoolman_api, "get_filament_answer",
+                        lambda fid: ({"id": fid, "extra": {}}, True))
     monkeypatch.setattr(app_module.spoolman_api, "update_filament",
                         lambda fid, data: None)
     monkeypatch.setattr(app_module.spoolman_api, "LAST_SPOOLMAN_ERROR", None)
@@ -329,8 +337,7 @@ def test_bulk_set_partial_success_counts_and_merge_order(client, monkeypatch):
         1: {"id": 1, "extra": {"filament_attributes": '["Silk", "Matte"]'}},
         2: {"id": 2, "extra": {"filament_attributes": '["Zeta", "Silk"]'}},
     }
-    monkeypatch.setattr(app_module.spoolman_api, "get_filament",
-                        lambda fid: fils.get(fid))
+    monkeypatch.setattr(app_module.spoolman_api, "get_filament_answer", _filament_answer(fils))
     update_calls = []
 
     def fake_update(fid, data):

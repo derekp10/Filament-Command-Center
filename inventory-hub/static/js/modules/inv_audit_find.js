@@ -66,7 +66,6 @@ console.log("🚀 Loaded Module: AUDIT FIND");
     const DOUBLE_PRESS_MS = 700;
     const DOUBLE_PRESS_SLOP_PX = { mouse: 16, other: 40 };
     const HINT = 'Type a name, colour, brand or number.';
-    const TOOLHEAD_TYPES = ['Tool Head', 'MMU Slot', 'No MMU Direct Load'];
     let _current = null;
     let _captureOn = false;
 
@@ -277,7 +276,7 @@ ${P} .fcc-find-foot { color:#ccc; font-size:var(--fcc-fs-small); margin-top:8px;
         const st = (typeof state !== 'undefined' && state) ? state : null;
         const rows = st && Array.isArray(st.allLocations) ? st.allLocations : [];
         const row = rows.find((l) => l && String(l.LocationID).toUpperCase() === want);
-        if (row) return TOOLHEAD_TYPES.includes(row.Type);
+        if (row) return window.isToolheadType(row.Type);
         const map = st && st.printerMap && typeof st.printerMap === 'object' ? st.printerMap : {};
         return Object.values(map).some((heads) => Array.isArray(heads)
             && heads.some((h) => h && String(h.location_id).toUpperCase() === want));

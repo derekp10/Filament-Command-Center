@@ -1105,6 +1105,42 @@ def _archived_off_note(sid, was, rec=None):
     return f"#{sid} is archived ({_archived_why(rec)}), so it was taken off {was}: it is Unassigned."
 
 
+def _is_spool_record(rec, spool_id):
+    """True when `rec` is Spool `spool_id`'s own record (Group 53 review, r3-3): a
+    dict whose id is the spool's, the id sent as a number or as text. get_spool
+    hands back Spoolman's body whatever the status, so a 404's or a 5xx's JSON
+    body is a truthy dict with no id. Read as the spool, Edit Spool diffed the form
+    against it, every field came out dirty and was written, and a Location in the
+    form was a move whose first write named where the body said the spool was:
+    '' (Unassigned)."""
+    if not isinstance(rec, dict) or isinstance(rec.get('id'), bool):
+        return False
+    try:
+        return int(rec.get('id')) == int(spool_id)
+    except (TypeError, ValueError):
+        return False
+
+
+def _pre_edit_read_refusal(spool_id, first):
+    """Why Edit Spool's pre-edit read gave no spool, in words a person reads
+    (Group 53 review, r3-3). Never LAST_SPOOLMAN_ERROR: get_spool doesn't set it,
+    so it held an earlier write's refusal (since Group 53.2 a refused filament
+    create's too), shown as the reason this edit failed.
+
+    get_spool answers None when Spoolman didn't answer or sent no JSON, and
+    Spoolman's own body otherwise, whatever the status: a 404's {"message": "No
+    spool with ID 57 found."} and a 500's {"message": "database is locked"}
+    alike. Only that second kind is asked again, through get_spool_answer, which
+    says whether Spoolman answered "no such spool" (a dict with no id). A read
+    with no answer isn't repeated: the edit has already waited for it."""
+    if isinstance(first, dict):
+        rec, answered = spoolman_api.get_spool_answer(spool_id)
+        if answered and isinstance(rec, dict) and rec.get('id') is None:
+            return f"There is no Spool {spool_id} in Spoolman."
+    return (f"Couldn't read Spool {spool_id} from Spoolman before the edit, so nothing was saved. "
+            f"Try again in a moment.")
+
+
 @app.route('/api/edit_spool_wizard', methods=['POST'])
 def api_edit_spool_wizard():
     """Endpoint to handle natively editing Filaments and Spools from the Wizard Edit UI.
@@ -1167,7 +1203,7 @@ def api_edit_spool_wizard():
         if spool_data:
             # Prevent 500 errors by only passing actual changes to Spoolman
             original_spool = spoolman_api.get_spool(spool_id)
-            if original_spool:
+            if _is_spool_record(original_spool, spool_id):
                 dirty_spool_data = {}
                 for k, v in spool_data.items():
                     if k == 'location':
@@ -1225,11 +1261,13 @@ def api_edit_spool_wizard():
                 # / physical_source verbatim and reopen the Item-4 slot-clobber
                 # window (the April-outage class the write-surface conventions
                 # exist to prevent). Fail closed and surface the error.
-                err = spoolman_api.LAST_SPOOLMAN_ERROR or (
-                    f"Could not read Spool {spool_id} before edit")
+                # Group 53 review (r3-3): in words of its own, never
+                # LAST_SPOOLMAN_ERROR, which get_spool doesn't set (it showed an
+                # earlier write's refusal as this edit's reason).
+                err = _pre_edit_read_refusal(spool_id, original_spool)
                 state.logger.warning(
-                    f"edit_spool_wizard: pre-edit get_spool({spool_id}) returned "
-                    f"None; refusing to write a raw-payload PATCH. {err}")
+                    f"edit_spool_wizard: pre-edit get_spool({spool_id}) gave no spool "
+                    f"({str(original_spool)[:200]}); refusing to write a raw-payload PATCH. {err}")
                 return jsonify({
                     "success": False,
                     "msg": f"Failed to update Spool {spool_id}: {err}",

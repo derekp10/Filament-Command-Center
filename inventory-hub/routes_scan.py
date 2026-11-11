@@ -929,8 +929,24 @@ def _handle_prusament_url_scan(res):
 
     sid = matched.get('id')
     fid = (matched.get('filament') or {}).get('id')
-    # Re-fetch the filament fresh — the spool's embedded copy can be stale.
-    fil = spoolman_api.get_filament(fid) or (matched.get('filament') or {})
+    # Re-fetch the filament fresh — the spool's embedded copy can be stale, so it
+    # is never used instead. Only the filament itself counts (Group 53 review,
+    # r3-5): get_filament handed back a 5xx's JSON body as the filament, every
+    # temp read as blank, and the write a moment later overwrote all four set
+    # temps, skipping the differing-temps suggestion. Anything else writes
+    # nothing, the spool's metadata included, and answers the error the page
+    # toasts for 7 s. hub.log has get_filament_answer's line saying what came
+    # back (rd-1); the Activity Log line says what the scan did.
+    fil, _answered = spoolman_api.get_filament_answer(fid)
+    if not (isinstance(fil, dict) and fil.get('id') == fid):
+        msg = (f"Couldn't read filament #{fid} from Spoolman, so its temps weren't changed. "
+               f"Scan it again in a moment.")
+        state.add_log_entry(html.escape(f"⚠️ Prusament scan of spool #{sid}: {msg}", quote=False),
+                            "WARNING", "ffaa00")
+        return jsonify({
+            "type": "prusament_matched", "status": "error",
+            "spool_id": sid, "filament_id": fid, "msg": msg,
+        })
     fil_extra = fil.get('extra') or {}
 
     # field -> (current on filament, scanned from parser, is_native_field)
@@ -1564,8 +1580,17 @@ def api_identify_scan():
         # L271 Phase 3: "Printer" is a valid slot target — a dual-role printer
         # like the Core One IS its own single deploy slot (Type:"Printer",
         # Max Spools "1"). Without this, LOC:CORE1:SLOT:1 scans would 400.
-        container_types = {'Dryer Box', 'MMU Slot', 'Tool Head', 'No MMU Direct Load', 'Printer'}
-        if not tgt_info or tgt_info.get('Type') not in container_types:
+        # Group 53 review (rb-6): the Types are locations_db's, read as the scan
+        # runs (a copy kept here refused a head Type added to TOOLHEAD_TYPES). The
+        # row's Type is compared as the row holds it, untrimmed, as the move engine
+        # compares it (logic._holds_one_spool, its dryer branch): a padded Type is
+        # refused here rather than reaching an engine that would misread it, e.g.
+        # file a spool on a padded head row as a plain place without unloading the
+        # one on it. One trimmed Type read for every door is a follow-up.
+        container_types = locations_db.TOOLHEAD_TYPES | {locations_db.DRYER_BOX_TYPE,
+                                                         locations_db.PRINTER_ROW_TYPE}
+        tgt_type = tgt_info.get('Type') if tgt_info else None
+        if not tgt_info or tgt_type not in container_types:
             found_type = tgt_info.get('Type') if tgt_info else 'missing'
             state.add_log_entry(
                 f"❌ Slot scan target <b>{target}</b> invalid (type={found_type}) — scan dropped",
@@ -1642,9 +1667,11 @@ def api_identify_scan():
         # box's slot then goes as `picked_slot`, filled only while it is still
         # free, never unseating a spool filed there since the tile was drawn. A
         # blind scan of a slot's label sends nothing: an explicit slot, as
-        # always. A single-slot box keeps its own slot-1 rule either way.
+        # always. A single-slot box keeps its own slot-1 rule either way. The
+        # Type as the check above read it, as the row holds it (untrimmed): a
+        # padded box was refused there and never gets here.
         shown_empty = ((request.json or {}).get('shown_empty') is True
-                       and tgt_info.get('Type') == locations_db.DRYER_BOX_TYPE and max_slots > 1)
+                       and tgt_type == locations_db.DRYER_BOX_TYPE and max_slots > 1)
         slot_kw = {'picked_slot': slot} if shown_empty else {'target_slot': slot}
         # Slot-QR scans pass the caller's confirm through: the heads whose
         # warning the user saw (Group 39.1). Frontend slot-QR paths pre-probe

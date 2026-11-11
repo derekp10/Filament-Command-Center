@@ -3125,7 +3125,7 @@ const _ejectModeWarn = (msg) => {
 };
 const _isSingleHeadRow = (row, id) => {
     if (!row) return false;
-    if (['Tool Head', 'MMU Slot', 'No MMU Direct Load'].includes(row.Type)) return true;
+    if (window.isToolheadType(row.Type)) return true;
     // A dual-role printer that is its own (only) head, the old Core One shape.
     if (row.Type !== 'Printer') return false;
     const heads = (row.toolheads || []).map(t => String((t && t.location_id) || '').toUpperCase()).filter(Boolean);
@@ -3257,7 +3257,7 @@ const _quickPickItem = (locData, res) => {
     const direct = contents.find(c => c && !c.is_ghost && String(c.location || '').toUpperCase() === id) || null;
     if (window.isSingleSlotBox && window.isSingleSlotBox(locData)) return direct || contents[0];
     const type = String(locData.Type || '').toLowerCase();
-    const headType = type.includes('tool') || type.includes('mmu') || type.includes('direct load');
+    const headType = window.isToolheadType(locData.Type);
     const ownHead = type === 'printer' && !(window.isPrinterRowNotHead && window.isPrinterRowNotHead(locData));
     const max = parseInt(locData['Max Spools'], 10);
     if (!(headType || ownHead || (type !== 'printer' && max === 1))) return null;
@@ -3715,7 +3715,7 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
                         state.lastScannedLoc = null;
                         return;
                     }
-                    const isSingleSpoolType = locType.includes('tool') || locType.includes('mmu') || locType.includes('direct load');
+                    const isSingleSpoolType = window.isToolheadType(locData && locData.Type);
                     let maxSpools = 0;
                     if (locData) {
                         const raw = parseInt(locData['Max Spools'], 10);
@@ -4196,10 +4196,9 @@ const _askRecordSource = (pick, sid, host) => {
     // review, BD-3: it was asked, then silently not used).
     if (pick.spool_keeps_trail) return Promise.resolve(undefined);
     const fromRow = (state.allLocations || []).find(l => String(l.LocationID || '').toUpperCase() === from);
-    const headTypes = ['Tool Head', 'MMU Slot', 'No MMU Direct Load', 'Printer'];
     // Unknown is a list, never a place a spool comes from (Group 58): the engine
     // gives a spool leaving it no trail, so it is asked about like one from Unassigned.
-    if (from && from !== 'UNKNOWN' && !(fromRow && headTypes.includes(fromRow.Type))) return Promise.resolve(undefined);
+    if (from && from !== 'UNKNOWN' && !(fromRow && window.isHeadOrPrinterType(fromRow.Type))) return Promise.resolve(undefined);
     const feeds = (Array.isArray(pick.feeds) ? pick.feeds : []).filter(f => f && f.box);
     const free = feeds.filter(f => f.free);
     if (!free.length) return Promise.resolve('');
