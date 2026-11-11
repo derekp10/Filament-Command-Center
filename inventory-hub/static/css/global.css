@@ -922,6 +922,55 @@ body {
     z-index: 20300;
 }
 
+/* Group 55.3: in-app help. A dialog's help button sits in its header beside the ✕: a
+   ring holding a bold "?", the sign the title bar's ? button already uses, in the
+   header's own text colour (white on FCC's dark headers, dark on a light coloured one).
+   Its click opens the dialog's help in the shortcut window (shortcuts_registry.js). */
+.fcc-help-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    border: 2px solid currentColor;
+    border-radius: 50%;
+    background: transparent;
+    color: #fff;
+    font-weight: 700;
+    font-size: 1.1rem;
+    line-height: 1;
+    cursor: pointer;
+}
+.fcc-help-btn:hover { background: rgba(255, 255, 255, 0.15); }
+.fcc-help-btn:focus-visible { outline: 3px solid #00d4ff; outline-offset: 2px; }
+.modal-header.bg-warning .fcc-help-btn,
+.modal-header.bg-info .fcc-help-btn,
+.modal-header.bg-light .fcc-help-btn { color: #212529; }
+.modal-header.bg-warning .fcc-help-btn:hover,
+.modal-header.bg-info .fcc-help-btn:hover,
+.modal-header.bg-light .fcc-help-btn:hover { background: rgba(0, 0, 0, 0.12); }
+/* A finger needs a bigger target. */
+@media (pointer: coarse) {
+    .fcc-help-btn { width: 2.75rem; height: 2.75rem; }
+}
+/* One dialog's help, drawn in the shortcut window instead of the full list. */
+#fcc-help-view .fcc-help-lines {
+    color: #f8f9fa;
+    font-size: 1.05rem;
+    line-height: 1.45;
+    padding-left: 1.25rem;
+    margin: 0 0 0.5rem;
+}
+#fcc-help-view .fcc-help-lines li + li { margin-top: 0.4rem; }
+#fcc-help-view .fcc-help-sub {
+    color: #0dcaf0;
+    font-weight: 700;
+    font-size: 1.15rem;
+    margin: 1rem 0 0.4rem;
+}
+
 .toast-msg {
     background: rgba(0, 0, 0, 0.95);
     color: #fff;

@@ -1330,3 +1330,29 @@ def test_the_empty_weight_prompts_notice_is_readable(page: Page, base_url: str):
     scored = [o.get("text") for o in conftest.contrast_offenders(dialog, min_ratio=100)]
     assert any("still at Shelf 1" in (t or "") for t in scored), scored
     page.locator("#fcc-archive-later").click()
+
+
+@pytest.mark.usefixtures("require_server")
+def test_the_in_app_help_is_readable(page: Page, base_url: str, assert_contrast):
+    """Group 55.3: a dialog's ? button (white on FCC's dark header) and the help it opens
+    (its lines, its section title, its keys, All shortcuts), over a location's window.
+    Every write is answered in the browser. The button is proved scored: the guard
+    scores descendants only, so the header is the root."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    _read_only(page)
+    page.goto(base_url)
+    page.wait_for_function(
+        "() => typeof state === 'object' && Array.isArray(state.allLocations) && state.allLocations.length > 0",
+        timeout=15_000)
+    loc = page.evaluate("() => (state.allLocations.find((r) => r.Type === 'Dryer Box') || state.allLocations[0]).LocationID")
+    page.evaluate("(id) => window.openManage(id)", loc)
+    expect(page.locator("#manageModal")).to_be_visible(timeout=8000)
+    header = page.locator("#manageModal .modal-header")
+    assert_contrast(header)
+    scored = [o.get("text") for o in conftest.contrast_offenders(header, min_ratio=100)]
+    assert "?" in scored, scored
+    page.locator('#manageModal [data-fcc-help="location-window"]').click()
+    overlay = page.locator("#fcc-shortcuts-overlay")
+    expect(page.locator("#fcc-help-view")).to_be_visible()
+    assert_contrast(overlay)
