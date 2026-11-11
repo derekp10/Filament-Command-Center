@@ -211,8 +211,12 @@ def test_each_entrys_dialog_exists(entries):
         if m.get("modal"):
             assert f'id="{m["modal"]}"' in text, f"{e['key']}: no element with id {m['modal']!r} in the templates"
         for oid in _overlay_ids(e):
-            assert f"'{oid}'" in text or f'"{oid}"' in text or f"`{oid}`" in text, (
-                f"{e['key']}: no script names the overlay id {oid!r}")
+            # Mounted with that id: mountOverlay's `id`, a question's `ids.overlay`, or
+            # confirmActivePrint's own default. A name alone isn't enough: the Quick-Swap
+            # question's ? names its id too, so a renamed mount still passed.
+            mounted = re.search(r"\b(?:id|overlay):\s*'" + re.escape(oid) + "'", text) or f"|| '{oid}'" in text
+            assert mounted, (f"{e['key']}: no script mounts an overlay with the id {oid!r} "
+                             f"(mountOverlay's id, or a question's ids.overlay)")
         for sel in ([m["overlayHas"]] if m.get("overlayHas") else []):
             for eid in re.findall(r"#([A-Za-z][\w-]*)", sel):
                 assert f'id="{eid}"' in text or f"'{eid}'" in text or f'"{eid}"' in text, (
