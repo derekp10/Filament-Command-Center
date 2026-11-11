@@ -955,6 +955,14 @@ body {
 @media (pointer: coarse) {
     .fcc-help-btn { width: 2.75rem; height: 2.75rem; }
 }
+/* The window takes the keyboard when it opens (shortcuts_registry.js): its own border
+   says where it is, so the panel itself draws no focus ring. Its buttons keep theirs. */
+#fcc-shortcuts-overlay:focus { outline: none; }
+/* A help button in a Bootstrap header sits beside the ✕ however the title is laid out:
+   it takes the free space before it (the ✕'s own auto margin would split that space
+   with it and float the button mid-header), and the ✕ keeps a small gap. */
+.modal-header .fcc-help-btn { margin-left: auto; }
+.modal-header .fcc-help-btn + .btn-close { margin-left: 0.5rem; }
 /* One dialog's help, drawn in the shortcut window instead of the full list. */
 #fcc-help-view .fcc-help-lines {
     color: #f8f9fa;

@@ -553,6 +553,7 @@
 
     const _render = (s) => {
         const m = s.model;
+        if (s.handle && m && m.mode) s.handle.element.dataset.fccPickerMode = m.mode;   // its help (Group 55.3)
         s.tiles = _buildTiles(s);
         const chips = (m.printers || []).map((p) =>
             `<span class="fcc-sp-pchip">🖨️ ${_esc(p.name)} · ${_pstate(p.name)}</span>`).join('');
@@ -961,6 +962,13 @@
         const root = s.handle.element;
         root.setAttribute('role', 'dialog');
         root.setAttribute('aria-label', 'Slot picker');
+        // Group 55.3: which picker this is, for its help (the loading view draws no
+        // mode): Return's, the Printer picker or the box picker. The model's own mode
+        // replaces it once read (_render).
+        const rows = Array.isArray(_st().allLocations) ? _st().allLocations : [];
+        const row = rows.find((r) => r && String(r.LocationID || '') === String(s.location || ''));
+        root.dataset.fccPickerMode = s.opts.mode === 'return' ? 'return'
+            : (row && window.isPrinterRowNotHead && window.isPrinterRowNotHead(row) ? 'printer' : 'box');
         // Delegated on the root, so a re-render (setContent) keeps them.
         const onClick = (e) => {
             if (s.settled) return;

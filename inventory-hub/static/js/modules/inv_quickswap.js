@@ -1873,6 +1873,9 @@
         // used to move this grid's focus behind it, and a later Enter then ran
         // quickSwapTap on a tile nobody could see (Group 40.3 / 40.1 review).
         if (document.querySelectorAll('[data-overlay-mount="1"]').length) return;
+        // So does the help window (Group 55.3): Q moved the keyboard off it, onto a
+        // tile under it.
+        if (window.fccShortcutsUp && window.fccShortcutsUp()) return;
 
         const tag = (e.target && e.target.tagName) || '';
         if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.isContentEditable) return;

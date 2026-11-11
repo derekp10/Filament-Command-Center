@@ -1391,3 +1391,13 @@ window.openQuickWeigh = (spoolId) => {
 };
 
 
+
+// Group 55.3: the list's own Enter, for its help and the full shortcut list. The
+// registerShortcut shim (scripts.html) queues it until shortcuts_registry.js loads.
+if (typeof window.registerShortcut === 'function') {
+    window.registerShortcut({
+        id: 'weigh-out-enter', scope: 'Weigh-Out',
+        keys: ['Enter'],
+        description: 'In a spool\'s box: save its weight and go to the next spool. In an empty box: skip to the next one.',
+    });
+}

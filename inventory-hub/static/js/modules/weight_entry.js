@@ -444,6 +444,9 @@
             // keys (Group 57 review, round 6: the prompt's Enter ran this Save a
             // second time, and its arrows switched this window's mode).
             if (window.isTopOverlay && !window.isTopOverlay(overlay)) return;
+            // So does the help window over it (Group 55.3): D set the default and an
+            // arrow switched the mode under it.
+            if (window.fccShortcutsUp && window.fccShortcutsUp()) return;
             if (e.key === 'Enter') {
                 // A scan's Enter with the focus off the field (on Save, say: its
                 // keys went to the scan accumulator) is the scan's, not a Save

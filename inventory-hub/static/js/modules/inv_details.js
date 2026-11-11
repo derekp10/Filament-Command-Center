@@ -1243,6 +1243,9 @@ window.promptEditLocation = (spoolId, currentLoc, opts = {}) => {
                         // If the confirm overlay is already up, let mountOverlay's
                         // onEscape take it (it uses stopImmediatePropagation).
                         if (confirmShowing()) return;
+                        // The shortcut window over it takes this Escape (it closes
+                        // only itself); "Cancel Override?" opened under it, unseen.
+                        if (window.fccShortcutsUp && window.fccShortcutsUp()) return;
                         e.preventDefault();
                         e.stopImmediatePropagation();
                         showConfirmOverlay();

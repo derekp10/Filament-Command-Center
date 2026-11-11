@@ -98,13 +98,14 @@
         return '<ul class="fcc-help-lines">' + list.map((l) => `<li>${_esc(l)}</li>`).join('') + '</ul>';
     }
 
-    // A section's `when` is on screen in its dialog (the dialog's own element first, so
-    // a look-alike elsewhere on the page never counts).
+    // A section's `when` is on screen: in the dialog's own element first, then anywhere
+    // (a question a window raised is an overlay of its own, outside the window).
     function _sectionShows(sec, el) {
         if (!sec.when) return true;
-        const root = (el && el.isConnected) ? el : document;
         let hit = null;
-        try { hit = root.querySelector(sec.when); } catch (_) { return false; }
+        try {
+            hit = ((el && el.isConnected) ? el.querySelector(sec.when) : null) || document.querySelector(sec.when);
+        } catch (_) { return false; }
         return !!hit && hit.getClientRects().length > 0;
     }
 
@@ -127,6 +128,10 @@
     }
 
     function _paint() {
+        const ovNow = _overlay();
+        // A switch between the help and the full list redraws the button that had the
+        // keyboard: it goes to the new All shortcuts / ← Back, not to the page.
+        const hadFocus = !!(ovNow && _isUp() && ovNow.contains(document.activeElement));
         renderList();  // refresh in case new shortcuts were registered post-load
         const title = document.getElementById('fcc-shortcuts-title');
         const helpEl = document.getElementById('fcc-help-view');
@@ -155,6 +160,10 @@
         }
         const ov = _overlay();
         if (ov) ov.scrollTop = 0;
+        if (ov && hadFocus && !ov.contains(document.activeElement)) {
+            const toggle = ov.querySelector('[data-fcc-help-back], [data-fcc-help-all]');
+            try { (toggle || ov).focus({ preventScroll: true }); } catch (_) { /* a stub page */ }
+        }
     }
 
     // The pointer press that opened the window, so the second press of a double click
@@ -188,6 +197,12 @@
         // when it fails, and every scan outcome is owed one. The class on <body>, so a
         // toast container made later (showToast makes it on first use) is in it too.
         if (document.body) document.body.classList.add('fcc-shortcuts-up');
+        // The keyboard comes with it (Group 55.3): a person's keys then land on the
+        // window, not on a dialog's control nobody can see (a Quick-Weigh's Enter saved,
+        // a question's Enter stored the spool), and Tab reaches its own buttons. Its
+        // focus guard keeps a Bootstrap window under it from pulling the focus back;
+        // _close gives it back to what had it.
+        try { ov.focus({ preventScroll: true }); } catch (_) { /* a stub page */ }
     }
 
     function _close() {
@@ -312,6 +327,26 @@
         const gone = e && e.detail && e.detail.element;
         if (_isUp() && ctx && gone && ctx.el === gone) _close();
     });
+    // A dialog's help goes when another dialog opens over that dialog (a scan goes on
+    // under the help, and a window or question it opened was drawn under the help,
+    // unseen). The full list from the title bar stays up as it always has.
+    document.addEventListener('show.bs.modal', (e) => {
+        if (_isUp() && ctx && ctx.el !== e.target) _close();
+    });
+    document.addEventListener('fcc:overlay-opened', (e) => {
+        const el = e && e.detail && e.detail.element;
+        if (_isUp() && ctx && el && ctx.el !== el) _close();
+    });
+    // The help keeps the keyboard while it is up: a focus moving into it is no
+    // Bootstrap window's business (its focus trap pulled the focus back to the window
+    // under the help, and after a close a person's Enter pressed that window's first
+    // button). mountOverlay guards its overlays the same way.
+    document.addEventListener('focusin', (e) => {
+        const ov = _overlay();
+        if (ov && _isUp() && ov.contains(e.target)) e.stopImmediatePropagation();
+    }, true);
+    // Read by every dialog key handler that must stand down while the window is up.
+    window.fccShortcutsUp = _isUp;
 
     // A dialog's ? button, and the window's own All shortcuts / ← Back.
     document.addEventListener('click', (e) => {
@@ -350,12 +385,19 @@
     let _pendingHelpTimer = null;
     const HELP_DEFER_MS = 120;
 
+    // What Tab can land on in the window: its ✕ and its own buttons, on screen.
+    const _tabStops = (ov) => Array.from(ov.querySelectorAll('button, a[href], [tabindex]:not([tabindex="-1"])'))
+        .filter((el) => !el.disabled && el.getClientRects().length > 0);
+
     document.addEventListener('keydown', (e) => {
         const ov = document.getElementById('fcc-shortcuts-overlay');
         if (!ov) return;
-        // Don't hijack typing inside inputs.
-        const tag = (e.target && e.target.tagName) || '';
-        if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.isContentEditable) return;
+        const t = e.target;
+        const tag = (t && t.tagName) || '';
+        // A field keeps its typing, a '?' included. A checkbox holds no text: a ? on
+        // it is a person's (it opened nothing, and the '?' waited in the scan buffer).
+        const typing = tag === 'TEXTAREA' || (tag === 'INPUT' && String(t.type).toLowerCase() !== 'checkbox')
+            || !!(t && t.isContentEditable);
 
         // If a deferred help-open is pending and ANY printable char (other
         // than `?` itself, which restarts the timer) arrives within the
@@ -363,6 +405,38 @@
         if (_pendingHelpTimer && e.key.length === 1 && e.key !== '?') {
             clearTimeout(_pendingHelpTimer);
             _pendingHelpTimer = null;
+        }
+
+        const up = ov.style.display === 'block';
+        if (e.key === '?' && typing) return;
+        // While the window is up it has the keyboard (Group 55.3): what it covers holds
+        // its keys, wherever the focus is (a weight box under it saved on Enter, its
+        // Escape closed the dialog under the help). A scan's keys go on: scans work
+        // under it. Letters and digits are a scan's too, so the hotkeys of the dialogs
+        // it covers ask window.fccShortcutsUp themselves.
+        if (up && e.key === 'Tab' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            const stops = _tabStops(ov);
+            if (!stops.length) { ov.focus({ preventScroll: true }); return; }
+            const at = stops.indexOf(document.activeElement);
+            const next = at === -1 ? (e.shiftKey ? stops[stops.length - 1] : stops[0])
+                : stops[(at + (e.shiftKey ? stops.length - 1 : 1)) % stops.length];
+            next.focus();
+            return;
+        }
+        if (up && (/^Arrow/.test(e.key) || ['PageUp', 'PageDown', 'Home', 'End'].includes(e.key))) {
+            // The window's own scrolling, when it has the focus; nothing under it moves.
+            e.stopImmediatePropagation();
+            if (!ov.contains(t)) e.preventDefault();
+            return;
+        }
+        if (up && e.key === ' ' && !(window.scanIsArriving && window.scanIsArriving())) {
+            // A person's Space presses the window's own button, or scrolls it; nothing
+            // under it hears it (a scan's Space is the scan's: it goes on).
+            e.stopImmediatePropagation();
+            if (!ov.contains(t)) e.preventDefault();
+            return;
         }
 
         if (e.key === '?') {
@@ -389,23 +463,25 @@
                 // a person's next Enter in a dialog a scan of it (round 5).
                 if (window.clearScanBuffer) window.clearScanBuffer();
             }, HELP_DEFER_MS);
-        } else if (e.key === 'Escape' && ov.style.display === 'block') {
+        } else if (e.key === 'Escape' && up) {
             // Group 10.1 SC round-3 fix: Escape used to bubble to whichever
             // Bootstrap modal was open underneath the shortcuts overlay,
             // dismissing the wizard at the same time as the overlay. Stop
             // immediate propagation so neither Bootstrap nor any sibling
-            // listener fires — overlay consumes Escape exclusively.
+            // listener fires — overlay consumes Escape exclusively. Wherever
+            // the focus is: in a field under the help it closed the dialog too.
             e.preventDefault();
             e.stopImmediatePropagation();
             _close();
-        } else if (e.key === 'Enter' && ov.style.display === 'block' && !ov.contains(e.target)
-                   && !(window.enterIsAScan && window.enterIsAScan())) {
+        } else if (e.key === 'Enter' && up && !(window.enterIsAScan && window.enterIsAScan())) {
             // The list is read, not pressed through. It sits above every overlay, so a
             // person's Enter here can't be meant for what it covers, and a dialog's
             // own Enter handler would answer a question they can't see (Group 58
             // review: a Yes with the focus on it). A scan's Enter goes on: scans work
-            // under the list.
-            e.preventDefault();
+            // under the list. On the window's own button the browser still presses it
+            // (no preventDefault); the dialogs under it don't hear it (a Quick-Weigh's
+            // Enter saved on any Enter not on its own buttons, Group 55.3).
+            if (!ov.contains(t)) e.preventDefault();
             e.stopImmediatePropagation();
             if (window.clearScanBuffer) window.clearScanBuffer();
         }
