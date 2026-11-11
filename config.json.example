@@ -11,9 +11,9 @@
     "backup_directory": "./backups",
     "export_directory": "./exports",
 
-    "comment_print": "--- LABELS: FCC writes label CSVs, and P-touch Editor reads them as its database to print ---",
+    "comment_print": "--- LABELS: FCC writes its label CSVs into this path's folder (/output is LABEL_OUTPUT_PATH in inventory-hub/.env), and P-touch Editor reads them as its database to print ---",
     "print_settings": {
-        "csv_path": "./labels/print_queue.csv"
+        "csv_path": "/output/labels.csv"
     },
     "buy_more_url_template": "https://www.amazon.com/s?k={{vendor}}+{{color}}+{{material}}",
     

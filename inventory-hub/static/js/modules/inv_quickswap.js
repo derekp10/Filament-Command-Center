@@ -193,10 +193,11 @@
             if (!silent) grid.innerHTML = '';
             if (!printerName) {
                 empty.style.display = 'block';
-                empty.innerHTML = '⚠️ This location is not registered in ' +
-                    '<span class="text-info fw-bold">printer_map</span>. ' +
-                    'Add an entry for its toolhead LocationID(s) in ' +
-                    '<span class="text-info fw-bold">config.json</span> to enable Quick-Swap.';
+                // Group 55: printers live on their Printer rows now; config.json's
+                // printer_map, which this used to name, is read no more.
+                empty.innerHTML = '⚠️ No printer lists this place as one of its toolheads yet. Add it to its printer in the ' +
+                    '<span class="text-info fw-bold">⚙️</span> window, under ' +
+                    '<span class="text-info fw-bold">🖨️ Printers &amp; Toolheads</span>, to use Quick-Swap.';
                 return;
             }
 

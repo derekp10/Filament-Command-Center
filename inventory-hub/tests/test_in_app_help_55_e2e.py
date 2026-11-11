@@ -280,3 +280,43 @@ def test_the_wizards_weigh_from_scale_is_not_the_quick_weigh(page: Page, base_ur
     page.wait_for_selector("#fcc-weight-entry-overlay", timeout=5000)
     assert page.evaluate("() => !!document.querySelector('#fcc-weight-entry-overlay #fcc-we-auto-archive')") is False
     assert page.evaluate("() => window.fccHelpContextKey()") is None
+
+
+@pytest.mark.parametrize("kind, key", [("box", "slot-picker"), ("printer", "printer-picker")])
+def test_each_picker_gets_its_own_help(page: Page, base_url: str, kind, key):
+    """The box picker and the Printer picker are one window, and its loading view draws no
+    mode: the picker marks its root with its mode from the start (data-fcc-picker-mode), so
+    ? opens the right help at once and once the slots are drawn. Read-only: the picker
+    reads its places and is cancelled."""
+    page.goto(base_url)
+    page.wait_for_function(
+        "() => typeof state === 'object' && Array.isArray(state.allLocations) && state.allLocations.length > 0",
+        timeout=10000)
+    loc = page.evaluate("""(kind) => {
+        const rows = state.allLocations;
+        if (kind === 'box') {
+            const r = rows.find((x) => x.Type === 'Dryer Box' && parseInt(x['Max Spools'], 10) > 1);
+            return r && r.LocationID;
+        }
+        const r = rows.find((x) => window.isPrinterRowNotHead(x));
+        return r && r.LocationID;
+    }""", kind)
+    if not loc:
+        pytest.skip(f"dev has no {kind} to pick in")
+    page.evaluate("(loc) => { window.__picked = window.openSlotPicker({ location: loc, spool: 1 }); }", loc)
+    page.wait_for_selector("#fcc-slot-picker", timeout=5000)
+    assert page.evaluate("() => document.getElementById('fcc-slot-picker').dataset.fccPickerMode") == kind
+    assert page.evaluate("() => window.fccHelpContextKey()") == key
+    page.wait_for_selector("#fcc-slot-picker .fcc-sp-tile", timeout=15000)
+    assert page.evaluate("() => window.fccHelpContextKey()") == key
+    page.evaluate("() => { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); }")
+    page.keyboard.press("?")
+    expect(page.locator(OVERLAY)).to_be_visible()
+    title = page.evaluate("(k) => window.fccHelpFor(k).title", key)
+    expect(page.locator(TITLE)).to_have_text("❓ " + title)
+    page.keyboard.press("Escape")                      # closes only the help
+    expect(page.locator(OVERLAY)).to_be_hidden()
+    expect(page.locator("#fcc-slot-picker")).to_be_visible()
+    page.keyboard.press("Escape")                      # the picker's own Escape: cancelled
+    expect(page.locator("#fcc-slot-picker")).to_have_count(0)
+    assert page.evaluate("() => window.__picked.then((r) => r)") is None
