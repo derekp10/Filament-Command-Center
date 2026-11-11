@@ -9,6 +9,9 @@
 // button in the dialog's header (data-fcc-help="<key>", one delegated click
 // below) or from the ? key while that dialog is on top; with no dialog that has
 // help on top, ? opens the full list as before. The help closes with its dialog.
+// A ? button is drawn in a template's header, or by the script that draws the
+// dialog (weight_entry.js's helpKey, slot_picker.js's header, confirmActivePrint's
+// `help`, which by default asks window.fccHelpKeyForOverlayId).
 // ---------------------------------------------------------------------------
 
 (function () {
@@ -38,6 +41,17 @@
     // Read by tests and canaries.
     window.fccHelpFor = (key) => helps.get(key) || null;
     window.fccHelpKeys = () => Array.from(helps.keys());
+    // The help of a mountOverlay by its id ({overlay: ...} in its entry's `match`), or
+    // null: a dialog drawn by a shared helper (inv_core.js's confirmActivePrint) shows
+    // its ? button exactly where the ? key would show its help. Read when the dialog
+    // opens, never while a module loads.
+    window.fccHelpKeyForOverlayId = (id) => {
+        if (!id) return null;
+        for (const entry of helps.values()) {
+            if ([].concat((entry.match || {}).overlay || []).includes(id)) return entry.key;
+        }
+        return null;
+    };
 
 
     const _esc = (s) => String(s)
@@ -347,6 +361,15 @@
     }, true);
     // Read by every dialog key handler that must stand down while the window is up.
     window.fccShortcutsUp = _isUp;
+
+    // A press on a dialog's ? button leaves the keyboard where it was (in a weight box,
+    // on a question's Just store it), so closing the help gives it back there: on the ?
+    // itself, a person's next Enter opened the help again while the question's hint
+    // said "Enter stores it". A ? reached by Tab keeps the keyboard, and gets it back.
+    document.addEventListener('mousedown', (e) => {
+        const t = e.target;
+        if (e.button === 0 && t && typeof t.closest === 'function' && t.closest('[data-fcc-help]')) e.preventDefault();
+    }, true);
 
     // A dialog's ? button, and the window's own All shortcuts / ← Back.
     document.addEventListener('click', (e) => {

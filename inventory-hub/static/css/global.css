@@ -963,6 +963,9 @@ body {
    with it and float the button mid-header), and the ✕ keeps a small gap. */
 .modal-header .fcc-help-btn { margin-left: auto; }
 .modal-header .fcc-help-btn + .btn-close { margin-left: 0.5rem; }
+/* A question's ? (inv_core.js's confirmActivePrint) has no ✕ to sit beside: it takes the
+   top right corner, and the title's own padding keeps it centred and clear of it. */
+.fcc-apc-help { position: absolute; top: 0.6rem; right: 0.6rem; }
 /* One dialog's help, drawn in the shortcut window instead of the full list. */
 #fcc-help-view .fcc-help-lines {
     color: #f8f9fa;

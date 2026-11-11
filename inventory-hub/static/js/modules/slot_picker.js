@@ -510,10 +510,16 @@
         const m = s.model || {};
         const sub = m.spool_display ? `<div class="small" style="color:#e0e0e0;">${_esc(m.spool_display)}</div>` : '';
         const step = s.opts.step ? `<span class="fcc-sp-step">${_esc(s.opts.step)}</span>` : '';
+        // Its ? (Group 55.3): the Printer picker's help, or the box picker's (Return's
+        // too), by the mode _mount marks on the root. A [data-sp-act] is in the picker's
+        // Tab order and Enter presses it; shortcuts_registry.js's click opens the help.
+        const root = s.handle && s.handle.element;
+        const helpKey = (root && root.dataset.fccPickerMode === 'printer') ? 'printer-picker' : 'slot-picker';
         return `
             <div class="card-header d-flex align-items-start justify-content-between gap-2">
                 <div><div class="fw-bold text-info" style="font-size:1.1rem;">🎯 ${_esc(_title(s))}${step}</div>${sub}</div>
                 <div class="d-flex align-items-center gap-2 flex-wrap justify-content-end">${chips || ''}
+                    <button type="button" class="fcc-help-btn" data-sp-act="help" data-fcc-help="${helpKey}" title="How this picker works (?)" aria-label="Help: how this picker works">?</button>
                     <button type="button" class="btn-close btn-close-white" data-sp-act="cancel" title="Cancel (Esc)" aria-label="Cancel"></button>
                 </div>
             </div>
@@ -979,6 +985,7 @@
                 if (a === 'cancel') _finish(s, null);
                 else if (a === 'retry') _load(s);
                 else if (a === 'feeds') _editFeeds(s);
+                // 'help': shortcuts_registry.js's click on the document opens it.
                 return;
             }
             const choice = e.target.closest && e.target.closest('[data-sp-choice]');

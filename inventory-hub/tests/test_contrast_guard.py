@@ -1356,3 +1356,84 @@ def test_the_in_app_help_is_readable(page: Page, base_url: str, assert_contrast)
     overlay = page.locator("#fcc-shortcuts-overlay")
     expect(page.locator("#fcc-help-view")).to_be_visible()
     assert_contrast(overlay)
+
+
+def _the_question_mark_is_scored(conftest, root):
+    scored = [o.get("text") for o in conftest.contrast_offenders(root, min_ratio=100)]
+    assert "?" in scored, scored
+
+
+@pytest.mark.usefixtures("require_server")
+@pytest.mark.parametrize("modal_id", ["locMgrModal", "spoolModal", "filamentModal", "wizardModal",
+                                      "weighOutModal", "queueModal", "backlogModal"])
+def test_each_windows_help_button_is_readable(page: Page, base_url: str, assert_contrast, modal_id):
+    """Group 55.3: every daily window's ? in its header, plain and hovered: white on FCC's
+    dark headers, dark on the Print Queue's yellow (global.css). Opened as the browser
+    tests open them; every write is answered in the browser."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_in_app_help_55_e2e import WINDOWS
+    from test_text_size_guard import _read_only
+    opener = {w[0]: w[2] for w in WINDOWS}[modal_id]
+    _read_only(page)
+    page.goto(base_url)
+    page.wait_for_function(
+        "() => typeof state === 'object' && typeof bootstrap !== 'undefined' && typeof window.openHelp === 'function'",
+        timeout=15_000)
+    if page.evaluate(opener) is False:
+        pytest.skip(f"dev's search found nothing to show in #{modal_id}")
+    expect(page.locator(f"#{modal_id}")).to_be_visible(timeout=10_000)
+    conftest.wait_modal_settled(page, modal_id)
+    header = page.locator(f"#{modal_id} .modal-header")
+    assert_contrast(header)
+    _the_question_mark_is_scored(conftest, header)
+    header.locator("[data-fcc-help]").hover()
+    page.wait_for_timeout(200)
+    assert_contrast(header)
+    page.mouse.move(0, 0)
+
+
+@pytest.mark.usefixtures("require_server")
+def test_the_help_buttons_scripts_draw_are_readable(page: Page, base_url: str, assert_contrast):
+    """Group 55.3: the move question's ? (top right of its panel), the Quick-Weigh's
+    (beside its ×) and the box picker's (beside its ✕), each scored on its own dark
+    surface. Nothing is sent: the question's answers are local, the Quick-Weigh's spool
+    is made up, and the picker only reads and is cancelled."""
+    import json as _json
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_in_app_help_55_e2e import THREE_WAY_JS
+    from test_text_size_guard import _read_only
+    spool = {"id": 9061, "initial_weight": 1000, "used_weight": 200, "spool_weight": 200, "archived": False,
+             "filament": {"id": 9062, "name": "Help Test", "material": "PLA", "weight": 1000,
+                          "spool_weight": 200, "color_hex": "336699", "vendor": {"id": 9063, "name": "Example"}}}
+    _read_only(page, extra_get={"/api/spool_details": spool})
+    page.goto(base_url)
+    page.wait_for_function(
+        "() => typeof window.confirmActivePrint === 'function' && typeof window.fccHelpKeyForOverlayId === 'function'"
+        " && typeof state === 'object' && Array.isArray(state.allLocations) && state.allLocations.length > 0",
+        timeout=15_000)
+    page.evaluate(THREE_WAY_JS)
+    question = page.locator("#fcc-active-print-confirm-overlay")
+    expect(question.locator("[data-fcc-help]")).to_be_visible()
+    assert_contrast(question)
+    _the_question_mark_is_scored(conftest, question)
+    page.keyboard.press("Escape")
+    expect(question).to_have_count(0)
+    page.evaluate("() => window.openQuickWeigh(9061)")
+    weigh = page.locator("#fcc-weight-entry-overlay")
+    expect(weigh.locator("[data-fcc-help]")).to_be_visible(timeout=10_000)
+    _the_question_mark_is_scored(conftest, weigh)
+    assert not [o for o in conftest.contrast_offenders(weigh) if (o.get("text") or "").strip() == "?"]
+    page.keyboard.press("Escape")
+    expect(weigh).to_have_count(0)
+    box = page.evaluate("""() => { const r = state.allLocations.find((x) => x.Type === 'Dryer Box'
+        && parseInt(x['Max Spools'], 10) > 1); return r && r.LocationID; }""")
+    if not box:
+        pytest.skip("dev has no dryer box with slots to open the picker on")
+    page.evaluate("(loc) => { window.openSlotPicker({ location: loc, spool: 1 }); }", box)
+    head = page.locator("#fcc-slot-picker .card-header")
+    expect(head.locator("[data-fcc-help]")).to_be_visible(timeout=10_000)
+    page.wait_for_selector("#fcc-slot-picker .fcc-sp-tile", timeout=15_000)
+    assert_contrast(head)
+    _the_question_mark_is_scored(conftest, head)
+    page.keyboard.press("Escape")
+    expect(page.locator("#fcc-slot-picker")).to_have_count(0)

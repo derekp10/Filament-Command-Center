@@ -288,6 +288,9 @@ window.openWizardModal = async () => {
                 + ' [tabindex]:not([tabindex="-1"])'
             );
             for (const el of focusables) {
+                // The header's ? (Group 55.3) sits before the ✕; the ✕ keeps the
+                // first focus it had before the ? came.
+                if (el.matches && el.matches('[data-fcc-help]')) continue;
                 if (el.offsetParent !== null) { el.focus(); return; }
             }
             _wizModalEl.focus();

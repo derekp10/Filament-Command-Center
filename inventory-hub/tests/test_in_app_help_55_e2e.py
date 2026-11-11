@@ -7,7 +7,12 @@ list, as before; a double click on the ? button leaves the help up; a scan that 
 with '?' opens nothing. The scanner case with no dialog open is
 test_quickswap_ui_e2e.py's test_shortcuts_overlay_question_mark_at_start_of_scan_does_not_trigger.
 
-Read-only on dev: it opens the dashboard and a location's window, and reads.
+Every covered dialog has its ? (each window's header, the Quick-Weigh, the move
+question, both pickers), and a click on it leaves the keyboard where it was, so Escape
+gives it back there; a ? reached by Tab gets it back.
+
+Read-only on dev: it opens the dashboard and the dialogs, and reads; a write a dialog
+could send is answered in the browser.
 """
 from __future__ import annotations
 
@@ -156,11 +161,19 @@ def test_a_scan_starting_with_a_question_mark_in_the_window_opens_nothing(page: 
 
 # --- the help has the keyboard while it is up (the Group 55 map's findings) ----------------
 
+_ACTIVE_JS = """() => { const a = document.activeElement;
+    return a ? (a.id || a.className || a.tagName) : null; }"""
+
+
 def test_the_help_takes_the_keyboard_and_gives_it_back(page: Page, base_url: str):
     """It opens with the focus on itself (a person's keys landed on the window under it,
     where Bootstrap's focus trap also pulled a click on the help's own buttons back), Tab
-    stays among its own buttons, and Escape gives the keyboard back to the ? button."""
+    stays among its own buttons, and Escape gives the keyboard back to what had it before
+    the press: a click on the ? never takes the keyboard (on a question, a person's next
+    Enter opened the help again while its hint said "Enter stores it"), and a ? reached
+    by Tab gets it back."""
     _open_a_location(page, base_url)
+    before = page.evaluate(_ACTIVE_JS)
     page.locator(WINDOW_HELP).click()
     expect(page.locator(OVERLAY)).to_be_visible()
     assert page.evaluate("() => document.activeElement && document.activeElement.id") == "fcc-shortcuts-overlay"
@@ -172,8 +185,90 @@ def test_the_help_takes_the_keyboard_and_gives_it_back(page: Page, base_url: str
     assert page.evaluate("() => document.getElementById('fcc-shortcuts-overlay').contains(document.activeElement)")
     page.keyboard.press("Escape")
     expect(page.locator(OVERLAY)).to_be_hidden()
+    assert page.evaluate(_ACTIVE_JS) == before, "the keyboard didn't go back to what had it before the click"
+    assert not page.evaluate("() => !!document.activeElement.closest('[data-fcc-help]')")
+    # By the keyboard: the ? reached by Tab, Enter opens the help, Escape gives it back.
+    page.locator(WINDOW_HELP).focus()
+    page.keyboard.press("Enter")
+    expect(page.locator(OVERLAY)).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(page.locator(OVERLAY)).to_be_hidden()
     assert page.evaluate("() => !!document.activeElement.closest('[data-fcc-help]')"), \
         "the keyboard didn't go back to the ? button it came from"
+
+
+# Every daily window with a ? in its header (Group 55.3): its id, its help key, and how the
+# page opens it. Read-only: each one reads, and the spool and filament windows show the
+# first spool or filament dev's search finds.
+WINDOWS = [
+    ("locMgrModal", "location-list", "() => { window.openLocationsModal(); }"),
+    ("spoolModal", "spool-window",
+     "async () => { const r = await (await fetch('/api/search?q=a&type=spool')).json();"
+     " const s = (r.results || [])[0]; if (!s) return false; openSpoolDetails(s.id); return true; }"),
+    ("filamentModal", "filament-window",
+     "async () => { const r = await (await fetch('/api/search?q=a&type=filament')).json();"
+     " const f = (r.results || [])[0]; if (!f) return false; openFilamentDetails(f.id); return true; }"),
+    ("wizardModal", "wizard", "() => { window.openWizardModal(); }"),
+    ("weighOutModal", "weigh-out",
+     "() => { bootstrap.Modal.getOrCreateInstance(document.getElementById('weighOutModal')).show(); }"),
+    ("queueModal", "print-queue", "() => { window.openQueueModal(); }"),
+    ("backlogModal", "label-backlog", "() => { window.openBacklogModal(); }"),
+]
+
+
+@pytest.mark.parametrize("modal_id, key, opener", WINDOWS, ids=[w[0] for w in WINDOWS])
+def test_each_windows_help_button_opens_its_help(page: Page, base_url: str, modal_id, key, opener):
+    """The ? sits in the window's header just left of its ✕, on the ✕'s line; a click opens
+    that window's help above it; Escape closes only the help and gives the keyboard back
+    to what had it; the window stays open."""
+    from test_text_size_guard import _read_only
+    _read_only(page)
+    page.goto(base_url)
+    page.wait_for_function(
+        "() => typeof state === 'object' && typeof bootstrap !== 'undefined' && typeof window.openHelp === 'function'",
+        timeout=15000)
+    if page.evaluate(opener) is False:
+        pytest.skip(f"dev's search found nothing to show in #{modal_id}")
+    modal = page.locator(f"#{modal_id}")
+    expect(modal).to_be_visible(timeout=10000)
+    page.wait_for_function(
+        "(id) => { const m = bootstrap.Modal.getInstance(document.getElementById(id)); return !!m && !m._isTransitioning; }",
+        arg=modal_id, timeout=8000)
+    btn = modal.locator(f'.modal-header [data-fcc-help="{key}"]')
+    expect(btn).to_be_visible()
+    geo = page.evaluate("""(id) => {
+        const head = document.querySelector('#' + id + ' .modal-header');
+        const q = head.querySelector('[data-fcc-help]').getBoundingClientRect();
+        const x = head.querySelector('.btn-close').getBoundingClientRect();
+        return { gap: x.left - q.right, dy: Math.abs((q.top + q.bottom) / 2 - (x.top + x.bottom) / 2) };
+    }""", modal_id)
+    assert 0 <= geo["gap"] <= 24 and geo["dy"] <= 12, f"the ? isn't beside the ✕: {geo}"
+    before = page.evaluate(_ACTIVE_JS)
+    btn.click()
+    expect(page.locator(OVERLAY)).to_be_visible()
+    title = page.evaluate("(k) => window.fccHelpFor(k).title", key)
+    expect(page.locator(TITLE)).to_have_text("❓ " + title)
+    first = page.evaluate("(k) => window.fccHelpFor(k).lines[0]", key)
+    expect(page.locator(f"{HELP} .fcc-help-lines li").first).to_have_text(first)
+    page.keyboard.press("Escape")
+    expect(page.locator(OVERLAY)).to_be_hidden()
+    page.wait_for_timeout(300)
+    expect(modal).to_be_visible()
+    assert page.evaluate(_ACTIVE_JS) == before
+
+
+def test_the_wizard_opens_with_the_keyboard_on_its_close_button(page: Page, base_url: str):
+    """The ? sits before the ✕ in the wizard's header; the ✕ keeps the first focus it had."""
+    from test_text_size_guard import _read_only
+    _read_only(page)
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openWizardModal === 'function'", timeout=15000)
+    page.evaluate("() => { window.openWizardModal(); }")
+    expect(page.locator("#wizardModal")).to_be_visible(timeout=10000)
+    page.wait_for_function(
+        "() => document.activeElement && document.activeElement.closest && !!document.activeElement.closest('#wizardModal .modal-header')",
+        timeout=8000)
+    assert page.evaluate("() => document.activeElement.classList.contains('btn-close')")
 
 
 def test_q_under_the_help_moves_nothing(page: Page, base_url: str):
@@ -280,6 +375,145 @@ def test_the_wizards_weigh_from_scale_is_not_the_quick_weigh(page: Page, base_ur
     page.wait_for_selector("#fcc-weight-entry-overlay", timeout=5000)
     assert page.evaluate("() => !!document.querySelector('#fcc-weight-entry-overlay #fcc-we-auto-archive')") is False
     assert page.evaluate("() => window.fccHelpContextKey()") is None
+    # No ? either: its caller names no help.
+    expect(page.locator("#fcc-weight-entry-overlay [data-fcc-help]")).to_have_count(0)
+
+
+def test_the_quick_weighs_help_button_leaves_the_keyboard_in_its_field(page: Page, base_url: str):
+    """The Quick-Weigh's ? sits beside its ×. A click opens its help, and Escape gives the
+    keyboard back to the weight box, where Enter saves: the reading typed before the click
+    is still there. The spool is made up, and every write is answered in the browser."""
+    import json as _json
+    saves = []
+    spool = {"id": 9058, "initial_weight": 1000, "used_weight": 200, "spool_weight": 200, "archived": False,
+             "filament": {"id": 9059, "name": "Help Test", "material": "PLA", "weight": 1000,
+                          "spool_weight": 200, "color_hex": "336699", "vendor": {"id": 9060, "name": "Example"}}}
+
+    def details(route):
+        route.fulfill(status=200, content_type="application/json", body=_json.dumps(spool))
+
+    def write(route):
+        if route.request.method != "GET":
+            saves.append(route.request.post_data_json)
+            route.fulfill(status=200, content_type="application/json", body='{"success": false, "msg": "not saved"}')
+        else:
+            route.continue_()
+
+    page.route("**/api/spool_details*", details)
+    page.route("**/api/spool/update*", write)
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openQuickWeigh === 'function' && typeof state === 'object'")
+    page.evaluate("() => window.openQuickWeigh(9058)")
+    overlay = page.locator("#fcc-weight-entry-overlay")
+    page.wait_for_selector("#fcc-weight-entry-overlay #fcc-we-auto-archive", timeout=10000)
+    btn = overlay.locator('[data-fcc-help="quick-weigh"]')
+    expect(btn).to_be_visible()
+    geo = page.evaluate("""() => {
+        const o = document.getElementById('fcc-weight-entry-overlay');
+        const q = o.querySelector('[data-fcc-help]').getBoundingClientRect();
+        const x = o.querySelector('#fcc-we-close').getBoundingClientRect();
+        return { gap: x.left - q.right, dy: Math.abs((q.top + q.bottom) / 2 - (x.top + x.bottom) / 2) };
+    }""")
+    assert 0 <= geo["gap"] <= 24 and geo["dy"] <= 12, f"the ? isn't beside the ×: {geo}"
+    page.wait_for_function("() => document.activeElement && document.activeElement.id === 'fcc-we-input'")
+    page.locator("#fcc-we-input").fill("500")
+    btn.click()
+    expect(page.locator(OVERLAY)).to_be_visible()
+    expect(page.locator(TITLE)).to_have_text("❓ " + page.evaluate("() => window.fccHelpFor('quick-weigh').title"))
+    page.keyboard.press("Escape")
+    expect(page.locator(OVERLAY)).to_be_hidden()
+    expect(overlay).to_be_visible()
+    assert page.evaluate("() => document.activeElement && document.activeElement.id") == "fcc-we-input"
+    assert page.locator("#fcc-we-input").input_value() == "500"
+    assert saves == []
+    page.keyboard.press("Enter")
+    page.wait_for_function("() => !document.getElementById('fcc-weight-entry-overlay')", timeout=5000)
+    assert len(saves) == 1 and saves[0]["id"] == 9058, saves
+
+
+QUESTION = "#fcc-active-print-confirm-overlay"
+THREE_WAY_JS = """(ids) => { window.__answer = null;
+    window.confirmActivePrint({ title: 'Load #42 onto HEAD-1?',
+        msg: 'DRYBOX-1 slot 2 feeds HEAD-1, and HEAD-1 is running #7 (from DRYBOX-2).',
+        printing: false, loadLabel: 'Load it instead', storeLabel: 'Just store it in DRYBOX-1 slot 2', ids: ids || {},
+        onConfirm: () => { window.__answer = 'load'; }, onStore: () => { window.__answer = 'store'; },
+        onCancel: () => { window.__answer = 'cancel'; } }); }"""
+
+
+def test_the_move_questions_help_button(page: Page, base_url: str):
+    """The move question (window.confirmActivePrint, as the move doors show it) has a ? in
+    its top right corner, clear of its title, whose words are as they were. A click opens
+    its help and leaves the keyboard on Just store it, so after Escape a person's Enter
+    stores, as the hint says. Enter on the ? itself opens the help and answers nothing.
+    Nothing is sent: the answers are local."""
+    page.goto(base_url)
+    page.wait_for_function(
+        "() => typeof window.confirmActivePrint === 'function' && typeof window.fccHelpKeyForOverlayId === 'function'")
+    page.evaluate(THREE_WAY_JS)
+    q = page.locator(QUESTION)
+    btn = q.locator('[data-fcc-help="move-question"]')
+    expect(btn).to_be_visible()
+    expect(q.locator(".fcc-apc-title")).to_have_text("🔁 Load #42 onto HEAD-1?")
+    geo = page.evaluate("""(sel) => {
+        const o = document.querySelector(sel);
+        const panel = o.querySelector('.fcc-apc-panel').getBoundingClientRect();
+        const b = o.querySelector('.fcc-apc-help').getBoundingClientRect();
+        const t = o.querySelector('.fcc-apc-title');
+        const r = document.createRange(); r.selectNodeContents(t);
+        const words = r.getBoundingClientRect();
+        const tb = t.getBoundingClientRect();
+        return { right: panel.right - b.right, top: b.top - panel.top, overlap: words.right > b.left && words.top < b.bottom,
+                 centred: Math.abs((words.left + words.right) / 2 - (tb.left + tb.right) / 2) };
+    }""", QUESTION)
+    assert geo["right"] <= 16 and geo["top"] <= 16, f"the ? isn't in the top right corner: {geo}"
+    assert not geo["overlap"], f"the title's words run under the ?: {geo}"
+    assert geo["centred"] <= 2, f"the title isn't centred: {geo}"
+    page.wait_for_function("() => document.activeElement && document.activeElement.classList.contains('fcc-apc-store')")
+    btn.click()
+    expect(page.locator(OVERLAY)).to_be_visible()
+    expect(page.locator(TITLE)).to_have_text("❓ " + page.evaluate("() => window.fccHelpFor('move-question').title"))
+    page.keyboard.press("Escape")
+    expect(page.locator(OVERLAY)).to_be_hidden()
+    expect(q).to_be_visible()
+    assert page.evaluate("() => window.__answer") is None
+    assert page.evaluate("() => document.activeElement.classList.contains('fcc-apc-store')")
+    # Enter on the ? opens the help; it never stores or cancels.
+    btn.focus()
+    page.keyboard.press("Enter")
+    expect(page.locator(OVERLAY)).to_be_visible()
+    page.wait_for_timeout(200)
+    assert page.evaluate("() => window.__answer") is None
+    page.keyboard.press("Escape")
+    expect(page.locator(OVERLAY)).to_be_hidden()
+    expect(q).to_be_visible()
+    page.evaluate("(sel) => document.querySelector(sel + ' .fcc-apc-store').focus()", QUESTION)
+    page.keyboard.press("Enter")
+    page.wait_for_function("() => window.__answer === 'store'")
+
+
+def test_only_questions_with_help_draw_a_help_button(page: Page, base_url: str):
+    """The ? shows where the ? key gives help: the scan door's question (the move
+    question's help) and the Printer picker's toolhead question (the picker's). Done's
+    question has no help, so no ?, and nothing it draws moves."""
+    page.goto(base_url)
+    page.wait_for_function(
+        "() => typeof window.confirmActivePrint === 'function' && typeof window.fccHelpKeyForOverlayId === 'function'")
+    for overlay_id, key in (("fcc-active-print-scan-overlay", "move-question"),
+                            ("fcc-head-pick-confirm", "printer-picker"),
+                            ("fcc-audit-done-question", None)):
+        page.evaluate(THREE_WAY_JS, {"overlay": overlay_id})
+        q = page.locator(f"#{overlay_id}")
+        expect(q).to_be_visible()
+        if key:
+            expect(q.locator(f'[data-fcc-help="{key}"]')).to_be_visible()
+            assert page.evaluate("() => window.fccHelpContextKey()") == key
+        else:
+            expect(q.locator("[data-fcc-help]")).to_have_count(0)
+            assert page.evaluate("(id) => getComputedStyle(document.querySelector('#' + id + ' .fcc-apc-title')).paddingLeft",
+                                 overlay_id) == "0px"
+        page.keyboard.press("Escape")
+        expect(q).to_have_count(0)
+        assert page.evaluate("() => window.__answer") == "cancel"
 
 
 @pytest.mark.parametrize("kind, key", [("box", "slot-picker"), ("printer", "printer-picker")])
@@ -315,6 +549,21 @@ def test_each_picker_gets_its_own_help(page: Page, base_url: str, kind, key):
     title = page.evaluate("(k) => window.fccHelpFor(k).title", key)
     expect(page.locator(TITLE)).to_have_text("❓ " + title)
     page.keyboard.press("Escape")                      # closes only the help
+    expect(page.locator(OVERLAY)).to_be_hidden()
+    expect(page.locator("#fcc-slot-picker")).to_be_visible()
+    # Its ? button, beside its ✕: a click opens the same help, and Enter on it (Tab
+    # reaches it: it is one of the picker's buttons) does too.
+    btn = page.locator(f'#fcc-slot-picker .card-header [data-fcc-help="{key}"]')
+    expect(btn).to_be_visible()
+    btn.click()
+    expect(page.locator(OVERLAY)).to_be_visible()
+    expect(page.locator(TITLE)).to_have_text("❓ " + title)
+    page.keyboard.press("Escape")
+    expect(page.locator(OVERLAY)).to_be_hidden()
+    btn.focus()
+    page.keyboard.press("Enter")
+    expect(page.locator(OVERLAY)).to_be_visible()
+    page.keyboard.press("Escape")
     expect(page.locator(OVERLAY)).to_be_hidden()
     expect(page.locator("#fcc-slot-picker")).to_be_visible()
     page.keyboard.press("Escape")                      # the picker's own Escape: cancelled

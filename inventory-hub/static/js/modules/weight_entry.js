@@ -29,6 +29,7 @@
 //       availableModes: ['gross','net','additive','set_used'],
 //       showAutoArchive: true,
 //       autoArchiveDefault: true,
+//       helpKey: 'quick-weigh',                    // optional: its ? (help_texts.js)
 //       onSubmit: ({ used_weight, mode, raw_value, auto_archive }) => {...},
 //       onCancel: () => {...},
 //   });
@@ -112,6 +113,10 @@
             // original net weight: gross/net then yield the available filament
             // directly (gross − tare) and report it via payload.derived_initial.
             allowUnknownInitial = false,
+            // Group 55.3: a help key (help_texts.js) draws a ? beside the × that opens
+            // this window's help: the Quick-Weigh's 'quick-weigh'. The wizard's Weigh
+            // from Scale passes none (that help's words are the Quick-Weigh's).
+            helpKey = '',
             onSubmit = null,
             onCancel = null,
         } = options;
@@ -165,7 +170,10 @@
                         box-shadow:0 8px 32px rgba(0,0,0,0.6);">
                 <div style="display:flex;justify-content:space-between;align-items:center;
                             padding:14px 18px;border-bottom:1px solid #444;">
-                    <div id="fcc-we-title" style="font-weight:bold;font-size:1.05rem;">⚖️ ${escapeHtml(title)}</div>
+                    <div id="fcc-we-title" style="font-weight:bold;font-size:1.05rem;">⚖️ ${escapeHtml(title)}</div>${helpKey ? `
+                    <button type="button" class="fcc-help-btn" data-fcc-help="${escapeHtml(helpKey)}"
+                        style="margin-left:auto;margin-right:0.75rem;"
+                        title="How this window works (?)" aria-label="Help: how this window works">?</button>` : ''}
                     <button type="button" id="fcc-we-close"
                         style="background:none;border:none;color:#aaa;font-size:1.4rem;line-height:1;cursor:pointer;"
                         aria-label="Close">×</button>

@@ -1366,6 +1366,7 @@ window.openQuickWeigh = (spoolId) => {
                 availableModes: ['gross', 'net', 'additive', 'set_used'],
                 showAutoArchive: true,
                 autoArchiveDefault: true,
+                helpKey: 'quick-weigh',   // its ? (Group 55.3)
                 onSubmit: (payload) => {
                     const updates = { used_weight: payload.used_weight };
                     // Used == initial means remaining hits zero; auto-archive

@@ -205,27 +205,59 @@ def test_every_scope_it_lists_has_keys(entries):
 
 _HELP_BTN = re.compile(r"data-fcc-help=(?:\\?[\"'])([a-z0-9-]+)")
 
+# The ? buttons a script draws with its key in a variable, so no data-fcc-help="<key>"
+# names them: each key, the module, and the text there that names or picks it. The
+# browser tests (test_in_app_help_55_e2e.py) and test_help_buttons_55_js.py prove each
+# one is drawn; this keeps the list honest when that code moves.
+SCRIPT_DRAWN = {
+    "quick-weigh": ("inv_weigh_out.js", "helpKey: 'quick-weigh'"),
+    "slot-picker": ("slot_picker.js", "'printer-picker' : 'slot-picker'"),
+    "printer-picker": ("slot_picker.js", "'printer-picker' : 'slot-picker'"),
+    # confirmActivePrint's ? asks the registry for its overlay's help: the move doors'
+    # overlays are the move question's (test_help_buttons_55_js.py).
+    "move-question": ("inv_core.js", "window.fccHelpKeyForOverlayId(overlayId)"),
+}
+
 
 @needs_node
 def test_every_help_button_names_an_entry_and_every_entry_has_one(entries):
     text = _page_text()
     named = set(_HELP_BTN.findall(text))
+    for key, (module, words) in SCRIPT_DRAWN.items():
+        src = (JS_ROOT / "modules" / module).read_text(encoding="utf-8")
+        assert words in src, f"{key}: {module} no longer holds {words!r}: update SCRIPT_DRAWN"
+        named.add(key)
     keys = {e["key"] for e in entries}
     assert named, "no ? button (data-fcc-help) on the page"
     assert not (named - keys), f"? buttons naming no help entry: {sorted(named - keys)}"
     assert not (keys - named), f"help entries with no ? button anywhere: {sorted(keys - named)}"
 
 
-def test_every_help_button_in_a_template_is_a_named_button():
+def _help_button_tags():
+    """Every tag with a data-fcc-help="…" in a template, and every <button …> with one in
+    a script (a template literal), as (where, tag)."""
     for path in sorted(TEMPLATES.rglob("*.html")):
         src = path.read_text(encoding="utf-8")
         for m in re.finditer(r"<[^>]*data-fcc-help=\"[^\"]+\"[^>]*>", src, re.S):
-            tag = m.group(0)
-            where = f"{path.name}: {tag[:120]}"
-            assert tag.startswith("<button"), f"a ? that isn't a <button>: {where}"
-            assert 'type="button"' in tag, f"a ? button without type=\"button\": {where}"
-            assert "fcc-help-btn" in tag, f"a ? button without its look (.fcc-help-btn): {where}"
-            assert "aria-label=" in tag, f"a ? button without a name for a screen reader: {where}"
+            yield path.name, m.group(0)
+    for path in sorted(JS_ROOT.rglob("*.js")):
+        if path.name.endswith(".min.js"):
+            continue
+        src = path.read_text(encoding="utf-8")
+        for m in re.finditer(r"<button\b[^>]*data-fcc-help=\"[^\"]+\"[^>]*>", src, re.S):
+            yield path.name, m.group(0)
+
+
+def test_every_help_button_is_a_named_button():
+    tags = list(_help_button_tags())
+    assert {where for where, _ in tags} >= {"modals_loc_mgr.html", "modals_details.html", "weight_entry.js",
+                                           "slot_picker.js", "inv_core.js"}, sorted({w for w, _ in tags})
+    for where, tag in tags:
+        at = f"{where}: {tag[:120]}"
+        assert tag.startswith("<button"), f"a ? that isn't a <button>: {at}"
+        assert 'type="button"' in tag, f"a ? button without type=\"button\": {at}"
+        assert "fcc-help-btn" in tag, f"a ? button without its look (.fcc-help-btn): {at}"
+        assert "aria-label=" in tag, f"a ? button without a name for a screen reader: {at}"
 
 
 # ---------------------------------------------------------------------------
