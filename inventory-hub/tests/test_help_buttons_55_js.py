@@ -12,6 +12,11 @@ no container.
     three-way's Enter elsewhere stores it).
   - window.WeightEntry draws a ? only for a caller that names a help key: the
     Quick-Weigh, never the wizard's Weigh from Scale.
+  - Drawn by the real openers (Group 55 review, R3-4: test_help_texts_55.py's SCRIPT_DRAWN
+    only finds their text): openQuickWeigh's window has its ?, and so does each picker's
+    header, the box picker's (Return's too) and the Printer picker's, each its own help.
+  - window.fccCornerHelpHtml (the Quick-Swap question's ? and "Record it as coming
+    from…"'s) draws the help its overlay id has, or nothing.
 
 The browser half (where each ? sits, a click leaving the keyboard where it was) is
 test_in_app_help_55_e2e.py.
@@ -133,3 +138,97 @@ def test_the_weigh_window_draws_a_help_button_only_for_a_caller_that_names_one(t
     assert "data-fcc-help" not in scale and "fcc-help-btn" not in scale
     # Beside the ×, before it, in the header.
     assert quick.index('data-fcc-help="quick-weigh"') < quick.index('id="fcc-we-close"') < quick.index('id="fcc-we-input"')
+
+
+# Group 55 review, R3-4: the ?s a script draws with its key in a variable, drawn by the
+# real code that opens them (test_help_texts_55.py's SCRIPT_DRAWN only finds the text).
+QUICK_WEIGH = r"""
+window.__respond = (url) => (url.startsWith('/api/spool_details')
+    ? { body: { id: 42, initial_weight: 1000, used_weight: 200, spool_weight: 200, archived: false,
+                filament: { id: 7, name: 'Blue', material: 'PLA', weight: 1000, spool_weight: 200,
+                            vendor: { id: 3, name: 'Example' } } } }
+    : { body: {} });
+window.openQuickWeigh(42);
+await __settle(120);
+return { html: __rec.overlays.map(o => o.content) };
+"""
+
+
+def test_the_quick_weigh_opens_with_its_help_button(tmp_path):
+    """openQuickWeigh names the Quick-Weigh's help key: its window has the ?."""
+    res = run_js(tmp_path, ["inv_core.js", "weight_utils.js", "weight_entry.js", "inv_weigh_out.js"], QUICK_WEIGH)
+    assert res["unhandled"] == [], res["unhandled"]
+    assert len(res["html"]) == 1, res["html"]
+    assert re.findall(r'data-fcc-help="([^"]+)"', res["html"][0]) == ["quick-weigh"]
+
+
+PICKER = r"""
+// The node sandbox has no URLSearchParams: the picker builds its read's address with one.
+window.URLSearchParams = class {
+  constructor(o) { this.o = Object.assign({}, o || {}); }
+  set(k, v) { this.o[k] = String(v); }
+  append(k, v) { this.o[k] = String(v); }
+  toString() { return Object.keys(this.o).map((k) => encodeURIComponent(k) + '=' + encodeURIComponent(this.o[k])).join('&'); }
+};
+// inv_core.js's fetchT times out with AbortSignal, which the sandbox lacks too.
+window.fetchT = (u, o) => window.fetch(u, o);
+// The stub overlay has no setContent: the picker draws through it.
+const __stubMount = window.mountOverlay;
+window.mountOverlay = (opts) => {
+  const h = __stubMount(opts);
+  h.panel = h.element;
+  h.setContent = (html) => { h.element.innerHTML = html; __rec.overlays.push({ id: opts.id, content: html, closed: false }); };
+  return h;
+};
+state.allLocations = [
+  { LocationID: 'DRYBOX-1', Name: 'Box', Type: 'Dryer Box', 'Max Spools': '4' },
+  { LocationID: 'PRINTER-1', Name: 'Printer 1', Type: 'Printer',
+    toolheads: [{ location_id: 'HEAD-1', position: 0 }, { location_id: 'HEAD-2', position: 1 }] },
+  { LocationID: 'HEAD-1', Name: 'Head 1', Type: 'Tool Head', 'Max Spools': '1' },
+  { LocationID: 'HEAD-2', Name: 'Head 2', Type: 'Tool Head', 'Max Spools': '1' },
+];
+window.__respond = () => ({ status: 503, body: {} });   // the loading view is enough
+window.openSlotPicker(__OPTS__);
+await __settle(120);
+// The views it drew (the mount's empty shell left out).
+return { html: __rec.overlays.filter(o => o.id === 'fcc-slot-picker' && o.content.includes('card-header')).map(o => o.content) };
+"""
+
+
+def test_each_picker_draws_its_own_help_button(tmp_path):
+    """The box picker's header has the slot picker's ?, Return's too, and the Printer
+    picker's has its own, from the loading view on (the mode _mount marks on its root)."""
+    for opts, key in (({"location": "DRYBOX-1", "spool": 42}, "slot-picker"),
+                      ({"location": "DRYBOX-1", "spool": 42, "mode": "return"}, "slot-picker"),
+                      ({"location": "PRINTER-1", "spool": 42}, "printer-picker")):
+        res = run_js(tmp_path, ["inv_core.js", "slot_picker.js"], PICKER.replace("__OPTS__", json.dumps(opts)))
+        assert res["unhandled"] == [], res["unhandled"]
+        assert res["html"], f"the picker drew nothing for {opts}"
+        for html in res["html"]:
+            assert re.findall(r'data-fcc-help="([^"]+)"', html) == [key], (opts, html[:400])
+            # In the header, just before its ✕ (the header ends where the status line starts).
+            at = [html.find(s) for s in ('class="card-header', 'data-fcc-help=', 'data-sp-act="cancel"',
+                                         'class="fcc-sp-status"')]
+            assert -1 not in at and at == sorted(at), (opts, at)
+
+
+CORNER = r"""
+return {
+  swap: window.fccCornerHelpHtml('fcc-quickswap-confirm-overlay'),
+  source: window.fccCornerHelpHtml('fcc-record-source'),
+  done: window.fccCornerHelpHtml('fcc-audit-done-question'),
+  none: window.fccCornerHelpHtml(''),
+};
+"""
+
+
+def test_a_corner_help_button_is_the_help_its_overlay_has(tmp_path):
+    """window.fccCornerHelpHtml (the Quick-Swap question's ? and "Record it as coming
+    from…"'s): the help help_texts.js gives the overlay id, or nothing."""
+    res = run_js(tmp_path, HELP, CORNER)
+    assert res["unhandled"] == [], res["unhandled"]
+    assert re.findall(r'data-fcc-help="([^"]+)"', res["swap"]) == ["swap-question"]
+    assert re.findall(r'data-fcc-help="([^"]+)"', res["source"]) == ["printer-picker"]
+    for html in (res["swap"], res["source"]):
+        assert html.startswith('<button type="button" class="fcc-help-btn fcc-help-corner"') and "aria-label=" in html, html
+    assert res["done"] == "" and res["none"] == ""

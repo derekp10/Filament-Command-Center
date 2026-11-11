@@ -371,6 +371,19 @@ const fccFitQuestion = (panel) => {
 };
 window.fccFitQuestion = fccFitQuestion;
 
+// Group 55.3 (review, R4-3): the ? button of a question a script draws, for its top right
+// corner (.fcc-help-corner in global.css; the panel is position:relative, and the title
+// keeps clear of it). Its help is the one help_texts.js gives the question's overlay id,
+// as for the ? key (window.fccHelpKeyForOverlayId), so the ? shows exactly where the key
+// gives help; '' when that overlay has none. Called when the question opens.
+window.fccCornerHelpHtml = (overlayId, what = 'question') => {
+    const key = (window.fccHelpKeyForOverlayId && window.fccHelpKeyForOverlayId(overlayId)) || '';
+    if (!key) return '';
+    const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    return `<button type="button" class="fcc-help-btn fcc-help-corner" data-fcc-help="${esc(key)}" `
+        + `title="How this ${esc(what)} works (?)" aria-label="Help: how this ${esc(what)} works">?</button>`;
+};
+
 window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', host = null,
                                ids = {}, onConfirm = null, onCancel = null,
                                title = '', onStore = null, storeLabel = '', loadLabel = '',

@@ -975,6 +975,10 @@ ${D} .fcc-stock-dlg-btn[disabled] { cursor:default; }
             return;
         }
         if (handle._dialog) return;              // the reason dialog owns the keys while it is up
+        // The shortcut window over the list holds its keys (Group 55 review, R1-6): Del
+        // opened the reason dialog under it, unseen, and '/' took the keyboard into the
+        // filter under it.
+        if (window.fccShortcutsUp && window.fccShortcutsUp()) return;
         if (e.ctrlKey || e.altKey || e.metaKey) return;
         const filter = _filterEl(handle);
         const inFilter = !!filter && e.target === filter;

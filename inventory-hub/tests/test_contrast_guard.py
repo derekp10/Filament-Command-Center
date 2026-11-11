@@ -1335,9 +1335,10 @@ def test_the_empty_weight_prompts_notice_is_readable(page: Page, base_url: str):
 @pytest.mark.usefixtures("require_server")
 def test_the_in_app_help_is_readable(page: Page, base_url: str, assert_contrast):
     """Group 55.3: a dialog's ? button (white on FCC's dark header) and the help it opens
-    (its lines, its section title, its keys, All shortcuts), over a location's window.
-    Every write is answered in the browser. The button is proved scored: the guard
-    scores descendants only, so the header is the root."""
+    (its lines, its section title, its keys, All shortcuts), over a toolhead's window, whose
+    help has its Quick-Swap part and keys (Group 55 review, R3-5: a dryer box's help has
+    neither, so they were never scored). Every write is answered in the browser. Each part
+    is proved scored: the guard scores descendants only, so the header is the root."""
     import conftest   # local: keeps this file's header out of other branches' merges
     from test_text_size_guard import _read_only
     _read_only(page)
@@ -1345,17 +1346,33 @@ def test_the_in_app_help_is_readable(page: Page, base_url: str, assert_contrast)
     page.wait_for_function(
         "() => typeof state === 'object' && Array.isArray(state.allLocations) && state.allLocations.length > 0",
         timeout=15_000)
-    loc = page.evaluate("() => (state.allLocations.find((r) => r.Type === 'Dryer Box') || state.allLocations[0]).LocationID")
-    page.evaluate("(id) => window.openManage(id)", loc)
+    # A toolhead a dryer box slot feeds, so its window has the Quick-Swap grid.
+    head = page.evaluate("""() => {
+        for (const r of state.allLocations) {
+            const t = (r && r.extra && r.extra.slot_targets) || {};
+            for (const v of Object.values(t)) {
+                const h = state.allLocations.find((x) => x.LocationID === v);
+                if (h && window.isToolheadType(h.Type)) return h.LocationID;
+            }
+        }
+        return null;
+    }""")
+    if not head:
+        pytest.skip("no dryer box slot on dev feeds a toolhead")
+    page.evaluate("(id) => window.openManage(id)", head)
     expect(page.locator("#manageModal")).to_be_visible(timeout=8000)
+    page.wait_for_function("() => document.querySelectorAll('#quickswap-grid .fcc-qs-slot').length > 0", timeout=10_000)
     header = page.locator("#manageModal .modal-header")
     assert_contrast(header)
     scored = [o.get("text") for o in conftest.contrast_offenders(header, min_ratio=100)]
     assert "?" in scored, scored
     page.locator('#manageModal [data-fcc-help="location-window"]').click()
     overlay = page.locator("#fcc-shortcuts-overlay")
-    expect(page.locator("#fcc-help-view")).to_be_visible()
+    expect(page.locator("#fcc-help-view .fcc-help-sub")).to_be_visible()
     assert_contrast(overlay)
+    scored = " ".join(o.get("text") or "" for o in conftest.contrast_offenders(overlay, min_ratio=100))
+    for words in ("Quick-Swap (a toolhead or a printer)", "Focus the Quick-Swap grid", "All shortcuts"):
+        assert words in scored, (words, scored[:400])
 
 
 def _the_question_mark_is_scored(conftest, root):
@@ -1418,6 +1435,16 @@ def test_the_help_buttons_scripts_draw_are_readable(page: Page, base_url: str, a
     _the_question_mark_is_scored(conftest, question)
     page.keyboard.press("Escape")
     expect(question).to_have_count(0)
+    # The Quick-Swap question's (Group 55 review, R4-3), on a made-up tile: nothing is answered.
+    page.evaluate("""() => { const b = document.createElement('button');
+        Object.assign(b.dataset, { toolhead: 'HEAD-1', box: 'DRYBOX-1', slot: '2', spoolLabel: '#42 Example PLA' });
+        window.quickSwapTap(b); }""")
+    swap = page.locator("#fcc-quickswap-confirm-overlay")
+    expect(swap.locator("[data-fcc-help]")).to_be_visible(timeout=10_000)
+    _the_question_mark_is_scored(conftest, swap)
+    assert not [o for o in conftest.contrast_offenders(swap) if (o.get("text") or "").strip() == "?"]
+    page.keyboard.press("Escape")
+    expect(swap).to_have_count(0)
     page.evaluate("() => window.openQuickWeigh(9061)")
     weigh = page.locator("#fcc-weight-entry-overlay")
     expect(weigh.locator("[data-fcc-help]")).to_be_visible(timeout=10_000)

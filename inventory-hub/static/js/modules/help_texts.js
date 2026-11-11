@@ -44,14 +44,14 @@
     help({
         key: 'location-window',
         title: 'Location window',
-        match: { modal: 'manageModal', overlay: ['fcc-quickswap-confirm-overlay'] },
+        match: { modal: 'manageModal' },
         lines: [
             'One place and its spools: a box with several slots as its numbered slots, any other place as a list.',
             'Scan a spool and it waits under READY TO SLOT (◀ PREV and NEXT ▶ pick another from your buffer). Click an empty slot, or ⬇️ DEPOSIT HERE, to put it here; a slot that feeds a toolhead loads it onto that toolhead too. A full slot asks first.',
-            'A click on ⬇️ DEPOSIT HERE puts only the spool shown; scanning its QR (this place\'s own label) puts your whole buffer here.',
+            'A click on ⬇️ DEPOSIT HERE puts only the spool shown. Scanning its QR (this place\'s own label) puts your buffer here: a toolhead or other one-spool place takes only the top spool, and a box with slots or a printer asks where each spool goes.',
             'On a spool: ✋ PICK puts it in your buffer, ⏏️ EJECT or 🗑️ TRASH takes it out of this place after asking, ✏️ edits it, and 🖨️ adds its label to the print queue. A loaded spool\'s ↩️ RETURN SPOOL puts it back in its slot.',
             'A dryer box has 🔗 Slot → Toolhead Feeds (press Show): choose which toolhead each slot feeds, then 💾 Save Feeds.',
-            'Scans while it is open: a slot\'s code (CMD:SLOT:2) does what clicking that slot does, and this place\'s own label puts your buffer here.',
+            'Scans while it is open: a slot\'s code (CMD:SLOT:2) does what clicking that slot does, and this place\'s own label puts your buffer here, as above.',
             'CMD:EJECTALL asks, then takes out every spool here that has no slot. CMD:DONE, like ✅ Done / Sync, closes the window, or goes back to the place you came from.',
             '🖨️ Print Location Label adds this place\'s label to the print queue, and its small QR opens bigger, to scan from the screen.',
         ],
@@ -66,6 +66,20 @@
             ],
             scopes: ['Quick-Swap'],
         }],
+    });
+
+    help({
+        key: 'swap-question',
+        title: 'Quick-Swap question',
+        match: { overlay: ['fcc-quickswap-confirm-overlay'] },
+        lines: [
+            'Quick-Swap asks before it moves a spool: a slot\'s spool onto the toolhead it feeds (a tile in a toolhead\'s window, or ✓ I loaded it in Printer Status), or a spool from your buffer into a slot (⬇️ Deposit from buffer).',
+            'It asks before ↩️ Return to Slot too, which puts the toolhead\'s spool back in a slot and loads nothing.',
+            'Yes, swap does what the question says. No, cancel, or Esc, moves nothing.',
+            'A spool going onto a toolhead takes the place of the one there, which goes back to the box slot it came from (with no record of one, to the printer\'s room, else Unassigned).',
+            'On an idle toolhead the question opens on Yes, swap. While the printer prints, or when FCC couldn\'t check the printer, it says so and opens on No, cancel, so a stray Enter moves nothing.',
+            'While the printer prints, it also shows a QR above each button: scan one to answer. Enter presses the button that has the keyboard, and Tab moves between the two.',
+        ],
     });
 
     help({

@@ -219,17 +219,44 @@
         try { ov.focus({ preventScroll: true }); } catch (_) { /* a stub page */ }
     }
 
-    function _close() {
+    // A double click's second press: under DOUBLE_PRESS_MS after the first, within 16 px
+    // of it (40 for a finger or a pen). Group 58's rule.
+    const DOUBLE_PRESS_MS = 700;
+    function _isSecondPress(first, ev, now) {
+        if (!first || !ev || typeof ev.clientX !== 'number' || now - first.t >= DOUBLE_PRESS_MS) return false;
+        const r = first.coarse ? 40 : 16;
+        return Math.abs(ev.clientX - first.x) <= r && Math.abs(ev.clientY - first.y) <= r;
+    }
+
+    // The click that closed the window (its ✕, its backdrop), and the second press of
+    // that double click while it is being eaten (Group 55 review, R1-3 / R4-1): the second
+    // press landed on whatever lay under the pointer once the window was gone, a location
+    // window's Print Location Label, a picker's tile, a slot, or Bootstrap's backdrop,
+    // which closed the window the help was opened over.
+    let _closedBy = null;
+    let _eating = 0;
+
+    // `ev`: the click that closed it, when a pointer did. `gone`: its dialog closed, or
+    // another opened over it, rather than the person closing it.
+    function _close(ev, gone) {
         const ov = _overlay();
         if (!ov) return;
         const bd = document.getElementById('fcc-shortcuts-overlay-backdrop');
+        const was = ctx && ctx.el;
         ov.style.display = 'none';
         if (bd) bd.style.display = 'none';
         if (document.body) document.body.classList.remove('fcc-shortcuts-up');
         view = 'all';
         ctx = null;
         _press = null;
-        const back = _focusBefore;
+        _closedBy = (ev && ev.detail > 0 && typeof ev.clientX === 'number')
+            ? { t: performance.now(), x: ev.clientX, y: ev.clientY,
+                coarse: ev.pointerType === 'touch' || ev.pointerType === 'pen' }
+            : null;
+        let back = _focusBefore;
+        // Drawn again under the help (a list redraws on the heartbeat): the control with
+        // its id now.
+        if (back && !back.isConnected && back.id) back = document.getElementById(back.id);
         const now = document.activeElement;
         _focusBefore = null;
         // Only where the list left it nowhere: the ✕ (inside the list) or the page
@@ -238,22 +265,36 @@
             && (!now || now === document.body || ov.contains(now))) {
             back.focus();
         }
+        // Said once it is closed (Group 55 review, R1-1), for a dialog that keeps a place
+        // of its own for the keyboard: the weigh-out list gives it to the box the next
+        // reading is for, which a redraw under the help replaced, or a scan under it moved.
+        try {
+            document.dispatchEvent(new CustomEvent('fcc:help-closed', { detail: { element: was || null, person: !gone } }));
+        } catch (_) { /* a page without CustomEvent: nothing listens there */ }
     }
 
     // The title bar's ? button, the list's ✕ and its backdrop: the full list, or close.
     window.toggleShortcutsOverlay = function (ev) {
-        if (_isUp()) _close();
-        else _open('all', null, ev);
+        if (_isUp()) {
+            // The second press of the double click that opened it, on its ✕ (on a phone
+            // the ✕ can sit within a finger's reach of the dialog's ?).
+            if (_isSecondPress(_press, ev, performance.now())) return;
+            _close(ev);
+        } else _open('all', null, ev);
     };
 
     // The backdrop: a click closes the window, except the second press of the double
     // click that opened it (Group 58's rule: under 700 ms, within 16 px, 40 for a finger).
     window.fccShortcutsBackdropClick = function (ev) {
-        if (_press && ev && typeof ev.clientX === 'number' && performance.now() - _press.t < 700) {
-            const r = _press.coarse ? 40 : 16;
-            if (Math.abs(ev.clientX - _press.x) <= r && Math.abs(ev.clientY - _press.y) <= r) return;
-        }
-        _close();
+        if (_isSecondPress(_press, ev, performance.now())) return;
+        _close(ev);
+    };
+
+    // The help, closed when the dialog it was opened for changes what it shows (a scan
+    // under it opened another place in the location window; Group 55 review, R1-8): its
+    // words, and the sections they showed, were about what was there.
+    window.fccCloseHelpFor = function (el) {
+        if (_isUp() && ctx && el && ctx.el === el) _close(null, true);
     };
 
     // The dialog that is on top and has help, or null (then ? opens the full list).
@@ -334,22 +375,22 @@
     document.addEventListener('hidden.bs.modal', (e) => {
         const i = _shownOrder.indexOf(e.target);
         if (i !== -1) _shownOrder.splice(i, 1);
-        if (_isUp() && ctx && ctx.el === e.target) _close();
+        if (_isUp() && ctx && ctx.el === e.target) _close(null, true);
     });
     // overlay_mount.js says when a mountOverlay is cleaned up (Group 55.3).
     document.addEventListener('fcc:overlay-closed', (e) => {
         const gone = e && e.detail && e.detail.element;
-        if (_isUp() && ctx && gone && ctx.el === gone) _close();
+        if (_isUp() && ctx && gone && ctx.el === gone) _close(null, true);
     });
     // A dialog's help goes when another dialog opens over that dialog (a scan goes on
     // under the help, and a window or question it opened was drawn under the help,
     // unseen). The full list from the title bar stays up as it always has.
     document.addEventListener('show.bs.modal', (e) => {
-        if (_isUp() && ctx && ctx.el !== e.target) _close();
+        if (_isUp() && ctx && ctx.el !== e.target) _close(null, true);
     });
     document.addEventListener('fcc:overlay-opened', (e) => {
         const el = e && e.detail && e.detail.element;
-        if (_isUp() && ctx && el && ctx.el !== el) _close();
+        if (_isUp() && ctx && el && ctx.el !== el) _close(null, true);
     });
     // The help keeps the keyboard while it is up: a focus moving into it is no
     // Bootstrap window's business (its focus trap pulled the focus back to the window
@@ -370,6 +411,36 @@
         const t = e.target;
         if (e.button === 0 && t && typeof t.closest === 'function' && t.closest('[data-fcc-help]')) e.preventDefault();
     }, true);
+
+    // The second press of the double click that closed the window (_closedBy, set by
+    // _close) reaches nothing: its pointerdown, mousedown, pointerup, mouseup, click and
+    // dblclick, the events Group 58's _shieldPage stops for the audit (the floating pills
+    // act on pointerup). A primary press only; a click from the keyboard (detail 0) is no
+    // press. Any press ends the shield: this one, or one somewhere else.
+    document.addEventListener('pointerdown', (e) => {
+        if (e.button > 0) return;
+        const first = _closedBy;
+        _closedBy = null;
+        _eating = 0;
+        if (_isSecondPress(first, e, performance.now())) {
+            _eating = performance.now();
+            e.stopImmediatePropagation();
+        }
+    }, true);
+    ['mousedown', 'pointerup', 'mouseup', 'click', 'dblclick'].forEach((type) => {
+        document.addEventListener(type, (e) => {
+            if (!_eating || performance.now() - _eating > 2000) return;
+            if (type === 'click' && !e.detail) return;
+            if (e.button > 0) return;
+            if (type !== 'pointerup') e.preventDefault();   // mousedown: the keyboard stays put
+            e.stopImmediatePropagation();
+            if (type === 'click') {
+                const was = _eating;
+                setTimeout(() => { if (_eating === was) _eating = 0; }, 0);   // and its dblclick
+            }
+        }, true);
+    });
+    document.addEventListener('pointercancel', () => { _eating = 0; }, true);
 
     // A dialog's ? button, and the window's own All shortcuts / ← Back.
     document.addEventListener('click', (e) => {
@@ -513,7 +584,7 @@
     // Seed the registry with shortcuts we already know about.
     window.registerShortcut({
         id: 'help-overlay', scope: 'Global',
-        keys: ['?'], description: 'Open this keyboard shortcut reference. In a window with a ? button, it opens that window\'s help first; press ? again for every shortcut.'
+        keys: ['?'], description: 'Open this keyboard shortcut reference. In a window with a ? button, it opens that window\'s help first; press ? again for every shortcut. In a text box (a weight box too) it types a ?: use the window\'s ? button there.'
     });
     window.registerShortcut({
         id: 'quickswap-focus', scope: 'Quick-Swap',
@@ -528,7 +599,7 @@
     window.registerShortcut({
         id: 'enter-confirm', scope: 'Quick-Swap',
         keys: ['Enter'],
-        description: 'Trigger swap for the highlighted slot; then confirm overlay with Enter again.'
+        description: 'Open the swap question for the highlighted slot. On an idle toolhead it opens on Yes, swap (Enter again swaps); while its printer prints, or FCC couldn\'t check it, it opens on No, cancel.'
     });
     window.registerShortcut({
         id: 'escape-cancel', scope: 'Quick-Swap',

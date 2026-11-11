@@ -148,7 +148,10 @@ def test_a_double_click_on_the_help_button_leaves_the_help_up(page: Page, base_u
 
 
 def test_a_scan_starting_with_a_question_mark_in_the_window_opens_nothing(page: Page, base_url: str):
-    """A legacy label can start with '?': the rest of the burst arrives inside the 120 ms."""
+    """A legacy label can start with '?': the rest of the burst arrives inside the 120 ms.
+    Pins what was right (it passes on the code before Group 55 too, whose handler cancelled
+    the deferred '?' the same way): the 120 ms defer still holds with a window open, now
+    that the '?' there opens the window's help."""
     _open_a_location(page, base_url)
     page.evaluate("""() => {
         if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
@@ -324,15 +327,18 @@ def test_the_help_closes_when_another_window_opens_over_its_window(page: Page, b
 
 def test_enter_and_keys_under_the_help_never_reach_the_quick_weigh(page: Page, base_url: str):
     """The Quick-Weigh saved on any Enter that wasn't on its own buttons, D set its default
-    and an arrow switched its mode. With its help up, none of them reach it. The spool is
-    made up, and every write is answered in the browser."""
+    mode and an arrow switched its mode. With its help up, none of them reach it: the arrow
+    and Enter are the help's own stop, and D is the Quick-Weigh's guard
+    (window.fccShortcutsUp), so D's own effect is what this checks: the stored default and
+    the Set as default button. The Enter is a person's (the scan buffer emptied first and
+    the in-flight window past), not a scan's, which the Quick-Weigh would ignore anyway
+    (Group 55 review, R1-5 / R3-2). The spool is made up, and every write is answered in
+    the browser."""
+    from test_text_size_guard import _read_only
     saves = []
     spool = {"id": 9055, "initial_weight": 1000, "used_weight": 200, "spool_weight": 200, "archived": False,
              "filament": {"id": 9056, "name": "Help Test", "material": "PLA", "weight": 1000,
                           "spool_weight": 200, "color_hex": "336699", "vendor": {"id": 9057, "name": "Example"}}}
-
-    def details(route):
-        route.fulfill(status=200, content_type="application/json", body=__import__("json").dumps(spool))
 
     def write(route):
         if route.request.method != "GET":
@@ -341,8 +347,8 @@ def test_enter_and_keys_under_the_help_never_reach_the_quick_weigh(page: Page, b
         else:
             route.continue_()
 
-    page.route("**/api/spool_details*", details)
-    page.route("**/api/spool/update*", write)
+    _read_only(page, extra_get={"/api/spool_details": spool})
+    page.route("**/api/spool/update*", write)        # after: the newest route answers first
     page.goto(base_url)
     page.wait_for_function("() => typeof window.openQuickWeigh === 'function' && typeof state === 'object'")
     page.evaluate("() => window.openQuickWeigh(9055)")
@@ -351,18 +357,48 @@ def test_enter_and_keys_under_the_help_never_reach_the_quick_weigh(page: Page, b
     assert page.evaluate("() => window.fccHelpContextKey()") == "quick-weigh"
     page.evaluate("() => window.openHelp('quick-weigh')")
     expect(page.locator(OVERLAY)).to_be_visible()
-    mode_before = page.evaluate("() => (document.querySelector('#fcc-we-tabs .fcc-we-tab.btn-info') || {}).dataset?.mode || ''")
+    look = """() => ({ mode: (document.querySelector('#fcc-we-tabs .fcc-we-tab.btn-info') || {}).dataset?.mode || '',
+        stored: (() => { try { return localStorage.getItem('fcc.weighEntry.defaultMode'); } catch (e) { return 'unreadable'; } })(),
+        button: (document.getElementById('fcc-we-set-default') || {}).textContent || '' })"""
+    before = page.evaluate(look)
     page.keyboard.press("ArrowRight")
     page.keyboard.press("d")
     page.wait_for_timeout(200)
+    assert page.evaluate(look) == before, "D or an arrow under the help changed the Quick-Weigh"
+    # A person's Enter: what they typed is no scan.
+    page.evaluate("() => { if (window.clearScanBuffer) window.clearScanBuffer(); }")
+    page.wait_for_timeout(600)
+    assert page.evaluate("() => !window.enterIsAScan || !window.enterIsAScan()")
     page.keyboard.press("Enter")
     page.wait_for_timeout(600)
     assert saves == [], f"a key under the help saved the Quick-Weigh: {saves}"
-    mode_after = page.evaluate("() => (document.querySelector('#fcc-we-tabs .fcc-we-tab.btn-info') || {}).dataset?.mode || ''")
-    assert mode_after == mode_before
+    assert page.evaluate(look) == before
     page.keyboard.press("Escape")
     expect(page.locator(OVERLAY)).to_be_hidden()
     expect(page.locator("#fcc-weight-entry-overlay")).to_be_visible()
+
+
+def test_escape_under_the_list_never_asks_force_locations_cancel_question(page: Page, base_url: str):
+    """Force Location's Escape asks "Cancel Override?" (its window-capture listener runs
+    before the help's). Under the shortcut list, Escape closes only the list: the question
+    opened under it, unseen (Group 55 review, R1-5: the guard had no test). Nothing is
+    written: the Force Location window is cancelled at the end."""
+    from test_text_size_guard import _read_only
+    _read_only(page)
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.promptEditLocation === 'function' && typeof Swal !== 'undefined'")
+    # fromCard: on the page body (without it, it draws inside the spool window).
+    page.evaluate("() => { window.promptEditLocation(9055, 'Unassigned', { fromCard: true }); }")
+    expect(page.locator(".swal2-popup")).to_be_visible(timeout=10000)
+    page.wait_for_selector(".swal-loc-item", timeout=10000)
+    # The full list over it (a SweetAlert has no help of its own).
+    page.evaluate("() => window.toggleShortcutsOverlay()")
+    expect(page.locator(OVERLAY)).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(page.locator(OVERLAY)).to_be_hidden()
+    page.wait_for_timeout(300)
+    expect(page.locator("#fcc-escape-confirm-overlay")).to_have_count(0)
+    expect(page.locator(".swal2-popup")).to_be_visible()
 
 
 def test_the_wizards_weigh_from_scale_is_not_the_quick_weigh(page: Page, base_url: str):
@@ -383,14 +419,10 @@ def test_the_quick_weighs_help_button_leaves_the_keyboard_in_its_field(page: Pag
     """The Quick-Weigh's ? sits beside its ×. A click opens its help, and Escape gives the
     keyboard back to the weight box, where Enter saves: the reading typed before the click
     is still there. The spool is made up, and every write is answered in the browser."""
-    import json as _json
     saves = []
     spool = {"id": 9058, "initial_weight": 1000, "used_weight": 200, "spool_weight": 200, "archived": False,
              "filament": {"id": 9059, "name": "Help Test", "material": "PLA", "weight": 1000,
                           "spool_weight": 200, "color_hex": "336699", "vendor": {"id": 9060, "name": "Example"}}}
-
-    def details(route):
-        route.fulfill(status=200, content_type="application/json", body=_json.dumps(spool))
 
     def write(route):
         if route.request.method != "GET":
@@ -399,8 +431,11 @@ def test_the_quick_weighs_help_button_leaves_the_keyboard_in_its_field(page: Pag
         else:
             route.continue_()
 
-    page.route("**/api/spool_details*", details)
-    page.route("**/api/spool/update*", write)
+    # Every other write answered in the browser too (Group 55 review, R3-1: the refused
+    # save's Activity Log line, POST /api/log_event, reached dev's log as an ERROR).
+    from test_text_size_guard import _read_only
+    _read_only(page, extra_get={"/api/spool_details": spool})
+    page.route("**/api/spool/update*", write)        # after: the newest route answers first
     page.goto(base_url)
     page.wait_for_function("() => typeof window.openQuickWeigh === 'function' && typeof state === 'object'")
     page.evaluate("() => window.openQuickWeigh(9058)")
@@ -569,3 +604,244 @@ def test_each_picker_gets_its_own_help(page: Page, base_url: str, kind, key):
     page.keyboard.press("Escape")                      # the picker's own Escape: cancelled
     expect(page.locator("#fcc-slot-picker")).to_have_count(0)
     assert page.evaluate("() => window.__picked.then((r) => r)") is None
+
+
+# --- Group 55 review: closing the help, and the dialogs it covers ------------------------
+
+SECOND_PRESS_JS = """() => {
+    window.__second = [];
+    ['mousedown', 'click', 'dblclick'].forEach((t) => document.addEventListener(t, (e) => {
+        if (t === 'dblclick' || e.detail >= 2) {
+            const w = e.target;
+            window.__second.push(t + ' on ' + ((w && (w.id || w.className || w.tagName)) || '?'));
+        }
+    }));
+}"""
+
+
+@pytest.mark.parametrize("where", ["close button", "backdrop"])
+def test_a_double_click_that_closes_the_help_presses_nothing_under_it(page: Page, base_url: str, where):
+    """Group 55 review, R1-3 / R4-1: the first press of a double click on the help's close
+    button, or on its dark backdrop, closes it, and the second landed on whatever lay under
+    the pointer once it was gone: a location window's Print Location Label (its label
+    queued), a picker's tile, or Bootstrap's backdrop beside the window, which closed the
+    window under the help. Now the second press reaches nothing: not the window under it
+    (its staying open is the proof for the backdrop, at a spot outside its dialog box), and
+    not the page (a listener counts any second press that gets through). Read-only: every
+    write is answered in the browser."""
+    from test_text_size_guard import _read_only
+    _read_only(page)
+    _open_a_location(page, base_url)
+    page.evaluate(SECOND_PRESS_JS)
+    page.locator(WINDOW_HELP).click()
+    expect(page.locator(OVERLAY)).to_be_visible()
+    page.wait_for_timeout(800)                         # past the opening click's double-click window
+    if where == "close button":
+        box = page.locator(f"{OVERLAY} .btn-close").bounding_box()
+        x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+    else:
+        x, y = 12, 12                                  # outside the window's dialog box: its .modal
+        under = page.evaluate("""([x, y]) => {
+            const ov = document.getElementById('fcc-shortcuts-overlay');
+            const bd = document.getElementById('fcc-shortcuts-overlay-backdrop');
+            ov.style.visibility = 'hidden'; bd.style.visibility = 'hidden';
+            const el = document.elementFromPoint(x, y);
+            ov.style.visibility = ''; bd.style.visibility = '';
+            return el && el.id;
+        }""", [x, y])
+        assert under == "manageModal", f"the spot isn't over the window's own backdrop: {under!r}"
+    page.mouse.dblclick(x, y)
+    expect(page.locator(OVERLAY)).to_be_hidden()
+    page.wait_for_timeout(600)
+    assert page.evaluate("() => window.__second") == [], "the second press reached the page"
+    expect(page.locator("#manageModal")).to_be_visible()
+    # A press there later is a person's next one and goes on.
+    if where == "backdrop":
+        page.wait_for_timeout(800)
+        page.mouse.click(x, y)
+        expect(page.locator("#manageModal")).to_be_hidden(timeout=5000)
+
+
+def test_the_help_goes_when_its_window_shows_another_place(page: Page, base_url: str):
+    """Group 55 review, R1-8: a scan under the help that opens another place in the same
+    location window drew it under the help, which still showed the last place's sections.
+    The window says so (window.fccCloseHelpFor), and the help goes. Read-only."""
+    from test_text_size_guard import _read_only
+    _read_only(page)
+    first = _open_a_location(page, base_url)
+    page.locator(WINDOW_HELP).click()
+    expect(page.locator(OVERLAY)).to_be_visible()
+    other = page.evaluate(
+        "(id) => (state.allLocations.find((r) => r.LocationID !== id && r.LocationID !== 'Unassigned') || {}).LocationID",
+        first)
+    assert other, "dev has one place only"
+    page.evaluate("(id) => window.openManage(id)", other)
+    expect(page.locator(OVERLAY)).to_be_hidden(timeout=5000)
+    expect(page.locator("#manageModal")).to_be_visible()
+    assert page.evaluate("() => document.getElementById('manage-loc-id').value") == other
+
+
+WEIGH_SPOOLS = [
+    {"id": 9064, "display": "#9064 Example PLA (Help Test One)", "color": "336699", "remaining_weight": 600},
+    {"id": 9065, "display": "#9065 Example PLA (Help Test Two)", "color": "993366", "remaining_weight": 400},
+]
+
+
+def test_the_weigh_out_list_gets_the_keyboard_back_after_its_help(page: Page, base_url: str):
+    """Group 55 review, R1-1 (red): the help gave the keyboard back to the box that had it,
+    but a redraw under the help (the heartbeat's refresh after a save) had replaced every
+    box, so the keyboard landed on the page and the next reading went to the scan path as
+    a spool id. Now the list puts it in the box of the spool being weighed, and the reading
+    typed next goes there. Made-up spools in a buffer of the page's own; every write is
+    answered in the browser."""
+    import json as _json
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    scans = []
+
+    def details(route):
+        sid = int(route.request.url.split("id=")[-1].split("&")[0])
+        body = {"id": sid, "initial_weight": 1000, "used_weight": 400, "spool_weight": 200, "archived": False,
+                "remaining_weight": 600,
+                "filament": {"id": 9066, "name": "Help Test", "material": "PLA", "weight": 1000,
+                             "spool_weight": 200, "color_hex": "336699", "vendor": {"id": 9067, "name": "Example"}}}
+        route.fulfill(status=200, content_type="application/json", body=_json.dumps(body))
+
+    def scan(route):
+        scans.append(route.request.post_data_json)
+        route.fulfill(status=200, content_type="application/json", body='{"type": "noop"}')
+
+    _read_only(page)
+    conftest.own_the_buffer(page, WEIGH_SPOOLS)
+    page.route("**/api/spool_details*", details)
+    page.route("**/api/identify_scan", scan)
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openWeighOutModal === 'function' && typeof state === 'object'"
+                           " && Array.isArray(state.heldSpools) && state.heldSpools.length === 2", timeout=15000)
+    page.evaluate("() => { window.openWeighOutModal(); }")
+    expect(page.locator("#weighOutModal")).to_be_visible(timeout=8000)
+    page.wait_for_function(
+        "() => { const m = bootstrap.Modal.getInstance(document.getElementById('weighOutModal'));"
+        " return !!m && !m._isTransitioning; }")
+    page.locator(".weigh-input[data-id='9064']").click()
+    page.locator('#weighOutModal [data-fcc-help="weigh-out"]').click()
+    expect(page.locator(OVERLAY)).to_be_visible()
+    # The redraw under the help: what the heartbeat's refresh of the buffer does.
+    page.evaluate("() => document.dispatchEvent(new CustomEvent('inventory:buffer-updated'))")
+    page.wait_for_timeout(300)
+    page.keyboard.press("Escape")
+    expect(page.locator(OVERLAY)).to_be_hidden()
+    focus = page.evaluate("""() => { const a = document.activeElement;
+        return a && a.classList.contains('weigh-input') ? a.dataset.id : (a && (a.id || a.tagName)); }""")
+    assert focus == "9064", f"the keyboard went to {focus!r}"
+    page.keyboard.type("645", delay=120)
+    expect(page.locator(".weigh-input[data-id='9064']")).to_have_value("645")
+    page.wait_for_timeout(500)
+    assert scans == [], f"the reading went to the scan path: {scans}"
+
+
+def test_a_half_typed_location_survives_the_wizards_help(page: Page, base_url: str):
+    """Group 55 review, R1-2: the wizard's Location box forgot a search in progress when it
+    got the keyboard back from the help (its focus handler reset it to the whole list), so
+    Tab took nothing and Save sent no location, which in an edit moved the spool to
+    Unassigned. Now Tab still takes the first match. Nothing is saved; every write is
+    answered in the browser."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    _read_only(page)
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openWizardModal === 'function'", timeout=15000)
+    page.evaluate("() => { window.openWizardModal(); }")
+    expect(page.locator("#wizardModal")).to_be_visible(timeout=10000)
+    conftest.wait_modal_settled(page, "wizardModal")
+    field = page.locator("#wiz-spool-location-search")
+    field.scroll_into_view_if_needed()
+    field.click()
+    page.wait_for_function("() => document.querySelectorAll('#dropdown-location .autocomplete-option').length > 1",
+                           timeout=10000)
+    # A query that matches a place but is no whole label: the first letters of one.
+    query = page.evaluate("""() => {
+        const opts = Array.from(document.querySelectorAll('#dropdown-location .autocomplete-option'));
+        const o = opts.find((x) => x.dataset.value && x.dataset.label.length > 4);
+        return o ? o.dataset.label.slice(0, 3) : null;
+    }""")
+    if not query:
+        pytest.skip("dev has no place with a long enough name for a partial search")
+    page.keyboard.type(query, delay=150)
+    expected = page.evaluate(
+        "() => { const o = document.querySelector('#dropdown-location .autocomplete-option'); return o ? o.dataset.value : null; }")
+    assert expected, f"{query!r} matches nothing"
+    assert page.evaluate("() => document.getElementById('wiz-spool-location').value") == ""
+    page.locator('#wizardModal [data-fcc-help="wizard"]').click()
+    expect(page.locator(OVERLAY)).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(page.locator(OVERLAY)).to_be_hidden()
+    assert page.evaluate("() => document.activeElement && document.activeElement.id") == "wiz-spool-location-search"
+    page.wait_for_timeout(300)
+    page.keyboard.press("Tab")
+    assert page.evaluate("() => document.getElementById('wiz-spool-location').value") == expected
+    conftest.close_wizard(page)
+
+
+def test_the_quick_swap_question_has_its_own_help_and_its_help_button(page: Page, base_url: str):
+    """Group 55 review, R1-4 / R4-3: the swap question (a Quick-Swap tile, Printer Status's
+    "I loaded it", the deposit, Return) showed the location window's help, which says
+    nothing about it, and drew no ?. Now it has its own help and a ? in its top right
+    corner, clear of its title. Opened on a made-up tile; nothing is answered Yes, and
+    every write is answered in the browser."""
+    from test_text_size_guard import _read_only
+    _read_only(page)
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.quickSwapTap === 'function' && typeof window.fccHelpFor === 'function'")
+    page.evaluate("""() => { const b = document.createElement('button');
+        Object.assign(b.dataset, { toolhead: 'HEAD-1', box: 'DRYBOX-1', slot: '2', spoolLabel: '#42 Example PLA' });
+        window.quickSwapTap(b); }""")
+    q = page.locator("#fcc-quickswap-confirm-overlay")
+    expect(q).to_be_visible(timeout=10000)
+    assert page.evaluate("() => window.fccHelpContextKey()") == "swap-question"
+    btn = q.locator('[data-fcc-help="swap-question"]')
+    expect(btn).to_be_visible()
+    clear = page.evaluate("""() => {
+        const b = document.querySelector('#fcc-quickswap-confirm-overlay [data-fcc-help]').getBoundingClientRect();
+        const t = document.getElementById('fcc-quickswap-confirm-title');
+        const r = document.createRange(); r.selectNodeContents(t);
+        const w = r.getBoundingClientRect();
+        return !(w.right > b.left && w.top < b.bottom && w.bottom > b.top);
+    }""")
+    assert clear, "the question's title runs under its ?"
+    btn.click()
+    expect(page.locator(OVERLAY)).to_be_visible()
+    expect(page.locator(TITLE)).to_have_text("❓ " + page.evaluate("() => window.fccHelpFor('swap-question').title"))
+    page.keyboard.press("Escape")                      # only the help
+    expect(page.locator(OVERLAY)).to_be_hidden()
+    expect(q).to_be_visible()
+    page.keyboard.press("Escape")                      # the question's own: nothing moves
+    expect(q).to_have_count(0)
+
+
+def test_the_low_stock_lists_keys_stand_down_under_the_shortcut_list(page: Page, base_url: str):
+    """Group 55 review, R1-6: with the shortcut list over the Low stock list, Del opened
+    the Exclude dialog under it, unseen, and '/' took the keyboard into its filter under
+    it. Now neither acts while the list is up. Read-only: nothing is excluded."""
+    from test_text_size_guard import _read_only
+    _read_only(page)
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openLowStockPanel === 'function'", timeout=15000)
+    page.evaluate("() => { window.openLowStockPanel(); }")
+    panel = page.locator("#fcc-low-stock-overlay")
+    expect(panel).to_be_visible(timeout=10000)
+    try:
+        page.wait_for_selector("#fcc-low-stock-overlay [data-stock-exclude]", timeout=15000)
+    except Exception:
+        pytest.skip("dev has no Low or Out filament to act on")
+    panel.locator("[data-stock-exclude]").first.focus()
+    page.evaluate("() => window.toggleShortcutsOverlay()")
+    expect(page.locator(OVERLAY)).to_be_visible()
+    page.keyboard.press("Delete")
+    page.keyboard.press("/")
+    page.wait_for_timeout(400)
+    expect(page.locator("#fcc-low-stock-reason")).to_have_count(0)
+    assert page.evaluate("() => !document.activeElement || !document.activeElement.matches('[data-stock-filter]')")
+    page.keyboard.press("Escape")
+    expect(page.locator(OVERLAY)).to_be_hidden()
+    expect(panel).to_be_visible()

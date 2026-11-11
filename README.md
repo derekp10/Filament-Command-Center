@@ -35,7 +35,7 @@ Open a toolhead from **LOCATIONS**: its **⚡ Quick-Swap** grid shows every box 
 
 ### Weigh
 
-**WEIGH** opens the weigh-out list for the spools in your buffer: type each one's weight and press Enter. It opens on **Net** (the filament alone); pick **Gross** to type what the scale reads with the spool on it, **Additive** to add or take off grams, or **Set Used**. A spool weighed down to nothing is archived, unless **Auto-Archive 0g** is off. The ⚖️ weight on a spool's card opens the Quick-Weigh for that one spool.
+**WEIGH** opens the weigh-out list for the spools in your buffer: type each one's weight and press Enter. It opens on **Net** (the filament alone) the first time, then on the mode you last used until the page reloads; pick **Gross** to type what the scale reads with the spool on it, **Additive** to add or take off grams, or **Set Used**. A spool weighed down to nothing is archived, unless **Auto-Archive 0g** is off. The ⚖️ weight on a spool's card opens the Quick-Weigh for that one spool.
 
 ### Labels
 
@@ -53,7 +53,7 @@ Open a toolhead from **LOCATIONS**: its **⚡ Quick-Swap** grid shows every box 
 
 ## Help inside the app
 
-Each everyday window has a **?** button in its header. It opens that window's help: what the window is for, what its buttons and scans do, and its keys. The **?** key does the same for the window on top (outside a text box), and pressing it again lists every keyboard shortcut and scan command. With no window open, **?** lists them all.
+Most everyday windows have a **?** button beside their ✕, and a question has one in its top corner: the location list and each place's window, the spool and filament windows, the wizard, weigh-out and the Quick-Weigh, the slot and printer pickers, the load and Quick-Swap questions, the print queue and the label backlog. It opens that window's help: what the window is for, what its buttons and scans do, and its keys. The **?** key does the same for the window on top (outside a text box, where it types a ?), and pressing it again lists every keyboard shortcut and scan command. With no window open, or in one with no help yet (the audit, Low stock, search), **?** lists them all.
 
 ![The help for a location's window](docs/images/readme/help.png)
 

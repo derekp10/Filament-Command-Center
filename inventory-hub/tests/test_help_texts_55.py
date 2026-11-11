@@ -6,11 +6,14 @@ dialog's ? button names its key (data-fcc-help="<key>"). The help is drawn in th
 shortcut window by shortcuts_registry.js. This file checks, offline:
 
   1. every entry is well formed: a key, a title, plain lines, a `match` naming its dialog;
-  2. each entry's dialog exists (a modal id in a template, an overlay id in the page's
-     scripts), and every scope it lists has keys registered under it, so a keys table
-     can't come out empty unseen;
-  3. every ? button names an entry and is a real button with a name, and every entry
-     has a ? button somewhere (a template, or a script that draws its header);
+  2. each entry's dialog exists (a modal id in a template, an overlay id or an
+     overlayHas selector's id or attribute in the page's own scripts, help_texts.js left
+     out), and every scope it lists has keys registered under it, so a keys table can't
+     come out empty unseen;
+  3. every ? button names an entry and is a real button with a name, every entry has a
+     ? button somewhere (a template, or a script that draws its header: those found only
+     as text here, SCRIPT_DRAWN, are drawn for real by test_help_buttons_55_js.py), and
+     every question an entry matches draws its ?;
   4. no words name the owner's own setup (CLAUDE.md, "no setup's own names": "It's
      useful for me, but including it in something others might use, just causes
      confusion."): none of his ids, printer names or emoji, and none of the ids in
@@ -113,12 +116,32 @@ def _all_words(entry: dict) -> list:
     return words
 
 
-def _page_text() -> str:
-    """Every template and page script, as text (for ids and help buttons)."""
+def _page_text(exclude=()) -> str:
+    """Every template and page script, as text (for ids and help buttons), less the
+    scripts named in `exclude`."""
     parts = [p.read_text(encoding="utf-8") for p in sorted(TEMPLATES.rglob("*.html"))]
     parts += [p.read_text(encoding="utf-8") for p in sorted(JS_ROOT.rglob("*.js"))
-              if not p.name.endswith(".min.js")]
+              if not p.name.endswith(".min.js") and p.name not in exclude]
     return "\n".join(parts)
+
+
+def _page_scripts() -> dict:
+    """The page's own scripts by file name, help_texts.js left out."""
+    return {p.name: p.read_text(encoding="utf-8") for p in sorted(JS_ROOT.rglob("*.js"))
+            if not p.name.endswith(".min.js") and p.name != HELP_JS.name}
+
+
+def _overlay_ids(entry) -> list:
+    m = entry.get("match") or {}
+    return [m["overlay"]] if isinstance(m.get("overlay"), str) else list(m.get("overlay") or [])
+
+
+def _dataset_name(attr: str):
+    """data-fcc-picker-mode -> fccPickerMode: the attribute as a script sets it."""
+    if not attr.startswith("data-"):
+        return None
+    head, *rest = attr[len("data-"):].split("-")
+    return head + "".join(w[:1].upper() + w[1:] for w in rest)
 
 
 def _registered_scopes() -> set:
@@ -131,6 +154,8 @@ FIRST_DIALOGS = {
     "location-list", "location-window", "spool-window", "filament-window", "wizard",
     "weigh-out", "quick-weigh", "move-question", "slot-picker", "printer-picker",
     "print-queue", "label-backlog",
+    # The Quick-Swap question, its own since the Group 55 review (R1-4).
+    "swap-question",
 }
 
 
@@ -176,14 +201,48 @@ def test_the_first_dialogs_all_have_help(entries):
 
 @needs_node
 def test_each_entrys_dialog_exists(entries):
-    text = _page_text()
+    """Every modal id, overlay id, and id or attribute in an `overlayHas` selector that an
+    entry matches on is in the page's own templates and scripts. help_texts.js is left out:
+    it names them all itself, so reading it too passed every rename and typo (Group 55
+    review, R3-3), and the ? key then opened the full list over that dialog."""
+    text = _page_text(exclude={HELP_JS.name})
     for e in entries:
         m = e.get("match") or {}
         if m.get("modal"):
             assert f'id="{m["modal"]}"' in text, f"{e['key']}: no element with id {m['modal']!r} in the templates"
-        for oid in ([m["overlay"]] if isinstance(m.get("overlay"), str) else (m.get("overlay") or [])):
+        for oid in _overlay_ids(e):
             assert f"'{oid}'" in text or f'"{oid}"' in text or f"`{oid}`" in text, (
                 f"{e['key']}: no script names the overlay id {oid!r}")
+        for sel in ([m["overlayHas"]] if m.get("overlayHas") else []):
+            for eid in re.findall(r"#([A-Za-z][\w-]*)", sel):
+                assert f'id="{eid}"' in text or f"'{eid}'" in text or f'"{eid}"' in text, (
+                    f"{e['key']}: no template or script draws the id #{eid} its overlayHas looks for")
+            for attr in re.findall(r"\[([A-Za-z][\w-]*)", sel):
+                camel = _dataset_name(attr)
+                assert attr in text or (camel and f".{camel}" in text), (
+                    f"{e['key']}: no template or script sets the attribute {attr} its overlayHas looks for")
+
+
+@needs_node
+def test_every_question_an_entry_matches_draws_its_help_button(entries):
+    """Group 55 review, R4-3: the ? key gave help over the Quick-Swap question and "Record it
+    as coming from…", which drew no ?, so a person with no keyboard couldn't reach it. Every
+    overlay an entry's `match` lists is drawn with its ?: by confirmActivePrint (its own
+    overlay, or one a caller names in `ids.overlay`: its `help` defaults to that overlay's)
+    or with window.fccCornerHelpHtml('<id>'). The browser tests see each one drawn."""
+    js = _page_scripts()
+    assert "ids.overlay || 'fcc-active-print-confirm-overlay'" in js["inv_core.js"]
+    assert "window.fccHelpKeyForOverlayId(overlayId)" in js["inv_core.js"]
+    for e in entries:
+        for oid in _overlay_ids(e):
+            if oid == "fcc-active-print-confirm-overlay":       # confirmActivePrint's own
+                continue
+            drawn = [name for name, src in js.items()
+                     if f"fccCornerHelpHtml('{oid}')" in src
+                     or re.search(r"\boverlay:\s*'" + re.escape(oid) + "'", src)]
+            assert drawn, (
+                f"{e['key']}: the overlay {oid!r} draws no ? (pass it to confirmActivePrint as "
+                f"ids.overlay, or put window.fccCornerHelpHtml('{oid}') in its top right corner)")
 
 
 @needs_node
@@ -216,6 +275,8 @@ SCRIPT_DRAWN = {
     # confirmActivePrint's ? asks the registry for its overlay's help: the move doors'
     # overlays are the move question's (test_help_buttons_55_js.py).
     "move-question": ("inv_core.js", "window.fccHelpKeyForOverlayId(overlayId)"),
+    # The Quick-Swap question's ? is its overlay's help, through window.fccCornerHelpHtml.
+    "swap-question": ("inv_quickswap.js", "fccCornerHelpHtml('fcc-quickswap-confirm-overlay')"),
 }
 
 
