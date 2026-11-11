@@ -4,7 +4,7 @@
 **Estimated effort:** SMALL–MEDIUM (~5–9 h, 1 session). 53.1 ~1.5–3 h · 53.2 ~1–2 h · 53.3 ~2–4 h.
 **Risk:** **LOW–MEDIUM.** 53.1 touches daily paths (the Quick-Swap grid, eject mode, the Printer picker, "Move all →"); 53.2 and 53.3 are tests only.
 
-> **2026-11-10: DONE, merged to `dev` (Derek: "Yes merge and file the followups"; `main` held). Nothing is left in the group; its follow-ups are standalone buglist items, the 🟠 error-body reads first. Build notes below.**
+> **2026-11-10: DONE, merged to `dev` `f4bea52` (Derek: "Yes merge and file the followups"; `main` held). Nothing is left in the group; its follow-ups are standalone buglist items, the 🟠 error-body reads first. Build notes below.**
 > **Status: `TODO` — filed 2026-10-19 (`/refresh-groups`). No Derek decision needed.** Not in the 48 + 49 + 51 + 52 bundle.
 > One frontend toolhead-Type list, and two classes of bug turned into cheap automatic source checks instead of agent reviews. Every decision: [refresh-2026-10-19.md](refresh-2026-10-19.md).
 > Code anchors were read on `dev` @ `c5c5aa6` (the refresh's grounding) and spot-checked at `08c4b10`. Line numbers drift, so re-grep before editing.
