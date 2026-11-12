@@ -337,3 +337,181 @@ def test_the_line_escapes_its_free_text(logs):
     assert body["status"] == "confirmed", body
     assert _uncharged(logs) == ("⚠️ P&lt;1&gt;: 5.00g of 'f&lt;3&gt;.gcode' wasn't charged to any spool: "
                                 "5 g on T0 · H&lt;2&gt;&amp;, which had #42 — weigh it to true up.")
+
+
+# --------------------------------------------------------------------------- #
+# Round 2's review (2026-11-12): the line agrees with the ledger               #
+# --------------------------------------------------------------------------- #
+# The ledger's shortfall is what the job asked minus what every Apply of it charged.
+# On a no_spool card, and on a review whose ask was fixed by an earlier Apply (a retry
+# after a failed write, a card kept with grams left), that is a total: grams typed
+# beyond one line make up for another's, and a line picked with fewer grams counts.
+# The line leads with that total, never more, says nothing when it is 0, names the
+# spool picked for a line it lists, and calls "said above" only the grams a picked
+# spool couldn't take, as logged.
+
+def _no_spool_card():
+    """A no_spool card from the print-end read: RCOI-5 and RCOI-7 were both empty
+    when the print ended, and #42 and #243 were on them when it started."""
+    return {"printer_name": INDX, "job_id": str(JOB), "filename": FILE, "progress": 1.0,
+            "total_grams": 159.6, "spools": [], "ambiguous": False, "kind": "no_spool",
+            "usage_map": {"4": 84.28, "6": 75.32},
+            "heads_at_end": [{"toolhead": "RCOI-5", "position": 4, "sid": None, "sids": []},
+                             {"toolhead": "RCOI-7", "position": 6, "sid": None, "sids": []},
+                             {"toolhead": "RCOI-5", "position": 4, "sid": 42, "when": "start"},
+                             {"toolhead": "RCOI-7", "position": 6, "sid": 243, "when": "start"}],
+            "heads_source": "print_end", "heads_words": print_deduct._heads_words("print_end"),
+            "unresolved_notes": {"4": "No spool was loaded on RCOI-5 when the print ended; #42 was on it "
+                                      "when the print started.",
+                                 "6": "No spool was loaded on RCOI-7 when the print ended; #243 was on it "
+                                      "when the print started."},
+            "created": "2026-11-12 00:00:00"}
+
+
+def _apply_on_wire(rec, body, spools, printer=INDX, job=JOB):
+    """Stash `rec` and Apply `body` over the wire harness holding `spools`."""
+    sm = WeightWireSpoolman(spools)
+    ctx = [patch.object(spoolman_api.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")),
+           patch.object(spoolman_api, "format_spool_display", return_value={"text": "#s", "color": "ff0000"}),
+           patch.object(spoolman_api.requests, "get", side_effect=sm._get),
+           patch.object(spoolman_api.requests, "patch", side_effect=sm._patch)]
+    _start(ctx)
+    try:
+        cancel_review_store.add_pending(rec)
+        return _confirm(body, printer=printer, job=job), sm
+    finally:
+        _stop(ctx)
+
+
+SHELF = {300: _spool(10.0, "SHELF-1"), 301: _spool(10.0, "SHELF-1"),
+         42: _spool(700.0, "CART-1"), 243: _spool(700.0, "CART-1")}
+
+
+def test_a_no_spool_card_charged_in_full_across_its_lines_says_nothing_went_uncharged(logs):
+    """100 g typed for T4 (FCC worked out 84.28) and 59.6 for T6 (75.32): all 159.6 g
+    charged, the ledger's shortfall 0, so there is no uncharged line."""
+    # On e777bcd: AssertionError: [("⚠️ 🦝 Core One INDX: 15.72g of '/usb/SCP-04~4.BGC' wasn't charged
+    # to any spool: 15.72 g on T6 · RCOI-7, which had #243 — weigh it to true up.", 'WARNING')]
+    body, _sm = _apply_on_wire(_no_spool_card(), {"charges": [{"position": 4, "sid": 300, "grams": 100.0},
+                                                              {"position": 6, "sid": 301, "grams": 59.6}]},
+                               SHELF)
+    assert body["status"] == "confirmed" and body["shortfall_g"] == pytest.approx(0.0), body
+    assert "shortfall" not in print_deduct_ledger._load()[print_deduct_ledger._key(INDX, str(JOB))]
+    assert [(m, lvl) for m, lvl in logs if "wasn't charged to any spool" in m] == []
+
+
+def test_grams_typed_beyond_one_line_make_up_for_another_and_the_line_says_so(logs):
+    """90 g typed for T4 (5.72 more than FCC worked out) and 59.6 for T6 (15.72 fewer):
+    the ledger's shortfall is 10 g, and the line leads with 10 g, never 15.72."""
+    # On e777bcd: AssertionError: "...15.72g of ... wasn't charged to any spool: 15.72 g on T6 · RCOI-7,
+    # which had #243 — weigh it to true up." (more than the ledger's 10 g, and #301 unnamed)
+    body, _sm = _apply_on_wire(_no_spool_card(), {"charges": [{"position": 4, "sid": 300, "grams": 90.0},
+                                                              {"position": 6, "sid": 301, "grams": 59.6}]},
+                               SHELF)
+    assert body["status"] == "confirmed" and body["shortfall_g"] == pytest.approx(10.0), body
+    assert _shortfall_entry() == pytest.approx(10.0)
+    assert _uncharged(logs) == (
+        f"{LEAD}10.00g of '{FILE}' wasn't charged to any spool: 15.72 g on T6 · RCOI-7, picked #301 "
+        f"(FCC saw #243 there); but 5.72 g more than FCC worked out were typed for T4 · RCOI-5 (#300) "
+        f"— weigh them to true up.")
+
+
+def test_a_no_spool_line_picked_with_fewer_grams_names_the_spool_picked_first(logs):
+    """#300 picked for T4 with 50 of FCC's 84.28 g: the line names #300, the spool
+    the person said printed there, and then #42, which FCC saw there."""
+    # On e777bcd: AssertionError: "...34.28 g on T4 · RCOI-5, which had #42 — weigh it to true up."
+    # (#300, the spool picked, unnamed)
+    body, _sm = _apply_on_wire(_no_spool_card(), {"charges": [{"position": 4, "sid": 300, "grams": 50.0},
+                                                              {"position": 6, "sid": 301, "grams": 75.32}]},
+                               SHELF)
+    assert body["status"] == "confirmed" and body["shortfall_g"] == pytest.approx(34.28), body
+    assert _shortfall_entry() == pytest.approx(34.28)
+    assert _uncharged(logs) == (
+        f"{LEAD}34.28g of '{FILE}' wasn't charged to any spool: 34.28 g on T4 · RCOI-5, picked #300 "
+        f"(FCC saw #42 there) — weigh them to true up.")
+
+
+def test_a_retry_row_typed_down_is_never_called_a_clamp(logs):
+    """#243's write was lost, and its retry is applied with 50 of its 75.32 g: no
+    spool clamped anything, so nothing is "said above"."""
+    # On e777bcd: AssertionError: "...; and 25.32 g the picked spools couldn't take (said above) — ..."
+    # (no spool had too little: the retry's row was typed down)
+    with Indx() as p, _measured(USAGE, {}):
+        _changed_at_end(p)
+        p.sm.patch_lost.add(243)
+        first = _confirm({"updates": {"243": 75.32, "231": 21.9}})
+        assert first["status"] == "confirmed" and first["errors"], first
+        p.sm.patch_lost.clear()
+        second = _confirm({"updates": {"243": 50.0}})
+    assert second["status"] == "confirmed" and second["shortfall_g"] == pytest.approx(109.6), second
+    assert not [m for m, _ in logs if "had only" in m]
+    assert _shortfall_entry() == pytest.approx(109.6)
+    assert _uncharged(logs) == (
+        f"{LEAD}109.60g of '{FILE}' wasn't charged to any spool: 84.28 g on T4 · RCOI-5, which had #42 "
+        f"and #229; and 25.32 g more that went to no spool — weigh them to true up.")
+
+
+def test_a_retry_row_typed_up_never_leads_with_more_than_the_ledger(logs):
+    """#243's retry is applied with 100 of its 75.32 g: the ledger's shortfall is
+    59.6 g, and the line leads with it, saying why it is less than T4's 84.28 g."""
+    # On e777bcd: AssertionError: "...84.28g of ... wasn't charged to any spool: 84.28 g on T4 · RCOI-5,
+    # which had #42 and #229 — weigh them to true up." (more than the ledger's 59.6 g)
+    with Indx() as p, _measured(USAGE, {}):
+        _changed_at_end(p)
+        p.sm.patch_lost.add(243)
+        _confirm({"updates": {"243": 75.32, "231": 21.9}})
+        p.sm.patch_lost.clear()
+        second = _confirm({"updates": {"243": 100.0}})
+    assert second["status"] == "confirmed" and second["shortfall_g"] == pytest.approx(59.6), second
+    assert _shortfall_entry() == pytest.approx(59.6)
+    assert _uncharged(logs) == (
+        f"{LEAD}59.60g of '{FILE}' wasn't charged to any spool: 84.28 g on T4 · RCOI-5, which had #42 "
+        f"and #229; but 24.68 g more than the card asked were typed for other spools — weigh them to "
+        f"true up.")
+
+
+def test_a_clamp_before_a_failed_write_is_still_said_above_at_the_retry(logs):
+    """#231 had 10 g left for its 21.9 g (its 11.9 g logged on its own line) in an
+    Apply whose #243 write was lost: the retry that commits still counts them as
+    said above. Passes by design on e777bcd: it pins that the clamp, now counted
+    where it is logged, rides on the retry."""
+    with Indx() as p, _measured(USAGE, {}):
+        p.sm.spools[231]["used_weight"] = 990.0
+        _changed_at_end(p)
+        p.sm.patch_lost.add(243)
+        first = _confirm({"updates": {"243": 75.32, "231": 21.9}})
+        assert first["status"] == "confirmed" and first["errors"], first
+        assert any("Spool #231 had only 10.0g left" in m for m, _ in logs), logs
+        p.sm.patch_lost.clear()
+        second = _confirm({"updates": {"243": 75.32}})
+    assert second["status"] == "confirmed" and second["shortfall_g"] == pytest.approx(96.18), second
+    assert _uncharged(logs) == (
+        f"{LEAD}96.18g of '{FILE}' wasn't charged to any spool: 84.28 g on T4 · RCOI-5, which had #42 "
+        f"and #229; and 11.9 g the picked spools couldn't take (said above) — weigh them to true up.")
+
+
+def test_a_kept_cards_line_picked_with_fewer_grams_is_named_never_a_clamp(logs):
+    """An uncharged-grams card kept by an earlier Apply (its ask fixed then): #96 is
+    picked for T4 with 20 of its 31.28 g, and T6's 0.5 g are left. The ledger counts
+    T4's 11.28 g; the line names them with #96, never as grams a spool couldn't take."""
+    # On e777bcd: AssertionError: "...: 0.5 g on T6 · RCOI-7, which had #243; and 11.28 g the picked
+    # spools couldn't take (said above) — weigh them to true up." (#96 took all 20 g)
+    card = {"printer_name": INDX, "job_id": f"{JOB}#shortfall", "shortfall_of": str(JOB), "filename": FILE,
+            "progress": 0.42, "total_grams": 31.78, "spools": [], "ambiguous": False, "kind": "shortfall",
+            "rev": 1, "unresolved_usage": {"4": 31.28, "6": 0.5}, "requested_total": 81.78, "applied_g": 50.0,
+            "heads_at_end": [{"toolhead": "RCOI-5", "position": 4, "sid": 42, "sids": [42]},
+                             {"toolhead": "RCOI-7", "position": 6, "sid": 243, "sids": [243]}],
+            "shortfall_causes": {"4": {"why": "ran_out", "sid": 229, "toolhead": "RCOI-5", "archived": True},
+                                 "6": {"why": "not_charged", "sid": 243, "toolhead": "RCOI-7",
+                                       "archived": False}},
+            "heads_source": "print_end", "heads_words": print_deduct._heads_words("print_end"),
+            "created": "2026-11-12 00:00:00"}
+    body, sm = _apply_on_wire(card, {"charges": [{"position": 4, "sid": 96, "grams": 20.0}], "rev": 1},
+                              {96: _spool(700.0, "RCOI-6"), 42: _spool(700.0, "RCOI-5"),
+                               243: _spool(700.0, "RCOI-7")}, job=f"{JOB}#shortfall")
+    assert body["status"] == "confirmed" and body["shortfall_g"] == pytest.approx(11.78), body
+    assert sm.spools[96]["used_weight"] == pytest.approx(720.0)
+    assert not [m for m, _ in logs if "had only" in m]
+    assert _uncharged(logs) == (
+        f"{LEAD}11.78g of '{FILE}' wasn't charged to any spool: 11.28 g on T4 · RCOI-5, picked #96 "
+        f"(FCC saw #42 there); 0.5 g on T6 · RCOI-7, which had #243 — weigh them to true up.")

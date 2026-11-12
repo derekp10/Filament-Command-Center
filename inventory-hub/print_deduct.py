@@ -3610,13 +3610,23 @@ def _set_grams_left(rec, charges):
 # ---------------------------------------------------------------------------
 
 def _lines_left_unplaced(rec, kind, charges):
-    """{line(str): grams} this Apply's picks leave unplaced on lines that are no
-    longer on the review once it commits: every line of a no_spool card (its whole
-    usage is the Apply's ask, so a line's grams no pick placed are its shortfall),
-    and a set's grams its boxes didn't place. A line nobody picked on any other
-    card stays in the record's `unresolved_usage` and is read there. For the log
-    line only: the ledger's figures come from _set_grams_left and requested_total."""
-    placed = {}
+    """What this Apply's picks leave on lines that are no longer on the review once
+    it commits, as the ledger counts it: ({line(str): grams not placed},
+    {line(str): grams typed beyond the line}, {line(str): [the spools picked for
+    it, in order]}).
+
+    The lines the ledger counts this way: every line of a no_spool card (its whole
+    usage is the Apply's ask, so a line's grams no pick placed are its shortfall);
+    a set's grams its boxes didn't place, on any card; and, on a review whose ask
+    an earlier Apply fixed (`requested_total` on the record: a retry after a failed
+    write, a card kept with grams left), every line a pick names. Where the ask is
+    fixed (a no_spool card, or such a review) the ledger's shortfall is a total, so
+    grams typed beyond one line make up for another's (round 2's review): they are
+    returned too. A plain line picked on any other card is charged what its pick
+    says (the person's nudge, as a row's is), and a line nobody picked stays in
+    `unresolved_usage` and is read there. For the log line only: the ledger's
+    figures come from _set_grams_left and requested_total."""
+    placed, picked = {}, {}
     for c in charges or []:
         if isinstance(c, dict) and c.get("row") is None and c.get("position") is not None:
             try:
@@ -3625,21 +3635,30 @@ def _lines_left_unplaced(rec, kind, charges):
                 continue
             line = str(c.get("position"))
             placed[line] = placed.get(line, 0.0) + g
+            try:
+                sid = int(c.get("sid"))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if all(str(s) != str(sid) for s in picked.get(line, [])):
+                picked.setdefault(line, []).append(sid)
+    fixed = kind == "no_spool" or rec.get("requested_total") is not None
     if kind == "no_spool":
         lines = rec.get("usage_map") if isinstance(rec.get("usage_map"), dict) else {}
     else:
         sets = rec.get("unresolved_sets") if isinstance(rec.get("unresolved_sets"), dict) else {}
         un = rec.get("unresolved_usage") if isinstance(rec.get("unresolved_usage"), dict) else {}
-        lines = {k: v for k, v in un.items() if str(k) in sets and str(k) in placed}
-    out = {}
+        lines = {k: v for k, v in un.items() if str(k) in placed and (fixed or str(k) in sets)}
+    under, over = {}, {}
     for line, g in lines.items():
         try:
-            left = float(g) - placed.get(str(line), 0.0)
+            d = float(g) - placed.get(str(line), 0.0)
         except (TypeError, ValueError):
             continue
-        if left > 0.005:
-            out[str(line)] = round(left, 2)
-    return out
+        if d > 0.005:
+            under[str(line)] = round(d, 2)
+        elif d < -0.005 and fixed:
+            over[str(line)] = round(-d, 2)
+    return under, over, {k: v for k, v in picked.items() if k in under or k in over}
 
 
 def _add_grams(*maps):
@@ -3652,6 +3671,34 @@ def _add_grams(*maps):
             except (TypeError, ValueError):
                 continue
     return out
+
+
+def _merge_picked(*maps):
+    """{line(str): [spools]} joined across `maps` (each a dict, or None): each spool
+    once per line, in the order it was first picked."""
+    out = {}
+    for m in maps:
+        for k, sids in (m if isinstance(m, dict) else {}).items():
+            have = out.setdefault(str(k), [])
+            for s in sids if isinstance(sids, list) else []:
+                if s is not None and all(str(x) != str(s) for x in have):
+                    have.append(s)
+    return {k: v for k, v in out.items() if v}
+
+
+def _uncharged_lines(rec):
+    """({line: grams no spool took}, {line: grams typed beyond it}) as the log line
+    reads the record: what the Apply(s) left unplaced and the heads nobody picked,
+    netted per line against what was typed beyond it (round 2's review)."""
+    under = _add_grams(rec.get("unplaced"), rec.get("unresolved_usage"))
+    over = _add_grams(rec.get("overplaced"))
+    for line in set(under) | set(over):
+        d = round(under.pop(line, 0.0) - over.pop(line, 0.0), 2)
+        if d > 0:
+            under[line] = d
+        elif d < 0:
+            over[line] = -d
+    return under, over
 
 
 def _line_spool_ids(rec, line):
@@ -3702,51 +3749,110 @@ def _spool_list_words(sids):
 
 def _uncharged_parts(rec):
     """([part words], [spools named], grams listed) for the lines an Apply leaves
-    uncharged, in head order: "84.28 g on T4 · RCOI-5, which had #42 and #229"."""
-    lines = _add_grams(rec.get("unplaced"), rec.get("unresolved_usage"))
+    uncharged, in head order: "84.28 g on T4 · RCOI-5, which had #42 and #229";
+    a line the person picked a spool for that FCC's record doesn't name there says
+    that spool first (round 2's review): "34.28 g on T4 · RCOI-5, picked #300 (FCC
+    saw #42 there)"."""
+    lines, _over = _uncharged_lines(rec)
+    picks = rec.get("unplaced_picked") if isinstance(rec.get("unplaced_picked"), dict) else {}
     parts, named, listed = [], [], 0.0
     for line in sorted(lines, key=_pos_order):
         g = lines[line]
         if g <= 0.05:
             continue
-        sids = _line_spool_ids(rec, line)
+        saw = _line_spool_ids(rec, line)
+        picked = [s for s in picks.get(line) or [] if s is not None]
         where = _esc(_line_where(rec, line))
-        parts.append(f"{_g_words(g)} g on {where}, which had {_spool_list_words(sids)}" if sids
-                     else f"{_g_words(g)} g on {where}, where FCC saw no spool")
+        if any(all(str(s) != str(x) for x in saw) for s in picked):
+            seen = f"FCC saw {_spool_list_words(saw)} there" if saw else "FCC saw no spool there"
+            parts.append(f"{_g_words(g)} g on {where}, picked {_spool_list_words(picked)} ({seen})")
+            sids = picked + [s for s in saw if all(str(s) != str(p) for p in picked)]
+        elif saw:
+            parts.append(f"{_g_words(g)} g on {where}, which had {_spool_list_words(saw)}")
+            sids = saw
+        else:
+            parts.append(f"{_g_words(g)} g on {where}, where FCC saw no spool")
+            sids = []
         named.extend(str(s) for s in sids if str(s) not in named)
         listed += g
     return parts, named, round(listed, 2)
 
 
-def _say_uncharged(printer, rec, shortfall, residue_card=None):
+def _overplaced_parts(rec):
+    """([part words], [spools named], grams) for the lines whose picks were typed
+    beyond what FCC worked out where the ledger's ask is a total (a no_spool card,
+    or a review whose ask an earlier Apply fixed), which make up for grams other
+    lines left (round 2's review): "5.72 g more than FCC worked out were typed for
+    T4 · RCOI-5 (#300)"."""
+    _under, lines = _uncharged_lines(rec)
+    picks = rec.get("unplaced_picked") if isinstance(rec.get("unplaced_picked"), dict) else {}
+    parts, named, total = [], [], 0.0
+    for line in sorted(lines, key=_pos_order):
+        g = lines[line]
+        if g <= 0.05:
+            continue
+        picked = [s for s in picks.get(line) or [] if s is not None]
+        who = f" ({_spool_list_words(picked)})" if picked else ""
+        where = _esc(_line_where(rec, line))
+        parts.append(f"{_g_words(g)} g more than FCC worked out were typed for {where}{who}" if not parts
+                     else f"{_g_words(g)} g more for {where}{who}")
+        named.extend(str(s) for s in picked if str(s) not in named)
+        total += g
+    return parts, named, round(total, 2)
+
+
+def _say_uncharged(printer, rec, shortfall, residue_card=None, clamped=0.0):
     """The Apply's one WARNING line for the grams its review leaves uncharged once
     it commits (after the ledger write). Per head, the grams left on it and every
     spool FCC's record names there; grams a picked spool couldn't take are logged
     on their own line per spool, so they are counted here but not named again,
     and grams that went on a card of their own (`residue_card`) are that card's
     line's. With no head to name, the line reads as before. Never raises: the
-    spools are already charged."""
+    spools are already charged.
+
+    The line agrees with the ledger (round 2's review): it leads with the
+    shortfall the ledger records, less what a card of its own holds, never more,
+    and says nothing when that is 0. Grams typed beyond one line that make up for
+    another's are said ("but ... were typed for ..."). "Said above" counts only
+    the grams a picked spool couldn't take, as the Apply loop logged them
+    (`clamped`, with an earlier Apply's on a retry); anything else no spool took is
+    said without a reason ("more that went to no spool")."""
     file = _esc(rec.get('filename'))
-    plain = (f"⚠️ {_esc(printer)}: {shortfall:.2f}g of '{file}' wasn't charged to any spool — "
+    try:
+        on_card = float(residue_card.get("total_grams") or 0) if residue_card else 0.0
+        total = round(float(shortfall or 0) - on_card, 2)
+    except (TypeError, ValueError, AttributeError):
+        return
+    if total <= 0.05:
+        return
+    plain = (f"⚠️ {_esc(printer)}: {total:.2f}g of '{file}' wasn't charged to any spool — "
              f"weigh the spools to true up.")
     try:
         parts, named, listed = _uncharged_parts(rec)
+        overs, over_named, over_g = _overplaced_parts(rec)
+        said = round(max(0.0, float(clamped or 0) - on_card), 2)
     except Exception as e:
         state.logger.debug(f"uncharged heads unnamed for {printer}: {e}")
-        parts, named, listed = [], [], 0.0
+        parts = []
     if not parts:
-        if residue_card is None and shortfall > 0.05:
+        if residue_card is None:
             state.add_log_entry(plain, "WARNING", "ffaa00")
         return
-    on_card = float(residue_card.get("total_grams") or 0) if residue_card else 0.0
-    clamped = round(shortfall - listed - on_card, 2)
-    clause = (f"; and {_g_words(clamped)} g the picked spools couldn't take (said above)"
-              if clamped > 0.05 else "")
-    total = listed + (clamped if clause else 0.0)
-    who = "the spools" if not named else ("it" if len(named) == 1 and not clause else "them")
+    clauses = []
+    if said > 0.05:
+        clauses.append(f"and {_g_words(said)} g the picked spools couldn't take (said above)")
+    rest = round(total - listed - (said if said > 0.05 else 0.0) + over_g, 2)
+    if rest > 0.05:
+        clauses.append(f"and {_g_words(rest)} g more that went to no spool")
+    elif rest < -0.05:
+        overs = overs + [f"{_g_words(-rest)} g more than the card asked were typed for other spools"]
+    if overs:
+        clauses.append("but " + ", and ".join(overs))
+    named.extend(s for s in over_named if s not in named)
+    who = "the spools" if not named else ("it" if len(named) == 1 and not clauses else "them")
     state.add_log_entry(
         f"⚠️ {_esc(printer)}: {total:.2f}g of '{file}' wasn't charged to any spool: "
-        f"{'; '.join(parts)}{clause} — weigh {who} to true up.", "WARNING", "ffaa00")
+        f"{'; '.join(parts + clauses)} — weigh {who} to true up.", "WARNING", "ffaa00")
 
 
 def _confirm_no_spool_review(printer, job_id, rec):
@@ -3949,11 +4055,16 @@ def api_cancel_deduct_confirm():
             set_left = _set_grams_left(rec, charges)
         # Round 2 (R2): what these picks leave unplaced on lines that leave the
         # review now, kept on it so the line that names them still can after a
-        # failed write's retry (_say_uncharged).
-        left_lines = _lines_left_unplaced(rec, kind, charges)
+        # failed write's retry (_say_uncharged). Round 2's review: as the ledger
+        # counts it, with what was typed beyond a line and the spools picked.
+        left_lines, over_lines, picked_for = _lines_left_unplaced(rec, kind, charges)
         rec = dict(rec)
         if left_lines:
             rec["unplaced"] = _add_grams(rec.get("unplaced"), left_lines)
+        if over_lines:
+            rec["overplaced"] = _add_grams(rec.get("overplaced"), over_lines)
+        if picked_for:
+            rec["unplaced_picked"] = _merge_picked(rec.get("unplaced_picked"), picked_for)
         # The user's picks are this review's rows from now on. A shortfall card
         # stays one, so a failed write's retry still reads as one (43.2).
         rec["kind"] = "shortfall" if kind == "shortfall" else "partial"
@@ -4026,6 +4137,10 @@ def api_cancel_deduct_confirm():
 
     applied, errors = [], []
     failed_sids = set()
+    # Round 2's review: the grams a picked spool couldn't take, as the loop logs
+    # them per spool ("had only Xg left"): the only grams the uncharged line may
+    # call "said above".
+    clamp_g = 0.0
     # 43.6 — {sid: (used_before, used_after)} for a write that REPORTED failure
     # (stamped on the retry row), or None to drop a stale attempt. update_spool's
     # timeout is a READ timeout, so a Spoolman that applied the PATCH but answered
@@ -4107,6 +4222,7 @@ def api_cancel_deduct_confirm():
                         f"⚠️ {where}: Spool #{sid} had only {avail:.1f}g left, so {grams - avail:.2f}g of "
                         f"this print weren't charged to it — weigh the spools to true up.",
                         "WARNING", "ffaa00")
+                    clamp_g += grams - avail
                 grams = min(grams, avail)
             if grams <= 0:
                 # Spool already empty — nothing to deduct, but it's not a failure.
@@ -4202,6 +4318,14 @@ def api_cancel_deduct_confirm():
                 retry_rec["total_grams"] = round(
                     sum(float(r.get('grams') or 0) for r in retry_rows) + sum(left.values()), 2)
                 retry_rec["rev"] = int(rec.get("rev") or 0) + 1
+            else:
+                # Round 2's review: what this Apply's picked spools couldn't take
+                # was logged per spool above, and the ledger counts it when the
+                # retry commits; carried, so the line then calls it said above.
+                # (On a shortfall card it stays on the card as lines instead.)
+                carried = round(float(rec.get("clamped_g") or 0) + clamp_g, 2)
+                if carried > 0.005:
+                    retry_rec["clamped_g"] = carried
             cancel_review_store.add_pending(retry_rec)
             # Re-emit the Review affordance so the retry is discoverable even if
             # the original cancel log line has scrolled off.
@@ -4291,7 +4415,8 @@ def api_cancel_deduct_confirm():
         # Round 2 (R2): the grams no spool took, per head with the spools FCC saw
         # there (Derek: "a note about xx grams not being deducted from Spool X or
         # spool Y"); the heads nobody placed are said even beside a new card.
-        _say_uncharged(printer, rec, shortfall, residue_card)
+        _say_uncharged(printer, rec, shortfall, residue_card,
+                       clamped=round(float(rec.get("clamped_g") or 0) + clamp_g, 2))
     return jsonify(resp)
 
 
