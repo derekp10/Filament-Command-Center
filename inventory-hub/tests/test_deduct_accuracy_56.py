@@ -61,6 +61,10 @@ def _isolated_stores(tmp_path, monkeypatch):
     monkeypatch.setattr(cancel_review_store, "_STORE_PATH", str(tmp_path / "pending.json"))
     monkeypatch.setattr(cancel_fetch_store, "_STORE_PATH", str(tmp_path / "fetches.json"))
     monkeypatch.setattr(print_deduct_ledger, "_LEDGER_PATH", str(tmp_path / "ledger.json"))
+    # Hotfix 2026-11-11: the edge handlers read the heads when a print ends; the real
+    # ones run here must not read locations.json or Spoolman (and write only to
+    # hub.log, so the Activity Log counts below hold either way).
+    monkeypatch.setattr(print_deduct, "_capture_print_heads", lambda *a, **k: None)
 
 
 @pytest.fixture

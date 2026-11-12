@@ -45,6 +45,24 @@
         if (window.showToast) window.showToast(msg, type, dur);
     }
 
+    // Where FCC read the heads a card names, in words (hotfix 2026-11-11). The
+    // server writes them on every card it builds from a read of the heads
+    // (`heads_words`, from print_deduct._HEADS_WORDS, the one map its notes use
+    // too), so the card and its notes say the same. A card from before carries
+    // none: its heads were read when FCC logged the print.
+    function headsWords(rec) {
+        return Object.assign({ end: 'when FCC logged the print' }, (rec && rec.heads_words) || {});
+    }
+    function capFirst(s) {
+        const t = String(s || '');
+        return t.charAt(0).toUpperCase() + t.slice(1);
+    }
+    // A note under a line or a row, in a named size: what FCC saw on that head.
+    function noteHtml(cls, color, text, icon) {
+        if (!text) return '';
+        return `<div class="${cls}" style="flex-basis:100%;color:${color};font-size:var(--fcc-fs-small);line-height:1.4;">${icon || ''}${esc(text)}</div>`;
+    }
+
     async function fetchPending() {
         try {
             const r = await fetch('/api/cancel_deduct/pending');
@@ -74,18 +92,30 @@
     }
 
     // `own` = the line's default spool (a row's sid), or null for a no_spool line.
-    // `atEnd` is the heads snapshot the review recorded. On the deferred-fetch
-    // path that is when FCC logged the print, not the moment it ended, so the
-    // label says that.
-    function pickSelectHtml(line, own, ownLabel, atEnd) {
+    // `atEnd` is the heads the review recorded, and `words` (headsWords) say
+    // when they were read: when the print ended for a card built from the
+    // print-end read, else when FCC logged the print. A spool FCC's own record
+    // names on a head during the print (`when`: start, during) has its own group,
+    // and a head that held two spools at the end offers both (`sids`).
+    function pickSelectHtml(line, own, ownLabel, atEnd, words) {
+        const w = words || headsWords(null);
         const first = own != null
             ? `<option value="${esc(own)}" selected>${esc(ownLabel)}</option>`
             : `<option value="" selected>— pick the spool it used —</option>`;
-        // 43.2: a spool that ran out is still offered (it is charged what it has
-        // left, 0 g for an empty one, and stays archived), but says so.
-        const ended = (atEnd || []).filter((h) => h.sid != null && String(h.sid) !== String(own))
-            .map((h) => `<option value="${esc(h.sid)}">#${esc(h.sid)} — on ${esc(h.toolhead)} when FCC logged the print${h.archived ? ' (ran out, archived)' : ''}</option>`)
-            .join('');
+        const groups = { end: [], start: [], during: [] };
+        (atEnd || []).forEach((h) => {
+            const when = h.when === 'start' || h.when === 'during' ? h.when : 'end';
+            const ids = h.sid != null ? [h.sid] : (Array.isArray(h.sids) ? h.sids : []);
+            ids.forEach((sid) => {
+                if (sid == null || String(sid) === String(own)) return;
+                // 43.2: a spool that ran out is still offered (it is charged what it
+                // has left, 0 g for an empty one, and stays archived), but says so.
+                groups[when].push(`<option value="${esc(sid)}">#${esc(sid)} — on ${esc(h.toolhead)} ${esc(w[when] || w.end)}${h.archived ? ' (ran out, archived)' : ''}</option>`);
+            });
+        });
+        const group = (when, cls) => groups[when].length
+            ? `<optgroup label="${esc(capFirst(w[when] || w.end))}" class="${cls}">${groups[when].join('')}</optgroup>`
+            : '';
         // The #id box is text, not number: arrow keys on a number box step it
         // (an empty one to 1), and charging spool #1 by accident is a real write.
         return `
@@ -93,7 +123,7 @@
                     data-line="${esc(line)}" data-own="${own == null ? '' : esc(own)}"
                     style="max-width:330px;font-size:0.92rem;">
                 ${first}
-                ${ended ? `<optgroup label="When FCC logged the print" class="fcc-cr-ended">${ended}</optgroup>` : ''}
+                ${group('end', 'fcc-cr-ended')}${group('start', 'fcc-cr-started')}${group('during', 'fcc-cr-during')}
                 <option value="other">Another spool by #ID…</option>
             </select>
             <input type="text" inputmode="numeric" class="fcc-cr-other form-control form-control-sm bg-dark text-white border-secondary"
@@ -138,7 +168,7 @@
         return Number.isFinite(n) && n > 0 ? n : null;
     }
 
-    function spoolRowHtml(s) {
+    function spoolRowHtml(s, rec) {
         const swatch = window.makeSwatchHtml
             ? window.makeSwatchHtml(s.color, 'longitudinal',
                 { size: 16, borderColor: 'rgba(255,255,255,0.5)', marginRight: 0 })
@@ -195,8 +225,9 @@
                 </div>
                 <div class="fcc-cr-redirect" style="flex-basis:100%;display:flex;align-items:center;gap:6px;
                             padding-left:24px;color:#9aa;font-size:0.88rem;">
-                    charge to: ${pickSelectHtml(s.sid, s.sid, `this spool (#${s.sid})`, null)}
+                    charge to: ${pickSelectHtml(s.sid, s.sid, `this spool (#${s.sid})`, rec && rec.heads_at_end, headsWords(rec))}
                 </div>
+                ${noteHtml('fcc-cr-row-note', '#7ec8ff', ((rec && rec.row_notes) || {})[String(s.sid)], 'ℹ️ ')}
             </div>`;
     }
 
@@ -205,6 +236,8 @@
     function noSpoolLinesHtml(rec) {
         const usage = rec.usage_map || {};
         const atEnd = Array.isArray(rec.heads_at_end) ? rec.heads_at_end : [];
+        const words = headsWords(rec);
+        const notes = rec.unresolved_notes || {};
         return Object.keys(usage).sort((a, b) => Number(a) - Number(b)).map((pos) => {
             const head = atEnd.find((h) => String(h.position) === String(pos));
             const where = head ? `T${esc(pos)} · ${esc(head.toolhead)}` : `T${esc(pos)}`;
@@ -219,25 +252,36 @@
                         <span class="input-group-text bg-dark text-light border-secondary">g</span>
                     </div>
                     <span style="color:#9aa;">→</span>
-                    ${pickSelectHtml(pos, null, '', atEnd)}
+                    ${pickSelectHtml(pos, null, '', atEnd, words)}
+                    ${noteHtml('fcc-cr-line-note', '#e6c074', notes[pos])}
                 </div>`;
         }).join('');
     }
 
-    // Group 43.4: the heads a partial review's print used that had no spool when
-    // it ended (emptied mid-print). Each gets a picker like a no_spool line; one
-    // left unpicked is reported as uncharged at Apply instead of vanishing.
+    // Group 43.4: the heads a partial review's print used that no row charges:
+    // emptied mid-print, or (hotfix 2026-11-11) held because FCC can't vouch for
+    // the spool on it, each with a note saying why. Each gets a picker like a
+    // no_spool line; one left unpicked is reported as uncharged at Apply instead
+    // of vanishing.
     function unresolvedLinesHtml(rec) {
         const un = rec.unresolved_usage || {};
         const keys = Object.keys(un).sort((a, b) => Number(a) - Number(b));
         if (!keys.length) return '';
         const atEnd = Array.isArray(rec.heads_at_end) ? rec.heads_at_end : [];
-        const lead = `
+        const words = headsWords(rec);
+        const notes = rec.unresolved_notes || {};
+        const which = keys.length === 1 ? 'this head' : 'these heads';
+        // "When the print ended" only where the heads were read then: each held
+        // line says itself what FCC saw on it.
+        const lead = keys.some((pos) => notes[pos])
+            ? `⚠️ FCC isn't sure which spool printed on ${which}. Pick the spool it used, or leave it:
+               its grams are then logged as uncharged.`
+            : `⚠️ No spool was loaded on ${which} ${esc(words.end)}. Pick the spool it used, or leave it:
+               its grams are then logged as uncharged.`;
+        return `
             <div class="fcc-cr-unresolved-note" style="margin-top:8px;color:#e6c074;font-size:0.92rem;">
-                ⚠️ No spool was loaded on ${keys.length === 1 ? 'this head' : 'these heads'} when the print
-                ended. Pick the spool it used, or leave it: its grams are then logged as uncharged.
-            </div>`;
-        return lead + keys.map((pos) => {
+                ${lead}
+            </div>` + keys.map((pos) => {
             const head = atEnd.find((h) => String(h.position) === String(pos));
             const where = head ? `T${esc(pos)} · ${esc(head.toolhead)}` : `T${esc(pos)}`;
             const line = `pos:${pos}`;
@@ -252,7 +296,8 @@
                         <span class="input-group-text bg-dark text-light border-secondary">g</span>
                     </div>
                     <span style="color:#9aa;">→</span>
-                    ${pickSelectHtml(line, null, '', atEnd)}
+                    ${pickSelectHtml(line, null, '', atEnd, words)}
+                    ${noteHtml('fcc-cr-line-note', '#e6c074', notes[pos])}
                 </div>`;
         }).join('');
     }
@@ -280,12 +325,13 @@
         const un = rec.unresolved_usage || {};
         const causes = rec.shortfall_causes || {};
         const atEnd = Array.isArray(rec.heads_at_end) ? rec.heads_at_end : [];
+        const words = headsWords(rec);
         return Object.keys(un).sort((a, b) => Number(a) - Number(b)).map((pos) => {
             const c = causes[pos] || {};
             const head = c.toolhead || (atEnd.find((h) => String(h.position) === String(pos)) || {}).toolhead;
             const where = head ? `T${esc(pos)} · ${esc(head)}` : `T${esc(pos)}`;
             const own = (c.sid != null && !c.archived) ? c.sid : null;
-            const ownLabel = own != null ? `#${own} — on ${head || 'T' + pos} when FCC logged the print` : '';
+            const ownLabel = own != null ? `#${own} — on ${head || 'T' + pos} ${words.end}` : '';
             const line = `pos:${pos}`;
             return `
                 <div class="fcc-cr-unline fcc-cr-shortline" data-pos="${esc(pos)}" data-line="${esc(line)}"
@@ -300,7 +346,7 @@
                             <span class="input-group-text bg-dark text-light border-secondary">g</span>
                         </div>
                         <span style="color:#9aa;">→</span>
-                        ${pickSelectHtml(line, own, ownLabel, atEnd)}
+                        ${pickSelectHtml(line, own, ownLabel, atEnd, words)}
                     </div>
                 </div>`;
         }).join('');
@@ -309,7 +355,7 @@
     function shortfallCardHtml(rec) {
         const total = fmtG(rec.total_grams);
         // A failed write's retry keeps its row (the picked spool) on the card.
-        const rows = (rec.spools || []).map(spoolRowHtml).join('');
+        const rows = (rec.spools || []).map((s) => spoolRowHtml(s, rec)).join('');
         return `
             <div class="fcc-cr-card" data-printer="${esc(rec.printer_name)}" data-job="${esc(rec.job_id)}"
                  data-kind="shortfall" data-ambiguous="0" data-rev="${esc(rec.rev == null ? 0 : rec.rev)}"
@@ -388,9 +434,17 @@
         // print sliced for one head can run on another (chosen on the printer),
         // which FCC can't see; the picker offers the spools that were on the
         // printer's heads when it ended, the spools on them now, or any #id.
-        const banner = isNoSpool
+        // Hotfix 2026-11-11: a card whose lines carry notes (built from the
+        // print-end read) says each line's reason under it, and leads neutrally.
+        const words = headsWords(rec);
+        const noted = Object.keys(rec.unresolved_notes || {}).length > 0;
+        const banner = isNoSpool && noted
+            ? `FCC computed this print used <b>${total}g</b>, but isn't sure which spool it came from
+               on the heads below. <b>Pick the spool each head used</b>, then <b>Apply</b>. Or
+               <b>Discard</b> if you've already trued it up.`
+            : isNoSpool
             ? `FCC computed this print used <b>${total}g</b>, but couldn't charge it: <b>no spool was
-               loaded</b> on the head it was sliced for when it ended (or Spoolman rejected the write),
+               loaded</b> on the head it was sliced for ${esc(words.end)} (or Spoolman rejected the write),
                so nothing was deducted. <b>Pick the spool it really used</b> for each tool — a print
                can run on a different head than it was sliced for — then <b>Apply</b>. Or
                <b>Discard</b> if you've already trued it up.`
@@ -427,7 +481,7 @@
         const pct = Math.round((Number(rec.progress) || 0) * 100);
         if (kind === 'no_spool' || kind === 'progress_unknown') return unresolvedCardHtml(rec, kind);
         if (kind === 'shortfall') return shortfallCardHtml(rec);
-        const rows = (rec.spools || []).map(spoolRowHtml).join('');
+        const rows = (rec.spools || []).map((s) => spoolRowHtml(s, rec)).join('');
         const total = (rec.spools || []).reduce((a, s) => a + (Number(s.grams) || 0), 0);
         // spool_changed (22.3): a COMPLETED print whose toolhead spool changed
         // mid-print (run-out / M600 replace). The full footer was NOT auto-applied
@@ -442,10 +496,19 @@
         const ambiguous = !spoolChanged && !!rec.ambiguous;
         let header, banner, headerColor;
         const autoSplit = spoolChanged && !!rec.auto_split;
+        // Hotfix 2026-11-11: built from the print-end read, a changed head that no
+        // split covers has no row: it is held below, offering every spool it had.
+        const held = spoolChanged && !autoSplit && !!rec.heads_source;
         if (spoolChanged) {
             headerColor = '#ffb74d';
             header = `🔁 ${esc(rec.printer_name)} — spool changed mid-print`;
-            banner = autoSplit
+            banner = held
+                ? `🔁 A spool feeding this print was <b>changed mid-print</b> at position(s)
+               <b>${esc(changedPos)}</b>, so the slicer total was <b>NOT auto-applied</b>. FCC can't tell
+               which spool printed there, so it charges neither by itself: each such head is listed
+               below with every spool it had. <b>Pick the spool it used</b> (or weigh them and nudge
+               the grams), then <b>Confirm</b>. Or <b>Discard</b>.`
+                : autoSplit
                 ? `🔁 A spool feeding this print was <b>changed mid-print</b> (a filament run-out
                or M600) at toolhead position(s) <b>${esc(changedPos)}</b>. FCC <b>auto-split</b>
                the slicer total by the swap point — each row below is charged only <b>its own

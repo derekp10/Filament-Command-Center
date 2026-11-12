@@ -612,3 +612,52 @@ def test_unmeasured_review_cards_are_readable(page: Page, base_url: str, assert_
                   "ended before FCC read its progress", "/usb/RACCOON~1.BGC", "Discard"):
         assert words in scored, (words, scored)
     page.keyboard.press("Escape")
+
+
+@pytest.mark.usefixtures("require_server")
+def test_print_end_review_notes_are_readable(page: Page, base_url: str, assert_contrast):
+    """Hotfix 2026-11-11: the 🛑 Review's new surfaces from the print-end read: the
+    amber note under a held line, the blue note under a row whose head holds another
+    spool now, the neutral lead above held lines, the no_spool card's neutral banner
+    and the held spool_changed banner. Made-up reviews in this page only; nothing is
+    written. The offline check of the notes' colours and size is
+    test_cancel_review_heads_words_js.py."""
+    import json as _json
+    import conftest
+    words = {"end": "when the print ended", "start": "when the print started", "during": "during the print"}
+    heads = [{"toolhead": "HEAD-5", "position": 4, "sid": 229, "sids": [229]},
+             {"toolhead": "HEAD-7", "position": 6, "sid": 243, "sids": [243]},
+             {"toolhead": "HEAD-5", "position": 4, "sid": 42, "when": "start"}]
+    held_note = "HEAD-5 had #42 when the print started and #229 when the print ended. Pick the spool it used."
+
+    def _card(job, kind, **extra):
+        rec = {"printer_name": "ZZ Contrast INDX", "job_id": job, "filename": "/usb/F.BGC", "progress": 0.42,
+               "total_grams": 95.0, "spools": [], "ambiguous": False, "kind": kind, "heads_source": "print_end",
+               "heads_words": words, "heads_at_end": heads, "unresolved_notes": {"4": held_note}}
+        rec.update(extra)
+        return rec
+    row = {"sid": 243, "toolhead": "HEAD-7", "position": 6, "grams": 10.0, "current_used": 700.0,
+           "initial_weight": 1000.0, "remaining_before": 300.0, "remaining_after": 290.0,
+           "display": "ZZ Contrast spool", "color": "ff0000", "ambiguous": False}
+    pending = [
+        _card("p1", "partial", spools=[row], unresolved_usage={"4": 85.0},
+              row_notes={"243": "#300 is on HEAD-7 now; #243 was on it when the print ended."}),
+        _card("p2", "no_spool", usage_map={"4": 85.0}),
+        _card("p3", "spool_changed", auto_split=False, changed_positions=[4], spools=[row],
+              unresolved_usage={"4": 85.0}),
+    ]
+    page.route("**/api/cancel_deduct/pending*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=_json.dumps({"pending": pending})))
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openCancelReview === 'function'")
+    page.evaluate("() => window.openCancelReview()")
+    page.wait_for_selector('#fcc-cancel-review-overlay .fcc-cr-card[data-job="p3"] .fcc-cr-line-note',
+                           timeout=15000)
+    overlay = page.locator("#fcc-cancel-review-overlay")
+    assert_contrast(overlay)
+    # Each element's text is scored by its first 80 characters (contrast_offenders).
+    scored = " | ".join(o["text"] for o in conftest.contrast_offenders(overlay, min_ratio=100))
+    for said in ("had #42 when the print started", "is on HEAD-7 now", "isn't sure which spool printed",
+                 "isn't sure which spool it came from", "changed mid-print at position(s)"):
+        assert said in scored, (said, scored)
+    page.keyboard.press("Escape")

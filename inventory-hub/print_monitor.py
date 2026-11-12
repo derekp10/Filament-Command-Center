@@ -122,12 +122,63 @@ def _fcc_owns_completion_deduct():
     return False
 
 
-def _on_cancel_edge(printer_name, filename, job_id, progress, fb_url):
+def _capture_end_heads(printer_name, job_id, fb_url, heads_when=None):
+    """The print-end read (hotfix 2026-11-11, prod job 1141): the spool on each of
+    the printer's heads, read on the edge-action thread when FCC sees the print
+    end, before any download, with the deduct's own pick
+    (print_deduct._capture_print_heads). The review or the deduct then names the
+    spools that were on the heads when the print ended, however long the download
+    takes (job 1141's 20 minutes, during which #229 was loaded on RCOI-5).
+
+    Returns {heads, source, at}: `source` is where the edge was seen ("print_end",
+    or the caller's `heads_when`: "restart" for an edge first seen by restart
+    recovery, "job_change" when the next job replaced it). None when the read
+    fails. One hub.log line says what was read and how long it took; it never
+    raises and writes no Activity Log line."""
+    source = heads_when or "print_end"
+    at = time.strftime("%Y-%m-%d %H:%M:%S")
+    started = time.time()
+    try:
+        heads = print_deduct._capture_print_heads(printer_name, fb_url)
+    except Exception:
+        heads = None
+    try:
+        if heads:
+            seen = ", ".join(
+                f"{h.get('toolhead')} "
+                + (f"#{h['sid']}" if h.get('sid') is not None
+                   else (" + ".join(f"#{s}" for s in h.get('sids') or []) or "empty"))
+                for h in heads)
+        else:
+            seen = "couldn't read them"
+        state.logger.info(f"🔎 {printer_name}: heads at the end of job {job_id} ({source}, "
+                          f"read in {time.time() - started:.1f}s): {seen}")
+    except Exception:
+        pass
+    if not heads:
+        return None
+    return {"heads": heads, "source": source, "at": at}
+
+
+def _edge_kwargs(start_spools=None, swap_log=None, heads_when=None, **more):
+    """The edge's optional keyword arguments that carry something: a handler (or a
+    test's strict stand-in) from before them sees exactly the call it always did."""
+    found = {"start_spools": start_spools, "swap_log": swap_log, "heads_when": heads_when}
+    found.update(more)
+    return {k: v for k, v in found.items() if v is not None}
+
+
+def _on_cancel_edge(printer_name, filename, job_id, progress, fb_url,
+                    start_spools=None, swap_log=None, heads_when=None):
     """Action taken when a cancel edge is detected. SLICE 5: compute the partial
     and stash it for preview-and-confirm (§9.7) — Derek reviews/nudges before it
     writes (automating the manual Connect-reading he does today). The detector
     reaches this only through _dispatch_cancel_edge, so the threading contract
-    (off the heartbeat thread) is unchanged from slice 2a."""
+    (off the heartbeat thread) is unchanged from slice 2a.
+
+    Hotfix 2026-11-11: the heads are read first (_capture_end_heads), before the
+    download, and the review is checked against the print's start snapshot and
+    recorded swaps (`start_spools`, `swap_log`)."""
     # INSTANT ACK (2026-06-13): log the moment the STOPPED edge fires, BEFORE the
     # slow async gcode download+decode. On a slow XL .bgcode download the review
     # line is 30-60s out; without this the user faces silence and thinks nothing
@@ -141,7 +192,13 @@ def _on_cancel_edge(printer_name, filename, job_id, progress, fb_url):
     except Exception:
         pass
     try:
-        print_deduct._create_pending_cancel_review(printer_name, filename, job_id, progress, fb_url=fb_url)
+        end_heads = _capture_end_heads(printer_name, job_id, fb_url, heads_when=heads_when)
+    except Exception:
+        end_heads = None
+    try:
+        print_deduct._create_pending_cancel_review(
+            printer_name, filename, job_id, progress, fb_url=fb_url,
+            **_edge_kwargs(start_spools, swap_log, end_heads=end_heads))
     except Exception as e:
         try:
             state.add_log_entry(
@@ -151,30 +208,39 @@ def _on_cancel_edge(printer_name, filename, job_id, progress, fb_url):
             pass
 
 
-def _dispatch_cancel_edge(printer_name, filename, job_id, progress, fb_url):
+def _dispatch_cancel_edge(printer_name, filename, job_id, progress, fb_url,
+                          start_spools=None, swap_log=None, heads_when=None):
     """Run the cancel-edge action OFF the heartbeat thread, so a slow gcode
     download never stalls the pulse. Synchronous when _CANCEL_DEDUCT_RUN_ASYNC
     is False (tests)."""
+    extra = _edge_kwargs(start_spools, swap_log, heads_when)
     if _CANCEL_DEDUCT_RUN_ASYNC:
         threading.Thread(
             target=_on_cancel_edge,
             args=(printer_name, filename, job_id, progress, fb_url),
-            daemon=True).start()
+            daemon=True, **({"kwargs": extra} if extra else {})).start()
     else:
-        _on_cancel_edge(printer_name, filename, job_id, progress, fb_url)
+        _on_cancel_edge(printer_name, filename, job_id, progress, fb_url, **extra)
 
 
 def _on_completion_edge(printer_name, filename, job_id, fb_url, start_spools=None,
-                        swap_log=None):
+                        swap_log=None, heads_when=None):
     """Action on a →FINISHED edge (Phase-2, flag-gated): compute + AUTO-APPLY the
     completion deduct from the slicer footer. No preview/confirm — the grams are
     exact for a completion. `start_spools` (22.3) is the print-start snapshot and
     `swap_log` (22.3(b)) the ordered mid-print swap history, both for spool-swap
     detection. Reaches here only through _dispatch_completion_edge so the
-    off-heartbeat threading contract matches the cancel path."""
+    off-heartbeat threading contract matches the cancel path. The heads are read
+    first, before the download (hotfix 2026-11-11), and the deduct charges the
+    spools that were on them when the print finished."""
+    try:
+        end_heads = _capture_end_heads(printer_name, job_id, fb_url, heads_when=heads_when)
+    except Exception:
+        end_heads = None
     try:
         print_deduct.deduct_completed_print(printer_name, filename, job_id, fb_url=fb_url,
-                               start_spools=start_spools, swap_log=swap_log)
+                               start_spools=start_spools, swap_log=swap_log,
+                               **_edge_kwargs(end_heads=end_heads))
     except Exception as e:
         try:
             state.add_log_entry(
@@ -185,23 +251,25 @@ def _on_completion_edge(printer_name, filename, job_id, fb_url, start_spools=Non
 
 
 def _dispatch_completion_edge(printer_name, filename, job_id, fb_url, start_spools=None,
-                              swap_log=None):
+                              swap_log=None, heads_when=None):
     """Run the completion-edge action OFF the heartbeat thread (mirrors
     _dispatch_cancel_edge). Synchronous when _CANCEL_DEDUCT_RUN_ASYNC is False
     (tests)."""
+    kwargs = {"start_spools": start_spools, "swap_log": swap_log}
+    kwargs.update(_edge_kwargs(heads_when=heads_when))
     if _CANCEL_DEDUCT_RUN_ASYNC:
         threading.Thread(
             target=_on_completion_edge,
             args=(printer_name, filename, job_id, fb_url),
-            kwargs={"start_spools": start_spools, "swap_log": swap_log},
+            kwargs=kwargs,
             daemon=True).start()
     else:
-        _on_completion_edge(printer_name, filename, job_id, fb_url,
-                            start_spools=start_spools, swap_log=swap_log)
+        _on_completion_edge(printer_name, filename, job_id, fb_url, **kwargs)
 
 
 def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
-                       progress_unknown=False, unmeasured_reason="replaced"):
+                       progress_unknown=False, unmeasured_reason="replaced",
+                       start_spools=None, swap_log=None, heads_when=None):
     """Action when a latched in-progress job reaches IDLE/READY WITHOUT our ever
     sampling the terminal STOPPED or FINISHED (2026-06-13): a fast cancel→restart
     that slipped the poll, or a PRINTING→offline→IDLE printer power-cycle. We
@@ -216,7 +284,11 @@ def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
     review short-circuits to a non-destructive "weigh the spool" review rather than
     computing a misleading 0g at 0%. `unmeasured_reason` says why for that review:
     "replaced" (the job change, the default) or "unsampled" (the print reached IDLE,
-    or FCC restarted, before any progress was read; Group 56 review, round 2)."""
+    or FCC restarted, before any progress was read; Group 56 review, round 2).
+
+    Hotfix 2026-11-11: as the cancel edge, the heads are read first, before the
+    download, and checked against `start_spools` / `swap_log` (not for a
+    progress_unknown end: its card has no usage to charge)."""
     # Instant ack (the ambiguous analogue of the cancel instant-ack), so the user
     # isn't met with silence during the async download.
     try:
@@ -234,11 +306,18 @@ def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
                 f"completed vs cancelled)…", "INFO")
     except Exception:
         pass
+    end_heads = None
+    if not progress_unknown:
+        try:
+            end_heads = _capture_end_heads(printer_name, job_id, fb_url, heads_when=heads_when)
+        except Exception:
+            end_heads = None
     try:
         print_deduct._create_pending_cancel_review(printer_name, filename, job_id, progress,
                                       fb_url=fb_url, ambiguous=True,
                                       progress_unknown=progress_unknown,
-                                      unmeasured_reason=unmeasured_reason)
+                                      unmeasured_reason=unmeasured_reason,
+                                      **_edge_kwargs(start_spools, swap_log, end_heads=end_heads))
     except Exception as e:
         try:
             state.add_log_entry(
@@ -249,21 +328,21 @@ def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
 
 
 def _dispatch_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
-                             progress_unknown=False, unmeasured_reason="replaced"):
+                             progress_unknown=False, unmeasured_reason="replaced",
+                             start_spools=None, swap_log=None, heads_when=None):
     """Run the ambiguous-edge action OFF the heartbeat thread (mirrors
     _dispatch_cancel_edge). Synchronous when _CANCEL_DEDUCT_RUN_ASYNC is False
     (tests)."""
+    kwargs = {"progress_unknown": progress_unknown, "unmeasured_reason": unmeasured_reason}
+    kwargs.update(_edge_kwargs(start_spools, swap_log, heads_when))
     if _CANCEL_DEDUCT_RUN_ASYNC:
         threading.Thread(
             target=_on_ambiguous_edge,
             args=(printer_name, filename, job_id, progress, fb_url),
-            kwargs={"progress_unknown": progress_unknown,
-                    "unmeasured_reason": unmeasured_reason},
+            kwargs=kwargs,
             daemon=True).start()
     else:
-        _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
-                           progress_unknown=progress_unknown,
-                           unmeasured_reason=unmeasured_reason)
+        _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url, **kwargs)
 
 
 def _track_print_edge(printer_name, state_info, fb_url):
@@ -342,6 +421,11 @@ def _track_print_edge(printer_name, state_info, fb_url):
                             # its usage is unmeasurable (route to a progress_unknown
                             # review, not a misleading 0g — the 1053 silent-loss bug).
                             'progress_sampled': 'progress' in entry,
+                            # Hotfix 2026-11-11: the outgoing job's own start snapshot
+                            # and swap log (pure reads, before they are popped below),
+                            # so its review checks the heads against them.
+                            'start_spools': print_deduct._validated_start_spools(entry, old_jid),
+                            'swap_log': print_deduct._validated_swap_log(entry, old_jid),
                         }
                     entry.pop('progress', None)
                     entry.pop('filename', None)
@@ -406,10 +490,11 @@ def _track_print_edge(printer_name, state_info, fb_url):
                                         float(entry.get('pause_progress', 0.0)))
                     swap_runout = bool(entry.get('saw_attention'))
         # 22.3 (off-lock, like get_printer_job): capture the start-spool snapshot for
-        # mid-print swap detection. ONLY when FCC owns completions — deduct_completed_print
-        # is the sole consumer, so it's dead weight (and a wasted Spoolman read) on
-        # cancel-only prints. _snapshot_active_spools is best-effort ({} on failure), so a
-        # blip leaves start_spools unset and the completion degrades to today's auto-apply.
+        # mid-print swap detection. ONLY when FCC owns completions (taking it whatever
+        # the flag says is a follow-up). Since the hotfix of 2026-11-11 the cancel and
+        # ambiguous reviews read it too, to check the heads read when the print ended.
+        # _snapshot_active_spools is best-effort ({} on failure), so a blip leaves
+        # start_spools unset and the completion degrades to today's auto-apply.
         if need_snapshot and _fcc_owns_completion_deduct():
             snap = print_deduct._snapshot_active_spools(printer_name, fb_url)
             with _PRINT_TRACKER_LOCK:
@@ -492,7 +577,9 @@ def _track_print_edge(printer_name, state_info, fb_url):
                 pass
             _dispatch_ambiguous_edge(printer_name, prev_job['filename'],
                                      prev_job['job_id'], prev_job['progress'], fb_url,
-                                     progress_unknown=progress_unknown)
+                                     progress_unknown=progress_unknown,
+                                     **_edge_kwargs(prev_job.get('start_spools'),
+                                                    prev_job.get('swap_log'), "job_change"))
         elif job_changed:
             # job_changed but nothing was latched to review (the previous job_id had
             # no PRINTING sample → no filename). Preserve the original INFO log.
@@ -637,14 +724,19 @@ def _track_print_edge(printer_name, state_info, fb_url):
                 printer_name, fire['filename'], fire['job_id'], fb_url,
                 start_spools=print_deduct._validated_start_spools(fire, fire['job_id']),
                 swap_log=print_deduct._validated_swap_log(fire, fire['job_id']))
-        elif fire['kind'] == 'ambiguous':
-            _dispatch_ambiguous_edge(
-                printer_name, fire['filename'], fire['job_id'], fire['progress'],
-                fb_url, progress_unknown=not fire.get('progress_sampled', False),
-                unmeasured_reason="unsampled")
         else:
-            _dispatch_cancel_edge(printer_name, fire['filename'], fire['job_id'],
-                                  fire['progress'], fb_url)
+            # Hotfix 2026-11-11: the cancel and ambiguous reviews check the heads
+            # read when the print ended against its start snapshot and swap log.
+            snapshot = _edge_kwargs(print_deduct._validated_start_spools(fire, fire['job_id']),
+                                    print_deduct._validated_swap_log(fire, fire['job_id']))
+            if fire['kind'] == 'ambiguous':
+                _dispatch_ambiguous_edge(
+                    printer_name, fire['filename'], fire['job_id'], fire['progress'],
+                    fb_url, progress_unknown=not fire.get('progress_sampled', False),
+                    unmeasured_reason="unsampled", **snapshot)
+            else:
+                _dispatch_cancel_edge(printer_name, fire['filename'], fire['job_id'],
+                                      fire['progress'], fb_url, **snapshot)
 
 
 # ---------------------------------------------------------------------------
@@ -825,6 +917,7 @@ def _process_pending_cancel_fetches(states, fb_url):
             ambiguous = bool(rec.get("ambiguous", False))  # cancel-review "couldn't confirm" flag
             start_spools = rec.get("start_spools")  # 22.3: carried for the deferred completion swap check
             swap_log = rec.get("swap_log")  # 22.3(b): ordered mid-print swap history
+            end_heads = rec.get("end_heads")  # hotfix 2026-11-11: the heads read when the print ended
             if not printer or job_id in (None, ""):
                 cancel_fetch_store.pop_pending(printer, job_id)
                 if printer and filename:
@@ -939,13 +1032,19 @@ def _process_pending_cancel_fetches(states, fb_url):
                 # (_stamp_charging): on a disk FCC can't write, the stamp raises and
                 # nothing is charged; once it lands, no later tick or process
                 # charges this job again (Group 56 review, rounds 3-4).
+                # The heads read when the print ended (end_heads) ride along only when
+                # the record has them, so a record queued before the hotfix (and a
+                # test's strict stand-in) sees exactly the call it always did.
                 result = print_deduct.deduct_completed_print(
                     printer, filename, job_id, fb_url=fb_url,
                     start_spools=start_spools, swap_log=swap_log,
-                    before_charge=lambda rec=rec: _stamp_charging(rec))
+                    before_charge=lambda rec=rec: _stamp_charging(rec),
+                    **({"end_heads": end_heads} if end_heads else {}))
             else:
                 result = print_deduct._create_pending_cancel_review(
-                    printer, filename, job_id, progress, fb_url=fb_url, ambiguous=ambiguous)
+                    printer, filename, job_id, progress, fb_url=fb_url, ambiguous=ambiguous,
+                    **{k: v for k, v in (("end_heads", end_heads), ("start_spools", start_spools),
+                                         ("swap_log", swap_log)) if v})
             status = (result or {}).get("status")
             if status == "awaiting_fetch":
                 # Still couldn't fetch (the file 404'd despite a ready state — a
@@ -1073,7 +1172,13 @@ def _recover_one_print_latch(name, entry, fb_url):
         state.add_log_entry(
             f"🛑 Recovering a cancel missed during an FCC restart on {name} "
             f"('{print_deduct._esc(filename)}', ~{pct:.0f}%) — printer still {cur}.", "WARNING", "ffaa00")
-        _dispatch_cancel_edge(name, filename, job_id, progress, fb_url)
+        # Hotfix 2026-11-11: the heads are read now ("restart": FCC was down, so FCC
+        # itself moved nothing meanwhile) and checked against the persisted start
+        # snapshot and swap log.
+        _dispatch_cancel_edge(name, filename, job_id, progress, fb_url,
+                              **_edge_kwargs(print_deduct._validated_start_spools(entry, job_id),
+                                             print_deduct._validated_swap_log(entry, job_id),
+                                             "restart"))
         with _PRINT_TRACKER_LOCK:
             _PRINT_TRACKER[name] = {'state': cur}
         return True
@@ -1092,7 +1197,8 @@ def _recover_one_print_latch(name, entry, fb_url):
             # swap; a restart BEFORE capture has no snapshot → None → auto-apply.
             _dispatch_completion_edge(name, filename, job_id, fb_url,
                                       start_spools=print_deduct._validated_start_spools(entry, job_id),
-                                      swap_log=print_deduct._validated_swap_log(entry, job_id))
+                                      swap_log=print_deduct._validated_swap_log(entry, job_id),
+                                      heads_when="restart")
             with _PRINT_TRACKER_LOCK:
                 _PRINT_TRACKER[name] = {'state': cur}
             return True
@@ -1115,7 +1221,10 @@ def _recover_one_print_latch(name, entry, fb_url):
             f"confirm completed vs cancelled).", "WARNING", "ffaa00")
         _dispatch_ambiguous_edge(name, filename, job_id, progress, fb_url,
                                  progress_unknown=not progress_sampled,
-                                 unmeasured_reason="unsampled")
+                                 unmeasured_reason="unsampled",
+                                 **_edge_kwargs(print_deduct._validated_start_spools(entry, job_id),
+                                                print_deduct._validated_swap_log(entry, job_id),
+                                                "restart"))
         with _PRINT_TRACKER_LOCK:
             _PRINT_TRACKER[name] = {'state': cur}
         return True

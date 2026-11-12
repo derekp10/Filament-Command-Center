@@ -45,6 +45,10 @@ def _reset(tmp_path, monkeypatch):
     monkeypatch.setattr(cancel_review_store, "_STORE_PATH", str(tmp_path / "review.json"))
     monkeypatch.setattr(cancel_fetch_store, "_STORE_PATH", str(tmp_path / "fetch.json"))
     monkeypatch.setattr(print_tracker_store, "_STORE_PATH", str(tmp_path / "latch.json"))
+    # Hotfix 2026-11-11: the edge handlers read the heads when a print ends (a real
+    # one runs on FINISHED and on a job change here); no read keeps them off
+    # locations.json and Spoolman, on main's path.
+    monkeypatch.setattr(print_deduct, "_capture_print_heads", lambda *a, **k: None)
     prev_async = print_monitor._CANCEL_DEDUCT_RUN_ASYNC
     print_monitor._CANCEL_DEDUCT_RUN_ASYNC = False
     with app_module._PRINT_TRACKER_LOCK:

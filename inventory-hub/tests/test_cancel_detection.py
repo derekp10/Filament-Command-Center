@@ -49,6 +49,10 @@ def _reset_tracker(tmp_path, monkeypatch):
     # flag is on) would otherwise hit real Spoolman per tick. No-op it by default; a
     # test that exercises capture overrides locally.
     monkeypatch.setattr(print_deduct, "_snapshot_active_spools", lambda *a, **k: {})
+    # Hotfix 2026-11-11: the edge handlers read the heads when a print ends; these
+    # tests run real handlers, which must not read locations.json or Spoolman. No
+    # read is main's path, which every assertion here was written against.
+    monkeypatch.setattr(print_deduct, "_capture_print_heads", lambda *a, **k: None)
     app_module._PRINT_TRACKER.clear()
     prev_async = print_monitor._CANCEL_DEDUCT_RUN_ASYNC
     print_monitor._CANCEL_DEDUCT_RUN_ASYNC = False
