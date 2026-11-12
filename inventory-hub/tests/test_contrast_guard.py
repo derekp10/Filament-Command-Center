@@ -850,3 +850,58 @@ def test_review_card_notices_are_readable(page: Page, base_url: str, assert_cont
     scored = " | ".join(o["text"] for o in conftest.contrast_offenders(overlay, min_ratio=100))
     assert "stub: nothing applied" in scored, scored
     page.keyboard.press("Escape")
+
+
+@pytest.mark.usefixtures("require_server")
+def test_review_yes_naming_a_plain_line_is_readable(page: Page, base_url: str, assert_contrast):
+    """Round 2's review (2026-11-12): while the set check waits for its second
+    press, a held line that isn't a set and that the press charges nothing to is
+    counted in the orange Yes, and the line by the buttons names it. Scored as
+    drawn, the pointer off the button. A made-up review in this page only, and
+    nothing is pressed a second time (the confirm route is answered in the page all
+    the same), so nothing is written. The offline check is
+    test_cancel_review_set_yes_js.py."""
+    import json as _json
+    import conftest
+    words = {"end": "when the print ended", "start": "when the print started", "during": "during the print"}
+    pending = [{"printer_name": "ZZ Contrast INDX", "job_id": "n2", "filename": "/usb/F.BGC", "progress": 0.42,
+                "total_grams": 104.0, "ambiguous": False, "kind": "partial", "heads_source": "print_end",
+                "heads_words": words, "spools": [], "unresolved_usage": {"4": 84.0, "6": 20.0},
+                "heads_at_end": [{"toolhead": "HEAD-5", "position": 4, "sid": 229, "sids": [229]},
+                                 {"toolhead": "HEAD-7", "position": 6, "sid": 243, "sids": [243]},
+                                 {"toolhead": "HEAD-5", "position": 4, "sid": 42, "when": "start"}],
+                "unresolved_sets": {"4": [{"sid": 42, "when": "start", "display": "ZZ Contrast spool 42",
+                                           "color": "222222", "remaining": 12.5},
+                                          {"sid": 229, "when": "end", "display": "ZZ Contrast spool 229",
+                                           "color": "ff0000", "remaining": 800.0}]}}]
+    page.route("**/api/cancel_deduct/pending*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=_json.dumps({"pending": pending})))
+    page.route("**/api/cancel_deduct/confirm*", lambda route: route.fulfill(
+        status=200, content_type="application/json",
+        body=_json.dumps({"status": "error", "msg": "stub: nothing applied"})))
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openCancelReview === 'function'")
+    page.evaluate("() => window.openCancelReview()")
+    card = '#fcc-cancel-review-overlay .fcc-cr-card[data-job="n2"]'
+    button = f"{card} .fcc-cr-confirm"
+    notice = f"{card} .fcc-cr-card-notice"
+    page.wait_for_selector(button, timeout=15000)
+    page.click(button)
+    page.wait_for_selector(notice, state="visible", timeout=5000)
+    assert page.locator(button).inner_text() == "⚠️ Yes, leave 104 g uncharged"
+    assert page.locator(notice).inner_text() == (
+        "⚠️ Yes below charges nothing to T6 · HEAD-7, leaving its 20 g uncharged.")
+    page.mouse.move(0, 0)
+    # Bootstrap eases a button's colours over 0.15 s: score it once it is orange.
+    page.wait_for_function(
+        "(sel) => { const cs = getComputedStyle(document.querySelector(sel));"
+        " return cs.backgroundColor === 'rgb(253, 126, 20)' && cs.color === 'rgb(0, 0, 0)'; }",
+        arg=button, timeout=5000)
+    overlay = page.locator("#fcc-cancel-review-overlay")
+    assert_contrast(overlay)
+    # Each element's text is scored by its first 80 characters (contrast_offenders).
+    scored = " | ".join(o["text"] for o in conftest.contrast_offenders(overlay, min_ratio=100))
+    for said in ("⚠️ Yes below charges nothing to T6 · HEAD-7", "⚠️ Yes, leave 104 g uncharged",
+                 "⚠️ T4 · HEAD-5: none of its 84 g are placed"):
+        assert said in scored, (said, scored)
+    page.keyboard.press("Escape")

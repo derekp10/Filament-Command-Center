@@ -263,6 +263,7 @@
         const asked = card.dataset.setAsked != null;
         delete card.dataset.setAsked;
         delete card.dataset.setAskedAt;
+        delete card.dataset.setAskNotice;
         card.querySelectorAll('.fcc-cr-set-alert').forEach((a) => { a.textContent = ''; a.style.display = 'none'; });
         if (asked) sayOnCard(card, '');
         yesOff(card.querySelector('.fcc-cr-confirm'));
@@ -305,20 +306,47 @@
         });
         return out;
     }
+    // Round 2's review: a held line that isn't a set and that a press charges
+    // nothing to (no spool picked, or no grams) is left uncharged too, at its
+    // record's grams, whatever its box shows: the server keeps them on the review
+    // (a no_spool card counts its whole line), and the Activity Log names them.
+    // [{line, where, grams}], for the set check's Yes to count.
+    function plainLinesLeft(card) {
+        const out = [];
+        card.querySelectorAll('.fcc-cr-unline, .fcc-cr-pickline').forEach((ln) => {
+            if (ln.classList.contains('fcc-cr-setline')) return;
+            const box = ln.querySelector('.fcc-cr-pgrams');
+            const held = Number(box && box.getAttribute('value'));
+            if (!(held > 0)) return;
+            if (pickedSid(card, ln.dataset.line) && parseFloat(box.value) > 0) return;
+            const pos = ln.dataset.pos != null ? ln.dataset.pos : ln.dataset.line;
+            out.push({ line: ln.dataset.line, where: ln.dataset.where || `T${pos}`, grams: held });
+        });
+        return out;
+    }
+    function orList(items) {
+        return items.length > 1 ? `${items.slice(0, -1).join(', ')} or ${items[items.length - 1]}` : items.join('');
+    }
     // Whether an Apply may go ahead over the card's sets: at once when each is
     // placed exactly; else the first press says why in each set and on the card,
     // and a second press with the same grams goes ahead (Derek: more resistance on
     // a yes that is hard to undo, no typed words). While it waits, the button
-    // says what that second press does (round 2, R1).
+    // says what that second press does (round 2, R1), counting the plain held
+    // lines it leaves too (round 2's review).
     function setsConfirmed(card, ev) {
         const problems = setProblems(card);
-        const sig = problems.map((p) => `${p.box.dataset.pos}=${p.placed}`).join(';');
+        const plain = problems.length ? plainLinesLeft(card) : [];
+        const sig = problems.map((p) => `${p.box.dataset.pos}=${p.placed}`)
+            .concat(plain.map((l) => `${l.line}=left`)).join(';');
         // A double click's second press is no second press (Derek's rule for a
         // yes that is hard to undo): the second click of a double click, or any
         // press under 700 ms after the one that asked, does nothing, and what
-        // the first press said stays up.
+        // the first press said stays up: the press's handler cleared the line by
+        // the buttons, which comes back (round 2's review: at phone width the
+        // panel scrolls the button back under the pointer for the second click).
         if (problems.length && card.dataset.setAsked === sig
                 && ((ev && ev.detail > 1) || Date.now() - Number(card.dataset.setAskedAt || 0) < 700)) {
+            sayOnCard(card, card.dataset.setAskNotice || '');
             return false;
         }
         // The second press goes out (or there is nothing left to ask): the button
@@ -333,14 +361,27 @@
             const a = p.box.querySelector('.fcc-cr-set-alert');
             if (a) { a.textContent = `⚠️ ${p.words}`; a.style.display = ''; }
         });
-        const short = problems.filter((p) => p.short > 0).reduce((a, p) => a + p.short, 0);
+        const setShort = problems.filter((p) => p.short > 0).reduce((a, p) => a + p.short, 0);
         const over = problems.filter((p) => p.short < 0).reduce((a, p) => a - p.short, 0);
+        const plainG = plain.reduce((a, l) => a + l.grams, 0);
+        const short = setShort + plainG;
         // Held sets are among a card's last lines, just above its buttons, so one
         // set's words are said in the set alone: the card's notice said them again
-        // a line or two below. Two or more sets get one line by the buttons.
-        const does = !over ? 'leave them uncharged' : !short ? 'charge the spools as typed' : 'go ahead as typed';
-        sayOnCard(card, problems.length === 1 ? ''
-            : `${problems.length} heads' grams don't add up, as each says above. Press ⚠️ Yes below to ${does}.`);
+        // a line or two below. Two or more sets get one line by the buttons, and so
+        // do the plain held lines the press leaves (round 2's review), so every
+        // gram the Yes names is said on the card.
+        const does = !over ? 'leave them uncharged' : !setShort ? 'charge the spools as typed' : 'go ahead as typed';
+        const lines = [];
+        if (problems.length > 1) {
+            lines.push(`${problems.length} heads' grams don't add up, as each says above. Press ⚠️ Yes below to ${does}.`);
+        }
+        if (plain.length) {
+            lines.push(`⚠️ Yes below charges nothing to ${orList(plain.map((l) => l.where))}, leaving `
+                + `${plain.length === 1 ? 'its' : 'their'} ${fmtG(plainG)} g uncharged.`);
+        }
+        const notice = lines.join(' ');
+        if (notice) card.dataset.setAskNotice = notice;
+        sayOnCard(card, notice);
         const btn = card.querySelector('.fcc-cr-confirm');
         yesOn(btn, !over ? `⚠️ Yes, leave ${fmtG(short)} g uncharged`
             : !short ? `⚠️ Yes, charge ${fmtG(over)} g more` : '⚠️ Yes, go ahead as typed');
@@ -664,7 +705,7 @@
             const head = atEnd.find((h) => String(h.position) === String(pos));
             const where = head ? `T${esc(pos)} · ${esc(head.toolhead)}` : `T${esc(pos)}`;
             return `
-                <div class="fcc-cr-pickline" data-line="${esc(pos)}"
+                <div class="fcc-cr-pickline" data-line="${esc(pos)}" data-where="${where}"
                      style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid #2b2c30;">
                     <span style="color:#eee;min-width:120px;">${where} used</span>
                     <div class="input-group input-group-sm" style="width:120px;flex:none;">
@@ -716,7 +757,7 @@
             const where = head ? `T${esc(pos)} · ${esc(head.toolhead)}` : `T${esc(pos)}`;
             const line = `pos:${pos}`;
             return `
-                <div class="fcc-cr-unline" data-pos="${esc(pos)}" data-line="${esc(line)}"
+                <div class="fcc-cr-unline" data-pos="${esc(pos)}" data-line="${esc(line)}" data-where="${where}"
                      style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid #2b2c30;">
                     <span style="color:#eee;min-width:120px;">${where} used</span>
                     <div class="input-group input-group-sm" style="width:120px;flex:none;">
@@ -1340,7 +1381,13 @@
         function updateSetLeft(input) {
             const box = input.closest && input.closest('.fcc-cr-heldset');
             const out = box && box.querySelector('.fcc-cr-set-left');
-            if (!out) return;
+            if (!out) {
+                // Round 2's review: a plain held line's grams count in the set
+                // check's Yes when its press charges nothing there, so a change in
+                // them ends its wait too.
+                endSetAsk(input.closest && input.closest('.fcc-cr-card'));
+                return;
+            }
             let placed = 0;
             box.querySelectorAll('.fcc-cr-pgrams').forEach((b) => {
                 const g = parseFloat(b.value);
@@ -1423,6 +1470,10 @@
             const other = card.querySelector(`.fcc-cr-other[data-line="${CSS.escape(String(line))}"]`);
             const info = card.querySelector(`.fcc-cr-other-info[data-line="${CSS.escape(String(line))}"]`);
             if (t.classList.contains('fcc-cr-pick')) {
+                // Round 2's review: whether a plain held line is charged decides
+                // what the set check's Yes leaves, so a new pick there ends its wait.
+                const held = t.closest('.fcc-cr-unline, .fcc-cr-pickline');
+                if (held && !held.classList.contains('fcc-cr-setline')) endSetAsk(card);
                 const want = t.value === 'other';
                 // No focus move: arrow keys on a closed <select> fire `change` on
                 // every step, and focus jumping to the #id box mid-way is a trap.
@@ -1496,7 +1547,12 @@
                         const g = parseFloat((ln.querySelector('.fcc-cr-pgrams') || {}).value);
                         if (sid && !Number.isNaN(g) && g > 0) charges.push({ position: Number(pos), sid, grams: g });
                     });
+                    // Round 2's review: a press refused here ends the set check's
+                    // wait first, so the button reads its own words again (the
+                    // refusals name them) and no set's words promise a press that
+                    // can't go ahead; the next press asks again.
                     if (noId != null) {
+                        endSetAsk(card);
                         tell(card, `Type the #id of the spool T${noId} used (or pick one).`);
                         return;
                     }
@@ -1506,6 +1562,7 @@
                         const sets = Array.from(card.querySelectorAll('.fcc-cr-heldset'))
                             .map((b) => b.dataset.where || `T${b.dataset.pos}`);
                         const plain = card.querySelectorAll('.fcc-cr-pickline:not(.fcc-cr-setline)').length > 0;
+                        endSetAsk(card);
                         tell(card, sets.length
                             ? `Type the grams each spool on ${sets.join(' and ')} used (or put them all on one)`
                               + `${plain ? ', and pick the spool each other head used' : ''}, then Apply. `
@@ -1532,6 +1589,7 @@
                         }
                     });
                     if (missing) {
+                        endSetAsk(card);
                         tell(card, 'Type the #id of the spool to charge (or pick one).');
                         return;
                     }
@@ -1550,12 +1608,14 @@
                         }
                     });
                     if (unNoId != null) {
+                        endSetAsk(card);
                         tell(card, `Type the #id of the spool T${unNoId} used (or pick one).`);
                         return;
                     }
                     // 43.2: a shortfall card names no spool of its own, so an Apply
                     // with nothing picked would charge nothing (the server refuses it too).
                     if (card.dataset.kind === 'shortfall' && !redirected && !Object.keys(updates).length) {
+                        endSetAsk(card);
                         tell(card, 'Pick the spool that took these grams (or Discard).');
                         return;
                     }

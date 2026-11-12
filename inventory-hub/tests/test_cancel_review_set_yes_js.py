@@ -30,11 +30,18 @@ browser, no container). Pinned:
     that still doesn't add up then asks again, so a green button never goes
     ahead over grams nobody placed with no words up;
   - the keyboard stays on the button, and a double click's second press still
-    does nothing.
+    does nothing;
+  - round 2's review: the Yes counts every gram its press leaves uncharged, a
+    held line that isn't a set and that the press charges nothing to (no spool
+    picked, or no grams) included, and the line by the buttons names those
+    heads; a change on such a line ends the wait; a press refused before the set
+    check ends it too, so the button never promises a press that can't go
+    ahead; and a double click's second press keeps the line by the buttons up.
 
-The browser contrast case is tests/test_contrast_guard.py's
-test_review_card_notices_are_readable, which scores the waiting state as drawn;
-this file checks its colours offline.
+The browser contrast cases are tests/test_contrast_guard.py's
+test_review_card_notices_are_readable, which scores the waiting state as drawn,
+and test_review_yes_naming_a_plain_line_is_readable; this file checks the colours
+offline.
 
 HEAD proof: run on d8876bd (before R1), every test here fails (the button kept
 its green "Confirm deduct" through the wait, the set's words were amber with no
@@ -415,3 +422,202 @@ def test_a_card_drawn_again_has_its_own_button_and_asks_again(tmp_path):
     fa = res["freshAsks"]
     assert fa["posted"] == 1 and fa["btn"]["text"] == "⚠️ Yes, leave 84.28 g uncharged", fa
     assert fa["alerts"] == [NONE_PLACED], fa
+
+
+# --------------------------------------------------------------------------- #
+# Round 2's review (2026-11-12): the Yes names every gram its press leaves     #
+# --------------------------------------------------------------------------- #
+# A held line that isn't a set and that the press charges nothing to (no spool
+# picked, or no grams) is left uncharged too: the server keeps its record's grams
+# on the review's `unresolved_usage`, or (no_spool) counts its whole usage, and the
+# Activity Log's uncharged line names them. The Yes adds them in, and the line by
+# the buttons says which heads they are; a change on such a line ends the wait. A
+# press refused before the set check ends the wait too, and a double click's second
+# press keeps the line by the buttons up.
+
+_HEAD_1 = {"toolhead": "HEAD-1", "position": 0, "sid": 72, "sids": [72]}
+_SET_6 = [{"sid": 243, "when": "start", "display": "#243 Test", "remaining": 300.0},
+          {"sid": 300, "when": "end", "display": "#300 Test", "remaining": 900.0}]
+# A partial card: T4 a set (84.28 g), T6 a plain held line (20 g).
+SET_PLUS_LINE = dict(PARTIAL_SET, job_id="psl", spools=[], unresolved_usage={"4": 84.28, "6": 20.0},
+                     total_grams=104.28,
+                     unresolved_notes=dict(PARTIAL_SET["unresolved_notes"], **{"6": "HEAD-7 had #243 and #300 "
+                                                                                    "when the print ended."}))
+# The money review's case: T4 a set, and a plain line on T0 (30 g).
+SET_PLUS_T0 = dict(PARTIAL_SET, job_id="st0", unresolved_usage={"0": 30.0, "4": 84.28},
+                   heads_at_end=PARTIAL_SET["heads_at_end"] + [_HEAD_1],
+                   unresolved_notes=dict(PARTIAL_SET["unresolved_notes"], **{"0": "No spool was loaded on "
+                                                                                  "HEAD-1 when the print ended."}))
+# A no_spool card: T4 a set, T6 a plain line.
+NOSPOOL_PLUS_LINE = dict(NOSPOOL_SET, job_id="nsl", usage_map={"4": 84.28, "6": 20.0}, total_grams=104.28)
+# Two sets and a plain line on T0.
+TWO_SETS_PLUS_T0 = dict(TWO_SETS, job_id="t2p", unresolved_usage={"0": 30.0, "4": 84.28, "6": 20.0},
+                        heads_at_end=TWO_SETS["heads_at_end"] + [_HEAD_1], total_grams=134.28)
+
+PLAIN_CASES = [
+    {"job": "psl", "fill": {}, "pick": {}},                                  # T6 left unpicked
+    {"job": "pk", "fill": {}, "pick": {"pos:6": "243"}},                     # T6 picked: charged
+    {"job": "st0", "fill": {}, "pick": {}},                                  # T0 left unpicked
+    {"job": "pov", "fill": {"set:4:42": 84.28, "set:4:229": 84.28}, "pick": {}},  # set over, T6 left
+    {"job": "nsl", "fill": {"set:4:42": 30}, "pick": {}},                    # a no_spool card, T6 left
+    {"job": "nsg", "fill": {"set:4:42": 30, "6": ""}, "pick": {"6": "243"}},  # T6 picked with no grams
+    {"job": "t2p", "fill": {}, "pick": {}},                                  # two sets and T0
+]
+PLAIN_PENDING = [SET_PLUS_LINE, dict(SET_PLUS_LINE, job_id="pk"), SET_PLUS_T0, dict(SET_PLUS_LINE, job_id="pov"),
+                 NOSPOOL_PLUS_LINE, dict(NOSPOOL_PLUS_LINE, job_id="nsg"), TWO_SETS_PLUS_T0]
+
+PLAIN_JS = r"""
+const out = {};
+for (const k of D.cases) {
+  const c = cardOf(k.job);
+  Object.entries(k.pick).forEach(([line, sid]) => pickIn(c.querySelector(`.fcc-cr-pick[data-line="${CSS.escape(line)}"]`), sid));
+  Object.entries(k.fill).forEach(([line, g]) => fill(c, line, g));
+  const btn = c.querySelector('.fcc-cr-confirm');
+  btn.click();
+  await settle(30);
+  out[k.job] = Object.assign({ btn: stateOf(btn) }, said(c));
+}
+// The second press of the first card's ask goes ahead with T6 unpicked.
+await settle(720);
+cardOf('psl').querySelector('.fcc-cr-confirm').click();
+await settle(40);
+return { out, posted: posts('/api/cancel_deduct/confirm') };
+"""
+
+T6_LEFT = "⚠️ Yes below charges nothing to T6 · HEAD-7, leaving its 20 g uncharged."
+T0_LEFT = "⚠️ Yes below charges nothing to T0 · HEAD-1, leaving its 30 g uncharged."
+
+
+def test_the_yes_counts_every_plain_line_its_press_leaves_uncharged(tmp_path):
+    # On e777bcd: AssertionError: ('psl', '⚠️ Yes, leave 84.28 g uncharged') (T6's 20 g, which the
+    # press also leaves uncharged, weren't counted, nor said anywhere on the card)
+    res = _run(tmp_path, PLAIN_JS, PLAIN_PENDING, cases=PLAIN_CASES)
+    out = res["out"]
+    want = {"psl": ("⚠️ Yes, leave 104.28 g uncharged", [NONE_PLACED], T6_LEFT),
+            "pk": ("⚠️ Yes, leave 84.28 g uncharged", [NONE_PLACED], None),
+            "st0": ("⚠️ Yes, leave 114.28 g uncharged", [NONE_PLACED], T0_LEFT),
+            "pov": ("⚠️ Yes, go ahead as typed", None, T6_LEFT),
+            "nsl": ("⚠️ Yes, leave 74.28 g uncharged", [PART_PLACED], T6_LEFT),
+            "nsg": ("⚠️ Yes, leave 74.28 g uncharged", [PART_PLACED], T6_LEFT),
+            "t2p": ("⚠️ Yes, leave 134.28 g uncharged", [NONE_PLACED, T6_NONE],
+                    "2 heads' grams don't add up, as each says above. Press ⚠️ Yes below to leave them "
+                    "uncharged. " + T0_LEFT)}
+    for job, (text, alerts, notice) in want.items():
+        o = out[job]
+        assert o["btn"]["text"] == text and _waiting(o["btn"]), (job, o)
+        if alerts is not None:
+            assert o["alerts"] == alerts, (job, o)
+        assert o["notice"] == notice, (job, o)
+    # The second press goes ahead as asked: nothing for T6, whose grams the server
+    # leaves uncharged, as the button said.
+    assert res["posted"] == [{"printer_name": "TESTER", "job_id": "psl", "updates": {}}], res["posted"]
+
+
+PLAIN_CHANGE_JS = r"""
+const c = cardOf('psl');
+const btn = c.querySelector('.fcc-cr-confirm');
+btn.click();
+await settle(30);
+const asked = stateOf(btn);
+// A spool picked for T6: what the press leaves changed, so the wait ends.
+pickIn(c.querySelector('.fcc-cr-pick[data-line="pos:6"]'), '243');
+const picked = Object.assign({ btn: stateOf(btn) }, said(c));
+btn.click();
+await settle(30);
+const reasked = Object.assign({ btn: stateOf(btn) }, said(c));
+// T6's grams emptied: it is left again, so the wait ends again.
+fill(c, 'pos:6', '');
+const emptied = Object.assign({ btn: stateOf(btn) }, said(c));
+btn.click();
+await settle(30);
+const again = Object.assign({ btn: stateOf(btn) }, said(c));
+return { asked, picked, reasked, emptied, again, posted: posts('/api/cancel_deduct/confirm').length };
+"""
+
+
+def test_a_change_on_a_plain_line_ends_the_wait(tmp_path):
+    # On e777bcd: AssertionError: ('⚠️ Yes, leave 84.28 g uncharged' ...) (T6 was never counted, and
+    # a pick there left the button saying "⚠️ Yes" over grams that had changed)
+    res = _run(tmp_path, PLAIN_CHANGE_JS, [SET_PLUS_LINE])
+    assert res["posted"] == 0, res
+    assert res["asked"]["text"] == "⚠️ Yes, leave 104.28 g uncharged", res["asked"]
+    p = res["picked"]
+    assert _normal(p["btn"]) and p["alerts"] == [] and p["notice"] is None, p
+    r = res["reasked"]
+    assert r["btn"]["text"] == "⚠️ Yes, leave 84.28 g uncharged" and r["notice"] is None, r
+    e = res["emptied"]
+    assert _normal(e["btn"]) and e["alerts"] == [] and e["notice"] is None, e
+    a = res["again"]
+    assert a["btn"]["text"] == "⚠️ Yes, leave 104.28 g uncharged" and a["notice"] == T6_LEFT, a
+
+
+REFUSED_JS = r"""
+const out = {};
+const typeBox = (c, line, text) => {
+  const b = c.querySelector(`.fcc-cr-other[data-line="${CSS.escape(line)}"]`);
+  b.value = text; fire(b, 'input');
+};
+// D.cases: a line moved to "Another spool by #ID…" with a spool's number in its box,
+// a first press that asks, the box then left unreadable, and a press long after.
+for (const k of D.cases) {
+  const c = cardOf(k.job);
+  pickIn(c.querySelector(`.fcc-cr-pick[data-line="${CSS.escape(k.line)}"]`), 'other');
+  typeBox(c, k.line, k.sid);
+  await settle(20);
+  const btn = c.querySelector('.fcc-cr-confirm');
+  btn.click();
+  await settle(30);
+  const asked = stateOf(btn);
+  typeBox(c, k.line, 'abc');
+  await settle(720);
+  btn.click();
+  await settle(30);
+  out[k.job] = Object.assign({ asked, btn: stateOf(btn) }, said(c));
+}
+return { out, posted: posts('/api/cancel_deduct/confirm').length };
+"""
+REFUSED_CASES = [{"job": "nsl", "line": "6", "sid": "243"},        # no_spool: a plain line
+                 {"job": "psl", "line": "pos:6", "sid": "243"},    # partial: a plain held line
+                 {"job": "ps", "line": "243", "sid": "243"}]       # partial: a row
+
+
+def test_a_press_refused_before_the_set_check_ends_the_wait(tmp_path):
+    # On e777bcd: AssertionError: ('nsl', ... 'text': '⚠️ Yes, leave 84.28 g uncharged' ...) (the
+    # refused press left the orange Yes and the set's "press ⚠️ Yes below" up, though no press of
+    # it could go ahead)
+    res = _run(tmp_path, REFUSED_JS, [NOSPOOL_PLUS_LINE, SET_PLUS_LINE, PARTIAL_SET], cases=REFUSED_CASES)
+    assert res["posted"] == 0, res
+    words = {"nsl": "Type the #id of the spool T6 used (or pick one).",
+             "psl": "Type the #id of the spool T6 used (or pick one).",
+             "ps": "Type the #id of the spool to charge (or pick one)."}
+    for job, notice in words.items():
+        o = res["out"][job]
+        assert _waiting(o["asked"]), (job, o)
+        # The refusal is said, and the button and the sets say their own words again.
+        assert _normal(o["btn"], APPLY if job == "nsl" else CONFIRM), (job, o)
+        assert o["alerts"] == [] and o["notice"] == notice, (job, o)
+
+
+DOUBLE_JS = r"""
+const c = cardOf('ts');
+const btn = c.querySelector('.fcc-cr-confirm');
+btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+await settle(20);
+const first = Object.assign({ btn: stateOf(btn) }, said(c));
+btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 2 }));
+await settle(20);
+const second = Object.assign({ btn: stateOf(btn) }, said(c));
+return { first, second, posted: posts('/api/cancel_deduct/confirm').length };
+"""
+
+
+def test_a_double_clicks_second_press_keeps_the_line_by_the_buttons(tmp_path):
+    # On e777bcd: AssertionError: assert None == "2 heads' grams don't add up, ..." (the second click
+    # of a double click cleared the card's line while the button still waited; at phone width the
+    # panel scrolls the button back under the pointer, so the second click lands on it)
+    res = _run(tmp_path, DOUBLE_JS, [TWO_SETS])
+    assert res["posted"] == 0, res
+    lead = "2 heads' grams don't add up, as each says above. Press ⚠️ Yes below to leave them uncharged."
+    assert res["first"]["notice"] == lead, res["first"]
+    assert res["second"]["notice"] == lead, res["second"]
+    assert res["second"]["btn"] == res["first"]["btn"] and _waiting(res["second"]["btn"]), res
