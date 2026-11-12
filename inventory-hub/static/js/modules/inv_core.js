@@ -371,16 +371,40 @@ const fccFitQuestion = (panel) => {
 };
 window.fccFitQuestion = fccFitQuestion;
 
+// Group 55.3 (review, R4-3): the ? button of a question a script draws, for its top right
+// corner (.fcc-help-corner in global.css; the panel is position:relative, and the title
+// keeps clear of it). Its help is the one help_texts.js gives the question's overlay id,
+// as for the ? key (window.fccHelpKeyForOverlayId), so the ? shows exactly where the key
+// gives help; '' when that overlay has none. Called when the question opens.
+window.fccCornerHelpHtml = (overlayId, what = 'question') => {
+    const key = (window.fccHelpKeyForOverlayId && window.fccHelpKeyForOverlayId(overlayId)) || '';
+    if (!key) return '';
+    const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    return `<button type="button" class="fcc-help-btn fcc-help-corner" data-fcc-help="${esc(key)}" `
+        + `title="How this ${esc(what)} works (?)" aria-label="Help: how this ${esc(what)} works">?</button>`;
+};
+
 window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', host = null,
                                ids = {}, onConfirm = null, onCancel = null,
                                title = '', onStore = null, storeLabel = '', loadLabel = '',
                                printing = null, noLoad = false, hint = '',
                                cancelLabel = '', cancelVerb = '', loadVerb = '',
                                loadCaption = '', cancelCaption = '', sections = null,
-                               armAfterMs = 0, keepWhole = false } = {}) => {
+                               armAfterMs = 0, keepWhole = false, help = null } = {}) => {
     const esc = (s) => String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    const overlayId = ids.overlay || 'fcc-active-print-confirm-overlay';
+    // Its ? button (Group 55.3): `help`, a help key ('' draws none), else the help
+    // help_texts.js gives this overlay's id, so the ? shows where the ? key gives help:
+    // the move doors' two overlays and the Printer picker's toolhead question. Done's
+    // question has no help, so its markup is as it was. Top right, beside a title its
+    // padding keeps centred and clear of it.
+    const helpKey = help != null ? String(help)
+        : ((window.fccHelpKeyForOverlayId && window.fccHelpKeyForOverlayId(overlayId)) || '');
+    const helpBtn = helpKey
+        ? `<button type="button" class="fcc-help-btn fcc-apc-help" data-fcc-help="${esc(helpKey)}" title="How this question works (?)" aria-label="Help: how this question works">?</button>`
+        : '';
     // `keepWhole` (Done's question; Derek's look of 2026-11-04): its title and words keep a
     // place id whole ("SHELF-2-R3", "LR-MDB-1"), as the buttons do, wrapping at spaces.
     const words = (s) => (keepWhole ? fccKeepWhole(esc(s)) : esc(s));
@@ -439,14 +463,13 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         ? `<div class="fcc-apc-status" role="alert" style="display:none; margin-bottom:10px; padding:6px 10px; border-radius:6px; background:#4a3200; color:#ffd27a; border:1px solid #ffb74d; font-weight:bold; text-align:left;"></div>`
         : '';
     const content = `
-        <div class="fcc-apc-panel${tiled ? ' fcc-apc-tiled' : ''}" style="background:#1e1e1e; color:#fff; border:2px solid ${border}; border-radius:8px; padding:20px min(24px, 4vw); ${width} text-align:center;">
-            <div class="fcc-apc-title" style="font-size:1.2em; font-weight:bold; margin-bottom:8px;">${header}</div>
+        <div class="fcc-apc-panel${tiled ? ' fcc-apc-tiled' : ''}" style="background:#1e1e1e; color:#fff; border:2px solid ${border}; border-radius:8px; padding:20px min(24px, 4vw); ${width} text-align:center;${helpKey ? ' position:relative;' : ''}">${helpBtn}
+            <div class="fcc-apc-title" style="font-size:1.2em; font-weight:bold; margin-bottom:8px;${helpKey ? ' padding:0 2.5rem;' : ''}">${header}</div>
             <div class="fcc-apc-msg" style="color:#ffc; margin-bottom:14px;${threeWay ? ' text-align:left;' : ''}">${words(bodyText)}</div>${listsHtml}
             ${status}
             <div class="fcc-apc-btns" style="display:flex; gap:10px; justify-content:center;${threeWay ? ' flex-wrap:wrap;' : ''}">${buttons}</div>
             ${extras}
         </div>`;
-    const overlayId = ids.overlay || 'fcc-active-print-confirm-overlay';
     let handle = null;
     let qrSession = null;
     let settled = false;
@@ -536,6 +559,7 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
             host.removeEventListener('hidden.bs.offcanvas', onHostGone);
         };
     }
+    const helpEl = helpKey ? ov.querySelector('.fcc-apc-help') : null;
     ov.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
             // A scan in flight owns this Enter: it terminates the scan (a
@@ -547,6 +571,13 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
             // (Group 57 review, round 4).
             if (enterIsAScan()) return;
             const ae = document.activeElement;
+            // On the ? button, Enter opens the help: it never stores or cancels.
+            if (helpEl && ae === helpEl) {
+                e.preventDefault(); e.stopPropagation();
+                clearScanBuffer();
+                helpEl.click();
+                return;
+            }
             // A person's Enter: a key they left in the scan buffer goes with
             // it, so it can't start the next scan (Group 57 review, round 5).
             if (threeWay) {

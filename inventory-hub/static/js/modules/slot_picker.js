@@ -510,10 +510,16 @@
         const m = s.model || {};
         const sub = m.spool_display ? `<div class="small" style="color:#e0e0e0;">${_esc(m.spool_display)}</div>` : '';
         const step = s.opts.step ? `<span class="fcc-sp-step">${_esc(s.opts.step)}</span>` : '';
+        // Its ? (Group 55.3): the Printer picker's help, or the box picker's (Return's
+        // too), by the mode _mount marks on the root. A [data-sp-act] is in the picker's
+        // Tab order and Enter presses it; shortcuts_registry.js's click opens the help.
+        const root = s.handle && s.handle.element;
+        const helpKey = (root && root.dataset.fccPickerMode === 'printer') ? 'printer-picker' : 'slot-picker';
         return `
             <div class="card-header d-flex align-items-start justify-content-between gap-2">
                 <div><div class="fw-bold text-info" style="font-size:1.1rem;">🎯 ${_esc(_title(s))}${step}</div>${sub}</div>
                 <div class="d-flex align-items-center gap-2 flex-wrap justify-content-end">${chips || ''}
+                    <button type="button" class="fcc-help-btn" data-sp-act="help" data-fcc-help="${helpKey}" title="How this picker works (?)" aria-label="Help: how this picker works">?</button>
                     <button type="button" class="btn-close btn-close-white" data-sp-act="cancel" title="Cancel (Esc)" aria-label="Cancel"></button>
                 </div>
             </div>
@@ -553,6 +559,7 @@
 
     const _render = (s) => {
         const m = s.model;
+        if (s.handle && m && m.mode) s.handle.element.dataset.fccPickerMode = m.mode;   // its help (Group 55.3)
         s.tiles = _buildTiles(s);
         const chips = (m.printers || []).map((p) =>
             `<span class="fcc-sp-pchip">🖨️ ${_esc(p.name)} · ${_pstate(p.name)}</span>`).join('');
@@ -961,6 +968,13 @@
         const root = s.handle.element;
         root.setAttribute('role', 'dialog');
         root.setAttribute('aria-label', 'Slot picker');
+        // Group 55.3: which picker this is, for its help (the loading view draws no
+        // mode): Return's, the Printer picker or the box picker. The model's own mode
+        // replaces it once read (_render).
+        const rows = Array.isArray(_st().allLocations) ? _st().allLocations : [];
+        const row = rows.find((r) => r && String(r.LocationID || '') === String(s.location || ''));
+        root.dataset.fccPickerMode = s.opts.mode === 'return' ? 'return'
+            : (row && window.isPrinterRowNotHead && window.isPrinterRowNotHead(row) ? 'printer' : 'box');
         // Delegated on the root, so a re-render (setContent) keeps them.
         const onClick = (e) => {
             if (s.settled) return;
@@ -971,6 +985,7 @@
                 if (a === 'cancel') _finish(s, null);
                 else if (a === 'retry') _load(s);
                 else if (a === 'feeds') _editFeeds(s);
+                // 'help': shortcuts_registry.js's click on the document opens it.
                 return;
             }
             const choice = e.target.closest && e.target.closest('[data-sp-choice]');
@@ -1149,7 +1164,7 @@
         window.registerShortcut({ id: 'slot-picker-pick', scope: 'Slot Picker', keys: ['Enter'],
             description: 'Pick the highlighted slot. Scanning a slot label (or the tile\'s QR) picks it too.' });
         window.registerShortcut({ id: 'slot-picker-cancel', scope: 'Slot Picker', keys: ['Esc'],
-            description: 'Cancel the picker; nothing moves. CMD:CANCEL does the same.' });
+            description: 'Cancel the picker; nothing moves. The 📷 CANCEL QR beside Cancel does the same.' });
         window.registerShortcut({ id: 'slot-picker-choice', scope: 'Slot Picker', keys: ['←', '→', 'Enter'],
             description: 'A slot that holds a spool asks what happens to it (Swap / Overwrite, or Swap it out): '
                 + '←/→ choose, Enter confirms, Back returns to the slots. Each answer has a QR too.' });

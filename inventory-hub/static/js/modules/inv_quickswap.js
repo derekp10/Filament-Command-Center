@@ -193,10 +193,16 @@
             if (!silent) grid.innerHTML = '';
             if (!printerName) {
                 empty.style.display = 'block';
-                empty.innerHTML = '⚠️ This location is not registered in ' +
-                    '<span class="text-info fw-bold">printer_map</span>. ' +
-                    'Add an entry for its toolhead LocationID(s) in ' +
-                    '<span class="text-info fw-bold">config.json</span> to enable Quick-Swap.';
+                // Group 55: a printer's toolheads are set on its Printer row in the ⚙️
+                // window (config.json's printer_map, which this used to name, only seeds
+                // an install that has no Printer row with toolheads yet). A Printer row
+                // with no toolheads is told to add them, a toolhead no printer lists to
+                // be added to its printer (Group 55 review, R2-7).
+                const where = '<span class="text-info fw-bold">⚙️</span> window, under ' +
+                    '<span class="text-info fw-bold">🖨️ Printers &amp; Toolheads</span>, to use Quick-Swap.';
+                empty.innerHTML = isPrinter
+                    ? '⚠️ This printer has no toolheads yet. Add them in the ' + where
+                    : '⚠️ No printer lists this place as one of its toolheads yet. Add it to its printer in the ' + where;
                 return;
             }
 
@@ -581,11 +587,13 @@
         const defaultBody = 'This moves the spool currently in that slot into the active toolhead. ' +
                             'Any spool already on the toolhead will be auto-ejected back to its source.';
         const bodyHtml = warningBanner + noteHtml + (opts.body || defaultBody);
+        // Its ? (Group 55 review, R4-3): the swap question's own help, top right.
+        const helpBtn = window.fccCornerHelpHtml ? window.fccCornerHelpHtml('fcc-quickswap-confirm-overlay') : '';
 
         const panelHtml = `
-            <div class="bg-dark border border-info rounded p-4 shadow-lg"
-                 style="min-width:min(26.25rem,94vw); max-width:33.75rem;">
-                <div class="text-info fw-bold mb-3" style="font-size:1.25rem;"
+            <div class="bg-dark border border-info rounded p-4 shadow-lg position-relative"
+                 style="min-width:min(26.25rem,94vw); max-width:33.75rem;">${helpBtn}
+                <div class="text-info fw-bold mb-3" style="font-size:1.25rem;${helpBtn ? ' padding-right:2.5rem;' : ''}"
                      id="fcc-quickswap-confirm-title">${_escapeHtml(titleText)}</div>
                 <div class="text-light mb-3" style="font-size:1.05rem;"
                      id="fcc-quickswap-confirm-body">${bodyHtml}</div>
@@ -1873,6 +1881,9 @@
         // used to move this grid's focus behind it, and a later Enter then ran
         // quickSwapTap on a tile nobody could see (Group 40.3 / 40.1 review).
         if (document.querySelectorAll('[data-overlay-mount="1"]').length) return;
+        // So does the help window (Group 55.3): Q moved the keyboard off it, onto a
+        // tile under it.
+        if (window.fccShortcutsUp && window.fccShortcutsUp()) return;
 
         const tag = (e.target && e.target.tagName) || '';
         if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.isContentEditable) return;

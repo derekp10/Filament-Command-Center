@@ -55,7 +55,10 @@
 //     applied (and restored on cleanup). Buglist L233 lesson — <select> /
 //     offcanvas elements under the host swallow clicks intended for overlay.
 //   - Idempotent cleanup: calling cleanup() twice (or via host-close and then
-//     manually) is a no-op.
+//     manually) is a no-op. The first one dispatches `fcc:overlay-closed` on
+//     document ({detail: {id, element}}), so the help window opened over the
+//     overlay closes with it, and a mount dispatches `fcc:overlay-opened`, so a
+//     dialog's help closes when another dialog opens over it (Group 55.3).
 //   - Mounting with an `id` that's already mounted tears down the prior
 //     handle first (re-mount).
 //   - The overlay on top owns the keys: Escape is answered by the topmost one
@@ -262,9 +265,20 @@
             }
             try { root.remove(); } catch (_) { /* noop */ }
             if (_registry.get(id) === handle) _registry.delete(id);
+            // Group 55.3: say so once, for what was opened over it: the help window
+            // (shortcuts_registry.js) closes with the dialog it was opened for.
+            try {
+                document.dispatchEvent(new CustomEvent('fcc:overlay-closed', { detail: { id, element: root } }));
+            } catch (_) { /* a page without CustomEvent: nothing listens there */ }
         }
 
         _registry.set(id, handle);
+
+        // Group 55.3: say it opened, for the help window: a dialog's help closes when
+        // another dialog opens over that dialog (it would be drawn under the help).
+        try {
+            document.dispatchEvent(new CustomEvent('fcc:overlay-opened', { detail: { id, element: root } }));
+        } catch (_) { /* a page without CustomEvent: nothing listens there */ }
 
         if (o.initialFocus) {
             setTimeout(() => {

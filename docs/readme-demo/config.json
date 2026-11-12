@@ -1,0 +1,11 @@
+{
+    "comment": "--- README DEMO: made-up setup, throwaway ---",
+    "server_ip": "spoolman",
+    "spoolman_port": 8000,
+    "sync_delay": 0.5,
+    "print_settings": {
+        "csv_path": "/output/labels.csv"
+    },
+    "dryer_slots": [],
+    "path_filament_g": 0
+}

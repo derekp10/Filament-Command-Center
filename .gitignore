@@ -49,3 +49,11 @@ config.json.*.bak
 
 # Group 45.1(c): per-test browser call times on this PC (the sweep load factor).
 /.test-timings/
+
+# The README demo (docs/readme-demo/README.md): its copy of the code, with its own
+# made-up data/, the setup_fields.py copy and the label CSVs it writes.
+/docs/readme-demo/app/
+/docs/readme-demo/setup-and-rebuild/
+/docs/readme-demo/labels/
+# ...but its config.json is the recipe (the demo Spoolman only), unlike the real one above.
+!/docs/readme-demo/config.json

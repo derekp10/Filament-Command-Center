@@ -76,10 +76,9 @@ CONFIG_SCHEMA = [
           help="Pause between Spoolman sync operations."),
     Field("fcc_owns_completion_deduct", "FCC owns completed-print deduct", "bool", False,
           section="behavior", scope="server",
-          help="Phase-2 cutover: when ON, FCC deducts filament on FINISHED prints "
-               "(the slicer footer, same as FilaBridge billed). Turn this ON the "
-               "SAME moment you stop the FilaBridge container — otherwise completed "
-               "prints double-deduct (FilaBridge + FCC)."),
+          help="When ON, FCC takes each finished print's filament off the spools it "
+               "used, from the print file's own totals. A new install starts with it "
+               "off."),
     Field("path_filament_g", "Runout path filament (g)", "float", 0,
           section="behavior", scope="server", min=0, max=50,
           help="Grams of filament between the runout SENSOR and the nozzle that you pull "

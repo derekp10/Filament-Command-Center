@@ -164,12 +164,16 @@ def test_escape_closes_only_the_list_and_the_panels_keys_come_back(live, env):
     live.keyboard.press("n")
     live.wait_for_timeout(PAST_N)
     live.keyboard.press("ArrowRight")
-    assert active(live) == BUTTON[1:]
+    # PIN UPDATED DELIBERATELY (Group 55.3): the list takes the keyboard while it is up
+    # (it was left on the panel's button, where a person's keys reached dialogs they
+    # couldn't see), and the arrow moved nothing on the panel.
+    assert active(live) == "fcc-shortcuts-overlay"
     assert sent(live).count("CMD:NEEDLABEL") == 0 and wire(env, 57) is None
 
     live.keyboard.press("Escape")
     assert not list_is_up(live)
     assert live.is_visible(PANEL) and live.evaluate("state.auditActive") is True
+    assert active(live) == BUTTON[1:]            # and Escape gives it back
 
     live.wait_for_timeout(520)                   # the n sits in the scan buffer, and an Enter
     #                                              under 500 ms would be a scan of it

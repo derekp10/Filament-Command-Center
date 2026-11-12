@@ -4247,14 +4247,17 @@ const _askRecordSource = (pick, sid, host) => {
         const msg = `${esc(Who)} isn't coming from a box, so pick a slot feeding ${esc(head)}: ↩️ Return and ⏏️ Eject`
             + ' will put it in that slot later. With No box, Return will ask which slot (or use the only free one),'
             + ' and Eject will leave it Unassigned.';
+        // Its ? (Group 55 review, R4-3): the Printer picker's help, which says what this
+        // question is for, top right.
+        const helpBtn = window.fccCornerHelpHtml ? window.fccCornerHelpHtml('fcc-record-source') : '';
         handle = window.mountOverlay({
             id: 'fcc-record-source',
             tier: 'confirm',
             host: host || undefined,
             onEscape: () => finish(null),
             content: `
-                <div class="fcc-rs-panel" style="background:#1e1e1e; color:#fff; border:2px solid #0dcaf0; border-radius:8px; padding:18px min(22px, 4vw); max-width:38.75rem; text-align:center;">
-                    <div class="fcc-rs-title" style="font-size:1.15em; font-weight:bold; margin-bottom:6px;">🔗 Record ${esc(who)} as coming from…</div>
+                <div class="fcc-rs-panel" style="background:#1e1e1e; color:#fff; border:2px solid #0dcaf0; border-radius:8px; padding:18px min(22px, 4vw); max-width:38.75rem; text-align:center;${helpBtn ? ' position:relative;' : ''}">${helpBtn}
+                    <div class="fcc-rs-title" style="font-size:1.15em; font-weight:bold; margin-bottom:6px;${helpBtn ? ' padding:0 2.5rem;' : ''}">🔗 Record ${esc(who)} as coming from…</div>
                     <div class="fcc-rs-msg" style="color:#ffc; margin-bottom:12px; text-align:left;">${msg}</div>
                     <div class="fcc-rs-status" role="alert" style="display:none; margin-bottom:10px; padding:6px 10px; border-radius:6px; background:#4a3200; color:#ffd27a; border:1px solid #ffb74d; font-weight:bold; text-align:left;"></div>
                     ${slotsAbove ? `<div class="fcc-rs-slots" style="display:flex; gap:10px; justify-content:center; flex-wrap:wrap; margin-bottom:10px;">${slotsAbove}</div>` : ''}

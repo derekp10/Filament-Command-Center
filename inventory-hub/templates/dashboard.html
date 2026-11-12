@@ -44,7 +44,7 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/global.css') }}?v=28">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/global.css') }}?v=29">
 </head>
 
 <body>
@@ -122,9 +122,11 @@
                     class="fcc-tb-word"> Low stock</span> <span class="fcc-tb-count"><span
                     class="fcc-tb-paren">(</span><span data-low-stock-count data-count-pending>–</span><span
                     class="fcc-tb-paren">)</span></span></span></button>
-                <!-- Phase 3: keyboard shortcut reference (?). Click or press `?` to open. -->
+                <!-- Phase 3: keyboard shortcut reference (?). Click or press `?` to open.
+                     Group 55.3: a dialog's own ? button opens that dialog's help in the
+                     same window (shortcuts_registry.js). -->
                 <button class="btn btn-outline-light ms-2" id="btn-shortcuts-help"
-                    onclick="window.toggleShortcutsOverlay()"
+                    onclick="window.toggleShortcutsOverlay(event)"
                     title="Keyboard shortcuts (?)"
                     style="font-weight:bold; width:2.375rem;">?</button>
                 <!-- L324 Config / Admin entry point. First inhabitant is the
@@ -159,21 +161,25 @@
          whatever is open, and what is under it holds its keys while it is up
          (inv_cmd.js's panel keys, personMayPress in scripts.html), so a list drawn
          behind an overlay left the keys dead with nothing on screen saying why
-         (Group 58 review). Its capture-phase Escape runs before mountOverlay's. -->
+         (Group 58 review). Its capture-phase Escape runs before mountOverlay's.
+         Group 55.3: it is also the in-app help. #fcc-help-view holds one dialog's
+         help (help_texts.js), shown instead of the list, or the "← Back" to it. -->
     <div id="fcc-shortcuts-overlay-backdrop"
         class="position-fixed top-0 start-0 w-100 h-100"
         style="display:none; z-index:20200; background:rgba(0,0,0,0.45);"
-        onclick="window.toggleShortcutsOverlay()"></div>
-    <div id="fcc-shortcuts-overlay"
+        onclick="window.fccShortcutsBackdropClick(event)"></div>
+    <div id="fcc-shortcuts-overlay" role="dialog" aria-modal="true" aria-labelledby="fcc-shortcuts-title" tabindex="-1"
         class="position-fixed top-50 start-50 translate-middle bg-dark border border-info rounded p-4 shadow-lg"
         style="display:none; z-index:20201; width:min(50rem, 95vw); max-height:85vh; overflow-y:auto;">
         <div class="d-flex justify-content-between align-items-center mb-3 pb-2 border-bottom border-secondary">
-            <h4 class="text-info mb-0 fw-bold">⌨️ Keyboard & Scan Shortcuts</h4>
-            <button type="button" class="btn-close btn-close-white"
-                onclick="window.toggleShortcutsOverlay()"></button>
+            <h4 class="text-info mb-0 fw-bold" id="fcc-shortcuts-title">⌨️ Keyboard & Scan Shortcuts</h4>
+            <button type="button" class="btn-close btn-close-white" aria-label="Close"
+                onclick="window.toggleShortcutsOverlay(event)"></button>
         </div>
+        <div id="fcc-help-view" style="display:none;"></div>
         <div id="fcc-shortcuts-list"></div>
-        <div class="text-light fw-bold mt-3 pt-2 border-top border-secondary" style="font-size:1rem;">
+        <div class="text-light fw-bold mt-3 pt-2 border-top border-secondary" style="font-size:1rem;"
+            id="fcc-shortcuts-foot">
             Press <kbd style="background:#111; color:#0ff; font-weight:bold; padding:2px 6px;">?</kbd>
             or <kbd style="background:#111; color:#0ff; font-weight:bold; padding:2px 6px;">Esc</kbd> to close.
         </div>

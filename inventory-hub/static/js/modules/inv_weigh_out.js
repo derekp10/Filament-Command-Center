@@ -645,6 +645,16 @@ document.addEventListener('hidden.bs.modal', (e) => {
     window.weighOutRefocus();
 });
 
+// The help window closed over the list by the person (Group 55 review, R1-1): the
+// focus to the target's box, as when another window over it closes. The help gives the
+// keyboard back to what had it, and a redraw under the help (a heartbeat after a save)
+// had replaced that box, so the keyboard landed on the page and the reading typed next
+// went to the scan path as a spool id; a spool scanned under the help moved the target,
+// and the reading went to the box of the spool weighed before it.
+document.addEventListener('fcc:help-closed', (e) => {
+    if (e && e.detail && e.detail.person) window.weighOutRefocus();
+});
+
 // A click on a row's card (its name, its "Current" line) picks that row: its
 // box takes the focus (round 8: the focus went to the window itself, and the
 // reading typed next to the box that had had it, another spool's). A row
@@ -1366,6 +1376,7 @@ window.openQuickWeigh = (spoolId) => {
                 availableModes: ['gross', 'net', 'additive', 'set_used'],
                 showAutoArchive: true,
                 autoArchiveDefault: true,
+                helpKey: 'quick-weigh',   // its ? (Group 55.3)
                 onSubmit: (payload) => {
                     const updates = { used_weight: payload.used_weight };
                     // Used == initial means remaining hits zero; auto-archive
@@ -1391,3 +1402,13 @@ window.openQuickWeigh = (spoolId) => {
 };
 
 
+
+// Group 55.3: the list's own Enter, for its help and the full shortcut list. The
+// registerShortcut shim (scripts.html) queues it until shortcuts_registry.js loads.
+if (typeof window.registerShortcut === 'function') {
+    window.registerShortcut({
+        id: 'weigh-out-enter', scope: 'Weigh-Out',
+        keys: ['Enter'],
+        description: 'In a spool\'s box: save its weight and go to the next spool. In an empty box: skip to the next one.',
+    });
+}

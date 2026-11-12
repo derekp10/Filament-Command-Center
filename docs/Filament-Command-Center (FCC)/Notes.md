@@ -50,8 +50,8 @@ Now when the script sends "Metal", Spoolman says, "Ah, that is on the list now. 
 ⚡ Summary
 The Updater is a Data Pusher, not a Rule Maker. It plays by the rules that exist; it does not change them.
 
-# ** Label Printer Options **
-In config.json - PrintSettings -> Mode:
-    csv - exports to CSV file
-    browser - uses attached ptouch print drivers to print directly
+# ** Label printing **
+FCC writes label CSVs (spools, filament swatches, locations, dryer-box slots), and the Brother P-touch Editor templates read them as their database and print. In `config.json`, only `print_settings.csv_path` is read. The old `print_settings.mode` switch (csv, or browser to print straight to the P-touch) is read nowhere now.
+
+Why CSVs: printing straight to the P-touch was tried and never printed labels correctly. Trying it again is on the buglist ("Try printing labels straight to the P-touch again", 2026-11-10).
 

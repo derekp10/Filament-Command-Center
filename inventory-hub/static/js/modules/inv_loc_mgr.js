@@ -238,6 +238,12 @@ window.openManage = (id) => {
         return;
     }
 
+    // Another place in the same window (a scan under its help, say): the help it had up
+    // was about the last place (Group 55 review, R1-8), so it goes.
+    const shownId = document.getElementById('manage-loc-id').value;
+    if (shownId && String(shownId) !== String(id) && window.fccCloseHelpFor) {
+        window.fccCloseHelpFor(document.getElementById('manageModal'));
+    }
     window.updateManageTitle(loc);
     document.getElementById('manage-loc-id').value = id;
     const input = document.getElementById('manual-spool-id');
@@ -1118,7 +1124,10 @@ const _paintDepositCard = (card, item) => {
     const inner = card.querySelector('.list-inner-gold');
     if (inner) inner.style.background = styles.inner;
     const label = card.querySelector('.js-deposit-spool');
-    if (label) label.textContent = `#${item.id} - ${item.display}`;
+    // A display that already starts with the spool's number ("#8 Acme PLA ...", most of
+    // them) isn't given it twice (Group 55 review: the README's picture read "#8 - #8 ...").
+    const display = String(item.display == null ? '' : item.display);
+    if (label) label.textContent = display.startsWith(`#${item.id} `) || display === `#${item.id}` ? display : `#${item.id} - ${display}`;
 };
 
 const _buildDepositCard = (locId) => {

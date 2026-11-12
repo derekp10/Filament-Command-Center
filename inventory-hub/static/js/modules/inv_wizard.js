@@ -288,6 +288,9 @@ window.openWizardModal = async () => {
                 + ' [tabindex]:not([tabindex="-1"])'
             );
             for (const el of focusables) {
+                // The header's ? (Group 55.3) sits before the ✕; the ✕ keeps the
+                // first focus it had before the ? came.
+                if (el.matches && el.matches('[data-fcc-help]')) continue;
                 if (el.offsetParent !== null) { el.focus(); return; }
             }
             _wizModalEl.focus();
@@ -1251,7 +1254,26 @@ window.wizardBindCombobox = ({ searchId, hiddenId, dropdownId, items, placeholde
     const picked = (value, label) => {
         if (typeof onPick === 'function') onPick(value, label, before || { value: '', label: '' });
     };
-    freshSearch.addEventListener('focus', () => { remember(); render(true); dropdown.style.display = 'block'; });
+    // The blur's late hide of the list (below), so a focus back before it fires keeps the
+    // list it shows: it hid the list a quick return had just shown, and Tab then confirmed
+    // nothing (Group 55 review).
+    let hideTimer = null;
+    freshSearch.addEventListener('focus', () => {
+        clearTimeout(hideTimer);
+        hideTimer = null;
+        // A search in progress stays one when the field gets the keyboard back (Group 55
+        // review, R1-2): the help window closing, or a return from another app. Re-entry
+        // reset it to the whole list with nothing typed, so Enter took the list's first
+        // item (-- Unassigned --) and Tab took nothing, and Save sent no location.
+        // In progress: typed since it was focused, and its text isn't the picked item's.
+        const pickedItem = items.find(it => String(it.value) === String(hidden.value));
+        if (typed && freshSearch.value.trim() && !(pickedItem && pickedItem.label === freshSearch.value)) {
+            render();
+            dropdown.style.display = 'block';
+            return;
+        }
+        remember(); render(true); dropdown.style.display = 'block';
+    });
     // Group 10.2/10.10: also handle click-while-already-focused. After
     // picking an option, mousedown.preventDefault keeps focus on the input,
     // so a subsequent click never fires `focus` again. Without this, the
@@ -1267,7 +1289,8 @@ window.wizardBindCombobox = ({ searchId, hiddenId, dropdownId, items, placeholde
     });
     freshSearch.addEventListener('blur', () => {
         // Short delay so mousedown on a list item can fire before we tear it down.
-        setTimeout(() => { dropdown.style.display = 'none'; }, 150);
+        clearTimeout(hideTimer);
+        hideTimer = setTimeout(() => { hideTimer = null; dropdown.style.display = 'none'; }, 150);
     });
     freshSearch.addEventListener('input', () => {
         typed = true;

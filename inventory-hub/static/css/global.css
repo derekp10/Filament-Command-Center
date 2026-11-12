@@ -922,6 +922,73 @@ body {
     z-index: 20300;
 }
 
+/* Group 55.3: in-app help. A dialog's help button sits in its header beside the ✕: a
+   ring holding a bold "?", the sign the title bar's ? button already uses, in the
+   header's own text colour (white on FCC's dark headers, dark on a light coloured one).
+   Its click opens the dialog's help in the shortcut window (shortcuts_registry.js). */
+.fcc-help-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    border: 2px solid currentColor;
+    border-radius: 50%;
+    background: transparent;
+    color: #fff;
+    font-weight: 700;
+    font-size: 1.1rem;
+    line-height: 1;
+    cursor: pointer;
+}
+.fcc-help-btn:hover { background: rgba(255, 255, 255, 0.15); }
+.fcc-help-btn:focus-visible { outline: 3px solid #00d4ff; outline-offset: 2px; }
+.modal-header.bg-warning .fcc-help-btn,
+.modal-header.bg-info .fcc-help-btn,
+.modal-header.bg-light .fcc-help-btn { color: #212529; }
+.modal-header.bg-warning .fcc-help-btn:hover,
+.modal-header.bg-info .fcc-help-btn:hover,
+.modal-header.bg-light .fcc-help-btn:hover { background: rgba(0, 0, 0, 0.12); }
+/* A finger needs a bigger target. */
+@media (pointer: coarse) {
+    .fcc-help-btn { width: 2.75rem; height: 2.75rem; }
+}
+/* The window takes the keyboard when it opens (shortcuts_registry.js): its own border
+   says where it is, so the panel itself draws no focus ring. Its buttons keep theirs. */
+#fcc-shortcuts-overlay:focus { outline: none; }
+/* A help button in a Bootstrap header sits beside the ✕ however the title is laid out:
+   it takes the free space before it (the ✕'s own auto margin would split that space
+   with it and float the button mid-header), and the ✕ keeps a small gap. */
+.modal-header .fcc-help-btn { margin-left: auto; }
+.modal-header .fcc-help-btn + .btn-close { margin-left: 0.5rem; }
+/* A question's ? (inv_core.js's confirmActivePrint, and window.fccCornerHelpHtml for the
+   Quick-Swap question and "Record it as coming from…") has no ✕ to sit beside: it takes
+   the top right corner, and the title's own padding keeps it clear of it. */
+.fcc-apc-help,
+.fcc-help-corner { position: absolute; top: 0.6rem; right: 0.6rem; }
+/* Its keyboard ring on a light coloured header (the Print Queue's yellow): dark, as the
+   ? itself is there; the cyan ring was 1.09:1 on the yellow (Group 55 review). */
+.modal-header.bg-warning .fcc-help-btn:focus-visible,
+.modal-header.bg-info .fcc-help-btn:focus-visible,
+.modal-header.bg-light .fcc-help-btn:focus-visible { outline-color: #212529; }
+/* One dialog's help, drawn in the shortcut window instead of the full list. */
+#fcc-help-view .fcc-help-lines {
+    color: #f8f9fa;
+    font-size: 1.05rem;
+    line-height: 1.45;
+    padding-left: 1.25rem;
+    margin: 0 0 0.5rem;
+}
+#fcc-help-view .fcc-help-lines li + li { margin-top: 0.4rem; }
+#fcc-help-view .fcc-help-sub {
+    color: #0dcaf0;
+    font-weight: 700;
+    font-size: 1.15rem;
+    margin: 1rem 0 0.4rem;
+}
+
 .toast-msg {
     background: rgba(0, 0, 0, 0.95);
     color: #fff;
