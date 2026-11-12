@@ -21,7 +21,12 @@ container). Pinned:
     "had 3 spools (#42, #229 and #300), so FCC charged none of them"; one whose
     head's split left two run-out spools short names both ("the records of #42
     and #229 hit 0 g"), and its picker still offers the spool on the head when
-    the print ended, each run-out spool marked so where FCC saw it.
+    the print ended, each run-out spool marked so where FCC saw it;
+  - round 2's review: a completion card counts the spools in its banner, "so it
+    charges none of them by itself" for a held head of three or more ("neither"
+    for two), and "by the swap points ... (each run-out spool up to its swap,
+    the next spool after it)" for a head split at two swaps or more (one swap
+    keeps its words).
 
 HEAD proof: run on 780a892 (R2, before R3), every test here passes by design
 except test_a_shortfall_card_counts_three_spools_on_one_head (its words read
@@ -271,3 +276,62 @@ def test_a_card_for_two_run_out_spools_names_both_and_offers_the_heads_own_spool
         ("When the print ended", ["#300 — on HEAD-5 when the print ended"]),
         ("When the print started", ["#42 — on HEAD-5 when the print started (ran out, archived)"]),
         ("During the print", ["#229 — on HEAD-5 during the print (ran out, archived)"])], res["groups"]
+
+
+# --------------------------------------------------------------------------- #
+# Round 2's review (2026-11-12): the completion banners count the spools       #
+# --------------------------------------------------------------------------- #
+# A completion card whose held head had three spools said FCC "charges neither by
+# itself"; one split at two or more swaps on a head said "by the swap point ... the
+# run-out spool up to the swap, the replacement after it". One swap, and two spools,
+# keep their words.
+
+NOTE_LINE3 = ("HEAD-5 had 3 spools when the print ended (#42, #229 and #300), so FCC can't tell which one "
+              "printed. Pick the spool it used.")
+CHANGED3 = _base("c3", "spool_changed", auto_split=False, changed_positions=[4], progress=1.0,
+                 heads_at_end=HEADS, total_grams=104.28, spools=[_row(243, 6, 20.0, toolhead="HEAD-7")],
+                 unresolved_usage={"4": 84.28}, unresolved_sets={"4": SET3}, unresolved_notes={"4": NOTE3})
+# Three spools on the head when the print ended: one held line, no set.
+CHANGED3_LINE = _base("c3l", "spool_changed", auto_split=False, changed_positions=[4], progress=1.0,
+                      heads_at_end=[{"toolhead": "HEAD-5", "position": 4, "sid": None, "sids": [42, 229, 300]},
+                                    {"toolhead": "HEAD-7", "position": 6, "sid": 243, "sids": [243]}],
+                      total_grams=104.28, spools=[_row(243, 6, 20.0, toolhead="HEAD-7")],
+                      unresolved_usage={"4": 84.28}, unresolved_notes={"4": NOTE_LINE3})
+CHANGED2 = _base("c2", "spool_changed", auto_split=False, changed_positions=[4], progress=1.0,
+                 heads_at_end=HEADS, total_grams=104.28, spools=[_row(243, 6, 20.0, toolhead="HEAD-7")],
+                 unresolved_usage={"4": 84.28}, unresolved_sets={"4": SET3[:2]}, unresolved_notes={"4": NOTE3})
+# A completion split at one swap.
+SPLIT2 = _base("s2", "spool_changed", auto_split=True, changed_positions=[4], progress=1.0,
+               heads_at_end=HEADS, total_grams=84.28,
+               spools=[_split(42, 30.0, None, 0.19, True), _split(229, 54.28, 0.19, None)])
+
+BANNER_JS = r"""
+const txt = (n) => (n ? n.textContent.replace(/\s+/g, ' ').trim() : null);
+const out = {};
+for (const j of ['c3', 'c3l', 'c2', 's4', 's2']) {
+  out[j] = txt(cardOf(j).querySelectorAll('div').find((d) => (d.getAttribute('style') || '').includes('background:#221d12')));
+}
+return out;
+"""
+
+
+def test_the_completion_banners_count_the_spools(tmp_path):
+    # On e777bcd: AssertionError: (c3's banner read "... so it charges neither by itself ..." over a
+    # head of three spools; s4's "by the swap point ... the run-out spool up to the swap, the
+    # replacement after it" over three swaps)
+    res = _go(tmp_path, BANNER_JS, [CHANGED3, CHANGED3_LINE, CHANGED2, SPLIT4, SPLIT2])
+    for job in ("c3", "c3l"):
+        assert "so it charges none of them by itself: each such head is listed below with every spool it had" \
+            in res[job], (job, res[job])
+        assert "neither" not in res[job], (job, res[job])
+    assert "so it charges neither by itself" in res["c2"], res["c2"]
+    assert ("FCC auto-split the slicer total by the swap points — each row below is charged only its own "
+            "segment (each run-out spool up to its swap, the next spool after it), pre-filled.") in res["s4"], \
+        res["s4"]
+    assert "Each run-out spool's sensor→nozzle remnant is included" in res["s4"], res["s4"]
+    assert "the replacement after it" not in res["s4"] and "The run-out spool's" not in res["s4"], res["s4"]
+    # One swap keeps its words, as they always were.
+    assert ("FCC auto-split the slicer total by the swap point — each row below is charged only its own "
+            "segment (the run-out spool up to the swap, the replacement after it), pre-filled.") in res["s2"], \
+        res["s2"]
+    assert "The run-out spool's sensor→nozzle remnant is included" in res["s2"], res["s2"]

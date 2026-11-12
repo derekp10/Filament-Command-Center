@@ -774,9 +774,19 @@ def _stash_shortfall_review(printer_name, job_id, *, filename, scale, uncharged,
         # the spool on the head when the print ended from the card's picker.
         same = next((h for h in heads if sid is not None and str(h.get('sid')) == str(sid)
                      and str(_norm_pos(h.get('position'))) == line), None)
-        target = same if same is not None else by_line.get(line)
-        if target is not None:
-            target.update(entry)
+        if same is not None:
+            same.update(entry)
+            return
+        own = by_line.get(line)
+        if own is not None and isinstance(own.get('sids'), list):
+            # Round 2's review: the print-end read's own entry for the head (it
+            # carries `sids`) is what the head held when the print ended, and is
+            # never written over with another spool: one it names among several
+            # stays offered beside the others, and one picked from elsewhere (by its
+            # #) isn't called the spool on the head. The line's cause names it.
+            return
+        if own is not None:
+            own.update(entry)
         else:
             heads.append(entry)
             by_line[line] = entry

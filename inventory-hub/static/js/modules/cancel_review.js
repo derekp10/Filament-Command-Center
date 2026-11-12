@@ -114,6 +114,28 @@
                 ${inner}
             </div>`;
     }
+    // Round 2's review: how many spools a card offers for a held head (a set's,
+    // else every spool its head entries name), and the most rows its split gives
+    // one head: the banners count them, as a head can have any number.
+    function heldSpoolCount(rec, pos) {
+        const ids = new Set();
+        (((rec.unresolved_sets || {})[pos]) || []).forEach((e) => { if (e && e.sid != null) ids.add(String(e.sid)); });
+        if (ids.size) return ids.size;
+        (rec.heads_at_end || []).forEach((h) => {
+            if (!h || String(h.position) !== String(pos)) return;
+            (h.sid != null ? [h.sid] : (Array.isArray(h.sids) ? h.sids : [])).forEach((s) => {
+                if (s != null) ids.add(String(s));
+            });
+        });
+        return ids.size;
+    }
+    function splitMostRows(rec) {
+        const n = {};
+        (rec.spools || []).forEach((s) => {
+            if (s && s.auto_split) n[String(s.position)] = (n[String(s.position)] || 0) + 1;
+        });
+        return Math.max(0, ...Object.values(n));
+    }
     // Review fix: whether a card's held line is a set of spools (scope B), whose
     // Apply needs each spool's grams rather than one pick.
     function isSetLine(rec, pos) {
@@ -1009,20 +1031,29 @@
         // Hotfix 2026-11-11: built from the print-end read, a changed head that no
         // split covers has no row: it is held below, offering every spool it had.
         const held = spoolChanged && !autoSplit && !!rec.heads_source;
+        // Round 2's review: the words count the spools. A held head can list more
+        // than two, and a head split at two swaps or more has more than one run-out
+        // spool; one swap and two spools keep their words.
+        const heldNone = held && heldKeys.some((k) => heldSpoolCount(rec, k) > 2) ? 'none of them' : 'neither';
+        const cut = autoSplit && splitMostRows(rec) > 2
+            ? { by: 'the swap points', rows: 'each run-out spool up to its swap, the next spool after it',
+                own: "Each run-out spool's" }
+            : { by: 'the swap point', rows: 'the run-out spool up to the swap, the replacement after it',
+                own: "The run-out spool's" };
         if (spoolChanged) {
             headerColor = '#ffb74d';
             header = `🔁 ${esc(rec.printer_name)} — spool changed mid-print`;
             banner = held
                 ? `🔁 A spool feeding this print was <b>changed mid-print</b> at position(s)
                <b>${esc(changedPos)}</b>, so the slicer total was <b>NOT auto-applied</b>. FCC can't tell
-               which spool printed there, so it charges neither by itself: each such head is listed
+               which spool printed there, so it charges ${heldNone} by itself: each such head is listed
                below with every spool it had. ${pickWords}, then <b>Confirm</b>. Or <b>Discard</b>.`
                 : autoSplit
                 ? `🔁 A spool feeding this print was <b>changed mid-print</b> (a filament run-out
                or M600) at toolhead position(s) <b>${esc(changedPos)}</b>. FCC <b>auto-split</b>
-               the slicer total by the swap point — each row below is charged only <b>its own
-               segment</b> (the run-out spool up to the swap, the replacement after it), pre-filled.
-               ${confirmWords} The run-out spool's sensor→nozzle
+               the slicer total by ${cut.by} — each row below is charged only <b>its own
+               segment</b> (${cut.rows}), pre-filled.
+               ${confirmWords} ${cut.own} sensor→nozzle
                remnant is included when a per-printer path value is configured. Or <b>Discard</b>.`
                 : `🔁 A spool feeding this print was <b>changed mid-print</b> (a filament
                run-out or M600) at toolhead position(s) <b>${esc(changedPos)}</b>, so the full

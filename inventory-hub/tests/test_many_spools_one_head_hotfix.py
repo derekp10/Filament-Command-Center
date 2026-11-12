@@ -34,7 +34,11 @@ the split is the point (only the download is stubbed, and counted):
     card, which names every one of them, marks each as run out where FCC saw it,
     and still offers the spool on the head when the print ended (the card used to
     name only the last, and wrote it over the head's own entry, so that spool was
-    no longer offered).
+    no longer offered);
+  - round 2's review: the print-end read's own entry for a head is never written
+    over on that card, when the head held two spools at the end (both stay
+    offered) or when the spool that couldn't take its grams was picked by its
+    number (it isn't called the spool on the head); the line's cause names it.
 
 HEAD proof: run on 780a892 (R2, before R3), the tests marked "passes by design"
 pass, because the code already handled them; the rest fail, on the words for more
@@ -453,3 +457,66 @@ def test_one_run_out_spool_of_a_split_keeps_the_heads_own_spool_offered(logs):
                  for h in card["heads_at_end"] if h.get("position") == 4)
     assert at4 == [(42, "start", True), (229, "during", False), (300, "", False)], card["heads_at_end"]
     assert any("(#42's record hit 0 g on RCOI-5)" in m for m in logs), logs
+
+
+# Round 2's review (2026-11-12): the print-end read's entry for a head is what the
+# head held when the print ended. An uncharged-grams card never writes another spool
+# over it: R3 kept it only where the run-out spool had an entry of its own.
+
+def _offered_on_card(card, pos):
+    """The spools the card's picker offers for a head, by its rule (cancel_review.js
+    pickSelectHtml: an entry's `sid`, else its `sids`)."""
+    out = set()
+    for h in card["heads_at_end"]:
+        if h.get("position") == pos:
+            out.update([h["sid"]] if h.get("sid") is not None else (h.get("sids") or []))
+    return out
+
+
+def test_a_clamp_on_a_two_spool_heads_pick_keeps_both_spools_offered(logs):
+    """RCOI-5 held #42 and #229 when the print ended (one held line). #229 is picked
+    for its 84.28 g and has 3 g left: the new card still offers both spools, and its
+    line's cause says #229's record hit 0 g."""
+    # On e777bcd: AssertionError: [(229, [42, 229], True)] (the head's entry was written over with
+    # #229, so its picker offered #229 alone: #42, on the head when the print ended, was gone)
+    with Indx() as p, _measured(USAGE, {}):
+        _tick("PRINTING", _job(0.42))
+        p.at["RCOI-5"] = [42, 229]
+        p.sm.spools[229]["location"] = "RCOI-5"
+        p.sm.spools[229]["used_weight"] = 997.0
+        _tick("STOPPED")
+        body = _confirm({"charges": [{"row": 243, "sid": 243, "grams": 75.32},
+                                     {"row": 231, "sid": 231, "grams": 21.9},
+                                     {"position": 4, "sid": 229, "grams": 84.28}]})
+    assert body["status"] == "confirmed" and body.get("shortfall_card") == f"{JOB}#shortfall", body
+    card = cancel_review_store.get_pending(INDX, f"{JOB}#shortfall")
+    at4 = [(h.get("sid"), h.get("sids"), bool(h.get("archived")))
+           for h in card["heads_at_end"] if h.get("position") == 4]
+    assert at4 == [(None, [42, 229], False)], card["heads_at_end"]
+    assert _offered_on_card(card, 4) == {42, 229}
+    assert card["shortfall_causes"]["4"] == {"why": "ran_out", "sid": 229, "toolhead": "RCOI-5",
+                                             "archived": True}, card
+    assert card["unresolved_usage"] == {"4": pytest.approx(81.28)}, card
+
+
+def test_a_spool_picked_by_its_number_that_runs_out_is_never_called_the_heads(logs):
+    """#42's row is pointed at #500, a shelf spool with 3 g left: the new card's head
+    entry still names #42 (on RCOI-5 when the print ended), and no entry calls #500
+    the spool that was on the head; its line's cause names #500."""
+    # On e777bcd: AssertionError: [(500, True)] (the head's entry was written over with #500, so the
+    # card offered "#500 — on RCOI-5 when the print ended (ran out, archived)" and #42 was gone)
+    with Indx() as p, _measured(USAGE, {}):
+        p.sm.spools[500] = _spool(997.0, "SHELF-1")
+        _tick("PRINTING", _job(0.42))
+        _tick("STOPPED")
+        body = _confirm({"charges": [{"row": 42, "sid": 500, "grams": 84.28},
+                                     {"row": 243, "sid": 243, "grams": 75.32},
+                                     {"row": 231, "sid": 231, "grams": 21.9}]})
+        assert p.sm.used(500) == pytest.approx(1000.0)
+    assert body["status"] == "confirmed" and body.get("shortfall_card") == f"{JOB}#shortfall", body
+    card = cancel_review_store.get_pending(INDX, f"{JOB}#shortfall")
+    at4 = [(h.get("sid"), bool(h.get("archived"))) for h in card["heads_at_end"] if h.get("position") == 4]
+    assert at4 == [(42, False)], card["heads_at_end"]
+    assert card["shortfall_causes"]["4"] == {"why": "ran_out", "sid": 500, "toolhead": "RCOI-5",
+                                             "archived": True}, card
+    assert any("(#500's record hit 0 g on RCOI-5)" in m for m in logs), logs
