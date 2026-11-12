@@ -740,13 +740,27 @@
     // Whatever a pick can't take stays on the card.
     // FCC sees the spool's record, not the spool: "ran out" is the record hitting
     // 0 g, which may also mean the record was off (Derek: small spools often are).
+    // Round 2 (R3): a head can have any number of spools: #1; #1 and #2; #1, #2 and #3.
+    function spoolListWords(sids) {
+        const ids = (sids || []).map((s) => `#${s}`);
+        return ids.length > 1 ? `${ids.slice(0, -1).join(', ')} and ${ids[ids.length - 1]}` : ids.join('');
+    }
     function shortfallReason(c, pos) {
         const head = c.toolhead || `T${pos}`;
-        if (c.why === 'ran_out') return `#${c.sid}'s record hit 0 g on ${head}${c.archived ? ' (archived)' : ''}`;
+        if (c.why === 'ran_out') {
+            // Round 2 (R3): every spool of the head whose record hit 0 g (a head
+            // split at its swaps can have several).
+            const who = Array.isArray(c.sids) && c.sids.length > 1
+                ? `the records of ${spoolListWords(c.sids)}` : `#${c.sid}'s record`;
+            return `${who} hit 0 g on ${head}${c.archived ? ' (archived)' : ''}`;
+        }
         if (c.why === 'no_spool') return `no spool was loaded on ${head}`;
         if (c.why === 'two_spools') {
-            const both = (c.sids || []).map((s) => `#${s}`).join(' and ');
-            return `${head} had two spools${both ? ` (${both})` : ''}, so FCC charged neither`;
+            // Round 2 (R3): counted, as FCC's record can put more than two on a head.
+            const n = (c.sids || []).length;
+            const both = spoolListWords(c.sids);
+            return `${head} had ${n > 2 ? `${n} spools` : 'two spools'}${both ? ` (${both})` : ''}, `
+                + `so FCC charged ${n > 2 ? 'none of them' : 'neither'}`;
         }
         return c.sid != null ? `#${c.sid} on ${head} wasn't charged (Spoolman didn't answer)` : `${head} wasn't charged`;
     }

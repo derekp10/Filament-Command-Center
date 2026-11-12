@@ -768,8 +768,15 @@ def _stash_shortfall_review(printer_name, job_id, *, filename, scale, uncharged,
     def _mark(line, toolhead, sid, archived):
         entry = {"toolhead": toolhead, "position": _norm_pos(line), "sid": sid,
                  "archived": bool(archived)}
-        if line in by_line:
-            by_line[line].update(entry)
+        # Round 2 (R3): the entry that already names this spool on this head (a
+        # card from the print-end read offers every spool the head had), so a
+        # split's run-out spool never takes over the head's own entry: that hid
+        # the spool on the head when the print ended from the card's picker.
+        same = next((h for h in heads if sid is not None and str(h.get('sid')) == str(sid)
+                     and str(_norm_pos(h.get('position'))) == line), None)
+        target = same if same is not None else by_line.get(line)
+        if target is not None:
+            target.update(entry)
         else:
             heads.append(entry)
             by_line[line] = entry
@@ -790,9 +797,16 @@ def _stash_shortfall_review(printer_name, job_id, *, filename, scale, uncharged,
             else:
                 del lines[line]
         _mark(line, f.get('toolhead'), f.get('sid'), False)
-    charged = {}
+    charged, more = {}, {}
     for d in details or []:
-        charged.setdefault(str(_norm_pos(d.get('position'))), d)
+        line = str(_norm_pos(d.get('position')))
+        if line in charged:
+            more.setdefault(line, []).append(d)
+        else:
+            charged[line] = d
+
+    def _emptied(d):
+        return d.get('remaining') is not None and float(d.get('remaining') or 0) <= 0.0
     causes = {}
     for line in lines:
         d = charged.get(line)
@@ -800,10 +814,17 @@ def _stash_shortfall_review(printer_name, job_id, *, filename, scale, uncharged,
             # The head's spool took what its record had left: the record hit 0 g,
             # and the auto-archive took the spool off the head. (FCC can't tell a
             # real runout from a record that was off: the card says "record".)
-            emptied = d.get('remaining') is not None and float(d.get('remaining') or 0) <= 0.0
+            emptied = _emptied(d)
             causes[line] = {"why": "ran_out" if emptied else "not_charged", "sid": d.get('sid'),
                             "toolhead": d.get('toolhead'), "archived": bool(emptied)}
             _mark(line, d.get('toolhead'), d.get('sid'), emptied)
+            # Round 2 (R3): the head's other spools that were emptied too (a head
+            # split at its swaps, where more than one couldn't take its stretch).
+            others = [x for x in more.get(line, []) if _emptied(x)]
+            if emptied and others:
+                causes[line]["sids"] = [d.get('sid')] + [x.get('sid') for x in others]
+                for x in others:
+                    _mark(line, x.get('toolhead'), x.get('sid'), True)
             continue
         f = unconfirmed.get(line)
         if f is not None:
@@ -880,12 +901,18 @@ def _shortfall_reasons(card):
         head = c.get("toolhead") or f"T{line}"
         sid = c.get("sid")
         if c.get("why") == "ran_out":
-            parts.append(f"#{sid}'s record hit 0 g on {head}")
+            # Round 2 (R3): every spool of the head whose record hit 0 g.
+            ids = c.get("sids") if isinstance(c.get("sids"), list) and len(c.get("sids")) > 1 else None
+            parts.append(f"the records of {_and_list(f'#{s}' for s in ids)} hit 0 g on {head}" if ids
+                         else f"#{sid}'s record hit 0 g on {head}")
         elif c.get("why") == "no_spool":
             parts.append(f"no spool on {head}")
         elif c.get("why") == "two_spools":
-            both = ", ".join(f"#{s}" for s in c.get("sids") or [])
-            parts.append(f"{head} had two spools{f' ({both})' if both else ''}")
+            ids = c.get("sids") or []
+            both = ", ".join(f"#{s}" for s in ids)
+            # Round 2 (R3): counted, as a head can hold more than two.
+            parts.append(f"{head} had {_count_spools(len(ids)) if len(ids) > 2 else 'two spools'}"
+                         f"{f' ({both})' if both else ''}")
         else:
             parts.append(f"#{sid} on {head} wasn't charged" if sid is not None else f"{head} wasn't charged")
     return "; ".join(parts) or "no spool took it"
@@ -1220,6 +1247,19 @@ def _g_words(grams):
         return str(grams)
 
 
+def _and_list(items):
+    """a; a and b; a, b and c (round 2, R3: a head can have any number of spools)."""
+    items = [str(i) for i in items]
+    if len(items) < 2:
+        return "".join(items)
+    return ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def _count_spools(n):
+    """'two spools', as the words for two always were; '3 spools' for more."""
+    return "two spools" if n == 2 else f"{n} spools"
+
+
 def _split_held_swaps(printer_name, usage_map, heads, held, start_spools, swap_cums, end):
     """The cancel's split at its recorded swaps. For each held head whose spool was
     swapped during the print (`held` from _held_heads, `why` "swapped"),
@@ -1432,12 +1472,16 @@ def _explain_unresolved_lines(unresolved, heads, held, start_spools, unread, wor
             elif split == "end_empty":
                 why_not = f", but no spool was on it {words['end']}"
             elif split == "end_two":
-                why_not = f", and it had two spools {words['end']} ({' and '.join(f'#{s}' for s in sids)})"
+                # Round 2 (R3): counted, as a head can hold more than two.
+                why_not = (f", and it had {_count_spools(len(sids))} {words['end']} "
+                           f"({_and_list(f'#{s}' for s in sids)})")
             elif split == "shared":
-                also = " and ".join(f"#{s}" for s in info.get('shared') or [])
+                also = _and_list(f"#{s}" for s in info.get('shared') or [])
                 why_not = f", and {also} also printed on another head, so FCC didn't split it there"
             else:
-                why_not = ", but FCC couldn't split its grams at the swap"
+                # Round 2 (R3): "at the swaps" when FCC recorded more than one.
+                why_not = (", but FCC couldn't split its grams at the swap"
+                           + ("s" if len(info.get('events') or []) > 1 else ""))
             if spools:
                 notes[line] = f"{th}'s spool was swapped during the print ({steps}){why_not}{tail}"
             else:
@@ -1449,10 +1493,12 @@ def _explain_unresolved_lines(unresolved, heads, held, start_spools, unread, wor
             notes[line] = (f"FCC saw #{info['start']} {words['start']} and #{sids[0]} {words['end']}, "
                            f"but not when it changed{tail}")
         elif why == "two_spools":
-            both = " and ".join(f"#{s}" for s in sids)
-            notes[line] = (f"{th} had two spools {words['end']} ({both}), so FCC can't tell which one printed. "
+            # Round 2 (R3): FCC's record can put more than two spools on a head.
+            both = _and_list(f"#{s}" for s in sids)
+            many = _count_spools(len(sids))
+            notes[line] = (f"{th} had {many} {words['end']} ({both}), so FCC can't tell which one printed. "
                            f"Pick the spool it used.")
-            phrases[line] = f"which had two spools {words['end']} ({both})"
+            phrases[line] = f"which had {many} {words['end']} ({both})"
         elif head is None:
             notes[line] = f"This printer has no head for T{line}, so FCC can't tell which spool it used."
         elif pos in (unread or ()) and len(sids) == 1:
@@ -3650,9 +3696,8 @@ def _line_where(rec, line):
 
 
 def _spool_list_words(sids):
-    """#42; #42 and #229; #42, #229 and #300."""
-    names = [f"#{_esc(s)}" for s in sids]
-    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+    """#42; #42 and #229; #42, #229 and #300, escaped for an Activity Log line."""
+    return _and_list(f"#{_esc(s)}" for s in sids)
 
 
 def _uncharged_parts(rec):
@@ -3769,8 +3814,9 @@ def _card_leftover(rec, applied, asked=None):
     grams (as this Apply posted them, `asked` {sid: grams}; a row it left out asked
     for nothing) minus what its spool took (a near-empty or archived spool takes
     less), plus the heads nobody picked. Returns ({position(str): grams},
-    {position(str): (sid, toolhead)} for the rows whose spool couldn't take it all).
-    Without `asked`, each row's own grams count."""
+    {position(str): [(sid, toolhead)]} for the rows whose spool couldn't take it all,
+    every such spool of a head: round 2, R3, a head split at its swaps can have
+    several). Without `asked`, each row's own grams count."""
     took = {}
     for a in applied or []:
         try:
@@ -3789,7 +3835,7 @@ def _card_leftover(rec, applied, asked=None):
         if g > 0.05 and r.get("position") is not None:
             line = str(_norm_pos(r["position"]))
             left[line] = round(left.get(line, 0.0) + g, 2)
-            drained[line] = (sid, r.get("toolhead"))
+            drained.setdefault(line, []).append((sid, r.get("toolhead")))
     for line, g in (rec.get("unresolved_usage") or {}).items():
         try:
             g = float(g)
@@ -3803,13 +3849,19 @@ def _card_leftover(rec, applied, asked=None):
 def _note_drained(card, drained):
     """Group 43.2 — a spool an Apply just emptied is no longer the pick for its
     line: the line's cause becomes "its record hit 0 g" (archived, so the card
-    doesn't pre-pick it again) and its head entry reads archived."""
+    doesn't pre-pick it again) and its head entry reads archived. Round 2 (R3): a
+    line where several spools were emptied (a head split at its swaps) names them
+    all (`sids`)."""
     causes = dict(card.get("shortfall_causes") or {})
-    for line, (sid, toolhead) in drained.items():
-        causes[line] = {"why": "ran_out", "sid": sid, "archived": True,
+    for line, spools in drained.items():
+        sids = [sid for sid, _ in spools]
+        toolhead = next((th for _, th in reversed(spools) if th), None)
+        causes[line] = {"why": "ran_out", "sid": sids[-1], "archived": True,
                         "toolhead": toolhead or (causes.get(line) or {}).get("toolhead")}
+        if len(sids) > 1:
+            causes[line]["sids"] = sids
     card["shortfall_causes"] = causes
-    gone = {sid for sid, _ in drained.values()}
+    gone = {sid for spools in drained.values() for sid, _ in spools}
     card["heads_at_end"] = [dict(h, archived=True) if h.get("sid") in gone else h
                             for h in card.get("heads_at_end") or []]
 
@@ -4202,8 +4254,9 @@ def api_cancel_deduct_confirm():
         # logged as uncharged. Stashed before the ledger write, like the deducts.
         residue, drained = _card_leftover(dict(rec, unresolved_usage={}), applied, asked)
         if residue and sum(residue.values()) >= max(0.05, _shortfall_review_min_g()):
+            # Round 2 (R3): every spool a head's line emptied, not only its last.
             gone = [{"sid": sid, "position": line, "toolhead": th, "remaining": 0.0, "grams": 0.0}
-                    for line, (sid, th) in drained.items()]
+                    for line, spools in drained.items() for sid, th in spools]
             try:
                 residue_card = _stash_shortfall_review(
                     printer, job_id, filename=rec.get('filename'), scale=rec.get('progress'),
