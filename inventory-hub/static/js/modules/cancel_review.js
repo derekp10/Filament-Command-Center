@@ -206,7 +206,9 @@
     }
 
     // Review fix (hotfix 2026-11-11): what stopped an Apply, said on the card
-    // itself, beside its buttons: the toast layer is drawn under the review panel.
+    // itself, above its buttons: the toast layer is drawn under the review panel.
+    // Each card's line builder ends with it (noSpoolLinesHtml, unresolvedLinesHtml,
+    // shortfallLinesHtml), so the card templates' button rows are untouched.
     const CARD_NOTICE = `<div class="fcc-cr-card-notice" role="alert"
             style="display:none;margin-top:8px;color:#e6c074;font-size:var(--fcc-fs-small);line-height:1.4;"></div>`;
     function sayOnCard(card, msg) {
@@ -599,7 +601,7 @@
                     ${pickSelectHtml(pos, null, '', atEnd, words)}
                     ${noteHtml('fcc-cr-line-note', '#e6c074', notes[pos])}
                 </div>`;
-        }).join('');
+        }).join('') + CARD_NOTICE;
     }
 
     // Group 43.4: the heads a partial review's print used that no row charges:
@@ -610,7 +612,7 @@
     function unresolvedLinesHtml(rec) {
         const un = rec.unresolved_usage || {};
         const keys = Object.keys(un).sort((a, b) => Number(a) - Number(b));
-        if (!keys.length) return '';
+        if (!keys.length) return CARD_NOTICE;
         const atEnd = Array.isArray(rec.heads_at_end) ? rec.heads_at_end : [];
         const words = headsWords(rec);
         const notes = rec.unresolved_notes || {};
@@ -651,7 +653,7 @@
                     ${pickSelectHtml(line, null, '', atEnd, words)}
                     ${noteHtml('fcc-cr-line-note', '#e6c074', notes[pos])}
                 </div>`;
-        }).join('');
+        }).join('') + CARD_NOTICE;
     }
 
     // Group 43.2: grams an automatic deduct couldn't charge (a spool ran out
@@ -701,7 +703,7 @@
                         ${pickSelectHtml(line, own, ownLabel, atEnd, words)}
                     </div>
                 </div>`;
-        }).join('');
+        }).join('') + CARD_NOTICE;
     }
 
     function shortfallCardHtml(rec) {
@@ -728,7 +730,6 @@
                 </div>
                 ${rows}
                 ${shortfallLinesHtml(rec)}
-                ${CARD_NOTICE}
                 <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
                     <button type="button" class="btn btn-sm btn-outline-secondary fcc-cr-discard"
                             data-armed="0"
@@ -829,7 +830,6 @@
                     ${banner}
                 </div>
                 ${lines}
-                ${CARD_NOTICE}
                 <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
                     <button type="button" class="btn btn-sm btn-outline-secondary fcc-cr-discard"
                             data-armed="0"
@@ -932,7 +932,6 @@
                 </div>
                 ${rows}
                 ${unresolvedLinesHtml(rec)}
-                ${CARD_NOTICE}
                 <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
                     <button type="button" class="btn btn-sm btn-outline-secondary fcc-cr-discard"
                             data-armed="0"
