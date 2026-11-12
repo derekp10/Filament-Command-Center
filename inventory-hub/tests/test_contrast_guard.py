@@ -614,6 +614,9 @@ def test_unmeasured_review_cards_are_readable(page: Page, base_url: str, assert_
     page.keyboard.press("Escape")
 
 
+# Hotfix 2026-11-11 (the print-end deduct): the 🛑 Review card's new surfaces. This
+# line keeps the block's first decorator inside it when a merge sets it beside
+# another block of tests added at the same place.
 @pytest.mark.usefixtures("require_server")
 def test_print_end_review_notes_are_readable(page: Page, base_url: str, assert_contrast):
     """Hotfix 2026-11-11: the 🛑 Review's new surfaces from the print-end read: the
