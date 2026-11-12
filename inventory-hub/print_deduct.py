@@ -26,6 +26,7 @@ from flask import request, jsonify  # type: ignore
 import html
 import math
 import requests  # type: ignore
+import threading
 import time
 
 import state  # type: ignore
@@ -321,6 +322,26 @@ def _spool_read(sid):
     return spool if isinstance(spool, dict) and spool.get('id') is not None else None
 
 
+# One charge of a spool at a time (hotfix 2026-11-11, review): a deduct reads the
+# spool's used weight and writes used + grams, an absolute value, so two charges of
+# one spool on two threads that both read the same weight lose one of them. Since
+# scope C each queued print is computed on a thread of its own, and a review's Apply
+# runs on a request thread. Held around one spool's read, compute and write, never
+# across spools, so no thread ever holds two of these.
+_SPOOL_LOCKS = {}
+_SPOOL_LOCKS_GUARD = threading.Lock()
+
+
+def _spool_lock(sid):
+    """The lock a deduct of spool `sid` holds from its read to its write."""
+    key = str(sid)
+    with _SPOOL_LOCKS_GUARD:
+        lock = _SPOOL_LOCKS.get(key)
+        if lock is None:
+            lock = _SPOOL_LOCKS[key] = threading.RLock()
+    return lock
+
+
 def _write_landed(sid, new_used):
     """Group 43.6 — whether a used_weight write that REPORTED failure landed
     anyway. update_spool's timeout is a read timeout, so a Spoolman that
@@ -383,9 +404,13 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label="",
 
     `heads` (hotfix 2026-11-11) is the print-end read (_capture_print_heads):
     given, each head is charged the spool that was on it when the print ended and
-    no head is read again (a spool loaded during the download is never charged);
-    its spool is read through _spool_read, so one deleted since counts as an empty
-    head. Without it, the heads are read now, as before.
+    no head is read again (a spool loaded during the download is never charged).
+    Without it, the heads are read now, as before. Either way each spool is read
+    through _spool_read (review fix): get_spool hands back Spoolman's body whatever
+    the status, so a 5xx's {"message": ...} read as a spool with nothing used, and
+    the write set the spool's used weight to this print's grams. A spool FCC can't
+    read is charged nothing; its grams go to the caller's shortfall card or
+    no_spool review. Each spool's read, compute and write hold _spool_lock(sid).
     """
     captured = None
     if heads is not None:
@@ -436,83 +461,84 @@ def _apply_usage_to_printer(printer_name, usage_map, fb_url, strategy_label="",
                     f"weigh the spool to true up.", "WARNING", "ffaa00")
                 continue
         for sid in loc_spools:
-            spool_data = _spool_read(sid) if captured is not None else spoolman_api.get_spool(sid)
-            if spool_data and weight_used > 0:
-                used = float(spool_data.get('used_weight', 0) or 0)
-                # 43.1 — clamp against the EFFECTIVE capacity: the spool's own
-                # initial_weight, else its filament's net weight (how Spoolman
-                # computes remaining_weight). This read `initial_weight or 0`, so an
-                # inherit-weight spool recorded 0 g applied while update_spool —
-                # which caps only an OWN initial_weight — charged it in full: a
-                # wrong ledger today, a double-deduct once a shortfall is
-                # recoverable (43.2). The write is clamped to the same capacity,
-                # so the spool absorbs exactly what the ledger records.
-                capacity = spoolman_api.effective_initial_weight(spool_data)
-                if capacity is None:
-                    # Neither the spool nor its filament has a weight: the
-                    # remaining is unknown. Charge as before and record it all.
-                    remaining = new_remaining = None
-                    actual_g = float(weight_used)
-                else:
-                    remaining = max(0.0, capacity - used)
-                    actual_g = min(float(weight_used), remaining)
-                    new_remaining = max(0.0, remaining - actual_g)
-                new_used = used + actual_g
-                ok = bool(spoolman_api.update_spool(sid, _deduct_payload(spool_data, new_used)))
-                if not ok:
-                    err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
-                    # 43.6 — a reported failure may have landed. Counting it as
-                    # failed stashed a no_spool review whose picker then offered
-                    # this very spool: a second charge.
-                    if _write_landed(sid, new_used):
-                        ok = True
-                        state.add_log_entry(
-                            f"⚠️ {printer_name} {str(loc_id).upper()}: Spoolman reported an error for "
-                            f"Spool #{sid} ({_esc(err)}), but the write landed — counted once.",
-                            "WARNING", "ffaa00")
-                if ok:
-                    spools_updated += 1
-                    # Record the ACTUALLY-absorbed grams so the ledger and the
-                    # callers' shortfall math reflect reality — else an
-                    # over-capacity deduct reads as fully applied and the gap is
-                    # silently lost (the clamp the partial-confirm loop also guards).
-                    info = spoolman_api.format_spool_display(spool_data)
-                    label = strategy_label or "Auto-deduct"
+            with _spool_lock(sid):
+                spool_data = _spool_read(sid)
+                if spool_data and weight_used > 0:
+                    used = float(spool_data.get('used_weight', 0) or 0)
+                    # 43.1 — clamp against the EFFECTIVE capacity: the spool's own
+                    # initial_weight, else its filament's net weight (how Spoolman
+                    # computes remaining_weight). This read `initial_weight or 0`, so an
+                    # inherit-weight spool recorded 0 g applied while update_spool —
+                    # which caps only an OWN initial_weight — charged it in full: a
+                    # wrong ledger today, a double-deduct once a shortfall is
+                    # recoverable (43.2). The write is clamped to the same capacity,
+                    # so the spool absorbs exactly what the ledger records.
+                    capacity = spoolman_api.effective_initial_weight(spool_data)
                     if capacity is None:
-                        tail = (f"[no known capacity — neither the spool nor its filament has a "
-                                f"weight; {new_used:.1f}g used so far]")
+                        # Neither the spool nor its filament has a weight: the
+                        # remaining is unknown. Charge as before and record it all.
+                        remaining = new_remaining = None
+                        actual_g = float(weight_used)
                     else:
-                        tail = f"[{remaining:.1f}g at start ➔ {new_remaining:.1f}g remaining]"
-                    # 43.5 — name the printer and toolhead: with several printers
-                    # and heads, "Auto-deducted 7.4g from Spool #96" didn't say where.
-                    state.add_log_entry(
-                        f"✔️ {printer_name} {str(loc_id).upper()}: auto-deducted {actual_g:.1f}g "
-                        f"from Spool #{sid} ({label}) {tail}",
-                        "SUCCESS", info['color'])
-                    details.append({"sid": sid, "grams": actual_g, "remaining": new_remaining,
-                                    "toolhead": str(loc_id).upper(), "position": toolhead_idx})
-                else:
-                    state.add_log_entry(
-                        f"❌ {printer_name} {str(loc_id).upper()}: failed to auto-deduct from "
-                        f"Spool #{sid}: {_esc(err)}", "ERROR", "ff4444")
-                    if failed_out is not None:
-                        # 43.2 — the attempt, for the uncharged-grams card: a write
-                        # that reported failure may still have landed (the re-read
-                        # just above couldn't confirm either way), so the card
-                        # carries it as a 43.6-stamped row and its Apply checks
-                        # before charging, never a plain pick that charges twice.
-                        disp = spoolman_api.format_spool_display(spool_data)
-                        failed_out.append({
-                            "sid": sid, "toolhead": str(loc_id).upper(), "position": toolhead_idx,
-                            "grams": round(actual_g, 2),
-                            "attempt_used_before": round(used, 2), "attempt_used_after": round(new_used, 2),
-                            # Group 51 review (engine-4): whether the spool was
-                            # stock before the attempt (the write archives it at 0 g).
-                            "attempt_was_archived": bool(spool_data.get('archived')),
-                            "remaining_before": None if remaining is None else round(remaining, 1),
-                            "remaining_after": None if new_remaining is None else round(new_remaining, 1),
-                            "display": disp.get('text', f"#{sid}"), "color": disp.get('color', '888888'),
-                        })
+                        remaining = max(0.0, capacity - used)
+                        actual_g = min(float(weight_used), remaining)
+                        new_remaining = max(0.0, remaining - actual_g)
+                    new_used = used + actual_g
+                    ok = bool(spoolman_api.update_spool(sid, _deduct_payload(spool_data, new_used)))
+                    if not ok:
+                        err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+                        # 43.6 — a reported failure may have landed. Counting it as
+                        # failed stashed a no_spool review whose picker then offered
+                        # this very spool: a second charge.
+                        if _write_landed(sid, new_used):
+                            ok = True
+                            state.add_log_entry(
+                                f"⚠️ {printer_name} {str(loc_id).upper()}: Spoolman reported an error for "
+                                f"Spool #{sid} ({_esc(err)}), but the write landed — counted once.",
+                                "WARNING", "ffaa00")
+                    if ok:
+                        spools_updated += 1
+                        # Record the ACTUALLY-absorbed grams so the ledger and the
+                        # callers' shortfall math reflect reality — else an
+                        # over-capacity deduct reads as fully applied and the gap is
+                        # silently lost (the clamp the partial-confirm loop also guards).
+                        info = spoolman_api.format_spool_display(spool_data)
+                        label = strategy_label or "Auto-deduct"
+                        if capacity is None:
+                            tail = (f"[no known capacity — neither the spool nor its filament has a "
+                                    f"weight; {new_used:.1f}g used so far]")
+                        else:
+                            tail = f"[{remaining:.1f}g at start ➔ {new_remaining:.1f}g remaining]"
+                        # 43.5 — name the printer and toolhead: with several printers
+                        # and heads, "Auto-deducted 7.4g from Spool #96" didn't say where.
+                        state.add_log_entry(
+                            f"✔️ {printer_name} {str(loc_id).upper()}: auto-deducted {actual_g:.1f}g "
+                            f"from Spool #{sid} ({label}) {tail}",
+                            "SUCCESS", info['color'])
+                        details.append({"sid": sid, "grams": actual_g, "remaining": new_remaining,
+                                        "toolhead": str(loc_id).upper(), "position": toolhead_idx})
+                    else:
+                        state.add_log_entry(
+                            f"❌ {printer_name} {str(loc_id).upper()}: failed to auto-deduct from "
+                            f"Spool #{sid}: {_esc(err)}", "ERROR", "ff4444")
+                        if failed_out is not None:
+                            # 43.2 — the attempt, for the uncharged-grams card: a write
+                            # that reported failure may still have landed (the re-read
+                            # just above couldn't confirm either way), so the card
+                            # carries it as a 43.6-stamped row and its Apply checks
+                            # before charging, never a plain pick that charges twice.
+                            disp = spoolman_api.format_spool_display(spool_data)
+                            failed_out.append({
+                                "sid": sid, "toolhead": str(loc_id).upper(), "position": toolhead_idx,
+                                "grams": round(actual_g, 2),
+                                "attempt_used_before": round(used, 2), "attempt_used_after": round(new_used, 2),
+                                # Group 51 review (engine-4): whether the spool was
+                                # stock before the attempt (the write archives it at 0 g).
+                                "attempt_was_archived": bool(spool_data.get('archived')),
+                                "remaining_before": None if remaining is None else round(remaining, 1),
+                                "remaining_after": None if new_remaining is None else round(new_remaining, 1),
+                                "display": disp.get('text', f"#{sid}"), "color": disp.get('color', '888888'),
+                            })
     # Surface gcode tool indices that don't correspond to ANY of this printer's
     # toolhead positions (a cross-machine gcode, or a tool↔position mismatch) —
     # those grams can't be deducted, so make the loss visible instead of
@@ -1240,9 +1266,10 @@ def _split_held_swaps(printer_name, usage_map, heads, held, start_spools, swap_c
 def _accept_splits(printer_name, job_id, split, rows, held, heads):
     """The review rows of each split _split_held_swaps made, one per spool with its
     segments (_split_to_review_rows); each split taken leaves `held`. A split stays
-    a held set ("unmeasured") when one of its spools has another row on this card
-    (the confirm charges a spool through its one row, so a second row of it would
-    be charged once), or Spoolman can't read one of its spools."""
+    a held set when one of its spools has another row on this card ("shared", the
+    spools in `shared`: the confirm charges a spool through its one row, so a second
+    row of it would be charged once), or Spoolman can't read one of its spools
+    ("unmeasured")."""
     if not split:
         return []
     seen = {}
@@ -1256,16 +1283,41 @@ def _accept_splits(printer_name, job_id, split, rows, held, heads):
     for pos in sorted(split, key=_pos_order):
         segs = split[pos]
         built = None
-        if all(seen.get(str(s.get('sid')), 0) == 1 for s in segs):
+        shared = []
+        for s in segs:
+            if seen.get(str(s.get('sid')), 0) > 1 and s.get('sid') not in shared:
+                shared.append(s.get('sid'))
+        if not shared:
             built = _split_to_review_rows({pos: segs}, locs)
         if not built:
-            held[pos]['split'] = 'unmeasured'
+            held[pos]['split'] = 'shared' if shared else 'unmeasured'
+            if shared:
+                held[pos]['shared'] = shared
             continue
         held.pop(pos, None)
         out.extend(built)
         state.logger.info(
             f"✂️ {printer_name}: job {job_id} T{pos} split at its recorded swaps: "
             + ", ".join(f"#{r['sid']} {float(r['grams']):.2f}g" for r in built))
+    return out
+
+
+def _splits_sharing_a_row(split, rows):
+    """{position: [spools]} for each head of `split` (_compute_swap_split's) one of
+    whose spools also has a row in `rows`: one spool feeding two heads, the second
+    head's grams a plain row. The confirm charges a spool through its one row (the
+    page sends {spool: grams}), so the card can't carry both (_accept_splits' rule,
+    for a completion's split; review fix, hotfix 2026-11-11)."""
+    plain = {str(r.get('sid')) for r in rows or []}
+    out = {}
+    for pos, segs in (split or {}).items():
+        shared = []
+        for s in segs or []:
+            sid = s.get('sid')
+            if str(sid) in plain and sid not in shared:
+                shared.append(sid)
+        if shared:
+            out[pos] = shared
     return out
 
 
@@ -1381,6 +1433,9 @@ def _explain_unresolved_lines(unresolved, heads, held, start_spools, unread, wor
                 why_not = f", but no spool was on it {words['end']}"
             elif split == "end_two":
                 why_not = f", and it had two spools {words['end']} ({' and '.join(f'#{s}' for s in sids)})"
+            elif split == "shared":
+                also = " and ".join(f"#{s}" for s in info.get('shared') or [])
+                why_not = f", and {also} also printed on another head, so FCC didn't split it there"
             else:
                 why_not = ", but FCC couldn't split its grams at the swap"
             if spools:
@@ -2509,7 +2564,6 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
                 single_position=single_pos)
             if split:
                 split_rows = _split_to_review_rows(split, active_locs)
-    auto_split = bool(split_rows)
     # Every position a row charges (the split's own, and whatever the resolver
     # finds), so a used head with no spool rides along as unresolved (43.4).
     charged = set()
@@ -2522,14 +2576,35 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
         # cover is held for a pick; the rest are the print-end spools' rows.
         words = _heads_words(heads_source)
         covered = {_norm_pos(p) for p in (split or {})} if split_rows else set()
-        charged.update(covered)
-        held = {p: info for p, info in _held_heads(heads, start_spools, swap_log, usage_map).items()
-                if p not in covered}
+        all_held = _held_heads(heads, start_spools, swap_log, usage_map)
+        held = {p: info for p, info in all_held.items() if p not in covered}
         rest_usage = {p: g for p, g in (usage_map or {}).items()
                       if _norm_pos(p) not in covered and _norm_pos(p) not in held and (g or 0) > 0}
         rest_rows = _resolve_usage_to_spools(
             printer_name, rest_usage, fb_url, active_locs=active_locs,
             charged_out=charged, heads=heads, unread_out=unread) if rest_usage else []
+        # Review fix (hotfix 2026-11-11): a split one of whose spools also has a
+        # plain row (one spool feeding two heads) is refused, as the cancel's is
+        # (_accept_splits): the confirm keys rows by spool, so one of the two rows'
+        # grams was lost and a false uncharged-grams card opened. The head is a set
+        # of its spools to split by hand (a change during the print always asks).
+        shared = _splits_sharing_a_row(split, rest_rows) if split_rows else {}
+        if shared:
+            for pos, sids in shared.items():
+                p = _norm_pos(pos)
+                covered.discard(p)
+                held[p] = dict(all_held.get(p) or {"toolhead": f"T{p}", "sids": [], "start": None,
+                                                   "why": "swapped", "events": []},
+                               split="shared", shared=sids)
+            split = {p: segs for p, segs in split.items() if _norm_pos(p) in covered} or None
+            split_rows = _split_to_review_rows(split, active_locs) if split else None
+            if split and not split_rows:
+                # A spool of the rest of the split can't be read now: every swapped
+                # head the split covered is asked about instead.
+                for p in covered:
+                    held[p] = dict(all_held.get(p) or {}, split="unmeasured")
+                covered, split = set(), None
+        charged.update(covered)
         rows = list(split_rows or []) + list(rest_rows or [])
         row_notes = _split_disagreements(split if split_rows else None, heads, swap_log, words)
     elif split_rows:
@@ -2538,16 +2613,37 @@ def _route_completion_to_review(printer_name, filename, job_id, usage_map, fb_ur
         # the full-footer resolve here dropped them silently (an 8-head print
         # with one swap billed one head and lost the other seven).
         covered = {_norm_pos(p) for p in (split or {})}
+        while True:
+            rest_usage = {p: g for p, g in (usage_map or {}).items()
+                          if _norm_pos(p) not in covered and (g or 0) > 0}
+            rest_rows = _resolve_usage_to_spools(
+                printer_name, rest_usage, fb_url, active_locs=active_locs,
+                charged_out=charged) if rest_usage else []
+            # Review fix: a split head one of whose spools also has a plain row gets
+            # the plain rows instead (the review's rows from before the split), so
+            # every spool has one row; its grams are then split by hand.
+            shared = _splits_sharing_a_row(
+                {p: segs for p, segs in split.items() if _norm_pos(p) in covered}, rest_rows)
+            if not shared:
+                break
+            covered -= {_norm_pos(p) for p in shared}
+        if covered != {_norm_pos(p) for p in split}:
+            split = {p: segs for p, segs in split.items() if _norm_pos(p) in covered} or None
+            split_rows = _split_to_review_rows(split, active_locs) if split else None
+            if split and not split_rows:
+                # A spool of the rest of the split can't be read now: every head
+                # gets the plain rows, as when the split can't be built at all.
+                covered, split = set(), None
+                rest_rows = _resolve_usage_to_spools(
+                    printer_name, usage_map, fb_url, active_locs=active_locs, charged_out=charged)
         charged.update(covered)
-        rest_usage = {p: g for p, g in (usage_map or {}).items()
-                      if _norm_pos(p) not in covered and (g or 0) > 0}
-        rest_rows = _resolve_usage_to_spools(
-            printer_name, rest_usage, fb_url, active_locs=active_locs,
-            charged_out=charged) if rest_usage else []
-        rows = list(split_rows) + list(rest_rows or [])
+        rows = list(split_rows or []) + list(rest_rows or [])
     else:
         rows = _resolve_usage_to_spools(
             printer_name, usage_map, fb_url, active_locs=active_locs, charged_out=charged)
+    # 22.3(b): True when the rows charge each swapped head's spools their own
+    # segments (taken after the review fix above, which can refuse a split).
+    auto_split = bool(split_rows)
     unresolved = _uncharged_usage(usage_map, charged)
     card = {}
     if heads is not None:
@@ -2911,7 +3007,12 @@ def _hold_fetch_in_flight(printer_name, filename, job_id, reached_fraction, kind
             changed = False
             for key, value in (("end_heads", end_heads), ("start_spools", start_spools),
                                ("swap_log", swap_log)):
-                if value and not kept.get(key):
+                have = kept.get(key)
+                if key == "end_heads" and _usable_heads(have) is None and _usable_heads(value) is not None:
+                    # Review fix: a stored read FCC can't use (no spool on any
+                    # head) is no first read; a usable one takes its place.
+                    have = None
+                if value and not have:
                     kept[key] = value
                     changed = True
             held.append(kept)
@@ -2987,6 +3088,8 @@ def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind
                     "attempts": int(rec.get("attempts", 0) or 0) + 1,
                     "last_status": "awaiting_fetch"})
         first_read = rec.get("end_heads") or end_heads
+        if _usable_heads(rec.get("end_heads")) is None and _usable_heads(end_heads) is not None:
+            first_read = end_heads      # a stored read FCC can't use is no first read
         if first_read:
             rec["end_heads"] = first_read
         return rec
@@ -3731,112 +3834,113 @@ def api_cancel_deduct_confirm():
             errors.append({"sid": sid, "error": "not in this review"})
             failed_sids.add(sid)
             continue
-        spool = _spool_read(sid)
-        if spool is None:
-            errors.append({"sid": sid, "error": "spool not found"})
-            failed_sids.add(sid)
-            continue
-        # Re-read CURRENT used (a weigh-out between preview and confirm isn't
-        # clobbered) and clamp grams to the spool's real remaining so the deduct
-        # never exceeds capacity and the reported figures match what Spoolman
-        # actually stores (update_spool silently caps used_weight ≤ initial).
-        used = float(spool.get('used_weight', 0) or 0)
-        # 43.1 — clamp against the effective capacity (own initial_weight, else
-        # the filament's). `initial_weight or 0` clamped an inherit-weight
-        # spool's grams to nothing, so its confirmed review charged 0 g and still
-        # burned the ledger. An unknown capacity isn't clamped (the apply loop's
-        # rule).
-        capacity = spoolman_api.effective_initial_weight(spool)
-        # 43.5 — name the printer and the head the reviewed row was charged for.
-        th = str(rec_rows[sid].get('toolhead') or '').upper()
-        where = f"{printer} {th}" if th else str(printer)
-        info = spoolman_api.format_spool_display(spool)
-        # 43.6 — a retry of a write that reported failure: judge it by the attempt
-        # recorded on the review row, not by the spool's current weight alone.
-        before = rec_rows[sid].get('attempt_used_before')
-        after = rec_rows[sid].get('attempt_used_after')
-        if before is not None and after is not None:
-            if abs(used - float(after)) <= eps:
-                # Exactly the weight the attempt would have left it at: the
-                # earlier write landed, so charging again would count it twice.
-                # Only an exact match counts. Past it is ambiguous (the write
-                # landed and something else charged it too, or it never landed
-                # and a later print charged more): the "changed" branch below.
-                done_g = round(float(after) - float(before), 2)
-                remaining = None if capacity is None else max(0.0, capacity - used)
-                state.add_log_entry(
-                    f"✔️ {where}: cancel-deduct {done_g:.2f}g on Spool #{sid} was already applied "
-                    f"by the earlier attempt (it is at {used:.1f}g used) — not charged again.",
-                    "SUCCESS", info.get('color', '888888'))
-                # Group 51 review (engine-4): stock or not BEFORE the attempt. The
-                # landed attempt archived a spool it emptied, so the record read
-                # now says archived, and its filament's "is out" was never said.
-                was = rec_rows[sid].get('attempt_was_archived')
-                applied.append({"sid": sid, "grams": done_g,
-                                "remaining": None if remaining is None else round(remaining, 1),
-                                "was_archived": bool(spool.get('archived') if was is None else was)})
-                continue
-            if abs(used - float(before)) > eps:
-                msg = (f"Spool #{sid}'s weight changed since the earlier attempt (it was weighed, or "
-                       f"another print charged it), so FCC can't tell whether this print's grams were "
-                       f"already taken. Nothing was charged. If you weighed it after this print, "
-                       f"Discard; otherwise Apply again to charge it.")
-                errors.append({"sid": sid, "error": msg})
+        with _spool_lock(sid):
+            spool = _spool_read(sid)
+            if spool is None:
+                errors.append({"sid": sid, "error": "spool not found"})
                 failed_sids.add(sid)
-                attempts[sid] = None   # the next Apply is a deliberate, fresh charge
-                state.add_log_entry(f"⚠️ {where}: {msg}", "WARNING", "ffaa00")
                 continue
-            # Unchanged since the attempt, so it never landed: charge it now.
-        if capacity is not None:
-            avail = max(0.0, capacity - used)
-            if grams > avail + eps:
-                # The spool can't absorb it all. Say so here, naming the spool;
-                # the job's shortfall below reports the total.
-                state.add_log_entry(
-                    f"⚠️ {where}: Spool #{sid} had only {avail:.1f}g left, so {grams - avail:.2f}g of "
-                    f"this print weren't charged to it — weigh the spools to true up.",
-                    "WARNING", "ffaa00")
-            grams = min(grams, avail)
-        if grams <= 0:
-            # Spool already empty — nothing to deduct, but it's not a failure.
-            applied.append({"sid": sid, "grams": 0.0, "remaining": 0.0,
+            # Re-read CURRENT used (a weigh-out between preview and confirm isn't
+            # clobbered) and clamp grams to the spool's real remaining so the deduct
+            # never exceeds capacity and the reported figures match what Spoolman
+            # actually stores (update_spool silently caps used_weight ≤ initial).
+            used = float(spool.get('used_weight', 0) or 0)
+            # 43.1 — clamp against the effective capacity (own initial_weight, else
+            # the filament's). `initial_weight or 0` clamped an inherit-weight
+            # spool's grams to nothing, so its confirmed review charged 0 g and still
+            # burned the ledger. An unknown capacity isn't clamped (the apply loop's
+            # rule).
+            capacity = spoolman_api.effective_initial_weight(spool)
+            # 43.5 — name the printer and the head the reviewed row was charged for.
+            th = str(rec_rows[sid].get('toolhead') or '').upper()
+            where = f"{printer} {th}" if th else str(printer)
+            info = spoolman_api.format_spool_display(spool)
+            # 43.6 — a retry of a write that reported failure: judge it by the attempt
+            # recorded on the review row, not by the spool's current weight alone.
+            before = rec_rows[sid].get('attempt_used_before')
+            after = rec_rows[sid].get('attempt_used_after')
+            if before is not None and after is not None:
+                if abs(used - float(after)) <= eps:
+                    # Exactly the weight the attempt would have left it at: the
+                    # earlier write landed, so charging again would count it twice.
+                    # Only an exact match counts. Past it is ambiguous (the write
+                    # landed and something else charged it too, or it never landed
+                    # and a later print charged more): the "changed" branch below.
+                    done_g = round(float(after) - float(before), 2)
+                    remaining = None if capacity is None else max(0.0, capacity - used)
+                    state.add_log_entry(
+                        f"✔️ {where}: cancel-deduct {done_g:.2f}g on Spool #{sid} was already applied "
+                        f"by the earlier attempt (it is at {used:.1f}g used) — not charged again.",
+                        "SUCCESS", info.get('color', '888888'))
+                    # Group 51 review (engine-4): stock or not BEFORE the attempt. The
+                    # landed attempt archived a spool it emptied, so the record read
+                    # now says archived, and its filament's "is out" was never said.
+                    was = rec_rows[sid].get('attempt_was_archived')
+                    applied.append({"sid": sid, "grams": done_g,
+                                    "remaining": None if remaining is None else round(remaining, 1),
+                                    "was_archived": bool(spool.get('archived') if was is None else was)})
+                    continue
+                if abs(used - float(before)) > eps:
+                    msg = (f"Spool #{sid}'s weight changed since the earlier attempt (it was weighed, or "
+                           f"another print charged it), so FCC can't tell whether this print's grams were "
+                           f"already taken. Nothing was charged. If you weighed it after this print, "
+                           f"Discard; otherwise Apply again to charge it.")
+                    errors.append({"sid": sid, "error": msg})
+                    failed_sids.add(sid)
+                    attempts[sid] = None   # the next Apply is a deliberate, fresh charge
+                    state.add_log_entry(f"⚠️ {where}: {msg}", "WARNING", "ffaa00")
+                    continue
+                # Unchanged since the attempt, so it never landed: charge it now.
+            if capacity is not None:
+                avail = max(0.0, capacity - used)
+                if grams > avail + eps:
+                    # The spool can't absorb it all. Say so here, naming the spool;
+                    # the job's shortfall below reports the total.
+                    state.add_log_entry(
+                        f"⚠️ {where}: Spool #{sid} had only {avail:.1f}g left, so {grams - avail:.2f}g of "
+                        f"this print weren't charged to it — weigh the spools to true up.",
+                        "WARNING", "ffaa00")
+                grams = min(grams, avail)
+            if grams <= 0:
+                # Spool already empty — nothing to deduct, but it's not a failure.
+                applied.append({"sid": sid, "grams": 0.0, "remaining": 0.0,
+                                "was_archived": bool(spool.get('archived'))})
+                continue
+            new_used = used + grams
+            ok = bool(spoolman_api.update_spool(sid, _deduct_payload(spool, new_used)))
+            if not ok:
+                err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
+                # 43.6 — a reported failure may have landed (a timeout after commit):
+                # re-read before calling it failed.
+                check = _spool_read(sid)
+                try:
+                    now = float(check.get('used_weight', 0) or 0) if check else None
+                except (TypeError, ValueError):
+                    now = None
+                if now is not None and abs(now - new_used) <= eps:
+                    ok = True
+                    state.add_log_entry(
+                        f"⚠️ {where}: Spoolman reported an error for Spool #{sid} ({_esc(err)}), but the "
+                        f"write landed — counted once.", "WARNING", "ffaa00")
+                else:
+                    errors.append({"sid": sid, "error": err})
+                    failed_sids.add(sid)
+                    # Stamped even when the re-read shows the old weight: the retry
+                    # then also catches a weigh-out made before it ("changed" below).
+                    attempts[sid] = (used, new_used, bool(spool.get('archived')))
+                    state.add_log_entry(
+                        f"❌ {where}: cancel-deduct failed for Spool #{sid}: {_esc(err)}", "ERROR", "ff4444")
+                    continue
+            remaining = None if capacity is None else max(0.0, capacity - new_used)
+            tail = "[no known capacity]" if remaining is None else f"[➔ {remaining:.1f}g remaining]"
+            state.add_log_entry(
+                f"✔️ {where}: cancel-deduct {grams:.2f}g from Spool #{sid} (confirmed) {tail}",
+                "SUCCESS", info.get('color', '888888'))
+            applied.append({"sid": sid, "grams": round(grams, 2),
+                            "remaining": None if remaining is None else round(remaining, 1),
+                            # Group 49.2b: a spool archived by hand (43.2) was no stock
+                            # before this charge, so it can't be what ran a filament out.
                             "was_archived": bool(spool.get('archived'))})
-            continue
-        new_used = used + grams
-        ok = bool(spoolman_api.update_spool(sid, _deduct_payload(spool, new_used)))
-        if not ok:
-            err = spoolman_api.LAST_SPOOLMAN_ERROR or "unknown error"
-            # 43.6 — a reported failure may have landed (a timeout after commit):
-            # re-read before calling it failed.
-            check = _spool_read(sid)
-            try:
-                now = float(check.get('used_weight', 0) or 0) if check else None
-            except (TypeError, ValueError):
-                now = None
-            if now is not None and abs(now - new_used) <= eps:
-                ok = True
-                state.add_log_entry(
-                    f"⚠️ {where}: Spoolman reported an error for Spool #{sid} ({_esc(err)}), but the "
-                    f"write landed — counted once.", "WARNING", "ffaa00")
-            else:
-                errors.append({"sid": sid, "error": err})
-                failed_sids.add(sid)
-                # Stamped even when the re-read shows the old weight: the retry
-                # then also catches a weigh-out made before it ("changed" below).
-                attempts[sid] = (used, new_used, bool(spool.get('archived')))
-                state.add_log_entry(
-                    f"❌ {where}: cancel-deduct failed for Spool #{sid}: {_esc(err)}", "ERROR", "ff4444")
-                continue
-        remaining = None if capacity is None else max(0.0, capacity - new_used)
-        tail = "[no known capacity]" if remaining is None else f"[➔ {remaining:.1f}g remaining]"
-        state.add_log_entry(
-            f"✔️ {where}: cancel-deduct {grams:.2f}g from Spool #{sid} (confirmed) {tail}",
-            "SUCCESS", info.get('color', '888888'))
-        applied.append({"sid": sid, "grams": round(grams, 2),
-                        "remaining": None if remaining is None else round(remaining, 1),
-                        # Group 49.2b: a spool archived by hand (43.2) was no stock
-                        # before this charge, so it can't be what ran a filament out.
-                        "was_archived": bool(spool.get('archived'))})
 
     if errors:
         # Re-queue ONLY the spools that DIDN'T apply, so a retry can't double-

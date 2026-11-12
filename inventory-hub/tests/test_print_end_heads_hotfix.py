@@ -77,7 +77,9 @@ def _isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(print_tracker_store, "_STORE_PATH", str(tmp_path / "latch.json"))
     monkeypatch.setattr(spoolman_api, "LAST_SPOOLMAN_ERROR", None)
     monkeypatch.setattr(print_monitor, "_CANCEL_DEDUCT_RUN_ASYNC", False)
-    monkeypatch.setattr(print_monitor, "_FETCH_CLAIMS", set())   # scope C: no claim outlives a test
+    # scope C: no claim outlives a test (raising=False: main has no claim set, and the
+    # red-on-main proof above runs this file there)
+    monkeypatch.setattr(print_monitor, "_FETCH_CLAIMS", set(), raising=False)
     monkeypatch.setattr(print_deduct.stock_report, "check_after_deduct", lambda *a, **k: None)
     monkeypatch.setattr(print_deduct.config_loader, "load_config", lambda: {})
     with print_monitor._PRINT_TRACKER_LOCK:

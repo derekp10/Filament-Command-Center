@@ -247,7 +247,9 @@ def _hold_end_heads(rec, printer_name, filename, job_id, progress, kind, ambiguo
     taken when the print ended, and this edge's after the restart, when the next
     print's spool may be on the head. The first read wins, as on a re-queue, so
     the compute never names a spool loaded while FCC was down; hub.log says which
-    read it used."""
+    read it used. A stored read FCC can't use (no spool on any head, written by a
+    process from before the review fix) counts as none: this edge's usable read
+    replaces it (print_deduct._hold_fetch_in_flight)."""
     if end_heads is not None:
         rec = _hold_edge_fetch(printer_name, filename, job_id, progress, kind,
                                ambiguous=ambiguous, start_spools=start_spools,
@@ -255,6 +257,8 @@ def _hold_end_heads(rec, printer_name, filename, job_id, progress, kind, ambiguo
     if not isinstance(rec, dict):
         return rec, start_spools, swap_log, end_heads
     first = rec.get("end_heads")
+    if print_deduct._usable_heads(first) is None:
+        first = None
     if first and first != end_heads:
         try:
             state.logger.info(
@@ -342,8 +346,12 @@ def _capture_end_heads(printer_name, job_id, fb_url, heads_when=None):
     Returns {heads, source, at}: `source` is where the edge was seen ("print_end",
     or the caller's `heads_when`: "restart" for an edge first seen by restart
     recovery, "job_change" when the next job replaced it). None when the read
-    fails. One hub.log line says what was read and how long it took; it never
-    raises and writes no Activity Log line."""
+    fails, and when it found no spool on any head (review fix): that is a Spoolman
+    blip's signature (get_spools_at_location answers [] when it can't read), the
+    rule print_deduct._usable_heads applies, so it is never stored on the print's
+    record, where as the first read it would beat a later usable one. One hub.log
+    line says what was read and how long it took; it never raises and writes no
+    Activity Log line."""
     source = heads_when or "print_end"
     at = time.strftime("%Y-%m-%d %H:%M:%S")
     started = time.time()
@@ -351,20 +359,23 @@ def _capture_end_heads(printer_name, job_id, fb_url, heads_when=None):
         heads = print_deduct._capture_print_heads(printer_name, fb_url)
     except Exception:
         heads = None
+    found = bool(heads) and any(print_deduct._head_sids(h) for h in heads)
     try:
-        if heads:
+        if found:
             seen = ", ".join(
                 f"{h.get('toolhead')} "
                 + (f"#{h['sid']}" if h.get('sid') is not None
                    else (" + ".join(f"#{s}" for s in h.get('sids') or []) or "empty"))
                 for h in heads)
+        elif heads:
+            seen = "no spool on any head (a Spoolman blip?), so the read isn't used"
         else:
             seen = "couldn't read them"
         state.logger.info(f"🔎 {printer_name}: heads at the end of job {job_id} ({source}, "
                           f"read in {time.time() - started:.1f}s): {seen}")
     except Exception:
         pass
-    if not heads:
+    if not found:
         return None
     return {"heads": heads, "source": source, "at": at}
 
@@ -1410,6 +1421,18 @@ def _compute_fetch(rec, fb_url):
                              ("swap_log", swap_log)) if v})
 
 
+def _not_in_flight(rec):
+    """A queued record a live edge left "in_flight" (FCC stopped during its
+    download), marked "awaiting_fetch" on disk and in hand before the queue's
+    retry computes it. Returns the record to compute with."""
+    def _mark(stored):
+        if isinstance(stored, dict) and stored.get("last_status") == print_deduct.FETCH_IN_FLIGHT:
+            return dict(stored, last_status="awaiting_fetch")
+        return None
+    cancel_fetch_store.update_pending(rec.get("printer_name"), rec.get("job_id"), _mark)
+    return dict(rec, last_status="awaiting_fetch")
+
+
 def _run_fetch_retry(rec, fb_url, key):
     """Compute one due record and settle it. An outcome (a review stashed, the
     ledger written, a charged completion, nothing to charge) drops the record; a
@@ -1426,6 +1449,12 @@ def _run_fetch_retry(rec, fb_url, key):
                               f"of job {job_id} on its own thread.")
         except Exception:
             pass
+        if rec.get("last_status") == print_deduct.FETCH_IN_FLIGHT:
+            # A live edge's download that died with FCC (review fix). The queue
+            # retries only at IDLE / READY, where the cancel or finish screen is
+            # already clear, so a failure here must not log the "clear the screen"
+            # nudge _enqueue_cancel_fetch gives an in-flight record's first failure.
+            rec = _not_in_flight(rec)
         result = _compute_fetch(rec, fb_url)
         status = result.get("status") if isinstance(result, dict) else None
         if status != "awaiting_fetch":
@@ -1491,6 +1520,37 @@ def _recover_print_tracker_on_start():
             pass
 
 
+def _held_for_restart(printer, job_id):
+    """Restart recovery found a different job printing (review fix, hotfix
+    2026-11-11): what FCC already holds for the print it was latched on, in words
+    for its line, or None when it holds nothing (the line then says to weigh the
+    spool, as before). Since scope C a live edge queues its print before the
+    download, so a print whose end FCC saw before the restart (its reset latch not
+    saved) may still be computed by the queue: "weigh the spool" would have the
+    print charged on top of the weighing. Routing the print itself is a follow-up
+    (D8)."""
+    try:
+        if print_deduct_ledger._is_blank_job(job_id):
+            return None
+        if print_deduct_ledger.was_deducted(printer, job_id):
+            return "FCC had already recorded its deduct."
+        if cancel_review_store.has_pending(printer, job_id):
+            return "Its review is waiting in 🛑 Review."
+        rec = cancel_fetch_store.get_pending(printer, job_id)
+        if not isinstance(rec, dict):
+            return None
+        if rec.get("kind") != "complete":
+            return "FCC had already queued it, so it opens its review once the printer is idle."
+        if rec.get("charging_since"):
+            return ("A deduct of it had begun charging its spools before the restart; FCC says "
+                    "what became of it once the printer is idle.")
+        if not _fcc_owns_completion_deduct():
+            return None
+        return "FCC had already queued it, so it records its deduct once the printer is idle."
+    except Exception:
+        return None
+
+
 def _recover_one_print_latch(name, entry, fb_url):
     """Reconcile one persisted latch (see _recover_print_tracker_on_start for the
     table). Returns True if it acted, False for a no-op (bare entry / completion)."""
@@ -1533,11 +1593,17 @@ def _recover_one_print_latch(name, entry, fb_url):
             return True
         # A DIFFERENT job is printing → the old one ended during the outage and
         # we can't tell cancel from completion → manual review; latch the new job.
-        state.add_log_entry(
-            f"⚠️ {name}: a print ('{print_deduct._esc(filename)}', ~{pct:.0f}%) was in progress when FCC "
-            f"restarted and a different job is printing now — its outcome is unknown, "
-            f"not auto-deducted. Weigh the spool if that print was cancelled.",
-            "WARNING", "ffaa00")
+        held = _held_for_restart(name, job_id)
+        if held:
+            state.add_log_entry(
+                f"⚠️ {name}: a print ('{print_deduct._esc(filename)}', ~{pct:.0f}%) was in progress when "
+                f"FCC restarted and a different job is printing now. {held}", "WARNING", "ffaa00")
+        else:
+            state.add_log_entry(
+                f"⚠️ {name}: a print ('{print_deduct._esc(filename)}', ~{pct:.0f}%) was in progress when FCC "
+                f"restarted and a different job is printing now — its outcome is unknown, "
+                f"not auto-deducted. Weigh the spool if that print was cancelled.",
+                "WARNING", "ffaa00")
         with _PRINT_TRACKER_LOCK:
             _PRINT_TRACKER[name] = {
                 'state': cur, 'job_id': cur_jid, 'filename': job.get('filename'),
