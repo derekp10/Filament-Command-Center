@@ -97,18 +97,28 @@
         if (d > 0) return `${fmtG(d)} g of ${t} g still to place`;
         return `${fmtG(-d)} g more than the ${t} g FCC computed`;
     }
-    function setBoxHtml(pos, toolhead, n, extra, inner, cls) {
-        const where = toolhead ? `T${esc(pos)} · ${esc(toolhead)}` : `T${esc(pos)}`;
+    // `label` follows the head's name: " had 2 spools this print" only where FCC
+    // knows they all printed there (a split, or a set whose spools the recorded
+    // swaps account for), else ": FCC saw 2 spools on it" (review fix: a spool
+    // seen only when the print ended may never have printed on that head).
+    function setBoxHtml(pos, headName, label, extra, inner, cls) {
+        const where = headName ? `T${pos} · ${headName}` : `T${pos}`;
         return `
-            <div class="fcc-cr-set ${cls}" data-pos="${esc(pos)}"
+            <div class="fcc-cr-set ${cls}" data-pos="${esc(pos)}" data-where="${esc(where)}"
                  style="margin:8px 0 4px;padding:2px 0 0 10px;border-left:3px solid #5aa0d0;">
                 <div class="fcc-cr-set-head"
                      style="display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 10px;padding:2px 0;
                             color:#e8e8e8;font-weight:bold;font-size:var(--fcc-fs-row);">
-                    <span>${where} had ${esc(n)} spools this print</span>${extra || ''}
+                    <span>${esc(where)}${esc(label)}</span>${extra || ''}
                 </div>
                 ${inner}
             </div>`;
+    }
+    // Review fix: whether a card's held line is a set of spools (scope B), whose
+    // Apply needs each spool's grams rather than one pick.
+    function isSetLine(rec, pos) {
+        const entries = ((rec && rec.unresolved_sets) || {})[pos];
+        return Array.isArray(entries) && entries.filter((e) => e && e.sid != null).length >= 2;
     }
     // The order a split head's rows printed in: the start spool first.
     function firstCut(s) {
@@ -135,7 +145,7 @@
             drawn.add(k);
             const ordered = set.slice().sort((a, b) => firstCut(a) - firstCut(b));
             const sub = `<span class="fcc-cr-set-sub" style="font-weight:normal;color:#9aa;font-size:var(--fcc-fs-small);">split at the swaps FCC recorded</span>`;
-            return setBoxHtml(k, set[0].toolhead, set.length, sub,
+            return setBoxHtml(k, set[0].toolhead, ` had ${set.length} spools this print`, sub,
                 ordered.map((x) => spoolRowHtml(x, rec)).join(''), 'fcc-cr-splitset');
         }).join('');
     }
@@ -182,8 +192,84 @@
         const left = `<span class="fcc-cr-set-left" data-total="${esc(fmtG(grams))}"
                             style="font-weight:normal;color:#e6c074;font-size:var(--fcc-fs-small);">${esc(setLeftWords(grams, 0))}</span>`;
         const lines = entries.map((e) => heldSetLineHtml(pos, e, lineCls, atEnd, words)).join('');
-        return setBoxHtml(pos, head && head.toolhead, entries.length, left,
-            lines + noteHtml('fcc-cr-line-note', '#e6c074', notes[pos]), 'fcc-cr-heldset');
+        // The recorded swaps account for every spool only when none was seen
+        // just at the end (or anywhere else FCC can't place in the print).
+        const accounted = entries.every((e) => e.when === 'start' || e.when === 'during');
+        const label = accounted ? ` had ${entries.length} spools this print` : `: FCC saw ${entries.length} spools on it`;
+        // Review fix: an Apply whose boxes don't add up to the set's grams says so
+        // here, in the set (setsConfirmed).
+        const alert = `<div class="fcc-cr-set-alert" role="alert"
+                            style="display:none;margin:4px 0 2px;color:#e6c074;font-weight:bold;
+                                   font-size:var(--fcc-fs-small);line-height:1.4;"></div>`;
+        return setBoxHtml(pos, head && head.toolhead, label, left,
+            lines + noteHtml('fcc-cr-line-note', '#e6c074', notes[pos]) + alert, 'fcc-cr-heldset');
+    }
+
+    // Review fix (hotfix 2026-11-11): what stopped an Apply, said on the card
+    // itself, beside its buttons: the toast layer is drawn under the review panel.
+    const CARD_NOTICE = `<div class="fcc-cr-card-notice" role="alert"
+            style="display:none;margin-top:8px;color:#e6c074;font-size:var(--fcc-fs-small);line-height:1.4;"></div>`;
+    function sayOnCard(card, msg) {
+        const n = card && card.querySelector('.fcc-cr-card-notice');
+        if (!n) return;
+        n.textContent = msg || '';
+        n.style.display = msg ? '' : 'none';
+    }
+    // A held set whose boxes don't add up to its grams (to 0.05 g), in words:
+    // [{box, placed, words}]. One press used to close a set left empty with its
+    // grams uncharged (its lines' pickers already name their spools, so the card
+    // looked done), and a head's grams typed in both boxes were charged twice.
+    function setProblems(card, verb) {
+        const out = [];
+        card.querySelectorAll('.fcc-cr-heldset').forEach((box) => {
+            const left = box.querySelector('.fcc-cr-set-left');
+            const total = Number(left && left.dataset.total);
+            if (!Number.isFinite(total) || total <= 0) return;
+            let placed = 0;
+            box.querySelectorAll('.fcc-cr-pgrams').forEach((b) => {
+                const g = parseFloat(b.value);
+                if (g > 0) placed += g;
+            });
+            placed = Math.round(placed * 100) / 100;
+            const d = Math.round((total - placed) * 100) / 100;
+            if (Math.abs(d) <= 0.05) return;
+            const where = box.dataset.where || `T${box.dataset.pos}`;
+            const t = fmtG(total);
+            let words;
+            if (placed <= 0) {
+                words = `${where}: none of its ${t} g are placed. Type the grams each spool used, or put them `
+                    + `all on one; or press ${verb} again to log them as uncharged.`;
+            } else if (d > 0) {
+                words = `${where}: ${fmtG(d)} g of its ${t} g aren't placed. Press ${verb} again to log them `
+                    + `as uncharged.`;
+            } else {
+                words = `${where}: its spools add up to ${fmtG(placed)} g, ${fmtG(-d)} g more than the ${t} g `
+                    + `FCC computed. Press ${verb} again to charge that.`;
+            }
+            out.push({ box, placed, words });
+        });
+        return out;
+    }
+    // Whether an Apply may go ahead over the card's sets: at once when each is
+    // placed exactly; else the first press says why in each set and on the card,
+    // and a second press with the same grams goes ahead (Derek: more resistance on
+    // a yes that is hard to undo, no typed words).
+    function setsConfirmed(card) {
+        const verb = (card.dataset.kind === 'no_spool' || card.dataset.kind === 'shortfall')
+            ? 'Apply' : 'Confirm deduct';
+        const problems = setProblems(card, verb);
+        card.querySelectorAll('.fcc-cr-set-alert').forEach((a) => { a.textContent = ''; a.style.display = 'none'; });
+        if (!problems.length) return true;
+        const sig = problems.map((p) => `${p.box.dataset.pos}=${p.placed}`).join(';');
+        if (card.dataset.setAsked === sig) return true;
+        card.dataset.setAsked = sig;
+        problems.forEach((p) => {
+            const a = p.box.querySelector('.fcc-cr-set-alert');
+            if (a) { a.textContent = p.words; a.style.display = ''; }
+        });
+        sayOnCard(card, problems.length === 1 ? problems[0].words
+            : `${problems.length} heads' grams don't add up, as each says above. Press ${verb} again to go ahead.`);
+        return false;
     }
 
     async function fetchPending() {
@@ -529,10 +615,15 @@
         const words = headsWords(rec);
         const notes = rec.unresolved_notes || {};
         const which = keys.length === 1 ? 'this head' : 'these heads';
+        // Review fix: a line that is a set of spools asks for each one's grams.
+        const sets = keys.filter((k) => isSetLine(rec, k)).length;
+        const ask = !sets ? 'Pick the spool it used,'
+            : sets === keys.length ? 'Type the grams each spool used (or put them all on one),'
+            : 'Pick the spool each used (on a head with several spools, type the grams each one used),';
         // "When the print ended" only where the heads were read then: each held
         // line says itself what FCC saw on it.
         const lead = keys.some((pos) => notes[pos])
-            ? `⚠️ FCC isn't sure which spool printed on ${which}. Pick the spool it used, or leave it:
+            ? `⚠️ FCC isn't sure which spool printed on ${which}. ${ask} or leave it:
                its grams are then logged as uncharged.`
             : `⚠️ No spool was loaded on ${which} ${esc(words.end)}. Pick the spool it used, or leave it:
                its grams are then logged as uncharged.`;
@@ -637,6 +728,7 @@
                 </div>
                 ${rows}
                 ${shortfallLinesHtml(rec)}
+                ${CARD_NOTICE}
                 <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
                     <button type="button" class="btn btn-sm btn-outline-secondary fcc-cr-discard"
                             data-armed="0"
@@ -688,9 +780,6 @@
     function unresolvedCardHtml(rec, kind) {
         const total = fmtG(rec.total_grams);
         const isNoSpool = kind === 'no_spool';
-        const header = isNoSpool
-            ? `⚠️ ${esc(rec.printer_name)} — ${total}g computed, no spool bound`
-            : `❓ ${esc(rec.printer_name)} — couldn't measure usage`;
         // Group 43.3: no_spool names no spool, so the user picks one per tool. A
         // print sliced for one head can run on another (chosen on the printer),
         // which FCC can't see; the picker offers the spools that were on the
@@ -699,9 +788,21 @@
         // print-end read) says each line's reason under it, and leads neutrally.
         const words = headsWords(rec);
         const noted = Object.keys(rec.unresolved_notes || {}).length > 0;
+        // Review fix: such a card's heads may well have had a spool (one that
+        // changed during the print), so its header says what its banner says.
+        const header = isNoSpool
+            ? `⚠️ ${esc(rec.printer_name)} — ${total}g computed, ${noted ? 'spool not certain' : 'no spool bound'}`
+            : `❓ ${esc(rec.printer_name)} — couldn't measure usage`;
+        // Review fix: a line that is a set of spools asks for each one's grams.
+        const keys = Object.keys(rec.usage_map || {});
+        const sets = keys.filter((k) => isSetLine(rec, k)).length;
+        const ask = !sets ? `<b>Pick the spool each head used</b>`
+            : sets === keys.length ? `<b>Type the grams each spool used</b> (or put them all on one)`
+            : `<b>Pick the spool each head used</b> (on a head with several spools, <b>type the grams each
+               one used</b>)`;
         const banner = isNoSpool && noted
             ? `FCC computed this print used <b>${total}g</b>, but isn't sure which spool it came from
-               on the heads below. <b>Pick the spool each head used</b>, then <b>Apply</b>. Or
+               on the heads below. ${ask}, then <b>Apply</b>. Or
                <b>Discard</b> if you've already trued it up.`
             : isNoSpool
             ? `FCC computed this print used <b>${total}g</b>, but couldn't charge it: <b>no spool was
@@ -728,6 +829,7 @@
                     ${banner}
                 </div>
                 ${lines}
+                ${CARD_NOTICE}
                 <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
                     <button type="button" class="btn btn-sm btn-outline-secondary fcc-cr-discard"
                             data-armed="0"
@@ -743,7 +845,23 @@
         if (kind === 'no_spool' || kind === 'progress_unknown') return unresolvedCardHtml(rec, kind);
         if (kind === 'shortfall') return shortfallCardHtml(rec);
         const rows = rowsHtml(rec);
-        const total = (rec.spools || []).reduce((a, s) => a + (Number(s.grams) || 0), 0);
+        // Review fix: the header's total is the card's whole print, its rows and its
+        // held lines, as the record's total and its Activity Log line say (a card
+        // from before 43.4 has no held lines: its rows alone, as before).
+        const heldKeys = Object.keys(rec.unresolved_usage || {});
+        const heldG = heldKeys.reduce((a, k) => a + (Number(rec.unresolved_usage[k]) || 0), 0);
+        const total = (rec.spools || []).reduce((a, s) => a + (Number(s.grams) || 0), 0) + heldG;
+        // Review fix: a held line that is a set of spools asks for each one's grams,
+        // and an auto-split card with a head still to fill in never says "Just Confirm".
+        const heldSets = heldKeys.filter((k) => isSetLine(rec, k)).length;
+        const pickWords = !heldSets ? `<b>Pick the spool it used</b> (or weigh them and nudge the grams)`
+            : heldSets === heldKeys.length ? `<b>Type the grams each spool used</b> (or put them all on one)`
+            : `<b>Pick the spool it used</b> (on a head with several spools, <b>type the grams each one used</b>)`;
+        const confirmWords = heldKeys.length === 1
+            ? `One head listed below still needs your grams: fill it in, then <b>Confirm</b>.`
+            : heldKeys.length > 1
+            ? `The ${heldKeys.length} heads listed below still need your grams: fill them in, then <b>Confirm</b>.`
+            : `Just <b>Confirm</b>, or nudge if you weighed it.`;
         // spool_changed (22.3): a COMPLETED print whose toolhead spool changed
         // mid-print (run-out / M600 replace). The full footer was NOT auto-applied
         // (it would dump the whole tool's usage on the replacement + record 0g on
@@ -767,14 +885,13 @@
                 ? `🔁 A spool feeding this print was <b>changed mid-print</b> at position(s)
                <b>${esc(changedPos)}</b>, so the slicer total was <b>NOT auto-applied</b>. FCC can't tell
                which spool printed there, so it charges neither by itself: each such head is listed
-               below with every spool it had. <b>Pick the spool it used</b> (or weigh them and nudge
-               the grams), then <b>Confirm</b>. Or <b>Discard</b>.`
+               below with every spool it had. ${pickWords}, then <b>Confirm</b>. Or <b>Discard</b>.`
                 : autoSplit
                 ? `🔁 A spool feeding this print was <b>changed mid-print</b> (a filament run-out
                or M600) at toolhead position(s) <b>${esc(changedPos)}</b>. FCC <b>auto-split</b>
                the slicer total by the swap point — each row below is charged only <b>its own
                segment</b> (the run-out spool up to the swap, the replacement after it), pre-filled.
-               Just <b>Confirm</b>, or nudge if you weighed it. The run-out spool's sensor→nozzle
+               ${confirmWords} The run-out spool's sensor→nozzle
                remnant is included when a per-printer path value is configured. Or <b>Discard</b>.`
                 : `🔁 A spool feeding this print was <b>changed mid-print</b> (a filament
                run-out or M600) at toolhead position(s) <b>${esc(changedPos)}</b>, so the full
@@ -815,6 +932,7 @@
                 </div>
                 ${rows}
                 ${unresolvedLinesHtml(rec)}
+                ${CARD_NOTICE}
                 <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
                     <button type="button" class="btn btn-sm btn-outline-secondary fcc-cr-discard"
                             data-armed="0"
@@ -941,7 +1059,34 @@
     // over an open one leaves only its own listening.
     let _offBuffer = null;
 
+    // Review fix (hotfix 2026-11-11): a scan read while the keyboard is in a grams
+    // box (where the review starts) goes to the scan path, as it does from the
+    // rest of the card. The dashboard's scan accumulator leaves an INPUT's keys
+    // alone, so a label's digits were typed into the grams ("ID:229" made #42's
+    // 30 g read 30229 g) and the spool never reached the scan buffer, where the
+    // pickers list it. inv_core.js's capture (its one copy, a document listener)
+    // puts back what the box held before the scan's first key; installed once,
+    // when a review first opens.
+    let _gramsScanCapture = false;
+    function captureScansInGramsBoxes() {
+        if (_gramsScanCapture || typeof window.installFieldScanCapture !== 'function') return;
+        _gramsScanCapture = true;
+        window.installFieldScanCapture({
+            match: (el) => !!(el && el.classList && el.closest
+                && (el.classList.contains('fcc-cr-grams') || el.classList.contains('fcc-cr-pgrams'))
+                && el.closest(`#${OVERLAY_ID}`)),
+            isScanPayload: (txt) => !!(window.looksLikeScanPayload && window.looksLikeScanPayload(txt)),
+            onScan: (payload, el) => {
+                // The box holds what it held before the scan again: its preview and
+                // its set's count follow it.
+                try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) { /* noop */ }
+                if (window.processScan) window.processScan(payload, 'barcode');
+            },
+        });
+    }
+
     async function openCancelReview() {
+        captureScansInGramsBoxes();
         const pending = await fetchPending();
         if (!pending.length) {
             toast('No pending cancel reviews.', 'info');
@@ -1036,7 +1181,7 @@
             const job = card.dataset.job;
             const rec = (await fetchPending()).find(
                 (r) => String(r.printer_name) === printer && String(r.job_id) === job);
-            if (!rec) { card.remove(); updateCount(); refreshBadge(); closeIfEmpty(); return; }
+            if (!rec) { card.remove(); updateCount(); refreshBadge(); closeIfEmpty(); return null; }
             if (freshHeads) liveHeads[printer] = await fetchCandidates(printer);
             const tmp = document.createElement('div');
             tmp.innerHTML = cardHtml(rec).trim();
@@ -1045,6 +1190,13 @@
             if (liveHeads[printer]) withHeads(fresh, liveHeads[printer]);
             const first = fresh.querySelector('.fcc-cr-pick, .fcc-cr-grams');
             if (first) { try { first.focus(); } catch (_) { /* noop */ } }
+            return fresh;
+        }
+        // Say on the card (review fix) and in a toast: the toast layer is drawn
+        // under the review panel. A card drawn again is told on its new self.
+        function tell(card, msg, type, dur) {
+            sayOnCard(card, msg);
+            toast(msg, type || 'warning', dur || 7000);
         }
 
         // 43.2: an Apply that couldn't place every gram opened an uncharged-grams
@@ -1106,6 +1258,14 @@
                 if (g > 0) placed += g;
             });
             out.textContent = setLeftWords(Number(out.dataset.total), placed);
+            // Review fix: what an Apply said about the grams as they were goes once
+            // they change (the next Apply checks them again).
+            const alert = box.querySelector('.fcc-cr-set-alert');
+            if (alert && alert.style.display !== 'none') {
+                alert.textContent = '';
+                alert.style.display = 'none';
+                sayOnCard(box.closest('.fcc-cr-card'), '');
+            }
         }
 
         overlay.addEventListener('input', (e) => {
@@ -1234,6 +1394,7 @@
                 // 43.3: explicit picks become `charges`; a card whose rows all keep
                 // their own spool still sends the old `updates` shape.
                 const payload = { printer_name: printer, job_id: job };
+                sayOnCard(card, '');
                 if (card.dataset.kind === 'no_spool') {
                     const charges = [];
                     let noId = null;
@@ -1251,11 +1412,20 @@
                         if (sid && !Number.isNaN(g) && g > 0) charges.push({ position: Number(pos), sid, grams: g });
                     });
                     if (noId != null) {
-                        toast(`Type the #id of the spool T${noId} used (or pick one).`, 'warning', 7000);
+                        tell(card, `Type the #id of the spool T${noId} used (or pick one).`);
                         return;
                     }
                     if (!charges.length) {
-                        toast('Pick the spool this print used (or type its #id) first.', 'warning', 7000);
+                        // Review fix: a set's lines already name their spools, so
+                        // what is missing there is each spool's grams.
+                        const sets = Array.from(card.querySelectorAll('.fcc-cr-heldset'))
+                            .map((b) => b.dataset.where || `T${b.dataset.pos}`);
+                        const plain = card.querySelectorAll('.fcc-cr-pickline:not(.fcc-cr-setline)').length > 0;
+                        tell(card, sets.length
+                            ? `Type the grams each spool on ${sets.join(' and ')} used (or put them all on one)`
+                              + `${plain ? ', and pick the spool each other head used' : ''}, then Apply. `
+                              + `Or Discard the review.`
+                            : 'Pick the spool this print used (or type its #id) first.');
                         return;
                     }
                     payload.charges = charges;
@@ -1277,7 +1447,7 @@
                         }
                     });
                     if (missing) {
-                        toast('Type the #id of the spool to charge (or pick one).', 'warning', 7000);
+                        tell(card, 'Type the #id of the spool to charge (or pick one).');
                         return;
                     }
                     // 43.4: a head that had no spool, picked here, is charged by
@@ -1295,13 +1465,13 @@
                         }
                     });
                     if (unNoId != null) {
-                        toast(`Type the #id of the spool T${unNoId} used (or pick one).`, 'warning', 7000);
+                        tell(card, `Type the #id of the spool T${unNoId} used (or pick one).`);
                         return;
                     }
                     // 43.2: a shortfall card names no spool of its own, so an Apply
                     // with nothing picked would charge nothing (the server refuses it too).
                     if (card.dataset.kind === 'shortfall' && !redirected && !Object.keys(updates).length) {
-                        toast('Pick the spool that took these grams (or Discard).', 'warning', 7000);
+                        tell(card, 'Pick the spool that took these grams (or Discard).');
                         return;
                     }
                     if (redirected) payload.charges = charges; else payload.updates = updates;
@@ -1309,6 +1479,10 @@
                     // another Apply changed it is refused instead of charging again.
                     if (card.dataset.kind === 'shortfall') payload.rev = Number(card.dataset.rev || 0);
                 }
+                // Review fix: a set whose boxes don't add up to its grams (left
+                // empty, part placed, or over) is said in the set and on the card;
+                // a second press with the same grams goes ahead.
+                if (!setsConfirmed(card)) return;
                 e.target.disabled = true;
                 try {
                     const r = await fetch('/api/cancel_deduct/confirm', {
@@ -1320,8 +1494,9 @@
                     if (d.status === 'confirmed' && d.kept) {
                         // 43.2: the picks couldn't take everything (a run-out or
                         // near-empty spool); the rest stays on the card to pick again.
-                        toast(`Charged ${fmtG(took)}g. ${fmtG(d.shortfall_g)}g still have no spool — pick another spool, or Discard.`, 'warning', 7000);
-                        await rerenderCard(card, true);
+                        const msg = `Charged ${fmtG(took)}g. ${fmtG(d.shortfall_g)}g still have no spool — pick another spool, or Discard.`;
+                        toast(msg, 'warning', 7000);
+                        sayOnCard(await rerenderCard(card, true), msg);
                         refreshBadge();
                         document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'cancel_review' } }));
                     } else if (d.status === 'confirmed') {
@@ -1343,8 +1518,9 @@
                         document.dispatchEvent(new CustomEvent('inventory:sync-pulse', { detail: { source: 'cancel_review' } }));
                     } else if (d.stale) {
                         // 43.2: another Apply changed this card since it was shown.
-                        toast(d.msg || 'This card changed — check it and Apply again.', 'warning', 7000);
-                        await rerenderCard(card, true);
+                        const msg = d.msg || 'This card changed — check it and Apply again.';
+                        toast(msg, 'warning', 7000);
+                        sayOnCard(await rerenderCard(card, true), msg);
                     } else if (d.status === 'already_handled') {
                         toast('Already handled elsewhere.', 'info');
                         card.remove(); updateCount(); refreshBadge(); closeIfEmpty();
@@ -1352,17 +1528,17 @@
                         // Not applied, but the review is kept server-side — LEAVE the
                         // card so the user can bind a spool / weigh, then retry Apply.
                         e.target.disabled = false;
-                        toast(d.msg || 'Not applied — still no spool bound.', 'warning', 7000);
+                        tell(card, d.msg || 'Not applied — still no spool bound.');
                     } else {
                         e.target.disabled = false;
-                        const why = d.msg || ((d.errors || [])[0] || {}).error;
-                        toast(why || 'Confirm failed — check the log.', 'error', 7000);
+                        const why = d.msg || ((d.errors || [])[0] || {}).error || 'Confirm failed — check the log.';
+                        tell(card, why, 'error');
                         // Writes that failed leave a reshaped review: show what it holds now.
-                        if ((d.errors || []).length) await rerenderCard(card);
+                        if ((d.errors || []).length) sayOnCard(await rerenderCard(card), why);
                     }
                 } catch (err) {
                     e.target.disabled = false;
-                    toast('Confirm failed.', 'error', 7000);
+                    tell(card, 'Confirm failed.', 'error');
                 }
             } else if (e.target.classList.contains('fcc-cr-discard')) {
                 const btn = e.target;
@@ -1389,11 +1565,11 @@
                         card.remove(); updateCount(); refreshBadge(); closeIfEmpty();
                     } else {
                         btn.disabled = false; disarmDiscard(btn);
-                        toast(d.msg || 'Discard failed — check the log.', 'error', 7000);
+                        tell(card, d.msg || 'Discard failed — check the log.', 'error');
                     }
                 } catch (err) {
                     btn.disabled = false; disarmDiscard(btn);
-                    toast('Discard failed.', 'error', 7000);
+                    tell(card, 'Discard failed.', 'error');
                 }
             }
         });

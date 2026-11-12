@@ -11,7 +11,8 @@ Pinned:
     ("start → 19%, ran out", "19% → 42%", "19% → end") and its grams box
     pre-filled, as rows are; another head's row stays outside the set;
   - a head FCC couldn't split, or whose spool changed with no swap recorded, is a
-    set of every spool it had: each with its own grams box, nothing pre-filled,
+    set of every spool it had (headed "FCC saw N spools on it" when one of them
+    was seen only when the print ended): each with its own grams box, nothing pre-filled,
     its own "charge to" picker on that spool, the words for when FCC saw it there,
     a "to split" count and the note. Its lines are the card's ordinary uncharged
     lines (`fcc-cr-unline` on a partial card, `fcc-cr-pickline` on a no_spool one,
@@ -258,7 +259,9 @@ def test_a_held_set_offers_each_spool_with_its_own_empty_grams_box(drawn):
     box = card.all("fcc-cr-set")[0]
     assert box.attrs.get("data-pos") == "4"
     head = box.all("fcc-cr-set-head")[0].text()
-    assert "T4 · RCOI-5 had 2 spools this print" in head, head
+    # #229 was seen only when the print ended, so the header claims nothing about
+    # when it printed (review fix: it read "had 2 spools this print").
+    assert "T4 · RCOI-5: FCC saw 2 spools on it" in head, head
     assert box.all("fcc-cr-set-left")[0].text() == "84.28 g to split"
     lines = box.all("fcc-cr-setline")
     assert [ln.attrs.get("data-line") for ln in lines] == ["set:4:42", "set:4:229"]

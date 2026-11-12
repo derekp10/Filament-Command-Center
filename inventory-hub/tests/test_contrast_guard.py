@@ -760,3 +760,46 @@ def test_review_picker_box_words_are_readable(page: Page, base_url: str, assert_
                  "#57 ZZ Contrast Blue (SHELF-1)"):
         assert said in scored, (said, scored)
     page.keyboard.press("Escape")
+
+
+@pytest.mark.usefixtures("require_server")
+def test_review_card_notices_are_readable(page: Page, base_url: str, assert_contrast):
+    """Hotfix 2026-11-11, the review's fixes: what stops an Apply is said on the
+    🛑 Review card itself, beside its buttons (`.fcc-cr-card-notice`), and a set
+    whose grams aren't placed says so in the set (`.fcc-cr-set-alert`). Confirm is
+    pressed over a set left empty, which the page stops before any request; the
+    confirm route is answered in the page all the same, so nothing can be written.
+    Made-up reviews in this page only. The offline check of their colours and size
+    is test_cancel_review_review_fixes_js.py."""
+    import json as _json
+    import conftest
+    words = {"end": "when the print ended", "start": "when the print started", "during": "during the print"}
+    pending = [{"printer_name": "ZZ Contrast INDX", "job_id": "n1", "filename": "/usb/F.BGC", "progress": 0.42,
+                "total_grams": 84.0, "ambiguous": False, "kind": "partial", "heads_source": "print_end",
+                "heads_words": words, "spools": [], "unresolved_usage": {"4": 84.0},
+                "heads_at_end": [{"toolhead": "HEAD-5", "position": 4, "sid": 229, "sids": [229]},
+                                 {"toolhead": "HEAD-5", "position": 4, "sid": 42, "when": "start"}],
+                "unresolved_sets": {"4": [{"sid": 42, "when": "start", "display": "ZZ Contrast spool 42",
+                                           "color": "222222", "remaining": 12.5},
+                                          {"sid": 229, "when": "end", "display": "ZZ Contrast spool 229",
+                                           "color": "ff0000", "remaining": 800.0}]}}]
+    page.route("**/api/cancel_deduct/pending*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=_json.dumps({"pending": pending})))
+    page.route("**/api/cancel_deduct/confirm*", lambda route: route.fulfill(
+        status=200, content_type="application/json",
+        body=_json.dumps({"status": "error", "msg": "stub: nothing applied"})))
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openCancelReview === 'function'")
+    page.evaluate("() => window.openCancelReview()")
+    card = '#fcc-cancel-review-overlay .fcc-cr-card[data-job="n1"]'
+    page.wait_for_selector(f"{card} .fcc-cr-confirm", timeout=15000)
+    page.click(f"{card} .fcc-cr-confirm")
+    page.wait_for_selector(f"{card} .fcc-cr-card-notice", state="visible", timeout=5000)
+    page.wait_for_selector(f"{card} .fcc-cr-set-alert", state="visible", timeout=5000)
+    overlay = page.locator("#fcc-cancel-review-overlay")
+    assert_contrast(overlay)
+    # Each element's text is scored by its first 80 characters (contrast_offenders).
+    scored = " | ".join(o["text"] for o in conftest.contrast_offenders(overlay, min_ratio=100))
+    for said in ("T4 · HEAD-5: none of its 84 g are placed", "T4 · HEAD-5: FCC saw 2 spools on it"):
+        assert said in scored, (said, scored)
+    page.keyboard.press("Escape")
