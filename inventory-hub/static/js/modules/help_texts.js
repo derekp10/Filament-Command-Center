@@ -95,7 +95,9 @@
             '⚙️ holds Delete this spool…, which asks twice before it deletes anything.',
             'Scans still work here: a spool\'s label puts it in your buffer, and a place\'s label puts your buffer there.',
         ],
-        scopes: ['Force Location Override'],
+        // Not the dialog's own title, "Force Location Override": the shortcut list sits in
+        // the page, hidden, and tests find that dialog by its exact title.
+        scopes: ['Force Location'],
     });
 
     help({

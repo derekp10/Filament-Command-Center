@@ -612,7 +612,7 @@
         description: 'In "Bind a Slot": clear the highlighted slot\'s binding.'
     });
     window.registerShortcut({
-        id: 'force-loc-arrows', scope: 'Force Location Override',
+        id: 'force-loc-arrows', scope: 'Force Location',
         keys: ['↑', '↓'],
         description: 'Navigate matching locations; Enter selects, Esc prompts before closing.'
     });
