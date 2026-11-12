@@ -214,22 +214,145 @@
         }
     }
 
+    // ----- Scope D (hotfix 2026-11-11): the picker reads scans and lists the
+    // scan buffer. Derek: "we have to manually key in the id on the spool, and
+    // scanning it just inputs the ID:XX into the text box with an enter.
+    // Scanning support might be a good idea here, as well as possibly listing
+    // spools in the current buffer."
+    //
+    // What the "#ID" box holds, read as a spool: its number typed (42, #42) or
+    // its label scanned (ID:42, or SPL:42), in any letter case, the spaces
+    // around it ignored. A label read twice, or a key left in front of one, reads
+    // as its last label. `why` says in plain words what it can't read. The
+    // dashboard's scan accumulator leaves a text box's keys alone, so a scan
+    // typed into the box reaches only the box.
+    const BOX_HINT = "Type the spool's number, or scan its label.";
+    function readSpoolBox(text) {
+        const raw = String(text == null ? '' : text).trim();
+        if (!raw) return { sid: null, why: '' };
+        const m = /^#?\s*(\d+)$/.exec(raw) || /(?:ID|SPL)\s*:\s*(\d+)$/i.exec(raw);
+        if (m) {
+            const n = parseInt(m[1], 10);
+            return n > 0 ? { sid: n, why: '' } : { sid: null, why: "There's no spool #0." };
+        }
+        const shown = raw.length > 24 ? `${raw.slice(0, 23)}…` : raw;
+        if (/^LOC\s*:/i.test(raw)) return { sid: null, why: `"${shown}" is a location's label, not a spool's.` };
+        if (/^FIL\s*:/i.test(raw)) return { sid: null, why: `"${shown}" is a filament's label, not a spool's.` };
+        return { sid: null, why: `"${shown}" isn't a spool's number or label.` };
+    }
+    // The box's info line: what the box names, or why it names nothing (amber).
+    function setBoxInfo(info, text, warn) {
+        info.textContent = text || '';
+        info.style.color = warn ? '#e6c074' : '#9aa';
+    }
+    // An Apply over a box it can't read says why on the card too: its toast is
+    // drawn under the overlay.
+    function sayBoxUnread(card, line) {
+        const inp = card.querySelector(`.fcc-cr-other[data-line="${CSS.escape(String(line))}"]`);
+        const info = card.querySelector(`.fcc-cr-other-info[data-line="${CSS.escape(String(line))}"]`);
+        if (info) setBoxInfo(info, readSpoolBox(inp && inp.value).why || BOX_HINT, true);
+    }
+
+    // The spools in the scan buffer (state.heldSpools: scanned on the dashboard,
+    // before the review opened or while it is open), read when a picker is drawn
+    // or opened, never kept.
+    function bufferSpools() {
+        const st = (typeof state !== 'undefined') ? state : window.state;
+        const held = st && Array.isArray(st.heldSpools) ? st.heldSpools : [];
+        const seen = new Set();
+        return held.filter((s) => {
+            const sid = s && s.id != null ? String(s.id) : '';
+            if (!/^\d+$/.test(sid) || Number(sid) <= 0 || seen.has(sid)) return false;
+            seen.add(sid);
+            return true;
+        });
+    }
+    // A buffer spool as an option: its number and name, that it is archived (a
+    // picked spool is charged what it has on record and stays archived), and its
+    // grams left when known.
+    function bufferOption(s) {
+        const sid = String(s.id);
+        const disp = String(s.display || '').trim();
+        const named = disp.startsWith(`#${sid}`) && !/^\d/.test(disp.slice(sid.length + 1));
+        const name = named ? disp : `#${sid}${disp ? ' ' + disp : ''}`;
+        const g = s.remaining_weight;
+        const known = g != null && g !== '' && Number.isFinite(Number(g));
+        const bits = [];
+        if (s.archived) bits.push('archived');
+        if (known) bits.push(`${fmt(g)}g left`);
+        return { value: sid, text: bits.length ? `${name} (${bits.join(', ')})` : name, remaining: known ? String(Number(g)) : '' };
+    }
+    // Every buffer spool the picker doesn't list already (`listed`: its own, the
+    // heads' spools).
+    function bufferOptions(listed) {
+        return bufferSpools().filter((s) => !listed.has(String(s.id))).map(bufferOption);
+    }
+    const BUFFER_GROUP = 'In the scan buffer';
+    function bufferGroupHtml(listed) {
+        const opts = bufferOptions(listed);
+        if (!opts.length) return '';
+        return `<optgroup label="${esc(BUFFER_GROUP)}" class="fcc-cr-buffer">${opts.map((o) =>
+            `<option value="${esc(o.value)}" data-remaining="${esc(o.remaining)}">${esc(o.text)}</option>`).join('')}</optgroup>`;
+    }
+    // Draws a picker's "In the scan buffer" group again from the buffer as it is
+    // now, leaving out a spool the picker lists elsewhere (on a head drawn since,
+    // say). A spool picked from it stays picked, and offered, after it leaves the
+    // buffer: a pick never changes by itself. Answers whether it drew anything.
+    function refreshBufferGroup(sel) {
+        const old = sel.querySelector('.fcc-cr-buffer');
+        const listed = new Set();
+        Array.from(sel.querySelectorAll('option')).forEach((o) => {
+            if (old && old.contains(o)) return;
+            if (o.value && o.value !== 'other') listed.add(o.value);
+        });
+        const want = bufferOptions(listed);
+        const pickedOpt = sel.selectedOptions && sel.selectedOptions[0];
+        const picked = pickedOpt && old && old.contains(pickedOpt) ? pickedOpt.value : null;
+        if (picked != null && !listed.has(picked) && !want.some((o) => o.value === picked)) {
+            want.push({ value: picked, text: pickedOpt.textContent, remaining: pickedOpt.dataset.remaining || '' });
+        }
+        const was = old ? Array.from(old.querySelectorAll('option')) : [];
+        const same = was.length === want.length && was.every((o, i) => o.value === want[i].value
+            && o.textContent === want[i].text && (o.dataset.remaining || '') === want[i].remaining);
+        if (same) return false;
+        let group = null;
+        if (want.length) {
+            group = document.createElement('optgroup');
+            group.setAttribute('label', BUFFER_GROUP);
+            group.className = 'fcc-cr-buffer';
+            want.forEach((o) => {
+                const opt = document.createElement('option');
+                opt.value = o.value;
+                opt.dataset.remaining = o.remaining;
+                opt.textContent = o.text;
+                group.appendChild(opt);
+            });
+        }
+        if (old) old.remove();
+        if (group) sel.insertBefore(group, sel.querySelector('option[value="other"]'));
+        if (picked != null) sel.value = picked;
+        return true;
+    }
+
     // `own` = the line's default spool (a row's sid), or null for a no_spool line.
     // `atEnd` is the heads the review recorded, and `words` (headsWords) say
     // when they were read: when the print ended for a card built from the
     // print-end read, else when FCC logged the print. A spool FCC's own record
     // names on a head during the print (`when`: start, during) has its own group,
-    // and a head that held two spools at the end offers both (`sids`).
+    // and a head that held two spools at the end offers both (`sids`). Then the
+    // scan buffer's spools (scope D), and any spool by its number or label.
     function pickSelectHtml(line, own, ownLabel, atEnd, words) {
         const w = words || headsWords(null);
         const first = own != null
             ? `<option value="${esc(own)}" selected>${esc(ownLabel)}</option>`
             : `<option value="" selected>— pick the spool it used —</option>`;
         const groups = { end: [], start: [], during: [] };
+        const listed = new Set(own != null ? [String(own)] : []);
         (atEnd || []).forEach((h) => {
             const when = h.when === 'start' || h.when === 'during' ? h.when : 'end';
             const ids = h.sid != null ? [h.sid] : (Array.isArray(h.sids) ? h.sids : []);
             ids.forEach((sid) => {
+                if (sid != null) listed.add(String(sid));
                 if (sid == null || String(sid) === String(own)) return;
                 // 43.2: a spool that ran out is still offered (it is charged what it
                 // has left, 0 g for an empty one, and stays archived), but says so.
@@ -241,18 +364,22 @@
             : '';
         // The #id box is text, not number: arrow keys on a number box step it
         // (an empty one to 1), and charging spool #1 by accident is a real write.
+        // It takes a scanned label too (scope D, readSpoolBox).
         return `
             <select class="fcc-cr-pick form-select form-select-sm bg-dark text-light border-secondary"
                     data-line="${esc(line)}" data-own="${own == null ? '' : esc(own)}"
                     style="max-width:330px;font-size:0.92rem;">
                 ${first}
                 ${group('end', 'fcc-cr-ended')}${group('start', 'fcc-cr-started')}${group('during', 'fcc-cr-during')}
+                ${bufferGroupHtml(listed)}
                 <option value="other">Another spool by #ID…</option>
             </select>
             <input type="text" inputmode="numeric" class="fcc-cr-other form-control form-control-sm bg-dark text-white border-secondary"
                    data-line="${esc(line)}" placeholder="#id" autocomplete="off"
+                   title="${esc(BOX_HINT)}" aria-label="The spool's number, or its label"
                    style="display:none;width:96px;font-size:0.92rem;" />
-            <span class="fcc-cr-other-info" data-line="${esc(line)}" style="color:#9aa;font-size:0.85rem;"></span>`;
+            <span class="fcc-cr-other-info" data-line="${esc(line)}" aria-live="polite"
+                  style="color:#9aa;font-size:var(--fcc-fs-small);"></span>`;
     }
 
     // Live heads arrive after render; add them to every picker on that printer's cards.
@@ -273,19 +400,21 @@
                 opt.textContent = `${h.toolhead}: ${h.display || '#' + h.sid} (${left})`;
                 group.appendChild(opt);
             });
-            if (group.children.length) sel.insertBefore(group, sel.querySelector('option[value="other"]'));
+            // Before the scan buffer's group (scope D), which then leaves these out.
+            if (group.children.length) {
+                sel.insertBefore(group, sel.querySelector('.fcc-cr-buffer') || sel.querySelector('option[value="other"]'));
+            }
         });
     }
 
-    // The spool a line will charge: the picker's choice, or the typed #id.
+    // The spool a line will charge: the picker's choice, or what the #id box
+    // names (a number or a scanned label, scope D).
     function pickedSid(card, line) {
         const sel = card.querySelector(`.fcc-cr-pick[data-line="${CSS.escape(line)}"]`);
         if (!sel) return null;
         if (sel.value === 'other') {
             const inp = card.querySelector(`.fcc-cr-other[data-line="${CSS.escape(line)}"]`);
-            const v = String((inp && inp.value) || '').trim().replace(/^#/, '');
-            const n = /^\d+$/.test(v) ? parseInt(v, 10) : NaN;
-            return Number.isFinite(n) && n > 0 ? n : null;
+            return readSpoolBox(inp && inp.value).sid;
         }
         const n = parseInt(sel.value, 10);
         return Number.isFinite(n) && n > 0 ? n : null;
@@ -808,6 +937,10 @@
         applyBadges(await fetchPending());
     }
 
+    // The open review's scan-buffer listener (scope D), so a review opened again
+    // over an open one leaves only its own listening.
+    let _offBuffer = null;
+
     async function openCancelReview() {
         const pending = await fetchPending();
         if (!pending.length) {
@@ -820,7 +953,8 @@
         // (matches the inv_quickswap.js reference pattern). Closing is always
         // non-destructive — refreshBadge keeps the indicators in sync.
         let handle = null;
-        const cleanup = () => { if (handle) handle.cleanup(); refreshBadge(); };
+        let offBuffer = null;
+        const cleanup = () => { if (offBuffer) offBuffer(); if (handle) handle.cleanup(); refreshBadge(); };
         handle = window.mountOverlay({
             id: OVERLAY_ID,
             content: panelHtml(pending),
@@ -840,13 +974,52 @@
         }
         updateCount();
 
+        // Scope D: each picker's "In the scan buffer" group follows the buffer
+        // (inv_cmd.js's renderBuffer announces every change) and the heads drawn
+        // since, and is drawn again as the picker is opened. A spool picked from
+        // the buffer previews its own grams left.
+        function refreshPicker(sel) {
+            if (!refreshBufferGroup(sel)) return;
+            const opt = sel.selectedOptions && sel.selectedOptions[0];
+            if (!opt || !opt.closest('.fcc-cr-buffer')) return;
+            const card = sel.closest('.fcc-cr-card');
+            if (card) setRowRemaining(card, sel.dataset.line, opt.dataset.remaining || '');
+        }
+        function refreshPickers(scope) {
+            scope.querySelectorAll('.fcc-cr-pick').forEach(refreshPicker);
+        }
+        function withHeads(card, heads) {
+            injectHeads(card, heads);
+            refreshPickers(card);
+        }
+        const onBuffer = () => {
+            if (!overlay.isConnected) { if (offBuffer) offBuffer(); return; }
+            refreshPickers(body);
+        };
+        if (_offBuffer) _offBuffer();
+        document.addEventListener('inventory:buffer-updated', onBuffer);
+        offBuffer = () => {
+            document.removeEventListener('inventory:buffer-updated', onBuffer);
+            if (_offBuffer === offBuffer) _offBuffer = null;
+        };
+        _offBuffer = offBuffer;
+        // A picker being opened (pressed, or reached by the keyboard) shows the
+        // buffer as it is now. `focus`, not `focusin`: mountOverlay's focus guard
+        // stops every focusin inside the overlay at the document.
+        const pickerOpening = (e) => {
+            const t = e.target;
+            if (t && t.classList && t.classList.contains('fcc-cr-pick')) refreshPicker(t);
+        };
+        overlay.addEventListener('mousedown', pickerOpening);
+        overlay.addEventListener('focus', pickerOpening, true);
+
         // 43.3: one candidates fetch per printer; the pickers fill in when it lands.
         const liveHeads = {};
         [...new Set(pending.map((r) => r.printer_name))].forEach((printer) => {
             fetchCandidates(printer).then((heads) => {
                 liveHeads[printer] = heads;
                 body.querySelectorAll('.fcc-cr-card').forEach((card) => {
-                    if (card.dataset.printer === printer) injectHeads(card, heads);
+                    if (card.dataset.printer === printer) withHeads(card, heads);
                 });
             });
         });
@@ -869,7 +1042,7 @@
             tmp.innerHTML = cardHtml(rec).trim();
             const fresh = tmp.firstElementChild;
             card.replaceWith(fresh);
-            if (liveHeads[printer]) injectHeads(fresh, liveHeads[printer]);
+            if (liveHeads[printer]) withHeads(fresh, liveHeads[printer]);
             const first = fresh.querySelector('.fcc-cr-pick, .fcc-cr-grams');
             if (first) { try { first.focus(); } catch (_) { /* noop */ } }
         }
@@ -888,7 +1061,7 @@
             tmp.innerHTML = cardHtml(rec).trim();
             const fresh = tmp.firstElementChild;
             body.appendChild(fresh);
-            injectHeads(fresh, liveHeads[printer]);
+            withHeads(fresh, liveHeads[printer]);
             updateCount();
         }
 
@@ -940,9 +1113,64 @@
             if (e.target.classList.contains('fcc-cr-grams')) updatePreview(e.target);
             else if (e.target.classList.contains('fcc-cr-pgrams')) updateSetLeft(e.target);
         });
-        // 43.3: "Another spool by #ID…" reveals the #id field; a typed id is
-        // looked up so the user sees what it is before Apply.
-        overlay.addEventListener('change', async (e) => {
+
+        // 43.3: the spool the #id box names is looked up, so the user sees what
+        // it is before Apply. Scope D: the box reads a scanned label as well as a
+        // number (readSpoolBox), and only its newest lookup paints, and only while
+        // its line is still on "Another spool by #ID…": an older answer never
+        // paints over a newer one, nor over a pick made since.
+        async function lookUpBox(card, inp, force) {
+            const line = inp.dataset.line;
+            const info = card.querySelector(`.fcc-cr-other-info[data-line="${CSS.escape(String(line))}"]`);
+            if (!info) return;
+            const text = String(inp.value || '');
+            // The same text read again (a scanner's second Enter, or the blur
+            // after an Enter) looks nothing up again.
+            if (!force && inp._fccLooked === text) return;
+            inp._fccLooked = text;
+            const seq = (inp._fccLook = (inp._fccLook || 0) + 1);
+            const got = readSpoolBox(text);
+            if (got.sid == null) {
+                setBoxInfo(info, got.why || BOX_HINT, !!got.why);
+                setRowRemaining(card, line, '');
+                return;
+            }
+            const id = got.sid;
+            setBoxInfo(info, '…');
+            let r = null;
+            try {
+                // /api/spools/<id> answers {success, data: spool}; a spool it has no
+                // record of answers 404 (or Spoolman's {message} as data, with no
+                // id), and so does a Spoolman that didn't answer.
+                r = await fetch(`/api/spools/${id}`);
+            } catch (err) {
+                if (inp._fccLook !== seq) return;
+                inp._fccLooked = null;              // an Enter tries again
+                setBoxInfo(info, `Couldn't look up #${id}: FCC didn't answer.`, true);
+                setRowRemaining(card, line, '');
+                return;
+            }
+            let j = null;
+            if (r.ok) { try { j = await r.json(); } catch (_) { j = null; } }
+            if (inp._fccLook !== seq) return;
+            const s = j && j.success !== false ? j.data : null;
+            if (!s || s.id == null || Number(s.id) !== id) {
+                setBoxInfo(info, `FCC couldn't find spool #${id}.`, true);
+                setRowRemaining(card, line, '');
+                return;
+            }
+            const name = (s.filament && s.filament.name) || s.display || '';
+            // 43.2 (Derek, 2026-10-13): an archived spool is charged what it
+            // still has on record and stays archived; say how much that is.
+            const left = s.remaining_weight == null ? '' : `${fmt(s.remaining_weight)}g left, `;
+            setBoxInfo(info, s.archived
+                ? `#${id} ${name} (archived, ${left}charged what it has, stays archived)`
+                : `#${id} ${name}${s.location ? ` (${s.location})` : ''}`);
+            setRowRemaining(card, line, s.remaining_weight == null ? '' : s.remaining_weight);
+        }
+
+        // 43.3: "Another spool by #ID…" reveals the #id box.
+        overlay.addEventListener('change', (e) => {
             const t = e.target;
             const card = t.closest && t.closest('.fcc-cr-card');
             if (!card || !t.classList) return;
@@ -955,6 +1183,9 @@
                 // every step, and focus jumping to the #id box mid-way is a trap.
                 if (other) other.style.display = want ? '' : 'none';
                 if (info && !want) info.textContent = '';
+                // Scope D: a lookup on its way paints nothing once the pick moved,
+                // and coming back to the box reads what it holds again.
+                if (other) { other._fccLook = (other._fccLook || 0) + 1; other._fccLooked = null; }
                 const opt = t.selectedOptions && t.selectedOptions[0];
                 const gramsInp = card.querySelector(`.fcc-cr-grams[data-sid="${CSS.escape(String(line))}"]`);
                 if (gramsInp) {
@@ -962,30 +1193,25 @@
                     else if (want) setRowRemaining(card, line, '');
                     else setRowRemaining(card, line, opt && opt.dataset.remaining !== undefined ? opt.dataset.remaining : '');
                 }
-            } else if (t.classList.contains('fcc-cr-other') && info) {
-                const v = String(t.value || '').trim().replace(/^#/, '');
-                const id = /^\d+$/.test(v) ? parseInt(v, 10) : NaN;
-                if (!Number.isFinite(id) || id <= 0) { info.textContent = v ? `"${v}" isn't a spool #id` : ''; return; }
-                info.textContent = '…';
-                try {
-                    // /api/spools/<id> answers {success, data: spool}; a missing id
-                    // answers 404 (or Spoolman's {message} as data, with no id).
-                    const r = await fetch(`/api/spools/${id}`);
-                    const j = r.ok ? await r.json() : null;
-                    const s = j && j.success !== false ? j.data : null;
-                    if (!s || s.id == null) { info.textContent = `#${id} not found`; return; }
-                    const name = (s.filament && s.filament.name) || s.display || '';
-                    // 43.2 (Derek, 2026-10-13): an archived spool is charged what it
-                    // still has on record and stays archived; say how much that is.
-                    const left = s.remaining_weight == null ? '' : `${fmt(s.remaining_weight)}g left, `;
-                    info.textContent = s.archived
-                        ? `#${id} ${name} (archived, ${left}charged what it has, stays archived)`
-                        : `#${id} ${name}${s.location ? ` (${s.location})` : ''}`;
-                    setRowRemaining(card, line, s.remaining_weight == null ? '' : s.remaining_weight);
-                } catch (err) {
-                    info.textContent = `couldn't look up #${id}`;
-                }
+                if (want && other) lookUpBox(card, other, true);
+            } else if (t.classList.contains('fcc-cr-other')) {
+                lookUpBox(card, t, false);
             }
+        });
+        // Scope D: an Enter in the #id box (a scanner ends every label with one,
+        // and some send two) reads the box and nothing else: it never applies the
+        // card or presses a button, and goes no further. Its text is left
+        // selected, so the next scan replaces it instead of joining it. Every
+        // other key is the box's own: the arrows move in it, and Escape closes
+        // the review as everywhere on it (mountOverlay takes it first).
+        overlay.addEventListener('keydown', (e) => {
+            const t = e.target;
+            if (e.key !== 'Enter' || e.isComposing || !t || !t.classList || !t.classList.contains('fcc-cr-other')) return;
+            e.preventDefault();
+            e.stopPropagation();
+            const card = t.closest('.fcc-cr-card');
+            if (card) lookUpBox(card, t, false);
+            try { t.select(); } catch (_) { /* noop */ }
         });
         // Both close affordances are non-destructive (reviews stay pending).
         overlay.querySelector('#fcc-cr-close').addEventListener('click', cleanup);
@@ -1020,7 +1246,7 @@
                         const sel = ln.querySelector('.fcc-cr-pick');
                         // "Another spool by #ID…" with no valid #id was skipped, and
                         // the Apply then used up the whole review without it.
-                        if (sel && sel.value === 'other' && sid == null) { noId = pos; return; }
+                        if (sel && sel.value === 'other' && sid == null) { noId = pos; sayBoxUnread(card, line); return; }
                         const g = parseFloat((ln.querySelector('.fcc-cr-pgrams') || {}).value);
                         if (sid && !Number.isNaN(g) && g > 0) charges.push({ position: Number(pos), sid, grams: g });
                     });
@@ -1043,7 +1269,7 @@
                         const g = parseFloat(inp.value);
                         const sid = card.querySelector(`.fcc-cr-pick[data-line="${CSS.escape(own)}"]`)
                             ? pickedSid(card, own) : Number(own);
-                        if (sid == null) { missing = true; return; }
+                        if (sid == null) { missing = true; sayBoxUnread(card, own); return; }
                         if (String(sid) !== String(own)) redirected = true;
                         if (!Number.isNaN(g) && g > 0) {
                             updates[own] = g;
@@ -1061,7 +1287,7 @@
                         const line = ln.dataset.line;
                         const sel = ln.querySelector('.fcc-cr-pick');
                         const sid = pickedSid(card, line);
-                        if (sel && sel.value === 'other' && sid == null) { unNoId = ln.dataset.pos; return; }
+                        if (sel && sel.value === 'other' && sid == null) { unNoId = ln.dataset.pos; sayBoxUnread(card, line); return; }
                         const g = parseFloat((ln.querySelector('.fcc-cr-pgrams') || {}).value);
                         if (sid && !Number.isNaN(g) && g > 0) {
                             charges.push({ position: Number(ln.dataset.pos), sid, grams: g });

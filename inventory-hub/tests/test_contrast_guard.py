@@ -662,6 +662,8 @@ def test_print_end_review_notes_are_readable(page: Page, base_url: str, assert_c
         assert said in scored, (said, scored)
     page.keyboard.press("Escape")
 
+
+@pytest.mark.usefixtures("require_server")
 def test_review_sets_are_readable(page: Page, base_url: str, assert_contrast):
     """Hotfix 2026-11-11, scope B: a head's spools as a set on the 🛑 Review card.
     A split set's header, its sub-caption and each row's stretch of the print
@@ -711,5 +713,50 @@ def test_review_sets_are_readable(page: Page, base_url: str, assert_contrast):
     for said in ("had 2 spools this print", "split at the swaps FCC recorded", "start → 19%",
                  "ran out", "19% → 42%", "84 g to split", "when the print started",
                  "FCC saw #42 when the print started"):
+        assert said in scored, (said, scored)
+    page.keyboard.press("Escape")
+
+
+@pytest.mark.usefixtures("require_server")
+def test_review_picker_box_words_are_readable(page: Page, base_url: str, assert_contrast):
+    """Hotfix 2026-11-11, scope D: the words beside the 🛑 Review picker's "#ID"
+    box. Its hint (the box opened empty, muted), what it can't read (amber: a
+    location's label scanned into it) and the spool it names (muted). A made-up
+    review in this page only, and a made-up spool answered in the page; nothing is
+    written (Apply is never pressed). The offline check of the colours and the size
+    is test_cancel_review_picker_scan_js.py."""
+    import json as _json
+    import conftest
+    words = {"end": "when the print ended", "start": "when the print started", "during": "during the print"}
+    pending = [{"printer_name": "ZZ Contrast INDX", "job_id": "d1", "filename": "/usb/F.BGC", "progress": 0.42,
+                "total_grams": 99.0, "ambiguous": False, "kind": "no_spool", "heads_source": "print_end",
+                "heads_words": words, "usage_map": {"4": 84.0, "5": 10.0, "6": 5.0},
+                "heads_at_end": [{"toolhead": "HEAD-5", "position": 4, "sid": None, "sids": []}]}]
+    spool = {"success": True, "data": {"id": 57, "filament": {"name": "ZZ Contrast Blue"},
+                                       "location": "SHELF-1", "remaining_weight": 400.0}}
+    page.route("**/api/cancel_deduct/pending*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=_json.dumps({"pending": pending})))
+    page.route("**/api/spools/57", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=_json.dumps(spool)))
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openCancelReview === 'function'")
+    page.evaluate("() => window.openCancelReview()")
+    page.wait_for_selector('#fcc-cancel-review-overlay .fcc-cr-card[data-job="d1"]', timeout=15000)
+    card = '#fcc-cancel-review-overlay .fcc-cr-card[data-job="d1"]'
+    for line in ("4", "5", "6"):
+        page.select_option(f'{card} .fcc-cr-pick[data-line="{line}"]', "other")
+    page.fill(f'{card} .fcc-cr-other[data-line="5"]', "LOC:SHELF-1")
+    page.press(f'{card} .fcc-cr-other[data-line="5"]', "Enter")
+    page.fill(f'{card} .fcc-cr-other[data-line="6"]', "57")
+    page.press(f'{card} .fcc-cr-other[data-line="6"]', "Enter")
+    page.wait_for_function(
+        "() => ((document.querySelector('.fcc-cr-other-info[data-line=\"6\"]') || {}).textContent || '')"
+        ".includes('ZZ Contrast Blue')", timeout=10000)
+    overlay = page.locator("#fcc-cancel-review-overlay")
+    assert_contrast(overlay)
+    # Each element's text is scored by its first 80 characters (contrast_offenders).
+    scored = " | ".join(o["text"] for o in conftest.contrast_offenders(overlay, min_ratio=100))
+    for said in ("Type the spool's number, or scan its label.", "is a location's label, not a spool's",
+                 "#57 ZZ Contrast Blue (SHELF-1)"):
         assert said in scored, (said, scored)
     page.keyboard.press("Escape")
