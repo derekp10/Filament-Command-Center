@@ -15,10 +15,13 @@ PrusaLink serves a print file at about 15 KB/s, so the INDX's take 20 minutes
     ledger entry, no warning.
 
 Pinned here:
-  - the edge writes the print's fetch record BEFORE its download (status
-    "in_flight", no "clear the screen" nudge; the nudge is logged once, the first
-    time a download really fails), and the record is dropped when the compute
-    reaches an outcome;
+  - the edge writes the print's fetch record BEFORE its heads read and its
+    download (status "in_flight", no "clear the screen" nudge; the nudge is logged
+    once, the first time a download really fails), and the record is dropped when
+    the compute reaches an outcome;
+  - a second edge for a print whose record a process before it wrote (restart
+    recovery, when the reset latch wasn't saved) computes with the record's first
+    heads read, never its own;
   - a thread of this process computing a print claims it: the loop skips a claimed
     print, starts no second download on a printer that has one in flight, and a
     second edge for a print being computed leaves it to that thread;
@@ -28,14 +31,20 @@ Pinned here:
   - the live completion stamps `charging_since` before its first spool write, as
     the queue's retry does, so a restart mid-charge never charges twice (the next
     tick, or a restart's recovery firing the edge again, gives it up);
-  - a re-queue's read-modify-write is one locked store step, and each store keeps
-    every record written at once.
+  - a re-queue's read-modify-write is one locked store step, a completion two
+    threads give up at once is reported once, and each store keeps every record
+    written at once;
+  - a failed edge says FCC will try again only when the queue really will (not
+    when a review or the ledger already holds the print).
 
 `_Died` stands for FCC stopping mid-way: a BaseException, so it passes every
 `except Exception` on its way out, as the real stop does.
 
 HEAD proof: run on the branch before scope C (dbd9669 = main 626a10e + scope A),
 every test here fails except the two marked "passes before the change by design".
+The five tests of the scope C follow-up (the second edge's first read, the restart
+during the heads read, the "try again" words) fail on e98b3e6, scope C's first
+commit; the give-up lock's test fails on dbd9669 (two ERROR lines).
 """
 from __future__ import annotations
 
@@ -544,6 +553,30 @@ def test_two_requeues_of_one_print_at_once_keep_both_attempts(monkeypatch, logs)
     assert real_get(XL, "7")["attempts"] == 3
 
 
+def test_a_completion_two_threads_give_up_at_once_is_reported_once(monkeypatch, logs):
+    """The live completion edge and a retry thread can each give one job up at the
+    same moment. The give-up's check-then-add is one locked step, so its ERROR line
+    is logged once."""
+    meet = threading.Barrier(2, timeout=1)
+
+    class _BothLook(set):
+        def __contains__(self, item):
+            found = set.__contains__(self, item)
+            try:
+                meet.wait()                       # both have looked before either adds
+            except threading.BrokenBarrierError:
+                pass
+            return found
+    monkeypatch.setattr(print_monitor, "_ABANDONED_COMPLETIONS", _BothLook())
+    workers = [threading.Thread(target=print_monitor._abandon_completion,
+                                args=(XL, "7", "x.gcode", "its deduct failed")) for _ in range(2)]
+    for w in workers:
+        w.start()
+    for w in workers:
+        w.join(10)
+    assert len([m for m in logs if "not retried" in m]) == 1, logs
+
+
 @pytest.mark.parametrize("store", ["cancel_fetch_store", "cancel_review_store", "print_deduct_ledger"])
 def test_each_store_keeps_every_record_written_at_once(monkeypatch, store):
     """Passes before the change by design: each store already holds its lock across
@@ -574,3 +607,94 @@ def test_each_store_keeps_every_record_written_at_once(monkeypatch, store):
             assert mod.was_deducted(XL, f"J-{i}"), i
         else:
             assert mod.has_pending(XL, f"J-{i}"), i
+
+
+# --------------------------------------------------------------------------- #
+# The record is there from the edge on, and the first read wins               #
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize("end", ["STOPPED", "IDLE", "FINISHED"])
+def test_a_second_edge_for_a_print_queued_before_a_restart_uses_the_print_end_read(logs, end):
+    """FCC stopped during the download, and the reset latch wasn't saved (its save
+    swallows its own errors), so restart recovery fires the edge again. The
+    print's record from before the restart holds the heads read when the print
+    ended: the second edge computes with that read, never with its own, taken after
+    the next print's spool was loaded on the head while FCC was down. The first
+    read wins, as on a re-queue."""
+    usage = {0: 50.0} if end == "FINISHED" else {0: 12.5}
+    calls = {"n": 0}
+
+    def _download(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise _Died()
+        return dict(usage), None
+    with Rig() as rig, patch.object(print_deduct, "_compute_cancel_usage", side_effect=_download):
+        _tick(XL, "PRINTING", _job(0.4))
+        with pytest.raises(_Died):
+            _tick(XL, end)
+        assert cancel_fetch_store.get_pending(XL, "7")["end_heads"]["source"] == "print_end"
+        _restart()
+        rig.on["XL-1"] = 200                   # loaded while FCC was down
+        with patch.object(print_monitor.prusalink_api, "get_printer_state",
+                          return_value={"state": end}):
+            print_monitor._recover_one_print_latch(
+                XL, {"state": "PRINTING", "job_id": 7, "filename": "x.gcode", "progress": 0.4},
+                "http://fb")
+    assert not cancel_fetch_store.has_pending(XL, "7")
+    if end == "FINISHED":
+        assert rig.sm.used(100) == pytest.approx(750.0)
+        assert rig.sm.used(200) == pytest.approx(10.0), "the spool loaded while FCC was down was charged"
+        assert print_deduct_ledger.was_deducted(XL, 7)
+        assert any("XL-1 now holds #200; FCC charged #100" in m for m in logs), logs
+    else:
+        review = cancel_review_store.get_pending(XL, "7")
+        assert [(r["sid"], r["toolhead"], r["grams"]) for r in review["spools"]] == [(100, "XL-1", 12.5)]
+        assert review["heads_source"] == "print_end"
+        assert review["row_notes"] == {"100": "#200 is on XL-1 now; #100 was on it when the print ended."}
+
+
+def test_a_restart_during_the_heads_read_at_the_edge_loses_nothing(monkeypatch, logs):
+    """The edge writes the print's record before it reads the heads, too: that read
+    is a Spoolman GET per head (eight on the INDX), and a restart during it lost the
+    print. After the restart the queue finishes it, checking the start snapshot
+    against a read then."""
+    monkeypatch.setattr(print_deduct, "_snapshot_active_spools", lambda *a, **k: {0: 100})
+    with Rig() as rig, patch.object(print_deduct, "_compute_cancel_usage", return_value=({0: 12.5}, None)):
+        reads = {"n": 0}
+
+        def _die_first(printer_name, fb_url):
+            reads["n"] += 1
+            if reads["n"] == 1:
+                raise _Died()
+            return rig._capture(printer_name, fb_url)
+        with patch.object(print_deduct, "_capture_print_heads", side_effect=_die_first, create=True):
+            _tick(XL, "PRINTING", _job(0.4))
+            with pytest.raises(_Died):
+                _tick(XL, "STOPPED")
+            rec = cancel_fetch_store.get_pending(XL, "7")
+            assert rec is not None, "the print died with the heads read"
+            assert rec["last_status"] == "in_flight" and rec["start_spools"] == {"0": 100}
+            assert not rec.get("end_heads")
+            _restart()
+            print_monitor._process_pending_cancel_fetches({XL: {"state": "IDLE"}}, "http://fb")
+    review = cancel_review_store.get_pending(XL, "7")
+    assert [(r["sid"], r["toolhead"], r["grams"]) for r in review["spools"]] == [(100, "XL-1", 12.5)]
+    assert review["heads_source"] == "late"
+    assert not cancel_fetch_store.has_pending(XL, "7")
+    assert not [m for m in logs if NUDGE in m], logs
+
+
+def test_a_failed_edge_promises_no_retry_when_a_review_already_holds_the_print(logs):
+    """The review was stashed and then something raised. The queue drops a record
+    a review holds, so the failure line must not say FCC will try again."""
+    def _stash_then_raise(printer, filename, job_id, progress, **kw):
+        cancel_review_store.add_pending({"printer_name": printer, "job_id": str(job_id),
+                                         "filename": filename, "spools": []})
+        raise RuntimeError("the review line couldn't be written")
+    with patch.object(print_deduct, "_create_pending_cancel_review", side_effect=_stash_then_raise):
+        print_monitor._on_cancel_edge(XL, "x.gcode", 7, 0.4, "http://fb")
+    line = next(m for m in logs if "review failed" in m)
+    assert "try again" not in line, line
+    print_monitor._process_pending_cancel_fetches({XL: {"state": "IDLE"}}, "http://fb")
+    assert not cancel_fetch_store.has_pending(XL, "7")

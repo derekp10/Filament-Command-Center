@@ -2629,8 +2629,11 @@ def _hold_fetch_in_flight(printer_name, filename, job_id, reached_fraction, kind
     logged the first time a download really fails. A record already there (a
     restart's recovery firing the edge again for a print a process before it
     queued) is kept as it is, given only the reads it lacks (the first print-end
-    read wins). Returns the record as stored. The caller drops it once the compute
-    reaches an outcome (print_monitor._settle_fetch)."""
+    read wins). The live edge calls this before it reads the heads, so a restart
+    during that read loses nothing either, and again with the read
+    (print_monitor._hold_end_heads), which computes with the record's first read.
+    Returns the record as stored. The caller drops it once the compute reaches an
+    outcome (print_monitor._settle_fetch)."""
     held = []
 
     def _hold(rec):

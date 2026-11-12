@@ -129,11 +129,14 @@ def _fcc_owns_completion_deduct():
 # Hotfix 2026-11-11, scope C: a download never blocks the watcher, and a restart
 # mid-download loses nothing. PrusaLink serves a print file at ~15 KB/s, so an
 # INDX file takes 20 minutes (prod job 1141).
-#   - The live edge claims its print and writes its fetch record BEFORE the
-#     download (print_deduct._hold_fetch_in_flight); the record is dropped once
-#     the compute reaches an outcome (_settle_fetch). The latch is reset at the
-#     edge, so before this a restart or an update during the download lost the
-#     print; now the queue finishes it, with the heads read when it ended.
+#   - The live edge claims its print and writes its fetch record BEFORE it reads
+#     the heads (a Spoolman GET per head) and before the download
+#     (print_deduct._hold_fetch_in_flight); the heads read joins the record as
+#     soon as it is taken (_hold_end_heads), and the record is dropped once the
+#     compute reaches an outcome (_settle_fetch). The latch is reset at the edge,
+#     so before this a restart or an update during the download lost the print;
+#     now the queue finishes it, with the heads read when it ended. A record
+#     already there keeps its first read, and the edge computes with that one.
 #   - The deferred-fetch loop only decides which records are due; each due retry
 #     runs on a daemon thread of its own (_start_fetch_retry), so the tick returns
 #     at once and every printer keeps being watched while one file trickles in
@@ -210,11 +213,12 @@ def _claim_edge(printer_name, job_id):
 
 def _hold_edge_fetch(printer_name, filename, job_id, progress, kind, ambiguous=False,
                      start_spools=None, swap_log=None, end_heads=None):
-    """Write the print's fetch record before the edge's download
-    (print_deduct._hold_fetch_in_flight). Returns the record as stored, or None for
-    a print with no job id, or when the write failed: the compute then runs as it
-    did before the hotfix (a restart during it would lose the print), and hub.log
-    says so. Never raises."""
+    """Write the print's fetch record before the edge's heads read and its
+    download (print_deduct._hold_fetch_in_flight); the edge calls it again with the
+    heads read (_hold_end_heads). Returns the record as stored, or None for a print
+    with no job id, or when the write failed: the compute then runs as it did
+    before the hotfix (a restart during it would lose the print), and hub.log says
+    so. Never raises."""
     if print_deduct_ledger._is_blank_job(job_id):
         return None
     try:
@@ -228,6 +232,39 @@ def _hold_edge_fetch(printer_name, filename, job_id, progress, kind, ambiguous=F
         except Exception:
             pass
         return None
+
+
+def _hold_end_heads(rec, printer_name, filename, job_id, progress, kind, ambiguous,
+                    start_spools, swap_log, end_heads):
+    """After the edge's heads read: add it to the print's record (written before
+    the read, so a restart during it loses nothing) and return what the edge
+    computes with, (rec, start_spools, swap_log, end_heads): the record's reads
+    where it has them, else the edge's own.
+
+    A record that already holds a heads read was written by an edge of a process
+    before this one: restart recovery fires the edge again when the reset latch
+    wasn't saved (print_tracker_store.save swallows its own errors). That read was
+    taken when the print ended, and this edge's after the restart, when the next
+    print's spool may be on the head. The first read wins, as on a re-queue, so
+    the compute never names a spool loaded while FCC was down; hub.log says which
+    read it used."""
+    if end_heads is not None:
+        rec = _hold_edge_fetch(printer_name, filename, job_id, progress, kind,
+                               ambiguous=ambiguous, start_spools=start_spools,
+                               swap_log=swap_log, end_heads=end_heads) or rec
+    if not isinstance(rec, dict):
+        return rec, start_spools, swap_log, end_heads
+    first = rec.get("end_heads")
+    if first and first != end_heads:
+        try:
+            state.logger.info(
+                f"🔁 {printer_name}: job {job_id} was queued by an earlier edge; computing it "
+                f"with that edge's heads read ({first.get('source')}, {first.get('at')}), "
+                f"not this one's.")
+        except Exception:
+            pass
+    return (rec, rec.get("start_spools") or start_spools, rec.get("swap_log") or swap_log,
+            first or end_heads)
 
 
 def _charged_before(rec, printer_name, job_id, filename):
@@ -277,10 +314,14 @@ def _try_again(printer, job_id):
     """The end of a live edge's failure line while its print is still queued: the
     queue computes it again once the printer is idle. Said, so nobody weighs the
     spool and then has the print charged on top. '' when nothing is queued for it,
-    or when its record says a charge may have begun (that one is given up, not
-    retried)."""
+    when the ledger or a review already holds the job (the queue then only drops
+    its record: nothing is computed again), or when its record says a charge may
+    have begun (that one is given up, not retried)."""
     try:
         if print_deduct_ledger._is_blank_job(job_id):
+            return ""
+        if (print_deduct_ledger.was_deducted(printer, job_id)
+                or cancel_review_store.has_pending(printer, job_id)):
             return ""
         rec = cancel_fetch_store.get_pending(printer, job_id)
         if not isinstance(rec, dict) or rec.get("charging_since"):
@@ -347,9 +388,11 @@ def _on_cancel_edge(printer_name, filename, job_id, progress, fb_url,
     Hotfix 2026-11-11: the heads are read first (_capture_end_heads), before the
     download, and the review is checked against the print's start snapshot and
     recorded swaps (`start_spools`, `swap_log`). Scope C: the print is claimed for
-    this thread and its fetch record written before the download, so a restart
-    mid-download loses nothing and no tick downloads it a second time; the record
-    is dropped once the review is stashed. A review that fails stays queued."""
+    this thread and its fetch record written before the heads read and the
+    download, so a restart in either loses nothing and no tick downloads it a
+    second time; the record is dropped once the review is stashed. A review that
+    fails stays queued. A record already there keeps its first heads read, and the
+    review is computed with that one (_hold_end_heads)."""
     # INSTANT ACK (2026-06-13): log the moment the STOPPED edge fires, BEFORE the
     # slow async gcode download+decode. On a slow XL .bgcode download the review
     # line is 30-60s out; without this the user faces silence and thinks nothing
@@ -367,15 +410,17 @@ def _on_cancel_edge(printer_name, filename, job_id, progress, fb_url,
         return
     try:
         try:
-            end_heads = _capture_end_heads(printer_name, job_id, fb_url, heads_when=heads_when)
-        except Exception:
-            end_heads = None
-        try:
             rec = _hold_edge_fetch(printer_name, filename, job_id, progress, "cancel",
-                                   start_spools=start_spools, swap_log=swap_log,
-                                   end_heads=end_heads)
+                                   start_spools=start_spools, swap_log=swap_log)
             if _charged_before(rec, printer_name, job_id, filename):
                 return
+            try:
+                end_heads = _capture_end_heads(printer_name, job_id, fb_url, heads_when=heads_when)
+            except Exception:
+                end_heads = None
+            rec, start_spools, swap_log, end_heads = _hold_end_heads(
+                rec, printer_name, filename, job_id, progress, "cancel", False,
+                start_spools, swap_log, end_heads)
             result = print_deduct._create_pending_cancel_review(
                 printer_name, filename, job_id, progress, fb_url=fb_url,
                 **_edge_kwargs(start_spools, swap_log, end_heads=end_heads))
@@ -418,27 +463,30 @@ def _on_completion_edge(printer_name, filename, job_id, fb_url, start_spools=Non
     first, before the download (hotfix 2026-11-11), and the deduct charges the
     spools that were on them when the print finished.
 
-    Scope C: the print is claimed and its fetch record written before the
-    download, as for a cancel, and the deduct stamps that record `charging_since`
-    right before its first spool write (`before_charge`), exactly as the queue's
-    retry stamps it: if FCC stops mid-charge, neither the next tick nor a
-    restart's recovery charges it again. A raise once the charging began gives the
-    job up; any other leaves it queued."""
+    Scope C: the print is claimed and its fetch record written before the heads
+    read and the download, as for a cancel, and the deduct stamps that record
+    `charging_since` right before its first spool write (`before_charge`), exactly
+    as the queue's retry stamps it: if FCC stops mid-charge, neither the next tick
+    nor a restart's recovery charges it again. A raise once the charging began
+    gives the job up; any other leaves it queued. A record already there keeps its
+    first heads read, and the deduct charges with that one (_hold_end_heads)."""
     proceed, key = _claim_edge(printer_name, job_id)
     if not proceed:
         return
     rec = None
     try:
         try:
-            end_heads = _capture_end_heads(printer_name, job_id, fb_url, heads_when=heads_when)
-        except Exception:
-            end_heads = None
-        try:
             rec = _hold_edge_fetch(printer_name, filename, job_id, 1.0, "complete",
-                                   start_spools=start_spools, swap_log=swap_log,
-                                   end_heads=end_heads)
+                                   start_spools=start_spools, swap_log=swap_log)
             if _charged_before(rec, printer_name, job_id, filename):
                 return
+            try:
+                end_heads = _capture_end_heads(printer_name, job_id, fb_url, heads_when=heads_when)
+            except Exception:
+                end_heads = None
+            rec, start_spools, swap_log, end_heads = _hold_end_heads(
+                rec, printer_name, filename, job_id, 1.0, "complete", False,
+                start_spools, swap_log, end_heads)
             more = _edge_kwargs(end_heads=end_heads)
             if rec is not None:
                 more["before_charge"] = lambda rec=rec: _stamp_charging(rec)
@@ -508,8 +556,9 @@ def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
     Hotfix 2026-11-11: as the cancel edge, the heads are read first, before the
     download, and checked against `start_spools` / `swap_log` (not for a
     progress_unknown end: its card has no usage to charge). Scope C: as the cancel
-    edge, the print is claimed and queued before its download (not a
-    progress_unknown end, which downloads nothing)."""
+    edge, the print is claimed and queued before its heads read and its download,
+    and a record already there keeps its first heads read (not a progress_unknown
+    end, which reads and downloads nothing)."""
     # Instant ack (the ambiguous analogue of the cancel instant-ack), so the user
     # isn't met with silence during the async download.
     try:
@@ -532,18 +581,21 @@ def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
         return
     try:
         end_heads = None
-        if not progress_unknown:
-            try:
-                end_heads = _capture_end_heads(printer_name, job_id, fb_url, heads_when=heads_when)
-            except Exception:
-                end_heads = None
         try:
             if not progress_unknown:
                 rec = _hold_edge_fetch(printer_name, filename, job_id, progress, "cancel",
                                        ambiguous=True, start_spools=start_spools,
-                                       swap_log=swap_log, end_heads=end_heads)
+                                       swap_log=swap_log)
                 if _charged_before(rec, printer_name, job_id, filename):
                     return
+                try:
+                    end_heads = _capture_end_heads(printer_name, job_id, fb_url,
+                                                   heads_when=heads_when)
+                except Exception:
+                    end_heads = None
+                rec, start_spools, swap_log, end_heads = _hold_end_heads(
+                    rec, printer_name, filename, job_id, progress, "cancel", True,
+                    start_spools, swap_log, end_heads)
             result = print_deduct._create_pending_cancel_review(
                 printer_name, filename, job_id, progress, fb_url=fb_url, ambiguous=True,
                 progress_unknown=progress_unknown, unmeasured_reason=unmeasured_reason,
