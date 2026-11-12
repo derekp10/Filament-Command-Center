@@ -143,6 +143,8 @@ window.__respond = (url, m, b) => url.startsWith('/api/cancel_deduct/confirm')
 EMPTY_SET_JS = CONFIRMED + r"""
 const c = cardOf('ps');
 const btn = c.querySelector('.fcc-cr-confirm');
+const scrolled = [];
+btn.scrollIntoView = (o) => { scrolled.push(o); };
 btn.click();
 await settle(40);
 const after1 = posts('/api/cancel_deduct/confirm').length;
@@ -152,9 +154,20 @@ const said = { alert: alert && alert.textContent, alertRole: alert && alert.getA
                alertShown: !!alert && alert.style.display !== 'none',
                notice: notice && notice.textContent, noticeRole: notice && notice.getAttribute('role'),
                noticeShown: !!notice && notice.style.display !== 'none', enabled: !btn.disabled };
+// A double click's second press is no second press: under 700 ms after the
+// press that asked, and the second click of a double click, post nothing.
+btn.click();
+await settle(40);
+const quick = { posted: posts('/api/cancel_deduct/confirm').length,
+                alertShown: alert.style.display !== 'none' };
+await settle(720);
+btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 2 }));
+await settle(40);
+const dbl = { posted: posts('/api/cancel_deduct/confirm').length,
+              alertShown: alert.style.display !== 'none' };
 btn.click();
 await settle(60);
-return { after1, said, posted: posts('/api/cancel_deduct/confirm') };
+return { after1, said, scrolled, quick, dbl, posted: posts('/api/cancel_deduct/confirm') };
 """
 
 
@@ -167,10 +180,55 @@ def test_a_set_left_empty_is_never_applied_by_one_press(tmp_path):
     assert s["alertShown"] and s["alertRole"] == "alert", s
     assert s["alert"] == ("T4 · HEAD-5: none of its 84.28 g are placed. Type the grams each spool used, "
                           "or put them all on one; or press Confirm deduct again to log them as uncharged."), s
-    assert s["noticeShown"] and s["noticeRole"] == "alert" and s["notice"] == s["alert"], s
+    # One set's words are said in the set alone: held sets are among a card's last
+    # lines, just above its buttons, and the card's notice said them again a line
+    # below (the picture check, 2026-11-12). On 4c2b750 the notice repeated the alert.
+    assert not s["noticeShown"] and s["noticeRole"] == "alert", s
+    # The words make the card taller: the button just pressed is kept in view.
+    assert res["scrolled"] == [{"block": "nearest"}], res
     assert s["enabled"], s
+    # A double click's second press does nothing, and the words stay up. On 4c2b750
+    # the quick second press posted.
+    assert res["quick"] == {"posted": 0, "alertShown": True}, res
+    assert res["dbl"] == {"posted": 0, "alertShown": True}, res
     # A second press goes ahead: what nobody placed is the job's shortfall.
     assert res["posted"] == [{"printer_name": "TESTER", "job_id": "ps", "updates": {"243": 75.32}}], res
+
+
+TWO_SETS = _base("ts", "partial", spools=[], unresolved_usage={"4": 84.28, "6": 20.0}, total_grams=104.28,
+                 heads_at_end=HEADS + [{"toolhead": "HEAD-7", "position": 6, "sid": 243, "when": "start"}],
+                 unresolved_sets={"4": SET_END,
+                                  "6": [{"sid": 243, "when": "start", "display": "#243 Test", "remaining": 300.0},
+                                        {"sid": 300, "when": "end", "display": "#300 Test", "remaining": 900.0}]},
+                 unresolved_notes={"4": NOTE})
+
+TWO_SETS_JS = CONFIRMED + r"""
+const c = cardOf('ts');
+const btn = c.querySelector('.fcc-cr-confirm');
+btn.click();
+await settle(40);
+const after1 = posts('/api/cancel_deduct/confirm').length;
+const alerts = c.querySelectorAll('.fcc-cr-heldset .fcc-cr-set-alert')
+  .map((a) => (a.style.display !== 'none' ? a.textContent : null));
+const notice = c.querySelector('.fcc-cr-card-notice');
+const said = { alerts, notice: notice && notice.textContent,
+               noticeShown: !!notice && notice.style.display !== 'none' };
+await settle(720);
+btn.click();
+await settle(60);
+return { after1, said, posted: posts('/api/cancel_deduct/confirm').length };
+"""
+
+
+def test_two_sets_left_empty_say_so_in_each_and_once_by_the_buttons(tmp_path):
+    # Passes on 4c2b750 by design: two sets get one line by the buttons, each its own words.
+    res = _go(tmp_path, TWO_SETS_JS, [TWO_SETS])
+    assert res["after1"] == 0, res
+    s = res["said"]
+    assert len(s["alerts"]) == 2 and all(a and "none of its" in a for a in s["alerts"]), s
+    assert s["noticeShown"] and s["notice"] == (
+        "2 heads' grams don't add up, as each says above. Press Confirm deduct again to go ahead."), s
+    assert res["posted"] == 1, res
 
 
 OVER_JS = CONFIRMED + r"""
@@ -191,6 +249,7 @@ btn.click();
 await settle(40);
 const after2 = posts('/api/cancel_deduct/confirm').length;
 const said2 = c.querySelector('.fcc-cr-heldset .fcc-cr-set-alert').textContent;
+await settle(720);
 btn.click();
 await settle(60);
 return { after1, said, gone, after2, said2, posted: posts('/api/cancel_deduct/confirm') };

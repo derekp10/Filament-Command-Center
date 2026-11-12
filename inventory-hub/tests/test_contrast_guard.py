@@ -767,13 +767,14 @@ def test_review_picker_box_words_are_readable(page: Page, base_url: str, assert_
 
 @pytest.mark.usefixtures("require_server")
 def test_review_card_notices_are_readable(page: Page, base_url: str, assert_contrast):
-    """Hotfix 2026-11-11, the review's fixes: what stops an Apply is said on the
-    🛑 Review card itself, beside its buttons (`.fcc-cr-card-notice`), and a set
-    whose grams aren't placed says so in the set (`.fcc-cr-set-alert`). Confirm is
-    pressed over a set left empty, which the page stops before any request; the
-    confirm route is answered in the page all the same, so nothing can be written.
-    Made-up reviews in this page only. The offline check of their colours and size
-    is test_cancel_review_review_fixes_js.py."""
+    """Hotfix 2026-11-11, the review's fixes: a set whose grams aren't placed says
+    so in the set (`.fcc-cr-set-alert`), and what stops an Apply is said on the
+    🛑 Review card itself, beside its buttons (`.fcc-cr-card-notice`). Confirm is
+    pressed over a set left empty, which the page stops before any request (one
+    set's words are said in the set alone); a second press posts, and the confirm
+    route, answered in the page, refuses it, so nothing can be written. Made-up
+    reviews in this page only. The offline check of their colours and size is
+    test_cancel_review_review_fixes_js.py."""
     import json as _json
     import conftest
     words = {"end": "when the print ended", "start": "when the print started", "during": "during the print"}
@@ -797,12 +798,19 @@ def test_review_card_notices_are_readable(page: Page, base_url: str, assert_cont
     card = '#fcc-cancel-review-overlay .fcc-cr-card[data-job="n1"]'
     page.wait_for_selector(f"{card} .fcc-cr-confirm", timeout=15000)
     page.click(f"{card} .fcc-cr-confirm")
-    page.wait_for_selector(f"{card} .fcc-cr-card-notice", state="visible", timeout=5000)
     page.wait_for_selector(f"{card} .fcc-cr-set-alert", state="visible", timeout=5000)
+    assert not page.locator(f"{card} .fcc-cr-card-notice").is_visible()
     overlay = page.locator("#fcc-cancel-review-overlay")
     assert_contrast(overlay)
     # Each element's text is scored by its first 80 characters (contrast_offenders).
     scored = " | ".join(o["text"] for o in conftest.contrast_offenders(overlay, min_ratio=100))
     for said in ("T4 · HEAD-5: none of its 84 g are placed", "T4 · HEAD-5: FCC saw 2 spools on it"):
         assert said in scored, (said, scored)
+    # The second press posts; the route above refuses it, and the card says so.
+    page.wait_for_timeout(750)  # past the double-click shield, so the press counts
+    page.click(f"{card} .fcc-cr-confirm")
+    page.wait_for_selector(f"{card} .fcc-cr-card-notice", state="visible", timeout=5000)
+    assert_contrast(overlay)
+    scored = " | ".join(o["text"] for o in conftest.contrast_offenders(overlay, min_ratio=100))
+    assert "stub: nothing applied" in scored, scored
     page.keyboard.press("Escape")

@@ -256,21 +256,37 @@
     // placed exactly; else the first press says why in each set and on the card,
     // and a second press with the same grams goes ahead (Derek: more resistance on
     // a yes that is hard to undo, no typed words).
-    function setsConfirmed(card) {
+    function setsConfirmed(card, ev) {
         const verb = (card.dataset.kind === 'no_spool' || card.dataset.kind === 'shortfall')
             ? 'Apply' : 'Confirm deduct';
         const problems = setProblems(card, verb);
+        const sig = problems.map((p) => `${p.box.dataset.pos}=${p.placed}`).join(';');
+        // A double click's second press is no second press (Derek's rule for a
+        // yes that is hard to undo): the second click of a double click, or any
+        // press under 700 ms after the one that asked, does nothing, and what
+        // the first press said stays up.
+        if (problems.length && card.dataset.setAsked === sig
+                && ((ev && ev.detail > 1) || Date.now() - Number(card.dataset.setAskedAt || 0) < 700)) {
+            return false;
+        }
         card.querySelectorAll('.fcc-cr-set-alert').forEach((a) => { a.textContent = ''; a.style.display = 'none'; });
         if (!problems.length) return true;
-        const sig = problems.map((p) => `${p.box.dataset.pos}=${p.placed}`).join(';');
         if (card.dataset.setAsked === sig) return true;
         card.dataset.setAsked = sig;
+        card.dataset.setAskedAt = String(Date.now());
         problems.forEach((p) => {
             const a = p.box.querySelector('.fcc-cr-set-alert');
             if (a) { a.textContent = p.words; a.style.display = ''; }
         });
-        sayOnCard(card, problems.length === 1 ? problems[0].words
+        // Held sets are among a card's last lines, just above its buttons, so one
+        // set's words are said in the set alone: the card's notice said them again
+        // a line or two below. Two or more sets get one line by the buttons.
+        sayOnCard(card, problems.length === 1 ? ''
             : `${problems.length} heads' grams don't add up, as each says above. Press ${verb} again to go ahead.`);
+        // The words make the card taller, and the panel scrolls: keep the button
+        // just pressed in view, with what it said above it.
+        const btn = card.querySelector('.fcc-cr-confirm');
+        if (btn && typeof btn.scrollIntoView === 'function') btn.scrollIntoView({ block: 'nearest' });
         return false;
     }
 
@@ -1480,8 +1496,9 @@
                 }
                 // Review fix: a set whose boxes don't add up to its grams (left
                 // empty, part placed, or over) is said in the set and on the card;
-                // a second press with the same grams goes ahead.
-                if (!setsConfirmed(card)) return;
+                // a second press with the same grams goes ahead (never a double
+                // click's second press).
+                if (!setsConfirmed(card, e)) return;
                 e.target.disabled = true;
                 try {
                     const r = await fetch('/api/cancel_deduct/confirm', {
