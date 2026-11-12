@@ -63,6 +63,129 @@
         return `<div class="${cls}" style="flex-basis:100%;color:${color};font-size:var(--fcc-fs-small);line-height:1.4;">${icon || ''}${esc(text)}</div>`;
     }
 
+    // ----- Scope B (hotfix 2026-11-11): a head's spools as a set -------------
+    // A head whose spool changed during the print shows every spool it had, under
+    // one header. Split at the swaps FCC recorded, each is a row pre-filled with
+    // its own stretch of the print ("start → 19%, ran out"); a head FCC couldn't
+    // split, or saw no swap on, gives each spool its own empty grams box.
+    function pctWords(f) {
+        const n = Number(f);
+        return Number.isFinite(n) ? `${Math.round(Math.max(0, Math.min(1, n)) * 100)}%` : '?';
+    }
+    // A split row's stretch of the print: `from` / `to` are the cuts, null for
+    // the print's start and its end.
+    function segmentHtml(segs) {
+        if (!Array.isArray(segs) || !segs.length) return '';
+        const parts = segs.map((sg) => {
+            const from = sg.from == null ? 'start' : pctWords(sg.from);
+            const to = sg.to == null ? 'end' : pctWords(sg.to);
+            const out = sg.runout
+                ? `, <span class="fcc-cr-seg-out" style="color:#ff8a65;font-weight:bold;">ran out</span>`
+                : '';
+            return `<span style="white-space:nowrap;">${esc(from)} → ${esc(to)}${out}</span>`;
+        });
+        return `<span class="fcc-cr-seg" title="The stretch of the print this spool printed, from the swaps FCC recorded"
+                      style="margin-left:6px;color:#9aa;font-size:var(--fcc-fs-small);">${parts.join('; ')}</span>`;
+    }
+    // A set's count of the grams still to place, as its boxes are filled in.
+    function setLeftWords(total, placed) {
+        const t = fmtG(total);
+        const p = Number(placed) || 0;
+        if (p <= 0) return `${t} g to split`;
+        const d = Math.round((Number(total) - p) * 100) / 100;
+        if (d === 0) return `All ${t} g placed`;
+        if (d > 0) return `${fmtG(d)} g of ${t} g still to place`;
+        return `${fmtG(-d)} g more than the ${t} g FCC computed`;
+    }
+    function setBoxHtml(pos, toolhead, n, extra, inner, cls) {
+        const where = toolhead ? `T${esc(pos)} · ${esc(toolhead)}` : `T${esc(pos)}`;
+        return `
+            <div class="fcc-cr-set ${cls}" data-pos="${esc(pos)}"
+                 style="margin:8px 0 4px;padding:2px 0 0 10px;border-left:3px solid #5aa0d0;">
+                <div class="fcc-cr-set-head"
+                     style="display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 10px;padding:2px 0;
+                            color:#e8e8e8;font-weight:bold;font-size:var(--fcc-fs-row);">
+                    <span>${where} had ${esc(n)} spools this print</span>${extra || ''}
+                </div>
+                ${inner}
+            </div>`;
+    }
+    // The order a split head's rows printed in: the start spool first.
+    function firstCut(s) {
+        const seg = Array.isArray(s.segments) && s.segments.length ? s.segments[0] : null;
+        if (!seg) return 0;
+        return seg.from == null ? -1 : (Number(seg.from) || 0);
+    }
+    // A card's rows: those of one head split at its recorded swaps sit together as
+    // a set (a card from before the sets has no segments: grouped all the same).
+    function rowsHtml(rec) {
+        const spools = rec.spools || [];
+        const split = {};
+        spools.forEach((s) => {
+            if (!s || !s.auto_split) return;
+            const k = String(s.position);
+            (split[k] = split[k] || []).push(s);
+        });
+        const drawn = new Set();
+        return spools.map((s) => {
+            const k = String(s && s.position);
+            const set = s && s.auto_split ? split[k] : null;
+            if (!set || set.length < 2) return spoolRowHtml(s, rec);
+            if (drawn.has(k)) return '';
+            drawn.add(k);
+            const ordered = set.slice().sort((a, b) => firstCut(a) - firstCut(b));
+            const sub = `<span class="fcc-cr-set-sub" style="font-weight:normal;color:#9aa;font-size:var(--fcc-fs-small);">split at the swaps FCC recorded</span>`;
+            return setBoxHtml(k, set[0].toolhead, set.length, sub,
+                ordered.map((x) => spoolRowHtml(x, rec)).join(''), 'fcc-cr-splitset');
+        }).join('');
+    }
+    // One spool of a held set: its own empty grams box, and a picker on that spool
+    // (it can still be pointed at another). `lineCls` makes it the card's ordinary
+    // uncharged line (fcc-cr-unline, or fcc-cr-pickline on a no_spool card), so
+    // Apply charges it by head and spool.
+    function heldSetLineHtml(pos, e, lineCls, atEnd, words) {
+        const line = `set:${pos}:${e.sid}`;
+        const swatch = e.color && window.makeSwatchHtml
+            ? window.makeSwatchHtml(e.color, 'longitudinal',
+                { size: 16, borderColor: 'rgba(255,255,255,0.5)', marginRight: 0 })
+            : '';
+        const when = words[e.when] || words.end;
+        const left = e.remaining == null ? '' : ` · ${fmt(e.remaining)}g left`;
+        return `
+            <div class="${lineCls} fcc-cr-setline" data-pos="${esc(pos)}" data-line="${esc(line)}" data-sid="${esc(e.sid)}"
+                 style="display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap;
+                        padding:6px 0;border-bottom:1px solid #2b2c30;">
+                <div style="min-width:0;flex:1;">
+                    ${swatch}
+                    <span style="color:#eee;">${esc(e.display || '#' + e.sid)}</span>
+                    <span style="color:#9aa;font-size:var(--fcc-fs-small);">(${esc(when)}${esc(left)})</span>
+                </div>
+                <div class="input-group input-group-sm" style="width:132px;flex:none;">
+                    <input type="number" class="fcc-cr-pgrams form-control bg-dark text-white border-secondary"
+                           data-line="${esc(line)}" value="" step="0.01" min="0" autocomplete="off"
+                           aria-label="Grams from spool #${esc(e.sid)}" style="font-size:1.05rem;" />
+                    <span class="input-group-text bg-dark text-light border-secondary">g</span>
+                </div>
+                <div style="flex-basis:100%;display:flex;align-items:center;gap:6px;padding-left:24px;
+                            color:#9aa;font-size:var(--fcc-fs-small);">
+                    charge to: ${pickSelectHtml(line, e.sid, `this spool (#${e.sid})`, atEnd, words)}
+                </div>
+            </div>`;
+    }
+    // A held head shown as a set (the record's `unresolved_sets`), or '' when the
+    // line has none: the card draws its single held line instead.
+    function heldSetHtml(rec, pos, grams, lineCls, atEnd, words, notes) {
+        const entries = (((rec.unresolved_sets || {})[pos]) || []).filter((e) => e && e.sid != null);
+        if (entries.length < 2) return '';
+        const head = atEnd.find((h) => String(h.position) === String(pos) && !h.when)
+            || atEnd.find((h) => String(h.position) === String(pos));
+        const left = `<span class="fcc-cr-set-left" data-total="${esc(fmtG(grams))}"
+                            style="font-weight:normal;color:#e6c074;font-size:var(--fcc-fs-small);">${esc(setLeftWords(grams, 0))}</span>`;
+        const lines = entries.map((e) => heldSetLineHtml(pos, e, lineCls, atEnd, words)).join('');
+        return setBoxHtml(pos, head && head.toolhead, entries.length, left,
+            lines + noteHtml('fcc-cr-line-note', '#e6c074', notes[pos]), 'fcc-cr-heldset');
+    }
+
     async function fetchPending() {
         try {
             const r = await fetch('/api/cancel_deduct/pending');
@@ -181,7 +304,10 @@
         // is visible. (Distinct from the card-level `rec.ambiguous` cancel-vs-completed
         // flag — this is a per-spool-row indicator.)
         const amb = !!s.ambiguous;
-        const isRunout = !!s.runout;
+        // Scope B: a split row says its stretch of the print, a run-out included,
+        // so its "ran out" badge would say it twice.
+        const seg = segmentHtml(s.segments);
+        const isRunout = !!s.runout && !seg;
         const ambBorder = amb ? 'border-left:3px solid #ffae42;padding-left:6px;' : '';
         const ambBadge = amb
             ? `<span title="This toolhead has more than one spool assigned — FCC can't tell which is loaded, so these grams weren't auto-deducted. Pick the real amount per spool."
@@ -204,7 +330,7 @@
                         padding:6px 0;border-bottom:1px solid #2b2c30;${ambBorder}">
                 <div style="min-width:0;flex:1;">
                     ${swatch}
-                    <span style="color:#eee;">${esc(s.display)}</span>${ambBadge}${unconfirmed}${isRunout ? `<span title="Ran out mid-print (sensor tripped) — charged its own segment up to the swap, plus the sensor-to-nozzle remnant when a per-printer path value is configured."
+                    <span style="color:#eee;">${esc(s.display)}</span>${seg}${ambBadge}${unconfirmed}${isRunout ? `<span title="Ran out mid-print (sensor tripped) — charged its own segment up to the swap, plus the sensor-to-nozzle remnant when a per-printer path value is configured."
                      style="margin-left:6px;font-size:var(--fcc-fs-label);font-weight:bold;color:#ff8a65;
                             border:1px solid #ff8a65;border-radius:4px;padding:0 4px;white-space:nowrap;">ran out</span>` : ''}
                     <span style="color:#9aa;font-size:0.92rem;">
@@ -239,6 +365,9 @@
         const words = headsWords(rec);
         const notes = rec.unresolved_notes || {};
         return Object.keys(usage).sort((a, b) => Number(a) - Number(b)).map((pos) => {
+            // Scope B: a head whose spool changed during the print is a set.
+            const set = heldSetHtml(rec, pos, usage[pos], 'fcc-cr-pickline', atEnd, words, notes);
+            if (set) return set;
             const head = atEnd.find((h) => String(h.position) === String(pos));
             const where = head ? `T${esc(pos)} · ${esc(head.toolhead)}` : `T${esc(pos)}`;
             return `
@@ -282,6 +411,9 @@
             <div class="fcc-cr-unresolved-note" style="margin-top:8px;color:#e6c074;font-size:0.92rem;">
                 ${lead}
             </div>` + keys.map((pos) => {
+            // Scope B: a head whose spool changed during the print is a set.
+            const set = heldSetHtml(rec, pos, un[pos], 'fcc-cr-unline', atEnd, words, notes);
+            if (set) return set;
             const head = atEnd.find((h) => String(h.position) === String(pos));
             const where = head ? `T${esc(pos)} · ${esc(head.toolhead)}` : `T${esc(pos)}`;
             const line = `pos:${pos}`;
@@ -481,7 +613,7 @@
         const pct = Math.round((Number(rec.progress) || 0) * 100);
         if (kind === 'no_spool' || kind === 'progress_unknown') return unresolvedCardHtml(rec, kind);
         if (kind === 'shortfall') return shortfallCardHtml(rec);
-        const rows = (rec.spools || []).map((s) => spoolRowHtml(s, rec)).join('');
+        const rows = rowsHtml(rec);
         const total = (rec.spools || []).reduce((a, s) => a + (Number(s.grams) || 0), 0);
         // spool_changed (22.3): a COMPLETED print whose toolhead spool changed
         // mid-print (run-out / M600 replace). The full footer was NOT auto-applied
@@ -790,8 +922,23 @@
             if (!body.querySelector('.fcc-cr-card')) cleanup();
         }
 
+        // Scope B: a held set's count of the grams still to place follows its boxes.
+        function updateSetLeft(input) {
+            const box = input.closest && input.closest('.fcc-cr-heldset');
+            const out = box && box.querySelector('.fcc-cr-set-left');
+            if (!out) return;
+            let placed = 0;
+            box.querySelectorAll('.fcc-cr-pgrams').forEach((b) => {
+                const g = parseFloat(b.value);
+                if (g > 0) placed += g;
+            });
+            out.textContent = setLeftWords(Number(out.dataset.total), placed);
+        }
+
         overlay.addEventListener('input', (e) => {
-            if (e.target.classList && e.target.classList.contains('fcc-cr-grams')) updatePreview(e.target);
+            if (!e.target.classList) return;
+            if (e.target.classList.contains('fcc-cr-grams')) updatePreview(e.target);
+            else if (e.target.classList.contains('fcc-cr-pgrams')) updateSetLeft(e.target);
         });
         // 43.3: "Another spool by #ID…" reveals the #id field; a typed id is
         // looked up so the user sees what it is before Apply.
@@ -866,13 +1013,16 @@
                     let noId = null;
                     card.querySelectorAll('.fcc-cr-pickline').forEach((ln) => {
                         const line = ln.dataset.line;
+                        // A set's line (scope B) names its head in data-pos; a
+                        // plain line's key is its head.
+                        const pos = ln.dataset.pos != null ? ln.dataset.pos : line;
                         const sid = pickedSid(card, line);
                         const sel = ln.querySelector('.fcc-cr-pick');
                         // "Another spool by #ID…" with no valid #id was skipped, and
                         // the Apply then used up the whole review without it.
-                        if (sel && sel.value === 'other' && sid == null) { noId = line; return; }
+                        if (sel && sel.value === 'other' && sid == null) { noId = pos; return; }
                         const g = parseFloat((ln.querySelector('.fcc-cr-pgrams') || {}).value);
-                        if (sid && !Number.isNaN(g) && g > 0) charges.push({ position: Number(line), sid, grams: g });
+                        if (sid && !Number.isNaN(g) && g > 0) charges.push({ position: Number(pos), sid, grams: g });
                     });
                     if (noId != null) {
                         toast(`Type the #id of the spool T${noId} used (or pick one).`, 'warning', 7000);

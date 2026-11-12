@@ -22,7 +22,9 @@ Pinned here, on the real edge, deduct and review code over the wire harness
   - a change DURING the print always asks: the start snapshot (advanced by the
     swap log) against the print-end read, a recorded swap, two spools on one head
     or a spool FCC can't read holds that head for a pick, with every spool it had
-    offered and a note saying why; a completion never auto-applies it;
+    offered and a note saying why; a completion never auto-applies it (scope B
+    splits a recorded swap the cancel's own walk measured, and shows a changed
+    head as a set of its spools: test_swap_split_sets_hotfix.py);
   - without a print-end read, a cancel's start snapshot is checked against a read
     made then (`late`); with neither, every function runs main's code;
   - an Apply without picks on a no_spool card built from the read is refused.
@@ -225,8 +227,10 @@ def test_job_1141_a_load_inside_the_poll_window_is_held_for_a_pick(logs, end_sta
     assert _rows(rec) == [(243, "RCOI-7", 75.32), (231, "RCOI-8", 21.9)]
     assert rec["unresolved_usage"] == {"4": 84.28}
     assert (229, None) in _offered(rec, 4) and (42, "start") in _offered(rec, 4)
+    # Scope B: shown as a set of both spools, nothing pre-filled.
     assert rec["unresolved_notes"]["4"] == (
-        "RCOI-5 had #42 when the print started and #229 when the print ended. Pick the spool it used.")
+        "FCC saw #42 when the print started and #229 when the print ended, but not when it "
+        "changed: split the 84.28 g between them, or put it all on one.")
     assert rec["total_grams"] == pytest.approx(181.5)
     assert rec["ambiguous"] is (end_state == "IDLE")
     assert any("84.28g on T4 RCOI-5" in m and "pick it in the review" in m for m in logs), logs
@@ -415,8 +419,9 @@ def test_a_cancel_recovered_after_a_restart_reads_the_heads_then_and_checks_them
         assert _rows(rec) == [(243, "RCOI-7", 75.32), (231, "RCOI-8", 21.9)]
         assert rec["unresolved_usage"] == {"4": 84.28}
         assert (42, "start") in _offered(rec, 4) and (229, None) in _offered(rec, 4)
-        assert rec["unresolved_notes"]["4"] == ("RCOI-5 had #42 when the print started and #229 "
-                                                "when FCC restarted after the print. Pick the spool it used.")
+        assert rec["unresolved_notes"]["4"] == (
+            "FCC saw #42 when the print started and #229 when FCC restarted after the print, but not "
+            "when it changed: split the 84.28 g between them, or put it all on one.")
 
 
 def test_the_job_change_review_keeps_the_outgoing_jobs_start_snapshot():
@@ -442,8 +447,9 @@ def test_a_job_change_review_holds_a_head_changed_during_the_outgoing_print(logs
     rec = _rec()
     assert rec["ambiguous"] is True and rec["heads_source"] == "job_change"
     assert rec["unresolved_usage"] == {"4": 84.28}
-    assert rec["unresolved_notes"]["4"] == ("RCOI-5 had #42 when the print started and #229 "
-                                            "when the next print started. Pick the spool it used.")
+    assert rec["unresolved_notes"]["4"] == (
+        "FCC saw #42 when the print started and #229 when the next print started, but not when "
+        "it changed: split the 84.28 g between them, or put it all on one.")
 
 
 # --------------------------------------------------------------------------- #
@@ -466,8 +472,9 @@ def test_when_the_print_end_read_fails_the_start_snapshot_is_checked_against_a_r
     assert _rows(rec) == [(243, "RCOI-7", 75.32), (231, "RCOI-8", 21.9)]
     assert rec["unresolved_usage"] == {"4": 84.28}
     assert (42, "start") in _offered(rec, 4)
-    assert rec["unresolved_notes"]["4"] == ("RCOI-5 had #42 when the print started and #229 "
-                                            "when FCC logged the print. Pick the spool it used.")
+    assert rec["unresolved_notes"]["4"] == (
+        "FCC saw #42 when the print started and #229 when FCC logged the print, but not when it "
+        "changed: split the 84.28 g between them, or put it all on one.")
 
 
 def test_an_all_empty_print_end_read_counts_as_a_failed_read(logs, hublog):
@@ -525,7 +532,11 @@ def test_a_completion_without_a_print_end_read_keeps_the_22_3_check(monkeypatch)
 # --------------------------------------------------------------------------- #
 
 @pytest.mark.parametrize("end_state", ["STOPPED", "IDLE"])
-def test_a_recorded_swap_on_a_used_head_holds_that_head_on_a_cancel(logs, end_state):
+def test_a_recorded_swap_the_walk_didnt_measure_holds_that_head_as_a_set_on_a_cancel(logs, end_state):
+    """Scope B splits a cancel at its recorded swaps, from the figures its own walk
+    measures there; this stand-in for the walk measures none, so the head is held,
+    a set of both spools with nothing pre-filled (test_swap_split_sets_hotfix.py
+    has the split itself)."""
     with Indx() as p, _compute(USAGE):
         _tick("PRINTING", _job(0.10))
         _tick("ATTENTION", _job(0.19))
@@ -536,8 +547,10 @@ def test_a_recorded_swap_on_a_used_head_holds_that_head_on_a_cancel(logs, end_st
     rec = _rec()
     assert rec["unresolved_usage"] == {"4": 84.28}
     assert (42, "start") in _offered(rec, 4) and (229, None) in _offered(rec, 4)
-    assert rec["unresolved_notes"]["4"] == ("RCOI-5's spool was swapped during the print "
-                                            "(#42 to #229 at ~19%). Pick the spool it used, or weigh both.")
+    assert [(e["sid"], e["when"]) for e in rec["unresolved_sets"]["4"]] == [(42, "start"), (229, "during")]
+    assert rec["unresolved_notes"]["4"] == (
+        "RCOI-5's spool was swapped during the print (#42 to #229 at ~19%), but FCC couldn't "
+        "split its grams at the swap: split the 84.28 g between them, or put it all on one.")
     assert all(r["sid"] not in (42, 229) for r in rec["spools"])
 
 

@@ -661,3 +661,55 @@ def test_print_end_review_notes_are_readable(page: Page, base_url: str, assert_c
                  "isn't sure which spool it came from", "changed mid-print at position(s)"):
         assert said in scored, (said, scored)
     page.keyboard.press("Escape")
+
+def test_review_sets_are_readable(page: Page, base_url: str, assert_contrast):
+    """Hotfix 2026-11-11, scope B: a head's spools as a set on the 🛑 Review card.
+    A split set's header, its sub-caption and each row's stretch of the print
+    ("start → 19%, ran out"), and a held set's header, its "to split" count, its
+    lines (each spool, when FCC saw it there, an empty grams box) and its note.
+    Made-up reviews in this page only; nothing is written. The offline check of
+    their colours and sizes is test_cancel_review_sets_js.py."""
+    import json as _json
+    import conftest
+    words = {"end": "when the print ended", "start": "when the print started", "during": "during the print"}
+    heads = [{"toolhead": "HEAD-5", "position": 4, "sid": 229, "sids": [229]},
+             {"toolhead": "HEAD-5", "position": 4, "sid": 42, "when": "start"}]
+
+    def _row(sid, grams, segments, runout=False):
+        return {"sid": sid, "toolhead": "HEAD-5", "position": 4, "grams": grams, "current_used": 700.0,
+                "initial_weight": 1000.0, "remaining_before": 300.0, "remaining_after": 300.0 - grams,
+                "display": f"ZZ Contrast spool {sid}", "color": "ff0000", "ambiguous": False,
+                "auto_split": True, "runout": runout, "segments": segments}
+    note = ("FCC saw #42 when the print started and #229 when the print ended, but not when it changed: "
+            "split the 84 g between them, or put it all on one.")
+    pending = [
+        {"printer_name": "ZZ Contrast INDX", "job_id": "s1", "filename": "/usb/F.BGC", "progress": 0.42,
+         "total_grams": 84.0, "ambiguous": False, "kind": "partial", "heads_source": "print_end",
+         "heads_words": words, "heads_at_end": heads,
+         "spools": [_row(42, 30.0, [{"from": None, "to": 0.19, "runout": True}], runout=True),
+                    _row(229, 54.0, [{"from": 0.19, "to": 0.42, "runout": False}])]},
+        {"printer_name": "ZZ Contrast INDX", "job_id": "s2", "filename": "/usb/F.BGC", "progress": 0.42,
+         "total_grams": 84.0, "ambiguous": False, "kind": "partial", "heads_source": "print_end",
+         "heads_words": words, "heads_at_end": heads, "spools": [], "unresolved_usage": {"4": 84.0},
+         "unresolved_notes": {"4": note},
+         "unresolved_sets": {"4": [{"sid": 42, "when": "start", "display": "ZZ Contrast spool 42",
+                                    "color": "222222", "remaining": 12.5},
+                                   {"sid": 229, "when": "end", "display": "ZZ Contrast spool 229",
+                                    "color": "ff0000", "remaining": 800.0}]}},
+    ]
+    page.route("**/api/cancel_deduct/pending*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=_json.dumps({"pending": pending})))
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openCancelReview === 'function'")
+    page.evaluate("() => window.openCancelReview()")
+    page.wait_for_selector('#fcc-cancel-review-overlay .fcc-cr-card[data-job="s2"] .fcc-cr-set-left',
+                           timeout=15000)
+    overlay = page.locator("#fcc-cancel-review-overlay")
+    assert_contrast(overlay)
+    # Each element's text is scored by its first 80 characters (contrast_offenders).
+    scored = " | ".join(o["text"] for o in conftest.contrast_offenders(overlay, min_ratio=100))
+    for said in ("had 2 spools this print", "split at the swaps FCC recorded", "start → 19%",
+                 "ran out", "19% → 42%", "84 g to split", "when the print started",
+                 "FCC saw #42 when the print started"):
+        assert said in scored, (said, scored)
+    page.keyboard.press("Escape")

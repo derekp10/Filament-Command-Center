@@ -296,18 +296,33 @@ def test_several_cuts_are_measured_in_one_pass_in_the_order_asked():
     assert early < mid < late, measured["partials"]
 
 
+_ONE_HEAD_PM = {"C-1": {"printer_name": "C", "position": 0}}
+
+
+def _completion_cums(text, points):
+    """A completion's usage and the figures at `points`, measured as the deduct
+    does (hotfix 2026-11-11, scope B: from the download its footer is read from)."""
+    cums = {}
+    with patch.object(prusalink_api, "_download_file_bytes", return_value=text.encode()), \
+         patch.object(print_deduct.locations_db, "get_active_printer_map", return_value=_ONE_HEAD_PM):
+        usage, terminal = print_deduct._compute_cancel_usage(
+            "C", "f.gcode", "J-1", 1.0, "ip", "k", use_footer=True, swap_points=points, cums_out=cums)
+    return usage, terminal, cums
+
+
 def test_the_run_out_split_walks_the_file_once_and_needs_the_mm_footer():
     body = "M83\nT0\n" + "G1 E1\n" * 11
     text = body + _footer([10], [5.0])                 # walks 11mm against 10mm / 5g
-    with patch.object(prusalink_api, "_download_file_bytes", return_value=text.encode()), \
-         patch.object(prusalink_api, "_walk_extrusion", wraps=prusalink_api._walk_extrusion) as walk:
-        seg = prusalink_api.compute_segment_usage("ip", "k", "f.gcode", [0.3, 0.6])
+    with patch.object(prusalink_api, "_walk_extrusion", wraps=prusalink_api._walk_extrusion) as walk:
+        usage, terminal, cums = _completion_cums(text, [0.3, 0.6])
     assert walk.call_count == 1
-    assert seg["footer"] == {0: 5.0}
-    assert all(c[0] <= 5.0 for c in seg["cums"]) and seg["cums"][0][0] < seg["cums"][1][0], seg
+    assert terminal is None and usage == {0: 5.0}
+    assert all(c[0] <= 5.0 for c in cums.values()) and cums[0.3][0] < cums[0.6][0], cums
+    # Without the [mm] footer the walk can't measure the swaps: the usage is still
+    # the footer, but nothing is measured for the split, which then asks instead.
     no_mm = body + "; filament used [g] = 5.0\n"
-    with patch.object(prusalink_api, "_download_file_bytes", return_value=no_mm.encode()):
-        assert prusalink_api.compute_segment_usage("ip", "k", "f.gcode", [0.5]) is None
+    usage, terminal, cums = _completion_cums(no_mm, [0.5])
+    assert terminal is None and usage == {0: 5.0} and cums == {}
 
 
 def _gap_file():
@@ -775,23 +790,24 @@ def _split_file():
 
 
 def _split(progress):
-    text = _split_file()
     swap = [{"position": 0, "progress": progress, "from_sid": 1, "to_sid": 2, "runout": False}]
-    with patch.object(prusalink_api, "_download_file_bytes", return_value=text.encode()):
-        return print_deduct._compute_swap_split("ip", "k", "f.gcode", {0: 5.0}, swap, {"0": 1},
-                                                path_filament_g=0.0, single_position=True)
+    usage, _terminal, cums = _completion_cums(_split_file(), print_deduct._swap_points(swap))
+    return print_deduct._compute_swap_split(usage, swap, {"0": 1}, cums,
+                                            path_filament_g=0.0, single_position=True)
 
 
 def test_the_run_out_split_charges_each_spool_its_share_of_the_footer():
-    """Driven through the real compute_segment_usage (only the download stubbed):
-    the swap's cumulative is the footer's share of the walk, not the walk's own
-    grams, and the two spools add up to the footer."""
+    """Driven through the real measurement (only the download stubbed; since the
+    hotfix of 2026-11-11 the completion's own download, scope B): the swap's
+    cumulative is the footer's share of the walk, not the walk's own grams, and
+    the two spools add up to the footer."""
     text = _split_file()
     cut = int(0.5 * len(text.encode()))
     cuts, whole = prusalink_api._walk_extrusion(text, [cut], 0)
     share = round(5.0 * cuts[0][0][0] / whole[0][0], 2)
     rows = _split(0.5)[0]
-    assert rows[0] == {"sid": 1, "grams": share, "segment": 0, "runout": False}, rows
+    assert rows[0] == {"sid": 1, "grams": share, "segment": 0, "runout": False,
+                       "from": None, "to": 0.5}, rows
     assert rows[1]["sid"] == 2 and rows[1]["grams"] == pytest.approx(5.0 - share, abs=0.01), rows
 
 
@@ -1035,8 +1051,10 @@ class _RealDeduct:
             patch.object(print_monitor, "_fcc_owns_completion_deduct", return_value=True),
             patch.object(prusalink_api, "fetch_printer_credentials",
                          return_value={"ip_address": "1.2.3.4", "api_key": "k"}),
+            # **k: a print with a recorded swap asks the same download for its swap
+            # points too (hotfix 2026-11-11, scope B).
             patch.object(prusalink_api, "fetch_cancel_gcode",
-                         side_effect=lambda ip, key, fn, f: {"gcode": gcode, "fraction": f}),
+                         side_effect=lambda ip, key, fn, f, **k: {"gcode": gcode, "fraction": f}),
             patch.object(print_deduct.locations_db, "get_active_printer_map", return_value=_XL_PM),
             patch.object(print_deduct, "_resolve_active_locs_for_printer",
                          return_value=[("XL-1", {"position": 0, "printer_name": "XL"})]),
