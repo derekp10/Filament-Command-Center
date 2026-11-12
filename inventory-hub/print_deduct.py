@@ -3555,6 +3555,155 @@ def _set_grams_left(rec, charges):
     return round(left, 2)
 
 
+# ---------------------------------------------------------------------------
+# Round 2, R2 (hotfix 2026-11-12, Derek's picture check): the line an Apply logs
+# for the grams its review leaves uncharged names each head and the spools FCC
+# saw there. Derek: "it's lost, except for probably a note about xx grams not
+# being deducted from Spool X or spool Y that were on the same toolhead during
+# the print." The card is closed once applied, so this line is what is left.
+# ---------------------------------------------------------------------------
+
+def _lines_left_unplaced(rec, kind, charges):
+    """{line(str): grams} this Apply's picks leave unplaced on lines that are no
+    longer on the review once it commits: every line of a no_spool card (its whole
+    usage is the Apply's ask, so a line's grams no pick placed are its shortfall),
+    and a set's grams its boxes didn't place. A line nobody picked on any other
+    card stays in the record's `unresolved_usage` and is read there. For the log
+    line only: the ledger's figures come from _set_grams_left and requested_total."""
+    placed = {}
+    for c in charges or []:
+        if isinstance(c, dict) and c.get("row") is None and c.get("position") is not None:
+            try:
+                g = float(c.get("grams") or 0)
+            except (TypeError, ValueError):
+                continue
+            line = str(c.get("position"))
+            placed[line] = placed.get(line, 0.0) + g
+    if kind == "no_spool":
+        lines = rec.get("usage_map") if isinstance(rec.get("usage_map"), dict) else {}
+    else:
+        sets = rec.get("unresolved_sets") if isinstance(rec.get("unresolved_sets"), dict) else {}
+        un = rec.get("unresolved_usage") if isinstance(rec.get("unresolved_usage"), dict) else {}
+        lines = {k: v for k, v in un.items() if str(k) in sets and str(k) in placed}
+    out = {}
+    for line, g in lines.items():
+        try:
+            left = float(g) - placed.get(str(line), 0.0)
+        except (TypeError, ValueError):
+            continue
+        if left > 0.005:
+            out[str(line)] = round(left, 2)
+    return out
+
+
+def _add_grams(*maps):
+    """{line(str): grams} summed across `maps` (each a dict, or None)."""
+    out = {}
+    for m in maps:
+        for k, v in (m if isinstance(m, dict) else {}).items():
+            try:
+                out[str(k)] = round(out.get(str(k), 0.0) + float(v), 2)
+            except (TypeError, ValueError):
+                continue
+    return out
+
+
+def _line_spool_ids(rec, line):
+    """The spools FCC's own record names on a review line's head, in the order it
+    saw them: a set's spools; else the start snapshot's and each recorded swap's
+    (the card's `when` offers), then the ones the read at the end found there.
+    From the record alone: no Spoolman read."""
+    out = []
+
+    def _add(sid):
+        if sid is not None and all(str(s) != str(sid) for s in out):
+            out.append(sid)
+    sets = rec.get("unresolved_sets") if isinstance(rec.get("unresolved_sets"), dict) else {}
+    entries = sets.get(str(line))
+    for e in entries if isinstance(entries, list) else []:
+        if isinstance(e, dict):
+            _add(e.get("sid"))
+    if out:
+        return out
+    pos = _norm_pos(line)
+    heads = [h for h in rec.get("heads_at_end") or []
+             if isinstance(h, dict) and _norm_pos(h.get("position")) == pos]
+    for when in ("start", "during"):
+        for h in heads:
+            if h.get("when") == when:
+                _add(h.get("sid"))
+    for h in heads:
+        if not h.get("when"):
+            for s in _head_sids(h):
+                _add(s)
+    return out
+
+
+def _line_where(rec, line):
+    """A review line's head as the card names it: "T4 · RCOI-5", or "T4"."""
+    pos = _norm_pos(line)
+    heads = [h for h in rec.get("heads_at_end") or []
+             if isinstance(h, dict) and _norm_pos(h.get("position")) == pos and h.get("toolhead")]
+    head = next((h for h in heads if not h.get("when")), None) or (heads[0] if heads else None)
+    th = (head or {}).get("toolhead") or ((rec.get("shortfall_causes") or {}).get(str(line)) or {}).get("toolhead")
+    return f"T{line} · {th}" if th else f"T{line}"
+
+
+def _spool_list_words(sids):
+    """#42; #42 and #229; #42, #229 and #300."""
+    names = [f"#{_esc(s)}" for s in sids]
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def _uncharged_parts(rec):
+    """([part words], [spools named], grams listed) for the lines an Apply leaves
+    uncharged, in head order: "84.28 g on T4 · RCOI-5, which had #42 and #229"."""
+    lines = _add_grams(rec.get("unplaced"), rec.get("unresolved_usage"))
+    parts, named, listed = [], [], 0.0
+    for line in sorted(lines, key=_pos_order):
+        g = lines[line]
+        if g <= 0.05:
+            continue
+        sids = _line_spool_ids(rec, line)
+        where = _esc(_line_where(rec, line))
+        parts.append(f"{_g_words(g)} g on {where}, which had {_spool_list_words(sids)}" if sids
+                     else f"{_g_words(g)} g on {where}, where FCC saw no spool")
+        named.extend(str(s) for s in sids if str(s) not in named)
+        listed += g
+    return parts, named, round(listed, 2)
+
+
+def _say_uncharged(printer, rec, shortfall, residue_card=None):
+    """The Apply's one WARNING line for the grams its review leaves uncharged once
+    it commits (after the ledger write). Per head, the grams left on it and every
+    spool FCC's record names there; grams a picked spool couldn't take are logged
+    on their own line per spool, so they are counted here but not named again,
+    and grams that went on a card of their own (`residue_card`) are that card's
+    line's. With no head to name, the line reads as before. Never raises: the
+    spools are already charged."""
+    file = _esc(rec.get('filename'))
+    plain = (f"⚠️ {_esc(printer)}: {shortfall:.2f}g of '{file}' wasn't charged to any spool — "
+             f"weigh the spools to true up.")
+    try:
+        parts, named, listed = _uncharged_parts(rec)
+    except Exception as e:
+        state.logger.debug(f"uncharged heads unnamed for {printer}: {e}")
+        parts, named, listed = [], [], 0.0
+    if not parts:
+        if residue_card is None and shortfall > 0.05:
+            state.add_log_entry(plain, "WARNING", "ffaa00")
+        return
+    on_card = float(residue_card.get("total_grams") or 0) if residue_card else 0.0
+    clamped = round(shortfall - listed - on_card, 2)
+    clause = (f"; and {_g_words(clamped)} g the picked spools couldn't take (said above)"
+              if clamped > 0.05 else "")
+    total = listed + (clamped if clause else 0.0)
+    who = "the spools" if not named else ("it" if len(named) == 1 and not clause else "them")
+    state.add_log_entry(
+        f"⚠️ {_esc(printer)}: {total:.2f}g of '{file}' wasn't charged to any spool: "
+        f"{'; '.join(parts)}{clause} — weigh {who} to true up.", "WARNING", "ffaa00")
+
+
 def _confirm_no_spool_review(printer, job_id, rec):
     """Apply a `no_spool` review (the record was already popped = the claim). The
     usage was computed when the print ended but no spool was bound; RE-RESOLVE the
@@ -3746,7 +3895,13 @@ def api_cancel_deduct_confirm():
             # job's shortfall, as an unpicked line's grams are (a no_spool card's
             # ask, its whole usage, already counts it).
             set_left = _set_grams_left(rec, charges)
+        # Round 2 (R2): what these picks leave unplaced on lines that leave the
+        # review now, kept on it so the line that names them still can after a
+        # failed write's retry (_say_uncharged).
+        left_lines = _lines_left_unplaced(rec, kind, charges)
         rec = dict(rec)
+        if left_lines:
+            rec["unplaced"] = _add_grams(rec.get("unplaced"), left_lines)
         # The user's picks are this review's rows from now on. A shortfall card
         # stays one, so a failed write's retry still reads as one (43.2).
         rec["kind"] = "shortfall" if kind == "shortfall" else "partial"
@@ -4080,10 +4235,10 @@ def api_cancel_deduct_confirm():
                 f"in 🛑 Review, or Discard.", "WARNING", "ffaa00",
                 meta={"type": "cancel_deduct_pending", "printer_name": printer,
                       "job_id": residue_card["job_id"]})
-        elif shortfall > 0.05:
-            state.add_log_entry(
-                f"⚠️ {printer}: {shortfall:.2f}g of '{_esc(rec.get('filename'))}' wasn't charged to any "
-                f"spool — weigh the spools to true up.", "WARNING", "ffaa00")
+        # Round 2 (R2): the grams no spool took, per head with the spools FCC saw
+        # there (Derek: "a note about xx grams not being deducted from Spool X or
+        # spool Y"); the heads nobody placed are said even beside a new card.
+        _say_uncharged(printer, rec, shortfall, residue_card)
     return jsonify(resp)
 
 
