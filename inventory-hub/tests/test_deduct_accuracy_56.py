@@ -65,6 +65,10 @@ def _isolated_stores(tmp_path, monkeypatch):
     # ones run here must not read locations.json or Spoolman (and write only to
     # hub.log, so the Activity Log counts below hold either way).
     monkeypatch.setattr(print_deduct, "_capture_print_heads", lambda *a, **k: None)
+    # Scope C: the fetch queue's retries run on threads of their own unless the seam
+    # is off; these tests read the outcome right after each tick.
+    monkeypatch.setattr(print_monitor, "_CANCEL_DEDUCT_RUN_ASYNC", False)
+    monkeypatch.setattr(print_monitor, "_FETCH_CLAIMS", set())
 
 
 @pytest.fixture

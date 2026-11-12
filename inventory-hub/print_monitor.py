@@ -6,7 +6,10 @@ test seam, _fcc_owns_completion_deduct, the cancel/completion/ambiguous
 edge handlers + dispatchers, _track_print_edge, the adaptive
 _cancel_monitor_tick / _cancel_monitor_loop daemon, the deferred-fetch
 retry queue, restart recovery, and the boot credential seed (since Group 56.5 a
-check that only names Printer rows with no PrusaLink IP).
+check that only names Printer rows with no PrusaLink IP). Since the hotfix of
+2026-11-11 (scope C) the live edge queues its print before the download, each
+queued retry runs on a thread of its own, and a thread computing a print claims
+it (_FETCH_CLAIMS): see the comment above _FETCH_CLAIMS.
 
 Wiring notes:
 - Calls INTO print_deduct are module-qualified (print_deduct.deduct_completed_print
@@ -122,6 +125,171 @@ def _fcc_owns_completion_deduct():
     return False
 
 
+# ---------------------------------------------------------------------------
+# Hotfix 2026-11-11, scope C: a download never blocks the watcher, and a restart
+# mid-download loses nothing. PrusaLink serves a print file at ~15 KB/s, so an
+# INDX file takes 20 minutes (prod job 1141).
+#   - The live edge claims its print and writes its fetch record BEFORE the
+#     download (print_deduct._hold_fetch_in_flight); the record is dropped once
+#     the compute reaches an outcome (_settle_fetch). The latch is reset at the
+#     edge, so before this a restart or an update during the download lost the
+#     print; now the queue finishes it, with the heads read when it ended.
+#   - The deferred-fetch loop only decides which records are due; each due retry
+#     runs on a daemon thread of its own (_start_fetch_retry), so the tick returns
+#     at once and every printer keeps being watched while one file trickles in
+#     (Derek: "waiting on one download shouldn't stop prints from other printers
+#     being processed when they complete in FCC").
+#   - The claim: whichever thread of this process is computing a print holds its
+#     (printer, job_id). The loop skips a claimed print and starts no download on
+#     a printer that already has one in flight. The live edge always proceeds,
+#     except for a print another thread is computing right now (restart recovery
+#     firing an edge again), which it leaves to that thread. After a restart the
+#     set is empty, so a record left on disk is retried by the queue's own state
+#     gate (IDLE/READY).
+# ---------------------------------------------------------------------------
+_FETCH_CLAIMS = set()
+_FETCH_CLAIMS_LOCK = threading.Lock()
+
+
+def _fetch_key(printer, job_id):
+    """A print's claim key: (printer, job_id) as the fetch queue keys its records."""
+    return (str(printer).strip(), str(job_id).strip())
+
+
+def _claim_fetch(printer, job_id):
+    """Claim a print for this thread: its key, or None when another thread of this
+    process holds it."""
+    key = _fetch_key(printer, job_id)
+    with _FETCH_CLAIMS_LOCK:
+        if key in _FETCH_CLAIMS:
+            return None
+        _FETCH_CLAIMS.add(key)
+    return key
+
+
+def _release_fetch(key):
+    """Release a claim (None: none was taken). Callers reach it from a `finally`."""
+    if key is None:
+        return
+    with _FETCH_CLAIMS_LOCK:
+        _FETCH_CLAIMS.discard(key)
+
+
+def _fetch_claimed(printer, job_id):
+    with _FETCH_CLAIMS_LOCK:
+        return _fetch_key(printer, job_id) in _FETCH_CLAIMS
+
+
+def _printer_fetching(printer):
+    """Whether a thread of this process is computing any print of `printer`. Its
+    download is the slow part, and Buddy's HTTP pool is tiny: one at a time."""
+    name = str(printer).strip()
+    with _FETCH_CLAIMS_LOCK:
+        return any(key[0] == name for key in _FETCH_CLAIMS)
+
+
+def _claim_edge(printer_name, job_id):
+    """The live edge's claim on its print: (proceed, key to release). A print with
+    no job id is neither claimed nor queued (the queue drops a record without
+    one), so it proceeds as it always did. A print another thread of this process
+    is computing right now is left to that thread (proceed False, one hub.log
+    line): restart recovery can fire an edge again for a print whose record a
+    retry already holds, and two computes of one completion could both charge it."""
+    if print_deduct_ledger._is_blank_job(job_id):
+        return True, None
+    key = _claim_fetch(printer_name, job_id)
+    if key is None:
+        try:
+            state.logger.info(f"🔁 {printer_name}: job {job_id} is already being computed by "
+                              f"another thread; this edge leaves it to that one.")
+        except Exception:
+            pass
+        return False, None
+    return True, key
+
+
+def _hold_edge_fetch(printer_name, filename, job_id, progress, kind, ambiguous=False,
+                     start_spools=None, swap_log=None, end_heads=None):
+    """Write the print's fetch record before the edge's download
+    (print_deduct._hold_fetch_in_flight). Returns the record as stored, or None for
+    a print with no job id, or when the write failed: the compute then runs as it
+    did before the hotfix (a restart during it would lose the print), and hub.log
+    says so. Never raises."""
+    if print_deduct_ledger._is_blank_job(job_id):
+        return None
+    try:
+        return print_deduct._hold_fetch_in_flight(
+            printer_name, filename, job_id, progress, kind=kind, ambiguous=ambiguous,
+            start_spools=start_spools, swap_log=swap_log, end_heads=end_heads)
+    except Exception as e:
+        try:
+            state.logger.warning(f"🔁 {printer_name}: couldn't queue job {job_id} before its "
+                                 f"download ({e}); a restart during it would lose the print.")
+        except Exception:
+            pass
+        return None
+
+
+def _charged_before(rec, printer_name, job_id, filename):
+    """Whether the print's record says a deduct of it may already have charged its
+    spools: a completion this process gave up on, or one stamped `charging_since`
+    that never recorded the job (FCC stopped mid-charge, and restart recovery fired
+    its edge again). Such a print is settled as the queue settles it and never
+    computed again. A record the ledger or a review already holds is left to the
+    compute's own guard, which answers "skipped"."""
+    if rec is None or print_deduct_ledger._is_blank_job(job_id):
+        return False
+    if (str(printer_name), str(job_id)) in _ABANDONED_COMPLETIONS:
+        try:
+            cancel_fetch_store.pop_pending(printer_name, job_id)   # the queue retries the drop
+        except Exception:
+            pass
+        return True
+    if not (rec.get("kind") == "complete" and rec.get("charging_since")):
+        return False
+    if (print_deduct_ledger.was_deducted(printer_name, job_id)
+            or cancel_review_store.has_pending(printer_name, job_id)):
+        return False
+    _settle_stamped(printer_name, job_id, filename)
+    return True
+
+
+def _settle_fetch(printer, job_id, result):
+    """Drop a print's fetch record once its compute reached an outcome: a review
+    stashed, the ledger written, a charged completion, or nothing to charge. A
+    download that still can't be read ("awaiting_fetch") keeps it queued. A print
+    with no job id is left alone (the queue can't hold one; its records would share
+    one key). Best-effort: a record left behind is dropped by the next tick, where
+    the ledger or a review holds the job."""
+    status = result.get("status") if isinstance(result, dict) else None
+    if status == "awaiting_fetch" or print_deduct_ledger._is_blank_job(job_id):
+        return
+    try:
+        cancel_fetch_store.pop_pending(printer, job_id)
+    except Exception as e:
+        try:
+            state.logger.debug(f"fetch record for {printer} job {job_id} not dropped yet: {e}")
+        except Exception:
+            pass
+
+
+def _try_again(printer, job_id):
+    """The end of a live edge's failure line while its print is still queued: the
+    queue computes it again once the printer is idle. Said, so nobody weighs the
+    spool and then has the print charged on top. '' when nothing is queued for it,
+    or when its record says a charge may have begun (that one is given up, not
+    retried)."""
+    try:
+        if print_deduct_ledger._is_blank_job(job_id):
+            return ""
+        rec = cancel_fetch_store.get_pending(printer, job_id)
+        if not isinstance(rec, dict) or rec.get("charging_since"):
+            return ""
+        return " — FCC will try again when the printer is idle."
+    except Exception:
+        return ""
+
+
 def _capture_end_heads(printer_name, job_id, fb_url, heads_when=None):
     """The print-end read (hotfix 2026-11-11, prod job 1141): the spool on each of
     the printer's heads, read on the edge-action thread when FCC sees the print
@@ -178,7 +346,10 @@ def _on_cancel_edge(printer_name, filename, job_id, progress, fb_url,
 
     Hotfix 2026-11-11: the heads are read first (_capture_end_heads), before the
     download, and the review is checked against the print's start snapshot and
-    recorded swaps (`start_spools`, `swap_log`)."""
+    recorded swaps (`start_spools`, `swap_log`). Scope C: the print is claimed for
+    this thread and its fetch record written before the download, so a restart
+    mid-download loses nothing and no tick downloads it a second time; the record
+    is dropped once the review is stashed. A review that fails stays queued."""
     # INSTANT ACK (2026-06-13): log the moment the STOPPED edge fires, BEFORE the
     # slow async gcode download+decode. On a slow XL .bgcode download the review
     # line is 30-60s out; without this the user faces silence and thinks nothing
@@ -191,21 +362,34 @@ def _on_cancel_edge(printer_name, filename, job_id, progress, fb_url,
             "INFO")
     except Exception:
         pass
+    proceed, key = _claim_edge(printer_name, job_id)
+    if not proceed:
+        return
     try:
-        end_heads = _capture_end_heads(printer_name, job_id, fb_url, heads_when=heads_when)
-    except Exception:
-        end_heads = None
-    try:
-        print_deduct._create_pending_cancel_review(
-            printer_name, filename, job_id, progress, fb_url=fb_url,
-            **_edge_kwargs(start_spools, swap_log, end_heads=end_heads))
-    except Exception as e:
         try:
-            state.add_log_entry(
-                f"❌ Cancelled-print review failed for {printer_name} "
-                f"('{print_deduct._esc(filename)}'): {print_deduct._esc(e)}", "ERROR", "ff4444")
+            end_heads = _capture_end_heads(printer_name, job_id, fb_url, heads_when=heads_when)
         except Exception:
-            pass
+            end_heads = None
+        try:
+            rec = _hold_edge_fetch(printer_name, filename, job_id, progress, "cancel",
+                                   start_spools=start_spools, swap_log=swap_log,
+                                   end_heads=end_heads)
+            if _charged_before(rec, printer_name, job_id, filename):
+                return
+            result = print_deduct._create_pending_cancel_review(
+                printer_name, filename, job_id, progress, fb_url=fb_url,
+                **_edge_kwargs(start_spools, swap_log, end_heads=end_heads))
+            _settle_fetch(printer_name, job_id, result)
+        except Exception as e:
+            try:
+                state.add_log_entry(
+                    f"❌ Cancelled-print review failed for {printer_name} "
+                    f"('{print_deduct._esc(filename)}'): {print_deduct._esc(e)}"
+                    f"{_try_again(printer_name, job_id)}", "ERROR", "ff4444")
+            except Exception:
+                pass
+    finally:
+        _release_fetch(key)
 
 
 def _dispatch_cancel_edge(printer_name, filename, job_id, progress, fb_url,
@@ -232,22 +416,57 @@ def _on_completion_edge(printer_name, filename, job_id, fb_url, start_spools=Non
     detection. Reaches here only through _dispatch_completion_edge so the
     off-heartbeat threading contract matches the cancel path. The heads are read
     first, before the download (hotfix 2026-11-11), and the deduct charges the
-    spools that were on them when the print finished."""
+    spools that were on them when the print finished.
+
+    Scope C: the print is claimed and its fetch record written before the
+    download, as for a cancel, and the deduct stamps that record `charging_since`
+    right before its first spool write (`before_charge`), exactly as the queue's
+    retry stamps it: if FCC stops mid-charge, neither the next tick nor a
+    restart's recovery charges it again. A raise once the charging began gives the
+    job up; any other leaves it queued."""
+    proceed, key = _claim_edge(printer_name, job_id)
+    if not proceed:
+        return
+    rec = None
     try:
-        end_heads = _capture_end_heads(printer_name, job_id, fb_url, heads_when=heads_when)
-    except Exception:
-        end_heads = None
-    try:
-        print_deduct.deduct_completed_print(printer_name, filename, job_id, fb_url=fb_url,
-                               start_spools=start_spools, swap_log=swap_log,
-                               **_edge_kwargs(end_heads=end_heads))
-    except Exception as e:
         try:
-            state.add_log_entry(
-                f"❌ Completed-print deduct failed for {printer_name} "
-                f"('{print_deduct._esc(filename)}'): {print_deduct._esc(e)}", "ERROR", "ff4444")
+            end_heads = _capture_end_heads(printer_name, job_id, fb_url, heads_when=heads_when)
         except Exception:
-            pass
+            end_heads = None
+        try:
+            rec = _hold_edge_fetch(printer_name, filename, job_id, 1.0, "complete",
+                                   start_spools=start_spools, swap_log=swap_log,
+                                   end_heads=end_heads)
+            if _charged_before(rec, printer_name, job_id, filename):
+                return
+            more = _edge_kwargs(end_heads=end_heads)
+            if rec is not None:
+                more["before_charge"] = lambda rec=rec: _stamp_charging(rec)
+            result = print_deduct.deduct_completed_print(
+                printer_name, filename, job_id, fb_url=fb_url,
+                start_spools=start_spools, swap_log=swap_log, **more)
+            _settle_fetch(printer_name, job_id, result)
+        except print_deduct.CompletionMayHaveCharged as e:
+            # The spools may already be charged: the job is given up, as the queue
+            # gives one up (never charged again), and this line says why.
+            if rec is not None:
+                _abandon_completion(printer_name, job_id, filename, str(e), say=False)
+            try:
+                state.add_log_entry(
+                    f"❌ Completed-print deduct failed for {printer_name} "
+                    f"('{print_deduct._esc(filename)}'): {print_deduct._esc(e)}", "ERROR", "ff4444")
+            except Exception:
+                pass
+        except Exception as e:
+            try:
+                state.add_log_entry(
+                    f"❌ Completed-print deduct failed for {printer_name} "
+                    f"('{print_deduct._esc(filename)}'): {print_deduct._esc(e)}"
+                    f"{_try_again(printer_name, job_id)}", "ERROR", "ff4444")
+            except Exception:
+                pass
+    finally:
+        _release_fetch(key)
 
 
 def _dispatch_completion_edge(printer_name, filename, job_id, fb_url, start_spools=None,
@@ -288,7 +507,9 @@ def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
 
     Hotfix 2026-11-11: as the cancel edge, the heads are read first, before the
     download, and checked against `start_spools` / `swap_log` (not for a
-    progress_unknown end: its card has no usage to charge)."""
+    progress_unknown end: its card has no usage to charge). Scope C: as the cancel
+    edge, the print is claimed and queued before its download (not a
+    progress_unknown end, which downloads nothing)."""
     # Instant ack (the ambiguous analogue of the cancel instant-ack), so the user
     # isn't met with silence during the async download.
     try:
@@ -306,25 +527,40 @@ def _on_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
                 f"completed vs cancelled)…", "INFO")
     except Exception:
         pass
-    end_heads = None
-    if not progress_unknown:
-        try:
-            end_heads = _capture_end_heads(printer_name, job_id, fb_url, heads_when=heads_when)
-        except Exception:
-            end_heads = None
+    proceed, key = (True, None) if progress_unknown else _claim_edge(printer_name, job_id)
+    if not proceed:
+        return
     try:
-        print_deduct._create_pending_cancel_review(printer_name, filename, job_id, progress,
-                                      fb_url=fb_url, ambiguous=True,
-                                      progress_unknown=progress_unknown,
-                                      unmeasured_reason=unmeasured_reason,
-                                      **_edge_kwargs(start_spools, swap_log, end_heads=end_heads))
-    except Exception as e:
+        end_heads = None
+        if not progress_unknown:
+            try:
+                end_heads = _capture_end_heads(printer_name, job_id, fb_url, heads_when=heads_when)
+            except Exception:
+                end_heads = None
         try:
-            state.add_log_entry(
-                f"❌ Ambiguous-print review failed for {printer_name} "
-                f"('{print_deduct._esc(filename)}'): {print_deduct._esc(e)}", "ERROR", "ff4444")
-        except Exception:
-            pass
+            if not progress_unknown:
+                rec = _hold_edge_fetch(printer_name, filename, job_id, progress, "cancel",
+                                       ambiguous=True, start_spools=start_spools,
+                                       swap_log=swap_log, end_heads=end_heads)
+                if _charged_before(rec, printer_name, job_id, filename):
+                    return
+            result = print_deduct._create_pending_cancel_review(
+                printer_name, filename, job_id, progress, fb_url=fb_url, ambiguous=True,
+                progress_unknown=progress_unknown, unmeasured_reason=unmeasured_reason,
+                **_edge_kwargs(start_spools, swap_log, end_heads=end_heads))
+            if not progress_unknown:
+                _settle_fetch(printer_name, job_id, result)
+        except Exception as e:
+            try:
+                state.add_log_entry(
+                    f"❌ Ambiguous-print review failed for {printer_name} "
+                    f"('{print_deduct._esc(filename)}'): {print_deduct._esc(e)}"
+                    f"{'' if progress_unknown else _try_again(printer_name, job_id)}",
+                    "ERROR", "ff4444")
+            except Exception:
+                pass
+    finally:
+        _release_fetch(key)
 
 
 def _dispatch_ambiguous_edge(printer_name, filename, job_id, progress, fb_url,
@@ -774,7 +1010,10 @@ _CANCEL_FETCH_MAX_AGE_S = 72 * 3600
 # review, rounds 3-4): never charged again, and reported once. The persistent
 # half is the queue entry's `charging_since` stamp, written right before the
 # first spool write (_stamp_charging), which a later process honours too.
+# Since scope C (hotfix 2026-11-11) the retries and the live edges that give one up
+# are threads of their own, so the check-then-add is under _ABANDON_LOCK.
 _ABANDONED_COMPLETIONS = set()
+_ABANDON_LOCK = threading.Lock()
 _cancel_monitor_started = False
 _cancel_monitor_lock = threading.Lock()
 
@@ -782,8 +1021,9 @@ _cancel_monitor_lock = threading.Lock()
 def _cancel_monitor_tick():
     """One detection sweep: probe every printer's state + run the latch/edge
     detector, then service the deferred-fetch retry queue (§9.10) using the
-    states just probed. Per-printer probes fan out so a slow/offline printer
-    doesn't block the rest. Best-effort throughout.
+    states just probed (each due retry on a thread of its own since scope C of the
+    2026-11-11 hotfix, so no download holds the tick up). Per-printer probes fan
+    out so a slow/offline printer doesn't block the rest. Best-effort throughout.
 
     Returns True when the fleet is BUSY (any printer in-progress or on a terminal
     screen) so the loop can poll on the FAST cadence; False when everything is
@@ -863,26 +1103,30 @@ def _stamp_charging(rec):
     raises here, before anything is charged; once it lands, every later tick, in
     this process or one after a restart, gives the job up instead of charging it
     again (the round-3 claim was a plain re-save made earlier, so a restart could
-    charge a job whose ledger write had failed)."""
+    charge a job whose ledger write had failed). Since scope C (hotfix 2026-11-11)
+    the live completion edge stamps the record it wrote before its download the
+    same way, so a restart mid-charge never charges twice there either."""
     stamped = dict(rec)
     stamped["charging_since"] = time.time()
     cancel_fetch_store.add_pending(stamped)
 
 
-def _abandon_completion(printer, job_id, filename, why):
+def _abandon_completion(printer, job_id, filename, why, say=True):
     """Give a queued completion up for good: its deduct may have charged the
     spools without recording the job. Never charged again by this process (the
     guard set, added FIRST: the drop is a write too and may fail on the same
     disk) nor a later one (the entry's `charging_since` stamp); the ERROR line is
-    logged once per process."""
+    logged once per process. `say=False`: the caller logs a line of its own (the
+    live completion edge's "deduct failed" line)."""
     key = (str(printer), str(job_id))
-    first = key not in _ABANDONED_COMPLETIONS
-    _ABANDONED_COMPLETIONS.add(key)
+    with _ABANDON_LOCK:
+        first = key not in _ABANDONED_COMPLETIONS
+        _ABANDONED_COMPLETIONS.add(key)
     try:
         cancel_fetch_store.pop_pending(printer, job_id)
     except Exception:
         pass
-    if first:
+    if first and say:
         try:
             state.add_log_entry(
                 f"❌ Completed-print deduct for {printer} ('{print_deduct._esc(filename)}') "
@@ -902,6 +1146,17 @@ def _process_pending_cancel_fetches(states, fb_url):
     `states` maps printer_name -> the state dict get_printer_state returned this
     tick (or None when offline). Best-effort per entry; one bad record never
     blocks the rest.
+
+    Scope C (hotfix 2026-11-11): this only decides which records are due. Each due
+    record's compute (the download, then the review or the completion deduct)
+    runs on a daemon thread of its own (_start_fetch_retry), so the tick returns at
+    once and every printer keeps being watched while an INDX file trickles in at
+    ~15 KB/s; inline when _CANCEL_DEDUCT_RUN_ASYNC is False (tests). A print a
+    thread of this process is computing (claimed: its live edge, or an earlier
+    tick's retry) is skipped, and a printer with a download in flight gets no
+    second one until it ends. After a restart nothing is claimed, so a record the
+    live edge wrote before a download that died with FCC is retried here, by the
+    same state gate.
     """
     pendings = cancel_fetch_store.list_pending()
     if not pendings:
@@ -915,9 +1170,10 @@ def _process_pending_cancel_fetches(states, fb_url):
             progress = float(rec.get("progress", 0.0) or 0.0)
             kind = rec.get("kind", "cancel")  # 'cancel' (review) | 'complete' (auto-apply)
             ambiguous = bool(rec.get("ambiguous", False))  # cancel-review "couldn't confirm" flag
-            start_spools = rec.get("start_spools")  # 22.3: carried for the deferred completion swap check
-            swap_log = rec.get("swap_log")  # 22.3(b): ordered mid-print swap history
-            end_heads = rec.get("end_heads")  # hotfix 2026-11-11: the heads read when the print ended
+            if printer and job_id not in (None, "") and _fetch_claimed(printer, job_id):
+                # A thread of this process is computing it right now (its live edge,
+                # or an earlier tick's retry): that thread settles the record.
+                continue
             if not printer or job_id in (None, ""):
                 cancel_fetch_store.pop_pending(printer, job_id)
                 if printer and filename:
@@ -947,14 +1203,7 @@ def _process_pending_cancel_fetches(states, fb_url):
                 # A deduct of this job got as far as charging (this process or one
                 # before a restart) and never recorded the job: its spools may
                 # already be charged. Never charge it again (Group 56 review, round 4).
-                # If its uncharged-grams card exists, the charges finished (the card
-                # is stashed after them): the 43.2 crash guard records the job.
-                if print_deduct._shortfall_card_exists(printer, job_id, filename, 1.0):
-                    cancel_fetch_store.pop_pending(printer, job_id)
-                    continue
-                _abandon_completion(printer, job_id, filename,
-                                    "a deduct of it was interrupted after it began charging "
-                                    "the spools (FCC restarted, or a write failed)")
+                _settle_stamped(printer, job_id, filename)
                 continue
 
             # Give up after the max-age window so a deleted/abandoned file's
@@ -1025,48 +1274,127 @@ def _process_pending_cancel_fetches(states, fb_url):
                 if not _fcc_owns_completion_deduct():
                     cancel_fetch_store.pop_pending(printer, job_id)
                     continue
-                # start_spools + swap_log (if captured before the finish-screen lock)
-                # ride the fetch record so the deferred completion still detects a
-                # mid-print spool swap (22.3/22.3(b)); None when not captured → auto-apply.
-                # The deduct stamps the entry right before its first spool write
-                # (_stamp_charging): on a disk FCC can't write, the stamp raises and
-                # nothing is charged; once it lands, no later tick or process
-                # charges this job again (Group 56 review, rounds 3-4).
-                # The heads read when the print ended (end_heads) ride along only when
-                # the record has them, so a record queued before the hotfix (and a
-                # test's strict stand-in) sees exactly the call it always did.
-                result = print_deduct.deduct_completed_print(
-                    printer, filename, job_id, fb_url=fb_url,
-                    start_spools=start_spools, swap_log=swap_log,
-                    before_charge=lambda rec=rec: _stamp_charging(rec),
-                    **({"end_heads": end_heads} if end_heads else {}))
-            else:
-                result = print_deduct._create_pending_cancel_review(
-                    printer, filename, job_id, progress, fb_url=fb_url, ambiguous=ambiguous,
-                    **{k: v for k, v in (("end_heads", end_heads), ("start_spools", start_spools),
-                                         ("swap_log", swap_log)) if v})
-            status = (result or {}).get("status")
-            if status == "awaiting_fetch":
-                # Still couldn't fetch (the file 404'd despite a ready state — a
-                # transient, or the file was deleted). Leave queued; the re-queue
-                # already bumped attempts. The max-age window bounds the retries.
+
+            # Due. One download per printer at a time (scope C): a printer with
+            # one in flight (a live edge's, or an earlier tick's retry) waits for
+            # a later tick. Then this print is claimed and computed on a thread of
+            # its own, so the tick goes on watching every printer meanwhile.
+            if _printer_fetching(printer):
                 continue
-            # Any terminal outcome (pending review / pending_unresolved / no_usage /
-            # skipped) resolves this entry.
-            cancel_fetch_store.pop_pending(printer, job_id)
-        except print_deduct.CompletionMayHaveCharged as e:
-            # The deduct raised once its spool writes had begun (the ledger write
-            # failing after them, say): the spools may already be charged, and every
-            # later IDLE tick used to charge the footer AGAIN (Group 56 review).
-            _abandon_completion(printer, job_id, filename, f"its deduct failed: {e}")
+            key = _claim_fetch(printer, job_id)
+            if key is None:
+                continue
+            _start_fetch_retry(rec, fb_url, key)
         except Exception as e:
-            # Anything else raised before a spool write (a review or queue store
-            # that couldn't be written, a malformed record): nothing was charged,
-            # so the entry stays queued and the next tick tries again.
+            # A malformed record (or a store that couldn't be read or written):
+            # it stays queued, and one bad record never blocks the rest.
             try:
                 state.logger.debug(f"cancel-fetch retry failed for {rec}: {e}")
             except Exception:
                 pass
+
+
+def _settle_stamped(printer, job_id, filename):
+    """A queued completion stamped `charging_since` that never recorded the job: a
+    deduct of it got as far as charging (this process, or one before a restart)
+    and its spools may already be charged, so it is never charged again (Group 56
+    review, round 4). If its uncharged-grams card exists, the charges finished (the
+    card is stashed after them): the 43.2 crash guard records the job. Otherwise
+    it is given up with one ERROR line. The queue and the live edge both settle a
+    stamped record here."""
+    if print_deduct._shortfall_card_exists(printer, job_id, filename, 1.0):
+        cancel_fetch_store.pop_pending(printer, job_id)
+        return
+    _abandon_completion(printer, job_id, filename,
+                        "a deduct of it was interrupted after it began charging "
+                        "the spools (FCC restarted, or a write failed)")
+
+
+def _start_fetch_retry(rec, fb_url, key):
+    """Run a due record's compute (_run_fetch_retry) on a daemon thread of its own,
+    holding `key` (scope C, hotfix 2026-11-11): the download takes 20 minutes on
+    the INDX, and inside the tick it stopped every printer being watched. Inline
+    when _CANCEL_DEDUCT_RUN_ASYNC is False (tests), as before."""
+    if not _CANCEL_DEDUCT_RUN_ASYNC:
+        _run_fetch_retry(rec, fb_url, key)
+        return
+    try:
+        threading.Thread(target=_run_fetch_retry, args=(rec, fb_url, key),
+                         name=f"fcc-fetch-{key[0]}-{key[1]}", daemon=True).start()
+    except Exception:
+        _release_fetch(key)            # no thread holds it
+        raise
+
+
+def _compute_fetch(rec, fb_url):
+    """A queued record's compute: the completion deduct for kind 'complete', else
+    the cancel review (an ambiguous end's flagged)."""
+    printer = rec.get("printer_name")
+    job_id = rec.get("job_id")
+    filename = rec.get("filename")
+    start_spools = rec.get("start_spools")  # 22.3: carried for the deferred completion swap check
+    swap_log = rec.get("swap_log")  # 22.3(b): ordered mid-print swap history
+    end_heads = rec.get("end_heads")  # hotfix 2026-11-11: the heads read when the print ended
+    if rec.get("kind", "cancel") == "complete":
+        # start_spools + swap_log (if captured before the finish-screen lock)
+        # ride the fetch record so the deferred completion still detects a
+        # mid-print spool swap (22.3/22.3(b)); None when not captured → auto-apply.
+        # The deduct stamps the entry right before its first spool write
+        # (_stamp_charging): on a disk FCC can't write, the stamp raises and
+        # nothing is charged; once it lands, no later tick or process
+        # charges this job again (Group 56 review, rounds 3-4).
+        # The heads read when the print ended (end_heads) ride along only when
+        # the record has them, so a record queued before the hotfix (and a
+        # test's strict stand-in) sees exactly the call it always did.
+        return print_deduct.deduct_completed_print(
+            printer, filename, job_id, fb_url=fb_url,
+            start_spools=start_spools, swap_log=swap_log,
+            before_charge=lambda rec=rec: _stamp_charging(rec),
+            **({"end_heads": end_heads} if end_heads else {}))
+    return print_deduct._create_pending_cancel_review(
+        printer, filename, job_id, float(rec.get("progress", 0.0) or 0.0), fb_url=fb_url,
+        ambiguous=bool(rec.get("ambiguous", False)),
+        **{k: v for k, v in (("end_heads", end_heads), ("start_spools", start_spools),
+                             ("swap_log", swap_log)) if v})
+
+
+def _run_fetch_retry(rec, fb_url, key):
+    """Compute one due record and settle it. An outcome (a review stashed, the
+    ledger written, a charged completion, nothing to charge) drops the record; a
+    download that still can't be read leaves it queued (the re-queue already bumped
+    attempts; the max-age window bounds the retries). A raise keeps the meaning it
+    had in the tick: CompletionMayHaveCharged gives the job up, anything else
+    leaves it queued for the next tick. The claim is released whatever happens."""
+    printer = rec.get("printer_name")
+    job_id = rec.get("job_id")
+    filename = rec.get("filename")
+    try:
+        try:
+            state.logger.info(f"🔁 {printer}: computing the queued {rec.get('kind', 'cancel')} "
+                              f"of job {job_id} on its own thread.")
+        except Exception:
+            pass
+        result = _compute_fetch(rec, fb_url)
+        status = result.get("status") if isinstance(result, dict) else None
+        if status != "awaiting_fetch":
+            # Any terminal outcome (pending review / pending_unresolved / no_usage /
+            # skipped) resolves this entry.
+            cancel_fetch_store.pop_pending(printer, job_id)
+    except print_deduct.CompletionMayHaveCharged as e:
+        # The deduct raised once its spool writes had begun (the ledger write
+        # failing after them, say): the spools may already be charged, and every
+        # later IDLE tick used to charge the footer AGAIN (Group 56 review).
+        _abandon_completion(printer, job_id, filename, f"its deduct failed: {e}")
+    except Exception as e:
+        # Anything else raised before a spool write (a review or queue store
+        # that couldn't be written, a malformed record): nothing was charged,
+        # so the entry stays queued and the next tick tries again.
+        try:
+            state.logger.debug(f"cancel-fetch retry failed for {rec}: {e}")
+        except Exception:
+            pass
+    finally:
+        _release_fetch(key)
 
 
 def _recover_print_tracker_on_start():

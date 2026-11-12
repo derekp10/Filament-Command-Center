@@ -2605,6 +2605,60 @@ def _stash_unresolved_review(printer_name, filename, job_id, reached_fraction,
             "job_id": str(job_id)}
 
 
+# Scope C (hotfix 2026-11-11): a fetch record's status while the edge that wrote it
+# is still downloading. The live edge writes its print's record before the first
+# download (_hold_fetch_in_flight), so a restart or an update during an INDX's
+# 20-minute download no longer loses the print; the record turns "awaiting_fetch"
+# the first time a download really fails, which is when its nudge is logged.
+FETCH_IN_FLIGHT = "in_flight"
+
+
+def _hold_fetch_in_flight(printer_name, filename, job_id, reached_fraction, kind="cancel",
+                          ambiguous=False, start_spools=None, swap_log=None, end_heads=None):
+    """Scope C (hotfix 2026-11-11): write the print's fetch record before the
+    live edge's download, so the print outlives FCC. PrusaLink serves a file at
+    ~15 KB/s (job 1141's took 20 minutes); the latch was reset at the edge, and
+    until this record the print lived only in the edge thread's memory until its
+    review was stashed, so a restart or an update in that window lost it: no
+    review, no ledger entry, no warning. After a restart the queue retries it
+    (_process_pending_cancel_fetches, once the printer is idle or ready) with the
+    heads read when the print ended.
+
+    The record is the one _enqueue_cancel_fetch writes, with `last_status`
+    FETCH_IN_FLIGHT and `attempts` 0, and no nudge: the "clear the screen" line is
+    logged the first time a download really fails. A record already there (a
+    restart's recovery firing the edge again for a print a process before it
+    queued) is kept as it is, given only the reads it lacks (the first print-end
+    read wins). Returns the record as stored. The caller drops it once the compute
+    reaches an outcome (print_monitor._settle_fetch)."""
+    held = []
+
+    def _hold(rec):
+        if isinstance(rec, dict) and rec:
+            kept = dict(rec)
+            changed = False
+            for key, value in (("end_heads", end_heads), ("start_spools", start_spools),
+                               ("swap_log", swap_log)):
+                if value and not kept.get(key):
+                    kept[key] = value
+                    changed = True
+            held.append(kept)
+            return kept if changed else None
+        fresh = {
+            "printer_name": printer_name, "job_id": str(job_id), "filename": filename,
+            "progress": float(reached_fraction), "first_seen": time.time(),
+            "kind": kind, "ambiguous": bool(ambiguous), "start_spools": start_spools,
+            "swap_log": swap_log, "attempts": 0, "last_status": FETCH_IN_FLIGHT,
+        }
+        if end_heads:
+            fresh["end_heads"] = end_heads
+        held.append(fresh)
+        return fresh
+
+    cancel_fetch_store.update_pending(printer_name, job_id, _hold)
+    return held[0] if held else None
+
+
 def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind="cancel",
                           ambiguous=False, start_spools=None, swap_log=None, end_heads=None):
     """Queue a print whose gcode couldn't be fetched yet (the selected-file
@@ -2628,32 +2682,46 @@ def _enqueue_cancel_fetch(printer_name, filename, job_id, reached_fraction, kind
     Idempotent:
     re-queuing the same job bumps `attempts`, PRESERVES `first_seen` (so the
     max-age give-up window is measured from the FIRST sighting), and does NOT
-    re-nudge. The nudge logs exactly ONCE, on first queue. Returns True if newly
-    queued (nudged), False if it was already queued."""
-    if cancel_fetch_store.has_pending(printer_name, job_id):
-        rec = cancel_fetch_store.get_pending(printer_name, job_id) or {}
+    re-nudge. The nudge logs exactly ONCE, the first time a download really fails:
+    on first queue, or (scope C, hotfix 2026-11-11) on the first failure of the
+    record the live edge wrote before its download (_hold_fetch_in_flight, status
+    "in_flight", which logs nothing). The read and the write are one locked store
+    step (cancel_fetch_store.update_pending), so two writers of one record never
+    lose a bump. Returns True if newly queued (nudged), False if it was already
+    queued."""
+    nudge = []
+
+    def _queue(rec):
+        if not isinstance(rec, dict) or not rec:
+            nudge.append(True)
+            fresh = {
+                "printer_name": printer_name, "job_id": str(job_id), "filename": filename,
+                "progress": float(reached_fraction), "first_seen": time.time(),
+                "kind": kind, "ambiguous": bool(ambiguous), "start_spools": start_spools,
+                "swap_log": swap_log,
+                "attempts": 1, "last_status": "awaiting_fetch",
+            }
+            if end_heads:
+                fresh["end_heads"] = end_heads
+            return fresh
+        if rec.get("last_status") == FETCH_IN_FLIGHT:
+            nudge.append(True)          # the first download of it that really failed
         rec.update({"printer_name": printer_name, "job_id": str(job_id),
                     "filename": filename, "progress": float(reached_fraction),
                     "kind": kind, "ambiguous": bool(ambiguous),
                     # Preserve an already-captured snapshot/log if this re-queue lacks one.
                     "start_spools": start_spools or rec.get("start_spools"),
                     "swap_log": swap_log or rec.get("swap_log"),
-                    "attempts": int(rec.get("attempts", 0)) + 1})
+                    "attempts": int(rec.get("attempts", 0) or 0) + 1,
+                    "last_status": "awaiting_fetch"})
         first_read = rec.get("end_heads") or end_heads
         if first_read:
             rec["end_heads"] = first_read
-        cancel_fetch_store.add_pending(rec)
+        return rec
+
+    cancel_fetch_store.update_pending(printer_name, job_id, _queue)
+    if not nudge:
         return False
-    fresh = {
-        "printer_name": printer_name, "job_id": str(job_id), "filename": filename,
-        "progress": float(reached_fraction), "first_seen": time.time(),
-        "kind": kind, "ambiguous": bool(ambiguous), "start_spools": start_spools,
-        "swap_log": swap_log,
-        "attempts": 1, "last_status": "awaiting_fetch",
-    }
-    if end_heads:
-        fresh["end_heads"] = end_heads
-    cancel_fetch_store.add_pending(fresh)
     pct = max(0.0, min(1.0, float(reached_fraction))) * 100
     if ambiguous:
         # The ambiguous edge fires at IDLE (file already unlocked), so this path

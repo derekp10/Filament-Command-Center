@@ -53,6 +53,9 @@ def _reset_tracker(tmp_path, monkeypatch):
     # tests run real handlers, which must not read locations.json or Spoolman. No
     # read is main's path, which every assertion here was written against.
     monkeypatch.setattr(print_deduct, "_capture_print_heads", lambda *a, **k: None)
+    # Scope C: a print an edge thread still holds must not hold up the next test's
+    # printer (the real daemon-thread test below leaves its thread finishing up).
+    monkeypatch.setattr(print_monitor, "_FETCH_CLAIMS", set())
     app_module._PRINT_TRACKER.clear()
     prev_async = print_monitor._CANCEL_DEDUCT_RUN_ASYNC
     print_monitor._CANCEL_DEDUCT_RUN_ASYNC = False
