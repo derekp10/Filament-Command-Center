@@ -13,7 +13,8 @@ browser, no container). Pinned:
     never applied by one press: the first press says so inside the set and on
     the card, and posts nothing; a second press goes ahead (Derek's rule for a
     hard-to-undo yes: more resistance, no typed words). A set placed exactly
-    posts at once;
+    posts at once (round 2: how the wait looks, and what the button says while
+    it waits, is test_cancel_review_set_yes_js.py);
   - a no_spool card whose set has no grams says what is missing on the card
     ("type the grams each spool used"), never "pick the spool";
   - every refusal of an Apply (the page's own and the server's) is said on the
@@ -178,8 +179,10 @@ def test_a_set_left_empty_is_never_applied_by_one_press(tmp_path):
     assert res["after1"] == 0, res
     s = res["said"]
     assert s["alertShown"] and s["alertRole"] == "alert", s
-    assert s["alert"] == ("T4 · HEAD-5: none of its 84.28 g are placed. Type the grams each spool used, "
-                          "or put them all on one; or press Confirm deduct again to log them as uncharged."), s
+    # Round 2 (R1): with a ⚠️, pointing at the button as it reads while it waits
+    # (test_cancel_review_set_yes_js.py pins the button and the orange look).
+    assert s["alert"] == ("⚠️ T4 · HEAD-5: none of its 84.28 g are placed. Type the grams each spool used, "
+                          "or put them all on one; or press ⚠️ Yes below to leave them uncharged."), s
     # One set's words are said in the set alone: held sets are among a card's last
     # lines, just above its buttons, and the card's notice said them again a line
     # below (the picture check, 2026-11-12). On 4c2b750 the notice repeated the alert.
@@ -227,7 +230,7 @@ def test_two_sets_left_empty_say_so_in_each_and_once_by_the_buttons(tmp_path):
     s = res["said"]
     assert len(s["alerts"]) == 2 and all(a and "none of its" in a for a in s["alerts"]), s
     assert s["noticeShown"] and s["notice"] == (
-        "2 heads' grams don't add up, as each says above. Press Confirm deduct again to go ahead."), s
+        "2 heads' grams don't add up, as each says above. Press ⚠️ Yes below to leave them uncharged."), s
     assert res["posted"] == 1, res
 
 
@@ -260,8 +263,8 @@ def test_a_sets_picks_over_its_grams_ask_before_they_charge(tmp_path):
     # On 9b16a9e: AssertionError: assert 1 == 0 (168.56 g of a head that used 84.28 g, charged at once)
     res = _go(tmp_path, OVER_JS, [PARTIAL_SET])
     assert res["after1"] == 0, res
-    assert res["said"] == ("T4 · HEAD-5: its spools add up to 168.56 g, 84.28 g more than the 84.28 g "
-                           "FCC computed. Press Confirm deduct again to charge that."), res
+    assert res["said"] == ("⚠️ T4 · HEAD-5: its spools add up to 168.56 g, 84.28 g more than the 84.28 g "
+                           "FCC computed. Press ⚠️ Yes below to charge the spools as typed."), res
     assert res["gone"], "a changed box takes the old words away"
     assert res["after2"] == 0 and "174.28 g, 90 g more" in res["said2"], res
     assert len(res["posted"]) == 1, res
@@ -458,5 +461,7 @@ def test_the_new_words_are_readable_and_use_a_named_size(tmp_path):
     res = _go(tmp_path, LOOK_JS, [PARTIAL_SET])
     for style in (res["alert"], res["notice"]):
         colour = re.search(r"(?<![-\w])color:\s*(#[0-9a-fA-F]{6})", style).group(1)
-        assert _contrast(colour) >= 4.5, (colour, style)
-        assert re.search(r"font-size:\s*var\(--fcc-fs-small\)", style), style
+        # Round 2 (R1): the set's words are drawn on a ground of their own (an orange box).
+        ground = re.search(r"background(?:-color)?:\s*(#[0-9a-fA-F]{6})", style)
+        assert _contrast(colour, ground.group(1) if ground else CARD_BG) >= 4.5, (colour, style)
+        assert re.search(r"font-size:\s*var\(--fcc-fs-(small|row)\)", style), style

@@ -197,10 +197,14 @@
         const accounted = entries.every((e) => e.when === 'start' || e.when === 'during');
         const label = accounted ? ` had ${entries.length} spools this print` : `: FCC saw ${entries.length} spools on it`;
         // Review fix: an Apply whose boxes don't add up to the set's grams says so
-        // here, in the set (setsConfirmed).
+        // here, in the set (setsConfirmed). Round 2 (R1, Derek's picture check:
+        // "the confirm looks exactly the same, I'm sure someone could misread
+        // it"): an orange box, its words opening on a ⚠️, unlike the amber note
+        // above it and the card's amber banner.
         const alert = `<div class="fcc-cr-set-alert" role="alert"
-                            style="display:none;margin:4px 0 2px;color:#e6c074;font-weight:bold;
-                                   font-size:var(--fcc-fs-small);line-height:1.4;"></div>`;
+                            style="display:none;margin:6px 0 4px;padding:7px 10px;border-radius:4px;
+                                   background:#3a1e08;border:1px solid #fd7e14;border-left:4px solid #fd7e14;
+                                   color:#ffe0c2;font-weight:bold;font-size:var(--fcc-fs-row);line-height:1.4;"></div>`;
         return setBoxHtml(pos, head && head.toolhead, label, left,
             lines + noteHtml('fcc-cr-line-note', '#e6c074', notes[pos]) + alert, 'fcc-cr-heldset');
     }
@@ -217,11 +221,60 @@
         n.textContent = msg || '';
         n.style.display = msg ? '' : 'none';
     }
+    // Round 2 (R1, Derek's picture check, 2026-11-12): while the set check waits
+    // for its second press, the card's button says what that press does, in
+    // orange ("Just so the user is made aware that they are about to not perform
+    // a deduct"). Dark words on orange (white on orange fails contrast), set as
+    // Bootstrap's own button colours so it stays orange when pointed at, pressed
+    // or reached by the keyboard, its focus ring too.
+    const YES_STYLE = '--bs-btn-color:#000;--bs-btn-bg:#fd7e14;--bs-btn-border-color:#fd7e14;'
+        + '--bs-btn-hover-color:#000;--bs-btn-hover-bg:#fd9137;--bs-btn-hover-border-color:#fd9137;'
+        + '--bs-btn-active-color:#000;--bs-btn-active-bg:#fd9843;--bs-btn-active-border-color:#fd9843;'
+        + '--bs-btn-disabled-color:#000;--bs-btn-disabled-bg:#fd7e14;--bs-btn-disabled-border-color:#fd7e14;'
+        + '--bs-btn-focus-shadow-rgb:253,126,20;';
+    // A waiting button's own words, classes and style, to give back (yesOff).
+    const _ownLook = new WeakMap();
+    function yesOn(btn, words) {
+        if (!btn) return;
+        if (!_ownLook.has(btn)) {
+            _ownLook.set(btn, { text: btn.textContent, cls: btn.className, style: btn.getAttribute('style') });
+        }
+        const own = _ownLook.get(btn);
+        btn.textContent = words;
+        btn.className = own.cls;
+        btn.classList.remove('btn-success');
+        btn.classList.add('fcc-cr-yes');
+        btn.setAttribute('style', (own.style ? `${own.style};` : '') + YES_STYLE);
+    }
+    function yesOff(btn) {
+        const own = btn && _ownLook.get(btn);
+        if (!own) return;
+        _ownLook.delete(btn);
+        btn.textContent = own.text;
+        btn.className = own.cls;
+        if (own.style == null) btn.removeAttribute('style'); else btn.setAttribute('style', own.style);
+    }
+    // Ends the set check's wait for a second press: the sets' words, and its line
+    // by the buttons, go, and the button is its own again, so a "⚠️ Yes" never
+    // stands over grams that changed since. The next press over a set that still
+    // doesn't add up asks again (never going ahead on an ask nobody sees now).
+    function endSetAsk(card) {
+        if (!card) return;
+        const asked = card.dataset.setAsked != null;
+        delete card.dataset.setAsked;
+        delete card.dataset.setAskedAt;
+        card.querySelectorAll('.fcc-cr-set-alert').forEach((a) => { a.textContent = ''; a.style.display = 'none'; });
+        if (asked) sayOnCard(card, '');
+        yesOff(card.querySelector('.fcc-cr-confirm'));
+    }
     // A held set whose boxes don't add up to its grams (to 0.05 g), in words:
-    // [{box, placed, words}]. One press used to close a set left empty with its
-    // grams uncharged (its lines' pickers already name their spools, so the card
-    // looked done), and a head's grams typed in both boxes were charged twice.
-    function setProblems(card, verb) {
+    // [{box, placed, short, words}], `short` being the grams not placed (below 0
+    // when the boxes add up to more). One press used to close a set left empty
+    // with its grams uncharged (its lines' pickers already name their spools, so
+    // the card looked done), and a head's grams typed in both boxes were charged
+    // twice. The words point at the button as it reads while the check waits
+    // (round 2, R1): "⚠️ Yes", the same on every card.
+    function setProblems(card) {
         const out = [];
         card.querySelectorAll('.fcc-cr-heldset').forEach((box) => {
             const left = box.querySelector('.fcc-cr-set-left');
@@ -240,26 +293,25 @@
             let words;
             if (placed <= 0) {
                 words = `${where}: none of its ${t} g are placed. Type the grams each spool used, or put them `
-                    + `all on one; or press ${verb} again to log them as uncharged.`;
+                    + 'all on one; or press ⚠️ Yes below to leave them uncharged.';
             } else if (d > 0) {
-                words = `${where}: ${fmtG(d)} g of its ${t} g aren't placed. Press ${verb} again to log them `
-                    + `as uncharged.`;
+                words = `${where}: ${fmtG(d)} g of its ${t} g aren't placed. Press ⚠️ Yes below to leave them `
+                    + 'uncharged.';
             } else {
                 words = `${where}: its spools add up to ${fmtG(placed)} g, ${fmtG(-d)} g more than the ${t} g `
-                    + `FCC computed. Press ${verb} again to charge that.`;
+                    + 'FCC computed. Press ⚠️ Yes below to charge the spools as typed.';
             }
-            out.push({ box, placed, words });
+            out.push({ box, placed, short: d, words });
         });
         return out;
     }
     // Whether an Apply may go ahead over the card's sets: at once when each is
     // placed exactly; else the first press says why in each set and on the card,
     // and a second press with the same grams goes ahead (Derek: more resistance on
-    // a yes that is hard to undo, no typed words).
+    // a yes that is hard to undo, no typed words). While it waits, the button
+    // says what that second press does (round 2, R1).
     function setsConfirmed(card, ev) {
-        const verb = (card.dataset.kind === 'no_spool' || card.dataset.kind === 'shortfall')
-            ? 'Apply' : 'Confirm deduct';
-        const problems = setProblems(card, verb);
+        const problems = setProblems(card);
         const sig = problems.map((p) => `${p.box.dataset.pos}=${p.placed}`).join(';');
         // A double click's second press is no second press (Derek's rule for a
         // yes that is hard to undo): the second click of a double click, or any
@@ -269,23 +321,31 @@
                 && ((ev && ev.detail > 1) || Date.now() - Number(card.dataset.setAskedAt || 0) < 700)) {
             return false;
         }
-        card.querySelectorAll('.fcc-cr-set-alert').forEach((a) => { a.textContent = ''; a.style.display = 'none'; });
-        if (!problems.length) return true;
-        if (card.dataset.setAsked === sig) return true;
+        // The second press goes out (or there is nothing left to ask): the button
+        // is its own again before it does, whatever the answer. Grams other than
+        // those asked about are asked about again.
+        const asked = card.dataset.setAsked;
+        endSetAsk(card);
+        if (!problems.length || asked === sig) return true;
         card.dataset.setAsked = sig;
         card.dataset.setAskedAt = String(Date.now());
         problems.forEach((p) => {
             const a = p.box.querySelector('.fcc-cr-set-alert');
-            if (a) { a.textContent = p.words; a.style.display = ''; }
+            if (a) { a.textContent = `⚠️ ${p.words}`; a.style.display = ''; }
         });
+        const short = problems.filter((p) => p.short > 0).reduce((a, p) => a + p.short, 0);
+        const over = problems.filter((p) => p.short < 0).reduce((a, p) => a - p.short, 0);
         // Held sets are among a card's last lines, just above its buttons, so one
         // set's words are said in the set alone: the card's notice said them again
         // a line or two below. Two or more sets get one line by the buttons.
+        const does = !over ? 'leave them uncharged' : !short ? 'charge the spools as typed' : 'go ahead as typed';
         sayOnCard(card, problems.length === 1 ? ''
-            : `${problems.length} heads' grams don't add up, as each says above. Press ${verb} again to go ahead.`);
+            : `${problems.length} heads' grams don't add up, as each says above. Press ⚠️ Yes below to ${does}.`);
+        const btn = card.querySelector('.fcc-cr-confirm');
+        yesOn(btn, !over ? `⚠️ Yes, leave ${fmtG(short)} g uncharged`
+            : !short ? `⚠️ Yes, charge ${fmtG(over)} g more` : '⚠️ Yes, go ahead as typed');
         // The words make the card taller, and the panel scrolls: keep the button
         // just pressed in view, with what it said above it.
-        const btn = card.querySelector('.fcc-cr-confirm');
         if (btn && typeof btn.scrollIntoView === 'function') btn.scrollIntoView({ block: 'nearest' });
         return false;
     }
@@ -1274,13 +1334,9 @@
             });
             out.textContent = setLeftWords(Number(out.dataset.total), placed);
             // Review fix: what an Apply said about the grams as they were goes once
-            // they change (the next Apply checks them again).
-            const alert = box.querySelector('.fcc-cr-set-alert');
-            if (alert && alert.style.display !== 'none') {
-                alert.textContent = '';
-                alert.style.display = 'none';
-                sayOnCard(box.closest('.fcc-cr-card'), '');
-            }
+            // they change (the next Apply checks them again). Round 2 (R1): every
+            // set's words go, and the button says its own words again.
+            endSetAsk(box.closest('.fcc-cr-card'));
         }
 
         overlay.addEventListener('input', (e) => {

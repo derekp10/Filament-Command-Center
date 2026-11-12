@@ -774,7 +774,14 @@ def test_review_card_notices_are_readable(page: Page, base_url: str, assert_cont
     set's words are said in the set alone); a second press posts, and the confirm
     route, answered in the page, refuses it, so nothing can be written. Made-up
     reviews in this page only. The offline check of their colours and size is
-    test_cancel_review_review_fixes_js.py."""
+    test_cancel_review_review_fixes_js.py.
+
+    Round 2 (R1, 2026-11-12): while the first press waits for the second, the set's
+    words are an orange box and the button is orange with dark words, saying what
+    the second press does; both are scored as drawn, with the pointer on the button
+    (its hover look, which the keyboard's focus shares) and off it, and the button
+    is scored again once the second press has put it back. The offline check of
+    those colours is test_cancel_review_set_yes_js.py."""
     import json as _json
     import conftest
     words = {"end": "when the print ended", "start": "when the print started", "during": "during the print"}
@@ -796,20 +803,49 @@ def test_review_card_notices_are_readable(page: Page, base_url: str, assert_cont
     page.wait_for_function("() => typeof window.openCancelReview === 'function'")
     page.evaluate("() => window.openCancelReview()")
     card = '#fcc-cancel-review-overlay .fcc-cr-card[data-job="n1"]'
-    page.wait_for_selector(f"{card} .fcc-cr-confirm", timeout=15000)
-    page.click(f"{card} .fcc-cr-confirm")
+    button = f"{card} .fcc-cr-confirm"
+
+    def _drawn(looks):
+        # Bootstrap eases a button's colours over 0.15 s: score it once it is drawn
+        # in one of `looks` ([background, words], as getComputedStyle gives them).
+        page.wait_for_function(
+            "([sel, looks]) => { const b = document.querySelector(sel); if (!b) return false;"
+            " const cs = getComputedStyle(b);"
+            " return looks.some(([bg, fg]) => cs.backgroundColor === bg && cs.color === fg); }",
+            arg=[button, looks], timeout=5000)
+    black, white = "rgb(0, 0, 0)", "rgb(255, 255, 255)"
+    orange, orange_hover = ["rgb(253, 126, 20)", black], ["rgb(253, 145, 55)", black]
+    green, green_hover = ["rgb(25, 135, 84)", white], ["rgb(21, 115, 71)", white]
+    page.wait_for_selector(button, timeout=15000)
+    page.click(button)
     page.wait_for_selector(f"{card} .fcc-cr-set-alert", state="visible", timeout=5000)
     assert not page.locator(f"{card} .fcc-cr-card-notice").is_visible()
     overlay = page.locator("#fcc-cancel-review-overlay")
+    # The waiting state (round 2, R1): the button says what the second press does,
+    # in orange, and the set's words are an orange box.
+    assert page.locator(button).inner_text() == "⚠️ Yes, leave 84 g uncharged"
+    box = page.evaluate(
+        "(sel) => { const cs = getComputedStyle(document.querySelector(sel));"
+        " return [cs.backgroundColor, cs.borderLeftColor, cs.color]; }", f"{card} .fcc-cr-set-alert")
+    assert box == ["rgb(58, 30, 8)", "rgb(253, 126, 20)", "rgb(255, 224, 194)"], box
+    page.hover(button)
+    _drawn([orange_hover])
     assert_contrast(overlay)
     # Each element's text is scored by its first 80 characters (contrast_offenders).
     scored = " | ".join(o["text"] for o in conftest.contrast_offenders(overlay, min_ratio=100))
-    for said in ("T4 · HEAD-5: none of its 84 g are placed", "T4 · HEAD-5: FCC saw 2 spools on it"):
+    for said in ("⚠️ T4 · HEAD-5: none of its 84 g are placed", "T4 · HEAD-5: FCC saw 2 spools on it",
+                 "⚠️ Yes, leave 84 g uncharged"):
         assert said in scored, (said, scored)
+    page.mouse.move(0, 0)
+    _drawn([orange, orange_hover])
+    assert_contrast(overlay)
     # The second press posts; the route above refuses it, and the card says so.
     page.wait_for_timeout(750)  # past the double-click shield, so the press counts
-    page.click(f"{card} .fcc-cr-confirm")
+    page.click(button)
     page.wait_for_selector(f"{card} .fcc-cr-card-notice", state="visible", timeout=5000)
+    # The press that went out put the button back: its own words, in green.
+    _drawn([green, green_hover])
+    assert page.locator(button).inner_text() == "Confirm deduct"
     assert_contrast(overlay)
     scored = " | ".join(o["text"] for o in conftest.contrast_offenders(overlay, min_ratio=100))
     assert "stub: nothing applied" in scored, scored
