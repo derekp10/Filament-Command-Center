@@ -589,7 +589,7 @@
     window.registerShortcut({
         id: 'quickswap-focus', scope: 'Quick-Swap',
         keys: ['Q'],
-        description: 'Focus the Quick-Swap grid when a toolhead is being managed.'
+        description: 'Put the keyboard on the Quick-Swap grid while a toolhead\'s window is open.'
     });
     window.registerShortcut({
         id: 'arrow-nav', scope: 'Quick-Swap',
@@ -604,7 +604,7 @@
     window.registerShortcut({
         id: 'escape-cancel', scope: 'Quick-Swap',
         keys: ['Esc'],
-        description: 'Cancel the active confirm overlay.'
+        description: 'Close the swap question; nothing moves.'
     });
     window.registerShortcut({
         id: 'bind-picker-unbind', scope: 'Quick-Swap',
@@ -612,29 +612,29 @@
         description: 'In "Bind a Slot": clear the highlighted slot\'s binding.'
     });
     window.registerShortcut({
-        id: 'force-loc-arrows', scope: 'Force Location Modal',
+        id: 'force-loc-arrows', scope: 'Force Location Override',
         keys: ['↑', '↓'],
         description: 'Navigate matching locations; Enter selects, Esc prompts before closing.'
     });
     window.registerShortcut({
-        id: 'weigh-entry-arrows', scope: 'Weigh / Quick-Weigh Overlay',
+        id: 'weigh-entry-arrows', scope: 'Weigh window',
         keys: ['←', '→'],
         description: 'Swap between Gross / Net / Additive / Set Used modes.'
     });
     window.registerShortcut({
-        id: 'weigh-entry-enter', scope: 'Weigh / Quick-Weigh Overlay',
+        id: 'weigh-entry-enter', scope: 'Weigh window',
         keys: ['Enter'],
         description: 'Save the weight update.'
     });
     window.registerShortcut({
-        id: 'weigh-entry-escape', scope: 'Weigh / Quick-Weigh Overlay',
+        id: 'weigh-entry-escape', scope: 'Weigh window',
         keys: ['Esc'],
-        description: 'Cancel and close the overlay.'
+        description: 'Close without saving.'
     });
     window.registerShortcut({
-        id: 'weigh-entry-set-default', scope: 'Weigh / Quick-Weigh Overlay',
+        id: 'weigh-entry-set-default', scope: 'Weigh window',
         keys: ['D'],
-        description: 'Set the current mode as the default the next time this overlay opens.'
+        description: 'Make the mode you are on the one this window opens in next time.'
     });
 
     // Scan-command prefixes you can type into the scan input or encode on QR labels.
@@ -760,7 +760,7 @@
     window.registerShortcut({
         id: 'load-question-cancel', scope: 'Load / Store Question',
         keys: ['Esc'],
-        description: 'Cancel: nothing moves. While the question is open, other scans are held off (CMD:CANCEL cancels it).'
+        description: 'Cancel: nothing moves, and the QR under Cancel does the same. A question with Load it instead or Just store it holds off other scans until it is answered; the shorter Continue Anyway question doesn\'t.'
     });
     window.registerShortcut({
         id: 'scan-cmd-slot', scope: 'Scan Commands',

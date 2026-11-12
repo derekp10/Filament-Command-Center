@@ -346,6 +346,93 @@ def test_no_pipe_in_the_help_words(entries):
             assert "|" not in line, f"{e['key']}: a '|' in {line!r} (the toolhead-Type canary's rule)"
 
 
+# ---------------------------------------------------------------------------
+# 6. No scan codes. A help names the button, or the QR a person sees beside it, never the
+#    text a QR carries (Derek, 2026-11-11, of "CMD:EJECTALL asks…" in the location
+#    window's help: "out of left field for someone not familiar with how QR code commands
+#    work in the back end"). The key rows a help lists under its words are held to the same
+#    rule. The full shortcut list's "Scan Commands" section is the codes' own reference,
+#    which no help lists.
+# ---------------------------------------------------------------------------
+
+SCAN_CODE = re.compile(r"\b(?:CMD|LOC|SPL|ID|LEG):\S+")
+
+
+def scan_codes_in(text: str) -> list:
+    """Every scan code written out in `text` ("CMD:EJECTALL", "LOC:SHELF-1")."""
+    return SCAN_CODE.findall(text)
+
+
+def _shortcut_blocks():
+    """Every registerShortcut({...}) in the page's scripts, as (file, scope, the call's
+    whole text): its keys and its description, however the description is built."""
+    for name, src in _page_scripts().items():
+        for m in re.finditer(r"registerShortcut\(\s*\{", src):
+            start = m.end() - 1
+            depth, j, quote = 0, start, None
+            while j < len(src):
+                c = src[j]
+                if quote:
+                    if c == "\\":
+                        j += 2
+                        continue
+                    if c == quote:
+                        quote = None
+                elif c in "'\"`":
+                    quote = c
+                elif c == "{":
+                    depth += 1
+                elif c == "}":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            block = src[start:j + 1]
+            scope = re.search(r"scope:\s*['\"]([^'\"]+)['\"]", block)
+            yield name, scope.group(1) if scope else "", block
+
+
+def _listed_scopes(entries) -> set:
+    listed = set()
+    for e in entries:
+        listed.update(e.get("scopes") or [])
+        for sec in e.get("sections") or []:
+            listed.update(sec.get("scopes") or [])
+    return listed
+
+
+@needs_node
+def test_no_help_names_a_scan_code(entries):
+    for e in entries:
+        for line in _all_words(e):
+            codes = scan_codes_in(line)
+            assert not codes, (
+                f"{e['key']}: {codes} in {line!r}. Name the button, or the QR beside it, not the "
+                f"text the QR carries (Derek, 2026-11-11).")
+    listed = _listed_scopes(entries)
+    seen = set()
+    for name, scope, block in _shortcut_blocks():
+        if scope not in listed:
+            continue
+        seen.add(scope)
+        codes = scan_codes_in(block)
+        assert not codes, (
+            f"{name}: the {scope!r} key row {block[:140]!r} names {codes}, and a help lists that "
+            f"scope's keys under its words. Name the button or the QR beside it instead.")
+    assert seen == listed, f"no key rows found for {sorted(listed - seen)}: the check read nothing there"
+
+
+@pytest.mark.parametrize("text, codes", [
+    ("CMD:EJECTALL asks, then takes out every spool here", ["CMD:EJECTALL"]),
+    ("a slot's code (CMD:SLOT:2) does what clicking it does", ["CMD:SLOT:2)"]),
+    ("this place's label (LOC:SHELF-1) puts your buffer here", ["LOC:SHELF-1)"]),
+    ("the 📷 CANCEL QR beside Cancel cancels", []),
+    ("Filament ID: 5, PAID:5", []),
+])
+def test_the_scan_code_check_catches_what_it_should(text, codes):
+    assert scan_codes_in(text) == codes
+
+
 @pytest.mark.parametrize("text, names", [
     ("Scan XL-3's label", ["XL-3"]),
     ("the 🦝 Core One INDX", ["Core One", "INDX", "\U0001F99D"]),

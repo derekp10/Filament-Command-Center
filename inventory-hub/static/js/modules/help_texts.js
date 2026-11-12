@@ -14,7 +14,8 @@
 //   sections  parts shown only while their `when` selector is on screen.
 //
 // Rules for the words (CLAUDE.md): plain words for the person using FCC, never
-// code; made-up examples only (SHELF-1, DRYBOX-1, PRINTER-1, HEAD-1, #42), never
+// code, and never a scan code ("CMD:EJECTALL"): name the button, or the QR beside it
+// (Derek, 2026-11-11); made-up examples only (SHELF-1, DRYBOX-1, PRINTER-1, HEAD-1, #42), never
 // the owner's own ids or names; no "|" (the toolhead-Type canary reads it); and
 // only what the code does: each line was checked against it (Group 55), so a
 // change to a dialog's buttons, keys or scans changes its lines here too.
@@ -50,10 +51,10 @@
             'Scan a spool and it waits under READY TO SLOT (◀ PREV and NEXT ▶ pick another from your buffer). Click an empty slot, or ⬇️ DEPOSIT HERE, to put it here; a slot that feeds a toolhead loads it onto that toolhead too. A full slot asks first.',
             'A click on ⬇️ DEPOSIT HERE puts only the spool shown. Scanning its QR (this place\'s own label) puts your buffer here: a toolhead or other one-spool place takes only the top spool, and a box with slots or a printer asks where each spool goes.',
             'On a spool: ✋ PICK puts it in your buffer, ⏏️ EJECT or 🗑️ TRASH takes it out of this place after asking, ✏️ edits it, and 🖨️ adds its label to the print queue. A loaded spool\'s ↩️ RETURN SPOOL puts it back in its slot.',
-            'A dryer box has 🔗 Slot → Toolhead Feeds (press Show): choose which toolhead each slot feeds, then 💾 Save Feeds.',
-            'Scans while it is open: a slot\'s code (CMD:SLOT:2) does what clicking that slot does, and this place\'s own label puts your buffer here, as above.',
-            'CMD:EJECTALL asks, then takes out every spool here that has no slot. CMD:DONE, like ✅ Done / Sync, closes the window, or goes back to the place you came from.',
-            '🖨️ Print Location Label adds this place\'s label to the print queue, and its small QR opens bigger, to scan from the screen.',
+            'A dryer box has 🔗 Slot → Toolhead Feeds (press Show): choose which toolhead each slot feeds, then 💾 Save Feeds. 🖨️ Print Location Label adds this place\'s label to the print queue, and its small QR opens bigger, to scan from the screen.',
+            'Scans while it is open: the QR on a slot\'s tile does what clicking that slot does, and this place\'s own label puts your buffer here, as above.',
+            'In a box with slots, spools with no slot are under Unslotted Items. EJECT ALL in the ☢️ DANGER ZONE below them (or its QR) asks, then sends each back where it came from, or to Unassigned after one more question. A spool loaded on a toolhead stays.',
+            '✅ Done / Sync closes the window, or goes back to the place you came from. The QR beside it does the same, except during an audit, where it is the audit\'s Done, or a bulk move, where it commits the move.',
         ],
         sections: [{
             title: '⚡ Quick-Swap (a toolhead or a printer)',
@@ -94,7 +95,7 @@
             '⚙️ holds Delete this spool…, which asks twice before it deletes anything.',
             'Scans still work here: a spool\'s label puts it in your buffer, and a place\'s label puts your buffer there.',
         ],
-        scopes: ['Force Location Modal'],
+        scopes: ['Force Location Override'],
     });
 
     help({
@@ -153,7 +154,7 @@
             'Auto Archive & Eject if Empty (0g) is on each time it opens: a spool saved at 0 g is archived and taken off its place.',
             'In Gross, when the empty spool\'s weight isn\'t known, Save asks for it first. Skip there saves your number as the filament left (as Net does).',
         ],
-        scopes: ['Weigh / Quick-Weigh Overlay'],
+        scopes: ['Weigh window'],
     });
 
     help({
@@ -166,7 +167,7 @@
             'Just store it: the spool goes in the slot, and HEAD-1 is left as it was. Cancel: nothing moves.',
             'Enter stores it, or cancels when there is no Just store it. Scan the QR under a button to answer with it. Any other scan is ignored, and the question says so: scan it again once you have answered.',
             'If what the slot feeds changes while you decide, FCC asks again and names the new toolhead.',
-            'Some actions during a print (a move straight onto or off a printing toolhead, an Undo, EJECT ALL) ask a shorter question instead: Continue Anyway or Cancel. It opens on Cancel, so a stray Enter moves nothing.',
+            'Some actions during a print (a move straight onto or off a printing toolhead, an Undo) ask a shorter question instead: Continue Anyway or Cancel. It opens on Cancel, so a stray Enter moves nothing, but other scans still go through while it is open.',
         ],
         scopes: ['Load / Store Question'],
     });
@@ -180,7 +181,7 @@
             '⭐ marks the slot FCC would choose itself. A greyed-out slot says why it can\'t take the spool.',
             'Picking a slot that feeds a toolhead loads the spool onto it too: FCC asks first when that toolhead runs a spool from elsewhere or its printer is printing. A tile that says the spool is stored there doesn\'t load it.',
             'A slot that holds a spool asks first: Swap sends that spool to your scan buffer and files it back where it sat before; Overwrite leaves it in the box with no slot.',
-            'Scan a slot\'s label, or the QR on its tile, to pick it. CMD:CANCEL cancels. Any other scan does nothing and says so: scan it again once the picker has closed.',
+            'Scan a slot\'s label, or the QR on its tile, to pick it; the 📷 CANCEL QR beside Cancel cancels. Any other scan does nothing and says so: scan it again once the picker has closed.',
             'With several spools in your buffer it opens once for each one (1 of 3, 2 of 3). Esc stops there, and the rest stay in your buffer.',
             'From ↩️ Return it asks which slot the spool goes back to, and nothing is loaded.',
         ],
@@ -198,11 +199,20 @@
         lines: [
             'Pick where on a printer the spool goes: one of its toolheads, or a Printer Pool slot, which holds the spool ready without loading a toolhead.',
             'Each toolhead tile shows its spool (or EMPTY), whether the printer is printing, and the box slots that feed it. ⭐ marks the one FCC suggests.',
-            'A toolhead that holds a spool asks first: Load it instead loads the new spool, and the question says where the old one goes. Cancel goes back to the picker.',
+            'A toolhead that holds a spool asks first: Load it instead loads the new spool, and the question says where the old one goes.',
             'For a spool that is Unassigned, in Unknown or on another toolhead, FCC asks which slot to record it as coming from: a free slot that feeds that toolhead, or No box. ↩️ Return and ⏏️ Eject use that slot later.',
-            'Scan a toolhead\'s label, or a tile\'s QR, to pick it. CMD:CANCEL cancels.',
+            'On either question, Cancel, Esc or the QR under Cancel goes back to the picker.',
         ],
-        scopes: ['Slot Picker'],
+        // The picker's own keys, only while the picker is up: over its two questions, Esc
+        // and Enter do something else (Esc goes back to the picker).
+        sections: [{
+            title: 'In the picker',
+            when: '[data-fcc-picker-mode="printer"]',
+            lines: [
+                'Scan a toolhead\'s label, or a tile\'s QR, to pick it; the 📷 CANCEL QR beside Cancel cancels.',
+            ],
+            scopes: ['Slot Picker'],
+        }],
     });
 
     help({

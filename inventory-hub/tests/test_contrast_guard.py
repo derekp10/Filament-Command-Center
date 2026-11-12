@@ -1371,7 +1371,7 @@ def test_the_in_app_help_is_readable(page: Page, base_url: str, assert_contrast)
     expect(page.locator("#fcc-help-view .fcc-help-sub")).to_be_visible()
     assert_contrast(overlay)
     scored = " ".join(o.get("text") or "" for o in conftest.contrast_offenders(overlay, min_ratio=100))
-    for words in ("Quick-Swap (a toolhead or a printer)", "Focus the Quick-Swap grid", "All shortcuts"):
+    for words in ("Quick-Swap (a toolhead or a printer)", "Put the keyboard on the Quick-Swap grid", "All shortcuts"):
         assert words in scored, (words, scored[:400])
 
 

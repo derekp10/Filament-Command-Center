@@ -21,6 +21,10 @@ Scan a spool's label and it joins the **Buffer Zone**. Then scan a place's label
 
 Scanned the wrong spool? **CLEAR** empties the buffer after asking. Or press **DROP**, scan the spools to take out, and press **DROP** again.
 
+### Find a spool
+
+**SEARCH** in the title bar, the round 🔍 button at the bottom left, or the **/** key opens the search: spools or filaments, by material, brand or colour, with colour and weight filters. The 🔍 floats over the page, so it can sit on something you need, such as a QR code: drag it anywhere and it stays there in that browser, and a long press puts it back. The 📡 pill moves the same way: it counts the Live Activity lines that came in since you last tapped it, and a tap shows the log over any open window and clears the count.
+
 ### Boxes, slots and printers
 
 A dryer box has numbered slots, and each slot has its own label. A slot can feed one of a printer's toolheads: open the box from **LOCATIONS** and set it under **🔗 Slot → Toolhead Feeds**. Scan a spool, then a slot's label: FCC puts the spool in that slot and, when the slot feeds a toolhead, loads it onto that toolhead. When that toolhead already runs a spool from somewhere else, or its printer is printing, FCC asks first: **Load it instead**, **Just store it** or **Cancel**.

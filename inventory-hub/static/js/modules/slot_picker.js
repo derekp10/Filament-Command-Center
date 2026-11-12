@@ -1164,7 +1164,7 @@
         window.registerShortcut({ id: 'slot-picker-pick', scope: 'Slot Picker', keys: ['Enter'],
             description: 'Pick the highlighted slot. Scanning a slot label (or the tile\'s QR) picks it too.' });
         window.registerShortcut({ id: 'slot-picker-cancel', scope: 'Slot Picker', keys: ['Esc'],
-            description: 'Cancel the picker; nothing moves. CMD:CANCEL does the same.' });
+            description: 'Cancel the picker; nothing moves. The 📷 CANCEL QR beside Cancel does the same.' });
         window.registerShortcut({ id: 'slot-picker-choice', scope: 'Slot Picker', keys: ['←', '→', 'Enter'],
             description: 'A slot that holds a spool asks what happens to it (Swap / Overwrite, or Swap it out): '
                 + '←/→ choose, Enter confirms, Back returns to the slots. Each answer has a QR too.' });
