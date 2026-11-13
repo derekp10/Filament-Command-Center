@@ -34,7 +34,6 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 import app as app_module  # noqa: E402
 import print_deduct  # noqa: E402
 import print_monitor  # noqa: E402
-import prusalink_api  # noqa: E402
 import config_loader  # noqa: E402
 import locations_db  # noqa: E402
 import spoolman_api  # noqa: E402
@@ -122,7 +121,9 @@ def test_swap_on_one_head_still_charges_the_other_heads():
     """The raccoon print: heads 0, 1 and 2 all printed; head 1 ran out and was
     swapped. Head 1 splits across two spools; heads 0 and 2 must STILL be billed."""
     swap_log = [{"position": 1, "progress": 0.5, "from_sid": 201, "to_sid": 202, "runout": True}]
-    seg = {"footer": dict(RACOON_FOOTER), "cums": [{1: 10.0}]}
+    # Head 1 had used 10 g at the swap: since the hotfix of 2026-11-11 (scope B) that
+    # figure comes from the print's own download, keyed by the swap's point.
+    cums = {0.5: {1: 10.0}}
     seen = {}
 
     def fake_resolve(printer_name, usage_map, fb_url, active_locs=None, charged_out=None):
@@ -132,8 +133,7 @@ def test_swap_on_one_head_still_charges_the_other_heads():
             charged_out.update(r["position"] for r in rows)
         return rows
 
-    with patch.object(prusalink_api, "compute_segment_usage", return_value=seg), \
-         patch.object(locations_db, "get_active_printer_map", return_value=_map(8)), \
+    with patch.object(locations_db, "get_active_printer_map", return_value=_map(8)), \
          patch.object(spoolman_api, "get_spool", side_effect=lambda sid: _spool(sid)), \
          patch.object(spoolman_api, "format_spool_display",
                       return_value={"text": "x", "color": "AAA"}), \
@@ -141,7 +141,7 @@ def test_swap_on_one_head_still_charges_the_other_heads():
          patch.object(print_deduct, "_resolve_usage_to_spools", side_effect=fake_resolve):
         res = print_deduct._route_completion_to_review(
             INDX, "racoon.bgcode", 9001, dict(RACOON_FOOTER), "http://fb", [1],
-            swap_log=swap_log, ip_address="ip", api_key="k", start_spools={"1": 201})
+            swap_log=swap_log, swap_cums=cums, start_spools={"1": 201})
 
     assert res["auto_split"] is True
     rec = cancel_review_store.get_pending(INDX, 9001)
@@ -159,7 +159,7 @@ def test_swap_split_total_covers_every_printing_head():
     """The review's total must account for all three heads (52.27 g), not just the
     swapped one (24.44 g)."""
     swap_log = [{"position": 1, "progress": 0.5, "from_sid": 201, "to_sid": 202}]
-    seg = {"footer": dict(RACOON_FOOTER), "cums": [{1: 10.0}]}
+    cums = {0.5: {1: 10.0}}
 
     def fake_resolve(printer_name, usage_map, fb_url, active_locs=None, charged_out=None):
         rows = [{"sid": 300 + p, "grams": g, "position": p} for p, g in sorted(usage_map.items())]
@@ -167,8 +167,7 @@ def test_swap_split_total_covers_every_printing_head():
             charged_out.update(r["position"] for r in rows)
         return rows
 
-    with patch.object(prusalink_api, "compute_segment_usage", return_value=seg), \
-         patch.object(locations_db, "get_active_printer_map", return_value=_map(8)), \
+    with patch.object(locations_db, "get_active_printer_map", return_value=_map(8)), \
          patch.object(spoolman_api, "get_spool", side_effect=lambda sid: _spool(sid)), \
          patch.object(spoolman_api, "format_spool_display",
                       return_value={"text": "x", "color": "AAA"}), \
@@ -176,7 +175,7 @@ def test_swap_split_total_covers_every_printing_head():
          patch.object(print_deduct, "_resolve_usage_to_spools", side_effect=fake_resolve):
         print_deduct._route_completion_to_review(
             INDX, "racoon.bgcode", 9002, dict(RACOON_FOOTER), "http://fb", [1],
-            swap_log=swap_log, ip_address="ip", api_key="k", start_spools={"1": 201})
+            swap_log=swap_log, swap_cums=cums, start_spools={"1": 201})
 
     rec = cancel_review_store.get_pending(INDX, 9002)
     assert rec["total_grams"] == pytest.approx(sum(RACOON_FOOTER.values()), abs=0.01)
@@ -194,13 +193,12 @@ def test_swap_on_a_head_that_printed_nothing_is_ignored():
         {"position": 3, "progress": 0.5, "from_sid": 401, "to_sid": 402},
         {"position": 0, "progress": 0.5, "from_sid": 500, "to_sid": 501},
     ]
-    seg = {"footer": dict(usage), "cums": [{3: 20.0}]}
+    cums = {0.5: {3: 20.0}}
 
     def fake_resolve(printer_name, usage_map, fb_url, active_locs=None, charged_out=None):
         return []
 
-    with patch.object(prusalink_api, "compute_segment_usage", return_value=seg), \
-         patch.object(locations_db, "get_active_printer_map", return_value=_map(8)), \
+    with patch.object(locations_db, "get_active_printer_map", return_value=_map(8)), \
          patch.object(spoolman_api, "get_spool", side_effect=lambda sid: _spool(sid)), \
          patch.object(spoolman_api, "format_spool_display",
                       return_value={"text": "x", "color": "AAA"}), \
@@ -208,7 +206,7 @@ def test_swap_on_a_head_that_printed_nothing_is_ignored():
          patch.object(print_deduct, "_resolve_usage_to_spools", side_effect=fake_resolve):
         print_deduct._route_completion_to_review(
             INDX, "single.bgcode", 9003, dict(usage), "http://fb", [3],
-            swap_log=swap_log, ip_address="ip", api_key="k",
+            swap_log=swap_log, swap_cums=cums,
             start_spools={"3": 401, "0": 500})
 
     rec = cancel_review_store.get_pending(INDX, 9003)
@@ -224,10 +222,9 @@ def test_single_head_printer_keeps_the_fold():
     sliced with an MMU profile (tool index 1, position 0). Removing it entirely
     would silently stop deducting those prints."""
     swap_log = [{"position": 0, "progress": 0.5, "from_sid": 601, "to_sid": 602}]
-    seg = {"footer": {1: 50.0}, "cums": [{1: 20.0}]}   # slicer says tool 1, printer has position 0
+    cums = {0.5: {1: 20.0}}   # slicer says tool 1, printer has position 0
 
-    with patch.object(prusalink_api, "compute_segment_usage", return_value=seg), \
-         patch.object(locations_db, "get_active_printer_map", return_value=_map(1, "CoreOne")), \
+    with patch.object(locations_db, "get_active_printer_map", return_value=_map(1, "CoreOne")), \
          patch.object(spoolman_api, "get_spool", side_effect=lambda sid: _spool(sid)), \
          patch.object(spoolman_api, "format_spool_display",
                       return_value={"text": "x", "color": "AAA"}), \
@@ -235,7 +232,7 @@ def test_single_head_printer_keeps_the_fold():
          patch.object(print_deduct, "_resolve_usage_to_spools", return_value=[]):
         res = print_deduct._route_completion_to_review(
             "CoreOne", "mmu.bgcode", 9004, {1: 50.0}, "http://fb", [0],
-            swap_log=swap_log, ip_address="ip", api_key="k", start_spools={"0": 601})
+            swap_log=swap_log, swap_cums=cums, start_spools={"0": 601})
 
     assert res["auto_split"] is True
     rec = cancel_review_store.get_pending("CoreOne", 9004)

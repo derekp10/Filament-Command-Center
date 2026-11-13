@@ -29,6 +29,10 @@ def _tmp_stores(tmp_path, monkeypatch):
     monkeypatch.setattr(cancel_review_store, "_STORE_PATH", str(tmp_path / "pending.json"))
     monkeypatch.setattr(cancel_fetch_store, "_STORE_PATH", str(tmp_path / "fetches.json"))
     monkeypatch.setattr(print_deduct_ledger, "_LEDGER_PATH", str(tmp_path / "ledger.json"))
+    # Hotfix 2026-11-11 (scope C): the fetch queue's retries run on threads of their
+    # own unless the seam is off; these tests read the outcome right after the call.
+    monkeypatch.setattr(print_monitor, "_CANCEL_DEDUCT_RUN_ASYNC", False)
+    monkeypatch.setattr(print_monitor, "_FETCH_CLAIMS", set())
 
 
 @pytest.fixture

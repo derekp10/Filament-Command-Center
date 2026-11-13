@@ -121,7 +121,7 @@ def download_gcode_content(ip_address: str, api_key: str, filename: str) -> Opti
 
 
 def fetch_cancel_gcode(ip_address: str, api_key: str, filename: str,
-                       reached_fraction: float) -> Optional[Dict]:
+                       reached_fraction: float, extra_fractions=None) -> Optional[Dict]:
     """Download + decode a print file for the cancelled-print parser.
 
     Returns ``{"gcode": ascii_text, "fraction": effective_fraction}`` or None on
@@ -130,6 +130,13 @@ def fetch_cancel_gcode(ip_address: str, api_key: str, filename: str,
     DECODED text, so the prefix-parse slices at the right point even though the
     header/thumbnail/metadata blocks (which carry no extrusion) sit before the
     G-code in the file. For plain ASCII gcode the fraction passes through.
+
+    `extra_fractions` (hotfix 2026-11-11): more progress values to cut the same
+    file at, the print's recorded mid-print swaps (the run-out split's
+    boundaries). Each is remapped exactly as `reached_fraction` is and comes back
+    in order as ``"fractions"``, so one download serves the print's usage and its
+    split; the split used to download the file a second time (another 20 minutes
+    on the INDX).
     """
     raw = _download_file_bytes(ip_address, api_key, filename)
     if raw is None:
@@ -139,10 +146,18 @@ def fetch_cancel_gcode(ip_address: str, api_key: str, filename: str,
             dec = bgcode_decode.decode_bgcode(raw)
             if not dec.get("gcode"):
                 return None
-            return {"gcode": dec["gcode"],
-                    "fraction": bgcode_decode.progress_to_decoded_fraction(dec, reached_fraction)}
-        text = raw.decode("utf-8", "replace")
-        return {"gcode": text, "fraction": max(0.0, min(1.0, float(reached_fraction)))}
+
+            def _remap(p):
+                return bgcode_decode.progress_to_decoded_fraction(dec, p)
+            text = dec["gcode"]
+        else:
+            def _remap(p):
+                return max(0.0, min(1.0, float(p)))
+            text = raw.decode("utf-8", "replace")
+        out = {"gcode": text, "fraction": _remap(reached_fraction)}
+        if extra_fractions:
+            out["fractions"] = [_remap(p) for p in extra_fractions]
+        return out
     except Exception as e:
         print(f"fetch_cancel_gcode: failed for {filename}: {e}")
         return None
@@ -454,51 +469,10 @@ def parse_color_change_segments(gcode_content: str) -> List[Dict]:
     return segments
 
 
-def compute_segment_usage(ip_address: str, api_key: str, filename: str,
-                          boundaries) -> Optional[Dict]:
-    """22.3(b) runout/swap split: download+decode a print file ONCE and report the
-    CUMULATIVE per-tool grams extruded up to each mid-print swap ``boundary`` — the
-    input a per-segment apportionment needs (segment k grams = cum[k] − cum[k−1]).
-
-    ``boundaries`` is an ordered list of PrusaLink progress fractions (0..1, the same
-    ``progress`` stored on each ``swap_log`` event). Each is remapped to the decoded
-    G-code position via :func:`bgcode_decode.progress_to_decoded_fraction` (the M73
-    time-progress inversion, scale-validated 2026-06-12), and all of them are measured
-    in one pass by :func:`measure_filament_usage`, so each cumulative is the share of
-    the tool's whole-file extrusion reached times its footer grams, never past the
-    footer (Group 56.2).
-
-    Returns ``{"footer": {tool: grams}, "cums": [ {tool: grams}, … ]}`` — the full-job
-    footer plus one cumulative dict per boundary (same order as ``boundaries``) — or
-    ``None`` on any download/decode/parse failure (a file without the ``[mm]``
-    footer included: its boundaries can't be measured) so the caller degrades to the
-    full-footer manual-split review rather than writing a guessed number.
-    """
-    raw = _download_file_bytes(ip_address, api_key, filename)
-    if raw is None:
-        return None
-    try:
-        if bgcode_decode.is_bgcode(raw):
-            dec = bgcode_decode.decode_bgcode(raw)
-            gcode = dec.get("gcode") or ""
-            def _remap(p):
-                return bgcode_decode.progress_to_decoded_fraction(dec, p)
-        else:
-            gcode = raw.decode("utf-8", "replace")
-            def _remap(p):
-                return max(0.0, min(1.0, float(p)))
-        if not gcode:
-            return None
-        footer = parse_footer_usage(gcode)
-        if not footer:
-            return None
-        measured = measure_filament_usage(gcode, [_remap(b) for b in boundaries])
-        if not measured:
-            return None
-        return {"footer": footer, "cums": measured["partials"]}
-    except Exception as e:
-        print(f"compute_segment_usage: failed for {filename}: {e}")
-        return None
+# The run-out split's boundaries (22.3(b)) used to come from a second download of
+# the print file here (compute_segment_usage). Since the hotfix of 2026-11-11 they
+# are cut from the print's one download: fetch_cancel_gcode's `extra_fractions`,
+# walked in the same pass as the cancel's usage (print_deduct._compute_cancel_usage).
 
 
 def get_printer_state(filabridge_url: str, printer_name: str) -> Optional[Dict]:
