@@ -904,4 +904,14 @@ def test_review_yes_naming_a_plain_line_is_readable(page: Page, base_url: str, a
     for said in ("⚠️ Yes below charges nothing to T6 · HEAD-7", "⚠️ Yes, leave 104 g uncharged",
                  "⚠️ T4 · HEAD-5: none of its 84 g are placed"):
         assert said in scored, (said, scored)
+    # Derek's picture check of round 2 ("some bolding on T6, like there was on the
+    # others, so that it reads as a toolhead"): T6's name is bold on its line and in
+    # the line by the buttons, as the set's header draws T4's; both are scored.
+    drawn = page.evaluate(
+        "(card) => Array.from(document.querySelectorAll(`${card} .fcc-cr-set-head > span:first-child, "
+        "${card} .fcc-cr-line-head, ${card} .fcc-cr-notice-head`))"
+        ".map((el) => [el.textContent, Number(getComputedStyle(el).fontWeight)])", card)
+    assert sorted(t for t, _ in drawn) == ["T4 · HEAD-5: FCC saw 2 spools on it", "T6 · HEAD-7", "T6 · HEAD-7"], drawn
+    assert all(w >= 600 for _, w in drawn), drawn
+    assert scored.split(" | ").count("T6 · HEAD-7") == 2, scored
     page.keyboard.press("Escape")

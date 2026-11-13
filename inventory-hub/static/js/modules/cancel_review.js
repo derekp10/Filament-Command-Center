@@ -237,11 +237,26 @@
     // shortfallLinesHtml), so the card templates' button rows are untouched.
     const CARD_NOTICE = `<div class="fcc-cr-card-notice" role="alert"
             style="display:none;margin-top:8px;color:#e6c074;font-size:var(--fcc-fs-small);line-height:1.4;"></div>`;
+    // `msg` is words, or a list of words and {head} pieces: a head's name drawn
+    // bold, as the card's set headers draw theirs (round 2's picture check,
+    // Derek, 2026-11-12: "there should be some bolding on T6, like there was on
+    // the others, so that it reads as a toolhead, instead of perhaps another part
+    // of the ui"). Text nodes only, never HTML: a head's name is the user's own.
     function sayOnCard(card, msg) {
         const n = card && card.querySelector('.fcc-cr-card-notice');
         if (!n) return;
-        n.textContent = msg || '';
-        n.style.display = msg ? '' : 'none';
+        n.textContent = '';
+        (Array.isArray(msg) ? msg : [msg]).forEach((p) => {
+            if (p && typeof p === 'object') {
+                const b = document.createElement('b');
+                b.className = 'fcc-cr-notice-head';
+                b.textContent = String(p.head == null ? '' : p.head);
+                n.appendChild(b);
+            } else if (p) {
+                n.appendChild(document.createTextNode(String(p)));
+            }
+        });
+        n.style.display = n.textContent ? '' : 'none';
     }
     // Round 2 (R1, Derek's picture check, 2026-11-12): while the set check waits
     // for its second press, the card's button says what that press does, in
@@ -256,6 +271,9 @@
         + '--bs-btn-focus-shadow-rgb:253,126,20;';
     // A waiting button's own words, classes and style, to give back (yesOff).
     const _ownLook = new WeakMap();
+    // What a waiting card's line by the buttons said (sayOnCard's pieces), to
+    // say again when a double click's second press clears it (setsConfirmed).
+    const _askSaid = new WeakMap();
     function yesOn(btn, words) {
         if (!btn) return;
         if (!_ownLook.has(btn)) {
@@ -285,7 +303,7 @@
         const asked = card.dataset.setAsked != null;
         delete card.dataset.setAsked;
         delete card.dataset.setAskedAt;
-        delete card.dataset.setAskNotice;
+        _askSaid.delete(card);
         card.querySelectorAll('.fcc-cr-set-alert').forEach((a) => { a.textContent = ''; a.style.display = 'none'; });
         if (asked) sayOnCard(card, '');
         yesOff(card.querySelector('.fcc-cr-confirm'));
@@ -346,8 +364,14 @@
         });
         return out;
     }
-    function orList(items) {
-        return items.length > 1 ? `${items.slice(0, -1).join(', ')} or ${items[items.length - 1]}` : items.join('');
+    // "a", "a or b", "a, b or c", as sayOnCard's pieces: each head's name bold.
+    function orHeads(wheres) {
+        const out = [];
+        wheres.forEach((w, i) => {
+            if (i) out.push(i === wheres.length - 1 ? ' or ' : ', ');
+            out.push({ head: w });
+        });
+        return out;
     }
     // Whether an Apply may go ahead over the card's sets: at once when each is
     // placed exactly; else the first press says why in each set and on the card,
@@ -368,7 +392,7 @@
         // panel scrolls the button back under the pointer for the second click).
         if (problems.length && card.dataset.setAsked === sig
                 && ((ev && ev.detail > 1) || Date.now() - Number(card.dataset.setAskedAt || 0) < 700)) {
-            sayOnCard(card, card.dataset.setAskNotice || '');
+            sayOnCard(card, _askSaid.get(card) || '');
             return false;
         }
         // The second press goes out (or there is nothing left to ask): the button
@@ -393,16 +417,17 @@
         // do the plain held lines the press leaves (round 2's review), so every
         // gram the Yes names is said on the card.
         const does = !over ? 'leave them uncharged' : !setShort ? 'charge the spools as typed' : 'go ahead as typed';
+        // Each line is a list of sayOnCard's pieces, the heads it names bold.
         const lines = [];
         if (problems.length > 1) {
-            lines.push(`${problems.length} heads' grams don't add up, as each says above. Press ⚠️ Yes below to ${does}.`);
+            lines.push([`${problems.length} heads' grams don't add up, as each says above. Press ⚠️ Yes below to ${does}.`]);
         }
         if (plain.length) {
-            lines.push(`⚠️ Yes below charges nothing to ${orList(plain.map((l) => l.where))}, leaving `
-                + `${plain.length === 1 ? 'its' : 'their'} ${fmtG(plainG)} g uncharged.`);
+            lines.push(['⚠️ Yes below charges nothing to ', ...orHeads(plain.map((l) => l.where)),
+                `, leaving ${plain.length === 1 ? 'its' : 'their'} ${fmtG(plainG)} g uncharged.`]);
         }
-        const notice = lines.join(' ');
-        if (notice) card.dataset.setAskNotice = notice;
+        const notice = lines.reduce((all, l) => (all.length ? all.concat(' ', l) : l), []);
+        if (notice.length) _askSaid.set(card, notice);
         sayOnCard(card, notice);
         const btn = card.querySelector('.fcc-cr-confirm');
         yesOn(btn, !over ? `⚠️ Yes, leave ${fmtG(short)} g uncharged`
@@ -725,11 +750,14 @@
             const set = heldSetHtml(rec, pos, usage[pos], 'fcc-cr-pickline', atEnd, words, notes);
             if (set) return set;
             const head = atEnd.find((h) => String(h.position) === String(pos));
+            // Escaped here. Its line draws it bold, as a set's header draws its
+            // head (round 2's picture check: "so that it reads as a toolhead");
+            // so do unresolvedLinesHtml's and shortfallLinesHtml's lines.
             const where = head ? `T${esc(pos)} · ${esc(head.toolhead)}` : `T${esc(pos)}`;
             return `
                 <div class="fcc-cr-pickline" data-line="${esc(pos)}" data-where="${where}"
                      style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid #2b2c30;">
-                    <span style="color:#eee;min-width:120px;">${where} used</span>
+                    <span style="color:#eee;min-width:120px;"><b class="fcc-cr-line-head">${where}</b> used</span>
                     <div class="input-group input-group-sm" style="width:120px;flex:none;">
                         <input type="number" class="fcc-cr-pgrams form-control bg-dark text-white border-secondary"
                                data-line="${esc(pos)}" value="${fmtG(usage[pos])}" step="0.01" min="0"
@@ -781,7 +809,7 @@
             return `
                 <div class="fcc-cr-unline" data-pos="${esc(pos)}" data-line="${esc(line)}" data-where="${where}"
                      style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid #2b2c30;">
-                    <span style="color:#eee;min-width:120px;">${where} used</span>
+                    <span style="color:#eee;min-width:120px;"><b class="fcc-cr-line-head">${where}</b> used</span>
                     <div class="input-group input-group-sm" style="width:120px;flex:none;">
                         <input type="number" class="fcc-cr-pgrams form-control bg-dark text-white border-secondary"
                                data-line="${esc(line)}" value="${fmtG(un[pos])}" step="0.01" min="0"
@@ -845,7 +873,7 @@
                      style="padding:6px 0;border-bottom:1px solid #2b2c30;">
                     <div class="fcc-cr-why" style="color:#e6c074;font-size:0.9rem;margin-bottom:4px;">${esc(shortfallReason(c, pos))}</div>
                     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                        <span style="color:#eee;min-width:120px;">${where} uncharged</span>
+                        <span style="color:#eee;min-width:120px;"><b class="fcc-cr-line-head">${where}</b> uncharged</span>
                         <div class="input-group input-group-sm" style="width:120px;flex:none;">
                             <input type="number" class="fcc-cr-pgrams form-control bg-dark text-white border-secondary"
                                    data-line="${esc(line)}" value="${fmtG(un[pos])}" step="0.01" min="0"

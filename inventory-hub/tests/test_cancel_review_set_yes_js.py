@@ -53,7 +53,7 @@ from __future__ import annotations
 import colorsys
 import re
 
-from test_cancel_review_picker_scan_js import _contrast, pytestmark  # noqa: F401  (pytestmark: skip without node)
+from test_cancel_review_picker_scan_js import SHORTFALL, _contrast, pytestmark  # noqa: F401  (pytestmark: skip without node)
 from test_cancel_review_review_fixes_js import NOSPOOL_SET, PARTIAL_SET, TWO_SETS, _go
 
 # The card's own button, as every card template draws it.
@@ -621,3 +621,81 @@ def test_a_double_clicks_second_press_keeps_the_line_by_the_buttons(tmp_path):
     assert res["first"]["notice"] == lead, res["first"]
     assert res["second"]["notice"] == lead, res["second"]
     assert res["second"]["btn"] == res["first"]["btn"] and _waiting(res["second"]["btn"]), res
+
+
+# --------------------------------------------------------------------------- #
+# Derek's picture check of round 2 (2026-11-12): a head's name reads as a head #
+# --------------------------------------------------------------------------- #
+# "I think there should be some bolding on T6, like there was on the others, so
+# that it reads as a toolhead, instead of perhaps another part of the ui." A set's
+# header and its orange words were bold; a plain line's label ("T6 · HEAD-7 used")
+# and the line by the buttons ("... charges nothing to T6 · HEAD-7, ...") were
+# not, so T6's grams read as part of the set above them.
+
+_ODD = {"toolhead": "HEAD<i>9", "position": 8, "sid": 77, "sids": [77]}
+# T4 a set, T0 and T6 plain lines: two heads named in the one line.
+SET_PLUS_TWO = dict(PARTIAL_SET, job_id="s2l", spools=[], unresolved_usage={"0": 30.0, "4": 84.28, "6": 20.0},
+                    total_grams=134.28, heads_at_end=PARTIAL_SET["heads_at_end"] + [_HEAD_1])
+# A head whose name holds markup: words on the card, never HTML.
+SET_PLUS_ODD = dict(PARTIAL_SET, job_id="odd", spools=[], unresolved_usage={"4": 84.28, "8": 12.0},
+                    total_grams=96.28, heads_at_end=PARTIAL_SET["heads_at_end"] + [_ODD])
+
+BOLD_CASES = [
+    {"job": "psl", "fill": {}, "press": True},                   # partial: T4 a set, T6 a plain line
+    {"job": "s2l", "fill": {}, "press": True},                   # partial: T4 a set, T0 and T6 plain
+    {"job": "nsl", "fill": {"set:4:42": 30}, "press": True},     # no_spool: T4 a set, T6 a plain line
+    {"job": "odd", "fill": {}, "press": True},                   # a head named "HEAD<i>9"
+    {"job": "s#shortfall", "fill": {}, "press": False},          # an uncharged-grams card's line
+]
+BOLD_PENDING = [SET_PLUS_LINE, SET_PLUS_TWO, NOSPOOL_PLUS_LINE, SET_PLUS_ODD, SHORTFALL]
+
+BOLD_JS = r"""
+const bold = (el) => el.querySelectorAll('b').map((b) => b.className + '=' + b.textContent);
+const out = {};
+for (const k of D.cases) {
+  const c = cardOf(k.job);
+  const o = { labels: c.querySelectorAll('.fcc-cr-line-head').map((b) => b.tagName + ':' + b.textContent),
+              tags: c.querySelectorAll('i').length };
+  Object.entries(k.fill).forEach(([line, g]) => fill(c, line, g));
+  if (k.press) {
+    const btn = c.querySelector('.fcc-cr-confirm');
+    const n = c.querySelector('.fcc-cr-card-notice');
+    btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+    await settle(20);
+    o.first = { text: n.textContent, bold: bold(n), tags: n.querySelectorAll('i').length };
+    // A double click's second press says the line again, its heads still bold.
+    btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 2 }));
+    await settle(20);
+    o.second = { text: n.textContent, bold: bold(n), tags: n.querySelectorAll('i').length };
+  }
+  out[k.job] = o;
+}
+return { out, posted: posts('/api/cancel_deduct/confirm').length };
+"""
+
+
+def test_a_heads_name_is_bold_on_its_line_and_by_the_buttons(tmp_path):
+    # On 82524e4: AssertionError: ('psl', {'first': {'bold': [], ...}, 'labels': [], ...}) (a plain
+    # line's head and the line by the buttons were drawn in the words' own weight, so T6's grams
+    # read as part of T4's set above them)
+    res = _run(tmp_path, BOLD_JS, BOLD_PENDING, cases=BOLD_CASES)
+    assert res["posted"] == 0, res
+    out = res["out"]
+    two = ("⚠️ Yes below charges nothing to T0 · HEAD-1 or T6 · HEAD-7, leaving their 50 g uncharged.")
+    odd = "⚠️ Yes below charges nothing to T8 · HEAD<i>9, leaving its 12 g uncharged."
+    want = {"psl": (["B:T6 · HEAD-7"], T6_LEFT, ["fcc-cr-notice-head=T6 · HEAD-7"]),
+            "s2l": (["B:T0 · HEAD-1", "B:T6 · HEAD-7"], two,
+                    ["fcc-cr-notice-head=T0 · HEAD-1", "fcc-cr-notice-head=T6 · HEAD-7"]),
+            "nsl": (["B:T6 · HEAD-7"], T6_LEFT, ["fcc-cr-notice-head=T6 · HEAD-7"]),
+            "odd": (["B:T8 · HEAD<i>9"], odd, ["fcc-cr-notice-head=T8 · HEAD<i>9"]),
+            "s#shortfall": (["B:T0 · HEAD-1"], None, None)}
+    for job, (labels, text, bold) in want.items():
+        o = out[job]
+        # Each plain line's head, bold, in the words it was given (an odd name too).
+        assert o["labels"] == labels and o["tags"] == 0, (job, o)
+        if text is None:
+            continue
+        # The line by the buttons: the same words, each head it names bold, and
+        # the same again after a double click's second press.
+        for press in ("first", "second"):
+            assert o[press] == {"text": text, "bold": bold, "tags": 0}, (job, press, o)
