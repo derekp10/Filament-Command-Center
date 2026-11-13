@@ -18,7 +18,17 @@ Keyed on (printer_name, job_id) like print_deduct_ledger / cancel_review_store.
 Survives a restart so an FCC reboot between cancel and screen-clear doesn't lose
 the pending deduct. Record shape:
   {printer_name, job_id, filename, progress, first_seen (epoch s), attempts,
-   last_status}
+   last_status, kind ("cancel" | "complete"), ambiguous, start_spools, swap_log,
+   end_heads (hotfix 2026-11-11), charging_since (a completion whose deduct began
+   charging)}
+
+Since the hotfix of 2026-11-11 (scope C) the live edge writes its print's record
+BEFORE its download, with `last_status` "in_flight" and `attempts` 0, so a restart
+during an INDX's 20-minute download loses nothing; the record turns
+"awaiting_fetch" the first time a download really fails, and is dropped once the
+compute reaches an outcome. Its writers are several threads now (each live edge,
+each retry), so a change that reads the record first goes through `update_pending`,
+one locked step.
 """
 from __future__ import annotations
 
@@ -66,6 +76,26 @@ def add_pending(record: dict) -> None:
         data = _load()
         data[_key(record["printer_name"], record["job_id"])] = record
         _save(data)
+
+
+def update_pending(printer_name, job_id, change):
+    """Read-modify-write one pending fetch in a single locked step: `change` gets
+    the record as stored (None when there is none) and returns the record to
+    store, or None to leave the store as it is. Returns what was stored, or None.
+
+    A get_pending then an add_pending is two steps, and between them another
+    thread's write to the same record was lost (two re-queues kept one bump): the
+    queue's writers are the live edge threads and each retry's thread since the
+    hotfix of 2026-11-11."""
+    with _LOCK:
+        data = _load()
+        key = _key(printer_name, job_id)
+        record = change(data.get(key))
+        if record is None:
+            return None
+        data[key] = record
+        _save(data)
+        return record
 
 
 def has_pending(printer_name, job_id) -> bool:

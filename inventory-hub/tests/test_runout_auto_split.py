@@ -58,7 +58,10 @@ def _spool(sid, initial, used, name=None, color="ABCDEF"):
 
 
 # The real job-1078 numbers: footer 109.76 g, prefix-parse to the captured 19% = 23.78 g.
-SEG = {"footer": {0: 109.76}, "cums": [{0: 23.78}]}
+# Since the hotfix of 2026-11-11 (scope B, D5) the figure at the swap comes from the
+# print's own download (_compute_cancel_usage's `cums_out`), keyed by the swap's
+# point; the split downloads nothing.
+CUMS = {0.19: {0: 23.78}}
 
 
 # --------------------------------------------------------------------------- #
@@ -77,18 +80,14 @@ def test_tool_grams_single_tool_folds_to_position():
 # --------------------------------------------------------------------------- #
 def test_compute_swap_split_runout_single_swap():
     swap_log = [{"position": 0, "progress": 0.19, "from_sid": 126, "to_sid": 127, "runout": True}]
-    with patch.object(prusalink_api, "compute_segment_usage", return_value=SEG):
-        out = print_deduct._compute_swap_split("ip", "k", "f.bgcode", {0: 109.76},
-                                               swap_log, {"0": 126}, path_filament_g=0)
-    assert out[0][0] == {"sid": 126, "grams": 23.78, "segment": 0, "runout": True}
-    assert out[0][1] == {"sid": 127, "grams": 85.98, "segment": 1, "runout": False}
+    out = print_deduct._compute_swap_split({0: 109.76}, swap_log, {"0": 126}, CUMS, path_filament_g=0)
+    assert out[0][0] == {"sid": 126, "grams": 23.78, "segment": 0, "runout": True, "from": None, "to": 0.19}
+    assert out[0][1] == {"sid": 127, "grams": 85.98, "segment": 1, "runout": False, "from": 0.19, "to": None}
 
 
 def test_compute_swap_split_adds_path_filament_on_runout():
     swap_log = [{"position": 0, "progress": 0.19, "from_sid": 126, "to_sid": 127, "runout": True}]
-    with patch.object(prusalink_api, "compute_segment_usage", return_value=SEG):
-        out = print_deduct._compute_swap_split("ip", "k", "f.bgcode", {0: 109.76},
-                                               swap_log, {"0": 126}, path_filament_g=2.0)
+    out = print_deduct._compute_swap_split({0: 109.76}, swap_log, {"0": 126}, CUMS, path_filament_g=2.0)
     assert out[0][0]["grams"] == 25.78   # 23.78 deposited + 2.0 path remnant
     assert out[0][1]["grams"] == 85.98   # replacement unchanged (footer - deposited)
 
@@ -96,28 +95,27 @@ def test_compute_swap_split_adds_path_filament_on_runout():
 def test_compute_swap_split_no_path_on_manual_early_swap():
     """A deliberate PAUSED swap (runout=False) gets NO path remnant on the old spool."""
     swap_log = [{"position": 0, "progress": 0.19, "from_sid": 126, "to_sid": 127, "runout": False}]
-    with patch.object(prusalink_api, "compute_segment_usage", return_value=SEG):
-        out = print_deduct._compute_swap_split("ip", "k", "f.bgcode", {0: 109.76},
-                                               swap_log, {"0": 126}, path_filament_g=2.0)
+    out = print_deduct._compute_swap_split({0: 109.76}, swap_log, {"0": 126}, CUMS, path_filament_g=2.0)
     assert out[0][0]["grams"] == 23.78   # no path added on a non-runout swap
 
 
-def test_compute_swap_split_none_on_fetch_failure():
-    with patch.object(prusalink_api, "compute_segment_usage", return_value=None):
-        assert print_deduct._compute_swap_split(
-            "ip", "k", "f", {0: 1}, [{"position": 0, "progress": 0.5, "to_sid": 2}], {"0": 1}) is None
+def test_compute_swap_split_none_when_the_walk_measured_no_swap():
+    """The print's download couldn't measure the swap (it failed, or the file has no
+    [mm] footer): no figure, no split."""
+    assert print_deduct._compute_swap_split(
+        {0: 1}, [{"position": 0, "progress": 0.5, "to_sid": 2}], {"0": 1}, {}) is None
+    assert print_deduct._compute_swap_split(
+        {0: 1}, [{"position": 0, "progress": 0.5, "to_sid": 2}], {"0": 1}, {0.4: {0: 0.5}}) is None
 
 
 def test_compute_swap_split_empty_swap_log():
-    assert print_deduct._compute_swap_split("ip", "k", "f", {0: 1}, [], {"0": 1}) is None
+    assert print_deduct._compute_swap_split({0: 1}, [], {"0": 1}, CUMS) is None
 
 
 def test_compute_swap_split_rejects_cum_over_footer():
     """A bad remap/parse that overshoots the footer → None (don't trust the split)."""
-    bad = {"footer": {0: 10.0}, "cums": [{0: 12.0}]}
-    with patch.object(prusalink_api, "compute_segment_usage", return_value=bad):
-        assert print_deduct._compute_swap_split(
-            "ip", "k", "f", {0: 10}, [{"position": 0, "progress": 0.5, "to_sid": 2}], {"0": 1}) is None
+    assert print_deduct._compute_swap_split(
+        {0: 10}, [{"position": 0, "progress": 0.5, "to_sid": 2}], {"0": 1}, {0.5: {0: 12.0}}) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -183,45 +181,50 @@ def test_route_auto_split_builds_both_rows():
     def gs(sid):
         return _spool(126, 1000, 976) if sid == 126 else _spool(127, 1162.5, 148.6)
 
-    with patch.object(prusalink_api, "compute_segment_usage", return_value=SEG), \
-         patch.object(spoolman_api, "get_spool", side_effect=gs), \
+    with patch.object(spoolman_api, "get_spool", side_effect=gs), \
          patch.object(spoolman_api, "format_spool_display", return_value={"text": "x", "color": "AAA"}), \
          patch.object(config_loader, "load_config", return_value={"path_filament_g": {"CoreOne": 2}}):
         res = print_deduct._route_completion_to_review(
             "CoreOne", "f.bgcode", 1078, {0: 109.76}, "http://fb", [0],
-            swap_log=swap_log, ip_address="ip", api_key="k", start_spools={"0": 126})
+            swap_log=swap_log, start_spools={"0": 126}, swap_cums=CUMS)
     assert res["status"] == "pending_spool_changed"
     assert res["auto_split"] is True
     rec = cancel_review_store.get_pending("CoreOne", 1078)
     assert rec["auto_split"] is True and rec["kind"] == "spool_changed"
     sids = {r["sid"]: r["grams"] for r in rec["spools"]}
     assert sids == {126: 25.78, 127: 85.98}   # 23.78 + 2 path remnant, and footer - 23.78
+    # Each row says the stretch of the print its spool fed (the card's set shows it).
+    segs = {r["sid"]: r["segments"] for r in rec["spools"]}
+    assert segs == {126: [{"from": None, "to": 0.19, "runout": True}],
+                    127: [{"from": 0.19, "to": None, "runout": False}]}
 
 
 def test_route_falls_back_to_full_footer_when_gcode_unavailable():
-    """compute_segment_usage None (printer offline / decode fail) → the legacy manual review
-    (single replacement row, full footer, auto_split False)."""
+    """The print's download couldn't measure the swap (printer offline / decode fail) →
+    the legacy manual review (single replacement row, full footer, auto_split False)."""
     full_row = [{"sid": 127, "grams": 109.76, "toolhead": "C", "position": 0,
                  "current_used": 148.6, "initial_weight": 1162.5, "remaining_before": 1013.9,
                  "remaining_after": 904.1, "display": "x", "color": "AAA", "ambiguous": False}]
-    with patch.object(prusalink_api, "compute_segment_usage", return_value=None), \
-         patch.object(print_deduct, "_resolve_usage_to_spools", return_value=full_row):
+    with patch.object(print_deduct, "_resolve_usage_to_spools", return_value=full_row):
         res = print_deduct._route_completion_to_review(
             "CoreOne", "f.bgcode", 1080, {0: 109.76}, "http://fb", [0],
             swap_log=[{"position": 0, "progress": 0.19, "to_sid": 127}],
-            ip_address="ip", api_key="k", start_spools={"0": 126})
+            start_spools={"0": 126}, swap_cums={})
     assert res["auto_split"] is False
     rec = cancel_review_store.get_pending("CoreOne", 1080)
     assert rec["auto_split"] is False
     assert [r["sid"] for r in rec["spools"]] == [127]
 
 
-def test_route_no_ip_key_falls_back():
-    """No ip/api_key (can't fetch the gcode) → the legacy manual review, not a crash."""
+def test_route_without_measured_swaps_falls_back():
+    """No figures at the swaps (a caller that measured none) → the legacy manual
+    review, not a crash, and never a download of its own."""
     full_row = [{"sid": 127, "grams": 109.76, "toolhead": "C", "position": 0,
                  "current_used": 0, "initial_weight": 1000, "remaining_before": 1000,
                  "remaining_after": 890.24, "display": "x", "color": "AAA", "ambiguous": False}]
-    with patch.object(print_deduct, "_resolve_usage_to_spools", return_value=full_row):
+    with patch.object(print_deduct, "_resolve_usage_to_spools", return_value=full_row), \
+         patch.object(prusalink_api, "_download_file_bytes",
+                      side_effect=AssertionError("the review downloaded the file")):
         res = print_deduct._route_completion_to_review(
             "CoreOne", "f.bgcode", 1081, {0: 109.76}, "http://fb", [0],
             swap_log=[{"position": 0, "progress": 0.19, "to_sid": 127}])

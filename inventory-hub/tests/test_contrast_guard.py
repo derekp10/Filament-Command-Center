@@ -612,3 +612,306 @@ def test_unmeasured_review_cards_are_readable(page: Page, base_url: str, assert_
                   "ended before FCC read its progress", "/usb/RACCOON~1.BGC", "Discard"):
         assert words in scored, (words, scored)
     page.keyboard.press("Escape")
+
+
+# Hotfix 2026-11-11 (the print-end deduct): the 🛑 Review card's new surfaces. This
+# line keeps the block's first decorator inside it when a merge sets it beside
+# another block of tests added at the same place.
+@pytest.mark.usefixtures("require_server")
+def test_print_end_review_notes_are_readable(page: Page, base_url: str, assert_contrast):
+    """Hotfix 2026-11-11: the 🛑 Review's new surfaces from the print-end read: the
+    amber note under a held line, the blue note under a row whose head holds another
+    spool now, the neutral lead above held lines, the no_spool card's neutral banner
+    and the held spool_changed banner. Made-up reviews in this page only; nothing is
+    written. The offline check of the notes' colours and size is
+    test_cancel_review_heads_words_js.py."""
+    import json as _json
+    import conftest
+    words = {"end": "when the print ended", "start": "when the print started", "during": "during the print"}
+    heads = [{"toolhead": "HEAD-5", "position": 4, "sid": 229, "sids": [229]},
+             {"toolhead": "HEAD-7", "position": 6, "sid": 243, "sids": [243]},
+             {"toolhead": "HEAD-5", "position": 4, "sid": 42, "when": "start"}]
+    held_note = "HEAD-5 had #42 when the print started and #229 when the print ended. Pick the spool it used."
+
+    def _card(job, kind, **extra):
+        rec = {"printer_name": "ZZ Contrast INDX", "job_id": job, "filename": "/usb/F.BGC", "progress": 0.42,
+               "total_grams": 95.0, "spools": [], "ambiguous": False, "kind": kind, "heads_source": "print_end",
+               "heads_words": words, "heads_at_end": heads, "unresolved_notes": {"4": held_note}}
+        rec.update(extra)
+        return rec
+    row = {"sid": 243, "toolhead": "HEAD-7", "position": 6, "grams": 10.0, "current_used": 700.0,
+           "initial_weight": 1000.0, "remaining_before": 300.0, "remaining_after": 290.0,
+           "display": "ZZ Contrast spool", "color": "ff0000", "ambiguous": False}
+    pending = [
+        _card("p1", "partial", spools=[row], unresolved_usage={"4": 85.0},
+              row_notes={"243": "#300 is on HEAD-7 now; #243 was on it when the print ended."}),
+        _card("p2", "no_spool", usage_map={"4": 85.0}),
+        _card("p3", "spool_changed", auto_split=False, changed_positions=[4], spools=[row],
+              unresolved_usage={"4": 85.0}),
+    ]
+    page.route("**/api/cancel_deduct/pending*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=_json.dumps({"pending": pending})))
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openCancelReview === 'function'")
+    page.evaluate("() => window.openCancelReview()")
+    page.wait_for_selector('#fcc-cancel-review-overlay .fcc-cr-card[data-job="p3"] .fcc-cr-line-note',
+                           timeout=15000)
+    overlay = page.locator("#fcc-cancel-review-overlay")
+    assert_contrast(overlay)
+    # Each element's text is scored by its first 80 characters (contrast_offenders).
+    scored = " | ".join(o["text"] for o in conftest.contrast_offenders(overlay, min_ratio=100))
+    for said in ("had #42 when the print started", "is on HEAD-7 now", "isn't sure which spool printed",
+                 "isn't sure which spool it came from", "changed mid-print at position(s)"):
+        assert said in scored, (said, scored)
+    page.keyboard.press("Escape")
+
+
+@pytest.mark.usefixtures("require_server")
+def test_review_sets_are_readable(page: Page, base_url: str, assert_contrast):
+    """Hotfix 2026-11-11, scope B: a head's spools as a set on the 🛑 Review card.
+    A split set's header, its sub-caption and each row's stretch of the print
+    ("start → 19%, ran out"), and a held set's header, its "to split" count, its
+    lines (each spool, when FCC saw it there, an empty grams box) and its note.
+    Made-up reviews in this page only; nothing is written. The offline check of
+    their colours and sizes is test_cancel_review_sets_js.py."""
+    import json as _json
+    import conftest
+    words = {"end": "when the print ended", "start": "when the print started", "during": "during the print"}
+    heads = [{"toolhead": "HEAD-5", "position": 4, "sid": 229, "sids": [229]},
+             {"toolhead": "HEAD-5", "position": 4, "sid": 42, "when": "start"}]
+
+    def _row(sid, grams, segments, runout=False):
+        return {"sid": sid, "toolhead": "HEAD-5", "position": 4, "grams": grams, "current_used": 700.0,
+                "initial_weight": 1000.0, "remaining_before": 300.0, "remaining_after": 300.0 - grams,
+                "display": f"ZZ Contrast spool {sid}", "color": "ff0000", "ambiguous": False,
+                "auto_split": True, "runout": runout, "segments": segments}
+    note = ("FCC saw #42 when the print started and #229 when the print ended, but not when it changed: "
+            "split the 84 g between them, or put it all on one.")
+    pending = [
+        {"printer_name": "ZZ Contrast INDX", "job_id": "s1", "filename": "/usb/F.BGC", "progress": 0.42,
+         "total_grams": 84.0, "ambiguous": False, "kind": "partial", "heads_source": "print_end",
+         "heads_words": words, "heads_at_end": heads,
+         "spools": [_row(42, 30.0, [{"from": None, "to": 0.19, "runout": True}], runout=True),
+                    _row(229, 54.0, [{"from": 0.19, "to": 0.42, "runout": False}])]},
+        {"printer_name": "ZZ Contrast INDX", "job_id": "s2", "filename": "/usb/F.BGC", "progress": 0.42,
+         "total_grams": 84.0, "ambiguous": False, "kind": "partial", "heads_source": "print_end",
+         "heads_words": words, "heads_at_end": heads, "spools": [], "unresolved_usage": {"4": 84.0},
+         "unresolved_notes": {"4": note},
+         "unresolved_sets": {"4": [{"sid": 42, "when": "start", "display": "ZZ Contrast spool 42",
+                                    "color": "222222", "remaining": 12.5},
+                                   {"sid": 229, "when": "end", "display": "ZZ Contrast spool 229",
+                                    "color": "ff0000", "remaining": 800.0}]}},
+    ]
+    page.route("**/api/cancel_deduct/pending*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=_json.dumps({"pending": pending})))
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openCancelReview === 'function'")
+    page.evaluate("() => window.openCancelReview()")
+    page.wait_for_selector('#fcc-cancel-review-overlay .fcc-cr-card[data-job="s2"] .fcc-cr-set-left',
+                           timeout=15000)
+    overlay = page.locator("#fcc-cancel-review-overlay")
+    assert_contrast(overlay)
+    # Each element's text is scored by its first 80 characters (contrast_offenders).
+    scored = " | ".join(o["text"] for o in conftest.contrast_offenders(overlay, min_ratio=100))
+    for said in ("had 2 spools this print", "split at the swaps FCC recorded", "start → 19%",
+                 "ran out", "19% → 42%", "84 g to split", "when the print started",
+                 "FCC saw #42 when the print started"):
+        assert said in scored, (said, scored)
+    page.keyboard.press("Escape")
+
+
+@pytest.mark.usefixtures("require_server")
+def test_review_picker_box_words_are_readable(page: Page, base_url: str, assert_contrast):
+    """Hotfix 2026-11-11, scope D: the words beside the 🛑 Review picker's "#ID"
+    box. Its hint (the box opened empty, muted), what it can't read (amber: a
+    location's label scanned into it) and the spool it names (muted). A made-up
+    review in this page only, and a made-up spool answered in the page; nothing is
+    written (Apply is never pressed). The offline check of the colours and the size
+    is test_cancel_review_picker_scan_js.py."""
+    import json as _json
+    import conftest
+    words = {"end": "when the print ended", "start": "when the print started", "during": "during the print"}
+    pending = [{"printer_name": "ZZ Contrast INDX", "job_id": "d1", "filename": "/usb/F.BGC", "progress": 0.42,
+                "total_grams": 99.0, "ambiguous": False, "kind": "no_spool", "heads_source": "print_end",
+                "heads_words": words, "usage_map": {"4": 84.0, "5": 10.0, "6": 5.0},
+                "heads_at_end": [{"toolhead": "HEAD-5", "position": 4, "sid": None, "sids": []}]}]
+    spool = {"success": True, "data": {"id": 57, "filament": {"name": "ZZ Contrast Blue"},
+                                       "location": "SHELF-1", "remaining_weight": 400.0}}
+    page.route("**/api/cancel_deduct/pending*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=_json.dumps({"pending": pending})))
+    page.route("**/api/spools/57", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=_json.dumps(spool)))
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openCancelReview === 'function'")
+    page.evaluate("() => window.openCancelReview()")
+    page.wait_for_selector('#fcc-cancel-review-overlay .fcc-cr-card[data-job="d1"]', timeout=15000)
+    card = '#fcc-cancel-review-overlay .fcc-cr-card[data-job="d1"]'
+    for line in ("4", "5", "6"):
+        page.select_option(f'{card} .fcc-cr-pick[data-line="{line}"]', "other")
+    page.fill(f'{card} .fcc-cr-other[data-line="5"]', "LOC:SHELF-1")
+    page.press(f'{card} .fcc-cr-other[data-line="5"]', "Enter")
+    page.fill(f'{card} .fcc-cr-other[data-line="6"]', "57")
+    page.press(f'{card} .fcc-cr-other[data-line="6"]', "Enter")
+    page.wait_for_function(
+        "() => ((document.querySelector('.fcc-cr-other-info[data-line=\"6\"]') || {}).textContent || '')"
+        ".includes('ZZ Contrast Blue')", timeout=10000)
+    overlay = page.locator("#fcc-cancel-review-overlay")
+    assert_contrast(overlay)
+    # Each element's text is scored by its first 80 characters (contrast_offenders).
+    scored = " | ".join(o["text"] for o in conftest.contrast_offenders(overlay, min_ratio=100))
+    for said in ("Type the spool's number, or scan its label.", "is a location's label, not a spool's",
+                 "#57 ZZ Contrast Blue (SHELF-1)"):
+        assert said in scored, (said, scored)
+    page.keyboard.press("Escape")
+
+
+@pytest.mark.usefixtures("require_server")
+def test_review_card_notices_are_readable(page: Page, base_url: str, assert_contrast):
+    """Hotfix 2026-11-11, the review's fixes: a set whose grams aren't placed says
+    so in the set (`.fcc-cr-set-alert`), and what stops an Apply is said on the
+    🛑 Review card itself, beside its buttons (`.fcc-cr-card-notice`). Confirm is
+    pressed over a set left empty, which the page stops before any request (one
+    set's words are said in the set alone); a second press posts, and the confirm
+    route, answered in the page, refuses it, so nothing can be written. Made-up
+    reviews in this page only. The offline check of their colours and size is
+    test_cancel_review_review_fixes_js.py.
+
+    Round 2 (R1, 2026-11-12): while the first press waits for the second, the set's
+    words are an orange box and the button is orange with dark words, saying what
+    the second press does; both are scored as drawn, with the pointer on the button
+    (its hover look, which the keyboard's focus shares) and off it, and the button
+    is scored again once the second press has put it back. The offline check of
+    those colours is test_cancel_review_set_yes_js.py."""
+    import json as _json
+    import conftest
+    words = {"end": "when the print ended", "start": "when the print started", "during": "during the print"}
+    pending = [{"printer_name": "ZZ Contrast INDX", "job_id": "n1", "filename": "/usb/F.BGC", "progress": 0.42,
+                "total_grams": 84.0, "ambiguous": False, "kind": "partial", "heads_source": "print_end",
+                "heads_words": words, "spools": [], "unresolved_usage": {"4": 84.0},
+                "heads_at_end": [{"toolhead": "HEAD-5", "position": 4, "sid": 229, "sids": [229]},
+                                 {"toolhead": "HEAD-5", "position": 4, "sid": 42, "when": "start"}],
+                "unresolved_sets": {"4": [{"sid": 42, "when": "start", "display": "ZZ Contrast spool 42",
+                                           "color": "222222", "remaining": 12.5},
+                                          {"sid": 229, "when": "end", "display": "ZZ Contrast spool 229",
+                                           "color": "ff0000", "remaining": 800.0}]}}]
+    page.route("**/api/cancel_deduct/pending*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=_json.dumps({"pending": pending})))
+    page.route("**/api/cancel_deduct/confirm*", lambda route: route.fulfill(
+        status=200, content_type="application/json",
+        body=_json.dumps({"status": "error", "msg": "stub: nothing applied"})))
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openCancelReview === 'function'")
+    page.evaluate("() => window.openCancelReview()")
+    card = '#fcc-cancel-review-overlay .fcc-cr-card[data-job="n1"]'
+    button = f"{card} .fcc-cr-confirm"
+
+    def _drawn(looks):
+        # Bootstrap eases a button's colours over 0.15 s: score it once it is drawn
+        # in one of `looks` ([background, words], as getComputedStyle gives them).
+        page.wait_for_function(
+            "([sel, looks]) => { const b = document.querySelector(sel); if (!b) return false;"
+            " const cs = getComputedStyle(b);"
+            " return looks.some(([bg, fg]) => cs.backgroundColor === bg && cs.color === fg); }",
+            arg=[button, looks], timeout=5000)
+    black, white = "rgb(0, 0, 0)", "rgb(255, 255, 255)"
+    orange, orange_hover = ["rgb(253, 126, 20)", black], ["rgb(253, 145, 55)", black]
+    green, green_hover = ["rgb(25, 135, 84)", white], ["rgb(21, 115, 71)", white]
+    page.wait_for_selector(button, timeout=15000)
+    page.click(button)
+    page.wait_for_selector(f"{card} .fcc-cr-set-alert", state="visible", timeout=5000)
+    assert not page.locator(f"{card} .fcc-cr-card-notice").is_visible()
+    overlay = page.locator("#fcc-cancel-review-overlay")
+    # The waiting state (round 2, R1): the button says what the second press does,
+    # in orange, and the set's words are an orange box.
+    assert page.locator(button).inner_text() == "⚠️ Yes, leave 84 g uncharged"
+    box = page.evaluate(
+        "(sel) => { const cs = getComputedStyle(document.querySelector(sel));"
+        " return [cs.backgroundColor, cs.borderLeftColor, cs.color]; }", f"{card} .fcc-cr-set-alert")
+    assert box == ["rgb(58, 30, 8)", "rgb(253, 126, 20)", "rgb(255, 224, 194)"], box
+    page.hover(button)
+    _drawn([orange_hover])
+    assert_contrast(overlay)
+    # Each element's text is scored by its first 80 characters (contrast_offenders).
+    scored = " | ".join(o["text"] for o in conftest.contrast_offenders(overlay, min_ratio=100))
+    for said in ("⚠️ T4 · HEAD-5: none of its 84 g are placed", "T4 · HEAD-5: FCC saw 2 spools on it",
+                 "⚠️ Yes, leave 84 g uncharged"):
+        assert said in scored, (said, scored)
+    page.mouse.move(0, 0)
+    _drawn([orange, orange_hover])
+    assert_contrast(overlay)
+    # The second press posts; the route above refuses it, and the card says so.
+    page.wait_for_timeout(750)  # past the double-click shield, so the press counts
+    page.click(button)
+    page.wait_for_selector(f"{card} .fcc-cr-card-notice", state="visible", timeout=5000)
+    # The press that went out put the button back: its own words, in green.
+    _drawn([green, green_hover])
+    assert page.locator(button).inner_text() == "Confirm deduct"
+    assert_contrast(overlay)
+    scored = " | ".join(o["text"] for o in conftest.contrast_offenders(overlay, min_ratio=100))
+    assert "stub: nothing applied" in scored, scored
+    page.keyboard.press("Escape")
+
+
+@pytest.mark.usefixtures("require_server")
+def test_review_yes_naming_a_plain_line_is_readable(page: Page, base_url: str, assert_contrast):
+    """Round 2's review (2026-11-12): while the set check waits for its second
+    press, a held line that isn't a set and that the press charges nothing to is
+    counted in the orange Yes, and the line by the buttons names it. Scored as
+    drawn, the pointer off the button. A made-up review in this page only, and
+    nothing is pressed a second time (the confirm route is answered in the page all
+    the same), so nothing is written. The offline check is
+    test_cancel_review_set_yes_js.py."""
+    import json as _json
+    import conftest
+    words = {"end": "when the print ended", "start": "when the print started", "during": "during the print"}
+    pending = [{"printer_name": "ZZ Contrast INDX", "job_id": "n2", "filename": "/usb/F.BGC", "progress": 0.42,
+                "total_grams": 104.0, "ambiguous": False, "kind": "partial", "heads_source": "print_end",
+                "heads_words": words, "spools": [], "unresolved_usage": {"4": 84.0, "6": 20.0},
+                "heads_at_end": [{"toolhead": "HEAD-5", "position": 4, "sid": 229, "sids": [229]},
+                                 {"toolhead": "HEAD-7", "position": 6, "sid": 243, "sids": [243]},
+                                 {"toolhead": "HEAD-5", "position": 4, "sid": 42, "when": "start"}],
+                "unresolved_sets": {"4": [{"sid": 42, "when": "start", "display": "ZZ Contrast spool 42",
+                                           "color": "222222", "remaining": 12.5},
+                                          {"sid": 229, "when": "end", "display": "ZZ Contrast spool 229",
+                                           "color": "ff0000", "remaining": 800.0}]}}]
+    page.route("**/api/cancel_deduct/pending*", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=_json.dumps({"pending": pending})))
+    page.route("**/api/cancel_deduct/confirm*", lambda route: route.fulfill(
+        status=200, content_type="application/json",
+        body=_json.dumps({"status": "error", "msg": "stub: nothing applied"})))
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.openCancelReview === 'function'")
+    page.evaluate("() => window.openCancelReview()")
+    card = '#fcc-cancel-review-overlay .fcc-cr-card[data-job="n2"]'
+    button = f"{card} .fcc-cr-confirm"
+    notice = f"{card} .fcc-cr-card-notice"
+    page.wait_for_selector(button, timeout=15000)
+    page.click(button)
+    page.wait_for_selector(notice, state="visible", timeout=5000)
+    assert page.locator(button).inner_text() == "⚠️ Yes, leave 104 g uncharged"
+    assert page.locator(notice).inner_text() == (
+        "⚠️ Yes below charges nothing to T6 · HEAD-7, leaving its 20 g uncharged.")
+    page.mouse.move(0, 0)
+    # Bootstrap eases a button's colours over 0.15 s: score it once it is orange.
+    page.wait_for_function(
+        "(sel) => { const cs = getComputedStyle(document.querySelector(sel));"
+        " return cs.backgroundColor === 'rgb(253, 126, 20)' && cs.color === 'rgb(0, 0, 0)'; }",
+        arg=button, timeout=5000)
+    overlay = page.locator("#fcc-cancel-review-overlay")
+    assert_contrast(overlay)
+    # Each element's text is scored by its first 80 characters (contrast_offenders).
+    scored = " | ".join(o["text"] for o in conftest.contrast_offenders(overlay, min_ratio=100))
+    for said in ("⚠️ Yes below charges nothing to T6 · HEAD-7", "⚠️ Yes, leave 104 g uncharged",
+                 "⚠️ T4 · HEAD-5: none of its 84 g are placed"):
+        assert said in scored, (said, scored)
+    # Derek's picture check of round 2 ("some bolding on T6, like there was on the
+    # others, so that it reads as a toolhead"): T6's name is bold on its line and in
+    # the line by the buttons, as the set's header draws T4's; both are scored.
+    drawn = page.evaluate(
+        "(card) => Array.from(document.querySelectorAll(`${card} .fcc-cr-set-head > span:first-child, "
+        "${card} .fcc-cr-line-head, ${card} .fcc-cr-notice-head`))"
+        ".map((el) => [el.textContent, Number(getComputedStyle(el).fontWeight)])", card)
+    assert sorted(t for t, _ in drawn) == ["T4 · HEAD-5: FCC saw 2 spools on it", "T6 · HEAD-7", "T6 · HEAD-7"], drawn
+    assert all(w >= 600 for _, w in drawn), drawn
+    assert scored.split(" | ").count("T6 · HEAD-7") == 2, scored
+    page.keyboard.press("Escape")
