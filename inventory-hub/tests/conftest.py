@@ -215,12 +215,18 @@ if (os.path.basename(_inherited).startswith(f"run-{os.getpid()}-")
 else:
     _early = [m for m in _READS_FCC_DATA_DIR if m in sys.modules]
     if _early:
+        if "app" in sys.modules:
+            # app's import has already run the startup migrations and the backup
+            # prune: the harm may be done by now, not merely ahead.
+            _harm = ("and so was app, whose import runs the startup migrations and the backup "
+                     "prune, so this run may already have migrated")
+        else:
+            _harm = "so this run would read and migrate"
         raise RuntimeError(
             f"{', '.join(_early)} was imported before tests/conftest.py could set "
-            "FCC_DATA_DIR (a -p plugin, or PYTEST_PLUGINS?), so this run would read and "
-            "migrate whatever data/locations.json the working directory holds (from "
-            "inventory-hub/: dev's live file). Import the backend inside the plugin's "
-            "hooks, not at its top.")
+            f"FCC_DATA_DIR (a -p plugin, or PYTEST_PLUGINS?), {_harm} whatever "
+            "data/locations.json the working directory holds (from inventory-hub/: dev's "
+            "live file). Import the backend inside the plugin's hooks, not at its top.")
     # Always this run's own folder: an FCC_DATA_DIR left in the shell (one naming
     # dev's real data/, say) never decides where a test run writes. A child pytest
     # (another PID) makes its own.

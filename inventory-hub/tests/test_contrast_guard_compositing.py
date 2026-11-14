@@ -26,6 +26,10 @@ Group 58's review reads a computed `filter: brightness(n)`. Before that a filter
 invisible to the guard: the audit tile's whole hover is one, so a brightness(40) tile,
 white on white, scored as its unlit colours and passed. The cases here are each held
 to the pixels Chromium paints, so the guard's model can't drift from the browser's.
+
+Group 45.12 pins which elements the walker scores: never the root (a text-only
+element is judged through its parent), and the children of a display: none
+element too (so a big parent's offenders are filtered to the element meant).
 """
 from __future__ import annotations
 
@@ -162,6 +166,46 @@ def test_translucent_text_is_scored_as_painted_onto_its_background(isolated_page
     with pytest.raises(AssertionError) as exc:
         assert_contrast(root)
     assert "(text at alpha 0.25, as painted)" in str(exc.value), str(exc.value)
+
+
+def test_a_text_only_element_is_scored_through_its_parent_never_as_the_root(isolated_page):
+    """Group 45.12. The walker starts at the root's first descendant, so a
+    text-only element passed as its own root is never scored, whatever its paint:
+    Group 52's two read-notice checks passed their notice that way and judged
+    nothing. Through its parent it is scored (at an impossible ratio it is
+    listed), and #555 on #444 is reported at 1.31:1."""
+    page = isolated_page
+    page.set_content("""
+      <style>html, body { background: #000; margin: 0; font: 16px sans-serif; }</style>
+      <div id="parent" style="background: #1a1a1a; padding: 8px">
+        <div id="notice" style="background: #444444; color: #555555">Spoolman didn't answer</div>
+      </div>""")
+    notice, parent = page.locator("#notice"), page.locator("#parent")
+    assert conftest.contrast_offenders(notice) == []
+    assert conftest.contrast_offenders(notice, min_ratio=100) == [], "the root itself was scored"
+    assert [o["id"] for o in conftest.contrast_offenders(parent, min_ratio=100)] == ["notice"]
+    offenders = conftest.contrast_offenders(parent)
+    assert [(o["id"], o["ratio"]) for o in offenders] == [("notice", 1.31)], offenders
+    assert offenders[0]["fg"] == "rgb(85, 85, 85)" and offenders[0]["bg"] == "rgb(68, 68, 68)", offenders[0]
+
+
+def test_a_hidden_elements_children_are_still_scored(isolated_page):
+    """Why a big parent's offenders are filtered to the element meant (CLAUDE.md's
+    contrast standing order): the walker skips an element that is display: none
+    but still walks its children, whose own computed display isn't none, and the
+    innerText of text that isn't drawn is its textContent. So text in a hidden
+    view under the same parent is judged too."""
+    page = isolated_page
+    page.set_content("""
+      <style>html, body { background: #000; margin: 0; font: 16px sans-serif; }</style>
+      <div id="parent" style="background: #1a1a1a; padding: 8px">
+        <div id="shown" style="color: #ffffff">shown</div>
+        <div id="hidden-view" style="display: none; color: #555555">hidden view
+          <span id="hidden-child" style="color: #555555">hidden child</span>
+        </div>
+      </div>""")
+    ids = [o["id"] for o in conftest.contrast_offenders(page.locator("#parent"))]
+    assert ids == ["hidden-child"], ids
 
 
 def test_the_offline_chip_passes_as_painted_and_stays_dimmer_than_idle(isolated_page):

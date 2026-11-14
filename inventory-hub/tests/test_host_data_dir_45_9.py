@@ -26,7 +26,6 @@ import json
 import os
 import subprocess
 import sys
-import time
 
 import pytest
 
@@ -40,7 +39,6 @@ import print_tracker_store
 import state
 
 HUB = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-DEV_DATA = os.path.join(HUB, "data")
 
 
 def _inside(path, folder):
@@ -101,11 +99,35 @@ def test_the_runs_folder_began_with_the_copy_alone():
     assert getattr(conftest, "SESSION_DATA_DIR_STARTED_WITH", None) == ["locations.json"]
 
 
+def _key_paths(value, key, path="$"):
+    """Every place in a parsed JSON value where a dict holds `key`."""
+    found = []
+    if isinstance(value, dict):
+        if key in value:
+            found.append(f"{path}.{key}")
+        for k, v in value.items():
+            found += _key_paths(v, key, f"{path}.{k}")
+    elif isinstance(value, list):
+        for i, v in enumerate(value):
+            found += _key_paths(v, key, f"{path}[{i}]")
+    return found
+
+
+def test_conftest_strips_the_key_the_backend_keeps_logins_under():
+    """conftest names the key itself (it runs before locations_db can be
+    imported). Renamed in locations_db alone, logins would ride into every
+    run's copy with each other pin here still green."""
+    assert locations_db.PRINTER_CREDS_KEY == "printer_creds", (
+        "locations_db keeps printer logins under a new key: update the key "
+        "tests/conftest.py's seed_session_locations drops, then this pin")
+
+
 def test_the_session_copy_holds_no_printer_login():
     with open(os.path.join(_run_dir(), "locations.json"), encoding="utf-8") as f:
         rows = json.load(f)
-    held = [r.get("LocationID") for r in rows if isinstance(r, dict) and "printer_creds" in r]
-    assert held == [], f"the run's copy carries printer logins for {held}"
+    # Values are never printed: the paths say where, never what.
+    held = _key_paths(rows, locations_db.PRINTER_CREDS_KEY)
+    assert held == [], f"the run's copy carries printer logins at {held}"
 
 
 # --- conftest's helpers ------------------------------------------------------
@@ -181,6 +203,42 @@ def test_reset_dev_is_never_handed_the_runs_folder(monkeypatch):
     monkeypatch.setenv("FCC_DATA_DIR", "somewhere")
     env = env_without(EXTRA="1")
     assert "FCC_DATA_DIR" not in env and env["EXTRA"] == "1"
+
+
+def test_the_reset_fixture_hands_reset_dev_that_env_and_seeds_the_copy_again(monkeypatch):
+    """The helper above is only half of it: _reset_dev_baseline must pass its env
+    to reset_dev.py, and take the run's copy again once the container is back
+    (the copy was made at conftest import, before the reset). The fixture's own
+    function runs here with a config that asks for a reset, and reset_dev.py's
+    subprocess, the wait for the server and the seeding stood in for, so nothing
+    runs and nothing is written."""
+    import inspect
+    import types
+    for name in ("RESET_DEV_BEFORE_SWEEP", "RESET_DEV_PRUNE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("FCC_DATA_DIR", conftest.FCC_TEST_DATA_DIR)   # as the run set it
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append(("run", cmd, kwargs))
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(conftest, "subprocess", types.SimpleNamespace(run=run))
+    monkeypatch.setattr(conftest, "_wait_for_server", lambda base_url, *a, **k: calls.append(("wait", base_url)))
+    monkeypatch.setattr(conftest, "seed_session_locations", lambda data_dir, *a, **k: calls.append(("seed", data_dir)))
+    request = types.SimpleNamespace(config=types.SimpleNamespace(getoption=lambda name: name == "--reset-dev"))
+    fixture_fn = inspect.unwrap(conftest._reset_dev_baseline)
+    gen = fixture_fn(request)
+    next(gen)          # up to its yield: the reset has run
+    gen.close()
+    assert [c[0] for c in calls] == ["run", "wait", "seed"], calls
+    cmd, kwargs = calls[0][1], calls[0][2]
+    assert os.path.basename(cmd[-1]) == "reset_dev.py" and "--prune" not in cmd, cmd
+    env = kwargs.get("env")
+    assert env is not None, "reset_dev.py would inherit this run's FCC_DATA_DIR"
+    assert "FCC_DATA_DIR" not in env, "reset_dev.py was handed the run's folder"
+    assert env == conftest.env_without_test_data_dir(), "not the env the helper builds"
+    assert calls[2][1] == conftest.FCC_TEST_DATA_DIR, calls[2]
 
 
 # --- the backend's paths, with and without FCC_DATA_DIR ----------------------
@@ -296,8 +354,9 @@ _IMPORT_APP_SCRIPT = r"""
 import json, sys
 sys.path.insert(0, sys.argv[1])
 import state
-# Detached as conftest does it: from inventory-hub/ the relative 'hub.log' is
-# the dev container's live log, and the migrations below log.
+# Detached as conftest does it (from inventory-hub/ the relative 'hub.log' is the
+# dev container's live log), so the migrations' log lines below never open it. A
+# handler that opened the file at `import state` (delay=False) has made it by now.
 state.logger.removeHandler(state.f_handler)
 state.f_handler.close()
 import app  # the startup migrations, the backup prune and both re-surfaces
@@ -305,61 +364,47 @@ import locations_db
 print("@@" + json.dumps({"json_file": locations_db.JSON_FILE}))
 """
 
-# Files the running container writes on its own: the print latch every monitor
-# tick, the stores and the ledger at a print's start or end (their .tmp siblings
-# too). `import app` only reads them (the review re-surface), so leaving them out
-# loses nothing here, and a print ending during the pin can't turn it red. That
-# the stores follow FCC_DATA_DIR is pinned above.
-_CONTAINER_RUNTIME_FILES = ("print_tracker_latch.json", "pending_cancel_fetches.json",
-                            "pending_cancel_deducts.json", "print_deduct_ledger.json")
-
 
 def _snapshot(folder):
-    """{relative path: sha256} of every file under `folder` but the container's
-    runtime files."""
+    """{relative path: sha256} of every file under `folder`."""
     out = {}
     for root, _dirs, files in os.walk(folder):
         for name in files:
-            if name.startswith(_CONTAINER_RUNTIME_FILES):
-                continue
             path = os.path.join(root, name)
-            for attempt in range(5):
-                try:
-                    with open(path, "rb") as f:
-                        out[os.path.relpath(path, folder)] = hashlib.sha256(f.read()).hexdigest()
-                    break
-                except FileNotFoundError:
-                    break   # replaced and gone this instant: the diff says so
-                except OSError:  # held by a write this instant
-                    time.sleep(0.2)
-            else:
-                out[os.path.relpath(path, folder)] = "unreadable"
+            with open(path, "rb") as f:
+                out[os.path.relpath(path, folder)] = hashlib.sha256(f.read()).hexdigest()
     return out
 
 
-def test_a_host_import_of_app_leaves_devs_data_folder_alone(tmp_path):
-    """From inventory-hub/, where the relative data/ IS dev's live folder: with
-    FCC_DATA_DIR set, the migrations write in that folder and nothing in dev's,
-    and importing creates no hub.log in the working directory."""
-    d = tmp_path / "data"
+def test_a_host_import_of_app_leaves_the_working_directorys_data_folder_alone(tmp_path):
+    """From inventory-hub/ (the canonical run) the working directory's data/ IS
+    dev's live folder. Here the import runs from a working directory of its own
+    whose data/ holds rows the migrations have work on, a decoy for dev's: with
+    FCC_DATA_DIR set, the migrations write in the FCC_DATA_DIR folder and nothing
+    in the decoy, and importing creates no hub.log in the working directory. If
+    the backend ever stopped honouring FCC_DATA_DIR, the decoy takes the
+    migration and the prune, never dev's files, and dev's container writing its
+    own folder meanwhile can't turn this red."""
+    cwd = tmp_path / "cwd"
+    decoy = cwd / "data"
+    decoy.mkdir(parents=True)
+    (decoy / "locations.json").write_text(json.dumps(_FIXTURE_ROWS), encoding="utf-8")
+    d = tmp_path / "fcc-data"
     d.mkdir()
     (d / "locations.json").write_text(json.dumps(_FIXTURE_ROWS), encoding="utf-8")
-    log = os.path.join(HUB, "hub.log")
-    log_was_there = os.path.exists(log)
-    before = _snapshot(DEV_DATA)
+    before = _snapshot(decoy)
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(("FCC_", "RESET_DEV", "PYTEST_"))}
     env["FCC_DATA_DIR"] = str(d)
     proc = subprocess.run([sys.executable, "-B", "-X", "utf8", "-c", _IMPORT_APP_SCRIPT, HUB],
-                          cwd=HUB, env=env, capture_output=True, text=True, encoding="utf-8",
+                          cwd=str(cwd), env=env, capture_output=True, text=True, encoding="utf-8",
                           errors="replace", timeout=300)
-    after = _snapshot(DEV_DATA)
     lines = [ln for ln in proc.stdout.splitlines() if ln.startswith("@@")]
     assert proc.returncode == 0 and lines, (proc.returncode, proc.stdout[-3000:], proc.stderr[-3000:])
+    after = _snapshot(decoy)
     changed = sorted(k for k in set(before) | set(after) if before.get(k) != after.get(k))
-    assert changed == [], f"importing app changed dev's data folder: {changed}"
-    if not log_was_there:
-        assert not os.path.exists(log), "importing app created a hub.log in the working directory"
+    assert changed == [], f"importing app changed the working directory's data folder: {changed}"
+    assert not (cwd / "hub.log").exists(), "importing app created a hub.log in the working directory"
     assert _inside(json.loads(lines[-1][2:])["json_file"], str(d))
     baks = [n for n in os.listdir(d) if n.startswith("locations.json.pre-") and n.endswith(".bak")]
     assert baks, f"the migrations wrote nothing in the FCC_DATA_DIR folder: {os.listdir(d)}"
@@ -393,22 +438,79 @@ def test_offline_with_a_reset_is_refused(args, env_extra):
     assert "[reset-dev]" not in out
 
 
+# --- a plugin that imported the backend first --------------------------------
+
+@pytest.mark.parametrize("module,words", [
+    ("locations_db", "so this run would read and migrate whatever data/locations.json"),
+    # app's import has run the migrations and the prune before conftest loads.
+    ("app", "may already have migrated whatever data/locations.json"),
+])
+def test_a_plugin_that_imported_the_backend_first_is_refused(tmp_path, module, words):
+    """A -p plugin's top-level import runs before tests/conftest.py, so the
+    backend would take the working directory's data/ (from inventory-hub/: dev's
+    live file), and conftest refuses the run. When app came in too, its startup
+    migrations have already run, and the refusal says the harm may be done.
+
+    The plugin's own import is given a folder of its own (FCC_DATA_DIR in its
+    env; conftest refuses whatever the variable says) and runs from a tmp
+    working directory, so even this run migrates nothing of dev's. --co: no
+    fixture runs either way."""
+    plug = tmp_path / "plug"
+    plug.mkdir()
+    (plug / "fcc_early_plugin_45_9.py").write_text(f"import {module}\n", encoding="utf-8")
+    own = tmp_path / "data-of-its-own"
+    own.mkdir()
+    (own / "locations.json").write_text("[]", encoding="utf-8")
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("FCC_", "RESET_DEV", "PYTEST_", "RUN_INTEGRATION"))}
+    env["FCC_DATA_DIR"] = str(own)
+    env["PYTHONPATH"] = os.pathsep.join([str(plug), HUB])
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "--co", "-q", "-p", "no:cacheprovider",
+         "-p", "fcc_early_plugin_45_9", os.path.join(HUB, "tests", "test_offline_mode.py")],
+        cwd=str(tmp_path), env=env, capture_output=True, text=True, encoding="utf-8",
+        errors="replace", timeout=300)
+    out = proc.stdout + proc.stderr
+    assert proc.returncode != 0, (proc.returncode, out[-3000:])
+    assert "was imported before tests/conftest.py could set FCC_DATA_DIR" in out, out[-3000:]
+    assert words in out, out[-3000:]
+    assert "test_offline_mode.py::" not in out, "it collected: the refusal came too late"
+
+
 # --- .build_info --------------------------------------------------------------
 
-def test_build_info_is_written_only_when_its_bytes_change(tmp_path, monkeypatch):
-    """Every host `import app` and every dashboard render rewrote it on dev's
-    bind mount, the same bytes unless HEAD moved."""
+def test_build_info_is_written_only_when_its_bytes_change(tmp_path, monkeypatch, capsys):
+    """Every host `import app` (each test run, each round-trip bridge) rewrote it
+    on dev's bind mount, the same bytes unless HEAD moved. Dev's dashboard
+    renders never did: its container has no .git, so the helper writes nothing
+    there. Run by hand (before a prod image build), it says which it did."""
     import _gen_build_info
     sha = {"v": "abcd1234"}
     monkeypatch.setattr(_gen_build_info, "find_git_dir", lambda start: str(tmp_path))
     monkeypatch.setattr(_gen_build_info, "resolve_head_sha", lambda git_dir: sha["v"])
     monkeypatch.setattr(_gen_build_info, "resolve_head_timestamp", lambda git_dir: 1700000000)
     out = tmp_path / ".build_info"
-    assert _gen_build_info.write_build_info(str(out)) is True
+    assert _gen_build_info.update_build_info(str(out)) == "written"
     assert out.read_text(encoding="utf-8") == "abcd1234|1700000000\n"
     os.utime(out, (1_000_000_000, 1_000_000_000))
-    assert _gen_build_info.write_build_info(str(out)) is True
+    assert _gen_build_info.update_build_info(str(out)) == "unchanged"
+    assert _gen_build_info.write_build_info(str(out)) is True   # app.py's call: up to date is a success
     assert os.path.getmtime(out) == 1_000_000_000, "the same bytes were written again"
     sha["v"] = "ef567890"
     assert _gen_build_info.write_build_info(str(out)) is True
     assert out.read_text(encoding="utf-8") == "ef567890|1700000000\n"
+
+    # The command line says what it did: 'wrote' only for a write.
+    capsys.readouterr()
+    assert _gen_build_info.main(str(out)) == 0
+    said = capsys.readouterr().out
+    assert "up to date" in said and "wrote" not in said, said
+    sha["v"] = "0123abcd"
+    assert _gen_build_info.main(str(out)) == 0
+    said = capsys.readouterr().out
+    assert said.startswith("wrote ") and "0123abcd|1700000000" in said, said
+    monkeypatch.setattr(_gen_build_info, "find_git_dir", lambda start: None)
+    assert _gen_build_info.update_build_info(str(out)) is None
+    assert _gen_build_info.write_build_info(str(out)) is False
+    assert _gen_build_info.main(str(out)) == 1
+    assert "nothing written" in capsys.readouterr().err

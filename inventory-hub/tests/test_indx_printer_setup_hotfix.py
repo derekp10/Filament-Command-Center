@@ -33,8 +33,8 @@ import config_schema
 import locations_db
 
 
-XL_CREDS = {"ip_address": "192.168.1.121", "api_key": "XLKEY"}
-INDX_CREDS = {"ip_address": "192.168.1.120", "api_key": "INDXKEY"}
+XL_CREDS = {"ip_address": "192.0.2.11", "api_key": "XLKEY"}
+INDX_CREDS = {"ip_address": "192.0.2.12", "api_key": "INDXKEY"}
 INDX_NAME = "🦝 Core One INDX"
 
 

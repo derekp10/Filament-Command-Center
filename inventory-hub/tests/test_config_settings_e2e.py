@@ -6,19 +6,48 @@ Closes the acceptance criteria the unit suite can't reach:
   #6  dark-theme contrast (no white-on-white / dark-on-dark).
 
 NON-DESTRUCTIVE: exercises only the CLIENT-scope pref (localStorage in the test
-browser context), asserts the SERVER inputs merely render (never saves a server
-change, so dev config.json is untouched), and restores the one pref it touches.
-The server write path is covered by test_config_save.py.
+browser context), asserts the SERVER inputs merely render, and restores the one
+pref it touches. Save sends every server value to PUT /api/config whether or not
+it changed, and the server rewrites dev's real config.json (and its .bak)
+whenever a value is sent, so every such PUT is answered in the page and recorded
+(`config_puts`, Group 45, 2026-11-13: the weigh-mode test's Save rewrote Derek's
+dev config.json on every sweep). The server write path is covered by
+test_config_save.py.
 """
 from __future__ import annotations
 
+import json
 import re
+from urllib.parse import urlsplit
 
 import pytest
 from playwright.sync_api import Page, expect
 
 WEIGH_KEY = "fcc.weighEntry.defaultMode"
 MODE_SEL = '.cfgset-input[data-key="fcc.weighEntry.defaultMode"]'
+
+
+@pytest.fixture(autouse=True)
+def config_puts(page: Page):
+    """Every PUT /api/config this page sends, answered in the page as a save
+    that changed nothing on the server (it never reaches dev's config.json),
+    and recorded: the request bodies, parsed."""
+    sent = []
+
+    def handle(route):
+        req = route.request
+        if req.method.upper() != "PUT" or urlsplit(req.url).path != "/api/config":
+            route.fallback()
+            return
+        try:
+            sent.append(req.post_data_json)
+        except ValueError:
+            sent.append(req.post_data)
+        route.fulfill(status=200, content_type="application/json",
+                      body=json.dumps({"ok": True, "saved": []}))
+
+    page.route("**/api/config*", handle)
+    return sent
 
 
 def _open_settings(page: Page, base_url: str, reset_dom_state_js: str):
@@ -76,7 +105,8 @@ def test_settings_card_contrast(page: Page, base_url: str, reset_dom_state_js: s
 
 
 @pytest.mark.usefixtures("require_server")
-def test_client_weigh_mode_persists_across_reload(page: Page, base_url: str, reset_dom_state_js: str):
+def test_client_weigh_mode_persists_across_reload(page: Page, base_url: str, reset_dom_state_js: str,
+                                                  config_puts):
     _open_settings(page, base_url, reset_dom_state_js)
     original = page.evaluate("(k) => window.localStorage.getItem(k)", WEIGH_KEY)
     try:
@@ -90,6 +120,16 @@ def test_client_weigh_mode_persists_across_reload(page: Page, base_url: str, res
             arg=[WEIGH_KEY, target],
             timeout=5000,
         )
+        # Save's server half went out once, answered in this page (dev's
+        # config.json is untouched), and the client pref was never in it.
+        page.wait_for_function(
+            "() => (document.getElementById('cfgset-status') || {}).textContent === '✓ Saved'",
+            timeout=5000,
+        )
+        assert len(config_puts) == 1, config_puts
+        values = (config_puts[0] or {}).get("values")
+        assert isinstance(values, dict) and values, config_puts[0]
+        assert WEIGH_KEY not in values, values
         # #1: survives a full reload and the reopened select reflects it
         _open_settings(page, base_url, reset_dom_state_js)
         assert page.evaluate("(k) => window.localStorage.getItem(k)", WEIGH_KEY) == target

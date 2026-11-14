@@ -150,7 +150,20 @@ def _grid_text(page: Page) -> str:
     return page.evaluate("() => document.getElementById('slot-grid-container').textContent || ''")
 
 
-def test_a_refresh_that_cant_read_keeps_the_cards_and_says_so(page: Page, base_url, assert_contrast):
+def _notice_offenders(notice) -> list:
+    """Group 45.12: the notice is a text-only div, and the contrast guard scores
+    a root's DESCENDANTS only, so passed as its own root it was never judged. It
+    is judged through its parent (wherever inv_loc_mgr.js puts it), after a
+    proof that it is scored there (at an impossible ratio it is reported), and
+    only its own offenders count: the parent also holds the grid's cards."""
+    import conftest   # local, as the contrast tests import it
+    parent = notice.locator("..")
+    scored = conftest.contrast_offenders(parent, min_ratio=100)
+    assert any(o["id"] == "manage-read-notice" for o in scored), "the notice isn't scored through its parent"
+    return [o for o in conftest.contrast_offenders(parent) if o["id"] == "manage-read-notice"]
+
+
+def test_a_refresh_that_cant_read_keeps_the_cards_and_says_so(page: Page, base_url):
     be = FakeBackend(page)
     _boot(page, base_url)
     _open(page)
@@ -165,7 +178,7 @@ def test_a_refresh_that_cant_read_keeps_the_cards_and_says_so(page: Page, base_u
     expect(notice).to_contain_text("Spoolman didn't answer")
     expect(notice).to_contain_text("These cards are from its last answer")
     assert "999521" in _grid_text(page), "a refresh that couldn't read redrew the box"
-    assert_contrast(notice)
+    assert _notice_offenders(notice) == []
 
     # The heartbeat's manage section can't read either: the cards still stay.
     page.wait_for_timeout(6_500)
