@@ -59,6 +59,13 @@ GRID_CONTENTS = {
     _PDB: [],
     _POOL: [_spool(990602, _POOL, "1", "Signal Orange", "PETG", "ff7f11", 455)],
 }
+# XL-1's own contents are answered too, as empty (Group 45, 2026-11-13): the
+# Location Manager lists the toolhead's spool above the grid, and read from dev,
+# that card's height moved the grid by a fraction of a pixel, which changes how
+# every line of text is drawn. The baselines were captured with dev's XL-1
+# empty; the 2026-11-13 refresh from prod put #270 on it, and both captures
+# failed (4.9% of pixels) with no code change.
+GRID_TOOLHEAD_CONTENTS: list = []
 GRID_SLOT_COUNT = 4    # two feeds + two pool slots
 GRID_CARD_COUNT = 2    # the loaded ones render as spool cards
 OK = {"success": True}
@@ -68,7 +75,9 @@ def grid_stub_response(method: str, url: str) -> typing.Optional[typing.Tuple[in
     """(status, json body) for a request the hermetic grid answers itself, or
     None to let it through. What passes through is read-only and renders outside
     #manage-quickswap-section: the page, JS/CSS, /api/locations (for the XL-1
-    row) and the XL-1 modal's own reads."""
+    row) and the XL-1 modal's other reads. XL-1's own contents are answered
+    (GRID_TOOLHEAD_CONTENTS, empty), and hermetic_grid stops the heartbeat,
+    whose manage section redrew them from dev: their height moved the section."""
     if method != "GET":
         return 200, OK                      # nothing the page sends may reach dev
     parts = urlsplit(url)
@@ -87,6 +96,8 @@ def grid_stub_response(method: str, url: str) -> typing.Optional[typing.Tuple[in
         box = (query.get("id") or [""])[0]
         if box in GRID_CONTENTS:
             return 200, GRID_CONTENTS[box]
+        if box == GRID_TOOLHEAD:
+            return 200, list(GRID_TOOLHEAD_CONTENTS)
     if path == "/api/state/buffer":
         return 200, []                      # empty buffer: empty slots stay inert, no Deposit buttons
     return None
@@ -110,6 +121,11 @@ def hermetic_grid(page: Page):
                 raise
 
     page.route("**/*", _handle)
+    # Group 45 (2026-11-13): the heartbeat's manage section redraws the open
+    # view's contents from dev (XL-1's real resident), which moved the grid by a
+    # fraction of a pixel; installed after the catch-all, so it answers first.
+    import conftest   # local: keeps this file's header out of other branches' merges
+    conftest.quiet_heartbeat(page)
     yield
     try:
         page.unroute_all(behavior="ignoreErrors")
@@ -186,8 +202,12 @@ def test_grid_stub_pins_the_buffer_and_swallows_every_write():
         assert grid_stub_response(method, base + path) == (200, OK), (method, path)
     assert grid_stub_response("GET", f"{base}/api/machine/%F0%9F%A6%9D%20XL/toolhead_slots") == (
         200, GRID_TOOLHEAD_SLOTS)
-    # Real boxes pass through (the XL-1 modal's own reads render outside the section).
-    assert grid_stub_response("GET", f"{base}/api/get_contents?id=XL-1") is None
+    # XL-1's own contents are answered as empty, strict read or not (Group 45): the
+    # spool card dev's XL-1 holds moved the section by a fraction of a pixel.
+    assert grid_stub_response("GET", f"{base}/api/get_contents?id=XL-1") == (200, [])
+    assert grid_stub_response("GET", f"{base}/api/get_contents?id=XL-1&strict=1") == (200, [])
+    # Other real places pass through (they render outside the section).
+    assert grid_stub_response("GET", f"{base}/api/get_contents?id=LR-MDB-1") is None
     assert grid_stub_response("GET", f"{base}/api/locations") is None
     # Group 52.1c: the grid's one batched read answers the whole loadout.
     status, body = grid_stub_response("GET", f"{base}/api/get_contents?ids={_MDB}&ids={_PDB}&ids={_POOL}")
