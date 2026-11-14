@@ -11,6 +11,8 @@ HERMETIC AGAINST DEV DATA: the buffer is the page's own (own_the_buffer), the
 location list, the search answer, the placement model and every POST are
 routed; nothing reaches dev's Spoolman or its shared buffer.
 Base proof (52741e6): the cards have no ✏️, so every test fails.
+Group 45, round 3: the ✏️'s contrast is judged through its parent
+(_pencil_offenders); passed as its own root, as it was, it was never judged.
 """
 from __future__ import annotations
 
@@ -116,11 +118,24 @@ def test_a_box_opens_the_slot_picker_as_from_the_spool_window(page: Page, base_u
     assert posts == [] and _buffer(page) == [SID]
 
 
-def test_the_pencil_is_a_keyboard_button(page: Page, base_url: str, assert_contrast):
+def _pencil_offenders(btn, min_ratio=4.5):
+    """Group 45.12's trap: the contrast guard scores a root's DESCENDANTS only,
+    and the button's one child is its ✏️ text, so passed as its own root it was
+    never judged (any paint passed). It is judged through its parent, after a
+    proof that it is scored there (at an impossible ratio it is reported), and
+    only its own offenders count: the parent also holds the 📍 badge."""
+    parent = btn.locator("..")
+    mine = lambda found: [o for o in found if "fcc-card-move-btn" in (o.get("className") or "")]  # noqa: E731
+    assert mine(conftest.contrast_offenders(parent, min_ratio=100)), "the ✏️ isn't scored through its parent"
+    return mine(conftest.contrast_offenders(parent, min_ratio=min_ratio))
+
+
+def test_the_pencil_is_a_keyboard_button(page: Page, base_url: str):
     _setup(page, base_url)
     btn = page.locator(CARD_BTN)
     assert btn.evaluate("el => el.tagName") == "BUTTON"
-    assert_contrast(btn)
+    offenders = _pencil_offenders(btn)
+    assert offenders == [], offenders
     btn.focus()
     page.keyboard.press("Space")
     expect(page.locator(POPUP)).to_be_visible(timeout=5000)

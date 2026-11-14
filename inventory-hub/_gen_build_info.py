@@ -123,8 +123,10 @@ def resolve_head_timestamp(git_dir: str):
 
 def update_build_info(output_path: str):
     """Bring the .build_info file up to date. Returns 'written' when it wrote
-    the file, 'unchanged' when the file already held these bytes (nothing is
-    written), or None when .git or HEAD can't be read or the write failed."""
+    the file, 'unchanged' when the file already held these bytes, or None when
+    .git or HEAD can't be read; neither of the last two writes anything. A
+    write that fails raises its OSError, its own outcome: one that fails after
+    the open may leave the file empty or cut short, since the open empties it."""
     here = os.path.dirname(os.path.abspath(__file__))
     git_dir = find_git_dir(here)
     if not git_dir:
@@ -152,26 +154,31 @@ def update_build_info(output_path: str):
                 return 'unchanged'
     except OSError:
         pass  # missing or unreadable: write it
-    try:
-        with open(output_path, 'w', encoding='utf-8') as f:
-            f.write(line + '\n')
-        return 'written'
-    except OSError:
-        return None
+    with open(output_path, 'w', encoding='utf-8') as f:
+        f.write(line + '\n')
+    return 'written'
 
 
 def write_build_info(output_path: str) -> bool:
     """Generate the .build_info file. Returns True on success: written, or
-    already up to date (see update_build_info)."""
-    return update_build_info(output_path) is not None
+    already up to date (see update_build_info); False when .git or HEAD can't
+    be read or the write failed. Never raises an OSError."""
+    try:
+        return update_build_info(output_path) is not None
+    except OSError:
+        return False
 
 
 def main(out=None) -> int:
-    """The command line: says whether it wrote the file or found it up to date.
-    Returns the exit code."""
+    """The command line: says whether it wrote the file, found it up to date,
+    couldn't write it, or found no .git. Returns the exit code."""
     if out is None:
         out = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.build_info')
-    outcome = update_build_info(out)
+    try:
+        outcome = update_build_info(out)
+    except OSError as exc:
+        print(f"couldn't write {out}: {exc}", file=sys.stderr)
+        return 1
     if outcome:
         with open(out, 'r', encoding='utf-8') as f:
             content = f.read().strip()

@@ -24,16 +24,20 @@ heartbeat and the spool refresh, which only read (test_text_size_guard.READ_POST
 It closes the page before the routes come off (a live page's 2 s buffer poll,
 un-routed, could still save to dev), then fails the test that wrote. The seven
 ids are made up and the two placement tests quiet the heartbeat and answer the
-spool refresh with nothing new, so no record of dev's repaints their cards.
+spool refresh with nothing new, so no record of dev's repaints their cards. The
+spool window the modal test opens shows a made-up spool too: its reads (the
+silent one each heartbeat makes while it is open) are answered in the page, so
+it never shows a dev copy of one of Derek's real spools (it used to name #255).
 
-Proving the tripwire: a copy of this module with the tripwire and without
-own_the_buffer must fail the two default-placement tests, naming
-POST /api/state/buffer, and leave dev's buffer reading the same before and
-after (the tripwire answers those saves in the page).
+The tripwire was proven on 2026-11-13: a copy of this module with the tripwire
+and without own_the_buffer failed the two default-placement tests, naming
+POST /api/state/buffer, and dev's buffer read the same before and after (the
+tripwire answered those saves in the page).
 """
 from __future__ import annotations
 
-from urllib.parse import urlsplit
+import json
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from playwright.sync_api import Error as PlaywrightError
@@ -45,6 +49,14 @@ from test_text_size_guard import READ_POSTS
 # Made-up spool ids for the seven buffer cards (dev's own ids name copies of
 # Derek's real spools since its 2026-11-13 refresh from prod).
 SEVEN = [999298, 999297, 999255, 999254, 999253, 999252, 999251]
+# The spool the modal test's spool window shows, made up the same way: what
+# /api/spool_details answers for it (openSpoolDetails' fields).
+MODAL_SPOOL = {
+    "id": 999240, "archived": False, "location": "", "comment": "",
+    "initial_weight": 1000.0, "used_weight": 250.0, "remaining_weight": 750.0, "extra": {},
+    "filament": {"id": 999340, "name": "FAB Test Teal", "material": "PLA", "color_hex": "1E9C8F",
+                 "weight": 1000.0, "vendor": {"id": 999440, "name": "ZZ FAB Test"}, "extra": {}},
+}
 
 
 @pytest.fixture(autouse=True)
@@ -218,15 +230,30 @@ def test_fab_position_restored_and_clamped(page: Page):
 # --- always available -------------------------------------------------------
 
 def test_fab_clickable_over_open_modal(page: Page):
+    sid = str(MODAL_SPOOL["id"])
+    asked = []
+
+    def spool_details(route):
+        # Every read of the window's spool, answered here with the made-up record.
+        asked.append((parse_qs(urlsplit(route.request.url).query).get("id") or [""])[0])
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(MODAL_SPOOL))
+
+    page.route("**/api/spool_details*", spool_details)
     _goto_dashboard(page)
     page.evaluate(
-        """() => {
-            document.getElementById('detail-id').innerText = '255';
+        """(sid) => {
+            document.getElementById('detail-id').innerText = sid;
             document.getElementById('detail-color-name').innerText = 'Test';
             if (modals && modals.spoolModal) modals.spoolModal.show();
-        }"""
+        }""",
+        sid,
     )
     page.wait_for_selector("#spoolModal.show", timeout=4000)
+    # The silent re-read a heartbeat makes while the window is open (inv_details.js's
+    # sync-pulse listener), now rather than at the next tick: the made-up spool paints.
+    page.evaluate("(sid) => openSpoolDetails(sid, true)", sid)
+    expect(page.locator("#detail-color-name")).to_have_text(MODAL_SPOOL["filament"]["name"])
+    assert asked and set(asked) == {sid}, asked
     fab = page.locator("#fcc-fab-search")
     expect(fab).to_be_visible()
     cx, cy = _fab_center(page)

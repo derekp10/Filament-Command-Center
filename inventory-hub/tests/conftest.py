@@ -19,6 +19,7 @@ import sys
 import time
 import typing
 import uuid
+from urllib.parse import urlsplit
 
 import pytest
 import requests
@@ -259,7 +260,21 @@ _fcc_state.f_handler.close()
 
 DEFAULT_BASE_URL = os.environ.get("INVENTORY_HUB_URL", "http://localhost:8000")
 DEFAULT_DEV_SPOOLMAN = os.environ.get("DEV_SPOOLMAN_URL", "http://192.168.1.29:7913")
+# Prod Spoolman's port. A DEV_SPOOLMAN_URL on it is refused before collection
+# (pytest_configure): the suite writes to the Spoolman that variable names (the
+# throwaway records, the integration tests, --reset-dev's reconcile), and since
+# dev's 2026-11-13 refresh from prod the two hold the same ids.
+PROD_SPOOLMAN_PORT = 7912
 BASELINE_VIEWPORT = {"width": 1600, "height": 1300}
+
+
+def names_prod_spoolman(url) -> bool:
+    """True when `url` is on prod Spoolman's port, whatever the host or its
+    spelling (a zero-padded port, a host name for the NAS)."""
+    try:
+        return urlsplit(str(url).strip()).port == PROD_SPOOLMAN_PORT
+    except ValueError:  # a port that isn't a number: requests can't reach it either
+        return False
 
 # Prefix used by every record the integration suite creates. The orphan-cleanup
 # fixture relies on this exact prefix to identify records left behind by
@@ -288,9 +303,11 @@ def pytest_addoption(parser):
     )
     # Group 19.1 — opt-in dev reset before a sweep. OFF by default so a
     # single-test run never triggers a docker restart / Spoolman reconcile.
-    # For a FULL sweep, `pytest --reset-dev` restores the committed seed
-    # baseline first so cross-test contamination can't accumulate. See
-    # setup-and-rebuild/reset_dev.py + docs/agent_docs/tasks/19-*.md.
+    # For a FULL sweep, `pytest --reset-dev` first restores dev to the local
+    # reset-dev snapshot (setup-and-rebuild/seeds/local/, made by
+    # reset_dev.py --capture; setup-and-rebuild/seeds/README.md) so cross-test
+    # contamination can't accumulate. See setup-and-rebuild/reset_dev.py +
+    # docs/agent_docs/tasks/19-*.md.
     # 2026-08-03 — a genuinely hermetic run. The plain `pytest` invocation was
     # documented as "the offline sweep" but never was one: --run-integration
     # gates only the dev-SPOOLMAN tests, while ~55 E2E files reach the local FCC
@@ -309,8 +326,10 @@ def pytest_addoption(parser):
         "--reset-dev",
         action="store_true",
         default=False,
-        help="Restore dev to the committed seed baseline (NON-destructive) "
-             "before the session. Use for full sweeps. Equivalent env: "
+        help="Restore dev to the local reset-dev snapshot "
+             "(setup-and-rebuild/seeds/local/, made by reset_dev.py --capture; "
+             "setup-and-rebuild/seeds/README.md), NON-destructive, before the "
+             "session. Use for full sweeps. Equivalent env: "
              "RESET_DEV_BEFORE_SWEEP=1.",
     )
     parser.addoption(
@@ -583,6 +602,14 @@ def _reset_dev_wanted(config):
 
 
 def pytest_configure(config):
+    # Group 45 (round 3): never against prod Spoolman. The tests that reach
+    # Spoolman, and the reset_dev.py run --reset-dev starts, use DEV_SPOOLMAN_URL.
+    if names_prod_spoolman(DEFAULT_DEV_SPOOLMAN):
+        raise pytest.UsageError(
+            f"DEV_SPOOLMAN_URL ({DEFAULT_DEV_SPOOLMAN}) is on port {PROD_SPOOLMAN_PORT}, prod "
+            "Spoolman's. The tests write to the Spoolman it names (throwaway records, the "
+            "integration tests, --reset-dev's reconcile), so they never run against prod. Point "
+            "it at dev Spoolman (http://192.168.1.29:7913) or unset it.")
     # Group 45.9: --offline promises that nothing touches dev, and a reset
     # rewrites dev's locations.json, reconciles dev's Spoolman and restarts the
     # container (_reset_dev_baseline runs at the first test whatever --offline
@@ -682,12 +709,20 @@ def page(page, request):
     flight when the test fails, plus where hub.log stood when the test began.
     Listeners only append to lists, so a passing test pays nothing visible.
 
-    Teardown: every route the test put on comes off without waiting for a
-    handler still running, as Playwright advises. A route handler still in
-    route.fetch() when its test ended (fixed_title_counts' heartbeat) raised
-    TargetClosedError at the NEXT test's setup: the 57.3 sweep's ERROR at
-    setup of an unrelated test. Reproduced 3 of 3 with a slow server, and 0
-    of 3 with this."""
+    Teardown closes the page, then takes every route the test put on off
+    without waiting for a handler still running, as Playwright advises.
+    - Closed first (Group 45, round 3): un-routed while still open, the page's
+      2 s buffer poll or a buffer save could reach dev's real server before
+      pytest-playwright closed it. From the close on, a request a route would
+      take is held, never sent. A page the test closed itself is fine. A run
+      that asks pytest-playwright for screenshots (--screenshot) keeps the old
+      order, since they are taken from the open page as its context closes.
+    - Routes off, errors ignored: a route handler still in route.fetch() when
+      its test ended (fixed_title_counts' heartbeat) raised TargetClosedError
+      at the NEXT test's setup: the 57.3 sweep's ERROR at setup of an
+      unrelated test. Reproduced 3 of 3 with a slow server, and 0 of 3 with
+      this. On a closed page unroute_all marks the handlers before its update
+      of the page fails, so the context's close still raises nothing."""
     net = {"slow": [], "pending": {}}
 
     def _started(req):
@@ -707,10 +742,15 @@ def page(page, request):
     request.node._fcc_page = page
     request.node._fcc_hub_offset = hub_log_size()
     yield page
+    if request.config.getoption("--screenshot", "off") == "off":
+        try:
+            page.close()
+        except Exception:
+            pass    # the browser went away; a page already closed raises nothing
     try:
         page.unroute_all(behavior="ignoreErrors")
     except Exception:
-        pass    # the test closed its page itself
+        pass    # a closed page: its handlers were marked before this failed
 
 
 # ---------------------------------------------------------------------------
@@ -1072,13 +1112,14 @@ def seed_via_ui(api_base_url: str):
 #   - teardown always PUTs the baseline back, never an observed snapshot.
 #
 # Why a baseline and not a test-only box: the tests need a single-slot box that
-# already exists in dev AND the reset-dev seed (a new row would change every
+# already exists in dev AND the reset-dev snapshot (a new row would change every
 # location list and visual baseline that renders locations). The PolyMaker boxes
-# fit, and their seed state is unbound, so the baseline is simply "no bindings".
+# fit, and they are unbound in the snapshot, so the baseline is simply "no bindings".
 #
-# Keep this in step with setup-and-rebuild/seeds/locations-seed.json so
-# `pytest --reset-dev` restores exactly this state (pinned by
-# tests/test_box_binding_loans.py). Borrowing a box that isn't listed fails.
+# Keep this in step with the local reset-dev snapshot's
+# setup-and-rebuild/seeds/local/locations-seed.json so `pytest --reset-dev`
+# restores exactly this state (pinned by tests/test_box_binding_loans.py on a PC
+# that has the snapshot). Borrowing a box that isn't listed fails.
 DEV_BOX_BINDING_BASELINES: typing.Dict[str, typing.Dict[str, str]] = {
     "PM-DB-1": {},
     "PM-DB-2": {},
@@ -1153,9 +1194,9 @@ class BoxBindingLoans:
         if box not in self.baselines:
             pytest.fail(
                 f"borrow_box_bindings: {box} has no fixed baseline. Add it to "
-                f"conftest.DEV_BOX_BINDING_BASELINES (matching "
-                f"setup-and-rebuild/seeds/locations-seed.json) before a test may "
-                f"borrow it.",
+                f"conftest.DEV_BOX_BINDING_BASELINES (matching the local reset-dev "
+                f"snapshot, setup-and-rebuild/seeds/local/locations-seed.json) before a "
+                f"test may borrow it.",
                 pytrace=False,
             )
         baseline = _normalized_slot_targets(self.baselines[box])
@@ -1231,8 +1272,11 @@ def borrow_box_bindings(api_base_url: str):
 # ---------------------------------------------------------------------------
 
 # The Quick-Swap overlay tests' slot (Group 45.5). TST-MDB-1 is a dev TEST box
-# (6 slots, no bindings at its baseline) whose slot 1 holds a virtual dev spool
-# (#123 as of 2026-10-13). The fixture used to take the first loaded slot in ANY
+# (6 slots, no bindings at its baseline). Its slot 1 holds #123, dev's copy of
+# one of Derek's real spools: since dev's 2026-11-13 refresh its Spoolman is a
+# copy of prod's, so no dev spool is made up any more. The refresh's fixtures
+# phase put it there, and `setup-and-rebuild/refresh_dev_from_prod.py fixtures
+# --apply` puts it back. The fixture used to take the first loaded slot in ANY
 # dryer box, which on dev meant Derek's real boxes (CR-MDB-1, then LR-MDB-1),
 # and it put back whatever binding it had found there.
 QUICKSWAP_TEST_BOX = "TST-MDB-1"
@@ -1268,9 +1312,11 @@ def bound_loaded_slot(api_base_url, borrow_box_bindings):
     spool_id = next((it.get("id") for it in contents
                      if str(it.get("slot", "")).replace('"', '').strip() == slot), None)
     if spool_id is None:
-        pytest.fail(f"bound_loaded_slot: {box} slot {slot} holds no spool. Put a virtual dev "
-                    f"spool there (it held #123); the Quick-Swap overlays only open on a loaded "
-                    f"slot.", pytrace=False)
+        pytest.fail(f"bound_loaded_slot: {box} slot {slot} holds no spool, and the Quick-Swap "
+                    f"overlays only open on a loaded slot. It held #123, dev's copy of a real "
+                    f"spool, which `setup-and-rebuild/refresh_dev_from_prod.py fixtures --apply` "
+                    f"puts back (run it without --apply first to see what it would do).",
+                    pytrace=False)
     borrow_box_bindings(box, {slot: toolhead})
     yield {"box": box, "slot": slot, "toolhead": toolhead, "spool_id": spool_id}
 
@@ -1524,6 +1570,26 @@ def scan(api_base_url: str):
 # Group 19.1 — opt-in dev-baseline reset before a sweep
 # ---------------------------------------------------------------------------
 
+# The local reset-dev snapshot: the two files reset_dev.py restores dev from (its
+# LOCATIONS_SEED and SPOOLMAN_SEED; tests/test_host_data_dir_45_9.py pins them
+# equal). Git-ignored since 2026-11-13, because they copy the real inventory and
+# the repo is public, so a clone has none until `reset_dev.py --capture` makes
+# them (setup-and-rebuild/seeds/README.md).
+_SNAPSHOT_DIR = os.path.abspath(os.path.join(_HUB_DIR, "..", "setup-and-rebuild", "seeds", "local"))
+RESET_DEV_SNAPSHOT = (os.path.join(_SNAPSHOT_DIR, "locations-seed.json"),
+                      os.path.join(_SNAPSHOT_DIR, "spoolman-dev-seed.json"))
+
+
+def _reset_dev_said(out, err, lines: int = 40) -> str:
+    """The end of what reset_dev.py printed, for a pytest.exit message: pytest
+    shows no captured output when a run exits from a fixture."""
+    text = "\n".join((t.decode("utf-8", "replace") if isinstance(t, bytes) else t).rstrip()
+                     for t in (out, err) if t).strip()
+    if not text:
+        return " reset_dev.py printed nothing."
+    return "\nreset_dev.py said:\n" + "\n".join("  " + ln for ln in text.splitlines()[-lines:])
+
+
 def _wait_for_server(base_url: str, timeout: int = 60) -> None:
     """Poll until the FCC app answers (reset_dev.py docker-restarts it)."""
     deadline = time.time() + timeout
@@ -1546,7 +1612,9 @@ def _wait_for_server(base_url: str, timeout: int = 60) -> None:
 
 @pytest.fixture(scope="session", autouse=True)
 def _reset_dev_baseline(request):
-    """Restore dev to the committed seed baseline before the session — OPT-IN.
+    """Restore dev to the local reset-dev snapshot (setup-and-rebuild/seeds/local/,
+    made by reset_dev.py --capture; setup-and-rebuild/seeds/README.md) before
+    the session — OPT-IN.
 
     No-op unless `--reset-dev` / `--reset-dev-prune` (or RESET_DEV_BEFORE_SWEEP=1
     / RESET_DEV_PRUNE=1) is set, so a normal single-test run never triggers a
@@ -1554,13 +1622,15 @@ def _reset_dev_baseline(request):
     host `reset_dev.py` (non-destructive restore by default; `--prune` deletes
     sweep-created records too) and waits for the container to come back before
     any test executes. If the reset fails, the session aborts rather than run
-    on a dirty baseline.
+    on a dirty baseline, and the message ends with what reset_dev.py said. A PC
+    with no snapshot (a fresh clone) stops before reset_dev.py starts.
 
     Agent-invoked: Derek doesn't run pytest with these flags himself — Claude
     does, on his behalf, and only opts into `--reset-dev-prune` (destructive)
     with Derek's explicit OK. See setup-and-rebuild/reset_dev.py.
 
-    --offline with a reset is refused before collection (pytest_configure).
+    --offline with a reset is refused before collection (pytest_configure), and
+    so is a DEV_SPOOLMAN_URL on prod's port.
     """
     want, prune = _reset_dev_wanted(request.config)
     if not want:
@@ -1573,18 +1643,38 @@ def _reset_dev_baseline(request):
     )
     if not os.path.exists(script):
         pytest.exit(f"reset-dev requested but {script} not found.", returncode=3)
+    missing = [p for p in RESET_DEV_SNAPSHOT if not os.path.exists(p)]
+    if missing:
+        pytest.exit(
+            "reset-dev: the reset-dev snapshot is missing on this PC, so nothing was reset and no "
+            f"test ran. Missing: {', '.join(missing)}. It is kept only on the PC that made it (git-ignored "
+            "since 2026-11-13; setup-and-rebuild/seeds/README.md). Make one from a known-good dev "
+            "with `python setup-and-rebuild/reset_dev.py --capture`, then run again.",
+            returncode=3,
+        )
     cmd = [sys.executable, script] + (["--prune"] if prune else [])
     print(f"\n[reset-dev] restoring dev baseline before session: {' '.join(cmd)}")
     try:
         # reset_dev.py writes dev's REAL locations.json by absolute path: it is
-        # never handed this run's copy (Group 45.9).
-        subprocess.run(cmd, check=True, timeout=300, env=env_without_test_data_dir())
-    except Exception as exc:  # noqa: BLE001
+        # never handed this run's copy (Group 45.9). Its output is kept for the
+        # message below, and printed after a reset that worked.
+        proc = subprocess.run(cmd, timeout=300, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace",
+                              env=env_without_test_data_dir(PYTHONIOENCODING="utf-8"))
+    except Exception as exc:  # noqa: BLE001  (it didn't start, or ran past the timeout)
         pytest.exit(
-            f"reset-dev failed before sweep ({exc}); aborting so tests don't "
-            f"run on a dirty baseline.",
+            f"reset-dev failed before sweep ({exc}); aborting so tests don't run on a dirty "
+            f"baseline.{_reset_dev_said(getattr(exc, 'stdout', None), getattr(exc, 'stderr', None))}",
             returncode=3,
         )
+    if proc.returncode != 0:
+        pytest.exit(
+            f"reset-dev failed before sweep (reset_dev.py exited {proc.returncode}); aborting so "
+            f"tests don't run on a dirty baseline.{_reset_dev_said(proc.stdout, proc.stderr)}",
+            returncode=3,
+        )
+    sys.stdout.write(proc.stdout or "")
+    sys.stderr.write(proc.stderr or "")
     # reset_dev.py docker-restarts inventory_hub — wait for it to answer again.
     _wait_for_server(DEFAULT_BASE_URL)
     # This run's copy was taken at conftest import, before the reset (which runs

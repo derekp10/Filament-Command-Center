@@ -16,6 +16,12 @@ with every printer login dropped, and no store files. The backend reads the
 variable once at import and keeps today's exact paths when it is unset (dev's
 container and prod never set it). --offline with a reset is refused.
 
+Also pinned here, conftest's other guards (Group 45, round 3): --reset-dev
+stops before reset_dev.py on a PC with no local snapshot and puts reset_dev.py's
+own words in its exit message; a DEV_SPOOLMAN_URL on prod Spoolman's port is
+refused before collection; the page fixture closes its page before its routes
+come off; and a .build_info write that fails says so.
+
 Hermetic: these run under --offline. The subprocess pins start Python or pytest
 with this machine's interpreter and touch no network.
 """
@@ -205,40 +211,124 @@ def test_reset_dev_is_never_handed_the_runs_folder(monkeypatch):
     assert "FCC_DATA_DIR" not in env and env["EXTRA"] == "1"
 
 
-def test_the_reset_fixture_hands_reset_dev_that_env_and_seeds_the_copy_again(monkeypatch):
-    """The helper above is only half of it: _reset_dev_baseline must pass its env
-    to reset_dev.py, and take the run's copy again once the container is back
-    (the copy was made at conftest import, before the reset). The fixture's own
-    function runs here with a config that asks for a reset, and reset_dev.py's
-    subprocess, the wait for the server and the seeding stood in for, so nothing
-    runs and nothing is written."""
+def _run_reset_fixture(monkeypatch, tmp_path, calls, answer=None, snapshot=("locations", "spoolman")):
+    """_reset_dev_baseline's own function, run with a config that asks for a
+    reset. reset_dev.py's subprocess, the wait for the server and the seeding
+    are stood in for and logged in `calls`, in order, so nothing runs and
+    nothing is written. `answer()` plays reset_dev.py (returns its result or
+    raises; default: it worked, saying nothing). The local snapshot is two files
+    in tmp_path, `snapshot` naming the ones that exist. A pytest.exit
+    propagates."""
     import inspect
     import types
     for name in ("RESET_DEV_BEFORE_SWEEP", "RESET_DEV_PRUNE"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("FCC_DATA_DIR", conftest.FCC_TEST_DATA_DIR)   # as the run set it
-    calls = []
+    files = []
+    for name in ("locations", "spoolman"):
+        path = tmp_path / f"snapshot-{name}.json"
+        if name in snapshot:
+            path.write_text("[]", encoding="utf-8")
+        files.append(str(path))
+    # raising=False: on code with no snapshot check this sets a name nothing
+    # reads, so the pins below fail on what the fixture does, not on the name.
+    monkeypatch.setattr(conftest, "RESET_DEV_SNAPSHOT", tuple(files), raising=False)
 
     def run(cmd, **kwargs):
         calls.append(("run", cmd, kwargs))
-        return types.SimpleNamespace(returncode=0)
+        if answer is not None:
+            return answer()
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(conftest, "subprocess", types.SimpleNamespace(run=run))
     monkeypatch.setattr(conftest, "_wait_for_server", lambda base_url, *a, **k: calls.append(("wait", base_url)))
     monkeypatch.setattr(conftest, "seed_session_locations", lambda data_dir, *a, **k: calls.append(("seed", data_dir)))
     request = types.SimpleNamespace(config=types.SimpleNamespace(getoption=lambda name: name == "--reset-dev"))
-    fixture_fn = inspect.unwrap(conftest._reset_dev_baseline)
-    gen = fixture_fn(request)
-    next(gen)          # up to its yield: the reset has run
-    gen.close()
+    gen = inspect.unwrap(conftest._reset_dev_baseline)(request)
+    try:
+        next(gen)      # up to its yield: the reset has run
+    finally:
+        gen.close()
+
+
+def test_the_reset_fixture_hands_reset_dev_that_env_and_seeds_the_copy_again(monkeypatch, tmp_path):
+    """The helper above is only half of it: _reset_dev_baseline must pass its env
+    to reset_dev.py, and take the run's copy again once the container is back
+    (the copy was made at conftest import, before the reset)."""
+    calls = []
+    _run_reset_fixture(monkeypatch, tmp_path, calls)
     assert [c[0] for c in calls] == ["run", "wait", "seed"], calls
     cmd, kwargs = calls[0][1], calls[0][2]
     assert os.path.basename(cmd[-1]) == "reset_dev.py" and "--prune" not in cmd, cmd
     env = kwargs.get("env")
     assert env is not None, "reset_dev.py would inherit this run's FCC_DATA_DIR"
     assert "FCC_DATA_DIR" not in env, "reset_dev.py was handed the run's folder"
-    assert env == conftest.env_without_test_data_dir(), "not the env the helper builds"
+    # The helper's env, plus UTF-8 for reset_dev.py's output, which is read back.
+    assert env == conftest.env_without_test_data_dir(PYTHONIOENCODING="utf-8"), "not the env the helper builds"
     assert calls[2][1] == conftest.FCC_TEST_DATA_DIR, calls[2]
+
+
+@pytest.mark.parametrize("present", [("spoolman",), ("locations",), ()])
+def test_the_reset_fixture_stops_before_reset_dev_on_a_pc_with_no_snapshot(monkeypatch, tmp_path, present):
+    """The snapshot is local since 2026-11-13, so a fresh clone has none. The run
+    stops with a plain message naming what is missing and how to make it, before
+    reset_dev.py starts (pytest.exit shows no captured output, so reset_dev.py's
+    own refusal read as 'exit status 2')."""
+    calls = []
+    with pytest.raises(pytest.exit.Exception) as stopped:
+        _run_reset_fixture(monkeypatch, tmp_path, calls, snapshot=present)
+    assert calls == [], f"it went on to {[c[0] for c in calls]}"
+    msg = str(stopped.value.msg)
+    for name in ("locations", "spoolman"):
+        path = str(tmp_path / f"snapshot-{name}.json")
+        assert (path in msg) == (name not in present), (name, msg)
+    assert "reset_dev.py --capture" in msg and "setup-and-rebuild/seeds/README.md" in msg, msg
+    assert "nothing was reset" in msg, msg
+
+
+@pytest.mark.parametrize("how", ["exit 2", "timeout"])
+def test_a_failed_reset_puts_reset_devs_own_words_in_the_exit_message(monkeypatch, tmp_path, how):
+    """reset_dev.py's output is read back, so the message that ends the run says
+    what went wrong (pytest.exit shows no captured output); nothing waits for the
+    server or takes the copy again."""
+    import types
+    said = "!! dev Spoolman refused a PATCH: HTTP 500 database is locked"
+
+    def answer():
+        if how == "timeout":
+            # subprocess.run's own exception, with the output so far (bytes on POSIX).
+            raise subprocess.TimeoutExpired(["reset_dev.py"], 300, output=("restoring...\n" + said).encode())
+        return types.SimpleNamespace(returncode=2, stdout="restoring...\n" + said + "\n",
+                                     stderr="Traceback (most recent call last):\n  boom\n")
+
+    calls = []
+    with pytest.raises(pytest.exit.Exception) as stopped:
+        _run_reset_fixture(monkeypatch, tmp_path, calls, answer=answer)
+    assert [c[0] for c in calls] == ["run"], calls
+    kwargs = calls[0][2]
+    assert kwargs.get("capture_output") or kwargs.get("stdout") is not None, \
+        "reset_dev.py's output isn't read, so the message can't hold it"
+    msg = str(stopped.value.msg)
+    assert said in msg, msg
+    assert "dirty baseline" in msg, msg
+    if how == "exit 2":
+        assert "exited 2" in msg and "boom" in msg, msg
+
+
+def test_the_reset_fixture_checks_the_files_reset_dev_restores_from():
+    """conftest names the snapshot files itself, so it can check them before
+    reset_dev.py starts: they must be the ones reset_dev.py reads. Imported as
+    tests/test_reset_dev.py imports it (by path; its module body only defines)."""
+    import importlib.util
+    path = os.path.join(HUB, "..", "setup-and-rebuild", "reset_dev.py")
+    spec = importlib.util.spec_from_file_location("_reset_dev_for_the_snapshot_pin", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    norm = lambda p: os.path.normcase(os.path.abspath(p))   # noqa: E731
+    assert sorted(map(norm, getattr(conftest, "RESET_DEV_SNAPSHOT", ()))) == \
+        sorted(map(norm, (mod.LOCATIONS_SEED, mod.SPOOLMAN_SEED))), (
+        "conftest.RESET_DEV_SNAPSHOT and reset_dev.py's LOCATIONS_SEED / SPOOLMAN_SEED name "
+        "different files: move them together")
 
 
 # --- the backend's paths, with and without FCC_DATA_DIR ----------------------
@@ -438,6 +528,109 @@ def test_offline_with_a_reset_is_refused(args, env_extra):
     assert "[reset-dev]" not in out
 
 
+# --- a DEV_SPOOLMAN_URL on prod's port ---------------------------------------
+
+@pytest.mark.parametrize("url,prod", [
+    ("http://192.168.1.29:7912", True),
+    ("http://192.168.1.29:07912", True),            # the same port, zero-padded
+    ("http://truenas.lan:7912/api/v1", True),       # another name for the NAS
+    ("HTTP://[::1]:7912", True),
+    (" http://192.168.1.29:7912 ", True),
+    ("http://192.168.1.29:7913", False),            # dev Spoolman
+    ("http://localhost:8000", False),
+    ("http://192.168.1.29", False),
+    ("http://192.168.1.29:notaport", False),        # requests can't reach it either
+])
+def test_prod_spoolmans_port_is_told_apart_from_devs(url, prod):
+    names = getattr(conftest, "names_prod_spoolman", None)
+    assert names, "conftest has no names_prod_spoolman"
+    assert names(url) is prod, url
+
+
+def test_a_dev_spoolman_url_on_prods_port_is_refused():
+    """The tests write to the Spoolman DEV_SPOOLMAN_URL names (throwaway records,
+    the integration tests, --reset-dev's reconcile), and since dev's 2026-11-13
+    refresh dev and prod hold the same ids. A real pytest, --co, on a small test
+    file: the refusal comes before collection, so nothing runs either way."""
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("FCC_", "RESET_DEV", "PYTEST_", "RUN_INTEGRATION"))}
+    env["DEV_SPOOLMAN_URL"] = "http://192.168.1.29:07912"
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "--co", "-q", "-p", "no:cacheprovider",
+         os.path.join("tests", "test_offline_mode.py")],
+        cwd=HUB, env=env, capture_output=True, text=True, encoding="utf-8",
+        errors="replace", timeout=300)
+    out = proc.stdout + proc.stderr
+    assert proc.returncode == pytest.ExitCode.USAGE_ERROR, (proc.returncode, out[-3000:])
+    assert "prod Spoolman's" in out and "http://192.168.1.29:07912" in out, out[-3000:]
+    assert "test_offline_mode.py::" not in out, "it collected: the refusal came too late"
+
+
+# --- the page fixture's teardown ----------------------------------------------
+
+class _TeardownPage:
+    """Stands in for a Playwright page at conftest.page's teardown: logs what
+    is done to it, and raises where a real one would (unroute_all on a closed
+    page; close when the browser has gone away)."""
+
+    def __init__(self, browser_gone=False):
+        self.done = []
+        self.closed = False
+        self.browser_gone = browser_gone
+
+    def on(self, event, handler):
+        pass
+
+    def close(self):
+        self.done.append("close")
+        if self.browser_gone:
+            raise RuntimeError("Browser has been closed")
+        self.closed = True     # Playwright's close of a closed page raises nothing
+
+    def unroute_all(self, behavior=None):
+        self.done.append(f"unroute_all({behavior})")
+        if self.closed or self.browser_gone:
+            raise RuntimeError("Target page, context or browser has been closed")
+
+
+@pytest.mark.parametrize("screenshot,expected", [
+    # Closed first: an un-routed live page's buffer poll or save could reach dev.
+    ("off", ["close", "unroute_all(ignoreErrors)"]),
+    # pytest-playwright takes its screenshots from the open page as the context closes.
+    ("only-on-failure", ["unroute_all(ignoreErrors)"]),
+    ("on", ["unroute_all(ignoreErrors)"]),
+])
+def test_the_page_fixture_closes_its_page_before_the_routes_come_off(screenshot, expected):
+    import inspect
+    import types
+    page = _TeardownPage()
+    opts = {"--screenshot": screenshot}
+    request = types.SimpleNamespace(
+        node=types.SimpleNamespace(),
+        config=types.SimpleNamespace(getoption=lambda name, default=None: opts.get(name, default)))
+    gen = inspect.unwrap(conftest.page)(page, request)
+    assert next(gen) is page
+    with pytest.raises(StopIteration):
+        next(gen)          # the teardown, raising nothing
+    assert page.done == expected
+
+
+def test_the_page_fixture_takes_the_routes_off_when_the_close_fails():
+    """A browser gone away: the teardown still marks the route handlers and
+    raises nothing (a teardown error would turn a green test into an ERROR)."""
+    import inspect
+    import types
+    page = _TeardownPage(browser_gone=True)
+    request = types.SimpleNamespace(
+        node=types.SimpleNamespace(),
+        config=types.SimpleNamespace(getoption=lambda name, default=None: default))
+    gen = inspect.unwrap(conftest.page)(page, request)
+    next(gen)
+    with pytest.raises(StopIteration):
+        next(gen)
+    assert page.done[-1] == "unroute_all(ignoreErrors)", page.done
+
+
 # --- a plugin that imported the backend first --------------------------------
 
 @pytest.mark.parametrize("module,words", [
@@ -514,3 +707,23 @@ def test_build_info_is_written_only_when_its_bytes_change(tmp_path, monkeypatch,
     assert _gen_build_info.write_build_info(str(out)) is False
     assert _gen_build_info.main(str(out)) == 1
     assert "nothing written" in capsys.readouterr().err
+
+
+def test_a_build_info_write_that_fails_says_so(tmp_path, monkeypatch, capsys):
+    """Its own outcome, never the .git message: a failed write says it couldn't
+    write the file and why (a write that fails after the open may have emptied
+    it, so 'nothing written' could be false). app.py's call still gets False."""
+    import _gen_build_info
+    monkeypatch.setattr(_gen_build_info, "find_git_dir", lambda start: str(tmp_path))
+    monkeypatch.setattr(_gen_build_info, "resolve_head_sha", lambda git_dir: "abcd1234")
+    monkeypatch.setattr(_gen_build_info, "resolve_head_timestamp", lambda git_dir: 1700000000)
+    out = tmp_path / "a-folder"
+    out.mkdir()          # opening a folder to write fails on every OS
+    capsys.readouterr()
+    assert _gen_build_info.main(str(out)) == 1
+    said = capsys.readouterr()
+    assert said.err.startswith(f"couldn't write {out}: "), said
+    assert ".git" not in said.err and said.out == "", said
+    assert _gen_build_info.write_build_info(str(out)) is False
+    with pytest.raises(OSError):
+        _gen_build_info.update_build_info(str(out))
