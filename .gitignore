@@ -39,6 +39,11 @@ inventory-hub/data/locations.json.*.bak
 # doesn't pollute diffs.
 inventory-hub/.build_info
 
+# The --reset-dev snapshot (setup-and-rebuild/seeds/README.md says what it is and how to make it).
+# Since 2026-11-13 dev is a copy of prod, so the snapshot copies the real inventory; the repo is
+# public, so it stays on the PC that made it. The README beside it is tracked.
+setup-and-rebuild/seeds/*.json
+
 # Real print captures kept for test fixtures (multi-MB .bgcode / decoded gcode,
 # e.g. the 2026-10-08 INDX raccoon print): durable on disk, never committed.
 /.captures/

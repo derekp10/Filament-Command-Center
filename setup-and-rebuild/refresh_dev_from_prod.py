@@ -13,17 +13,36 @@ WHAT IT REFRESHES
 PROD IS READ-ONLY, in code:
   - Every HTTP call goes through `http()`. It sends only GETs to prod Spoolman, only GETs to dev
     FCC, and refuses any address that isn't dev Spoolman, prod Spoolman or dev FCC.
-  - Every file write goes through `_guard_write()`. It refuses any path on prod's TrueNAS share
-    folders (App_Data\\Spoolman, App_Data\\InventoryHub, on any host name) and any path outside
-    the stage folder, dev's inventory-hub/data/ and dev Spoolman's database file.
+  - Every file write this script makes itself goes through `_guard_write()`. It reads a path in
+    one canonical spelling first (forward slashes, the \\\\?\\UNC\\ / \\\\.\\UNC\\ / \\??\\UNC\\ device
+    prefixes, '..', trailing dots and spaces, case; on Windows a local path's mapped drive, junction
+    or symlink is resolved too), then refuses any path on prod's TrueNAS share folders
+    (App_Data\\Spoolman, App_Data\\InventoryHub, on any host name, and whatever the
+    FCC_REFRESH_PROD_* overrides name). On any network (UNC) path it writes only two files: dev
+    Spoolman's database and dev's marker beside it. On this PC it writes only in the stage
+    folder and dev's inventory-hub/data/.
+  - Writes made outside `_guard_write()`, all on this PC and none on the share: the `seeds`
+    phase runs `reset_dev.py --capture`, which writes setup-and-rebuild/seeds/*.json itself (a
+    temp file in that folder, then a replace); the `locations` phase's migration check runs a
+    child Python in a temp folder inside the stage folder (made through the guard), which writes
+    result.json there and may open a hub.log there; temp files beside a guarded file (`.refresh-*`)
+    are made in that file's folder.
   - Prod's files are only ever opened for reading, and never with SQLite: the database is
     copied as bytes and the LOCAL copy is opened read-only.
   - No phase prints, logs or writes a printer login. Reports name the rows that carry one and
     say, true or false, whether prod's differ. (The dev-data backup is a byte copy of dev's own
     folder, logins included as dev's own files hold them; it stays on this PC.)
 
-EVERY PHASE IS A DRY RUN unless --apply is given. Run them in this order:
+NO PHASE WRITES DEV'S OR PROD'S DATA unless --apply is given. A dry run can still create and
+remove a temp folder in the stage folder: the swap's local copy of the target database
+(.tmp-swap-<pid>) and the locations check's work folder (.tmp-migrate-<pid>). Run them in this order:
 
+   0. init-marker      once per dev Spoolman data folder, never on prod's: writes
+                       FCC_DEV_SPOOLMAN.marker beside dev's spoolman.db (Spoolman ignores it). It
+                       needs --apply AND --i-checked-this-is-dev: say it only after proving the
+                       folder is dev's (a write through dev's API landing in that file, or a
+                       backup of it holding dev's data and not prod's). A new or wiped dev data
+                       folder needs it again.
    1. stage            dev Spoolman UP. Copies prod's spoolman.db and reads prod's locations.json
                        at the same moment (a stripped copy, no logins, goes to the stage folder),
                        and snapshots dev Spoolman's counts and max ids for the swap's identity
@@ -32,11 +51,15 @@ EVERY PHASE IS A DRY RUN unless --apply is given. Run them in this order:
          `stage`: a write to dev in between (a test run) makes the swap's identity guard refuse --
    3. swap             dev Spoolman DOWN, prod UP. Refuses unless: dev doesn't answer and prod
                        does; dev FCC tracks no print (every printer IDLE in the latch, the fetch
-                       queue empty); the target file, copied locally and opened read-only, has
-                       exactly the counts and max ids of the stage snapshot (so it really is
-                       dev's database). Then backs the target up, overwrites it IN PLACE with
-                       shutil.copyfile (its owner and permissions on TrueNAS stay), and checks
-                       the hash.
+                       queue empty); the target's own folder holds dev's marker and prod's
+                       database folder holds none; the target is not prod's file
+                       (os.path.samefile) and doesn't hold prod's live bytes or the staged copy's
+                       (sha256); and the target file, copied locally and opened read-only,
+                       matches the stage snapshot of dev's counts and max ids (that one only shows
+                       nothing wrote dev after `stage`: it can't tell dev's file from prod's while
+                       their counts match, which is why the marker comes first). Then backs the
+                       target up, overwrites it IN PLACE with shutil.copyfile (its owner and
+                       permissions on TrueNAS stay), and checks the hash.
    4. -- a person starts the dev Spoolman app in TrueNAS --
    5. verify-spoolman  dev answers with prod's records, every vendor, filament and spool
                        (archived ones too), field by field. The test spool `fixtures` moved is
@@ -49,11 +72,14 @@ EVERY PHASE IS A DRY RUN unless --apply is given. Run them in this order:
    7. fixtures         dev Spoolman only: exactly one stored, in-stock spool in the Quick-Swap
                        test box's slot (TST-MDB-1 slot 1), slots 2-6 empty; a direct PATCH while
                        FCC is stopped.
-   8. count            45.7, read-only: in-stock spools whose physical_source is set while they
-                       are not on a head, on prod's data and on dev's data before the refresh.
+   8. count            45.7, read-only: spools whose physical_source is set while they are not on
+                       a head, on prod's data and on dev's data before the refresh. Two numbers:
+                       the rule as filed (archived spools included) and in stock only.
    9. seeds            retakes setup-and-rebuild/seeds/ from the refreshed dev through
-                       reset_dev.py --capture (which never writes printer_creds) and checks them.
-                       Don't commit the seeds without Derek's OK: they hold his real inventory.
+                       reset_dev.py --capture (which never writes printer_creds, and takes
+                       archived spools too) and checks them. The seeds stay on this PC: they are
+                       a copy of the real inventory and the repo is public, so they are
+                       git-ignored since 2026-11-13 (setup-and-rebuild/seeds/README.md).
       checklist        any time, read-only: the Bulk Move checklist's starting state on dev
                        (Feature-Buglist.md, PENDING DEREK).
 
@@ -64,7 +90,7 @@ DEV'S OWN PIECES (`locations`):
     reds come back with one (Group 46.5). Nothing is cascaded to spools.
   - The boxes in tests/conftest.py's DEV_BOX_BINDING_BASELINES are Dryer Boxes at exactly their
     baseline slot_targets ({} today); sibling extra keys stay, a box prod lacks comes from dev
-    (else the committed seed), and every prod binding replaced is reported.
+    (else the local seed), and every prod binding replaced is reported.
   - The CR-TC test carts, verbatim from dev (else the seed), unless prod has those ids.
   - Everything else is prod's (RCOI's parent_id included).
 
@@ -74,14 +100,16 @@ would charge twice. The deduct ledger and the print latch stay.
 
 ROLLBACK: Spoolman: stop the dev app, copy <stage>/dev-spoolman-before.db over dev's
 spoolman.db the same way (shutil.copyfile), start it. FCC: docker stop inventory_hub, copy
-<stage>/dev-data-before/* back into inventory-hub/data/, docker start inventory_hub. Seeds: git.
+<stage>/dev-data-before/* back into inventory-hub/data/, docker start inventory_hub. Seeds: they
+are local only (no git copy after 2026-11-13); keep a copy before a refresh, or re-capture.
 
 Runs on the host's Python (stdlib only). Read the TrueNAS share from PowerShell:
     & "C:/Python314/python.exe" -I -X utf8 setup-and-rebuild/refresh_dev_from_prod.py <phase> [--apply]
 Env overrides: FCC_REFRESH_STAGE_DIR (or --stage-dir), DEV_SPOOLMAN_URL,
 FCC_REFRESH_PROD_SPOOLMAN_URL, FCC_REFRESH_DEV_FCC_URL, INVENTORY_HUB_CONTAINER,
 FCC_REFRESH_PROD_SPOOLMAN_DB, FCC_REFRESH_DEV_SPOOLMAN_DB, FCC_REFRESH_PROD_FCC_DATA_DIR,
-FCC_REFRESH_DEV_DATA_DIR. Prod's share folders are refused whatever they are set to.
+FCC_REFRESH_DEV_DATA_DIR. Prod's share folders are refused whatever they are set to, and the
+folders the FCC_REFRESH_PROD_* overrides name are refused too.
 """
 from __future__ import annotations
 
@@ -144,6 +172,11 @@ PROD_SHARE_FOLDERS = (r"\\TRUENAS\App_Data\Spoolman", r"\\TRUENAS\App_Data\Inven
                       r"\\192.168.1.29\App_Data\Spoolman", r"\\192.168.1.29\App_Data\InventoryHub")
 PROD_SHARE = "app_data"
 PROD_SHARE_SUBFOLDERS = frozenset({"spoolman", "inventoryhub"})
+# Dev's marker: a small text file beside dev Spoolman's database (Spoolman ignores unknown files).
+# The swap overwrites a database only in a folder that holds it, and refuses while prod's database
+# folder holds one. Written once, by `init-marker`, after a person has proved the folder is dev's.
+MARKER_NAME = "FCC_DEV_SPOOLMAN.marker"
+MARKER_MAGIC = "FCC_DEV_SPOOLMAN marker v1"      # its first line; the swap reads it
 # Prod Spoolman's addresses: GET only, whatever the env says.
 PROD_NETLOCS = frozenset({"192.168.1.29:7912", "truenas:7912", "truenas.local:7912"})
 
@@ -187,13 +220,84 @@ def _say(msg=""):
 # --------------------------------------------------------------------------
 # Guard (a): prod is read-only, for files
 # --------------------------------------------------------------------------
-def _norm_path(path):
-    """A path in one comparable spelling, by Windows rules on any OS (the share is SMB): back
-    slashes, case folded, '..' resolved."""
-    p = str(path).replace("/", "\\")
-    if not p.startswith("\\\\"):
-        p = os.path.abspath(str(path)).replace("/", "\\")
-    return ntpath.normcase(ntpath.normpath(p))
+_DEVICE_PREFIXES = ("\\\\?\\", "\\\\.\\", "\\??\\")        # \\?\  \\.\  \??\
+_MUP_PREFIX = "globalroot\\device\\mup\\"                   # \\?\GLOBALROOT\Device\Mup\host\share
+
+
+def _strip_device_prefix(p):
+    r"""Win32's device spellings of an ordinary path, read as that path: \\?\UNC\host\share\x,
+    \\.\UNC\host\share\x, \??\UNC\host\share\x and \\?\GLOBALROOT\Device\Mup\host\share\x are all
+    \\host\share\x, and \\?\C:\x is C:\x. Any other device path comes back as it is: nothing here
+    can say where it points, so the guards refuse it. Takes back slashes only."""
+    for _ in range(8):
+        low = p.lower()
+        pre = next((d for d in _DEVICE_PREFIXES if low.startswith(d)), None)
+        if pre is None:
+            return p
+        rest, rest_low = p[len(pre):], low[len(pre):]
+        if rest_low.startswith("unc\\"):
+            p = "\\\\" + rest[4:]
+        elif rest_low.startswith(_MUP_PREFIX):
+            p = "\\\\" + rest[len(_MUP_PREFIX):]
+        elif len(rest) >= 2 and rest[1] == ":" and rest[0].isalpha():
+            p = rest
+        else:
+            return p
+    return p
+
+
+def _strip_part(part):
+    """Windows drops trailing dots and spaces from a path's parts: 'Spoolman. ' names 'Spoolman'."""
+    return part.rstrip(". ")
+
+
+def _canon(path):
+    r"""A path in one comparable spelling, by Windows rules on any OS (the share is SMB): forward
+    slashes read as back slashes, the device prefixes read (_strip_device_prefix), made absolute by
+    ntpath.abspath (on Windows GetFullPathNameW, which resolves '..' and touches no disk or
+    server), trailing dots and spaces taken off every part (the host and share too), case folded.
+    A device path it can't read keeps its prefix, so _kind() says 'device'."""
+    p = _strip_device_prefix(str(path).replace("/", "\\"))
+    if p.lower().startswith(_DEVICE_PREFIXES):
+        return p.casefold()
+    if p.startswith("\\\\"):
+        p = "\\\\" + p.lstrip("\\")
+    try:
+        p = ntpath.abspath(p)
+    except (OSError, ValueError):
+        p = ntpath.normpath(p)
+    p = _strip_device_prefix(p)
+    drive, rest = ntpath.splitdrive(p)
+    unc = drive.startswith("\\\\")
+    if unc:
+        drive = "\\\\" + "\\".join(_strip_part(b) for b in drive[2:].split("\\"))
+    parts = [x for x in (_strip_part(x) for x in rest.split("\\")) if x and x != "."]
+    out = drive + "".join("\\" + x for x in parts) if unc else drive + "\\" + "\\".join(parts)
+    return out.casefold()
+
+
+def _kind(n):
+    """'device', 'unc' (a network path) or 'local' (this PC), for a _canon spelling."""
+    if n.startswith(_DEVICE_PREFIXES):
+        return "device"
+    return "unc" if n.startswith("\\\\") else "local"
+
+
+def _spellings(path):
+    r"""Every canonical spelling of a path this script can work out without asking a server: the
+    path as written, and on Windows, for a path on this PC, os.path.realpath's (a mapped drive's
+    \\host\share spelling, a junction's or a symlink's target). A UNC path is never resolved here,
+    so the guards never touch the network (and unit tests stay off it)."""
+    n = _canon(path)
+    out = [n]
+    if os.name == "nt" and _kind(n) == "local":
+        try:
+            real = _canon(os.path.realpath(str(path)))
+        except (OSError, ValueError):
+            real = None
+        if real and real != n:
+            out.append(real)
+    return out
 
 
 def _is_under(path_n, folder_n):
@@ -202,36 +306,65 @@ def _is_under(path_n, folder_n):
 
 
 def _prod_folders():
-    folders = list(PROD_SHARE_FOLDERS) + [os.path.dirname(PROD_SPOOLMAN_DB), PROD_FCC_DATA_DIR]
-    return [_norm_path(f) for f in folders if f]
+    folders = list(PROD_SHARE_FOLDERS) + [ntpath.dirname(str(PROD_SPOOLMAN_DB or "").replace("/", "\\")),
+                                          PROD_FCC_DATA_DIR]
+    return [n for f in folders if f for n in _spellings(f)]
 
 
 def is_prod_path(path):
-    """True for any path on prod's share folders (on any host name, any spelling)."""
-    n = _norm_path(path)
-    if any(_is_under(n, f) for f in _prod_folders()):
-        return True
-    if n.startswith("\\\\"):
-        parts = n.lstrip("\\").split("\\")
-        if len(parts) >= 3 and parts[1] == PROD_SHARE and parts[2] in PROD_SHARE_SUBFOLDERS:
+    """True for any path on prod's share folders, in any spelling _canon reads: App_Data\\Spoolman
+    and App_Data\\InventoryHub on any host name, and the folders FCC_REFRESH_PROD_SPOOLMAN_DB and
+    FCC_REFRESH_PROD_FCC_DATA_DIR name. Also True for a device path it can't read (it might be)."""
+    folders = _prod_folders()
+    for n in _spellings(path):
+        kind = _kind(n)
+        if kind == "device":
             return True
+        if any(_is_under(n, f) for f in folders):
+            return True
+        if kind == "unc":
+            parts = n[2:].split("\\")
+            if len(parts) >= 3 and parts[1] == PROD_SHARE and parts[2] in PROD_SHARE_SUBFOLDERS:
+                return True
     return False
 
 
+def marker_path_for(db_path):
+    """Dev's marker sits beside the database it vouches for."""
+    return os.path.join(os.path.dirname(str(db_path)), MARKER_NAME)
+
+
 def _guard_write(path):
-    """Every write goes through here. Prod's share: never. Anything else: only the stage folder,
-    dev's data folder, or dev Spoolman's database file itself."""
+    """Every write this script makes itself goes through here (the module docstring names the few
+    that don't). Prod's share: never. A network (UNC) path: only dev Spoolman's database file and
+    dev's marker beside it, an allowlist, so another share or another name for prod's dataset is
+    refused too. This PC: only the stage folder and dev's data folder (or those two files, when a
+    test points them here)."""
     if is_prod_path(path):
         raise Refused("refusing to write %s: it is on prod's share, which is read-only" % path)
-    n = _norm_path(path)
     if is_prod_path(DEV_SPOOLMAN_DB):
         raise Refused("FCC_REFRESH_DEV_SPOOLMAN_DB points at prod's share (%s)" % DEV_SPOOLMAN_DB)
-    if n == _norm_path(DEV_SPOOLMAN_DB):
+    spellings = _spellings(path)
+    files = set(_spellings(DEV_SPOOLMAN_DB)) | set(_spellings(marker_path_for(DEV_SPOOLMAN_DB)))
+    if any(n in files for n in spellings):
         return
-    if any(_is_under(n, _norm_path(d)) for d in (STAGE_DIR, DEV_DATA_DIR)):
+    if any(_kind(n) != "local" for n in spellings):
+        raise Refused("refusing to write %s: it is outside the two files this script writes on a network "
+                      "share, dev Spoolman's database (%s) and its marker" % (path, DEV_SPOOLMAN_DB))
+    folders = [f for d in (STAGE_DIR, DEV_DATA_DIR) for f in _spellings(d)]
+    if all(any(_is_under(n, f) for f in folders) for n in spellings):
         return
     raise Refused("refusing to write %s: outside the stage folder (%s), dev's data folder (%s) "
                   "and dev Spoolman's database" % (path, STAGE_DIR, DEV_DATA_DIR))
+
+
+def _write_new_file(path, text):
+    """A small new file, through the guard, never over an existing one (open mode 'x')."""
+    _guard_write(path)
+    with open(path, "x", encoding="utf-8", newline="\n") as fh:
+        fh.write(text)
+        fh.flush()
+        os.fsync(fh.fileno())
 
 
 def _makedirs(path):
@@ -893,9 +1026,100 @@ def phase_stage(args):
 # --------------------------------------------------------------------------
 # Phase: swap (guards b and c)
 # --------------------------------------------------------------------------
+def read_marker(path):
+    """(True, text) when `path` is dev's marker (a file whose first line is MARKER_MAGIC);
+    (False, why) when it is missing, unreadable or something else."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read(4096)
+    except FileNotFoundError:
+        return False, "no %s" % path
+    except OSError as exc:
+        return False, "couldn't read %s (%s)" % (path, exc)
+    if not text.startswith(MARKER_MAGIC):
+        return False, "%s isn't dev's marker (its first line isn't %r)" % (path, MARKER_MAGIC)
+    return True, text
+
+
+def same_file(a, b):
+    """(True or False, None) by os.path.samefile; (None, why) when it can't be told: a file can't
+    be stat'ed, or the filesystem reports no file ids (st_ino 0, where samefile says True for any
+    two files). The TrueNAS share reports real ids (checked 2026-11-13: dev's and prod's databases
+    differ)."""
+    try:
+        sa, sb = os.stat(a), os.stat(b)
+    except OSError as exc:
+        return None, "%s: %s" % (type(exc).__name__, exc)
+    if not sa.st_ino or not sb.st_ino:
+        return None, "the filesystem reports no file ids, so os.path.samefile can't tell"
+    return os.path.samefile(a, b), None
+
+
+def _target_spellings(path):
+    """The path as written and, on Windows, as the server names it (os.path.realpath: 8.3 short
+    names, a mapped drive). Only the swap and init-marker call this: it may ask the share."""
+    out = [str(path)]
+    if os.name == "nt":
+        try:
+            out.append(os.path.realpath(str(path)))
+        except (OSError, ValueError):
+            pass
+    return out
+
+
+def target_guard_problems(staged_sha=None):
+    """Guard (b), before the identity check: is the swap's target dev's database, and not prod's?
+    Reads only: the two folders' markers, os.stat of the two files, and both files' sha256 (prod's
+    live database is read as bytes, as `stage` reads it). Returns (problems, facts)."""
+    problems, facts = [], {}
+    target, prod = DEV_SPOOLMAN_DB, PROD_SPOOLMAN_DB
+    for spelling in _target_spellings(target)[1:]:
+        if is_prod_path(spelling):
+            problems.append("the target %s resolves to %s, on prod's share" % (target, spelling))
+    marker = marker_path_for(target)
+    ok, why = read_marker(marker)
+    facts["target_marker"] = "present (%s)" % marker if ok else why
+    if not ok:
+        problems.append("the target's folder holds no dev marker (%s). The swap overwrites a database only "
+                        "in a folder marked as dev's: once you have proved %s is dev Spoolman's folder, run "
+                        "`init-marker --apply --i-checked-this-is-dev`" % (why, os.path.dirname(target)))
+    prod_marker = marker_path_for(prod)
+    try:
+        os.stat(prod_marker)
+    except FileNotFoundError:
+        facts["prod_marker"] = "absent"
+    except OSError as exc:
+        facts["prod_marker"] = "couldn't check (%s)" % exc
+        problems.append("couldn't check prod's database folder for a dev marker (%s)" % exc)
+    else:
+        facts["prod_marker"] = "PRESENT (%s)" % prod_marker
+        problems.append("prod's database folder holds a dev marker (%s): the two paths may be one folder, or the "
+                        "marker was copied to prod. Look before swapping" % prod_marker)
+    same, why = same_file(target, prod)
+    facts["same_file_as_prod"] = same if same is not None else why
+    if same is None:
+        problems.append("couldn't tell whether the target is prod's database file (%s)" % why)
+    elif same:
+        problems.append("the target IS prod's database file (os.path.samefile): refusing")
+    try:
+        target_sha, prod_sha = sha256_file(target), sha256_file(prod)
+    except OSError as exc:
+        problems.append("couldn't hash the target or prod's live database (%s)" % exc)
+    else:
+        facts["target_sha256"], facts["prod_live_sha256"] = target_sha, prod_sha
+        if target_sha == prod_sha:
+            problems.append("the target holds exactly prod's live database bytes: nothing to swap, or it IS "
+                            "prod's file under another name")
+        if staged_sha and target_sha == staged_sha:
+            problems.append("the target already is the staged copy: nothing to swap")
+    return problems, facts
+
+
 def check_target_identity(snapshot):
-    """Guard (b): copy dev's database file locally, open THAT read-only, and compare its counts and
-    max ids with the snapshot of dev's API. Returns (ok, identity_of_the_file)."""
+    """Guard (b), last: copy dev's database file locally, open THAT read-only, and compare its counts
+    and max ids with the stage snapshot of dev's API. A match says nothing wrote dev after `stage`;
+    it can't tell dev's file from prod's while their counts match (target_guard_problems can).
+    Returns (ok, identity_of_the_file)."""
     work = stage_path(".tmp-swap-%d" % os.getpid())
     _makedirs(work)
     try:
@@ -918,6 +1142,7 @@ def phase_swap(args):
     if is_prod_path(DEV_SPOOLMAN_DB):
         raise Refused("the swap's target %s is on prod's share" % DEV_SPOOLMAN_DB)
     _say("target (dev's database): %s" % DEV_SPOOLMAN_DB)
+    _say("prod's live database:    %s" % PROD_SPOOLMAN_DB)
 
     problems = []
     dev_up, dev_why = spoolman_answers(DEV_SPOOLMAN_URL)
@@ -941,21 +1166,28 @@ def phase_swap(args):
     if os.path.exists(stage_path(DEV_DB_BACKUP)):
         problems.append("%s already exists: this swap has run from this stage folder" % stage_path(DEV_DB_BACKUP))
 
+    guard_problems, facts = target_guard_problems(staged_sha=want)
+    _say("dev marker: %s; prod's folder: marker %s" % (facts.get("target_marker"), facts.get("prod_marker")))
+    _say("the target is prod's file (os.path.samefile): %s" % facts.get("same_file_as_prod"))
+    if facts.get("target_sha256"):
+        _say("sha256: target %s..., prod's live database %s..., the staged copy %s..."
+             % (facts["target_sha256"][:12], facts["prod_live_sha256"][:12], want[:12]))
+    problems.extend(guard_problems)
+
+    # Only the stage snapshot is compared: dev's API read now would be served from the very file being
+    # checked, so it would prove nothing about which file that is.
     snapshot = rep.get("dev_identity")
-    if snapshot is None and not args.apply and dev_up:
-        snapshot = identity_from_lists(spoolman_lists(DEV_SPOOLMAN_URL))
-        _say("(dry run: the stage report has no dev identity snapshot, so dev's API was read now)")
     if snapshot is None:
         problems.append("the stage report has no dev identity snapshot: run `stage` while dev Spoolman is up")
     else:
         ok, ident = check_target_identity(snapshot)
-        _say("identity: dev's API (snapshot) %s" % snapshot)
-        _say("          the target file      %s -> %s" % (ident, "SAME: it is dev's database" if ok else "DIFFERENT"))
+        _say("identity: dev's API at the stage %s" % snapshot)
+        _say("          the target file       %s -> %s" % (ident, "matches dev's snapshot" if ok else "DIFFERENT"))
         if not ok:
-            problems.append("the target file's counts and max ids differ from dev's snapshot: it may not be "
-                            "dev's database (both config files name the same spoolman_db_path, so a wrong guess "
-                            "would overwrite prod's). If dev Spoolman was written after `stage` (a test run, "
-                            "say), start it again and re-run `stage` with a new --stage-dir")
+            problems.append("the target file's counts and max ids differ from dev's stage snapshot: dev was written "
+                            "after `stage` (a test run, say), or the target isn't dev's database (both config "
+                            "files name the same spoolman_db_path, so a wrong guess would overwrite prod's). "
+                            "Start dev Spoolman again and re-run `stage` with a new --stage-dir")
     if problems:
         _say("\nREFUSED%s:" % ("" if args.apply else " (dry run)"))
         for p in problems:
@@ -978,6 +1210,77 @@ def phase_swap(args):
     if after != want:
         raise Refused("dev's database doesn't match the staged copy: put %s back the same way" % backup)
     _say("\nOK. NEXT: start the dev Spoolman app in TrueNAS, then run `verify-spoolman`.")
+    return 0
+
+
+# --------------------------------------------------------------------------
+# Phase: init-marker (once per dev Spoolman data folder)
+# --------------------------------------------------------------------------
+def marker_text(folder, note):
+    return "\n".join([
+        MARKER_MAGIC,
+        "This folder holds FCC's DEV Spoolman database (spoolman.db). setup-and-rebuild/refresh_dev_from_prod.py's",
+        "`swap` overwrites a database only in a folder that holds this file, and refuses while prod's Spoolman",
+        "database folder holds one. Spoolman ignores this file. Never copy it into prod's Spoolman folder.",
+        "folder: %s" % folder,
+        "written: %s by refresh_dev_from_prod.py init-marker --apply --i-checked-this-is-dev" % _now(),
+        "note: %s" % (" ".join(str(note or "").split()) or "(none)"),
+    ]) + "\n"
+
+
+def phase_init_marker(args):
+    """Mark dev Spoolman's data folder as dev's (needs --apply and --i-checked-this-is-dev)."""
+    folder = os.path.dirname(DEV_SPOOLMAN_DB)
+    marker = marker_path_for(DEV_SPOOLMAN_DB)
+    prod_folder = os.path.dirname(PROD_SPOOLMAN_DB)
+    _say("dev Spoolman's database: %s" % DEV_SPOOLMAN_DB)
+    _say("the marker:              %s" % marker)
+    _say("prod's database folder:  %s" % prod_folder)
+    # The lexical checks first: a prod path is refused before anything on the share is touched.
+    for name, path in (("dev Spoolman's database", DEV_SPOOLMAN_DB), ("the marker", marker)):
+        if is_prod_path(path):
+            raise Refused("%s (%s) is on prod's share: init-marker never writes there" % (name, path))
+    problems = []
+    for spelling in _target_spellings(DEV_SPOOLMAN_DB)[1:] + _target_spellings(marker)[1:]:
+        if is_prod_path(spelling):
+            problems.append("%s resolves to %s, on prod's share" % (DEV_SPOOLMAN_DB, spelling))
+    if not os.path.isfile(DEV_SPOOLMAN_DB):
+        problems.append("%s isn't a file: is %s Spoolman's data folder?" % (DEV_SPOOLMAN_DB, folder))
+    try:
+        if os.path.samefile(folder, prod_folder):
+            problems.append("dev's folder IS prod's database folder (os.path.samefile)")
+    except FileNotFoundError:
+        pass                                 # prod's folder isn't there, so it can't be dev's
+    except OSError as exc:
+        problems.append("couldn't compare dev's folder with prod's (%s)" % exc)
+    if os.path.exists(marker_path_for(PROD_SPOOLMAN_DB)):
+        problems.append("prod's database folder already holds a dev marker (%s): look before going on"
+                        % marker_path_for(PROD_SPOOLMAN_DB))
+    there, text = read_marker(marker)
+    if there:
+        _say("\nthe marker is already there:\n" + text.rstrip())
+    elif os.path.exists(marker):
+        problems.append("%s exists but isn't dev's marker: look at it, and remove it by hand if it is junk" % marker)
+    if problems:
+        _say("\nREFUSED:")
+        for p in problems:
+            _say("  - " + p)
+        return 2
+    if there:
+        return 0
+    if not args.apply:
+        _say("\nDRY RUN: --apply --i-checked-this-is-dev would write %s. Nothing written." % marker)
+        return 0
+    if not args.i_checked_this_is_dev:
+        _say("\nREFUSED: --apply needs --i-checked-this-is-dev too. Give it only once you have proved %s is dev "
+             "Spoolman's data folder and not prod's: a write sent to dev's API (%s) that landed in this file, or "
+             "a backup of it that holds dev's data and not prod's." % (folder, DEV_SPOOLMAN_URL))
+        return 2
+    _write_new_file(marker, marker_text(folder, args.note))
+    ok, text = read_marker(marker)
+    if not ok:
+        raise Refused("the marker didn't read back: %s" % text)
+    _say("\nwrote %s:\n%s" % (marker, text.rstrip()))
     return 0
 
 
@@ -1656,16 +1959,22 @@ def phase_fixtures(args):
 # Phase: count (45.7)
 # --------------------------------------------------------------------------
 def drift_count(spools, rows, toolhead_types):
-    """The 45.7 number and what goes with it. A spool counts when it is in stock, its
-    physical_source is set, and its location is not a head (Places.is_head)."""
+    """The 45.7 numbers and what goes with them. As filed, a spool counts when its physical_source
+    is set and its location is not a head (Places.is_head), archived or not (`number_as_filed`).
+    `number` is the same rule for spools in stock only. "Slot-only residue" is a spool in stock with
+    physical_source_slot set and no physical_source."""
     places = Places(rows, toolhead_types)
-    counted, companions = [], {"archived_with_trail": [], "slot_only_residue": [], "archived_on_head": [],
-                               "on_head_no_trail": [], "on_head_with_trail": []}
+    counted, as_filed = [], []
+    companions = {"archived_with_trail": [], "slot_only_residue": [], "archived_on_head": [],
+                  "on_head_no_trail": [], "on_head_with_trail": []}
     for s in spools:
         src, slot = trail_of(s.get("extra"))
         on_head = places.is_head(s.get("location"))
         loc = _norm_loc(s.get("location"))
         entry = {"id": s.get("id"), "location": loc or "(unassigned)", "trail": src + (":" + slot if slot else "")}
+        if src and not on_head:
+            as_filed.append(dict(entry, archived=bool(s.get("archived")),
+                                 place=places.place_kind(loc)))
         if s.get("archived"):
             if src:
                 companions["archived_with_trail"].append(entry)
@@ -1697,22 +2006,27 @@ def drift_count(spools, rows, toolhead_types):
         by_trail[t] = by_trail.get(t, 0) + 1
     in_stock = sum(1 for s in spools if not s.get("archived"))
     return {"number": len(counted), "counted": sorted(counted, key=lambda e: e["id"]),
+            "number_as_filed": len(as_filed), "as_filed": sorted(as_filed, key=lambda e: e["id"]),
             "by_place_kind": by_place, "by_trail": by_trail, "trail_is_own_location": own,
             "spools": len(spools), "in_stock": in_stock, "archived": len(spools) - in_stock,
             "heads": len(places.printer_heads), "companions": companions}
 
 
 def _print_count(label, res):
-    _say("\n[%s] 45.7 count = %d   (%d spools: %d in stock, %d archived; %d heads)" % (
-        label, res["number"], res["spools"], res["in_stock"], res["archived"], res["heads"]))
-    for e in res["counted"]:
-        _say("    #%s at %s, trail %s" % (e["id"], e["location"], e["trail"]))
+    _say("\n[%s] 45.7 count: %d as filed (archived spools included), %d in stock   "
+         "(%d spools: %d in stock, %d archived; %d heads)" % (
+             label, res["number_as_filed"], res["number"], res["spools"], res["in_stock"], res["archived"],
+             res["heads"]))
+    for e in res["as_filed"]:
+        _say("    #%s at %s (%s%s), trail %s" % (e["id"], e["location"], e["place"].strip("()"),
+                                                 ", archived" if e["archived"] else "", e["trail"]))
     if res["counted"]:
         _say("  by the place the spool is in: %s" % res["by_place_kind"])
         _say("  by what the trail names: %s; trail is the spool's own location: %d"
              % (res["by_trail"], res["trail_is_own_location"]))
     c = res["companions"]
-    _say("  companions (not in the number): archived with a trail %d %s; slot-only residue (in stock) %d %s; "
+    _say("  companions (not in the in-stock number): archived with a trail %d %s; slot-only residue (in stock, "
+         "physical_source_slot with no physical_source) %d %s; "
          "archived still on a head %d %s; in stock on a head with a trail %d %s; on a head with no trail %d"
          % (len(c["archived_with_trail"]), [e["id"] for e in c["archived_with_trail"]],
             len(c["slot_only_residue"]), [e["id"] for e in c["slot_only_residue"]],
@@ -1735,14 +2049,16 @@ def phase_count(args):
     _say("prod's locations as read: %s (%d rows)" % (rep["prod_locations"], len(prod_rows)))
     dev_spools = get_json(DEV_SPOOLMAN_URL + "/api/v1/spool?allow_archived=true")
     rep["prod_from_dev_api"] = drift_count(dev_spools, prod_rows, consts["toolhead_types"])
-    _print_count("prod: dev Spoolman's API (prod's data) + prod's locations as read", rep["prod_from_dev_api"])
+    _print_count("prod: dev Spoolman's API (prod's data, read now, so after any fixture move) + prod's "
+                 "locations as read", rep["prod_from_dev_api"])
     staged = stage_path(STAGED_PROD_DB)
     if os.path.exists(staged):
         rep["prod_from_staged_db"] = drift_count(spools_from_db(staged), prod_rows, consts["toolhead_types"])
-        same = [e["id"] for e in rep["prod_from_staged_db"]["counted"]] == \
-               [e["id"] for e in rep["prod_from_dev_api"]["counted"]]
-        _say("  cross-check, the staged prod database: %d (%s)" % (
-            rep["prod_from_staged_db"]["number"], "the same spools" if same else "DIFFERENT spools"))
+        same = all([e["id"] for e in rep["prod_from_staged_db"][k]] == [e["id"] for e in rep["prod_from_dev_api"][k]]
+                   for k in ("counted", "as_filed"))
+        _say("  cross-check, the staged prod database: %d as filed, %d in stock (%s)" % (
+            rep["prod_from_staged_db"]["number_as_filed"], rep["prod_from_staged_db"]["number"],
+            "the same spools" if same else "DIFFERENT spools"))
     dev_db = stage_path(DEV_DB_BACKUP)
     dev_locs = args.dev_locations or os.path.join(stage_path(DEV_DATA_BACKUP), "locations.json")
     if os.path.exists(dev_db) and os.path.exists(dev_locs):
@@ -1784,12 +2100,16 @@ def check_seeds(baselines):
             problems.append("seed: %s isn't a Dryer Box at %s" % (box, normalized_slot_targets(baseline)))
     seed = load_json(SPOOLMAN_SEED)
     info["spoolman_counts"] = seed.get("counts")
+    if seed.get("spools_include_archived") is not True:
+        problems.append("spoolman-dev-seed.json holds no archived spools (taken by a reset_dev.py from before "
+                        "2026-11-13): re-capture it")
     return problems, info
 
 
 def phase_seeds(args):
     consts = conftest_constants()
     if args.apply:
+        # reset_dev.py writes the two seed files itself (outside _guard_write; on this PC only).
         _say("Running reset_dev.py --capture ...")
         proc = subprocess.run([sys.executable, RESET_DEV, "--capture"], capture_output=True, text=True, timeout=600)
         _say(proc.stdout.strip())
@@ -1797,6 +2117,11 @@ def phase_seeds(args):
             raise Refused("reset_dev.py --capture failed: %s" % proc.stderr.strip()[-500:])
     else:
         _say("DRY RUN: would run reset_dev.py --capture. Checking the current seeds instead.")
+        missing = [p for p in (LOCATIONS_SEED, SPOOLMAN_SEED) if not os.path.exists(p)]
+        if missing:
+            _say("  no seed on this PC yet: %s (the seeds are local and git-ignored; --apply makes them)"
+                 % ", ".join(missing))
+            return 0
     problems, info = check_seeds(consts["baselines"])
     _say("seeds: %s" % info)
     _say("Running reset_dev.py --dry-run --no-restart (read-only) ...")
@@ -1816,7 +2141,8 @@ def phase_seeds(args):
         _say("  PROBLEM: " + p)
     _say("OK" if not problems else "CHECK FAILED")
     if args.apply:
-        _say("The seeds are git-tracked: don't commit them without Derek's OK (they hold his real inventory).")
+        _say("The seeds stay on this PC (git-ignored since 2026-11-13): they copy the real inventory, and the "
+             "repo is public. See setup-and-rebuild/seeds/README.md.")
     return 0 if not problems else 3
 
 
@@ -1861,9 +2187,9 @@ def phase_checklist(args):
 # --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
-PHASES = {"stage": phase_stage, "swap": phase_swap, "verify-spoolman": phase_verify_spoolman,
-          "locations": phase_locations, "fixtures": phase_fixtures, "count": phase_count,
-          "seeds": phase_seeds, "checklist": phase_checklist}
+PHASES = {"init-marker": phase_init_marker, "stage": phase_stage, "swap": phase_swap,
+          "verify-spoolman": phase_verify_spoolman, "locations": phase_locations, "fixtures": phase_fixtures,
+          "count": phase_count, "seeds": phase_seeds, "checklist": phase_checklist}
 
 
 def main(argv=None):
@@ -1879,6 +2205,11 @@ def main(argv=None):
         if name == "count":
             p.add_argument("--prod-locations", help="prod's locations.json as read (default: the stage copy)")
             p.add_argument("--dev-locations", help="dev's locations.json before the refresh (default: the backup)")
+        if name == "init-marker":
+            p.add_argument("--i-checked-this-is-dev", action="store_true",
+                           help="Say you have proved dev Spoolman's data folder is dev's, not prod's. "
+                                "--apply writes the marker only with this.")
+            p.add_argument("--note", help="One line kept in the marker: how you proved it.")
     args = ap.parse_args(argv)
     if args.stage_dir:
         STAGE_DIR = args.stage_dir
@@ -1888,6 +2219,10 @@ def main(argv=None):
     for name, value in (("stage folder", STAGE_DIR), ("dev data folder", DEV_DATA_DIR)):
         if is_prod_path(value):
             _say("REFUSED: the %s (%s) is on prod's share." % (name, value))
+            return 2
+        if any(_kind(n) != "local" for n in _spellings(value)):
+            _say("REFUSED: the %s (%s) isn't on this PC: on a network share this script writes only dev "
+                 "Spoolman's database and its marker." % (name, value))
             return 2
     _say("refresh_dev_from_prod %s%s | stage %s" % (args.phase, "" if args.apply else " (DRY RUN)", STAGE_DIR))
     try:

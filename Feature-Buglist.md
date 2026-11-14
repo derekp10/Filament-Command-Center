@@ -108,12 +108,12 @@
   prod is dark; dev's own `config.json` has it `True`). Derek, 2026-10-08: *"I'm so unexcited about
   that whole thing that I keep putting it off. (And I doubt I'll even really use it much.)"* Flip it
   on in ⚙️ Settings → Behavior whenever the mood strikes — no release needed, prod unaffected.
-  **The checks, with fixtures re-read 2026-10-08 so this is runnable cold:**
+  **The checks, with fixtures re-read 2026-11-13 (after dev was refreshed from prod) so this is runnable cold:**
   | # | Check | Steps | Pass if |
   |---|---|---|---|
-  | 1 | Undo | `CR-CT-2-R3` (#156, #194) → `CR-TC-2-R1` (empty), commit, then `CMD:UNDO` | One prompt first, naming the move ("Undo: put #156 back in CR-CT-2-R3 and #194 back in CR-CT-2-R3?"; since Group 41.4); Yes puts both back and the toast says so. Stronger: move `LR-MDB-1`'s spool out and undo — it returns to the same box AND slot |
-  | 2 | Capacity block | `CR-CT-2-R1` (#42, #95, #126) → `LR-MDB-2` (**full**: #242@1, #230@2) | whole batch refused with a capacity message, nothing moves. ⚠️ the 2026-09-13 handoff said "2 free"; it is now 0 free |
-  | 3 | Deployed-spool skip | ⚠️ **can't run as written** — `CR-MDB-1` is empty, so there's nothing to deploy. Put a spool in slot 1 first (dev spools are disposable), then bulk move `CR-MDB-1` → `CR-TC-2-R2` | the deployed spool is listed as skipped, with a reason |
+  | 1 | Undo | `CR-CT-2-R3` (#149, #156, #194) → `CR-TC-2-R1` (empty), commit, then `CMD:UNDO` | One prompt first, naming the move ("Undo: put #149 back in CR-CT-2-R3, #156 back in CR-CT-2-R3 and #194 back in CR-CT-2-R3?"; since Group 41.4); Yes puts all three back and the toast says so. Stronger: move a box's stored spool out and undo — it returns to the same box AND slot. ⚠️ `LR-MDB-1` can't be used for that now: it holds no stored spool (#270 and #25 are loaded on XL-1 and XL-2 from its slots 1 and 2, and a bulk move skips loaded spools). Put a spool in `CR-MDB-1` slot 1 first (it feeds no head, so it stays stored), then bulk move `CR-MDB-1` → `CR-TC-2-R1` and undo |
+  | 2 | Capacity block | `CR-CT-2-R1` (#42, #70, #127) → `LR-MDB-2` (**full**: #242@1, #230@2) | whole batch refused with a capacity message, nothing moves. ⚠️ the 2026-09-13 handoff said "2 free"; it is now 0 free |
+  | 3 | Deployed-spool skip | ⚠️ **can't run as written** — `CR-MDB-1` is still empty, so there's nothing to deploy. Put a spool in slot 1 first (dev spools are disposable; check 1's stronger variant leaves one there) and load it from there onto an empty head (`CR-MDB-1` feeds no head; XL-3 is empty), then bulk move `CR-MDB-1` → `CR-TC-2-R2` | the deployed spool is listed as skipped, with a reason |
   | 4 | Active print | while printing, a bulk move touching the loaded spool | a skip, not a prompt (bulk move refuses spools on a toolhead) |
   Optional sanity: source == destination blocked; a destination inside the source blocked; a toolhead
   destination blocked; reloading while armed brings the pill back. **Known, NOT a failure:** scanning

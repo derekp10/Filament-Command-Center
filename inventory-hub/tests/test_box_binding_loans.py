@@ -227,8 +227,14 @@ def test_restore_tries_every_box_then_names_the_ones_it_could_not_restore():
 # ---------------------------------------------------------------------------
 
 def test_baselines_match_the_reset_dev_seed():
-    """`pytest --reset-dev` restores the committed seed; it must restore exactly
-    the state the fixture demands, or a freshly reset dev would refuse to run."""
+    """`pytest --reset-dev` restores the seed; it must restore exactly the state
+    the fixture demands, or a freshly reset dev would refuse to run. The seed is
+    local to the PC that made it (git-ignored since 2026-11-13), so another clone
+    has none to check."""
+    if not os.path.exists(SEED):
+        pytest.skip("no reset-dev seed on this PC: setup-and-rebuild/seeds/locations-seed.json is local "
+                    "(git-ignored since 2026-11-13: it copies the real inventory and the repo is public); "
+                    "make it with setup-and-rebuild/reset_dev.py --capture")
     with open(SEED, encoding="utf-8") as fh:
         rows = json.load(fh)
     by_id = {str(r.get("LocationID", "")).upper(): r for r in rows if isinstance(r, dict)}
