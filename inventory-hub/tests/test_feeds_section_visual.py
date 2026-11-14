@@ -26,9 +26,25 @@ def _own_buffer(page: Page):
     above the section when dev's shared buffer holds a spool, and with one an
     earlier test left there the section's text came out a fraction of a pixel
     off and failed one run in three (readability review, 2026-10-21, once the
-    comparator compared colours)."""
-    from conftest import own_the_buffer
+    comparator compared colours).
+
+    The box's own contents are answered as empty, and the heartbeat (whose
+    manage section redraws them from dev) is stopped, for the same reason
+    (Group 45, 2026-11-13): the spool card dev's PM-DB-1 holds sits above the
+    section. The baselines were taken with dev's PM-DB-1 empty; the refresh from
+    prod put #66 in it, and the collapsed capture failed at 6.7% with no code
+    change."""
+    from urllib.parse import parse_qs, urlsplit
+    from conftest import own_the_buffer, quiet_heartbeat
     own_the_buffer(page, [])
+
+    def _is_box_contents(url: str) -> bool:
+        parts = urlsplit(url)
+        return parts.path == "/api/get_contents" and parse_qs(parts.query).get("id") == [TEST_BOX]
+
+    page.route(_is_box_contents, lambda route: route.fulfill(
+        status=200, content_type="application/json", body="[]"))
+    quiet_heartbeat(page)
 
 
 @pytest.mark.usefixtures("require_server", "box_at_baseline")
