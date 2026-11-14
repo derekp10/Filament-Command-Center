@@ -57,10 +57,19 @@ def locations_write_lock():
 # dev testing kept accidentally committing locations.json and pull on prod
 # would clobber live bindings. Moving to a dedicated subtree lets us
 # blanket-ignore everything that isn't tracked documentation.
-_DATA_DIR = 'data'
+#
+# FCC_DATA_DIR (Group 45.9) moves the folder: a host test run (tests/conftest.py)
+# points it at a copy made for that run, so importing app from inventory-hub/
+# no longer migrates dev's live file. Dev's container and prod never set it, so
+# every path below is exactly what it always was there ('data', relative to the
+# working directory). Each is read once, here, and stays a module attribute that
+# the functions read when called: tests monkeypatch them.
+_DATA_DIR = os.environ.get('FCC_DATA_DIR') or 'data'
 JSON_FILE = os.path.join(_DATA_DIR, 'locations.json')
-_LEGACY_JSON_FILE = 'locations.json'  # former root-level path, auto-migrated below
-CSV_FILE = '3D Print Supplies - Locations.csv'
+# The two legacy sources sit one level above the data folder: the working
+# directory itself when FCC_DATA_DIR is unset, beside the override when set.
+_LEGACY_JSON_FILE = os.path.join(os.path.dirname(_DATA_DIR), 'locations.json')  # former root-level path, auto-migrated below
+CSV_FILE = os.path.join(os.path.dirname(_DATA_DIR), '3D Print Supplies - Locations.csv')
 
 # Location Type constants used for Dryer Box / Toolhead logic.
 DRYER_BOX_TYPE = 'Dryer Box'

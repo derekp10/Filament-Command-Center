@@ -747,7 +747,10 @@ def _smart_load(rows, target, residents, with_result=False):
             return {"id": 8, "location": "", "extra": {}}
         return {"id": sid, "location": residents.get(sid, ""), "extra": {}}
 
+    # The save too (Group 45.9): a single-slot box attach would write these rows
+    # over the run's locations.json.
     with patch.object(locations_db, "load_locations_list", return_value=copy.deepcopy(rows)), \
+         patch.object(locations_db, "save_locations_list", return_value=True), \
          patch.object(spoolman_api, "get_spools_at_location", return_value=list(residents)), \
          patch.object(spoolman_api, "get_spools_at_location_detailed_strict",
                       return_value=[{"id": sid, "is_ghost": False, "location": loc}

@@ -48,7 +48,11 @@ import atomic_store  # type: ignore
 import http_retry  # type: ignore
 import state  # type: ignore
 
-_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+# FCC_DATA_DIR (Group 45.9, set only by a host test run) puts both in that run's
+# own folder, so app's import-time snapshot listing reads no live folder; dev's
+# container and prod never set it, and keep this module's data/.
+_DATA_DIR = (os.environ.get("FCC_DATA_DIR")
+             or os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
 _HIDDEN_PATH = os.path.join(_DATA_DIR, "attr_hidden_choices.json")
 
 # Recovery snapshots are `data/attr_recovery_<stamp>.json`. The prefix is what

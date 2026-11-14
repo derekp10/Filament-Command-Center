@@ -278,15 +278,23 @@ def test_put_printer_creds_blank_ip_clears(client):
 
 def test_put_printer_creds_unknown_printer_404(client):
     import app
-    with patch.object(app.locations_db, "load_locations_list", return_value=copy.deepcopy(_rows())):
+    # The save is a mock too (Group 45.9): a regression that saved would write
+    # these three rows over the run's locations.json.
+    with patch.object(app.locations_db, "load_locations_list", return_value=copy.deepcopy(_rows())), \
+         patch.object(app.locations_db, "save_locations_list") as save:
         res = client.put("/api/printer_creds", json={
             "printer_name": "Nope", "ip_address": "1.2.3.4", "api_key": "k"})
     assert res.status_code == 404
+    save.assert_not_called()
 
 
 def test_put_printer_creds_requires_name(client):
-    res = client.put("/api/printer_creds", json={"ip_address": "1.2.3.4", "api_key": "k"})
+    import app
+    with patch.object(app.locations_db, "load_locations_list", return_value=copy.deepcopy(_rows())), \
+         patch.object(app.locations_db, "save_locations_list") as save:
+        res = client.put("/api/printer_creds", json={"ip_address": "1.2.3.4", "api_key": "k"})
     assert res.status_code == 400
+    save.assert_not_called()
 
 
 # --------------------------------------------------------------------------- #

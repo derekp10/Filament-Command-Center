@@ -109,6 +109,9 @@ def test_bucket_dedupes_and_uppercases_targets():
 def _patch_pulse(printer_map, bindings_toolheads, spools, get_all=None):
     return [
         patch.object(app.config_loader, 'load_config', return_value={'printer_map': printer_map}),
+        # The section reads the rows once, for each printer's own id (Group 50.1),
+        # which nothing here asserts: no rows, not the run's copy of dev's file.
+        patch.object(app.locations_db, 'load_locations_list', return_value=[]),
         # L271 Phase 4 (step 2): the pulse aggregator reads printer_map via
         # locations_db.get_active_printer_map() (Printer-row toolheads[]).
         patch.object(app.locations_db, 'get_active_printer_map', return_value=printer_map),

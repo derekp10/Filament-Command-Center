@@ -44,6 +44,9 @@ def _setup_smartmove_mocks(spool_data, printer_map, loc_list, captured):
         patch.object(logic.config_loader, "get_api_urls",
                      return_value=("http://spoolman", "http://filabridge")),
         patch.object(logic.locations_db, "load_locations_list", return_value=loc_list),
+        # A single-slot box attach / release saves locations.json: never over the
+        # run's copy (Group 45.9).
+        patch.object(logic.locations_db, "save_locations_list", return_value=True),
         patch.object(logic.spoolman_api, "get_spool", return_value=spool_data),
         patch.object(logic.spoolman_api, "get_spools_at_location", return_value=[]),
         # Smart Load's resident read is strict (Group 39.7): the head is empty.
@@ -89,6 +92,7 @@ def test_perform_smart_move_auto_deploys_when_slot_is_bound():
         patch.object(logic.config_loader, "get_api_urls",
                      return_value=("http://spoolman", "http://filabridge")),
         patch.object(logic.locations_db, "load_locations_list", return_value=loc_list),
+        patch.object(logic.locations_db, "save_locations_list", return_value=True),  # Group 45.9
         patch.object(logic.spoolman_api, "get_spool", return_value=spool_data),
         patch.object(logic.spoolman_api, "get_spools_at_location", return_value=[]),
         # Smart Load's resident read is strict (Group 39.7): the head is empty.
@@ -136,6 +140,7 @@ def test_perform_smart_move_skips_auto_deploy_when_slot_unbound():
         patch.object(logic.config_loader, "get_api_urls",
                      return_value=("http://spoolman", "http://filabridge")),
         patch.object(logic.locations_db, "load_locations_list", return_value=loc_list),
+        patch.object(logic.locations_db, "save_locations_list", return_value=True),  # Group 45.9
         patch.object(logic.spoolman_api, "get_spool", return_value=spool_data),
         patch.object(logic.spoolman_api, "get_spools_at_location", return_value=[]),
         # Smart Load's resident read is strict (Group 39.7): the head is empty.

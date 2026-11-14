@@ -88,6 +88,10 @@ def env(monkeypatch):
                         lambda: {"server_ip": "spoolman.test", "spoolman_port": 7000})
     rows = copy.deepcopy(ROWS)
     monkeypatch.setattr(locations_db, "load_locations_list", lambda: copy.deepcopy(rows))
+    # And the save (Group 45.9): a single-slot box attach or release would write
+    # these rows over the run's locations.json. Loads keep answering `rows`, as
+    # they did when a save went to disk.
+    monkeypatch.setattr(locations_db, "save_locations_list", lambda *a, **k: True)
     logs = []
     monkeypatch.setattr(state, "add_log_entry", lambda msg, cat="INFO", color=None, meta=None:
                         logs.append((msg, cat, color)))

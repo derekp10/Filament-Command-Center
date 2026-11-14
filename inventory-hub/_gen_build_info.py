@@ -130,6 +130,19 @@ def write_build_info(output_path: str) -> bool:
     ts = resolve_head_timestamp(git_dir)
     # File format: SHA  (single line; optional second token = unix timestamp)
     line = sha if ts is None else f"{sha}|{ts}"
+    # Written only when its bytes would change (Group 45.9). Every host
+    # `import app` (each test run, each round-trip bridge) and every dashboard
+    # render rewrote it with a truncating write, on dev's bind mount, which the
+    # container reads on every render; the bytes were the same unless HEAD had
+    # moved. Nothing reads its mtime: app._compute_build_mtime skips it by name.
+    # These are the bytes the text-mode write below puts on disk.
+    new_bytes = (line + os.linesep).encode('utf-8')
+    try:
+        with open(output_path, 'rb') as f:
+            if f.read() == new_bytes:
+                return True
+    except OSError:
+        pass  # missing or unreadable: write it
     try:
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(line + '\n')

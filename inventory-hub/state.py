@@ -93,8 +93,10 @@ c_handler = logging.StreamHandler(sys.stdout)
 c_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 logger.addHandler(c_handler)
 
-# File Output
-f_handler = RotatingFileHandler('hub.log', maxBytes=1000000, backupCount=5)
+# File Output. delay=True (Group 45.9): the file is opened at the first log line,
+# not at import, so importing this module (every host test run, every script)
+# creates no hub.log in whatever the working directory is.
+f_handler = RotatingFileHandler('hub.log', maxBytes=1000000, backupCount=5, delay=True)
 f_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 logger.addHandler(f_handler)
 

@@ -23,8 +23,12 @@ import threading
 
 import atomic_store
 
-# Overridable by tests (monkeypatch this attribute to a tmp path).
-_STORE_PATH = os.path.join(os.path.dirname(__file__), "data", "print_tracker_latch.json")
+# Overridable by tests (monkeypatch this attribute to a tmp path). FCC_DATA_DIR
+# (Group 45.9, set only by a host test run) puts it in that run's own folder;
+# dev's container and prod never set it, and keep this module's data/.
+_STORE_PATH = (os.path.join(os.environ["FCC_DATA_DIR"], "print_tracker_latch.json")
+               if os.environ.get("FCC_DATA_DIR")
+               else os.path.join(os.path.dirname(__file__), "data", "print_tracker_latch.json"))
 _LOCK = threading.RLock()
 
 
