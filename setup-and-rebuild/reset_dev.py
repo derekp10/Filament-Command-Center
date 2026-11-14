@@ -23,6 +23,13 @@ Two seed artifacts (captured from a known-good dev with `--capture`):
   - setup-and-rebuild/seeds/spoolman-dev-seed.json  (vendors/filaments/spools)
   - setup-and-rebuild/seeds/locations-seed.json      (full FCC locations.json)
 
+PRINTER LOGINS (Group 45.6): a Printer row's `printer_creds` (a PrusaLink IP and
+API key) never goes into the seed, which is committed and pushed: `--capture`
+drops the key from every row. A restore keeps the live file's `printer_creds`
+by LocationID, so resetting dev never wipes the logins it watches the printers
+with, and a seed (even an old one that held some) never brings a login back.
+A login alone is not drift.
+
 NOTE on the .example stub: data/locations.json.example is the *fresh-install*
 bootstrap (6 locations) — NOT a test baseline. Spools reference ~40 distinct
 locations, so restoring from the stub would orphan most of them. The test
@@ -58,6 +65,7 @@ location/extra/archived/weight on existing spools — all fully PATCH-restorable
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import re
@@ -118,6 +126,10 @@ _FLOAT_EPS = 1e-4
 NULL_CLEARS = True
 _NULL_CLEARS_FROM = (0, 26, 0)
 
+# A Printer row's PrusaLink login (locations_db.PRINTER_CREDS_KEY). Never written
+# into the seed, and never taken from it (see the module docstring).
+PRINTER_CREDS_KEY = "printer_creds"
+
 
 # --------------------------------------------------------------------------
 # Small helpers
@@ -149,6 +161,56 @@ def _null_clears_for(version) -> bool:
     if len(nums) < 2:
         return True
     return tuple(nums + [0] * (3 - len(nums))) >= _NULL_CLEARS_FROM
+
+
+def _location_key(row) -> str:
+    return str(row.get("LocationID") or "").strip().upper() if isinstance(row, dict) else ""
+
+
+def _strip_printer_creds(rows: list) -> tuple:
+    """A copy of a locations list with no `printer_creds` on any row, and the
+    LocationIDs that had one (names only: a login's value is never logged)."""
+    out, stripped = [], []
+    for row in rows:
+        if isinstance(row, dict) and PRINTER_CREDS_KEY in row:
+            stripped.append(str(row.get("LocationID") or "?"))
+            row = {k: v for k, v in row.items() if k != PRINTER_CREDS_KEY}
+        out.append(row)
+    return out, stripped
+
+
+def _with_live_printer_creds(seed_rows: list, live_rows) -> tuple:
+    """The seed's rows, each carrying the live file's `printer_creds` for the same
+    LocationID (compared trimmed and case-blind), and none taken from the seed.
+
+    Returns (rows, kept, lost): the LocationIDs whose live login was kept, and
+    those whose live login has no row in the seed (it goes with the row)."""
+    live = {}
+    for row in live_rows if isinstance(live_rows, list) else []:
+        key = _location_key(row)
+        if key and PRINTER_CREDS_KEY in row and key not in live:
+            live[key] = row[PRINTER_CREDS_KEY]
+    rows, kept, seed_keys = [], [], set()
+    for row in seed_rows:
+        if not isinstance(row, dict):
+            rows.append(row)
+            continue
+        key = _location_key(row)
+        seed_keys.add(key)
+        new = {}
+        for k, v in row.items():
+            if k == PRINTER_CREDS_KEY:     # an old seed's login is never restored
+                if key in live:
+                    new[k] = copy.deepcopy(live[key])
+                continue
+            new[k] = v
+        if key in live and PRINTER_CREDS_KEY not in new:
+            new[PRINTER_CREDS_KEY] = copy.deepcopy(live[key])
+        if key in live:
+            kept.append(str(row.get("LocationID")))
+        rows.append(new)
+    lost = sorted(k for k in live if k not in seed_keys)
+    return rows, kept, lost
 
 
 def _check_spoolman_reachable() -> None:
@@ -205,16 +267,27 @@ def capture() -> None:
     _atomic_write(SPOOLMAN_SEED, json.dumps(seed, indent=2, ensure_ascii=False))
     _log(f"  wrote {SPOOLMAN_SEED}  ({len(vendors)} vendors / {len(filaments)} filaments / {len(spools)} spools)")
 
-    # locations.json snapshot (the full test baseline, not the .example stub).
+    # locations.json snapshot (the full test baseline, not the .example stub),
+    # with every printer login left out: the seed is committed and pushed. It is
+    # written the way locations_db writes the live file (json.dump, indent 4,
+    # ASCII), so apart from the logins it is the live text.
     if os.path.exists(LIVE_LOCATIONS):
         with open(LIVE_LOCATIONS, "r", encoding="utf-8") as fh:
             locs = fh.read()
-        _atomic_write(LOCATIONS_SEED, locs)
         try:
-            n = len(json.loads(locs))
-        except Exception:  # noqa: BLE001
-            n = "?"
-        _log(f"  wrote {LOCATIONS_SEED}  ({n} locations)")
+            rows = json.loads(locs)
+        except ValueError as e:
+            rows = None
+            _log(f"  !! {LIVE_LOCATIONS} doesn't parse ({e}); skipped the locations snapshot, "
+                 "because its printer logins can't be left out of text that doesn't parse")
+        if rows is not None and not isinstance(rows, list):
+            rows = None
+            _log(f"  !! {LIVE_LOCATIONS} isn't a list; skipped the locations snapshot")
+        if rows is not None:
+            seed_rows, stripped = _strip_printer_creds(rows)
+            _atomic_write(LOCATIONS_SEED, json.dumps(seed_rows, indent=4))
+            note = f"; printer logins left out of {', '.join(stripped)}" if stripped else ""
+            _log(f"  wrote {LOCATIONS_SEED}  ({len(seed_rows)} locations{note})")
     else:
         _log(f"  !! {LIVE_LOCATIONS} not found — skipped locations snapshot")
     _log("Capture complete.")
@@ -246,28 +319,42 @@ def _load_seed() -> dict:
 
 
 def restore_locations(dry_run: bool) -> None:
+    """Put the seed's rows back, keeping the live file's printer logins by LocationID."""
     if not os.path.exists(LOCATIONS_SEED):
         _log(f"  !! No locations seed at {LOCATIONS_SEED} — skipping locations restore.")
         return
     with open(LOCATIONS_SEED, "r", encoding="utf-8") as fh:
         seed_text = fh.read()
-    current = ""
+    try:
+        seed_rows = json.loads(seed_text)
+    except ValueError as e:
+        _log(f"  !! The locations seed doesn't parse ({e}) — skipping locations restore.")
+        return
+    if not isinstance(seed_rows, list):
+        _log("  !! The locations seed isn't a list — skipping locations restore.")
+        return
+    current = None
     if os.path.exists(LIVE_LOCATIONS):
         with open(LIVE_LOCATIONS, "r", encoding="utf-8") as fh:
-            current = fh.read()
-    # Compare parsed JSON so whitespace-only diffs don't trigger a rewrite.
-    try:
-        drifted = json.loads(seed_text) != json.loads(current or "null")
-    except Exception:  # noqa: BLE001
-        drifted = True
-    if not drifted:
+            current_text = fh.read()
+        try:
+            current = json.loads(current_text)
+        except ValueError:
+            _log("  locations.json doesn't parse, so no printer login can be kept from it.")
+    # Compare parsed JSON so whitespace-only diffs don't trigger a rewrite. A login
+    # alone is no drift: the restored rows carry the live logins.
+    restored, kept, lost = _with_live_printer_creds(seed_rows, current)
+    if restored == current:
         _log("  locations.json: already matches seed (no change).")
         return
+    note = f" (keeping the printer logins of {', '.join(kept)})" if kept else ""
+    if lost:
+        note += f"; the seed has no row for {', '.join(lost)}, so their logins go with them"
     if dry_run:
-        _log("  locations.json: WOULD restore from seed.")
+        _log(f"  locations.json: WOULD restore from seed{note}.")
         return
-    _atomic_write(LIVE_LOCATIONS, seed_text)
-    _log("  locations.json: restored from seed.")
+    _atomic_write(LIVE_LOCATIONS, json.dumps(restored, indent=4))
+    _log(f"  locations.json: restored from seed{note}.")
 
 
 def _patch(entity: str, eid, payload: dict) -> tuple[bool, str]:
