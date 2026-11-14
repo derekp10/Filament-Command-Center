@@ -20,15 +20,23 @@ before a sweep, `pytest --reset-dev-prune` adds the delete; a flagless run is a
 no-op (see inventory-hub/tests/conftest.py).
 
 Two seed artifacts (captured from a known-good dev with `--capture`):
-  - setup-and-rebuild/seeds/spoolman-dev-seed.json  (vendors/filaments/spools,
-    archived spools included)
-  - setup-and-rebuild/seeds/locations-seed.json      (full FCC locations.json)
+  - setup-and-rebuild/seeds/local/spoolman-dev-seed.json  (vendors/filaments/
+    spools, archived spools included)
+  - setup-and-rebuild/seeds/local/locations-seed.json      (full FCC
+    locations.json, printer logins left out)
 
 THE SEEDS ARE LOCAL (2026-11-13): since dev was refreshed from prod they are a
-copy of the real inventory, and the GitHub repo is public, so they stay on this
-PC, git-ignored (setup-and-rebuild/seeds/README.md). A clone has none until
+copy of the real inventory, and the GitHub repo is public, so they live only on
+the PC that made them, in seeds/local/, a folder git ignores and no commit has
+ever tracked (setup-and-rebuild/seeds/README.md). A clone has none until
 `--capture` (or refresh_dev_from_prod.py's `seeds` phase) makes them; a restore
 or dry run stops with that message, before anything is read or written.
+
+NEVER PROD: every run exits 2 before any request or write when DEV_SPOOLMAN_URL
+names prod Spoolman (port 7912, on any host name, or one of prod's addresses).
+Since 2026-11-13 the seed holds prod's records under prod's ids, so a restore
+aimed at prod would put prod back to the snapshot, and --prune would delete
+everything prod made since.
 
 ARCHIVED SPOOLS (2026-11-13): capture and reconcile both read spools with
 `allow_archived=true`, so a sweep that archives a seed spool is restored (not
@@ -56,7 +64,8 @@ Modes
                                seed values (idempotent); docker restart.
   reset_dev.py --prune         also DELETE entities created during a sweep
                                (present in dev but absent from the seed).
-  reset_dev.py --capture       snapshot CURRENT dev -> the two seed files.
+  reset_dev.py --capture       snapshot CURRENT dev -> the two seed files in
+                               seeds/local/.
   reset_dev.py --dry-run       report what WOULD change; write nothing.
   reset_dev.py --no-restart    skip the `docker restart inventory_hub` step.
   reset_dev.py --no-locations  skip the locations.json restore.
@@ -85,6 +94,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 
 import requests
 
@@ -93,14 +103,27 @@ import requests
 # --------------------------------------------------------------------------
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(HERE)
-SEEDS_DIR = os.path.join(HERE, "seeds")
+# The snapshot's folder: local to the PC that made it, never tracked by any commit, so a checkout of
+# another branch can't overwrite or delete it (setup-and-rebuild/seeds/README.md).
+SEEDS_DIR = os.path.join(HERE, "seeds", "local")
 SPOOLMAN_SEED = os.path.join(SEEDS_DIR, "spoolman-dev-seed.json")
 LOCATIONS_SEED = os.path.join(SEEDS_DIR, "locations-seed.json")
 LIVE_LOCATIONS = os.path.join(REPO_ROOT, "inventory-hub", "data", "locations.json")
+# What --capture writes into the snapshot folder when it isn't there: the folder then ignores itself
+# on every branch, even one whose own .gitignore doesn't name it yet (main, until dev is merged).
+SEEDS_GITIGNORE = ".gitignore"
+SEEDS_GITIGNORE_TEXT = ("# The local reset-dev snapshot (../README.md). Git ignores this whole folder, this file too,\n"
+                        "# on every branch, including one whose own .gitignore doesn't name the folder yet.\n"
+                        "*\n")
 
 SPOOLMAN_URL = os.environ.get("DEV_SPOOLMAN_URL", "http://192.168.1.29:7913").rstrip("/")
 CONTAINER = os.environ.get("INVENTORY_HUB_CONTAINER", "inventory_hub")
 TIMEOUT = 15
+
+# Prod Spoolman: this script never sends it anything. Its port is refused on any host name (an alias
+# or a zero-padded port is still prod), and its known addresses besides.
+PROD_SPOOLMAN_PORT = 7912
+PROD_NETLOCS = frozenset({"192.168.1.29:7912", "truenas:7912", "truenas.local:7912"})
 
 # Fields restored per entity when they drift from the seed. `extra` is handled
 # specially (whole-dict compare, then the seed's whole dict is sent back). Up to
@@ -155,8 +178,40 @@ def _log(msg: str) -> None:
     print(msg, flush=True)
 
 
+def prod_refusal(url: str):
+    """Why `url` can't be dev Spoolman because it names prod's, or None. Read from its parsed parts,
+    so another spelling of prod is still prod: port 7912 on any host name ('07912' is 7912), one of
+    prod's addresses, or a port that can't be read at all."""
+    parts = urllib.parse.urlsplit(str(url))
+    try:
+        port = parts.port
+    except ValueError:
+        return "its port can't be read"
+    if port == PROD_SPOOLMAN_PORT:
+        return f"port {PROD_SPOOLMAN_PORT} is prod Spoolman's, on any host name"
+    if parts.netloc.lower() in PROD_NETLOCS:
+        return "it is one of prod Spoolman's addresses"
+    return None
+
+
+def _refuse_prod() -> None:
+    """Exit 2 when DEV_SPOOLMAN_URL names prod, before any request or write. main() asks first, and
+    every request asks again (a direct caller of capture() or restore())."""
+    why = prod_refusal(SPOOLMAN_URL)
+    if why:
+        _log(f"REFUSED: DEV_SPOOLMAN_URL ({SPOOLMAN_URL}) can't be dev Spoolman: {why}. reset_dev.py never "
+             "talks to prod Spoolman (the seed holds prod's records under prod's ids, so a restore there "
+             "would put prod back to the snapshot). Nothing was read or written.")
+        sys.exit(2)
+
+
+def _url(path: str) -> str:
+    _refuse_prod()
+    return f"{SPOOLMAN_URL}{path}"
+
+
 def _get(path: str):
-    r = requests.get(f"{SPOOLMAN_URL}{path}", timeout=TIMEOUT)
+    r = requests.get(_url(path), timeout=TIMEOUT)
     r.raise_for_status()
     return r.json()
 
@@ -248,10 +303,21 @@ def _check_spoolman_reachable() -> None:
 # --------------------------------------------------------------------------
 # Capture
 # --------------------------------------------------------------------------
+def _ensure_seeds_folder() -> None:
+    """The snapshot folder, made if needed, holding a .gitignore that ignores the whole folder, so
+    the snapshot stays out of git on every branch, even one whose own .gitignore doesn't name it."""
+    os.makedirs(SEEDS_DIR, exist_ok=True)
+    ignore_file = os.path.join(SEEDS_DIR, SEEDS_GITIGNORE)
+    if not os.path.exists(ignore_file):
+        with open(ignore_file, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(SEEDS_GITIGNORE_TEXT)
+
+
 def capture() -> None:
     """Snapshot current dev Spoolman + locations.json into the seed files."""
+    _refuse_prod()
     _check_spoolman_reachable()
-    _log("Capturing dev baseline -> seeds/ ...")
+    _log(f"Capturing dev baseline -> {SEEDS_DIR} ...")
 
     vendors = _get(LIST_PATHS["vendor"])
     filaments_raw = _get(LIST_PATHS["filament"])
@@ -274,7 +340,8 @@ def capture() -> None:
     archived = sum(1 for s in spools if s.get("archived"))
     seed = {
         "_note": "Group 19.1 reset-dev baseline. Snapshot of dev Spoolman, archived spools included. "
-                 "Local to this PC (git-ignored since 2026-11-13: it copies the real inventory). "
+                 "It lives only on the PC that made it, in setup-and-rebuild/seeds/local/ (git-ignored "
+                 "since 2026-11-13: it copies the real inventory, and the repo is public). "
                  "Re-capture with `python reset_dev.py --capture` from a known-good dev.",
         "spoolman_url": SPOOLMAN_URL,
         "spools_include_archived": True,
@@ -284,7 +351,7 @@ def capture() -> None:
         "filaments": filaments,
         "spools": spools,
     }
-    os.makedirs(SEEDS_DIR, exist_ok=True)
+    _ensure_seeds_folder()
     _atomic_write(SPOOLMAN_SEED, json.dumps(seed, indent=2, ensure_ascii=False))
     _log(f"  wrote {SPOOLMAN_SEED}  ({len(vendors)} vendors / {len(filaments)} filaments / "
          f"{len(spools)} spools, {archived} of them archived)")
@@ -343,8 +410,9 @@ def _require_seeds(do_locations: bool, do_spoolman: bool) -> None:
     _log("!! The reset-dev snapshot is missing on this PC:")
     for p in missing:
         _log(f"     {p}")
-    _log("   It lives only on this PC (git-ignored since 2026-11-13: it copies the real inventory, and")
-    _log("   the repo is public), so a fresh clone has none. Make it from a known-good dev with")
+    _log("   It lives only on the PC that made it (git-ignored since 2026-11-13: it copies the real")
+    _log("   inventory, and the repo is public), so a fresh clone has none. Make it from a known-good")
+    _log("   dev with")
     _log("     python setup-and-rebuild/reset_dev.py --capture")
     _log("   (or refresh_dev_from_prod.py's `seeds --apply` right after a refresh).")
     _log("   See setup-and-rebuild/seeds/README.md. Nothing was read or changed.")
@@ -398,7 +466,7 @@ def restore_locations(dry_run: bool) -> None:
 
 
 def _patch(entity: str, eid, payload: dict) -> tuple[bool, str]:
-    url = f"{SPOOLMAN_URL}/api/v1/{entity}/{eid}"
+    url = _url(f"/api/v1/{entity}/{eid}")
     try:
         r = requests.patch(url, json=payload, timeout=TIMEOUT)
         if r.ok:
@@ -409,7 +477,7 @@ def _patch(entity: str, eid, payload: dict) -> tuple[bool, str]:
 
 
 def _delete(entity: str, eid) -> tuple[bool, str]:
-    url = f"{SPOOLMAN_URL}/api/v1/{entity}/{eid}"
+    url = _url(f"/api/v1/{entity}/{eid}")
     try:
         r = requests.delete(url, timeout=TIMEOUT)
         if r.ok:
@@ -498,6 +566,7 @@ def reconcile_entity(entity: str, seed_records: list, dry_run: bool, prune: bool
 
 def restore(dry_run: bool, prune: bool, do_locations: bool, do_spoolman: bool,
             do_restart: bool) -> int:
+    _refuse_prod()
     _log(f"reset-dev {'(DRY RUN) ' if dry_run else ''}-> baseline restore")
     _log("")
     _require_seeds(do_locations, do_spoolman)
@@ -574,13 +643,15 @@ def _print_summary(summary: dict, dry_run: bool, prune: bool) -> None:
 # --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
-def main() -> int:
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         prog="reset_dev.py",
-        description="Restore the shared dev backend to a clean seed baseline (Group 19.1).",
+        description="Restore the shared dev backend to a clean seed baseline (Group 19.1). The seed "
+                    "lives only on the PC that made it, in setup-and-rebuild/seeds/local/ "
+                    "(setup-and-rebuild/seeds/README.md).",
     )
     ap.add_argument("--capture", action="store_true",
-                    help="Snapshot CURRENT dev Spoolman + locations.json into seeds/.")
+                    help="Snapshot CURRENT dev Spoolman + locations.json into seeds/local/.")
     ap.add_argument("--prune", action="store_true",
                     help="Also DELETE entities created during a sweep (absent from "
                          "seed). DESTRUCTIVE + agent-invoked only — Derek never calls "
@@ -593,7 +664,8 @@ def main() -> int:
                     help="Skip the locations.json restore.")
     ap.add_argument("--no-spoolman", action="store_true",
                     help="Skip the Spoolman reconcile.")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
+    _refuse_prod()          # before any request or write, whatever the mode
 
     if args.capture:
         if args.dry_run:

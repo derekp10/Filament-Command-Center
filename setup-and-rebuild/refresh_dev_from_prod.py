@@ -11,8 +11,11 @@ WHAT IT REFRESHES
   - config.json is out of scope (dev keeps its own; its Spoolman address must stay dev's).
 
 PROD IS READ-ONLY, in code:
-  - Every HTTP call goes through `http()`. It sends only GETs to prod Spoolman, only GETs to dev
-    FCC, and refuses any address that isn't dev Spoolman, prod Spoolman or dev FCC.
+  - Every HTTP call goes through `http()`. It compares addresses by their parsed parts (host name
+    and port as numbers, so '07912' is 7912), never as strings. It refuses every write to port 7912
+    (prod Spoolman's) on any host name, sends only GETs to prod Spoolman and to dev FCC, and refuses
+    any address that isn't dev Spoolman, prod Spoolman or dev FCC. main() refuses a
+    DEV_SPOOLMAN_URL on prod's port before any phase runs.
   - Every file write this script makes itself goes through `_guard_write()`. It reads a path in
     one canonical spelling first (forward slashes, the \\\\?\\UNC\\ / \\\\.\\UNC\\ / \\??\\UNC\\ device
     prefixes, '..', trailing dots and spaces, case; on Windows a local path's mapped drive, junction
@@ -22,8 +25,8 @@ PROD IS READ-ONLY, in code:
     Spoolman's database and dev's marker beside it. On this PC it writes only in the stage
     folder and dev's inventory-hub/data/.
   - Writes made outside `_guard_write()`, all on this PC and none on the share: the `seeds`
-    phase runs `reset_dev.py --capture`, which writes setup-and-rebuild/seeds/*.json itself (a
-    temp file in that folder, then a replace); the `locations` phase's migration check runs a
+    phase runs `reset_dev.py --capture`, which writes setup-and-rebuild/seeds/local/*.json itself
+    (a temp file in that folder, then a replace); the `locations` phase's migration check runs a
     child Python in a temp folder inside the stage folder (made through the guard), which writes
     result.json there and may open a hub.log there; temp files beside a guarded file (`.refresh-*`)
     are made in that file's folder.
@@ -35,7 +38,9 @@ PROD IS READ-ONLY, in code:
 
 NO PHASE WRITES DEV'S OR PROD'S DATA unless --apply is given. A dry run can still create and
 remove a temp folder in the stage folder: the swap's local copy of the target database
-(.tmp-swap-<pid>) and the locations check's work folder (.tmp-migrate-<pid>). Run them in this order:
+(.tmp-swap-<pid>) and the locations check's work folder (.tmp-migrate-<pid>). A Spoolman, dev FCC
+or share that doesn't answer ends the phase with one REFUSED line naming the address and what the
+run had written by then ("nothing was written" when that is so). Run them in this order:
 
    0. init-marker      once per dev Spoolman data folder, never on prod's: writes
                        FCC_DEV_SPOOLMAN.marker beside dev's spoolman.db (Spoolman ignores it). It
@@ -44,9 +49,10 @@ remove a temp folder in the stage folder: the swap's local copy of the target da
                        backup of it holding dev's data and not prod's). A new or wiped dev data
                        folder needs it again.
    1. stage            dev Spoolman UP. Copies prod's spoolman.db and reads prod's locations.json
-                       at the same moment (a stripped copy, no logins, goes to the stage folder),
-                       and snapshots dev Spoolman's counts and max ids for the swap's identity
-                       guard. Writes only in the stage folder.
+                       at the same moment (a stripped copy, no logins, goes to the stage folder as
+                       prod-locations-at-stage.json: what `locations` builds from), and snapshots
+                       dev Spoolman's counts and max ids for the swap's identity guard. Writes only
+                       in the stage folder.
    2. -- a person stops the dev Spoolman app in TrueNAS (never the prod one), right after
          `stage`: a write to dev in between (a test run) makes the swap's identity guard refuse --
    3. swap             dev Spoolman DOWN, prod UP. Refuses unless: dev doesn't answer and prod
@@ -64,22 +70,27 @@ remove a temp folder in the stage folder: the swap's local copy of the target da
    5. verify-spoolman  dev answers with prod's records, every vendor, filament and spool
                        (archived ones too), field by field. The test spool `fixtures` moved is
                        named as the one expected difference.
-   6. locations        builds dev's locations.json from prod's rows (prod's order) and dev's
-                       pieces, validates it (shape, ids, the test fleet, every boot migration at
-                       its fixpoint), then with FCC stopped backs up dev's data folder, writes the
-                       file atomically, empties the review cards and fetch queue (only while
-                       every latch reads IDLE), starts FCC and checks its answers.
+   6. locations        builds dev's locations.json from the stage copy of prod's rows (prod's
+                       order), the copy saved at the same moment as the database, and dev's pieces.
+                       It refuses when prod's live locations.json differs from that copy, or prod's
+                       database was written after it, unless --use-live-locations (which builds
+                       from prod's file as it reads it now). It validates the file (shape, ids,
+                       the test fleet, every boot migration at its fixpoint), then with FCC
+                       stopped backs up dev's data folder, writes the file atomically, empties the
+                       review cards and fetch queue (only while every latch reads IDLE; a file of
+                       those it can't read is refused, not emptied, unless --empty-unreadable),
+                       starts FCC and checks its answers.
    7. fixtures         dev Spoolman only: exactly one stored, in-stock spool in the Quick-Swap
-                       test box's slot (TST-MDB-1 slot 1), slots 2-6 empty; a direct PATCH while
-                       FCC is stopped.
+                       test box's slot (TST-MDB-1 slot 1), its other slots empty; a direct PATCH
+                       while FCC is stopped.
    8. count            45.7, read-only: spools whose physical_source is set while they are not on
                        a head, on prod's data and on dev's data before the refresh. Two numbers:
                        the rule as filed (archived spools included) and in stock only.
-   9. seeds            retakes setup-and-rebuild/seeds/ from the refreshed dev through
-                       reset_dev.py --capture (which never writes printer_creds, and takes
-                       archived spools too) and checks them. The seeds stay on this PC: they are
-                       a copy of the real inventory and the repo is public, so they are
-                       git-ignored since 2026-11-13 (setup-and-rebuild/seeds/README.md).
+   9. seeds            retakes the reset-dev snapshot (setup-and-rebuild/seeds/local/) from the
+                       refreshed dev through reset_dev.py --capture (which never writes
+                       printer_creds, and takes archived spools too) and checks it. The snapshot
+                       lives only on the PC that made it: it is a copy of the real inventory and
+                       the repo is public, so git ignores it (setup-and-rebuild/seeds/README.md).
       checklist        any time, read-only: the Bulk Move checklist's starting state on dev
                        (Feature-Buglist.md, PENDING DEREK).
 
@@ -101,7 +112,8 @@ would charge twice. The deduct ledger and the print latch stay.
 ROLLBACK: Spoolman: stop the dev app, copy <stage>/dev-spoolman-before.db over dev's
 spoolman.db the same way (shutil.copyfile), start it. FCC: docker stop inventory_hub, copy
 <stage>/dev-data-before/* back into inventory-hub/data/, docker start inventory_hub. Seeds: they
-are local only (no git copy after 2026-11-13); keep a copy before a refresh, or re-capture.
+are local only (git has no copy of the snapshot a refresh replaces); keep a copy of
+setup-and-rebuild/seeds/local/ before a refresh, or re-capture.
 
 Runs on the host's Python (stdlib only). Read the TrueNAS share from PowerShell:
     & "C:/Python314/python.exe" -I -X utf8 setup-and-rebuild/refresh_dev_from_prod.py <phase> [--apply]
@@ -133,6 +145,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from http.client import HTTPException     # an answer cut off part-way (not an OSError); `http` is a function here
 
 # --------------------------------------------------------------------------
 # Paths, addresses and fixtures (constants; env overrides as in reset_dev.py)
@@ -143,7 +156,7 @@ HUB_DIR = os.path.join(REPO_ROOT, "inventory-hub")
 CONFTEST = os.path.join(HUB_DIR, "tests", "conftest.py")
 LOCATIONS_DB_PY = os.path.join(HUB_DIR, "locations_db.py")
 RESET_DEV = os.path.join(HERE, "reset_dev.py")
-SEEDS_DIR = os.path.join(HERE, "seeds")
+SEEDS_DIR = os.path.join(HERE, "seeds", "local")     # the local reset-dev snapshot (reset_dev.SEEDS_DIR)
 LOCATIONS_SEED = os.path.join(SEEDS_DIR, "locations-seed.json")
 SPOOLMAN_SEED = os.path.join(SEEDS_DIR, "spoolman-dev-seed.json")
 CONFIG_JSON = os.path.join(REPO_ROOT, "config.json")
@@ -177,8 +190,10 @@ PROD_SHARE_SUBFOLDERS = frozenset({"spoolman", "inventoryhub"})
 # folder holds one. Written once, by `init-marker`, after a person has proved the folder is dev's.
 MARKER_NAME = "FCC_DEV_SPOOLMAN.marker"
 MARKER_MAGIC = "FCC_DEV_SPOOLMAN marker v1"      # its first line; the swap reads it
-# Prod Spoolman's addresses: GET only, whatever the env says.
+# Prod Spoolman's addresses: GET only, whatever the env says. Its port gets no write on any host name
+# (an alias, or the port spelled '07912'), and DEV_SPOOLMAN_URL may not use it.
 PROD_NETLOCS = frozenset({"192.168.1.29:7912", "truenas:7912", "truenas.local:7912"})
+PROD_SPOOLMAN_PORT = 7912
 
 CREDS = "printer_creds"
 LATCH_FILE = "print_tracker_latch.json"
@@ -187,7 +202,8 @@ BACKUP_SKIP = ("val_*.gcode",)       # large print captures that never change
 STAGED_PROD_DB = "prod-spoolman.db"
 DEV_DB_BACKUP = "dev-spoolman-before.db"
 STAGE_REPORT = "stage-report.json"
-PROD_LOCATIONS_AS_READ = "prod-locations-as-read.json"     # prod's rows, logins stripped
+PROD_LOCATIONS_AT_STAGE = "prod-locations-at-stage.json"   # prod's rows as `stage` read them, logins stripped
+PROD_LOCATIONS_AS_READ = "prod-locations-as-read.json"     # the rows `locations --apply` built from, logins stripped
 DEV_DATA_BACKUP = "dev-data-before"
 
 # The Quick-Swap pictures pin this spool's line (tests/test_quickswap_visual.py). The box and
@@ -205,12 +221,38 @@ NAME_MUST_STAY = ("XL",)
 # destinations it uses.
 CHECKLIST_SOURCES = ("CR-CT-2-R3", "CR-CT-2-R1", "LR-MDB-2", "CR-MDB-1", "LR-MDB-1")
 CHECKLIST_EMPTY = ("CR-TC-2-R1", "CR-TC-2-R2")
-SPOOLS_TESTS_NAME = (1, 2)       # the weigh-out tests scan these ids
 NOT_A_ROW = ("", "UNASSIGNED", "UNKNOWN")
 
 
 class Refused(Exception):
-    """A guard said no. Its message says why. Nothing after the guard ran."""
+    """A guard said no, or a step stopped part-way. Its message says why; nothing after it ran, and
+    when something had already been written the message says what to put back."""
+
+
+def _reason_text(reason):
+    """A failure's reason in words: 'ConnectionRefusedError: [WinError 10061] ...'."""
+    if isinstance(reason, BaseException):
+        return "%s: %s" % (type(reason).__name__, reason)
+    return str(reason)
+
+
+class NoAnswer(OSError):
+    """A request got no answer: the connection failed, it timed out, or the answer was cut off. An
+    OSError, so the callers that wait and retry on a failed connection still catch it; main() turns
+    one that reaches it into a REFUSED line naming the address."""
+
+    def __init__(self, method, url, reason):
+        super().__init__("%s %s: %s" % (method, url, _reason_text(reason)))
+        self.method, self.url, self.reason = method, url, reason
+
+
+# What this run has written so far (paths, and each write request sent), in order. main() names
+# them when a step fails, so its line never says "nothing was written" after something was.
+WRITTEN = []
+
+
+def _wrote(what):
+    WRITTEN.append(str(what))
 
 
 def _say(msg=""):
@@ -362,6 +404,7 @@ def _write_new_file(path, text):
     """A small new file, through the guard, never over an existing one (open mode 'x')."""
     _guard_write(path)
     with open(path, "x", encoding="utf-8", newline="\n") as fh:
+        _wrote(path)
         fh.write(text)
         fh.flush()
         os.fsync(fh.fileno())
@@ -372,8 +415,9 @@ def _makedirs(path):
     os.makedirs(path, exist_ok=True)
 
 
-def _write_text_atomic(path, text):
-    """Temp file in the same folder, fsync, os.replace. '\\n' line ends, as FCC writes them."""
+def _write_text_atomic(path, text, record=True):
+    """Temp file in the same folder, fsync, os.replace. '\\n' line ends, as FCC writes them. A file
+    that fails part-way leaves the old one as it was. `record` is False for a temp work file."""
     _guard_write(path)
     folder = os.path.dirname(os.path.abspath(path))
     _makedirs(folder)
@@ -387,22 +431,36 @@ def _write_text_atomic(path, text):
     finally:
         if os.path.exists(tmp):
             os.remove(tmp)
+    if record:
+        _wrote(path)
 
 
-def _write_json(path, data, indent=2):
-    _write_text_atomic(path, json.dumps(data, indent=indent, ensure_ascii=False) + "\n")
+def _write_json(path, data, indent=2, record=True):
+    _write_text_atomic(path, json.dumps(data, indent=indent, ensure_ascii=False) + "\n", record=record)
 
 
 def _copy_keep_times(src, dst):
     """A backup copy (shutil.copy2 keeps the mtime)."""
     _guard_write(dst)
     shutil.copy2(src, dst)
+    _wrote(dst)
 
 
 def _copy_in_place(src, dst):
-    """shutil.copyfile truncates and rewrites dst, so its owner and permissions stay."""
+    """shutil.copyfile truncates and rewrites dst, so its owner and permissions stay. dst counts as
+    written from the start: a copy that fails part-way leaves it changed."""
     _guard_write(dst)
+    _wrote(dst)
     shutil.copyfile(src, dst)
+
+
+def _remove_partial(path):
+    """Take away a file this script was writing when it failed (a partial copy), if it can."""
+    _guard_write(path)
+    try:
+        os.remove(path)
+    except OSError:
+        pass
 
 
 def _rmtree(path):
@@ -413,26 +471,61 @@ def _rmtree(path):
 # --------------------------------------------------------------------------
 # Guard (a): prod is read-only, for HTTP
 # --------------------------------------------------------------------------
-def _netloc(url):
-    return urllib.parse.urlsplit(url).netloc.lower()
+def _addr(url):
+    """(host, port) of a URL from its parsed parts: the host name lower-cased without a trailing dot,
+    the port as a number ('07912' is 7912; the scheme's default when none is written). None when
+    the port can't be read. Addresses are compared this way, never as strings."""
+    parts = urllib.parse.urlsplit(str(url))
+    try:
+        port = parts.port
+    except ValueError:
+        return None
+    if port is None:
+        port = {"http": 80, "https": 443}.get(parts.scheme.lower())
+    return (parts.hostname or "").rstrip(".").lower(), port
 
 
-def _prod_netlocs():
-    return set(PROD_NETLOCS) | {_netloc(PROD_SPOOLMAN_URL)}
+def _prod_addrs():
+    """Prod Spoolman's known addresses (PROD_NETLOCS, and whatever PROD_SPOOLMAN_URL names)."""
+    out = {_addr("http://" + n) for n in PROD_NETLOCS} | {_addr(PROD_SPOOLMAN_URL)}
+    out.discard(None)
+    return out
+
+
+def _prod_ports():
+    """Ports that get no write, on any host name: prod Spoolman's, and any of its known addresses'."""
+    return {PROD_SPOOLMAN_PORT} | {port for _, port in _prod_addrs()}
+
+
+def dev_spoolman_refusal(url):
+    """Why `url` can't be dev Spoolman, or None: its port is prod's (on any host name), it is one of
+    prod's addresses, or its port can't be read."""
+    addr = _addr(url)
+    if addr is None:
+        return "its port can't be read"
+    if addr[1] in _prod_ports():
+        return "port %s is prod Spoolman's, on any host name" % addr[1]
+    if addr in _prod_addrs():
+        return "it is prod Spoolman's address"
+    return None
 
 
 def http(method, url, payload=None, timeout=30):
-    """The one HTTP helper. Returns (status, json_or_None, text, headers); a connection that
-    fails raises (urllib.error.URLError / OSError)."""
+    """The one HTTP helper. Returns (status, json_or_None, text, headers). A request that gets no
+    answer (no connection, a timeout, an answer cut off) raises NoAnswer, an OSError."""
     method = method.upper()
-    loc = _netloc(url)
-    if loc in _prod_netlocs():
-        if method != "GET":
-            raise Refused("refusing %s %s: prod Spoolman is read-only" % (method, url))
-    elif loc == _netloc(DEV_FCC_URL):
+    addr = _addr(url)
+    if addr is None:
+        raise Refused("refusing %s %s: its port can't be read" % (method, url))
+    if method != "GET" and addr[1] in _prod_ports():
+        raise Refused("refusing %s %s: port %s is prod Spoolman's, which is read-only, on any host name"
+                      % (method, url, addr[1]))
+    if addr in _prod_addrs():
+        pass                                            # prod Spoolman: GETs only (a write was refused above)
+    elif addr == _addr(DEV_FCC_URL):
         if method != "GET":
             raise Refused("refusing %s %s: this script only reads dev FCC" % (method, url))
-    elif loc != _netloc(DEV_SPOOLMAN_URL):
+    elif addr != _addr(DEV_SPOOLMAN_URL):
         raise Refused("refusing %s %s: not dev Spoolman, prod Spoolman or dev FCC" % (method, url))
     data = None
     headers = {"Accept": "application/json"}
@@ -440,11 +533,18 @@ def http(method, url, payload=None, timeout=30):
         data = json.dumps(payload).encode("utf-8")
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
+    if method != "GET":
+        _wrote("%s %s (sent)" % (method, url))  # it may land even if its answer is lost
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             status, body, hdrs = resp.status, resp.read(), dict(resp.headers)
     except urllib.error.HTTPError as exc:
-        status, body, hdrs = exc.code, exc.read(), dict(exc.headers or {})
+        try:
+            status, body, hdrs = exc.code, exc.read(), dict(exc.headers or {})
+        except (OSError, HTTPException) as read_exc:
+            raise NoAnswer(method, url, read_exc) from read_exc
+    except (urllib.error.URLError, OSError, socket.timeout, HTTPException) as exc:
+        raise NoAnswer(method, url, getattr(exc, "reason", exc)) from exc
     text = body.decode("utf-8", "replace")
     try:
         parsed = json.loads(text) if text else None
@@ -814,28 +914,60 @@ def latch_state():
     return True, "%d printer(s), all IDLE" % len(data)
 
 
-def fetch_queue_state():
-    path = dev_path("pending_cancel_fetches.json")
+def read_pending(name):
+    """One of dev FCC's pending stores (PENDING_FILES), read: (data, None) for a JSON object ({}
+    when there is no file); (None, why) when it can't be read or isn't a JSON object."""
+    path = dev_path(name)
     try:
         data = load_json(path)
     except FileNotFoundError:
-        return True, "no fetch queue file"
+        return {}, None
     except (ValueError, OSError) as exc:
-        return False, "couldn't read %s (%s)" % (path, exc)
-    if isinstance(data, dict) and not data:
+        return None, "couldn't read %s (%s)" % (path, exc)
+    if not isinstance(data, dict):
+        return None, "couldn't read %s (it holds a %s, not a JSON object)" % (path, type(data).__name__)
+    return data, None
+
+
+def unreadable_pending():
+    """[(name, why)] for each of PENDING_FILES that can't be read."""
+    out = []
+    for name in PENDING_FILES:
+        data, why = read_pending(name)
+        if data is None:
+            out.append((name, why))
+    return out
+
+
+def fetch_queue_state():
+    path = dev_path("pending_cancel_fetches.json")
+    if not os.path.exists(path):
+        return True, "no fetch queue file"
+    data, why = read_pending("pending_cancel_fetches.json")
+    if data is None:
+        return False, why
+    if not data:
         return True, "empty"
-    return False, "%d queued print download(s)" % (len(data) if isinstance(data, dict) else -1)
+    return False, "%d queued print download(s)" % len(data)
 
 
 def review_cards():
-    try:
-        data = load_json(dev_path("pending_cancel_deducts.json"))
-    except (FileNotFoundError, ValueError, OSError):
-        return []
-    if not isinstance(data, dict):
-        return []
-    return [{"key": k, "kind": (v or {}).get("kind"), "job_id": (v or {}).get("job_id"),
-             "total_grams": (v or {}).get("total_grams")} for k, v in data.items()]
+    """(cards, None): the review cards in dev's pending_cancel_deducts.json, [] when there is none.
+    (None, why) when the file can't be read, so a report never says "no cards" for a file nobody
+    read."""
+    data, why = read_pending("pending_cancel_deducts.json")
+    if data is None:
+        return None, why
+    return [{"key": k, "kind": (v or {}).get("kind") if isinstance(v, dict) else None,
+             "job_id": (v or {}).get("job_id") if isinstance(v, dict) else None,
+             "total_grams": (v or {}).get("total_grams") if isinstance(v, dict) else None}
+            for k, v in data.items()], None
+
+
+def cards_text(cards, why):
+    if cards is None:
+        return why
+    return str([(c["job_id"], c["kind"], c["total_grams"]) for c in cards])
 
 
 # --------------------------------------------------------------------------
@@ -866,7 +998,7 @@ def wait_for_fcc(timeout=240):
                 return True
             last = "HTTP %s" % status
         except (urllib.error.URLError, OSError, socket.timeout) as exc:
-            last = type(exc).__name__
+            last = type(getattr(exc, "reason", exc)).__name__
         time.sleep(2)
     raise Refused("dev FCC didn't answer /api/locations within %d s (last: %s)" % (timeout, last))
 
@@ -965,6 +1097,7 @@ def load_stage_report(required=True):
 # Phase: stage
 # --------------------------------------------------------------------------
 def phase_stage(args):
+    """Copy prod's spoolman.db and locations.json into the stage folder (dev Spoolman up)."""
     rep = {"at": _now(), "stage_dir": STAGE_DIR}
     keep = ("version", "db_type", "data_dir", "backups_dir", "automatic_backups", "debug_mode")
     prod_info, dev_info = spoolman_info(PROD_SPOOLMAN_URL), spoolman_info(DEV_SPOOLMAN_URL)
@@ -1000,7 +1133,13 @@ def phase_stage(args):
     _makedirs(STAGE_DIR)
     st0 = os.stat(PROD_SPOOLMAN_DB)
     _guard_write(dest)
-    shutil.copyfile(PROD_SPOOLMAN_DB, dest)        # read from prod, written locally
+    try:
+        shutil.copyfile(PROD_SPOOLMAN_DB, dest)    # read from prod, written locally
+    except OSError as exc:
+        _remove_partial(dest)
+        raise Refused("copying prod's database to %s failed part-way (%s); the partial copy was removed and "
+                      "nothing else was written. Run stage again" % (dest, _reason_text(exc)))
+    _wrote(dest)
     st1 = os.stat(PROD_SPOOLMAN_DB)
     if (st0.st_size, st0.st_mtime) != (st1.st_size, st1.st_mtime) or side_files(PROD_SPOOLMAN_DB):
         os.remove(dest)
@@ -1012,7 +1151,7 @@ def phase_stage(args):
            "spool": len(get_json(PROD_SPOOLMAN_URL + "/api/v1/spool?allow_archived=true"))}
     rep["prod_api_counts"] = api
     rep["counts_match"] = api == {k: rep["tables"].get(k, {}).get("rows") for k in api}
-    _write_json(stage_path("prod-locations-at-stage.json"), strip_creds(prod_rows), indent=4)
+    _write_json(stage_path(PROD_LOCATIONS_AT_STAGE), strip_creds(prod_rows), indent=4)
     if hidden is not None:
         _write_json(stage_path("prod-attr_hidden_choices.json"), hidden.get("content"))
     _write_json(stage_path(STAGE_REPORT), rep)
@@ -1133,6 +1272,7 @@ def check_target_identity(snapshot):
 
 
 def phase_swap(args):
+    """Overwrite dev's spoolman.db with the staged copy (dev Spoolman stopped, prod up)."""
     rep = load_stage_report()
     staged = stage_path(STAGED_PROD_DB)
     want = (rep.get("prod_db") or {}).get("sha256")
@@ -1185,9 +1325,10 @@ def phase_swap(args):
         _say("          the target file       %s -> %s" % (ident, "matches dev's snapshot" if ok else "DIFFERENT"))
         if not ok:
             problems.append("the target file's counts and max ids differ from dev's stage snapshot: dev was written "
-                            "after `stage` (a test run, say), or the target isn't dev's database (both config "
-                            "files name the same spoolman_db_path, so a wrong guess would overwrite prod's). "
-                            "Start dev Spoolman again and re-run `stage` with a new --stage-dir")
+                            "after `stage` (a test run, say), or the target isn't dev's database. config.json and "
+                            "config.prod.json both name prod's database as spoolman_db_path, so neither can tell "
+                            "you where dev's is: FCC_REFRESH_DEV_SPOOLMAN_DB does. Start dev Spoolman again and "
+                            "re-run `stage` with a new --stage-dir")
     if problems:
         _say("\nREFUSED%s:" % ("" if args.apply else " (dry run)"))
         for p in problems:
@@ -1199,16 +1340,33 @@ def phase_swap(args):
         return 0
     backup = stage_path(DEV_DB_BACKUP)
     _guard_write(backup)
-    shutil.copyfile(DEV_SPOOLMAN_DB, backup)
+    try:
+        shutil.copyfile(DEV_SPOOLMAN_DB, backup)
+    except OSError as exc:
+        _remove_partial(backup)
+        raise Refused("couldn't back up dev's database to %s (%s); nothing was replaced. Run `swap --apply` "
+                      "again once the share answers" % (backup, _reason_text(exc)))
+    _wrote(backup)
     before = sha256_file(DEV_SPOOLMAN_DB)
     if sha256_file(backup) != before or identity_from_db(backup) != snapshot:
         raise Refused("the backup of dev's database doesn't match it; nothing was replaced")
     _say("dev backup: %s (%d bytes, sha256 %s...)" % (backup, os.path.getsize(backup), before[:12]))
-    _copy_in_place(staged, DEV_SPOOLMAN_DB)
-    after = sha256_file(DEV_SPOOLMAN_DB)
+    put_back = ("put the backup %s back over %s the same way (shutil.copyfile, which keeps the file's owner "
+                "and permissions)" % (backup, DEV_SPOOLMAN_DB))
+    try:
+        _copy_in_place(staged, DEV_SPOOLMAN_DB)
+    except OSError as exc:
+        raise Refused("the copy into dev's database failed part-way (%s), so %s may now be partial. Before you "
+                      "start dev Spoolman, %s" % (_reason_text(exc), DEV_SPOOLMAN_DB, put_back))
+    try:
+        after = sha256_file(DEV_SPOOLMAN_DB)
+    except OSError as exc:
+        raise Refused("dev's database was overwritten, but couldn't be read back to check it (%s). Before you "
+                      "start dev Spoolman, check that its sha256 is the staged copy's (%s...); if it isn't, %s"
+                      % (_reason_text(exc), want[:12], put_back))
     _say("dev's database now: sha256 %s... (the staged copy: %s...)" % (after[:12], want[:12]))
     if after != want:
-        raise Refused("dev's database doesn't match the staged copy: put %s back the same way" % backup)
+        raise Refused("dev's database doesn't match the staged copy. Before you start dev Spoolman, %s" % put_back)
     _say("\nOK. NEXT: start the dev Spoolman app in TrueNAS, then run `verify-spoolman`.")
     return 0
 
@@ -1276,7 +1434,13 @@ def phase_init_marker(args):
              "Spoolman's data folder and not prod's: a write sent to dev's API (%s) that landed in this file, or "
              "a backup of it that holds dev's data and not prod's." % (folder, DEV_SPOOLMAN_URL))
         return 2
-    _write_new_file(marker, marker_text(folder, args.note))
+    try:
+        _write_new_file(marker, marker_text(folder, args.note))
+    except FileExistsError:
+        raise Refused("%s appeared while init-marker ran: look at it before going on" % marker)
+    except OSError as exc:
+        raise Refused("writing the marker failed (%s): if %s exists now it may be cut off. Look at it, remove it "
+                      "by hand if so, and run init-marker again" % (_reason_text(exc), marker))
     ok, text = read_marker(marker)
     if not ok:
         raise Refused("the marker didn't read back: %s" % text)
@@ -1300,6 +1464,7 @@ def _fixture_only_difference(prod_rec, dev_rec, box):
 
 
 def phase_verify_spoolman(args):
+    """Check dev Spoolman now answers with prod's records, field by field (dev Spoolman up)."""
     consts = conftest_constants()
     rep = {"at": _now(), "dev_version": spoolman_info(DEV_SPOOLMAN_URL).get("version"),
            "prod_version": spoolman_info(PROD_SPOOLMAN_URL).get("version"), "kinds": {}}
@@ -1360,8 +1525,12 @@ def phase_verify_spoolman(args):
 # --------------------------------------------------------------------------
 # Phase: locations (the build is a pure function, so it can be read and tested on its own)
 # --------------------------------------------------------------------------
-def build_dev_locations(prod_rows, dev_rows, baselines, test_carts, fallback_rows=None):
-    """Dev's new locations list and a report of every choice made. No I/O."""
+def build_dev_locations(prod_rows, dev_rows, baselines, test_carts, fallback_rows=None, logins_rows=None):
+    """Dev's new locations list and a report of every choice made. No I/O.
+
+    `logins_rows`: prod's rows with their logins, read only for the report's "prod's differ" and
+    "prod has a login dev lacks", when prod_rows is the stage copy (which holds no login). No login
+    is ever taken from them. Default: prod_rows."""
     if not isinstance(prod_rows, list):
         raise Refused("prod's locations.json is not a list")
 
@@ -1373,6 +1542,7 @@ def build_dev_locations(prod_rows, dev_rows, baselines, test_carts, fallback_row
         return out
 
     dev_by, fb_by = index(dev_rows), index(fallback_rows)
+    login_by = index(logins_rows if logins_rows is not None else prod_rows)
     rep = {"prod_rows": len(prod_rows), "dropped_blank": [], "dropped_non_dict": 0, "logins_kept": [],
            "prod_logins_not_taken": [], "boxes": [], "bindings_replaced": [], "boxes_added": [],
            "parents_added": [], "parents_missing": [], "carts_added": [], "carts_in_prod": [],
@@ -1397,10 +1567,12 @@ def build_dev_locations(prod_rows, dev_rows, baselines, test_carts, fallback_row
             row[k] = copy.deepcopy(v)
         if dev_has and CREDS not in row:
             row[CREDS] = copy.deepcopy(dev_row[CREDS])
+        with_login = login_by.get(_lid(r).upper())
+        with_login = with_login if isinstance(with_login, dict) else {}
         if dev_has:
             rep["logins_kept"].append({"LocationID": _lid(r),
-                                       "prod_differs": r.get(CREDS) != dev_row.get(CREDS)})
-        elif CREDS in r:
+                                       "prod_differs": with_login.get(CREDS) != dev_row.get(CREDS)})
+        elif CREDS in with_login:
             rep["prod_logins_not_taken"].append(_lid(r))
         out.append(row)
 
@@ -1596,9 +1768,9 @@ def migration_fixpoint(rows):
     work = stage_path(".tmp-migrate-%d" % os.getpid())
     _makedirs(work)
     try:
-        _write_json(os.path.join(work, "candidate.json"), strip_creds(rows))
+        _write_json(os.path.join(work, "candidate.json"), strip_creds(rows), record=False)
         _write_json(os.path.join(work, "maps.json"), {"printer_map": cfg.get("printer_map") or {},
-                                                       "feeder_map": cfg.get("feeder_map") or {}})
+                                                       "feeder_map": cfg.get("feeder_map") or {}}, record=False)
         env = dict(os.environ, FCC_DATA_DIR=work)
         proc = subprocess.run([sys.executable, "-I", "-B", "-c", _MIGRATE_CHILD, HUB_DIR, work],
                               cwd=work, env=env, capture_output=True, text=True, timeout=120)
@@ -1655,9 +1827,14 @@ def backup_dev_data():
             skipped.append(name)
             continue
         dst = os.path.join(target, name)
-        _copy_keep_times(src, dst)
-        if sha256_file(src) != sha256_file(dst):
-            raise Refused("the backup of %s doesn't match it" % name)
+        try:
+            _copy_keep_times(src, dst)
+            same = sha256_file(src) == sha256_file(dst)
+        except OSError as exc:
+            raise Refused("couldn't back up %s to %s (%s); nothing in dev's data folder was changed"
+                          % (src, dst, _reason_text(exc)))
+        if not same:
+            raise Refused("the backup of %s doesn't match it; nothing in dev's data folder was changed" % name)
         copied.append(name)
     return target, copied, skipped
 
@@ -1678,22 +1855,51 @@ def _spool_location_report(spools, rows, baselines, toolhead_types):
     return no_row, from_box
 
 
+def empty_pending(empty_unreadable=False):
+    """Empty dev FCC's review cards and fetch queue (PENDING_FILES): each is written '{}'. A file it
+    can't read is left as it is, unless empty_unreadable says to empty it anyway. Returns
+    (emptied, left), left being [(name, why)]."""
+    emptied, left = [], []
+    for name in PENDING_FILES:
+        data, why = read_pending(name)
+        if data is None and not empty_unreadable:
+            left.append((name, why))
+            continue
+        _write_text_atomic(dev_path(name), "{}")
+        emptied.append(name)
+    return emptied, left
+
+
 def phase_locations(args):
+    """Build dev's locations.json from the stage copy of prod's rows plus dev's own pieces (stops and starts dev FCC)."""
     consts = dict(conftest_constants(), **backend_constants())
     baselines = consts["baselines"]
     stage = load_stage_report(required=False)
-    rep = {"at": _now(), "stage_dir": STAGE_DIR}
+    use_live = bool(getattr(args, "use_live_locations", False))
+    empty_unreadable = bool(getattr(args, "empty_unreadable", False))
+    rep = {"at": _now(), "stage_dir": STAGE_DIR, "use_live_locations": use_live}
+    problems = []
 
     _say("Reading prod (read-only) ...")
-    prod_rows, rep["prod_locations"] = read_prod_locations()
+    live_rows, rep["prod_locations"] = read_prod_locations()
     _say("  %s: %s rows, %d bytes, mtime %s" % (rep["prod_locations"]["path"], rep["prod_locations"]["rows"],
                                                  rep["prod_locations"]["size"], rep["prod_locations"]["mtime"]))
     at_stage = stage.get("prod_locations") or {}
+    copy_path = stage_path(PROD_LOCATIONS_AT_STAGE)
+    if not use_live and not (at_stage.get("sha256") and os.path.exists(copy_path)):
+        raise Refused("no stage copy of prod's locations.json in %s (`stage --apply` saves one, %s, with the "
+                      "database): run stage first, or pass --use-live-locations to build from prod's live file"
+                      % (STAGE_DIR, PROD_LOCATIONS_AT_STAGE))
     if at_stage.get("sha256"):
         same = at_stage["sha256"] == rep["prod_locations"]["sha256"]
         rep["prod_locations_changed_since_stage"] = not same
         _say("  prod's locations.json %s since the stage (%s)" % ("is unchanged" if same else "CHANGED",
                                                                    at_stage.get("mtime")))
+        if not same and not use_live:
+            problems.append("prod's locations.json changed after the stage (mtime %s then, %s now). Dev's Spoolman "
+                            "holds the staged database, and the stage copy is from that same moment. Run stage and "
+                            "swap again for a new moment, or pass --use-live-locations to build from prod's file "
+                            "as it is now" % (at_stage.get("mtime"), rep["prod_locations"]["mtime"]))
     rep["prod_data_listing"], listing_err = prod_data_listing()
     _say("  prod's data folder: %s" % (", ".join(rep["prod_data_listing"]) if listing_err is None else listing_err))
     hidden = prod_hidden_choices()
@@ -1706,24 +1912,45 @@ def phase_locations(args):
     if (stage.get("prod_db") or {}).get("mtime"):
         now = prod_db_stat()
         rep["prod_db_now"] = now
-        rep["prod_spoolman_changed_since_copy"] = now["mtime"] != stage["prod_db"]["mtime"] or bool(now["side_files"])
+        changed = now["mtime"] != stage["prod_db"]["mtime"] or bool(now["side_files"])
+        rep["prod_spoolman_changed_since_copy"] = changed
         _say("  prod's spoolman.db mtime: copied at %s, now %s -> %s" % (
             stage["prod_db"]["mtime"], now["mtime"],
             "CHANGED: prod's Spoolman was written after the copy, so the two snapshots aren't from one moment"
-            if rep["prod_spoolman_changed_since_copy"] else "unchanged (the two snapshots are from one moment)"))
+            if changed else "unchanged (the two snapshots are from one moment)"))
+        if changed and not use_live:
+            problems.append("prod's Spoolman was written after the copy (copied at %s; now mtime %s%s), so dev's "
+                            "Spoolman, the copy, is behind prod. Run stage and swap again for a new moment, or pass "
+                            "--use-live-locations to go on, building from prod's locations.json as it is now"
+                            % (stage["prod_db"]["mtime"], now["mtime"],
+                               ", side files %s" % now["side_files"] if now["side_files"] else ""))
+    elif not use_live:
+        problems.append("the stage report doesn't say when prod's database was copied, so nothing shows the stage "
+                        "copy and dev's Spoolman are from one moment: run `stage --apply` again, or pass "
+                        "--use-live-locations")
+
+    if use_live:
+        prod_rows, logins_rows = live_rows, None
+        rep["source"] = "%s, read now (--use-live-locations)" % rep["prod_locations"]["path"]
+    else:
+        # The stage copy holds no login; prod's live rows (the same bytes when nothing above refused)
+        # say which rows have one, for the report only.
+        prod_rows, logins_rows = load_json(copy_path), live_rows
+        rep["source"] = copy_path
+    _say("  building from: %s" % rep["source"])
 
     dev_rows = load_json(dev_path("locations.json"))
     seed_rows = load_json(LOCATIONS_SEED) if os.path.exists(LOCATIONS_SEED) else []
-    new_rows, build = build_dev_locations(prod_rows, dev_rows, baselines, TEST_CARTS, seed_rows)
+    new_rows, build = build_dev_locations(prod_rows, dev_rows, baselines, TEST_CARTS, seed_rows,
+                                          logins_rows=logins_rows)
     rep["build"] = build
-    problems = validate_locations(new_rows, dev_rows, baselines, TEST_CARTS, consts)
+    problems.extend("the new file: " + p for p in validate_locations(new_rows, dev_rows, baselines, TEST_CARTS, consts))
     steps = migration_fixpoint(new_rows)
     rep["migrations"] = steps
     for s in steps:
         if s["changed"]:
-            problems.append("boot migration %r would change %s" % (s["name"], {k: s.get(k) for k in
-                                                                               ("added", "removed", "changed_rows")}))
-    rep["problems"] = problems
+            problems.append("the new file: boot migration %r would change %s" % (
+                s["name"], {k: s.get(k) for k in ("added", "removed", "changed_rows")}))
     rep["diff_vs_dev"] = diff_rows(dev_rows, new_rows)
     dev_rcoi = next((r for r in dev_rows if _lid(r).upper() == "RCOI"), {})
     new_rcoi = next((r for r in new_rows if _lid(r).upper() == "RCOI"), {})
@@ -1766,13 +1993,20 @@ def phase_locations(args):
     _say("  in-stock dev spools whose trail names a test box: %d %s" % (len(from_box), from_box[:10]))
     idle, latch_why = latch_state()
     queue_ok, queue_why = fetch_queue_state()
-    cards = review_cards()
-    rep["latch"], rep["fetch_queue"], rep["review_cards_before"] = latch_why, queue_why, cards
-    _say("  dev FCC: latch %s; fetch queue %s; review cards %s" % (
-        latch_why, queue_why, [(c["job_id"], c["kind"], c["total_grams"]) for c in cards]))
+    cards, cards_why = review_cards()
+    rep["latch"], rep["fetch_queue"] = latch_why, queue_why
+    rep["review_cards_before"] = cards if cards is not None else {"unreadable": cards_why}
+    _say("  dev FCC: latch %s; fetch queue %s; review cards %s" % (latch_why, queue_why, cards_text(cards, cards_why)))
+    unread = unreadable_pending()
+    rep["pending_unreadable"] = [name for name, _ in unread]
+    if unread and not empty_unreadable:
+        problems.append("%s. The apply empties the review cards and the fetch queue, and it never empties a file it "
+                        "couldn't read: look at it, or pass --empty-unreadable to empty it anyway (the apply backs up "
+                        "dev's data folder first, so its bytes are kept)" % "; ".join(why for _, why in unread))
+    rep["problems"] = problems
 
     if problems:
-        _say("\nREFUSED: the new file doesn't validate:")
+        _say("\nREFUSED (nothing written):")
         for p in problems:
             _say("  - " + p)
         return 2
@@ -1789,18 +2023,28 @@ def phase_locations(args):
         rep["backup"] = {"folder": target, "copied": copied, "skipped": skipped}
         _say("  backed up %d files to %s (skipped %s)" % (len(copied), target, skipped))
         baks_before = bak_files()
-        _write_text_atomic(dev_path("locations.json"), json.dumps(new_rows, indent=4))
-        _say("  wrote %s (%d rows)" % (dev_path("locations.json"), len(new_rows)))
-        idle, latch_why = latch_state()
-        if idle:
-            for name in PENDING_FILES:
-                _write_text_atomic(dev_path(name), "{}")
-            rep["pending_cleared"] = list(PENDING_FILES)
-            _say("  emptied %s (latch: %s)" % (", ".join(PENDING_FILES), latch_why))
-        else:
-            rep["pending_cleared"] = []
-            _say("  left the review cards and fetch queue as they are: %s" % latch_why)
-        _write_json(stage_path(PROD_LOCATIONS_AS_READ), strip_creds(prod_rows), indent=4)
+        start = len(WRITTEN)
+        try:
+            _write_text_atomic(dev_path("locations.json"), json.dumps(new_rows, indent=4))
+            _say("  wrote %s (%d rows)" % (dev_path("locations.json"), len(new_rows)))
+            idle, latch_why = latch_state()
+            if idle:
+                emptied, left = empty_pending(empty_unreadable)
+                rep["pending_cleared"], rep["pending_left_unread"] = emptied, [name for name, _ in left]
+                if emptied:
+                    _say("  emptied %s (latch: %s)" % (", ".join(emptied), latch_why))
+                for name, why in left:
+                    _say("  LEFT %s as it is: %s. A file it couldn't read is never emptied; pass "
+                         "--empty-unreadable to empty it anyway" % (name, why))
+            else:
+                rep["pending_cleared"], rep["pending_left_unread"] = [], []
+                _say("  left the review cards and fetch queue as they are: %s" % latch_why)
+            _write_json(stage_path(PROD_LOCATIONS_AS_READ), strip_creds(prod_rows), indent=4)
+        except OSError as exc:
+            raise Refused("writing dev's data failed part-way (%s). Written by then: %s. %s holds dev's data folder "
+                          "as it was before: put it back into %s (docker stop %s first), or run `locations --apply` "
+                          "again" % (_reason_text(exc), ", ".join(WRITTEN[start:]) or "nothing", target,
+                                     DEV_DATA_DIR, CONTAINER))
     wait_for_fcc()
     _say("  dev FCC answers again")
     status, api_rows, _, hdrs = fcc_get("/api/locations")
@@ -1821,10 +2065,10 @@ def phase_locations(args):
     rep["bak_files"] = {"before": baks_before, "after": baks_after, "same": baks_before == baks_after}
     _say("  locations.json.pre-*.bak: %d before, %d after, %s" % (
         len(baks_before), len(baks_after), "the same files" if baks_before == baks_after else "CHANGED"))
-    _say("  review cards now: %s" % review_cards())
+    _say("  review cards now: %s" % cards_text(*review_cards()))
     _write_json(stage_path("locations-report.json"), rep)
     ok = (status == 200 and all(v == normalized_slot_targets(baselines[b]) for b, v in rep["bindings_after"].items())
-          and baks_before == baks_after)
+          and baks_before == baks_after and not rep["pending_left_unread"])
     _say("\n%s. Report: %s" % ("OK" if ok else "CHECK FAILED", stage_path("locations-report.json")))
     return 0 if ok else 3
 
@@ -1857,7 +2101,54 @@ def _choose_fixture(spools_by, places, box):
     raise Refused("no spool fits the fixture: %s" % why)
 
 
+def _slot_ranges(slots):
+    """[2, 3, 4, 6] -> '2-4, 6'."""
+    out, run = [], []
+    for s in sorted(slots):
+        if run and s == run[-1] + 1:
+            run.append(s)
+            continue
+        if run:
+            out.append(str(run[0]) if len(run) == 1 else "%d-%d" % (run[0], run[-1]))
+        run = [s]
+    if run:
+        out.append(str(run[0]) if len(run) == 1 else "%d-%d" % (run[0], run[-1]))
+    return ", ".join(out)
+
+
+def fixture_verdict(box, slot, max_spools, fixture_id, status, items, want_display=None):
+    """(ok, line): whether FCC's /api/get_contents answer for the test box holds exactly the fixture
+    spool in its slot, and a line saying what was found. A failure names what FCC listed, never the
+    state it was looking for."""
+    items = items if isinstance(items, list) else []
+    item = items[0] if len(items) == 1 and isinstance(items[0], dict) else {}
+    ok = (status == 200 and item.get("id") == fixture_id
+          and str(item.get("slot", "")).replace('"', "").strip() == str(slot)
+          and (want_display is None or item.get("display") == want_display))
+    try:
+        others = [n for n in range(1, int(max_spools) + 1) if str(n) != str(slot)]
+    except (TypeError, ValueError):
+        others = []
+    if ok:
+        rest = (", and its other slot%s (%s) %s empty" % ("s" if len(others) > 1 else "", _slot_ranges(others),
+                                                           "are" if len(others) > 1 else "is")) if others else ""
+        return True, "OK: %s slot %s holds #%s%s" % (box, slot, fixture_id, rest)
+    if status != 200:
+        found = "FCC answered HTTP %s" % status
+    elif not items:
+        found = "FCC lists nothing there"
+    else:
+        found = "FCC lists %s" % "; ".join(
+            "#%s in slot %s (%s)" % (it.get("id"), str(it.get("slot", "")).replace('"', "").strip() or "none",
+                                    it.get("display")) if isinstance(it, dict) else repr(it) for it in items)
+    want = "only #%s in slot %s" % (fixture_id, slot)
+    if want_display is not None:
+        want += ", reading %r" % want_display
+    return False, "CHECK FAILED: %s should hold %s; %s" % (box, want, found)
+
+
 def phase_fixtures(args):
+    """Put the Quick-Swap test spool alone in its test box slot on dev Spoolman (stops and starts dev FCC)."""
     consts = dict(conftest_constants(), **backend_constants())
     box, slot = consts["box"], consts["slot"]
     rows = load_json(dev_path("locations.json"))
@@ -1892,14 +2183,6 @@ def phase_fixtures(args):
                               for s in occupants]
     rep["deployed_from_box"] = [{"id": s["id"], "location": s.get("location")} for s in deployed]
     _say("other spools in %s: %s; spools deployed from it: %s" % (box, rep["other_occupants"], rep["deployed_from_box"]))
-    for sid in SPOOLS_TESTS_NAME:
-        s = by.get(sid)
-        rep.setdefault("weigh_out_spools", {})[sid] = None if s is None else {
-            "exists": True, "archived": bool(s.get("archived")), "location": s.get("location"),
-            "display": spool_display(s), "remaining_weight": s.get("remaining_weight")}
-        _say("spool #%d: %s" % (sid, "MISSING" if s is None else "%s, %s, at %r, %s g left" % (
-            spool_display(s), "ARCHIVED" if s.get("archived") else "in stock", s.get("location"),
-            s.get("remaining_weight"))))
     if occupants or deployed:
         _say("\nREFUSED: %s must hold only the fixture spool; move the others out by hand first." % box)
         return 2
@@ -1941,15 +2224,12 @@ def phase_fixtures(args):
     st, contents, _, _ = fcc_get("/api/get_contents?id=%s" % urllib.parse.quote(box))
     items = contents if isinstance(contents, list) else []
     rep["get_contents"] = [{"id": it.get("id"), "slot": it.get("slot"), "display": it.get("display"),
-                            "is_ghost": it.get("is_ghost")} for it in items]
+                            "is_ghost": it.get("is_ghost")} if isinstance(it, dict) else it for it in items]
     _say("GET /api/get_contents?id=%s: HTTP %s, %s" % (box, st, rep["get_contents"]))
-    ok = (st == 200 and len(items) == 1 and items[0].get("id") == fixture["id"]
-          and str(items[0].get("slot", "")).replace('"', "").strip() == slot)
-    if fixture["id"] == FIXTURE_SPOOL and ok:
-        ok = items[0].get("display") == FIXTURE_LABEL
+    ok, line = fixture_verdict(box, slot, max_spools, fixture["id"], st, items,
+                               want_display=FIXTURE_LABEL if fixture["id"] == FIXTURE_SPOOL else None)
     rep["ok"] = ok
-    _say("%s: %s slot %s holds #%s and slots 2-%s are empty" % ("OK" if ok else "CHECK FAILED", box, slot,
-                                                                fixture["id"], max_spools))
+    _say(line)
     if args.apply:
         _write_json(stage_path("fixtures-report.json"), rep)
     return 0 if ok else 3
@@ -2036,11 +2316,23 @@ def _print_count(label, res):
             len(c["on_head_no_trail"])))
 
 
+def count_prod_locations_path(given=None):
+    """The file of prod's rows the count reads: the one given, else the copy `locations --apply`
+    saved (the rows it built from), else the copy `stage` saved. None: read prod's live file now."""
+    if given:
+        return given
+    for name in (PROD_LOCATIONS_AS_READ, PROD_LOCATIONS_AT_STAGE):
+        if os.path.exists(stage_path(name)):
+            return stage_path(name)
+    return None
+
+
 def phase_count(args):
+    """45.7, read-only: spools with a trail while not on a head, on prod's data and on dev's old data."""
     consts = backend_constants()
     rep = {"at": _now()}
-    prod_locs_path = args.prod_locations or stage_path(PROD_LOCATIONS_AS_READ)
-    if os.path.exists(prod_locs_path):
+    prod_locs_path = count_prod_locations_path(args.prod_locations)
+    if prod_locs_path:
         prod_rows = load_json(prod_locs_path)
         rep["prod_locations"] = prod_locs_path
     else:
@@ -2107,19 +2399,21 @@ def check_seeds(baselines):
 
 
 def phase_seeds(args):
+    """Retake the local reset-dev snapshot (setup-and-rebuild/seeds/local/) from the refreshed dev and check it."""
     consts = conftest_constants()
     if args.apply:
         # reset_dev.py writes the two seed files itself (outside _guard_write; on this PC only).
         _say("Running reset_dev.py --capture ...")
+        _wrote("the reset-dev snapshot in %s (reset_dev.py --capture)" % SEEDS_DIR)
         proc = subprocess.run([sys.executable, RESET_DEV, "--capture"], capture_output=True, text=True, timeout=600)
         _say(proc.stdout.strip())
         if proc.returncode != 0:
-            raise Refused("reset_dev.py --capture failed: %s" % proc.stderr.strip()[-500:])
+            raise Refused("reset_dev.py --capture failed: %s" % (proc.stderr.strip() or proc.stdout.strip())[-500:])
     else:
         _say("DRY RUN: would run reset_dev.py --capture. Checking the current seeds instead.")
         missing = [p for p in (LOCATIONS_SEED, SPOOLMAN_SEED) if not os.path.exists(p)]
         if missing:
-            _say("  no seed on this PC yet: %s (the seeds are local and git-ignored; --apply makes them)"
+            _say("  no seed on this PC yet: %s (the seeds live only on the PC that made them; --apply makes them)"
                  % ", ".join(missing))
             return 0
     problems, info = check_seeds(consts["baselines"])
@@ -2141,8 +2435,8 @@ def phase_seeds(args):
         _say("  PROBLEM: " + p)
     _say("OK" if not problems else "CHECK FAILED")
     if args.apply:
-        _say("The seeds stay on this PC (git-ignored since 2026-11-13): they copy the real inventory, and the "
-             "repo is public. See setup-and-rebuild/seeds/README.md.")
+        _say("The seeds stay on this PC, in %s (git-ignored since 2026-11-13): they copy the real inventory, "
+             "and the repo is public. See setup-and-rebuild/seeds/README.md." % SEEDS_DIR)
     return 0 if not problems else 3
 
 
@@ -2167,6 +2461,7 @@ def checklist_state(spools, rows, toolhead_types):
 
 
 def phase_checklist(args):
+    """Read-only: the Bulk Move checklist's starting state on dev (dev Spoolman up)."""
     consts = backend_constants()
     spools = get_json(DEV_SPOOLMAN_URL + "/api/v1/spool?allow_archived=true")
     state = checklist_state(spools, load_json(dev_path("locations.json")), consts["toolhead_types"])
@@ -2191,6 +2486,47 @@ PHASES = {"init-marker": phase_init_marker, "stage": phase_stage, "swap": phase_
           "verify-spoolman": phase_verify_spoolman, "locations": phase_locations, "fixtures": phase_fixtures,
           "count": phase_count, "seeds": phase_seeds, "checklist": phase_checklist}
 
+EPILOG = """\
+Run order (every phase is a dry run without --apply; the module docstring has the details):
+  0. init-marker      once per dev Spoolman data folder, after proving the folder is dev's:
+                      needs --apply and --i-checked-this-is-dev.
+  1. stage            dev Spoolman UP, prod UP. Copies prod's database and locations.json.
+  2. (by hand)        stop the dev Spoolman app in TrueNAS (never prod's), right after stage.
+  3. swap             dev Spoolman DOWN, prod UP, dev FCC tracking no print, dev's marker beside
+                      dev's database.
+  4. (by hand)        start the dev Spoolman app in TrueNAS.
+  5. verify-spoolman  dev Spoolman UP, after the swap.
+  6. locations        after the swap, Docker running (it stops and starts dev FCC). Refuses when
+                      prod changed after the stage, unless --use-live-locations.
+  7. fixtures         after locations: dev Spoolman UP, Docker running.
+  8. count            after locations (dev's old number reads the swap's and locations' backups);
+                      dev Spoolman UP. Read-only.
+  9. seeds            last: dev Spoolman UP and dev FCC's data refreshed.
+     checklist        any time: dev Spoolman UP. Read-only.
+"""
+
+
+def _written_words():
+    if not WRITTEN:
+        return "nothing was written."
+    return "written by then: %s." % ", ".join(WRITTEN)
+
+
+def failure_line(exc, phase):
+    """main()'s line for a request or a file that failed: what didn't answer, why, and what the run
+    had written by then."""
+    if isinstance(exc, NoAnswer):
+        if exc.method == "GET":
+            return "%s didn't answer (%s); %s" % (exc.url, _reason_text(exc.reason), _written_words())
+        return ("%s didn't answer the %s (%s), so it may or may not have landed; %s Run `%s` again: it reads "
+                "the record before it writes." % (exc.url, exc.method, _reason_text(exc.reason), _written_words(),
+                                                  phase))
+    address = getattr(exc, "filename", None) or getattr(exc, "url", None)
+    reason = _reason_text(getattr(exc, "reason", None) or exc)
+    if address and _kind(_canon(address)) == "local":
+        return "couldn't use %s (%s); %s" % (address, reason, _written_words())
+    return "%s didn't answer (%s); %s" % (address or "a file or an address", reason, _written_words())
+
 
 def main(argv=None):
     global STAGE_DIR
@@ -2198,13 +2534,27 @@ def main(argv=None):
     common.add_argument("--apply", action="store_true", help="Write. Without it every phase is a dry run.")
     common.add_argument("--stage-dir", help="The stage folder (default %s, or FCC_REFRESH_STAGE_DIR)." % STAGE_DIR)
     ap = argparse.ArgumentParser(prog="refresh_dev_from_prod.py",
-                                 description="Refresh dev's data from prod, read-only on prod (Group 45.6 / 45.7).")
-    sub = ap.add_subparsers(dest="phase", required=True)
+                                 description="Refresh dev's data from prod, read-only on prod (Group 45.6 / 45.7).",
+                                 epilog=EPILOG, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="phase", required=True, metavar="phase")
     for name in PHASES:
-        p = sub.add_parser(name, parents=[common], help=(PHASES[name].__doc__ or "").strip().split("\n")[0] or None)
+        doc = (PHASES[name].__doc__ or "").strip()
+        p = sub.add_parser(name, parents=[common], help=doc.split("\n")[0] or None, description=doc or None,
+                           formatter_class=argparse.RawDescriptionHelpFormatter)
         if name == "count":
-            p.add_argument("--prod-locations", help="prod's locations.json as read (default: the stage copy)")
+            p.add_argument("--prod-locations",
+                           help="prod's locations.json as the count should read it (default: the copy "
+                                "`locations --apply` saved, else the copy `stage` saved, else prod's live "
+                                "locations.json read now)")
             p.add_argument("--dev-locations", help="dev's locations.json before the refresh (default: the backup)")
+        if name == "locations":
+            p.add_argument("--use-live-locations", action="store_true",
+                           help="Build from prod's locations.json as it reads it now, and go on when prod's file or "
+                                "database changed after the stage. Without it the phase builds from the stage copy "
+                                "and refuses then.")
+            p.add_argument("--empty-unreadable", action="store_true",
+                           help="Empty a review-card or fetch-queue file it can't read too. Without it the phase "
+                                "refuses (the apply backs up dev's data folder first either way).")
         if name == "init-marker":
             p.add_argument("--i-checked-this-is-dev", action="store_true",
                            help="Say you have proved dev Spoolman's data folder is dev's, not prod's. "
@@ -2213,8 +2563,10 @@ def main(argv=None):
     args = ap.parse_args(argv)
     if args.stage_dir:
         STAGE_DIR = args.stage_dir
-    if _netloc(DEV_SPOOLMAN_URL) in _prod_netlocs():
-        _say("REFUSED: DEV_SPOOLMAN_URL (%s) points at prod Spoolman." % DEV_SPOOLMAN_URL)
+    why = dev_spoolman_refusal(DEV_SPOOLMAN_URL)
+    if why:
+        _say("REFUSED: DEV_SPOOLMAN_URL (%s) can't be dev Spoolman: %s. Nothing was read or written."
+             % (DEV_SPOOLMAN_URL, why))
         return 2
     for name, value in (("stage folder", STAGE_DIR), ("dev data folder", DEV_DATA_DIR)):
         if is_prod_path(value):
@@ -2224,11 +2576,15 @@ def main(argv=None):
             _say("REFUSED: the %s (%s) isn't on this PC: on a network share this script writes only dev "
                  "Spoolman's database and its marker." % (name, value))
             return 2
+    del WRITTEN[:]
     _say("refresh_dev_from_prod %s%s | stage %s" % (args.phase, "" if args.apply else " (DRY RUN)", STAGE_DIR))
     try:
         return PHASES[args.phase](args)
     except Refused as exc:
         _say("\nREFUSED: %s" % exc)
+        return 2
+    except (urllib.error.URLError, OSError, socket.timeout) as exc:     # NoAnswer included
+        _say("\nREFUSED: %s" % failure_line(exc, args.phase))
         return 2
 
 

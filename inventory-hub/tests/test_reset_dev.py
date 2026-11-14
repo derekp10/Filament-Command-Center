@@ -12,6 +12,13 @@ restore driven through an in-memory Spoolman (archived spools included, and
 the stop when a local seed is missing), and refresh_dev_from_prod.py's guards
 (prod read-only for HTTP and files, the dev marker, the swap's target checks).
 Still no network: urlopen is a tripwire, and no UNC path is ever opened.
+
+Round 3 (2026-11-13) added: the snapshot's folder (seeds/local/, which no
+commit tracks and which ignores itself), the prod refusals on a parsed address
+(reset_dev.py, the refresh, and the by-hand scripts in utilities/, whose
+requests are recorded and never sent), the locations phase building from the
+stage copy, review cards it couldn't read, a swap copy that fails part-way,
+and the refresh's REFUSED line for an address that doesn't answer.
 """
 from __future__ import annotations
 
@@ -19,8 +26,12 @@ import hashlib
 import importlib.util
 import json
 import os
+import runpy
 import shutil
+import subprocess
+import sys
 import types
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -348,7 +359,9 @@ def _spoolman_db(path, spools, filaments=3, vendors=2):
     con.close()
 
 
-def test_the_swap_proves_its_target_is_devs_database_first(refresh, tmp_path, monkeypatch):
+def test_the_swap_identity_check_compares_the_file_with_devs_stage_snapshot(refresh, tmp_path, monkeypatch):
+    """Guard (b), last: the target file's counts and max ids against dev's stage snapshot. It shows
+    only that nothing wrote dev after `stage`; the marker and the other target checks come first."""
     target = tmp_path / "share" / "spoolman.db"
     target.parent.mkdir()
     _spoolman_db(str(target), spools=5)
@@ -357,9 +370,9 @@ def test_the_swap_proves_its_target_is_devs_database_first(refresh, tmp_path, mo
                 "spool": {"count": 5, "max_id": 5}}
     ok, ident = refresh.check_target_identity(snapshot)
     assert ok and ident == snapshot
-    other = dict(snapshot, spool={"count": 7, "max_id": 9})      # prod's numbers, say
+    other = dict(snapshot, spool={"count": 7, "max_id": 9})      # written after `stage`, say
     ok, ident = refresh.check_target_identity(other)
-    assert not ok, "a file whose counts differ from dev's snapshot is not dev's database"
+    assert not ok, "counts that differ from dev's stage snapshot are refused"
     assert not os.listdir(tmp_path / "stage"), "the local copy it opened is removed"
 
 
@@ -785,7 +798,7 @@ def test_a_restore_puts_back_a_sweeps_archive_and_unarchive(reset_dev, seed_file
                              do_restart=False) == 0
     sent = {eid: payload for entity, eid, payload in fake.patches if entity == "spool"}
     assert sent[1] == {"location": "SHELF-1", "archived": False, "extra": {"fcc_pre_archive_location": None}}, \
-        "an archived seed spool is restored in stock, where it was, its archive note dropped"
+        "a seed spool the sweep archived is restored in stock, where it was, its archive note dropped"
     assert sent[2] == {"location": "", "archived": True}, "an un-archived one goes back to archived"
     assert fake.deletes == [("spool", 3)], "only the sweep's own spool is pruned, never #2"
     assert "2 drifted" in capsys.readouterr().out
@@ -821,5 +834,525 @@ def test_a_restore_stops_first_when_a_seed_file_is_missing(reset_dev, seed_files
                 reset_dev.restore(dry_run=dry_run, prune=False, do_restart=False, **kwargs)
             assert exc.value.code == 2
             out = capsys.readouterr().out
-            assert "--capture" in out and "only on this PC" in out, out
+            assert "--capture" in out and "only on the PC that made it" in out, out
     assert live.read_bytes() == before
+
+
+# --- round 3: the snapshot's folder, and no write to prod in any spelling ------------------------
+#
+# The snapshot sat at paths main still tracks, so a checkout of main swapped it for June's copy and
+# switching back deleted it; it lives in seeds/local/ now, a folder no commit has tracked, which
+# ignores itself. reset_dev.py, the refresh and the by-hand scripts in utilities/ compared prod's
+# address as a string, or not at all: a zero-padded port or a host alias passed. Every address below
+# is made up or prod's by name, and nothing is ever sent: each request is recorded by a stand-in.
+
+_REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+_UTILITIES = os.path.join(_REPO, "utilities")
+PROD_SPELLINGS = ["http://192.168.1.29:7912", "http://192.168.1.29:07912", "http://truenas.lan:7912",
+                  "https://TRUENAS.:7912/", "http://192.168.1.29:79x2"]
+
+
+def _same_path(a, b):
+    return os.path.normcase(os.path.abspath(str(a))) == os.path.normcase(os.path.abspath(str(b)))
+
+
+class _Answer:
+    """What a recorded request gets back: an empty 200, or Spoolman's info for /info."""
+
+    ok = True
+    status_code = 200
+    text = ""
+
+    def __init__(self, url):
+        self.url = url
+
+    def json(self):
+        return {"version": "0.27.1", "db_type": "sqlite"} if self.url.rstrip("/").endswith("/info") else []
+
+    def raise_for_status(self):
+        pass
+
+
+def _record_requests(monkeypatch):
+    """requests.get/post/patch/put/delete record what would have been sent and send nothing; any
+    other way out through requests is a tripwire."""
+    import requests
+    sent = []
+
+    def recorder(method):
+        def call(url, *args, **kwargs):
+            sent.append((method, url))
+            return _Answer(url)
+        return call
+
+    for name in ("get", "post", "patch", "put", "delete"):
+        monkeypatch.setattr(requests, name, recorder(name.upper()))
+
+    def tripwire(*args, **kwargs):
+        raise AssertionError("a request went past the recording stand-ins")
+
+    monkeypatch.setattr(requests.Session, "request", tripwire)
+    return sent
+
+
+@pytest.mark.parametrize("url", PROD_SPELLINGS)
+def test_reset_dev_refuses_a_dev_spoolman_url_that_names_prod(reset_dev, seed_files, monkeypatch, capsys, url):
+    """Since 2026-11-13 the seed holds prod's records under prod's ids: a restore aimed at prod would
+    put prod back to the snapshot, and --prune would delete what prod made since. Every mode refuses
+    before any request or write."""
+    live, seed = seed_files
+    _write_rows(live, LIVE_ROWS)
+    _write_rows(seed, [dict(r, Name=r["Name"] + " (seed)") for r in _without_login(LIVE_ROWS)])  # drift
+    _write_spoolman_seed(reset_dev, [{"id": 1, "location": "SHELF-1", "archived": False, "extra": {}}])
+    before = (live.read_bytes(), seed.read_bytes(), Path(reset_dev.SPOOLMAN_SEED).read_bytes())
+    sent = _record_requests(monkeypatch)
+
+    def no_command(*args, **kwargs):
+        raise AssertionError("reset_dev.py ran a command (docker restart)")
+
+    monkeypatch.setattr(reset_dev.subprocess, "run", no_command)
+    monkeypatch.setattr(reset_dev, "SPOOLMAN_URL", url.rstrip("/"))
+    for argv in ([], ["--dry-run", "--no-restart"], ["--capture"], ["--prune", "--no-restart"],
+                 ["--no-locations", "--no-restart"]):
+        monkeypatch.setattr(sys, "argv", ["reset_dev.py"] + argv)
+        try:
+            rc = reset_dev.main()
+        except SystemExit as exc:
+            rc = exc.code
+        out = capsys.readouterr().out
+        assert rc == 2, (argv, rc, out)
+        assert "REFUSED" in out and "prod Spoolman" in out, out
+    assert sent == [], "a request was sent to an address that names prod"
+    assert (live.read_bytes(), seed.read_bytes(), Path(reset_dev.SPOOLMAN_SEED).read_bytes()) == before
+    assert reset_dev.prod_refusal("http://192.168.1.29:7913") is None, "dev itself is never refused"
+    assert reset_dev.prod_refusal("http://192.168.1.29:07913") is None
+
+
+def test_capture_makes_the_snapshot_folder_ignore_itself(reset_dev, tmp_path, monkeypatch):
+    """--capture on a clone that has no seeds/local/ yet makes it, with a .gitignore that ignores the
+    whole folder: on a branch whose own .gitignore doesn't name it (main, until dev is merged), a
+    `git add -A` still can't publish the inventory."""
+    seeds = tmp_path / "fresh-clone" / "local"
+    live = tmp_path / "data" / "locations.json"
+    live.parent.mkdir()
+    _write_rows(live, LIVE_ROWS)
+    monkeypatch.setattr(reset_dev, "LIVE_LOCATIONS", str(live))
+    monkeypatch.setattr(reset_dev, "SEEDS_DIR", str(seeds))
+    monkeypatch.setattr(reset_dev, "LOCATIONS_SEED", str(seeds / "locations-seed.json"))
+    monkeypatch.setattr(reset_dev, "SPOOLMAN_SEED", str(seeds / "spoolman-dev-seed.json"))
+    _use_fake(reset_dev, monkeypatch, _FakeSpoolman([]))
+    reset_dev.capture()
+    ignore = seeds / ".gitignore"
+    assert "*" in [line.strip() for line in ignore.read_text(encoding="utf-8").splitlines()]
+    assert (seeds / "spoolman-dev-seed.json").exists() and (seeds / "locations-seed.json").exists()
+    ignore.write_text("*\n# a person's note\n", encoding="utf-8")
+    reset_dev.capture()
+    assert ignore.read_text(encoding="utf-8") == "*\n# a person's note\n", "an existing one is left as it is"
+    # Git's own answer, in a throwaway repository whose top-level .gitignore names nothing.
+    repo = tmp_path / "repo"
+    (repo / "seeds").mkdir(parents=True)
+    shutil.copytree(seeds, repo / "seeds" / "local")
+    try:
+        subprocess.run(["git", "init", "-q", str(repo)], check=True, capture_output=True, timeout=60)
+        status = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "--untracked-files=all"],
+                                check=True, capture_output=True, text=True, timeout=60).stdout
+    except (OSError, subprocess.SubprocessError) as exc:
+        pytest.skip(f"git isn't usable here: {exc}")
+    assert status.strip() == "", f"git still sees the snapshot: {status!r}"
+
+
+def test_the_snapshot_lives_in_seeds_local_which_git_never_tracks(reset_dev, refresh):
+    """Every reader points at seeds/local/: reset_dev.py, the refresh and the seed canary. A path a
+    commit tracks gets swapped by a checkout of main, then deleted by the switch back."""
+    local = os.path.join(_REPO, "setup-and-rebuild", "seeds", "local")
+    assert _same_path(reset_dev.SEEDS_DIR, local)
+    assert _same_path(reset_dev.LOCATIONS_SEED, os.path.join(local, "locations-seed.json"))
+    assert _same_path(reset_dev.SPOOLMAN_SEED, os.path.join(local, "spoolman-dev-seed.json"))
+    assert _same_path(refresh.SEEDS_DIR, local)
+    assert _same_path(refresh.LOCATIONS_SEED, reset_dev.LOCATIONS_SEED)
+    assert _same_path(refresh.SPOOLMAN_SEED, reset_dev.SPOOLMAN_SEED)
+    import test_box_binding_loans        # the seed canary
+    assert _same_path(test_box_binding_loans.SEED, reset_dev.LOCATIONS_SEED)
+    try:
+        tracked = subprocess.run(["git", "-C", _REPO, "ls-files", "--", "setup-and-rebuild/seeds/local"],
+                                 capture_output=True, text=True, timeout=60)
+        ignored = subprocess.run(["git", "-C", _REPO, "check-ignore", "-q", "--no-index",
+                                  "setup-and-rebuild/seeds/local/spoolman-dev-seed.json"],
+                                 capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as exc:
+        pytest.skip(f"git isn't usable here: {exc}")
+    if tracked.returncode != 0:
+        pytest.skip("not a git checkout")
+    assert tracked.stdout.strip() == "", f"git tracks the snapshot: {tracked.stdout!r}"
+    assert ignored.returncode == 0, "the top-level .gitignore doesn't name setup-and-rebuild/seeds/local/"
+
+
+@pytest.mark.parametrize("alias", ["http://192.168.1.29:07912", "http://truenas.lan:7912", "http://TRUENAS.:7912",
+                                   "https://nas.example:7912"])
+def test_refresh_sends_no_write_to_prods_port_in_any_spelling(refresh, monkeypatch, capsys, alias):
+    """The address is compared by its parsed parts: prod's port gets no write on any host name, even
+    with DEV_SPOOLMAN_URL set to it, and main() refuses such a DEV_SPOOLMAN_URL before any phase."""
+    monkeypatch.setattr(refresh, "DEV_SPOOLMAN_URL", alias)        # a wrongly set environment variable
+    for method in ("POST", "PATCH", "PUT", "DELETE"):
+        with pytest.raises(refresh.Refused, match="read-only"):
+            refresh.http(method, alias + "/api/v1/spool/123", {"location": "TEST-BOX"})
+    assert refresh.main(["checklist"]) == 2          # urlopen is a tripwire: a read would raise
+    out = capsys.readouterr().out
+    assert "REFUSED" in out and "DEV_SPOOLMAN_URL" in out and "7912" in out, out
+
+
+def test_refresh_reads_an_address_by_its_parts(refresh, monkeypatch):
+    with pytest.raises(refresh.Refused, match="port can't be read"):
+        refresh.http("GET", "http://192.168.1.29:79x2/api/v1/info")
+    assert refresh.dev_spoolman_refusal("http://192.168.1.29:79x2") == "its port can't be read"
+    assert refresh.dev_spoolman_refusal("http://192.168.1.29:7913") is None
+    for dev in ("http://192.168.1.29:7913/api/v1/spool/1", "http://192.168.1.29:07913/api/v1/spool/1"):
+        with pytest.raises(AssertionError, match="sent a real request"):     # dev gets its writes
+            refresh.http("PATCH", dev, {"location": "TEST-BOX"})
+    monkeypatch.setattr(refresh, "PROD_SPOOLMAN_URL", "http://10.0.0.99:7999")   # an override's port is prod's too
+    with pytest.raises(refresh.Refused, match="read-only"):
+        refresh.http("PATCH", "http://192.168.1.29:7999/api/v1/spool/1", {})
+
+
+def test_refresh_names_the_address_that_didnt_answer(refresh, tmp_path, monkeypatch, capsys):
+    def refused(req, timeout=None):
+        raise urllib.error.URLError(ConnectionRefusedError(10061, "made-up: nothing listens there"))
+
+    monkeypatch.setattr(refresh.urllib.request, "urlopen", refused)
+    assert refresh.main(["checklist"]) == 2
+    out = capsys.readouterr().out
+    assert ("REFUSED: http://192.168.1.29:7913/api/v1/spool?allow_archived=true didn't answer "
+            "(ConnectionRefusedError: [Errno 10061] made-up: nothing listens there); nothing was written.") in out, out
+
+    def patch_phase(args):
+        refresh.http("PATCH", refresh.DEV_SPOOLMAN_URL + "/api/v1/spool/123", {"location": "TEST-BOX"})
+        return 0
+
+    monkeypatch.setitem(refresh.PHASES, "fixtures", patch_phase)
+    assert refresh.main(["fixtures", "--apply"]) == 2
+    out = capsys.readouterr().out
+    assert "didn't answer the PATCH" in out and "may or may not have landed" in out, out
+    assert "written by then: PATCH http://192.168.1.29:7913/api/v1/spool/123 (sent)" in out, out
+
+    monkeypatch.setattr(refresh, "get_json", lambda url, timeout=60: [])     # Spoolman answers; dev's file is gone
+    assert refresh.main(["checklist"]) == 2
+    out = capsys.readouterr().out
+    assert "REFUSED: couldn't use %s" % os.path.join(str(tmp_path / "data"), "locations.json") in out, out
+    assert out.rstrip().endswith("nothing was written."), out
+
+
+def test_review_cards_says_when_it_couldnt_read_the_file(refresh, tmp_path):
+    data = tmp_path / "data"
+    data.mkdir()
+    assert refresh.review_cards() == ([], None), "no file: no cards"
+    cards_file = data / "pending_cancel_deducts.json"
+    cards_file.write_text(json.dumps({"7#x": {"kind": "no_spool", "job_id": "7", "total_grams": 7.5}}),
+                          encoding="utf-8")
+    assert refresh.review_cards() == ([{"key": "7#x", "kind": "no_spool", "job_id": "7", "total_grams": 7.5}], None)
+    for text, words in (("{not json", "couldn't read"), ("[1, 2]", "not a JSON object")):
+        cards_file.write_text(text, encoding="utf-8")
+        cards, why = refresh.review_cards()
+        assert cards is None and words in why and "pending_cancel_deducts.json" in why, why
+
+
+def test_the_refresh_never_empties_a_pending_file_it_couldnt_read(refresh, tmp_path):
+    data = tmp_path / "data"
+    data.mkdir()
+    cards, queue = data / "pending_cancel_deducts.json", data / "pending_cancel_fetches.json"
+    cards.write_text("{not json", encoding="utf-8")
+    queue.write_text(json.dumps({"7": {"printer": "Printer one"}}), encoding="utf-8")
+    emptied, left = refresh.empty_pending()
+    assert emptied == ["pending_cancel_fetches.json"] and [name for name, _ in left] == ["pending_cancel_deducts.json"]
+    assert cards.read_text(encoding="utf-8") == "{not json", "a file it couldn't read is left as it is"
+    assert queue.read_text(encoding="utf-8") == "{}"
+    emptied, left = refresh.empty_pending(empty_unreadable=True)
+    assert left == [] and cards.read_text(encoding="utf-8") == "{}", "the flag empties it"
+
+
+PROD_LOGIN = {"ip_address": "10.2.2.2", "api_key": "made-up-prod-key-2"}
+
+
+def _locations_scene(refresh, tmp_path, monkeypatch, *, live_changed=False, db_changed=False, stage_copy=True,
+                     cards_text=None):
+    """The locations phase over tmp_path: prod's share folders, the stage folder and dev's data are
+    folders here, dev FCC's Docker commands and answers are stand-ins, and dev Spoolman lists no spool.
+    The stage copy holds one row prod's file lacks (AT-STAGE-ONLY), which shows which file the build
+    read; the stage report's hash is the live file's, as `stage` writes it."""
+    stage, data, prodfcc, prodshare = (tmp_path / n for n in ("stage", "data", "prodfcc", "prodshare"))
+    for folder in (stage, data, prodfcc, prodshare):
+        folder.mkdir(exist_ok=True)
+    prod_rows = [
+        {"LocationID": "SHELF-1", "Type": "Room", "Name": "Shelf one", "parent_id": None},
+        {"LocationID": "PRINTER-1", "Type": "Printer", "Name": "Printer one", "parent_id": "SHELF-1",
+         "printer_creds": PROD_LOGIN, "toolheads": [{"location_id": "HEAD-1", "position": 0}]},
+        {"LocationID": "HEAD-1", "Type": "Tool Head", "Name": "Head one", "Max Spools": "1", "parent_id": "PRINTER-1"},
+        {"LocationID": "DRYBOX-1", "Type": "Dryer Box", "Name": "Box one", "Max Spools": "4", "parent_id": "SHELF-1",
+         "extra": {"slot_targets": {}}},
+    ]
+    live_text = json.dumps(prod_rows, indent=4)
+    (prodfcc / "locations.json").write_text(live_text, encoding="utf-8", newline="\n")
+    db = prodshare / "spoolman.db"
+    _spoolman_db(str(db), spools=3)
+    report = {"prod_locations": {"sha256": hashlib.sha256(live_text.encode("utf-8")).hexdigest(),
+                                 "mtime": "2026-11-09T19:06:31", "rows": len(prod_rows)},
+              "prod_db": {"mtime": refresh._iso(os.stat(db).st_mtime)}}
+    (stage / "stage-report.json").write_text(json.dumps(report), encoding="utf-8")
+    at_stage = refresh.strip_creds(prod_rows) + [
+        {"LocationID": "AT-STAGE-ONLY", "Type": "Cart", "Name": "Only in the stage copy", "parent_id": "SHELF-1"}]
+    if stage_copy:
+        (stage / "prod-locations-at-stage.json").write_text(json.dumps(at_stage, indent=4), encoding="utf-8")
+    if live_changed:
+        (prodfcc / "locations.json").write_text(live_text.replace("Shelf one", "Shelf one, renamed on prod"),
+                                                encoding="utf-8", newline="\n")
+    if db_changed:
+        st = os.stat(db)
+        os.utime(db, (st.st_atime, st.st_mtime + 120))
+    dev_rows = [{"LocationID": "PRINTER-1", "Type": "Printer", "Name": "Printer one", "printer_creds": LOGIN},
+                {"LocationID": "CART-T", "Type": "Cart", "Name": "Test cart", "parent_id": "SHELF-1"}]
+    (data / "locations.json").write_text(json.dumps(dev_rows, indent=4), encoding="utf-8")
+    if cards_text is not None:
+        (data / "pending_cancel_deducts.json").write_text(cards_text, encoding="utf-8")
+    monkeypatch.setattr(refresh, "PROD_FCC_DATA_DIR", str(prodfcc))
+    monkeypatch.setattr(refresh, "PROD_SPOOLMAN_DB", str(db))
+    monkeypatch.setattr(refresh, "LOCATIONS_SEED", str(tmp_path / "no-seed-here.json"))
+    monkeypatch.setattr(refresh, "conftest_constants",
+                        lambda: {"baselines": {"DRYBOX-1": {}}, "box": "DRYBOX-1", "slot": "1"})
+    monkeypatch.setattr(refresh, "backend_constants",
+                        lambda: {"toolhead_types": frozenset({"Tool Head"}), "pseudo_rooms": frozenset()})
+    monkeypatch.setattr(refresh, "FLEET", ())
+    monkeypatch.setattr(refresh, "NAME_MUST_STAY", ())
+    monkeypatch.setattr(refresh, "TEST_CARTS", ("CART-T",))
+    monkeypatch.setattr(refresh, "migration_fixpoint", lambda rows: [])
+    monkeypatch.setattr(refresh, "get_json", lambda url, timeout=60: [])
+    docker = []
+    monkeypatch.setattr(refresh, "docker", lambda *args, **kwargs: docker.append(args) or "")
+    monkeypatch.setattr(refresh, "container_running", lambda: True)
+    monkeypatch.setattr(refresh, "wait_for_fcc", lambda timeout=240: True)
+
+    def fcc_get(path, timeout=30, tries=15):
+        if path == "/api/locations":
+            return 200, json.loads((data / "locations.json").read_text(encoding="utf-8")), "", {"X-FCC-Spool-Read": "ok"}
+        return 200, {"slot_targets": {}}, "", {}
+
+    monkeypatch.setattr(refresh, "fcc_get", fcc_get)
+    return types.SimpleNamespace(stage=stage, data=data, docker=docker, at_stage=at_stage,
+                                 dev_before=(data / "locations.json").read_bytes())
+
+
+def test_the_locations_phase_builds_from_the_stage_copy(refresh, tmp_path, monkeypatch, capsys):
+    """The copy `stage` saved with the database is what dev's file is built from, not prod's file as it
+    reads it later; prod's live rows only tell the report which rows have a login."""
+    scene = _locations_scene(refresh, tmp_path, monkeypatch)
+    assert refresh.main(["locations", "--apply"]) == 0, capsys.readouterr().out
+    rows = {r["LocationID"]: r for r in json.loads((scene.data / "locations.json").read_text(encoding="utf-8"))}
+    assert "AT-STAGE-ONLY" in rows, "built from prod's live file, not the stage copy"
+    assert rows["PRINTER-1"]["printer_creds"] == LOGIN, "dev keeps its own login"
+    assert PROD_LOGIN["api_key"] not in (scene.data / "locations.json").read_text(encoding="utf-8")
+    report = json.loads((scene.stage / "locations-report.json").read_text(encoding="utf-8"))
+    assert report["build"]["logins_kept"] == [{"LocationID": "PRINTER-1", "prod_differs": True}]
+    assert json.loads((scene.stage / "prod-locations-as-read.json").read_text(encoding="utf-8")) == scene.at_stage
+    out = capsys.readouterr().out
+    assert PROD_LOGIN["api_key"] not in out and PROD_LOGIN["ip_address"] not in out
+
+
+@pytest.mark.parametrize("change, words", [("live_changed", "locations.json changed after the stage"),
+                                           ("db_changed", "Spoolman was written after the copy")])
+def test_the_locations_phase_refuses_when_prod_moved_on_after_the_stage(refresh, tmp_path, monkeypatch, capsys,
+                                                                         change, words):
+    scene = _locations_scene(refresh, tmp_path, monkeypatch, **{change: True})
+    for argv in (["locations"], ["locations", "--apply"]):
+        assert refresh.main(argv) == 2
+        out = capsys.readouterr().out
+        assert words in out and "--use-live-locations" in out, out
+    assert (scene.data / "locations.json").read_bytes() == scene.dev_before, "nothing written"
+    assert not (scene.stage / "dev-data-before").exists() and scene.docker == [], "FCC never stopped"
+    assert refresh.main(["locations", "--apply", "--use-live-locations"]) == 0, capsys.readouterr().out
+    rows = {r["LocationID"]: r for r in json.loads((scene.data / "locations.json").read_text(encoding="utf-8"))}
+    assert "AT-STAGE-ONLY" not in rows, "--use-live-locations builds from prod's file as it reads it now"
+    if change == "live_changed":
+        assert rows["SHELF-1"]["Name"] == "Shelf one, renamed on prod"
+
+
+def test_the_locations_phase_needs_the_stage_copy(refresh, tmp_path, monkeypatch, capsys):
+    scene = _locations_scene(refresh, tmp_path, monkeypatch, stage_copy=False)
+    assert refresh.main(["locations", "--apply"]) == 2
+    assert "no stage copy of prod's locations.json" in capsys.readouterr().out
+    assert (scene.data / "locations.json").read_bytes() == scene.dev_before
+    assert refresh.main(["locations", "--apply", "--use-live-locations"]) == 0, capsys.readouterr().out
+
+
+def test_the_locations_phase_never_empties_review_cards_it_couldnt_read(refresh, tmp_path, monkeypatch, capsys):
+    scene = _locations_scene(refresh, tmp_path, monkeypatch, cards_text="{not json")
+    cards = scene.data / "pending_cancel_deducts.json"
+    for argv in (["locations"], ["locations", "--apply"]):
+        assert refresh.main(argv) == 2
+        out = capsys.readouterr().out
+        assert "couldn't read" in out and "pending_cancel_deducts.json" in out and "--empty-unreadable" in out, out
+    assert cards.read_text(encoding="utf-8") == "{not json"
+    assert (scene.data / "locations.json").read_bytes() == scene.dev_before
+    assert refresh.main(["locations", "--apply", "--empty-unreadable"]) == 0, capsys.readouterr().out
+    assert cards.read_text(encoding="utf-8") == "{}", "the flag empties it"
+    assert (scene.stage / "dev-data-before" / "pending_cancel_deducts.json").read_text(encoding="utf-8") == "{not json", \
+        "after the backup kept its bytes"
+
+
+def test_the_build_reads_prods_logins_only_for_its_report(refresh):
+    live = [{"LocationID": "PRINTER-1", "Type": "Printer", "Name": "Printer one", "printer_creds": PROD_LOGIN},
+            {"LocationID": "PRINTER-2", "Type": "Printer", "Name": "Printer two", "printer_creds": PROD_LOGIN}]
+    stage_copy = refresh.strip_creds(live)
+    dev = [{"LocationID": "PRINTER-1", "Type": "Printer", "Name": "Printer one", "printer_creds": LOGIN}]
+    rows, rep = refresh.build_dev_locations(stage_copy, dev, {}, (), logins_rows=live)
+    by = {r["LocationID"]: r for r in rows}
+    assert by["PRINTER-1"]["printer_creds"] == LOGIN and "printer_creds" not in by["PRINTER-2"]
+    assert rep["logins_kept"] == [{"LocationID": "PRINTER-1", "prod_differs": True}]
+    assert rep["prod_logins_not_taken"] == ["PRINTER-2"]
+    assert PROD_LOGIN["api_key"] not in json.dumps(rows) + json.dumps(rep)
+    same = [dict(live[0], printer_creds=LOGIN), live[1]]
+    _, rep = refresh.build_dev_locations(stage_copy, dev, {}, (), logins_rows=same)
+    assert rep["logins_kept"] == [{"LocationID": "PRINTER-1", "prod_differs": False}]
+
+
+def test_a_swap_copy_that_fails_part_way_names_the_backup_to_put_back(refresh, tmp_path, monkeypatch, capsys):
+    scene = _swap_scene(refresh, tmp_path, monkeypatch)
+    original = scene.db.read_bytes()
+    real_copyfile = shutil.copyfile
+
+    def copyfile(src, dst, *args, **kwargs):
+        if _same_path(dst, scene.db):
+            with open(dst, "wb") as fh:        # shutil.copyfile opens the target 'wb', so it is cut short
+                fh.write(b"partial")
+            raise OSError(5, "made-up: the share went away mid-copy")
+        return real_copyfile(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(refresh.shutil, "copyfile", copyfile)
+    assert refresh.main(["swap", "--apply"]) == 2
+    out = capsys.readouterr().out
+    backup = scene.stage / "dev-spoolman-before.db"
+    assert "failed part-way" in out and "may now be partial" in out, out
+    assert "Before you start dev Spoolman, put the backup %s back" % backup in out, out
+    assert backup.read_bytes() == original, "the backup holds dev's database as it was"
+
+
+def test_the_count_reads_the_stage_copy_before_prods_live_file(refresh, tmp_path, monkeypatch, capsys):
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    rows = [{"LocationID": "SHELF-1", "Type": "Shelf"}]
+    (stage / "prod-locations-at-stage.json").write_text(json.dumps(rows), encoding="utf-8")
+
+    def no_live_read():
+        raise AssertionError("the count read prod's live locations.json while the stage holds a copy")
+
+    monkeypatch.setattr(refresh, "read_prod_locations", no_live_read)
+    monkeypatch.setattr(refresh, "get_json", lambda url, timeout=60: [])
+    monkeypatch.setattr(refresh, "backend_constants",
+                        lambda: {"toolhead_types": frozenset({"Tool Head"}), "pseudo_rooms": frozenset()})
+    assert refresh.main(["count"]) == 0
+    assert "prod-locations-at-stage.json" in capsys.readouterr().out
+    (stage / "prod-locations-as-read.json").write_text(json.dumps(rows), encoding="utf-8")
+    assert _same_path(refresh.count_prod_locations_path(), stage / "prod-locations-as-read.json"), \
+        "the copy `locations --apply` built from comes first"
+    assert refresh.count_prod_locations_path("given.json") == "given.json"
+
+
+def test_the_fixtures_check_says_what_it_found(refresh):
+    good = [{"id": 123, "slot": '"1"', "display": "#123 made-up"}]
+    assert refresh.fixture_verdict("TEST-BOX", "1", 6, 123, 200, good) == (
+        True, "OK: TEST-BOX slot 1 holds #123, and its other slots (2-6) are empty")
+    ok, line = refresh.fixture_verdict("TEST-BOX", "3", 6, 123, 200, [dict(good[0], slot="3")])
+    assert ok and "other slots (1-2, 4-6)" in line, line
+    assert refresh.fixture_verdict("TEST-BOX", "1", 1, 123, 200, good) == (True, "OK: TEST-BOX slot 1 holds #123")
+    assert refresh.fixture_verdict("TEST-BOX", "1", 6, 123, 200, []) == (
+        False, "CHECK FAILED: TEST-BOX should hold only #123 in slot 1; FCC lists nothing there")
+    ok, line = refresh.fixture_verdict("TEST-BOX", "1", 6, 123, 200,
+                                       good + [{"id": 7, "slot": "2", "display": "#7 made-up"}])
+    assert not ok and "#7 in slot 2" in line and "holds #123" not in line, line
+    ok, line = refresh.fixture_verdict("TEST-BOX", "1", 6, 123, 502, None)
+    assert not ok and line.endswith("FCC answered HTTP 502"), line
+    ok, line = refresh.fixture_verdict("TEST-BOX", "1", 6, 123, 200, good, want_display="#123 another")
+    assert not ok and "reading '#123 another'" in line, line
+    assert not hasattr(refresh, "SPOOLS_TESTS_NAME"), "no test scans #1 or #2 any more (throwaway spools)"
+
+
+def test_every_phase_says_in_the_help_what_it_does_and_when(refresh, capsys):
+    for name, phase in refresh.PHASES.items():
+        assert (phase.__doc__ or "").strip(), f"{name} has no one-line docstring for --help"
+    with pytest.raises(SystemExit):
+        refresh.main(["--help"])
+    out = capsys.readouterr().out
+    assert "Run order" in out and "dev Spoolman DOWN" in out and "(by hand)" in out, out
+    for name in refresh.PHASES:
+        assert name in out
+
+
+# --- utilities/: the by-hand scripts that write go to dev, never prod --------------------------
+
+def _load_by_path(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.fixture
+def utilities(monkeypatch, tmp_path):
+    """utilities/ loaded by path, with project_config reading a made-up repo config.json, and every
+    request recorded, never sent."""
+    pc = _load_by_path("project_config", os.path.join(_UTILITIES, "project_config.py"))
+    monkeypatch.setitem(sys.modules, "project_config", pc)
+    config = tmp_path / "config.json"
+    monkeypatch.setattr(pc, "REPO_CONFIG", str(config), raising=False)
+    sent = _record_requests(monkeypatch)
+
+    def write_config(port, host="192.168.1.29"):
+        config.write_text(json.dumps({"server_ip": host, "spoolman_port": port}), encoding="utf-8")
+
+    def load(name):
+        return _load_by_path("utility_" + name, os.path.join(_UTILITIES, name + ".py"))
+
+    return types.SimpleNamespace(load=load, sent=sent, config=write_config, path=lambda n: os.path.join(_UTILITIES, n))
+
+
+@pytest.mark.parametrize("port, host", [(7912, "192.168.1.29"), ("07912", "192.168.1.29"), (7912, "truenas.lan")])
+def test_the_spool_63_probe_refuses_prod(utilities, capsys, port, host):
+    utilities.config(port, host)
+    mod = utilities.load("test_assignment")
+    assert utilities.sent == [], "importing it sends nothing"
+    with pytest.raises(SystemExit) as exc:
+        mod.main()
+    assert exc.value.code == 2 and utilities.sent == [], utilities.sent
+    assert "REFUSED" in capsys.readouterr().out
+
+
+def test_the_spool_63_probe_writes_to_dev_by_default(utilities):
+    mod = utilities.load("test_assignment")
+    mod.main()                                            # no config.json: dev's default address
+    assert [m for m, _ in utilities.sent] == ["PATCH", "PATCH"]
+    assert all(url == "http://192.168.1.29:7913/api/v1/spool/63" for _, url in utilities.sent), utilities.sent
+    utilities.config(7913, "dev.example")                  # the repo-root config.json, when it names one
+    del utilities.sent[:]
+    mod.main()
+    assert {url for _, url in utilities.sent} == {"http://dev.example:7913/api/v1/spool/63"}
+
+
+def test_the_field_probe_is_no_pytest_test_and_never_writes_prod(utilities, capsys):
+    mod = utilities.load("debug_test")
+    assert not hasattr(mod, "test_create_field"), "`pytest utilities/debug_test.py` would collect and run it"
+    for url in ("http://192.168.1.29:7912", "http://truenas.lan:07912"):
+        with pytest.raises(SystemExit):
+            mod.probe_create_field(url)
+    assert utilities.sent == []
+    mod.probe_create_field()
+    assert utilities.sent == [("POST", "http://192.168.1.29:7913/api/v1/field/filament/debug_test_field")]
+
+
+def test_the_field_rebuild_never_writes_prod(utilities, capsys):
+    """repair_db_fields.py deletes the container_slot field, which wipes it on every spool: it named
+    prod, and nothing stopped a by-hand run."""
+    utilities.config(7912)
+    with pytest.raises(SystemExit) as exc:
+        runpy.run_path(utilities.path("repair_db_fields.py"), run_name="__main__")
+    assert exc.value.code == 2 and utilities.sent == [], utilities.sent
+    mod = utilities.load("repair_db_fields")
+    with pytest.raises(SystemExit):
+        mod.nuke_and_pave("container_slot", "Container / MMU Slot", "text", "http://truenas.lan:7912")
+    assert utilities.sent == []

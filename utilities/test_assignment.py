@@ -1,33 +1,31 @@
-"""Manual probe (January 2026): does Spoolman take a plain string for the container_slot extra?
+"""WARNING: this script WRITES to Spoolman. It PATCHes spool 63's extras twice (container_slot "1",
+then spool_type "Cardboard" with container_slot "1"). Since 2026-11-13 dev's spool 63 is a copy of
+a real spool, so a run gives that copy a slot-1 claim: put it back afterwards (reset_dev.py puts
+dev's spools back to its snapshot).
+
+It writes only to dev Spoolman. The address comes from the repo-root config.json (server_ip and
+spoolman_port: 7913 on this PC), else http://192.168.1.29:7913, and prod Spoolman is refused before
+anything is sent: port 7912 on any host name, or one of prod's addresses (project_config.py).
+
+A manual probe (January 2026): does Spoolman take a plain string for the container_slot extra? That
+was settled when container_slot became a text field (Group 54.4), so there is little reason to run it.
 
 Run it by hand only:  python utilities/test_assignment.py
-It PATCHes spool 63 (SPOOL_ID) on the Spoolman it finds: inventory-hub/config.json's server_ip and
-spoolman_port, else prod's address (192.168.1.29:7912).
-
 Everything it does sits in main(), run only under `if __name__ == "__main__":` (2026-11-13). Its
 name matches pytest's test_*.py, so a `pytest .` from the repo root would collect it, and its
-module-level PATCHes used to run at import, against prod. Importing it now sends nothing; the root
+module-level PATCHes used to run at import, against prod. Importing it sends nothing; the root
 pytest.ini's norecursedirs also keeps pytest out of utilities/.
 """
 import requests
-import json
-import os
-import sys
+
+import project_config
 
 
-def main():
+def main(spoolman_url=None):
     # --- SETUP ---
-    # Attempt to find config.json
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(current_dir, '..', 'inventory-hub', 'config.json')
-
-    SPOOLMAN_IP = "http://192.168.1.29:7912" # Default
-    if os.path.exists(config_path):
-        try:
-            with open(config_path, 'r') as f:
-                cfg = json.load(f)
-                SPOOLMAN_IP = f"http://{cfg.get('server_ip')}:{cfg.get('spoolman_port')}"
-        except: pass
+    # Dev Spoolman (the repo-root config.json), never prod: refused before any request.
+    SPOOLMAN_IP = spoolman_url or project_config.dev_spoolman_url()
+    project_config.refuse_prod_spoolman(SPOOLMAN_IP)
 
     print(f"🦝 Connecting to Spoolman at {SPOOLMAN_IP}")
 
