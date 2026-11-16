@@ -196,10 +196,13 @@ def test_printers_are_first_class_on_disk(api_base_url, require_server):
     import json
     import requests
     rows = requests.get(f"{api_base_url}/api/locations", timeout=10).json()
-    # The container's own file, by absolute path (Group 45.8). locations_db's
-    # JSON_FILE is relative ('data/locations.json'), so a run started from the
-    # repo root read a stray June 2026 repo-root data/locations.json that still
-    # had CORE1 as a Printer, and failed on a printer dev hasn't had since.
+    # The container's own file, by absolute path (Group 45.8), because that is
+    # what /api/locations serves. locations_db's JSON_FILE isn't it under pytest:
+    # since Group 45.9 it is the run's own copy (conftest's FCC_DATA_DIR), taken
+    # when the run began. Before that it was relative ('data/locations.json'), so
+    # a run started from the repo root read a stray June 2026 repo-root
+    # data/locations.json that still had CORE1 as a Printer, and failed on a
+    # printer dev hasn't had since.
     dev_file = os.path.join(os.path.dirname(os.path.abspath(locations_db.__file__)),
                             "data", "locations.json")
     with open(dev_file, encoding="utf-8") as fh:

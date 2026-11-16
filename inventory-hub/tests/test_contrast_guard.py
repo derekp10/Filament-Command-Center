@@ -704,10 +704,30 @@ def test_spool_window_slicer_profile_row_is_readable(page: Page, base_url: str, 
 # Group 52.1b: "Spoolman didn't answer" notices (Location Manager + backlog)
 # ---------------------------------------------------------------------------
 
+def _notice_offenders(notice, element_id):
+    """Group 45.12: a read notice is a text-only div, and the guard scores a
+    root's DESCENDANTS only, so passed as its own root it was never judged
+    (Group 52's two checks below passed it, and any paint passed). It is
+    judged through its parent, wherever its script puts it, after a proof that
+    it is scored there (_reads1_scored), and only its own offenders count: its
+    parent also holds text that isn't this test's (the manager's nav deck,
+    hidden views, whose children the guard still walks). A notice painted
+    #555 on #444 is reported at 1.31:1 (the hermetic twin:
+    test_contrast_guard_compositing's text-only-element test)."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    parent = notice.locator("..")
+    assert _reads1_scored(parent, element_id), f"#{element_id} isn't scored through its parent"
+    return [o for o in conftest.contrast_offenders(parent) if o["id"] == element_id]
+
+
 @pytest.mark.usefixtures("require_server")
-def test_manage_read_notice_has_no_gray_on_gray_text(page: Page, open_manage_modal, assert_contrast):
+def test_manage_read_notice_has_no_gray_on_gray_text(page: Page, open_manage_modal):
     """Shown only when a contents read fails: the strict reads of TEST_BOX
-    answer 502 here, as the server does when Spoolman times out. Read-only."""
+    answer 502 here, as the server does when Spoolman times out. Read-only,
+    with the page's own empty buffer (nothing in the nav deck, and nothing
+    saved back to dev's). Judged through its parent (_notice_offenders)."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+
     def _down(route):
         if "strict=1" in route.request.url:
             route.fulfill(status=502, content_type="application/json",
@@ -715,6 +735,7 @@ def test_manage_read_notice_has_no_gray_on_gray_text(page: Page, open_manage_mod
         else:
             route.continue_()
 
+    conftest.own_the_buffer(page, [])
     page.route(lambda url: f"/api/get_contents?id={TEST_BOX}&" in url, _down)
     # The heartbeat's manage section would read dev's real contents and clear
     # the notice before the check (conftest.quiet_heartbeat's move).
@@ -722,14 +743,17 @@ def test_manage_read_notice_has_no_gray_on_gray_text(page: Page, open_manage_mod
     open_manage_modal(TEST_BOX)
     notice = page.locator("#manage-read-notice")
     expect(notice).to_be_visible(timeout=8000)
-    assert_contrast(notice)
+    offenders = _notice_offenders(notice, "manage-read-notice")
+    assert offenders == [], offenders
 
 
 @pytest.mark.usefixtures("require_server")
-def test_backlog_read_notice_has_no_gray_on_gray_text(page: Page, base_url: str, assert_contrast):
+def test_backlog_read_notice_has_no_gray_on_gray_text(page: Page, base_url: str):
     """Shown when a backlog refresh fails while the window lists rows: the
-    first answer lists one (fake) row, every later one fails. Read-only."""
+    first answer lists one (fake) row, every later one fails. Read-only, with
+    the page's own empty buffer. Judged through its parent (_notice_offenders)."""
     import json   # local: keeps this file's header out of other branches' merges
+    import conftest
     answers = {"n": 0}
     row = {"id": 999531, "type": "spool", "registered": "2026-10-19T00:00:00",
            "filament": {"material": "PLA", "name": "Contrast Red", "color_hex": "c0392b",
@@ -741,6 +765,7 @@ def test_backlog_read_notice_has_no_gray_on_gray_text(page: Page, base_url: str,
                 else {"success": False, "msg": "Spoolman didn't answer the spool list (HTTP 503)"})
         route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
 
+    conftest.own_the_buffer(page, [])
     page.route("**/api/print_queue/pending*", _pending)
     page.goto(base_url)
     page.wait_for_selector("#btn-backlog-count", timeout=10000)
@@ -749,7 +774,8 @@ def test_backlog_read_notice_has_no_gray_on_gray_text(page: Page, base_url: str,
     page.evaluate("window.fetchBacklog()")
     notice = page.locator("#backlog-read-notice")
     expect(notice).to_be_visible(timeout=8000)
-    assert_contrast(notice)
+    offenders = _notice_offenders(notice, "backlog-read-notice")
+    assert offenders == [], offenders
 
 
 # ---------------------------------------------------------------------------

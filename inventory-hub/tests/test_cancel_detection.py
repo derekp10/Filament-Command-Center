@@ -903,6 +903,7 @@ def test_pulse_no_longer_drives_detection():
     printer_map = {"XL-1": {"printer_name": "XL", "position": 0}}
     with patch.object(print_monitor, "_track_print_edge") as tpe, \
          patch.object(app_module.config_loader, "load_config", return_value={}), \
+         patch.object(app_module.locations_db, "load_locations_list", return_value=[]), \
          patch.object(app_module.locations_db, "get_active_printer_map", return_value=printer_map), \
          patch.object(app_module.config_loader, "get_api_urls", return_value=("http://sm", "http://fb")), \
          patch.object(app_module.locations_db, "get_bindings_for_machine",

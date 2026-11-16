@@ -6,8 +6,8 @@ suite runs against the SHARED, MUTATING dev backend (Spoolman 7913 +
 inventory-hub/data/locations.json), so a full ~986-test sweep contaminates dev
 and reruns fail in clusters that have nothing to do with the code under test
 (manage-modal won't open, quickswap/locmgr/returns, buffer-card refresh, …).
-This script restores dev to a committed seed baseline so the reset can't be
-forgotten or done wrong by hand.
+This script restores dev to a seed baseline so the reset can't be forgotten or
+done wrong by hand.
 
 WHO RUNS THIS (Derek, 2026-06-02): NOT Derek. This is an *agent-invoked* tool —
 Claude runs it on Derek's behalf when asked to reset/clean dev. Derek will not
@@ -20,8 +20,36 @@ before a sweep, `pytest --reset-dev-prune` adds the delete; a flagless run is a
 no-op (see inventory-hub/tests/conftest.py).
 
 Two seed artifacts (captured from a known-good dev with `--capture`):
-  - setup-and-rebuild/seeds/spoolman-dev-seed.json  (vendors/filaments/spools)
-  - setup-and-rebuild/seeds/locations-seed.json      (full FCC locations.json)
+  - setup-and-rebuild/seeds/local/spoolman-dev-seed.json  (vendors/filaments/
+    spools, archived spools included)
+  - setup-and-rebuild/seeds/local/locations-seed.json      (full FCC
+    locations.json, printer logins left out)
+
+THE SEEDS ARE LOCAL (2026-11-13): since dev was refreshed from prod they are a
+copy of the real inventory, and the GitHub repo is public, so they live only on
+the PC that made them, in seeds/local/, a folder git ignores and no commit has
+ever tracked (setup-and-rebuild/seeds/README.md). A clone has none until
+`--capture` (or refresh_dev_from_prod.py's `seeds` phase) makes them; a restore
+or dry run stops with that message, before anything is read or written.
+
+NEVER PROD: every run exits 2 before any request or write when DEV_SPOOLMAN_URL
+names prod Spoolman (port 7912, on any host name, or one of prod's addresses).
+Since 2026-11-13 the seed holds prod's records under prod's ids, so a restore
+aimed at prod would put prod back to the snapshot, and --prune would delete
+everything prod made since.
+
+ARCHIVED SPOOLS (2026-11-13): capture and reconcile both read spools with
+`allow_archived=true`, so a sweep that archives a seed spool is restored (not
+reported deleted), one that un-archives an archived seed spool is put back
+(and never pruned as sweep-made). A seed from before this (no
+`spools_include_archived`) never lists an archived dev spool as sweep-made: it
+couldn't tell one from a real spool it never captured.
+
+PRINTER LOGINS (Group 45.6): a Printer row's `printer_creds` (a PrusaLink IP and
+API key) never goes into the seed: `--capture` drops the key from every row. A
+restore keeps the live file's `printer_creds` by LocationID, so resetting dev
+never wipes the logins it watches the printers with, and a seed (even an old one
+that held some) never brings a login back. A login alone is not drift.
 
 NOTE on the .example stub: data/locations.json.example is the *fresh-install*
 bootstrap (6 locations) — NOT a test baseline. Spools reference ~40 distinct
@@ -36,7 +64,8 @@ Modes
                                seed values (idempotent); docker restart.
   reset_dev.py --prune         also DELETE entities created during a sweep
                                (present in dev but absent from the seed).
-  reset_dev.py --capture       snapshot CURRENT dev -> the two seed files.
+  reset_dev.py --capture       snapshot CURRENT dev -> the two seed files in
+                               seeds/local/.
   reset_dev.py --dry-run       report what WOULD change; write nothing.
   reset_dev.py --no-restart    skip the `docker restart inventory_hub` step.
   reset_dev.py --no-locations  skip the locations.json restore.
@@ -58,12 +87,14 @@ location/extra/archived/weight on existing spools — all fully PATCH-restorable
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import re
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 
 import requests
 
@@ -72,14 +103,27 @@ import requests
 # --------------------------------------------------------------------------
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(HERE)
-SEEDS_DIR = os.path.join(HERE, "seeds")
+# The snapshot's folder: local to the PC that made it, never tracked by any commit, so a checkout of
+# another branch can't overwrite or delete it (setup-and-rebuild/seeds/README.md).
+SEEDS_DIR = os.path.join(HERE, "seeds", "local")
 SPOOLMAN_SEED = os.path.join(SEEDS_DIR, "spoolman-dev-seed.json")
 LOCATIONS_SEED = os.path.join(SEEDS_DIR, "locations-seed.json")
 LIVE_LOCATIONS = os.path.join(REPO_ROOT, "inventory-hub", "data", "locations.json")
+# What --capture writes into the snapshot folder when it isn't there: the folder then ignores itself
+# on every branch, even one whose own .gitignore doesn't name it yet (main, until dev is merged).
+SEEDS_GITIGNORE = ".gitignore"
+SEEDS_GITIGNORE_TEXT = ("# The local reset-dev snapshot (../README.md). Git ignores this whole folder, this file too,\n"
+                        "# on every branch, including one whose own .gitignore doesn't name the folder yet.\n"
+                        "*\n")
 
 SPOOLMAN_URL = os.environ.get("DEV_SPOOLMAN_URL", "http://192.168.1.29:7913").rstrip("/")
 CONTAINER = os.environ.get("INVENTORY_HUB_CONTAINER", "inventory_hub")
 TIMEOUT = 15
+
+# Prod Spoolman: this script never sends it anything. Its port is refused on any host name (an alias
+# or a zero-padded port is still prod), and its known addresses besides.
+PROD_SPOOLMAN_PORT = 7912
+PROD_NETLOCS = frozenset({"192.168.1.29:7912", "truenas:7912", "truenas.local:7912"})
 
 # Fields restored per entity when they drift from the seed. `extra` is handled
 # specially (whole-dict compare, then the seed's whole dict is sent back). Up to
@@ -103,6 +147,10 @@ RESTORE_FIELDS = {
     "vendor": ["name", "comment", "empty_spool_weight", "external_id", "extra"],
 }
 ENTITY_PLURAL = {"vendor": "vendors", "filament": "filaments", "spool": "spools"}
+# What capture and reconcile both read: every record, archived spools included (Spoolman lists only
+# spools in stock without allow_archived). One table, so the two can't drift apart.
+LIST_PATHS = {"vendor": "/api/v1/vendor", "filament": "/api/v1/filament",
+              "spool": "/api/v1/spool?allow_archived=true"}
 # Restore order (FK-safe): vendors before filaments before spools.
 RESTORE_ORDER = ["vendor", "filament", "spool"]
 # Prune (delete) order (reverse FK): spools before filaments before vendors.
@@ -118,6 +166,10 @@ _FLOAT_EPS = 1e-4
 NULL_CLEARS = True
 _NULL_CLEARS_FROM = (0, 26, 0)
 
+# A Printer row's PrusaLink login (locations_db.PRINTER_CREDS_KEY). Never written
+# into the seed, and never taken from it (see the module docstring).
+PRINTER_CREDS_KEY = "printer_creds"
+
 
 # --------------------------------------------------------------------------
 # Small helpers
@@ -126,8 +178,40 @@ def _log(msg: str) -> None:
     print(msg, flush=True)
 
 
+def prod_refusal(url: str):
+    """Why `url` can't be dev Spoolman because it names prod's, or None. Read from its parsed parts,
+    so another spelling of prod is still prod: port 7912 on any host name ('07912' is 7912), one of
+    prod's addresses, or a port that can't be read at all."""
+    parts = urllib.parse.urlsplit(str(url))
+    try:
+        port = parts.port
+    except ValueError:
+        return "its port can't be read"
+    if port == PROD_SPOOLMAN_PORT:
+        return f"port {PROD_SPOOLMAN_PORT} is prod Spoolman's, on any host name"
+    if parts.netloc.lower() in PROD_NETLOCS:
+        return "it is one of prod Spoolman's addresses"
+    return None
+
+
+def _refuse_prod() -> None:
+    """Exit 2 when DEV_SPOOLMAN_URL names prod, before any request or write. main() asks first, and
+    every request asks again (a direct caller of capture() or restore())."""
+    why = prod_refusal(SPOOLMAN_URL)
+    if why:
+        _log(f"REFUSED: DEV_SPOOLMAN_URL ({SPOOLMAN_URL}) can't be dev Spoolman: {why}. reset_dev.py never "
+             "talks to prod Spoolman (the seed holds prod's records under prod's ids, so a restore there "
+             "would put prod back to the snapshot). Nothing was read or written.")
+        sys.exit(2)
+
+
+def _url(path: str) -> str:
+    _refuse_prod()
+    return f"{SPOOLMAN_URL}{path}"
+
+
 def _get(path: str):
-    r = requests.get(f"{SPOOLMAN_URL}{path}", timeout=TIMEOUT)
+    r = requests.get(_url(path), timeout=TIMEOUT)
     r.raise_for_status()
     return r.json()
 
@@ -151,6 +235,56 @@ def _null_clears_for(version) -> bool:
     return tuple(nums + [0] * (3 - len(nums))) >= _NULL_CLEARS_FROM
 
 
+def _location_key(row) -> str:
+    return str(row.get("LocationID") or "").strip().upper() if isinstance(row, dict) else ""
+
+
+def _strip_printer_creds(rows: list) -> tuple:
+    """A copy of a locations list with no `printer_creds` on any row, and the
+    LocationIDs that had one (names only: a login's value is never logged)."""
+    out, stripped = [], []
+    for row in rows:
+        if isinstance(row, dict) and PRINTER_CREDS_KEY in row:
+            stripped.append(str(row.get("LocationID") or "?"))
+            row = {k: v for k, v in row.items() if k != PRINTER_CREDS_KEY}
+        out.append(row)
+    return out, stripped
+
+
+def _with_live_printer_creds(seed_rows: list, live_rows) -> tuple:
+    """The seed's rows, each carrying the live file's `printer_creds` for the same
+    LocationID (compared trimmed and case-blind), and none taken from the seed.
+
+    Returns (rows, kept, lost): the LocationIDs whose live login was kept, and
+    those whose live login has no row in the seed (it goes with the row)."""
+    live = {}
+    for row in live_rows if isinstance(live_rows, list) else []:
+        key = _location_key(row)
+        if key and PRINTER_CREDS_KEY in row and key not in live:
+            live[key] = row[PRINTER_CREDS_KEY]
+    rows, kept, seed_keys = [], [], set()
+    for row in seed_rows:
+        if not isinstance(row, dict):
+            rows.append(row)
+            continue
+        key = _location_key(row)
+        seed_keys.add(key)
+        new = {}
+        for k, v in row.items():
+            if k == PRINTER_CREDS_KEY:     # an old seed's login is never restored
+                if key in live:
+                    new[k] = copy.deepcopy(live[key])
+                continue
+            new[k] = v
+        if key in live and PRINTER_CREDS_KEY not in new:
+            new[PRINTER_CREDS_KEY] = copy.deepcopy(live[key])
+        if key in live:
+            kept.append(str(row.get("LocationID")))
+        rows.append(new)
+    lost = sorted(k for k in live if k not in seed_keys)
+    return rows, kept, lost
+
+
 def _check_spoolman_reachable() -> None:
     global NULL_CLEARS
     try:
@@ -169,14 +303,25 @@ def _check_spoolman_reachable() -> None:
 # --------------------------------------------------------------------------
 # Capture
 # --------------------------------------------------------------------------
+def _ensure_seeds_folder() -> None:
+    """The snapshot folder, made if needed, holding a .gitignore that ignores the whole folder, so
+    the snapshot stays out of git on every branch, even one whose own .gitignore doesn't name it."""
+    os.makedirs(SEEDS_DIR, exist_ok=True)
+    ignore_file = os.path.join(SEEDS_DIR, SEEDS_GITIGNORE)
+    if not os.path.exists(ignore_file):
+        with open(ignore_file, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(SEEDS_GITIGNORE_TEXT)
+
+
 def capture() -> None:
     """Snapshot current dev Spoolman + locations.json into the seed files."""
+    _refuse_prod()
     _check_spoolman_reachable()
-    _log("Capturing dev baseline -> seeds/ ...")
+    _log(f"Capturing dev baseline -> {SEEDS_DIR} ...")
 
-    vendors = _get("/api/v1/vendor")
-    filaments_raw = _get("/api/v1/filament")
-    spools_raw = _get("/api/v1/spool")
+    vendors = _get(LIST_PATHS["vendor"])
+    filaments_raw = _get(LIST_PATHS["filament"])
+    spools_raw = _get(LIST_PATHS["spool"])          # archived spools too
 
     # De-nest FKs so the seed isn't 280 redundant copies of filament+vendor.
     filaments = []
@@ -192,29 +337,47 @@ def capture() -> None:
         s.pop("filament", None)
         spools.append(s)
 
+    archived = sum(1 for s in spools if s.get("archived"))
     seed = {
-        "_note": "Group 19.1 reset-dev baseline. Snapshot of dev Spoolman. "
+        "_note": "Group 19.1 reset-dev baseline. Snapshot of dev Spoolman, archived spools included. "
+                 "It lives only on the PC that made it, in setup-and-rebuild/seeds/local/ (git-ignored "
+                 "since 2026-11-13: it copies the real inventory, and the repo is public). "
                  "Re-capture with `python reset_dev.py --capture` from a known-good dev.",
         "spoolman_url": SPOOLMAN_URL,
-        "counts": {"vendors": len(vendors), "filaments": len(filaments), "spools": len(spools)},
+        "spools_include_archived": True,
+        "counts": {"vendors": len(vendors), "filaments": len(filaments), "spools": len(spools),
+                   "archived_spools": archived},
         "vendors": vendors,
         "filaments": filaments,
         "spools": spools,
     }
-    os.makedirs(SEEDS_DIR, exist_ok=True)
+    _ensure_seeds_folder()
     _atomic_write(SPOOLMAN_SEED, json.dumps(seed, indent=2, ensure_ascii=False))
-    _log(f"  wrote {SPOOLMAN_SEED}  ({len(vendors)} vendors / {len(filaments)} filaments / {len(spools)} spools)")
+    _log(f"  wrote {SPOOLMAN_SEED}  ({len(vendors)} vendors / {len(filaments)} filaments / "
+         f"{len(spools)} spools, {archived} of them archived)")
 
-    # locations.json snapshot (the full test baseline, not the .example stub).
+    # locations.json snapshot (the full test baseline, not the .example stub),
+    # with every printer login left out: a seed is a file that gets copied
+    # around, and a login never belongs in one. It is written the way
+    # locations_db writes the live file (json.dump, indent 4, ASCII), so apart
+    # from the logins it is the live text.
     if os.path.exists(LIVE_LOCATIONS):
         with open(LIVE_LOCATIONS, "r", encoding="utf-8") as fh:
             locs = fh.read()
-        _atomic_write(LOCATIONS_SEED, locs)
         try:
-            n = len(json.loads(locs))
-        except Exception:  # noqa: BLE001
-            n = "?"
-        _log(f"  wrote {LOCATIONS_SEED}  ({n} locations)")
+            rows = json.loads(locs)
+        except ValueError as e:
+            rows = None
+            _log(f"  !! {LIVE_LOCATIONS} doesn't parse ({e}); skipped the locations snapshot, "
+                 "because its printer logins can't be left out of text that doesn't parse")
+        if rows is not None and not isinstance(rows, list):
+            rows = None
+            _log(f"  !! {LIVE_LOCATIONS} isn't a list; skipped the locations snapshot")
+        if rows is not None:
+            seed_rows, stripped = _strip_printer_creds(rows)
+            _atomic_write(LOCATIONS_SEED, json.dumps(seed_rows, indent=4))
+            note = f"; printer logins left out of {', '.join(stripped)}" if stripped else ""
+            _log(f"  wrote {LOCATIONS_SEED}  ({len(seed_rows)} locations{note})")
     else:
         _log(f"  !! {LIVE_LOCATIONS} not found — skipped locations snapshot")
     _log("Capture complete.")
@@ -237,41 +400,73 @@ def _atomic_write(path: str, text: str) -> None:
 # --------------------------------------------------------------------------
 # Restore
 # --------------------------------------------------------------------------
+def _require_seeds(do_locations: bool, do_spoolman: bool) -> None:
+    """Stop, before anything is read or written, when a seed file this run needs is missing. The
+    seeds are local since 2026-11-13, so a fresh clone (or a cleaned PC) has none."""
+    needed = ([LOCATIONS_SEED] if do_locations else []) + ([SPOOLMAN_SEED] if do_spoolman else [])
+    missing = [p for p in needed if not os.path.exists(p)]
+    if not missing:
+        return
+    _log("!! The reset-dev snapshot is missing on this PC:")
+    for p in missing:
+        _log(f"     {p}")
+    _log("   It lives only on the PC that made it (git-ignored since 2026-11-13: it copies the real")
+    _log("   inventory, and the repo is public), so a fresh clone has none. Make it from a known-good")
+    _log("   dev with")
+    _log("     python setup-and-rebuild/reset_dev.py --capture")
+    _log("   (or refresh_dev_from_prod.py's `seeds --apply` right after a refresh).")
+    _log("   See setup-and-rebuild/seeds/README.md. Nothing was read or changed.")
+    sys.exit(2)
+
+
 def _load_seed() -> dict:
     if not os.path.exists(SPOOLMAN_SEED):
-        _log(f"!! No seed at {SPOOLMAN_SEED}. Run `python reset_dev.py --capture` first.")
-        sys.exit(2)
+        _require_seeds(False, True)
     with open(SPOOLMAN_SEED, "r", encoding="utf-8") as fh:
         return json.load(fh)
 
 
 def restore_locations(dry_run: bool) -> None:
+    """Put the seed's rows back, keeping the live file's printer logins by LocationID."""
     if not os.path.exists(LOCATIONS_SEED):
         _log(f"  !! No locations seed at {LOCATIONS_SEED} — skipping locations restore.")
         return
     with open(LOCATIONS_SEED, "r", encoding="utf-8") as fh:
         seed_text = fh.read()
-    current = ""
+    try:
+        seed_rows = json.loads(seed_text)
+    except ValueError as e:
+        _log(f"  !! The locations seed doesn't parse ({e}) — skipping locations restore.")
+        return
+    if not isinstance(seed_rows, list):
+        _log("  !! The locations seed isn't a list — skipping locations restore.")
+        return
+    current = None
     if os.path.exists(LIVE_LOCATIONS):
         with open(LIVE_LOCATIONS, "r", encoding="utf-8") as fh:
-            current = fh.read()
-    # Compare parsed JSON so whitespace-only diffs don't trigger a rewrite.
-    try:
-        drifted = json.loads(seed_text) != json.loads(current or "null")
-    except Exception:  # noqa: BLE001
-        drifted = True
-    if not drifted:
+            current_text = fh.read()
+        try:
+            current = json.loads(current_text)
+        except ValueError:
+            _log("  locations.json doesn't parse, so no printer login can be kept from it.")
+    # Compare parsed JSON so whitespace-only diffs don't trigger a rewrite. A login
+    # alone is no drift: the restored rows carry the live logins.
+    restored, kept, lost = _with_live_printer_creds(seed_rows, current)
+    if restored == current:
         _log("  locations.json: already matches seed (no change).")
         return
+    note = f" (keeping the printer logins of {', '.join(kept)})" if kept else ""
+    if lost:
+        note += f"; the seed has no row for {', '.join(lost)}, so their logins go with them"
     if dry_run:
-        _log("  locations.json: WOULD restore from seed.")
+        _log(f"  locations.json: WOULD restore from seed{note}.")
         return
-    _atomic_write(LIVE_LOCATIONS, seed_text)
-    _log("  locations.json: restored from seed.")
+    _atomic_write(LIVE_LOCATIONS, json.dumps(restored, indent=4))
+    _log(f"  locations.json: restored from seed{note}.")
 
 
 def _patch(entity: str, eid, payload: dict) -> tuple[bool, str]:
-    url = f"{SPOOLMAN_URL}/api/v1/{entity}/{eid}"
+    url = _url(f"/api/v1/{entity}/{eid}")
     try:
         r = requests.patch(url, json=payload, timeout=TIMEOUT)
         if r.ok:
@@ -282,7 +477,7 @@ def _patch(entity: str, eid, payload: dict) -> tuple[bool, str]:
 
 
 def _delete(entity: str, eid) -> tuple[bool, str]:
-    url = f"{SPOOLMAN_URL}/api/v1/{entity}/{eid}"
+    url = _url(f"/api/v1/{entity}/{eid}")
     try:
         r = requests.delete(url, timeout=TIMEOUT)
         if r.ok:
@@ -319,10 +514,15 @@ def _drifted_payload(entity: str, seed_rec: dict, live_rec: dict) -> dict:
 
 
 def reconcile_entity(entity: str, seed_records: list, dry_run: bool, prune: bool,
-                     summary: dict) -> None:
+                     summary: dict, seed_has_archived: bool = False) -> None:
+    """PATCH drifted records back to the seed; list (and with --prune delete) records the seed
+    lacks. Spools are read archived ones included (LIST_PATHS), so an archive or un-archive a
+    sweep made is drift on `archived`, restored like any other field. `seed_has_archived` says the
+    seed was captured that way too: a seed from before (False) can't tell a real archived spool it
+    never captured from a sweep's, so an archived spool it lacks is left alone, never pruned."""
     plural = ENTITY_PLURAL[entity]
     seed_by_id = {r["id"]: r for r in seed_records if r.get("id") is not None}
-    live = _get(f"/api/v1/{entity}")
+    live = _get(LIST_PATHS[entity])
     live_by_id = {r["id"]: r for r in live}
 
     s = summary[plural]
@@ -345,8 +545,12 @@ def reconcile_entity(entity: str, seed_records: list, dry_run: bool, prune: bool
         else:
             s["errors"].append(f"{entity} {eid}: {err}")
 
-    # 2. Extra entities (present in dev, absent from seed) = sweep-created.
+    # 2. Extra entities (present in dev, absent from seed) = sweep-created. With a seed that
+    #    holds no archived spools, an archived spool it lacks may be a real one it never took.
     extras = [eid for eid in live_by_id if eid not in seed_by_id]
+    if entity == "spool" and not seed_has_archived:
+        s["archived_not_in_seed"] = [eid for eid in extras if live_by_id[eid].get("archived")]
+        extras = [eid for eid in extras if not live_by_id[eid].get("archived")]
     s["extra"] = list(extras)
     if prune and extras:
         for eid in extras:
@@ -362,8 +566,10 @@ def reconcile_entity(entity: str, seed_records: list, dry_run: bool, prune: bool
 
 def restore(dry_run: bool, prune: bool, do_locations: bool, do_spoolman: bool,
             do_restart: bool) -> int:
+    _refuse_prod()
     _log(f"reset-dev {'(DRY RUN) ' if dry_run else ''}-> baseline restore")
     _log("")
+    _require_seeds(do_locations, do_spoolman)
 
     if do_locations:
         _log("locations.json:")
@@ -371,7 +577,7 @@ def restore(dry_run: bool, prune: bool, do_locations: bool, do_spoolman: bool,
         _log("")
 
     summary = {
-        plural: {"drifted": 0, "restored": 0, "missing": [], "extra": [],
+        plural: {"drifted": 0, "restored": 0, "missing": [], "extra": [], "archived_not_in_seed": [],
                  "pruned": 0, "pruned_would": 0, "fields": {}, "errors": []}
         for plural in ENTITY_PLURAL.values()
     }
@@ -379,12 +585,13 @@ def restore(dry_run: bool, prune: bool, do_locations: bool, do_spoolman: bool,
     if do_spoolman:
         _check_spoolman_reachable()
         seed = _load_seed()
+        seed_has_archived = seed.get("spools_include_archived") is True
         _log("Spoolman reconcile (PATCH drifted fields back to seed):")
         # Restore FK-parents first; prune happens per-entity but we delete in
         # reverse-FK order so spools are gone before their filaments.
         for entity in (PRUNE_ORDER if prune else RESTORE_ORDER):
             reconcile_entity(entity, seed.get(ENTITY_PLURAL[entity], []),
-                             dry_run, prune, summary)
+                             dry_run, prune, summary, seed_has_archived=seed_has_archived)
         _print_summary(summary, dry_run, prune)
         _log("")
 
@@ -420,6 +627,9 @@ def _print_summary(summary: dict, dry_run: bool, prune: bool) -> None:
                 bits.append(f"{len(s['extra'])} sweep-created ({'would prune' if dry_run else 'pruned'} {pv})")
             else:
                 bits.append(f"{len(s['extra'])} sweep-created (left; use --prune)")
+        if s.get("archived_not_in_seed"):
+            bits.append(f"{len(s['archived_not_in_seed'])} archived not in the seed (left: the seed "
+                        f"was taken without archived spools; re-capture)")
         if s["errors"]:
             bits.append(f"{len(s['errors'])} ERROR(s)")
         _log(f"  {plural:9s}: " + ", ".join(bits))
@@ -433,13 +643,15 @@ def _print_summary(summary: dict, dry_run: bool, prune: bool) -> None:
 # --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
-def main() -> int:
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         prog="reset_dev.py",
-        description="Restore the shared dev backend to a clean seed baseline (Group 19.1).",
+        description="Restore the shared dev backend to a clean seed baseline (Group 19.1). The seed "
+                    "lives only on the PC that made it, in setup-and-rebuild/seeds/local/ "
+                    "(setup-and-rebuild/seeds/README.md).",
     )
     ap.add_argument("--capture", action="store_true",
-                    help="Snapshot CURRENT dev Spoolman + locations.json into seeds/.")
+                    help="Snapshot CURRENT dev Spoolman + locations.json into seeds/local/.")
     ap.add_argument("--prune", action="store_true",
                     help="Also DELETE entities created during a sweep (absent from "
                          "seed). DESTRUCTIVE + agent-invoked only — Derek never calls "
@@ -452,7 +664,8 @@ def main() -> int:
                     help="Skip the locations.json restore.")
     ap.add_argument("--no-spoolman", action="store_true",
                     help="Skip the Spoolman reconcile.")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
+    _refuse_prod()          # before any request or write, whatever the mode
 
     if args.capture:
         if args.dry_run:

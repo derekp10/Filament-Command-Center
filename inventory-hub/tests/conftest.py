@@ -19,6 +19,7 @@ import sys
 import time
 import typing
 import uuid
+from urllib.parse import urlsplit
 
 import pytest
 import requests
@@ -44,18 +45,212 @@ for _utf8_stream in (sys.stdout, sys.stderr):
         pass
 
 # ---------------------------------------------------------------------------
-# The host never holds the container's hub.log (Group 45, review test-infra-1)
+# Host test runs get their own data folder (Group 45.9)
 # ---------------------------------------------------------------------------
-# state.py opens RotatingFileHandler('hub.log') relative to the working
-# directory at import. From inventory-hub/ (the canonical run) that is the dev
-# container's own bind-mounted log, so pytest held it open for the whole run.
-# Windows can't rename a file another process holds, so the container's 1 MB
-# rollover failed and Python's handler DROPPED the container's records until the
-# host happened to rotate; dev's hub.log.1 and .5 with no .2-.4 between them are
-# what those failed rollovers leave. It also mixed host unit-test lines ("DATA
-# LOSS in remove_choice('Doomed')") into the container's log, and starved the
-# request log's timeout count. Host log lines still reach stdout. Imported here,
-# before any test module imports state.
+# locations_db fixes its data folder once, when it is first imported: 'data',
+# relative to the working directory. app.py runs the startup migrations and the
+# .bak prune against it at import (app.py:153-157), and about 140 test files
+# import app, so collection alone opened dev's LIVE inventory-hub/data/
+# locations.json from the host. It would have rewritten that file the day a
+# branch carried a migration the container hadn't run, and deleted its oldest
+# backup the day there were six. The four JSON stores and attr_migration keep
+# their files in the same folder (by their module's own path), so the import
+# also read dev's pending print reviews into this process's Activity Log, and a
+# store write a test forgot to patch landed in dev's live files. Run from the
+# repo root, the import read a stray repo-root data/ instead.
+#
+# FCC_DATA_DIR hands the backend a folder made for this run, outside
+# inventory-hub/ (the container never sees it): a copy of dev's locations.json
+# with every row's printer_creds dropped (no printer login sits in a temp
+# folder, and a test that forgets to patch a printer probe can't reach a real
+# printer), and no store files (nothing is re-surfaced). Dev's container and
+# prod never set the variable.
+#
+# Set HERE, above `import state` and every other backend import. pytest imports
+# this file as an initial conftest, before pytest_configure and before
+# collection imports any test module, however it starts: from inventory-hub/ or
+# the repo root; a directory, a file or a node id; --offline, --run-integration,
+# --reset-dev, --co, --fixtures. Only a `-p` plugin or PYTEST_PLUGINS runs
+# sooner (refused below when it imported the backend), and --noconftest skips
+# this file altogether.
+import atexit  # noqa: E402
+import json  # noqa: E402
+import shutil  # noqa: E402
+import tempfile  # noqa: E402
+
+_HUB_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+# Dev's live file. A test that reads it on purpose reads it by this path; no
+# test writes it (the container and reset_dev.py do).
+DEV_LOCATIONS_FILE = os.path.join(_HUB_DIR, "data", "locations.json")
+# The backend modules that read FCC_DATA_DIR when they are imported (app, logic,
+# spoolman_api and every route module import locations_db). A module that starts
+# reading it goes here too.
+_READS_FCC_DATA_DIR = ("locations_db", "cancel_fetch_store", "cancel_review_store",
+                       "print_deduct_ledger", "print_tracker_store", "attr_migration")
+_DATA_DIR_ROOT = os.path.join(tempfile.gettempdir(), "fcc-pytest-data")
+_DATA_DIR_MAX_AGE_S = 24 * 3600
+# What a dev locations.json that won't parse is copied as: JSON that won't parse
+# either, so host code reads the copy as corrupt, as it would dev's file, and
+# holding none of dev's bytes, so no login rides along.
+_UNPARSEABLE_COPY = (b'["tests/conftest.py: dev data/locations.json did not parse, '
+                     b'so neither does this copy"\n')
+
+
+def path_is_inside(path, folder):
+    """True when `path` is `folder` or anything under it. Drive-safe: never
+    os.path.commonpath, which raises ValueError for paths on two Windows drives
+    (Derek's TEMP is on C:, the repo on D:)."""
+    p = os.path.normcase(os.path.realpath(path))
+    f = os.path.normcase(os.path.realpath(folder))
+    return p == f or p.startswith(f.rstrip("\\/") + os.sep)
+
+
+def _prune_stale_data_dirs(root=_DATA_DIR_ROOT, max_age=_DATA_DIR_MAX_AGE_S, now=None):
+    """Delete the run-* folders that killed runs left behind (their atexit never
+    ran). By age alone: no run lasts a day, so a run going on beside this one
+    (another chat's) is never touched. There is no process check, because on
+    Windows os.kill(pid, 0) ends that process."""
+    now = time.time() if now is None else now
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return
+    for name in names:
+        path = os.path.join(root, name)
+        try:
+            if name.startswith("run-") and now - os.path.getmtime(path) > max_age:
+                shutil.rmtree(path, ignore_errors=True)
+        except OSError:
+            pass
+
+
+def _read_dev_locations(path=DEV_LOCATIONS_FILE, tries=5, pause_s=0.2):
+    """Dev's live locations.json, parsed: ("ok", value), ("missing", None) when
+    there is none (a fresh checkout, a worktree), or ("unparseable", None). A
+    read that fails or doesn't parse is tried again (the container may be saving
+    it). A file that can't be read at all stops the run rather than start it on
+    an empty copy."""
+    err = None
+    for attempt in range(tries):
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+        except FileNotFoundError:
+            return "missing", None
+        except OSError as e:  # held by the container's os.replace this instant
+            err = e
+        else:
+            err = None
+            try:
+                return "ok", json.loads(data.decode("utf-8"))  # as locations_db reads it
+            except ValueError:  # a UnicodeDecodeError is one too
+                pass
+        if attempt + 1 < tries:
+            time.sleep(pause_s)
+    if err is not None:
+        raise RuntimeError(f"Couldn't read {path} to copy it for this test run: {err}")
+    return "unparseable", None
+
+
+def seed_session_locations(data_dir, source=DEV_LOCATIONS_FILE):
+    """Write the run's locations.json from dev's live file with every row's
+    printer_creds dropped (locations_db.PRINTER_CREDS_KEY, named here because
+    locations_db can't be imported yet). Returns what it wrote: "copied";
+    "missing", `[]`, which reads as no locations, as a missing file did;
+    "unparseable", JSON that won't parse either; "not a list", `[]`, which is
+    how locations_db reads a root that isn't a list. Never left missing: then
+    locations_db would MOVE a locations.json, or convert and rename a
+    '3D Print Supplies - Locations.csv', from the folder above into this one,
+    which atexit deletes."""
+    kind, value = _read_dev_locations(source)
+    if kind == "ok" and isinstance(value, list):
+        rows = [{k: v for k, v in r.items() if k != "printer_creds"} if isinstance(r, dict) else r
+                for r in value]
+        body, kind = json.dumps(rows, indent=4).encode("utf-8"), "copied"
+    elif kind == "ok":
+        body, kind = b"[]\n", "not a list"
+    elif kind == "missing":
+        body = b"[]\n"
+    else:
+        body = _UNPARSEABLE_COPY
+    path = os.path.join(data_dir, "locations.json")
+    with open(path + ".tmp", "wb") as f:
+        f.write(body)
+    os.replace(path + ".tmp", path)
+    return kind
+
+
+def _make_session_data_dir():
+    if path_is_inside(_DATA_DIR_ROOT, _HUB_DIR):
+        raise RuntimeError(
+            f"The temp folder ({tempfile.gettempdir()}) is inside {_HUB_DIR}, the folder dev's "
+            "container mounts, so this run's copy of the locations data would sit where the "
+            "container sees it. Point TEMP (or TMPDIR) somewhere outside inventory-hub/.")
+    os.makedirs(_DATA_DIR_ROOT, exist_ok=True)
+    _prune_stale_data_dirs()
+    path = tempfile.mkdtemp(prefix=f"run-{os.getpid()}-", dir=_DATA_DIR_ROOT)
+    # atexit, not pytest_unconfigure: it also runs after a usage error, --help,
+    # a collection error, pytest.exit and Ctrl+C. A hard kill skips it, and a
+    # later run's prune takes the folder.
+    atexit.register(shutil.rmtree, path, ignore_errors=True)
+    seed_session_locations(path)
+    return path
+
+
+def env_without_test_data_dir(**extra):
+    """os.environ for a child process that must find its data folder its own
+    way: reset_dev.py writes dev's real locations.json by absolute path and must
+    never be handed this run's copy."""
+    env = {k: v for k, v in os.environ.items() if k != "FCC_DATA_DIR"}
+    env.update(extra)
+    return env
+
+
+_inherited = os.environ.get("FCC_DATA_DIR", "")
+if (os.path.basename(_inherited).startswith(f"run-{os.getpid()}-")
+        and os.path.isdir(_inherited)):
+    # This file imported a second time in one process: the backend already
+    # holds this folder, so keep it.
+    FCC_TEST_DATA_DIR = _inherited
+    SESSION_DATA_DIR_STARTED_WITH = None
+else:
+    _early = [m for m in _READS_FCC_DATA_DIR if m in sys.modules]
+    if _early:
+        if "app" in sys.modules:
+            # app's import has already run the startup migrations and the backup
+            # prune: the harm may be done by now, not merely ahead.
+            _harm = ("and so was app, whose import runs the startup migrations and the backup "
+                     "prune, so this run may already have migrated")
+        else:
+            _harm = "so this run would read and migrate"
+        raise RuntimeError(
+            f"{', '.join(_early)} was imported before tests/conftest.py could set "
+            f"FCC_DATA_DIR (a -p plugin, or PYTEST_PLUGINS?), {_harm} whatever "
+            "data/locations.json the working directory holds (from inventory-hub/: dev's "
+            "live file). Import the backend inside the plugin's hooks, not at its top.")
+    # Always this run's own folder: an FCC_DATA_DIR left in the shell (one naming
+    # dev's real data/, say) never decides where a test run writes. A child pytest
+    # (another PID) makes its own.
+    FCC_TEST_DATA_DIR = _make_session_data_dir()
+    os.environ["FCC_DATA_DIR"] = FCC_TEST_DATA_DIR
+    # What the folder held as the run began: the copy alone, no store file.
+    SESSION_DATA_DIR_STARTED_WITH = sorted(os.listdir(FCC_TEST_DATA_DIR))
+
+# ---------------------------------------------------------------------------
+# The host never writes the container's hub.log (Group 45, review test-infra-1)
+# ---------------------------------------------------------------------------
+# state.py's RotatingFileHandler('hub.log') is relative to the working
+# directory, which from inventory-hub/ (the canonical run) is the dev
+# container's own bind-mounted log. Before Group 45.9 it opened the file at
+# import, so pytest held it open for the whole run: Windows can't rename a file
+# another process holds, so the container's 1 MB rollover failed and Python's
+# handler DROPPED the container's records until the host happened to rotate
+# (dev's hub.log.1 and .5 with no .2-.4 between them are what those failed
+# rollovers leave). Since 45.9 it opens nothing until its first log line
+# (delay=True). It is still detached here, before any test module imports
+# state, so host unit-test lines ("DATA LOSS in remove_choice('Doomed')") never
+# land in the container's log or starve the request log's timeout count. Host
+# log lines still reach stdout.
 import state as _fcc_state  # noqa: E402
 
 if _fcc_state.f_handler in _fcc_state.logger.handlers:
@@ -65,7 +260,21 @@ _fcc_state.f_handler.close()
 
 DEFAULT_BASE_URL = os.environ.get("INVENTORY_HUB_URL", "http://localhost:8000")
 DEFAULT_DEV_SPOOLMAN = os.environ.get("DEV_SPOOLMAN_URL", "http://192.168.1.29:7913")
+# Prod Spoolman's port. A DEV_SPOOLMAN_URL on it is refused before collection
+# (pytest_configure): the suite writes to the Spoolman that variable names (the
+# throwaway records, the integration tests, --reset-dev's reconcile), and since
+# dev's 2026-11-13 refresh from prod the two hold the same ids.
+PROD_SPOOLMAN_PORT = 7912
 BASELINE_VIEWPORT = {"width": 1600, "height": 1300}
+
+
+def names_prod_spoolman(url) -> bool:
+    """True when `url` is on prod Spoolman's port, whatever the host or its
+    spelling (a zero-padded port, a host name for the NAS)."""
+    try:
+        return urlsplit(str(url).strip()).port == PROD_SPOOLMAN_PORT
+    except ValueError:  # a port that isn't a number: requests can't reach it either
+        return False
 
 # Prefix used by every record the integration suite creates. The orphan-cleanup
 # fixture relies on this exact prefix to identify records left behind by
@@ -94,9 +303,11 @@ def pytest_addoption(parser):
     )
     # Group 19.1 — opt-in dev reset before a sweep. OFF by default so a
     # single-test run never triggers a docker restart / Spoolman reconcile.
-    # For a FULL sweep, `pytest --reset-dev` restores the committed seed
-    # baseline first so cross-test contamination can't accumulate. See
-    # setup-and-rebuild/reset_dev.py + docs/agent_docs/tasks/19-*.md.
+    # For a FULL sweep, `pytest --reset-dev` first restores dev to the local
+    # reset-dev snapshot (setup-and-rebuild/seeds/local/, made by
+    # reset_dev.py --capture; setup-and-rebuild/seeds/README.md) so cross-test
+    # contamination can't accumulate. See setup-and-rebuild/reset_dev.py +
+    # docs/agent_docs/tasks/19-*.md.
     # 2026-08-03 — a genuinely hermetic run. The plain `pytest` invocation was
     # documented as "the offline sweep" but never was one: --run-integration
     # gates only the dev-SPOOLMAN tests, while ~55 E2E files reach the local FCC
@@ -115,8 +326,10 @@ def pytest_addoption(parser):
         "--reset-dev",
         action="store_true",
         default=False,
-        help="Restore dev to the committed seed baseline (NON-destructive) "
-             "before the session. Use for full sweeps. Equivalent env: "
+        help="Restore dev to the local reset-dev snapshot "
+             "(setup-and-rebuild/seeds/local/, made by reset_dev.py --capture; "
+             "setup-and-rebuild/seeds/README.md), NON-destructive, before the "
+             "session. Use for full sweeps. Equivalent env: "
              "RESET_DEV_BEFORE_SWEEP=1.",
     )
     parser.addoption(
@@ -295,8 +508,9 @@ def _read_from(path, offset):
 
 def count_spoolman_timeouts(offset, path=HUB_LOG, host=DEV_SPOOLMAN_HOST):
     """Read timeouts to dev Spoolman that FCC logged since byte `offset` of
-    hub.log. Only lines naming the dev Spoolman host count: host-side unit tests
-    can write a hub.log too (state.py opens a relative path), with mocked hosts.
+    hub.log. Only lines naming the dev Spoolman host count: a host process can
+    write a hub.log too (state.py's handler logs to 'hub.log' in its working
+    directory; conftest detaches it only in this process), with mocked hosts.
     A file now smaller than `offset` rotated meanwhile: the rest of the old file
     is `<path>.1`, and the new one is read from its start."""
     try:
@@ -370,7 +584,42 @@ def _short_url(url):
 EXPECT_TIMEOUT_MS = 10_000
 
 
+def _reset_dev_wanted(config):
+    """(want, prune): whether --reset-dev / --reset-dev-prune, or their env
+    forms RESET_DEV_BEFORE_SWEEP=1 / RESET_DEV_PRUNE=1, asked for a reset. One
+    reading for the reset fixture and the --offline refusal."""
+    def _flag(name):
+        try:
+            return bool(config.getoption(name))
+        except (ValueError, AttributeError):  # option not registered (sub-config)
+            return False
+
+    truthy = ("1", "true", "yes")
+    prune = _flag("--reset-dev-prune") or os.environ.get("RESET_DEV_PRUNE", "").lower() in truthy
+    want = (prune or _flag("--reset-dev")
+            or os.environ.get("RESET_DEV_BEFORE_SWEEP", "").lower() in truthy)
+    return want, prune
+
+
 def pytest_configure(config):
+    # Group 45 (round 3): never against prod Spoolman. The tests that reach
+    # Spoolman, and the reset_dev.py run --reset-dev starts, use DEV_SPOOLMAN_URL.
+    if names_prod_spoolman(DEFAULT_DEV_SPOOLMAN):
+        raise pytest.UsageError(
+            f"DEV_SPOOLMAN_URL ({DEFAULT_DEV_SPOOLMAN}) is on port {PROD_SPOOLMAN_PORT}, prod "
+            "Spoolman's. The tests write to the Spoolman it names (throwaway records, the "
+            "integration tests, --reset-dev's reconcile), so they never run against prod. Point "
+            "it at dev Spoolman (http://192.168.1.29:7913) or unset it.")
+    # Group 45.9: --offline promises that nothing touches dev, and a reset
+    # rewrites dev's locations.json, reconciles dev's Spoolman and restarts the
+    # container (_reset_dev_baseline runs at the first test whatever --offline
+    # says). Refused here, before collection, so neither runs.
+    if _offline_mode(config) and _reset_dev_wanted(config)[0]:
+        raise pytest.UsageError(
+            "--offline (or FCC_OFFLINE=1) can't be combined with --reset-dev / "
+            "--reset-dev-prune (or RESET_DEV_BEFORE_SWEEP=1 / RESET_DEV_PRUNE=1): --offline "
+            "promises that nothing touches dev, and a reset rewrites dev's locations.json "
+            "and Spoolman and restarts its container. Drop one of them.")
     try:
         from playwright.sync_api import expect as _expect
     except ImportError:
@@ -460,12 +709,20 @@ def page(page, request):
     flight when the test fails, plus where hub.log stood when the test began.
     Listeners only append to lists, so a passing test pays nothing visible.
 
-    Teardown: every route the test put on comes off without waiting for a
-    handler still running, as Playwright advises. A route handler still in
-    route.fetch() when its test ended (fixed_title_counts' heartbeat) raised
-    TargetClosedError at the NEXT test's setup: the 57.3 sweep's ERROR at
-    setup of an unrelated test. Reproduced 3 of 3 with a slow server, and 0
-    of 3 with this."""
+    Teardown closes the page, then takes every route the test put on off
+    without waiting for a handler still running, as Playwright advises.
+    - Closed first (Group 45, round 3): un-routed while still open, the page's
+      2 s buffer poll or a buffer save could reach dev's real server before
+      pytest-playwright closed it. From the close on, a request a route would
+      take is held, never sent. A page the test closed itself is fine. A run
+      that asks pytest-playwright for screenshots (--screenshot) keeps the old
+      order, since they are taken from the open page as its context closes.
+    - Routes off, errors ignored: a route handler still in route.fetch() when
+      its test ended (fixed_title_counts' heartbeat) raised TargetClosedError
+      at the NEXT test's setup: the 57.3 sweep's ERROR at setup of an
+      unrelated test. Reproduced 3 of 3 with a slow server, and 0 of 3 with
+      this. On a closed page unroute_all marks the handlers before its update
+      of the page fails, so the context's close still raises nothing."""
     net = {"slow": [], "pending": {}}
 
     def _started(req):
@@ -485,10 +742,15 @@ def page(page, request):
     request.node._fcc_page = page
     request.node._fcc_hub_offset = hub_log_size()
     yield page
+    if request.config.getoption("--screenshot", "off") == "off":
+        try:
+            page.close()
+        except Exception:
+            pass    # the browser went away; a page already closed raises nothing
     try:
         page.unroute_all(behavior="ignoreErrors")
     except Exception:
-        pass    # the test closed its page itself
+        pass    # a closed page: its handlers were marked before this failed
 
 
 # ---------------------------------------------------------------------------
@@ -850,13 +1112,14 @@ def seed_via_ui(api_base_url: str):
 #   - teardown always PUTs the baseline back, never an observed snapshot.
 #
 # Why a baseline and not a test-only box: the tests need a single-slot box that
-# already exists in dev AND the reset-dev seed (a new row would change every
+# already exists in dev AND the reset-dev snapshot (a new row would change every
 # location list and visual baseline that renders locations). The PolyMaker boxes
-# fit, and their seed state is unbound, so the baseline is simply "no bindings".
+# fit, and they are unbound in the snapshot, so the baseline is simply "no bindings".
 #
-# Keep this in step with setup-and-rebuild/seeds/locations-seed.json so
-# `pytest --reset-dev` restores exactly this state (pinned by
-# tests/test_box_binding_loans.py). Borrowing a box that isn't listed fails.
+# Keep this in step with the local reset-dev snapshot's
+# setup-and-rebuild/seeds/local/locations-seed.json so `pytest --reset-dev`
+# restores exactly this state (pinned by tests/test_box_binding_loans.py on a PC
+# that has the snapshot). Borrowing a box that isn't listed fails.
 DEV_BOX_BINDING_BASELINES: typing.Dict[str, typing.Dict[str, str]] = {
     "PM-DB-1": {},
     "PM-DB-2": {},
@@ -931,9 +1194,9 @@ class BoxBindingLoans:
         if box not in self.baselines:
             pytest.fail(
                 f"borrow_box_bindings: {box} has no fixed baseline. Add it to "
-                f"conftest.DEV_BOX_BINDING_BASELINES (matching "
-                f"setup-and-rebuild/seeds/locations-seed.json) before a test may "
-                f"borrow it.",
+                f"conftest.DEV_BOX_BINDING_BASELINES (matching the local reset-dev "
+                f"snapshot, setup-and-rebuild/seeds/local/locations-seed.json) before a "
+                f"test may borrow it.",
                 pytrace=False,
             )
         baseline = _normalized_slot_targets(self.baselines[box])
@@ -1009,8 +1272,11 @@ def borrow_box_bindings(api_base_url: str):
 # ---------------------------------------------------------------------------
 
 # The Quick-Swap overlay tests' slot (Group 45.5). TST-MDB-1 is a dev TEST box
-# (6 slots, no bindings at its baseline) whose slot 1 holds a virtual dev spool
-# (#123 as of 2026-10-13). The fixture used to take the first loaded slot in ANY
+# (6 slots, no bindings at its baseline). Its slot 1 holds #123, dev's copy of
+# one of Derek's real spools: since dev's 2026-11-13 refresh its Spoolman is a
+# copy of prod's, so no dev spool is made up any more. The refresh's fixtures
+# phase put it there, and `setup-and-rebuild/refresh_dev_from_prod.py fixtures
+# --apply` puts it back. The fixture used to take the first loaded slot in ANY
 # dryer box, which on dev meant Derek's real boxes (CR-MDB-1, then LR-MDB-1),
 # and it put back whatever binding it had found there.
 QUICKSWAP_TEST_BOX = "TST-MDB-1"
@@ -1046,9 +1312,11 @@ def bound_loaded_slot(api_base_url, borrow_box_bindings):
     spool_id = next((it.get("id") for it in contents
                      if str(it.get("slot", "")).replace('"', '').strip() == slot), None)
     if spool_id is None:
-        pytest.fail(f"bound_loaded_slot: {box} slot {slot} holds no spool. Put a virtual dev "
-                    f"spool there (it held #123); the Quick-Swap overlays only open on a loaded "
-                    f"slot.", pytrace=False)
+        pytest.fail(f"bound_loaded_slot: {box} slot {slot} holds no spool, and the Quick-Swap "
+                    f"overlays only open on a loaded slot. It held #123, dev's copy of a real "
+                    f"spool, which `setup-and-rebuild/refresh_dev_from_prod.py fixtures --apply` "
+                    f"puts back (run it without --apply first to see what it would do).",
+                    pytrace=False)
     borrow_box_bindings(box, {slot: toolhead})
     yield {"box": box, "slot": slot, "toolhead": toolhead, "spool_id": spool_id}
 
@@ -1302,6 +1570,26 @@ def scan(api_base_url: str):
 # Group 19.1 — opt-in dev-baseline reset before a sweep
 # ---------------------------------------------------------------------------
 
+# The local reset-dev snapshot: the two files reset_dev.py restores dev from (its
+# LOCATIONS_SEED and SPOOLMAN_SEED; tests/test_host_data_dir_45_9.py pins them
+# equal). Git-ignored since 2026-11-13, because they copy the real inventory and
+# the repo is public, so a clone has none until `reset_dev.py --capture` makes
+# them (setup-and-rebuild/seeds/README.md).
+_SNAPSHOT_DIR = os.path.abspath(os.path.join(_HUB_DIR, "..", "setup-and-rebuild", "seeds", "local"))
+RESET_DEV_SNAPSHOT = (os.path.join(_SNAPSHOT_DIR, "locations-seed.json"),
+                      os.path.join(_SNAPSHOT_DIR, "spoolman-dev-seed.json"))
+
+
+def _reset_dev_said(out, err, lines: int = 40) -> str:
+    """The end of what reset_dev.py printed, for a pytest.exit message: pytest
+    shows no captured output when a run exits from a fixture."""
+    text = "\n".join((t.decode("utf-8", "replace") if isinstance(t, bytes) else t).rstrip()
+                     for t in (out, err) if t).strip()
+    if not text:
+        return " reset_dev.py printed nothing."
+    return "\nreset_dev.py said:\n" + "\n".join("  " + ln for ln in text.splitlines()[-lines:])
+
+
 def _wait_for_server(base_url: str, timeout: int = 60) -> None:
     """Poll until the FCC app answers (reset_dev.py docker-restarts it)."""
     deadline = time.time() + timeout
@@ -1324,7 +1612,9 @@ def _wait_for_server(base_url: str, timeout: int = 60) -> None:
 
 @pytest.fixture(scope="session", autouse=True)
 def _reset_dev_baseline(request):
-    """Restore dev to the committed seed baseline before the session — OPT-IN.
+    """Restore dev to the local reset-dev snapshot (setup-and-rebuild/seeds/local/,
+    made by reset_dev.py --capture; setup-and-rebuild/seeds/README.md) before
+    the session — OPT-IN.
 
     No-op unless `--reset-dev` / `--reset-dev-prune` (or RESET_DEV_BEFORE_SWEEP=1
     / RESET_DEV_PRUNE=1) is set, so a normal single-test run never triggers a
@@ -1332,21 +1622,17 @@ def _reset_dev_baseline(request):
     host `reset_dev.py` (non-destructive restore by default; `--prune` deletes
     sweep-created records too) and waits for the container to come back before
     any test executes. If the reset fails, the session aborts rather than run
-    on a dirty baseline.
+    on a dirty baseline, and the message ends with what reset_dev.py said. A PC
+    with no snapshot (a fresh clone) stops before reset_dev.py starts.
 
     Agent-invoked: Derek doesn't run pytest with these flags himself — Claude
     does, on his behalf, and only opts into `--reset-dev-prune` (destructive)
     with Derek's explicit OK. See setup-and-rebuild/reset_dev.py.
+
+    --offline with a reset is refused before collection (pytest_configure), and
+    so is a DEV_SPOOLMAN_URL on prod's port.
     """
-    prune = (
-        request.config.getoption("--reset-dev-prune")
-        or os.environ.get("RESET_DEV_PRUNE", "").lower() in ("1", "true", "yes")
-    )
-    want = (
-        prune
-        or request.config.getoption("--reset-dev")
-        or os.environ.get("RESET_DEV_BEFORE_SWEEP", "").lower() in ("1", "true", "yes")
-    )
+    want, prune = _reset_dev_wanted(request.config)
     if not want:
         yield
         return
@@ -1357,18 +1643,44 @@ def _reset_dev_baseline(request):
     )
     if not os.path.exists(script):
         pytest.exit(f"reset-dev requested but {script} not found.", returncode=3)
+    missing = [p for p in RESET_DEV_SNAPSHOT if not os.path.exists(p)]
+    if missing:
+        pytest.exit(
+            "reset-dev: the reset-dev snapshot is missing on this PC, so nothing was reset and no "
+            f"test ran. Missing: {', '.join(missing)}. It is kept only on the PC that made it (git-ignored "
+            "since 2026-11-13; setup-and-rebuild/seeds/README.md). Make one from a known-good dev "
+            "with `python setup-and-rebuild/reset_dev.py --capture`, then run again.",
+            returncode=3,
+        )
     cmd = [sys.executable, script] + (["--prune"] if prune else [])
     print(f"\n[reset-dev] restoring dev baseline before session: {' '.join(cmd)}")
     try:
-        subprocess.run(cmd, check=True, timeout=300)
-    except Exception as exc:  # noqa: BLE001
+        # reset_dev.py writes dev's REAL locations.json by absolute path: it is
+        # never handed this run's copy (Group 45.9). Its output is kept for the
+        # message below, and printed after a reset that worked.
+        proc = subprocess.run(cmd, timeout=300, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace",
+                              env=env_without_test_data_dir(PYTHONIOENCODING="utf-8"))
+    except Exception as exc:  # noqa: BLE001  (it didn't start, or ran past the timeout)
         pytest.exit(
-            f"reset-dev failed before sweep ({exc}); aborting so tests don't "
-            f"run on a dirty baseline.",
+            f"reset-dev failed before sweep ({exc}); aborting so tests don't run on a dirty "
+            f"baseline.{_reset_dev_said(getattr(exc, 'stdout', None), getattr(exc, 'stderr', None))}",
             returncode=3,
         )
+    if proc.returncode != 0:
+        pytest.exit(
+            f"reset-dev failed before sweep (reset_dev.py exited {proc.returncode}); aborting so "
+            f"tests don't run on a dirty baseline.{_reset_dev_said(proc.stdout, proc.stderr)}",
+            returncode=3,
+        )
+    sys.stdout.write(proc.stdout or "")
+    sys.stderr.write(proc.stderr or "")
     # reset_dev.py docker-restarts inventory_hub — wait for it to answer again.
     _wait_for_server(DEFAULT_BASE_URL)
+    # This run's copy was taken at conftest import, before the reset (which runs
+    # at the first test, after collection). Take it again from the baseline the
+    # container has just restored, so host code reads what the reset put there.
+    seed_session_locations(FCC_TEST_DATA_DIR)
     yield
 
 

@@ -12,10 +12,90 @@ which was rejected); its default box clears the WEIGH QR and buffer weights; a
 tap opens search; a drag moves + persists it (and does NOT open search); a
 saved position is restored + clamped on-screen; it stays clickable over an open
 modal; and the new '/' + Ctrl/Cmd+K shortcuts open search.
+
+Group 45.10: nothing here writes to dev. Every test owns the page's buffer
+(conftest.own_the_buffer, an empty start, before page.goto), so neither the
+seven spools the two default-placement tests put in the buffer nor a stale
+buffer dev's server holds is saved to dev's shared one (renderBuffer's save, the
+grace path's, and the save after a refresh repaints a card all POST the page's
+buffer). A write tripwire (`dev_writes`, autouse) answers every request the page
+sends to /api/** that isn't a GET in the page and records it, except the
+heartbeat and the spool refresh, which only read (test_text_size_guard.READ_POSTS).
+It closes the page before the routes come off (a live page's 2 s buffer poll,
+un-routed, could still save to dev), then fails the test that wrote. The seven
+ids are made up and the two placement tests quiet the heartbeat and answer the
+spool refresh with nothing new, so no record of dev's repaints their cards. The
+spool window the modal test opens shows a made-up spool too: its reads (the
+silent one each heartbeat makes while it is open) are answered in the page, so
+it never shows a dev copy of one of Derek's real spools (it used to name #255).
+
+The tripwire was proven on 2026-11-13: a copy of this module with the tripwire
+and without own_the_buffer failed the two default-placement tests, naming
+POST /api/state/buffer, and dev's buffer read the same before and after (the
+tripwire answered those saves in the page).
 """
 from __future__ import annotations
 
+import json
+from urllib.parse import parse_qs, urlsplit
+
+import pytest
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page, expect
+
+from conftest import own_the_buffer, quiet_heartbeat
+from test_text_size_guard import READ_POSTS
+
+# Made-up spool ids for the seven buffer cards (dev's own ids name copies of
+# Derek's real spools since its 2026-11-13 refresh from prod).
+SEVEN = [999298, 999297, 999255, 999254, 999253, 999252, 999251]
+# The spool the modal test's spool window shows, made up the same way: what
+# /api/spool_details answers for it (openSpoolDetails' fields).
+MODAL_SPOOL = {
+    "id": 999240, "archived": False, "location": "", "comment": "",
+    "initial_weight": 1000.0, "used_weight": 250.0, "remaining_weight": 750.0, "extra": {},
+    "filament": {"id": 999340, "name": "FAB Test Teal", "material": "PLA", "color_hex": "1E9C8F",
+                 "weight": 1000.0, "vendor": {"id": 999440, "name": "ZZ FAB Test"}, "extra": {}},
+}
+
+
+@pytest.fixture(autouse=True)
+def dev_writes(page: Page):
+    """Every write this page sends to /api/**, answered in the page (it never
+    reaches dev) and recorded as 'METHOD /path'. Registered before the test's
+    own routes, which Playwright asks first, so a write a test answers itself
+    (own_the_buffer's buffer saves) never gets here."""
+    written = []
+
+    def handle(route):
+        req = route.request
+        method = req.method.upper()
+        path = urlsplit(req.url).path
+        if method in ("GET", "HEAD") or (method == "POST" and path in READ_POSTS):
+            route.fallback()
+            return
+        if path == "/api/log_event":
+            # A line for dev's Activity Log, not data: kept out of it, never a red
+            # (a leaked dev audit ending mid-test logs one, _sayAuditEndedUnderPage).
+            route.fulfill(status=200, content_type="application/json", body='{"success": true}')
+            return
+        written.append(f"{method} {path}")
+        route.fulfill(status=200, content_type="application/json", body='{"success": true}')
+
+    page.route("**/api/**", handle)
+    yield written
+    try:
+        page.close()   # first: an un-routed live page can still save its buffer to dev
+    except PlaywrightError:
+        pass
+    assert written == [], f"this test sent writes meant for dev (answered in the page instead): {written}"
+
+
+@pytest.fixture(autouse=True)
+def held(page: Page, dev_writes):
+    """The page's own buffer endpoint, starting empty (after the tripwire, so it
+    answers first). The stored dict: `held['buffer']` is what the page saved."""
+    return own_the_buffer(page, [])
 
 
 def _rects_overlap(a: dict, b: dict) -> bool:
@@ -43,20 +123,32 @@ def _fab_center(page: Page):
 
 # --- default placement clears all live data --------------------------------
 
-def _check_default_clears_data(page: Page, viewport: dict):
+def _check_default_clears_data(page: Page, viewport: dict, held: dict, dev_writes: list):
     # Fresh default position (no saved override).
     page.add_init_script("try { localStorage.removeItem('fcc.fab.pos'); } catch(e){}")
+    # The seven cards stay as injected: no heartbeat repaints them, and the
+    # spool refresh (the only other source) brings nothing new.
+    quiet_heartbeat(page)
+    page.route("**/api/spools/refresh", lambda route: route.fulfill(
+        status=200, content_type="application/json", body="{}"))
     _goto_dashboard(page, viewport)
     # Seed a full buffer + scroll to the bottom so the WORST-case bottom card
     # weight is rendered (the 21.1 collision was with the bottom card).
     page.evaluate(
-        """() => {
-            state.heldSpools = [298,297,255,254,253,252,251].map(id => ({id, display:'#'+id, color:'888888'}));
+        """(ids) => {
+            state.heldSpools = ids.map(id => ({id, display:'#'+id, color:'888888'}));
             renderBuffer();
             const bc = document.querySelector('.buffer-content'); if (bc) bc.scrollTop = bc.scrollHeight;
-        }"""
+        }""",
+        SEVEN,
     )
     page.wait_for_timeout(400)
+    # renderBuffer still saves the seven, into this page's own store (45.10).
+    for _ in range(50):
+        if [s.get("id") for s in held["buffer"]] == SEVEN:
+            break
+        page.wait_for_timeout(100)
+    assert [s.get("id") for s in held["buffer"]] == SEVEN, held["buffer"]
     fab = page.locator("#fcc-fab-search")
     expect(fab).to_be_visible()
     fab_box = fab.bounding_box()
@@ -66,6 +158,7 @@ def _check_default_clears_data(page: Page, viewport: dict):
         f"default FAB {fab_box} overlaps the WEIGH QR {weigh_box} (L36) at {viewport}"
     )
     weights = page.locator("#buffer-zone .fcc-card-metric")
+    assert weights.count() == len(SEVEN), weights.count()
     for i in range(weights.count()):
         wb = weights.nth(i).bounding_box()
         if wb:
@@ -74,14 +167,15 @@ def _check_default_clears_data(page: Page, viewport: dict):
             )
     # navbar search button still present.
     expect(page.get_by_role("button", name="🔍 SEARCH")).to_be_visible()
+    assert dev_writes == [], f"writes meant for dev (answered in the page instead): {dev_writes}"
 
 
-def test_fab_default_clears_data_at_default_viewport(page: Page):
-    _check_default_clears_data(page, {"width": 1600, "height": 1300})
+def test_fab_default_clears_data_at_default_viewport(page: Page, held, dev_writes):
+    _check_default_clears_data(page, {"width": 1600, "height": 1300}, held, dev_writes)
 
 
-def test_fab_default_clears_data_at_short_viewport(page: Page):
-    _check_default_clears_data(page, {"width": 1280, "height": 700})
+def test_fab_default_clears_data_at_short_viewport(page: Page, held, dev_writes):
+    _check_default_clears_data(page, {"width": 1280, "height": 700}, held, dev_writes)
 
 
 # --- tap vs drag ------------------------------------------------------------
@@ -136,15 +230,30 @@ def test_fab_position_restored_and_clamped(page: Page):
 # --- always available -------------------------------------------------------
 
 def test_fab_clickable_over_open_modal(page: Page):
+    sid = str(MODAL_SPOOL["id"])
+    asked = []
+
+    def spool_details(route):
+        # Every read of the window's spool, answered here with the made-up record.
+        asked.append((parse_qs(urlsplit(route.request.url).query).get("id") or [""])[0])
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(MODAL_SPOOL))
+
+    page.route("**/api/spool_details*", spool_details)
     _goto_dashboard(page)
     page.evaluate(
-        """() => {
-            document.getElementById('detail-id').innerText = '255';
+        """(sid) => {
+            document.getElementById('detail-id').innerText = sid;
             document.getElementById('detail-color-name').innerText = 'Test';
             if (modals && modals.spoolModal) modals.spoolModal.show();
-        }"""
+        }""",
+        sid,
     )
     page.wait_for_selector("#spoolModal.show", timeout=4000)
+    # The silent re-read a heartbeat makes while the window is open (inv_details.js's
+    # sync-pulse listener), now rather than at the next tick: the made-up spool paints.
+    page.evaluate("(sid) => openSpoolDetails(sid, true)", sid)
+    expect(page.locator("#detail-color-name")).to_have_text(MODAL_SPOOL["filament"]["name"])
+    assert asked and set(asked) == {sid}, asked
     fab = page.locator("#fcc-fab-search")
     expect(fab).to_be_visible()
     cx, cy = _fab_center(page)

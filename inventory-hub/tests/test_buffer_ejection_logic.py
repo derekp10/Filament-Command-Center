@@ -1,11 +1,40 @@
+import copy
 import pytest
 import sys
 import os
+from contextlib import contextmanager
 from unittest.mock import patch, MagicMock
 
 # Add parent directory to python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import logic
+
+# The rows of dev's locations.json that the ejects below read (the printer map,
+# the box and room rows), fixed here (Group 45.9) instead of read from the run's
+# copy of dev's file, which a refresh from prod can change. DRYER_BOX,
+# MMU_TOOLHEAD and PM-DB-XL-L were never rows in dev's file, so they aren't here.
+_DEV_LIKE_ROWS = [
+    {"LocationID": "LR", "Name": "Living Room", "Type": "Room", "Max Spools": "0", "parent_id": None},
+    {"LocationID": "XL", "Name": "XL", "Type": "Printer", "Max Spools": "0", "parent_id": "LR",
+     "toolheads": [{"location_id": f"XL-{n}", "position": n - 1} for n in range(1, 6)]},
+    *[{"LocationID": f"XL-{n}", "Name": f"XL Tool Head {n}", "Type": "Tool Head", "Max Spools": "1",
+       "parent_id": "XL"} for n in range(1, 6)],
+    {"LocationID": "LR-MDB-1", "Name": "Multi-Dryer Box", "Type": "Dryer Box", "Max Spools": "4",
+     "parent_id": "LR", "extra": {"slot_targets": {"1": "XL-1", "2": "XL-2", "3": "XL-3", "4": "PRINTER:XL"}}},
+    {"LocationID": "LR-MDB-2", "Name": "Dryer E2", "Type": "Dryer Box", "Max Spools": "2",
+     "parent_id": "LR", "extra": {"slot_targets": {"1": "XL-4", "2": "XL-5"}}},
+]
+
+
+@contextmanager
+def _dev_like_rows():
+    """locations.json holds _DEV_LIKE_ROWS. None of these ejects writes it (no
+    single-slot box lets go), and the save stays a mock that says so."""
+    with patch('locations_db.load_locations_list',
+               side_effect=lambda *a, **k: copy.deepcopy(_DEV_LIKE_ROWS)), \
+         patch('locations_db.save_locations_list') as save:
+        yield
+    save.assert_not_called()
 
 def test_get_live_spools_data_retains_ghost_context():
     """Verify get_live_spools_data correctly infers and attaches ghost slot context."""
@@ -59,7 +88,7 @@ def test_smart_eject_restores_home_slot():
         assert data['extra']['physical_source_slot'] == ""
         return True
 
-    with patch('spoolman_api.get_spool', return_value=mock_db):
+    with _dev_like_rows(), patch('spoolman_api.get_spool', return_value=mock_db):
         with patch('spoolman_api.update_spool', side_effect=fake_update):
             with patch('state.add_log_entry'):
                 res = logic.perform_smart_eject(1)
@@ -96,7 +125,7 @@ def test_smart_eject_lands_unslotted_when_home_slot_already_claimed():
         captured["data"] = data
         return True
 
-    with patch("spoolman_api.get_spool", return_value=spool_106):
+    with _dev_like_rows(), patch("spoolman_api.get_spool", return_value=spool_106):
         with patch("spoolman_api.update_spool", side_effect=fake_update):
             with patch("spoolman_api.get_spools_at_location_detailed",
                        return_value=other_at_box):
@@ -136,7 +165,7 @@ def test_smart_eject_keeps_slot_when_only_self_claims_it():
         captured["data"] = data
         return True
 
-    with patch("spoolman_api.get_spool", return_value=spool_77):
+    with _dev_like_rows(), patch("spoolman_api.get_spool", return_value=spool_77):
         with patch("spoolman_api.update_spool", side_effect=fake_update):
             with patch("spoolman_api.get_spools_at_location_detailed",
                        return_value=self_ghost):
@@ -210,8 +239,8 @@ def test_smart_eject_requires_confirm_for_unassigned():
             "physical_source_slot": "5"
         }
     }
-    
-    with patch('spoolman_api.get_spool', return_value=mock_db):
+
+    with _dev_like_rows(), patch('spoolman_api.get_spool', return_value=mock_db):
         res = logic.perform_smart_eject(3)
         assert res == "REQUIRE_CONFIRM"
         

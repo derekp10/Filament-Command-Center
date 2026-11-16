@@ -42,6 +42,9 @@ def _move_ctx(printer_map, loc_list, get_spool, update_spool,
         patch.object(logic.config_loader, "get_api_urls",
                      return_value=("http://spoolman", "http://filabridge")),
         patch.object(logic.locations_db, "load_locations_list", return_value=loc_list),
+        # A single-slot box attach / release saves locations.json: never over the
+        # run's copy (Group 45.9).
+        patch.object(logic.locations_db, "save_locations_list", return_value=True),
         patch.object(logic.spoolman_api, "get_spool", **get_spool),
         patch.object(logic.spoolman_api, "get_spools_at_location",
                      return_value=spools_at_location if spools_at_location is not None else []),
