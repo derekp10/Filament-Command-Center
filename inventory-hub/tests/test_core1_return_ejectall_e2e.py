@@ -33,6 +33,8 @@ from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
+import logic
+
 OK = {"success": True}
 PRINTER_ID = "FCC-TEST-P1"
 PRINTER_NAME = "FCC Test Core"
@@ -98,7 +100,10 @@ class FakeBackend:
         self.buffer: list = []
         self.contents = contents or {}
         self.extra_locations = list(extra_locations)
-        self._identify = identify or (lambda body: {"type": "command", "cmd": "ejectall"})
+        # The real ladder's answer (identify_scan returns a command as resolved): a
+        # stub that answered 'ejectall' for any text hid that "FCC-TEST CMD:EJECTALL"
+        # came back 'eject' and turned Eject mode on (Group 62.1).
+        self._identify = identify or (lambda body: logic.resolve_scan(str(body.get("text") or "")))
         self._manage_contents = manage_contents or (lambda body: OK)
         page.context.route("**/*", self._handle)
 

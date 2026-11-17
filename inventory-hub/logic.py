@@ -1006,13 +1006,18 @@ def resolve_scan(text):
         }
 
     # 2. COMMAND HANDLING
+    # Substring-matched, so a command whose text holds another's is tested
+    # before it (Group 62.1): CMD:EJECTALL came after CMD:EJECT, and every
+    # EJECTALL text the page's exact match missed (a key left in front of the
+    # scan) came back as `eject`, which turned Eject mode on, and the next spool
+    # scanned was ejected. tests/test_scan_ladder_62_1.py keeps the order.
     if "CMD:" in upper_text:
         if "CMD:UNDO" in upper_text: return {'type': 'command', 'cmd': 'undo'}
         if "CMD:CLEAR" in upper_text: return {'type': 'command', 'cmd': 'clear'}
-        if "CMD:EJECT" in upper_text: return {'type': 'command', 'cmd': 'eject'} 
+        if "CMD:EJECTALL" in upper_text: return {'type': 'command', 'cmd': 'ejectall'}
+        if "CMD:EJECT" in upper_text: return {'type': 'command', 'cmd': 'eject'}
         if "CMD:CONFIRM" in upper_text: return {'type': 'command', 'cmd': 'confirm'}
-        if "CMD:EJECTALL" in upper_text: return {'type': 'command', 'cmd': 'ejectall'} 
-        
+
         # NAV
         if "CMD:CYCLE" in upper_text: return {'type': 'command', 'cmd': 'next'}
         if "CMD:NEXT" in upper_text: return {'type': 'command', 'cmd': 'next'}
