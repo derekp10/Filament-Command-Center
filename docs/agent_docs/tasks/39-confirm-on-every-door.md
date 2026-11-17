@@ -577,7 +577,7 @@ Printing checks need a real print on the XL or the Core One. "Powered off" means
 
 ### Q1 — What makes a mid-print Quick-Swap "deliberate"? — ✅ ANSWERED 2026-09-18: option A
 
-**Derek chose A: keep today's overlay** (Yes focused; Enter, a click or the CONFIRM QR all confirm), adding only the new consequence wording. Build it that way; the background below is kept for the record.
+**Derek chose A: keep today's overlay** (Yes focused; Enter, a click or the CONFIRM QR all confirm), adding only the new consequence wording. _(Reversed 2026-10-29 by Group 50.6, Derek: "more resistance on really important things": the printing yes / no and the Quick-Swap confirm on a printing head now open on Cancel; CLAUDE.md, "A dialog whose yes is hard to undo opens on its safe answer".)_ Build it that way; the background below is kept for the record.
 
 **Background.**
 - You said Quick-Swap is for idle, stopped or paused printers, and that using it mid-print is a deliberate correction when FCC has drifted from the real printer.

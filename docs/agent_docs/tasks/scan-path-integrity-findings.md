@@ -69,7 +69,7 @@ Preserves keyboard use, restores the QRs. → **FIXING (3 sites)**
 disarms the scanner for the rest of the session — in the one modal whose own instructions say
 to scan. Scans can also misroute *into* a weight field and be written as a weight.
 
-**→ HOLDING FOR DEREK.** The fix is a genuine UX trade-off, not a mechanical change:
+**→ HOLDING FOR DEREK.** _(Shipped since: `4f10e35` / `34d0fe3`, archived with Group 47.5.)_ The fix is a genuine UX trade-off, not a mechanical change:
 auto-focus is legitimately useful when you intend to *type* weights, so the options are
 (a) drop the auto-focus, (b) keep it but blur on the first scanner-speed keystroke, or
 (c) only auto-focus when the modal was opened by mouse rather than by a `CMD:WEIGH` scan.
@@ -82,9 +82,9 @@ That's your call, not mine.
 | # | Finding | Disposition |
 |---|---|---|
 | 4 | **Quick-Swap grid Enter fires a swap on an unrelated scan's terminating Enter** (F4, `inv_quickswap.js:1205`). Press `Q` to highlight a slot, then scan a spool — you get an unrequested "Load box slot N into toolhead?" confirm, which then compounds with finding 2. | **FIXING** — same scan-in-flight guard as 2 |
-| 5 | **`manualAddSpool` re-focuses `#manual-spool-id` after every add** (F8 + F15, `inv_loc_mgr.js:1503`). The modal's **own** `CMD:DONE` QR then reports "Invalid Code", as does any location or slot label. | **HOLDING** — the field's re-focus is deliberate for repeated legacy entry; which behaviour wins is your call |
+| 5 | **`manualAddSpool` re-focuses `#manual-spool-id` after every add** (F8 + F15, `inv_loc_mgr.js:1503`). The modal's **own** `CMD:DONE` QR then reports "Invalid Code", as does any location or slot label. | **HOLDING** (shipped since: `4f10e35` / `34d0fe3`, Group 47.5) — the field's re-focus is deliberate for repeated legacy entry; which behaviour wins is your call |
 | 6 | **Weigh-out "Auto-Archive 0g" checkbox never blurs** (F9 + F14, `modals_weigh_out.html:42`). Ticking it kills the scanner for the rest of the session — a verbatim re-run of the L298 bulk-move ack-box incident, in a different modal. | **FIXING** — trivial, established pattern |
-| 7 | **Slot-QR scan during an active print returns `assignment_requires_confirm`, which `processScan` doesn't handle** (F17, `inv_cmd.js:1524`). User gets a yellow *"Unknown assignment result: assignment_requires_confirm"*, no dialog, no move — **forever**, since the scan path has no way to send the confirm flag. | **HOLDING** — needs a real confirm flow; that's a feature, not a patch |
+| 7 | **Slot-QR scan during an active print returns `assignment_requires_confirm`, which `processScan` doesn't handle** (F17, `inv_cmd.js:1524`). User gets a yellow *"Unknown assignment result: assignment_requires_confirm"*, no dialog, no move — **forever**, since the scan path has no way to send the confirm flag. | **HOLDING** (shipped since: `4f10e35` / `34d0fe3`, Group 47.5) — needs a real confirm flow; that's a feature, not a patch |
 
 ---
 

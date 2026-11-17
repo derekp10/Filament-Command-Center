@@ -5,7 +5,7 @@
 **Risk:** **LOW.** 55.1 and 55.2 are docs and config-example text; 55.3 is frontend help panels. Never capture secrets in screenshots (Settings shows printer API keys), and a `?` inside a dialog must never eat scanner input.
 
 > **2026-11-11: DONE, merged to `dev` `d7a676f` (Derek: "So merge", and keep the README demo; `main` held). Nothing is left in the group: the full rename stays on the buglist as eventual work (Derek), and help for the dialogs that don't have it yet is a standalone item (the documentation overhaul). Build notes below.**
-> **Status: `TODO` — filed 2026-10-19 (`/refresh-groups`). Derek's answers are in (2026-10-19); nothing waits on him.** Not in the 48 + 49 + 51 + 52 bundle.
+> **Was: `TODO` — filed 2026-10-19 (`/refresh-groups`). Derek's answers are in (2026-10-19); nothing waits on him.** Not in the 48 + 49 + 51 + 52 bundle.
 > Documentation, in two places Derek will actually use: a short README for him, and help one click away inside each dialog. Every decision and his exact answers: [refresh-2026-10-19.md](refresh-2026-10-19.md).
 > Code anchors were read on `dev` @ `c5c5aa6` (the refresh's grounding) and spot-checked at `08c4b10`. Line numbers drift, so re-grep before editing.
 

@@ -35,7 +35,7 @@ source answers it, and poking a live Spoolman carried real risk for no added cer
 
 **Where the sibling losses actually came from:** the pre-2026-05-19 draft that PATCHed a *partial*
 extras dict, tripping Spoolman's replace-the-whole-sub-document PATCH semantics. Already fixed;
-its rationale is recorded at [spoolman_api.py:1013-1020](../../../inventory-hub/spoolman_api.py#L1013-L1020).
+its rationale is recorded in `update_filament`'s docstring in `spoolman_api.py` (the read-merge of a partial `extra`; the old line link here had drifted, re-pointed 2026-11-16).
 Its fingerprint is still in the data — dev is bimodal (attrs-only 110, siblings-only 64, **both 2**)
 where prod has 22 "both".
 

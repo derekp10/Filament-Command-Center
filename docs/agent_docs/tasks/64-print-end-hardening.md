@@ -1,0 +1,238 @@
+# Group 64: 🖨️ Print-End Hardening
+
+**Branch name (when started):** `feature/group-64-print-end-hardening`
+**Estimated effort:** LARGE (~17–24 h, 3 sessions), plus one batched review round and the full sweep. 64.1 ~1.5–2 h · 64.2 ~7–10 h (eleven small parts; +2–3 h if Derek picks (c) in Decision 1) · 64.3 ~6–8 h (nine parts, one folded into 65) · 64.4 ~1–1.5 h (built with 64.2 (3)) · 64.5 ~1.5–2.5 h. The proposal's ~8–12 h was set before this grounding. Estimates here have run about 30% low, so these are not trimmed. "Splitting" near the end offers two sittings.
+**Risk:** **MEDIUM.** Every change is on the charge path: what FCC writes as a prod spool's used weight. Nothing here may change what a plain print is charged (one spool per head, no swap, nothing weighed in between); each member's tests prove that first. The hotfix's code was built 2026-11-11 and is pinned by about 150 tests (eleven files). Two hazards: 64.3 (1) moves the heads read off a function that 13 deduct-family test files patch (the wire harness among them, which more tests use), and 64.2 (3) / 64.4 change when the deferred-fetch queue gives a print up.
+
+> **Status: TODO, filed 2026-11-16** (/refresh-groups; Derek approved the grouping the same day: "otherwise this seems fine").
+> **Place in the order:** third, after 62 and 63, then 65 (📡 Print Watch) right after it: both groups edit `print_deduct.py`, `print_monitor.py`, `prusalink_api.py` and `cancel_review.js`. 72 (🔄 Ask at the Mid-Print Change) comes after both.
+> **Starts with:** ready. The proposal marks no call of Derek's here, but grounding found one: Decision 1 (a spool weighed between a print's end and its charge). Ask it at the start, cold, one question. Only the second half of 64.2 (1) waits on it, and its default is safe to build.
+> **What it is:** the print-end hotfix's known limits (released in `main` `102d234` on 2026-11-12, checked live on INDX job 1142) and the deduct's small gaps. None charges a wrong spool today. No leftovers from the pre-refresh audit belong here.
+> Hotfix context: `completed-archive.md`'s 2026-11-12 entry, and CLAUDE.md's write-surface rows for `print_deduct.py` (the print deduct `_apply_usage_to_printer`, and the confirm `api_cancel_deduct_confirm`).
+> Code anchors were read on `dev` @ `3388c7d` (2026-11-16). `print_deduct.py`, `print_monitor.py` and `prusalink_api.py` are byte-identical on `main`; only `cancel_review.js` differs (dev's button rows and its Discard double-press guard). **Line numbers drift, so re-grep before editing.**
+
+## Items covered (quoted from `Feature-Buglist.md`)
+
+Two long items are quoted part by part, each part in its own row. "On dev" is what grounding found on `3388c7d`; "Today's code" below has the anchors.
+
+| # | Buglist item (quoted) | On dev | Direction |
+|---|---|---|---|
+| **64.1** | 🟡 *"A single-position printer's swap split counts a tool's grams twice (found 2026-11-12 by the print-end hotfix's review; pre-existing). On a printer whose heads share one position (MMU aliases), a completion whose file charges tool index 1 while the swap was recorded at position 0 is split onto position 0 by `print_deduct._route_completion_to_review`, which also leaves the same grams as an unresolved T1 line: the real `_compute_swap_split` and `_uncharged_usage` give position 0 = 20 + 30 g and unresolved `{'1': 50.0}`. An Apply as shown records a false 50 g shortfall, and a spool picked on the T1 line is charged those grams twice. Latent here (no MMU printer today). Fix with a test on the real functions. **Standalone.**"* | **Live, latent.** Reproduced on the real functions (probe below). No one-position printer on dev (RCOI 8 positions, XL 5). | Fold only a sole-tool footer, read the swaps' figures by that same tool; several tools on one position asks. |
+| **64.2** | 🟡 *"The print-end hotfix's smaller known limits (found 2026-11-11 and 12 by its reviews; none charges a wrong spool)."* The parts: | **Live**, all eleven. | Each part below. |
+| 64.2 (1) | *"`print_deduct._spool_lock` covers only FCC's own deducts, in one process: a weigh-out, a wizard edit or a label scan landing between a deduct's read and its write can still be overwritten, as before."* | Live. The lock is taken only in the two deduct loops. | FCC's own weight writers take the lock too. The bigger case grounding found is Decision 1. |
+| 64.2 (2) | *"A review card from another tab, or from a page loaded before the release, posts with no set check (the server accepts a deliberate over-allocation, as it does for rows)."* | Live. The ask exists only in the page. | The server checks a set's sum itself; an older page is told to reload. |
+| 64.2 (3) | *"A live edge whose compute raises before charging leaves the print queued, and a raise that always happens re-downloads the file on every idle tick, with only debug lines, until the 72 h give-up: say it once at WARNING (the same loop as the 🔁 `.bgcode` re-download item)."* | Live. | One WARNING at the first raise; give up after 3. Built with 64.4. |
+| 64.2 (4) | *"A scan with the keyboard on a picker's dropdown goes to the global scan path (the spool joins the scan buffer and shows under "In the scan buffer"), not into that line's box."* | Live. | A scan on a picker picks that spool on its line. |
+| 64.2 (5) | *"Two fallback clauses of the uncharged-grams log line name no spool ("and N g more that went to no spool", "but N g more than the card asked were typed for other spools")."* | Live. | Name the spools and heads behind each figure. |
+| 64.2 (6) | *"On a no_spool card that also has a set, a plain line picked with fewer grams than FCC worked out is counted by the ledger and named in the log line, but the orange Yes doesn't count it."* | Live. | The page counts it by the server's own rule. |
+| 64.2 (7) | *"`_stash_shortfall_review`'s `_mark` keeps an emptied spool's own entry only on print-end records (`sids`): older cards and the automatic path keep the old overwrite (with its "on the head" words), and a spool picked by #id that clamps still overwrites the head's entry (append one instead)."* | Live. | Append, never overwrite. |
+| 64.2 (8) | *"A run-out spool inside a multi-spool head entry is offered without its "(ran out, archived)" marker (picking it charges 0 g and keeps the grams on the card)."* | Live. | A per-spool mark on the head's entry. |
+| 64.2 (9) | *"A completion whose end read disagrees with its last recorded swap keeps the split with a note, while a cancel holds that head as a set: Derek's view welcome, nothing waits on it."* | Live. | One rule: a completion holds it as a set too (Claude's call). |
+| 64.2 (10) | *"A cancel during the pause itself, before a new progress sample, holds a swapped head as a set to split by hand (the split is refused when a swap was recorded after the cancel's latched progress)."* | Live. | A cancel's progress is at least its last swap's point. |
+| 64.2 (11) | *"A label scanned into a grams box goes to the scan path only when the scan ends within 150 ms, on `dev` as on `main` (checked 2026-11-13): the card calls `installFieldScanCapture` without its `labels` mode, so a slower scanner's digits still go into the grams. Enter in a grams box presses nothing, so the person sees the box change before the Yes, and a set's check asks about grams placed beyond its total. Direction: pass `labels`, or make the boxes `fcc-weight-box` boxes (CLAUDE.md's weight-entry rule)."* | Live. | Make them `fcc-weight-box` boxes. |
+| 64.2 (look) | *"Optional, a look: a head's name bold in the card's refusal messages too. **Standalone.**"* | Not built. | Build it; a picture at the group's end. |
+| **64.3** | 🟡 *"Print-end reads and edges: the pieces the hotfix left out (its D8, 2026-11-11)."* The parts: | **Live**, all nine. | Each part below. |
+| 64.3 (1) | *"One read per edge: the heads read does one spool-list GET per head (about 8 on the INDX), and an edge can read the heads up to three times (the end read, then a read before the stash or the apply): read the spool list once (`read_spool_list`)."* | Live. | One honest list read per edge, kept on the edge. |
+| 64.3 (2) | *"Take the start snapshot whatever `fcc_owns_completion_deduct` says: without it a cancel can't see a change made during the print."* | Live. The resume capture is gated the same way. | Take both always. |
+| 64.3 (3) | *"`last_seen` words for an edge seen late (see the 📡 network-drop item below)."* | Live. The latch keeps no time for its last good sample. | Fold into 65.1, which builds exactly this (Claude's call). |
+| 64.3 (4) | *"Read the heads at an ATTENTION park too."* | Live. | Read once at the first park; an end straight from the park uses it. |
+| 64.3 (5) | *"Retire the legacy no_spool Apply beyond the hotfix's refusal on a card built from the end read."* | Live. | Any pick-less no_spool Apply is told to reload; the old path goes. |
+| 64.3 (6) | *"Restart recovery's "a different job is printing now" branch got honest words only."* | Live. | Route the old print to the ambiguous review, as the live job change does. |
+| 64.3 (7) | *"Compare the start snapshot with the end read per MMU alias."* | Live, latent. | Keep each alias's spool; compare alias by alias where a position has several. |
+| 64.3 (8) | *"`deduct_cancelled_print`, the one-shot cancel deduct that nothing calls today (kept for a future auto mode), still reads the heads after its download: the job-1141 bug, waiting for its first caller. Give it the end read before anything calls it."* | Live. No caller in the app. | Give it `end_heads`; a held head sends the print to the review. |
+| 64.3 (9) | *"Hygiene in `tests/test_spool_swap_22_3*.py`. **Standalone.**"* | Live (what a read shows; the hotfix's own notes aren't in the repo). | Stale docstrings, hand-set globals, copied helpers. |
+| **64.4** | 🔁 *"A `.bgcode` FCC can't decode is re-downloaded every 30 s for 72 hours (found 2026-10-26 by Group 56's review). `prusalink_api.fetch_cancel_gcode` returns None for a failed download, an empty decode and a decode exception alike, so `_compute_cancel_usage` treats all three as "download failed" and the job is queued; the monitor then downloads the whole file again on every IDLE tick until the 72 h give-up (for the 11 MB raccoon file, thousands of downloads). Rare (`decode_bgcode` skips bad blocks), and since Group 56.3 the give-up opens a "couldn't download or read its file" review. Direction: report a decode failure separately, carry it on the fetch record, and give up after a few attempts. Since the print-end hotfix (2026-11-12) each retry downloads on a thread of its own, so the repeats no longer hold up the watcher; its limits item (3) is the same loop for a compute that raises. **Standalone.**"* | **Live.** Worse than the item says: one download per printer at a time, so the stuck file also holds that printer's other queued prints. | Report a decode failure apart; give up after 3, into the existing give-up. |
+| **64.5** | 📉 *"FCC's G-code walk leaves out a tool's last retract, which the slicer's footer counts (found 2026-11-02 by the INDX hotfix's review). _(Standalone; pre-existing, every printer, tiny.)_ In relative E, `_walk_extrusion` nets every retract against the next un-retract, so a retract the file never takes back (each tool's last one, and the park's at a cancel) comes off its walk, while PrusaSlicer's count is a high-water mark of the signed sum and keeps it. So a whole walk lands 0.8 mm or so under its footer per tool: -0.01% on a big tool, up to -1.4% on a small one (FLEXI-~2's T2, 0.35 g, on 2026-11-03), never more than one retract in grams (about 0.005 g), and the 2% WARNING's 0.1 g floor keeps it quiet. A high-water walk lands both INDX captures within 0.05 mm of their footers. Also pre-existing, found the same day: in absolute E a `G92` forgets a retract still outstanding, and `G91` / `G90` are never read. Fix only with a test on a real file (`.captures/indx-flexi-2026-11-02/flexi_printed.bgcode`)."* | **Live.** | One high-water rule for both E modes; `G92` keeps what is owed; `G90` / `G91` read as the slicer reads them. |
+
+## Decisions
+
+### For Derek (one, found while grounding 64.2 (1))
+
+**Decision 1: a spool weighed between a print's end and FCC's charge of it.**
+- **What it is:** FCC charges a print by adding its grams to the spool's used weight as Spoolman has it right before the write. If the spool was weighed after the print ended, the scale already counted those grams (the filament was gone), so FCC counts them twice. 64.2 (1)'s lock doesn't help: it only stops two writes racing within milliseconds.
+- **Where:** `print_deduct._apply_usage_to_printer` reads the spool (`:465`) and writes used + grams (`:486-487`). A review card's Apply does the same with a fresh read (`api_cancel_deduct_confirm`, `:4169-4185`; its comment calls that "a weigh-out between preview and confirm isn't clobbered"). Not new, and the window is wide: on the INDX the download before the charge takes 20 to 33 minutes (job 1142 was charged 33 min after it ended), and a card waits for you.
+- **A real example:** an INDX print ends at 13:50 with #42 on RCOI-3, its footer 12.4 g. At 14:05 you take #42 off and weigh it on the Quick-Weigh, and FCC writes its used weight from the scale. At 14:23 the file is in, and FCC adds 12.4 g on top. #42 now reads 12.4 g lighter than it is.
+- **Options:**
+  - (a) Charge on top, as today, and say so in one Activity Log line: "#42 was weighed at 14:05, after job 1144 ended at 13:50, and FCC charged its 12.4 g on top: weigh it again if that weighing came after the print."
+  - (b) Charge nothing to that spool, and say so (trust the scale).
+  - (c) Hold that spool's grams on a 🛑 review card, pre-filled, with that sentence as its note: you confirm, or set it to 0. A card's Apply says the same when the spool was weighed after its print ended.
+- **Recommendation:** (c). It is FCC's rule for a change it can't vouch for ("a change during the print always asks"), it fires only in this case, and the print's other heads still charge at once.
+- **How FCC tells:** the print-end read (64.3 (1)) keeps each head spool's used weight as it was at the end, and the charge compares it with its own read. Any change counts: a weighing, an edit in the wizard or in Spoolman, rarely another print's charge of the same spool.
+- **If he doesn't answer:** build (a). It changes no charge; it only says what happened.
+
+Also welcome, not waited on: his view on 64.2 (9) (Claude's call 8 below), and the picture of 64.2's bold head names at the group's end.
+
+### Claude's calls (veto any)
+
+1. **64.1, narrow:** fix the fold, not MMU accounting. A per-MMU-slot split needs an MMU printer and Group 22's M600 data, and no printer here has one position.
+2. **64.2 (1):** FCC's own writers of a weight the deduct reads (`/api/spool/update`'s weight writes, the wizard's weight fields, and `/api/spool/prusament_apply_weights`, whose `initial_weight` is the deduct's clamp) hold `_spool_lock(sid)` around their read-merge-write. `/api/backfill_spool_weights` writes only the tare (`spool_weight`), which no deduct reads, so it stays out. Nothing across processes: Spoolman has no compare-and-set, and Spoolman's own page can't take FCC's lock. Say so in the code.
+3. **64.2 (2):** the server checks a set itself. A set line whose picks don't add up (to 0.05 g) is refused unless the post says the person saw the ask (`set_ack`: `{line: placed}`, which today's page sends on its second press). A post with no `set_ack` key at all is an older page: refused with "reload the page" words in the review's own terms (the stale-page pattern `logic.STALE_PAGE_MSG` follows for moves, whose words are about a move), the card kept. Plain rows keep taking an over-allocation, as now.
+4. **64.2 (3) / 64.4:** give up after **3** compute raises or **3** decode failures, into the give-up the 72 h window already uses: the 56.3 "couldn't measure" review for a completion or an ambiguous end (its `no_download` words, "FCC couldn't download or read its file", so the card needs no new words), the 0 g entry and its "weigh the spool" line for a true cancel. A plain download failure at IDLE keeps the 72 h window. One WARNING at the first raise or decode failure.
+5. **64.2 (4):** a scan with the picker focused picks that spool on that line (through the line's "#ID" box, so its lookup and info line run as for a typed number), and a select the scan's letters moved by the browser's typeahead is put back first (Group 61's location-editor rule).
+6. **64.2 (7) / (8):** `_mark` appends an entry and never writes over the head's own; a run-out spool is marked per spool (`archived_sids`), and the picker reads that mark.
+7. **64.2 (11):** the grams boxes become `fcc-weight-box` boxes (the one weight capture), not `labels` mode; no `data-fcc-weight-keys` on the card (it has many boxes and no target). CLAUDE.md's weight-entry paragraph loses its "don't take it yet" exception.
+8. **64.2 (9):** one rule: a completion whose print-end read disagrees with its last recorded swap holds that head as a set, as a cancel does. The read names a spool FCC never saw loaded, so part of the last segment may be that spool's.
+9. **64.2 (10):** a cancel's progress is at least its latch's `pause_progress` and its last recorded swap's point (the print reached them).
+10. **64.3 (1):** one `read_spool_list()` per edge (Group 52's honest read: "couldn't read" is never "empty"), with each head spool's used weight kept on the end read. `_usable_heads`' rule stays: a read with no spool on any head is no read.
+11. **64.3 (3):** folded into **65.1**, which records the last good sample's time on the latch and words the review from it; nothing is built here. The orchestrator may move the part.
+12. **64.3 (5):** retire the old path outright: a no_spool Apply without `charges` gets "reload the page" words, and `_confirm_no_spool_review` goes. Today's page always sends `charges` on such a card.
+13. **64.3 (6):** restart recovery routes the old print to the ambiguous review (`progress_unknown` when it was never sampled), as the live job-change path does, with `heads_when="restart"`. `_held_for_restart`'s words stay for a print FCC already holds.
+14. **64.3 (7):** built latent: the start snapshot and the end read keep every alias's spool, compared alias by alias only where a position has more than one alias. Tested on a made-up MMU printer map.
+15. **64.3 (8):** `deduct_cancelled_print` takes `end_heads`. With a usable read it charges those heads, never a read after its download, and any head `_held_heads` holds sends the whole print to `_create_pending_cancel_review` instead (a one-shot can't ask). Not deleted: its docstring keeps it for a future auto mode.
+16. **64.5:** one high-water rule for both E modes (a relative move becomes a position); `G92` keeps a retract still owed; `G90` / `G91` read as PrusaSlicer's own processor reads them (to confirm against its source in the build). Proven on both real captures before it ships.
+17. **Order:** 64.4 with 64.2 (3) first (a stuck file holds a printer's queue for 72 h), then 64.1, then 64.3's reads (1, 2, 4, 7, with Decision 1's detection), the server parts of 64.2, the page parts (2, 4, 6, 8, 11, the look), 64.3's routing (5, 6, 8) and hygiene (9), and 64.5 last.
+
+## Today's code (anchors, `dev` @ `3388c7d`)
+
+All `print_deduct.py` unless named. Line numbers drift: re-grep.
+
+### 64.1
+- `_compute_cancel_usage` (`:1759`) folds a sole footer tool onto a one-position printer's position (`:1869-1880`). So the item's shape (`{1: 50}`) reaches the split only if that one printer-map read fails, and `deduct_completed_print`'s swap check (`:2187-2211`) counts a swap only at a used position (`:2207-2209`), so it isn't even routed then. The item's shape is reachable only by a direct call today.
+- `_route_completion_to_review` (`:2552`): on a one-position printer every swap is taken as given (`:2600-2607`) and split with `single_position=True` (`:2617-2620`); the split's keys are the charged positions (`:2671`, `:2695`); the rest goes through `_uncharged_usage` (`:2703`, defined `:2510`).
+- `_tool_grams` (`:2317-2337`) folds ANY sole entry onto the position asked, for the usage total and for each swap's figure alike. `_compute_swap_split` (`:2340-2420`): the total `:2381`, each swap's figure `:2389`, the check `:2399`.
+- The cancel's twin: `_split_held_swaps` (`:1273`), `single_position` at `:1290`, the call at `:1304-1305`.
+- **Probe** (2026-11-16, read-only: the real functions exec'd from the file's source, nothing else imported): `_compute_swap_split({1: 50}, a swap at position 0 / 40%, {'0': 100}, {0.4: {1: 20}}, single_position=True)` gives position 0 = #100 20 g + #200 30 g, and `_uncharged_usage({1: 50}, {0})` gives `{'1': 50.0}`: the item exactly. A **reachable cousin**: a multi-material footer `{0: 30, 1: 50}` whose swap came before T0 first printed (figures `{1: 12}`) splits T0's 30 g as 12 + 18, T1's figure folded onto T0. When the folded figure passes T0's total the split refuses and the head asks, as it should.
+- Dev's Printer rows (a copy of prod's): RCOI with 8 positions, XL with 5. No one-position printer, so the member is latent.
+
+### 64.2
+1. `_spool_lock` (`:331-342`) is taken only in the apply loop (`:464`) and the confirm loop (`:4169`). The weigh screens' `/api/spool/update`, the wizard and Prusament's apply-weights write through `spoolman_api.update_spool` (or its `_or_raise` form) without it. (A label scan writes only `needs_label_print`, which a deduct's `{used_weight}` write doesn't touch.)
+2. No server set check: `_rows_from_charges` (`:3477-3587`) keys a set's picks per (line, spool) and `_set_grams_left` (`:3590-3611`) only counts what is left. The ask is the page's: `cancel_review.js` `setProblems` / `setsConfirmed` (`:318-439`).
+3. `print_monitor._run_fetch_retry` (`:1436-1478`): any raise but `CompletionMayHaveCharged` is one `logger.debug` line (`:1469-1476`) and the record stays. `_process_pending_cancel_fetches` (`:1202`) starts it again at every IDLE / READY tick (`_start_fetch_retry`, `:1376`) until `_CANCEL_FETCH_MAX_AGE_S` (72 h, `:1070`; the give-up `:1272-1315`). Only the live edge's raise gets a line (`_on_cancel_edge`, `:439-446`, ERROR with `_try_again`'s "FCC will try again").
+4. `cancel_review.js` `pickSelectHtml` (`:596-635`): the picker is a `<select>` with no scan handling. The card's only key handler (`:1569-1577`) is the "#ID" box's Enter. A scan on the picker goes to processScan, and its spool shows in the "In the scan buffer" group (`:542-587`).
+5. `_say_uncharged` (`:3814-3865`): "and N g more that went to no spool" (`:3856`) and "N g more than the card asked were typed for other spools" (`:3858`).
+6. `cancel_review.js` `plainLinesLeft` (`:354-366`) skips a plain line with a pick and grams over 0 (`:361`). The server's `_lines_left_unplaced` (`:3622-3671`) counts its shortfall where the ask is fixed (`:3654`: a no_spool card, or a record with `requested_total`).
+7. `_stash_shortfall_review._mark` (`:768-792`): a print-end entry (it has `sids`) is never written over (`:781-787`); any other entry is (`:788-789`). Older cards and the automatic path (`_heads_snapshot`, no `sids`, `:760-762`) take the overwrite, and so does a #id pick that clamps.
+8. The same early return leaves a print-end entry without `archived`, and the picker's "(ran out, archived)" is per entry (`cancel_review.js:603-611`), so a run-out spool inside a `sids` list is offered unmarked.
+9. Completion: `_split_disagreements` (`:1575-1597`) keeps the split with a note (via `_route_completion_to_review`, `:2665`). Cancel: `_split_held_swaps` marks `end_differs` (`:1300-1301`): a set.
+10. The cancel's progress is the latch's high-water of job samples (`print_monitor.py:967`). A swap cuts at `max(progress, pause_progress)` (`:788-789`); `pause_progress` comes from ATTENTION polls (`:904-910`, `:1009-1011`), which never raise `progress`. A swap past the cancel's progress fails `_compute_swap_split`'s check (`:2399`), so the head is `unmeasured`: a set.
+11. `cancel_review.js` `captureScansInGramsBoxes` (`:1266-1282`): `installFieldScanCapture` with no `labels`. CLAUDE.md's weight-entry paragraph names these boxes as the one exception to `fcc-weight-box`.
+- The look: `sayOnCard` takes `{head}` pieces (`orHeads`, `:368-375`); the server's refusals reach the page as plain `msg` text (`api_cancel_deduct_confirm`, `:4052-4055`).
+
+### 64.3
+1. `_capture_print_heads` (`:1047-1079`), `_snapshot_active_spools` (`:931-964`) and `_heads_snapshot` (`:967-994`) call `spoolman_api.get_spools_at_location` per alias, a whole-list GET each (`spoolman_api.py:2566-2582`), and `select_deduct_targets` (`:2585`) for a head with two. Per edge: the end read (`print_monitor._capture_end_heads`, `:338`), then `_changed_since_end` (`:1541`) before an apply, or `_row_notes_after_end` (`:1563`) before a stash, or the `late` read (`:3302-3310`). The GET answers `[]` when it fails, hence `_usable_heads`' "no spool on any head is no read" (`:1092-1109`).
+2. `print_monitor._track_print_edge` (`:647`): the start snapshot runs only `if need_snapshot and _fcc_owns_completion_deduct()` (`:797`), and the resume capture the same way (`:820`). The flag defaults to False (`config_loader.py:92`, `config_schema.py:77`), so a new install records neither.
+3. The latch keeps no time for its last good sample. 65.1 ("FCC lost contact with XL at ~30% (14:02) …") builds it.
+4. The ATTENTION branch (`print_monitor.py:904-911`, `:994-1011`) samples the frozen progress and logs the first park; it reads no heads.
+5. `api_cancel_deduct_confirm` refuses a pick-less no_spool Apply only on a card built from the print-end read (`:4022-4029`). Any other goes to `_confirm_no_spool_review` (`:4092-4101`, defined `:3868-3925`), which reads the heads now and charges whatever is on them. Today's page always sends `charges` on a no_spool card (`cancel_review.js:1607-1646`).
+6. `print_monitor._recover_one_print_latch` (`:1554`), branch `:1594-1612`: a WARNING with `_held_for_restart`'s words (`:1523-1551`), never a review. The live job-change path routes its outgoing print (`:859-881`).
+7. Both reads key by position, the first alias holding a spool deciding it (`:951-961`, `:1062-1076`). On an MMU printer every slot shares one position.
+8. `deduct_cancelled_print` (`:1966-2040`) has no `end_heads` and charges through `_apply_usage_to_printer` with no `heads` (`:2013-2014`): it reads the heads after its download. Nothing in the app calls it (app.py's re-export `:293`, and five test files). `print_monitor.py`'s header comment (`:42-56`) still says the edge fires it, rides the dashboard pulse and leaves FINISHED to FilaBridge.
+9. `tests/test_spool_swap_22_3.py` / `_22_3b.py`: 22_3b's module docstring says the grams split is deferred (scope B built it); `test_resume_capture_skipped_when_flag_off` says `deduct_completed_print` is "the only consumer" (the cancel and ambiguous reviews read the snapshot since the hotfix); both files set `print_monitor._CANCEL_DEDUCT_RUN_ASYNC` by hand in their fixtures; `_completion_ctx` and `_latch` are copied in each; `test_capture_skipped_when_flag_off` and `test_resume_capture_skipped_when_flag_off` pin the gate (2) removes.
+
+### 64.4
+- `prusalink_api.fetch_cancel_gcode` (`:123-163`) answers None for a failed download (`:141-143`), an empty decode (`:147-148`) and any exception (`:161-163`).
+- `_compute_cancel_usage` (`:1802-1813`) reads all three as `download_failed`. `_enqueue_cancel_fetch` (`:3091`) bumps `attempts` (`:3144`); nothing reads it.
+- The queue retries at every IDLE / READY tick (30 s, `print_monitor.py:1064`) for 72 h. Since the hotfix's scope C a printer gets one download at a time (`_printer_fetching`, `:186`, checked `:1345`), so a file that never decodes keeps that printer downloading (an INDX file takes ~20 min) and holds its other queued prints behind it.
+- The give-up's words: `_UNMEASURED_WHY["no_download"]`, "FCC couldn't download or read its file" (`:2918`); the card words the same key.
+
+### 64.5
+- `prusalink_api._walk_extrusion` (`:196-295`): relative E adds each signed move (`:273-279`); `G92` sets the mark and the position to its value (`:256-266`), dropping a retract still owed; only `M82` / `M83` switch the mode (`:250-255`).
+- `measure_filament_usage` (`:298-390`) scales each tool's share to the footer, so a cancel's charge moves by about one retract at most (~0.005 g). `_warn_parse_gap` (`print_deduct.py:1916`), floor `_PARSE_GAP_MIN_G` 0.1 g (`:1899`).
+- Real files: `.captures/indx-flexi-2026-11-02/flexi_printed.bgcode` (what job 1134 ran) and `flexi_resliced.bgcode`; `.captures/indx-raccoon-2026-10-08/racoon_indx.bgcode` (git-ignored, on Derek's PC). Committed: `tests/fixtures/indx_raccoon_trimmed.gcode`, `tests/fixtures/sample.bgcode`. Pinned today by `tests/test_exclude_e_tags.py` (the flexi captures within 1% per tool, the 2% cancel at ±0.002 g) and `tests/test_deduct_accuracy_56.py`.
+
+## Design, by member
+
+### 64.1 — one fold, one tool
+- `_compute_swap_split` takes the tool a position stands for, not "any sole entry": on a one-position printer whose usage names exactly one tool T, the position's total is T's grams and each swap's figure is T's figure (absent = 0, never another tool's). With several tools on a one-position printer the split answers None, so the head asks (a set on a cancel, the held line or the manual review on a completion).
+- `_route_completion_to_review` re-keys a sole-tool usage onto the sole position first, as `_compute_cancel_usage` does, so `_uncharged_usage` sees the same key the split charges. Never a second line for the same grams.
+- `_split_held_swaps` gets the same rule (it calls the same function).
+- `_tool_grams(allow_fold=True)` stays for any other caller; grep them in the build.
+
+### 64.2 — the eleven limits
+1. The lock in FCC's own weight writers (call 2). The routes import `spoolman_api`, not `print_deduct`, so the lock moves there (one per spool, as now) and `print_deduct._spool_lock` stays as the name the deduct calls and its tests know. Decision 1's (a), (b) or (c) on top, from the end read's used weights (64.3 (1)). For (c): the spool's grams go on the card as a held line with its note; the completion's other heads charge as now.
+2. Server set check with `set_ack` (call 3). The words name the head in bold on the page (the look below). An older page's refusal keeps the card.
+3. With 64.4: `_run_fetch_retry`'s raise bumps `raises` on the record (`cancel_fetch_store.update_pending`). The first raise logs one WARNING, escaped: "⚠️ XL: FCC couldn't work out job 1141's deduct (<error>); it tries again when the printer is idle, 3 times at most." The queue checks the count BEFORE it downloads, and at 3 takes the give-up branch (factor `:1272-1315` into one helper). The live edge's raise counts too: its record is already written.
+4. A capture on `.fcc-cr-pick` (focused, `scanIsArriving()` or a burst, never a person's typeahead): on the scan's Enter, put the select back to its value before the scan's first key, set the line to "Another spool by #ID…", fill its box with the label and run its lookup, as a typed number does. The scan never reaches processScan. Check in a browser that a scan's letters really move the select (a `<select>`'s typeahead); the put-back is needed either way for a slow scanner.
+5. `_say_uncharged` names what it can: the spool and head behind each gram ("and 3.1 g more on RCOI-2, whose #57 FCC couldn't read"). The figures come from the confirm loop's `errors` and the record's lines, not from a subtraction. A gram with no spool left says "no spool" with its head.
+6. `plainLinesLeft` counts a picked plain line's shortfall by the server's rule: only where the ask is fixed (a no_spool card, or `requested_total` on the record; the page needs that flag on the card's dataset).
+7. `_mark` appends `{toolhead, position, sid, archived, when: 'end'}` and never updates the head's own entry. The "on the head" words read the entry's `when`.
+8. `_mark` on a `sids` entry adds the run-out spool to `archived_sids`; `pickSelectHtml` marks "(ran out, archived)" per spool from it.
+9. `_route_completion_to_review` holds a split head whose print-end read disagrees with its last swap (`held[p] = … split="end_differs"`), sharing `_split_held_swaps`' rule; `_split_disagreements` goes or keeps only its note for the log line.
+10. `_track_print_edge`'s fire dict (`:963-983`) carries `progress = max(progress, pause_progress, the last swap's point)`, and `_create_pending_cancel_review` takes `max(reached_fraction, the last swap's point)` too (a queued record from before the change).
+11. The grams boxes take `fcc-weight-box`; the card's old field capture for them goes. The weight capture must fire the box's `input` event when it puts the box back, as `captureScansInGramsBoxes`' `onScan` does (`:1275-1279`), or the preview and the set's count go stale. CLAUDE.md's weight-entry paragraph drops its exception.
+- The look: a refusal names its head as a `{head}` piece (the server sends `head` beside `msg`, or the page finds the card's own head names in it). Picture to Derek with the group's end.
+
+### 64.3 — the reads and the edges
+1. One read per edge: a helper (`_read_heads_list()` → `(spools, why)`) reads `read_spool_list()` once; `_capture_print_heads`, `_snapshot_active_spools`, `_heads_snapshot`, `select_deduct_targets`' pick and `_changed_since_end` bucket it (`spoolman_api.bucket_spools_by_location` has the same match). The end read keeps each head spool's `used_weight`. A failed read is `why`, said once in hub.log. **Every deduct test that sets heads by patching `spoolman_api.get_spools_at_location` moves to the new seam deliberately**: `deduct_wire_harness._wire_ctx` (whose `WeightWireSpoolman` answers only per-spool GETs: give it a list path, or use `SpoolmanHTTPFake`), `test_cancel_deduct`, `test_cancel_detection`, `test_cancel_review`, `test_completion_deduct`, `test_deduct_accuracy_56`, `test_deduct_followups_22_4`, `test_deduct_recovery_43`, `test_low_stock_warning`, `test_print_end_heads_hotfix`, `test_print_end_review_fixes_hotfix`, `test_shortfall_review_43_2`, `test_spool_swap_22_3`. The move engine's tests keep the old function, which it still uses. A test left on the old seam would stop intercepting without failing (CLAUDE.md's patch rule).
+2. Drop the flag from `:797` and `:820`. Both reads are best-effort and once per job / per resume.
+3. Nothing here (call 11).
+4. At the first ATTENTION tick of a latched job (flagged at `:1002`, beside the park's log line; the read itself runs off the tracker lock, as the start snapshot's does at `:797-809`), take the same read as the end read and keep it on the latch (`park_heads`: `{heads, source: "park", at, progress}`, persisted with it). An end straight from the park (ATTENTION → STOPPED / ERROR / IDLE) uses it as its end read, with words "when the printer paused" (`_HEADS_WORDS`, and the page's copy). A resume compares the resume read with it, as with the start mapping. This is also the hook 72 asks from.
+5. Refuse every pick-less no_spool Apply with "reload the page" words; delete `_confirm_no_spool_review`. CLAUDE.md's confirm row ("the old `updates` / no_spool re-check stand") changes with it.
+6. In the "different job" branch, dispatch `_dispatch_ambiguous_edge(name, filename, job_id, progress, …, progress_unknown=not progress_sampled, heads_when="restart")` as the live job change does, unless `_held_for_restart` says FCC already holds it.
+7. The start snapshot and the end read keep `{alias: sid}` too (one list read makes it free). Where a used position has more than one alias, `_held_heads` and `deduct_completed_print`'s check compare alias by alias.
+8. `deduct_cancelled_print(…, end_heads=None)`: given a usable read, `_held_heads` first; any held head → `_create_pending_cancel_review(…, end_heads=…)`; else `_apply_usage_to_printer(…, heads=…)` and `_record_applied_deduct(…, heads=…)`, as the completion does. Rewrite `print_monitor.py`'s header comment (`:42-56`).
+9. Fix the stale docstrings; use `monkeypatch.setattr` for `_CANCEL_DEDUCT_RUN_ASYNC`; share `_latch` / `_completion_ctx` in one helper module; rewrite the two flag-off pins to pin the new rule (the snapshot runs with the flag off). Re-read both files for anything else.
+
+### 64.4 — a file FCC can't read
+- `fetch_cancel_gcode` answers `{"gcode": None, "decode_error": "<why>"}` for an empty decode or a decode exception, and None only for a download that failed. `_compute_cancel_usage` turns it into `{"status": "error", "reason": "undecodable"}`.
+- `_enqueue_cancel_fetch` keeps `decode_failures` on the record. The first logs one WARNING, escaped: "⚠️ RCOI: FCC downloaded job 1141's file but couldn't read it (<why>); it tries 3 times." At 3 the queue gives up as call 4 says, before any further download.
+- Tests' stand-ins for `fetch_cancel_gcode` keep working: the new shape is additive.
+
+### 64.5 — the walk keeps what the slicer keeps
+- Per tool, keep a position and a mark. A relative move adds to the position; an absolute move sets it. New filament is what the position passes the mark by. The `;EXCLUDE_E` rule stays as it is (an excluded move moves the mark by its own delta).
+- `G92 E<v>`: the position becomes v, and the mark becomes v plus what was owed (mark − position before), so the un-retract after it is not new filament.
+- `G90` / `G91`: read as PrusaSlicer's `GCodeProcessor` reads them (E relative under `G91` or `M83`; check whether `G90` clears `M83` in its source, not from memory).
+- Before it ships: the flexi printed and re-sliced captures and the raccoon capture each walk to within 0.05 mm of their footers per tool (the item's figure), and the 2% cancel still charges 0.13 g on the printed file. Re-pin `test_exclude_e_tags.py` and the Core One fixture's "~1.4% over" in `test_deduct_accuracy_56.py` deliberately, with the new figures.
+
+## Tests
+
+Every change is on the charge path, so each member is proven on the **real deduct functions**: `tests/deduct_wire_harness.py` (`WeightWireSpoolman`: `get_spool` / `update_spool` run for real, weights, the cap and the archive rule as on the wire), `tests/spoolman_extra_fake.SpoolmanHTTPFake` where a list read is involved, the spool-swap tests, and the real `.bgcode` captures. Each new test is shown red on the base, and every fix's pin is checked under its mutant. The hotfix's own files are the neighbours: `test_print_end_heads_hotfix.py`, `test_print_end_review_fixes_hotfix.py`, `test_swap_split_sets_hotfix.py`, `test_fetch_off_watcher_hotfix.py`, `test_review_uncharged_line_hotfix.py`, and the card's node-vm files (`test_cancel_review_sets_js.py`, `test_cancel_review_set_yes_js.py`, `test_cancel_review_picker_scan_js.py`, whose small DOM presses keys and picks options).
+
+| Member | The pin |
+|---|---|
+| 64.1 | Backend, offline: the probe's two shapes on `_compute_swap_split` / `_uncharged_usage` (no gram twice; the cousin asks), then a whole completion through `deduct_completed_print` on the wire harness with a one-position printer map and a two-tool footer: the card's rows and lines add up to the footer exactly. |
+| 64.2 (1) | Backend: two threads (a deduct and `/api/spool/update` through the Flask test client) on one spool over the wire harness: the second waits, nothing is lost. Decision 1: a completion whose spool's used weight changed after the end read, on the wire harness: the line (a), nothing charged (b) or a card (c). |
+| 64.2 (2) | Backend: a set line that doesn't add up, with and without `set_ack`, and with no key at all (an older page): refused, accepted, "reload". Node: today's page sends `set_ack` on its second press only. |
+| 64.2 (3) / 64.4 | Backend, offline, `_CANCEL_DEDUCT_RUN_ASYNC` False: a compute that always raises, and a file that never decodes, are downloaded 3 times, logged once at WARNING, then given up into the right give-up per kind (completion, ambiguous, true cancel); a plain download failure still waits 72 h; another queued print of the same printer goes after the give-up. |
+| 64.2 (4) | Node (`test_cancel_review_picker_scan_js.py`'s driver): a label scanned at scanner pace, and at a slow scanner's pace, onto a focused picker picks that spool on that line, never reaches processScan, and leaves the select where the scan found it; a person's typeahead still moves it. Playwright (the 43.3 picker e2e's routed card, no dev writes): the real browser's typeahead under a scan. |
+| 64.2 (5) | Backend: the Apply's line names every spool and head behind each figure, and still agrees with the ledger's shortfall (`test_review_uncharged_line_hotfix.py`'s cases). |
+| 64.2 (6) | Node: the orange Yes's grams equal the server's `_lines_left_unplaced` on a no_spool card with a set and a short plain line. |
+| 64.2 (7) / (8) | Backend: a #id pick that clamps, an older card and the automatic path keep the head's own entry; node: a run-out spool inside a `sids` entry reads "(ran out, archived)". |
+| 64.2 (9) | Backend: a completion whose end read names a spool its last swap didn't load holds that head as a set (the cancel's own case beside it). |
+| 64.2 (10) | Backend: a cancel at ATTENTION after a recorded swap whose point passes the latched progress splits at the swap. |
+| 64.2 (11) | Node + Playwright: a slow scanner's label into a grams box goes to the scan path with the box put back and the set's count right; a person's "12.5" stays. |
+| 64.3 (1) | Backend on `SpoolmanHTTPFake`: an edge makes one list GET (count them, as Group 52's tests do); `list_reads_fail` gives "couldn't read", never an empty head. A grep-style canary that no deduct test still patches `get_spools_at_location` for the heads read. |
+| 64.3 (2), (4), (6) | Backend: the snapshot with the flag off; a cancel from the ATTENTION prompt names the park read's spool, not one loaded at the prompt; restart recovery with a different job printing opens the ambiguous review. |
+| 64.3 (5), (8) | Backend: a pick-less no_spool Apply on an old card says reload and charges nothing; `deduct_cancelled_print` with an end read never charges a spool loaded after the end, and a held head goes to the review. |
+| 64.3 (7) | Backend: a made-up MMU printer map (five aliases at one position): a slot change is seen per alias; an unchanged slot under a reordered probe is no change. |
+| 64.5 | Offline: committed synthetic files (a last retract, `G92` with a retract owed, a `G91` block under `M82`) at the slicer's count; the real captures within 0.05 mm per tool (skipped where absent, as `test_exclude_e_tags.py` does); the trimmed raccoon fixture against its footer. |
+
+Standing orders that apply:
+- **Write surfaces:** no new Spoolman write is planned. The lock wraps existing writes; deleting `_confirm_no_spool_review` removes no registered site (its writes are `_apply_usage_to_printer`'s, `tests/test_spoolman_write_sites.py` `:404`). Anything that does write goes into `WRITE_SITES` and the write-surface table in the same commit, and CLAUDE.md's print-deduct rows change with 64.2 (2), 64.3 (1), (4), (5), (8) and Decision 1.
+- **Activity Log escaping:** every new line escapes outside text through `print_deduct._esc` (`tests/test_deduct_accuracy_56.py`'s `_unescaped_free_text` canary).
+- **Scanner-safe keys and the keyboard idiom:** 64.2 (4) and (11) ask `window.scanIsArriving()` / `window.enterIsAScan()`, never `isScanInFlight` alone; a person's arrows, typeahead and Enter on the card work as before.
+- **Contrast guard and named text sizes:** Decision 1 (c)'s note and the bold refusals go into `tests/test_contrast_guard.py`; new card text uses `var(--fcc-fs-*)` (`tests/test_text_size_floor.py`).
+- **mountOverlay:** the review already mounts through it; nothing new overlays it.
+- **Toolhead-type one-list canary:** no new head-Type test; heads are named from data.
+- **Load-order canary:** no new script; `cancel_review.js`'s changes run inside its functions.
+- **No setup's own names in what a user reads:** new words name heads and spools from the data only.
+- **Patch semantics:** patch on the defining module; source canaries through `tests/source_family.py`; Python 3.9 syntax in the backend.
+- **The full sweep** before merging (`cancel_review.js` changes), on a quiet desktop.
+
+## Splitting (if the group is too big for its slot)
+
+- **64a, the backend's money parts (~9–12 h):** 64.4 with 64.2 (3), 64.1, 64.2 (1), (5), (7), (9), (10), 64.3 (2), (5), (6), (8), and Decision 1.
+- **64b, the reads and the page (~8–12 h):** 64.3 (1), (4), (7), (9), 64.2 (2), (4), (6), (8), (11), the look, and 64.5.
+- 65 can start after 64a, but both touch `print_monitor.py`'s edges: merge 64b first if they overlap.
+
+## Prod facts (read-only, optional; prod is off-limits without Derek's OK)
+
+- 64.4: prod's `data/pending_cancel_fetches.json`, any record with a high `attempts` (has the loop happened on prod?).
+- Decision 1: prod's `hub.log`, a weighing of a spool between a print's "🔎 … heads at the end of job N" line and its "✔️ … auto-deducted … from Spool #N" line (how often the double count happens).
+- 64.1: prod's `locations.json` Printer rows (a one-position printer?). Dev's copy says none.
+
+## Done when
+
+- No gram is charged twice, or lost, on a one-position printer's swap.
+- A stuck file or a raising compute is said once and given up after 3 tries, and never holds a printer's other prints for 72 h.
+- An edge reads the spool list once, the start snapshot is taken whatever the flag says, and every end FCC can't vouch for asks.
+- The card's set check, picker scans, grams boxes and Yes words agree with the server.
+- The walk keeps each tool's last retract, as the slicer does, on the real captures.
+- Derek's Decision 1 is built as answered (or its default).
+
+## Risks
+
+- **The heads read's new seam (64.3 (1)):** tests that keep patching the old function pass for the wrong reason. Move each deliberately; count GETs to prove the new path runs.
+- **The queue's give-up (64.2 (3) / 64.4):** giving up too early loses a charge FCC could have made; the plain download failure keeps its 72 h, and only a raise or a decode failure counts.
+- **A changed charge for a plain print:** each member's first test is a plain print charged exactly as before.
+- **Same files as 65:** build 64 first and merge it before 65 starts, or rebase 65 on it.
