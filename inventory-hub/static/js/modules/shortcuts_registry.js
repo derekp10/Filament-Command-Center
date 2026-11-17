@@ -236,6 +236,18 @@
     let _closedBy = null;
     let _eating = 0;
 
+    // A scan plainly on its way (a scanner-speed burst, or a buffer that already looks
+    // like a label): the scan's keys, which a close must leave whole. Not
+    // window.scanIsArriving: it also counts any key under 500 ms old, so a person's N
+    // and a quick Escape would keep the N.
+    function _scanPlainlyArriving() {
+        // inv_core.js's `let state` is a global binding, not a window property.
+        const st = (typeof state !== 'undefined') ? state : window.state;
+        const buf = st && typeof st.scanBuffer === 'string' ? st.scanBuffer.trim() : '';
+        return !!buf && !!((window.isScannerBurst && window.isScannerBurst())
+            || (window.looksLikeScanPayload && window.looksLikeScanPayload(buf)));
+    }
+
     // `ev`: the click that closed it, when a pointer did. `gone`: its dialog closed, or
     // another opened over it, rather than the person closing it.
     function _close(ev, gone) {
@@ -243,6 +255,14 @@
         if (!ov) return;
         const bd = document.getElementById('fcc-shortcuts-overlay-backdrop');
         const was = ctx && ctx.el;
+        // A person closing it (Escape, its ✕, its backdrop, ? again) takes the keys they
+        // pressed under it with it (Group 62.5). The hotkeys it covers stand down while it
+        // is up (the audit panel's N, the Quick-Weigh's D, the grid's Q, Shift+B), so the
+        // scan accumulator kept such a key as a scan's first: a person's Enter under
+        // 500 ms after the close then read as a scan of "n" (enterIsAScan's in-flight
+        // rule), and two keys left made it the accumulator's full 2 s. A scan read under
+        // the list had its Enter before the close; one plainly arriving stays whole.
+        if (!gone && !_scanPlainlyArriving() && window.clearScanBuffer) window.clearScanBuffer();
         ov.style.display = 'none';
         if (bd) bd.style.display = 'none';
         if (document.body) document.body.classList.remove('fcc-shortcuts-up');

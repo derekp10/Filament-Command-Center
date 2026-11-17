@@ -778,6 +778,10 @@ window.commitBulkMove = () => {
         if (document.querySelector('[data-overlay-mount="1"]')
             && !(typeof window.isBulkMovePanelOpen === 'function' && window.isBulkMovePanelOpen())) return;
         if (document.querySelector('.modal.show, .offcanvas.show')) return;
+        // Nor under the ⌨️ list, which lists Shift+B (Group 62.5): read there, it armed
+        // a session and opened its panel under the list, out of sight. The 'B' stays
+        // in the scan buffer, and the list's close takes it out (shortcuts_registry.js).
+        if (window.fccShortcutsUp && window.fccShortcutsUp()) return;
         if (_scanInFlight()) return;
         e.preventDefault();
 
