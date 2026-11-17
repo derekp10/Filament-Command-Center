@@ -369,6 +369,8 @@ If the size matters, 67.4 and 67.7 can be a second session: nothing else depends
 
 ## Found while grounding (not in this group's items; for the refresh to file or fold in)
 
+> **Filed 2026-11-16 by the refresh:** (1) joined 67.2's filament-window item, so it is this group's to build with 67.2; (2) and (3) joined 67.6's item, so build them with 67.6 (the same guard, and Group 52's "couldn't read"); (4) joined 71.2's item (Group 71).
+
 1. **The Prusament scan's spool match reads the spool list loosely** (`routes_scan.py:899`, `get_all_spools`, which answers `[]` on a failure). With Spoolman not answering, scanning the QR of a Prusament spool you already own says "isn't in inventory yet" and opens the Add wizard to onboard it a second time. It fits 66 (the wizard's Prusament scans) or 67.2.
 2. **A bare-number scan reads a Spoolman that didn't answer as "ID Not Found"** (`logic.py:1141-1162`).
 3. **`/api/locations` and the move engine read `row['LocationID']` with no guard** (`routes_locations.py:68`, `logic.py:1991-1992`). One hand-edited row with no LocationID breaks the dashboard and every move.
