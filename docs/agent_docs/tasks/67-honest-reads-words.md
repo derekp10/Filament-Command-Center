@@ -28,6 +28,8 @@
 | **67.7** | From *"🟡 Smaller loose ends from Group 53"*: *"No browser test covers the Location Manager title's "Move all →" button, Merge Filament or the attributes bulk add / remove (their routes are pinned offline). `scripts.html`'s comment above `inv_quickswap.js` ("hooks into state.printerMap") describes a load-time dependency that no longer exists."* | **Live.** Only route tests exist. The comment is still at `scripts.html:74-75`. |
 | **67.7** | Pre-refresh audit leftover `G47:47.6-stale-pause-comments`: *"Comments still say a paused Activity Log swaps 'logs' for 'status' (routes_state_pulse.py:621-626, inv_core.js:3078-3082). That has been untrue since 2026-08-05 (inv_core.js:3098, :3460)."* | **Live.** Comments only. |
 
+> **Gained since this file was written (2026-11-17, the refresh, from Groups 70, 72 and 73's task files):** 67.2 gains an item (the 📡 pill's `/api/logs` read has no catch); 67.6's item adds `locations_db.load_locations_list` answering `[]` for a file it can't open; 67.7's comments item adds a stale docstring (`logic._active_print_info_for_location`), a stale z-index comment (`fab_drag.js`) and two dead z-index rules (`global.css`). Read those items in `Feature-Buglist.md`.
+
 ## Decisions
 
 ### For Derek (one; it has a default, so nothing waits)

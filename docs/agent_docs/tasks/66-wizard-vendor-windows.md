@@ -26,6 +26,8 @@
 
 Not in this group: the vendor editor made easier to find (59.10) and the wizard's ▾ at 3.71:1 (59.6) are in Group 59's picture session; Group 73 writes the wizard's and the vendor editor's help after this group.
 
+> **Gained since this file was written (2026-11-17, the refresh, from Group 73's task file):** a new member, **66.8**, Edit Filament's close question and the wizard's 🔍 Advanced Search: two buglist items (Edit Filament asks before closing unsaved only on Escape, where the wizard asks on every way out; the Advanced Search's `alert()`, missing catch, wrong panel words and unescaped names). Not grounded here: about 2–3 h by its findings; ground it at the build. And 66.4's item adds the search panel's box (a scanned label becomes words to find). Read those items in `Feature-Buglist.md`.
+
 ## Decisions
 
 ### For Derek
