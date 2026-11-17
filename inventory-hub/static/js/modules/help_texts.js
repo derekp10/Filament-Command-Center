@@ -80,6 +80,7 @@
             'A spool going onto a toolhead takes the place of the one there, which goes back to the box slot it came from (with no record of one, to the printer\'s room, else Unassigned).',
             'On an idle toolhead the question opens on Yes, swap. While the printer prints, or when FCC couldn\'t check the printer, it says so and opens on No, cancel, so a stray Enter moves nothing.',
             'While the printer prints, it also shows a QR above each button: scan one to answer. Enter presses the button that has the keyboard, and Tab moves between the two.',
+            'While it is open, any other scan is ignored, and the question says so: answer it first, then scan again.',
         ],
     });
 
@@ -169,7 +170,7 @@
             'Just store it: the spool goes in the slot, and HEAD-1 is left as it was. Cancel: nothing moves.',
             'Enter stores it, or cancels when there is no Just store it. Scan the QR under a button to answer with it. Any other scan is ignored, and the question says so: scan it again once you have answered.',
             'If what the slot feeds changes while you decide, FCC asks again and names the new toolhead.',
-            'Some actions during a print (a move straight onto or off a printing toolhead, an Undo) ask a shorter question instead: Continue Anyway or Cancel. It opens on Cancel, so a stray Enter moves nothing, but other scans still go through while it is open.',
+            'Some actions during a print (a move straight onto or off a printing toolhead, an Undo) ask a shorter question instead: Continue Anyway or Cancel. It opens on Cancel, so a stray Enter moves nothing, and it holds off other scans too until it is answered.',
         ],
         scopes: ['Load / Store Question'],
     });

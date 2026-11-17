@@ -3318,11 +3318,13 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
     // generic CMD-routes below. Returns true on a matched session — fall
     // through to the rest of the dispatch otherwise.
     if (window.routeConfirmScan && window.routeConfirmScan(text)) return;
-    // Group 40.3: a load question on screen (the three-way "Load it instead /
-    // Just store it / Cancel") holds off every other scan until it is answered.
-    // Its own QRs were answered just above; CMD:CANCEL cancels it; anything else
-    // is refused and does nothing (a second slot label used to start a second
-    // move behind the dialog). The dialog says why too: toasts sit under it.
+    // Group 40.3: a question on screen holds off every other scan until it is
+    // answered: the three-way "Load it instead / Just store it / Cancel", and since
+    // Group 62.2 the printing yes / no "Continue Anyway / Cancel" and the Quick-Swap
+    // confirm. Its own QRs were answered just above; CMD:CANCEL cancels it (the
+    // question, never an audit behind it); anything else is refused and does
+    // nothing (a second slot label used to start a second move behind the dialog).
+    // The dialog says why too: toasts sit under it.
     let openQuestion = window._fccOpenMoveQuestion;
     while (openQuestion && openQuestion.element && openQuestion.element.isConnected === false) {
         // Its dialog left the page without being answered (Group 40.3 review,

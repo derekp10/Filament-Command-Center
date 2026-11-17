@@ -230,9 +230,12 @@ window.unionConfirmFedHeads = unionConfirmFedHeads;
 //     (the no). Nothing about printing is invented: a printing answer's body
 //     says so itself. Enter stores (Derek, 2026-10-14: a toolhead can't be
 //     loaded mid-print, and on the fed dialog too); with no store option it
-//     cancels, never loads. While it is open, other scans are held off
-//     (window._fccOpenMoveQuestion, read by processScan).
-// Both: one answer only (a double click, or a click racing a scan, moves
+//     cancels, never loads.
+// Both: while it is open, other scans are held off (window._fccOpenMoveQuestions,
+// read by processScan): its own QRs and a bare CMD:CANCEL answer it, and any other
+// scan is refused and said on its status line (Group 62.2: the yes / no held off
+// nothing, so a slot label scanned meanwhile started a second move behind it).
+// One answer only (a double click, or a click racing a scan, moves
 // once); a scan in flight owns its Enter, and so does a slower scanner's
 // buffered payload; Tab (and ←/→ in the three-way) cycles the buttons; Escape
 // cancels through mountOverlay; the QR row mirrors the buttons (CMD:CONFIRM /
@@ -459,9 +462,9 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
     // three-way opens on its safe answer: Continue Anyway takes a deliberate
     // Tab or click.
     const extras = `<div class="fcc-apc-hint" style="font-size:var(--fcc-fs-small); color:#ccc; margin-top:8px;">Enter ${hasStore ? 'stores it' : noVerb} · Esc ${noVerb}</div>`;
-    const status = threeWay
-        ? `<div class="fcc-apc-status" role="alert" style="display:none; margin-bottom:10px; padding:6px 10px; border-radius:6px; background:#4a3200; color:#ffd27a; border:1px solid #ffb74d; font-weight:bold; text-align:left;"></div>`
-        : '';
+    // Why a scan did nothing, said on the question itself: the toast layer (z 11000)
+    // sits under it. Both forms hold scans off (Group 62.2).
+    const status = `<div class="fcc-apc-status" role="alert" style="display:none; margin-bottom:10px; padding:6px 10px; border-radius:6px; background:#4a3200; color:#ffd27a; border:1px solid #ffb74d; font-weight:bold; text-align:left;"></div>`;
     const content = `
         <div class="fcc-apc-panel${tiled ? ' fcc-apc-tiled' : ''}" style="background:#1e1e1e; color:#fff; border:2px solid ${border}; border-radius:8px; padding:20px min(24px, 4vw); ${width} text-align:center;${helpKey ? ' position:relative;' : ''}">${helpBtn}
             <div class="fcc-apc-title" style="font-size:1.2em; font-weight:bold; margin-bottom:8px;${helpKey ? ' padding:0 2.5rem;' : ''}">${header}</div>
@@ -482,7 +485,7 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         if (handle) { try { handle.cleanup(); } catch (_) { /* noop */ } handle = null; }
         if (hostOff) { try { hostOff(); } catch (_) { /* noop */ } hostOff = null; }
         if (question) {
-            // Scans are held off while ANY three-way is open (Group 40.3 fix
+            // Scans are held off while ANY question is open (Group 40.3 fix
             // check, W3): answering the newer of two let a scan start a move
             // behind the older one.
             const open = (window._fccOpenMoveQuestions || []).filter(q => q !== question);
@@ -633,17 +636,21 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
     // Fitted to the screen: box ids whole where they fit, and a question
     // taller than the window scrolls inside itself.
     fccFitQuestion(handle.panel);
-    if (threeWay) {
+    {
         // The question on screen: processScan holds off every other scan until
         // it is answered (a second slot label used to start a second move
         // behind the dialog). The status line says why a scan did nothing:
-        // the toast layer (z 11000) sits under this dialog.
+        // the toast layer (z 11000) sits under this dialog. The yes / no too
+        // (Group 62.2): it held off nothing, and a bare CMD:CANCEL reached no
+        // handler (with the audit panel hidden it went on and ended the audit).
         // What a held-off scan is told (processScan): the buttons on screen
         // (Group 40 review, BD-6: a question with no store said "Just store it").
-        const said = [hasLoad ? (loadLabel || 'Load it instead') : '', hasStore ? 'Just store it' : '', cancelLabel || 'Cancel']
-            .filter(Boolean);
+        const said = threeWay
+            ? [hasLoad ? (loadLabel || 'Load it instead') : '', hasStore ? 'Just store it' : '', cancelLabel || 'Cancel']
+                .filter(Boolean)
+            : ['Continue Anyway', 'Cancel'];
         question = {
-            title,
+            title: threeWay ? title : `${first.printer_name || 'A printer'} is ${first.state || 'PRINTING'}`,
             hint: hint || `Answer the question on screen first: ${said.slice(0, -1).join(', ')}`
                 + `${said.length > 2 ? ',' : ''} or ${said[said.length - 1]}`,
             // processScan drops a hold-off whose dialog is no longer on the page.

@@ -751,7 +751,7 @@
     window.registerShortcut({
         id: 'scan-cmd-cancel', scope: 'Scan Commands',
         keys: ['CMD:CANCEL'],
-        description: 'Cancel without moving anything: an active audit (safe bail; opposite of CMD:DONE), the slot picker, or the load question on screen.'
+        description: 'Cancel without moving anything: the question on screen (a load, printing or Quick-Swap question; never an audit behind it), the slot picker, or an active audit (safe bail; opposite of CMD:DONE).'
     });
     window.registerShortcut({
         id: 'scan-cmd-needlabel', scope: 'Scan Commands',
@@ -780,7 +780,7 @@
     window.registerShortcut({
         id: 'load-question-cancel', scope: 'Load / Store Question',
         keys: ['Esc'],
-        description: 'Cancel: nothing moves, and the QR under Cancel does the same. A question with Load it instead or Just store it holds off other scans until it is answered; the shorter Continue Anyway question doesn\'t.'
+        description: 'Cancel: nothing moves, and the QR under Cancel does the same. The question holds off other scans until it is answered, and so does the shorter Continue Anyway question.'
     });
     window.registerShortcut({
         id: 'scan-cmd-slot', scope: 'Scan Commands',

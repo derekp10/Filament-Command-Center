@@ -99,6 +99,49 @@ def test_quickswap_confirm_overlay_has_no_gray_on_gray_text(page: Page, open_man
     assert_contrast(overlay)
 
 
+@pytest.mark.usefixtures("require_server")
+def test_a_questions_held_off_scan_line_is_readable(page: Page, base_url: str, assert_contrast):
+    """Group 62.2: the printing yes / no and the Quick-Swap confirm hold off other scans
+    now, and say on themselves why a scan did nothing (toasts sit under them), in the
+    three-way's look. Each is drawn with nothing sent (every write answered in the
+    browser, the printer's answer a stub), a label scanned and held off, the line scored,
+    then Escape."""
+    import conftest   # local: keeps this file's header out of other branches' merges
+    from test_text_size_guard import _read_only
+    _read_only(page)
+    conftest.quiet_heartbeat(page)
+    page.goto(base_url)
+    page.wait_for_function("() => typeof window.confirmActivePrint === 'function'"
+                           " && typeof window.quickSwapTap === 'function' && typeof state !== 'undefined'")
+    page.evaluate("""() => window.confirmActivePrint({
+        activePrint: { toolhead: 'XL-3', printer_name: 'XL', state: 'PRINTING' },
+        msg: 'Moving #57 now will disrupt the print. Continue?', ids: { overlay: 'fcc-contrast-yes-no' } })""")
+    question = page.locator("#fcc-contrast-yes-no")
+    expect(question.locator(".fcc-apc-no")).to_be_visible()
+    page.evaluate("() => window.processScan('LOC:SHELF-8', 'barcode')")
+    expect(question.locator(".fcc-apc-status")).to_be_visible()
+    assert_contrast(question)
+    scored = " ".join(o.get("text", "") for o in conftest.contrast_offenders(question, min_ratio=100))
+    assert "Answer the question on screen first" in scored, scored
+    page.keyboard.press("Escape")
+    expect(question).to_have_count(0)
+
+    page.evaluate("""() => {
+        window.checkPrinterForHead = () => Promise.resolve({ active: true, known: true, state: 'PRINTING', printer_name: 'XL' });
+        const b = document.createElement('button');
+        Object.assign(b.dataset, { toolhead: 'XL-1', box: 'LR-MDB-1', slot: '1', spoolId: '57', spoolLabel: 'PLA Red' });
+        window.quickSwapTap(b); }""")
+    swap = page.locator("#fcc-quickswap-confirm-overlay")
+    expect(swap.locator(".fcc-confirm-qr-row")).to_be_visible(timeout=8000)
+    page.evaluate("() => window.processScan('LOC:SHELF-9', 'barcode')")
+    expect(swap.locator("#fcc-quickswap-confirm-status")).to_be_visible()
+    assert_contrast(swap)
+    scored = " ".join(o.get("text", "") for o in conftest.contrast_offenders(swap, min_ratio=100))
+    assert "Yes, swap or No, cancel" in scored, scored
+    page.keyboard.press("Escape")
+    expect(swap).to_have_count(0)
+
+
 # ---------------------------------------------------------------------------
 # Shortcuts overlay (? help)
 # ---------------------------------------------------------------------------

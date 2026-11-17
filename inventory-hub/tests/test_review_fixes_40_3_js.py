@@ -80,9 +80,15 @@ const held = !!window._fccOpenMoveQuestion;
 window.confirmActivePrint({{ activePrints: [{{ toolhead: 'XL-2', printer_name: 'XL', state: 'PRINTING' }}],
                             msg: 'XL is PRINTING. Continue?', onConfirm() {{}} }});
 await __settle(80);
-return {{ held, after: !!window._fccOpenMoveQuestion, sent, toasts: toasts(), logs: posts('/api/log_event') }};
+const q = window._fccOpenMoveQuestion;
+return {{ held, after: !!q, title: q && q.title, open: (window._fccOpenMoveQuestions || []).length,
+         sent, toasts: toasts(), logs: posts('/api/log_event') }};
 """)
-    assert res["held"] is True and res["after"] is False, res
+    # PIN UPDATED DELIBERATELY (Group 62.2): the yes / no holds scans off too now, so
+    # the question left holding them is the new one, and only it: the superseded
+    # three-way let go of its hold.
+    assert res["held"] is True and res["after"] is True and res["open"] == 1, res
+    assert res["title"] == "XL is PRINTING", res
     assert res["sent"] == [] and not any("Cancelled" in t["msg"] for t in res["toasts"]), res["toasts"]
     assert any("was replaced by another question" in (lg.get("msg") or "") for lg in res["logs"]), res["logs"]
 

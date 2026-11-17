@@ -597,6 +597,10 @@
                      id="fcc-quickswap-confirm-title">${_escapeHtml(titleText)}</div>
                 <div class="text-light mb-3" style="font-size:1.05rem;"
                      id="fcc-quickswap-confirm-body">${bodyHtml}</div>
+                <!-- Why a scan did nothing while this is open (Group 62.2): the
+                     toast layer (z 11000) sits under it. -->
+                <div id="fcc-quickswap-confirm-status" class="fcc-qs-status" role="alert"
+                     style="display:none; margin-top:10px; padding:6px 10px; border-radius:6px; background:#4a3200; color:#ffd27a; border:1px solid #ffb74d; font-weight:bold; text-align:left;"></div>
                 <!-- Buttons mirror the QR row's flex layout exactly (gap:14px;
                      justify-content:center; from attachConfirmQRs in
                      inv_core.js). The CONFIRM QR's "📷 SCAN TO CONFIRM"
@@ -620,11 +624,24 @@
         `;
 
         let qrSession = null;
+        let question = null;
+        let statusTimer = null;
         const close = () => {
             document.removeEventListener('keydown', keyHandler, true);
             if (qrSession) { try { qrSession.cleanup(); } catch (_) { /* noop */ } qrSession = null; }
             try { handle.cleanup(); } catch (_) { /* noop */ }
             if (_activeConfirmClose === close) _activeConfirmClose = null;
+            if (question) {
+                // Scans are held off while ANY question is open, so the older of two
+                // still holds them once the newer is answered (confirmActivePrint's rule).
+                const open = (window._fccOpenMoveQuestions || []).filter((q) => q !== question);
+                window._fccOpenMoveQuestions = open;
+                if (window._fccOpenMoveQuestion === question) {
+                    window._fccOpenMoveQuestion = open.length ? open[open.length - 1] : null;
+                }
+                question = null;
+            }
+            clearTimeout(statusTimer);
         };
         // ONE confirm path for Enter, the Yes button and the QR. onConfirm gets
         // the probe result, so a caller can tell the backend the user confirmed
@@ -749,6 +766,28 @@
         no.onclick = close;
         document.addEventListener('keydown', keyHandler, true);
         _activeConfirmClose = close;
+        // The question on screen holds off every other scan until it is answered
+        // (Group 62.2, found grounding it): a slot label scanned meanwhile started a
+        // second move behind it. Its own QRs (a printing head's) are answered first
+        // (routeConfirmScan), a bare CMD:CANCEL cancels it, and anything else is
+        // refused and said on its status line (processScan).
+        question = {
+            title: titleText,
+            hint: 'Answer the question on screen first: Yes, swap or No, cancel',
+            // processScan drops a hold-off whose dialog is no longer on the page.
+            element: ov,
+            cancel: () => close(),
+            flash: (text) => {
+                const line = ov.querySelector('#fcc-quickswap-confirm-status');
+                if (!line) return;
+                line.textContent = text;
+                line.style.display = 'block';
+                clearTimeout(statusTimer);
+                statusTimer = setTimeout(() => { line.style.display = 'none'; }, 7000);
+            },
+        };
+        window._fccOpenMoveQuestions = (window._fccOpenMoveQuestions || []).concat([question]);
+        window._fccOpenMoveQuestion = question;
     };
 
     // Public teardown for the manage modal to call on hide.
