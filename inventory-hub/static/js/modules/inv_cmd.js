@@ -4300,14 +4300,23 @@ const _askRecordSource = (pick, sid, host) => {
             statusTimer = setTimeout(() => { line.style.display = 'none'; }, 7000);
         };
         const choose = (f) => finish({ box: String(f.box).toUpperCase(), slot: String(f.slot) });
+        // Its answers take no click until a double click has passed (Group 62.3): it opens
+        // where the Printer picker's question was, right after "Load it instead", and the
+        // second click of a double click on that recorded a home nobody had read. Cancel
+        // takes a click at once; Enter and the QRs answer at once (`acts`, never the click).
+        const armMs = window.questionArmMs ? window.questionArmMs() : 700;
+        const armed = (fn) => (window.armedClick ? window.armedClick(fn, armMs) : fn);
+        const acts = new Map();
         feeds.forEach((f, i) => {
             if (!f.free) return;
             const b = ov.querySelector(`.fcc-rs-opt[data-rs-i="${i}"]`);
-            if (b) b.onclick = () => choose(f);
+            if (b) { acts.set(b, () => choose(f)); b.onclick = armed(() => choose(f)); }
         });
         const noneBtn = ov.querySelector('.fcc-rs-none');
         const cancelBtn = ov.querySelector('.fcc-rs-cancel');
-        noneBtn.onclick = () => finish('');
+        acts.set(noneBtn, () => finish(''));
+        acts.set(cancelBtn, () => finish(null));
+        noneBtn.onclick = armed(() => finish(''));
         cancelBtn.onclick = () => finish(null);
         // Heard on the document while it is on top and the ⌨️ list is down (Group 62.4):
         // on its own overlay they went dead after a click on its words, which moves the
@@ -4326,7 +4335,7 @@ const _askRecordSource = (pick, sid, host) => {
                 if (order.includes(ae)) {
                     e.preventDefault(); e.stopPropagation();
                     if (window.clearScanBuffer) window.clearScanBuffer();   // a key a person left starts no scan
-                    ae.click();
+                    (acts.get(ae) || (() => ae.click()))();                 // never waits: no second click
                     return;
                 }
                 // Its other controls (its ?): Enter presses them, as on any button.

@@ -658,6 +658,10 @@
         const actions = c.actions.concat([{ key: 'back', label: 'Back', sub: 'pick another slot' }]);
         s.view = 'choice';
         s.choice = { tile: t, via, actions };
+        // Its answers take no click until a double click on the tile has passed (Group
+        // 62.3): the question opens in the panel under the pointer, and the second click
+        // chose for the slot's spool. Back, Enter and the QRs never wait.
+        s.choiceArmedAt = Date.now() + (window.questionArmMs ? window.questionArmMs() : 700);
         const occ = (t.data && t.data.spool) || null;
         // One tone per action, for its button AND its QR (attachConfirmQRs'
         // tones are named after the Bootstrap button variants).
@@ -1004,7 +1008,9 @@
             const choice = e.target.closest && e.target.closest('[data-sp-choice]');
             if (choice) {
                 e.preventDefault();
-                _choose(s, choice.getAttribute('data-sp-choice'));
+                const key = choice.getAttribute('data-sp-choice');
+                if (key !== 'back' && s.choiceArmedAt && Date.now() < s.choiceArmedAt) return;   // armed (62.3)
+                _choose(s, key);
                 return;
             }
             const tile = e.target.closest && e.target.closest('.fcc-sp-tile');

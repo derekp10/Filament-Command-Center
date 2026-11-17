@@ -764,7 +764,11 @@
             }
         }
 
-        yes.onclick = doConfirm;
+        // Yes takes no click until a double click on the tile that asked has passed
+        // (Group 62.3): the confirm can open with Yes under the pointer. No, Enter and
+        // the QRs never wait.
+        yes.onclick = window.armedClick
+            ? window.armedClick(doConfirm, window.questionArmMs ? window.questionArmMs() : 700) : doConfirm;
         no.onclick = close;
         document.addEventListener('keydown', keyHandler, true);
         _activeConfirmClose = close;

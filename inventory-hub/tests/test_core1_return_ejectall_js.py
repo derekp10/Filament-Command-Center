@@ -89,6 +89,9 @@ const MODULE_PATHS = __MODULE_PATHS__;
 function prelude() {
   globalThis.window = globalThis;
   globalThis.self = globalThis;
+  // Group 62.3: a question's answers wait 700 ms for a click; a scenario presses them at
+  // once. A scenario about the arming deletes it.
+  globalThis.fccQuestionArmMs = 0;
   const rec = globalThis.__rec = { toasts: [], logs: [], fetches: [], overlays: [], safety: [], ejectAll: [] };
   globalThis.__overlayEls = [];
 

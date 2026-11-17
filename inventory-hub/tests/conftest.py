@@ -738,6 +738,11 @@ def page(page, request):
     page.on("request", _started)
     page.on("requestfinished", _ended)
     page.on("requestfailed", _ended)
+    # Group 62.3: a question's answers take no click for 700 ms after it opens (a
+    # double click's second press must answer nothing). The tests press them at once,
+    # so the page's own value is 0 here; a test about the arming takes it away
+    # (`delete window.fccQuestionArmMs` in an init script of its own, added after this).
+    page.add_init_script("window.fccQuestionArmMs = 0;")
     request.node._fcc_net = net
     request.node._fcc_page = page
     request.node._fcc_hub_offset = hub_log_size()
@@ -2343,6 +2348,9 @@ def isolated_page(_isolated_chromium):
     """
     context = _isolated_chromium.new_context(viewport=BASELINE_VIEWPORT)
     context.route("**/*", lambda route: route.abort())
+    # Group 62.3: a question's answers wait 700 ms for a click; the tests press them at
+    # once (see the `page` fixture). A test about the arming deletes it.
+    context.add_init_script("window.fccQuestionArmMs = 0;")
     page = context.new_page()
     try:
         yield page

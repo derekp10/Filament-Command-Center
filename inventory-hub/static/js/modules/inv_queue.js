@@ -222,8 +222,12 @@ window.executeClearQueue = () => {
     if (clearConfirmModal) clearConfirmModal.hide();
 };
 
+// One send at a time (Group 62.3): the second press of a double click on 📄 Send, while
+// the first was still writing, sent the batch again.
+let _queueSending = false;
 window.printQueueCSV = () => {
-    if (labelQueue.length === 0) return;
+    if (labelQueue.length === 0 || _queueSending) return;
+    _queueSending = true;
     const overwrite = document.getElementById('chk-overwrite-csv').checked;
 
     const spools = labelQueue.filter(i => i.type === 'spool').map(i => i.id);
@@ -259,8 +263,11 @@ window.printQueueCSV = () => {
             _renderQueueList();
             window.updateQueueUI();
             modals.queueModal.hide();
+            // The window closes under the pointer: the second press of a double click
+            // on Send reaches nothing behind it (Group 62.3).
+            if (window.fccShieldNextPress) window.fccShieldNextPress();
         }
-    });
+    }).finally(() => { _queueSending = false; });
 };
 
 /* --- MULTI-SPOOL FEATURE (Modal Version) --- */

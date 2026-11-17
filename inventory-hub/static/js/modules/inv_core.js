@@ -261,11 +261,14 @@ window.unionConfirmFedHeads = unionConfirmFedHeads;
 // now): a line that fits is drawn as one row still, and one that doesn't keeps its
 // name whole and puts its `where` under it, nothing cut (a touch screen can't read a
 // line's title).
-// `armAfterMs` (Group 58 review; default 0, every other door as it was): the yes
-// button's CLICK does nothing until that long after the mount. The question can open
-// with its yes under the pointer, and the second click of a double click on the
-// button that asked it then answered a question nobody had read (a whole batch
-// parked). Enter and the QRs are no second click, so they don't wait.
+// `armAfterMs` (Group 58 review; every question since Group 62.3): the yes button's
+// CLICK, and the store's, does nothing until that long after the mount. The question
+// can open with its yes under the pointer, and the second click of a double click on
+// the button that asked it then answered a question nobody had read (a whole batch
+// parked). Left out, it is window.fccQuestionArmMs when a number (the test harnesses
+// set 0), else QUESTION_ARM_MS (700, Group 58's double-press figure); a door passes 0
+// only with a comment saying why. Cancel never waits, and Enter and the QRs are no
+// second click, so they don't wait either.
 // A list of every spool, as colour tiles (`tiles: true` on a section; Done's question,
 // Derek, 2026-11-03: "display the spools like we did in the audit window ... a vibrant
 // list of data where an out of place color might spark a memory"): its lines are
@@ -277,6 +280,70 @@ window.unionConfirmFedHeads = unionConfirmFedHeads;
 // is no scroller (fccFitQuestion's rule). Scrolling, the lists are a stop in the Tab
 // order that the arrow and page keys scroll, and Enter there does what the hint says.
 const _openMoveConfirms = {};
+
+// --- A QUESTION'S ANSWERS WAIT FOR A DOUBLE CLICK TO PASS (Group 62.3) ---
+// How long a question's answers that do something take no click after it opens: the
+// second click of a double click on the button that asked it lands within this (Group
+// 58's DOUBLE_PRESS_MS). questionArmMs(explicit): a door's own figure, else the test
+// harnesses' window.fccQuestionArmMs (0), read as each question opens, else 700.
+// armedClick(fn, ms): fn, called only once `ms` have passed since now.
+const QUESTION_ARM_MS = 700;
+window.QUESTION_ARM_MS = QUESTION_ARM_MS;
+const questionArmMs = (explicit) => (typeof explicit === 'number' ? explicit
+    : (typeof window.fccQuestionArmMs === 'number' ? window.fccQuestionArmMs : QUESTION_ARM_MS));
+window.questionArmMs = questionArmMs;
+const armedClick = (fn, ms) => {
+    if (!(ms > 0)) return fn;
+    const armedAt = Date.now() + ms;
+    return (...args) => { if (Date.now() >= armedAt) return fn(...args); return undefined; };
+};
+window.armedClick = armedClick;
+
+// --- THE SECOND PRESS AFTER A WINDOW CLOSES UNDER THE POINTER (Group 62.3) ---
+// window.fccShieldNextPress(): called as a press closes the window it was on (the Print
+// Queue's 📄 Send), so the second press of that double click, which would land on
+// whatever lay behind the window, reaches nothing: its pointerdown, mousedown,
+// pointerup, mouseup, click and dblclick, as Group 58's _shieldPage does for the audit
+// (inv_cmd.js). Only while the press that did it is under QUESTION_ARM_MS old, only a
+// press within 16 px of it (40 for a finger or a pen), and a click from the keyboard
+// is no press; any other press ends the shield.
+(() => {
+    if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return;
+    let last = null;      // the last primary press: { at, x, y, slop }
+    let shield = null;    // the press whose double click's second press reaches nothing
+    let eating = 0;
+    const isSecond = (first, e, now) => !!first && typeof e.clientX === 'number'
+        && now - first.at < QUESTION_ARM_MS
+        && Math.abs(e.clientX - first.x) <= first.slop && Math.abs(e.clientY - first.y) <= first.slop;
+    document.addEventListener('pointerdown', (e) => {
+        if (e.button > 0) return;
+        const now = Date.now();
+        const s = shield;
+        shield = null;            // one press: this one, or one elsewhere, ends it
+        eating = 0;
+        if (isSecond(s, e, now)) {
+            eating = now;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            return;
+        }
+        last = { at: now, x: e.clientX, y: e.clientY, slop: e.pointerType === 'mouse' ? 16 : 40 };
+    }, true);
+    ['mousedown', 'pointerup', 'mouseup', 'click', 'dblclick'].forEach((type) => {
+        document.addEventListener(type, (e) => {
+            if (!eating || Date.now() - eating > 2000) return;
+            if (type === 'click' && !e.detail) return;      // a key's click: not this press
+            if (e.button > 0) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            if (type === 'dblclick') eating = 0;
+        }, true);
+    });
+    window.fccShieldNextPress = () => {
+        const now = Date.now();
+        if (last && now - last.at < QUESTION_ARM_MS) shield = Object.assign({}, last, { at: now });
+    };
+})();
 
 // --- A SPOOL AS A COLOUR TILE (Group 58; Derek, 2026-11-03) ---
 // The audit panel's look for a spool in a list nobody presses: Done's question and the
@@ -393,7 +460,7 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
                                printing = null, noLoad = false, hint = '',
                                cancelLabel = '', cancelVerb = '', loadVerb = '',
                                loadCaption = '', cancelCaption = '', sections = null,
-                               armAfterMs = 0, keepWhole = false, help = null } = {}) => {
+                               armAfterMs = null, keepWhole = false, help = null } = {}) => {
     const esc = (s) => String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -539,9 +606,11 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         && handle.panel.classList.contains('fcc-apc-lists-scroll'));
     // What Enter does on the lists, as anywhere but a button: the hint says so there too.
     const otherVerb = hasStore ? 'stores it' : noVerb;
-    const armedAt = Date.now() + armAfterMs;
-    if (yesBtn) yesBtn.onclick = armAfterMs > 0 ? () => { if (Date.now() >= armedAt) yes(); } : yes;
-    if (storeBtn) storeBtn.onclick = store;
+    // The yes and the store take no click until a double click on the button that
+    // asked has passed (Group 62.3); Cancel takes one at once.
+    const armMs = questionArmMs(armAfterMs);
+    if (yesBtn) yesBtn.onclick = armedClick(yes, armMs);
+    if (storeBtn) storeBtn.onclick = armedClick(store, armMs);
     if (noBtn) noBtn.onclick = no;
     // The hint says what Enter does on the button that has the focus (Group 50
     // review: "Enter cancels" stayed up with the focus on Continue Anyway).
