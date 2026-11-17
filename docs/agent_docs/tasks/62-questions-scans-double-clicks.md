@@ -12,7 +12,9 @@ No Spoolman write changes, unless Derek picks (b) for 62.9.
 
 > **🔄 2026-11-16 (after the grouping): 62.10 added**, the slot picker's missing CR LF Enter rule, found by the investigation of Group 40's dropped hand checks. ~1–2 h with its pins.
 >
-> **Status: TODO, filed 2026-11-16** (/refresh-groups; Derek approved the grouping the same day: "otherwise this seems fine"). **First in the recommended order**: it holds the daily scan path's two 🟠 (62.1, 62.2). **Starts ready:** 62.1–62.8 need nothing from Derek. 62.9 is one question at the group's start (see Decisions), and it blocks nothing else.
+> **Status: IN PROGRESS, started 2026-11-17** on `feature/group-62-questions-scans-double-clicks` (from `dev` `453b472`; no app code had changed since the grounding at `3388c7d`, so its anchors held). **Derek's answers at the start (2026-11-17):** 62.9 **(a) keep Eject All as it is**; Claude's calls below: *"Go ahead as planned"* (DEPOSIT HERE's QR included). On 62.10 he added: *"I can't confirm in the inateck app what values the scanner sends at the end. The option in the configuration just says enter … So I don't want to expect a CR LF if we only send a CR or just a LF."* The fix assumes neither: it drops only an Enter within 100 ms of a scan's own, so one Enter changes nothing and a doubled one loses its second.
+>
+> **Filed 2026-11-16** (/refresh-groups; Derek approved the grouping the same day: "otherwise this seems fine"). **First in the recommended order**: it holds the daily scan path's two 🟠 (62.1, 62.2). **Starts ready:** 62.1–62.8 need nothing from Derek. 62.9 is one question at the group's start (see Decisions), and it blocks nothing else.
 > **Grounded the same day**, read-only, on `dev` @ `3388c7d`. Every member is still live; each row below says what was found. Two of the four overlays 62.4 names were only partly right. Grounding also found three siblings, now folded in:
 > - the Quick-Swap confirm holds off no scans either (62.2);
 > - a card's own 🗑️ isn't stopped during an audit (62.7);
@@ -65,6 +67,7 @@ No Spoolman write changes, unless Derek picks (b) for 62.9.
   - A printed label still empties a shelf.
   - (c) puts a button that moves every spool into every window, and (b) takes away something you have used.
 - **If you don't answer:** (a). 62.9 blocks nothing else in the group.
+- **✅ Answered 2026-11-17: (a) keep it as it is.** Only the dead list-view QR call and its comment go.
 
 ### Claude's calls (for veto)
 
