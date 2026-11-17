@@ -409,11 +409,17 @@ document.addEventListener('DOMContentLoaded', () => {
     // Bootstrap's per-modal handler never sees them, so the user gets
     // stuck on the locations list with no keyboard way out.
     //
-    // Strategy:
-    //   - If manageModal is showing, preempt Bootstrap and route through
-    //     closeManage so the breadcrumb pops instead of wiping.
-    //   - Otherwise, dismiss the topmost visible Bootstrap modal as a
-    //     fallback. This keeps Escape working across the whole stack.
+    // Strategy (Group 62.4: an Escape reaches only the window on top):
+    //   - If manageModal is the window on top, preempt Bootstrap and route
+    //     through closeManage so the breadcrumb pops instead of wiping.
+    //   - Another window on top (a spool's or a filament's window over a
+    //     place's, Edit Filament, the QR view) answers its own Escape: with the
+    //     focus inside it, its own handlers hear this one; with the focus on the
+    //     page, the Escape is handed to it, as if the focus were there. This
+    //     handler hears every Escape first (the document, capture phase), and it
+    //     used to close a place's window open anywhere underneath, and to hide
+    //     the top window past its own Escape code (Edit Filament's "Close
+    //     without saving?").
     document.addEventListener('keydown', (e) => {
         if (e.key !== 'Escape') return;
 
@@ -431,17 +437,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const tag = (e.target && e.target.tagName) || '';
         if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable)) return;
 
-        // Manage-modal priority path: breadcrumb pop or close.
-        if (modalEl.classList.contains('show')) {
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            window.closeManage();
-            return;
-        }
-
-        // Fallback: dismiss the topmost visible Bootstrap modal. This
-        // covers locMgrModal / locModal / any other stacked modal whose
-        // own keyboard handler may have lost focus tracking.
+        // The window on top: the highest z-index (the page gives each window it
+        // shows one above the open ones, inv_core.js).
         const shown = Array.from(document.querySelectorAll('.modal.show'));
         if (shown.length === 0) return;
         const topmost = shown.reduce((a, b) => {
@@ -449,15 +446,25 @@ document.addEventListener('DOMContentLoaded', () => {
             const zb = parseInt(getComputedStyle(b).zIndex || '0', 10) || 0;
             return zb > za ? b : a;
         });
-        // Respect any modal that has opted out of keyboard dismissal.
-        if (topmost.getAttribute('data-bs-keyboard') === 'false') return;
-        const inst = (window.bootstrap && window.bootstrap.Modal)
-            ? window.bootstrap.Modal.getInstance(topmost)
-            : null;
-        if (!inst) return;
+
+        // Manage-modal priority path: breadcrumb pop or close, only when it is on top.
+        if (topmost === modalEl) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            window.closeManage();
+            return;
+        }
+
+        // Another window on top answers its own Escape. With the focus inside it,
+        // its own handlers hear this one (Bootstrap's dismiss, a guard of its own).
+        if (topmost.contains(e.target)) return;
+        // With the focus on the page they would hear nothing (Bootstrap's own
+        // handler sits on the window), so the Escape is handed to it: a window
+        // that opted out of keyboard dismissal (data-bs-keyboard="false") still
+        // runs its own Escape code, and only that window's.
         e.preventDefault();
         e.stopImmediatePropagation();
-        inst.hide();
+        topmost.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
     }, true);
 
     modalEl.addEventListener('hidden.bs.modal', () => {

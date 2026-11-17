@@ -85,6 +85,17 @@ window.fetch = (url, opts) => {
 };
 window.fetchT = (u, o) => window.fetch(u, o);
 const ctl = (op, body) => __bridgeCall('POST', '/__ctl/' + op, JSON.stringify(body || {})).then(t => JSON.parse(t).body);
+// Key listeners a dialog puts on the document (Group 62.4: confirmActivePrint and the
+// "Record it as coming from…" question hear their keys there, while on top): the stub
+// DOM drops them, so they are kept here, and key() fires them first, as a browser's
+// capture phase does, then the overlay's own unless one of them stopped it.
+const __docKeys = [];
+document.addEventListener = (t, fn) => { if (t === 'keydown') __docKeys.push(fn); };
+document.removeEventListener = (t, fn) => {
+  if (t !== 'keydown') return;
+  const i = __docKeys.indexOf(fn);
+  if (i !== -1) __docKeys.splice(i, 1);
+};
 const __mounts = [];
 const __stubMount = window.mountOverlay;
 window.mountOverlay = (opts) => {
@@ -100,8 +111,11 @@ const btn = (sel) => lastMount().el.querySelector(sel);
 const click = async (sel, ms) => { const b = btn(sel); if (b && typeof b.onclick === 'function') b.onclick(); await __settle(ms || 900); };
 const key = async (k, extra) => {
   const m = lastMount();
-  m.ls.filter(([t]) => t === 'keydown').forEach(([, fn]) => fn(Object.assign(
-    { key: k, shiftKey: false, preventDefault() {}, stopPropagation() {} }, extra || {})));
+  let stopped = false;
+  const ev = Object.assign({ key: k, shiftKey: false, preventDefault() {}, stopPropagation() { stopped = true; } },
+                           extra || {});
+  __docKeys.slice().forEach((fn) => fn(ev));
+  if (!stopped) m.ls.filter(([t]) => t === 'keydown').forEach(([, fn]) => fn(ev));
   await __settle(900);
 };
 const toasts = () => (document.getElementById('toast-container').children || [])

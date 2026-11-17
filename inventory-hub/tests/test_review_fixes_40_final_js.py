@@ -128,8 +128,10 @@ m.el.querySelectorAll = () => [none, cancel];
 document.activeElement = none;
 let stopped = false;
 const enter = async () => {
-  m.ls.filter(([t]) => t === 'keydown').forEach(([, fn]) => fn({ key: 'Enter', shiftKey: false,
-    preventDefault() {}, stopPropagation() { stopped = true; } }));
+  // The question hears its keys on the document (Group 62.4), then its overlay's own.
+  const ev = { key: 'Enter', shiftKey: false, preventDefault() {}, stopPropagation() { stopped = true; } };
+  __docKeys.slice().forEach((fn) => fn(ev));
+  if (!stopped) m.ls.filter(([t]) => t === 'keydown').forEach(([, fn]) => fn(ev));
   await __settle(200);
 };
 """

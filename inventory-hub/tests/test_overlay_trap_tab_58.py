@@ -2,9 +2,10 @@
 overlay_mount.js in `isolated_page`, and real Tab keys, because what a browser's own Tab
 does is the point. test_audit_stacking_58_js.py has the three overlays that pass it.
 
-Opt-in: every other overlay keeps the Tab it had. While the overlay is on top, Tab and
-Shift+Tab wrap inside its focusable, visible, enabled controls, a focus outside it comes
-to its first one, and nothing but Tab is touched.
+The default since Group 62.4 (it was opt-in, and Tab walked out of most overlays): an
+overlay that passes `trapTab: false` keeps the Tab it had. While the overlay is on top,
+Tab and Shift+Tab wrap inside its focusable, visible, enabled controls, a focus outside it
+comes to its first one, and nothing but Tab is touched.
 
 RED on 1f8e03a unless a test says it pins what was already right.
 """
@@ -60,10 +61,16 @@ def tabs(page, key, times):
     return out
 
 
-def test_it_is_off_unless_asked_for(overlay):
-    """A pin: every other overlay's Tab is what it was."""
+def test_it_is_on_unless_an_overlay_opts_out(overlay):
+    """PIN UPDATED DELIBERATELY (Group 62.4): trapTab is the default, so an overlay that
+    says nothing keeps Tab inside it; one that passes `trapTab: false` (it cycles Tab
+    itself, tests/test_overlay_tab_canary.py) keeps the Tab it had."""
     page, mount = overlay
     mount()
+    page.focus("#last")
+    page.keyboard.press("Tab")
+    assert at(page) == "one"
+    mount(id="fcc-test", trapTab=False)
     page.focus("#last")
     page.keyboard.press("Tab")
     assert at(page) not in WALK

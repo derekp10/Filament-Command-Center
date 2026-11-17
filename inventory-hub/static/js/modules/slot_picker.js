@@ -913,9 +913,12 @@
         if (_session !== s || s.settled || !_isTopmost(s)) return;
         if (e.ctrlKey || e.altKey || e.metaKey) return;
         // D1: a key aimed at a field behind the picker (focus outside its panel)
-        // never drives it: a scan typed into that field used to pick a slot.
+        // never drives it: a scan typed into that field used to pick a slot. Except
+        // Tab, which no scan carries: it comes into the panel (Group 62.4; it walked
+        // on through the page behind).
         const ae = document.activeElement;
-        if (ae && ae !== document.body && s.handle && !s.handle.element.contains(ae)) return;
+        const outside = ae && ae !== document.body && s.handle && !s.handle.element.contains(ae);
+        if (outside && e.key !== 'Tab') return;
         const k = e.key;
         if (s.view === 'choice') { _choiceKeys(s, e, k); return; }
         if (k === 'Tab') {
@@ -971,6 +974,9 @@
             backdrop: true,
             occlude: ['select'],
             onEscape: () => _finish(s, null),
+            // own-tab: _keyHandler cycles Tab through its tiles and buttons (and the
+            // occupied slot's question's choices), on the document.
+            trapTab: false,
         });
         const root = s.handle.element;
         root.setAttribute('role', 'dialog');

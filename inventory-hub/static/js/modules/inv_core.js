@@ -480,10 +480,12 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
     let question = null;
     let statusTimer = null;
     let superseded = null;
+    let keysOff = null;
     const cleanup = () => {
         if (qrSession) { try { qrSession.cleanup(); } catch (_) { /* noop */ } qrSession = null; }
         if (handle) { try { handle.cleanup(); } catch (_) { /* noop */ } handle = null; }
         if (hostOff) { try { hostOff(); } catch (_) { /* noop */ } hostOff = null; }
+        if (keysOff) { keysOff(); keysOff = null; }
         if (question) {
             // Scans are held off while ANY question is open (Group 40.3 fix
             // check, W3): answering the newer of two let a scan start a move
@@ -522,6 +524,9 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         host: host || undefined,
         initialFocus: hasStore ? '.fcc-apc-store' : '.fcc-apc-no',
         onEscape: no,
+        // own-tab: onKeys below cycles Tab (and ← / →) in the question's own order: its
+        // buttons, and the tiles' lists only while they scroll, never its ? button.
+        trapTab: false,
     });
     _openMoveConfirms[overlayId] = superseded;
     const ov = handle.element;
@@ -550,6 +555,13 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
                     : (listsEl && e.target === listsEl ? otherVerb : '')));
             if (does) hintEl.textContent = `Enter ${does} · Esc ${noVerb}`;
         }, true);
+        // The focus leaving the question (a click on its words, or the ⌨️ list opening
+        // over it): Enter then does what it does on no button, and the hint says so
+        // (Group 62.4: it went on saying "Enter continues").
+        ov.addEventListener('focusout', (e) => {
+            if (e.relatedTarget && ov.contains(e.relatedTarget)) return;
+            hintEl.textContent = `Enter ${otherVerb} · Esc ${noVerb}`;
+        });
     }
     // mountOverlay removes the DOM when the host closes; the answer must close
     // too, or its QR session stays armed and a late CMD:CONFIRM still moves.
@@ -563,7 +575,14 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
         };
     }
     const helpEl = helpKey ? ov.querySelector('.fcc-apc-help') : null;
-    ov.addEventListener('keydown', (e) => {
+    // Heard on the document while the question is on top and the ⌨️ list is down
+    // (Group 62.4). On its own overlay they went dead after a click on its words or its
+    // background, which moves the focus to the page, while the hint still said what
+    // Enter does; only Escape (mountOverlay's) and the mouse answered it, and Tab
+    // walked the page behind it (Done's question too).
+    const onKeys = (e) => {
+        if (window.isTopOverlay && !window.isTopOverlay(ov)) return;
+        if (window.fccShortcutsUp && window.fccShortcutsUp()) return;
         if (e.key === 'Enter') {
             // A scan in flight owns this Enter: it terminates the scan (a
             // "Scan to Cancel" QR must never perform the CONFIRM). So does a
@@ -593,14 +612,18 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
                 else no();
                 return;
             }
-            if (ae === yesBtn) { e.preventDefault(); e.stopPropagation(); clearScanBuffer(); yes(); }
-            else if (ae === noBtn) { e.preventDefault(); e.stopPropagation(); clearScanBuffer(); no(); }
+            // The yes / no: Continue Anyway only on its own button. Anywhere else
+            // (Cancel, or no button after a click away) Enter cancels, as the hint says.
+            e.preventDefault(); e.stopPropagation(); clearScanBuffer();
+            if (yesBtn && ae === yesBtn) yes();
+            else no();
             return;
         }
         const arrow = threeWay && (e.key === 'ArrowLeft' || e.key === 'ArrowRight');
-        if (e.key === 'Tab' || arrow) {
+        if ((e.key === 'Tab' && !e.ctrlKey && !e.altKey && !e.metaKey) || arrow) {
             // Tab reaches the tiles' lists while they scroll (their arrow and page keys
-            // scroll them); ← and → go between the buttons.
+            // scroll them); ← and → go between the buttons. From anywhere outside
+            // them, Tab comes back to the first (Shift+Tab, the last).
             const order = ((e.key === 'Tab' && listsScroll()) ? [listsEl] : []).concat([yesBtn, storeBtn, noBtn].filter(Boolean));
             const back = e.key === 'ArrowLeft' || (e.key === 'Tab' && e.shiftKey);
             const idx = order.indexOf(document.activeElement);
@@ -609,7 +632,9 @@ window.confirmActivePrint = ({ activePrint = null, activePrints = [], msg = '', 
             e.preventDefault(); e.stopPropagation();
             order[next].focus();
         }
-    }, true);
+    };
+    document.addEventListener('keydown', onKeys, true);
+    keysOff = () => document.removeEventListener('keydown', onKeys, true);
     if (window.attachConfirmQRs) {
         // Under the buttons, each QR centred under its own button (Derek,
         // 2026-10-22; `alignTo`, the buttons' row, else the dialog PANEL as

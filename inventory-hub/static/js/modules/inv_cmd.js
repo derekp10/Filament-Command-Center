@@ -4220,10 +4220,12 @@ const _askRecordSource = (pick, sid, host) => {
         let question = null;
         let statusTimer = null;
         let hostOff = null;
+        let keysOff = null;
         const finish = (value) => {
             if (settled) return;
             settled = true;
             if (hostOff) { try { hostOff(); } catch (_) { /* noop */ } hostOff = null; }
+            if (keysOff) { keysOff(); keysOff = null; }
             if (qr) { try { qr.cleanup(); } catch (_) { /* noop */ } qr = null; }
             if (handle) { try { handle.cleanup(); } catch (_) { /* noop */ } handle = null; }
             const open = (window._fccOpenMoveQuestions || []).filter(q => q !== question);
@@ -4271,6 +4273,9 @@ const _askRecordSource = (pick, sid, host) => {
                     <div class="fcc-rs-hint" style="font-size:var(--fcc-fs-small); color:#ccc; margin-top:8px;">←/→ move · Enter chooses · scan a slot's label to choose it · Esc goes back</div>
                 </div>`,
             initialFocus: pre ? `.fcc-rs-opt[data-rs-i="${feeds.indexOf(pre)}"]` : '.fcc-rs-none',
+            // own-tab: onKeys below cycles Tab (and ← / →) through its free slots, No box
+            // and Cancel, never its ? button or a held slot.
+            trapTab: false,
         });
         // The host closing settles the question too (Group 40 review, BD-1), as
         // it does confirmActivePrint's: mountOverlay only removes the DOM, which
@@ -4304,7 +4309,12 @@ const _askRecordSource = (pick, sid, host) => {
         const cancelBtn = ov.querySelector('.fcc-rs-cancel');
         noneBtn.onclick = () => finish('');
         cancelBtn.onclick = () => finish(null);
-        ov.addEventListener('keydown', (e) => {
+        // Heard on the document while it is on top and the ⌨️ list is down (Group 62.4):
+        // on its own overlay they went dead after a click on its words, which moves the
+        // focus to the page.
+        const onKeys = (e) => {
+            if (window.isTopOverlay && !window.isTopOverlay(ov)) return;
+            if (window.fccShortcutsUp && window.fccShortcutsUp()) return;
             const order = Array.from(ov.querySelectorAll('.fcc-rs-opt:not([disabled]), .fcc-rs-none, .fcc-rs-cancel'));
             if (e.key === 'Enter') {
                 // A scan's Enter is the scan's (Group 40 review, BD-2): a slower
@@ -4317,17 +4327,29 @@ const _askRecordSource = (pick, sid, host) => {
                     e.preventDefault(); e.stopPropagation();
                     if (window.clearScanBuffer) window.clearScanBuffer();   // a key a person left starts no scan
                     ae.click();
+                    return;
                 }
+                // Its other controls (its ?): Enter presses them, as on any button.
+                if (ae && ov.contains(ae)) return;
+                // On no answer (after a click on its words): the keyboard comes back to
+                // the answer it opened on, and the next Enter chooses it. Recording a
+                // home takes a choice the person can see.
+                e.preventDefault(); e.stopPropagation();
+                if (window.clearScanBuffer) window.clearScanBuffer();
+                const first = ov.querySelector(pre ? `.fcc-rs-opt[data-rs-i="${feeds.indexOf(pre)}"]` : '.fcc-rs-none');
+                if (first) first.focus();
                 return;
             }
-            if (e.key === 'Tab' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+            if ((e.key === 'Tab' && !e.ctrlKey && !e.altKey && !e.metaKey) || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
                 const back = e.key === 'ArrowLeft' || (e.key === 'Tab' && e.shiftKey);
                 const idx = order.indexOf(document.activeElement);
-                const next = idx === -1 ? 0 : (idx + (back ? order.length - 1 : 1)) % order.length;
+                const next = idx === -1 ? (back ? order.length - 1 : 0) : (idx + (back ? order.length - 1 : 1)) % order.length;
                 e.preventDefault(); e.stopPropagation();
                 order[next].focus();
             }
-        }, true);
+        };
+        document.addEventListener('keydown', onKeys, true);
+        keysOff = () => document.removeEventListener('keydown', onKeys, true);
         if (window.attachConfirmQRs) {
             const panel = ov.querySelector('.fcc-rs-panel') || handle.panel;
             // With a slot pre-selected, No box gets its own code (Group 40

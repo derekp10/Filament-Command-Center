@@ -1139,9 +1139,11 @@ window.promptEditLocation = (spoolId, currentLoc, opts = {}) => {
                         const escNo = ov.querySelector('#fcc-escape-no');
                         escYes.addEventListener('click', () => Swal.close());
                         escNo.addEventListener('click', hideConfirmOverlay);
-                        // Arrow keys and Tab switch focus between Yes/No buttons
+                        // Arrow keys switch focus between Yes/No buttons. Tab is
+                        // mountOverlay's (trapTab, Group 62.4): it also brings a focus
+                        // left outside back, which a handler on this overlay never heard.
                         ov.addEventListener('keydown', (e) => {
-                            if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Tab') {
+                            if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
                                 e.preventDefault();
                                 const target = document.activeElement === escYes ? escNo : escYes;
                                 target.focus();

@@ -727,6 +727,8 @@
             // Yes first (Undo covers it).
             initialFocus: (stateInfo || note) ? '#fcc-quickswap-no' : '#fcc-quickswap-yes',
             onEscape: close,
+            // own-tab: keyHandler above cycles Tab between Yes and No, on the document.
+            trapTab: false,
         });
         const ov = handle.element;
         const yes = ov.querySelector('#fcc-quickswap-yes');
