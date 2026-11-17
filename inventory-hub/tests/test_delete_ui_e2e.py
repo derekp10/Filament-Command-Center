@@ -195,3 +195,68 @@ def test_filament_delete_shows_cascade_count(page: Page, api_base_url: str):
     overlay.locator("[data-fcc-delete-cancel]").click()
     expect(overlay).not_to_be_visible()
     expect(page.locator("#filamentModal")).to_be_visible()
+
+
+# ---------------------------------------------------------------------------
+# Group 62.8: the delete question is a mountOverlay
+# ---------------------------------------------------------------------------
+
+def test_spool_delete_question_is_on_top_keeps_tab_and_escape_closes_only_it(page: Page, reset_dom_state_js: str):
+    """It was a div inside the spool window; it is a mountOverlay now. Tab stays inside
+    it, a real Escape closes only it (the window stays), and the window's own buttons
+    can't be pressed under it."""
+    _open_first_spool_modal(page, reset_dom_state_js)
+    page.locator("#btn-spool-gear").click()
+    page.locator("#btn-spool-delete").click()
+    overlay = page.locator("#fcc-spool-delete-overlay")
+    expect(overlay).to_be_visible()
+    assert overlay.get_attribute("data-overlay-mount") == "1"
+    page.wait_for_function("() => document.activeElement && document.activeElement.matches('[data-fcc-delete-cancel]')")
+    for _ in range(4):
+        page.keyboard.press("Tab")
+        assert page.evaluate("() => !!document.activeElement.closest('#fcc-spool-delete-overlay')")
+    page.keyboard.press("Escape")
+    expect(overlay).to_have_count(0)
+    expect(page.locator("#spoolModal")).to_be_visible()
+
+
+def _route_writes(page: Page, deletes: list):
+    """The DELETE answered in the browser (refused, so the flow keeps its question up),
+    and any scan answered empty: nothing reaches dev."""
+    def handle(route, request):
+        if request.method == "DELETE":
+            deletes.append(request.url)
+            route.fulfill(status=200, content_type="application/json",
+                          body='{"success": false, "error": "test: not deleted"}')
+        elif request.method == "POST" and "/api/identify_scan" in request.url:
+            route.fulfill(status=200, content_type="application/json", body="{}")
+        else:
+            route.continue_()
+    page.route("**/api/**", handle)
+
+
+def test_the_typed_step_sends_one_delete_and_a_scan_into_its_box_sends_none(page: Page, reset_dom_state_js: str):
+    """A scanner's digits-only label for the spool, read into the typed box at scanner
+    speed, goes to the scan path (the box keeps what it held), so its Enter never presses
+    Delete forever. Then the id typed by a person, and Enter: one DELETE, answered here."""
+    deletes: list = []
+    _route_writes(page, deletes)
+    _open_first_spool_modal(page, reset_dom_state_js)
+    sid = (page.locator("#detail-id").inner_text() or "").strip()
+    assert sid.isdigit(), sid
+    page.locator("#btn-spool-gear").click()
+    page.locator("#btn-spool-delete").click()
+    page.locator("#fcc-spool-delete-overlay [data-fcc-delete-confirm]").click()
+    box = page.locator("#fcc-spool-delete-overlay-input")
+    expect(box).to_be_focused()
+    page.keyboard.type(sid, delay=5)                    # a scanner's pace
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(400)
+    assert deletes == [], "a scanned label pressed Delete forever"
+    assert box.input_value() == ""
+    page.wait_for_timeout(2100)                          # past the accumulator's reset
+    box.focus()
+    page.keyboard.type(sid, delay=120)                   # a person
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(500)
+    assert len(deletes) == 1 and deletes[0].rstrip("/").endswith(f"/api/spool/{sid}"), deletes
