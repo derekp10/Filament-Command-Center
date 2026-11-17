@@ -1127,7 +1127,8 @@ const renderGrid = (data, max) => {
 // landed, so prev/next followed by a quick click deposited the PREVIOUS spool
 // (Derek, prod 2026-10-08). Its click now resolves the spool when it happens,
 // and the buffer-updated listener repaints it synchronously (_syncDepositCard).
-// Its QR is the location's (LOC:<id>) and never depends on the spool.
+// Its QR (CMD:DEPOSIT:<id>, Group 62.6) is drawn once per window and never
+// depends on the spool either: processScan reads the spool shown at the scan.
 const _paintDepositCard = (card, item) => {
     const styles = getFilamentStyle(item.color, item.color_direction || 'longitudinal');
     card.style.background = styles.frame;
@@ -1140,28 +1141,33 @@ const _paintDepositCard = (card, item) => {
     if (label) label.textContent = display.startsWith(`#${item.id} `) || display === `#${item.id}` ? display : `#${item.id} - ${display}`;
 };
 
+// The card's action: the spool READY TO SLOT shows, read when it happens, into `locId`.
+// Its click and its QR (CMD:DEPOSIT:<id>, processScan) both run it (Group 62.6: the QR
+// was this place's own LOC: label, which files the whole buffer, while the click placed
+// one spool, and the comment here said the two matched).
+window.depositShownSpool = (locId) => {
+    const top = state.heldSpools[0];
+    if (!top) { showToast('Buffer is empty — scan a spool first', 'warning', 3500); return; }
+    // Group 40.5 (and D2.4): a multi-slot box, or a Printer row that isn't its own
+    // toolhead (XL, RCOI), opens its picker for this spool (a slot; a head or a
+    // Printer Pool slot). It used to file the spool on the printer row itself, which
+    // the engine refuses since 40.0a.
+    const row = (state.allLocations || []).find(l => String(l.LocationID) === String(locId));
+    if (window._placeBufferWithPicker && window.openSlotPicker && row
+            && ((window.isMultiSlotBox && window.isMultiSlotBox(row))
+                || (window.isPrinterRowNotHead && window.isPrinterRowNotHead(row)))) {
+        window._placeBufferWithPicker(locId, [top.id]);
+        return;
+    }
+    doAssign(locId, top.id, null);
+};
+
 const _buildDepositCard = (locId) => {
     const depositCard = document.createElement('div');
     depositCard.id = 'manage-deposit-card';
     depositCard.className = "cham-card manage-list-item";
     depositCard.style.cssText = `border: 2px dashed #fff; cursor: pointer; margin-bottom: 15px;`;
-    depositCard.onclick = () => {
-        const top = state.heldSpools[0];
-        if (!top) { showToast('Buffer is empty — scan a spool first', 'warning', 3500); return; }
-        // Group 40.5 (and D2.4): the card's QR is this location's label, so a
-        // click does what scanning it does: a multi-slot box, or a Printer row
-        // that isn't its own toolhead (XL, RCOI), opens its picker for this spool
-        // (a slot; a head or a Printer Pool slot). It used to file the spool on
-        // the printer row itself, which the engine refuses since 40.0a.
-        const row = (state.allLocations || []).find(l => String(l.LocationID) === String(locId));
-        if (window._placeBufferWithPicker && window.openSlotPicker && row
-                && ((window.isMultiSlotBox && window.isMultiSlotBox(row))
-                    || (window.isPrinterRowNotHead && window.isPrinterRowNotHead(row)))) {
-            window._placeBufferWithPicker(locId, [top.id]);
-            return;
-        }
-        doAssign(locId, top.id, null);
-    };
+    depositCard.onclick = () => window.depositShownSpool(locId);
 
     depositCard.innerHTML = `
         <div class="list-inner-gold" style="justify-content: center; align-items: center; flex-direction: column; padding: 15px;">
@@ -1194,7 +1200,7 @@ const _syncDepositCard = () => {
         list.insertBefore(_buildDepositCard(locId), list.firstChild);
         if (emptyMsg) emptyMsg.style.display = 'none';
         const safeId = String(locId).replace(/['"]/g, '');
-        requestAnimationFrame(() => generateSafeQR('qr-deposit-trigger', 'LOC:' + safeId, 85));
+        requestAnimationFrame(() => generateSafeQR('qr-deposit-trigger', 'CMD:DEPOSIT:' + safeId, 85));
     } else if (card) {
         card.remove();
         if (emptyMsg && list.children.length === 0) emptyMsg.style.display = 'block';
@@ -1340,7 +1346,7 @@ const renderList = (data, locId) => {
 
                 if (document.getElementById('qr-deposit-trigger')) {
                     const safeId = String(locId).replace(/['"]/g, '');
-                    generateSafeQR('qr-deposit-trigger', 'LOC:' + safeId, 85);
+                    generateSafeQR('qr-deposit-trigger', 'CMD:DEPOSIT:' + safeId, 85);
                 }
             });
         });
@@ -1348,7 +1354,7 @@ const renderList = (data, locId) => {
         requestAnimationFrame(() => {
             if (document.getElementById('qr-deposit-trigger')) {
                 const safeId = String(locId).replace(/['"]/g, '');
-                generateSafeQR('qr-deposit-trigger', 'LOC:' + safeId, 85);
+                generateSafeQR('qr-deposit-trigger', 'CMD:DEPOSIT:' + safeId, 85);
             }
         });
     }

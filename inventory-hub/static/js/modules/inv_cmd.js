@@ -273,6 +273,8 @@ const _AUDIT_REFUSES = new Map([
     ['CMD:EJECTALL', 'Eject All waits until the audit is finished or cancelled.'],
     // CMD:TRASH:<id> (matched by its start below), and a spool card's own 🗑️ (62.7b).
     ['CMD:TRASH', 'Eject waits until the audit is finished or cancelled.'],
+    // CMD:DEPOSIT:<place> (matched by its start below), DEPOSIT HERE's own QR (62.6).
+    ['CMD:DEPOSIT', 'DEPOSIT HERE waits until the audit is finished or cancelled: the buffer is kept during an audit.'],
     ['CMD:CLEAR', 'The buffer is kept during an audit: finish or cancel it first.'],
     ['CMD:UNDO', 'Undo Last Move is off while an audit is running. Finish or cancel the audit first.'],
     ['CMD:BULKMOVE', 'A bulk move waits until the audit is finished or cancelled.'],
@@ -281,6 +283,7 @@ const _AUDIT_PANEL_COVERS = ['CMD:LOCATIONS', 'CMD:WEIGH', 'CMD:PREV', 'CMD:NEXT
 const _auditCommandRefusal = (upper) => {
     if (_AUDIT_REFUSES.has(upper)) return _AUDIT_REFUSES.get(upper);
     if (upper.startsWith('CMD:TRASH:')) return _AUDIT_REFUSES.get('CMD:TRASH');
+    if (upper.startsWith('CMD:DEPOSIT:')) return _AUDIT_REFUSES.get('CMD:DEPOSIT');
     const covered = _AUDIT_PANEL_COVERS.includes(upper) || upper.startsWith('CMD:PRINT:');
     if (covered && window.isAuditPanelOpen && window.isAuditPanelOpen()) {
         return 'The audit panel is on top: press Hide, then scan that again.';
@@ -3461,6 +3464,26 @@ const processScan = (text, source = 'keyboard', capturedAt = null, weighRead = n
         return;
     }
     if (upper.startsWith('CMD:TRASH:')) { const parts = upper.split(':'); if (parts[2] && document.getElementById('manageModal').classList.contains('show')) ejectSpool(parts[2], document.getElementById('manage-loc-id').value, false); return; }
+    // Group 62.6: ⬇️ DEPOSIT HERE's own QR does what clicking the card does: the spool
+    // READY TO SLOT shows, into the place whose Location Manager window is open, through
+    // its slot or Printer picker where the click opens one. It was the place's LOC:
+    // label, which files the whole buffer (that printed label still does). Read only
+    // here: anywhere else, during a bulk move or (above) an audit, it moves nothing.
+    if (upper.startsWith('CMD:DEPOSIT:')) {
+        const place = upper.slice('CMD:DEPOSIT:'.length).trim();
+        if (window.bulkMovePressWaits && window.bulkMovePressWaits('⬇️ DEPOSIT HERE')) return;
+        const m = document.getElementById('manageModal');
+        const locEl = document.getElementById('manage-loc-id');
+        const open = (m && m.classList.contains('show') && locEl) ? String(locEl.value || '').trim() : '';
+        if (!place || !open || open.toUpperCase() !== place) {
+            showToast(`⬇️ DEPOSIT HERE ignored: open ${place || 'its place'}'s window first, then scan it again`, 'warning', 7000);
+            if (window.logClientEvent) window.logClientEvent(`⚠️ Scan "${escLog(text)}" ignored: DEPOSIT HERE `
+                + `${open ? `for another place (${escLog(open)}'s window is open)` : 'with no location window open'}`, 'WARNING');
+            return;
+        }
+        if (typeof window.depositShownSpool === 'function') window.depositShownSpool(open);
+        return;
+    }
 
     // A CONFIRM scan may fire a dialog's callback ONLY while that dialog is
     // genuinely on screen (fully shown, not dismissed). activeModal/pendingConfirm

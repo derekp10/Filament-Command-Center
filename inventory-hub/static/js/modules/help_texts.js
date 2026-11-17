@@ -49,10 +49,10 @@
         lines: [
             'One place and its spools: a box with several slots as its numbered slots, any other place as a list.',
             'Scan a spool and it waits under READY TO SLOT (◀ PREV and NEXT ▶ pick another from your buffer). Click an empty slot, or ⬇️ DEPOSIT HERE, to put it here; a slot that feeds a toolhead loads it onto that toolhead too. A full slot asks first.',
-            'A click on ⬇️ DEPOSIT HERE puts only the spool shown. Scanning its QR (this place\'s own label) puts your buffer here: a toolhead or other one-spool place takes only the top spool, and a box with slots or a printer asks where each spool goes.',
+            '⬇️ DEPOSIT HERE puts only the spool shown, clicked or its QR scanned. This place\'s own printed label puts your whole buffer here: a toolhead or other one-spool place takes only the top spool, and a box with slots or a printer asks where each spool goes.',
             'On a spool: ✋ PICK puts it in your buffer, ⏏️ EJECT or 🗑️ TRASH takes it out of this place after asking, ✏️ edits it, and 🖨️ adds its label to the print queue. A loaded spool\'s ↩️ RETURN SPOOL puts it back in its slot.',
             'A dryer box has 🔗 Slot → Toolhead Feeds (press Show): choose which toolhead each slot feeds, then 💾 Save Feeds. 🖨️ Print Location Label adds this place\'s label to the print queue, and its small QR opens bigger, to scan from the screen.',
-            'Scans while it is open: the QR on a slot\'s tile does what clicking that slot does, and this place\'s own label puts your buffer here, as above.',
+            'Scans while it is open: the QR on a slot\'s tile does what clicking that slot does, DEPOSIT HERE\'s QR what clicking it does, and this place\'s own label puts your buffer here, as above.',
             'In a box with slots, spools with no slot are under Unslotted Items. EJECT ALL in the ☢️ DANGER ZONE below them (or its QR) asks, then sends each back where it came from, or to Unassigned after one more question. A spool loaded on a toolhead stays.',
             '✅ Done / Sync closes the window, or goes back to the place you came from, and so does the QR beside it, whatever else is running.',
         ],
